@@ -23,9 +23,10 @@ struct RelocateSchemaTests {
 
     // MARK: - Version bump
 
+    // GH #167 bumped 6 → 7 (unknown-key preservation; no field changed).
     @Test
-    func currentSnapshotVersionIsSix() {
-        #expect(CatalogSnapshot.currentVersion == 6)
+    func currentSnapshotVersionIsSeven() {
+        #expect(CatalogSnapshot.currentVersion == 7)
     }
 
     // MARK: - New ArchiveStage cases

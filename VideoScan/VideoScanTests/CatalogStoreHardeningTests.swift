@@ -14,8 +14,10 @@ import Foundation
 //      → catalog.json.prev so a subsequent corrupt primary can fall
 //      back to the previous good catalog.
 //   3. Newer-version refusal — a catalog.json with version >
-//      `CatalogSnapshot.currentVersion` does NOT load, and the load
-//      outcome is .refusedNewerVersion(found:). This is the critical
+//      `CatalogSnapshot.currentVersion` opens READ-ONLY (GH #167): the
+//      records are browsable, the outcome is
+//      .openedReadOnlyNewerVersion(found:), and every write refuses. The
+//      write refusal is the critical
 //      data-protection path: without it, an old build loading a newer
 //      catalog would silently come back with empty records and the next
 //      debounced save would overwrite the user's data.
@@ -168,8 +170,13 @@ struct CatalogStoreHardeningTests {
 
         let store = CatalogStore(directory: dir)
         let loaded = store.load()
-        #expect(loaded.isEmpty, "Newer-version snapshot must NOT decode into records")
-        #expect(store.lastLoadOutcome == .refusedNewerVersion(found: CatalogSnapshot.currentVersion + 1))
+        // GH #167 (Rick 2026-10-02): a newer catalog is read-only, not an
+        // error — its records are browsable, and every write is refused
+        // (the data-loss path above stays closed by the write latch).
+        #expect(loaded.count == 1, "Newer-version snapshot opens for browsing")
+        #expect(store.lastLoadOutcome == .openedReadOnlyNewerVersion(found: CatalogSnapshot.currentVersion + 1))
+        #expect(store.writesDisabledReason != nil, "…and every write is refused")
+        #expect(store.saveNow(records: loaded) == false)
     }
 
     // The current version must always load.

@@ -631,8 +631,18 @@ struct VideoScanApp: App {
                         // in-memory records.
                         catalogModel.startLiveDossierReload()
 
+                        // GH #167: a catalog saved by a newer VideoScan is
+                        // browse-only — analysis results could never be
+                        // saved, so the auto-resume is HELD and says so.
+                        if !TestEnvironment.isTestHost,
+                           catalogModel.catalogSavingPausedNotice != nil,
+                           UserDefaults.standard.bool(forKey: CaptionOrchestrator.autoResumePrefsKey) {
+                            catalogModel.log("Analyze auto-resume held — catalog saving is paused (this catalog was saved by a newer VideoScan).")
+                            appLog.write("Analyze auto-resume held — catalog saving is paused (newer catalog, GH #167)")
+                        }
                         if !TestEnvironment.isTestHost,
                            !catalogSync.isReadOnly,
+                           catalogModel.catalogSavingPausedNotice == nil,
                            UserDefaults.standard.bool(forKey: CaptionOrchestrator.autoResumePrefsKey) {
                             Task {
                                 try? await Task.sleep(for: .seconds(3))

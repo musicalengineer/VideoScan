@@ -90,7 +90,15 @@ extension VideoScanModel {
         guard !TestEnvironment.isTestHost else { return }
         guard !isReadOnly else {
             if findTagBackgroundSetting.enabled {
-                appLog.write("Find and Tag background: viewer mode — daemon not spawned, ingest disabled")
+                // GH #167: name the real reason — a master Mac can be
+                // read-only too, when its catalog came from a newer build.
+                let why = catalogSavingPausedNotice != nil
+                    ? "held — catalog saving is paused (this catalog was saved by a newer VideoScan)"
+                    : "viewer mode"
+                appLog.write("Find and Tag background: \(why) — daemon not spawned, ingest disabled")
+                if catalogSavingPausedNotice != nil {
+                    log("Find and Tag background held — catalog saving is paused (newer catalog).")
+                }
             }
             return
         }

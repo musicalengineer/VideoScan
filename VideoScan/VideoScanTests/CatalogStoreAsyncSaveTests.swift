@@ -532,7 +532,7 @@ struct CatalogStoreAsyncSaveTests {
         // encoder — `version` then `generation` lead, `records` trails —
         // even though the golden encoder asks for sortedKeys (which still
         // governs the record objects, as the embedded record golden proves).
-        #expect(produced.hasPrefix(#"{"version":6,"generation":0,"savedAt":"2025-06-15T15:06:40Z","savedFromHost":"MacStudio","records":["#))
+        #expect(produced.hasPrefix(#"{"version":7,"generation":0,"savedAt":"2025-06-15T15:06:40Z","savedFromHost":"MacStudio","records":["#))
         #expect(produced.hasSuffix("]}"))
     }
 
@@ -583,6 +583,6 @@ struct CatalogStoreAsyncSaveTests {
     /// [masterArchive], records) regardless of the encoder's options, so
     /// the golden is composed from the record golden rather than captured.
     private static let snapshotGolden =
-        #"{"version":6,"generation":0,"savedAt":"2025-06-15T15:06:40Z","savedFromHost":"MacStudio","records":["#
+        #"{"version":7,"generation":0,"savedAt":"2025-06-15T15:06:40Z","savedFromHost":"MacStudio","records":["#
         + videoRecordGolden + "]}"
 }

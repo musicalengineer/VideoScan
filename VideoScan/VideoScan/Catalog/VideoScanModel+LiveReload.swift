@@ -84,14 +84,26 @@ extension VideoScanModel {
         // back to the main actor for the merge (touching @Published
         // state).
         let url = URL(fileURLWithPath: path)
-        let snapshot: [VideoRecord]? = await Task.detached(priority: .utility) { [url] in
+        // (records, version, top-level unknown keys) — a tuple, not a
+        // struct, so it crosses back exactly as the bare [VideoRecord] did.
+        let decoded: ([VideoRecord], Int, [String: CatalogJSONValue])? = await Task.detached(priority: .utility) { [url] in
             try? Self.loadRecordsForLiveReload(from: url)
         }.value
 
-        guard let snapshot else {
+        guard let decoded else {
             liveReloadLogger.warning("Live dossier reload: snapshot decode failed; will retry next tick")
             return
         }
+        // GH #167: a newer build wrote the file while we ran — pause saving
+        // now (the store's write probe would refuse anyway; this shows it).
+        let (snapshot, diskVersion, diskUnknownTopLevel) = decoded
+        if diskVersion > CatalogSnapshot.currentVersion {
+            catalogStore.noteNewerCatalogOnDisk(version: diskVersion)
+            applyCatalogVersionPause()
+        }
+        // GH #167: top-level keys an external writer added must survive
+        // our next save.
+        catalogStore.mergeUnknownTopLevelFields(diskUnknownTopLevel)
 
         let merged = mergeDossierFields(from: snapshot)
         lastLiveReloadMtime = mtime
@@ -114,12 +126,12 @@ extension VideoScanModel {
     /// because we only consume the dossier-channel fields, not the
     /// correlation graph — that lives on the in-memory records we're
     /// merging onto.
-    nonisolated private static func loadRecordsForLiveReload(from url: URL) throws -> [VideoRecord] {
+    nonisolated private static func loadRecordsForLiveReload(from url: URL) throws -> ([VideoRecord], Int, [String: CatalogJSONValue]) {
         let data = try Data(contentsOf: url)
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         let snapshot = try decoder.decode(CatalogSnapshot.self, from: data)
-        return snapshot.records
+        return (snapshot.records, snapshot.version, snapshot.unknownFields)
     }
 
     /// Apply dossier-channel fields from a freshly-loaded snapshot to
@@ -174,6 +186,14 @@ extension VideoScanModel {
                 newRecords.append(fresh)
                 added += 1
                 continue
+            }
+            // GH #167: keys a newer build / external writer added to this
+            // record on disk must survive our next save. Union, disk wins
+            // per key; a known key is never admitted. Before the dossier
+            // gate below — this applies to every matched record.
+            if !fresh.unknownFields.isEmpty {
+                mem.unknownFields = CatalogUnknownFields.merged(mem.unknownFields, with: fresh.unknownFields,
+                                                                known: VideoRecord.persistedKeyNames)
             }
             // Existing record — merge only the dossier-channel fields,
             // preserving any in-memory user edits (people tags,

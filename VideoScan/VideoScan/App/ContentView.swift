@@ -43,6 +43,10 @@ struct ContentView: View {
             if catalogSync.mode == .viewer {
                 CatalogSyncBanner(sync: catalogSync)
             }
+            // GH #167: catalog saved by a newer VideoScan — browse-only.
+            if let notice = model.catalogSavingPausedNotice {
+                CatalogVersionPauseBanner(notice: notice)
+            }
             // Custom tab bar — centered with traffic-light inset
             HStack(spacing: 0) {
                 // Reserve space for window traffic-light buttons

@@ -46,7 +46,10 @@ private let catalogStoreLog = Logger(subsystem: "Rick-Breen.VideoScan", category
 enum CatalogLoadOutcome: Equatable {
     case missing                            // no catalog.json present (first launch)
     case loaded(fromBackup: Bool)           // success — true if we read .prev because primary was corrupt
-    case refusedNewerVersion(found: Int)    // catalog.json was written by a newer build; refuse to load
+    /// catalog.json was written by a NEWER build (GH #167, Rick 2026-10-02):
+    /// its records are shown for browsing, every write is refused, and the
+    /// app says so. Never an error, never a downgrade.
+    case openedReadOnlyNewerVersion(found: Int)
     case corruptNoBackup                    // primary unreadable AND no usable .prev backup
 }
 
@@ -75,8 +78,24 @@ enum CatalogLoadOutcome: Equatable {
 ///    a marker so a v6-aware build knows the parallel volume metadata
 ///    layer *may* carry retire fields; v5 catalog.json files load
 ///    unchanged (no record-level fields were added).
+///  - v7 (GH #167, 2026-10-02): unknown keys are PRESERVED from here on —
+///    top level and per record (`unknownFields`), written back verbatim.
+///    No field changed. The bump exists so builds from before today, which
+///    silently DROP keys they do not know (how masterArchive /
+///    archiveFixity could vanish), see a newer catalog and refuse to save
+///    it. Builds that predate the version check itself (before v2-era
+///    `refusedNewerVersion`) cannot be protected by any bump.
+///
+/// WHEN TO BUMP (docs/practices/invariants/Catalog.md, CAT-4): only when an
+/// EXISTING field's meaning or type changes, or one is removed/renamed.
+/// ADDING a field never needs a bump — every v7+ build carries keys it does
+/// not know through untouched. The key-snapshot sensor in
+/// CatalogVersioningTests fails when a key is added, to make the addition
+/// a deliberate one-line edit, not to demand a bump.
+/// A build that opens a catalog NEWER than `currentVersion` shows it
+/// read-only (`CatalogStore.newerCatalogVersion`) and never writes it.
 struct CatalogSnapshot: Decodable {
-    static let currentVersion = 6
+    static let currentVersion = 7
 
     var version: Int = Self.currentVersion
     /// Monotonic write counter — the optimistic-concurrency stamp
@@ -95,10 +114,17 @@ struct CatalogSnapshot: Decodable {
     /// header BEFORE `records` (it is a few hundred bytes), see
     /// `CatalogSnapshotDTO.encoded(using:)`.
     var masterArchive: MasterArchiveDesignation?
+    /// Top-level keys a NEWER build wrote that this build does not know
+    /// (GH #167). Kept verbatim; written back after `records`.
+    var unknownFields: [String: CatalogJSONValue] = [:]
 
-    private enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case version, generation, savedAt, records, savedFromHost, masterArchive
     }
+
+    /// Every top-level key this build reads or writes. Anything else at the
+    /// top of catalog.json is a future field, preserved in `unknownFields`.
+    static let topLevelKeyNames: Set<String> = Set(CodingKeys.allCases.map(\.rawValue))
 
     init(version: Int = Self.currentVersion,
          generation: Int = 0,
@@ -122,6 +148,8 @@ struct CatalogSnapshot: Decodable {
         records       = try c.decodeIfPresent([VideoRecord].self, forKey: .records) ?? []
         savedFromHost = try c.decodeIfPresent(String.self, forKey: .savedFromHost) ?? ""
         masterArchive = try c.decodeIfPresent(MasterArchiveDesignation.self, forKey: .masterArchive)
+        // GH #167: top-level keys from a newer build ride along verbatim.
+        unknownFields = try CatalogUnknownFields.capture(from: decoder, known: Self.topLevelKeyNames)
     }
 
     /// Bytes read from each end of the file by `headerProbe`. The header
@@ -408,6 +436,56 @@ final class CatalogStore {
     /// data-loss path independent of concurrency, present on main.
     private(set) var writesDisabledReason: String?
 
+    /// Set when load() found a catalog.json written by a NEWER build (GH
+    /// #167): the version it carries. The records are browsable; every
+    /// write path refuses (`writesDisabledReason` is latched alongside).
+    private(set) var newerCatalogVersion: Int?
+
+    /// The words the app shows while a newer catalog is open (Rick
+    /// 2026-10-02). One constant so the banner, the console line and the
+    /// tests agree.
+    static let newerCatalogNotice = "This catalog was last saved by a newer VideoScan — you can browse, but saving is paused until you update this Mac's copy."
+
+    /// The held-save line is said once per session (not once per debounced
+    /// save) — same etiquette as the designation refusal.
+    private var writesDisabledReported = false
+
+    /// Top-level catalog.json keys a NEWER build wrote that this build does
+    /// not know (GH #167). Loaded by `load()`, stamped into every payload by
+    /// `makePayload`, so they are written back verbatim. Merged forward by
+    /// the live reload when an external writer adds one mid-session.
+    private(set) var unknownTopLevelFields: [String: CatalogJSONValue] = [:]
+
+    /// Latch read-only for a catalog written by a newer build. Idempotent;
+    /// never cleared within a session (a relaunch with a build that reads
+    /// that version is the only way out — refuse over guess).
+    private func latchNewerCatalog(found version: Int) {
+        let first = newerCatalogVersion == nil
+        newerCatalogVersion = max(newerCatalogVersion ?? 0, version)
+        writesDisabledReason = "catalog.json was saved by a newer VideoScan (catalog v\(version); this build reads up to v\(CatalogSnapshot.currentVersion))"
+        if first {
+            NSLog("VideoScan: catalog.json version %d is newer than this build (v%d) — opened read-only; every save is held",
+                  version, CatalogSnapshot.currentVersion)
+            catalogStoreLog.notice("catalog: v\(version) is newer than this build (v\(CatalogSnapshot.currentVersion)) — read-only, saves held (GH #167)")
+        }
+    }
+
+    /// Merge top-level unknown keys an external writer put on disk (live
+    /// reload, GH #167): theirs replace ours key by key, ours stay.
+    func mergeUnknownTopLevelFields(_ incoming: [String: CatalogJSONValue]) {
+        unknownTopLevelFields = CatalogUnknownFields.merged(unknownTopLevelFields, with: incoming,
+                                                            known: CatalogSnapshot.topLevelKeyNames)
+    }
+
+    /// Live reload saw a catalog.json NEWER than this build on disk:
+    /// latch exactly as `load()` would (GH #167). Writes were already
+    /// refused by `writePrecondition`'s version probe; this makes the
+    /// state visible before the next save tries.
+    func noteNewerCatalogOnDisk(version: Int) {
+        guard version > CatalogSnapshot.currentVersion else { return }
+        latchNewerCatalog(found: version)
+    }
+
     /// Most recent refusal or failure, for UI surfacing. Cleared on success.
     private(set) var lastWriteError: CatalogWriteError?
 
@@ -428,9 +506,7 @@ final class CatalogStore {
             return e
         }
 
-        if let reason = writesDisabledReason {
-            return fail(.writesDisabled(reason))
-        }
+        if let refusal = heldWriteRefusal() { return refusal }
 
         // GH #167 — before the lock, before any byte: never drop a
         // designation nobody cleared.
@@ -469,12 +545,40 @@ final class CatalogStore {
         // have loaded: an in-flight async save that has already landed but
         // whose main-actor completion has not run yet is our own write, and
         // must not make the quit-time saveNow refuse itself as "stale".
-        let onDisk = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
+        let probe = CatalogSnapshot.headerProbe(at: fileURL)
+        // GH #167 — never downgrade. A NEWER build may have replaced the
+        // file since we loaded it (same machine, or a sync), possibly at a
+        // generation the staleness check below cannot tell from ours. The
+        // version in the same 4 KB probe settles it: latch read-only and
+        // hold, before a byte is written.
+        if let v = probe?.version, v > CatalogSnapshot.currentVersion {
+            lock.release()
+            latchNewerCatalog(found: v)
+            return heldWriteRefusal()
+        }
+        let onDisk = probe?.generation ?? 0
         if onDisk > max(loadedGeneration, claimedGeneration) {
             lock.release()   // we will not be writing; do not squat on it
             return fail(.staleGeneration(loaded: loadedGeneration, onDisk: onDisk))
         }
         return nil
+    }
+
+    /// The write latch (newer catalog, codex #377 / GH #167). nil when
+    /// writes may proceed. The refusal is journalled and announced through
+    /// the audit sink ONCE per session — a debounced save every few seconds
+    /// must not flood catalog.log or the journal — and always left in
+    /// `lastWriteError` for the UI.
+    private func heldWriteRefusal() -> CatalogWriteError? {
+        guard let reason = writesDisabledReason else { return nil }
+        let e = CatalogWriteError.writesDisabled(reason)
+        lastWriteError = e
+        if !writesDisabledReported {
+            writesDisabledReported = true
+            CatalogWriteJournal.record(e, catalogURL: fileURL)
+            auditCatalog("Catalog save held — \(reason). Nothing was written; \(fileURL.lastPathComponent) is untouched. Browsing works; saving (and every background job that would save) stays paused until this Mac runs a VideoScan that can read this catalog (GH #167).")
+        }
+        return e
     }
 
     /// Balances a successful writePrecondition(). Releases the per-write
@@ -635,47 +739,65 @@ final class CatalogStore {
         // taken before AND after the decode purely to make that race
         // visible: a disagreement means the file moved under us, and we
         // reload once.
-        if let (records, version, master, decodedGeneration) = decodePrimaryStable() {
-            if version > CatalogSnapshot.currentVersion {
-                NSLog("VideoScan: catalog.json version %d is newer than this build (v%d) — refusing to load; not overwriting on next save",
-                      version, CatalogSnapshot.currentVersion)
-                lastLoadOutcome = .refusedNewerVersion(found: version)
-                // LATCH writes off (codex #377 blocker 3). The old comment
-                // said "not overwriting on next save" but nothing enforced
-                // it — the quit-time save would replace the future-schema
-                // catalog with an empty current-schema one. Now enforced by
-                // writePrecondition.
-                writesDisabledReason = "catalog.json was written by a newer build (v\(version) > v\(CatalogSnapshot.currentVersion))"
-                return []
+        if let primary = decodePrimaryStable() {
+            if primary.version > CatalogSnapshot.currentVersion {
+                // GH #167 (Rick 2026-10-02): a newer catalog is READ-ONLY,
+                // not an error. Show its records for browsing; LATCH every
+                // write off (codex #377 blocker 3 — the quit-time save must
+                // never replace a newer catalog). No rotation, no OCC
+                // adoption: this session writes no catalog bytes.
+                latchNewerCatalog(found: primary.version)
+                lastLoadOutcome = .openedReadOnlyNewerVersion(found: primary.version)
+                masterArchive = primary.masterArchive   // shown, never saved
+                unknownTopLevelFields = primary.unknownTopLevel
+                return primary.records
             }
-            reconcileLoadedGeneration(decoded: decodedGeneration,
+            reconcileLoadedGeneration(decoded: primary.generation,
                                       probed: lastPrimaryProbe,
                                       source: fileURL.lastPathComponent)
             // Rotate primary → .prev on every successful load. Copy (not move)
             // so primary stays in place; replace any stale .prev.
             rotateBackup()
-            masterArchive = master
-            persistedMasterArchive = master
-            acceptedMasterArchive = master
+            masterArchive = primary.masterArchive
+            persistedMasterArchive = primary.masterArchive
+            acceptedMasterArchive = primary.masterArchive
+            unknownTopLevelFields = primary.unknownTopLevel
             lastLoadOutcome = .loaded(fromBackup: false)
-            return records
+            return primary.records
+        }
+        // Primary undecodable. If its header says a NEWER build wrote it
+        // (a newer build changed a field's type — exactly when it bumps),
+        // falling back to .prev with writes enabled would let the next save
+        // overwrite it with older data. Latch read-only first; .prev is
+        // shown for browsing only (GH #167 — refuse over guess).
+        if let probed = CatalogSnapshot.headerProbe(at: fileURL)?.version,
+           probed > CatalogSnapshot.currentVersion {
+            latchNewerCatalog(found: probed)
+            lastLoadOutcome = .openedReadOnlyNewerVersion(found: probed)
+            if FileManager.default.fileExists(atPath: backupURL.path),
+               let prev = decode(url: backupURL) {
+                masterArchive = prev.masterArchive   // shown, never saved
+                return prev.records
+            }
+            return []
         }
         // Primary unreadable — try .prev.
         NSLog("VideoScan: primary catalog.json unreadable; trying %@", backupURL.path)
         if FileManager.default.fileExists(atPath: backupURL.path),
-           let (records, version, master, decodedGeneration) = decode(url: backupURL),
-           version <= CatalogSnapshot.currentVersion {
-            NSLog("VideoScan: recovered catalog from %@ (%d records)", backupURL.path, records.count)
+           let prev = decode(url: backupURL),
+           prev.version <= CatalogSnapshot.currentVersion {
+            NSLog("VideoScan: recovered catalog from %@ (%d records)", backupURL.path, prev.records.count)
             // The records we hold are .prev's; baseline on ITS generation
             // (probe of the corrupt primary may well have been nil).
-            reconcileLoadedGeneration(decoded: decodedGeneration,
+            reconcileLoadedGeneration(decoded: prev.generation,
                                       probed: CatalogSnapshot.headerProbe(at: backupURL)?.generation,
                                       source: backupURL.lastPathComponent)
-            masterArchive = master
-            persistedMasterArchive = master
-            acceptedMasterArchive = master
+            masterArchive = prev.masterArchive
+            persistedMasterArchive = prev.masterArchive
+            acceptedMasterArchive = prev.masterArchive
+            unknownTopLevelFields = prev.unknownTopLevel
             lastLoadOutcome = .loaded(fromBackup: true)
-            return records
+            return prev.records
         }
         NSLog("VideoScan: no usable backup catalog; starting with empty records")
         lastLoadOutcome = .corruptNoBackup
@@ -723,7 +845,7 @@ final class CatalogStore {
     /// two probes disagree the file was replaced mid-read — log it and read
     /// again (once). Returns the decode result; `lastPrimaryProbe` is left
     /// at the post-decode probe of the accepted read.
-    private func decodePrimaryStable() -> ([VideoRecord], Int, MasterArchiveDesignation?, Int)? {
+    private func decodePrimaryStable() -> DecodedCatalog? {
         var attempt = 0
         var before = CatalogSnapshot.headerProbe(at: fileURL)?.generation
         while true {
@@ -793,11 +915,20 @@ final class CatalogStore {
         }
     }
 
-    /// Decode helper — returns (records, version, masterArchive,
-    /// generation) on success, nil on any failure (missing file, malformed
-    /// JSON, malformed snapshot). Resolves `pairedWith` references against
-    /// the decoded array.
-    private func decode(url: URL) -> ([VideoRecord], Int, MasterArchiveDesignation?, Int)? {
+    /// What `decode(url:)` hands back. (≈ a plain C struct return instead
+    /// of a growing tuple.)
+    private struct DecodedCatalog {
+        let records: [VideoRecord]
+        let version: Int
+        let masterArchive: MasterArchiveDesignation?
+        let generation: Int
+        let unknownTopLevel: [String: CatalogJSONValue]
+    }
+
+    /// Decode helper — nil on any failure (missing file, malformed JSON,
+    /// malformed snapshot). Resolves `pairedWith` references against the
+    /// decoded array.
+    private func decode(url: URL) -> DecodedCatalog? {
         do {
             let data = try Data(contentsOf: url)
             let decoder = JSONDecoder()
@@ -830,7 +961,10 @@ final class CatalogStore {
                 NSLog("VideoScan: cleared %d invalid persisted A/V pair endpoint(s) while loading %@",
                       cleared, url.lastPathComponent)
             }
-            return (records, snapshot.version, snapshot.masterArchive, snapshot.generation)
+            return DecodedCatalog(records: records, version: snapshot.version,
+                                  masterArchive: snapshot.masterArchive,
+                                  generation: snapshot.generation,
+                                  unknownTopLevel: snapshot.unknownFields)
         } catch {
             NSLog("VideoScan: failed to decode catalog at %@: %@", url.path, String(describing: error))
             return nil
@@ -876,9 +1010,9 @@ final class CatalogStore {
     /// protect). Returns nil on any failure or a newer-version snapshot.
     /// Used by the volume-rename Undo to restore the pre-migration catalog.
     func loadRecords(fromSnapshotAtPath path: String) -> [VideoRecord]? {
-        guard let (records, version, _, _) = decode(url: URL(fileURLWithPath: path)),
-              version <= CatalogSnapshot.currentVersion else { return nil }
-        return records
+        guard let d = decode(url: URL(fileURLWithPath: path)),
+              d.version <= CatalogSnapshot.currentVersion else { return nil }
+        return d.records
     }
 
     /// The records currently in catalog.json (or .prev when the primary is
@@ -962,7 +1096,8 @@ final class CatalogStore {
         // CAS stamp: this write claims the next generation (design doc §4.1).
         let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration,
-                                       masterArchive: masterArchive)
+                                       masterArchive: masterArchive,
+                                       unknownTopLevel: unknownTopLevelFields)
         let designationChanging = noteDesignationWriteStart(payload.masterArchive,
                                                             generation: nextGeneration)
         var writeError: CatalogWriteError?
@@ -1041,7 +1176,8 @@ final class CatalogStore {
         pendingRecords = nil  // superseded by this save
         let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration,
-                                       masterArchive: masterArchive)
+                                       masterArchive: masterArchive,
+                                       unknownTopLevel: unknownTopLevelFields)
         let designationChanging = noteDesignationWriteStart(payload.masterArchive,
                                                             generation: nextGeneration)
         let dest = fileURL
@@ -1095,7 +1231,8 @@ final class CatalogStore {
         // CAS stamp: this write claims the next generation (design doc §4.1).
         let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration,
-                                       masterArchive: masterArchive)
+                                       masterArchive: masterArchive,
+                                       unknownTopLevel: unknownTopLevelFields)
         let designationChanging = noteDesignationWriteStart(payload.masterArchive,
                                                             generation: nextGeneration)
         let wroteDesignation = payload.masterArchive
@@ -1165,11 +1302,15 @@ final class CatalogStore {
             NSLog("VideoScan: CatalogStore.writeSnapshot refused — read-only viewer mode")
             return false
         }
+        // GH #167: a newer catalog is open — no catalog bytes of any kind.
+        // Callers already treat false as "no snapshot → do not destroy".
+        if heldWriteRefusal() != nil { return false }
         // Real generation, never 0 (GH #165): the snapshot records which
         // catalog.json generation its contents derive from.
         return Self.encodeAndWrite(payload: Self.makePayload(records: records,
                                                              generation: currentGeneration,
-                                                             masterArchive: masterArchive),
+                                                             masterArchive: masterArchive,
+                                                             unknownTopLevel: unknownTopLevelFields),
                                    to: URL(fileURLWithPath: path),
                                    purpose: .snapshot,
                                    afterWriteBeforeVerify: testAfterWriteBeforeVerify) == nil
@@ -1185,8 +1326,10 @@ final class CatalogStore {
             NSLog("VideoScan: CatalogStore.writeSnapshotAsync refused — read-only viewer mode")
             return false
         }
+        if heldWriteRefusal() != nil { return false }   // GH #167, as above
         let payload = Self.makePayload(records: records, generation: currentGeneration,
-                                       masterArchive: masterArchive)
+                                       masterArchive: masterArchive,
+                                       unknownTopLevel: unknownTopLevelFields)
         let url = URL(fileURLWithPath: path)
         let seam = testAfterWriteBeforeVerify
         return await Task.detached(priority: .userInitiated) {
@@ -1205,14 +1348,16 @@ final class CatalogStore {
     /// boundary as a true value type (no @unchecked Sendable box).
     private static func makePayload(records: [VideoRecord],
                                     generation: Int = 0,
-                                    masterArchive: MasterArchiveDesignation? = nil) -> CatalogSnapshotDTO {
+                                    masterArchive: MasterArchiveDesignation? = nil,
+                                    unknownTopLevel: [String: CatalogJSONValue] = [:]) -> CatalogSnapshotDTO {
         CatalogSnapshotDTO(
             version: CatalogSnapshot.currentVersion,
             generation: generation,
             savedAt: Date(),
             records: records.map(VideoRecordDTO.init),
             savedFromHost: CatalogHost.currentName,
-            masterArchive: masterArchive
+            masterArchive: masterArchive,
+            unknownFields: unknownTopLevel   // GH #167: written back verbatim
         )
     }
 
@@ -1432,6 +1577,13 @@ extension CatalogStore {
         designationAudit?(line)
     }
 
+    /// Catalog-level audit line through the SAME one sink (console +
+    /// catalog.log + videoscan.log, installed by the model). GH #167's
+    /// "saving held" line uses it.
+    fileprivate func auditCatalog(_ line: String) {
+        auditDesignation(line)
+    }
+
     /// The user cleared the Master Archive designation (and only that).
     /// Authorizes the NEXT durable save to write the catalog without it.
     func authorizeDesignationClear(reason: String) {
@@ -1514,6 +1666,9 @@ struct CatalogSnapshotDTO: Sendable {
     /// Master Archive designation — additive optional. Emitted only when
     /// set, so a catalog with no master archive carries no key.
     var masterArchive: MasterArchiveDesignation? = nil
+    /// Top-level keys from a NEWER build (GH #167), written back verbatim
+    /// AFTER `records` so the header stays a few hundred bytes.
+    var unknownFields: [String: CatalogJSONValue] = [:]
 
     /// THE catalog.json serializer — the single place catalog bytes are
     /// produced. Top-level key order is fixed (see the type comment); the
@@ -1542,9 +1697,22 @@ struct CatalogSnapshotDTO: Sendable {
 
         let body = try encoder.encode(records)
 
-        var out = Data(capacity: header.count + body.count + 1)
+        // GH #167: top-level keys a NEWER build wrote, written back after
+        // the records so the header the probe reads stays small. A known
+        // name is never emitted from here (it would duplicate — and could
+        // contradict — the typed value above). Sorted for stable bytes.
+        var tail = Data()
+        for key in unknownFields.keys.sorted() where !CatalogSnapshot.topLevelKeyNames.contains(key) {
+            tail.append(UInt8(ascii: ","))
+            tail.append(try fragment(key))
+            tail.append(UInt8(ascii: ":"))
+            tail.append(try fragment(unknownFields[key]!))
+        }
+
+        var out = Data(capacity: header.count + body.count + tail.count + 1)
         out.append(header)
         out.append(body)
+        out.append(tail)
         out.append(UInt8(ascii: "}"))
         return out
     }
@@ -1568,6 +1736,7 @@ extension CatalogSnapshotDTO {
                   savedAt: snapshot.savedAt,
                   records: snapshot.records.map(VideoRecordDTO.init),
                   savedFromHost: snapshot.savedFromHost,
-                  masterArchive: snapshot.masterArchive)
+                  masterArchive: snapshot.masterArchive,
+                  unknownFields: snapshot.unknownFields)
     }
 }

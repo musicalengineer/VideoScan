@@ -46,6 +46,15 @@ final class VideoScanModel: ObservableObject {
     /// CatalogStore layer also refuses writes — this flag is the UI
     /// half of the belt-and-suspenders. See CatalogSync.swift.
     @Published var isReadOnly: Bool = false
+    /// Non-nil while the open catalog.json was saved by a NEWER VideoScan
+    /// (GH #167): the banner's words. Browsing works; every save, and every
+    /// background job that would save, is held. Cleared only by relaunching
+    /// a build that can read that version.
+    @Published var catalogSavingPausedNotice: String?
+    /// The viewer half of `isReadOnly` (CatalogSync's decision), kept apart
+    /// so the newer-catalog pause and viewer mode compose: read-only when
+    /// EITHER holds. (≈ two independent inhibit bits OR-ed into one flag.)
+    var viewerModeReadOnly: Bool = false
     @Published var isScanning: Bool = false
     @Published var isCombining: Bool = false
     /// §3 Relocate Job Queue — backing store for the per-volume queue.
@@ -923,7 +932,11 @@ final class VideoScanModel: ObservableObject {
     // Application Support. Production code never reassigns this.
     // didSet: the designation guard's audit lines follow the store (GH #167).
     var catalogStore: CatalogStore = .shared {
-        didSet { installDesignationAuditSink() }
+        didSet {
+            installDesignationAuditSink()
+            // GH #167: a store that opened a newer catalog pauses saving.
+            applyCatalogVersionPause()
+        }
     }
 
     /// Live-reload polling task — set by `startLiveDossierReload()` in
@@ -1013,6 +1026,10 @@ final class VideoScanModel: ObservableObject {
         // Restore previously-scanned records so the user can browse the
         // catalog even when source volumes are offline.
         let restored = catalogStore.load()
+        // GH #167: a catalog saved by a NEWER VideoScan opens read-only.
+        // Decide before anything below can mutate or schedule a save.
+        applyCatalogVersionPause()
+        let catalogPaused = catalogSavingPausedNotice != nil
         // Master Archive designation rides the same snapshot (additive
         // key) — adopt it before anything else reads `masterArchive`.
         // Test hosts: the shared store never loads, and its `masterArchive`
@@ -1024,7 +1041,13 @@ final class VideoScanModel: ObservableObject {
         }
         reresolveMasterArchiveMount()   // volume-UUID-first re-resolution
         publishFamilyAssetConfiguration()
-        if !restored.isEmpty {
+        if !restored.isEmpty && catalogPaused {
+            // Browse-only (GH #167): show exactly what the newer build
+            // wrote. No load-time migrations, backfills or repairs — they
+            // exist to be SAVED, and nothing may be saved over this file.
+            records = restored
+            log("Restored \(restored.count) records (read-only — this catalog was saved by a newer VideoScan).")
+        } else if !restored.isEmpty {
             records = restored
             log("Restored \(restored.count) records from previous session.")
             // One UUID = one record. Repairs the 8/17 duplicate-id incident
@@ -1082,7 +1105,7 @@ final class VideoScanModel: ObservableObject {
         // persistence — without this, View Catalog shows (0) for offline
         // volumes even though the ffprobe cache is full of their files.
         var backfilled = 0
-        for t in scanTargets where !t.searchPath.isEmpty {
+        for t in scanTargets where !t.searchPath.isEmpty && !catalogPaused {
             // Don't backfill volumes whose catalog was explicitly deleted
             if t.phase == .noCatalog { continue }
             let already = records.contains { $0.fullPath.hasPrefix(t.searchPath) }
@@ -1103,7 +1126,7 @@ final class VideoScanModel: ObservableObject {
         // FULL assembled set (restored + backfilled) and BEFORE the
         // search-index load/rebuild below so haystacks see the
         // post-migration values. Idempotent — see migrateLegacyUserNotes.
-        let notesMigrated = migrateLegacyUserNotes()
+        let notesMigrated = catalogPaused ? 0 : migrateLegacyUserNotes()
         if notesMigrated > 0 {
             log("Moved your notes on \(notesMigrated) record(s) into the new Notes field (probe details stay separate).")
             catalogStore.scheduleSave(records: records)
@@ -1112,7 +1135,7 @@ final class VideoScanModel: ObservableObject {
         // split above pumped into userNotes before it knew every machine
         // shape. Backup first, marker beside catalog.json, idempotent —
         // see VideoScanModel+NotesRepair. Schedules its own save.
-        repairMachineTextInUserNotes()
+        if !catalogPaused { repairMachineTextInUserNotes() }   // writes a backup + marker
         enforcePhaseConsistency()
         repairCorruptedPhases()
         // Volume-role taxonomy migration (2026-08-16): boot volume → System,
@@ -1188,7 +1211,7 @@ final class VideoScanModel: ObservableObject {
         configureIgnoredContent()
         // Archived date (2026-09-09): stamp copies promoted before the field
         // existed, once, from their Promote note / manifest row / fixity.
-        backfillArchivedAtIfNeeded()
+        if !catalogPaused { backfillArchivedAtIfNeeded() }   // GH #167: nothing to save into
 
         // Detached Find and Tag daemon (2026-08-06): BUILD only — the
         // launch-resume respawn and catch-up ingest wait for
@@ -1304,9 +1327,31 @@ final class VideoScanModel: ObservableObject {
     /// underlying CatalogStore to refuse writes. Idempotent.
     /// Called by VideoScanApp once CatalogSync has decided the mode.
     func applyReadOnlyMode(_ readOnly: Bool) {
-        isReadOnly = readOnly
+        viewerModeReadOnly = readOnly
+        // OR with the newer-catalog pause (GH #167): a MASTER Mac that
+        // opened a newer catalog stays read-only.
+        isReadOnly = readOnly || catalogSavingPausedNotice != nil
         catalogStore.isReadOnly = readOnly
         publishFamilyAssetConfiguration()
+    }
+
+    /// GH #167: mirror the store's newer-catalog latch into the UI — the
+    /// banner words and the read-only flag every write affordance and
+    /// background-job gate already honours. Said once, through the one
+    /// sink (console + catalog.log + videoscan.log). Never clears a pause
+    /// the store still holds; the store never un-latches in a session.
+    func applyCatalogVersionPause() {
+        let paused = catalogStore.newerCatalogVersion
+        let notice: String? = paused == nil ? nil : CatalogStore.newerCatalogNotice
+        let announce = notice != nil && catalogSavingPausedNotice == nil
+        catalogSavingPausedNotice = notice
+        isReadOnly = viewerModeReadOnly || notice != nil
+        if announce, let paused {
+            let line = "⚠ \(CatalogStore.newerCatalogNotice) (catalog.json is v\(paused); this build reads up to v\(CatalogSnapshot.currentVersion).) Background jobs that would save are held."
+            log(line)
+            appLog.write(line)
+            publishFamilyAssetConfiguration()
+        }
     }
 
     /// Persist the current records array. Debounced; bursts of mutations

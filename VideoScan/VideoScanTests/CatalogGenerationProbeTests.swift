@@ -359,7 +359,8 @@ final class CatalogGenerationProbeTests: XCTestCase {
             let off = try XCTUnwrap(generationOffset(in: url), "\(label): no generation key at all", file: file, line: line)
             XCTAssertLessThan(off, 4096, "\(label): generation at byte \(off) — outside the head window", file: file, line: line)
             let head = String(decoding: try Data(contentsOf: url).prefix(64), as: UTF8.self)
-            XCTAssertTrue(head.hasPrefix("{\"version\":6,\"generation\":\(generation),"),
+            // Writers stamp the CURRENT version (v7 since GH #167).
+            XCTAssertTrue(head.hasPrefix("{\"version\":\(CatalogSnapshot.currentVersion),\"generation\":\(generation),"),
                           "\(label): canonical header order, got \(head)", file: file, line: line)
             XCTAssertEqual(CatalogSnapshot.headerProbe(at: url)?.generation, generation, label, file: file, line: line)
         }

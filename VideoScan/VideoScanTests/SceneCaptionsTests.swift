@@ -86,11 +86,13 @@ struct SceneCaptionsTests {
     //
     // History: v2 (legacy), v3 (added caption fields), v4 (sceneCaption
     // model/date metadata), v5 (scanContext nested on record), v6
-    // (originVolume + originalFullPath for Bucket-A/D adoption).
-    // v5 and v6 migration tests are a known gap — only forward round-
-    // trip is covered by `vNCatalogJsonRoundTripsCaptions` below.
-    @Test func currentVersionIs6() {
-        #expect(CatalogSnapshot.currentVersion == 6)
+    // (originVolume + originalFullPath for Bucket-A/D adoption), v7
+    // (GH #167: unknown keys preserved; no field changed — the bump makes
+    // pre-#167 builds, which strip unknown keys, refuse to save).
+    // v0–v6 load-and-upgrade fixtures live in CatalogVersioningTests
+    // (CatalogOlderVersionUpgradeTests), which closes the old v5/v6 gap.
+    @Test func currentVersionIs7() {
+        #expect(CatalogSnapshot.currentVersion == 7)
     }
 
     // MARK: - Round-trip
@@ -98,8 +100,7 @@ struct SceneCaptionsTests {
     // A current-schema catalog with captions populated round-trips
     // through encode + decode unchanged. Locks down encode-if-non-empty
     // and encodeIfPresent for the new fields. Asserts the live schema
-    // version (currently 6) — bump the assertion when the canary above
-    // is bumped.
+    // version (the canary above pins its number; GH #167 made it 7).
     @Test func v6CatalogJsonRoundTripsCaptions() throws {
         let r = VideoRecord()
         r.fullPath = "/v/family.mov"
@@ -117,7 +118,7 @@ struct SceneCaptionsTests {
         let data = try CatalogSnapshotDTO(snap).encoded(using: JSONEncoder())
         let decoded = try JSONDecoder().decode(CatalogSnapshot.self, from: data)
 
-        #expect(decoded.version == 6)
+        #expect(decoded.version == CatalogSnapshot.currentVersion)
         #expect(decoded.records.count == 1)
         let rec = decoded.records[0]
         #expect(rec.detectedPeople == ["Donna"])
