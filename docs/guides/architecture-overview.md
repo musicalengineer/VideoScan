@@ -72,7 +72,7 @@ VideoScanApp.swift          App entry, scenes, menu commands
 Originally three tabs (People, Media, Settings). Settings moved to Apple menu Cmd+, per macOS convention. See [settings-apple-menu.md](settings-apple-menu.md).
 
 ### Model files are god objects (intentional)
-PersonFinderModel and VideoScanModel are large single classes. This is a conscious deferral — they have tightly coupled `@Published` state that makes clean extraction into extensions or helper types a larger architectural effort. The view layer was refactored first because it had clean extraction seams (self-contained structs). See [refactor-view-extraction.md](refactor-view-extraction.md) for the rationale.
+PersonFinderModel and VideoScanModel are large single classes. This is a conscious deferral — they have tightly coupled `@Published` state that makes clean extraction into extensions or helper types a larger architectural effort. The view layer was refactored first because it had clean extraction seams (self-contained structs). See [refactor-view-extraction.md](../archive/2026-Q2/refactor-view-extraction.md) for the rationale.
 
 ### Four face detection engines
 Vision (Apple native), ArcFace (CoreML on ANE), dlib (Python subprocess), Hybrid (Vision + ArcFace). Engine selection is per-job — different scan jobs can use different engines simultaneously. Dispatch happens in `processOne()` in PersonFinderModel.

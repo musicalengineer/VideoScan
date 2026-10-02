@@ -20,7 +20,7 @@
 
 # Find Original / Find Related — design v2 (2026-09-23, after codex's independent review)
 
-**Status: DRAFT for Rick.** v1 (below, unchanged) proposed evidence tiers → an overnight fingerprint index → learned weights. Codex's review (docs/codex-review-1633-1638-2026-09-23.md) found real gaps; Claude agrees with every point. v2 changes the plan, not the ambition.
+**Status: DRAFT for Rick.** v1 (below, unchanged) proposed evidence tiers → an overnight fingerprint index → learned weights. Codex's review (docs/reviews/codex/codex-review-1633-1638-2026-09-23.md) found real gaps; Claude agrees with every point. v2 changes the plan, not the ambition.
 
 ## What changes in v2
 

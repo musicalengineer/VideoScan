@@ -1,5 +1,5 @@
 // HallieRemoteClient.swift
-// Hallie on the viewer (Phase 1, docs/remote_use_design.md §3): the porch
+// Hallie on the viewer (Phase 1, docs/design/remote_use_design.md §3): the porch
 // Mac's chat talks to the MASTER's Hallie web bridge — the same
 // `POST /api/ask` the iPad page uses — so answers, citations, memory,
 // logs and pronunciations are the master's. Nothing forks: the master

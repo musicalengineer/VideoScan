@@ -16,7 +16,7 @@
 //     FAILS CLOSED with one warning on every involved profile;
 //   • a sibling with one stored parent receives the missing one;
 //   • a derived edge cites the profile whose row was copied.
-// Dimensions (docs/testing_retrospective):
+// Dimensions (docs/practices/testing_retrospective_2026_07_05.md):
 //   LOGIC     — Rick's exact row set; cross-surface agreement; mixed bases;
 //               partial explicit parent; half dominates unspecified;
 //               full-vs-half conflict; populated 3- and 4-parent conflicts;

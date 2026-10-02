@@ -18,16 +18,16 @@ Use this document for the common contracts, operating boundaries, and roadmap. K
 
 | Focused document | Why it remains separate |
 |---|---|
-| [CyberBrain design](cyberbrain_design.md) | Persisted schema, privacy, retrieval, correction and preservation contracts; historical proposal sections remain labeled. |
-| [Proposer/tool contract](hallie_proposer_with_tools_design.md) | Typed claims, verification table, tool schemas, budgets, cache and cutover requirements. Read the benchmark correction below before its rev-5 rationale. |
-| [Two-mode specification](hallie_two_mode_design.md) | Detailed routing transitions, cross-client wiring and acceptance sequences. Historical line numbers are navigation clues, not current anchors. |
+| [CyberBrain design](../design/cyberbrain_design.md) | Persisted schema, privacy, retrieval, correction and preservation contracts; historical proposal sections remain labeled. |
+| [Proposer/tool contract](../design/hallie_proposer_with_tools_design.md) | Typed claims, verification table, tool schemas, budgets, cache and cutover requirements. Read the benchmark correction below before its rev-5 rationale. |
+| [Two-mode specification](../design/hallie_two_mode_design.md) | Detailed routing transitions, cross-client wiring and acceptance sequences. Historical line numbers are navigation clues, not current anchors. |
 | [Live failure ledger](hallie_live_failures.md) | Exact questions, corpus IDs, fix evidence and unresolved statuses must remain auditable. |
-| [Pronunciation research](pronunciation_training_research.md) | Phoneme mappings, prototype evidence, candidate methods and cited research. |
+| [Pronunciation research](../research/pronunciation_training_research.md) | Phoneme mappings, prototype evidence, candidate methods and cited research. |
 | [Local neural voice](hallie-local-neural-voice.md) | Installation, pinned revisions/checksums, fallback and license provenance. |
-| [Qwen measurements](qwen_metrics_2026_08_27.md) | Reproducible benchmark identity, artifact hashes, uncertainty and invalidated-pilot correction. |
+| [Qwen measurements](../archive/2026-Q3/qwen_metrics_2026_08_27.md) | Reproducible benchmark identity, artifact hashes, uncertainty and invalidated-pilot correction. |
 
-Detailed tree ingest/cache and web contracts remain separate: [GEDCOM](gedcom.md), [offline tree cache](offline_family_tree_cache.md),
-[FamilySearch API notes](familysearch_api_notes.md), and [web interface](web_interface.md). This document does not redefine their
+Detailed tree ingest/cache and web contracts remain separate: [GEDCOM](gedcom.md), [offline tree cache](../design/offline_family_tree_cache.md),
+[FamilySearch API notes](../research/familysearch_api_notes.md), and [web interface](../design/web_interface.md). This document does not redefine their
 storage, authentication, export, or serving protocols. September 12–15 code-review and refactoring reports remain independent records.
 
 ## Status: decisions, implementation evidence, and proposals
@@ -194,7 +194,7 @@ CyberBrain holds attributed family passages, events, anecdotes and sources,
 with stable IDs, privacy, confidence, status and supersession. Catalog dossiers
 hold evidence about media. GEDCOM holds imported assertions. Reviewed world
 facts belong in versioned knowledge data, not arbitrary routing constants.
-The [detailed CyberBrain specification](cyberbrain_design.md) remains the
+The [detailed CyberBrain specification](../design/cyberbrain_design.md) remains the
 schema/preservation reference; its original August implementation inventory
 and proposed migration state are historical.
 

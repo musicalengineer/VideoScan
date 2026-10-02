@@ -354,7 +354,7 @@ struct AudioTranscriberTests {
     }
 
     /// Cross-source composition: a person tag + a transcript token
-    /// should hit via AND semantics, matching the docs/scene_captions_plan.md
+    /// should hit via AND semantics, matching the docs/design/scene_captions_plan.md
     /// "Donna playing guitar" example shape.
     @Test("Search composes person tag AND transcript token")
     func searchComposesPeopleAndTranscript() {

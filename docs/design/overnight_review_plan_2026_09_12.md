@@ -24,5 +24,5 @@ the CLI configuration by the sandbox. No scheduled wake was installed. The activ
 session must remain alive to perform the channel checks and 23:00 assessment;
 do not describe queued messages or this note as a working scheduled automation.
 
-Deliverable: `docs/refactoring_assessment_2026_09_13.md`, with a summary sent to
+Deliverable: `docs/reviews/qa/refactoring_assessment_2026_09_13.md`, with a summary sent to
 both Rick and Claude on the local Team Channel and any unreviewed work disclosed.

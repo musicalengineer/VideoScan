@@ -519,7 +519,7 @@ enum HallieTurnExecutor {
         /// tree person id, valued "Rick as Richard Harding Breen Jr". An
         /// answer that leans on one says so in a "(taking …)" aside.
         let assumedTreeBridges: [String: String]
-        /// The FAMILY the turn was read in (docs/hallie_two_mode_design.md
+        /// The FAMILY the turn was read in (docs/design/hallie_two_mode_design.md
         /// §3.4 C): the executor's own cross-family fallbacks — a place
         /// question becoming a catalog cross search, an unresolved
         /// aggregate anchor becoming a presence search — are refused in
@@ -702,7 +702,7 @@ enum HallieTurnExecutor {
         /// — "Did you mean X or Y?" and an unresolved "my dad" are declines
         /// too, and they offer no retry.
         let retryOffer: HallieOfferAcceptance.Offer?
-        /// The FAMILY the turn was read in (docs/hallie_two_mode_design.md
+        /// The FAMILY the turn was read in (docs/design/hallie_two_mode_design.md
         /// §3.2): set by the mode-aware handlers and the mode gate so a
         /// DECLINED turn still moves the session to the mode the classifier
         /// chose ("not in the tree" keeps you in tree mode). Nil = derive
@@ -2140,7 +2140,7 @@ enum HallieTurnExecutor {
             knowledgeCitations: knowledgeCitations,
             catalogPersonName: answered ? plan.subject : nil,
             // The approved CyberBrain claims, verbatim, are the only thing a
-            // model may rephrase for this answer (docs/cyberbrain_design.md §9).
+            // model may rephrase for this answer (docs/design/cyberbrain_design.md §9).
             answerPlan: answered
                 ? HallieAnswerPlan.biography(plan, fallbackText: prose, subjectLifeStatus: life)
                 : nil,

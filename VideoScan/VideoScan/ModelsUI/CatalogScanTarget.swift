@@ -85,7 +85,7 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     /// source volume in `.manuallyDeleted` (Bucket B + Bucket E disposed
     /// 100% of records). Two-button modal (`Retire` / `Skip for now`) —
     /// no typed confirmation; fully reversible via the Reinstate context
-    /// action. See docs/relocate_volume_plan.md §1B.
+    /// action. See docs/design/relocate_volume_plan.md §1B.
     ///
     /// Swift's `Date?` ≈ C++ `std::optional<Date>` — nil means "not retired."
     @Published var retiredAt: Date?

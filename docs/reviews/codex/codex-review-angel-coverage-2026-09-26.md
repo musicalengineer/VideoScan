@@ -6,9 +6,9 @@ The sibling worktree `/Users/rickb/dev/VideoScan-wt-angel-coverage` exists but
 its contents are sandbox-blocked. This is a head start on the design and
 existing integration boundaries, **not approval of the feature implementation**.
 
-Sources: `docs/footage_groups_gap_plan_2026-09-26.md`,
-`docs/footage_tech_survey_2026-09-26.md`, `docs/find_original_design.md`,
-`docs/archive_angel_wise_design.md`, and relevant production/test code.
+Sources: `docs/design/footage_groups_gap_plan_2026-09-26.md`,
+`docs/research/footage_tech_survey_2026-09-26.md`, `docs/design/find_original_design.md`,
+`docs/design/archive_angel_wise_design.md`, and relevant production/test code.
 Two read-only QA agents and a testing agent reviewed separate concerns;
 the manager checked the cited source paths. Findings below are source-confirmed,
 not runtime reproductions. No app, app test host, media analysis, or tests ran.
@@ -98,7 +98,7 @@ unarchived repaired output; include the state before the old source is supersede
 
 ### D1 — P1: Fingerprint edges erase the distinction between overlap and identity
 
-**Location:** `docs/footage_groups_gap_plan_2026-09-26.md:48`–`:51`.
+**Location:** `docs/design/footage_groups_gap_plan_2026-09-26.md:48`–`:51`.
 
 The proposed UUID-pair edge makes audio/visual fingerprints Likely and passes
 them into ordinary union-find. It carries neither typed containment nor machine-
@@ -120,7 +120,7 @@ safe today, but the proposed seam's semantics are unsafe for its intended use.
 
 ### D2 — P2: Date plus folder cannot reliably identify an event
 
-**Location:** `docs/footage_groups_gap_plan_2026-09-26.md:34`–`:36`.
+**Location:** `docs/design/footage_groups_gap_plan_2026-09-26.md:34`–`:36`.
 
 The motivating case is differently named Thanksgiving edits in different folders.
 If those folder basenames differ (`Exports`, `Tape12`, `Restored`), the proposed
@@ -135,7 +135,7 @@ unknown dates, month/year precision, and conflicting conversion/capture dates.
 
 ### D3 — P2: Raw file backlog rewards duplicate-heavy years
 
-**Location:** `docs/footage_groups_gap_plan_2026-09-26.md:37`.
+**Location:** `docs/design/footage_groups_gap_plan_2026-09-26.md:37`.
 
 The proposed `[year: (unarchived, archived)]` file counts are not unique footage
 coverage. Importing 1,000 copies of one 1994 recording can increase that year's

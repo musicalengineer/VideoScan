@@ -2,7 +2,7 @@
 // "Show me some memories…" (Rick 2026-10-01; GH #236 Story of the Day is
 // where it grows): the provider list behind the "Recently discovered" card.
 //
-// Dimensions (docs/testing_retrospective_2026_07_05.md):
+// Dimensions (docs/practices/testing_retrospective_2026_07_05.md):
 //   Logic     — documents filed in the last 30 days, research dossiers with
 //               Confirmed findings, today's Person of the Day; newest first,
 //               capped at five, deduped; a new provider plugs in

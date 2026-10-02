@@ -70,7 +70,7 @@ Claude confirmed ownership in team-channel #1469: Codex owns the isolated Hallie
 response extraction; Claude owns People correctness fixes, the spouse-route
 correction, Promote completion and Hallie catalog/tree mode selection. People
 extraction is deferred until its correctness fixes land. Codex's durable findings
-are in [the post-merge review](codex_postmerge_review_2026_09_13.md).
+are in [the post-merge review](../reviews/codex/codex_postmerge_review_2026_09_13.md).
 
 Rick explicitly requested that refactoring stay on a branch so he and Claude can
 continue rapid development on Promote. Worktree:
@@ -91,6 +91,6 @@ ownership extraction with injected sinks. No app/UI/test-host launch on Rick's
 active M4. Do not change storage schemas, logging contracts, threading models,
 or recovered media as part of this work.
 
-Evidence: [overnight assessment](refactoring_assessment_2026_09_13.md),
-[restart handoff](codex_restart_handoff_2026_09_13.md), and saved paired replay
+Evidence: [overnight assessment](../reviews/qa/refactoring_assessment_2026_09_13.md),
+[restart handoff](../ops/codex_restart_handoff_2026_09_13.md), and saved paired replay
 artifacts under `~/Library/Logs/VideoScan/hallie-eval/visible-20260913-1020/`.

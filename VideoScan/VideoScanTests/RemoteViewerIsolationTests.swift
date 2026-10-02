@@ -1,5 +1,5 @@
 // RemoteViewerIsolationTests.swift
-// Phase 1 remote use, slice 5 — isolation (docs/remote_use_design.md §5).
+// Phase 1 remote use, slice 5 — isolation (docs/design/remote_use_design.md §5).
 //
 // A viewer starting from a POISONED world: garbage catalog.json, a
 // compiled pointer that is not JSON, a stale .sync-staging full of junk, a

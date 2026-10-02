@@ -68,7 +68,7 @@ Each record (see `Models.swift::VideoRecord`) holds:
   `ocrDateCandidates`, `ocrText`, `inferredRecordDate`,
   `inferredDateConfidence`, `inferredDateSource` (provenance of a date the
   record did not derive in its own pass — "catch-up", "propagated from
-  <id>", "folder-year"; see docs/date_inference_catchup_and_propagation.md),
+  <id>", "folder-year"; see docs/guides/date_inference_catchup_and_propagation.md),
   `dossierProcessedAt`, `dossierProcessedBy`
 - **User-edit:** `detectedPeople`, `confirmedByUserPeople`,
   `mediaDisposition`, `lifecycleStage`, `starRating`, `notes`, etc.

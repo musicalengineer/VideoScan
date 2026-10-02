@@ -141,7 +141,7 @@ func pfBuildSortedClipEntries(results: [pfVideoResult], outputDir: String) -> [p
 
 // MARK: - Compatibility bucketing
 //
-// See docs/compilation-bucketing.md for design rationale. The short version:
+// See docs/guides/compilation-bucketing.md for design rationale. The short version:
 // the ffmpeg concat demuxer requires every input to share identical stream
 // parameters (codec, pix_fmt, resolution, SAR, audio layout, etc). With
 // mixed family-archive material that condition fails about ten minutes

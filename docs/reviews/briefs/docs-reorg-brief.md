@@ -8,13 +8,13 @@ Target layout:
 - docs/practices/ — process and policy: software_dev_policy, overnight_themes, review/adversarial process, testing retrospectives, branching; create practices/invariants/ empty with a README placeholder (tonight's work fills it).
 - docs/design/ — feature designs and plans (*_design_*, *_plan*, roadmaps), including existing docs/design/.
 - docs/research/ — source surveys and API notes (irish_*, uk_scotland_*, familysearch_api_notes, existing docs/research/).
-- docs/reviews/codex/ — codex-review-*.md; docs/reviews/briefs/ — merge docs/codex-briefs/ and docs/briefs/; docs/reviews/qa/ — test-gap audits, QA reports; docs/reviews/adversarial/ — empty with README placeholder.
+- docs/reviews/codex/ — codex-review-*.md; docs/reviews/briefs/ — merge docs/reviews/briefs/ and docs/reviews/briefs/; docs/reviews/qa/ — test-gap audits, QA reports; docs/reviews/adversarial/ — empty with README placeholder.
 - docs/ops/ — morning reports, nightly notes, incident write-ups, perf/metrics/analysis snapshots (fold existing docs/perf, docs/metrics, docs/analysis, docs/poi-cycles under ops/ unless a script writes there — see below).
 - docs/archive/2026-Q3/ (and 2026-Q2 etc. by the file's last-commit date) — superseded designs, handoffs, codex reviews whose cycle is closed AND older than 30 days, one-off reports. When unsure, keep it current (not archived) and list it in the report.
 - Leave docs/team-channel/ where it is. Leave data files (*.jsonl, *.json, *.csv, dashboards) where code/tests read them unless you update every reader.
 
 Mandatory reference rewrite: after the moves, `git grep` the WHOLE repo (Swift, Python, shell, plists, workflows, CLAUDE.md, .claude/, tests, scripts, tools) for every moved path and fix it. Special care:
-- tools/codex_review.py writes `docs/codex-review-<slug>-<date>.md` and reads briefs — change its default output dir to docs/reviews/codex/ and keep its tests green (pytest).
+- tools/codex_review.py writes `docs/reviews/codex/codex-review-<slug>-<date>.md` and reads briefs — change its default output dir to docs/reviews/codex/ and keep its tests green (pytest).
 - Hallie test corpora / testbeds read under docs/ (e.g. docs/hallie_testbed.jsonl) — prefer leaving data files in place over moving them.
 - Nightly scripts, morning hook (.claude/scripts/session_morning_hook.sh), metrics scripts, workflows.
 - Swift tests that read docs (SourceTree helpers) — grep VideoScanTests and VideoScanCore/Tests for "docs/".

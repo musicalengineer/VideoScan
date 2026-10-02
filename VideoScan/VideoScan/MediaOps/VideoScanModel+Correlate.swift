@@ -103,7 +103,7 @@ extension VideoScanModel {
     }
 
     /// Correlate under the analysis-ledger contract
-    /// (docs/analysis_ledger_design.md, 2026-07-05):
+    /// (docs/design/analysis_ledger_design.md, 2026-07-05):
     ///
     ///   - `selectedIDs == nil` (Correlate All): INCREMENTAL. Existing
     ///     pairs are settled history — only unpaired A/V-only orphans are

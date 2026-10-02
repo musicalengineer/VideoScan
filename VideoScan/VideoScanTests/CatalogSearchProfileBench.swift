@@ -3,7 +3,7 @@
 //
 // MEASUREMENT HARNESS, not (yet) a regression sensor. This benchmark is
 // the shared yardstick for the #123 fix: the diagnosis run
-// (docs/perf/search_profile_2026-07-20.md) and the fix's before/after
+// (docs/ops/perf/search_profile_2026-07-20.md) and the fix's before/after
 // numbers must both come from THIS file, unchanged, in Release
 // (-configuration Release; per project build-mode policy a Debug run is
 // not a perf measurement).

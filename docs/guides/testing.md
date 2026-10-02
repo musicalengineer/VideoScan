@@ -20,7 +20,7 @@ than one; these are purposes, not mutually exclusive directories.
    Stress tests are opt-in and run on an assigned fleet machine.
 
 Every feature/fix also follows the orthogonal five-dimension checklist in
-[`testing_retrospective_2026_07_05.md`](testing_retrospective_2026_07_05.md):
+[`testing_retrospective_2026_07_05.md`](../practices/testing_retrospective_2026_07_05.md):
 logic, scale, media matrix, isolation, and a regression sensor.
 
 ## Native Find & Tag coverage

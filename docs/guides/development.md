@@ -6,13 +6,13 @@ those bugs remain in today's code.
 
 ## Start here
 
-- [Software development policy](software_dev_policy.md): contribution, review,
+- [Software development policy](../practices/software_dev_policy.md): contribution, review,
   merge and regression-test rules.
 - [Testing](testing.md): test categories, isolation and machine routing.
 - [Compute assignments](compute-assignments.md): fleet responsibilities.
 - [Architecture](architecture-overview.md): subsystem boundaries.
-- [Team channel](team-channel/README.md): local coordination.
-- [Engineering Room](../tools/engineering-room/README.md): current discussion
+- [Team channel](../team-channel/README.md): local coordination.
+- [Engineering Room](../../tools/engineering-room/README.md): current discussion
   service and its controls. The July invitation and prototype review are
   superseded by that maintained operational guide.
 
@@ -47,8 +47,8 @@ risks. Recheck these against the implementation being reviewed:
   recomputation, while preserving one coherent source of truth.
 
 Current findings and evidence belong in dated review reports, including
-[September 15 code review](codex_review_2026_09_15.md) and
-[technical-debt review](tech_debt_review_2026_09_15.md). Their test counts and
+[September 15 code review](../reviews/codex/codex_review_2026_09_15.md) and
+[technical-debt review](../reviews/qa/tech_debt_review_2026_09_15.md). Their test counts and
 verdicts apply to the revisions named there. They are not a current build badge.
 
 ## Historical branches and administrative notes

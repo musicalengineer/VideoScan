@@ -604,7 +604,7 @@ rejected person after the correction.
 
 ### A. "dad" was never fuzzy-matched. The tree has a man named Dad.
 
-`docs/hallie_live_failures.md` and the 9/11 strict notes both say "fuzzy-
+`docs/guides/hallie_live_failures.md` and the 9/11 strict notes both say "fuzzy-
 matched 'dad' to Dafydd". It is not fuzzy. The merged FamilySearch tree's
 `@IB21341@` — Dafydd ab Einion "Y Giwn Llwyd", b. about 1360 — carries
 fifteen NAME records, and the seventh is

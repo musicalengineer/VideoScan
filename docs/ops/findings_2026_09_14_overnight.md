@@ -3,7 +3,7 @@
 Written while Rick was away. **Nothing here was merged to `main`.** Fixes that
 exist are on their own branches; everything else is a finding awaiting his call.
 
-Context: the day's P0 (`docs/incident_2026_09_14_sandbox_rename_wedge.md`) was
+Context: the day's P0 (`docs/ops/incident_2026_09_14_sandbox_rename_wedge.md`) was
 fixed and merged as `34aeda64`. Rick then spot-tested, reported two things, and
 handed the fleet over for the night with one standing instruction:
 

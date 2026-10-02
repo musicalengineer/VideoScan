@@ -13,7 +13,7 @@ datasets and the dashboard; they are retained, not treated as expendable prose.
 
 | Retired group | Files | Where useful material now lives |
 |---|---:|---|
-| July 15–25 Markdown team-channel messages | 145 | [Channel guide](team-channel/README.md); durable design/evaluation material in the theme guides |
+| July 15–25 Markdown team-channel messages | 145 | [Channel guide](../team-channel/README.md); durable design/evaluation material in the theme guides |
 | Recognition designs, experiments, research and April handoffs | 32 | [Facial recognition](facial-recognition.md) |
 | Hallie overviews, plans and duplicate topic notes | 17 | [Hallie](hallie.md) |
 | Archive, promotion, copy, cleanup and volume plans | 19 | [Media archive](media-archive.md) |
@@ -24,7 +24,7 @@ specs remain when their exact schemas, algorithms, installation provenance or
 unresolved evidence would be diluted by a summary. Recent code reviews,
 incident evidence, datasets, model artifacts and operational scripts remain.
 
-The [main index](README.md) is now organized by subject. Channel chatter has a
+The [main index](../README.md) is now organized by subject. Channel chatter has a
 seven-day maximum, with 2–3 days preferred. No scheduled deletion job was added.
 
 ## Recovery and historical citations

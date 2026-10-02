@@ -189,7 +189,7 @@ Long-arc plan already documented in three docs:
 
 - `docs/family_media_training_model.md` — full architecture (ArcFace
   frozen + small classifier head → vector index → query engine)
-- `docs/Media_Analyzer.md` — research on *why* generic recognizers fail
+- `docs/research/Media_Analyzer.md` — research on *why* generic recognizers fail
   on a family (genetic similarity, age drift, source drift)
 - `docs/media_longterm_plan.md` — the four-disposition vision (Master /
   Backed up / Ready for LTA / Archived)

@@ -147,7 +147,7 @@ The model may *mine* candidate world facts at authoring time; a human reviews; s
 
 > "cyberbrain may be the bridge to qwen?"
 
-Yes, by construction. `docs/cyberbrain_design.md` §8 already defines retrieval as *evidence, not prose* (resolved identities, GEDCOM facts, items, media citations, contradictions), with deterministic ordering, privacy ceilings, and bounded results. That `CyberBrainEvidenceSet` **is** the `cyberBrain.*` tool result: every element carries a stable id (`brain:<itemID>`, `gedcom:@I…@`, `catalog:<uuid>`), so a claim can cite it and the verifier can re-fetch it. Nothing new is invented; the proposer reads through the existing contract.
+Yes, by construction. `docs/design/cyberbrain_design.md` §8 already defines retrieval as *evidence, not prose* (resolved identities, GEDCOM facts, items, media citations, contradictions), with deterministic ordering, privacy ceilings, and bounded results. That `CyberBrainEvidenceSet` **is** the `cyberBrain.*` tool result: every element carries a stable id (`brain:<itemID>`, `gedcom:@I…@`, `catalog:<uuid>`), so a claim can cite it and the verifier can re-fetch it. Nothing new is invented; the proposer reads through the existing contract.
 
 Three consequences:
 - **Identity goes through the shared resolver** ("substring matching is not identity resolution") — the proposer never receives a name it resolved itself; it calls `cyberBrain.resolve(name)` and gets ids.

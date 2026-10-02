@@ -19,7 +19,7 @@ Hallie chat, the video archive, and photos from outside the house. They see only
 what Rick has explicitly marked public, never the whole catalog.
 
 This supersedes the forward references in
-[Hallie guide](hallie.md), which anticipated this
+[Hallie guide](../guides/hallie.md), which anticipated this
 work from two directions:
 
 - *Vision:* "a natural-language frontend so Rick — and eventually less-technical
@@ -76,12 +76,12 @@ containment check. There is no obvious path-traversal surface.
 
 Four blockers. Each is small to fix except the last, which is a feature.
 
-**1. No TLS.** [`HallieWebServer.swift:211`](../VideoScan/VideoScan/HallieWebServer.swift)
+**1. No TLS.** [`HallieWebServer.swift:211`](../../VideoScan/VideoScan/HallieWebServer.swift)
 uses `NWParameters.tcp` — plain HTTP. The passphrase and every frame of family
 video would cross the network in cleartext.
 
 **2. Authentication fails open.**
-[`HallieWebBridge.swift:128`](../VideoScan/VideoScan/HallieWebBridge.swift):
+[`HallieWebBridge.swift:128`](../../VideoScan/VideoScan/HallieWebBridge.swift):
 
 ```swift
 let required = config.passphrase.trimmingCharacters(in: .whitespacesAndNewlines)

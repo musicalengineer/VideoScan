@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - ProvenanceTests
 //
-// Covers the Provenance & Audit Trail builders (docs/relocate_volume_plan.md
+// Covers the Provenance & Audit Trail builders (docs/design/relocate_volume_plan.md
 // §2). Three views: Volume Provenance, File Journey, Migration Overview.
 //
 // Pure builders — no filesystem, no MainActor needed for the actual

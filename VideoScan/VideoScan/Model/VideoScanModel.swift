@@ -52,7 +52,7 @@ final class VideoScanModel: ObservableObject {
     /// Each user "Run/Add to Queue" click appends one job; the queue is
     /// strictly serial (a parallel-to-the-user illusion). See
     /// `VideoScanModel+RelocateQueue.swift` and
-    /// docs/relocate_volume_plan.md §3.
+    /// docs/design/relocate_volume_plan.md §3.
     @Published var relocateQueue: [RelocateQueuedJob] = []
     /// Handle to the currently-running relocate runner Task, retained so
     /// the user can cancel an in-flight job. Cancellation is cooperative:
@@ -97,7 +97,7 @@ final class VideoScanModel: ObservableObject {
     /// `.sheet(item:)` to this. The sheet's Done button is the ONLY trigger
     /// that fires `maybeOfferRetire` — Rick has to see the verification
     /// summary before the Retire prompt can appear. See
-    /// docs/relocate_volume_plan.md (§1A summary-sheet note).
+    /// docs/design/relocate_volume_plan.md (§1A summary-sheet note).
     @Published var pendingRelocateSummary: RelocateSummary?
     /// Live (done, total) of the reconcile classify loop — nil when no
     /// reconcile is running. One channel serves both the Jobs panel and

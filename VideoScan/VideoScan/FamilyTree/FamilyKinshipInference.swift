@@ -1,6 +1,6 @@
 // FamilyKinshipInference.swift
 // Derivation engine for People-tab relationships (design:
-// docs/kinship_inference_design.md §2 + amendments after codex review
+// docs/design/kinship_inference_design.md §2 + amendments after codex review
 // #830/#831/#833/#835/#845, 2026-08-29). Rick stores only the four
 // PRIMITIVES — parent, child, spouse, sibling — and everything else ("Tim
 // is uncle of Matt", "Bob is Rick's brother-in-law", "Martha Lamson is

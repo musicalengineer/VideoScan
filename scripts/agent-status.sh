@@ -1,7 +1,7 @@
 #!/bin/bash
 # agent-status.sh — append one agent-status row to the shared dashboard feed.
 #
-# Part of the Agent Dashboard (docs/agent_dashboard.md): both managers
+# Part of the Agent Dashboard (docs/design/agent_dashboard.md): both managers
 # (Claude, Codex) append rows here; the engineering-room UI renders the
 # latest row per agent. Append-only, attributed, honest — a stale row is
 # better than a fake-live one, so rows carry timestamps and the UI shows

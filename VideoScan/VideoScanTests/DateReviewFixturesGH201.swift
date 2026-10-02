@@ -1,7 +1,7 @@
 import Foundation
 @testable import VideoScan
 
-// Shared fixtures for the codex review of GH #201 (docs/codex-review-dates-2026-09-26.md,
+// Shared fixtures for the codex review of GH #201 (docs/reviews/codex/codex-review-dates-2026-09-26.md,
 // F1–F4). Scratch catalog stores only; the real catalog and People store are never read.
 
 enum DateReviewFixtures {

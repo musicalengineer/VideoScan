@@ -170,4 +170,4 @@ after this handoff.
 - Baseline CI remains red; the new full CI run was still in progress at
   reviewer close. No full-suite-green claim is made.
 
-Final handoff: [morning brief](morning_brief_2026-09-11.md).
+Final handoff: [morning brief](../../ops/morning_brief_2026-09-11.md).

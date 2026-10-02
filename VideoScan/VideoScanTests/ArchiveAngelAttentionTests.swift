@@ -1,5 +1,5 @@
 // ArchiveAngelAttentionTests.swift
-// Phase 1 of docs/archive_angel_curation_direction.md (Rick 2026-09-19):
+// Phase 1 of docs/design/archive_angel_curation_direction.md (Rick 2026-09-19):
 // the Angel REMEMBERS what it showed you. Five dimensions:
 //   LOGIC     the summary, the family key, the scorer's novelty / fatigue /
 //             resting lines, one-per-family, the fresh slots, the evidence

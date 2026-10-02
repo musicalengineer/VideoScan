@@ -2,7 +2,7 @@
 """One command for a whole codex review cycle (Rick, 2026-09-26/27).
 
     python3 tools/codex_review.py --title "⌘O" --range de54a7ca..48708aba \
-        --brief docs/briefs/<file>.md [--doc docs/codex-review-<slug>-<date>.md] \
+        --brief docs/reviews/briefs/<file>.md [--doc docs/reviews/codex/codex-review-<slug>-<date>.md] \
         [--timeout 1800]
     python3 tools/codex_review.py close --title "⌘O" --closed-by <sha> [--note "..."]
     python3 tools/codex_review.py status
@@ -289,7 +289,7 @@ def run_review(title: str, rng: str, brief: str, doc: str | None, timeout: float
     if problem:
         print(f"codex_review: {problem} ({brief_path})", file=sys.stderr)
         return 2
-    doc_path = resolve(doc) if doc else REPO / "docs" / (
+    doc_path = resolve(doc) if doc else REPO / "docs" / "reviews" / "codex" / (
         f"codex-review-{slug(title, rng)}-{datetime.now().strftime('%Y-%m-%d')}.md")
 
     # briefed

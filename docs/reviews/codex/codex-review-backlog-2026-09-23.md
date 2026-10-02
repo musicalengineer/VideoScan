@@ -57,8 +57,8 @@ Evidence of completed or superseded work:
 
 - 1518/1520/1521: GEDCOM review in 1523–1526. Later rule-3b work in 1537/1538/1558 culminated in independently executed 16/16 at `0a69c73c`, reported in 1563.
 - 1529/1531/1533/1536: recovery/replay coordination answered in 1532/1535/1543; not proof that every routing defect was fixed.
-- 1577/1578/1580 and Angel part of 1587: Phase 1/2 review in 1590 and `docs/codex-review-2026-09-20.md`.
-- 1599/1600/1601: duplicate/document/prune review in 1602–1604 and `docs/codex-review-followup-2026-09-20.md`.
+- 1577/1578/1580 and Angel part of 1587: Phase 1/2 review in 1590 and `docs/reviews/codex/codex-review-2026-09-20.md`.
+- 1599/1600/1601: duplicate/document/prune review in 1602–1604 and `docs/reviews/codex/codex-review-followup-2026-09-20.md`.
 - 1605/1612/1614: duplicate follow-ups in 1610/1611/1619 and current source closure in 1672. Prune received later review in 1642, including new D4/D5 findings; no blanket sweep approval.
 - 1519/1542/1557/1560 are corrections or retractions; 1625 is a corpus handoff followed by work in 1626–1629.
 

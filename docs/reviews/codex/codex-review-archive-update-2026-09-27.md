@@ -32,7 +32,7 @@ Static review at `449b232f`; supplied tests inspected for coverage. No builds or
 
 ## Brief
 
-Adversarial review of the WHOLE feature "Update… an archived file" on branch feat/archive-update: `git diff main...449b232f -- VideoScan` (it is a rewrite of the earlier Refile branch, simplified by Rick's ruling 2026-09-27 — review it fresh; the Refile review history is in docs/codex-review-refile-2026-09-27.md for context only). Do not explore outside these files; read-only; do not build or run.
+Adversarial review of the WHOLE feature "Update… an archived file" on branch feat/archive-update: `git diff main...449b232f -- VideoScan` (it is a rewrite of the earlier Refile branch, simplified by Rick's ruling 2026-09-27 — review it fresh; the Refile review history is in docs/reviews/codex/codex-review-refile-2026-09-27.md for context only). Do not explore outside these files; read-only; do not build or run.
 
 WHAT IT IS: right-click ▸ Update… on an archived file in the Archive window. Exactly two editable things: Name, and Date (year / month / day + known / estimated). The folder follows the date through Promote's own placement function (`ArchivePathResolver.baseRelativePath`); the user never picks a folder. Name-only keeps the folder; date changes move folders; both at once are ONE move; known/estimated alone updates the manifest row without moving the file. The date is written onto THIS archived record only (its userDate / confidence) plus the manifest row's record_date / date_confidence. If the catalog save or the ledger line fails AFTER the archive + index are updated, it is logged loudly and reported ("the archive is updated; the catalog will pick up the new path on the next scan") — no retry journal, no replay, by design.
 
@@ -99,7 +99,7 @@ Static review at `55e64b6e`; no builds or tests run. Supplied execution evidence
 
 ## Brief
 
-Re-review, SCOPED to the fix commits for your Archive Update review (docs/codex-review-archive-update-2026-09-27.md): range 8862271c..55e64b6e on feat/archive-update (commits ee92da34 #1, 472844cc #2, c1948c0c #3, 4233b0e1 #4–#6, 55e64b6e #7). Use `git diff 8862271c..55e64b6e -- VideoScan` and `git show <sha>`. The branch then merges origin/main (9bf4d3c7 — review-cycle tooling only, no VideoScan app files); ignore it. Do not explore outside the files these commits touch; read-only; do not build or run.
+Re-review, SCOPED to the fix commits for your Archive Update review (docs/reviews/codex/codex-review-archive-update-2026-09-27.md): range 8862271c..55e64b6e on feat/archive-update (commits ee92da34 #1, 472844cc #2, c1948c0c #3, 4233b0e1 #4–#6, 55e64b6e #7). Use `git diff 8862271c..55e64b6e -- VideoScan` and `git show <sha>`. The branch then merges origin/main (9bf4d3c7 — review-cycle tooling only, no VideoScan app files); ignore it. Do not explore outside the files these commits touch; read-only; do not build or run.
 
 FIXES (each red first):
 - ee92da34 #1 — ArchiveIndexRename.rollback: a restore that THREW is never a confirmed restore, even when the original bytes read back (the problem is recorded, the backup kept). ArchiveRefile.failureOutcome: every index file back to its original bytes + the original back at its path by identity, with only durability unconfirmed → incompleteRecovery (not rolledBack, not mixedState). Pin: ArchiveUpdateSafetyTests.restoreDurabilityFailureIsNotRollback.

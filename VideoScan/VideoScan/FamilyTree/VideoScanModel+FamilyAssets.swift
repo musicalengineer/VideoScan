@@ -5,7 +5,7 @@ extension VideoScanModel {
     /// workers and the Family Tree tab.  A designated archive is usable only
     /// when its root is online and its recorded volume identity still matches.
     ///
-    /// Remote viewer (docs/remote_use_design.md Phase 1): the synced
+    /// Remote viewer (docs/design/remote_use_design.md Phase 1): the synced
     /// catalog carries the MASTER's archive designation, and that RAID is
     /// not mounted on the porch Mac. Publishing it would make the tree
     /// `.unavailable` ("designated but offline") and hide everything. A

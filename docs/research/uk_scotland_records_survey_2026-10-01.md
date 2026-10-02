@@ -1,6 +1,6 @@
 # England & Wales, Scotland (and UK-wide) records — source survey for the Record Finder
 
-Date: 2026-10-01 · Status: **SURVEY** (companion to `docs/irish_records_design_2026-09-30.md`) · Author: Claude for Rick · No code in this task.
+Date: 2026-10-01 · Status: **SURVEY** (companion to `docs/research/irish_records_design_2026-09-30.md`) · Author: Claude for Rick · No code in this task.
 
 Scope: the same question the Irish doc asked, for Great Britain. Which sites hold the records, can a search
 be pre-filled by URL, and may the app fetch anything itself inside the existing `ResearchFetcher` /
@@ -25,7 +25,7 @@ appear in this doc (public repo); worked examples are generic.
 
 ## 1. What the app already has
 
-See `docs/irish_records_design_2026-09-30.md` §1 — same pieces: `FamilyTreeResearchLinks` (Core; pre-filled FamilySearch record search with `q.givenName/q.surname/q.birthLikeDate.from/to/q.birthLikePlace`), Research Person (`ResearchSources.swift`: `ResearchFetcher`, `URLSessionResearchFetcher`, `FixtureResearchFetcher`, `CachingResearchFetcher`, `ResearchSource` adapters — today `ChroniclingAmericaSource`, `FindAGraveSource`, `WikipediaSource`, `WebSearchSource`), person Documents, CyberBrain `officialRecord` sources, `PersonFactOverlayStore`. The Irish Phase A "I found it" bring-back is the delivery path for every link-only source below; nothing here needs new plumbing beyond more links and (for Discovery) more series.
+See `docs/research/irish_records_design_2026-09-30.md` §1 — same pieces: `FamilyTreeResearchLinks` (Core; pre-filled FamilySearch record search with `q.givenName/q.surname/q.birthLikeDate.from/to/q.birthLikePlace`), Research Person (`ResearchSources.swift`: `ResearchFetcher`, `URLSessionResearchFetcher`, `FixtureResearchFetcher`, `CachingResearchFetcher`, `ResearchSource` adapters — today `ChroniclingAmericaSource`, `FindAGraveSource`, `WikipediaSource`, `WebSearchSource`), person Documents, CyberBrain `officialRecord` sources, `PersonFactOverlayStore`. The Irish Phase A "I found it" bring-back is the delivery path for every link-only source below; nothing here needs new plumbing beyond more links and (for Discovery) more series.
 
 ## 2. Site survey (probed 2026-10-01)
 

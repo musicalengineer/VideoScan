@@ -100,7 +100,7 @@ extension CaptionOrchestrator {
     /// currentStatus / currentTarget published state.
     ///
     /// Roadmap item #4 (2026-06-04). See
-    /// docs/family-tagging-and-search-roadmap.md and
+    /// docs/design/family-tagging-and-search-roadmap.md and
     /// `pfCatalogWideMetadataCandidates`.
     func startCatalogWideCaptioning(model: VideoScanModel) async {
         guard !isShuttingDown else {

@@ -22,8 +22,8 @@ Do not restore, stage or overwrite it.
 
 ## Completed overnight assessment
 
-Report is merged on main: [refactoring_assessment_2026_09_13.md](refactoring_assessment_2026_09_13.md).
-Review history: [overnight_reviews_2026_09_12.md](overnight_reviews_2026_09_12.md).
+Report is merged on main: [refactoring_assessment_2026_09_13.md](../reviews/qa/refactoring_assessment_2026_09_13.md).
+Review history: [overnight_reviews_2026_09_12.md](../reviews/codex/overnight_reviews_2026_09_12.md).
 
 Top ten: People identity/storage; Hallie turn/session ownership; ConfirmPersonSheet;
 catalog mutation/projections/actions; date/dossier provenance; tree lifecycle/photo

@@ -1,6 +1,6 @@
 // FootageGrouping.swift
 // Find Similar Footage, Phase 1 — the pure core (Rick 2026-09-23,
-// docs/find_original_design.md top section). Catalog METADATA in, footage
+// docs/design/find_original_design.md top section). Catalog METADATA in, footage
 // groups out. No media bytes, no disk, no actors: every function here is a
 // plain computation over Sendable values, so it runs on the cooperative
 // pool (@concurrent) and is table-testable.

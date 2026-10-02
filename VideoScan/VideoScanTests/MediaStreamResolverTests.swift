@@ -1,5 +1,5 @@
 // MediaStreamResolverTests.swift
-// Phase 1 remote use, slice 2 — media on the viewer (docs/remote_use_design.md §2).
+// Phase 1 remote use, slice 2 — media on the viewer (docs/design/remote_use_design.md §2).
 //
 // The resolver matrix: master role → local always; viewer → opted-in
 // mounted volume with matching identity → local (re-rooted path); mounted

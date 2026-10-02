@@ -1,7 +1,7 @@
 // POIStorage.swift
 // Single source of truth for where Person-of-Interest (POI) data lives.
 //
-// Layout (issue #35, re-keyed by uuid 2026-09-12 — docs/people_uuid_folders_design.md):
+// Layout (issue #35, re-keyed by uuid 2026-09-12 — docs/design/people_uuid_folders_design.md):
 //
 //     ~/Library/Application Support/VideoScan/
 //     ├── catalog.json
@@ -585,7 +585,7 @@ enum POIStorage {
     /// `root` to `root/<UUID>/`. Safe to call before every enumeration: when
     /// every folder is already uuid-named it costs one directory listing.
     ///
-    /// Order of operations (docs/people_uuid_folders_design.md, hardened
+    /// Order of operations (docs/design/people_uuid_folders_design.md, hardened
     /// after codex review 2026-09-12):
     ///   1. refuse a live root under a test host and any viewer;
     ///   2. reconcile a previous run's plan (a folder it renamed but never

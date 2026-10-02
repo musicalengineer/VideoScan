@@ -1,5 +1,5 @@
 // ArchiveAngelRecommendations.swift
-// THE recommendation classifier (docs/archive_angel_consolidation_plan.md,
+// THE recommendation classifier (docs/design/archive_angel_consolidation_plan.md,
 // "Folding the Helper in"; Consolidation S3). One pure pass over the
 // catalog's candidates that puts every record in ONE class — Ready, Needs a
 // date, Worth a look, Not now, Excluded (with its reason), or Another copy —

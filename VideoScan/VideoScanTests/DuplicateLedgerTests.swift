@@ -1,6 +1,6 @@
 // DuplicateLedgerTests.swift
 // Analysis-ledger semantics for duplicate detection
-// (docs/analysis_ledger_design.md, 2026-07-05): dup groups are computed
+// (docs/design/analysis_ledger_design.md, 2026-07-05): dup groups are computed
 // once and stamped (`dupAnalyzedAt`); "Analyze All" processes only the
 // pending delta (new/invalidated records) plus the records they could
 // possibly group with; an unchanged catalog is an instant no-op. The

@@ -63,11 +63,11 @@ enum CatalogLoadOutcome: Equatable {
 ///  - v4: VideoRecord gains `sceneCaptions: [SceneCaption]`,
 ///    `sceneCaptionModel: String?`, `sceneCaptionDate: Date?` for VLM-generated
 ///    natural-language descriptions. Same additive Codable pattern as v3.
-///    See docs/scene_captions_plan.md.
+///    See docs/design/scene_captions_plan.md.
 ///  - v5: VideoRecord gains `originalFullPath: String?` and `originVolume:
 ///    String?` for Relocate Volume provenance, plus two new `ArchiveStage`
 ///    cases (`manuallyDeleted`, `salvageFailed`). Pure additive — v4 loads
-///    unchanged. See docs/relocate_volume_plan.md.
+///    unchanged. See docs/design/relocate_volume_plan.md.
 ///  - v6: Companion to Relocate §1B Retire Volume. No catalog.json schema
 ///    change — the retire fields (`retiredAt`, `retiredReason`,
 ///    `retiredWitnesses`) live on `CatalogScanTarget` in UserDefaults and

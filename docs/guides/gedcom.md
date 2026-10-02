@@ -188,5 +188,5 @@ than expecting an Ancestry or FamilySearch GEDCOM export to carry them.
 
 VideoScan's proposed direct FamilySearch integration remains local-first and
 read-oriented. The implementation and approval constraints are documented in
-[familysearch_api_notes.md](familysearch_api_notes.md). Direct API data must not
+[familysearch_api_notes.md](../research/familysearch_api_notes.md). Direct API data must not
 silently overwrite the local GEDCOM.

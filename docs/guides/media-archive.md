@@ -448,11 +448,11 @@ Do not infer their completion from the presence of an archive, an alpha batch, o
 
 ## 14. Separate authoritative references
 
-- [Relocation and reconcile](relocate_volume_plan.md): cross-volume movement and witness contracts.
-- [Catalog write safety](catalog_write_safety_design.md): persistence, locking, recovery, and generation safety.
+- [Relocation and reconcile](../design/relocate_volume_plan.md): cross-volume movement and witness contracts.
+- [Catalog write safety](../design/catalog_write_safety_design.md): persistence, locking, recovery, and generation safety.
 - [Database design](database_design.md): authoritative catalog versus disposable caches.
 - [Avid format research](Avid-Format-Reverse-Engineering.md): essence/recovery details.
-- [Storage hardware](storage_raid_recommendations.md): hardware decisions; re-evaluate before buying/repartitioning.
+- [Storage hardware](../research/storage_raid_recommendations.md): hardware decisions; re-evaluate before buying/repartitioning.
 
 ## 15. Provenance
 

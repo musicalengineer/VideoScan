@@ -1,6 +1,6 @@
 # Same/Similar footage detection — technology survey (Sept 2026)
 
-Context checked first: `docs/find_original_design.md` (2026-09-23) already defines tiers T0–T4 and a "guitar case" spike; `PerceptualHash.swift` (dHash, ±2-index offsets) and `PerceptualFingerprinter.swift` (32 frames/file via ffmpeg) are on main; `AudioTranscriber.swift`/`WhisperWorkerTranscriber.swift` run Whisper via Python; `ArcFaceEngine.swift`/`AdaFaceEngine.swift` produce 512-d face embeddings; `CaptionRunner.swift` runs Qwen2.5-VL via MLXVLM. No audio fingerprinting exists yet (grep: only design docs mention it). This survey slots into that design rather than replacing it.
+Context checked first: `docs/design/find_original_design.md` (2026-09-23) already defines tiers T0–T4 and a "guitar case" spike; `PerceptualHash.swift` (dHash, ±2-index offsets) and `PerceptualFingerprinter.swift` (32 frames/file via ffmpeg) are on main; `AudioTranscriber.swift`/`WhisperWorkerTranscriber.swift` run Whisper via Python; `ArcFaceEngine.swift`/`AdaFaceEngine.swift` produce 512-d face embeddings; `CaptionRunner.swift` runs Qwen2.5-VL via MLXVLM. No audio fingerprinting exists yet (grep: only design docs mention it). This survey slots into that design rather than replacing it.
 
 ## A. SAME footage (copies, re-encodes, trims, re-captures)
 

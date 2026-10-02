@@ -2,7 +2,7 @@
 
 Overnight shift authorised by Rick 2026-09-07 evening. Working agreement:
 team-channel #1178, amended by codex #1179. Codex's independent review
-checkpoint: `docs/codex-overnight-review-2026-09-08.md` (codex owns; linked,
+checkpoint: `docs/reviews/codex/codex-overnight-review-2026-09-08.md` (codex owns; linked,
 not merged into this file).
 
 Hard rules held all night: no push, no schema/codec changes, no nightly config

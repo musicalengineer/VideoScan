@@ -408,7 +408,7 @@ paper](https://arxiv.org/abs/2409.08345). For the audited implementations, see
 [Immich](https://github.com/immich-app/immich) and [PhotoPrism](https://github.com/photoprism/photoprism);
 consult the recorded audit revision before assuming today's repository matches the old findings.
 
-Retain [AdaFace conversion and provenance](design/adaface-plugin.md) as the focused specification: exact
+Retain [AdaFace conversion and provenance](../design/adaface-plugin.md) as the focused specification: exact
 112px BGR normalization, checkpoint hash, fp32/fp16 parity gates, model packaging, backend cache tokens and
 migration details are needed for reproducible model work. Its dated installation instructions require
 checking actual model locations before reuse. Retain [compilation bucketing](compilation-bucketing.md) as
@@ -426,7 +426,7 @@ links or instructions to rerun old work. No original log or conversation grants 
 retained focused specifications are identified above.
 
 - `docs/find-and-tag-design.md`; `docs/tagging_people.md`
-- `docs/compilation-bucketing.md`; `docs/catalog-aided-face-detection.md`
+- `docs/guides/compilation-bucketing.md`; `docs/catalog-aided-face-detection.md`
 - `docs/family_media_training_model.md`; `docs/find_donna_scan.md`
 - `docs/donna-recipe-v1.md`; `docs/donna-recipe-smoke-2026-08-01.md`
 - `docs/donna-gallery-report-2026-08-01.md`

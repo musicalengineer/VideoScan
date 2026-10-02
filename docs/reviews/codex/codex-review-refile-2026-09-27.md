@@ -91,7 +91,7 @@ Static review only. No builds, tests, or file changes.
 
 ## Brief
 
-Re-review, SCOPED to the five fix commits for your Refile review (docs/codex-review-refile-2026-09-27.md): range b0776c68..8f8be568 on feat/archive-refile. Use `git diff b0776c68..8f8be568` and `git show <sha>`. Do not explore outside these files; read-only; do not build or run.
+Re-review, SCOPED to the five fix commits for your Refile review (docs/reviews/codex/codex-review-refile-2026-09-27.md): range b0776c68..8f8be568 on feat/archive-refile. Use `git diff b0776c68..8f8be568` and `git show <sha>`. Do not explore outside these files; read-only; do not build or run.
 
 FIX COMMITS, one per finding, each red first (red by the new seam where one was needed):
 - 797a810c #2 — ArchiveIndexRename.swift: an index file is TOUCHED before its publisher is called; rollback restores every touched file whose on-disk bytes differ from the original, and judges a restore by the bytes on disk. A recheck-refused file is never touched. Pin: ArchiveRefileR2PublishThrowTests (publish-then-throw on the 1st and 2nd file).
@@ -159,7 +159,7 @@ Static review only; no builds, tests, or writes. Untouched attestation/decisions
 
 ## Brief
 
-Re-review, SCOPED to the four fix commits for your Refile r2 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r2"): range f1b4e025..f06a93e0 on feat/archive-refile (commits e68abbfb, a4c056aa, 0535d2b7, f06a93e0). Use `git diff f1b4e025..f06a93e0` and `git show <sha>`. Do not explore outside the files they touch; read-only; do not build or run.
+Re-review, SCOPED to the four fix commits for your Refile r2 findings (docs/reviews/codex/codex-review-refile-2026-09-27.md, section "Codex review — Refile r2"): range f1b4e025..f06a93e0 on feat/archive-refile (commits e68abbfb, a4c056aa, 0535d2b7, f06a93e0). Use `git diff f1b4e025..f06a93e0` and `git show <sha>`. Do not explore outside the files they touch; read-only; do not build or run.
 
 FIXES (each red first):
 - e68abbfb r2#1 — ArchiveIndexRename.swift, ArchiveRefile.swift, VideoScanModel+Rename.swift: after a failed media move, `apply` RETAINS the backup by default and discards it only when the error conforms to `BackupDisposition` and says `backupIsSafeToDiscard` (Refile: refusedBeforeMove, rolledBack-with-flushed-folders; Catalog rename: `.filesystem`). notRolledBack / incompleteRecovery keep it (incomplete marker). Pin: ArchiveRefileR2MoveBackIdentityTests.blockerAtOldPath now requires the backup + incomplete marker.
@@ -217,7 +217,7 @@ Static review only; no builds or tests run. r3 #4 remains declined.
 
 ## Brief
 
-Re-review, SCOPED to the three fix commits for your Refile r3 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r3", with its Disposition block): range 8dac4acf..c9bdaf6a on feat/archive-refile (commits ccd31101, f6ba060d, c9bdaf6a). Use `git diff 8dac4acf..c9bdaf6a` and `git show <sha>`. Do not explore outside the files they touch; read-only; do not build or run. r3 #4 was DECLINED by the coordinator (no pending file with that schema ever existed outside this branch; covered by the new version field) — do not re-raise it.
+Re-review, SCOPED to the three fix commits for your Refile r3 findings (docs/reviews/codex/codex-review-refile-2026-09-27.md, section "Codex review — Refile r3", with its Disposition block): range 8dac4acf..c9bdaf6a on feat/archive-refile (commits ccd31101, f6ba060d, c9bdaf6a). Use `git diff 8dac4acf..c9bdaf6a` and `git show <sha>`. Do not explore outside the files they touch; read-only; do not build or run. r3 #4 was DECLINED by the coordinator (no pending file with that schema ever existed outside this branch; covered by the new version field) — do not re-raise it.
 
 FIXES (each red first):
 - ccd31101 r3#1 — VideoScanModel+ArchiveRefile.swift: pending entries form a CHAIN. A new entry for a record inherits `chainFromPaths` (every FROM of older entries whose catalog step is still owed) and their date updates (newer wins per record); replay accepts the record at FROM, TO or any chain FROM, still requiring the lstat identity at TO. New seam `ArchiveRefilePersistence.scheduleRetrySave` (the debounced retry). Pin: ArchiveRefileR2StepEPersistenceTests.chainedFailedSavesRecover (A→B and B→C both fail to save, no debounced save, records reset to the on-disk state → replay lands C with the latest dates).
@@ -275,7 +275,7 @@ Static review only; no builds or tests run. r3 #4 remains declined.
 
 ## Brief
 
-Re-review, SCOPED to ONE fix commit for your Refile r4 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r4", with its Disposition block): bdb3d955 on feat/archive-refile. Use `git show bdb3d955`. Do not explore outside the files it touches (VideoScanModel+ArchiveRefile.swift, VideoScanTests/ArchiveRefileR2Tests.swift); read-only; do not build or run. r3 #4 stays declined.
+Re-review, SCOPED to ONE fix commit for your Refile r4 findings (docs/reviews/codex/codex-review-refile-2026-09-27.md, section "Codex review — Refile r4", with its Disposition block): bdb3d955 on feat/archive-refile. Use `git show bdb3d955`. Do not explore outside the files it touches (VideoScanModel+ArchiveRefile.swift, VideoScanTests/ArchiveRefileR2Tests.swift); read-only; do not build or run. r3 #4 stays declined.
 
 THE ONE RULE (coordinator's ruling for r4 #1 and #2): replay never overrides a newer edit.
 - A pending entry records `priorCopyStates` — the archive copy record's state (fullPath, sizeBytes, partialMD5, contentHash) before EACH refile of its chain whose catalog save did not land (replaces `chainFromPaths`) — and every `DateUpdate` carries `expectedUserDate` / `expectedConfidence`, the value it replaced. The chain's date updates are kept in order, not merged.
@@ -340,7 +340,7 @@ Static review only; no builds or tests run. r3 #4 remains declined.
 
 ## Brief
 
-Re-review, SCOPED to the two fix commits for your Refile r5 findings (docs/codex-review-refile-2026-09-27.md, section "Codex review — Refile r5", with its Disposition block): range 1e931b3e..0dd2d1c4 on feat/archive-refile (commits c1a4ae2d, 0dd2d1c4). Use `git diff 1e931b3e..0dd2d1c4` and `git show <sha>`. Do not explore outside the files they touch (VideoScanModel+ArchiveRefile.swift, VideoScanTests/ArchiveRefileR2Tests.swift); read-only; do not build or run. r3 #4 stays declined.
+Re-review, SCOPED to the two fix commits for your Refile r5 findings (docs/reviews/codex/codex-review-refile-2026-09-27.md, section "Codex review — Refile r5", with its Disposition block): range 1e931b3e..0dd2d1c4 on feat/archive-refile (commits c1a4ae2d, 0dd2d1c4). Use `git diff 1e931b3e..0dd2d1c4` and `git show <sha>`. Do not explore outside the files they touch (VideoScanModel+ArchiveRefile.swift, VideoScanTests/ArchiveRefileR2Tests.swift); read-only; do not build or run. r3 #4 stays declined.
 
 FIXES (each red first):
 - c1a4ae2d r5#1 — `DateUpdate.createdAtMillis`; `replayCatalogStep` checks the media ledger FIRST: if the record has a `dateSet` later than the update was made that does NOT carry a `refile:` idempotency key (i.e. not written by the refile machinery — the Inspector, the Angel, any other path), that update is not replayed, the field is a "Refile recovery conflict" (logged), and the entry is kept marked conflict after the rest is applied and saved. The value check remains the second guard. The ledger has no repoint event kind, so repoints stay covered by the r5 copy fingerprint. Pin: userDateRevertSurvivesReplay (A→B 1984, B→C 1985, both saves fail; Rick reverts the original to 1984 through noteUserDateEdited; replay leaves 1984). This commit also adds the r5#2 pin, red until the next commit.

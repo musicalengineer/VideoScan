@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - RelocateQueueTests
 //
-// Coverage for the §3 Relocate Job Queue (docs/relocate_volume_plan.md):
+// Coverage for the §3 Relocate Job Queue (docs/design/relocate_volume_plan.md):
 // non-modal enqueue, serial execution, cancel-queued, clear-completed,
 // summary-dismiss-advances-queue, isRelocating computed semantics.
 //

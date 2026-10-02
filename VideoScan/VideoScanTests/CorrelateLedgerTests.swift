@@ -1,5 +1,5 @@
 // CorrelateLedgerTests.swift
-// Analysis-ledger semantics for correlation (docs/analysis_ledger_design.md,
+// Analysis-ledger semantics for correlation (docs/design/analysis_ledger_design.md,
 // Rick's directive 2026-07-05): derived relations are computed once and
 // preserved; "Correlate All" processes the DELTA (unpaired orphans), never
 // the world; full recompute exists only as an explicit, separate action.

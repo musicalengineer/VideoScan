@@ -141,7 +141,7 @@ Rick (project owner) wants: "Run the Gauntlet" — ONE command he gives when he 
 Stages he named: unit, regression, integration, performance, Hallie (strict + advisory testbed), stress, UI. Timing per stage + total, git sha, pass/fail counts.
 
 Known history — read these first (and only what you need beyond them):
-- docs/gauntlet.md, scripts/run_gauntlet.sh, docs/codex-ui-testing-handoff.md (your own earlier write-up), TestDriver/ (a Swift package harness: xcodebuild runner + metrics publishing; Rick abandoned its UI), the VideoScanUITests target, scripts/nightly_local_tests.sh, scripts/nightly_hallie_replay.sh, the metrics dashboard publisher (GitHub Pages under docs/metrics or wherever the nightly publishes).
+- docs/guides/gauntlet.md, scripts/run_gauntlet.sh, docs/codex-ui-testing-handoff.md (your own earlier write-up), TestDriver/ (a Swift package harness: xcodebuild runner + metrics publishing; Rick abandoned its UI), the VideoScanUITests target, scripts/nightly_local_tests.sh, scripts/nightly_hallie_replay.sh, the metrics dashboard publisher (GitHub Pages under docs/metrics or wherever the nightly publishes).
 - The old walls: (1) the UI-test password prompt — this M4 reports "Automation Mode is disabled. This device requires user authentication to enable Automation Mode." (`automationmodetool`); (2) "Timed out while enabling automation mode" when the screen is locked/asleep (testmanagerd needs an unlocked GUI session); (3) Accessibility/Automation TCC grant for the launching terminal; (4) `| tail` masking exit codes; (5) a UI test once grabbed Rick's mouse while he worked (so the Gauntlet only runs when he says he's away).
 
 Answer, concretely:

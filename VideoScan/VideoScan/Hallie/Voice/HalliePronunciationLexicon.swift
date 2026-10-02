@@ -19,7 +19,7 @@
 // McGill's record also respells any other Nathaniel. That is the intended
 // scope: a name is said the same way whoever carries it.
 //
-// Two representations per entry (docs/pronunciation_training_research.md,
+// Two representations per entry (docs/research/pronunciation_training_research.md,
 // 2026-08-29): a RESPELLING ("LAT-uh") and, when known, PHONEMES in
 // misaki's alphabet ("lˈætə"). A respelling is re-guessed by misaki's
 // BART fallback — that is why Rick's "Lah-Tah" did not stick — so on the

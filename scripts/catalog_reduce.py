@@ -215,7 +215,7 @@ def main():
               "with its in-memory copy. Quit the app and re-run.")
         return
 
-    # --- external-writer contract (docs/catalog_write_safety_design.md §5) ---
+    # --- external-writer contract (docs/design/catalog_write_safety_design.md §5) ---
     # This script is the REFERENCE IMPLEMENTATION for scripts that write
     # catalog.json:
     #   1. take the advisory flock on catalog.lock (refuse, don't wait --

@@ -458,7 +458,7 @@ enum ArchivistQueryAST: Codable, Equatable, Sendable {
     /// anchor was the word "it". The executor resolves the reference to
     /// exactly one record and answers from that record's own fields; nothing
     /// here widens to a search. This payload is the future
-    /// `catalog.record(id)` tool of docs/hallie_proposer_with_tools_design.md.
+    /// `catalog.record(id)` tool of docs/design/hallie_proposer_with_tools_design.md.
     struct Record: Codable, Equatable, Sendable {
         /// What to report. `about` is the whole dossier (metadata + date +
         /// people) and therefore stands alone; `people` and `date` combine.

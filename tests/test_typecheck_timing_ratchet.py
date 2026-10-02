@@ -40,7 +40,7 @@ def warn(file_name, line, col, message):
 
 
 # Verbatim lines from run 34750465600 (nightly, main, 2026-09-13); only the
-# file paths are re-homed into the 2026-09-29 feature folders (docs/source_layout.md)
+# file paths are re-homed into the 2026-09-29 feature folders (docs/guides/source_layout.md)
 # so the committed baseline — remapped the same way — still grandfathers them.
 REAL_LOG_SAMPLE = [
     f"{RUNNER_PREFIX}/Hallie/HallieLineageAnswer+CommonAncestor.swift:93:17: warning: "

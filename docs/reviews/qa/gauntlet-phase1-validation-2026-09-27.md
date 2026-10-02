@@ -10,7 +10,7 @@ Branch: `feature/release-gauntlet`, based on `fcfb8ce7`. Claude review is requir
 - `scripts/gauntlet/manifest.json`
 - `scripts/gauntlet/publish.swift`
 - `docs/index.html`
-- `docs/gauntlet.md`
+- `docs/guides/gauntlet.md`
 - `tests/test_gauntlet_runner.py`
 - `tests/test_gauntlet_publish.py`
 

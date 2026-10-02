@@ -1,6 +1,6 @@
 # Morning brief — night of 2026-09-10 → 11 · Theme T10 (Archive Angel top-50 hygiene)
 
-**Owner:** Claude · **Reviewer:** codex (record: [review details](codex-t10-review-2026-09-11.md)) · **Cap:** 20:16–00:16 ET, closed ~22:00 · **implementation/corpus head:** 12fdc2fb (pushed; subsequent commits document the handoff)
+**Owner:** Claude · **Reviewer:** codex (record: [review details](../reviews/codex/codex-t10-review-2026-09-11.md)) · **Cap:** 20:16–00:16 ET, closed ~22:00 · **implementation/corpus head:** 12fdc2fb (pushed; subsequent commits document the handoff)
 
 ## 🔴 CI / nightly status (baseline, NOT tonight's regressions)
 - **main CI was already red before T10:** run [34540926129](https://github.com/musicalengineer/VideoScan/actions/runs/34540926129) on 8308fa89 — unit step fails (possessorCandidates 2.047 s > 2 s budget; transcript render appendRows 28 > 2; cleanup-matrix ffmpeg cases; vorbis integration). Python tests + Pages green. `CICanary mustFail` is intentional.

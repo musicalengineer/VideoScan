@@ -150,7 +150,7 @@ tests for attestations. Passing counts do not cover the missing sequences above.
 At 23:00:43 Eastern, main remained `01d94091`; the three follow-up branches were
 still `cd801d16`, `7514bb56`, and `c56bd2bc`. No newer inbox messages had arrived.
 Receipt/status requested in #1443. The ranked assessment is in
-[refactoring_assessment_2026_09_13.md](refactoring_assessment_2026_09_13.md).
+[refactoring_assessment_2026_09_13.md](../qa/refactoring_assessment_2026_09_13.md).
 
 Assessment cross-check correction: the original target-projection complexity
 observation above describes the early implementation. Main now has

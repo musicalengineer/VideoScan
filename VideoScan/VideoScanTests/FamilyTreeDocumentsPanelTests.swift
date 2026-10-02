@@ -4,7 +4,7 @@
 // filed through Record Finder, the confirmed-findings count, and the
 // research read staying off the view body.
 //
-// Dimensions (docs/testing_retrospective_2026_07_05.md):
+// Dimensions (docs/practices/testing_retrospective_2026_07_05.md):
 //   Logic     — group order, newest-first inside a group, empty groups
 //               dropped; year/site only from the matching Record Finder
 //               finding (a hand-added document gets neither; a note that

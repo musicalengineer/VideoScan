@@ -37,7 +37,7 @@ not a commitment to do ten simultaneous refactors.
   **52 passed**, 0.249 seconds reported by unittest. These are harness tests, not
   52 real-model questions. No VideoScan app, model, UI tests or live-data mutation.
 - Tonight's branch reviews are documented separately in
-  [the review ledger](overnight_reviews_2026_09_12.md). A branch's passing test
+  [the review ledger](../codex/overnight_reviews_2026_09_12.md). A branch's passing test
   count is attributed to Claude unless this report explicitly says otherwise.
 
 ### Review handoff at the snapshot

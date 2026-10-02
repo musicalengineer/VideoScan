@@ -1,6 +1,6 @@
 // CorrelationScorer+Snaps.swift
 // Off-main correlation pipeline over Sendable value snapshots — the
-// analysis-ledger arc (docs/analysis_ledger_design.md, 2026-07-05).
+// analysis-ledger arc (docs/design/analysis_ledger_design.md, 2026-07-05).
 //
 // The legacy correlate path ran the full videos × candidate-audios
 // scoring loop on the main actor: a 15.3 s worst main-thread hop at a
