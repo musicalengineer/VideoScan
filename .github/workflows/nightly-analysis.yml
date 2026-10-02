@@ -27,12 +27,14 @@ name: Nightly Static Analysis
 #                         volumes, both against grandfathered baselines in
 #                         ci/baselines/. Fails only on NEW violations.
 #   findings-to-issues  — (after the above) tools/nightly_findings_to_issues.py:
-#                         one issue per HIGH/MEDIUM finding fingerprint (cap
-#                         10/night), one rolling digest per tool for LOW.
-#                         DRY RUN unless repo variable NIGHTLY_FINDINGS_WRITE
-#                         is 'true' AND the ref is main. The dry run publishes
-#                         the full plan (would-open/comment/close + digest
-#                         bodies) as an artifact and to the morning brief.
+#                         ONE "Nightly findings — YYYY-MM-DD" ticket per night
+#                         (NEW high / NEW medium / changed / fixed / still
+#                         open / low deltas; yesterday's is closed), plus a
+#                         tracking issue per HIGH finding (cap 3/night).
+#                         Vendored code is one line, never filed. Writes need
+#                         repo variable NIGHTLY_FINDINGS_WRITE='true' AND the
+#                         main ref; otherwise a dry run that publishes the
+#                         full plan (ticket body included) as an artifact.
 #   aggregate           — (last) Collects every count and appends one row to
 #                         metrics/static_analysis.jsonl on the metrics branch,
 #                         and publishes metrics/nightly_findings_latest.json
@@ -41,7 +43,9 @@ name: Nightly Static Analysis
 # Findings appear in:
 #   1. Each run's Summary panel (markdown — green or expandable details)
 #   2. Security → Code Scanning (CodeQL alerts, deduped over time)
-#   3. GitHub issues labelled `nightly-finding` (+ tool, + High Priority)
+#   3. The nightly ticket (label `nightly-findings`, one open at a time) and
+#      high-severity tracking issues (label `nightly-finding` + tool +
+#      High Priority)
 #   4. metrics/static_analysis.jsonl (history for the dashboard)
 #
 # A FINDING NEVER FAILS THIS WORKFLOW. Jobs go red for broken pipelines
@@ -1178,20 +1182,24 @@ jobs:
           retention-days: 30
 
   # -------------------------------------------------------------------
-  # Nightly findings → GitHub issues (Rick, 2026-10-01; Manager rulings the
-  # same night). Design, severity rules and state model: the docstring of
-  # tools/nightly_findings_to_issues.py.
+  # Nightly findings → GitHub issues (Rick, 2026-10-01; reshaped by Rick
+  # 2026-10-02 to ONE nightly ticket + high-only tracking issues, "organized
+  # in such a way as we won't ignore the issues"). Design, severity rules and
+  # state model: the docstring of tools/nightly_findings_to_issues.py.
   #
-  # WRITES ARE OFF until Rick has read a dry run. They happen only when ALL
-  # of these hold:
+  # Rick approved writes on 2026-10-02; the Manager turns them on by setting
+  # the repo variable. Writes happen only when ALL of these hold:
   #   * repo variable NIGHTLY_FINDINGS_WRITE is exactly 'true' (Settings →
   #     Secrets and variables → Actions → Variables). Unset = dry run.
   #   * the ref is main (branch validation runs are always dry)
   #   * a manual dispatch did not ask for dry_run
   # A dry run still reads the real issues and plans everything. The plan
-  # (would-open / would-comment / would-close + every digest body) goes to
-  # the `nightly-findings-plan` artifact, and the summary JSON goes to
-  # metrics/nightly_findings_latest.json for the morning brief.
+  # (ticket action + full ticket body, tracking would-open / comment /
+  # close) goes to the `nightly-findings-plan` artifact, and the summary
+  # JSON goes to metrics/nightly_findings_latest.json for the morning brief
+  # (🔴 NEW high/medium, ⚠️ high tracking issue > 7 days, ticket URL).
+  # The ticket rotation reads issue comments (48 h human-comment guard);
+  # `issues: write` covers that.
   #
   # Each tool's "complete" verdict comes from its job result (or, for the
   # strict build, the build step's outcome) AND the nightly-status-*.json
@@ -1208,6 +1216,8 @@ jobs:
       actions: read
     outputs:
       new_high: ${{ steps.file.outputs.new_high }}
+      new_medium: ${{ steps.file.outputs.new_medium }}
+      ticket_url: ${{ steps.file.outputs.ticket_url }}
 
     steps:
       - name: Checkout
@@ -1252,7 +1262,7 @@ jobs:
             --summary-out nightly-findings-summary.json \
             --plan-out nightly-findings-plan.md \
             "${ARGS[@]}"
-          python3 -c "import json; s=json.load(open('nightly-findings-summary.json')); print('new_high=%d' % len(s['new_high']))" >> "$GITHUB_OUTPUT"
+          python3 -c "import json; s=json.load(open('nightly-findings-summary.json')); print('new_high=%d' % len(s['new_high'])); print('new_medium=%d' % len(s.get('new_medium') or [])); print('ticket_url=%s' % ((s.get('ticket') or {}).get('url') or ''))" >> "$GITHUB_OUTPUT"
 
       - name: Upload findings summary
         if: always()
@@ -1354,6 +1364,7 @@ jobs:
               "ratchet_check_then_act_new": num("RATCHET_CHECKTHENACT_NEW"),
               "nightly_finding_fingerprints": summ.get("fingerprints"),
               "nightly_findings_new_high": len(summ["new_high"]) if "new_high" in summ else None,
+              "nightly_findings_new_medium": len(summ["new_medium"]) if "new_medium" in summ else None,
               "nightly_findings_dry_run": summ.get("dry_run"),
           }
           line = json.dumps(row, separators=(",", ":"))
@@ -1393,8 +1404,9 @@ jobs:
           touch metrics/static_analysis.jsonl
           cat "$RUNNER_TEMP/row.json" >> metrics/static_analysis.jsonl
           git add metrics/static_analysis.jsonl
-          # The morning digest reads this file: 🔴 for new high findings,
-          # 🟡 for the dry-run plan while writes are off. Dry-run summaries
+          # The morning digest reads this file: 🔴 for NEW high/medium
+          # findings in tonight's ticket, ⚠️ for a high tracking issue open
+          # more than 7 days, 🟡 for the plan when the run was dry. Dry-run summaries
           # are published on purpose (Manager 2026-10-01), so Rick sees
           # exactly what would be filed before turning writes on.
           if [ -f "$RUNNER_TEMP/findings.json" ]; then
@@ -1426,14 +1438,19 @@ jobs:
           RATCHET_CTA_NEW: ${{ needs.source-ratchets.outputs.checkthenact_new }}
           RATCHET_CTA_BASE: ${{ needs.source-ratchets.outputs.checkthenact_baseline }}
           NEW_HIGH: ${{ needs.findings-to-issues.outputs.new_high }}
+          NEW_MEDIUM: ${{ needs.findings-to-issues.outputs.new_medium }}
+          TICKET_URL: ${{ needs.findings-to-issues.outputs.ticket_url }}
         run: |
           ASAN=$(python3 -c "import json; print(json.load(open('row.json'))['asan_issues'])" 2>/dev/null || echo '?')
           UBSAN=$(python3 -c "import json; print(json.load(open('row.json'))['ubsan_issues'])" 2>/dev/null || echo '?')
           {
             echo "## Nightly static analysis — $(date -u +'%Y-%m-%d')"
             echo ""
-            if [ -n "$NEW_HIGH" ] && [ "$NEW_HIGH" != "0" ]; then
-              echo "🔴 **$NEW_HIGH new high-severity finding(s)** — see the Findings → GitHub issues job."
+            if { [ -n "$NEW_HIGH" ] && [ "$NEW_HIGH" != "0" ]; } || { [ -n "$NEW_MEDIUM" ] && [ "$NEW_MEDIUM" != "0" ]; }; then
+              echo "🔴 **${NEW_HIGH:-0} NEW high, ${NEW_MEDIUM:-0} NEW medium finding(s)** — ${TICKET_URL:-see the Findings → GitHub issues job (dry run: no ticket written)}"
+              echo ""
+            elif [ -n "$TICKET_URL" ]; then
+              echo "Nightly findings ticket: $TICKET_URL"
               echo ""
             fi
             echo "| Tool | Findings |"
