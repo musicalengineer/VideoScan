@@ -245,3 +245,7 @@ Declined / not in scope (for Rick):
 - The proof read means a non-duplicate source with a trusted stored fixity is now read twice (proof +
   copy) where it used to be read once. A stored fixity that disagrees with unchanged-stamp bytes is
   refused every run until the source is re-fingerprinted (refuse over guess).
+
+## Closed
+
+Closed by `28efad09` at 2026-10-02T20:28:22Z.
