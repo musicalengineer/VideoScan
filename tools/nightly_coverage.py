@@ -92,9 +92,22 @@ def folder_of(path: str) -> str | None:
     return None
 
 
+_VIEW_CACHE: dict[str, bool] = {}
+
+
 def is_view(path: str) -> bool:
+    """SwiftUI view files are reported, never gated. A file counts as a view when
+    its name says so or its source declares a SwiftUI View (`: View` / `some View`)."""
     name = Path(path).name
-    return name.endswith("View.swift") or name.endswith("Sheet.swift") or "View+" in name or name.endswith("Card.swift")
+    if name.endswith(("View.swift", "Sheet.swift", "Card.swift")) or "View+" in name:
+        return True
+    if path not in _VIEW_CACHE:
+        try:
+            text = Path(path).read_text(errors="ignore")
+            _VIEW_CACHE[path] = ("some View" in text) or (": View {" in text) or (": View," in text)
+        except OSError:
+            _VIEW_CACHE[path] = False
+    return _VIEW_CACHE[path]
 
 
 def aggregate(files: list[tuple[str, int, int]]) -> dict:
