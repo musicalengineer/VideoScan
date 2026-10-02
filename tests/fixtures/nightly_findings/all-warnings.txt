@@ -1,0 +1,8 @@
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/Archive/ArchiveAngelJob.swift:211:17: warning: sending 'self' risks causing data races; this is an error in the Swift 6 language mode
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/Archive/ArchiveAngelJob.swift:388:17: warning: sending 'self' risks causing data races; this is an error in the Swift 6 language mode
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/App/ContentView.swift:52:9: warning: main actor-isolated static property 'title' can not be referenced from a nonisolated context; this is an error in the Swift 6 language mode
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/App/ContentView.swift:39:25: warning: getter for property 'body' took 475ms to type-check (limit: 100ms)
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/App/BundleModels.swift:14:22: warning: use of protocol 'Error' as a type must be written 'any Error'; this will be an error in a future Swift language mode [#ExistentialAny]
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScanCore/Sources/VideoScanCore/ArchiveFixity.swift:77:13: warning: expression uses unsafe constructs but is not marked with 'unsafe' [#StrictMemorySafety]
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/App/Globals.swift:3:5: warning: var 'shared' is not concurrency-safe because it is nonisolated global shared mutable state; this is an error in the Swift 6 language mode [#MutableGlobalVariable]
+not a warning line at all

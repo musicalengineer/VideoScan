@@ -1,0 +1,18 @@
+Test Suite 'All tests' started at 2026-10-02 05:30:00.000.
+==================
+WARNING: ThreadSanitizer: data race (pid=4242)
+  Write of size 8 at 0x7b0c00012345 by thread T3:
+    #0 VideoScanModel.records.setter VideoScanModel.swift:120 (VideoScan.debug.dylib:arm64+0x12345)
+  Previous read of size 8 at 0x7b0c00012345 by main thread:
+    #0 CatalogView.body.getter CatalogView.swift:88 (VideoScan.debug.dylib:arm64+0x23456)
+SUMMARY: ThreadSanitizer: data race /Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/Model/VideoScanModel.swift:120 in VideoScanModel.records.setter
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=4242)
+SUMMARY: ThreadSanitizer: data race /Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/Model/VideoScanModel.swift:131 in VideoScanModel.records.setter
+==================
+==================
+WARNING: ThreadSanitizer: data race (pid=4242)
+SUMMARY: ThreadSanitizer: data race (libswiftCore.dylib:arm64e+0x3f2a0) in swift_retain
+==================
+ThreadSanitizer: reported 3 warnings

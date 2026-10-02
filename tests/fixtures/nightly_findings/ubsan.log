@@ -1,0 +1,4 @@
+/Users/runner/work/VideoScan/VideoScan/VideoScan/SourcePackages/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/array.cpp:212:17: runtime error: signed integer overflow: 2147483647 + 1 cannot be represented in type 'int'
+/Users/runner/work/VideoScan/VideoScan/VideoScan/SourcePackages/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/array.cpp:212:17: runtime error: signed integer overflow: 2147483600 + 99 cannot be represented in type 'int'
+/Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/Media/ycbcr.c:40:9: runtime error: load of misaligned address 0x00016fdff2a1 for type 'uint32_t', which requires 4 byte alignment
+SUMMARY: UndefinedBehaviorSanitizer: undefined-behavior /Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/Media/ycbcr.c:40:9 in

@@ -19,6 +19,14 @@ cd "$REPO_ROOT"
 
 git fetch origin metrics --quiet 2>/dev/null || true
 
+# New high-severity nightly findings go at the very top, ahead of the test
+# table (Rick 2026-10-01). Silent when there are none. Never fails the
+# digest: the helper exits 0 on anything it cannot read.
+NF="$(git show origin/metrics:metrics/nightly_findings_latest.json 2>/dev/null || true)"
+if [ -n "$NF" ]; then
+    printf '%s' "$NF" | python3 "$REPO_ROOT/scripts/nightly_findings_alert.py" || true
+fi
+
 TD="$(git show origin/metrics:metrics/testdriver.jsonl 2>/dev/null || true)"
 SA="$(git show origin/metrics:metrics/static_analysis.jsonl 2>/dev/null || true)"
 

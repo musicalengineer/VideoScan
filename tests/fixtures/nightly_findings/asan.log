@@ -1,0 +1,7 @@
+=================================================================
+==5150==ERROR: AddressSanitizer: heap-use-after-free on address 0x60200000eff0 at pc 0x000104b2c3d4 bp 0x00016b2a0f10 sp 0x00016b2a0f08
+READ of size 8 at 0x60200000eff0 thread T0
+    #0 0x104b2c3d4 in FrameDecoder.copyPlane(_:) FrameDecoder.swift:57
+SUMMARY: AddressSanitizer: heap-use-after-free /Users/runner/work/VideoScan/VideoScan/VideoScan/VideoScan/Media/FrameDecoder.swift:57 in FrameDecoder.copyPlane(_:)
+Shadow bytes around the buggy address:
+==5150==ABORTING
