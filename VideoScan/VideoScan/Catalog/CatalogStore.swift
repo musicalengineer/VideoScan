@@ -467,8 +467,18 @@ final class CatalogStore {
             NSLog("VideoScan: catalog.json version %d is newer than this build (v%d) — opened read-only; every save is held",
                   version, CatalogSnapshot.currentVersion)
             catalogStoreLog.notice("catalog: v\(version) is newer than this build (v\(CatalogSnapshot.currentVersion)) — read-only, saves held (GH #167)")
+            // Tell the owner NOW, whichever path latched (load, the write
+            // probe, live reload) — so the banner and model.isReadOnly
+            // (which gates every background job) follow immediately rather
+            // than at the next live-reload tick.
+            onNewerCatalogLatched?()
         }
     }
+
+    /// Called once, on the main actor, the first time this store latches
+    /// read-only for a newer catalog (GH #167). Installed by the model.
+    /// (≈ a C++ std::function callback member; nil = nobody listening.)
+    var onNewerCatalogLatched: (@MainActor () -> Void)?
 
     /// Merge top-level unknown keys an external writer put on disk (live
     /// reload, GH #167): theirs replace ours key by key, ours stay.
@@ -648,6 +658,9 @@ final class CatalogStore {
     /// first — adopting without merging is exactly the lost update the
     /// guard exists to prevent.
     func adoptOnDiskGenerationAfterReconcile() {
+        // GH #167: a newer catalog is open — this session will never save,
+        // so there is nothing to adopt, and the sidecar is not ours to bump.
+        guard newerCatalogVersion == nil else { return }
         let onDisk = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
         if onDisk > loadedGeneration {
             catalogStoreLog.info("catalog OCC: adopting on-disk generation \(onDisk) after live reconcile (was \(self.loadedGeneration))")
@@ -692,8 +705,8 @@ final class CatalogStore {
 
     /// Load records from disk. Resolves `pairedWith` back-references after
     /// the array is fully decoded. Returns an empty array if the file is
-    /// missing, unreadable, or written by a newer build — never throws
-    /// into the caller, since a missing snapshot on first launch is normal.
+    /// missing or unreadable with no usable backup — never throws into the
+    /// caller, since a missing snapshot on first launch is normal.
     ///
     /// Side-effects:
     ///   - On a successful primary load, the primary is rotated to
@@ -702,11 +715,12 @@ final class CatalogStore {
     ///     primary in place so a power-loss between rotate and any future
     ///     save still leaves a real catalog.json on disk.)
     ///   - On a corrupt primary, we attempt to decode `.prev` and use it.
-    ///   - On a newer-version primary, we refuse to load (returning [])
-    ///     so the next debounced save does NOT overwrite the user's data
-    ///     with an empty array. The original primary is NOT rotated in
-    ///     this case so a downgrade-then-upgrade cycle still sees the
-    ///     original catalog.
+    ///   - On a newer-version primary (GH #167) the records are returned
+    ///     for BROWSING and every write is latched off for the session, so
+    ///     no save can overwrite or downgrade the newer file. The primary
+    ///     is NOT rotated (zero bytes written), so a downgrade-then-upgrade
+    ///     cycle still sees the original catalog. Same latch when the
+    ///     newer primary cannot even be decoded (.prev shown, read-only).
     ///   - `lastLoadOutcome` is updated for diagnostics in all paths.
     func load() -> [VideoRecord] {
         if Self.isRunningTests && self === CatalogStore.shared {
@@ -724,7 +738,13 @@ final class CatalogStore {
         // known even if decode falls back to .prev — and even if there is
         // no catalog.json at all: a catalog that carried generation N
         // before must not restart at 1 just because the file was removed.
-        generationFloor = CatalogGenerationSidecar.load(besideCatalogAt: fileURL)
+        // GH #167: if the primary's header says a NEWER build wrote it, this
+        // session will write nothing beside it — not even the first-run
+        // sidecar bootstrap. (4 KB head+tail probe; the decode below
+        // re-checks the version authoritatively.)
+        let primaryLooksNewer = (CatalogSnapshot.headerProbe(at: fileURL)?.version ?? 0) > CatalogSnapshot.currentVersion
+        generationFloor = CatalogGenerationSidecar.load(besideCatalogAt: fileURL,
+                                                        persistBootstrap: !primaryLooksNewer)
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             NSLog("VideoScan: CatalogStore.load() — no catalog file at %@", fileURL.path)
             lastLoadOutcome = .missing
@@ -1702,11 +1722,12 @@ struct CatalogSnapshotDTO: Sendable {
         // name is never emitted from here (it would duplicate — and could
         // contradict — the typed value above). Sorted for stable bytes.
         var tail = Data()
-        for key in unknownFields.keys.sorted() where !CatalogSnapshot.topLevelKeyNames.contains(key) {
+        for (key, value) in unknownFields.sorted(by: { $0.key < $1.key })
+        where !CatalogSnapshot.topLevelKeyNames.contains(key) {
             tail.append(UInt8(ascii: ","))
             tail.append(try fragment(key))
             tail.append(UInt8(ascii: ":"))
-            tail.append(try fragment(unknownFields[key]!))
+            tail.append(try fragment(value))
         }
 
         var out = Data(capacity: header.count + body.count + tail.count + 1)

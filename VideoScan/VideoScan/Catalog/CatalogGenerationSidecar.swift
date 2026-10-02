@@ -73,7 +73,10 @@ enum CatalogGenerationSidecar {
     /// only ever observed (never written to a surviving file) the operator
     /// can seed the sidecar by hand — it is a one-line text file — and the
     /// next load honours it.
-    static func bootstrap(besideCatalogAt catalogURL: URL) -> Int {
+    /// `persist: false` computes the mark without writing it (GH #167: a
+    /// newer catalog is open read-only — this session writes no file
+    /// beside it; the next writable load bootstraps for real).
+    static func bootstrap(besideCatalogAt catalogURL: URL, persist: Bool = true) -> Int {
         let dir = catalogURL.deletingLastPathComponent()
         var best = 0
         var scanned = 0
@@ -87,12 +90,15 @@ enum CatalogGenerationSidecar {
             }
         }
         sidecarLog.notice("catalog OCC: no \(fileName, privacy: .public) yet — bootstrapped high-water mark \(best) from \(scanned) catalog file(s) in \(dir.path, privacy: .public)")
-        write(best, besideCatalogAt: catalogURL)   // even 0: the scan happens once
+        if persist {
+            write(best, besideCatalogAt: catalogURL)   // even 0: the scan happens once
+        }
         return best
     }
 
     /// Read the mark, bootstrapping it from sibling files on first use.
-    static func load(besideCatalogAt catalogURL: URL) -> Int {
-        read(besideCatalogAt: catalogURL) ?? bootstrap(besideCatalogAt: catalogURL)
+    /// `persistBootstrap: false` never writes (see `bootstrap`).
+    static func load(besideCatalogAt catalogURL: URL, persistBootstrap: Bool = true) -> Int {
+        read(besideCatalogAt: catalogURL) ?? bootstrap(besideCatalogAt: catalogURL, persist: persistBootstrap)
     }
 }

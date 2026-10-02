@@ -96,8 +96,8 @@ public indirect enum CatalogJSONValue: Sendable, Equatable, Codable {
         case .object(let o):
             var c = encoder.container(keyedBy: CatalogAnyCodingKey.self)
             // Sorted so the bytes are deterministic run to run.
-            for k in o.keys.sorted() {
-                try c.encode(o[k]!, forKey: CatalogAnyCodingKey(k))
+            for (k, v) in o.sorted(by: { $0.key < $1.key }) {
+                try c.encode(v, forKey: CatalogAnyCodingKey(k))
             }
         }
     }
@@ -140,8 +140,8 @@ public enum CatalogUnknownFields {
                             to encoder: Encoder) throws {
         guard !fields.isEmpty else { return }
         var c = encoder.container(keyedBy: CatalogAnyCodingKey.self)
-        for k in fields.keys.sorted() where !known.contains(k) {
-            try c.encode(fields[k]!, forKey: CatalogAnyCodingKey(k))
+        for (k, v) in fields.sorted(by: { $0.key < $1.key }) where !known.contains(k) {
+            try c.encode(v, forKey: CatalogAnyCodingKey(k))
         }
     }
 

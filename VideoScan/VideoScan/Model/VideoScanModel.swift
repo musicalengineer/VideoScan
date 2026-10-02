@@ -934,7 +934,9 @@ final class VideoScanModel: ObservableObject {
     var catalogStore: CatalogStore = .shared {
         didSet {
             installDesignationAuditSink()
-            // GH #167: a store that opened a newer catalog pauses saving.
+            // GH #167: a store that opened a newer catalog pauses saving —
+            // now, and the moment it latches later in the session.
+            installCatalogVersionPauseSink()
             applyCatalogVersionPause()
         }
     }
@@ -1023,6 +1025,9 @@ final class VideoScanModel: ObservableObject {
         // GH #167: designation START / OUTCOME / REFUSED lines reach the
         // console, catalog.log and videoscan.log from the very first load.
         installDesignationAuditSink()
+        // GH #167: the store reports a newer-catalog latch from ANY path
+        // (load, write probe, live reload) straight to the banner.
+        installCatalogVersionPauseSink()
         // Restore previously-scanned records so the user can browse the
         // catalog even when source volumes are offline.
         let restored = catalogStore.load()
@@ -1333,6 +1338,17 @@ final class VideoScanModel: ObservableObject {
         isReadOnly = readOnly || catalogSavingPausedNotice != nil
         catalogStore.isReadOnly = readOnly
         publishFamilyAssetConfiguration()
+    }
+
+    /// GH #167: route the store's one-shot newer-catalog latch to
+    /// `applyCatalogVersionPause`, so a newer catalog that appears
+    /// MID-SESSION (another Mac's newer build saved it; caught by the write
+    /// probe) flips the banner and `isReadOnly` at once — `isReadOnly` is
+    /// what every background job checks before it starts.
+    func installCatalogVersionPauseSink() {
+        catalogStore.onNewerCatalogLatched = { [weak self] in
+            self?.applyCatalogVersionPause()
+        }
     }
 
     /// GH #167: mirror the store's newer-catalog latch into the UI — the

@@ -55,8 +55,8 @@ extension VideoScanModel {
     }
 
     /// Run the repair over `records` once. Returns nil when it did not run
-    /// (marker present, test-host shared store, read-only viewer, or the
-    /// backup could not be written); otherwise the summary — with
+    /// (marker present, test-host shared store, read-only viewer, a newer
+    /// catalog open read-only (GH #167), or the backup could not be written); otherwise the summary — with
     /// recordsCleaned == 0 when the catalog was already clean (the marker
     /// is still written so the scan is never repeated).
     ///
@@ -67,6 +67,9 @@ extension VideoScanModel {
     func repairMachineTextInUserNotes() -> NotesRepairSummary? {
         if TestEnvironment.isTestHost && catalogStore === CatalogStore.shared { return nil }
         if catalogStore.isReadOnly { return nil }
+        // GH #167: a newer catalog is open — no backup, no marker, no
+        // edits (the marker would claim a repair of a file we never saved).
+        if catalogStore.newerCatalogVersion != nil { return nil }
         let marker = notesRepairMarkerPath
         let fm = FileManager.default
         if fm.fileExists(atPath: marker) { return nil }
