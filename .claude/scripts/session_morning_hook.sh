@@ -69,6 +69,36 @@ elif st == "nothing": print("⚪ adversarial review: nothing in scope")
 else: print(f"🔴 adversarial review: unknown state {st!r}")
 PY
 
+# ── Nightly local-model review (tools/model-fitness/nightly_review.sh, 04:30) ──
+# One line from its latest.json (it posted to the team channel until the
+# channel was retired, 2026-10-02). The path is the night's summary.md.
+python3 - "$STAMP_DIR/model-review/latest.json" "$(date +%Y-%m-%d)" <<'PY' 2>/dev/null || echo "🔴 local review: latest.json unreadable"
+import json, sys
+path, today = sys.argv[1], sys.argv[2]
+try: s = json.load(open(path))
+except Exception: s = {}
+st, where = s.get("status"), s.get("summary") or path
+if s.get("date") != today: print(f"🔴 local review did not run last night (last: {s.get('date') or 'never'}) → {path}")
+elif st == "skipped": print(f"🔴 local review SKIPPED: {s.get('reason')}; {s.get('unreviewed')} commit(s) pending → {where}")
+elif st == "quiet": print(f"{'🟡' if (s.get('quietNights') or 0) >= 2 else '⚪'} local review: nothing new ({s.get('quietNights')} quiet night(s)) → {where}")
+elif st == "reviewed":
+    bad = (s.get("unreviewed") or 0) > 0 or (s.get("abandoned") or 0) > 0
+    icon = "🔴" if bad else ("🟡" if (s.get("flagged") or 0) > 0 else "🟢")
+    ab = f", {s['abandoned']} abandoned" if s.get("abandoned") else ""
+    print(f"{icon} local review: {s.get('flagged')} flagged, {s.get('unreviewed')} unreviewed{ab} → {where}")
+else: print(f"🔴 local review: unknown state {st!r} → {path}")
+PY
+
+# ── Hallie's voice (scripts/nightly_hallie_voice.py, in the 02:00 nightly) ──
+# Silent unless last night's lane raised an alert.
+python3 - "$STAMP_DIR/hallie-voice/latest.json" "$(date +%Y-%m-%d)" <<'PY' 2>/dev/null || true
+import json, sys
+path, today = sys.argv[1], sys.argv[2]
+try: s = json.load(open(path))
+except Exception: sys.exit(0)
+if s.get("date") == today and s.get("alert"): print(f"🔴 {s.get('headline')} — {s.get('detail')} → {path}")
+PY
+
 echo "=== end digest — surface this to Rick and flag anything marked 'Needs a look'."
 echo "Then, per Rick's standing request: report how overnight tests went, and ASK him"
 echo "whether yesterday's spot-testing passed — if yes, propose purging the merged"

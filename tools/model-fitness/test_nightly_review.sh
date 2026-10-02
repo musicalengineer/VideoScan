@@ -13,8 +13,12 @@
 # commits went to a dead endpoint (cases 7-8): the reviewer preflights
 # /api/tags, retries once, and skips loudly with the baseline kept.
 #
-# Runs entirely in a sandbox: a throwaway repo, a stub reviewer, a stub team
-# channel, and HOME pointed at the sandbox so STATE lands there.
+# Since the team channel was retired (2026-10-02) the outcome is two files,
+# $STATE/<YYYY-MM-DD>/summary.md and $STATE/latest.json; the cases assert on
+# those where they used to assert on stubbed channel posts.
+#
+# Runs entirely in a sandbox: a throwaway repo, a stub reviewer, and
+# REVIEW_STATE pointed at the sandbox.
 #
 # Usage:  tools/model-fitness/test_nightly_review.sh
 set -u
@@ -60,15 +64,20 @@ print("ERRORED_SHAS: " + ",".join(errs))
 pathlib.Path(out + ".alsocommits").write_text(also)
 STUB
 
-# Stub channel: append every post so the harness can assert on escalation.
-cat > "$WORK/tools/team-channel.py" <<'STUB'
-import sys, os, pathlib
-subject = sys.argv[sys.argv.index("--subject") + 1] if "--subject" in sys.argv else ""
-body = sys.stdin.read() if "-" in sys.argv else ""
-with open(os.environ["POSTS_FILE"], "a") as fh:
-    fh.write("SUBJECT: " + subject + "\n" + body + "\n===\n")
-STUB
-POSTS="$SANDBOX/posts.txt"; : > "$POSTS"
+# latest.json, one field (empty when the file or field is missing).
+latest() {
+    python3 - "$STATE/latest.json" "$1" <<'PY2' 2>/dev/null
+import json, sys
+try:
+    value = json.load(open(sys.argv[1])).get(sys.argv[2], "")
+except Exception:
+    value = ""
+print(value)
+PY2
+}
+# Per-run review directories are YYYYMMDD-HHMM[-pid]; the summary's day
+# directory is YYYY-MM-DD and must not be counted as one.
+RUN_DIRS='2[0-9][0-9][0-9][0-9][0-9][0-9][0-9]-*/'
 
 # Stub ollama: a /api/tags server listing stub-model, so the preflight sees an
 # awake host that has the reviewer's model. Cases 7-8 point ENDPOINT elsewhere.
@@ -92,7 +101,7 @@ STUB_ENDPOINT="http://127.0.0.1:$(cat "$SANDBOX/port")"
 
 run_reviewer() {
     ( cd "$WORK"
-      REVIEW_STATE="$STATE" REPO="$WORK" POSTS_FILE="$POSTS" \
+      REVIEW_STATE="$STATE" REPO="$WORK" \
       STUB_ERRORS="${1:-}" MAX_RETRIES="${MAX_RETRIES:-3}" \
       ENDPOINT="${ENDPOINT:-$STUB_ENDPOINT}" REVIEW_MODEL="${REVIEW_MODEL:-stub-model}" \
       REVIEW_PREFLIGHT_RETRY_SECONDS=1 \
@@ -113,18 +122,31 @@ else
     fail "unpushed commit was not reviewed: $(cat "$STATE/nightly.log" 2>/dev/null | tr '\n' ' ')"
 fi
 
+if [ "$(latest status)" = "reviewed" ] && [ "$(latest reviewed)" = "1" ] \
+   && [ "$(latest summary)" = "$STATE/$(date +%Y-%m-%d)/summary.md" ] && [ -s "$(latest summary)" ]; then
+    pass "latest.json records the run and points at today's summary.md"
+else
+    fail "latest.json/summary.md missing or wrong: $(cat "$STATE/latest.json" 2>/dev/null | tr '\n' ' ')"
+fi
+if head -1 "$(latest summary)" 2>/dev/null | grep -q "^# nightly review: 1 commits, 0 flagged"; then
+    pass "summary.md opens with the headline"
+else
+    fail "summary.md headline wrong: $(head -1 "$(latest summary)" 2>/dev/null)"
+fi
+
 echo "== 2: a quiet night is quiet ONCE, then escalates =="
 run_reviewer ""
-if [ "$(grep -c 'SUBJECT:' "$POSTS")" -eq 1 ]; then
-    pass "first quiet night posts nothing new to the channel"
+if [ "$(latest status)" = "quiet" ] && [ "$(latest quietNights)" = "1" ] \
+   && [ "$(latest headline)" = "nightly review: nothing new" ]; then
+    pass "first quiet night is recorded as plain 'nothing new'"
 else
-    fail "first quiet night should not escalate (posts=$(grep -c 'SUBJECT:' "$POSTS"))"
+    fail "first quiet night should not escalate: $(latest headline) (quietNights=$(latest quietNights))"
 fi
 run_reviewer ""
-if grep -q "SUBJECT: nightly review: 2 quiet nights" "$POSTS"; then
-    pass "a SECOND consecutive quiet night escalates to the channel"
+if latest headline | grep -q "^nightly review: 2 quiet nights" && grep -q "LOCAL main" "$(latest summary)"; then
+    pass "a SECOND consecutive quiet night escalates in the headline"
 else
-    fail "two quiet nights did not escalate: $(grep 'SUBJECT:' "$POSTS" | tr '\n' '|')"
+    fail "two quiet nights did not escalate: $(latest headline)"
 fi
 
 echo "== 3: an ERRORED commit is retried, not skipped forever =="
@@ -136,13 +158,13 @@ if [ "$(cat "$STATE/unreviewed_shas" 2>/dev/null)" = "$ERRSHA" ]; then
 else
     fail "errored commit was not queued: '$(cat "$STATE/unreviewed_shas" 2>/dev/null)'"
 fi
-if grep -q "SUBJECT:.*1 UNREVIEWED" "$POSTS"; then
-    pass "the channel subject says UNREVIEWED out loud"
+if latest headline | grep -q "1 UNREVIEWED" && [ "$(latest unreviewed)" = "1" ]; then
+    pass "the headline says UNREVIEWED out loud"
 else
-    fail "unreviewed count never reached the subject line"
+    fail "unreviewed count never reached the headline: $(latest headline)"
 fi
 run_reviewer ""
-if grep -q "$ERRSHA" "$(ls -td "$STATE"/2*/ | head -1)".alsocommits 2>/dev/null \
+if grep -q "$ERRSHA" "$(ls -td "$STATE"/$RUN_DIRS 2>/dev/null | head -1)".alsocommits 2>/dev/null \
    || grep -rq "$ERRSHA" "$STATE"/*.alsocommits 2>/dev/null; then
     pass "the next run actually passes it back via --also-commits"
 else
@@ -150,15 +172,14 @@ else
 fi
 
 echo "== 4: a permanently-failing commit is abandoned, loudly, not looped =="
-: > "$POSTS"
 echo four > "$WORK/d.txt"; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "always errors"
 BADSHA=$(git -C "$WORK" rev-parse --short=8 HEAD)
 MAX_RETRIES=2 run_reviewer "$BADSHA"
 MAX_RETRIES=2 run_reviewer "$BADSHA"
-if grep -q "SUBJECT:.*abandoned" "$POSTS"; then
+if latest headline | grep -q "abandoned" && grep -q "$BADSHA" "$(latest summary)"; then
     pass "abandonment after MAX_RETRIES is announced, never silent"
 else
-    fail "a permanently-failing commit vanished quietly: $(grep 'SUBJECT:' "$POSTS" | tr '\n' '|')"
+    fail "a permanently-failing commit vanished quietly: $(latest headline)"
 fi
 
 echo "== 5: a clean retry in the SAME MINUTE does not inherit stale verdicts =="
@@ -166,14 +187,13 @@ echo "== 5: a clean retry in the SAME MINUTE does not inherit stale verdicts =="
 # runs inside one minute shared an output directory and the flagged/errors
 # greps counted the FIRST run's .md files. A clean retry straight after an
 # ERROR is exactly when that happens.
-: > "$POSTS"
 echo five > "$WORK/e.txt"; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "errors then clean"
 ESHA=$(git -C "$WORK" rev-parse --short=8 HEAD)
 run_reviewer "$ESHA"                      # run A: one ERROR
 run_reviewer ""                           # run B: same minute, all clean
-LAST_SUBJECT=$(grep 'SUBJECT:' "$POSTS" | tail -1)
-if echo "$LAST_SUBJECT" | grep -q "UNREVIEWED"; then
-    fail "the clean retry inherited the previous run's ERROR: $LAST_SUBJECT"
+LAST_HEADLINE=$(latest headline)
+if echo "$LAST_HEADLINE" | grep -q "UNREVIEWED"; then
+    fail "the clean retry inherited the previous run's ERROR: $LAST_HEADLINE"
 else
     pass "the clean retry gets its own output directory and its own counts"
 fi
@@ -190,13 +210,12 @@ fi
 echo "== 7: an asleep host is ONE skip line, the baseline is kept, nothing is asked per commit =="
 # The 2026-09-11->12 night: ricksm5 asleep at 04:30, forty commits each
 # timing out or erroring on urlopen, digest posted as if reviewed.
-: > "$POSTS"
 echo seven > "$WORK/g.txt"; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "lands while the M5 sleeps"
-BEFORE_SHA=$(cat "$STATE/last_sha"); BEFORE_DIRS=$(ls -d "$STATE"/2*/ 2>/dev/null | wc -l | tr -d ' ')
+BEFORE_SHA=$(cat "$STATE/last_sha"); BEFORE_DIRS=$(ls -d "$STATE"/$RUN_DIRS 2>/dev/null | wc -l | tr -d ' ')
 start=$(date +%s)
 ENDPOINT=http://127.0.0.1:1 run_reviewer ""; rc=$?
 took=$(( $(date +%s) - start ))
-AFTER_DIRS=$(ls -d "$STATE"/2*/ 2>/dev/null | wc -l | tr -d ' ')
+AFTER_DIRS=$(ls -d "$STATE"/$RUN_DIRS 2>/dev/null | wc -l | tr -d ' ')
 if [ "$rc" -ne 0 ] && tail -1 "$STATE/nightly.log" | grep -q "SKIPPED — host http://127.0.0.1:1 asleep or unreachable"; then
     pass "the skip is one line in nightly.log with the host named (rc=$rc, ${took}s)"
 else
@@ -212,10 +231,10 @@ if [ "$AFTER_DIRS" = "$BEFORE_DIRS" ]; then
 else
     fail "a review directory was created for a dead endpoint ($BEFORE_DIRS -> $AFTER_DIRS)"
 fi
-if grep -q "SUBJECT: nightly review: SKIPPED — host http://127.0.0.1:1 asleep" "$POSTS"; then
-    pass "the channel hears 'asleep', not a digest"
+if [ "$(latest status)" = "skipped" ] && latest headline | grep -q "^nightly review: SKIPPED — host http://127.0.0.1:1 asleep"; then
+    pass "the summary says 'asleep', not a digest"
 else
-    fail "channel subject missing or wrong: $(grep 'SUBJECT:' "$POSTS" | tr '\n' '|')"
+    fail "skip headline missing or wrong: $(latest status) / $(latest headline)"
 fi
 if grep -q "1 commit(s) (.*) not reviewed, baseline kept" "$STATE/nightly.log"; then
     pass "the skip line counts what was left unreviewed"
@@ -224,7 +243,6 @@ else
 fi
 
 echo "== 8: an awake host WITHOUT the reviewer's model also skips, with its own reason =="
-: > "$POSTS"
 REVIEW_MODEL=absent-model run_reviewer ""; rc=$?
 if [ "$rc" -ne 0 ] && tail -1 "$STATE/nightly.log" | grep -q "SKIPPED — host $STUB_ENDPOINT is up but does not list absent-model (has: stub-model"; then
     pass "a missing model is named, with what the host has"
@@ -233,7 +251,6 @@ else
 fi
 
 echo "== 9: once the host answers, the pending commit is reviewed on the next run =="
-: > "$POSTS"
 run_reviewer ""
 if grep -q "reviewed 1 " <(tail -1 "$STATE/nightly.log"); then
     pass "the commit skipped in case 7 is reviewed as soon as the host is back"
@@ -241,44 +258,27 @@ else
     fail "pending commit was not reviewed after the host returned: $(tail -1 "$STATE/nightly.log")"
 fi
 
-echo "== 10: a night that ABANDONS many commits still reaches the channel (subject <= 160 chars) =="
-# RED 2026-09-25: nightly_review.sh builds the subject as
-# "…, abandoned <every sha>"; the 09/25 04:30 run abandoned 46 and
-# tools/team-channel.py refused it ("subject must be 1..160 characters"),
-# so the digest never arrived. The stub channel accepts anything, so assert
-# the length here.
+echo "== 10: a night that ABANDONS many commits keeps the headline short (<= 160 chars) =="
+# RED 2026-09-25: nightly_review.sh built the subject as
+# "…, abandoned <every sha>"; the 09/25 04:30 run abandoned 46 and the
+# (since retired) team channel refused the 160+ character subject, so the
+# digest never arrived. Counts in the headline, SHAs in the body.
 FAKES=$(python3 -c 'print(",".join(f"{i:08x}" for i in range(0xabc00000, 0xabc00000 + 20)))')
 : > "$STATE/retry_attempts"
 for s in ${FAKES//,/ }; do echo "$s 2" >> "$STATE/retry_attempts"; done
 echo "$FAKES" > "$STATE/unreviewed_shas"
-: > "$POSTS"
 MAX_RETRIES=3 run_reviewer "$FAKES"
-LONG=$(python3 -c 'import sys; print(sum(1 for l in open(sys.argv[1]) if l.startswith("SUBJECT: ") and len(l.rstrip("\n")) - 9 > 160))' "$POSTS")
-if grep -q '^SUBJECT:' "$POSTS" && [ "$LONG" -eq 0 ]; then
-    pass "the abandoned-commits subject fits the channel's 160-char limit (SHAs belong in the body)"
+HEADLINE=$(latest headline)
+if [ "$(latest status)" = "reviewed" ] && [ "${#HEADLINE}" -le 160 ]; then
+    pass "the abandoned-commits headline stays short (${#HEADLINE} chars; SHAs belong in the body)"
 else
-    fail "subject over 160 chars ($LONG) — team-channel.py would refuse it: $(grep '^SUBJECT:' "$POSTS" | cut -c1-120)"
+    fail "headline over 160 chars (${#HEADLINE}): $(echo "$HEADLINE" | cut -c1-120)"
 fi
-
-# Subject/body length as the REAL channel measures it (tools/team-channel.py
-# MAX_SUBJECT / MAX_BODY), read from the source so the two cannot drift.
-CHANNEL_SRC="$SCRIPT_DIR/../team-channel.py"
-MAX_SUBJECT=$(sed -n 's/^MAX_SUBJECT = \([0-9_]*\).*/\1/p' "$CHANNEL_SRC" | tr -d _)
-MAX_BODY=$(sed -n 's/^MAX_BODY = \([0-9_]*\).*/\1/p' "$CHANNEL_SRC" | tr -d _)
-posts_over_limits() {   # prints "<long subjects> <long bodies>" for $POSTS
-    python3 - "$POSTS" "$MAX_SUBJECT" "$MAX_BODY" <<'PY2'
-import sys
-text = open(sys.argv[1]).read()
-ms, mb = int(sys.argv[2]), int(sys.argv[3])
-ls = lb = 0
-for post in [p for p in text.split("\n===\n") if p.strip()]:
-    head, _, body = post.lstrip("\n").partition("\n")
-    subject = head[len("SUBJECT: "):] if head.startswith("SUBJECT: ") else head
-    ls += len(subject) > ms
-    lb += len(body.rstrip("\n")) > mb
-print(ls, lb)
-PY2
-}
+if grep -q "abc00013" "$(latest summary)"; then
+    pass "every abandoned SHA is in summary.md"
+else
+    fail "summary.md lost the abandoned SHAs"
+fi
 
 echo "== 11: a python that cannot reach the host (curl can) is a LOUD skip, not 150 ERRORs =="
 # 2026-09-23..25: after the macOS 26.7 update, launchd-run Homebrew python got
@@ -293,7 +293,6 @@ def _blocked(self, *a, **k):
 socket.socket.connect = _blocked
 socket.socket.connect_ex = lambda self, *a, **k: errno.EHOSTUNREACH
 PY2
-: > "$POSTS"
 echo eleven > "$WORK/k.txt"; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "lands while python is blocked"
 BEFORE_SHA=$(cat "$STATE/last_sha")
 PYTHONPATH="$SANDBOX/blockednet" run_reviewer ""; rc=$?
@@ -312,31 +311,50 @@ if [ "$(cat "$STATE/last_sha")" = "$BEFORE_SHA" ]; then
 else
     fail "baseline advanced while python could not reach the host"
 fi
-read -r LS LB <<< "$(posts_over_limits)"
-if grep -q '^SUBJECT: nightly review: SKIPPED' "$POSTS" && [ "$LS" -eq 0 ]; then
-    pass "the skip post's subject fits the channel ($MAX_SUBJECT chars)"
+HEADLINE=$(latest headline)
+if echo "$HEADLINE" | grep -q '^nightly review: SKIPPED' && [ "${#HEADLINE}" -le 160 ] \
+   && grep -q "Local Network" "$(latest summary)"; then
+    pass "the skip headline is short and summary.md carries the advice"
 else
-    fail "skip subject missing or over $MAX_SUBJECT chars: $(grep '^SUBJECT:' "$POSTS" | cut -c1-200)"
+    fail "skip headline/summary wrong: $(echo "$HEADLINE" | cut -c1-200)"
 fi
 run_reviewer ""   # python unblocked: review the pending commit so later cases start clean
 : > "$STATE/unreviewed_shas"; : > "$STATE/retry_attempts"
 
-echo "== 12: a night with hundreds of UNREVIEWED commits still fits the channel's body limit =="
-# 2026-09-25: the digest was 20,538 bytes; MAX_BODY is 20,000.
+echo "== 12: a night with hundreds of UNREVIEWED commits is summarised whole, not truncated =="
+# 2026-09-25: the digest was 20,538 bytes and the channel capped bodies at
+# 20,000. A file has no cap: every SHA must survive into summary.md.
 MANY=$(python3 -c 'print(",".join(f"{i:08x}" for i in range(0xcd000000, 0xcd000000 + 700)))')
-: > "$POSTS"
 echo twelve > "$WORK/l.txt"; git -C "$WORK" add -A; git -C "$WORK" commit -q -m "a very bad night"
 run_reviewer "$MANY"
-read -r LS LB <<< "$(posts_over_limits)"
-if grep -q '^SUBJECT:' "$POSTS" && [ "$LS" -eq 0 ] && [ "$LB" -eq 0 ]; then
-    pass "the digest post fits the channel (subject <= $MAX_SUBJECT, body <= $MAX_BODY)"
+if grep -q "cd000000" "$(latest summary)" && grep -q "cd0002bb" "$(latest summary)" \
+   && [ "$(latest unreviewed)" = "700" ]; then
+    pass "summary.md holds all 700 unreviewed SHAs and latest.json counts them"
 else
-    fail "digest over the channel limits (long subjects $LS, long bodies $LB)"
+    fail "summary.md truncated or count wrong (unreviewed=$(latest unreviewed))"
 fi
-if grep -q "$STATE/.*digest.md" "$POSTS"; then
-    pass "a truncated body points at the full digest file"
+if [ -s "$(latest digest)" ] && [ -d "$(latest rawVerdicts)" ]; then
+    pass "latest.json points at the digest and the raw verdicts"
 else
-    fail "truncated body does not say where the full digest is"
+    fail "latest.json digest/rawVerdicts paths missing: $(latest digest) $(latest rawVerdicts)"
+fi
+
+echo "== 13: --help prints usage and runs NOTHING; an unknown argument is refused =="
+BEFORE_LOG=$(wc -c < "$STATE/nightly.log" | tr -d ' ')
+BEFORE_DIRS=$(ls -d "$STATE"/$RUN_DIRS 2>/dev/null | wc -l | tr -d ' ')
+( cd "$WORK" && REVIEW_STATE="$STATE" REPO="$WORK" zsh "$REAL_SCRIPT" --help ) > "$SANDBOX/help.out" 2>&1; rc=$?
+if [ "$rc" -eq 0 ] && grep -q "summary.md" "$SANDBOX/help.out" \
+   && [ "$(wc -c < "$STATE/nightly.log" | tr -d ' ')" = "$BEFORE_LOG" ] \
+   && [ "$(ls -d "$STATE"/$RUN_DIRS 2>/dev/null | wc -l | tr -d ' ')" = "$BEFORE_DIRS" ]; then
+    pass "--help exits 0 with usage and touches no state"
+else
+    fail "--help ran something or failed (rc=$rc)"
+fi
+( cd "$WORK" && REVIEW_STATE="$STATE" REPO="$WORK" zsh "$REAL_SCRIPT" --bogus ) > "$SANDBOX/bogus.out" 2>&1; rc=$?
+if [ "$rc" -eq 2 ] && [ "$(wc -c < "$STATE/nightly.log" | tr -d ' ')" = "$BEFORE_LOG" ]; then
+    pass "an unknown argument exits 2 without reviewing"
+else
+    fail "unknown argument was not refused (rc=$rc)"
 fi
 
 echo
