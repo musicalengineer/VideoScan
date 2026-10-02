@@ -676,6 +676,10 @@ struct RecordFinderFiler {
     /// findings) is kept. A dossier.json this filing created is retired if
     /// it is otherwise empty (QA P3-4).
     private func restoreDossier(pre: Prepared, findingID: String, wrote: FindingWrite) -> DossierRestore {
+        // Write 2 never ran (its read failed first): nothing of this
+        // filing is in the file, so there is nothing to take back — and
+        // the file is not touched (adversarial review 2026-10-02 F3).
+        if wrote == .none { return .restored }
         let subject = self.subject
         var kept = false
         do {
