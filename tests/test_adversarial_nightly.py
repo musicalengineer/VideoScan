@@ -196,6 +196,18 @@ def test_comment_only_changes_are_dropped(env):
     assert not adv.comment_only("")
 
 
+def test_a_line_led_by_a_binary_operator_is_code_not_a_comment():
+    # Nightly review 2026-10-02 (qwen on 67206ab9): a stripped line starting
+    # with "*" was taken for a block-comment continuation. Swift has no "*ptr",
+    # but a wrapped product does start a line with "*" -- PreviewFrameScorer.swift
+    # lines 103-104 -- and a diff touching only that line was dropped from review.
+    assert not adv.comment_only("-                * (1.0 - dominantColorFraction)\n"
+                                "+                * (1.0 - dominantColorFraction * 0.5)\n")
+    assert not adv.comment_only("+    *= scale\n")
+    # Still comment-only: line and doc comments, a block comment's own delimiters.
+    assert adv.comment_only("+/// Doc line\n-// old\n+/* opened\n+*/\n")
+
+
 def test_scope_on_a_real_range(env):
     head = change_day(env["repo"])
     scope = adv.compute_scope(f"{env['base']}..{head}")
