@@ -52,7 +52,7 @@ final class PersistentLogCapture {
         appLog = previous
         var out: [String] = []
         let catalogLog = (try? Data(contentsOf: model.dashboard.catalogLog.url)) ?? Data()
-        out += String(decoding: catalogLog.dropFirst(catalogLogOffset), as: UTF8.self)
+        out += (String(bytes: catalogLog.dropFirst(catalogLogOffset), encoding: .utf8) ?? "")
             .split(separator: "\n").map { "catalog.log: " + $0 }
         out += sink.lines.map { "appLog: " + $0 }
         for url in extraFiles {

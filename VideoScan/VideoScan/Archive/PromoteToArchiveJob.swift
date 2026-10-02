@@ -322,42 +322,7 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
             currentOpLabel = Self.opLabel(jobID: id, index: index, total: total)
             let outcome = await promoteOne(entry: entry, model: model, ctx: ctx,
                                            bytesDone: tally.bytesDone)
-            switch outcome {
-            case .promoted(let relPath):
-                tally.promoted += 1
-                tally.bytesDone += entry.sizeBytes
-                record(.promoted, entry.filename, relPath, recordID: entry.recordID,
-                       notLocked: noteLockWarning(entry, &tally, model: model))
-            case .adopted(let relPath):
-                tally.adopted += 1
-                tally.bytesDone += entry.sizeBytes
-                record(.adopted, entry.filename, relPath, recordID: entry.recordID,
-                       notLocked: noteLockWarning(entry, &tally, model: model))
-                model.log("Promote: \(entry.filename) — an identical copy already sat at \(relPath); adopted it (no second copy).")
-            case .skipped(let why):
-                tally.skipped += 1
-                record(.skipped, entry.filename, why, recordID: entry.recordID)
-                model.log("Promote: skipped \(entry.filename) — \(why).")
-            case .failed(let why):
-                tally.failed += 1
-                tally.bytesDone += entry.sizeBytes
-                record(.failed, entry.filename, why, recordID: entry.recordID)
-                model.log("Promote: FAILED \(entry.filename) — \(why)")
-                promoteLog.error("promote FAILED \(entry.filename, privacy: .public): \(why, privacy: .public)")
-            case .refused(let refusal):
-                if refusal.kind == .skipped {
-                    tally.skipped += 1
-                } else {
-                    tally.failed += 1
-                    tally.bytesDone += entry.sizeBytes
-                }
-                // The detail (names, paths, dates) goes to the outcome row
-                // only; the persistent lines carry the op id + code + facts.
-                record(refusal.kind, entry.filename, refusal.detail, recordID: entry.recordID)
-                noteRefusal(refusal, model: model)
-            case .cancelled:
-                break
-            }
+            settle(outcome, for: entry, tally: &tally, model: model)
             if case .cancelled = outcome { break }
         }
 
@@ -433,6 +398,48 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         let append = model.ledgerAppend(events)
         guard mirror else { return append }
         return model.mediaLedger.mirror(intoArchiveRoot: root)
+    }
+
+    /// Count, record and log one file's result (the run loop's body; split
+    /// out to keep `run()` readable).
+    private func settle(_ outcome: FileResult, for entry: ArchivePromotePlan.Entry,
+                        tally: inout Tally, model: VideoScanModel) {
+        switch outcome {
+        case .promoted(let relPath):
+            tally.promoted += 1
+            tally.bytesDone += entry.sizeBytes
+            record(.promoted, entry.filename, relPath, recordID: entry.recordID,
+                   notLocked: noteLockWarning(entry, &tally, model: model))
+        case .adopted(let relPath):
+            tally.adopted += 1
+            tally.bytesDone += entry.sizeBytes
+            record(.adopted, entry.filename, relPath, recordID: entry.recordID,
+                   notLocked: noteLockWarning(entry, &tally, model: model))
+            model.log("Promote: \(entry.filename) — an identical copy already sat at \(relPath); adopted it (no second copy).")
+        case .skipped(let why):
+            tally.skipped += 1
+            record(.skipped, entry.filename, why, recordID: entry.recordID)
+            model.log("Promote: skipped \(entry.filename) — \(why).")
+        case .failed(let why):
+            tally.failed += 1
+            tally.bytesDone += entry.sizeBytes
+            record(.failed, entry.filename, why, recordID: entry.recordID)
+            model.log("Promote: FAILED \(entry.filename) — \(why)")
+            promoteLog.error("promote FAILED \(entry.filename, privacy: .public): \(why, privacy: .public)")
+        case .refused(let refusal):
+            if refusal.kind == .skipped {
+                tally.skipped += 1
+            } else {
+                tally.failed += 1
+                tally.bytesDone += entry.sizeBytes
+            }
+            // The detail (names, paths, dates) goes to the outcome row
+            // only; the persistent lines carry the op id + code + facts.
+            record(refusal.kind, entry.filename, refusal.detail, recordID: entry.recordID)
+            noteRefusal(refusal, model: model)
+        case .cancelled:
+            break
+        }
     }
 
     /// The ONE place a Promote refusal reaches persistent logs (console +
