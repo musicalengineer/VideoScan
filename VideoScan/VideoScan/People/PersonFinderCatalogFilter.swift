@@ -31,8 +31,8 @@ nonisolated func pfCatalogSkipPaths(from records: [VideoRecord]) -> Set<String> 
 /// they are known from prior catalog scans to be unscannable (audio-only, no streams,
 /// ffprobe failures). Must be called on MainActor since CatalogStore is MainActor-isolated.
 @MainActor
-func pfCatalogSkipSet() -> Set<String> {
-    pfCatalogSkipPaths(from: CatalogStore.shared.load())
+func pfCatalogSkipSet(store: CatalogStore = .shared) -> Set<String> {
+    pfCatalogSkipPaths(from: store.load())
 }
 
 // MARK: - Person scan prefilter (issue #66)
@@ -146,9 +146,10 @@ nonisolated func pfPersonScanSkipPaths(
 
 /// MainActor wrapper that loads the catalog and applies the full prefilter.
 @MainActor
-func pfPersonScanSkipResult(targetPersonName: String?) -> CatalogSkipResult {
+func pfPersonScanSkipResult(targetPersonName: String?,
+                            store: CatalogStore = .shared) -> CatalogSkipResult {
     pfPersonScanSkipPaths(
-        from: CatalogStore.shared.load(),
+        from: store.load(),
         targetPersonName: targetPersonName
     )
 }
