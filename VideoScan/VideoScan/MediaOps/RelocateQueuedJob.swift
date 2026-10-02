@@ -17,7 +17,7 @@ import Foundation
 // top-level here, so a name suffix is the disambiguator.)
 //
 // Access level matches the rest of the Relocate stack (internal).
-// See docs/relocate_volume_plan.md §3 (Relocate Job Queue).
+// See docs/design/relocate_volume_plan.md §3 (Relocate Job Queue).
 
 /// Lifecycle of one queued relocate. The states are strictly monotonic
 /// in the happy path: queued → reconciling → copying → awaitingDone →

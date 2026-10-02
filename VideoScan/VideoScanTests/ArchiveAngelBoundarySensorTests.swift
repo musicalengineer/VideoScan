@@ -1,6 +1,6 @@
 // ArchiveAngelBoundarySensorTests.swift
 // The Archive Angel's module boundary, enforced by a test instead of the
-// compiler (docs/archive_angel_consolidation_plan.md, Packaging option A).
+// compiler (docs/design/archive_angel_consolidation_plan.md, Packaging option A).
 //
 // RATCHET: each table below is today's list of leaks. A count may only go
 // DOWN; a new leak (or a leak in a new place) fails. When you remove one,

@@ -10,7 +10,7 @@ extension VideoScanModel {
     // pipeline writes VLM-generated descriptions to sceneCaptions, along
     // with the model id and date that produced them. Re-captioning
     // *replaces* the array wholesale — we don't merge captions from
-    // different models per docs/scene_captions_plan.md.
+    // different models per docs/design/scene_captions_plan.md.
     //
     // Provenance stamp (fix 2026-07-01, twin of the applyAudioTranscript
     // fix): every apply variant also stamps `dossierProcessedAt`

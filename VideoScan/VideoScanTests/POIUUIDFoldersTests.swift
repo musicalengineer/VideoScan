@@ -3,7 +3,7 @@ import Testing
 @testable import VideoScan
 
 // People profile folders keyed by uuid, display name = first alias
-// (docs/people_uuid_folders_design.md, Rick's ruling 2026-09-12).
+// (docs/design/people_uuid_folders_design.md, Rick's ruling 2026-09-12).
 //
 // Dimension 1 (logic) and dimension 5 (sensors) of the feature-test
 // checklist. Every test works in the per-process test store

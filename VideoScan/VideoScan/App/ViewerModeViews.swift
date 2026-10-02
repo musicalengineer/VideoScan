@@ -1,5 +1,5 @@
 // ViewerModeViews.swift
-// The viewer's face (Phase 1 §4, docs/remote_use_design.md): one status
+// The viewer's face (Phase 1 §4, docs/design/remote_use_design.md): one status
 // chip — "Viewing RicksM4's catalog · synced 2 min ago · media: streaming"
 // — and one modifier for master-only controls, which stay visible but
 // disabled with the hint "on the master (RicksM4)". Both read

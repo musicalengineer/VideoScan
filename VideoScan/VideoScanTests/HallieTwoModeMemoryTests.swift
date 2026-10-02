@@ -1,5 +1,5 @@
 // HallieTwoModeMemoryTests.swift
-// ConversationMemory's two-mode state (docs/hallie_two_mode_design.md
+// ConversationMemory's two-mode state (docs/design/hallie_two_mode_design.md
 // §3.1–3.2): the transition table, declines that keep the chosen mode,
 // reset, force/unforce, the count scope and tree offers, the
 // whole-catalog follow-up snapshot — and the isolation dimension: three

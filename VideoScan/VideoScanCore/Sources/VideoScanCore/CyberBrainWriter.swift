@@ -13,7 +13,7 @@
 // file — every field here is typed by a family member or derived
 // deterministically from what they typed.
 //
-// Durability, per docs/cyberbrain_design.md §7: temp file in the same
+// Durability, per docs/design/cyberbrain_design.md §7: temp file in the same
 // directory → full validation of the NEW archive → fsync → atomic rename over
 // cyberbrain.json, with the previous file copied to backups/ first. A crash
 // at any point leaves either the old file or the new file, never a torn one.

@@ -80,7 +80,7 @@ extension VideoScanModel {
     static let deletionCheckpointEvery = 25
 
     /// Duplicate analysis under the analysis-ledger contract
-    /// (docs/analysis_ledger_design.md, 2026-07-05):
+    /// (docs/design/analysis_ledger_design.md, 2026-07-05):
     ///
     ///   - `selectedIDs == nil` (Analyze All): INCREMENTAL. Only records
     ///     never stamped (`dupAnalyzedAt == nil` — new files, or records

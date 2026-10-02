@@ -147,7 +147,7 @@ extension HallieTurnExecutor {
             return terms.compactMap { HallieTurnExecutor.RelativeFactSubject.kinRelation(inPersonTerm: $0) }
         }
 
-        // MARK: Two-mode session state (docs/hallie_two_mode_design.md §3.1-3.2)
+        // MARK: Two-mode session state (docs/design/hallie_two_mode_design.md §3.1-3.2)
 
         /// Which FAMILY the conversation is in right now — catalog or family
         /// tree — from the last substantive answer. Lives here, not on the
@@ -786,7 +786,7 @@ extension HallieTurnExecutor {
     }
 
     /// The pre-translation decision together with the MODE verdict that
-    /// gated it (docs/hallie_two_mode_design.md §3.4). The clients read the
+    /// gated it (docs/design/hallie_two_mode_design.md §3.4). The clients read the
     /// verdict for the `[hallie-mode]` log line, the executor context and
     /// the post-translation gate. The verdict is computed lazily — after
     /// the mode-independent steps (repair, offer, selection date,
@@ -1062,7 +1062,7 @@ extension HallieTurnExecutor {
             performsFirstOfferedAction: immediateAction != nil,
             immediateOfferedAction: immediateAction,
             // GH #210 — merge semantics (decided 2026-10-01, documented in
-            // docs/hallie.md "Two questions in one turn"):
+            // docs/guides/hallie.md "Two questions in one turn"):
             //   • the LATER clause wins, like `mode`: the ranking a scope
             //     correction re-runs, the list "and the newest?" sorts;
             //   • the life status follows the SUBJECT the join names

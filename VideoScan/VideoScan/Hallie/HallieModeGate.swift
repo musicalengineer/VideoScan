@@ -1,5 +1,5 @@
 // HallieModeGate.swift
-// The post-translation check that never existed (docs/hallie_two_mode_design.md
+// The post-translation check that never existed (docs/design/hallie_two_mode_design.md
 // §1.3, §3.4 B): whether the AST the model returned belongs to the FAMILY the
 // sentence asked for. Every strict miss went through this hole — a pronoun
 // kin question came back as `presence … keyword=marry` and was executed

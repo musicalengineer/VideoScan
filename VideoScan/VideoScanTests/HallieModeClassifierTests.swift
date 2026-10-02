@@ -1,5 +1,5 @@
 // HallieModeClassifierTests.swift
-// The pure mode classifier (docs/hallie_two_mode_design.md §3.3): cue
+// The pure mode classifier (docs/design/hallie_two_mode_design.md §3.3): cue
 // tables, subject resolution, stickiness, scope overrides, conflict →
 // unknown, and the CLAUDE.md dimensions — scale (10,000 classifications
 // against a 40,000-person oracle under a stated budget, at most two

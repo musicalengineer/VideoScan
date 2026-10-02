@@ -1,5 +1,5 @@
 // ArchiveAngel.swift
-// The Archive Angel's ONE front door (docs/archive_angel_consolidation_plan.md,
+// The Archive Angel's ONE front door (docs/design/archive_angel_consolidation_plan.md,
 // "Target architecture"). The rest of the app talks to `model.archiveAngel`
 // and to the few public views (ArchiveAngelStrip, ArchiveAngelMenuItems,
 // ArchiveAngelCatalogBadgeView, ArchiveAngelJobDetailView,
@@ -58,7 +58,7 @@ final class ArchiveAngel: ObservableObject {
     let store: ArchiveAngelEvidenceStore
     /// The background scoring sweep over the evidence store.
     let sweep: ArchiveAngelSweep
-    /// Angel Checks (docs/archive_angel_wise_design.md §4): Verify Audio on
+    /// Angel Checks (docs/design/archive_angel_wise_design.md §4): Verify Audio on
     /// the top of the list, in the background, before a row is shown as
     /// "Needs audio checked".
     let checks: ArchiveAngelChecks

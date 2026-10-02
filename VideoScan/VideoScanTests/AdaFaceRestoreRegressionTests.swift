@@ -16,7 +16,7 @@ import Testing
 // missed on rehydration. Fixed by resolving through
 // `effectiveEngine(globalDefault: settings.recognitionEngine)`.
 //
-// Five-dimension notes (docs/testing_retrospective_2026_07_05.md):
+// Five-dimension notes (docs/practices/testing_retrospective_2026_07_05.md):
 //  - Logic: cache-key identity across the persist→rehydrate boundary.
 //  - Isolation: PersonFinderCache/ScanJobsStorage both redirect to per-process
 //    scratch under a test host, so this never touches Rick's real cache/history.

@@ -5,7 +5,7 @@ import SwiftUI
 // Modal entry point for the Relocate Volume feature. Lets Rick pick a
 // source volume root (typically a flaky external HDD), pick a
 // destination folder on a healthier drive, optionally preview via
-// dry-run, and kick off the migration. See docs/relocate_volume_plan.md
+// dry-run, and kick off the migration. See docs/design/relocate_volume_plan.md
 // §7.
 
 private let relocateDestFolderKey = "relocateDestFolder"

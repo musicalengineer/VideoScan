@@ -13,7 +13,7 @@ import UserNotifications
 //   - Concurrent reads from a single networked Mac Pro share one NIC.
 //   - Concurrent catalog mutations would race on the in-memory model.
 //
-// See docs/relocate_volume_plan.md §3 (Relocate Job Queue).
+// See docs/design/relocate_volume_plan.md §3 (Relocate Job Queue).
 //
 // Memory footprint: O(jobs) entries in `relocateQueue`. Each job is a
 // few hundred bytes of metadata + an optional ~few-KB `RelocateSummary`.

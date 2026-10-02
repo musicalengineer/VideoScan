@@ -11,7 +11,7 @@ import Foundation
 //
 // No VideoScanModel reference. No catalog mutation. No UI. The model
 // layer is responsible for translating outcomes into catalog updates.
-// See docs/relocate_volume_plan.md §3.
+// See docs/design/relocate_volume_plan.md §3.
 
 struct RelocateJob: Sendable, Equatable {
     let recordID: UUID

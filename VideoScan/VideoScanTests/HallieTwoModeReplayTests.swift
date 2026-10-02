@@ -1,5 +1,5 @@
 // HallieTwoModeReplayTests.swift
-// Sensor suite for docs/hallie_two_mode_design.md §2 — the seven observed
+// Sensor suite for docs/design/hallie_two_mode_design.md §2 — the seven observed
 // misroutes that motivate the Catalog / Family-tree session mode. Written
 // FIRST (step 0) to pin what the deterministic chain does TODAY, so the
 // later steps flip each expectation in a visible diff rather than by

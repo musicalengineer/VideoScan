@@ -471,7 +471,7 @@ struct ArchiveAngelRecommendationPolicyTests {
         #expect(loaded.notices.first?.contains(reason) == true, "\(loaded.notices)")
     }
 
-    // The three worked examples of docs/archive_angel_policy.md, verbatim.
+    // The three worked examples of docs/guides/archive_angel_policy.md, verbatim.
 
     static let exampleUnderFive = #"""
     {

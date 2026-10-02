@@ -1,7 +1,7 @@
 // FootageOriginality.swift
 // Find Similar Footage, Phase 1 — "which member of a footage group is most
 // likely the original?" and "what is each other member?" (the v1 scorer of
-// docs/find_original_design.md §2, metadata only).
+// docs/design/find_original_design.md §2, metadata only).
 //
 // A reason-printing points table, in the style of DuplicateDetector's
 // keeperScore. FOR the original:

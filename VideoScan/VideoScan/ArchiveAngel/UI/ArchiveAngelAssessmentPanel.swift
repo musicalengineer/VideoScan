@@ -118,7 +118,7 @@ struct ArchiveAngelAssessmentPanel: View {
                     Toggle("Assess Continuously", isOn: Binding(
                         get: { angel.sweepEnabled },
                         set: { angel.setContinuous($0) }))
-                    // Angel Checks (docs/archive_angel_wise_design.md §4).
+                    // Angel Checks (docs/design/archive_angel_wise_design.md §4).
                     Toggle("Check Sound in the Background", isOn: Binding(
                         get: { angel.checksEnabled },
                         set: { angel.setChecks($0) }))

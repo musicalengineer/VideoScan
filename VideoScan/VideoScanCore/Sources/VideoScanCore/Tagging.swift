@@ -16,7 +16,7 @@ import Foundation
 /// searchable in natural language ("Donna playing guitar" → match
 /// on detectedPeople ∪ sceneCaptions text).
 ///
-/// See docs/scene_captions_plan.md for the long-arc design.
+/// See docs/design/scene_captions_plan.md for the long-arc design.
 public struct SceneCaption: Codable, Hashable, Sendable {
     /// Seconds into the clip the caption describes.
     public let timestamp: Double

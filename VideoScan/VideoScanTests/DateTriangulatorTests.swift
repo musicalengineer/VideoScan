@@ -9,7 +9,7 @@ import Foundation
 // live cases that drove the work, the criterion table, and the model-
 // level catch-up / footage-group sharing.
 //
-// Five dimensions (docs/testing_retrospective_2026_07_05.md):
+// Five dimensions (docs/practices/testing_retrospective_2026_07_05.md):
 //   logic      CapeCod (with / without People-tab birth years), Clip 19,
 //              "Christmas 2002" + camera stamp, now vs reference table,
 //              age parsing, era floors, ranges, disagreement, priors

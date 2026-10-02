@@ -9,7 +9,7 @@ import VideoScanCore
 
 extension ArchiveAngelScorer {
 
-    /// Rules v12 (docs/archive_angel_wise_design.md §3.6): a footage group
+    /// Rules v12 (docs/design/archive_angel_wise_design.md §3.6): a footage group
     /// (Find Similar Footage, Likely or stronger — a Possible group is
     /// shown to the person, never decided for them) whose likely original
     /// is already archived is DONE: its other members (rank > 0 — the

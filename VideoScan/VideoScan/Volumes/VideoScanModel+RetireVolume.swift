@@ -40,7 +40,7 @@ struct PendingRetireOffer: Identifiable, Equatable {
 // to mark it retired and never see the nag again.
 //
 // Fully reversible: Reinstate clears all three retire fields. See
-// docs/relocate_volume_plan.md §1B.
+// docs/design/relocate_volume_plan.md §1B.
 
 extension VideoScanModel {
 

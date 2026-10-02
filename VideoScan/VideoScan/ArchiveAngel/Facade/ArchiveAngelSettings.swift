@@ -9,7 +9,7 @@
 //   archiveAngel.makeLossless  the FFV1 checkbox, also used by the catalog's
 //                              "Prepare with Archive Angel"      (default off)
 //   archiveAngel.checksEnabled Check Sound in the Background (Angel Checks,
-//                              docs/archive_angel_wise_design.md §4; default
+//                              docs/design/archive_angel_wise_design.md §4; default
 //                              ON; missing key → ON)
 //   archiveAngel.footageAutoEnabled  Keep footage groups current (§5;
 //                              default ON; missing key → ON)

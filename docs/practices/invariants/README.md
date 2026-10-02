@@ -2,7 +2,7 @@
 
 One file per area. `tools/adversarial_nightly.py` reads them to decide what is
 in scope each night and to build the reviewer's brief. Design:
-`nightly_adversarial_review_design_2026-10-01.md` (docs/, or docs/design/ after the reorg).
+docs/design/nightly_adversarial_review_design_2026-10-01.md.
 
 ## File shape
 
@@ -23,8 +23,8 @@ paths:
 ```
 
 - `tier: data-risk` — a miss can lose or corrupt family media, the archive or
-  the family record (docs/source_layout.md, "Data-risk code"). Reviewed at
-  effort `xhigh`.
+  the family record (docs/guides/source_layout.md, "Data-risk code"). Reviewed
+  at effort `xhigh`.
 - `tier: truth` — a miss makes the app say something false (Hallie answers,
   dates, genealogy). Reviewed at effort `high`.
 - `paths` are repo-relative globs: `*` stays inside one folder, `**` crosses
@@ -43,7 +43,7 @@ writes something new) — never by narrowing the sensor.
 
 ## Sources
 
-Seeded 2026-10-01 from the codex briefs and review docs (#230 filing, #235
-map birth rule, Refile r1–r6, Archive Update, Promote dates and lock, fixity
-#1721, rename backups, dates resolver, the 9/28 day bundle),
-docs/source_layout.md and the project's data-safety rules.
+Seeded 2026-10-01 from the codex briefs and review docs in docs/reviews/
+(#230 filing, #235 map birth rule, Refile r1–r6, Archive Update, Promote dates
+and lock, fixity #1721, rename backups, dates resolver, the 9/28 day bundle),
+docs/guides/source_layout.md and the project's data-safety rules.

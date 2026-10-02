@@ -1,6 +1,6 @@
 // ArchiveAngelBufferHygieneCard.swift
 // Archive Angel curation Phase 2 — the "What next?" card (Rick 2026-09-19,
-// docs/archive_angel_curation_direction.md). Sits in the Archive tab ABOVE
+// docs/design/archive_angel_curation_direction.md). Sits in the Archive tab ABOVE
 // the ready-batch disclosure whenever prepared batches are waiting in the
 // buffer or finished batches still hold files:
 //

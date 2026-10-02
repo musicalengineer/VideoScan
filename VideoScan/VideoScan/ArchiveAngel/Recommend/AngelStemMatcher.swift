@@ -287,7 +287,7 @@ struct AngelStemMatcher: Sendable, Equatable {
     ///   • anything else → refused, with the reason.
     static func migrateRetired(_ value: Any) -> RetiredPatternVerdict {
         let why = "is a regular expression — no longer read: a pattern can hang the Angel's sweep (codex #1643). "
-            + "Use tables.appCacheStemNames / appCacheStemNumbered / appCacheStemGlobs (docs/archive_angel_policy.md)"
+            + "Use tables.appCacheStemNames / appCacheStemNumbered / appCacheStemGlobs (docs/guides/archive_angel_policy.md)"
         guard let pattern = value as? String else { return .refuse(why) }
         if pattern == retiredDefaultPattern {
             return .names(AngelPolicyTables.standard.appCacheStemNames, numbered: true)

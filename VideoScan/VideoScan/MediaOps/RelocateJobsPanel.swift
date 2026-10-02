@@ -13,7 +13,7 @@ import SwiftUI
 // `Window` scene — the panel is review-only, and SwiftUI's
 // `.sheet(isPresented:)` plumbing is the lightest touch.
 //
-// See docs/relocate_volume_plan.md §3.
+// See docs/design/relocate_volume_plan.md §3.
 
 struct RelocateJobsPanel: View {
 

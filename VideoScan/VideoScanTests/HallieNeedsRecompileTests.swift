@@ -442,7 +442,7 @@ struct HallieNeedsRecompileTests {
         // that does not parse is a source whose hash already failed.
         //
         // The scenario is still real, in the one configuration that skips
-        // the re-hash: the remote VIEWER (docs/remote_use_design.md Phase
+        // the re-hash: the remote VIEWER (docs/design/remote_use_design.md Phase
         // 1), where the generation arrived by verified sync and its
         // sources name master paths. There, a local source that will not
         // parse is reachable — and a viewer must REPORT that, not hide it

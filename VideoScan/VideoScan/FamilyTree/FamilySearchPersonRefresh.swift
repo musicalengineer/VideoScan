@@ -10,7 +10,7 @@
 // THE SAME TERMINAL SEAM AS "Get Family Tree" (FamilySearchPull.swift):
 // VideoScan writes a `.command` file, Terminal runs it, getmyancestors asks
 // for the username AND the password itself. VideoScan never collects,
-// stores, forwards or logs either (docs/familysearch_api_notes.md). This
+// stores, forwards or logs either (docs/research/familysearch_api_notes.md). This
 // file does not even pass `-u`: the tool prompts for it.
 //
 // THE COMMAND (checked against getmyancestors 1.2.0's own source,

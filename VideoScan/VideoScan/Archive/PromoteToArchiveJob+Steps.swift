@@ -357,7 +357,7 @@ extension PromoteToArchiveJob {
         model.log("Promote: \(entry.filename) → \(choice.relPath) (sha256 \(sha.prefix(12))…) ✓ in \(Self.promoteElapsedText(elapsed))")
         // .notice, not .info: promote is irreversible, so its DONE line has
         // to survive into the persisted log for post-hoc reading
-        // (docs/findings_2026_09_14_overnight.md, row 14).
+        // (docs/ops/findings_2026_09_14_overnight.md, row 14).
         promoteLog.notice("promote DONE \(entry.filename, privacy: .public) → \(choice.relPath, privacy: .public) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
         return choice.identicalExistingSHA == nil ? .promoted(relPath: choice.relPath)
                                                   : .adopted(relPath: choice.relPath)

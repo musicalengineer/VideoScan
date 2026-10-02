@@ -1,6 +1,6 @@
 // ArchiveAngelCodex1643Tests.swift
 // codex #1643 (independent review of Archive Angel S3, 2026-09-23;
-// docs/codex-review-1633-1638-2026-09-23.md, A1–A5). Red first:
+// docs/reviews/codex/codex-review-1633-1638-2026-09-23.md, A1–A5). Red first:
 //
 //   A1  a user regex in policy.json could hang VALIDATION (`^[a1_-]*…b$`)
 //       or pass it and hang SCORING on the main actor (`^a*a*…a*b$`) —

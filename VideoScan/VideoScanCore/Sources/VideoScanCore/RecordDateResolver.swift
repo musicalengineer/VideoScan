@@ -255,7 +255,7 @@ public enum RecordDateResolver {
                abs(iy - ey) > contentStampToleranceYears {
                 return i
             }
-            // Rules v12 (2026-09-25, docs/archive_angel_wise_design.md §3.2):
+            // Rules v12 (2026-09-25, docs/design/archive_angel_wise_design.md §3.2):
             // a stamp with NO camera behind it (a transcoder's, or one of
             // unknown origin — ≤ 0.85) is a copy-era date whenever the name
             // says otherwise. "DickyDonnaDancing1992.mov" stamped 2026-04-03

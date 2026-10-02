@@ -53,7 +53,7 @@ enum SourceTree {
     // MARK: - App sources by NAME (2026-09-29 source-folder reorg)
     //
     // The app sources live in feature folders (Archive/, Hallie/Voice/, …;
-    // see docs/source_layout.md). A sensor that hard-codes
+    // see docs/guides/source_layout.md). A sensor that hard-codes
     // "VideoScan/Foo.swift" breaks — or, worse, reads nothing — the next
     // time a file moves. Look the file up by NAME instead: the name is
     // unique across the app tree, so a move cannot change the answer.

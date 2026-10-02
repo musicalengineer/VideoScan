@@ -1,5 +1,5 @@
 // HallieRemoteClientTests.swift
-// Phase 1 remote use, slice 3 — Hallie on the viewer (docs/remote_use_design.md §3).
+// Phase 1 remote use, slice 3 — Hallie on the viewer (docs/design/remote_use_design.md §3).
 //
 // Parity: the viewer's client posts exactly what the iPad page posts and
 // shows exactly what the bridge returned — proven against a stub bridge

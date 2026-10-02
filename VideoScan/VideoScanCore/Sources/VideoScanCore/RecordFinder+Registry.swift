@@ -2,8 +2,8 @@
 // GH #230 — the Record Finder's DATA: one `Site` per archive. Split from
 // RecordFinder.swift (the template language and evaluator) so adding an
 // archive is an edit to this table and nothing else. Sources:
-// docs/irish_records_design_2026-09-30.md §2/§4 (re-checked 2026-10-01) and
-// docs/uk_scotland_records_survey_2026-10-01.md §5. Every URL shape here is
+// docs/research/irish_records_design_2026-09-30.md §2/§4 (re-checked 2026-10-01) and
+// docs/research/uk_scotland_records_survey_2026-10-01.md §5. Every URL shape here is
 // pinned by RecordFinderLinkTests.
 //
 // C++ readers: an `extension` adds members to a type declared elsewhere —
@@ -52,7 +52,7 @@ extension RecordFinder {
     private static let diedEW: Condition = .any([.diedIn(.england), .diedIn(.wales)])
     private static let diedGB: Condition = .any([.diedIn(.england), .diedIn(.wales), .diedIn(.scotland)])
 
-    /// Ireland — docs/irish_records_design_2026-09-30.md §2/§4, URL shapes
+    /// Ireland — docs/research/irish_records_design_2026-09-30.md §2/§4, URL shapes
     /// re-checked 2026-10-01.
     public static let ireland: [Site] = [
         Site(id: "ie.nai.census-1901-1911",
@@ -188,7 +188,7 @@ extension RecordFinder {
              verification: .verified("2026-10-01: API equivalent returns WO 363 rows")),
     ]
 
-    /// England, Wales and Scotland — docs/uk_scotland_records_survey_2026-10-01.md §5.
+    /// England, Wales and Scotland — docs/research/uk_scotland_records_survey_2026-10-01.md §5.
     public static let britain: [Site] = {
         func fs(_ id: String, _ title: String, _ collection: String, _ reason: String,
                 countries: [R], conditions: [Condition], group: String) -> Site {

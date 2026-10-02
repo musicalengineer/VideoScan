@@ -1,5 +1,5 @@
 // ArchiveAngelTruthfulReadinessTests.swift
-// Rules v12 — "truthful readiness" (docs/archive_angel_wise_design.md §3,
+// Rules v12 — "truthful readiness" (docs/design/archive_angel_wise_design.md §3,
 // 2026-09-25). Measured on the live catalog that morning: the Angel's own
 // buffer companions listed as Worth a look, VHS tapes digitized in 2026
 // listed as Ready under 2026, Person Finder compilations as Ready, and a

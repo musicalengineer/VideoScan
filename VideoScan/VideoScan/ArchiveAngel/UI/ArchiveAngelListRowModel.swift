@@ -71,7 +71,7 @@ struct ArchiveAngelRowFacts: Sendable, Equatable, Identifiable {
     var isReachable: Bool = true
     /// Does the file exist? nil = not probed (yet).
     var fileExists: Bool?
-    /// Angel Checks (docs/archive_angel_wise_design.md §4): the checker has
+    /// Angel Checks (docs/design/archive_angel_wise_design.md §4): the checker has
     /// this file queued or running — "Checking the sound…" instead of
     /// "Needs audio checked".
     var isBeingChecked: Bool = false

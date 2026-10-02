@@ -436,7 +436,7 @@ nonisolated func pfTokenMatches(_ token: SearchToken, _ rec: VideoRecord) -> Boo
         // Scene captions search (v1 — linear substring across caption text).
         // Composes with the people-tag matches above so "donna playing guitar"
         // matches via Donna (detectedPeople) + "playing guitar" (sceneCaptions).
-        // For v2 at >10k records, see docs/scene_captions_plan.md FTS5 plan.
+        // For v2 at >10k records, see docs/design/scene_captions_plan.md FTS5 plan.
         if rec.sceneCaptions.contains(where: { $0.text.lowercased().contains(n) }) { return true }
         // Audio transcript search (Phase 1 — linear substring across the
         // single transcript text blob). Same case-insensitive comparison
