@@ -365,6 +365,9 @@ struct RecordFinderFilingTests {
         #expect(try sb.research.loadDossier(key: sb.subject.key) == prior)
         #expect(!fm.fileExists(atPath: brainFile(sb).path))
         #expect(lines.all.last?.contains("OUTCOME rolledBack (cyberbrain-failed)") == true)
+        // Adversarial review 2026-10-01 (267d107a): the log names the file and where it went.
+        #expect(lines.all.last?.contains("Documents/\(FamilyAssetStore.documentsTrashFolderName)/\(trashed[0])") == true,
+                "\(lines.all.last ?? "")")
         // And the same file can be filed again once the brain is back.
         #expect(await filer(sb).file(submission(file, read: true, words: "Words.")).isSuccess)
     }
@@ -391,12 +394,14 @@ struct RecordFinderFilingTests {
         let file = try write(try pdf(), "r.pdf", in: sb)
         _ = await filer(sb, lines: lines).file(submission(file, read: true, words: words))
         _ = await filer(sb, lines: lines).file(submission(file, read: true, words: words))   // refused duplicate
-        let text = lines.all.joined(separator: "\n")
+        // Case-insensitive (adversarial review 2026-10-01, 31bd2de8): an item
+        // id slugs the name to lower case, which a case-sensitive check missed.
+        let text = lines.all.joined(separator: "\n").lowercased()
         #expect(lines.all.count == 4, "START + OUTCOME per filing: \(lines.all)")
         for secret in ["Honora", "Fenlane", "irishgenealogy.ie/view", "TEST123", words] {
-            #expect(!text.contains(secret), "log leaked \(secret)")
+            #expect(!text.contains(secret.lowercased()), "log leaked \(secret)")
         }
-        #expect(text.contains(sb.subject.key))
+        #expect(text.contains(sb.subject.key.lowercased()))
     }
 
     @Test func outcomesAreNamedAndOnlyFiledIsSuccess() {
@@ -811,6 +816,12 @@ struct RecordFinderFilingTests {
                 == Data("[{ damaged".utf8), "the damaged list is never rewritten")
         #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
         #expect(lines.all.last?.contains("OUTCOME rolledBack") == true)
+        // Adversarial review 2026-10-01 (267d107a): the LOG names the file
+        // and where it is, not only the sheet.
+        if let name = trashed.first {
+            #expect(lines.all.last?.contains("Documents/\(FamilyAssetStore.documentsTrashFolderName)/\(name)") == true,
+                    "\(lines.all.last ?? "")")
+        }
     }
 
     /// F4: same, but the move to .trash fails — the PDF is left in
@@ -818,13 +829,21 @@ struct RecordFinderFilingTests {
     @Test func aListDamagedDuringImportWithTrashBlockedIsMixedStateAndNamesTheFile() async throws {
         let (sb, documents) = try damagedListDuringImport(try sandbox(), blockTrash: true)
         defer { try? fm.removeItem(at: sb.base) }
+        let lines = Lines()
         let file = try write(try pdf(), "r.pdf", in: sb)
-        let outcome = await filer(sb).file(submission(file))
+        let outcome = await filer(sb, lines: lines).file(submission(file))
         guard case .mixedState(let why) = outcome else { Issue.record("expected mixedState, got \(outcome)"); return }
         let left = pdfs(in: documents)
         #expect(left.count == 1, "the file really is still in Documents/")
         if let name = left.first { #expect(why.contains("Documents/\(name)"), "says where the file is: \(why)") }
         #expect(try sb.research.loadDossier(key: sb.subject.key) == nil)
+        // Adversarial review 2026-10-01 (267d107a): so does the log line.
+        if let name = left.first {
+            #expect(lines.all.last?.contains("OUTCOME MIXED STATE") == true)
+            #expect(lines.all.last?.contains("Documents/\(name)") == true, "\(lines.all.last ?? "")")
+        }
+        let text = lines.all.joined(separator: "\n").lowercased()
+        #expect(!text.contains("honora") && !text.contains("fenlane"), "no name in the log: \(text)")
     }
 
     // MARK: Coverage gaps named by codex review #18
