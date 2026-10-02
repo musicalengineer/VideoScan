@@ -482,7 +482,13 @@ public struct GedcomFamilyGraph: Sendable {
             pendingFamilyEvent = nil
         }
 
-        for rawLine in gedcomText.split(whereSeparator: \.isNewline) {
+        // A closure, NOT the key path `\.isNewline`: a key-path-as-function
+        // is one shared object retained and released per CHARACTER, so
+        // parses on several threads fight over its refcount. Measured
+        // 2026-10-02 (Debug, M4): 0.2 s alone vs 33 s each on 16 threads
+        // for the key path; 0.09 s vs 0.10 s for the closure. Pinned by
+        // GedcomParseContentionSensorTests.
+        for rawLine in gedcomText.split(whereSeparator: { $0.isNewline }) {
             let line = rawLine.trimmingCharacters(in: .whitespaces)
             let parts = line.split(separator: " ", maxSplits: 2,
                                    omittingEmptySubsequences: true)
@@ -614,7 +620,7 @@ public struct GedcomFamilyGraph: Sendable {
     /// Nil when the bytes are not UTF-8 or not a `0 HEAD … 0 TRLR` file.
     public init?(data: Data, fileURL: URL) {
         guard let text = String(data: data, encoding: .utf8) else { return nil }
-        let records = text.split(whereSeparator: \.isNewline)
+        let records = text.split(whereSeparator: { $0.isNewline })
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         guard let first = records.first, let last = records.last,
               first.trimmingCharacters(in: CharacterSet(charactersIn: "\u{feff}")) == "0 HEAD",
