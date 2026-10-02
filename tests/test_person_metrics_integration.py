@@ -39,14 +39,15 @@ class PersonMetricsIntegrationSensors(unittest.TestCase):
         # publish a FAILED row, never a silent green one.
         self.assertIn("zero-tests-ran:test-rc=", script)
 
-    def test_dashboard_has_honest_missing_and_stale_states(self):
+    def test_metrics_page_does_not_render_person_recognition(self):
+        """2026-10-02: the one metrics page (Rick) dropped the person-recognition
+        panel. Every nightly row since July says `not-configured` (PersonFinder
+        was demoted 2026-09-26), so the panel only ever showed a red 0% readiness.
+        The fields still ride on the nightly row and the morning digest still
+        reports them (test below); the public page must not invent a number
+        from them."""
         page = (ROOT / "docs/index.html").read_text()
-        self.assertIn("PERSON_METRIC_STALE_HOURS = 36", page)
-        self.assertIn('person_eval_status: "not-configured"', page)
-        self.assertIn('person_eval_quality_score: null', page)
-        self.assertIn('person_eval_status: "stale"', page)
-        self.assertIn('person_eval_publish_eligible: false', page)
-        self.assertIn('personStatusValue.textContent', page)
+        self.assertNotIn("person_eval_", page)
         self.assertNotIn('rawUrl("poi_cycles.jsonl")', page)
         self.assertNotIn('id="poi-cycle-cards"', page)
 

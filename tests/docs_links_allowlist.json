@@ -324,9 +324,6 @@
     "docs/perf": "The reorganization brief names the pre-reorganization folders it moved.",
     "docs/team-channel/": "The team channel was retired 2026-10-02 and docs/team-channel/ removed; historical citation, kept as written."
   },
-  "scripts/dashboard.sh": {
-    "docs/history.jsonl": "Generated dashboard data, intentionally gitignored; written by scripts/dashboard.sh from the metrics branch."
-  },
   "scripts/find_donna_scan.py": {
     "docs/find_donna_scan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
