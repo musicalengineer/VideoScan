@@ -21,7 +21,11 @@
 //     ARE ordinary words elsewhere ("Del." — Spanish "del"; "Mont." —
 //     French "mont"; "Ark.", "Neb.", "Kan.", "Cal."): only upper-case, or
 //     Capitalised with the period. Lower-case "in", "or", "me", "del" are
-//     words, never states.
+//     words, never states; so are "Co." (County) and "Mt." (Mount), and
+//     "Co. Cork" is an Irish county (`isIrishCountyPhrase`).
+//   • Position: a bare postal code names a state only in STATE position —
+//     the end of a comma part, after any country words. "CO DUBLIN" and
+//     "MT VERNON" carry no state (adversarial review 2026-10-01).
 //
 // Pure tables and string work. C++ readers: an `enum` with no cases is a
 // namespace of static constants and functions.
@@ -87,14 +91,68 @@ public enum USPlaceNames {
         let key = BirthplaceClassifier.normalize(trimmed)
         if let name = fullNames[key] ?? writtenForms[key] { return name }
         let letters = trimmed.filter { $0.isLetter }
+        let upperCase = letters == letters.uppercased()
+        let capitalisedWithPeriod = letters.first?.isUppercase == true && trimmed.hasSuffix(".")
         if letters.count == 2, let name = USStateCodes.names[letters.uppercased()] {
-            if letters == letters.uppercased() { return name }
+            // "N.H.", "R.I.", "D.C." are dotted INITIALS; "W.I." (West
+            // Indies) and "W.A." (Western Australia) only look like them —
+            // Wisconsin and Washington are one word, so no record ever
+            // wrote them so. Adversarial review 2026-10-01 (ea7b6739).
+            if isDottedInitials(trimmed), !areInitials(letters.uppercased(), of: name) { return nil }
+            if upperCase { return name }
             // "Ky.", "Va.", "Me." — the old written forms, with the period.
-            if letters.first?.isUppercase == true, trimmed.hasSuffix(".") { return name }
+            // Never "Co." (County) or "Mt." (Mount): adversarial review
+            // 2026-10-01 (efdf169d) — "Fenlane, Co. Cork" was Colorado.
+            // Colorado is "Colo." or the postal "CO"; Montana "Mont." or "MT".
+            if capitalisedWithPeriod, !dottedPlaceWords.contains(letters.uppercased()) { return name }
             return nil
         }
-        if let name = capitalisedForms[key], letters.first?.isUppercase == true { return name }
+        // "Del.", "Mont.", "DEL" — never the bare word "Mont" ("Mont
+        // Saint-Michel") or "Del" ("Puerto Del Rosario"): adversarial
+        // review 2026-10-01 (cafe2e2d).
+        if let name = capitalisedForms[key], upperCase || capitalisedWithPeriod { return name }
         return nil
+    }
+
+    /// Two-letter postal codes whose Capitalised dotted form is a place
+    /// word, not a state: "Co." is County, "Mt." is Mount.
+    static let dottedPlaceWords: Set<String> = ["CO", "MT"]
+
+    /// "N.H.", "N. H", "W.I." — a period BETWEEN the two letters.
+    static func isDottedInitials(_ trimmed: String) -> Bool {
+        guard let first = trimmed.firstIndex(where: { $0.isLetter }),
+              let last = trimmed.lastIndex(where: { $0.isLetter }), first < last else { return false }
+        return trimmed[trimmed.index(after: first)..<last].contains(".")
+    }
+
+    /// True when `letters` are the initials of `name`'s words, "of" skipped
+    /// ("NH" New Hampshire, "DC" District of Columbia).
+    static func areInitials(_ letters: String, of name: String) -> Bool {
+        let initials = name.split(separator: " ").filter { $0 != "of" }.compactMap(\.first)
+        return String(initials).uppercased() == letters
+    }
+
+    // MARK: - The Irish county prefix
+
+    /// The 32 counties (normalised; both names where a county has two).
+    static let irishCounties: Set<String> = [
+        "antrim", "armagh", "carlow", "cavan", "clare", "cork", "derry", "londonderry", "donegal",
+        "down", "dublin", "fermanagh", "galway", "kerry", "kildare", "kilkenny", "laois",
+        "queen's county", "queens county", "leitrim", "limerick", "longford", "louth", "mayo", "meath",
+        "monaghan", "offaly", "king's county", "kings county", "roscommon", "sligo", "tipperary",
+        "tyrone", "waterford", "westmeath", "wexford", "wicklow",
+    ]
+
+    /// True for "Co. Cork", "Co Mayo", "CO DUBLIN", "County Down": the
+    /// Irish county prefix followed by an Irish county. Such a phrase is
+    /// Irish, and its "Co"/"CO" is never Colorado (adversarial review
+    /// 2026-10-01, efdf169d). "Kent Co." (the US suffix form) is not one.
+    public static func isIrishCountyPhrase(_ recorded: String) -> Bool {
+        let key = BirthplaceClassifier.normalize(recorded)
+        for prefix in ["co ", "county "] where key.hasPrefix(prefix) {
+            if irishCounties.contains(String(key.dropFirst(prefix.count))) { return true }
+        }
+        return false
     }
 
     /// True for the two-letter postal forms under the case rule ("KY",
@@ -104,9 +162,11 @@ public enum USPlaceNames {
         let letters = recorded.filter { $0.isLetter }
         guard letters.count == 2,
               recorded.allSatisfy({ $0.isLetter || $0 == "." || $0 == " " }),
-              USStateCodes.names[letters.uppercased()] != nil else { return false }
+              let name = USStateCodes.names[letters.uppercased()] else { return false }
+        if isDottedInitials(recorded), !areInitials(letters.uppercased(), of: name) { return false }
         if letters == letters.uppercased() { return true }
         return letters.first?.isUppercase == true && recorded.hasSuffix(".")
+            && !dottedPlaceWords.contains(letters.uppercased())
     }
 
     // MARK: - A comma part

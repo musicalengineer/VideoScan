@@ -157,6 +157,13 @@ struct GeneratedPlace: CustomStringConvertible {
         /// `writtenAsIreland`: the record says "…, Ireland" (pre-1922 style).
         case northernIreland(writtenAsIreland: Bool)
         case newSouthWales
+        /// "Ballina, Co. Mayo" — an Irish county with its prefix and no
+        /// country at all (adversarial review 2026-10-01, efdf169d).
+        case irishCountyNoCountry(northern: Bool)
+        /// Foreign places carrying a US-looking short form: "W.I.", "W.A.",
+        /// undotted "Mont" / "Del", and bare "Down" beside an English
+        /// county (adversarial review 2026-10-01: ea7b6739, cafe2e2d, 0bb392bd).
+        case foreignLookalike(downInEngland: Bool)
     }
     struct Part: Equatable {
         var text: String
@@ -320,6 +327,59 @@ enum PlaceGenerator {
         return place
     }
 
+    /// P5 input: "Ballina, Co. Mayo", "CO DUBLIN", "Lisburn County Antrim".
+    static func irishCountyNoCountry(_ g: inout SeededGenerator) -> GeneratedPlace {
+        let northern = g.chance(0.35)
+        let place = g.pick(northern ? PlaceVocabulary.northernIreland : PlaceVocabulary.ireland)
+        let county = g.pick(["Co. \(place.county)", "Co \(place.county)", "County \(place.county)"])
+        var parts: [Part] = []
+        if g.chance(0.7) { parts.append(Part(text: place.town, essential: false)) }
+        parts.append(Part(text: county, essential: true))
+        var generated = GeneratedPlace(parts: parts, expected: .irishCountyNoCountry(northern: northern))
+        style(&generated, &g)
+        generated.noCommas = g.chance(0.2)
+        generated.upperCase = g.chance(0.15)
+        return generated
+    }
+
+    /// P6 input: foreign places that carry a US-looking short form.
+    static func foreignLookalike(_ g: inout SeededGenerator) -> GeneratedPlace {
+        switch g.int(0...3) {
+        case 0:
+            let (town, island) = g.pick([("Kingston", "Jamaica"), ("Bridgetown", "Barbados"),
+                                         ("Port of Spain", "Trinidad"), ("St. John's", "Antigua"),
+                                         ("Basseterre", "St. Kitts")])
+            let mark = g.pick(["W.I.", "W. I.", "B.W.I."])
+            var p = GeneratedPlace(parts: [Part(text: town, essential: false), Part(text: island, essential: false),
+                                           Part(text: mark, essential: true)],
+                                   expected: .foreignLookalike(downInEngland: false))
+            style(&p, &g)
+            p.upperCase = g.chance(0.1)
+            return p
+        case 1:
+            let town = g.pick(["Perth", "Fremantle", "Bunbury", "Geraldton", "Kalgoorlie"])
+            var p = GeneratedPlace(parts: [Part(text: town, essential: false), Part(text: g.pick(["W.A.", "W. A."]), essential: true)],
+                                   expected: .foreignLookalike(downInEngland: false))
+            style(&p, &g)
+            return p
+        case 2:
+            let name = g.pick(["Mont Saint-Michel", "Mont Blanc", "Mont Ventoux", "Puerto Del Rosario",
+                               "Castel Del Monte", "Villa Del Rio"])
+            var p = GeneratedPlace(parts: [Part(text: name, essential: true)], expected: .foreignLookalike(downInEngland: false))
+            style(&p, &g)
+            return p
+        default:
+            let county = g.pick(["Kent", "Surrey", "Sussex", "Essex", "Devon", "Hampshire", "Yorkshire", "Lancashire"])
+            var parts = [Part(text: "Down", essential: true), Part(text: county, essential: true)]
+            let country = g.pick(["", "England", "United Kingdom", "UK"])
+            if !country.isEmpty { parts.append(Part(text: country, essential: false)) }
+            var p = GeneratedPlace(parts: parts, expected: .foreignLookalike(downInEngland: true))
+            style(&p, &g)
+            p.upperCase = g.chance(0.1)
+            return p
+        }
+    }
+
     static func shrink(_ p: GeneratedPlace) -> [GeneratedPlace] { p.shrinks }
 }
 
@@ -449,6 +509,61 @@ enum PlaceOracle {
         }
     }
 
+    static let usRegions: Set<Region> = [.newEngland, .restOfUS, .unitedStatesUnspecified]
+
+    /// No reader calls the place American.
+    static func notUS(_ reader: PlaceReader, _ p: GeneratedPlace) -> String? {
+        switch reader {
+        case .classify:
+            return BirthplaceClassifier.classify(p.text).country == BirthplaceClassifier.unitedStates
+                ? "classify.country = United States" : nil
+        case .region:
+            let r = BirthplaceClassifier.region(p.text)
+            return usRegions.contains(r) ? "region = \(r)" : nil
+        case .researchLinks:
+            return FamilyTreeResearchLinks.regions(ofPlace: p.text).contains(.unitedStates) ? "regions ∋ unitedStates" : nil
+        case .lifeAndTimes:
+            return LifeAndTimes.region(ofPlace: p.text) == .unitedStates ? "LifeAndTimes.region = unitedStates" : nil
+        case .unitResolver:
+            return BirthplaceUnitResolver.resolve(p.text)?.country == .unitedStates ? "resolver country = unitedStates" : nil
+        }
+    }
+
+    /// P5 — "Co. <Irish county>" with no country: never American, and the
+    /// region / Life & Times readers say Ireland (Northern Ireland for the
+    /// six counties when the county is its own comma part).
+    static func irishCounty(_ reader: PlaceReader, _ p: GeneratedPlace) -> String? {
+        guard case .irishCountyNoCountry(let northern) = p.expected else { return nil }
+        if let wrong = notUS(reader, p) { return wrong }
+        switch reader {
+        case .region:
+            let r = BirthplaceClassifier.region(p.text)
+            return r == .ireland ? nil : "region = \(r), want ireland"
+        case .lifeAndTimes:
+            let r = LifeAndTimes.region(ofPlace: p.text)
+            if northern, p.hasCommas { return r == .northernIreland ? nil : "LifeAndTimes.region = \(r.map(\.rawValue) ?? "nil"), want northernIreland" }
+            return r == .ireland || r == .northernIreland ? nil : "LifeAndTimes.region = \(r.map(\.rawValue) ?? "nil"), want the island"
+        default:
+            return nil
+        }
+    }
+
+    /// P6 — foreign look-alikes are never American, and "Down" beside an
+    /// English county is never Northern Ireland.
+    static func foreign(_ reader: PlaceReader, _ p: GeneratedPlace) -> String? {
+        guard case .foreignLookalike(let downInEngland) = p.expected else { return nil }
+        if let wrong = notUS(reader, p) { return wrong }
+        guard downInEngland else { return nil }
+        switch reader {
+        case .lifeAndTimes:
+            return LifeAndTimes.region(ofPlace: p.text) == .northernIreland ? "LifeAndTimes.region = northernIreland" : nil
+        case .unitResolver:
+            return BirthplaceUnitResolver.resolve(p.text)?.country == .northernIreland ? "resolver country = northernIreland" : nil
+        default:
+            return nil
+        }
+    }
+
     /// P3.
     static func notWales(_ reader: PlaceReader, _ p: GeneratedPlace) -> String? {
         switch reader {
@@ -499,6 +614,41 @@ struct PlaceClassificationPropertyTests {
     func newSouthWalesIsNeverWales(reader: PlaceReader, batch: Int) {
         Property.check("nsw-not-wales/\(reader)", batch: batch, cases: 250, generate: PlaceGenerator.newSouthWales,
                        shrink: PlaceGenerator.shrink) { PlaceOracle.notWales(reader, $0) }
+    }
+
+    @Test("P5: an Irish county with its Co./County prefix and no country is Irish, never Colorado",
+          arguments: PlaceReader.allCases, Property.batches)
+    func irishCountyWithoutCountryIsIrish(reader: PlaceReader, batch: Int) {
+        Property.check("irish-county-no-country/\(reader)", batch: batch, cases: 250,
+                       generate: PlaceGenerator.irishCountyNoCountry,
+                       shrink: PlaceGenerator.shrink) { PlaceOracle.irishCounty(reader, $0) }
+    }
+
+    @Test("P6: W.I., W.A., undotted Mont/Del and Down-beside-an-English-county are never American",
+          arguments: PlaceReader.allCases, Property.batches)
+    func foreignLookalikesAreNeverAmerican(reader: PlaceReader, batch: Int) {
+        Property.check("foreign-lookalike/\(reader)", batch: batch, cases: 250,
+                       generate: PlaceGenerator.foreignLookalike,
+                       shrink: PlaceGenerator.shrink) { PlaceOracle.foreign(reader, $0) }
+    }
+
+    @Test("generator coverage: the adversarial-review shapes all occur")
+    func adversarialShapesCoverage() {
+        var coDot = 0, westIndies = 0, westernAustralia = 0, undotted = 0, downKent = 0
+        for index in 0..<1_000 {
+            var g = SeededGenerator(seed: Property.seed(property: "adv-coverage", batch: 0, index: index))
+            let irish = PlaceGenerator.irishCountyNoCountry(&g).text.lowercased()
+            if irish.contains("co. ") { coDot += 1 }
+            let t = PlaceGenerator.foreignLookalike(&g).text.lowercased()
+            if t.contains("w.i.") || t.contains("w. i.") { westIndies += 1 }
+            if t.contains("w.a.") || t.contains("w. a.") { westernAustralia += 1 }
+            if t.hasPrefix("mont ") || t.contains(" del ") { undotted += 1 }
+            if t.hasPrefix("down,") || t.hasPrefix("down ,") { downKent += 1 }
+        }
+        for (label, n) in [("Co. <county>", coDot), ("W.I.", westIndies), ("W.A.", westernAustralia),
+                           ("undotted Mont/Del", undotted), ("Down, <English county>", downKent)] {
+            #expect(n > 20, "\(label) generated: \(n) of 1,000")
+        }
     }
 
     @Test("P4: Northern Ireland is touched by Irish events before 1922 and British events from 1921")

@@ -95,31 +95,43 @@ extension BirthplaceClassifier {
     /// "Sydney New South Wales" is New South Wales — never its last word
     /// "Wales" (generated-input F3) — and "Derry New Hampshire" is New
     /// Hampshire. The same scan as BirthplaceUnitResolver's.
+    ///
+    /// State position (adversarial review 2026-10-01, efdf169d): a bare
+    /// two-letter postal code counts only when nothing but country words
+    /// stands to its right in the part — "Durham NH USA" yes, "CO DUBLIN"
+    /// and "MT VERNON" no. The same rule `USPlaceNames.stateName(endOf:)`
+    /// keeps.
     private static func regionOfComponent(_ component: String) -> ComponentRegion {
-        let whole = regionOfToken(component)
+        let whole = regionOfToken(component, statePosition: true)
         if case .none = whole {} else { return whole }
         let tokens = component.split(whereSeparator: { $0.isWhitespace }).map(String.init)
         guard tokens.count > 1 else { return .none }
         var coarse: ComponentRegion = .none
         var end = tokens.count
+        var statePosition = true
         while end > 0 {
             var consumed = 1
+            var matched = false
             // The whole component (length == tokens.count) was tried above.
             for length in stride(from: min(4, end), through: 1, by: -1) where length < tokens.count {
-                let phrase = regionOfToken(tokens[(end - length)..<end].joined(separator: " "))
+                let phrase = regionOfToken(tokens[(end - length)..<end].joined(separator: " "),
+                                           statePosition: statePosition)
                 if case .fine(let r) = phrase { return .fine(r) }
                 if case .coarse(let r) = phrase {
                     if case .none = coarse { coarse = .coarse(r) }
                     consumed = length
+                    matched = true
                     break
                 }
             }
+            // Only country words (coarse) keep the next token in state position.
+            if !matched { statePosition = false }
             end -= consumed
         }
         return coarse
     }
 
-    private static func regionOfToken(_ raw: String) -> ComponentRegion {
+    private static func regionOfToken(_ raw: String, statePosition: Bool) -> ComponentRegion {
         // Stray punctuation from hand-typed places ("England>", "(Wales)").
         let recorded = raw.trimmingCharacters(in: CharacterSet.letters.union(.whitespaces).union(CharacterSet(charactersIn: ".")).inverted)
         let key = normalize(recorded)
@@ -128,11 +140,14 @@ extension BirthplaceClassifier {
         if coarseUS.contains(key) { return .coarse(.unitedStatesUnspecified) }
         if coarseOther.contains(key) { return .coarse(.other) }
         if elsewhere.contains(key) { return .fine(.other) }
+        // "Co. Cork", "CO DUBLIN", "County Down" — Irish, never Colorado.
+        if USPlaceNames.isIrishCountyPhrase(recorded) { return .fine(.ireland) }
         // A state in any spelling the shared reader knows: full names,
         // the old written forms ("Penn.", "Ind.", "N. H."), and the postal
         // codes under the case rule ("Ma." yes; "me" in lower case is a
-        // word) — generated-input F1/F4.
-        if let state = USPlaceNames.stateName(recorded: recorded) {
+        // word) — generated-input F1/F4 — in state position only.
+        if let state = USPlaceNames.stateName(recorded: recorded),
+           statePosition || !USPlaceNames.isPostalAbbreviation(recorded) {
             return .fine(USPlaceNames.newEnglandStates.contains(state) ? .newEngland : .restOfUS)
         }
         if usStates.contains(key) { return .fine(.restOfUS) }
