@@ -506,6 +506,16 @@ extension VideoScanModel {
         migrateVolumeRoles()
     }
 
+    /// Routes the catalog store's designation-guard lines (GH #167) through
+    /// the one sink: console + catalog.log (`log`) and videoscan.log
+    /// (`appLog`). Re-installed whenever `catalogStore` is swapped.
+    func installDesignationAuditSink() {
+        catalogStore.designationAudit = { [weak self] line in
+            self?.log(line)
+            appLog.write(line)
+        }
+    }
+
     /// v1 clear: forget the designation. The on-disk tree and its
     /// manifest are NOT touched (they are the archive; the app only
     /// forgets which volume it is). Records already promoted keep their
@@ -518,6 +528,9 @@ extension VideoScanModel {
         // not mistaken for the master, and so it never lands in the
         // reclassification queue as a "legacy Archive" (codex m3).
         let exMaster = resolvedMasterArchiveTarget() ?? masterArchiveTarget
+        // GH #167: the ONE path allowed to remove the designation from
+        // catalog.json. Without this the store refuses the save.
+        catalogStore.authorizeDesignationClear(reason: "Clear Master Archive — \(current.targetPath)")
         masterArchive = nil
         if let t = exMaster, t.role == .archive {
             t.role = .unassigned

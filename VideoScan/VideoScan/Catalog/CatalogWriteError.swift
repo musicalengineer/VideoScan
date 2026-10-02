@@ -56,6 +56,12 @@ enum CatalogWriteError: Error, Equatable, Sendable {
     /// The lock file could not even be opened (permissions, missing dir).
     case lockUnavailable(String)
 
+    /// GH #167: this save would REMOVE the Master Archive designation that
+    /// catalog.json carries (`targetPath`), and nobody cleared it — only
+    /// Clear Master Archive authorizes that. Refused before any write, so
+    /// the designation on disk survives whatever nulled it in memory.
+    case designationLossRefused(targetPath: String)
+
     var userFacingDescription: String {
         switch self {
         case .lockedByAnotherProcess(let owner):
@@ -73,6 +79,8 @@ enum CatalogWriteError: Error, Equatable, Sendable {
             return "Could not obtain the catalog lock: \(detail)"
         case .verificationFailed(let expected, let actual, let bytes):
             return "The catalog failed verification after writing \(bytes) bytes (expected SHA-256 \(expected.prefix(12))…, read back \(actual.prefix(12))…). The previous copy is intact in catalog.json.prev."
+        case .designationLossRefused(let targetPath):
+            return "Catalog not saved: it would have removed the Master Archive designation (\(targetPath)) without anyone clearing it. catalog.json still carries it. Re-open the Archive tab: re-initialize the archive, or clear it there if that is what you meant."
         }
     }
 
@@ -86,6 +94,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .lockUnavailable:        return "lockUnavailable"
         case .verificationFailed:     return "verificationFailed"
         case .writesDisabled:         return "writesDisabled"
+        case .designationLossRefused: return "designationLoss"
         }
     }
 
@@ -100,6 +109,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .writeFailed:             return 5
         case .verificationFailed:      return 6
         case .writesDisabled:          return 7
+        case .designationLossRefused:  return 8
         }
     }
 
@@ -112,7 +122,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .lockedByAnotherProcess, .lockUnavailable: return true
         case .readOnlyViewer, .staleGeneration,
              .writeFailed, .verificationFailed,
-             .writesDisabled:                           return false
+             .writesDisabled, .designationLossRefused:  return false
         }
     }
 }

@@ -13,7 +13,7 @@ import Foundation
 
 /// Pure helper: from a list of records, return paths known to be unscannable
 /// (audio-only, no streams, ffprobe failures). Pulled out for unit testing —
-/// `pfCatalogSkipSet()` calls this with `CatalogStore.shared.load()`.
+/// `pfCatalogSkipSet()` calls this with the records on disk.
 nonisolated func pfCatalogSkipPaths(from records: [VideoRecord]) -> Set<String> {
     var skip = Set<String>()
     for rec in records {
@@ -30,9 +30,14 @@ nonisolated func pfCatalogSkipPaths(from records: [VideoRecord]) -> Set<String> 
 /// Build a set of full paths that should be skipped during person search because
 /// they are known from prior catalog scans to be unscannable (audio-only, no streams,
 /// ffprobe failures). Must be called on MainActor since CatalogStore is MainActor-isolated.
+///
+/// GH #167: reads with `readRecordsWithoutAdopting()`, NEVER `load()`. The
+/// session load resets the store's Master Archive slot, OCC generation and
+/// .prev backup — a Person Finder job start used to null an unsaved
+/// designation that way. `store:` is a test seam (default the shared store).
 @MainActor
-func pfCatalogSkipSet() -> Set<String> {
-    pfCatalogSkipPaths(from: CatalogStore.shared.load())
+func pfCatalogSkipSet(store: CatalogStore = .shared) -> Set<String> {
+    pfCatalogSkipPaths(from: store.readRecordsWithoutAdopting())
 }
 
 // MARK: - Person scan prefilter (issue #66)
@@ -144,11 +149,13 @@ nonisolated func pfPersonScanSkipPaths(
     return result
 }
 
-/// MainActor wrapper that loads the catalog and applies the full prefilter.
+/// MainActor wrapper that reads the catalog on disk and applies the full
+/// prefilter. Read-only — see `pfCatalogSkipSet` for why not `load()` (GH #167).
 @MainActor
-func pfPersonScanSkipResult(targetPersonName: String?) -> CatalogSkipResult {
+func pfPersonScanSkipResult(targetPersonName: String?,
+                            store: CatalogStore = .shared) -> CatalogSkipResult {
     pfPersonScanSkipPaths(
-        from: CatalogStore.shared.load(),
+        from: store.readRecordsWithoutAdopting(),
         targetPersonName: targetPersonName
     )
 }

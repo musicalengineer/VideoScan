@@ -119,14 +119,13 @@ struct RelocateSheet: View {
     /// Destination equal to, inside, or containing the source is never a
     /// migration (Rick 2026-08-17: a job ran with dest == source and
     /// reported "done" having copied nothing). nil = fine; else the reason.
+    /// GH #109: decided by RelocatePathGuard — resolved paths and volume
+    /// identity, so an alias, the firmlink spelling or another letter case
+    /// cannot slip through. The model refuses the same pairs again.
     static func destinationProblem(source: String, destination: URL?) -> String? {
-        guard let dest = destination else { return nil }
-        let src = URL(fileURLWithPath: source).standardizedFileURL.path
-        let dst = dest.standardizedFileURL.path
-        if src == dst { return "The destination is the source folder itself — choose a different volume or folder." }
-        if dst.hasPrefix(src + "/") { return "The destination is inside the source — that would copy the folder into itself." }
-        if src.hasPrefix(dst + "/") { return "The destination contains the source — files are already there; choose a different folder." }
-        return nil
+        guard let dest = destination,
+              !source.trimmingCharacters(in: .whitespaces).isEmpty else { return nil }
+        return RelocatePathGuard.refusal(source: source, destination: dest.path)?.message
     }
 
     private var destinationProblemText: String? {
@@ -330,8 +329,11 @@ struct RelocateSheet: View {
 
                 // Reconcile preview + bucket summary.
                 HStack(spacing: 8) {
+                    // GH #109: the preview hashes the whole scope — never
+                    // for a destination that overlaps the source.
                     Button("Reconcile preview") { runPreview() }
-                        .disabled(isPreviewing || scopedRecords.isEmpty || destinationFolder == nil)
+                        .disabled(isPreviewing || scopedRecords.isEmpty || destinationFolder == nil
+                                  || destinationProblemText != nil)
                         .accessibilityIdentifier("relocateSheet.reconcilePreview")
                     if isPreviewing {
                         ProgressView().controlSize(.small)
@@ -554,7 +556,7 @@ struct RelocateSheet: View {
     /// applied back on the main actor only if a re-trigger or an
     /// option/source/dest change hasn't cancelled this Task in the meantime.
     private func runPreview() {
-        guard let dest = destinationFolder else { return }
+        guard let dest = destinationFolder, destinationProblemText == nil else { return }
         let scope = scopedRecords
         // Seam D — project the records the classify pass reads into Sendable
         // inputs HERE on the main actor (the enclosing Task inherits MainActor),
