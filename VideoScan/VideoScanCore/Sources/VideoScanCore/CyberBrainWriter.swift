@@ -18,6 +18,7 @@
 // cyberbrain.json, with the previous file copied to backups/ first. A crash
 // at any point leaves either the old file or the new file, never a torn one.
 
+import CryptoKit
 import Foundation
 
 public enum CyberBrainWriter {
@@ -308,9 +309,13 @@ public enum CyberBrainWriter {
             guard let citation = testimony.citation, !citation.url.isEmpty else {
                 throw WriteError.ioFailure("a research finding needs a citation with a URL")
             }
-            // One source per fetched page: the same page confirmed twice
-            // (two excerpts) shares its record; a different page never does.
-            sourceID = researchSourceIDPrefix + slug(citation.url)
+            // One source per DOCUMENT (locator, title, date): the same page
+            // confirmed twice (two excerpts) shares its record; two records
+            // filed from one results page, or a record re-filed under a
+            // corrected type, never do (adversarial review 2026-10-01,
+            // 61c81eab — the second used to cite the first's document).
+            let sourceTitle = citation.title.isEmpty ? citation.url : citation.title
+            sourceID = researchSourceID(for: citation, title: sourceTitle, in: sources)
             itemPrefix = "research"
             // Rick read the page and pressed Confirmed — the owner's verdict
             // on a document, the same standing as his own tree note.
@@ -320,7 +325,7 @@ public enum CyberBrainWriter {
                 sources.append(CyberBrainSource(
                     id: sourceID,
                     type: citation.sourceKind,
-                    title: citation.title.isEmpty ? citation.url : citation.title,
+                    title: sourceTitle,
                     attribution: "confirmed by \(speakerLabel)",
                     sourceDate: citation.sourceDate.map {
                         CyberBrainQualifiedDate(
@@ -337,10 +342,15 @@ public enum CyberBrainWriter {
         // passage from the SAME research source about the SAME person is
         // already recorded → hand back that item and the archive unchanged.
         // A "told Hallie, but the dossier didn't record it" retry can then
-        // never write a duplicate item.
+        // never write a duplicate item. ACTIVE items only: a passage taken
+        // back or reworded through "correct a family note" is not what
+        // Hallie knows, so the same words filed again are a new item
+        // (adversarial review 2026-10-01, 06addb5d).
         if testimony.origin == .researchFinding, !createdPerson,
            let person = people.first(where: { $0.id == personID }),
-           let existing = person.items.first(where: { $0.sourceIDs.contains(sourceID) && $0.text == text }) {
+           let existing = person.items.first(where: {
+               $0.status == .active && $0.sourceIDs.contains(sourceID) && $0.text == text
+           }) {
             return Receipt(archive: archive, personID: personID, canonicalName: person.canonicalName,
                            itemID: existing.id, sourceID: sourceID, createdPerson: false)
         }
@@ -936,6 +946,26 @@ public enum CyberBrainWriter {
     }
 
     // MARK: - Helpers
+
+    /// The research source id for one cited document:
+    /// `source.research.<slug(url)>.<12 hex of SHA-256(locator, title, date)>`.
+    /// The URL slug stays first so the page is still visible in the id, and
+    /// `researchURL(of:)` (which reads the notes) is unchanged. A source an
+    /// older build wrote under the URL-only id is reused when it describes
+    /// the SAME document (same locator, title and date), so passages filed
+    /// before the change stay idempotent and are never duplicated.
+    static func researchSourceID(for citation: Testimony.Citation, title: String,
+                                 in sources: [CyberBrainSource]) -> String {
+        let legacyID = researchSourceIDPrefix + slug(citation.url)
+        if let legacy = sources.first(where: { $0.id == legacyID }),
+           legacy.locator == citation.locator, legacy.title == title,
+           legacy.sourceDate?.value == citation.sourceDate {
+            return legacyID
+        }
+        let identity = [citation.locator ?? "", title, citation.sourceDate ?? ""].joined(separator: "\u{1F}")
+        let digest = SHA256.hash(data: Data(identity.utf8)).prefix(6).map { String(format: "%02x", $0) }.joined()
+        return legacyID + "." + digest
+    }
 
     public static func slug(_ value: String) -> String {
         let lowered = value.lowercased()
