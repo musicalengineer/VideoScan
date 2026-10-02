@@ -33,7 +33,14 @@ private final class Words: @unchecked Sendable {
     var failures: [String] { lock.withLock { errors } }
 }
 
-@Suite("CyberBrain writer — concurrent writers")
+// `.serialized`: the root-lock table is process-global. These tests use
+// distinct temporary roots, but a lock regression (one lock for every root)
+// let `aHeldRootDoesNotBlockAnotherRoot`'s 60 s hold stall its siblings
+// too, so three tests went red for one bug (mutation check 2026-10-02).
+// One at a time, a failure names the property that broke. The suite still
+// runs in parallel with every OTHER suite. (C++: a gtest fixture that must
+// not run under a parallel shard.)
+@Suite("CyberBrain writer — concurrent writers", .serialized)
 struct CyberBrainWriterConcurrencyTests {
 
     private let told = Date(timeIntervalSince1970: 1_790_000_000)
@@ -122,17 +129,36 @@ struct CyberBrainWriterConcurrencyTests {
         .init(subjectName: "Synthetic Ancestor", speakerName: "Tester", text: text, date: told)
     }
 
-    /// Run `work` on another thread and wait at most `seconds`. A lock that
-    /// is never released strands that thread, but the TEST still ends —
-    /// with a failure — instead of hanging the suite. (C++: std::async +
-    /// future.wait_for.)
-    private func completes(within seconds: Double, _ work: @escaping @Sendable () -> Void) -> Bool {
+    /// How long any one wait may take before the test calls the lock
+    /// leaked. Generous because a full parallel Core run (load 35 on 16
+    /// cores, 2026-10-02) is slow; bounded so a real leak still FAILS.
+    private static let bound: Double = 60
+
+    /// Start `work` on a thread of its own and hand back a semaphore that is
+    /// signalled when it returns. A raw `Thread`, NOT `DispatchQueue.global()`
+    /// or a `Task`: under a parallel test run every cooperative thread is
+    /// busy with synchronous tests, and GCD will not admit another default-
+    /// QoS worker while that many higher-priority threads are runnable, so a
+    /// block handed to `.global()` sat unstarted past the old 10 s bound
+    /// (2026-10-02 coverage run; probe: >20 s for `.global()`, 0.1 ms for a
+    /// `Thread`). A pthread is scheduled by the kernel like any other, so
+    /// what the test times is the LOCK, not the pool. (C++: std::thread.)
+    private func onOwnThread(_ work: @escaping @Sendable () -> Void) -> DispatchSemaphore {
         let done = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
+        let thread = Thread {
             work()
             done.signal()
         }
-        return done.wait(timeout: .now() + seconds) == .success
+        thread.start()
+        return done
+    }
+
+    /// Run `work` on its own thread and wait at most `seconds`. A lock that
+    /// is never released strands that thread, but the TEST still ends —
+    /// with a failure — instead of hanging the suite. (C++: std::async +
+    /// future.wait_for.)
+    private func completes(within seconds: Double = bound, _ work: @escaping @Sendable () -> Void) -> Bool {
+        onOwnThread(work).wait(timeout: .now() + seconds) == .success
     }
 
     /// A writer that throws INSIDE the root lock must release it: the next
@@ -156,13 +182,13 @@ struct CyberBrainWriterConcurrencyTests {
             try CyberBrainWriter.withRootLock(raw) { throw Boom() }
         }
         let rawAgain = testimony("Written after a throwing body.")
-        #expect(completes(within: 10) {
+        #expect(completes {
             do { receipts.add(rawAgain.text, try CyberBrainWriter.record(rawAgain, rootURL: raw)) } catch { receipts.fail(error) }
         }, "the raw lock was released by the throwing body")
 
         // 2. A real durable writer refused INSIDE the lock (no archive yet,
         // so no such person), then a writer on the same root.
-        #expect(completes(within: 10) {
+        #expect(completes {
             do {
                 _ = try CyberBrainWriter.setPronunciation(personID: "person.none", token: "Synthetic",
                                                           saidAs: "SIN-thet-ik", rootURL: durable)
@@ -172,7 +198,7 @@ struct CyberBrainWriterConcurrencyTests {
         })
         #expect(threw.failures.count == 1, "the durable writer was refused")
         let durableAgain = testimony("Written after a refused writer.")
-        #expect(completes(within: 10) {
+        #expect(completes {
             do { receipts.add(durableAgain.text, try CyberBrainWriter.record(durableAgain, rootURL: durable)) } catch { receipts.fail(error) }
         }, "the lock was released by the refused durable writer")
 
@@ -192,32 +218,29 @@ struct CyberBrainWriterConcurrencyTests {
         }
         let holding = DispatchSemaphore(value: 0)
         let release = DispatchSemaphore(value: 0)
-        let holderDone = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
+        let holderDone = onOwnThread {
             CyberBrainWriter.withRootLock(held) {
                 holding.signal()
                 release.wait()
             }
-            holderDone.signal()
         }
-        try #require(holding.wait(timeout: .now() + 10) == .success)
+        try #require(holding.wait(timeout: .now() + Self.bound) == .success)
 
         let receipts = Receipts()
         let onFree = testimony("Written to the free root.")
-        #expect(completes(within: 10) {
+        #expect(completes {
             do { receipts.add(onFree.text, try CyberBrainWriter.record(onFree, rootURL: free)) } catch { receipts.fail(error) }
         }, "the free root is not blocked by the held one")
 
         let onHeld = testimony("Written to the held root.")
-        let heldWriter = DispatchSemaphore(value: 0)
-        DispatchQueue.global().async {
+        let heldWriter = onOwnThread {
             do { receipts.add(onHeld.text, try CyberBrainWriter.record(onHeld, rootURL: held)) } catch { receipts.fail(error) }
-            heldWriter.signal()
         }
         #expect(heldWriter.wait(timeout: .now() + 0.5) == .timedOut, "the held root's writer waits")
+        #expect(receipts.all.count == 1, "nothing was written to the held root while it was held")
         release.signal()
-        #expect(heldWriter.wait(timeout: .now() + 10) == .success, "and proceeds once released")
-        #expect(holderDone.wait(timeout: .now() + 10) == .success)
+        #expect(heldWriter.wait(timeout: .now() + Self.bound) == .success, "and proceeds once released")
+        #expect(holderDone.wait(timeout: .now() + Self.bound) == .success)
         #expect(receipts.failures.isEmpty, "\(receipts.failures)")
         #expect(receipts.all.count == 2)
     }
@@ -234,7 +257,7 @@ struct CyberBrainWriterConcurrencyTests {
         }
         let rounds = 12
         let onA = Receipts(), onB = Receipts(), told = self.told
-        let finished = completes(within: 60) {
+        let finished = completes {
             DispatchQueue.concurrentPerform(iterations: 2) { writer in
                 for round in 0..<rounds {
                     let toA = (round + writer) % 2 == 0

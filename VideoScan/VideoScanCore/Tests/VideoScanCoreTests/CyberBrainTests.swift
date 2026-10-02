@@ -448,12 +448,19 @@ struct CyberBrainTests {
             archiveID: "scale", displayName: "Scale Fixture",
             people: people, sources: [])
 
-        let started = ContinuousClock.now
-        let index = try CyberBrainIndex(archive: large)
-        let resolution = index.resolve("Needle Archivist")
-        let elapsed = started.duration(to: .now)
+        // Thread CPU time, not wall clock: the body is synchronous and
+        // single-threaded, and wall clock measured the host (5.2 s against a
+        // 4.5 s ceiling at load 24 from other processes, 2026-10-02).
+        var resolution: CyberBrainIdentityResolution?
+        var wall: Duration = .zero
+        let elapsed = try TimingBudget.measureThreadCPUTime {
+            wall = try ContinuousClock().measure {
+                let index = try CyberBrainIndex(archive: large)
+                resolution = index.resolve("Needle Archivist")
+            }
+        }
 
-        guard case .resolved(let person) = resolution else {
+        guard case .resolved(let person)? = resolution else {
             Issue.record("Expected exact identity resolution")
             return
         }
@@ -463,7 +470,7 @@ struct CyberBrainTests {
         // is the same rule the app tests use via PerformanceLane.
         let ceiling = TimingBudget.loadAwareDebugCeiling(.seconds(3))
         #expect(elapsed < ceiling,
-                "100k CyberBrain index+lookup took \(elapsed), ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+                "100k CyberBrain index+lookup took \(elapsed) CPU / \(wall) wall, ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -477,11 +484,16 @@ struct CyberBrainTests {
         }
         let large = archive(items: items)
 
-        let started = ContinuousClock.now
-        let index = try CyberBrainIndex(archive: large)
-        let evidence = index.evidence(
-            for: "person.jordan", privacyCeiling: .family, limit: 12)
-        let elapsed = started.duration(to: .now)
+        // Thread CPU time (synchronous, single-threaded body); see above.
+        var evidence: [CyberBrainItem] = []
+        var wall: Duration = .zero
+        let elapsed = try TimingBudget.measureThreadCPUTime {
+            wall = try ContinuousClock().measure {
+                let index = try CyberBrainIndex(archive: large)
+                evidence = index.evidence(
+                    for: "person.jordan", privacyCeiling: .family, limit: 12)
+            }
+        }
 
         #expect(evidence.count == 12)
         #expect(evidence.first?.id == "item.000000")
@@ -490,7 +502,7 @@ struct CyberBrainTests {
         // load 11 on 3 cores against a flat 3 s).
         let ceiling = TimingBudget.loadAwareDebugCeiling(.seconds(3))
         #expect(elapsed < ceiling,
-                "100k CyberBrain item index+query took \(elapsed), ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+                "100k CyberBrain item index+query took \(elapsed) CPU / \(wall) wall, ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
     }
 
     private func temporaryRoot() throws -> URL {

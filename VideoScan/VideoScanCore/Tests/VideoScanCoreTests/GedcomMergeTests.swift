@@ -872,22 +872,30 @@ struct GedcomMergeTests {
         let n = 100_000
         var a = Self.synthetic(offset: 0, count: n); a.sourceFileName = "a.ged"
         var b = Self.synthetic(offset: n / 2, count: n); b.sourceFileName = "b.ged"
+        // Budgets are THREAD CPU time (TimingBudget.measureThreadCPUTime),
+        // not wall clock. Every stage below is synchronous and
+        // single-threaded on this test thread, which is the case that
+        // helper exists for. Wall clock measured the host instead: 2026-10-02
+        // parse took 3.3 s alone, then 45.4 s (04:00 coverage run, load 11.8)
+        // and 62.7 s (full Core --parallel, load 35) in the same Debug build.
+        // An O(n²) regression still costs CPU on this thread and fails.
+        // (C++: std::clock() per thread instead of steady_clock.)
         let clock = ContinuousClock()
-        let t0 = clock.now
-        let outcome = a.merge(with: b)
-        let tMerge = TimingBudget.seconds(clock.now - t0)
+        let wallStart = clock.now
+        var merged: GedcomFamilyGraph.MergeOutcome?
+        let cpuMerge = TimingBudget.measureThreadCPUTime { merged = a.merge(with: b) }
+        let outcome = try #require(merged)
         #expect(outcome.graph.people.count == n + n / 2)
         #expect(outcome.sharedPeopleCount == n / 2)
         #expect(outcome.fieldConflictCount == 0)
 
-        let t1 = clock.now
-        let text = outcome.graph.gedcomText(provenance: "scale pipeline")
-        let tWrite = TimingBudget.seconds(clock.now - t1)
-        let t2 = clock.now
-        let back = GedcomFamilyGraph(gedcomText: text)
-        let tParse = TimingBudget.seconds(clock.now - t2)
+        var text = ""
+        let cpuWrite = TimingBudget.measureThreadCPUTime { text = outcome.graph.gedcomText(provenance: "scale pipeline") }
+        var parsed: GedcomFamilyGraph?
+        let cpuParse = TimingBudget.measureThreadCPUTime { parsed = GedcomFamilyGraph(gedcomText: text) }
+        let back = try #require(parsed)
 
-        let t3 = clock.now
+        let verifyStart = TimingBudget.currentThreadCPUTime()   // verify runs inline; `try #require` can't sit in a closure
         #expect(back.people.count == outcome.graph.people.count)
         #expect(back.familyCount == outcome.graph.familyCount)
         #expect(back.rootPersonIDs == outcome.graph.rootPersonIDs)
@@ -908,15 +916,20 @@ struct GedcomMergeTests {
         #expect(!hits.isEmpty)
         #expect(back.person(familySearchID: b.people["@I0@"]!.familySearchID!)?.id == donnaSide)
         #expect(back.directRelation(between: "@I0@", and: "@I1@")?.kind == .parentChild)
-        let tVerify = TimingBudget.seconds(clock.now - t3)
-        let total = TimingBudget.seconds(clock.now - t0)
-        print("SCALE pipeline 2×\(n): merge \(String(format: "%.2f", tMerge))s write \(String(format: "%.2f", tWrite))s (\(text.utf8.count / 1_000_000) MB) parse \(String(format: "%.2f", tParse))s verify \(String(format: "%.2f", tVerify))s total \(String(format: "%.2f", total))s")
-        // 2 s / 20 s on a quiet machine; ×1.5 only for a busy Debug run
-        // (both failed under full-battery load on the M5), ×3 only on GitHub.
-        let mergeCeiling = TimingBudget.seconds(TimingBudget.loadAwareDebugCeiling(.seconds(2)))
-        let totalCeiling = TimingBudget.seconds(TimingBudget.loadAwareDebugCeiling(.seconds(20)))
-        #expect(tMerge < mergeCeiling, "merge took \(tMerge) s, ceiling \(mergeCeiling) s (\(TimingBudget.loadDescription()))")
-        #expect(total < totalCeiling, "pipeline took \(total) s, ceiling \(totalCeiling) s (\(TimingBudget.loadDescription()))")
+        let cpuVerify = TimingBudget.currentThreadCPUTime() - verifyStart
+        let wall = clock.now - wallStart
+        let s = { (d: Duration) in String(format: "%.2f", TimingBudget.seconds(d)) }
+        let cpuTotal = cpuMerge + cpuWrite + cpuParse + cpuVerify
+        print("SCALE pipeline 2×\(n) (thread CPU): merge \(s(cpuMerge))s write \(s(cpuWrite))s (\(text.utf8.count / 1_000_000) MB) parse \(s(cpuParse))s verify \(s(cpuVerify))s total \(s(cpuTotal))s; wall \(s(wall))s (\(TimingBudget.loadDescription()))")
+        // 2 s / 20 s on a quiet machine (quiet M4 Debug 2026-10-02: wall
+        // merge 1.2 s, total 10.7 s); ×1.5 for a busy Debug run, ×3 on GitHub.
+        let mergeCeiling = TimingBudget.loadAwareDebugCeiling(.seconds(2))
+        let totalCeiling = TimingBudget.loadAwareDebugCeiling(.seconds(20))
+        #expect(cpuMerge < mergeCeiling, "merge took \(s(cpuMerge)) s CPU, ceiling \(s(mergeCeiling)) s (\(TimingBudget.loadDescription()))")
+        #expect(cpuTotal < totalCeiling, "pipeline took \(s(cpuTotal)) s CPU, ceiling \(s(totalCeiling)) s (\(TimingBudget.loadDescription()))")
+        // CPU time does not count waiting, so wall clock stays as a hang
+        // guard only (the TreeWalkScaleTests pattern).
+        #expect(wall < totalCeiling * 5, "pipeline hang guard: \(s(wall)) s wall (\(TimingBudget.loadDescription()))")
     }
 
     // MARK: Provenance union is identity-aware (codex #810)
