@@ -19,6 +19,5 @@ using an old survey to choose a model, dependency or purchase.
 
 Update the owning theme with durable conclusions instead of accumulating
 near-duplicate surveys. Preserve exact experimental evidence where reproducibility
-requires it. Announce coordination through the [local mailbox](../team-channel/README.md),
-not new permanent chatter files. The [documentation map](../guides/documentation-map.md)
+requires it. Do not add permanent chatter files. The [documentation map](../guides/documentation-map.md)
 locates retired originals in Git and the local recovery folder.

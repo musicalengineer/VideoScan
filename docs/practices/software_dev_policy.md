@@ -22,7 +22,7 @@ Their full content lives in git history if you need the deep dives.)
    start, escalate: independent same-side review, or ask Rick.
 4. **Rick can waive any of this** to break a logjam. His call, not yours.
 
-Exception: documentation-only commits (`docs/`, team-channel messages) and
+Exception: documentation-only commits (`docs/`) and
 metrics/CI publishes may go straight to main under standing permission.
 Everything that touches code takes the gate.
 
@@ -39,10 +39,10 @@ Use **Fred** for the local agent's human-facing identity. `qwen` remains the
 stable provider/transcript identifier; “Codex” refers to Codex Manager unless
 the CLI harness is being discussed explicitly.
 
-Codex, Claude, and Fred coordinate through the M4-local mailbox implemented by
-`tools/team-channel.py`; see `docs/team-channel/README.md`. Mailbox messages are
-coordination context, not authority to modify code. Record durable review
-verdicts in the branch, PR, or tracked documentation as appropriate.
+The M4-local team channel (`tools/team-channel.py`) was retired 2026-10-02:
+Claude is the single orchestrator and runs codex reviews headless with
+`tools/codex_review.py`. Record durable review verdicts in the branch, PR, or
+tracked documentation as appropriate.
 
 ## Git Rules
 

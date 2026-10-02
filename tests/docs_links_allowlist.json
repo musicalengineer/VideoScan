@@ -321,7 +321,8 @@
   "docs/reviews/briefs/docs-reorg-brief.md": {
     "docs/analysis": "The reorganization brief names the pre-reorganization folders it moved.",
     "docs/metrics": "The reorganization brief names the pre-reorganization folders it moved.",
-    "docs/perf": "The reorganization brief names the pre-reorganization folders it moved."
+    "docs/perf": "The reorganization brief names the pre-reorganization folders it moved.",
+    "docs/team-channel/": "The team channel was retired 2026-10-02 and docs/team-channel/ removed; historical citation, kept as written."
   },
   "scripts/dashboard.sh": {
     "docs/history.jsonl": "Generated dashboard data, intentionally gitignored; written by scripts/dashboard.sh from the metrics branch."
@@ -343,12 +344,16 @@
     "docs/donna-gallery-report.md": "Example generated gallery-report output; tools/donna-recipe/gallery_report.py creates it when invoked.",
     "docs/donna-recipe-v1.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
+  "tools/engineering-room/README.md": {
+    "docs/team-channel/": "tools/engineering-room's legacy Markdown-channel ingest/export directory (ENGINEERING_ROOM_TEAM_CHANNEL default). docs/team-channel/ was removed when the team channel was retired 2026-10-02; ingest tolerates the absent directory.",
+    "docs/team-channel": "tools/engineering-room's legacy Markdown-channel ingest/export directory (ENGINEERING_ROOM_TEAM_CHANNEL default). docs/team-channel/ was removed when the team channel was retired 2026-10-02; ingest tolerates the absent directory."
+  },
+  "tools/engineering-room/test/evidence/control-plane-acceptance-2026-07-17.md": {
+    "docs/team-channel/": "The team channel was retired 2026-10-02 and docs/team-channel/ removed; historical citation, kept as written."
+  },
   "tools/person-eval/build_holdout_queue_skeleton.py": {
     "docs/poi-holdout": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
     "docs/poi-holdout/": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
     "docs/team-channel/2026-07-23-1213-codex-poi-c4-c6-execution-handoff.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/ReviewCyclesTests.swift": {
-    "docs/x.md": "Synthetic review-document path in an isolated test fixture; no repository document is read."
   }
 }
