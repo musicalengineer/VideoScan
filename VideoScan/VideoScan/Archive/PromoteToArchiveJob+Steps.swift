@@ -270,60 +270,17 @@ extension PromoteToArchiveJob {
         if let typed = plan.archiveDateOverrides[source.id] {
             facts = facts.withDateHint(typed)
         }
-        // Filing-year guard (Rick 2026-09-27): no video under a year before
-        // 1900 or after next year — refused BEFORE the journal intent, so
-        // nothing is written for it. The same function guards Refile.
-        if let refusal = ArchivePathResolver.filingYearRefusal(facts: facts) {
-            model.log("Promote: \(entry.filename) refused — \(refusal).")
-            appLog.write("promote: \(entry.filename) refused by the filing-year guard — \(refusal)")
-            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): filing-year guard (\(facts.dateHint.manifestDate, privacy: .public))")
-            return .failed(refusal)
-        }
-        // GH #219 — the archived record must carry a date that agrees with
-        // where it is filed. When Promote will not write the chosen date on
-        // it (a decade, or a machine proposal), registration keeps the
-        // SOURCE's own userDate — refuse if that disagrees, before a byte
-        // moves (ARCH-6, ARCH-7).
-        if let refusal = recordDateRefusal(source: source, placement: facts.dateHint) {
-            model.log("Promote: \(entry.filename) refused — \(refusal).")
-            appLog.write("promote: \(entry.filename) refused by the date-agreement guard — \(refusal)")
-            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): date agreement (placement \(facts.dateHint.manifestDate, privacy: .public), own \(source.userDate ?? "", privacy: .public))")
+        // Date refusals (filing-year guard; GH #219 date agreement) — BEFORE
+        // the journal intent, so a refusal writes nothing.
+        if let refusal = dateRefusal(source: source, entry: entry, facts: facts, model: model) {
             return .failed(refusal)
         }
 
-        // GH #190 — the source's whole-file digest BEFORE the journal
-        // intent: a stamp-bound fixity that still describes the file, else
-        // one full read (logged before it starts — it can take minutes).
-        let digest: String
-        if let trusted = await Self.trustedSourceDigestOffMain(path: source.fullPath, fixity: source.contentFixity) {
-            digest = trusted
-        } else {
-            model.log("Promote: checking \(entry.filename) (\(Self.promoteByteText(max(1, source.sizeBytes)))) against the archive before copying…")
-            promoteLog.notice("promote CHECK \(entry.filename, privacy: .public) (\(source.sizeBytes, privacy: .public) bytes) — hashing the source for the duplicate check")
-            let reporter = PromoteProgressReporter()
-            let fileBytes = max(1, source.sizeBytes)
-            let filename = source.filename
-            let checkProgress: @Sendable (Int64) -> Void = { [weak self] done in
-                guard let tick = reporter.tick(phase: .verifying, done: done, fileBytes: fileBytes) else { return }
-                let sub = "Checking \(filename) against the archive · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
-                Task { @MainActor [weak self] in self?.applyPhaseSubtitle(sub) }
-            }
-            guard let read = try await Self.hashSourceOffMain(path: source.fullPath, progress: checkProgress) else {
-                return .cancelled
-            }
-            digest = read
-        }
-        if Task.isCancelled { return .cancelled }
-        // Look up, then claim — one main-actor turn, so a second identical
-        // file (this batch, or another Promote job) cannot pass between.
+        // GH #190 — content idempotency, BEFORE the journal intent.
         let provisional = ArchivePathResolver.baseRelativePath(facts: facts, title: plan.archiveTitles[source.id])
-        if let held = archiveDigests.relPath(forDigest: digest)
-            ?? model.claimPromoteDigest(digest, relPath: provisional, root: ctx.root) {
-            let why = Self.duplicateRefusal(existingRelPath: held, digest: digest)
-            appLog.write("promote: \(entry.filename) refused — identical bytes (sha256 \(digest)) already in the archive as \(held); nothing copied")
-            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): duplicate of \(held, privacy: .public) (sha256 \(digest, privacy: .public))")
-            return .skipped(why)
-        }
+        let claim = try await claimSourceDigest(source: source, entry: entry, provisional: provisional,
+                                                model: model, ctx: ctx)
+        guard case .claimed(let digest) = claim else { return claim.notClaimedResult }
         var claimPath = provisional
         var landed = false
         defer { if !landed { model.releasePromoteDigest(digest, relPath: claimPath, root: ctx.root) } }
@@ -805,6 +762,84 @@ extension PromoteToArchiveJob {
     }
 
     // MARK: GH #190 / #219 guards
+
+    /// The two date refusals that run before a byte moves, each logged:
+    /// - the filing-year guard (Rick 2026-09-27): no video under a year
+    ///   before 1900 or after next year (the same function guards Refile);
+    /// - GH #219: when Promote will not write the chosen date on the
+    ///   archived record (a decade, or a machine proposal), registration
+    ///   keeps the SOURCE's own userDate — refused if that disagrees with
+    ///   the placement (ARCH-6, ARCH-7).
+    func dateRefusal(source: VideoRecord, entry: ArchivePromotePlan.Entry,
+                     facts: ArchivePathResolver.RecordFacts, model: VideoScanModel) -> String? {
+        if let refusal = ArchivePathResolver.filingYearRefusal(facts: facts) {
+            model.log("Promote: \(entry.filename) refused — \(refusal).")
+            appLog.write("promote: \(entry.filename) refused by the filing-year guard — \(refusal)")
+            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): filing-year guard (\(facts.dateHint.manifestDate, privacy: .public))")
+            return refusal
+        }
+        if let refusal = recordDateRefusal(source: source, placement: facts.dateHint) {
+            model.log("Promote: \(entry.filename) refused — \(refusal).")
+            appLog.write("promote: \(entry.filename) refused by the date-agreement guard — \(refusal)")
+            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): date agreement (placement \(facts.dateHint.manifestDate, privacy: .public), own \(source.userDate ?? "", privacy: .public))")
+            return refusal
+        }
+        return nil
+    }
+
+    /// What the duplicate check decided for one source.
+    enum DigestClaim {
+        /// Not in the archive; this digest is now claimed for `provisional`.
+        case claimed(String)
+        /// The archive (or a file landing right now) already holds these bytes.
+        case alreadyArchived(String)
+        case cancelled
+
+        /// The per-file result when nothing was claimed.
+        var notClaimedResult: FileResult {
+            switch self {
+            case .alreadyArchived(let why): return .skipped(why)
+            case .cancelled, .claimed: return .cancelled
+            }
+        }
+    }
+
+    /// GH #190: the source's whole-file digest (a stamp-bound fixity that
+    /// still describes the file, else one full read — logged before it
+    /// starts, it can take minutes), then look up and claim it in ONE
+    /// main-actor turn, so a second identical file (this batch, or another
+    /// Promote job) cannot pass between. The caller releases the claim if
+    /// nothing gets published.
+    func claimSourceDigest(source: VideoRecord, entry: ArchivePromotePlan.Entry, provisional: String,
+                           model: VideoScanModel, ctx: RunContext) async throws -> DigestClaim {
+        let digest: String
+        if let trusted = await Self.trustedSourceDigestOffMain(path: source.fullPath, fixity: source.contentFixity) {
+            digest = trusted
+        } else {
+            model.log("Promote: checking \(entry.filename) (\(Self.promoteByteText(max(1, source.sizeBytes)))) against the archive before copying…")
+            promoteLog.notice("promote CHECK \(entry.filename, privacy: .public) (\(source.sizeBytes, privacy: .public) bytes) — hashing the source for the duplicate check")
+            let reporter = PromoteProgressReporter()
+            let fileBytes = max(1, source.sizeBytes)
+            let filename = source.filename
+            let checkProgress: @Sendable (Int64) -> Void = { [weak self] done in
+                guard let tick = reporter.tick(phase: .verifying, done: done, fileBytes: fileBytes) else { return }
+                let sub = "Checking \(filename) against the archive · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
+                Task { @MainActor [weak self] in self?.applyPhaseSubtitle(sub) }
+            }
+            guard let read = try await Self.hashSourceOffMain(path: source.fullPath, progress: checkProgress) else {
+                return .cancelled
+            }
+            digest = read
+        }
+        if Task.isCancelled { return .cancelled }
+        if let held = archiveDigests.relPath(forDigest: digest)
+            ?? model.claimPromoteDigest(digest, relPath: provisional, root: ctx.root) {
+            appLog.write("promote: \(entry.filename) refused — identical bytes (sha256 \(digest)) already in the archive as \(held); nothing copied")
+            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): duplicate of \(held, privacy: .public) (sha256 \(digest, privacy: .public))")
+            return .alreadyArchived(Self.duplicateRefusal(existingRelPath: held, digest: digest))
+        }
+        return .claimed(digest)
+    }
 
     /// GH #219: the date-agreement refusal for this source at `placement`,
     /// or nil. Promote writes the chosen date on the archived record only
