@@ -31,7 +31,10 @@ extension VideoRecord {
     // Access widened private → internal: the decoder in VideoRecord.swift
     // (forced to stay in the class body by Swift) and VideoRecordDTO's
     // encoder both reference these keys.
-    enum CodingKeys: String, CodingKey {
+    // CaseIterable (GH #167): `persistedKeyNames` below is derived from
+    // the cases, so the unknown-key capture and the key-snapshot sensor
+    // can never drift from the enum.
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case id, filename, ext, streamTypeRaw, size, sizeBytes, duration, durationSeconds
         case dateCreated, dateModified, dateCreatedRaw, dateModifiedRaw
         case container, videoCodec, resolution, frameRate, videoBitrate, totalBitrate
@@ -94,4 +97,9 @@ extension VideoRecord {
         case footageDecisions
         case familyMusic
     }
+
+    /// Every JSON key this build reads or writes on a record. Anything
+    /// else in a record object is a FUTURE field and is preserved verbatim
+    /// in `unknownFields` (GH #167). Built once per process.
+    public static let persistedKeyNames: Set<String> = Set(CodingKeys.allCases.map(\.rawValue))
 }

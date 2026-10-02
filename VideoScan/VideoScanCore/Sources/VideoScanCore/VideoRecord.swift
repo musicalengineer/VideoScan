@@ -651,6 +651,15 @@ public class VideoRecord: Identifiable, Decodable {
     /// on every rescan so old records backfill naturally.
     public var scanContext: ScanContext = ScanContext()
 
+    /// JSON keys in this record's catalog.json object that THIS build does
+    /// not know — fields a newer VideoScan added (GH #167). Kept verbatim
+    /// and written back unchanged by `VideoRecordDTO`, so a round trip
+    /// through an older build never strips a newer build's data. Never
+    /// holds a key in `persistedKeyNames`; never read by app logic.
+    /// Empty for every record a current build wrote (zero bytes added).
+    /// (≈ C++: an opaque "extensions" blob carried through untouched.)
+    public var unknownFields: [String: CatalogJSONValue] = [:]
+
     public init(id: UUID = UUID()) {
         self.id = id
     }
@@ -851,5 +860,12 @@ public class VideoRecord: Identifiable, Decodable {
         // these keys are encoded on every subsequent write.
         originalFullPath            = try c.decodeIfPresent(String.self, forKey: .originalFullPath)
         originVolume                = try c.decodeIfPresent(String.self, forKey: .originVolume)
+        // GH #167: keep every key a NEWER build wrote that this build does
+        // not know, so the next save writes it back instead of dropping it.
+        // Known keys are excluded here and again at emit. Cost: one pass
+        // over this object's keys; records with no unknown keys allocate
+        // nothing.
+        unknownFields               = try CatalogUnknownFields.capture(from: decoder,
+                                                                       known: Self.persistedKeyNames)
     }
 }

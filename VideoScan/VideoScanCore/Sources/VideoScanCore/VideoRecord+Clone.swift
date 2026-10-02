@@ -165,6 +165,8 @@ extension VideoRecord {
         c.footageDecisions = footageDecisions
         c.familyMusic = familyMusic
         c.scanContext = scanContext
+        // GH #167: a newer build's fields ride every snapshot.
+        c.unknownFields = unknownFields
         return c
     }
 }

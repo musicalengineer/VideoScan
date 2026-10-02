@@ -24,7 +24,9 @@
 // actor boundary on load. Only the ENCODE path needed a Sendable mirror.
 //
 // MAINTENANCE: adding a persisted stored property to VideoRecord now means
-// updating FIVE places: CodingKeys + VideoRecord.init(from:) (decode),
+// updating SIX places — the five below plus the key snapshot in
+// CatalogVersioningTests (GH #167; an ADDED key needs no catalog version
+// bump): CodingKeys + VideoRecord.init(from:) (decode),
 // VideoRecordDTO's stored property + init(_:) + encode(to:) (here), and
 // snapshotClone() (VideoRecord+Clone.swift). The byte-identity test in
 // CatalogStoreAsyncSaveTests will fail loudly if the DTO drifts from the
@@ -161,6 +163,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let footage: FootageMembership?
     public let footageDecisions: [FootageDecision]
     public let familyMusic: FamilyMusicInfo?
+    /// Keys a NEWER build wrote that this build does not know (GH #167).
+    /// Emitted after every typed key, never overriding one.
+    public let unknownFields: [String: CatalogJSONValue]
 
     // MARK: Capture from a live VideoRecord (called ON the main actor)
 
@@ -293,6 +298,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         footage                     = r.footage
         footageDecisions            = r.footageDecisions
         familyMusic                 = r.familyMusic
+        unknownFields               = r.unknownFields
     }
 
     // MARK: Encode — VERBATIM from VideoRecord.encode(to:)
@@ -547,5 +553,10 @@ public struct VideoRecordDTO: Sendable, Encodable {
         }
         // Family Music (2026-09-23): only when Rick marked the file.
         try c.encodeIfPresent(familyMusic, forKey: .familyMusic)
+        // GH #167: a newer build's keys, written back verbatim AFTER every
+        // typed key and never over one (emit skips known names). No-op —
+        // zero bytes — for every record that carries none, so the
+        // byte-identity golden is unchanged.
+        try CatalogUnknownFields.emit(unknownFields, known: VideoRecord.persistedKeyNames, to: encoder)
     }
 }

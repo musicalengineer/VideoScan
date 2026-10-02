@@ -257,6 +257,11 @@ struct RescanPreservedFields: Sendable {
     /// relink pass has nothing to follow.
     let familyMusic: FamilyMusicInfo?
 
+    /// Keys a NEWER build wrote on this record (GH #167). Their meaning is
+    /// unknown to this build, so they are carried forward verbatim rather
+    /// than guessed at — nothing silently lost on a rescan.
+    let unknownFields: [String: CatalogJSONValue]
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -301,6 +306,7 @@ struct RescanPreservedFields: Sendable {
             || !footageDecisions.isEmpty
             || footage != nil
             || familyMusic != nil
+            || !unknownFields.isEmpty
     }
 
     @MainActor
@@ -351,6 +357,7 @@ struct RescanPreservedFields: Sendable {
         self.footageDecisions = rec.footageDecisions
         self.footage = rec.footage
         self.familyMusic = rec.familyMusic
+        self.unknownFields = rec.unknownFields
     }
 
     // MARK: Fixity identity guard
@@ -455,6 +462,7 @@ struct RescanPreservedFields: Sendable {
         rec.footageDecisions = self.footageDecisions
         rec.footage = self.footage
         rec.familyMusic = self.familyMusic
+        rec.unknownFields = self.unknownFields
         return carry
     }
 }
