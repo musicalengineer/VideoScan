@@ -28,7 +28,32 @@ extension PromoteToArchiveJob {
         case adopted(relPath: String)
         case skipped(String)
         case failed(String)
+        /// A guard refused the file before anything was written (ARCH-7).
+        /// Logged by the run loop from `logFacts` only.
+        case refused(Refusal)
         case cancelled
+    }
+
+    /// One Promote refusal (codex 2026-10-02 #7). The identifying detail —
+    /// file names, archive paths, dates — goes to the outcome row in the
+    /// Promote window; persistent logs (catalog.log, videoscan.log, the
+    /// unified log) get the operation id, the code and `logFacts`, which
+    /// carry digest prefixes and counts only.
+    struct Refusal: Equatable {
+        enum Code: String {
+            case duplicate
+            case storedDigestMismatch = "stored-digest-mismatch"
+            case changedDuringCopy = "changed-during-copy"
+            case dateAgreement = "date-agreement"
+            case filingYear = "filing-year"
+        }
+        let code: Code
+        /// How the outcome row shows it (a duplicate is a skip, the rest fail).
+        let kind: FileOutcome.Kind
+        /// UI only — may name files, folders and dates.
+        let detail: String
+        /// Persistent logs only — NO paths, names or dates.
+        let logFacts: String
     }
 
     // MARK: Preflight
@@ -273,7 +298,7 @@ extension PromoteToArchiveJob {
         // Date refusals (filing-year guard; GH #219 date agreement) — BEFORE
         // the journal intent, so a refusal writes nothing.
         if let refusal = dateRefusal(source: source, entry: entry, facts: facts, model: model) {
-            return .failed(refusal)
+            return .refused(refusal)
         }
 
         // GH #190 — content idempotency, BEFORE the journal intent.
@@ -295,7 +320,10 @@ extension PromoteToArchiveJob {
                 return .cancelled
             }
             if actual != digest {
-                return .failed(Self.storedDigestMismatch(recorded: digest, actual: actual))
+                return .refused(Refusal(
+                    code: .storedDigestMismatch, kind: .failed,
+                    detail: Self.storedDigestMismatch(recorded: digest, actual: actual),
+                    logFacts: "stored sha256 \(digest.prefix(12))… ≠ current sha256 \(actual.prefix(12))…; nothing written"))
             }
         }
         testHookAfterSourceProof?(source)
@@ -339,8 +367,8 @@ extension PromoteToArchiveJob {
                                                      relPath: choice.relPath, digest: digest,
                                                      intent: receipt, journalEntry: journalEntry,
                                                      bytesDone: bytesDone) {
-            case .refused(let why):
-                return .failed(why)
+            case .refused(let refusal):
+                return .refused(refusal)
             case .published(let published, let stamp):
                 sha = published.sha256
                 // Published: from here the bytes ARE in the archive whatever
@@ -372,7 +400,7 @@ extension PromoteToArchiveJob {
     enum CopyStep {
         case published(ArchivePromoteEngine.PublishResult, FileIdentityStamp?)
         /// The source changed during the copy; everything was rolled back.
-        case refused(String)
+        case refused(Refusal)
     }
 
     /// Copy + verify + publish one file off-main (the intent is already
@@ -433,7 +461,10 @@ extension PromoteToArchiveJob {
         } catch ArchivePromoteEngine.Failure.sourceChangedDuringCopy {
             let retracted = await Self.retractIntentOffMain(intent, abandon: journalEntry.with(state: .abandoned),
                                                             root: ctx.root)
-            return .refused(Self.changedDuringCopyRefusal(digest: digest, intentRetracted: retracted))
+            return .refused(Refusal(
+                code: .changedDuringCopy, kind: .failed,
+                detail: Self.changedDuringCopyRefusal(digest: digest, intentRetracted: retracted),
+                logFacts: "the source changed during the copy (checked sha256 \(digest.prefix(12))…); partial and new folders removed, journal intent \(retracted ? "retracted" : "closed as abandoned")"))
         }
     }
 
@@ -860,18 +891,14 @@ extension PromoteToArchiveJob {
     ///   keeps the SOURCE's own userDate — refused if that disagrees with
     ///   the placement (ARCH-6, ARCH-7).
     func dateRefusal(source: VideoRecord, entry: ArchivePromotePlan.Entry,
-                     facts: ArchivePathResolver.RecordFacts, model: VideoScanModel) -> String? {
+                     facts: ArchivePathResolver.RecordFacts, model: VideoScanModel) -> Refusal? {
         if let refusal = ArchivePathResolver.filingYearRefusal(facts: facts) {
-            model.log("Promote: \(entry.filename) refused — \(refusal).")
-            appLog.write("promote: \(entry.filename) refused by the filing-year guard — \(refusal)")
-            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): filing-year guard (\(facts.dateHint.manifestDate, privacy: .public))")
-            return refusal
+            return Refusal(code: .filingYear, kind: .failed, detail: refusal,
+                           logFacts: "the filing year is outside the allowed range; nothing written")
         }
         if let refusal = recordDateRefusal(source: source, placement: facts.dateHint) {
-            model.log("Promote: \(entry.filename) refused — \(refusal).")
-            appLog.write("promote: \(entry.filename) refused by the date-agreement guard — \(refusal)")
-            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): date agreement (placement \(facts.dateHint.manifestDate, privacy: .public), own \(source.userDate ?? "", privacy: .public))")
-            return refusal
+            return Refusal(code: .dateAgreement, kind: .failed, detail: refusal,
+                           logFacts: "the date it would be filed under disagrees with the file's own date; nothing written")
         }
         return nil
     }
@@ -883,13 +910,13 @@ extension PromoteToArchiveJob {
         /// it came from a stored fixity and must be proven before any write.
         case claimed(String, proven: Bool)
         /// The archive (or a file landing right now) already holds these bytes.
-        case alreadyArchived(String)
+        case alreadyArchived(Refusal)
         case cancelled
 
         /// The per-file result when nothing was claimed.
         var notClaimedResult: FileResult {
             switch self {
-            case .alreadyArchived(let why): return .skipped(why)
+            case .alreadyArchived(let refusal): return .refused(refusal)
             case .cancelled, .claimed: return .cancelled
             }
         }
@@ -910,8 +937,10 @@ extension PromoteToArchiveJob {
             proven = false
         } else {
             proven = true
-            model.log("Promote: checking \(entry.filename) (\(Self.promoteByteText(max(1, source.sizeBytes)))) against the archive before copying…")
-            promoteLog.notice("promote CHECK \(entry.filename, privacy: .public) (\(source.sizeBytes, privacy: .public) bytes) — hashing the source for the duplicate check")
+            // Persistent lines name the operation, not the file (codex
+            // 2026-10-02 #7); the window's subtitle names it.
+            model.log("Promote: \(currentOpLabel) — checking the source (\(Self.promoteByteText(max(1, source.sizeBytes)))) against the archive before copying…")
+            promoteLog.notice("promote CHECK \(self.currentOpLabel, privacy: .public) (\(source.sizeBytes, privacy: .public) bytes) — hashing the source for the duplicate check")
             let reporter = PromoteProgressReporter()
             let fileBytes = max(1, source.sizeBytes)
             let filename = source.filename
@@ -928,9 +957,10 @@ extension PromoteToArchiveJob {
         if Task.isCancelled { return .cancelled }
         if let held = archiveDigests.relPath(forDigest: digest)
             ?? model.claimPromoteDigest(digest, relPath: provisional, root: ctx.root) {
-            appLog.write("promote: \(entry.filename) refused — identical bytes (sha256 \(digest)) already in the archive as \(held); nothing copied")
-            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): duplicate of \(held, privacy: .public) (sha256 \(digest, privacy: .public))")
-            return .alreadyArchived(Self.duplicateRefusal(existingRelPath: held, digest: digest))
+            return .alreadyArchived(Refusal(
+                code: .duplicate, kind: .skipped,
+                detail: Self.duplicateRefusal(existingRelPath: held, digest: digest),
+                logFacts: "identical bytes (sha256 \(digest.prefix(12))…) are already in the archive; nothing copied"))
         }
         return .claimed(digest, proven: proven)
     }
@@ -939,7 +969,7 @@ extension PromoteToArchiveJob {
     /// intent, when its digest came from a stored fixity. nil = cancelled.
     /// Logged before it starts (it can take minutes on a long tape).
     func proveSourceDigest(source: VideoRecord, entry: ArchivePromotePlan.Entry) async throws -> String? {
-        model?.log("Promote: proving the source's current bytes (\(Self.promoteByteText(max(1, source.sizeBytes)))) before anything is written — a stored fingerprint is not evidence…")
+        model?.log("Promote: \(currentOpLabel) — proving the source's current bytes (\(Self.promoteByteText(max(1, source.sizeBytes)))) before anything is written; a stored fingerprint is not evidence…")
         let reporter = PromoteProgressReporter()
         let fileBytes = max(1, source.sizeBytes)
         let filename = source.filename

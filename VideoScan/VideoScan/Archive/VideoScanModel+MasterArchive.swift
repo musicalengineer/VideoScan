@@ -530,7 +530,8 @@ extension VideoScanModel {
         let exMaster = resolvedMasterArchiveTarget() ?? masterArchiveTarget
         // GH #167: the ONE path allowed to remove the designation from
         // catalog.json. Without this the store refuses the save.
-        catalogStore.authorizeDesignationClear(reason: "Clear Master Archive — \(current.targetPath)")
+        // The reason is logged persistently: no path (codex 2026-10-02 #7).
+        catalogStore.authorizeDesignationClear(reason: "Clear Master Archive")
         masterArchive = nil
         if let t = exMaster, t.role == .archive {
             t.role = .unassigned

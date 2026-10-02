@@ -131,6 +131,16 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     /// source under the copy, or cancel, at a deterministic point.
     var testHookAfterSourceProof: ((VideoRecord) -> Void)?
 
+    /// "promote 1A2B3C4D item 3/12" — names the file being worked on in
+    /// PERSISTENT log lines without naming the file (codex 2026-10-02 #7).
+    /// The Promote window's outcome rows map it back to the file.
+    var currentOpLabel = "promote"
+
+    /// The operation label for item `index` (0-based) of `total`. Pure.
+    nonisolated static func opLabel(jobID: UUID, index: Int, total: Int) -> String {
+        "promote \(jobID.uuidString.prefix(8)) item \(index + 1)/\(total)"
+    }
+
     /// Journal entries this run brought to `published` (file + manifest
     /// durable, catalog link in memory). Advanced to `done` ONLY after
     /// the batch-end `saveCatalogNow()` returns true (codex R3 blocker 5).
@@ -309,6 +319,7 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         for (index, entry) in plan.entries.enumerated() {
             if Task.isCancelled || state == .cancelling { break }
             subtitleText = "\(index + 1)/\(total) · \(entry.filename)"
+            currentOpLabel = Self.opLabel(jobID: id, index: index, total: total)
             let outcome = await promoteOne(entry: entry, model: model, ctx: ctx,
                                            bytesDone: tally.bytesDone)
             switch outcome {
@@ -333,6 +344,17 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
                 record(.failed, entry.filename, why, recordID: entry.recordID)
                 model.log("Promote: FAILED \(entry.filename) — \(why)")
                 promoteLog.error("promote FAILED \(entry.filename, privacy: .public): \(why, privacy: .public)")
+            case .refused(let refusal):
+                if refusal.kind == .skipped {
+                    tally.skipped += 1
+                } else {
+                    tally.failed += 1
+                    tally.bytesDone += entry.sizeBytes
+                }
+                // The detail (names, paths, dates) goes to the outcome row
+                // only; the persistent lines carry the op id + code + facts.
+                record(refusal.kind, entry.filename, refusal.detail, recordID: entry.recordID)
+                noteRefusal(refusal, model: model)
             case .cancelled:
                 break
             }
@@ -411,6 +433,16 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         let append = model.ledgerAppend(events)
         guard mirror else { return append }
         return model.mediaLedger.mirror(intoArchiveRoot: root)
+    }
+
+    /// The ONE place a Promote refusal reaches persistent logs (console +
+    /// catalog.log, videoscan.log, unified log): op id, code, path-free
+    /// facts (codex 2026-10-02 #7).
+    private func noteRefusal(_ refusal: Refusal, model: VideoScanModel) {
+        let op = currentOpLabel
+        model.log("Promote: \(op) refused [\(refusal.code.rawValue)] — \(refusal.logFacts). The file and the reason are listed in the Promote window.")
+        appLog.write("promote REFUSED [\(refusal.code.rawValue)] \(op): \(refusal.logFacts)")
+        promoteLog.notice("promote REFUSED [\(refusal.code.rawValue, privacy: .public)] \(op, privacy: .public): \(refusal.logFacts, privacy: .public)")
     }
 
     func record(_ kind: FileOutcome.Kind, _ filename: String, _ detail: String, recordID: UUID? = nil,

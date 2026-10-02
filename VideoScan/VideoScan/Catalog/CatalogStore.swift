@@ -439,7 +439,7 @@ final class CatalogStore {
             if !designationRefusalReported {
                 designationRefusalReported = true
                 CatalogWriteJournal.record(refusal, catalogURL: fileURL)
-                auditDesignation("Master Archive designation: REFUSED catalog save — it would remove \(Self.describe(persistedMasterArchive)) but nobody cleared it. Nothing was written; \(fileURL.path) keeps the designation. Later saves stay refused until the designation is set again (Archive tab ▸ Initialize) or cleared on purpose (GH #167).")
+                auditDesignation("Master Archive designation: REFUSED catalog save — it would remove \(Self.describe(persistedMasterArchive ?? acceptedMasterArchive)) but nobody cleared it. Nothing was written; \(fileURL.lastPathComponent) keeps the designation. Later saves stay refused until the designation is set again (Archive tab ▸ Initialize) or cleared on purpose (GH #167).")
             }
             return refusal
         }
@@ -529,7 +529,7 @@ final class CatalogStore {
             lastWriteError = .writeFailed("encode or atomic write failed")
         }
         if !success && designationChanging {
-            auditDesignation("Master Archive designation: OUTCOME FAILED — catalog save generation \(wroteGeneration) did not land (\(lastWriteError?.userFacingDescription ?? "unknown")); catalog.json still carries \(Self.describe(persistedMasterArchive)).")
+            auditDesignation("Master Archive designation: OUTCOME FAILED — catalog save generation \(wroteGeneration) did not land (\(lastWriteError?.persistentDescription ?? "unknown")); catalog.json still carries \(Self.describe(persistedMasterArchive)).")
         }
         lock.release()
     }
@@ -1436,7 +1436,7 @@ extension CatalogStore {
     /// Authorizes the NEXT durable save to write the catalog without it.
     func authorizeDesignationClear(reason: String) {
         designationClearAuthorized = true
-        auditDesignation("Master Archive designation: clear authorized (\(reason)); the next catalog save removes \(persistedMasterArchive?.targetPath ?? "nothing — none on disk").")
+        auditDesignation("Master Archive designation: clear authorized (\(reason)); the next catalog save removes \(persistedMasterArchive == nil ? "nothing — none on disk" : Self.describe(persistedMasterArchive)).")
     }
 
     /// nil = this save may proceed as far as the designation goes.
@@ -1448,9 +1448,13 @@ extension CatalogStore {
         return .designationLossRefused(targetPath: was.targetPath)
     }
 
-    fileprivate static func describe(_ d: MasterArchiveDesignation?) -> String {
+    /// How a designation appears in the audit lines — which go to
+    /// catalog.log, videoscan.log and the unified log. By VOLUME UUID only:
+    /// the target and root paths name a volume and the family archive
+    /// folder (codex 2026-10-02 #7). The Archive tab shows the paths.
+    nonisolated static func describe(_ d: MasterArchiveDesignation?) -> String {
         guard let d else { return "none" }
-        return "\(d.targetPath) (root \(d.rootPath), volume UUID \(d.volumeUUID ?? "none"))"
+        return "the designation on volume UUID \(d.volumeUUID ?? "unknown")"
     }
 
     /// START line for a save whose payload changes the designation on disk.
@@ -1461,7 +1465,7 @@ extension CatalogStore {
         // carries is what the disk will say once the queue reaches it.
         acceptedMasterArchive = payloadDesignation
         guard payloadDesignation != persistedMasterArchive else { return false }
-        auditDesignation("Master Archive designation: START catalog save generation \(generation) changes it \(Self.describe(persistedMasterArchive)) → \(Self.describe(payloadDesignation)) in \(fileURL.path).")
+        auditDesignation("Master Archive designation: START catalog save generation \(generation) changes it \(Self.describe(persistedMasterArchive)) → \(Self.describe(payloadDesignation)) in \(fileURL.lastPathComponent).")
         return true
     }
 }

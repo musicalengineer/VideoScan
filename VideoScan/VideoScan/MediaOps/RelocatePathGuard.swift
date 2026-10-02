@@ -57,6 +57,28 @@ enum RelocatePathGuard {
                 return "Could not tell which volume \(path) is on, so Migrate cannot prove it is not the source — check that the drive is connected."
             }
         }
+
+        /// Stable refusal code for persistent logs.
+        var code: String {
+            switch self {
+            case .identical: return "identical"
+            case .destinationInsideSource: return "destination-inside-source"
+            case .sourceInsideDestination: return "source-inside-destination"
+            case .unresolvable: return "unresolvable"
+            }
+        }
+
+        /// The reason WITHOUT any path — for catalog.log / videoscan.log
+        /// (codex 2026-10-02 #7). `message`, which may name a folder, is
+        /// for the UI only.
+        var logReason: String {
+            switch self {
+            case .identical, .destinationInsideSource, .sourceInsideDestination:
+                return message
+            case .unresolvable:
+                return "One of the two folders could not be located on a connected volume, so Migrate cannot prove it is not the source."
+            }
+        }
     }
 
     /// Test seam (task-local, never process-global): how a path is located.
@@ -169,11 +191,16 @@ extension VideoScanModel {
     /// the runner starts the job. Logs the refusal through the one sink
     /// (console + catalog.log via `log`, videoscan.log via `appLog`) and
     /// returns its message; nil = the pair does not overlap.
+    ///
+    /// The logged line carries the refusal CODE and a path-free reason only
+    /// (codex 2026-10-02 #7: no media paths in persistent logs). The
+    /// returned message — shown in the Migrate sheet / job row — keeps the
+    /// detail.
     func refuseOverlappingMigrate(source: String, destination: URL, when: String) -> String? {
         guard let refusal = RelocatePathGuard.refusal(source: source, destination: destination.path) else {
             return nil
         }
-        let line = "Migrate refused \(when): \(refusal.message) (source \(source) → destination \(destination.path)). Nothing was queued, read or copied (GH #109)."
+        let line = "Migrate refused \(when) [\(refusal.code)]: \(refusal.logReason) Nothing was queued, read or copied (GH #109)."
         log(line)
         appLog.write(line)
         return refusal.message

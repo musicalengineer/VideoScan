@@ -132,13 +132,18 @@ struct MasterArchiveDesignationGuardTests {
         let d = designation(under: dir)
         store.masterArchive = d
         #expect(store.saveNow(records: []))
-        #expect(lines.contains { $0.contains("START") && $0.contains(d.targetPath) })
-        #expect(lines.contains { $0.contains("OUTCOME durable") && $0.contains(d.targetPath) })
+        // Identified by volume UUID — never the archive's path (codex
+        // 2026-10-02 #7: these lines reach catalog.log / videoscan.log).
+        let uuid = try #require(d.volumeUUID)
+        #expect(lines.contains { $0.contains("START") && $0.contains(uuid) })
+        #expect(lines.contains { $0.contains("OUTCOME durable") && $0.contains(uuid) })
+        #expect(!lines.contains { $0.contains(d.targetPath) || $0.contains(d.rootPath) }, "\(lines)")
 
         lines.removeAll()
         store.masterArchive = nil
         for _ in 0..<3 { #expect(store.saveNow(records: []) == false) }
         #expect(lines.filter { $0.contains("REFUSED") }.count == 1)
+        #expect(!lines.contains { $0.contains(d.targetPath) }, "\(lines)")
         #expect(journalLines(store).filter { $0.contains("designationLoss") }.count == 1)
     }
 

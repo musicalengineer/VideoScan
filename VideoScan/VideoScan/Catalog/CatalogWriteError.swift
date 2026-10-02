@@ -84,6 +84,21 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         }
     }
 
+    /// The description written to PERSISTENT records — the write-error
+    /// journal beside catalog.json and the unified log. Identical to
+    /// `userFacingDescription` except where that names a path: the Master
+    /// Archive's target path names a volume and the family archive, so the
+    /// persistent wording omits it (codex 2026-10-02 #7). The UI keeps
+    /// `userFacingDescription`.
+    var persistentDescription: String {
+        switch self {
+        case .designationLossRefused:
+            return "Catalog not saved: it would have removed the Master Archive designation without anyone clearing it. catalog.json still carries it. Re-open the Archive tab: re-initialize the archive, or clear it there if that is what you meant."
+        default:
+            return userFacingDescription
+        }
+    }
+
     /// Short stable tag for the journal and for metrics.
     var kind: String {
         switch self {
@@ -165,14 +180,14 @@ enum CatalogWriteJournal {
             at: Date(),
             code: error.code,
             kind: error.kind,
-            detail: error.userFacingDescription,
+            detail: error.persistentDescription,
             pid: getpid(),
             processName: ProcessInfo.processInfo.processName,
             hostname: ProcessInfo.processInfo.hostName
         )
 
         if emitLog {
-            writeErrorLog.error("catalog write refused [code \(error.code, privacy: .public) \(error.kind, privacy: .public)]: \(error.userFacingDescription, privacy: .public)")
+            writeErrorLog.error("catalog write refused [code \(error.code, privacy: .public) \(error.kind, privacy: .public)]: \(error.persistentDescription, privacy: .public)")
         }
 
         let url = journalURL(besideCatalogAt: catalogURL)

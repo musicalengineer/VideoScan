@@ -63,8 +63,11 @@ extension VideoScanModel {
         }.value
         // The world may have moved during the await.
         guard masterArchive == nil else { return [] }
-        for c in found where Self.readoptionReported.insert(c.targetPath).inserted {
-            let line = "Master Archive: none designated, but \(c.rootPath) carries an archive manifest (\(c.manifestRows) line(s)). Nothing was changed — Archive tab ▸ Re-adopt… makes it the Master Archive again after you confirm (GH #167)."
+        // Persistent lines carry counts only — the candidate's path names a
+        // volume and the family archive folder (codex 2026-10-02 #7); the
+        // Archive tab's offer shows it.
+        for (i, c) in found.enumerated() where Self.readoptionReported.insert(c.targetPath).inserted {
+            let line = "Master Archive: none designated, but a mounted volume (candidate \(i + 1) of \(found.count)) carries an archive manifest (\(c.manifestRows) line(s)). Nothing was changed — Archive tab ▸ Re-adopt… shows it and makes it the Master Archive again after you confirm (GH #167)."
             log(line)
             appLog.write(line)
             readoptionLog.notice("\(line, privacy: .public)")
@@ -76,7 +79,7 @@ extension VideoScanModel {
     /// confirms; Initialize is create-if-missing, so the tree, manifest and
     /// README are kept as they are).
     func offerReadoptMasterArchive(_ candidate: MasterArchiveReadoptionCandidate) {
-        let line = "Master Archive: Re-adopt offered for \(candidate.targetPath) — waiting for confirmation."
+        let line = "Master Archive: Re-adopt offered (an archive with \(candidate.manifestRows) manifest line(s)) — waiting for confirmation."
         log(line)
         appLog.write(line)
         offerInitializeMasterArchive(atPath: candidate.targetPath)
