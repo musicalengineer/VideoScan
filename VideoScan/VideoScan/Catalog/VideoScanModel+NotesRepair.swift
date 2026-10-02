@@ -67,9 +67,13 @@ extension VideoScanModel {
     func repairMachineTextInUserNotes() -> NotesRepairSummary? {
         if TestEnvironment.isTestHost && catalogStore === CatalogStore.shared { return nil }
         if catalogStore.isReadOnly { return nil }
-        // GH #167: a newer catalog is open — no backup, no marker, no
-        // edits (the marker would claim a repair of a file we never saved).
-        if catalogStore.newerCatalogVersion != nil { return nil }
+        // GH #167: a newer catalog is open — or has replaced ours on disk
+        // since the last save (codex review 2026-10-02 #5: the clean-plan
+        // branch below writes the marker without any other write gate) —
+        // no backup, no marker, no edits (the marker would claim a repair
+        // of a file we never saved). Discovering it latches the store, which
+        // flips the banner and isReadOnly at once.
+        if catalogStore.refuseIfNewerCatalogOnDisk() != nil { return nil }
         let marker = notesRepairMarkerPath
         let fm = FileManager.default
         if fm.fileExists(atPath: marker) { return nil }

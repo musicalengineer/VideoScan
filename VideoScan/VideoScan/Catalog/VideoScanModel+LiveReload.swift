@@ -68,6 +68,15 @@ extension VideoScanModel {
 
     /// One poll iteration — check the file's mtime, and if it's newer
     /// than the last successful merge, do the merge. Public for tests.
+    ///
+    /// While a NEWER catalog is open read-only (GH #167) the tick is NOT a
+    /// no-op: it still READS — decodes the file and merges what it shows
+    /// (dossier fields, records the newer build added, unknown keys) into
+    /// memory, so browsing stays current. It WRITES nothing: the top-level
+    /// unknown-key merge is in memory only, and
+    /// `adoptOnDiskGenerationAfterReconcile` returns before touching the
+    /// OCC baseline or `catalog.generation.max` (pinned by
+    /// CatalogReadOnlyLiveReloadTickTests and CatalogNewerVersionNoWritePathTests).
     @MainActor
     func pollAndMergeDossierFromDisk() async {
         let path = catalogStore.fileLocation

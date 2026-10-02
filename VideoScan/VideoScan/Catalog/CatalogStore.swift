@@ -213,6 +213,45 @@ protocol CatalogStoreObserver: AnyObject {
     func catalogStoreDidWrite(_ store: CatalogStore)
 }
 
+/// The newer-catalog latch, readable OFF the main actor (GH #167, codex
+/// review 2026-10-02 #1). The authoritative latch lives on the main actor
+/// (`CatalogStore.newerCatalogVersion`); this mirror lets a write that was
+/// QUEUED before the latch fired see it on the write queue, and lets the
+/// write queue record a newer catalog it discovers itself.
+/// (≈ a mutex-guarded `std::optional<int>` shared with the writer thread.)
+final class CatalogNewerLatchMirror: @unchecked Sendable {
+    private let lock = NSLock()
+    private var latched: Int?
+    var version: Int? { lock.lock(); defer { lock.unlock() }; return latched }
+    func note(_ version: Int) {
+        lock.lock(); latched = max(latched ?? 0, version); lock.unlock()
+    }
+}
+
+/// The last check before bytes land (GH #167, codex review 2026-10-02 #1):
+/// run on the write queue, after encoding and immediately before the
+/// atomic write — under the per-write advisory lock for live saves. The
+/// main-actor `writePrecondition` runs when the save is QUEUED; a newer
+/// build can replace catalog.json (a sync, another Mac) between then and
+/// now. Refuses when the latch is set or the primary on disk is newer.
+/// Residual: the window between this probe and rename(2) is microseconds
+/// and cannot be closed — rename is not conditional.
+struct CatalogWriteGate: Sendable {
+    let primaryURL: URL
+    let latch: CatalogNewerLatchMirror
+
+    /// nil = write; otherwise the newer catalog version that forbids it.
+    func newerVersion() -> Int? {
+        if let v = latch.version { return v }
+        if let v = CatalogSnapshot.headerProbe(at: primaryURL)?.version,
+           v > CatalogSnapshot.currentVersion {
+            latch.note(v)
+            return v
+        }
+        return nil
+    }
+}
+
 @MainActor
 final class CatalogStore {
     static let shared = CatalogStore()
@@ -408,6 +447,19 @@ final class CatalogStore {
     /// write path refuses (`writesDisabledReason` is latched alongside).
     private(set) var newerCatalogVersion: Int?
 
+    /// Off-main mirror of the latch for the write queue (codex #1).
+    private let newerLatchMirror = CatalogNewerLatchMirror()
+
+    /// The gate every `encodeAndWrite` call carries (codex #1 / #5).
+    private var writeGate: CatalogWriteGate {
+        CatalogWriteGate(primaryURL: fileURL, latch: newerLatchMirror)
+    }
+
+    /// Why writes are held, worded once for the latch and the write queue.
+    nonisolated static func newerCatalogReason(_ version: Int) -> String {
+        "catalog.json was saved by a newer VideoScan (catalog v\(version); this build reads up to v\(CatalogSnapshot.currentVersion))"
+    }
+
     /// The words the app shows while a newer catalog is open (Rick
     /// 2026-10-02). One constant so the banner, the console line and the
     /// tests agree.
@@ -429,7 +481,8 @@ final class CatalogStore {
     private func latchNewerCatalog(found version: Int) {
         let first = newerCatalogVersion == nil
         newerCatalogVersion = max(newerCatalogVersion ?? 0, version)
-        writesDisabledReason = "catalog.json was saved by a newer VideoScan (catalog v\(version); this build reads up to v\(CatalogSnapshot.currentVersion))"
+        newerLatchMirror.note(version)   // queued writes see it (codex #1)
+        writesDisabledReason = Self.newerCatalogReason(version)
         if first {
             NSLog("VideoScan: catalog.json version %d is newer than this build (v%d) — opened read-only; every save is held",
                   version, CatalogSnapshot.currentVersion)
@@ -461,6 +514,31 @@ final class CatalogStore {
     func noteNewerCatalogOnDisk(version: Int) {
         guard version > CatalogSnapshot.currentVersion else { return }
         latchNewerCatalog(found: version)
+    }
+
+    /// The newer-catalog gate for writers that do NOT go through
+    /// `writePrecondition` — safety snapshots and the notes-repair backup /
+    /// marker (codex review 2026-10-02 #5). A held latch refuses; otherwise
+    /// the primary's header is probed NOW, so a newer catalog that replaced
+    /// ours since the last save or reload is discovered (and latched)
+    /// before any sibling file is touched. nil = go.
+    func refuseIfNewerCatalogOnDisk() -> CatalogWriteError? {
+        if let held = heldWriteRefusal() { return held }
+        if let v = CatalogSnapshot.headerProbe(at: fileURL)?.version,
+           v > CatalogSnapshot.currentVersion {
+            latchNewerCatalog(found: v)
+            return heldWriteRefusal()
+        }
+        return nil
+    }
+
+    /// After a write the write queue REFUSED (codex #1): carry a newer
+    /// catalog it discovered into the main-actor latch, so the banner,
+    /// `isReadOnly` and every later save follow at once.
+    private func adoptLatchFromWriteQueue() {
+        if newerCatalogVersion == nil, let v = newerLatchMirror.version {
+            latchNewerCatalog(found: v)
+        }
     }
 
     /// Most recent refusal or failure, for UI surfacing. Cleared on success.
@@ -591,6 +669,12 @@ final class CatalogStore {
                 generationFloor = CatalogGenerationSidecar.recordMax(wroteGeneration,
                                                                      besideCatalogAt: fileURL)
             }
+        } else if let error, case .writesDisabled = error {
+            // The write queue's last-moment gate refused (codex #1): latch
+            // (if it discovered the newer catalog itself) and report it
+            // through the one-shot held line, like every other refusal.
+            adoptLatchFromWriteQueue()
+            _ = heldWriteRefusal()
         } else if let error {
             // An attempted write that FAILED is the current truth, so it
             // outranks whatever was in lastWriteError. The case that makes
@@ -628,7 +712,13 @@ final class CatalogStore {
         // GH #167: a newer catalog is open — this session will never save,
         // so there is nothing to adopt, and the sidecar is not ours to bump.
         guard newerCatalogVersion == nil else { return }
-        let onDisk = CatalogSnapshot.headerProbe(at: fileURL)?.generation ?? 0
+        let probe = CatalogSnapshot.headerProbe(at: fileURL)
+        // The file may have become newer since the reload decoded it.
+        if let v = probe?.version, v > CatalogSnapshot.currentVersion {
+            latchNewerCatalog(found: v)
+            return
+        }
+        let onDisk = probe?.generation ?? 0
         if onDisk > loadedGeneration {
             catalogStoreLog.info("catalog OCC: adopting on-disk generation \(onDisk) after live reconcile (was \(self.loadedGeneration))")
             loadedGeneration = onDisk
@@ -1100,6 +1190,7 @@ final class CatalogStore {
         var writeError: CatalogWriteError?
         // Captured on the main actor; the closure crosses to writeQueue.
         let seam = testAfterWriteBeforeVerify
+        let gate = writeGate
         // BEGIN line before a synchronous, unbounded write. Everything inside
         // writeQueue.sync — encode, atomic write, F_FULLFSYNC, SHA-256 re-read
         // — can block forever on a stalling volume, and this call happens on
@@ -1109,7 +1200,7 @@ final class CatalogStore {
         catalogStoreLog.notice("catalog save: BEGIN \(records.count) records → \(destName, privacy: .public)")
         writeQueue.sync {
             writeError = Self.encodeAndWrite(payload: payload, to: fileURL,
-                                             purpose: .liveCatalog,
+                                             purpose: .liveCatalog, gate: gate,
                                              afterWriteBeforeVerify: seam)
         }
         let ok = writeError == nil
@@ -1179,11 +1270,12 @@ final class CatalogStore {
                                                             generation: nextGeneration)
         let dest = fileURL
         let seam = testAfterWriteBeforeVerify
+        let gate = writeGate
         catalogStoreLog.notice("catalog save (acknowledged): BEGIN \(records.count) records → \(dest.lastPathComponent, privacy: .public)")
         let writeError: CatalogWriteError? = await withCheckedContinuation { cont in
             writeQueue.async {
                 cont.resume(returning: Self.encodeAndWrite(payload: payload, to: dest,
-                                                           purpose: .liveCatalog,
+                                                           purpose: .liveCatalog, gate: gate,
                                                            afterWriteBeforeVerify: seam))
             }
         }
@@ -1239,10 +1331,11 @@ final class CatalogStore {
         let dest = fileURL
         let delay = testWriteDelay
         let seam = testAfterWriteBeforeVerify
+        let gate = writeGate
         writeQueue.async {
             if delay > 0 { Thread.sleep(forTimeInterval: delay) }
             let writeError = Self.encodeAndWrite(payload: payload, to: dest,
-                                                 purpose: .liveCatalog,
+                                                 purpose: .liveCatalog, gate: gate,
                                                  afterWriteBeforeVerify: seam)
             Task { @MainActor [weak self] in
                 self?.asyncSaveDidFinish(success: writeError == nil,
@@ -1299,18 +1392,21 @@ final class CatalogStore {
             NSLog("VideoScan: CatalogStore.writeSnapshot refused — read-only viewer mode")
             return false
         }
-        // GH #167: a newer catalog is open — no catalog bytes of any kind.
+        // GH #167: a newer catalog is open — or has just replaced ours on
+        // disk (codex review 2026-10-02 #5) — no catalog bytes of any kind.
         // Callers already treat false as "no snapshot → do not destroy".
-        if heldWriteRefusal() != nil { return false }
+        if refuseIfNewerCatalogOnDisk() != nil { return false }
         // Real generation, never 0 (GH #165): the snapshot records which
         // catalog.json generation its contents derive from.
-        return Self.encodeAndWrite(payload: Self.makePayload(records: records,
-                                                             generation: currentGeneration,
-                                                             masterArchive: masterArchive,
-                                                             unknownTopLevel: unknownTopLevelFields),
-                                   to: URL(fileURLWithPath: path),
-                                   purpose: .snapshot,
-                                   afterWriteBeforeVerify: testAfterWriteBeforeVerify) == nil
+        let wrote = Self.encodeAndWrite(payload: Self.makePayload(records: records,
+                                                                  generation: currentGeneration,
+                                                                  masterArchive: masterArchive,
+                                                                  unknownTopLevel: unknownTopLevelFields),
+                                        to: URL(fileURLWithPath: path),
+                                        purpose: .snapshot, gate: writeGate,
+                                        afterWriteBeforeVerify: testAfterWriteBeforeVerify) == nil
+        if !wrote { adoptLatchFromWriteQueue() }
+        return wrote
     }
 
     /// Same contract as `writeSnapshot`, but only the DTO map (the ONE
@@ -1323,16 +1419,20 @@ final class CatalogStore {
             NSLog("VideoScan: CatalogStore.writeSnapshotAsync refused — read-only viewer mode")
             return false
         }
-        if heldWriteRefusal() != nil { return false }   // GH #167, as above
+        if refuseIfNewerCatalogOnDisk() != nil { return false }   // GH #167, as above
         let payload = Self.makePayload(records: records, generation: currentGeneration,
                                        masterArchive: masterArchive,
                                        unknownTopLevel: unknownTopLevelFields)
         let url = URL(fileURLWithPath: path)
         let seam = testAfterWriteBeforeVerify
-        return await Task.detached(priority: .userInitiated) {
-            Self.encodeAndWrite(payload: payload, to: url, purpose: .snapshot,
+        let gate = writeGate
+        let wrote = await Task.detached(priority: .userInitiated) {
+            Self.encodeAndWrite(payload: payload, to: url, purpose: .snapshot, gate: gate,
                                 afterWriteBeforeVerify: seam) == nil
         }.value
+        // The detached write may have discovered a newer primary (codex #1).
+        if !wrote { adoptLatchFromWriteQueue() }
+        return wrote
     }
 
     /// Build the on-disk payload as a Sendable DTO. Must run on the main
@@ -1454,15 +1554,29 @@ final class CatalogStore {
     /// failure carry its real cause (ENOSPC, EIO, EPERM) into
     /// `lastWriteError` and the write journal; previously the cause reached
     /// the log only, and the UI got a fixed "encode or atomic write failed".
+    ///
+    /// `gate` is REQUIRED (no default) so no call site can forget it: the
+    /// newer-catalog check runs here, after the encode and immediately
+    /// before the bytes land (codex review 2026-10-02 #1).
     nonisolated private static func encodeAndWrite(payload: CatalogSnapshotDTO,
                                                    to fileURL: URL,
                                                    purpose: WritePurpose,
+                                                   gate: CatalogWriteGate,
                                                    afterWriteBeforeVerify: (@Sendable (URL) -> Void)? = nil) -> CatalogWriteError? {
         let t0 = CFAbsoluteTimeGetCurrent()
         do {
             let encoder = JSONEncoder()
             encoder.dateEncodingStrategy = .iso8601
             let data = try payload.encoded(using: encoder)
+            // GH #167: last check before any byte lands. The main actor's
+            // precondition ran when this write was QUEUED; a newer build may
+            // have replaced catalog.json since, or the latch fired. Not
+            // journalled here — the main-actor completion reports it once
+            // through `heldWriteRefusal` (no flooding).
+            if let newer = gate.newerVersion() {
+                catalogStoreLog.notice("catalog write refused on the write queue: catalog.json is v\(newer), newer than this build (v\(CatalogSnapshot.currentVersion)) — nothing written to \(fileURL.lastPathComponent, privacy: .public) (GH #167)")
+                return .writesDisabled(Self.newerCatalogReason(newer))
+            }
             // Atomic write so a crash mid-write doesn't truncate the file.
             // Foundation implements this as: write to a sibling tmp file,
             // fsync, then `rename(2)` into place — POSIX rename is atomic

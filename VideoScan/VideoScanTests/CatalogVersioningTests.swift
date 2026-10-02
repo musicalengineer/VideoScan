@@ -712,8 +712,8 @@ struct CatalogKeySnapshotSensorTests {
             ("func saveNow(records:", "writePrecondition()"),
             ("func saveAcknowledged(records:", "writePrecondition()"),
             ("func saveAsync(records:", "writePrecondition()"),
-            ("func writeSnapshot(records:", "heldWriteRefusal()"),
-            ("func writeSnapshotAsync(records:", "heldWriteRefusal()"),
+            ("func writeSnapshot(records:", "refuseIfNewerCatalogOnDisk()"),
+            ("func writeSnapshotAsync(records:", "refuseIfNewerCatalogOnDisk()"),
         ]
         for (sig, gate) in gated {
             let body = try #require(Self.methodBody(sig, in: src), "\(sig) not found in CatalogStore.swift")
@@ -727,6 +727,14 @@ struct CatalogKeySnapshotSensorTests {
         // call site is a new write path: gate it, then update this count.
         let calls = src.components(separatedBy: "Self.encodeAndWrite(").count - 1
         #expect(calls == 5, "encodeAndWrite has \(calls) call sites (expected 5) — is the new one latched?")
+        // ...and the byte writer itself re-checks on the write queue, after
+        // the encode and before the write (codex cycle #28 #1). `gate` is a
+        // required parameter, so every call site carries it.
+        let writer = try #require(Self.methodBody("nonisolated private static func encodeAndWrite(", in: src))
+        let check = try #require(writer.range(of: "gate.newerVersion()"), "encodeAndWrite lost its last-moment newer-catalog check")
+        let write = try #require(writer.range(of: "data.write(to:"))
+        #expect(check.lowerBound < write.lowerBound, "the newer-catalog check must run BEFORE the bytes land")
+        #expect(writer.contains("gate: CatalogWriteGate,"), "gate must stay a required parameter")
         // load() never rotates (.prev copy) a newer catalog.
         let load = try #require(Self.methodBody("func load() -> [VideoRecord]", in: src))
         let newer = try #require(load.range(of: "openedReadOnlyNewerVersion"))
