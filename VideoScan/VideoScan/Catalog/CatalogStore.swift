@@ -308,6 +308,17 @@ final class CatalogStore {
     /// carries none.
     private(set) var persistedMasterArchive: MasterArchiveDesignation?
 
+    /// The designation carried by the NEWEST write this session ACCEPTED —
+    /// past the precondition, generation claimed — whether or not it has
+    /// landed yet (codex 2026-10-02 #2). An async save's completion runs
+    /// later on the main actor, so `persistedMasterArchive` alone misses a
+    /// first designation still in flight: a nil save without Clear passed
+    /// the guard, queued behind it on the serial write queue and overwrote
+    /// it. The guard refuses when EITHER this or the persisted value
+    /// carries a designation. Seeded by `load()`; never cleared by a failed
+    /// write (refusing more is the safe direction).
+    private(set) var acceptedMasterArchive: MasterArchiveDesignation?
+
     /// Set by `authorizeDesignationClear` (Clear Master Archive); consumed
     /// by the first durable write that carries no designation; cancelled
     /// when a designation is set again.
@@ -645,6 +656,7 @@ final class CatalogStore {
             rotateBackup()
             masterArchive = master
             persistedMasterArchive = master
+            acceptedMasterArchive = master
             lastLoadOutcome = .loaded(fromBackup: false)
             return records
         }
@@ -661,6 +673,7 @@ final class CatalogStore {
                                       source: backupURL.lastPathComponent)
             masterArchive = master
             persistedMasterArchive = master
+            acceptedMasterArchive = master
             lastLoadOutcome = .loaded(fromBackup: true)
             return records
         }
@@ -1428,7 +1441,9 @@ extension CatalogStore {
 
     /// nil = this save may proceed as far as the designation goes.
     fileprivate func designationLossRefusal() -> CatalogWriteError? {
-        guard let was = persistedMasterArchive, masterArchive == nil,
+        // Baseline = what is on disk OR what an accepted write still in
+        // flight will put there (codex 2026-10-02 #2).
+        guard let was = persistedMasterArchive ?? acceptedMasterArchive, masterArchive == nil,
               !designationClearAuthorized else { return nil }
         return .designationLossRefused(targetPath: was.targetPath)
     }
@@ -1442,6 +1457,9 @@ extension CatalogStore {
     /// Returns whether it does, so the OUTCOME line can be paired with it.
     fileprivate func noteDesignationWriteStart(_ payloadDesignation: MasterArchiveDesignation?,
                                                generation: Int) -> Bool {
+        // Accepted from here on (codex 2026-10-02 #2): whatever this payload
+        // carries is what the disk will say once the queue reaches it.
+        acceptedMasterArchive = payloadDesignation
         guard payloadDesignation != persistedMasterArchive else { return false }
         auditDesignation("Master Archive designation: START catalog save generation \(generation) changes it \(Self.describe(persistedMasterArchive)) → \(Self.describe(payloadDesignation)) in \(fileURL.path).")
         return true

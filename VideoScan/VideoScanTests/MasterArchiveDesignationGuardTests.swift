@@ -163,6 +163,47 @@ struct MasterArchiveDesignationGuardTests {
         #expect(reread(dir) == nil)
     }
 
+    // Codex 2026-10-02 #2 (P1): the FIRST designation rides an async write
+    // whose completion has not run, so `persistedMasterArchive` is still
+    // nil; a nil saveNow without Clear passed the guard, queued behind the
+    // designated write and overwrote it. The baseline must include
+    // accepted-but-pending writes.
+    @Test("a first designation still in flight cannot be lost to a nil save without Clear")
+    func pendingFirstDesignationCannotBeLost() async throws {
+        let dir = scratch("pending")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        let d = designation(under: dir)
+
+        store.testWriteDelay = 0.2
+        store.masterArchive = d
+        store.saveAsync(records: [])
+        store.masterArchive = nil // no Clear
+
+        #expect(!store.saveNow(records: []))
+        try await Task.sleep(nanoseconds: 600_000_000)
+        #expect(reread(dir) == d)
+    }
+
+    @Test("a first designation in flight, THEN an explicit Clear: the clear still lands (no false refusal)")
+    func pendingFirstDesignationThenClearLands() async throws {
+        let dir = scratch("pendingclear")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        let d = designation(under: dir)
+
+        store.testWriteDelay = 0.2
+        store.masterArchive = d
+        store.saveAsync(records: [])
+        store.authorizeDesignationClear(reason: "test")
+        store.masterArchive = nil
+        #expect(store.saveNow(records: []), "Clear is the one authorized removal")
+        try await Task.sleep(nanoseconds: 600_000_000)
+        store.testWriteDelay = 0
+        #expect(reread(dir) == nil)
+        #expect(store.saveNow(records: []), "nothing pending, nothing designated: saves proceed")
+    }
+
     // MARK: Model path (the Clear button and a poisoned model value)
 
     @Test("model: Clear Master Archive persists the removal; a bare nil does not")
