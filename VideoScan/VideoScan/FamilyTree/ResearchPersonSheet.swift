@@ -171,14 +171,18 @@ final class ResearchPersonModel: ObservableObject {
     /// Commit the draft for one finding (Return in the field / focus lost).
     /// A draft the user never edited is not committed: it is the disk's own
     /// value, possibly older than what is on disk now.
+    ///
+    /// An edited draft always goes through `mutate`, which compares it with
+    /// the lore ON DISK under the per-key lock (an equal value writes
+    /// nothing) — never with this pane's copy (codex review 2026-10-02 F3:
+    /// a failed save used to land in the copy, so the retry saw "already
+    /// saved", skipped the write and dropped the words). The edited mark
+    /// clears only after a save that is proven to have succeeded; a failed
+    /// one keeps it, so the next commit (or Tell Hallie) tries again.
     func commitLore(for id: String) {
         guard editedLore.contains(id) else { return }
         let draft = loreDrafts[id] ?? ""
-        if dossier.findings.first(where: { $0.id == id })?.lore != draft {
-            // A failed save keeps the draft marked edited, so the next
-            // commit (or Tell Hallie) tries again instead of dropping it.
-            guard mutate({ $0.setLore(draft, for: id) }) else { return }
-        }
+        guard mutate({ $0.setLore(draft, for: id) }) else { return }
         editedLore.remove(id)
     }
 
@@ -218,8 +222,10 @@ final class ResearchPersonModel: ObservableObject {
     /// lock: read now → change → write), then show the result. Never saves
     /// this pane's in-memory copy over someone else's newer file — the
     /// "I found a record" filer or a second window (QA 2026-10-01 P2-1).
-    /// On a store error the change is still shown here, with the error.
-    /// Returns whether the change reached the disk.
+    /// On a store error the change is NOT applied here (codex review
+    /// 2026-10-02 F3): the pane keeps showing what is on disk — re-read if
+    /// the file is readable — and says what failed. Returns whether the
+    /// change reached the disk.
     @discardableResult
     private func mutate(_ change: (inout ResearchDossier) -> Void) -> Bool {
         let subject = self.subject
@@ -233,9 +239,16 @@ final class ResearchPersonModel: ObservableObject {
             }
             if let updated { dossier = updated }
         } catch {
-            change(&dossier)
             errorMessage = error.localizedDescription
             saved = false
+            do {
+                if let onDisk = try store.loadDossier(key: subject.key) { dossier = onDisk }
+            } catch {
+                // Unreadable too (the usual reason the save failed): keep
+                // the last copy that WAS on disk. The save error above is
+                // the one Rick needs to see; this read error is the same
+                // fault, so it is not shown twice.
+            }
         }
         // Untouched drafts follow the dossier as it is NOW; the user's own
         // unsaved typing is left alone (codex review #18 F2).

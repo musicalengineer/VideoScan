@@ -757,7 +757,7 @@ struct RecordFinderFilingTests {
         model.commitLore(for: id)
         #expect(model.errorMessage != nil)
         #expect(model.findings.first { $0.id == id }?.verdict == .unreviewed, "a failed verdict save is not shown")
-        #expect(model.findings.first { $0.id == id }?.lore == "", "a failed lore save is not shown")
+        #expect(model.findings.first { $0.id == id }?.lore.isEmpty == true, "a failed lore save is not shown")
         #expect(model.loreDrafts[id] == "Synthetic draft", "the typed draft is kept for the retry")
         try original.write(to: url)
         #expect(model.tellHallie() == 0, "nothing was confirmed on disk")
