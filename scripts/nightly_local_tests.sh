@@ -85,7 +85,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-09-30-release-r1"
+NIGHTLY_SCRIPT_VERSION="2026-10-02-timing-strict-r1"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -94,6 +94,12 @@ NIGHTLY_SCRIPT_VERSION="2026-09-30-release-r1"
 # ${NIGHTLY_CONFIGURATION:-unknown} so a harness that sources them in isolation
 # under set -u still publishes valid JSON.
 NIGHTLY_CONFIGURATION="Release"
+# GH #208 (Rick, 2026-10-02): timing budgets are STRICT on a quiet machine and
+# a known issue (within 3x) on a busy one. The 2 AM M4 run is the real gate, so
+# pin strict here regardless of load. xcodebuild forwards TEST_RUNNER_<NAME>
+# to the test process as <NAME>; swift test reads the plain name.
+export VIDEOSCAN_TIMING_STRICT=1
+export TEST_RUNNER_VIDEOSCAN_TIMING_STRICT=1
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"

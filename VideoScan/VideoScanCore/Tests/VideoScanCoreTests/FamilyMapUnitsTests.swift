@@ -432,14 +432,15 @@ struct FamilyMapUnitsTests {
         // consumed, not on what the rest of the host was doing.
         var hits = 0
         var wall: Duration = .zero
+        let loadBefore = TimingBudget.sampleLoad()
         let cpu = TimingBudget.measureThreadCPUTime {
             wall = ContinuousClock().measure {
                 for p in points where map.unit(containing: p) != nil { hits += 1 }
             }
         }
-        let ceiling = TimingBudget.loadAwareDebugCeiling(.milliseconds(20))
         print("[family-map] 1,000 lookups over 200×300: cpu \(cpu), wall \(wall), \(hits) hits (\(TimingBudget.loadDescription()))")
-        #expect(cpu < ceiling, "1,000 lookups took \(cpu) cpu / \(wall) wall, ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+        expectWithinTimingBudget("1,000 unit lookups over 200×300 (CPU)", measured: cpu, budget: .milliseconds(20),
+                                 loadBefore: loadBefore)
         #expect(hits > 800 && hits < 1_000, "\(hits)")
     }
 

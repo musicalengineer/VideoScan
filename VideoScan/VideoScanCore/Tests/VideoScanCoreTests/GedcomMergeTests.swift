@@ -880,6 +880,7 @@ struct GedcomMergeTests {
         // and 62.7 s (full Core --parallel, load 35) in the same Debug build.
         // An O(n²) regression still costs CPU on this thread and fails.
         // (C++: std::clock() per thread instead of steady_clock.)
+        let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
         let wallStart = clock.now
         var merged: GedcomFamilyGraph.MergeOutcome?
@@ -921,14 +922,17 @@ struct GedcomMergeTests {
         let s = { (d: Duration) in String(format: "%.2f", TimingBudget.seconds(d)) }
         let cpuTotal = cpuMerge + cpuWrite + cpuParse + cpuVerify
         print("SCALE pipeline 2×\(n) (thread CPU): merge \(s(cpuMerge))s write \(s(cpuWrite))s (\(text.utf8.count / 1_000_000) MB) parse \(s(cpuParse))s verify \(s(cpuVerify))s total \(s(cpuTotal))s; wall \(s(wall))s (\(TimingBudget.loadDescription()))")
-        // 2 s / 20 s on a quiet machine (quiet M4 Debug 2026-10-02: wall
-        // merge 1.2 s, total 10.7 s); ×1.5 for a busy Debug run, ×3 on GitHub.
-        let mergeCeiling = TimingBudget.loadAwareDebugCeiling(.seconds(2))
-        let totalCeiling = TimingBudget.loadAwareDebugCeiling(.seconds(20))
-        #expect(cpuMerge < mergeCeiling, "merge took \(s(cpuMerge)) s CPU, ceiling \(s(mergeCeiling)) s (\(TimingBudget.loadDescription()))")
-        #expect(cpuTotal < totalCeiling, "pipeline took \(s(cpuTotal)) s CPU, ceiling \(s(totalCeiling)) s (\(TimingBudget.loadDescription()))")
+        // 2 s / 20 s CPU (quiet M4 Debug 2026-10-02: wall merge 1.2 s, total
+        // 10.7 s). Strict on a quiet machine; busy within 3× = known issue
+        // (GH #208, TimingBudget.judge).
+        expectWithinTimingBudget("2×100k GEDCOM merge (CPU)", measured: cpuMerge,
+                                 budget: .seconds(2), loadBefore: loadBefore)
+        expectWithinTimingBudget("2×100k GEDCOM merge→write→parse→verify (CPU)", measured: cpuTotal,
+                                 budget: .seconds(20), loadBefore: loadBefore)
         // CPU time does not count waiting, so wall clock stays as a hang
-        // guard only (the TreeWalkScaleTests pattern).
+        // guard only (the TreeWalkScaleTests pattern), on the unchanged
+        // load-aware ceiling.
+        let totalCeiling = TimingBudget.loadAwareDebugCeiling(.seconds(20))
         #expect(wall < totalCeiling * 5, "pipeline hang guard: \(s(wall)) s wall (\(TimingBudget.loadDescription()))")
     }
 

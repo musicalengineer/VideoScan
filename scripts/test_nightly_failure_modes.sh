@@ -434,6 +434,36 @@ else
             fail "$f invented crashes: got '$got', want '0|[]'"
         fi
     done
+
+    # 8f: GH #208 (2026-10-02). A busy-machine timing miss within 3x is a
+    # Swift Testing KNOWN ISSUE; its lines (real swift-testing output shape)
+    # must never count as a failure or leak into failed_names. The one
+    # over-3x miss is a real failure and must count exactly once.
+    cat > "$SANDBOX/known_issue.log" <<'LOG'
+━ Test "settled keystroke" recorded a known issue at CatalogSearchBudgetSensorTests.swift:120:13: Issue recorded
+↳ [timing-budget] 100k settled keystroke 'mov' (median of 5): budget 165.0 ms, measured 210.4 ms (1.28×), load 9.1→9.4 on 16 cores, busy (busy) → known-issue
+━ Test settledKeystrokeBudgetAndAgreementAt100k() passed after 41.2 seconds with 1 known issue.
+✘ Test "tree walk" recorded an issue at TreeWalkScaleTests.swift:64:13: Issue recorded
+↳ [timing-budget] 100k tree walk: budget 8000.0 ms, measured 30100.0 ms (3.76×), load 12.0→12.2 on 16 cores, busy (busy) → fail
+✘ Test hundredThousandPeopleWalkAndCheckOffMain() failed after 30.4 seconds with 1 issue.
+✔ Test quietIsStrict() passed after 0.001 seconds.
+LOG
+    got=$(run_parse "$SANDBOX/known_issue.log")
+    want='1|1|0|["hundredThousandPeopleWalkAndCheckOffMain()"]'
+    if [ "$got" = "$want" ]; then
+        pass "known-issue timing miss is not a failure; the over-3x miss counts once"
+    else
+        fail "known-issue fixture: got '$got', want '$want'"
+    fi
+fi
+
+# 8g: GH #208 — the nightly pins strict timing (both spellings: swift test
+# reads the plain name, xcodebuild forwards TEST_RUNNER_<NAME> as <NAME>).
+if grep -qx 'export VIDEOSCAN_TIMING_STRICT=1' "$SCRIPT_DIR/nightly_local_tests.sh" &&
+   grep -qx 'export TEST_RUNNER_VIDEOSCAN_TIMING_STRICT=1' "$SCRIPT_DIR/nightly_local_tests.sh"; then
+    pass "nightly exports VIDEOSCAN_TIMING_STRICT=1 (+ TEST_RUNNER_ form)"
+else
+    fail "nightly no longer pins strict timing budgets (VIDEOSCAN_TIMING_STRICT=1)"
 fi
 
 # ───────────────────────────────────────────────────────────────────
