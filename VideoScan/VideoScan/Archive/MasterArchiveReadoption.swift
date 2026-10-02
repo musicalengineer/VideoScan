@@ -112,7 +112,10 @@ extension VideoScanModel {
         guard fstat(fd, &st) == 0, st.st_mode & S_IFMT == S_IFREG else { close(fd); return 0 }
         let h = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
         guard let data = try? h.read(upToCount: 64 << 20) else { return 0 }
-        let lines = String(decoding: data, as: UTF8.self)
+        // A 64 MB cut can split a UTF-8 sequence; fall back to Latin-1,
+        // which never fails — only newlines are counted.
+        let text = String(bytes: data, encoding: .utf8) ?? String(bytes: data, encoding: .isoLatin1) ?? ""
+        let lines = text
             .split(whereSeparator: \.isNewline)
             .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         return max(0, lines.count - 1)

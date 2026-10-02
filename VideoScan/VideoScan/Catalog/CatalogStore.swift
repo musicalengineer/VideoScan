@@ -324,39 +324,6 @@ final class CatalogStore {
     /// os_log only.
     var designationAudit: (@MainActor (String) -> Void)?
 
-    private func auditDesignation(_ line: String) {
-        catalogStoreLog.notice("\(line, privacy: .public)")
-        designationAudit?(line)
-    }
-
-    /// The user cleared the Master Archive designation (and only that).
-    /// Authorizes the NEXT durable save to write the catalog without it.
-    func authorizeDesignationClear(reason: String) {
-        designationClearAuthorized = true
-        auditDesignation("Master Archive designation: clear authorized (\(reason)); the next catalog save removes \(persistedMasterArchive?.targetPath ?? "nothing — none on disk").")
-    }
-
-    /// nil = this save may proceed as far as the designation goes.
-    private func designationLossRefusal() -> CatalogWriteError? {
-        guard let was = persistedMasterArchive, masterArchive == nil,
-              !designationClearAuthorized else { return nil }
-        return .designationLossRefused(targetPath: was.targetPath)
-    }
-
-    private static func describe(_ d: MasterArchiveDesignation?) -> String {
-        guard let d else { return "none" }
-        return "\(d.targetPath) (root \(d.rootPath), volume UUID \(d.volumeUUID ?? "none"))"
-    }
-
-    /// START line for a save whose payload changes the designation on disk.
-    /// Returns whether it does, so the OUTCOME line can be paired with it.
-    private func noteDesignationWriteStart(_ payloadDesignation: MasterArchiveDesignation?,
-                                           generation: Int) -> Bool {
-        guard payloadDesignation != persistedMasterArchive else { return false }
-        auditDesignation("Master Archive designation: START catalog save generation \(generation) changes it \(Self.describe(persistedMasterArchive)) → \(Self.describe(payloadDesignation)) in \(fileURL.path).")
-        return true
-    }
-
     // MARK: - Cross-process write safety
     //
     // Added 2026-08-14 after an external maintenance script's 52% catalog
@@ -1436,6 +1403,48 @@ final class CatalogStore {
             }
             return err
         }
+    }
+}
+
+// MARK: - Master Archive designation guard (GH #167) — behaviour
+//
+// The state lives in the class above (stored properties cannot live in an
+// extension); the rules live here. Same file so `private` members stay
+// shared (≈ C++ member functions defined outside the class body).
+
+extension CatalogStore {
+
+    fileprivate func auditDesignation(_ line: String) {
+        catalogStoreLog.notice("\(line, privacy: .public)")
+        designationAudit?(line)
+    }
+
+    /// The user cleared the Master Archive designation (and only that).
+    /// Authorizes the NEXT durable save to write the catalog without it.
+    func authorizeDesignationClear(reason: String) {
+        designationClearAuthorized = true
+        auditDesignation("Master Archive designation: clear authorized (\(reason)); the next catalog save removes \(persistedMasterArchive?.targetPath ?? "nothing — none on disk").")
+    }
+
+    /// nil = this save may proceed as far as the designation goes.
+    fileprivate func designationLossRefusal() -> CatalogWriteError? {
+        guard let was = persistedMasterArchive, masterArchive == nil,
+              !designationClearAuthorized else { return nil }
+        return .designationLossRefused(targetPath: was.targetPath)
+    }
+
+    fileprivate static func describe(_ d: MasterArchiveDesignation?) -> String {
+        guard let d else { return "none" }
+        return "\(d.targetPath) (root \(d.rootPath), volume UUID \(d.volumeUUID ?? "none"))"
+    }
+
+    /// START line for a save whose payload changes the designation on disk.
+    /// Returns whether it does, so the OUTCOME line can be paired with it.
+    fileprivate func noteDesignationWriteStart(_ payloadDesignation: MasterArchiveDesignation?,
+                                               generation: Int) -> Bool {
+        guard payloadDesignation != persistedMasterArchive else { return false }
+        auditDesignation("Master Archive designation: START catalog save generation \(generation) changes it \(Self.describe(persistedMasterArchive)) → \(Self.describe(payloadDesignation)) in \(fileURL.path).")
+        return true
     }
 }
 
