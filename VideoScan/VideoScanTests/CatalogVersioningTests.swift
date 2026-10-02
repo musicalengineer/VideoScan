@@ -237,10 +237,20 @@ struct CatalogUnknownKeyPreservationTests {
         var top = try jsonObject(Data(contentsOf: catalogURL(dir)))
         #expect(same(top["futureScalar"], 42))
 
-        store.saveAsync(records: records)
+        // ASYNC-specific (codex cycle #28): an edit only saveAsync can have
+        // written, and the generation must advance — otherwise this would
+        // pass against the acknowledged save above even with saveAsync gone.
+        let target = try #require(records.first { $0.id.uuidString == fixedID1 })
+        target.userNotes = "written by saveAsync only"
         let g = store.currentGeneration
-        for _ in 0..<200 where store.currentGeneration == g { try await Task.sleep(nanoseconds: 10_000_000) }
+        store.saveAsync(records: records)
+        for _ in 0..<300 where store.currentGeneration == g { try await Task.sleep(nanoseconds: 10_000_000) }
+        #expect(store.currentGeneration > g, "saveAsync never completed")
         top = try jsonObject(Data(contentsOf: catalogURL(dir)))
+        #expect(top["generation"] as? Int == store.currentGeneration)
+        let asyncRec = try #require((top["records"] as? [[String: Any]])?.first { $0["id"] as? String == fixedID1 })
+        #expect(asyncRec["userNotes"] as? String == "written by saveAsync only", "the async write did not land")
+        #expect(same(asyncRec["futureRecordField"], expectedRecordUnknowns["futureRecordField"]))
         #expect(same(top["futureTopLevel"], expectedTopUnknowns["futureTopLevel"]))
 
         let snap = dir.appendingPathComponent("catalog.pre-test.json").path
@@ -767,5 +777,390 @@ struct CatalogUnknownKeyScaleTests {
         #expect(loaded.allSatisfy { $0.unknownFields.count == 2 }, "every record kept its unknown keys")
         #expect(loaded.last?.unknownFields["futureScore"] == .int(Int64(n - 1)))
         print("GH #167 scale: save \(String(format: "%.2f", save)) s, load \(String(format: "%.2f", load)) s for \(n) records with unknown keys")
+    }
+}
+
+// MARK: - 6. Codex review 2026-10-02 (cycle #28) — one red test per finding
+//
+// docs/reviews/codex/codex-review-catalog-versioning-167-2026-10-02.md.
+// Each test failed on d4a678f6 before its fix landed.
+
+/// A v(current+1) catalog with the given generation and no records — the
+/// bytes a newer build writes over ours mid-session.
+private func newerBytes(generation: Int) -> Data {
+    Data(#"{"version":\#(CatalogSnapshot.currentVersion + 1),"generation":\#(generation),"records":[]}"#.utf8)
+}
+
+@MainActor
+private func waitUntil(_ seconds: Double, _ done: @MainActor () -> Bool) async {
+    let deadline = Date().addingTimeInterval(seconds)
+    while !done() && Date() < deadline { try? await Task.sleep(nanoseconds: 10_000_000) }
+}
+
+@Suite("GH #167 codex #1 — a queued save re-checks the newer-catalog latch before it writes", .serialized)
+@MainActor
+struct CatalogQueuedWriteLatchTests {
+
+    @Test("saveAsync queued, then a newer build replaces catalog.json and the latch fires: the queued write refuses")
+    func queuedAsyncSaveRefusesAfterLatch() async throws {
+        let dir = scratch("q_async")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let g = store.currentGeneration
+
+        store.testWriteDelay = 0.3
+        store.saveAsync(records: [VideoRecord()])      // passes the gate on main, sleeps on the queue
+        try newerBytes(generation: g).write(to: catalogURL(dir), options: .atomic)
+        store.noteNewerCatalogOnDisk(version: CatalogSnapshot.currentVersion + 1)
+        let newer = try Data(contentsOf: catalogURL(dir))
+
+        try await Task.sleep(nanoseconds: 900_000_000)
+        #expect(try Data(contentsOf: catalogURL(dir)) == newer, "the queued write overwrote a newer catalog")
+        #expect(store.currentGeneration == g, "a refused write must not advance the generation")
+    }
+
+    @Test("saveAsync queued, then a newer build replaces catalog.json (latch NOT yet set): the queued write discovers it and refuses")
+    func queuedAsyncSaveDiscoversNewerOnDisk() async throws {
+        let dir = scratch("q_disk")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let g = store.currentGeneration
+
+        store.testWriteDelay = 0.3
+        store.saveAsync(records: [VideoRecord()])
+        try newerBytes(generation: g).write(to: catalogURL(dir), options: .atomic)
+        let newer = try Data(contentsOf: catalogURL(dir))
+
+        await waitUntil(3) { store.newerCatalogVersion != nil }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(try Data(contentsOf: catalogURL(dir)) == newer, "the queued write overwrote a newer catalog")
+        #expect(store.newerCatalogVersion == CatalogSnapshot.currentVersion + 1,
+                "the write queue's discovery must latch the store")
+        #expect(store.lastWriteError?.kind == "writesDisabled")
+    }
+
+    @Test("latch set while the write is queued (file untouched): the queued write still refuses")
+    func queuedAsyncSaveHonoursLatchAlone() async throws {
+        let dir = scratch("q_latch")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let before = try Data(contentsOf: catalogURL(dir))
+
+        store.testWriteDelay = 0.3
+        store.saveAsync(records: [VideoRecord()])
+        store.noteNewerCatalogOnDisk(version: CatalogSnapshot.currentVersion + 1)
+
+        try await Task.sleep(nanoseconds: 900_000_000)
+        #expect(try Data(contentsOf: catalogURL(dir)) == before, "a write queued before the latch landed after it")
+    }
+
+    @Test("saveAcknowledged and saveNow queued behind a slow write: a newer catalog that lands meanwhile is never overwritten")
+    func acknowledgedAndTerminalSavesRecheck() async throws {
+        let dir = scratch("q_ack")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let g = store.currentGeneration
+        let url = catalogURL(dir)
+        let bytes = newerBytes(generation: g)
+
+        // Occupy the serial write queue for 0.4 s; the newer build's file
+        // lands at 0.15 s, AFTER both saves below passed their main-actor
+        // gate and BEFORE either reached the queue.
+        store.testWriteDelay = 0.4
+        store.saveAsync(records: [VideoRecord()])
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.15) {
+            try? bytes.write(to: url, options: .atomic)
+        }
+        async let ack = store.saveAcknowledged(records: [VideoRecord()])
+        #expect(await ack == false, "an acknowledged save reported durable over a newer catalog")
+        #expect(try Data(contentsOf: url) == bytes)
+
+        // Terminal (quit-time) save: the latch is now set, so the gate on
+        // main refuses outright.
+        #expect(store.saveNow(records: [VideoRecord()]) == false)
+        #expect(try Data(contentsOf: url) == bytes)
+    }
+}
+
+@Suite("GH #167 codex #2 — the version probe reads only the TOP-LEVEL version", .serialized)
+@MainActor
+struct CatalogVersionProbeDepthTests {
+
+    /// A record field named "version" BEFORE the top-level one (codex's
+    /// reproduction — valid JSON any other writer may produce).
+    static let nestedDecoy = #"{"records":[{"id":"\#(fixedID1)","version":1}],"version":\#(CatalogSnapshot.currentVersion + 1),"generation":0}"#
+
+    @Test("head window: a record's \"version\" is not the catalog's")
+    func headProbeIgnoresNestedVersion() throws {
+        let dir = scratch("probe_head")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(Self.nestedDecoy.utf8).write(to: catalogURL(dir))
+        let probe = try #require(CatalogSnapshot.headerProbe(at: catalogURL(dir)))
+        #expect(probe.version == CatalogSnapshot.currentVersion + 1)
+    }
+
+    @Test("saveNow without a load refuses a newer catalog whose first \"version\" is a record's")
+    func saveWithoutLoadRefusesDecoy() throws {
+        let dir = scratch("probe_save")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data(Self.nestedDecoy.utf8).write(to: catalogURL(dir))
+        let before = everyFile(dir)
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []) == false)
+        #expect(everyFile(dir) == before)
+        #expect(store.newerCatalogVersion == CatalogSnapshot.currentVersion + 1)
+    }
+
+    @Test("tail window: the LAST \"version\" in the tail is a record's, the top-level one is mid-file")
+    func tailProbeIgnoresNestedVersion() throws {
+        let dir = scratch("probe_tail")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pad = String(repeating: "p", count: 6000)
+        let json = #"{"padA":"\#(pad)","version":\#(CatalogSnapshot.currentVersion + 1),"generation":4,"padB":"\#(pad)","records":[{"id":"\#(fixedID1)","version":1}]}"#
+        try Data(json.utf8).write(to: catalogURL(dir))
+        let before = everyFile(dir)
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []) == false, "a nested tail \"version\" read as the catalog's lets v7 overwrite v8")
+        #expect(everyFile(dir) == before)
+    }
+
+    @Test("a top-level version more than 4 KB from both ends is still found; load writes no sidecar before the decode decides")
+    func midFileVersionLoadWritesNothing() throws {
+        let dir = scratch("probe_mid")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pad = String(repeating: "p", count: 6000)
+        let future = CatalogSnapshot.currentVersion + 1
+        let json = #"{"padA":"\#(pad)","version":\#(future),"generation":3,"padB":"\#(pad)","records":[]}"#
+        try Data(json.utf8).write(to: catalogURL(dir))
+        #expect(CatalogSnapshot.headerProbe(at: catalogURL(dir))?.version == future)
+        let before = everyFile(dir)
+        let store = CatalogStore(directory: dir)
+        _ = store.load()
+        #expect(store.newerCatalogVersion == future)
+        #expect(everyFile(dir) == before,
+                "load wrote beside a newer catalog: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted())")
+    }
+
+    @Test("strings are opaque to the probe: an escaped \"version\" inside a value is not a key")
+    func probeIgnoresVersionInsideStrings() throws {
+        let dir = scratch("probe_str")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let json = #"{"savedFromHost":"x\",\"version\":1,\"y","version":\#(CatalogSnapshot.currentVersion + 1),"generation":2,"records":[]}"#
+        try Data(json.utf8).write(to: catalogURL(dir))
+        #expect(CatalogSnapshot.headerProbe(at: catalogURL(dir))?.version == CatalogSnapshot.currentVersion + 1)
+        #expect(CatalogSnapshot.headerProbe(at: catalogURL(dir))?.generation == 2)
+    }
+
+    @Test("our own encoder's header still probes at once, and a v0 file (no version key) still reads as old")
+    func probeKeepsOrdinaryLayouts() throws {
+        let dir = scratch("probe_ord")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: [VideoRecord()]))
+        let p = try #require(CatalogSnapshot.headerProbe(at: catalogURL(dir)))
+        #expect(p.version == CatalogSnapshot.currentVersion && p.generation == store.currentGeneration)
+        try Data(#"{"records":[{"id":"\#(fixedID1)","version":99}]}"#.utf8).write(to: catalogURL(dir))
+        #expect((CatalogSnapshot.headerProbe(at: catalogURL(dir))?.version ?? 0) <= CatalogSnapshot.currentVersion,
+                "a v0 file's record \"version\" must not make it look newer either")
+    }
+}
+
+@Suite("GH #167 codex #3 — rescan carries the LIVE unknown keys, not the scan-start copy", .serialized)
+@MainActor
+struct RescanUnknownFieldsLiveRefreshTests {
+
+    @Test("live reload changes a key and adds one during the scan: the fresh record gets the live values")
+    func liveReloadDuringRescanWins() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/TestVol167")
+        let old = VideoRecord(id: UUID(uuidString: fixedID1)!)
+        old.fullPath = "/Volumes/TestVol167/a.mov"
+        old.unknownFields = ["future": .string("old")]
+        model.records = [old]
+        model.scanTargets = [target]
+        model.snapshotPreservedFieldsForRescan(of: target)
+
+        // Live reload while the scan walks: the external writer changed
+        // `future` and added `futureAdded`.
+        let disk = VideoRecord(id: old.id)
+        disk.fullPath = old.fullPath
+        disk.unknownFields = ["future": .string("new"), "futureAdded": .bool(true)]
+        _ = model.mergeDossierFields(from: [disk])
+        #expect(old.unknownFields["future"] == .string("new"))
+
+        let fresh = VideoRecord()
+        fresh.fullPath = old.fullPath
+        model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        #expect(fresh.unknownFields == ["future": .string("new"), "futureAdded": .bool(true)],
+                "scan-start snapshot overwrote live-reloaded unknown keys: \(fresh.unknownFields)")
+    }
+
+    @Test("a record that gains its FIRST unknown key during the scan keeps it")
+    func firstUnknownKeyDuringRescanKept() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/TestVol167")
+        let old = VideoRecord(id: UUID(uuidString: fixedID2)!)
+        old.fullPath = "/Volumes/TestVol167/plain.mov"
+        model.records = [old]
+        model.scanTargets = [target]
+        model.snapshotPreservedFieldsForRescan(of: target)   // nothing worth restoring yet
+
+        let disk = VideoRecord(id: old.id)
+        disk.fullPath = old.fullPath
+        disk.unknownFields = ["futureFirst": .int(1)]
+        _ = model.mergeDossierFields(from: [disk])
+
+        let fresh = VideoRecord()
+        fresh.fullPath = old.fullPath
+        model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        #expect(fresh.unknownFields == ["futureFirst": .int(1)])
+    }
+
+    @Test("an old instance already gone keeps the scan-start copy (fallback unchanged)")
+    func goneOldInstanceKeepsSnapshot() {
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/TestVol167")
+        let old = VideoRecord()
+        old.fullPath = "/Volumes/TestVol167/b.mov"
+        old.unknownFields = ["future": .string("kept")]
+        model.records = [old]
+        model.snapshotPreservedFieldsForRescan(of: target)
+        model.records.removeAll()
+        let fresh = VideoRecord()
+        fresh.fullPath = old.fullPath
+        model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        #expect(fresh.unknownFields == ["future": .string("kept")])
+    }
+}
+
+@Suite("GH #167 codex #4 — unknown numbers keep their exact value through a catalog save", .serialized)
+@MainActor
+struct CatalogUnknownNumberExactnessTests {
+
+    @Test("UInt64.max, < Int64.min, 35-digit decimal, exponents — top level, per record and nested — survive load → save")
+    func exactNumbersSurviveCatalogSave() throws {
+        let dir = scratch("numbers")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let nums = #"{"u":18446744073709551615,"neg":-9223372036854775809,"big":-99999999999999999999999,"dec":3.14159265358979323846264338327950288,"tiny":5e-324,"huge":1.5e300,"mixed":12345678901234567890.123456789}"#
+        let json = #"{"version":\#(CatalogSnapshot.currentVersion),"generation":1,"futureNums":\#(nums),"records":[{"id":"\#(fixedID1)","futureNums":\#(nums),"futureList":[\#(nums)]}]}"#
+        try Data(json.utf8).write(to: catalogURL(dir))
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: store.load()))
+        let text = String(decoding: try Data(contentsOf: catalogURL(dir)), as: UTF8.self)
+        for literal in ["18446744073709551615", "-9223372036854775809", "-99999999999999999999999",
+                        "3.14159265358979323846264338327950288", "12345678901234567890.123456789"] {
+            // Three copies: top level, record, nested inside an array.
+            #expect(text.components(separatedBy: literal).count - 1 == 3, "\(literal) not preserved exactly: \(text)")
+        }
+        let top = try jsonObject(Data(text.utf8))
+        let n = try #require(top["futureNums"] as? [String: Any])
+        #expect((n["tiny"] as? Double) == 5e-324)
+        #expect((n["huge"] as? Double) == 1.5e300)
+    }
+}
+
+@Suite("GH #167 codex #5 — snapshots and notes repair discover a newer primary before touching siblings", .serialized)
+@MainActor
+struct CatalogSiblingWritersDiscoverNewerTests {
+
+    /// Healthy v7 catalog saved, then a newer build replaces it — nothing
+    /// in this session has noticed yet.
+    private func replacedByNewer(_ tag: String) throws -> (URL, CatalogStore) {
+        let dir = scratch(tag)
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: [VideoRecord()]))
+        try newerBytes(generation: store.currentGeneration).write(to: catalogURL(dir), options: .atomic)
+        #expect(store.newerCatalogVersion == nil, "precondition: not yet discovered")
+        return (dir, store)
+    }
+
+    @Test("writeSnapshot refuses and latches; no catalog.pre-* appears")
+    func writeSnapshotDiscoversNewer() throws {
+        let (dir, store) = try replacedByNewer("sib_snap")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let before = everyFile(dir)
+        #expect(store.writeSnapshot(records: [VideoRecord()],
+                                    toPath: dir.appendingPathComponent("catalog.pre-x.json").path) == false)
+        #expect(everyFile(dir) == before)
+        #expect(store.newerCatalogVersion == CatalogSnapshot.currentVersion + 1)
+    }
+
+    @Test("writeSnapshotAsync refuses and latches; no catalog.pre-* appears")
+    func writeSnapshotAsyncDiscoversNewer() async throws {
+        let (dir, store) = try replacedByNewer("sib_snap_async")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let before = everyFile(dir)
+        #expect(await store.writeSnapshotAsync(records: [VideoRecord()],
+                                               toPath: dir.appendingPathComponent("catalog.pre-y.json").path) == false)
+        #expect(everyFile(dir) == before)
+        #expect(store.newerCatalogVersion == CatalogSnapshot.currentVersion + 1)
+    }
+
+    @Test("notes repair on an empty catalog (clean-plan branch) writes no marker beside a newer primary")
+    func notesRepairCleanPlanDiscoversNewer() throws {
+        let (dir, store) = try replacedByNewer("sib_notes")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let m = VideoScanModel()
+        m.catalogStore = store
+        m.records = []
+        let before = everyFile(dir)
+        #expect(m.repairMachineTextInUserNotes() == nil)
+        #expect(!FileManager.default.fileExists(atPath: m.notesRepairMarkerPath), "notes-repair.v1.done written beside a newer catalog")
+        #expect(everyFile(dir) == before)
+        #expect(m.isReadOnly, "the discovery reaches the model at once")
+    }
+
+    @Test("a healthy primary still gets its snapshot and its notes-repair marker")
+    func healthyPrimaryUnaffected() async throws {
+        let dir = scratch("sib_ok")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: [VideoRecord()]))
+        #expect(store.writeSnapshot(records: [VideoRecord()], toPath: dir.appendingPathComponent("catalog.pre-a.json").path))
+        #expect(await store.writeSnapshotAsync(records: [VideoRecord()], toPath: dir.appendingPathComponent("catalog.pre-b.json").path))
+        let m = VideoScanModel()
+        m.catalogStore = store
+        m.records = []
+        #expect(m.repairMachineTextInUserNotes() != nil)
+        #expect(FileManager.default.fileExists(atPath: m.notesRepairMarkerPath))
+    }
+}
+
+@Suite("GH #167 — live reload while a newer catalog is open: READS and merges in memory, WRITES nothing", .serialized)
+@MainActor
+struct CatalogReadOnlyLiveReloadTickTests {
+
+    @Test("the tick shows the newer build's fields; catalog.generation.max and every other file stay byte-identical")
+    func readOnlyTickReadsButNeverWrites() async throws {
+        let dir = scratch("ro_tick")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let future = CatalogSnapshot.currentVersion + 1
+        try Data(futureCatalogJSON(version: future, generation: 5).utf8).write(to: catalogURL(dir))
+        // An existing high-water mark BELOW what the newer build will stamp:
+        // adopting the on-disk generation would advance (rewrite) it.
+        try Data("5\n".utf8).write(to: dir.appendingPathComponent(CatalogGenerationSidecar.fileName))
+        let store = CatalogStore(directory: dir)
+        let m = VideoScanModel()
+        m.catalogStore = store
+        m.records = store.load()
+        #expect(m.isReadOnly)
+
+        let next = futureCatalogJSON(version: future, generation: 9)
+            .replacingOccurrences(of: #""filename":"plain.mov""#,
+                                  with: #""filename":"plain.mov","audioTranscript":"read while paused","dossierProcessedAt":"2026-10-01T13:00:00Z""#)
+        try Data(next.utf8).write(to: catalogURL(dir))
+        let before = everyFile(dir)
+        m.lastLiveReloadMtime = .distantPast
+        await m.pollAndMergeDossierFromDisk()
+
+        #expect(m.records.first { $0.id.uuidString == fixedID2 }?.audioTranscript == "read while paused",
+                "reading is allowed in read-only — the tick merges into memory")
+        #expect(everyFile(dir) == before, "the read-only tick wrote: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted()) / bytes differ")
+        #expect(CatalogGenerationSidecar.read(besideCatalogAt: catalogURL(dir)) == 5)
+        #expect(store.currentGeneration == 0, "no generation adopted while paused")
     }
 }
