@@ -175,9 +175,9 @@ class TestParsersAndSeverity:
         groups = nf.group_findings(fs)
         sev = {(g.file.rsplit("/", 1)[-1], g.rule): g.severity for g in groups.values()}
         assert sev[("ArchiveAngelJob.swift", "concurrency")] == "high"          # "data race"
-        assert sev[("ContentView.swift", "concurrency")] == "medium"           # actor isolation
+        assert sev[("ContentView.swift", "concurrency")] == "low"              # isolation, no race
         assert sev[("BundleModels.swift", "upcoming-feature-or-other")] == "low"
-        assert sev[("Globals.swift", "concurrency")] == "medium"
+        assert sev[("Globals.swift", "concurrency")] == "low"
         # Type-check timing lines are owned by typecheck_timing_ratchet.py.
         assert not any("type-check" in f.message for f in fs)
         # A memory-safety line belongs to the memory-safety tool, never here.
@@ -340,9 +340,9 @@ class TestWontfix:
 
 
 class TestCapAndDigest:
-    def _many(self, n_high, n_low):
+    def _many(self, n_high, n_medium):
         return ([F(file=f"h{i}.swift", sev="high") for i in range(n_high)]
-                + [F(tool="periphery", file=f"l{i}.swift", sev="low") for i in range(n_low)])
+                + [F(tool="ubsan", file=f"m{i}.c", sev="medium") for i in range(n_medium)])
 
     def test_cap_ten_high_first_rest_in_one_digest(self):
         gh = FakeGh()
@@ -374,8 +374,8 @@ class TestCapAndDigest:
 
     def test_digest_body_fits_github_limit_at_scale(self):
         gh = FakeGh()
-        fs = [F(tool="periphery", file=f"VideoScan/VideoScan/Deep/Path/File{i}.swift",
-                msg="Assign-only property 'p" + "x" * 80 + f"{i}' is assigned, but never used", sev="low")
+        fs = [F(tool="ubsan", file=f"VideoScan/VideoScan/Deep/Path/File{i}.c",
+                msg="load of misaligned address for type 'p" + "x" * 80 + f"{i}'", sev="medium")
               for i in range(3000)]
         night(gh, fs, "2026-10-02")
         (dg,) = gh.digest()
@@ -383,10 +383,89 @@ class TestCapAndDigest:
         assert len(nf._digest_fps(dg)) == 2990      # every overflow fp is remembered
 
 
+def LOW(i, tool="periphery", rule="Unused function '…'"):
+    return F(tool=tool, rule=rule, file=f"VideoScan/VideoScan/F{i}.swift", line=i,
+             msg=f"Unused function 'f{i}()'", sev="low")
+
+
+class TestLowDigests:
+    """Manager ruling 2026-10-01: low findings never get individual issues,
+    only ONE rolling digest per tool, edited in place each night."""
+
+    def low_digest(self, gh, tool):
+        found = [i for i in gh.digest() if f"nightly-low-digest" in i.body and f'"tool": "{tool}"' in i.body]
+        assert len(found) == 1, found
+        return found[0]
+
+    def test_lows_get_no_individual_issue_one_digest_per_tool(self):
+        gh = FakeGh()
+        fs = [LOW(i) for i in range(30)] + [LOW(i, tool="memory-safety", rule="memory-safety")
+                                           for i in range(5)]
+        p = night(gh, fs, "2026-10-02")
+        assert gh.finding_issues() == [] and p.opened == []
+        per = self.low_digest(gh, "periphery")
+        assert "30 low-severity findings" in per.body and "First digest" in per.body
+        assert per.body.count("| low |") == 20                     # top 20 new items
+        assert {"nightly-finding", "nightly-digest", "periphery"} <= set(per.labels)
+        assert self.low_digest(gh, "memory-safety").is_open
+        assert p.low_digests["periphery"]["new"] == 30
+
+    def test_digest_is_edited_in_place_with_deltas(self):
+        gh = FakeGh()
+        night(gh, [LOW(i) for i in range(10)], "2026-10-02")
+        num = self.low_digest(gh, "periphery").number
+        p = night(gh, [LOW(i) for i in range(1, 12)], "2026-10-03")   # -1 gone (0), +2 new (10, 11)
+        d = self.low_digest(gh, "periphery")
+        assert d.number == num and len(gh.digest()) == 1           # same issue, no new one
+        assert "**+2 new, −1 gone**" in d.body and "Since 2026-10-02 (10 findings)" in d.body
+        assert "F10.swift" in d.body and "F11.swift" in d.body
+        assert p.low_digests["periphery"] == {**p.low_digests["periphery"], "new": 2, "gone": 1,
+                                              "count": 11, "action": "edit"}
+
+    def test_incomplete_tool_leaves_digest_alone(self):
+        gh = FakeGh()
+        night(gh, [LOW(i) for i in range(10)], "2026-10-02")
+        before = self.low_digest(gh, "periphery").body
+        incomplete = {t: True for t in nf.TOOLS} | {"periphery": False}
+        p = night(gh, [LOW(1)], "2026-10-03", complete=incomplete)
+        assert p.low_held == ["periphery"]
+        assert self.low_digest(gh, "periphery").body == before
+        assert gh.calls == []
+
+    def test_digest_closes_when_tool_reports_no_lows(self):
+        gh = FakeGh()
+        night(gh, [LOW(1)], "2026-10-02")
+        night(gh, [], "2026-10-03")
+        assert not self.low_digest(gh, "periphery").is_open
+        night(gh, [LOW(2)], "2026-10-04")                          # comes back -> reopened
+        d = self.low_digest(gh, "periphery")
+        assert d.is_open and len(gh.digest()) == 1
+
+    def test_wontfix_digest_is_silenced(self):
+        gh = FakeGh()
+        night(gh, [LOW(1)], "2026-10-02")
+        self.low_digest(gh, "periphery").labels.append("wontfix")
+        night(gh, [LOW(1), LOW(2)], "2026-10-03")
+        assert gh.calls == []
+
+    def test_low_digest_fits_github_limit_at_scale(self):
+        gh = FakeGh()
+        fs = [LOW(i, rule=f"Unused function '{'x' * 90}{i % 40}'") for i in range(3000)]
+        night(gh, fs, "2026-10-02")
+        d = self.low_digest(gh, "periphery")
+        assert len(d.body) < nf.GITHUB_BODY_LIMIT
+
+    def test_lows_do_not_use_the_cap(self):
+        gh = FakeGh()
+        fs = [LOW(i) for i in range(50)] + [F(file=f"m{i}.swift", sev="medium") for i in range(4)]
+        p = night(gh, fs, "2026-10-02")
+        assert len(p.opened) == 4 and p.overflow == []
+
+
 class TestScale:
     def test_five_thousand_findings_plan_within_budget(self):
-        fs = [F(tool="periphery", file=f"f{i % 900}.swift", line=i, msg=f"Unused function 'f{i}'",
-                sev="low") for i in range(5000)]
+        fs = [F(tool="ubsan", file=f"f{i % 900}.c", line=i, msg=f"runtime error kind {i}",
+                sev="medium") for i in range(5000)]
         t0 = time.monotonic()
         groups = nf.group_findings(fs)
         p = nf.plan(groups, [], {t: True for t in nf.TOOLS}, "2026-10-02", "", 10)
@@ -440,9 +519,14 @@ class TestEndToEnd:
                        "asan": 1, "ubsan": 2, "periphery": 3}
         assert s["fingerprints"] == 17
         # high: codeql cleartext, strict data race, 2x tsan, asan
-        assert s["by_severity"]["high"] == 5 and len(s["new_high"]) == 5
-        assert s["opened_or_reopened"] == 10 and s["overflow"] == 7
-        assert all(it["issue"] for it in s["new_high"])            # highs go first
+        # medium: codeql warning, 2x ubsan
+        # low: codeql note, 3x strict non-race, 2x memory-safety, 3x periphery
+        assert s["by_severity"] == {"high": 5, "medium": 3, "low": 9}
+        assert len(s["new_high"]) == 5
+        assert s["opened_or_reopened"] == 8 and s["overflow"] == 0
+        assert all(it["issue"] for it in s["new_high"])
+        assert sorted(s["low_digests"]) == ["codeql", "memory-safety", "periphery", "strict-concurrency"]
+        assert len([i for i in gh.issues.values() if "nightly-digest" not in i.labels]) == 8
         assert "nightly-finding" in gh.labels and "asan" in gh.labels
 
     def test_failed_job_or_status_marks_tool_incomplete(self, tmp_path):
@@ -458,12 +542,24 @@ class TestEndToEnd:
         art = make_artifacts(tmp_path)
         gh = FakeGh()
         out = tmp_path / "s.json"
+        plan_md = tmp_path / "plan.md"
         rc = nf.run(["--artifacts", str(art), "--repo", "o/r", "--today", "2026-10-02",
-                     "--summary-out", str(out), "--dry-run"], gh_factory=lambda repo: gh)
+                     "--summary-out", str(out), "--plan-out", str(plan_md), "--dry-run"],
+                    gh_factory=lambda repo: gh)
         assert rc == 0 and gh.issues == {}
         assert [c[0] for c in gh.calls] == ["list_issues"]
         s = json.loads(out.read_text())
-        assert s["dry_run"] is True and s["opened_or_reopened"] == 10
+        assert s["dry_run"] is True and s["opened_or_reopened"] == 8
+        # The planned list is recorded in full, digest bodies included, so the
+        # morning brief can show exactly what would be filed.
+        pr = s["plan"]
+        assert len(pr["would_open"]) == 8
+        assert {o["severity"] for o in pr["would_open"]} == {"high", "medium"}
+        assert sorted(d["tool"] for d in pr["digests"]) == [
+            "codeql", "memory-safety", "periphery", "strict-concurrency"]
+        assert all("nightly-low-digest" in d["body"] for d in pr["digests"])
+        text = plan_md.read_text()
+        assert "## Would open (8)" in text and "nightly-low-digest" in text
 
     def test_gh_failure_is_a_pipeline_failure_but_summary_still_written(self, tmp_path):
         art = make_artifacts(tmp_path)
@@ -522,11 +618,24 @@ class TestMorningAlert:
         lines = alert.alert_lines(self._s(new_high=[{"issue": 12, "title": "T"}]), self.NOW)
         assert lines[0].startswith("🔴 1 NEW high-severity") and "#12 T" in lines[1]
 
-    def test_quiet_when_nothing_new_dry_run_or_stale(self):
+    def test_quiet_when_nothing_new_or_stale(self):
         assert alert.alert_lines(self._s(), self.NOW) == []
-        assert alert.alert_lines(self._s(dry_run=True, new_high=[{"issue": 1}]), self.NOW) == []
         stale = self._s(date="2026-09-28", new_high=[{"issue": 1, "title": "x"}])
         assert alert.alert_lines(stale, self.NOW) == []
+
+    def test_dry_run_shows_what_would_be_filed(self):
+        s = self._s(dry_run=True, new_high=[{"issue": 900001, "title": "Race in X"}],
+                    overflow=0,
+                    plan={"would_open": [{"severity": "high", "title": "Race in X"}],
+                          "would_reopen": [], "would_comment": [], "would_close": []},
+                    low_digests={"periphery": {"count": 1404, "new": 3, "gone": 1}})
+        lines = alert.alert_lines(s, self.NOW)
+        assert lines[0].startswith("🔴 1 NEW") and "writes are off" in lines[0]
+        assert "(would open) Race in X" in lines[1]
+        yellow = [ln for ln in lines if ln.startswith("🟡")]
+        assert yellow and "would open 1" in yellow[0] and "NIGHTLY_FINDINGS_WRITE" in yellow[0]
+        assert any("periphery 1404 (+3/−1)" in ln for ln in lines)
+        assert "#900001" not in "\n".join(lines)            # fake dry-run numbers never shown
 
     def test_pipeline_errors_are_red_too(self):
         assert alert.alert_lines(self._s(errors=["boom"]), self.NOW)[0].startswith("🔴")

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """Nightly static-analysis findings -> GitHub issues.
 
-Runs as the last job of .github/workflows/nightly-analysis.yml. It reads the
-artifacts every analysis job uploaded, gives each finding a stable
-fingerprint, and keeps exactly one GitHub issue per fingerprint.
+Runs as the last analysis job of .github/workflows/nightly-analysis.yml. It
+reads the artifacts every analysis job uploaded, gives each finding a stable
+fingerprint, and plans (and, when writes are enabled, applies) the issue
+changes.
 
 Inputs: the actions/download-artifact layout, one directory per artifact.
   codeql-results/*.sarif                    CodeQL (security-and-quality)
@@ -18,30 +19,49 @@ Inputs: the actions/download-artifact layout, one directory per artifact.
 Any directory may also hold `nightly-status-<tool>.json` containing
 {"complete": bool}. A tool counts as COMPLETE tonight only when its input
 parsed, its status file (if any) says complete, and its job result (given
-with --job-result) is "success". Findings are still filed from an incomplete
-tool, but an incomplete tool never advances the "gone for N nights" counter.
+with --job-result) is "success". An incomplete tool never advances the
+"gone for N nights" counter and never updates its low-severity digest.
 Without that rule, a CodeQL build that broke would look like every CodeQL
 finding being fixed.
 
 Fingerprint = sha256(tool, rule, repo-relative file, normalised message),
 with no line numbers anywhere, so a finding keeps its issue when code moves.
 
-Issue policy (Rick, 2026-10-01):
+Severity (Manager ruling, 2026-10-01):
+  high    data races (compiler "data race" warnings), TSan, ASan,
+          CodeQL security-tagged or error-level
+  medium  CodeQL warning-level, UBSan
+  low     everything else: Periphery dead code, strict-memory-safety
+          `unsafe` markers, non-race strict-concurrency / upcoming-feature
+          warnings, CodeQL note-level
+
+Issue policy:
+  HIGH / MEDIUM (individual issues)
   * new fingerprint             -> open an issue (labels: nightly-finding,
                                    the tool name, High Priority if high)
   * open, and it changed        -> one comment (count or severity or detail)
   * open, unchanged             -> nothing
   * gone for 3 complete nights  -> close with a comment
   * came back after auto-close  -> reopen with a comment
+  * at most --cap (10) issues opened or reopened per night, highest severity
+    first. The rest wait in ONE overflow digest issue and get their own
+    issues on later nights.
+  LOW (no individual issues)
+  * one rolling digest issue PER TOOL, edited in place each night: count,
+    delta since the last digest (+new / -gone), the top rules, and the top
+    20 new items. Closed when the tool reports no low findings.
+  BOTH
   * `wontfix` label, or closed as "not planned" -> never touched again
-  * at most --cap (10) issues opened or reopened per night. Everything past
-    the cap goes into ONE digest issue, and those findings get their own
-    issues on later nights, high severity first.
+    (a digest marked wontfix silences that tool's digest).
+
+WRITES ARE OFF BY DEFAULT. The workflow passes --dry-run unless the repo
+variable NIGHTLY_FINDINGS_WRITE is 'true' (Rick turns it on after reading a
+dry run). A dry run still reads the real issues and records the full plan
+(would-open / would-comment / would-close / digest bodies) in the summary
+JSON, which the morning brief reads from metrics/nightly_findings_latest.json.
 
 State lives in the issues themselves, in a hidden JSON marker at the top of
-each body, so there is no second database to drift. The digest issue
-carries the fingerprints it lists. That is how "newly seen" stays true for
-a finding that waited in the digest.
+each body, so there is no second database to drift.
 
 A finding never makes this script fail. It exits non-zero only when the
 pipeline is broken: an unreadable input, or a `gh` call that failed.
@@ -50,7 +70,8 @@ Usage (CI):
   python3 tools/nightly_findings_to_issues.py --artifacts artifacts \
       --repo "$GITHUB_REPOSITORY" --run-url "$RUN_URL" \
       --job-result codeql=success --job-result strict-concurrency=failure ... \
-      --summary-out nightly-findings-summary.json [--dry-run]
+      --summary-out nightly-findings-summary.json --plan-out nightly-findings-plan.md \
+      [--dry-run]
 
 Stdlib only, plus the `gh` CLI. Every gh call goes through the GhCli seam,
 so the tests drive a fake and never touch the network.
@@ -79,14 +100,17 @@ HIGH_LABEL = "High Priority"
 WONTFIX_LABEL = "wontfix"
 CLOSE_AFTER_NIGHTS = 3
 DEFAULT_CAP = 10
+LOW_DIGEST_NEW_SHOWN = 20
+INDIVIDUAL_SEVERITIES = ("high", "medium")
 MARKER_RE = re.compile(r"<!--\s*nightly-finding\s+(\{.*?\})\s*-->", re.S)
 DIGEST_MARKER_RE = re.compile(r"<!--\s*nightly-findings-digest\s+(\{.*?\})\s*-->", re.S)
+LOW_DIGEST_MARKER_RE = re.compile(r"<!--\s*nightly-low-digest\s+(\{.*?\})\s*-->", re.S)
 
 TOOLS = ("codeql", "strict-concurrency", "memory-safety", "tsan", "asan", "ubsan", "periphery")
 SEVERITY_RANK = {"high": 0, "medium": 1, "low": 2}
 LABEL_COLORS = {
     BASE_LABEL: ("5319e7", "Filed by the nightly static analysis (tools/nightly_findings_to_issues.py)"),
-    DIGEST_LABEL: ("bfd4f2", "Nightly overflow digest: findings waiting for their own issue"),
+    DIGEST_LABEL: ("bfd4f2", "Nightly digest issue (overflow or low-severity roll-up)"),
     "codeql": ("1d76db", "CodeQL finding"),
     "strict-concurrency": ("0e8a16", "Swift strict concurrency warning"),
     "memory-safety": ("fbca04", "Swift strict memory safety (SE-0458) warning"),
@@ -147,13 +171,7 @@ class Issue:
 
     @property
     def marker(self) -> dict | None:
-        m = MARKER_RE.search(self.body or "")
-        if not m:
-            return None
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            return None
+        return _marker(MARKER_RE, self.body)
 
     @property
     def is_open(self) -> bool:
@@ -164,6 +182,16 @@ class Issue:
         if WONTFIX_LABEL in self.labels:
             return True
         return (not self.is_open) and (self.state_reason or "").upper() == "NOT_PLANNED"
+
+
+def _marker(regex: re.Pattern, body: str | None) -> dict | None:
+    m = regex.search(body or "")
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(1))
+    except json.JSONDecodeError:
+        return None
 
 
 # --------------------------------------------------------------------------
@@ -240,7 +268,8 @@ def group_findings(findings: Iterable[Finding]) -> dict[str, FindingGroup]:
 
 
 def parse_sarif(path: Path) -> list[Finding]:
-    """CodeQL SARIF. High = security-tagged rule or level error."""
+    """CodeQL SARIF. High = security-tagged rule or level error; warning =
+    medium; note/none = low."""
     doc = json.loads(path.read_text(encoding="utf-8"))
     out: list[Finding] = []
     for run in doc.get("runs") or []:
@@ -291,19 +320,19 @@ def classify_compiler_warning(msg: str) -> tuple[str, str] | None:
 
     Type-check timing warnings are skipped. They jitter around the 100 ms
     line from night to night, and scripts/typecheck_timing_ratchet.py already
-    owns them, with identity keys and a gate. As issues they would open and
-    auto-close forever.
+    owns them, with identity keys and a gate.
     """
     if _PERF.search(msg):
         return None
     if _MEMSAFE.search(msg):
-        # Low: SE-0458 flags every unsafe construct not ACKNOWLEDGED with
-        # `unsafe` (1,590 sites on 2026-10-01). That is annotation debt, the
-        # same class as lint, not a demonstrated memory error. ASan is the
-        # tool that finds real ones, and it is high.
+        # SE-0458 flags every unsafe construct not ACKNOWLEDGED with
+        # `unsafe` (1,590 sites on 2026-10-01): annotation debt, not a
+        # demonstrated memory error. ASan finds real ones, and it is high.
         return "memory-safety", "low"
     if _CONCURRENCY.search(msg):
-        return "concurrency", ("high" if "data race" in msg.lower() else "medium")
+        # Only a warning that names a data race is high. The rest are
+        # Swift 6 migration warnings (isolation, Sendable) - low.
+        return "concurrency", ("high" if "data race" in msg.lower() else "low")
     return "upcoming-feature-or-other", "low"
 
 
@@ -574,6 +603,9 @@ class DryRunGh:
 
 MAX_OCCURRENCES_SHOWN = 40
 MAX_DIGEST_ROWS = 250
+DIGEST_FP_CHARS = 8          # 32 bits per fp: ~2,000 entries -> collision odds ~0.05%
+GITHUB_BODY_LIMIT = 65536
+DIGEST_BODY_BUDGET = 60000   # headroom under GitHub's limit
 
 
 def issue_title(g: FindingGroup) -> str:
@@ -623,15 +655,23 @@ def with_state(body: str, state: dict) -> str:
     return render_marker(state) + "\n" + (body or "")
 
 
-DIGEST_FP_CHARS = 8          # 32 bits per fp: ~2,000 entries -> collision odds ~0.05%
-GITHUB_BODY_LIMIT = 65536
-DIGEST_BODY_BUDGET = 60000   # headroom under GitHub's limit
-
-
 def digest_fp_blob(fps: Iterable[str]) -> str:
-    """Compact membership set for the digest marker: sorted 8-hex prefixes,
-    concatenated. 1,700 overflow findings cost ~14 KB, not ~35 KB of JSON."""
+    """Compact membership set for a digest marker: sorted 8-hex prefixes,
+    concatenated. 1,700 findings cost ~14 KB, not ~35 KB of JSON."""
     return "".join(sorted({fp[:DIGEST_FP_CHARS] for fp in fps}))
+
+
+def blob_to_set(blob: str) -> set[str]:
+    k = DIGEST_FP_CHARS
+    return {blob[i:i + k] for i in range(0, len(blob or ""), k)}
+
+
+def _row(g: FindingGroup, with_tool: bool = True) -> str:
+    msg = normalise_detail(g.message).replace("|", "\\|")
+    if len(msg) > 120:
+        msg = msg[:117] + "…"
+    tool = f" {g.tool} |" if with_tool else ""
+    return f"| {g.severity} |{tool} `{g.file}` | {msg} (×{g.count}) |"
 
 
 def render_digest(overflow: list[FindingGroup], today: str, run_url: str, cap: int) -> str:
@@ -644,8 +684,9 @@ def render_digest(overflow: list[FindingGroup], today: str, run_url: str, cap: i
         marker,
         f"## {len(overflow)} nightly findings waiting for their own issue",
         "",
-        f"The nightly opens at most {cap} issues per night, high severity first. These are the rest, "
-        f"as of {today}. They get their own issues on later nights; nothing to do here.",
+        f"The nightly opens at most {cap} issues per night, high severity first. These are the "
+        f"high/medium findings past that cap, as of {today}. They get their own issues on later "
+        "nights; nothing to do here.",
         "",
         "Severity: " + ", ".join(f"{k} {by_sev[k]}" for k in ("high", "medium", "low") if k in by_sev),
         f"Run: {run_url or 'n/a'}",
@@ -656,10 +697,7 @@ def render_digest(overflow: list[FindingGroup], today: str, run_url: str, cap: i
     rows: list[str] = []
     used = sum(len(x) + 1 for x in head) + 300          # reserve for the tail line
     for g in overflow[:MAX_DIGEST_ROWS]:
-        msg = normalise_detail(g.message).replace("|", "\\|")
-        if len(msg) > 120:
-            msg = msg[:117] + "…"
-        row = f"| {g.severity} | {g.tool} | `{g.file}` | {msg} (×{g.count}) |"
+        row = _row(g)
         if used + len(row) + 1 > DIGEST_BODY_BUDGET:
             break
         rows.append(row)
@@ -669,6 +707,60 @@ def render_digest(overflow: list[FindingGroup], today: str, run_url: str, cap: i
         tail = ["", f"… and {len(overflow) - len(rows)} more. The full list is in the "
                     "`nightly-findings-summary` artifact of the run."]
     return "\n".join(head + rows + tail)
+
+
+def low_digest_title(tool: str) -> str:
+    return f"[nightly/{tool}] Low-severity findings (rolling digest)"
+
+
+def render_low_digest(tool: str, lows: list[FindingGroup], prev: dict | None,
+                      today: str, run_url: str) -> tuple[str, dict]:
+    """Body for one tool's rolling low-severity digest, plus its delta stats."""
+    cur_set = {g.fp[:DIGEST_FP_CHARS] for g in lows}
+    prev_set = blob_to_set((prev or {}).get("fp8", ""))
+    first = prev is None
+    new = sorted((g for g in lows if g.fp[:DIGEST_FP_CHARS] not in prev_set),
+                 key=lambda g: (g.rule, g.file, g.fp))
+    gone = len(prev_set - cur_set)
+    occurrences = sum(g.count for g in lows)
+    marker = ("<!-- nightly-low-digest "
+              f"{json.dumps({'v': 1, 'tool': tool, 'date': today, 'count': len(lows), 'fp8': digest_fp_blob(g.fp for g in lows)})} -->")
+    by_rule: dict[str, int] = {}
+    for g in lows:
+        by_rule[g.rule] = by_rule.get(g.rule, 0) + 1
+    if first:
+        delta = "First digest for this tool, so every finding counts as new."
+    else:
+        delta = (f"Since {prev.get('date', '?')} ({prev.get('count', '?')} findings): "
+                 f"**+{len(new)} new, −{gone} gone**.")
+    head = [
+        marker,
+        f"## `{tool}`: {len(lows)} low-severity findings ({occurrences} occurrences), as of {today}",
+        "",
+        delta,
+        "",
+        "Low-severity findings get no individual issues (Manager ruling 2026-10-01). This issue is "
+        "edited in place each night. Run: " + (run_url or "n/a"),
+        "",
+        "### Top rules",
+        "",
+        "| Rule | Findings |",
+        "|---|---:|",
+    ]
+    head += [f"| `{r.replace('|', '/')[:100]}` | {n} |"
+             for r, n in sorted(by_rule.items(), key=lambda kv: (-kv[1], kv[0]))[:15]]
+    head += ["", f"### New since the last digest (top {LOW_DIGEST_NEW_SHOWN} of {len(new)})", ""]
+    rows = (["| Severity | File | Finding |", "|---|---|---|"]
+            + [_row(g, with_tool=False) for g in new[:LOW_DIGEST_NEW_SHOWN]]) if new else ["(none)"]
+    tail = ["", "---",
+            "_Managed by `tools/nightly_findings_to_issues.py`. The full list is in the "
+            "`nightly-findings-summary` artifact. Add the `wontfix` label to silence this digest._"]
+    body = "\n".join(head + rows + tail)
+    if len(body) > DIGEST_BODY_BUDGET:          # very long rule names; keep under GitHub's limit
+        body = body[:DIGEST_BODY_BUDGET] + "\n… (truncated)"
+    stats = {"tool": tool, "count": len(lows), "new": len(new), "gone": gone, "first": first,
+             "new_items": [g.fp for g in new[:LOW_DIGEST_NEW_SHOWN]]}
+    return body, stats
 
 
 # --------------------------------------------------------------------------
@@ -685,6 +777,7 @@ class Action:
     labels: list[str] = dataclasses.field(default_factory=list)
     comment: str = ""
     fp: str = ""
+    meta: dict = dataclasses.field(default_factory=dict)   # digest kind / tool, severity
 
 
 @dataclasses.dataclass
@@ -698,6 +791,8 @@ class Plan:
     missing_counted: list[str]
     closed: list[str]
     held_incomplete: list[str]     # open issues left alone because their tool was incomplete
+    low_digests: dict[str, dict] = dataclasses.field(default_factory=dict)
+    low_held: list[str] = dataclasses.field(default_factory=list)
 
 
 def labels_for(g: FindingGroup) -> list[str]:
@@ -707,48 +802,50 @@ def labels_for(g: FindingGroup) -> list[str]:
     return labels
 
 
-def _index_issues(issues: list[Issue]) -> tuple[dict[str, Issue], Issue | None]:
+def _index_issues(issues: list[Issue]) -> tuple[dict[str, Issue], Issue | None, dict[str, Issue]]:
     by_fp: dict[str, Issue] = {}
     digest: Issue | None = None
+    low: dict[str, Issue] = {}
+
+    def better(new: Issue, cur: Issue | None) -> bool:
+        # Prefer a wontfix issue (Rick's ruling wins), then an open one, then the oldest.
+        return cur is None or (new.is_wontfix and not cur.is_wontfix) or (
+            new.is_open and not cur.is_open and not cur.is_wontfix)
+
     for iss in sorted(issues, key=lambda i: i.number):
+        lm = _marker(LOW_DIGEST_MARKER_RE, iss.body)
+        if lm and lm.get("tool"):
+            if better(iss, low.get(lm["tool"])):
+                low[lm["tool"]] = iss
+            continue
         if DIGEST_MARKER_RE.search(iss.body or "") or DIGEST_LABEL in iss.labels:
-            if digest is None or (iss.is_open and not digest.is_open):
+            if better(iss, digest):
                 digest = iss
             continue
         mk = iss.marker
         if not mk or "fp" not in mk:
             continue
-        cur = by_fp.get(mk["fp"])
-        # Prefer a wontfix issue (Rick's ruling wins), then an open one, then the oldest.
-        if cur is None or (iss.is_wontfix and not cur.is_wontfix) or (
-                iss.is_open and not cur.is_open and not cur.is_wontfix):
+        if better(iss, by_fp.get(mk["fp"])):
             by_fp[mk["fp"]] = iss
-    return by_fp, digest
+    return by_fp, digest, low
 
 
 def _digest_fps(digest: Issue | None) -> set[str]:
-    """8-hex prefixes of the fingerprints the last digest listed."""
+    """8-hex prefixes of the fingerprints the last overflow digest listed."""
     if not digest:
         return set()
-    m = DIGEST_MARKER_RE.search(digest.body or "")
-    if not m:
-        return set()
-    try:
-        blob = json.loads(m.group(1)).get("fp8") or ""
-    except json.JSONDecodeError:
-        return set()
-    k = DIGEST_FP_CHARS
-    return {blob[i:i + k] for i in range(0, len(blob), k)}
+    return blob_to_set((_marker(DIGEST_MARKER_RE, digest.body) or {}).get("fp8", ""))
 
 
 def plan(groups: dict[str, FindingGroup], issues: list[Issue], complete: dict[str, bool],
          today: str, run_url: str, cap: int = DEFAULT_CAP) -> Plan:
-    by_fp, digest = _index_issues(issues)
+    by_fp, digest, low_issues = _index_issues(issues)
     prior_digest = _digest_fps(digest)
     actions: list[Action] = []
     newly_seen: list[FindingGroup] = []
     opened: list[str] = []
     overflow: list[FindingGroup] = []
+    lows: dict[str, list[FindingGroup]] = {}
     skipped, commented, missing_counted, closed, held = [], [], [], [], []
     budget = cap
 
@@ -760,6 +857,8 @@ def plan(groups: dict[str, FindingGroup], issues: list[Issue], complete: dict[st
             skipped.append(g.fp)
             continue
         if iss is not None and iss.is_open:
+            # An issue already exists (even if the finding is now low):
+            # keep its lifecycle going rather than orphan it.
             st = dict(iss.marker or {})
             changed = st.get("digest") != g.detail_digest
             was_missing = bool(st.get("missing_dates"))
@@ -778,7 +877,8 @@ def plan(groups: dict[str, FindingGroup], issues: list[Issue], complete: dict[st
                 if len(note) == 1:
                     note.append("The detail text changed (see the updated description).")
                 note.append(f"Run: {run_url or 'n/a'}")
-                actions.append(Action("comment", iss.number, comment="\n\n".join(note), fp=g.fp))
+                actions.append(Action("comment", iss.number, comment="\n\n".join(note), fp=g.fp,
+                                      title=iss.title))
                 actions.append(Action("edit", iss.number, body=body, fp=g.fp))
                 if g.severity == "high" and HIGH_LABEL not in iss.labels:
                     actions.append(Action("add_label", iss.number, labels=[HIGH_LABEL], fp=g.fp))
@@ -786,7 +886,10 @@ def plan(groups: dict[str, FindingGroup], issues: list[Issue], complete: dict[st
             else:
                 actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=g.fp))
             continue
-        # No issue yet, or an auto-closed (completed) one: both need the budget.
+        if g.severity not in INDIVIDUAL_SEVERITIES:
+            lows.setdefault(g.tool, []).append(g)
+            continue
+        # High/medium with no issue yet, or an auto-closed one: both need the budget.
         is_new = iss is None and g.fp[:DIGEST_FP_CHARS] not in prior_digest
         if is_new or iss is not None:
             newly_seen.append(g)
@@ -800,17 +903,19 @@ def plan(groups: dict[str, FindingGroup], issues: list[Issue], complete: dict[st
                   "digest": g.detail_digest, "count": g.count, "severity": g.severity,
                   "missing_dates": []}
             actions.append(Action("create", title=issue_title(g), body=render_body(g, st, run_url),
-                                  labels=labels_for(g), fp=g.fp))
+                                  labels=labels_for(g), fp=g.fp, meta={"severity": g.severity,
+                                                                       "tool": g.tool}))
         else:
             st = dict(iss.marker or {})
             st.update({"digest": g.detail_digest, "count": g.count, "severity": g.severity,
                        "missing_dates": []})
-            actions.append(Action("reopen", iss.number,
+            actions.append(Action("reopen", iss.number, title=iss.title, fp=g.fp,
+                                  meta={"severity": g.severity, "tool": g.tool},
                                   comment=f"**Reappeared in the nightly of {today}** after being closed. "
-                                          f"Run: {run_url or 'n/a'}", fp=g.fp))
+                                          f"Run: {run_url or 'n/a'}"))
             actions.append(Action("edit", iss.number, body=render_body(g, st, run_url), fp=g.fp))
 
-    # Open issues whose finding is absent tonight.
+    # Open individual issues whose finding is absent tonight.
     for fp, iss in sorted(by_fp.items(), key=lambda kv: kv[1].number):
         if fp in groups or not iss.is_open or iss.is_wontfix:
             continue
@@ -826,7 +931,7 @@ def plan(groups: dict[str, FindingGroup], issues: list[Issue], complete: dict[st
         st["missing_dates"] = dates
         if len(dates) >= CLOSE_AFTER_NIGHTS:
             actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=fp))
-            actions.append(Action("close", iss.number, fp=fp, comment=(
+            actions.append(Action("close", iss.number, fp=fp, title=iss.title, comment=(
                 f"Not reported by `{tool}` in {CLOSE_AFTER_NIGHTS} consecutive complete nightly runs "
                 f"({', '.join(dates[-CLOSE_AFTER_NIGHTS:])}). Closing as fixed. It will reopen "
                 f"if the finding comes back. Run: {run_url or 'n/a'}")))
@@ -835,21 +940,61 @@ def plan(groups: dict[str, FindingGroup], issues: list[Issue], complete: dict[st
             actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=fp))
             missing_counted.append(fp)
 
-    # The one digest issue.
+    # The one overflow digest (high/medium past the cap).
     if overflow:
         body = render_digest(overflow, today, run_url, cap)
+        meta = {"digest": "overflow", "count": len(overflow)}
         if digest is not None and digest.is_open:
-            actions.append(Action("digest_edit", digest.number, body=body))
+            actions.append(Action("digest_edit", digest.number, body=body, title=digest.title, meta=meta))
         else:
             actions.append(Action("digest_create", title="[nightly] Findings waiting for their own issue",
-                                  body=body, labels=[BASE_LABEL, DIGEST_LABEL]))
+                                  body=body, labels=[BASE_LABEL, DIGEST_LABEL], meta=meta))
     elif digest is not None and digest.is_open:
-        actions.append(Action("digest_close", digest.number,
+        actions.append(Action("digest_close", digest.number, title=digest.title,
+                              meta={"digest": "overflow", "count": 0},
                               comment=f"Nothing is waiting as of {today}: every finding has its own issue "
                                       "or is gone."))
 
+    # One rolling low-severity digest per tool.
+    low_stats: dict[str, dict] = {}
+    low_held: list[str] = []
+    for tool in TOOLS:
+        tool_lows = lows.get(tool, [])
+        existing = low_issues.get(tool)
+        if existing is not None and existing.is_wontfix:
+            continue
+        if not tool_lows and existing is None:
+            continue
+        if not complete.get(tool, False):
+            # Partial counts would publish a fake "-N gone". Leave the digest alone.
+            low_held.append(tool)
+            continue
+        if not tool_lows:
+            if existing.is_open:
+                actions.append(Action("digest_close", existing.number, title=existing.title,
+                                      meta={"digest": "low", "tool": tool, "count": 0},
+                                      comment=f"`{tool}` reported no low-severity findings on {today}."))
+                low_stats[tool] = {"tool": tool, "count": 0, "new": 0,
+                                   "gone": len(blob_to_set((_marker(LOW_DIGEST_MARKER_RE, existing.body) or {}).get("fp8", ""))),
+                                   "first": False, "new_items": [], "action": "close"}
+            continue
+        prev = _marker(LOW_DIGEST_MARKER_RE, existing.body) if existing is not None else None
+        body, stats = render_low_digest(tool, tool_lows, prev, today, run_url)
+        meta = {"digest": "low", "tool": tool, "count": len(tool_lows)}
+        if existing is None:
+            actions.append(Action("digest_create", title=low_digest_title(tool), body=body,
+                                  labels=[BASE_LABEL, DIGEST_LABEL, tool], meta=meta))
+            stats["action"] = "create"
+        else:
+            if not existing.is_open:
+                actions.append(Action("digest_reopen", existing.number, title=existing.title, meta=meta,
+                                      comment=f"`{tool}` reports low-severity findings again ({today})."))
+            actions.append(Action("digest_edit", existing.number, title=existing.title, body=body, meta=meta))
+            stats["action"] = "edit" if existing.is_open else "reopen"
+        low_stats[tool] = stats
+
     return Plan(actions, newly_seen, opened, overflow, skipped, commented,
-                missing_counted, closed, held)
+                missing_counted, closed, held, low_stats, low_held)
 
 
 def ensure_labels(gh, needed: Iterable[str]) -> None:
@@ -870,9 +1015,10 @@ def apply(p: Plan, gh) -> tuple[dict[str, int], list[str]]:
                 n = gh.create_issue(a.title, a.body, a.labels)
                 if a.fp:
                     numbers[a.fp] = n
-            elif a.kind == "reopen":
+            elif a.kind in ("reopen", "digest_reopen"):
                 gh.reopen(a.number, a.comment)
-                numbers[a.fp] = a.number
+                if a.fp:
+                    numbers[a.fp] = a.number
             elif a.kind == "comment":
                 gh.comment(a.number, a.comment)
             elif a.kind in ("edit", "digest_edit"):
@@ -887,8 +1033,33 @@ def apply(p: Plan, gh) -> tuple[dict[str, int], list[str]]:
 
 
 # --------------------------------------------------------------------------
-# Summary
+# Summary and the planned-changes record
 # --------------------------------------------------------------------------
+
+
+def plan_record(p: Plan) -> dict:
+    """Everything the plan would do, readable without the issues: the morning
+    brief shows this while writes are off."""
+    rec = {"would_open": [], "would_reopen": [], "would_comment": [], "would_close": [],
+           "would_label": [], "digests": [], "marker_edits": 0}
+    for a in p.actions:
+        if a.kind == "create":
+            rec["would_open"].append({"title": a.title, "fp": a.fp, "labels": a.labels, **a.meta})
+        elif a.kind == "reopen":
+            rec["would_reopen"].append({"issue": a.number, "title": a.title, "fp": a.fp, **a.meta})
+        elif a.kind == "comment":
+            rec["would_comment"].append({"issue": a.number, "title": a.title, "fp": a.fp,
+                                         "comment": a.comment})
+        elif a.kind == "close":
+            rec["would_close"].append({"issue": a.number, "title": a.title, "fp": a.fp})
+        elif a.kind == "add_label":
+            rec["would_label"].append({"issue": a.number, "labels": a.labels, "fp": a.fp})
+        elif a.kind == "edit":
+            rec["marker_edits"] += 1
+        elif a.kind.startswith("digest_"):
+            rec["digests"].append({"action": a.kind.removeprefix("digest_"), "issue": a.number,
+                                   "title": a.title, **a.meta, "body": a.body or a.comment})
+    return rec
 
 
 def build_summary(runs: dict[str, ToolRun], groups: dict[str, FindingGroup], p: Plan,
@@ -904,7 +1075,7 @@ def build_summary(runs: dict[str, ToolRun], groups: dict[str, FindingGroup], p: 
     for g in groups.values():
         sev_counts[g.severity] += 1
     return {
-        "v": 1,
+        "v": 2,
         "date": today,
         "run_url": run_url,
         "dry_run": dry_run,
@@ -922,18 +1093,25 @@ def build_summary(runs: dict[str, ToolRun], groups: dict[str, FindingGroup], p: 
         "closed": len(p.closed),
         "held_incomplete": len(p.held_incomplete),
         "skipped_wontfix": len(p.skipped_wontfix),
+        "low_digests": p.low_digests,
+        "low_digests_held": p.low_held,
+        "plan": plan_record(p),
         "errors": errors,
     }
 
 
 def summary_markdown(s: dict) -> str:
-    out = ["## Nightly findings → issues" + (" (DRY RUN — nothing written)" if s["dry_run"] else ""), ""]
+    dry = s["dry_run"]
+    out = ["## Nightly findings → issues" + (" (DRY RUN — nothing written)" if dry else ""), ""]
+    if dry:
+        out += ["Writes are off. The repo variable `NIGHTLY_FINDINGS_WRITE` must be `true` "
+                "for the nightly on main to file issues.", ""]
     if s["new_high"]:
         out.append(f"🔴 **{len(s['new_high'])} new high-severity finding(s)**")
         for it in s["new_high"][:20]:
             if not it["issue"]:
-                ref = "(digest)"
-            elif s["dry_run"]:
+                ref = "(overflow digest)"
+            elif dry:
                 ref = "(would open)"
             else:
                 ref = f"#{it['issue']}"
@@ -943,13 +1121,44 @@ def summary_markdown(s: dict) -> str:
     for t, r in s["tools"].items():
         out.append(f"| {t} | {'yes' if r['input'] else 'no'} | {'yes' if r['complete'] else 'no'} "
                    f"| {r['findings']} | {r['fingerprints']} |")
+    pr = s["plan"]
+    verb = "would " if dry else ""
     out += ["", f"Severity: high {s['by_severity']['high']} · medium {s['by_severity']['medium']} · "
                 f"low {s['by_severity']['low']}",
-            f"Opened/reopened {s['opened_or_reopened']} · digest {s['overflow']} · commented {s['commented']} · "
-            f"missing-counted {s['missing_counted']} · closed {s['closed']} · held (tool incomplete) "
-            f"{s['held_incomplete']} · wontfix skipped {s['skipped_wontfix']}"]
+            f"{verb}open {len(pr['would_open'])} · {verb}reopen {len(pr['would_reopen'])} · "
+            f"{verb}comment {len(pr['would_comment'])} · {verb}close {len(pr['would_close'])} · "
+            f"overflow {s['overflow']} · held (tool incomplete) {s['held_incomplete']} · "
+            f"wontfix skipped {s['skipped_wontfix']}"]
+    if s["low_digests"]:
+        out += ["", "| Low digest | Findings | New | Gone | Action |", "|---|---:|---:|---:|---|"]
+        for t, d in s["low_digests"].items():
+            out.append(f"| {t} | {d['count']} | {d['new']} | {d['gone']} | {verb}{d.get('action', '?')} |")
+    if s["low_digests_held"]:
+        out.append(f"Low digests held (tool incomplete): {', '.join(s['low_digests_held'])}")
     if s["errors"]:
         out += ["", f"❌ **{len(s['errors'])} gh error(s)**:"] + [f"- {e}" for e in s["errors"][:20]]
+    return "\n".join(out) + "\n"
+
+
+def plan_markdown(s: dict) -> str:
+    """The full planned list, as an artifact a human can read top to bottom."""
+    pr = s["plan"]
+    out = [f"# Nightly findings plan, {s['date']}" + (" (DRY RUN)" if s["dry_run"] else ""),
+           "", f"Run: {s['run_url'] or 'n/a'}", ""]
+    out += [f"## Would open ({len(pr['would_open'])})", ""]
+    out += [f"- [{o.get('severity')}] {o['title']}" for o in pr["would_open"]] or ["(none)"]
+    out += ["", f"## Would reopen ({len(pr['would_reopen'])})", ""]
+    out += [f"- #{o['issue']} {o['title']}" for o in pr["would_reopen"]] or ["(none)"]
+    out += ["", f"## Would comment ({len(pr['would_comment'])})", ""]
+    out += [f"- #{o['issue']} {o['title']}: {o['comment'].splitlines()[0]}"
+            for o in pr["would_comment"]] or ["(none)"]
+    out += ["", f"## Would close ({len(pr['would_close'])})", ""]
+    out += [f"- #{o['issue']} {o['title']}" for o in pr["would_close"]] or ["(none)"]
+    out += ["", f"## Digest issues ({len(pr['digests'])})", ""]
+    for d in pr["digests"]:
+        name = d.get("tool") or "overflow"
+        ref = f"#{d['issue']}" if d.get("issue") else "(new)"
+        out += [f"### {d['action']} {ref} — {name}", "", d.get("body") or "", ""]
     return "\n".join(out) + "\n"
 
 
@@ -978,6 +1187,7 @@ def run(argv: list[str] | None = None, gh_factory=None) -> int:
     ap.add_argument("--cap", type=int, default=DEFAULT_CAP)
     ap.add_argument("--today", default=_dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%d"))
     ap.add_argument("--summary-out", type=Path, default=Path("nightly-findings-summary.json"))
+    ap.add_argument("--plan-out", type=Path, help="markdown plan (would-open/comment/close + digests)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
@@ -1016,12 +1226,12 @@ def run(argv: list[str] | None = None, gh_factory=None) -> int:
     summary = build_summary(runs, groups, p, numbers, errors, args.today, args.run_url,
                             args.dry_run, args.repo)
     args.summary_out.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    if args.plan_out:
+        args.plan_out.write_text(plan_markdown(summary), encoding="utf-8")
     md = summary_markdown(summary)
     print(md)
     if isinstance(gh, DryRunGh):
         print(f"dry run: {len(gh.writes)} write(s) suppressed")
-        for w in gh.writes[:60]:
-            print("  would", *w[:3])
     step = os.environ.get("GITHUB_STEP_SUMMARY")
     if step:
         with open(step, "a", encoding="utf-8") as fh:

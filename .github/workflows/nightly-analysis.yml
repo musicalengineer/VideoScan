@@ -15,19 +15,24 @@ name: Nightly Static Analysis
 #                         FLOOR: the job fails if CodeQL extracted fewer than
 #                         80% of the app + VideoScanCore Swift sources (#171).
 #   thread-sanitizer    — Disabled (if: false) since 2026-05-12.
-#   sanitizers          — Address Sanitizer and Undefined Behavior Sanitizer
-#                         over the VideoScanTests unit tests (matrix, one leg
-#                         each). Reporting jobs: a sanitizer hit or a failing
-#                         test never fails them; only a broken build, or a
-#                         run in which no test executed, does.
+#   sanitizers          — Address Sanitizer (VideoScanCore `swift test`; app
+#                         unit tests only on manual dispatch with asan_app)
+#                         and Undefined Behavior Sanitizer (app unit tests),
+#                         one matrix leg each. Reporting jobs: a sanitizer hit
+#                         or a failing test never fails them; only a broken
+#                         build, or a run in which no test executed, does.
 #   lint-strict         — SwiftLint --strict + Periphery.
 #   source-ratchets     — Build-free source ratchets (pure Python, ubuntu):
 #                         subprocess-injection + check-then-act on removable
 #                         volumes, both against grandfathered baselines in
 #                         ci/baselines/. Fails only on NEW violations.
-#   findings-to-issues  — (after the above) one GitHub issue per finding
-#                         fingerprint: tools/nightly_findings_to_issues.py.
-#                         Writes ONLY on main; any other ref is a dry run.
+#   findings-to-issues  — (after the above) tools/nightly_findings_to_issues.py:
+#                         one issue per HIGH/MEDIUM finding fingerprint (cap
+#                         10/night), one rolling digest per tool for LOW.
+#                         DRY RUN unless repo variable NIGHTLY_FINDINGS_WRITE
+#                         is 'true' AND the ref is main. The dry run publishes
+#                         the full plan (would-open/comment/close + digest
+#                         bodies) as an artifact and to the morning brief.
 #   aggregate           — (last) Collects every count and appends one row to
 #                         metrics/static_analysis.jsonl on the metrics branch,
 #                         and publishes metrics/nightly_findings_latest.json
@@ -58,6 +63,10 @@ on:
         description: 'Comma list of jobs to run (blank = all): strict-concurrency,codeql,sanitizers,lint-strict,lint-warn,source-ratchets'
         type: string
         default: ''
+      asan_app:
+        description: 'ASan: also run the APP unit tests (VideoScanTests). Off by default — exceeded 200 min on 2026-10-01'
+        type: boolean
+        default: false
 
 permissions:
   contents: write          # needed for the metrics push step
@@ -626,28 +635,33 @@ jobs:
   # -------------------------------------------------------------------
   # Address Sanitizer and Undefined Behavior Sanitizer (added 2026-10-01).
   #
-  # Same shape as the TSan job above, but ENABLED, because the GH runner
-  # now runs the unit suite (ci.yml, ~47 min uninstrumented). One matrix
-  # leg per sanitizer:
+  # Same shape as the TSan job above, but ENABLED. One matrix leg each:
   #
-  #   build-for-testing  with the sanitizer on. A failed build FAILS the
-  #                      job (broken pipeline).
-  #   test-without-building over VideoScanTests (VideoScan-CI plan, UI
-  #                      targets excluded). continue-on-error: failing tests,
-  #                      a sanitizer abort, or the step timeout never fail
-  #                      the job.
-  #   swift test --sanitize=address over VideoScanCore (ASan leg only).
-  #                      The package's ~720 tests (fixity, ledger, GEDCOM …)
-  #                      are not in the app scheme.
-  #   count + summarise  SUMMARY / runtime-error lines, failed tests, suites
-  #                      started. FAILS the job only if no suite started AND
-  #                      no sanitizer report exists, i.e. nothing ran.
+  #   ASan (nightly)  `swift test --sanitize=address` over VideoScanCore:
+  #                   ~720 package tests (fixity, ledger, GEDCOM …), with a
+  #                   45-minute step timeout.
+  #   ASan app tests  ONLY on a manual dispatch with asan_app=true. The full
+  #                   VideoScanTests run under ASan exceeded its 200-minute
+  #                   step timeout on the first try (run 36934781080, 00:03 →
+  #                   03:23Z). The UBSan leg ran the same suite in 41 minutes.
+  #                   Whether that was slowness or a hang is not known yet;
+  #                   try it by hand before putting it back on the schedule
+  #                   (Manager ruling 2026-10-01).
+  #   UBSan           build-for-testing + test-without-building over
+  #                   VideoScanTests (VideoScan-CI plan, UI targets excluded).
+  #
+  # Reporting jobs: failing tests, a sanitizer abort or a step timeout never
+  # fail them (continue-on-error). They fail only for a broken build, or a
+  # run in which nothing executed and nothing was reported.
+  #
+  # A timeout, an ASan abort, or too few suites marks the tool INCOMPLETE in
+  # nightly-status-<tool>.json. The findings job then counts none of that
+  # tool's issues as gone and closes nothing.
   #
   # Scope, stated plainly so a zero is not over-read:
   #   * ASan instruments Swift, C and C++. It stops the process at the first
-  #     error, so a night with one ASan hit has not run the tests after it.
-  #     That night is marked INCOMPLETE, so the findings job does not count
-  #     other ASan issues as fixed.
+  #     error, so a night with an ASan hit has not run the tests after it.
+  #     That night is marked incomplete.
   #   * UBSan in Xcode is a clang feature: it instruments C, C++ and ObjC
   #     (our few .c/.m files and C/C++ packages such as mlx-swift's Cmlx),
   #     NOT Swift. Swift's own overflow and bounds traps already run in
@@ -682,10 +696,18 @@ jobs:
       - name: Select Xcode (26.x required)
         run: scripts/ci_select_xcode.sh
 
-      # Same component download as the other jobs. Unlike them, this build
-      # does NOT exclude *.metal: the tests run the real app host, and
-      # ci.yml's green test build compiles the kernels too.
+      # Several tests spawn real ffmpeg/ffprobe, in the app and in
+      # VideoScanCore (FFmpegPreviewRendererE2ETests), as in ci.yml.
+      - name: Install FFmpeg
+        run: |
+          brew install ffmpeg || true
+          ffmpeg -version | head -1
+
+      # Same component download as the other jobs. Unlike them, the app
+      # build here does NOT exclude *.metal: the tests run the real app host,
+      # and ci.yml's green test build compiles the kernels too.
       - name: Download Metal Toolchain (mlx-swift kernels)
+        if: matrix.tool != 'asan' || inputs.asan_app
         run: |
           set -o pipefail
           if ! xcodebuild -downloadComponent MetalToolchain 2>&1 | tail -3; then
@@ -695,13 +717,8 @@ jobs:
           xcodebuild -checkFirstLaunchStatus 2>&1 | tail -1 || true
           xcrun -f metal
 
-      # Several unit tests spawn real ffmpeg/ffprobe (as in ci.yml).
-      - name: Install FFmpeg
-        run: |
-          brew install ffmpeg || true
-          ffmpeg -version | head -1
-
       - name: Build for testing (${{ matrix.label }})
+        if: matrix.tool != 'asan' || inputs.asan_app
         shell: bash
         run: |
           set -o pipefail
@@ -721,8 +738,9 @@ jobs:
             exit 1
           fi
 
-      - name: Unit tests under ${{ matrix.label }}
+      - name: App unit tests under ${{ matrix.label }}
         id: test
+        if: matrix.tool != 'asan' || inputs.asan_app
         continue-on-error: true
         timeout-minutes: 200
         shell: bash
@@ -754,7 +772,7 @@ jobs:
         id: core
         if: matrix.spm != ''
         continue-on-error: true
-        timeout-minutes: 60
+        timeout-minutes: 45
         shell: bash
         run: |
           set +e
@@ -784,15 +802,29 @@ jobs:
           FAILED=$(wc -l < failed-tests.txt | tr -d ' ')
           SUITES=$(grep -cE '^(◇ Suite |Test Suite .*started)' "$LOG" || true)
           SUITES=${SUITES:-0}
-          # Complete = the unit step ran to the end (no timeout), enough
-          # suites started to be a real run, and, for ASan, nothing aborted
-          # the host early.
+          # A Core run counts as having happened when swift test printed a
+          # run total, from XCTest ("Executed N tests") or Swift Testing
+          # ("Test run with N tests").
+          CORE_RAN=0
+          if [ -f "$CORE" ] && grep -qE 'Executed [0-9]+ tests?|Test run with [0-9]+ tests?' "$CORE"; then CORE_RAN=1; fi
+
+          # Complete = every part that was scheduled ran to the end (no
+          # timeout), the app part (if any) started enough suites to be a
+          # real run, and, for ASan, nothing aborted early.
+          APP_OK=true
+          if [ "${TEST_OUTCOME:-skipped}" != "skipped" ]; then
+            if [ "$TEST_OUTCOME" != "success" ] || [ "$SUITES" -lt 20 ]; then APP_OK=false; fi
+          fi
+          CORE_OK=true
+          if [ "${CORE_OUTCOME:-skipped}" != "skipped" ]; then
+            if [ "$CORE_OUTCOME" != "success" ] || [ "$CORE_RAN" = "0" ]; then CORE_OK=false; fi
+          fi
           COMPLETE=false
-          if [ "$TEST_OUTCOME" = "success" ] && [ "$SUITES" -ge 20 ]; then
+          if [ "$APP_OK" = "true" ] && [ "$CORE_OK" = "true" ]; then
             if [ "$TOOL" != "asan" ] || [ "$COUNT" = "0" ]; then COMPLETE=true; fi
           fi
-          python3 -c "import json,sys; json.dump({'tool':sys.argv[1],'complete':sys.argv[2]=='true','suites_started':int(sys.argv[3]),'reports':int(sys.argv[4]),'failed_tests':int(sys.argv[5]),'test_step':sys.argv[6],'core_step':sys.argv[7]}, open(f'nightly-status-{sys.argv[1]}.json','w'))" \
-            "$TOOL" "$COMPLETE" "$SUITES" "$COUNT" "$FAILED" "${TEST_OUTCOME:-none}" "${CORE_OUTCOME:-skipped}"
+          python3 -c "import json,sys; json.dump({'tool':sys.argv[1],'complete':sys.argv[2]=='true','suites_started':int(sys.argv[3]),'core_ran':sys.argv[8]=='1','reports':int(sys.argv[4]),'failed_tests':int(sys.argv[5]),'test_step':sys.argv[6],'core_step':sys.argv[7]}, open(f'nightly-status-{sys.argv[1]}.json','w'))" \
+            "$TOOL" "$COMPLETE" "$SUITES" "$COUNT" "$FAILED" "${TEST_OUTCOME:-skipped}" "${CORE_OUTCOME:-skipped}" "$CORE_RAN"
           cat "nightly-status-$TOOL.json"; echo
 
           {
@@ -801,10 +833,10 @@ jobs:
             echo "| Metric | Value |"
             echo "|---|---:|"
             echo "| Sanitizer reports (unique lines) | $COUNT |"
-            echo "| Tests failing under instrumentation (canary excluded) | $FAILED |"
-            echo "| Suites started | $SUITES |"
-            echo "| Unit-test step | ${TEST_OUTCOME:-none} ($(cat test-exit.txt 2>/dev/null || echo 'no exit recorded')) |"
-            echo "| VideoScanCore step | ${CORE_OUTCOME:-skipped} |"
+            echo "| App tests failing under instrumentation (canary excluded) | $FAILED |"
+            echo "| App suites started | $SUITES |"
+            echo "| App unit-test step | ${TEST_OUTCOME:-skipped} ($(cat test-exit.txt 2>/dev/null || echo 'not run')) |"
+            echo "| VideoScanCore step | ${CORE_OUTCOME:-skipped} ($(cat core-exit.txt 2>/dev/null || echo 'not run')) |"
             echo "| Complete run (counts toward auto-close) | $COMPLETE |"
             echo ""
             if [ "$COUNT" != "0" ]; then
@@ -818,8 +850,8 @@ jobs:
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-          if [ "$SUITES" = "0" ] && [ "$COUNT" = "0" ]; then
-            echo "::error::No test suite started and no sanitizer report: the $LABEL run did not happen (pipeline, not a finding)"
+          if [ "$SUITES" = "0" ] && [ "$CORE_RAN" = "0" ] && [ "$COUNT" = "0" ]; then
+            echo "::error::Nothing ran and nothing was reported: the $LABEL run did not happen (pipeline, not a finding)"
             exit 1
           fi
 
@@ -837,7 +869,7 @@ jobs:
           retention-days: 30
 
       - name: Upload sanitizer result bundle
-        if: always()
+        if: always() && (matrix.tool != 'asan' || inputs.asan_app)
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}-xcresult
@@ -1146,12 +1178,20 @@ jobs:
           retention-days: 30
 
   # -------------------------------------------------------------------
-  # One GitHub issue per finding fingerprint (Rick, 2026-10-01). Design,
-  # rules and state model: the docstring of tools/nightly_findings_to_issues.py.
+  # Nightly findings → GitHub issues (Rick, 2026-10-01; Manager rulings the
+  # same night). Design, severity rules and state model: the docstring of
+  # tools/nightly_findings_to_issues.py.
   #
-  # Writes ONLY for the scheduled/dispatched run on main. Any other ref, or
-  # dry_run=true, plans and summarises without touching issues. That is how
-  # the workflow is validated on a branch.
+  # WRITES ARE OFF until Rick has read a dry run. They happen only when ALL
+  # of these hold:
+  #   * repo variable NIGHTLY_FINDINGS_WRITE is exactly 'true' (Settings →
+  #     Secrets and variables → Actions → Variables). Unset = dry run.
+  #   * the ref is main (branch validation runs are always dry)
+  #   * a manual dispatch did not ask for dry_run
+  # A dry run still reads the real issues and plans everything. The plan
+  # (would-open / would-comment / would-close + every digest body) goes to
+  # the `nightly-findings-plan` artifact, and the summary JSON goes to
+  # metrics/nightly_findings_latest.json for the morning brief.
   #
   # Each tool's "complete" verdict comes from its job result (or, for the
   # strict build, the build step's outcome) AND the nightly-status-*.json
@@ -1191,10 +1231,13 @@ jobs:
         id: file
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DRY: ${{ (inputs.dry_run || github.ref != 'refs/heads/main') && 'true' || 'false' }}
+          WRITE: ${{ (vars.NIGHTLY_FINDINGS_WRITE == 'true' && github.ref == 'refs/heads/main' && !inputs.dry_run) && 'true' || 'false' }}
         run: |
           ARGS=()
-          if [ "$DRY" = "true" ]; then ARGS+=(--dry-run); echo "DRY RUN: no issue will be written"; fi
+          if [ "$WRITE" != "true" ]; then
+            ARGS+=(--dry-run)
+            echo "DRY RUN: no issue will be written (NIGHTLY_FINDINGS_WRITE='${{ vars.NIGHTLY_FINDINGS_WRITE }}', ref=$GITHUB_REF)"
+          fi
           python3 tools/nightly_findings_to_issues.py \
             --artifacts artifacts \
             --repo "$GITHUB_REPOSITORY" \
@@ -1207,6 +1250,7 @@ jobs:
             --job-result "ubsan=${{ needs.sanitizers.result }}" \
             --job-result "periphery=${{ needs.lint-strict.result }}" \
             --summary-out nightly-findings-summary.json \
+            --plan-out nightly-findings-plan.md \
             "${ARGS[@]}"
           python3 -c "import json; s=json.load(open('nightly-findings-summary.json')); print('new_high=%d' % len(s['new_high']))" >> "$GITHUB_OUTPUT"
 
@@ -1216,6 +1260,14 @@ jobs:
         with:
           name: nightly-findings-summary
           path: nightly-findings-summary.json
+          retention-days: 30
+
+      - name: Upload planned issue changes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nightly-findings-plan
+          path: nightly-findings-plan.md
           retention-days: 30
 
   # -------------------------------------------------------------------
@@ -1311,6 +1363,9 @@ jobs:
 
       # Pushes only from main. A branch validation run must not add a row
       # to the history, nor overwrite the summary the morning digest reads.
+      # (The gate is the ref, not the dry-run flag: the nightly on main is
+      # a dry run until NIGHTLY_FINDINGS_WRITE is set, and its plan must
+      # still reach the morning brief.)
       - name: Push row + findings summary to metrics branch
         if: github.ref == 'refs/heads/main'
         run: |
@@ -1338,10 +1393,11 @@ jobs:
           touch metrics/static_analysis.jsonl
           cat "$RUNNER_TEMP/row.json" >> metrics/static_analysis.jsonl
           git add metrics/static_analysis.jsonl
-          # The morning digest's 🔴 line reads this file. A dry-run summary
-          # never replaces a real one.
-          if [ -f "$RUNNER_TEMP/findings.json" ] && \
-             python3 -c "import json,sys; sys.exit(0 if not json.load(open(sys.argv[1])).get('dry_run') else 1)" "$RUNNER_TEMP/findings.json"; then
+          # The morning digest reads this file: 🔴 for new high findings,
+          # 🟡 for the dry-run plan while writes are off. Dry-run summaries
+          # are published on purpose (Manager 2026-10-01), so Rick sees
+          # exactly what would be filed before turning writes on.
+          if [ -f "$RUNNER_TEMP/findings.json" ]; then
             cp "$RUNNER_TEMP/findings.json" metrics/nightly_findings_latest.json
             git add metrics/nightly_findings_latest.json
           fi
