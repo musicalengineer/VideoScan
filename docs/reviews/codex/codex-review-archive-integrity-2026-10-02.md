@@ -199,3 +199,49 @@ Output contract (required):
 - A line: Verdict: <merge | fix | block> — <one-line reason>
 
 Wanted: findings with file:line + a concrete reproduction (ideally a Swift Testing red test with synthetic data), and "read, no findings" per clean file. Privacy: public repo — no real family names, addresses or dates in any suggested fixture.
+
+## Closure (2026-10-02, bug-fix agent, branch `review/archive-integrity-2026-10-02`)
+
+Every finding fixed red-first (codex's red test where it drafted one), Debug, own
+`-derivedDataPath`, suites filtered by SUITE (counts confirmed). Each fix was
+mutation-checked: the fix was reverted textually, the pinning test went red, then restored.
+
+| # | Sev | Finding | Fix SHA | Pinning test(s) | Red → green | Mutations (all killed) |
+|---|-----|---------|---------|-----------------|-------------|------------------------|
+| 1 | P1 | Adoption trusted a stored digest | `c404771f` | `PromoteAdoptionProofTests.lyingDigestCannotAdoptDifferentBytes` (+ `honestDigestStillAdopts`, `noDigestDifferentBytesCopiedBeside` controls) | 7 issues → 17 tests / 3 suites | proof branch disabled → 7 issues |
+| 2 | P1 | First designation lost to a pending async write | `ea366c34` | `MasterArchiveDesignationGuardTests.pendingFirstDesignationCannotBeLost` (codex's test) + `pendingFirstDesignationThenClearLands` | 2 issues → 20 tests / 4 suites | baseline = persisted only → 2 issues |
+| 3 | P1 | Symlink + `..` bypass of the overlap guard | `b7ffd5cd` | `RelocateSourceDestGuardTests.symlinkThenDotDotIsPhysical`, `symlinkLoopRefused`, `danglingSymlinkIntoSourceRefused`, `unsearchableFolderRefused` | 4 issues → green (combined run) | lexical standardize → 1; errno guard dropped → EACCES test red; dangling check dropped → 2 |
+| 4 | P2 | Digest-mismatch refusal after intent/dirs/partial | `1ab2274f` (proof before intent: `c404771f`) | `PromoteRefusalRollbackTests.lyingFixityLeavesNoTrace`, `sourceChangedMidCopyRollsBack`, `engineRemovesCreatedFolders`, `engineKeepsPreexistingFolders`, 3 journal-retraction contract tests | 2 issues → 35 tests / 4 suites | no folder rollback → 2; no intent retraction → 1; retract without tail check → 2; pre-intent proof disabled → 1 |
+| 5 | P2 | Verify sensor compared the row with itself after a fallback match | `18f6905d` | `VerifyDateSensorReviewTests.fallbackMatchUsesCurrentPath` | 2 issues → 32 tests / 6 suites | `row.relPath` as placement → 2 |
+| 6 | P3 | Placement vs index used exact equality | `18f6905d` | `VerifyDateSensorReviewTests.placementVersusIndexUsesCoarserPrecision` (codex's assertion), `exactMatchAgreeing` | 2 issues (incl. control) → green | exact equality → 2 |
+| 7 | P2 | Raw paths / filenames in persistent logs | `d7420941` | `ArchiveLogPrivacyTests` (4 tests, PRIVATE_SUBJECT_SENTINEL; catalog.log + appLog + write journal + unified log via `log show`), `MasterArchiveDesignationGuardTests.auditLines` (now requires the volume UUID, forbids the path) | 4/4 leaking (6 issues) → 59 tests / 9 suites | overlap message; designation describe; readoption rootPath; refusal detail in appLog; CHECK os_log filename → each 1 |
+| 8 | P2 | Verify disagreement log unbounded | `3324cb95` | `VerifyDisagreementLogBoundTests.boundedAt50k`, `realRunBounded` | 6 issues → 7 tests / 2 suites | sample = whole list → 4 |
+
+Coverage gaps codex named, now pinned (`1ab2274f`):
+- Deterministic cancellation and claim release: `PromoteRefusalRollbackTests.deterministicCancelReleasesClaim`
+  (cancel at a fixed seam after claim+proof; claim released, archive snapshot unchanged, a later run lands).
+- End-to-end duplicate sensor with more than five sources: `duplicateSensorTwelveSources`
+  (18 records, 12 distinct digests, twins and a triplet, three mixed batches → 12 files, 12 rows, no digest twice).
+
+Follow-up commit `ff6b0764` (pure moves for file length, run() complexity, ARCH-7/ARCH-13 text) also
+restores `PromoteBeginLineSensorTests`' anchor, which my own F4 extraction had broken (`model?.log`)
+from `1ab2274f` until then.
+
+Combined run at `ff6b0764` (Debug, by suite): **838 Swift Testing tests in 150 suites + 48 XCTest,
+0 failures**: PromoteArchiveIntegrity*, MasterArchive* (designation guard/reload/readoption/hardening/
+promote/logic/scale), RelocateSourceDestGuard / PathGuardIdentity / PathGuardSensor, RelocateIntegration,
+RelocateReconcile(+PlanMapping), VerifyArchive* (logic/race/matrix/scale/isolation), all ArchiveAngel*
+suites, the catalog-store suites, and the new review suites.
+
+Log-format note: #7 changes message CONTENT only. Paths, destinations and line structure are unchanged
+and START / OUTCOME / REFUSED prefixes stay.
+
+Declined / not in scope (for Rick):
+- Other pre-existing persistent lines still name files or paths: Promote BEGIN/DONE/adopted/skipped/
+  FAILED (generic failures), archive-lock lines, Initialize / rehome lines, Migrate per-file lines,
+  Verify MISMATCH/MISSING/NOT LOCKED lines, and the 20-entry Verify DATE DISAGREES sample (#8 asked for
+  the sample). These are outside the five categories #7 named and are durable forensics Rick relies on,
+  so whether they change is his call.
+- The proof read means a non-duplicate source with a trusted stored fixity is now read twice (proof +
+  copy) where it used to be read once. A stored fixity that disagrees with unchanged-stamp bytes is
+  refused every run until the source is re-fingerprinted (refuse over guess).
