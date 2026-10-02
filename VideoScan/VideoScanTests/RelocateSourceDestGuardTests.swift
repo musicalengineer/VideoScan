@@ -136,3 +136,100 @@ struct RelocateSourceDestGuardTests {
         #expect(m.relocateQueue.isEmpty)
     }
 }
+
+// MARK: - Volume identity (RelocatePathGuard)
+
+@Suite("GH #109 — same volume under different names", .serialized)
+@MainActor
+struct RelocatePathGuardIdentityTests {
+
+    /// One volume (UUID TEST-VOL-U) seen as "/Volumes/LaCieWorkspace" AND
+    /// "/Volumes/LaCieWorkspace 1"; a different volume that happens to
+    /// share a folder name.
+    private static let stub: @Sendable (String) -> RelocatePathLocation? = { path in
+        let comps = URL(fileURLWithPath: path).standardizedFileURL.pathComponents
+        guard comps.count >= 3, comps[1] == "Volumes" else { return nil }
+        let below = Array(comps.dropFirst(3))
+        switch comps[2] {
+        case "LaCieWorkspace", "LaCieWorkspace 1":
+            return RelocatePathLocation(volumeKey: "TEST-VOL-U", components: below,
+                                        caseInsensitive: true, resolvedPath: path)
+        case "OtherVolume":
+            return RelocatePathLocation(volumeKey: "TEST-VOL-OTHER", components: below,
+                                        caseInsensitive: true, resolvedPath: path)
+        default:
+            return nil
+        }
+    }
+
+    @Test("two mount names of one volume: identical, nested, containing")
+    func sameVolumeDifferentNames() {
+        RelocatePathGuard.$locate.withValue(Self.stub) {
+            #expect(RelocatePathGuard.refusal(source: "/Volumes/LaCieWorkspace",
+                                              destination: "/Volumes/LaCieWorkspace 1") == .identical)
+            #expect(RelocatePathGuard.refusal(source: "/Volumes/LaCieWorkspace",
+                                              destination: "/Volumes/LaCieWorkspace 1/from_LaCieWorkspace")
+                    == .destinationInsideSource)
+            #expect(RelocatePathGuard.refusal(source: "/Volumes/LaCieWorkspace 1/Projects/2004",
+                                              destination: "/Volumes/LaCieWorkspace/projects")
+                    == .sourceInsideDestination, "case-folded on a case-insensitive volume")
+        }
+    }
+
+    @Test("different volumes never overlap, even with matching folder names")
+    func differentVolumes() {
+        RelocatePathGuard.$locate.withValue(Self.stub) {
+            #expect(RelocatePathGuard.refusal(source: "/Volumes/LaCieWorkspace/A",
+                                              destination: "/Volumes/OtherVolume/A") == nil)
+        }
+    }
+
+    @Test("a path that cannot be located is refused, not guessed")
+    func unresolvableRefused() {
+        RelocatePathGuard.$locate.withValue(Self.stub) {
+            #expect(RelocatePathGuard.refusal(source: "/Volumes/LaCieWorkspace",
+                                              destination: "/Volumes/NoSuchThing/x")
+                    == .unresolvable("/Volumes/NoSuchThing/x"))
+        }
+        #expect(RelocatePathGuard.refusal(source: "", destination: "/tmp") != nil)
+    }
+
+    @Test("the model refuses a same-volume-different-name Migrate before queuing")
+    func modelRefusesSameVolumeAlias() throws {
+        let catalog = FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_109_identity_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: catalog) }
+        let m = VideoScanModel()
+        m.catalogStore = CatalogStore(directory: catalog)
+        let rec = VideoRecord()
+        rec.filename = "clip.mov"
+        rec.fullPath = "/Volumes/LaCieWorkspace/clip.mov"
+        m.records = [rec]
+        let dest = URL(fileURLWithPath: "/Volumes/LaCieWorkspace 1")
+        let opts = RelocateOptions(sourceVolumeRootPath: "/Volumes/LaCieWorkspace", destinationRoot: dest,
+                                   maxConcurrency: 1, dryRun: true, skipAlreadyRelocated: true)
+        let id = RelocatePathGuard.$locate.withValue(Self.stub) {
+            m.enqueueRelocate(sourceRootPath: "/Volumes/LaCieWorkspace", destinationRoot: dest, options: opts)
+        }
+        #expect(id == nil)
+        #expect(m.relocateQueue.isEmpty)
+    }
+}
+
+// MARK: - Sensor
+
+@Suite("GH #109 — sensor: every Migrate gate consults the path guard")
+struct RelocatePathGuardSensor {
+    @Test("enqueueRelocate, runRelocate(jobID:) and the sheet go through the path guard")
+    func gatesWired() throws {
+        let queue = try SourceTree.appSource(named: "VideoScanModel+RelocateQueue.swift")
+        let run = try SourceTree.appSource(named: "VideoScanModel+Relocate.swift")
+        let sheet = try SourceTree.appSource(named: "RelocateSheet.swift")
+        let gate = try SourceTree.appSource(named: "RelocatePathGuard.swift")
+        #expect(queue.contains("refuseOverlappingMigrate("))
+        #expect(run.contains("refuseOverlappingMigrate("))
+        #expect(gate.contains("RelocatePathGuard.refusal(source: source, destination: destination.path)"))
+        #expect(sheet.contains("RelocatePathGuard.refusal("))
+        #expect(!sheet.contains("dst.hasPrefix(src"), "the string-prefix check must not come back")
+    }
+}

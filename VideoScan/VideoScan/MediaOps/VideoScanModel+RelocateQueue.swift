@@ -41,6 +41,15 @@ extension VideoScanModel {
             log("Migrate refused: read-only viewer mode.")
             return nil
         }
+        // GH #109: source and destination must not overlap — by resolved
+        // path and volume identity, not spelling. The job layer refuses
+        // whatever the UI let through. Both spellings the job will use are
+        // checked (the options carry their own copy).
+        for (src, dst) in [(sourceRootPath, destinationRoot),
+                           (options.sourceVolumeRootPath, options.destinationRoot)]
+        where refuseOverlappingMigrate(source: src, destination: dst, when: "before queuing") != nil {
+            return nil
+        }
         let scope = Self.recordsScoped(to: sourceRootPath, in: records)
         guard !scope.isEmpty else {
             log("Migrate: no catalogued files under \(sourceRootPath).")

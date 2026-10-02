@@ -227,11 +227,14 @@ extension VideoScanModel {
         }
         let options = relocateQueue[initialIdx].options
         let scope = Self.recordsScoped(to: options.sourceVolumeRootPath, in: records)
-        // Defensive — enqueueRelocate already guards on empty scope,
-        // but races (e.g. records removed between enqueue and run) are
-        // possible. Treat as a clean .failed transition.
-        guard !scope.isEmpty else {
-            updateJobStatus(id: jobID, status: .failed(reason: "no records in scope"))
+        // Defensive — enqueueRelocate already refuses both, but races are
+        // possible: records removed between enqueue and run (empty scope),
+        // or a mount changed so source and destination now overlap
+        // (GH #109, job layer). Either is a clean .failed transition.
+        let refusal = refuseOverlappingMigrate(source: options.sourceVolumeRootPath,
+                                               destination: options.destinationRoot, when: "at start")
+        guard refusal == nil, !scope.isEmpty else {
+            updateJobStatus(id: jobID, status: .failed(reason: refusal ?? "no records in scope"))
             advanceQueueAfterCurrent()
             return
         }
