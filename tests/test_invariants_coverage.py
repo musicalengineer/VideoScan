@@ -2,7 +2,7 @@
 an invariants file (2026-10-01, nightly adversarial review design §1).
 
 Why: codex found the #230 P1s in RecordFinderFiling.swift / ResearchStore.swift,
-which docs/source_layout.md's data-risk list did not name. The nightly review
+which the source layout guide's data-risk list did not name. The nightly review
 only reads files whose path matches a glob in docs/practices/invariants/*.md,
 so an uncovered writer is a writer nobody attacks.
 
@@ -27,7 +27,7 @@ import invariants  # noqa: E402
 APP = "VideoScan/VideoScan"
 CORE = "VideoScan/VideoScanCore/Sources/VideoScanCore"
 
-# docs/source_layout.md, "Data-risk code", plus the CyberBrain writer.
+# docs/guides/source_layout.md, "Data-risk code", plus the CyberBrain writer.
 DATA_RISK_FOLDERS = [
     f"{APP}/Archive",
     f"{APP}/MediaOps",

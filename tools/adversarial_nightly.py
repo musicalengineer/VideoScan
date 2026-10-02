@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Nightly adversarial review of the day's merges to local main (2026-10-01).
 
-Design: nightly_adversarial_review_design_2026-10-01.md (docs/, docs/design/
-after the reorg). Installed in SHADOW MODE: a review doc, a ledger row and a
+Design: docs/design/nightly_adversarial_review_design_2026-10-01.md
+Installed in SHADOW MODE: a review doc, a ledger row and a
 morning-brief line only — no issues filed, no codex, no commits.
 
     python3 tools/adversarial_nightly.py scope   [--range A..B] [--json]
@@ -500,8 +500,10 @@ def already_reported(paths: list[str]) -> list[str]:
         if rec.get("path") in paths and fp not in known:
             lines.append(f"- {fp[:8]} `{rec.get('key')}` — declined: {rec.get('reason')}")
     # Prior review docs that name these files (codex + adversarial), newest first.
-    docs = sorted(list((repo() / "docs").glob("codex-review-*.md"))
-                  + list((repo() / "docs" / "reviews").rglob("*.md")),
+    reviews = repo() / "docs" / "reviews"
+    docs = sorted(list((repo() / "docs").glob("codex-review-*.md"))      # pre-reorg layout
+                  + [p for sub in ("codex", "adversarial", "qa") for p in (reviews / sub).glob("*.md")
+                     if p.name.lower() != "readme.md"],
                   key=lambda p: p.name, reverse=True)
     for path in paths:
         base = Path(path).name

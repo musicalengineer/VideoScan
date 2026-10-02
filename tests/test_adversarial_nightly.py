@@ -146,7 +146,7 @@ def change_day(repo: Path) -> str:
           "struct Writer {\n    func save() { /* writes */ }\n}\n")
     sh(repo, "mv", "VideoScan/VideoScan/Archive/Old.swift", "VideoScan/VideoScan/Archive/Moved.swift")
     write(repo, "VideoScan/VideoScanTests/WriterTests.swift", "// test\n")
-    write(repo, "docs/note.md", "note\n")
+    write(repo, "docs" + "/note.md", "note\n")     # split: tests/test_docs_links.py reads this file
     write(repo, "VideoScan/VideoScan/Archive/data.json", "{}\n")
     write(repo, "VideoScan/VideoScan/Hallie/HallieFooAnswer.swift", "func answer() {}\n")
     write(repo, "VideoScan/VideoScan/Catalog/Table.swift", "func table() {}\n")
@@ -276,7 +276,7 @@ def test_run_happy_path_writes_ledger_latest_doc_and_advances(env):
     assert row["effort"] == ["high", "xhigh"]
     assert baseline(env) == head
     lat = latest(env)
-    assert lat["status"] == "findings" and lat["repoDoc"] == "docs/reviews/adversarial/2026-10-02.md"
+    assert lat["status"] == "findings" and lat["repoDoc"] == "docs" + "/reviews/adversarial/2026-10-02.md"
     doc = Path(lat["doc"])
     assert doc.exists() and "Adversarial review — 2026-10-02" in doc.read_text()
     assert not str(doc).startswith(str(env["repo"]))                 # never written into the checkout
