@@ -15,6 +15,7 @@ paths:
   - VideoScan/VideoScanCore/Sources/VideoScanCore/USStateCodes.swift
   - VideoScan/VideoScanCore/Sources/VideoScanCore/BirthplaceClassifier*.swift
   - VideoScan/VideoScanCore/Sources/VideoScanCore/RollCall.swift
+  - VideoScan/VideoScanCore/Sources/VideoScanCore/TreeWalkDate.swift
   - VideoScan/VideoScan/FamilyTree/FamilyKinship*.swift
   - VideoScan/VideoScan/FamilyTree/FamilyMapModel.swift
   - VideoScan/VideoScan/FamilyTree/LifeStatus.swift

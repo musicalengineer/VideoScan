@@ -5,6 +5,8 @@ paths:
   - VideoScan/VideoScan/Hallie/Archivist*Executor*.swift
   - VideoScan/VideoScan/Hallie/*Answer*.swift
   - VideoScan/VideoScan/Hallie/HallieLineage*.swift
+  - VideoScan/VideoScan/Hallie/HallieAncestorStatistics*.swift
+  - VideoScan/VideoScan/Hallie/HallieTreeStatistics*.swift
   - VideoScan/VideoScan/Hallie/HallieCompositionVerifier.swift
   - VideoScan/VideoScan/Hallie/HallieResponseCommit.swift
   - VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift
