@@ -138,24 +138,46 @@ struct CyberBrainWriterConcurrencyTests {
     /// A writer that throws INSIDE the root lock must release it: the next
     /// writer on that root proceeds. Both the raw lock and a real durable
     /// writer that fails after taking it (no such person) are checked.
+    ///
+    /// Every acquisition that could meet a leaked lock runs through
+    /// `completes` (a fresh root per case, so the first acquisition is
+    /// always free): a regression FAILS this test, it cannot hang the suite.
     @Test func aWriterThatThrowsReleasesTheRootLock() throws {
-        let root = try temporaryRoot()
-        defer { try? FileManager.default.removeItem(at: root) }
-        #expect(throws: Boom.self) {
-            try CyberBrainWriter.withRootLock(root) { throw Boom() }
-        }
-        #expect(throws: (any Error).self, "no archive yet, so no such person: refused inside the lock") {
-            try CyberBrainWriter.setPronunciation(personID: "person.none", token: "Synthetic",
-                                                  saidAs: "SIN-thet-ik", rootURL: root)
+        let raw = try temporaryRoot()
+        let durable = try temporaryRoot()
+        defer {
+            try? FileManager.default.removeItem(at: raw)
+            try? FileManager.default.removeItem(at: durable)
         }
         let receipts = Receipts()
-        let t = testimony("Written after two failed writers.")
-        let finished = completes(within: 10) {
-            do { receipts.add(t.text, try CyberBrainWriter.record(t, rootURL: root)) } catch { receipts.fail(error) }
+        let threw = Receipts()
+        // 1. The raw lock: a body that throws.
+        #expect(throws: Boom.self) {
+            try CyberBrainWriter.withRootLock(raw) { throw Boom() }
         }
-        #expect(finished, "the lock was released by the throwing writers")
+        let rawAgain = testimony("Written after a throwing body.")
+        #expect(completes(within: 10) {
+            do { receipts.add(rawAgain.text, try CyberBrainWriter.record(rawAgain, rootURL: raw)) } catch { receipts.fail(error) }
+        }, "the raw lock was released by the throwing body")
+
+        // 2. A real durable writer refused INSIDE the lock (no archive yet,
+        // so no such person), then a writer on the same root.
+        #expect(completes(within: 10) {
+            do {
+                _ = try CyberBrainWriter.setPronunciation(personID: "person.none", token: "Synthetic",
+                                                          saidAs: "SIN-thet-ik", rootURL: durable)
+            } catch {
+                threw.fail(error)
+            }
+        })
+        #expect(threw.failures.count == 1, "the durable writer was refused")
+        let durableAgain = testimony("Written after a refused writer.")
+        #expect(completes(within: 10) {
+            do { receipts.add(durableAgain.text, try CyberBrainWriter.record(durableAgain, rootURL: durable)) } catch { receipts.fail(error) }
+        }, "the lock was released by the refused durable writer")
+
         #expect(receipts.failures.isEmpty, "\(receipts.failures)")
-        #expect(receipts.all.count == 1)
+        #expect(receipts.all.count == 2)
     }
 
     /// Two roots make progress independently: while one root's lock is
