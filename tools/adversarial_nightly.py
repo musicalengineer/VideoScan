@@ -366,10 +366,14 @@ def filter_entries(entries: list[dict]) -> tuple[list[dict], dict]:
 
 def comment_only(diff_text: str) -> bool:
     """True when every changed line is blank or a Swift comment line — nothing
-    a reviewer could attack. An empty diff is not comment-only (mode change etc.)."""
+    a reviewer could attack. An empty diff is not comment-only (mode change etc.).
+    A line led by a bare "*" is NOT taken for a block-comment continuation:
+    Swift wraps a product that way ("    * scale", PreviewFrameScorer.swift), and
+    this repo's Swift uses no " * " block-comment bodies, so such a line stays in
+    review (nightly review 2026-10-02). Erring toward review is the safe side."""
     changed = [line[1:].strip() for line in diff_text.splitlines()
                if line[:1] in "+-" and not line.startswith(("+++", "---"))]
-    return bool(changed) and all(not c or c.startswith(("//", "/*", "*", "*/")) for c in changed)
+    return bool(changed) and all(not c or c.startswith(("//", "/*", "*/")) for c in changed)
 
 
 def compute_scope(rng: str, inv_files: list | None = None) -> dict:
