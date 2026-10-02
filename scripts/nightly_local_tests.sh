@@ -341,7 +341,8 @@ collect_optional_post_test_metrics() {
 # silently fell back to Apple speech. The lane renders the reference sentence
 # with the installed Kokoro engine, compares its signature with the stored
 # recording, and counts app fallbacks logged since the last night; anything
-# wrong posts a red team-channel message. Adds hallie_voice_* fields only.
+# wrong writes a red alert record (~/Library/Logs/VideoScan/hallie-voice/latest.json)
+# that the session morning hook prints. Adds hallie_voice_* fields only.
 refresh_hallie_voice() {
     local out="/tmp/nightly-hallie-voice.json"
     rm -f "$out"

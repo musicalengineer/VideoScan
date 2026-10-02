@@ -207,6 +207,3 @@ Designs and reviews are ordered by their last committed update, newest first.
 - [regression_test_backlog.md](reviews/qa/regression_test_backlog.md)
 - [perceptual_compare_review_2026-06-20.md](reviews/qa/perceptual_compare_review_2026-06-20.md)
 
-## team-channel
-
-- [README.md](team-channel/README.md)

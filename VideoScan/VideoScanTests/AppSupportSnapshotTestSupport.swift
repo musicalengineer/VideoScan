@@ -10,7 +10,11 @@
 // Excluded — written by OTHER processes at any moment, never by the app
 // under test: the team-channel mailbox (codex, hooks; nightly 2026-09-20
 // failed on team-channel/team-channel.sqlite3-shm alone, codex #1585),
-// the channel watcher, the gh-codex relay.
+// the channel watcher, the gh-codex relay, and review-cycles/ (the codex
+// review state tools/codex_review.py and the adversarial nightly write;
+// it lived inside team-channel/ until the channel was retired 2026-10-02).
+// The channel folders stay listed: they can reappear on a machine still
+// running pre-retirement tooling, and an extra exclusion costs nothing.
 //
 // Positive controls live below: the snapshot MUST see a product file
 // created, changed and deleted, and MUST see a folder whose name only
@@ -24,7 +28,7 @@ import Testing
 enum AppSupportSnapshot {
     /// Top-level folders other processes write; matched as whole
     /// components, never as string prefixes.
-    static let excludedTopLevel: Set<String> = ["team-channel", "channel-watcher", "gh-codex"]
+    static let excludedTopLevel: Set<String> = ["team-channel", "channel-watcher", "gh-codex", "review-cycles"]
 
     static var realVideoScanRoot: URL? {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
@@ -95,6 +99,7 @@ struct AppSupportSnapshotTests {
         let root = try scratch("exact")
         defer { try? FileManager.default.removeItem(at: root) }
         for rel in ["team-channel/team-channel.sqlite3-shm", "channel-watcher/state.json", "gh-codex/relay.log",
+                    "review-cycles/review-cycles.json",
                     "team-channel-ish/product.json", "team-channelX", "catalog/team-channel/inside.json", "catalog.json"] {
             let url = root.appendingPathComponent(rel)
             try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -103,6 +108,7 @@ struct AppSupportSnapshotTests {
         let snap = AppSupportSnapshot.take(root: root)
         #expect(snap["team-channel/team-channel.sqlite3-shm"] == nil && snap["team-channel"] == nil)
         #expect(snap["channel-watcher/state.json"] == nil && snap["gh-codex/relay.log"] == nil)
+        #expect(snap["review-cycles/review-cycles.json"] == nil, "codex review state is another process's")
         #expect(snap["team-channel-ish/product.json"] != nil, "a lookalike product folder is watched")
         #expect(snap["team-channelX"] != nil)
         #expect(snap["catalog/team-channel/inside.json"] != nil, "only the FIRST component is matched")

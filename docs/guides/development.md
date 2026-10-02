@@ -11,7 +11,6 @@ those bugs remain in today's code.
 - [Testing](testing.md): test categories, isolation and machine routing.
 - [Compute assignments](compute-assignments.md): fleet responsibilities.
 - [Architecture](architecture-overview.md): subsystem boundaries.
-- [Team channel](../team-channel/README.md): local coordination.
 - [Engineering Room](../../tools/engineering-room/README.md): current discussion
   service and its controls. The July invitation and prototype review are
   superseded by that maintained operational guide.

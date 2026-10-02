@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """Claude Code status line: the codex review cycles, one short line.
 
-Reads the same review-cycles.json that tools/codex_review.py writes and the
-menu-bar monitor shows, and prints the newest cycles that are still open
+Reads the same review-cycles.json that tools/codex_review.py writes
+(codex_review.DEFAULT_STATE), and prints the newest cycles that are still open
 (plus one that closed in the last 10 minutes, so a finish is visible). Prints
 nothing when there is nothing to show, so the status line stays empty.
 
-Colours match the monitor: green < 10 min in a phase (or closed), yellow
+Colours: green < 10 min in a phase (or closed), yellow
 10–30 min, red > 30 min, a `running` cycle whose codex pid is gone, or
 `failed`. Claude Code passes session JSON on stdin; it is not needed here.
 """
@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 STATE = os.environ.get(
     "VIDEOSCAN_REVIEW_CYCLES",
     os.path.expanduser(
-        "~/Library/Application Support/VideoScan/team-channel/review-cycles.json"
+        "~/Library/Application Support/VideoScan/review-cycles/review-cycles.json"
     ),
 )
 GREEN, YELLOW, RED, DIM, RESET = "\033[32m", "\033[33m", "\033[31m", "\033[2m", "\033[0m"

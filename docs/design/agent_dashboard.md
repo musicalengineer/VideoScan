@@ -68,5 +68,5 @@ work.
 
 ## Related
 
-- tools/engineering-room/ (chat pane exists), docs/team-channel/ (interim),
+- tools/engineering-room/ (chat pane exists), the team channel (interim; retired 2026-10-02),
   [[three-way-team-structure]] in Claude's memory, codex's roundtable work.
