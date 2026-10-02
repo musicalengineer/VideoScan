@@ -85,7 +85,7 @@
 
 set -u
 
-NIGHTLY_SCRIPT_VERSION="2026-09-30-release-r1"
+NIGHTLY_SCRIPT_VERSION="2026-10-02-timing-strict-r2"
 # THE build configuration for the whole nightly lane (Rick, 2026-09-29 21:00:
 # the nightly builds Release for production parity; Debug stays for rapid dev
 # and day testing). Build, test, coverage, the person evaluator and the Hallie
@@ -94,6 +94,12 @@ NIGHTLY_SCRIPT_VERSION="2026-09-30-release-r1"
 # ${NIGHTLY_CONFIGURATION:-unknown} so a harness that sources them in isolation
 # under set -u still publishes valid JSON.
 NIGHTLY_CONFIGURATION="Release"
+# GH #208 (Rick, 2026-10-02): timing budgets are STRICT on a quiet machine and
+# a known issue (within 3x) on a busy one. The 2 AM M4 run is the real gate, so
+# pin strict here regardless of load. xcodebuild forwards TEST_RUNNER_<NAME>
+# to the test process as <NAME>; swift test reads the plain name.
+export VIDEOSCAN_TIMING_STRICT=1
+export TEST_RUNNER_VIDEOSCAN_TIMING_STRICT=1
 REPO="$HOME/dev/VideoScan"
 LOGDIR="$HOME/Library/Logs/VideoScan"
 LOGFILE="$LOGDIR/nightly_test_$(date +%Y%m%d_%H%M%S).log"
@@ -233,7 +239,7 @@ base.update(json.loads(os.environ["PERSON_ROW"]))
 # the expansion at the first brace and appends a stray "}" (caught by
 # test_nightly_failure_modes.sh 9b: "Extra data" at column 125).
 hallie = json.loads(os.environ["HALLIE_ROW"] or "{}")
-for key in ("status", "reason", "passed", "failed", "skipped", "total"):
+for key in ("status", "reason", "passed", "failed", "skipped", "total", "known_issue_tests"):
     hallie.pop(key, None)
 base.update(hallie)
 # The Hallie VOICE lane (2026-09-29): only its own hallie_voice_* keys.
@@ -257,9 +263,9 @@ make_current_test_result_row() {
     if [ "${CRASHED_NAMES_JSON:-[]}" != "[]" ]; then
         crashed_field=",\"crashed_names\":${CRASHED_NAMES_JSON}"
     fi
-    printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","configuration":"%s","failed_names":%s%s}' \
+    printf '{"ts":"%s","source":"nightly-local","host":"%s","branch":"%s","commit":"%s","commit_date":"%s","app_version":"1.0","dirty":%s,"passed":%d,"failed":%d,"skipped":%d,"total":%d,"known_issue_tests":%d,"elapsed_s":%.3f,"status":"%s","reason":"%s","nightly_script_v":"%s","configuration":"%s","failed_names":%s%s}' \
         "$ts" "$HOST" "$BRANCH" "$COMMIT" "$COMMIT_DATE" "$DIRTY" \
-        "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" \
+        "$PASSED" "$FAILED" "$SKIPPED" "$TOTAL" "${KNOWN_ISSUE_TESTS:-0}" \
         "$ELAPSED" "$STATUS" "$REASON" "$NIGHTLY_SCRIPT_VERSION" \
         "${NIGHTLY_CONFIGURATION:-unknown}" \
         "$FAILED_NAMES_JSON" "${cov_field}${crashed_field}"
@@ -789,11 +795,23 @@ fi
 #   * The run-summary exclusion is pinned to the summary's real shape
 #     ('Test run with <N> test…') so a test whose display name merely
 #     contains the words "Test run with" still counts.
+#
+# 2026-10-02 (GH #208): a Swift Testing test that passed with known issues
+# prints "━ Test x() passed after N seconds with K known issue(s)." — no ✔,
+# so it used to vanish from PASSED and from the total. It now counts as
+# PASSED, and KNOWN_ISSUE_TESTS (row field known_issue_tests) says how many
+# of those passes carried a known issue. The "━ Suite …" and "━ Test run
+# with …" summaries are excluded like their ✔ counterparts.
 parse_test_counts() {
     local out="$1"
-    PASSED=$(grep -E '(✔ Test .* passed after |^Test Case .* passed)' "$out" 2>/dev/null \
+    local plain_passed
+    plain_passed=$(grep -E '(✔ Test .* passed after |^Test Case .* passed)' "$out" 2>/dev/null \
         | grep -v ' recorded an issue ' \
         | grep -Ecv 'Test run with [0-9]+ test')
+    KNOWN_ISSUE_TESTS=$(grep -E '━ Test .* passed after .* known issues?\.?$' "$out" 2>/dev/null \
+        | grep -v ' recorded a known issue ' \
+        | grep -Ecv 'Test run with [0-9]+ test')
+    PASSED=$(( ${plain_passed:-0} + ${KNOWN_ISSUE_TESTS:-0} ))
     FAILED=$(grep -E '(✘ Test .* failed after |^Test Case .* failed)' "$out" 2>/dev/null \
         | grep -v ' recorded an issue ' \
         | grep -Ecv 'Test run with [0-9]+ test')
@@ -803,6 +821,7 @@ parse_test_counts() {
     PASSED=${PASSED:-0}
     FAILED=${FAILED:-0}
     SKIPPED=${SKIPPED:-0}
+    KNOWN_ISSUE_TESTS=${KNOWN_ISSUE_TESTS:-0}
     # failed_names: JSON array of failing test names ([] on green runs).
     # python3 does the JSON escaping; on any hiccup fall back to [] so the
     # published row stays valid JSON.
@@ -886,7 +905,7 @@ print(json.dumps(names))
 
 parse_test_counts /tmp/nightly-test-output.log
 TOTAL=$((PASSED + FAILED + SKIPPED))
-log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total)"
+log "Results: ${PASSED}p / ${FAILED}f / ${SKIPPED}s (${TOTAL} total; ${KNOWN_ISSUE_TESTS} passed with known issues)"
 [ "$FAILED" -gt 0 ] && log "Failed tests: $FAILED_NAMES_JSON"
 [ "${CRASHED:-0}" -gt 0 ] && log "Crashed tests (host died, no failure line): $CRASHED_NAMES_JSON"
 

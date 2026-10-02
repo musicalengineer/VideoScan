@@ -27,6 +27,7 @@ struct TreeWalkScaleTests {
         let root = try #require(graph.rootPersonID)
         let second = try #require(graph.relatives(.spouse, of: graph.people[root]!).first?.id
                                   ?? graph.people.keys.sorted().dropFirst().first)
+        let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
         let start = clock.now
         var result: TreeWalk.Result?
@@ -61,7 +62,8 @@ struct TreeWalkScaleTests {
             #expect(workMs < workCeilingMs, "100k walk+checks work \(workMs) ms, ceiling \(workCeilingMs) ms")
             #expect(elapsed < ceiling * 5, "100k walk hang guard: \(elapsed) (\(TimingBudget.loadDescription()))")
         } else {
-            #expect(elapsed < ceiling, "100k walk took \(elapsed), ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+            expectWithinTimingBudget("100k tree walk", measured: elapsed, budget: Self.budget,
+                                     loadBefore: loadBefore)
         }
         #expect(r.decorations.count == graph.people.count)
         #expect(r.visitedCount > 10_000)

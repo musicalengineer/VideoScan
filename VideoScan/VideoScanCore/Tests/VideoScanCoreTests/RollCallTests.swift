@@ -169,6 +169,7 @@ struct RollCallScaleTests {
 
     @Test func hundredThousandWalkedPeopleWithinBudget() {
         let lines: [TreeWalk.Line] = [.first, .second, .both, .none]
+        let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
         let start = clock.now
         let people = (0..<100_000).map { i in
@@ -182,7 +183,7 @@ struct RollCallScaleTests {
         print("[rollcall-scale] 100k → \(list.count) rows in \(elapsed) (\(TimingBudget.loadDescription()))")
         #expect(list.count == 36)
         #expect(Set(list.map(\.id)).count == 36)
-        let ceiling = TimingBudget.loadAwareDebugCeiling(Self.budget)
-        #expect(elapsed < ceiling, "100k roll call took \(elapsed), ceiling \(ceiling)")
+        expectWithinTimingBudget("100k roll call", measured: elapsed, budget: Self.budget,
+                                 loadBefore: loadBefore)
     }
 }

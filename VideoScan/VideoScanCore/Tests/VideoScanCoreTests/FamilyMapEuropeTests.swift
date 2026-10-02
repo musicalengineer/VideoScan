@@ -394,6 +394,7 @@ struct FamilyMapEuropeTests {
         _ = R.allUnitKeys   // the tables are built once, outside the measured loop
         var resolved = 0
         var wall: Duration = .zero
+        let loadBefore = TimingBudget.sampleLoad()
         let cpu = TimingBudget.measureThreadCPUTime {
             wall = ContinuousClock().measure {
                 for s in inputs where R.resolve(s) != nil { resolved += 1 }
@@ -401,9 +402,9 @@ struct FamilyMapEuropeTests {
         }
         // Measured 2026-09-30 (M4 Max, Debug, quiet): see the printed line;
         // the ceiling is ~3× that.
-        let ceiling = TimingBudget.loadAwareDebugCeiling(.milliseconds(900))
         print("[family-map] resolve 100k European: cpu \(cpu), wall \(wall), \(resolved) resolved (\(TimingBudget.loadDescription()))")
-        #expect(cpu < ceiling, "100k resolves took \(cpu) cpu / \(wall) wall, ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+        expectWithinTimingBudget("100k European place resolves (CPU)", measured: cpu, budget: .milliseconds(900),
+                                 loadBefore: loadBefore)
         #expect(resolved > n * 9 / 10, "\(resolved) of \(n)")
     }
 }

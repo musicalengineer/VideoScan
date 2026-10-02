@@ -400,8 +400,9 @@ final class FamilyTreeNameSearchTests: XCTestCase {
         return samples.sorted()[2]
     }
 
-    func testHundredThousandPeopleBuildAndTokenMatchWithinBudget() {
+    func testHundredThousandPeopleBuildAndTokenMatchWithinBudget() throws {
         let big = Self.big
+        let loadBefore = TimingBudget.sampleLoad()
         XCTAssertEqual(big.search.rowCount, 100_000)
         XCTAssertGreaterThan(big.search.keys.count, 1_000, "pointers and FSIDs give a real key table")
         // Token AND-match keystrokes: a full name, a narrowing pair, and
@@ -415,17 +416,23 @@ final class FamilyTreeNameSearchTests: XCTestCase {
         XCTAssertGreaterThan(broad, 5_000)
         print("SCALE[\(TimingBudget.isDebugBuild ? "Debug" : "Release")] 100k name search: build \(Int(big.buildMS)) ms; "
               + "'mary breen' \(full) ms (\(hits) rows); keystroke pair \(pair) ms; 'a' \(letter) ms (\(broad) rows)")
-        // Release budget from the spec (≤ 30 ms); Debug is held to a coarse,
-        // load-aware ceiling so a busy battery does not false-alarm.
+        // Release budget from the spec (≤ 30 ms); Debug gets a coarse 400 ms.
+        // Strict on a quiet machine; a busy-machine miss within 3× skips
+        // with the load named (GH #208, TimingBudget.judge).
         let budget: Duration = TimingBudget.isDebugBuild ? .milliseconds(400) : .milliseconds(30)
-        let ceiling = TimingBudget.seconds(TimingBudget.loadAwareDebugCeiling(budget)) * 1_000
-        XCTAssertLessThan(full, ceiling, "'mary breen' at 100k (\(TimingBudget.loadDescription()))")
-        XCTAssertLessThan(pair, ceiling, "keystroke pair at 100k (\(TimingBudget.loadDescription()))")
-        XCTAssertLessThan(letter, ceiling * 2, "single letter at 100k ranks ~\(broad) rows (\(TimingBudget.loadDescription()))")
+        try assertTimingJudgements([
+            TimingBudget.judgeNow("100k name search 'mary breen'", budget: budget,
+                                  measured: .milliseconds(full), loadBefore: loadBefore),
+            TimingBudget.judgeNow("100k name search keystroke pair", budget: budget,
+                                  measured: .milliseconds(pair), loadBefore: loadBefore),
+            TimingBudget.judgeNow("100k name search single letter (~\(broad) rows)", budget: budget * 2,
+                                  measured: .milliseconds(letter), loadBefore: loadBefore),
+        ])
     }
 
-    func testHundredThousandPeopleFuzzyFallbackWithinBudget() {
+    func testHundredThousandPeopleFuzzyFallbackWithinBudget() throws {
         let big = Self.big
+        let loadBefore = TimingBudget.sampleLoad()
         var result = FamilyTreeNameSearch.Result.empty
         // Misspelled both tokens: nothing exact, so the fuzzy stage runs.
         let fuzzy = medianMS { result = big.search.search("Elizabth Bradfrod") }
@@ -440,9 +447,12 @@ final class FamilyTreeNameSearchTests: XCTestCase {
         XCTAssertEqual(result.hits.count, 0)
         print("SCALE[\(TimingBudget.isDebugBuild ? "Debug" : "Release")] 100k fuzzy: 'Elizabth Bradfrod' \(fuzzy) ms; miss \(miss) ms")
         let budget: Duration = TimingBudget.isDebugBuild ? .milliseconds(1_500) : .milliseconds(150)
-        let ceiling = TimingBudget.seconds(TimingBudget.loadAwareDebugCeiling(budget)) * 1_000
-        XCTAssertLessThan(fuzzy, ceiling, "fuzzy fallback at 100k (\(TimingBudget.loadDescription()))")
-        XCTAssertLessThan(miss, ceiling, "fuzzy miss at 100k (\(TimingBudget.loadDescription()))")
+        try assertTimingJudgements([
+            TimingBudget.judgeNow("100k fuzzy fallback", budget: budget,
+                                  measured: .milliseconds(fuzzy), loadBefore: loadBefore),
+            TimingBudget.judgeNow("100k fuzzy miss", budget: budget,
+                                  measured: .milliseconds(miss), loadBefore: loadBefore),
+        ])
     }
 
     func testExactNameSensorOn100k() {
