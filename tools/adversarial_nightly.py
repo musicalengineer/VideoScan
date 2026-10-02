@@ -1154,6 +1154,21 @@ def status(as_json: bool) -> int:
     return 0
 
 
+def publish_metrics() -> None:
+    """After confirm: hand the ledger to the one metrics publisher
+    (tools/publish_metrics.py). It publishes COUNTS and dates only, never a title,
+    key, path or test name. Never fails the job; a failed publish is logged and
+    the next confirm re-reads the whole ledger."""
+    try:
+        r = subprocess.run([sys.executable, str(TOOLS / "publish_metrics.py"),
+                            "--adversarial-dir", str(state_dir())],
+                           capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+        lines = (r.stdout or "").strip().splitlines()
+        log_line("PROGRESS", "metrics publish: " + (lines[-1] if lines else f"no output (exit {r.returncode})"))
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log_line("ERROR", f"metrics publish failed: {exc}")
+
+
 def enable() -> int:
     if disabled_path().exists():
         trash = state_dir() / ".trash"
@@ -1229,8 +1244,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "confirm":
         import adversarial_confirm  # stage 3 lives beside this file
         with run_lock():
-            return adversarial_confirm.confirm(args.date or today(), sandbox=not args.no_sandbox,
-                                               app_run=not args.no_app_run)
+            rc = adversarial_confirm.confirm(args.date or today(), sandbox=not args.no_sandbox,
+                                             app_run=not args.no_app_run)
+        publish_metrics()
+        return rc
     if args.cmd == "close":
         return close_finding(args.fp, args.test, args.sha)
     if args.cmd == "decline":

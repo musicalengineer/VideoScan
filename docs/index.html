@@ -2,442 +2,302 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>VideoScan — Code Health Dashboard</title>
+<title>VideoScan — Metrics</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-
+<meta name="color-scheme" content="light dark">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<!--
+  ONE metrics page (Rick, 2026-10-02). Static; everything is fetched at load.
+  Data: the `metrics` branch via raw.githubusercontent.com (public, no auth,
+  CORS *), plus the public GitHub Actions API for CI / nightly-analysis run
+  results. Local-only data (coverage, adversarial ledger, codex review headers)
+  reaches the branch through tools/publish_metrics.py, which publishes numbers,
+  dates, folder names, tool names and severities only.
+  Honesty rule: a metric with no data says "no data yet"; never a fake zero.
+-->
 <style>
-  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
-
   :root {
-    --bg: #0d1117;
-    --panel: #161b22;
-    --panel-hover: #1c2230;
-    --border: #30363d;
-    --fg: #e6edf3;
-    --muted: #8b949e;
-    --accent: #58a6ff;
-    --accent-dim: #58a6ff22;
-    --good: #3fb950;
-    --good-dim: #3fb95022;
-    --warn: #d29922;
-    --warn-dim: #d2992222;
-    --orange: #db6d28;
-    --orange-dim: #db6d2822;
-    --bad: #f85149;
-    --bad-dim: #f8514922;
-    --purple: #bc8cff;
-    --purple-dim: #bc8cff22;
-    --radius: 12px;
+    --bg: #f6f8fa; --panel: #ffffff; --border: #d0d7de; --fg: #1f2328; --muted: #59636e;
+    --accent: #0969da; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e; --purple: #8250df;
+    --chip-bg: #eef1f4; --radius: 10px;
   }
-
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3; --muted: #8b949e;
+      --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; --purple: #bc8cff;
+      --chip-bg: #21262d;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3; --muted: #8b949e;
+    --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; --purple: #bc8cff;
+    --chip-bg: #21262d;
+  }
   * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--fg); padding: 24px;
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; line-height: 1.4; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  .top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .top h1 { font-size: 24px; font-weight: 700; }
+  .top .spacer { flex: 1; }
+  #theme-toggle { background: var(--panel); color: var(--fg); border: 1px solid var(--border);
+                  border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
+  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  #status { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+  #status.error { color: var(--bad); }
+  h3.section { margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
+               font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
+  .section-note { color: var(--muted); font-size: 12px; margin: -4px 0 10px; }
+  .section-error { color: var(--bad); font-size: 13px; margin: 6px 0; }
 
-  body {
-    background: var(--bg);
-    color: var(--fg);
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
-    padding: 32px;
-    min-height: 100vh;
-  }
+  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
+  .chip { background: var(--panel); border: 1px solid var(--border); border-left-width: 5px;
+          border-radius: var(--radius); padding: 10px 12px; min-height: 92px; }
+  .chip .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+  .chip .value { font-size: 17px; font-weight: 700; margin-top: 4px; }
+  .chip .when { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .chip.good { border-left-color: var(--good); }
+  .chip.bad  { border-left-color: var(--bad); }
+  .chip.warn { border-left-color: var(--warn); }
+  .chip.none { border-left-color: var(--border); }
+  .stale { display: inline-block; font-size: 11px; font-weight: 700; color: #fff; background: var(--bad);
+           border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
 
-  /* Header */
-  .header {
-    display: flex;
-    align-items: center;
-    gap: 16px;
-    margin-bottom: 8px;
-  }
-  .header svg { flex-shrink: 0; }
-  .header h1 {
-    font-size: 28px;
-    font-weight: 700;
-    letter-spacing: -0.5px;
-    background: linear-gradient(135deg, var(--accent), var(--purple));
-    -webkit-background-clip: text;
-    -webkit-text-fill-color: transparent;
-  }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+          padding: 12px 14px; position: relative; overflow: hidden; }
+  .card .indicator { position: absolute; top: 0; left: 0; width: 4px; height: 100%; }
+  .card .label { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.6px; margin-left: 6px; }
+  .card .value { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; margin-left: 6px; }
+  .card .delta { font-size: 12px; margin-top: 2px; color: var(--muted); margin-left: 6px; }
+  .delta.up-good, .delta.down-good { color: var(--good); }
+  .delta.up-bad, .delta.down-bad { color: var(--bad); }
 
-  .subtitle {
-    color: var(--muted);
-    font-size: 14px;
-    margin-bottom: 28px;
-    line-height: 1.5;
-  }
-  .subtitle a { color: var(--accent); text-decoration: none; }
-  .subtitle a:hover { text-decoration: underline; }
-
-  #status {
-    font-size: 12px;
-    color: var(--muted);
-    margin-bottom: 20px;
-    padding: 8px 12px;
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    display: inline-block;
-  }
-  #status.error {
-    color: var(--bad);
-    border-color: var(--bad);
-    background: var(--bad-dim);
-  }
-
-  /* Summary cards */
-  .cards {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-    gap: 14px;
-    margin-bottom: 28px;
-  }
-  .card {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 18px;
-    transition: border-color 0.15s, background 0.15s;
-    position: relative;
-    overflow: hidden;
-  }
-  .card:hover {
-    border-color: var(--accent);
-    background: var(--panel-hover);
-  }
-  .card .indicator {
-    position: absolute;
-    top: 0; left: 0;
-    width: 4px;
-    height: 100%;
-    border-radius: 4px 0 0 4px;
-  }
-  .card .label {
-    font-size: 11px;
-    text-transform: uppercase;
-    color: var(--muted);
-    letter-spacing: 0.8px;
-    font-weight: 500;
-    margin-left: 8px;
-  }
-  .card .value {
-    font-size: 28px;
-    font-weight: 700;
-    margin-top: 6px;
-    font-variant-numeric: tabular-nums;
-    margin-left: 8px;
-  }
-  .card .delta {
-    font-size: 12px;
-    margin-top: 4px;
-    color: var(--muted);
-    font-weight: 500;
-    margin-left: 8px;
-  }
-  .delta.up-good   { color: var(--good); }
-  .delta.up-bad    { color: var(--bad); }
-  .delta.down-good { color: var(--good); }
-  .delta.down-bad  { color: var(--bad); }
-
-  /* Chart grid */
-  .charts {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(460px, 1fr));
-    gap: 16px;
-  }
-  .chart-box {
-    background: var(--panel);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    padding: 20px;
-    transition: border-color 0.15s;
-  }
-  .chart-box:hover { border-color: var(--muted); }
-  .chart-box h2 {
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--muted);
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-    margin-bottom: 12px;
-  }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 12px; }
+  .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; min-width: 0; }
+  .chart-box h2 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase;
+                  letter-spacing: 0.4px; margin-bottom: 8px; }
   canvas { width: 100% !important; height: 240px !important; }
-  .chart-note {
-    min-height: 240px;
-    display: flex;
-    align-items: center;
-    color: var(--muted);
-    font-size: 14px;
-    line-height: 1.5;
-  }
-  .hidden { display: none; }
-
-  /* Section heading (between the per-push and nightly blocks) */
-  .section-heading {
-    margin: 32px 0 12px;
-    padding-bottom: 8px;
-    border-bottom: 1px solid var(--border);
-    font-size: 15px;
-    font-weight: 600;
-    color: var(--muted);
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
-  }
-  .section-heading:first-of-type { margin-top: 8px; }
-
-  /* Staleness banner — shown only when newest testdriver row is >36h old.
-     Surfaced by JS via .hidden toggle. Bright red to be impossible to
-     miss; clicking the log path is informational only. */
-  #staleness-banner {
-    background: var(--bad-dim);
-    border: 1px solid var(--bad);
-    color: var(--bad);
-    border-radius: var(--radius);
-    padding: 14px 18px;
-    margin-bottom: 20px;
-    font-size: 14px;
-    font-weight: 500;
-    line-height: 1.5;
-  }
-  #staleness-banner code {
-    background: rgba(0,0,0,0.3);
-    padding: 2px 6px;
-    border-radius: 4px;
-    font-family: 'SF Mono', Menlo, Monaco, monospace;
-    font-size: 12px;
-  }
-
-  /* Footer */
-  .footer {
-    margin-top: 32px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-    font-size: 12px;
-    color: var(--muted);
-  }
-  .footer a { color: var(--accent); text-decoration: none; }
-
-  /* Responsive */
-  @media (max-width: 520px) {
-    body { padding: 16px; }
+  canvas.tall { height: 380px !important; }
+  .chart-note { min-height: 80px; display: flex; align-items: center; color: var(--muted); font-size: 14px; }
+  .hidden { display: none !important; }
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
+  th, td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  .footer { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+  @media (max-width: 560px) {
+    body { padding: 12px; }
+    .top h1 { font-size: 20px; }
     .cards { grid-template-columns: repeat(2, 1fr); }
-    .charts { grid-template-columns: 1fr; }
-    .header h1 { font-size: 22px; }
+    canvas { height: 210px !important; }
   }
 </style>
 </head>
 <body>
 
-<div class="header">
-  <svg width="36" height="36" viewBox="0 0 36 36" fill="none">
-    <rect width="36" height="36" rx="8" fill="#58a6ff" fill-opacity="0.15"/>
-    <path d="M10 18L15 23L26 12" stroke="#58a6ff" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>
-  <h1>VideoScan</h1>
+<div class="top">
+  <h1>VideoScan metrics</h1>
+  <div class="spacer"></div>
+  <button id="theme-toggle" type="button" onclick="cycleTheme()">Theme: auto</button>
 </div>
-
 <div class="subtitle">
-  Code health dashboard &mdash; lint, complexity, repository metrics, and nightly
-  static analysis. Runtime tests and TSan run on Mac hardware.<br>
-  <a href="https://github.com/musicalengineer/VideoScan">musicalengineer/VideoScan</a>
+  Tests, coverage, static analysis and reviews for
+  <a href="https://github.com/musicalengineer/VideoScan">musicalengineer/VideoScan</a>.
+  Anything older than 36 hours is marked <span class="stale">STALE</span>. Missing data says so; it is never shown as zero.
 </div>
-
-<!-- Shown only when latest TestDriver row is older than the threshold
-     defined in JS (currently 36h). Hidden by default. -->
-<div id="staleness-banner" class="hidden"></div>
-
 <div id="status">Loading metrics&hellip;</div>
 
-<!-- ============ CATALOG SEARCH PERFORMANCE ============ -->
-<h3 class="section-heading">Performance Benchmarks &mdash; Catalog Search</h3>
+<!-- 1 ============ STATUS STRIP ============ -->
+<h3 class="section">Status</h3>
+<div class="strip" id="status-strip"></div>
+<div class="section-error hidden" id="status-error"></div>
+
+<!-- 2 ============ TESTS ============ -->
+<h3 class="section">Tests &mdash; 2 AM nightly</h3>
+<div class="cards" id="tests-cards"></div>
+<div class="charts">
+  <div class="chart-box"><h2>Passed / failed per nightly run</h2><canvas id="c-tests"></canvas><div class="chart-note hidden" id="c-tests-note"></div></div>
+  <div class="chart-box"><h2>Nightly duration (minutes)</h2><canvas id="c-tests-duration"></canvas><div class="chart-note hidden" id="c-tests-duration-note"></div></div>
+</div>
+<div class="section-error hidden" id="tests-error"></div>
+
+<!-- 3 ============ COVERAGE ============ -->
+<h3 class="section">Coverage</h3>
+<p class="section-note" id="coverage-note">Per folder, from the 4 AM Debug coverage run on the M4. Logic % leaves out SwiftUI views.</p>
+<div class="cards" id="coverage-cards"></div>
+<div class="charts">
+  <div class="chart-box"><h2>By folder &mdash; latest run</h2><canvas id="c-cov-folders" class="tall"></canvas><div class="chart-note hidden" id="c-cov-folders-note"></div></div>
+  <div class="chart-box"><h2>Coverage trend (%)</h2><canvas id="c-cov-trend"></canvas><div class="chart-note hidden" id="c-cov-trend-note"></div></div>
+</div>
+<div class="section-error hidden" id="coverage-error"></div>
+
+<!-- 4 ============ STATIC ANALYSIS ============ -->
+<h3 class="section">Static analysis &mdash; GitHub nightly</h3>
+<div class="cards" id="static-cards"></div>
+<div class="charts">
+  <div class="chart-box"><h2>Compiler warnings</h2><canvas id="c-sa-compiler"></canvas><div class="chart-note hidden" id="c-sa-compiler-note"></div></div>
+  <div class="chart-box"><h2>CodeQL findings and extraction coverage</h2><canvas id="c-sa-codeql"></canvas><div class="chart-note hidden" id="c-sa-codeql-note"></div></div>
+  <div class="chart-box"><h2>Periphery dead code and SwiftLint --strict</h2><canvas id="c-sa-lint"></canvas><div class="chart-note hidden" id="c-sa-lint-note"></div></div>
+  <div class="chart-box"><h2>Sanitizer hits (UBSan / ASan / TSan)</h2><canvas id="c-sa-san"></canvas><div class="chart-note hidden" id="c-sa-san-note"></div></div>
+</div>
+<div class="chart-box" style="margin-top:12px"><h2 id="findings-title">Latest findings summary, by tool</h2><div class="table-wrap" id="findings-table"></div></div>
+<div class="section-error hidden" id="static-error"></div>
+
+<!-- 5 ============ ADVERSARIAL REVIEW ============ -->
+<h3 class="section">Adversarial review &mdash; nightly</h3>
+<div class="cards" id="adv-cards"></div>
+<div class="charts">
+  <div class="chart-box"><h2>Findings by severity, per night</h2><canvas id="c-adv"></canvas><div class="chart-note hidden" id="c-adv-note"></div></div>
+  <div class="chart-box"><h2>Per night</h2><div class="table-wrap" id="adv-table"></div></div>
+</div>
+<div class="section-error hidden" id="adv-error"></div>
+
+<!-- 6 ============ CODEX REVIEWS ============ -->
+<h3 class="section">Codex reviews</h3>
+<div class="cards" id="codex-cards"></div>
+<div class="charts">
+  <div class="chart-box"><h2>Passes and findings per day</h2><canvas id="c-codex"></canvas><div class="chart-note hidden" id="c-codex-note"></div></div>
+</div>
+<div class="section-error hidden" id="codex-error"></div>
+
+<!-- 7 ============ HALLIE TESTBED ============ -->
+<h3 class="section">Hallie testbed</h3>
+<div class="cards" id="hallie-cards"></div>
+<div class="charts">
+  <div class="chart-box"><h2>Pass rate per nightly replay (%)</h2><canvas id="c-hallie"></canvas><div class="chart-note hidden" id="c-hallie-note"></div></div>
+</div>
+<div class="section-error hidden" id="hallie-error"></div>
+
+<!-- 8 ============ CODE SIZE ============ -->
+<h3 class="section">Code size</h3>
+<div class="cards" id="size-cards"></div>
+<div class="charts">
+  <div class="chart-box"><h2>Swift lines by folder &mdash; latest push</h2><canvas id="c-size-folders" class="tall"></canvas><div class="chart-note hidden" id="c-size-folders-note"></div></div>
+  <div class="chart-box"><h2>Total Swift lines (app + tests + CLI) and files over 1,000 lines</h2><canvas id="c-size-trend"></canvas><div class="chart-note hidden" id="c-size-trend-note"></div></div>
+</div>
+<div class="section-error hidden" id="size-error"></div>
+
+<!-- 9 ============ BENCHMARKS (occasional runs) ============ -->
+<h3 class="section">Benchmarks &mdash; occasional runs</h3>
+<p class="section-note">Not nightly: these publish only when someone runs them, so their dates matter.</p>
 <div class="cards" id="search-benchmark-cards"></div>
 <div class="charts">
   <div class="chart-box">
-    <h2>100k synthetic catalog &mdash; comparable Release runs</h2>
+    <h2>Catalog search, 100k synthetic records &mdash; comparable Release runs</h2>
     <canvas id="chart-search-benchmarks"></canvas>
     <div id="chart-search-benchmark-note" class="chart-note hidden">No validated catalog-search benchmarks have been published yet.</div>
     <div id="search-benchmark-provenance" class="chart-note hidden"></div>
   </div>
 </div>
-
-<!-- ============ NATURAL LANGUAGE CATALOG SEARCH QUALITY ============ -->
-<h3 class="section-heading">Natural Language Catalog Search &mdash; pass/fail numbers</h3>
-<div class="cards" id="hallie-cards"></div>
+<p class="subtitle" id="gauntlet-status" style="margin-top:12px">Release gauntlet: UI not run (phase 2). No gauntlet results published yet.</p>
 <div class="charts">
-  <div class="chart-box">
-    <h2>Hallie question testbed &mdash; pass/fail trend</h2>
-    <canvas id="chart-hallie-pass-fail"></canvas>
-    <div id="chart-hallie-note" class="chart-note hidden"></div>
-  </div>
+  <div class="chart-box"><h2>Gauntlet &mdash; stage and total duration (s)</h2><canvas id="chart-gauntlet-duration"></canvas></div>
+  <div class="chart-box"><h2>Gauntlet &mdash; stage pass / fail / incomplete</h2><canvas id="chart-gauntlet-outcome"></canvas></div>
 </div>
-
-<!-- ============ PERSON RECOGNITION QUALITY SECTION ============ -->
-<h3 class="section-heading">Person Recognition &mdash; benchmark readiness and measured quality</h3>
-
-<div class="cards" id="person-cards"></div>
-
-<div class="charts">
-  <div class="chart-box">
-    <h2>Person Recognition &mdash; Readiness and Identity F1</h2>
-    <canvas id="chart-person-scores"></canvas>
-    <div id="chart-person-note" class="chart-note hidden">
-      Quality history begins after the nightly job publishes its first person-recognition row.
-    </div>
-  </div>
-</div>
-
-<!-- ============ TESTDRIVER (LOCAL RUNS) SECTION ============ -->
-<!-- Real test runs (XCTest + Swift Testing) on Rick's Mac hardware via
-     TestDriver. This is the only place real coverage and pass/fail counts
-     show up; GitHub-hosted CI skips unit tests entirely. -->
-<h3 class="section-heading">Release Gauntlet</h3>
-<p class="subtitle" id="gauntlet-status">UI not run (phase 2). No gauntlet results published yet.</p>
-<div class="charts">
-  <div class="chart-box"><h2>Gauntlet &mdash; Stage and Total Duration (s)</h2><canvas id="chart-gauntlet-duration"></canvas></div>
-  <div class="chart-box"><h2>Gauntlet &mdash; Stage Pass / Fail / Incomplete</h2><canvas id="chart-gauntlet-outcome"></canvas></div>
-</div>
-<h3 class="section-heading">Local Test Runs &mdash; TestDriver on Mac hardware</h3>
-
-<!-- TestDriver cards -->
-<div class="cards" id="td-cards"></div>
-
-<!-- TestDriver trend charts -->
-<div class="charts">
-  <div class="chart-box"><h2>TestDriver &mdash; Test Pass/Fail Trend</h2><canvas id="chart-td-pass-fail"></canvas></div>
-  <div class="chart-box"><h2>TestDriver &mdash; Coverage %</h2><canvas id="chart-td-coverage"></canvas></div>
-  <div class="chart-box"><h2>TestDriver &mdash; Duration (s)</h2><canvas id="chart-td-duration"></canvas></div>
-</div>
-
-<!-- ============ NIGHTLY STATIC ANALYSIS SECTION ============ -->
-<h3 class="section-heading">Nightly Static Analysis (full strictness, run at 01:00 EDT)</h3>
-
-<!-- Cards -->
-<div class="cards" id="nightly-cards"></div>
-
-<!-- Charts -->
-<div class="charts">
-  <div class="chart-box"><h2>Swift Strict Concurrency Warnings</h2><canvas id="chart-concurrency"></canvas></div>
-  <div class="chart-box"><h2>CodeQL Findings (security &amp; quality)</h2><canvas id="chart-codeql"></canvas></div>
-  <div class="chart-box"><h2>Thread Sanitizer Race Reports (Mac/self-hosted)</h2><canvas id="chart-tsan"></canvas></div>
-  <div class="chart-box"><h2>SwiftLint --strict</h2><canvas id="chart-swiftlint-strict"></canvas></div>
-  <div class="chart-box"><h2>Periphery (no --retain-public)</h2><canvas id="chart-periphery-strict"></canvas></div>
-</div>
-
-<!-- ============ PER-PUSH SECTION ============ -->
-<!-- Demoted to the bottom: GitHub-hosted CI on every push to main.
-     Coverage is always 0% here because real unit tests don't run on
-     virtualized M1 runners; useful for lint/LOC/fat-file trends only. -->
-<h3 class="section-heading">Per-Push CI &mdash; GitHub Actions (lint &amp; LOC trends; no unit tests)</h3>
-
-<!-- Summary cards -->
-<div class="cards" id="cards"></div>
-
-<!-- Trend charts -->
-<div class="charts">
-  <div class="chart-box">
-    <h2>Logic-Only Coverage %</h2>
-    <canvas id="chart-coverage"></canvas>
-    <div id="chart-coverage-note" class="chart-note hidden">
-      Coverage is unavailable from GitHub-hosted CI because unit tests are disabled there. See the Local Test Runs section above for real coverage from Mac hardware.
-    </div>
-  </div>
-  <div class="chart-box"><h2>SwiftLint Warnings + Errors</h2><canvas id="chart-swiftlint"></canvas></div>
-  <div class="chart-box"><h2>Periphery — Unused Code</h2><canvas id="chart-periphery"></canvas></div>
-  <div class="chart-box"><h2>Total Swift Lines of Code</h2><canvas id="chart-loc"></canvas></div>
-  <div class="chart-box"><h2>Files Over 1,000 Lines</h2><canvas id="chart-fat-files"></canvas></div>
-  <div class="chart-box"><h2>Test Count</h2><canvas id="chart-tests"></canvas></div>
-  <div class="chart-box"><h2>Regression Tests Locked-In</h2><canvas id="chart-regressions"></canvas></div>
-</div>
+<div class="section-error hidden" id="bench-error"></div>
 
 <div class="footer">
-  Per-push data collected on every push to <code>main</code>; nightly data
-  collected at 01:00 EDT or via manual <code>workflow_dispatch</code>.
-  Both stored on the <code>metrics</code> branch.
-  &bull; <a href="https://github.com/musicalengineer/VideoScan">Source</a>
+  Data: the <code>metrics</code> branch (CI on every push to <code>main</code>, the GitHub nightly analysis,
+  the 2 AM nightly on the Macs, and <code>tools/publish_metrics.py</code> after the 4 AM coverage and
+  05:30 adversarial-confirm jobs) and the public GitHub Actions API.
+  &bull; <a href="https://github.com/musicalengineer/VideoScan/tree/metrics/metrics">Raw data</a>
+  &bull; <a href="https://github.com/musicalengineer/VideoScan/actions">Actions</a>
 </div>
 
 <script>
-// Two streams: per-CI history and nightly static analysis. Both live on
-// the orphan `metrics` branch. We prefer SHA-pinned raw URLs (uncacheable
-// by Fastly) when we can resolve the current tip via the public branches
-// API; otherwise fall back to branch-pinned URLs (cacheable, slow refresh)
-// then to local files for `file://` opens.
 const REPO = "musicalengineer/VideoScan";
 const BRANCH_API = `https://api.github.com/repos/${REPO}/branches/metrics`;
+const RUNS_API = wf => `https://api.github.com/repos/${REPO}/actions/workflows/${wf}/runs?per_page=30`;
 const RAW_BRANCH_BASE = `https://raw.githubusercontent.com/${REPO}/metrics/metrics`;
 const CACHE_BUSTER = `t=${Date.now()}`;
-const HISTORY_LOCAL = `./history.jsonl?${CACHE_BUSTER}`;
-const NIGHTLY_LOCAL = `./static_analysis.jsonl?${CACHE_BUSTER}`;
-const TESTDRIVER_LOCAL = `./testdriver.jsonl?${CACHE_BUSTER}`;
+const local = name => `./${name}?${CACHE_BUSTER}`;
 const SEARCH_BENCHMARKS_LOCAL = `./search_benchmarks.jsonl?${CACHE_BUSTER}`;
-const HALLIE_TESTBED_LOCAL = `./hallie_testbed.jsonl?${CACHE_BUSTER}`;
 const EXPECTED_SEARCH_QUERIES = [
   "d", "don", "donna", "xylotheremin", "zzqx", "donna christmas 1997",
   "1990s", "people:donna", '"cape cod"', "pelicanwharf sunsetreel",
 ];
+// POI replays and gauntlet runs share testdriver.jsonl but are not product test runs.
 const isTestRunRow = row => row.source !== "poi-cycle-metrics" && row.source !== "gauntlet";
+const STALE_HOURS = 36;
+const NO_DATA = "no data yet";
+const SEVERITIES = ["P0", "P1", "P2", "P3"];
+const SEV_COLORS = { P0: "#a40e26", P1: "#f85149", P2: "#d29922", P3: "#8b949e" };
 
-// Resolved at load time. If the API call fails (rate limit, offline,
-// etc.) these stay null and the fetch path uses the branch-pinned URL.
 let METRICS_SHA = null;
-
-// Staleness threshold for the TestDriver banner. 36h gives some slack
-// for weekends + DST jitter — nightly runs at 02:00 local daily.
-const STALENESS_THRESHOLD_HOURS = 36;
-const PERSON_METRIC_STALE_HOURS = 36;
-
 const $status = document.getElementById("status");
-const $staleBanner = document.getElementById("staleness-banner");
-function fail(msg) { $status.classList.add("error"); $status.textContent = msg; }
 
-async function resolveMetricsSha() {
-  try {
-    const r = await fetch(BRANCH_API, { cache: "no-store" });
-    if (!r.ok) return null;
-    const j = await r.json();
-    return j?.commit?.sha || null;
-  } catch { return null; }
-}
-
-function rawUrl(fileName) {
-  // SHA-pinned raw URLs are immutable, so Fastly serves them cold to
-  // any caller — exactly what we want for "show me TODAY's nightly
-  // row immediately" after the page loads. Falls back to branch URL.
-  if (METRICS_SHA) {
-    return `https://raw.githubusercontent.com/${REPO}/${METRICS_SHA}/metrics/${fileName}`;
+// ---------------------------------------------------------------- theme
+const THEMES = ["auto", "dark", "light"];
+function applyTheme(theme) {
+  const root = typeof document.documentElement === "object" ? document.documentElement : null;
+  if (root && root.setAttribute) {
+    if (theme === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", theme);
   }
-  return `${RAW_BRANCH_BASE}/${fileName}?${CACHE_BUSTER}`;
+  const btn = document.getElementById("theme-toggle");
+  if (btn) btn.textContent = `Theme: ${theme}`;
+}
+function savedTheme() {
+  try { return (typeof localStorage !== "undefined" && localStorage.getItem("vs-theme")) || "auto"; }
+  catch { return "auto"; }
+}
+function cycleTheme() {
+  const next = THEMES[(THEMES.indexOf(savedTheme()) + 1) % THEMES.length];
+  try { if (typeof localStorage !== "undefined") localStorage.setItem("vs-theme", next); } catch {}
+  applyTheme(next);
 }
 
-function hoursSince(isoTs) {
-  if (!isoTs) return Infinity;
-  const ms = Date.now() - new Date(isoTs).getTime();
-  if (Number.isNaN(ms)) return Infinity;
-  return ms / (1000 * 60 * 60);
+// ---------------------------------------------------------------- helpers
+function esc(value) {
+  return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
 }
-
-function showStalenessBanner(latestTs) {
-  if (!$staleBanner) return;
-  const hrs = hoursSince(latestTs);
-  if (hrs <= STALENESS_THRESHOLD_HOURS) {
-    $staleBanner.classList.add("hidden");
-    return;
-  }
-  const days = Math.floor(hrs / 24);
-  const pretty = days >= 2
-    ? `${days} days ago`
-    : `${Math.floor(hrs)} hours ago`;
-  $staleBanner.innerHTML =
-    `&#9888; <strong>Metrics stale</strong> &mdash; last successful TestDriver run ${pretty}. ` +
-    `Check <code>~/Library/Logs/VideoScan/nightly_test_*.log</code> on the Mac Studio.`;
-  $staleBanner.classList.remove("hidden");
-}
+const isNum = v => typeof v === "number" && Number.isFinite(v);
+const fmtNum = v => isNum(v) ? v.toLocaleString("en-US") : NO_DATA;
+const fmtPct = v => isNum(v) ? `${v.toFixed(1)}%` : NO_DATA;
 
 function parseJsonl(text) {
-  return text.split("\n")
+  return (text || "").split("\n")
     .map(l => l.trim())
     .filter(l => l.length > 0)
     .map(l => { try { return JSON.parse(l); } catch { return null; } })
-    .filter(r => r !== null);
+    .filter(r => r !== null && typeof r === "object");
 }
+// A date-only value ("2026-10-02") is the local night it names.
+function toTime(ts) {
+  if (!ts) return NaN;
+  const s = /^\d{4}-\d{2}-\d{2}$/.test(ts) ? `${ts}T00:00:00` : ts;
+  return new Date(s).getTime();
+}
+function hoursSince(ts) {
+  const t = toTime(ts);
+  return Number.isNaN(t) ? Infinity : (Date.now() - t) / 3600000;
+}
+function fmtWhen(ts) {
+  const t = toTime(ts);
+  if (Number.isNaN(t)) return NO_DATA;
+  const d = new Date(t);
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(ts);
+  const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const hrs = hoursSince(ts);
+  const ago = hrs < 48 ? `${Math.max(0, Math.round(hrs))} h ago` : `${Math.round(hrs / 24)} days ago`;
+  return dateOnly ? `night of ${day} · ${ago}`
+    : `${day} ${d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · ${ago}`;
+}
+function dateLabels(rows) {
+  return rows.map(r => {
+    const t = toTime(r.ts || r.date);
+    return Number.isNaN(t) ? "" : new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  });
+}
+// The last row of each calendar day (keeps 1,000+ per-push rows readable).
+function lastPerDay(rows) {
+  const byDay = new Map();
+  for (const r of rows) byDay.set(String(r.ts || r.date || "").slice(0, 10), r);
+  return Array.from(byDay.values());
+}
+function sortByTs(rows) { return rows.sort((a, b) => String(a.ts || a.date || "").localeCompare(String(b.ts || b.date || ""))); }
 
 function deltaClass(older, newer, lowerIsBetter) {
   if (older == null || newer == null || older === newer) return "";
@@ -445,7 +305,6 @@ function deltaClass(older, newer, lowerIsBetter) {
   if (lowerIsBetter) return rising ? "up-bad" : "down-good";
   return rising ? "up-good" : "down-bad";
 }
-
 function fmtDelta(older, newer) {
   if (older == null || newer == null) return "";
   const d = newer - older;
@@ -454,203 +313,469 @@ function fmtDelta(older, newer) {
   const val = Number.isInteger(d) ? d : d.toFixed(2);
   return `${sign}${val} from previous`;
 }
-
 function card(label, value, older, newer, lowerIsBetter, indicatorColor) {
   const el = document.createElement("div");
   el.className = "card";
   el.innerHTML = `
     <div class="indicator" style="background: ${indicatorColor || 'var(--accent)'}"></div>
-    <div class="label">${label}</div>
-    <div class="value">${value == null ? "&mdash;" : value}</div>
-    <div class="delta ${deltaClass(older, newer, lowerIsBetter)}">${fmtDelta(older, newer)}</div>
+    <div class="label">${esc(label)}</div>
+    <div class="value">${value == null ? NO_DATA : esc(value)}</div>
+    <div class="delta ${deltaClass(older, newer, lowerIsBetter)}">${esc(fmtDelta(older, newer))}</div>
   `;
   return el;
 }
-
-function personBandColor(band) {
-  if (band === "green") return "var(--good)";
-  if (band === "orange") return "var(--orange)";
-  if (band === "yellow") return "var(--warn)";
-  return "var(--bad)";
+function noDataCard(container, label, detail) {
+  container.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
+    <div class="indicator" style="background: var(--border)"></div>
+    <div class="label">${esc(label)}</div>
+    <div class="value" style="font-size: 14px;">${esc(detail)}</div></div>`;
 }
-
-function metricPercent(value) {
-  return typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "N/A";
-}
-
+const lineStyle = (color) => ({
+  borderColor: color,
+  backgroundColor: color + "22",
+  fill: false,
+  pointBackgroundColor: color,
+  pointBorderColor: color,
+});
 const chartDefaults = {
   responsive: true,
   maintainAspectRatio: false,
   interaction: { mode: "index", intersect: false },
-  plugins: {
-    legend: { display: false },
-    tooltip: {
-      backgroundColor: "#161b22",
-      borderColor: "#30363d",
-      borderWidth: 1,
-      titleColor: "#e6edf3",
-      bodyColor: "#8b949e",
-      padding: 10,
-      cornerRadius: 8,
-      displayColors: true,
-    },
-  },
+  plugins: { legend: { display: true, labels: { boxWidth: 12 } } },
   scales: {
-    x: {
-      ticks: { color: "#8b949e", maxRotation: 0, autoSkipPadding: 24, font: { size: 11 } },
-      grid: { color: "#21262d", drawBorder: false },
-    },
-    y: {
-      ticks: { color: "#8b949e", font: { size: 11 } },
-      grid: { color: "#21262d", drawBorder: false },
-      beginAtZero: true,
-    },
+    x: { ticks: { maxRotation: 0, autoSkipPadding: 20, font: { size: 11 } }, grid: { color: "rgba(139,148,158,0.18)" } },
+    y: { ticks: { font: { size: 11 } }, grid: { color: "rgba(139,148,158,0.18)" }, beginAtZero: true },
   },
-  elements: {
-    point: { radius: 3, hoverRadius: 6, borderWidth: 2, backgroundColor: "#0d1117" },
-    line: { borderWidth: 2.5, tension: 0.3 },
-  },
+  elements: { point: { radius: 2, hoverRadius: 5 }, line: { borderWidth: 2, tension: 0.25 } },
 };
-
-function drawLine(canvasId, labels, datasets) {
-  new Chart(document.getElementById(canvasId), {
-    type: "line",
-    data: { labels, datasets },
-    options: chartDefaults,
-  });
+function note(canvasId, text) {
+  const canvas = document.getElementById(canvasId);
+  if (canvas) canvas.classList.add("hidden");
+  const n = document.getElementById(`${canvasId}-note`);
+  if (n) { n.textContent = text; n.classList.remove("hidden"); }
+}
+// Draw a chart only if at least one dataset has a real value; otherwise say so.
+function chartOrNote(canvasId, type, labels, datasets, options, emptyText) {
+  const hasData = datasets.some(d => (d.data || []).some(v => isNum(v)));
+  if (!hasData) { note(canvasId, emptyText || NO_DATA); return; }
+  new Chart(document.getElementById(canvasId), { type, data: { labels, datasets }, options: options || chartDefaults });
+}
+function withAxes(extra) {
+  return { ...chartDefaults, scales: { ...chartDefaults.scales, ...extra } };
+}
+function showError(section, err) {
+  const el = document.getElementById(`${section}-error`);
+  if (el) { el.textContent = `This section failed to render: ${err && err.message ? err.message : err}`; el.classList.remove("hidden"); }
+  if (typeof console !== "undefined") console.error(section, err);
 }
 
-async function fetchText(remote, local) {
+// ---------------------------------------------------------------- fetch
+async function resolveMetricsSha() {
   try {
-    // `cache: no-store` skips the browser cache; SHA-pinned URLs are
-    // already CDN-cold but the browser may still serve a stale copy on
-    // a refresh-within-session.
+    const r = await fetch(BRANCH_API, { cache: "no-store" });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j?.commit?.sha || null;
+  } catch { return null; }
+}
+function rawUrl(fileName) {
+  // SHA-pinned raw URLs are immutable, so the CDN serves today's rows at once;
+  // the branch URL (cached ~5 min) is the fallback when the API is rate-limited.
+  if (METRICS_SHA) return `https://raw.githubusercontent.com/${REPO}/${METRICS_SHA}/metrics/${fileName}`;
+  return `${RAW_BRANCH_BASE}/${fileName}?${CACHE_BUSTER}`;
+}
+async function fetchText(remote, localUrl) {
+  try {
     const r = await fetch(remote, { cache: "no-store" });
     if (r.ok) return await r.text();
   } catch {}
   try {
-    const r = await fetch(local);
+    const r = await fetch(localUrl);
     if (r.ok) return await r.text();
   } catch {}
   return null;
 }
-
-function dateLabels(rows) {
-  return rows.map(r => {
-    if (!r.ts) return "";
-    const d = new Date(r.ts);
-    return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
-  });
+async function fetchJson(url) {
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+// Latest COMPLETED run on main (the API's own branch filter is unreliable,
+// so filter client-side), plus whether a newer one is still running.
+async function latestMainRun(workflowFile) {
+  const j = await fetchJson(RUNS_API(workflowFile));
+  const runs = (j && Array.isArray(j.workflow_runs) ? j.workflow_runs : []).filter(r => r.head_branch === "main");
+  if (!runs.length) return null;
+  const done = runs.find(r => r.status === "completed") || null;
+  return { done, running: runs[0].status !== "completed" ? runs[0] : null };
 }
 
-async function loadData() {
-  // Resolve a SHA for the metrics branch first so subsequent fetches go
-  // to immutable URLs. Null is fine — fetchText will use the branch URL.
-  METRICS_SHA = await resolveMetricsSha();
+// ---------------------------------------------------------------- 1. status strip
+function chip(container, { label, value, when, tone, detail }) {
+  const el = document.createElement("div");
+  const stale = when && hoursSince(when) > STALE_HOURS;
+  el.className = `chip ${stale ? "bad" : (tone || "none")}`;
+  el.innerHTML = `<div class="label">${esc(label)}</div>
+    <div class="value">${esc(value)}${stale ? '<span class="stale">STALE</span>' : ""}</div>
+    <div class="when">${esc(when ? fmtWhen(when) : NO_DATA)}${detail ? " · " + esc(detail) : ""}</div>`;
+  container.appendChild(el);
+}
+const conclusionTone = c => c === "success" ? "good" : (c === "failure" || c === "timed_out") ? "bad" : "warn";
 
-  // ---- Per-push history ----
-  const historyText = await fetchText(rawUrl("history.jsonl"), HISTORY_LOCAL);
-  if (!historyText) {
-    fail("No metrics data available. Push to main or run scripts/collect_metrics.sh locally.");
-    return;
-  }
-  const rows = parseJsonl(historyText);
-  if (rows.length === 0) {
-    fail("Metrics file exists but contains no valid data.");
-    return;
-  }
-  rows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
+function renderStatus(d) {
+  const strip = document.getElementById("status-strip");
 
-  const last = rows[rows.length - 1];
-  const prev = rows.length > 1 ? rows[rows.length - 2] : {};
-
-  // ---- Nightly static analysis (optional \u2014 may not exist yet) ----
-  const nightlyText = await fetchText(rawUrl("static_analysis.jsonl"), NIGHTLY_LOCAL);
-  const nightlyRows = nightlyText ? parseJsonl(nightlyText) : [];
-  nightlyRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
-  const nLast = nightlyRows.length ? nightlyRows[nightlyRows.length - 1] : {};
-  const nPrev = nightlyRows.length > 1 ? nightlyRows[nightlyRows.length - 2] : {};
-
-  // ---- Status line ----
-  const date = last.ts ? new Date(last.ts).toLocaleDateString("en-US", {
-    month: "short", day: "numeric", year: "numeric", hour: "2-digit", minute: "2-digit"
-  }) : "unknown";
-  const nightlyDate = nLast.ts ? new Date(nLast.ts).toLocaleDateString("en-US", {
-    month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
-  }) : null;
-  $status.textContent =
-    `${rows.length} per-push points \u2022 last: ${date} \u2022 ${last.sha}` +
-    (nightlyDate
-      ? ` \u2022 ${nightlyRows.length} nightly points \u2022 last nightly: ${nightlyDate}`
-      : ` \u2022 no nightly runs yet`);
-
-  // ---- Per-push cards ----
-  const cardsEl = document.getElementById("cards");
-  const hasCoverage = rows.some(r => r.coverage_logic_pct != null);
-  cardsEl.appendChild(card("Logic Coverage",
-    last.coverage_logic_pct != null ? last.coverage_logic_pct.toFixed(1) + "%" : "Mac only",
-    prev.coverage_logic_pct, last.coverage_logic_pct, false, "var(--good)"));
-  cardsEl.appendChild(card("Swift LOC",
-    last.total_swift_lines?.toLocaleString(), prev.total_swift_lines, last.total_swift_lines, false, "var(--muted)"));
-  cardsEl.appendChild(card("Open Issues",
-    last.open_issues, prev.open_issues, last.open_issues, true, "var(--bad)"));
-  cardsEl.appendChild(card("Lint Warnings",
-    last.swiftlint_warnings, prev.swiftlint_warnings, last.swiftlint_warnings, true, "var(--warn)"));
-  cardsEl.appendChild(card("Lint Errors",
-    last.swiftlint_errors, prev.swiftlint_errors, last.swiftlint_errors, true, "var(--bad)"));
-  cardsEl.appendChild(card("Unused Code",
-    last.periphery_findings, prev.periphery_findings, last.periphery_findings, true, "var(--accent)"));
-  cardsEl.appendChild(card("Tests",
-    last.test_count, prev.test_count, last.test_count, false, "var(--good)"));
-  cardsEl.appendChild(card("Regression Tests",
-    last.regression_count, prev.regression_count, last.regression_count, false, "var(--purple)"));
-  cardsEl.appendChild(card("Files > 1K Lines",
-    last.files_over_1000, prev.files_over_1000, last.files_over_1000, true, "var(--bad)"));
-  cardsEl.appendChild(card("Largest File",
-    last.worst_file || "\u2014", null, null, false, "var(--purple)"));
-
-  // ---- Nightly cards ----
-  const nightlyEl = document.getElementById("nightly-cards");
-  if (nightlyRows.length) {
-    nightlyEl.appendChild(card("Concurrency Warns",
-      nLast.concurrency_warnings, nPrev.concurrency_warnings, nLast.concurrency_warnings, true, "var(--warn)"));
-    nightlyEl.appendChild(card("CodeQL Findings",
-      nLast.codeql_findings, nPrev.codeql_findings, nLast.codeql_findings, true, "var(--bad)"));
-    nightlyEl.appendChild(card("TSan Races",
-      nLast.tsan_issues, nPrev.tsan_issues, nLast.tsan_issues, true, "var(--bad)"));
-    nightlyEl.appendChild(card("SwiftLint --strict",
-      nLast.swiftlint_strict, nPrev.swiftlint_strict, nLast.swiftlint_strict, true, "var(--warn)"));
-    nightlyEl.appendChild(card("Periphery Strict",
-      nLast.periphery_aggressive, nPrev.periphery_aggressive, nLast.periphery_aggressive, true, "var(--accent)"));
+  // CI on main
+  if (d.ciRun && d.ciRun.done) {
+    const r = d.ciRun.done;
+    chip(strip, { label: "CI on main", value: r.conclusion || r.status, when: r.updated_at,
+                  tone: conclusionTone(r.conclusion), detail: d.ciRun.running ? "newer run in progress" : (r.head_sha || "").slice(0, 8) });
+  } else if (d.history.length) {
+    const last = d.history[d.history.length - 1];
+    chip(strip, { label: "CI on main", value: "result unknown", when: last.ts, tone: "warn",
+                  detail: "Actions API unavailable; metrics row seen" });
   } else {
-    nightlyEl.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
-      <div class="indicator" style="background: var(--muted)"></div>
-      <div class="label">Waiting for first nightly run</div>
-      <div class="value" style="font-size: 14px;">Trigger via <code>Actions &rarr; Nightly Static Analysis &rarr; Run workflow</code> or wait for 01:00 EDT.</div>
-    </div>`;
+    chip(strip, { label: "CI on main", value: NO_DATA, when: null });
   }
 
-  // ---- Per-push charts ----
-  const labels = dateLabels(rows);
-  const col = key => rows.map(r => r[key]);
+  // 2 AM nightly (Macs)
+  const nightly = d.tdRows.filter(r => r.source === "nightly-local");
+  if (nightly.length) {
+    const n = nightly[nightly.length - 1];
+    const ok = n.status === "ok" && (n.total || 0) > 0;
+    const counts = (n.total || 0) > 0 ? `${fmtNum(n.passed)} passed · ${fmtNum(n.failed)} failed · ${fmtNum(n.skipped)} skipped` : "no tests ran";
+    chip(strip, { label: "2 AM nightly", value: ok && !n.failed ? "green" : (n.status || "unknown"), when: n.ts,
+                  tone: ok && !n.failed ? "good" : (n.status === "failed" || n.failed ? "bad" : "warn"),
+                  detail: `${counts}${n.host ? " · " + n.host : ""}` });
+  } else {
+    chip(strip, { label: "2 AM nightly", value: NO_DATA, when: null });
+  }
 
-  const lineStyle = (color) => ({
-    borderColor: color,
-    backgroundColor: color + "18",
-    fill: true,
-    pointBackgroundColor: "#0d1117",
-    pointBorderColor: color,
-  });
+  // GitHub nightly analysis
+  const sa = d.staticRows.length ? d.staticRows[d.staticRows.length - 1] : null;
+  if (d.naRun && d.naRun.done) {
+    const r = d.naRun.done;
+    chip(strip, { label: "GitHub nightly analysis", value: r.conclusion || r.status, when: r.updated_at,
+                  tone: conclusionTone(r.conclusion), detail: sa ? `row published ${fmtWhen(sa.ts)}` : "no row published" });
+  } else if (sa) {
+    chip(strip, { label: "GitHub nightly analysis", value: "row published", when: sa.ts, tone: "warn",
+                  detail: "Actions API unavailable; run result unknown" });
+  } else {
+    chip(strip, { label: "GitHub nightly analysis", value: NO_DATA, when: null });
+  }
 
-  // A poi-cycle-metrics replay is not a product test run and must never
-  // affect host/latest/delta/chart state on the nightly metrics page.
-  const tdText = await fetchText(rawUrl("testdriver.jsonl"), TESTDRIVER_LOCAL);
-  const allTdRows = tdText ? parseJsonl(tdText) : [];
-  allTdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
-  const tdRows = allTdRows.filter(isTestRunRow);
-  tdRows.sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
-  const tdLast = tdRows.length ? tdRows[tdRows.length - 1] : {};
+  // Adversarial review
+  const adv = d.advRows.length ? d.advRows[d.advRows.length - 1] : null;
+  if (adv) {
+    const total = adv.findings ? SEVERITIES.reduce((s, k) => s + (adv.findings[k] || 0), 0) : null;
+    const value = adv.status === "findings" ? `${total} finding${total === 1 ? "" : "s"}` : adv.status;
+    const red = isNum(adv.confirmed_red) ? `${adv.confirmed_red} confirmed red` : "confirm: no data";
+    chip(strip, { label: "Adversarial review", value, when: adv.date,
+                  tone: adv.status === "failed" ? "bad" : (adv.confirmed_red ? "warn" : "good"), detail: red });
+  } else {
+    chip(strip, { label: "Adversarial review", value: NO_DATA, when: null });
+  }
 
+  // Coverage run (M4, 4 AM)
+  const cov = d.covRows.length ? d.covRows[d.covRows.length - 1] : null;
+  if (cov) {
+    chip(strip, { label: "Coverage run", value: `${fmtPct(cov.total && cov.total.logic_pct)} logic`, when: cov.date,
+                  tone: cov.app_status === "failed" || cov.core_status === "failed" ? "warn" : "good",
+                  detail: `${fmtPct(cov.total && cov.total.pct)} all · app ${cov.app_status} · core ${cov.core_status}` });
+  } else {
+    chip(strip, { label: "Coverage run", value: NO_DATA, when: null });
+  }
+}
+
+// ---------------------------------------------------------------- 2. tests
+function renderTests(d) {
+  const nightly = d.tdRows.filter(r => r.source === "nightly-local");
+  const cards = document.getElementById("tests-cards");
+  if (!nightly.length) {
+    noDataCard(cards, "No nightly test rows", NO_DATA);
+    note("c-tests", NO_DATA); note("c-tests-duration", NO_DATA);
+    return;
+  }
+  const ran = nightly.filter(r => (r.total || 0) > 0);
+  const last = nightly[nightly.length - 1];
+  const prev = ran.length > 1 ? ran[ran.length - 2] : {};
+  const lastRan = ran.length ? ran[ran.length - 1] : {};
+  cards.appendChild(card("Passed", lastRan.passed ?? null, prev.passed, lastRan.passed, false, "var(--good)"));
+  cards.appendChild(card("Failed", lastRan.failed ?? null, prev.failed, lastRan.failed, true, "var(--bad)"));
+  cards.appendChild(card("Skipped", lastRan.skipped ?? null, prev.skipped, lastRan.skipped, true, "var(--warn)"));
+  cards.appendChild(card("Last status", `${last.status || "unknown"}${last.configuration ? " · " + last.configuration : ""}`, null, null, false, "var(--accent)"));
+  cards.appendChild(card("Host", last.host || "unknown", null, null, false, "var(--purple)"));
+
+  // A run where no test ran is a gap, not a zero.
+  const labels = dateLabels(nightly);
+  chartOrNote("c-tests", "line", labels, [
+    { label: "passed", data: nightly.map(r => (r.total || 0) > 0 ? r.passed : null), yAxisID: "y", spanGaps: false, ...lineStyle("#3fb950") },
+    { label: "failed", data: nightly.map(r => (r.total || 0) > 0 ? r.failed : null), yAxisID: "y1", spanGaps: false, ...lineStyle("#f85149") },
+  ], withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false, title: { display: true, text: "passed" } },
+                y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: "failed" } } }));
+  chartOrNote("c-tests-duration", "line", labels, [
+    { label: "minutes", data: nightly.map(r => isNum(r.elapsed_s) && (r.total || 0) > 0 ? +(r.elapsed_s / 60).toFixed(1) : null), ...lineStyle("#58a6ff") },
+  ]);
+}
+
+// ---------------------------------------------------------------- 3. coverage
+function renderCoverage(d) {
+  const cards = document.getElementById("coverage-cards");
+  const rows = d.covRows;
+  const last = rows.length ? rows[rows.length - 1] : null;
+  const prev = rows.length > 1 ? rows[rows.length - 2] : null;
+  if (last) {
+    cards.appendChild(card("Logic coverage", fmtPct(last.total.logic_pct), prev && prev.total.logic_pct, last.total.logic_pct, false, "var(--good)"));
+    cards.appendChild(card("All coverage", fmtPct(last.total.pct), prev && prev.total.pct, last.total.pct, false, "var(--accent)"));
+    cards.appendChild(card("Lines measured", fmtNum(last.total.lines), null, null, false, "var(--muted)"));
+    cards.appendChild(card("Folders", last.folders.length, null, null, false, "var(--purple)"));
+    const folders = last.folders.slice().sort((a, b) => (b.lines || 0) - (a.lines || 0));
+    chartOrNote("c-cov-folders", "bar", folders.map(f => f.folder), [
+      { label: "logic %", data: folders.map(f => f.logic_pct), backgroundColor: "#3fb950" },
+      { label: "all %", data: folders.map(f => f.pct), backgroundColor: "#58a6ff" },
+    ], { ...chartDefaults, indexAxis: "y", scales: { x: { ...chartDefaults.scales.y, max: 100 }, y: { ticks: { autoSkip: false, font: { size: 11 } }, grid: { display: false } } } });
+  } else {
+    noDataCard(cards, "No per-folder coverage published yet",
+      "Published by tools/publish_metrics.py after the 4 AM coverage run on the M4.");
+    note("c-cov-folders", NO_DATA);
+  }
+  // Trend: the per-folder run (one point per day) plus the 2 AM nightly's own
+  // logic-coverage number, which has months of history. They are different
+  // measurements (Debug + Core vs the Release nightly), so they are separate lines.
+  const nightly = d.tdRows.filter(r => r.source === "nightly-local" && isNum(r.coverage_logic_pct));
+  const days = Array.from(new Set([...rows.map(r => r.date), ...nightly.map(r => String(r.ts).slice(0, 10))])).sort();
+  const covByDay = new Map(rows.map(r => [r.date, r]));
+  const nightlyByDay = new Map(nightly.map(r => [String(r.ts).slice(0, 10), r]));
+  chartOrNote("c-cov-trend", "line", days.map(day => dateLabels([{ date: day }])[0]), [
+    { label: "logic % (4 AM per-folder run)", data: days.map(day => covByDay.has(day) ? covByDay.get(day).total.logic_pct : null), spanGaps: true, ...lineStyle("#3fb950") },
+    { label: "all % (4 AM per-folder run)", data: days.map(day => covByDay.has(day) ? covByDay.get(day).total.pct : null), spanGaps: true, ...lineStyle("#58a6ff") },
+    { label: "logic % (2 AM nightly)", data: days.map(day => nightlyByDay.has(day) ? nightlyByDay.get(day).coverage_logic_pct : null), spanGaps: true, ...lineStyle("#bc8cff") },
+  ], withAxes({ y: { ...chartDefaults.scales.y, max: 100 } }));
+}
+
+// ---------------------------------------------------------------- 4. static analysis
+function renderStatic(d) {
+  const rows = d.staticRows;
+  const cards = document.getElementById("static-cards");
+  if (!rows.length) {
+    noDataCard(cards, "No nightly static-analysis rows", NO_DATA);
+    ["c-sa-compiler", "c-sa-codeql", "c-sa-lint", "c-sa-san"].forEach(id => note(id, NO_DATA));
+  } else {
+    const last = rows[rows.length - 1];
+    const prev = rows.length > 1 ? rows[rows.length - 2] : {};
+    const extraction = r => isNum(r.codeql_extracted_files) && isNum(r.codeql_in_scope_files) && r.codeql_in_scope_files > 0
+      ? +(100 * r.codeql_extracted_files / r.codeql_in_scope_files).toFixed(1) : null;
+    const spec = [
+      ["CodeQL findings", "codeql_findings", "var(--bad)"],
+      ["Strict-concurrency warnings", "concurrency_warnings", "var(--warn)"],
+      ["All strict warnings", "strict_warning_total", "var(--warn)"],
+      ["Memory-safety warnings", "memory_safety_warnings", "var(--warn)"],
+      ["Periphery dead code", "periphery_aggressive", "var(--accent)"],
+      ["SwiftLint --strict", "swiftlint_strict", "var(--accent)"],
+      ["UBSan hits", "ubsan_issues", "var(--bad)"],
+      ["ASan hits", "asan_issues", "var(--bad)"],
+      ["TSan hits", "tsan_issues", "var(--bad)"],
+    ];
+    for (const [label, key, color] of spec) {
+      cards.appendChild(card(label, isNum(last[key]) ? last[key] : null, prev[key], last[key], true, color));
+    }
+    const ex = extraction(last);
+    cards.appendChild(card("CodeQL extraction", ex == null ? null : `${ex}%`, null, null, false, "var(--good)"));
+    cards.appendChild(card("CodeQL extraction errors", isNum(last.codeql_extraction_errors) ? last.codeql_extraction_errors : null,
+      prev.codeql_extraction_errors, last.codeql_extraction_errors, true, "var(--bad)"));
+
+    const daily = lastPerDay(rows);
+    const labels = dateLabels(daily);
+    const col = key => daily.map(r => isNum(r[key]) ? r[key] : null);
+    chartOrNote("c-sa-compiler", "line", labels, [
+      { label: "strict concurrency", data: col("concurrency_warnings"), ...lineStyle("#d29922") },
+      { label: "all strict warnings", data: col("strict_warning_total"), ...lineStyle("#db6d28") },
+      { label: "memory safety", data: col("memory_safety_warnings"), ...lineStyle("#bc8cff") },
+    ]);
+    chartOrNote("c-sa-codeql", "line", labels, [
+      { label: "findings", data: col("codeql_findings"), yAxisID: "y", ...lineStyle("#f85149") },
+      { label: "extraction %", data: daily.map(extraction), yAxisID: "y1", ...lineStyle("#3fb950") },
+    ], withAxes({ y1: { position: "right", min: 0, max: 100, grid: { drawOnChartArea: false } } }));
+    chartOrNote("c-sa-lint", "line", labels, [
+      { label: "Periphery", data: col("periphery_aggressive"), ...lineStyle("#58a6ff") },
+      { label: "SwiftLint --strict", data: col("swiftlint_strict"), ...lineStyle("#d29922") },
+    ]);
+    chartOrNote("c-sa-san", "line", labels, [
+      { label: "UBSan", data: col("ubsan_issues"), ...lineStyle("#d29922") },
+      { label: "ASan", data: col("asan_issues"), ...lineStyle("#f85149") },
+      { label: "TSan", data: col("tsan_issues"), ...lineStyle("#bc8cff") },
+    ]);
+  }
+
+  // Findings summary (metrics/nightly_findings_latest.json). Only counts,
+  // tool names and severities are read from it, never titles or paths.
+  const box = document.getElementById("findings-table");
+  const f = d.findings;
+  if (!f || typeof f.tools !== "object") { box.textContent = NO_DATA; return; }
+  document.getElementById("findings-title").textContent =
+    `Latest findings summary, by tool · ${f.date || "date unknown"}${f.dry_run ? " · dry run (no issues filed)" : ""}`;
+  const fresh = {};
+  for (const item of Array.isArray(f.new) ? f.new : []) {
+    const key = `${item.tool}|${item.severity}`;
+    fresh[key] = (fresh[key] || 0) + 1;
+  }
+  const sevs = ["high", "medium", "low"];
+  let html = `<table><thead><tr><th>Tool</th><th>Ran</th><th>Findings</th><th>Fingerprints</th>${sevs.map(s => `<th>New ${s}</th>`).join("")}</tr></thead><tbody>`;
+  for (const [tool, t] of Object.entries(f.tools)) {
+    const ran = t && t.input ? (t.complete ? "complete" : "incomplete") : "no input";
+    const n = v => t && t.input && isNum(v) ? fmtNum(v) : NO_DATA;
+    html += `<tr><td>${esc(tool)}</td><td>${esc(ran)}</td><td>${n(t.findings)}</td><td>${n(t.fingerprints)}</td>` +
+      sevs.map(s => `<td>${t && t.input ? (fresh[`${tool}|${s}`] || 0) : NO_DATA}</td>`).join("") + "</tr>";
+  }
+  const bs = f.by_severity || {};
+  html += `<tr><td><strong>All tools</strong></td><td></td><td></td><td>${isNum(f.fingerprints) ? fmtNum(f.fingerprints) : NO_DATA}</td>` +
+    sevs.map(s => `<td>${isNum(bs[s]) ? fmtNum(bs[s]) + " total" : NO_DATA}</td>`).join("") + "</tr></tbody></table>";
+  box.innerHTML = html;
+}
+
+// ---------------------------------------------------------------- 5. adversarial
+function renderAdversarial(d) {
+  const rows = d.advRows;
+  const cards = document.getElementById("adv-cards");
+  const table = document.getElementById("adv-table");
+  if (!rows.length) {
+    noDataCard(cards, "No adversarial review data published yet",
+      "Published by tools/publish_metrics.py after the 05:30 confirm job (counts only).");
+    note("c-adv", NO_DATA);
+    table.textContent = NO_DATA;
+    return;
+  }
+  const last = rows[rows.length - 1];
+  const kept = rows.reduce((s, r) => s + r.kept, 0);
+  const declined = rows.reduce((s, r) => s + r.declined, 0);
+  const cost = rows.reduce((s, r) => s + (isNum(r.cost_usd) ? r.cost_usd : 0), 0);
+  const anyCost = rows.some(r => isNum(r.cost_usd));
+  cards.appendChild(card("Nights", rows.length, null, null, false, "var(--accent)"));
+  cards.appendChild(card("Files reviewed (last)", isNum(last.files_reviewed) ? `${last.files_reviewed} of ${last.files_in_scope}` : null, null, null, false, "var(--muted)"));
+  cards.appendChild(card("Confirmed red (last)", isNum(last.confirmed_red) ? last.confirmed_red : null, null, null, true, "var(--bad)"));
+  cards.appendChild(card("Kept / declined (all)", `${kept} / ${declined}`, null, null, false, "var(--good)"));
+  cards.appendChild(card("Precision (all)", kept + declined ? `${(100 * kept / (kept + declined)).toFixed(0)}%` : null, null, null, false, "var(--purple)"));
+  cards.appendChild(card("Cost (all)", anyCost ? `$${cost.toFixed(2)}` : null, null, null, true, "var(--warn)"));
+
+  const labels = rows.map(r => r.date);
+  chartOrNote("c-adv", "bar", labels, [
+    ...SEVERITIES.map(s => ({ label: s, data: rows.map(r => r.findings ? r.findings[s] : null), backgroundColor: SEV_COLORS[s], stack: "f" })),
+    { type: "line", label: "confirmed red", data: rows.map(r => r.confirmed_red), ...lineStyle("#58a6ff") },
+  ], withAxes({ x: { ...chartDefaults.scales.x, stacked: true }, y: { ...chartDefaults.scales.y, stacked: true } }));
+
+  const cell = v => isNum(v) ? fmtNum(v) : "—";
+  let html = `<table><thead><tr><th>Night</th><th>Status</th><th>Files</th>${SEVERITIES.map(s => `<th>${s}</th>`).join("")}` +
+    `<th>Red</th><th>Kept</th><th>Declined</th><th>Precision</th><th>Cost</th></tr></thead><tbody>`;
+  for (const r of rows.slice().reverse()) {
+    html += `<tr><td>${esc(r.date)}</td><td>${esc(r.status)}${r.failed_runs ? ` (${r.failed_runs} failed)` : ""}</td>` +
+      `<td>${isNum(r.files_reviewed) ? `${r.files_reviewed}/${r.files_in_scope}` : "—"}</td>` +
+      SEVERITIES.map(s => `<td>${r.findings ? cell(r.findings[s]) : "—"}</td>`).join("") +
+      `<td>${cell(r.confirmed_red)}</td><td>${cell(r.kept)}</td><td>${cell(r.declined)}</td>` +
+      `<td>${isNum(r.precision) ? (100 * r.precision).toFixed(0) + "%" : "—"}</td>` +
+      `<td>${isNum(r.cost_usd) ? "$" + r.cost_usd.toFixed(2) : "—"}</td></tr>`;
+  }
+  table.innerHTML = html + "</tbody></table>";
+}
+
+// ---------------------------------------------------------------- 6. codex
+function renderCodex(d) {
+  const rows = d.codexRows;
+  const cards = document.getElementById("codex-cards");
+  if (!rows.length) {
+    noDataCard(cards, "No codex review counts published yet",
+      "Published by tools/publish_metrics.py from the docs/reviews/codex headers.");
+    note("c-codex", NO_DATA);
+    return;
+  }
+  const sum = key => rows.reduce((s, r) => s + (r[key] || 0), 0);
+  cards.appendChild(card("Passes", sum("passes"), null, null, false, "var(--accent)"));
+  cards.appendChild(card("Findings", sum("findings"), null, null, false, "var(--bad)"));
+  cards.appendChild(card("Passes closed", `${sum("closed_passes")} of ${sum("passes")}`, null, null, false, "var(--good)"));
+  cards.appendChild(card("Docs without a header", sum("unparsed_docs"), null, null, false, "var(--muted)"));
+  const parsed = rows.filter(r => r.passes > 0);
+  chartOrNote("c-codex", "bar", parsed.map(r => r.date), [
+    { label: "findings", data: parsed.map(r => r.findings), backgroundColor: "#f85149" },
+    { label: "passes", data: parsed.map(r => r.passes), backgroundColor: "#58a6ff" },
+    { label: "passes closed", data: parsed.map(r => r.closed_passes), backgroundColor: "#3fb950" },
+  ], chartDefaults, "No review doc has a parseable `Credits spent | Finding count` header yet.");
+}
+
+// ---------------------------------------------------------------- 7. hallie
+function renderHallie(d) {
+  const cards = document.getElementById("hallie-cards");
+  // Pass rate over the cases that COMPLETED. A replay that completed nothing
+  // (model missing, timed out) is a gap, never a 0 % pass rate.
+  const rate = (pass, completed) => isNum(pass) && isNum(completed) && completed > 0 ? +(100 * pass / completed).toFixed(1) : null;
+  const strictRate = r => rate(r.hallie_strict_pass, r.hallie_strict_completed);
+  const advisoryRate = r => rate(r.hallie_advisory_pass, r.hallie_advisory_completed);
+  const rows = d.tdRows.filter(r => r.source === "nightly-local" && r.hallie_strict_status !== undefined);
+  const graded = rows.filter(r => strictRate(r) != null || advisoryRate(r) != null);
+  const last = rows.length ? rows[rows.length - 1] : null;
+  if (last) {
+    cards.appendChild(card(`Last replay${last.host ? " · " + last.host : ""}`, last.hallie_replay_status || "unknown", null, null, false,
+      last.hallie_replay_status === "ok" ? "var(--good)" : "var(--bad)"));
+  }
+  if (!graded.length) {
+    if (!last) noDataCard(cards, "No Hallie replay rows", NO_DATA);
+    note("c-hallie", "No nightly Hallie replay has completed a case yet.");
+    return;
+  }
+  const g = graded[graded.length - 1];
+  const of = (pass, done, expected) => isNum(done) && done > 0 ? `${pass} of ${done}${isNum(expected) && expected !== done ? ` (${expected} expected)` : ""}` : NO_DATA;
+  cards.appendChild(card("Strict pass rate (last completed)", fmtPct(strictRate(g)), null, null, false, "var(--good)"));
+  cards.appendChild(card("Strict passed", of(g.hallie_strict_pass, g.hallie_strict_completed, g.hallie_strict_expected), null, null, false, "var(--good)"));
+  cards.appendChild(card("Advisory pass rate (last completed)", fmtPct(advisoryRate(g)), null, null, false, "var(--purple)"));
+  cards.appendChild(card("Last completed replay", `${fmtWhen(g.ts).split(" · ")[0]}${g.host ? " · " + g.host : ""}`, null, null, false, "var(--muted)"));
+  chartOrNote("c-hallie", "line", dateLabels(graded), [
+    { label: "strict %", data: graded.map(strictRate), ...lineStyle("#3fb950") },
+    { label: "advisory %", data: graded.map(advisoryRate), ...lineStyle("#bc8cff") },
+  ], withAxes({ y: { ...chartDefaults.scales.y, max: 100 } }));
+}
+
+// ---------------------------------------------------------------- 8. code size
+function renderSize(d) {
+  const rows = d.history;
+  const cards = document.getElementById("size-cards");
+  if (!rows.length) {
+    noDataCard(cards, "No CI metrics rows", NO_DATA);
+    note("c-size-folders", NO_DATA); note("c-size-trend", NO_DATA);
+    return;
+  }
+  const last = rows[rows.length - 1];
+  const daily = lastPerDay(rows);
+  const prevDay = daily.length > 1 ? daily[daily.length - 2] : {};
+  cards.appendChild(card("Swift lines", isNum(last.total_swift_lines) ? last.total_swift_lines.toLocaleString("en-US") : null,
+    prevDay.total_swift_lines, last.total_swift_lines, false, "var(--muted)"));
+  cards.appendChild(card("Files over 1,000 lines", isNum(last.files_over_1000) ? last.files_over_1000 : null,
+    prevDay.files_over_1000, last.files_over_1000, true, "var(--bad)"));
+  cards.appendChild(card("Test functions in source", isNum(last.test_count) ? last.test_count : null,
+    prevDay.test_count, last.test_count, false, "var(--good)"));
+  cards.appendChild(card("Open issues", isNum(last.open_issues) ? last.open_issues : null,
+    prevDay.open_issues, last.open_issues, true, "var(--warn)"));
+
+  const withFolders = rows.filter(r => r.swift_by_folder && typeof r.swift_by_folder === "object");
+  if (withFolders.length) {
+    const f = withFolders[withFolders.length - 1].swift_by_folder;
+    const names = Object.keys(f).sort((a, b) => (f[b].lines || 0) - (f[a].lines || 0));
+    chartOrNote("c-size-folders", "bar", names, [
+      { label: "lines", data: names.map(n => f[n].lines), backgroundColor: "#58a6ff", xAxisID: "x" },
+      { label: "files", data: names.map(n => f[n].files), backgroundColor: "#bc8cff", xAxisID: "x1" },
+    ], { ...chartDefaults, indexAxis: "y",
+         scales: { x: { ...chartDefaults.scales.y, position: "bottom" }, x1: { beginAtZero: true, position: "top", grid: { drawOnChartArea: false } },
+                   y: { ticks: { autoSkip: false, font: { size: 11 } }, grid: { display: false } } } });
+  } else {
+    note("c-size-folders", "No per-folder breakdown yet: it starts with the first CI run after this page shipped.");
+  }
+  chartOrNote("c-size-trend", "line", dateLabels(daily), [
+    { label: "Swift lines", data: daily.map(r => isNum(r.total_swift_lines) ? r.total_swift_lines : null), yAxisID: "y", ...lineStyle("#8b949e") },
+    { label: "files > 1,000 lines", data: daily.map(r => isNum(r.files_over_1000) ? r.files_over_1000 : null), yAxisID: "y1", ...lineStyle("#f85149") },
+  ], withAxes({ y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false } } }));
+}
+
+// ---------------------------------------------------------------- 9. benchmarks
+async function renderBenchmarks(allTdRows) {
   // Gauntlet rows share transport, never nightly averages or freshness.
   const gauntletRows = allTdRows.filter(row => row.source === "gauntlet" && row.schemaVersion === 1);
   if (gauntletRows.length) {
@@ -739,7 +864,7 @@ async function loadData() {
     searchProvenance.textContent =
       `Latest: ${latestSearch.host || "unknown host"} · ${latestSearch.machineClass} · ${mac} · ` +
       `${latestSearch.xcode?.version || "Xcode unknown"} · ${(latestSearch.commit || "unknown").slice(0, 8)} · ` +
-      `worst “${worst.query}” · ${donna.sampleCount} samples after ${donna.warmupCount} warmups.`;
+      `${fmtWhen(latestSearch.ts)} · worst “${worst.query}” · ${donna.sampleCount} samples after ${donna.warmupCount} warmups.`;
     searchProvenance.classList.remove("hidden");
     if (comparable.length > 1) {
       new Chart(searchCanvas, {
@@ -767,277 +892,67 @@ async function loadData() {
       <div class="value" style="font-size: 14px;">Run the fixed 100k synthetic Release benchmark on an available M1 or M5.</div>
     </div>`;
   }
+}
 
-  // ---- Hallie natural-language question testbed ----
-  const hallieText = await fetchText(rawUrl("hallie_testbed.jsonl"), HALLIE_TESTBED_LOCAL);
-  const hallieRows = (hallieText ? parseJsonl(hallieText) : [])
-    .filter(row => row.schemaVersion === 1 && row.source === "hallie-question-testbed")
-    .sort((a, b) => (a.ts || "").localeCompare(b.ts || ""));
-  const hallieCards = document.getElementById("hallie-cards");
-  const hallieCanvas = document.getElementById("chart-hallie-pass-fail");
-  const hallieNote = document.getElementById("chart-hallie-note");
-  if (hallieRows.length) {
-    const hLast = hallieRows[hallieRows.length - 1];
-    const hPrev = hallieRows.length > 1 ? hallieRows[hallieRows.length - 2] : {};
-    const hallieRate = hLast.pass_rate_pct == null ? "N/A" : `${Number(hLast.pass_rate_pct).toFixed(1)}%`;
-    hallieCards.appendChild(card("Pass rate", hallieRate, hPrev.pass_rate_pct, hLast.pass_rate_pct, false, "var(--good)"));
-    hallieCards.appendChild(card("Passed", hLast.passed, hPrev.passed, hLast.passed, false, "var(--good)"));
-    hallieCards.appendChild(card("Failed", hLast.failed, hPrev.failed, hLast.failed, true, "var(--bad)"));
-    hallieCards.appendChild(card("Ungraded", hLast.ungraded, hPrev.ungraded, hLast.ungraded, true, "var(--warn)"));
-    hallieCards.appendChild(card("Questions", hLast.cases, hPrev.cases, hLast.cases, false, "var(--accent)"));
-    hallieCards.appendChild(card("Baseline date", new Date(hLast.ts).toLocaleDateString("en-US", { month: "short", day: "numeric" }), null, null, false, "var(--purple)"));
-    drawLine("chart-hallie-pass-fail", dateLabels(hallieRows), [
-      { label: "pass %", data: hallieRows.map(row => row.pass_rate_pct), ...lineStyle("#3fb950") },
-      { label: "passed", data: hallieRows.map(row => row.passed), ...lineStyle("#58a6ff") },
-      { label: "failed", data: hallieRows.map(row => row.failed), ...lineStyle("#f85149") },
-      { label: "ungraded", data: hallieRows.map(row => row.ungraded), ...lineStyle("#d29922") },
-    ]);
-    hallieNote.textContent = hLast.note || "Historical replay baseline; semantic grading is still manual.";
-    hallieNote.classList.remove("hidden");
-  } else {
-    hallieCards.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
-      <div class="indicator" style="background: var(--muted)"></div>
-      <div class="label">No Hallie testbed data</div>
-      <div class="value" style="font-size: 14px;">Run scripts/hallie_question_testbed.py grade to publish a baseline.</div>
-    </div>`;
-    hallieCanvas.classList.add("hidden");
-    hallieNote.textContent = "No Hallie question replay has been published yet.";
-    hallieNote.classList.remove("hidden");
-  }
+// ---------------------------------------------------------------- load
+async function loadData() {
+  try { applyTheme(savedTheme()); } catch {}
+  try {
+    if (Chart.defaults) {
+      Chart.defaults.color = "#8b949e";
+      Chart.defaults.font.family = "-apple-system, BlinkMacSystemFont, system-ui, sans-serif";
+    }
+  } catch {}
 
-  const coverageCanvas = document.getElementById("chart-coverage");
-  const coverageNote = document.getElementById("chart-coverage-note");
-  if (hasCoverage) {
-    drawLine("chart-coverage", labels, [{ label: "coverage %", data: col("coverage_logic_pct"), ...lineStyle("#3fb950") }]);
-  } else {
-    coverageCanvas.classList.add("hidden");
-    coverageNote.classList.remove("hidden");
-  }
-  drawLine("chart-swiftlint", labels, [
-    { label: "warnings", data: col("swiftlint_warnings"), ...lineStyle("#d29922") },
-    { label: "errors", data: col("swiftlint_errors"), ...lineStyle("#f85149") },
+  METRICS_SHA = await resolveMetricsSha();
+  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, ciRun, naRun] = await Promise.all([
+    fetchText(rawUrl("history.jsonl"), local("history.jsonl")),
+    fetchText(rawUrl("static_analysis.jsonl"), local("static_analysis.jsonl")),
+    fetchText(rawUrl("testdriver.jsonl"), local("testdriver.jsonl")),
+    fetchText(rawUrl("nightly_findings_latest.json"), local("nightly_findings_latest.json")),
+    fetchText(rawUrl("coverage.jsonl"), local("coverage.jsonl")),
+    fetchText(rawUrl("adversarial.jsonl"), local("adversarial.jsonl")),
+    fetchText(rawUrl("codex_reviews.jsonl"), local("codex_reviews.jsonl")),
+    latestMainRun("ci.yml"),
+    latestMainRun("nightly-analysis.yml"),
   ]);
-  drawLine("chart-periphery", labels, [{ label: "findings", data: col("periphery_findings"), ...lineStyle("#58a6ff") }]);
-  drawLine("chart-loc", labels, [{ label: "total LOC", data: col("total_swift_lines"), ...lineStyle("#8b949e") }]);
-  drawLine("chart-fat-files", labels, [{ label: "files > 1000", data: col("files_over_1000"), ...lineStyle("#f85149") }]);
-  drawLine("chart-tests", labels, [{ label: "test count", data: col("test_count"), ...lineStyle("#3fb950") }]);
-  drawLine("chart-regressions", labels, [{ label: "regression markers", data: col("regression_count"), ...lineStyle("#bc8cff") }]);
 
-  // ---- TestDriver (local runs) ----
-  // ---- Person recognition readiness + quality ----
-  // Person fields are additive to the robust nightly-local row. Ad-hoc
-  // TestDriver rows may not carry them, so select the latest metric-bearing
-  // row instead of blindly using tdLast. Old histories intentionally render
-  // as readiness 0 / quality N/A until tonight's first row arrives.
-  const personRows = tdRows.filter(r =>
-    r.person_eval_readiness_pct != null &&
-    r.source === "nightly-local" &&
-    r.branch === "main" &&
-    r.dirty !== true
-  );
-  const personRaw = personRows.length ? personRows[personRows.length - 1] : {
-    person_eval_status: "not-configured",
-    person_eval_reason: "quality-holdout-not-configured",
-    person_eval_readiness_pct: 0,
-    person_eval_readiness_band: "red",
-    person_eval_publish_eligible: false,
-    person_eval_quality_score: null,
+  const allTdRows = sortByTs(parseJsonl(tdText));
+  const tdRows = allTdRows.filter(isTestRunRow);
+  let findings = null;
+  try { findings = findingsText ? JSON.parse(findingsText) : null; } catch { findings = null; }
+  const d = {
+    history: sortByTs(parseJsonl(historyText)),
+    staticRows: sortByTs(parseJsonl(staticText)),
+    tdRows,
+    findings,
+    covRows: sortByTs(parseJsonl(covText).filter(r => r.schemaVersion === 1 && r.total && Array.isArray(r.folders))),
+    advRows: sortByTs(parseJsonl(advText).filter(r => r.schemaVersion === 1 && r.date)),
+    codexRows: sortByTs(parseJsonl(codexText).filter(r => r.schemaVersion === 1 && r.date)),
+    ciRun, naRun,
   };
-  const personIsStale = personRows.length > 0 && hoursSince(personRaw.ts) > PERSON_METRIC_STALE_HOURS;
-  const person = personIsStale ? {
-    ...personRaw,
-    person_eval_status: "stale",
-    person_eval_reason: "last-clean-main-person-metric-older-than-36h",
-    person_eval_readiness_pct: Math.min(Number(personRaw.person_eval_readiness_pct) || 0, 75),
-    person_eval_readiness_band: (Number(personRaw.person_eval_readiness_pct) || 0) < 25 ? "red" : "orange",
-    person_eval_publish_eligible: false,
-    person_eval_quality_score: null,
-    person_eval_quality_band: null,
-  } : personRaw;
-  const personPrev = personRows.length > 1 ? personRows[personRows.length - 2] : {};
-  const eligible = person.person_eval_publish_eligible === true;
-  const personCards = document.getElementById("person-cards");
-  const readiness = Number(person.person_eval_readiness_pct) || 0;
-  const quality = eligible && typeof person.person_eval_quality_score === "number"
-    ? person.person_eval_quality_score : null;
-  personCards.appendChild(card("Benchmark Readiness", `${readiness.toFixed(0)}%`,
-    personPrev.person_eval_readiness_pct, readiness, false,
-    personBandColor(person.person_eval_readiness_band)));
-  personCards.appendChild(card("Identity F1 Quality",
-    quality == null ? "N/A" : `${quality.toFixed(1)}/100`,
-    eligible ? personPrev.person_eval_quality_score : null, quality, false,
-    quality == null ? "var(--muted)" : personBandColor(person.person_eval_quality_band)));
-  personCards.appendChild(card("Identity Precision",
-    eligible ? metricPercent(person.person_eval_identity_precision) : "N/A",
-    null, null, false, eligible ? "var(--accent)" : "var(--muted)"));
-  personCards.appendChild(card("Identity Recall",
-    eligible ? metricPercent(person.person_eval_identity_recall) : "N/A",
-    null, null, false, eligible ? "var(--accent)" : "var(--muted)"));
-  personCards.appendChild(card("Face Detection Recall",
-    eligible ? metricPercent(person.person_eval_face_recall) : "N/A",
-    null, null, false, eligible ? "var(--purple)" : "var(--muted)"));
-  personCards.appendChild(card("False Positives / Negatives",
-    eligible ? `${person.person_eval_false_positives ?? "—"} / ${person.person_eval_false_negatives ?? "—"}` : "N/A",
-    null, null, true, eligible ? "var(--bad)" : "var(--muted)"));
-  personCards.appendChild(card("Quality Cases",
-    eligible ? person.person_eval_case_count : "N/A",
-    null, null, false, eligible ? "var(--good)" : "var(--muted)"));
-  const setupDetail = eligible
-    ? `${person.person_eval_engine || "engine?"} · ${person.person_eval_dataset_version || "dataset?"}`
-    : `${person.person_eval_status || "not-configured"}: ${person.person_eval_reason || "quality not measured"}`;
-  const provenance = person.ts
-    ? ` · ${person.host || "host?"} · ${person.commit || "commit?"}` : "";
-  const personStatusCard = card("Status", "", null, null, false,
-    eligible ? "var(--good)" : personBandColor(person.person_eval_readiness_band));
-  const personStatusValue = personStatusCard.querySelector(".value");
-  personStatusValue.textContent = setupDetail + provenance;
-  personStatusValue.style.fontSize = "14px";
-  personCards.appendChild(personStatusCard);
 
-  if (personRows.length) {
-    const personLabels = dateLabels(personRows);
-    new Chart(document.getElementById("chart-person-scores"), {
-      type: "line",
-      data: { labels: personLabels, datasets: [
-        { label: "readiness %", data: personRows.map(r => r.person_eval_readiness_pct), ...lineStyle("#d29922") },
-        { label: "identity F1", data: personRows.map(r => r.person_eval_publish_eligible === true ? r.person_eval_quality_score : null), ...lineStyle("#3fb950") },
-      ]},
-      options: {
-        ...chartDefaults,
-        plugins: {
-          ...chartDefaults.plugins,
-          legend: { display: true, labels: { color: "#8b949e" } },
-        },
-      },
-    });
+  const sections = [
+    ["status", () => renderStatus(d)],
+    ["tests", () => renderTests(d)],
+    ["coverage", () => renderCoverage(d)],
+    ["static", () => renderStatic(d)],
+    ["adv", () => renderAdversarial(d)],
+    ["codex", () => renderCodex(d)],
+    ["hallie", () => renderHallie(d)],
+    ["size", () => renderSize(d)],
+    ["bench", () => renderBenchmarks(allTdRows)],
+  ];
+  for (const [id, render] of sections) {
+    try { await render(); } catch (err) { showError(id, err); }
+  }
+
+  const sources = [historyText, staticText, tdText].filter(Boolean).length;
+  if (!sources) {
+    $status.classList.add("error");
+    $status.textContent = "Could not load the metrics branch (offline, or GitHub unreachable).";
   } else {
-    document.getElementById("chart-person-scores").classList.add("hidden");
-    document.getElementById("chart-person-note").classList.remove("hidden");
-  }
-
-  // Apples-to-apples delta: only compare against the most recent prior
-  // row that shares the SAME `source`. The file mixes `nightly-local`
-  // (xcodebuild — ~1850 tests) and `testdriver` (TestDriver harness —
-  // ~4400 tests). Cross-source deltas are nonsense ("Passed -2535" is
-  // not a regression, it's a methodology change). 2026-06-14.
-  let tdPrev = {};
-  if (tdLast.source && tdRows.length > 1) {
-    for (let i = tdRows.length - 2; i >= 0; i--) {
-      if (tdRows[i].source === tdLast.source) {
-        tdPrev = tdRows[i];
-        break;
-      }
-    }
-  } else if (tdRows.length > 1) {
-    // Older rows without `source` field — fall back to immediate prior.
-    tdPrev = tdRows[tdRows.length - 2];
-  }
-
-  // ---- Staleness banner ----
-  // Show only if the freshest TestDriver row is older than the threshold.
-  // We intentionally pick the most recent ts (any status — even a `skipped`
-  // row counts as proof the nightly is alive). If we had ZERO rows we also
-  // show the banner — that's the "never ran" case.
-  if (tdRows.length === 0) {
-    showStalenessBanner(null);
-  } else {
-    showStalenessBanner(tdLast.ts);
-  }
-
-  const tdCardsEl = document.getElementById("td-cards");
-  if (tdRows.length) {
-    const lastDate = tdLast.ts ? new Date(tdLast.ts).toLocaleDateString("en-US", {
-      month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"
-    }) : "—";
-    // Surface flags from the row so we don't have to guess at suspicious
-    // pass-count drops. `dirty=true` and `branch!=main` are tagged in the
-    // hostname line; status/reason go in the value.
-    const flags = [];
-    if (tdLast.dirty === true) flags.push("dirty");
-    if (tdLast.branch && tdLast.branch !== "main") flags.push(tdLast.branch);
-    if (tdLast.status && tdLast.status !== "ok") flags.push(tdLast.status);
-    const flagSuffix = flags.length ? ` [${flags.join(", ")}]` : "";
-    const lastWho = `${lastDate} — ${tdLast.host || ""}${flagSuffix}`;
-    const avgDur = tdRows.reduce((acc, r) => acc + (parseFloat(r.elapsed_s) || 0), 0) / tdRows.length;
-    tdCardsEl.appendChild(card("Last Run", lastWho, null, null, false, "var(--accent)"));
-    tdCardsEl.appendChild(card("Passed (latest)",
-      tdLast.passed, tdPrev.passed, tdLast.passed, false, "var(--good)"));
-    tdCardsEl.appendChild(card("Failed (latest)",
-      tdLast.failed, tdPrev.failed, tdLast.failed, true, "var(--bad)"));
-    tdCardsEl.appendChild(card("Coverage %",
-      tdLast.coverage_logic_pct != null ? tdLast.coverage_logic_pct.toFixed(1) + "%" : "—",
-      tdPrev.coverage_logic_pct, tdLast.coverage_logic_pct, false, "var(--purple)"));
-    tdCardsEl.appendChild(card("Avg Duration",
-      avgDur.toFixed(1) + " s", null, null, false, "var(--muted)"));
-
-    const tdLabels = dateLabels(tdRows);
-    const tdCol = key => tdRows.map(r => r[key]);
-    // Per-source pass-count lines so methodology changes (xcodebuild
-    // 1850-ish vs TestDriver 4400-ish) don't look like regressions on
-    // the chart. Each source gets its own series; rows from the other
-    // source are drawn as null so the line breaks rather than jumps.
-    const sources = Array.from(new Set(tdRows.map(r => r.source || "unknown")));
-    const seriesFor = (source, key) => tdRows.map(r => (r.source || "unknown") === source ? r[key] : null);
-    const passColors = { "nightly-local": "#3fb950", "testdriver": "#2da44e", "adhoc-m1": "#7ee787" };
-    const passDatasets = sources.map(s => ({
-      label: `passed (${s})`,
-      data: seriesFor(s, "passed"),
-      spanGaps: false,
-      ...lineStyle(passColors[s] || "#3fb950"),
-    }));
-    passDatasets.push({
-      label: "failed (any source)",
-      data: tdCol("failed"),
-      ...lineStyle("#f85149"),
-    });
-    // Use a one-off chart config so the legend is visible (default
-    // chartDefaults hides it). With multiple sources, the legend is the
-    // only way to tell the green lines apart.
-    new Chart(document.getElementById("chart-td-pass-fail"), {
-      type: "line",
-      data: { labels: tdLabels, datasets: passDatasets },
-      options: {
-        ...chartDefaults,
-        plugins: {
-          ...chartDefaults.plugins,
-          legend: { display: true, labels: { color: "#8b949e" } },
-        },
-      },
-    });
-    if (tdRows.some(r => r.coverage_logic_pct != null)) {
-      drawLine("chart-td-coverage", tdLabels,
-        [{ label: "coverage %", data: tdCol("coverage_logic_pct"), ...lineStyle("#bc8cff") }]);
-    } else {
-      const cv = document.getElementById("chart-td-coverage");
-      if (cv) {
-        cv.classList.add("hidden");
-        const box = cv.parentElement;
-        const note = document.createElement("div");
-        note.className = "chart-note";
-        note.textContent = "Coverage not collected for any TestDriver run yet. Toggle “Generate Coverage Report” in TestDriver and re-run.";
-        box.appendChild(note);
-      }
-    }
-    drawLine("chart-td-duration", tdLabels,
-      [{ label: "elapsed (s)", data: tdCol("elapsed_s"), ...lineStyle("#58a6ff") }]);
-  } else {
-    tdCardsEl.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
-      <div class="indicator" style="background: var(--muted)"></div>
-      <div class="label">No TestDriver runs published yet</div>
-      <div class="value" style="font-size: 14px;">Run on Mac Studio with <code>Publish</code> enabled (clean main, in sync with origin).</div>
-    </div>`;
-  }
-
-  // ---- Nightly charts ----
-  if (nightlyRows.length) {
-    const nLabels = dateLabels(nightlyRows);
-    const nCol = key => nightlyRows.map(r => r[key]);
-
-    drawLine("chart-concurrency", nLabels, [{ label: "concurrency warnings", data: nCol("concurrency_warnings"), ...lineStyle("#d29922") }]);
-    drawLine("chart-codeql", nLabels, [{ label: "CodeQL findings", data: nCol("codeql_findings"), ...lineStyle("#f85149") }]);
-    drawLine("chart-tsan", nLabels, [{ label: "TSan reports", data: nCol("tsan_issues"), ...lineStyle("#f85149") }]);
-    drawLine("chart-swiftlint-strict", nLabels, [{ label: "SwiftLint --strict", data: nCol("swiftlint_strict"), ...lineStyle("#d29922") }]);
-    drawLine("chart-periphery-strict", nLabels, [{ label: "Periphery (no --retain-public)", data: nCol("periphery_aggressive"), ...lineStyle("#58a6ff") }]);
+    $status.textContent = `Loaded ${new Date().toLocaleString("en-US")} · data ${METRICS_SHA ? "at metrics@" + METRICS_SHA.slice(0, 8) : "from the metrics branch (latest)"}`;
   }
 }
 

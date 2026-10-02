@@ -13,6 +13,8 @@ Output (one sink, START/OUTCOME lines):
     ~/Library/Logs/VideoScan/coverage/coverage-<date>.json   per-folder numbers
     ~/Library/Logs/VideoScan/coverage/coverage-<date>.md     human summary
     ~/Library/Logs/VideoScan/coverage/latest.json            for the morning brief
+    metrics/coverage.jsonl on the `metrics` branch           via tools/publish_metrics.py
+                                                              (folder names + numbers only)
 
 Policy (Rick 2026-10-01): measure every folder; floors/ratchet only for
 VideoScanCore, data-risk folders and Hallie answers; SwiftUI views are reported,
@@ -182,6 +184,20 @@ def write_report(folders: dict, meta: dict) -> None:
     (OUT / f"coverage-{day}.md").write_text("\n".join(md) + "\n")
 
 
+def publish_metrics() -> None:
+    """Hand the numbers to the one metrics publisher (tools/publish_metrics.py),
+    which pushes a sanitized copy (folder names + numbers only) to the public
+    `metrics` branch for the metrics page. Never fails the coverage job: a failed
+    publish is logged, and tomorrow's run re-reads every coverage-<date>.json."""
+    try:
+        r = subprocess.run([sys.executable, str(REPO / "tools/publish_metrics.py")],
+                           capture_output=True, text=True, timeout=600, stdin=subprocess.DEVNULL)
+        lines = (r.stdout or "").strip().splitlines()
+        log(f"publish: {lines[-1] if lines else f'no output (exit {r.returncode})'}")
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        log(f"publish: OUTCOME failed: {exc}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-wait", action="store_true")
@@ -199,6 +215,7 @@ def main() -> int:
         if a.core_json:
             files += core_files(Path(a.core_json))
         write_report(aggregate(files), meta)
+        publish_metrics()
         log(f"OUTCOME report-only written for {day}")
         return 0
 
@@ -244,6 +261,7 @@ def main() -> int:
         return 1
     folders = aggregate(files)
     write_report(folders, meta)
+    publish_metrics()
     total_e = sum(d["executable"] for d in folders.values())
     total_c = sum(d["covered"] for d in folders.values())
     log(f"OUTCOME ok: {len(folders)} folders, {total_c}/{total_e} lines "
