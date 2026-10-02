@@ -329,56 +329,28 @@ extension PromoteToArchiveJob {
         // Intent (or, for an adoption, "already published") BEFORE any
         // byte moves — the convergence contract. A journal that cannot be
         // written durably stops the file here.
-        try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
-
         if let existingSHA = choice.identicalExistingSHA {
+            try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
             sha = existingSHA
             landed = true          // the bytes are already in place
         } else {
-            let totalBytes = max(1, plan.totalBytes)
-            let fileBytes = max(1, source.sizeBytes)
-            let filename = source.filename
-            // Each file is copied AND read back; the bar spends the first
-            // half of this file's share copying, the second half verifying.
-            // Throttled to ~4 UI updates/s — 69 GB in 1 MB chunks would
-            // otherwise post 70k main-actor hops.
-            // BEGIN LINE, before a single byte moves. Rick's rule applied
-            // literally: log that you are ENTERING the long operation.
-            // Until 2026-09-15 the normal path logged only on COMPLETION,
-            // so one 263 GB promote emitted a batch begin line and then
-            // five minutes of total log silence while a large file copied
-            // — indistinguishable, from the log alone, from the hang that
-            // cost two days that week. The window always showed live
-            // rate/ETA; it was the durable record that went quiet.
-            model.log("Promote: copying \(entry.filename) (\(Self.promoteByteText(fileBytes))) → \(choice.relPath)…")
-            promoteLog.notice("promote BEGIN \(entry.filename, privacy: .public) (\(fileBytes, privacy: .public) bytes) → \(choice.relPath, privacy: .public)")
-            let reporter = PromoteProgressReporter()
-            let phaseProgress: @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { [weak self] phase, done in
-                guard let tick = reporter.tick(phase: phase, done: done, fileBytes: fileBytes) else { return }
-                let share = Double(fileBytes) / Double(totalBytes)
-                let within = (phase == .copying ? 0.0 : 0.5) + 0.5 * min(1.0, Double(done) / Double(fileBytes))
-                let overall = (Double(bytesDone) / Double(totalBytes)) + share * within
-                let verb = phase == .copying ? "Copying" : "Verifying"
-                let sub = "\(verb) \(filename) · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
-                Task { @MainActor [weak self] in
-                    self?.applyProgress(overall)
-                    self?.applyPhaseSubtitle(sub)
-                }
+            let receipt = try ArchivePromoteJournal.appendRetractable(journalEntry, rootPath: ctx.root)
+            switch try await copyRollingBackOnChange(source: source, entry: entry, ctx: ctx,
+                                                     relPath: choice.relPath, digest: digest,
+                                                     intent: receipt, journalEntry: journalEntry,
+                                                     bytesDone: bytesDone) {
+            case .refused(let why):
+                return .failed(why)
+            case .published(let published, let stamp):
+                sha = published.sha256
+                // Published: from here the bytes ARE in the archive whatever
+                // happens next (a failed manifest append converges next run via
+                // the journal), so the claim stays.
+                landed = true
+                sourceStamp = stamp
+                journalEntry = journalEntry.with(state: .renamed, sha256: sha)
+                try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
             }
-            let (published, stamp) = try await Self.copyOffMain(sourcePath: source.fullPath,
-                                                                root: ctx.root,
-                                                                relPath: choice.relPath,
-                                                                expectedSHA: digest,
-                                                                progress: { _ in },
-                                                                phaseProgress: phaseProgress)
-            sha = published.sha256
-            // Published: from here the bytes ARE in the archive whatever
-            // happens next (a failed manifest append converges next run via
-            // the journal), so the claim stays.
-            landed = true
-            sourceStamp = stamp
-            journalEntry = journalEntry.with(state: .renamed, sha256: sha)
-            try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
         }
         if Task.isCancelled { return .cancelled }
 
@@ -394,6 +366,99 @@ extension PromoteToArchiveJob {
         promoteLog.notice("promote DONE \(entry.filename, privacy: .public) → \(choice.relPath, privacy: .public) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
         return choice.identicalExistingSHA == nil ? .promoted(relPath: choice.relPath)
                                                   : .adopted(relPath: choice.relPath)
+    }
+
+    /// What the copy step produced.
+    enum CopyStep {
+        case published(ArchivePromoteEngine.PublishResult, FileIdentityStamp?)
+        /// The source changed during the copy; everything was rolled back.
+        case refused(String)
+    }
+
+    /// Copy + verify + publish one file off-main (the intent is already
+    /// journaled as `intent`). If the source turns out to have changed
+    /// under the copy (codex 2026-10-02 #4) the engine has already removed
+    /// the partial and the folders it created; this takes the journal
+    /// intent back as well, so the refusal leaves the archive as it was.
+    /// When the intent is no longer the journal's last line (another job
+    /// appended after it) it cannot be retracted without touching their
+    /// bytes, so an `abandoned` line closes it instead — and the refusal
+    /// says so.
+    private func copyRollingBackOnChange(source: VideoRecord,
+                                         entry: ArchivePromotePlan.Entry,
+                                         ctx: RunContext,
+                                         relPath: String,
+                                         digest: String,
+                                         intent: ArchivePromoteJournal.AppendReceipt,
+                                         journalEntry: ArchivePromoteJournal.Entry,
+                                         bytesDone: Int64) async throws -> CopyStep {
+        let totalBytes = max(1, plan.totalBytes)
+        let fileBytes = max(1, source.sizeBytes)
+        let filename = source.filename
+        // Each file is copied AND read back; the bar spends the first
+        // half of this file's share copying, the second half verifying.
+        // Throttled to ~4 UI updates/s — 69 GB in 1 MB chunks would
+        // otherwise post 70k main-actor hops.
+        // BEGIN LINE, before a single byte moves. Rick's rule applied
+        // literally: log that you are ENTERING the long operation.
+        // Until 2026-09-15 the normal path logged only on COMPLETION,
+        // so one 263 GB promote emitted a batch begin line and then
+        // five minutes of total log silence while a large file copied
+        // — indistinguishable, from the log alone, from the hang that
+        // cost two days that week. The window always showed live
+        // rate/ETA; it was the durable record that went quiet.
+        model?.log("Promote: copying \(entry.filename) (\(Self.promoteByteText(fileBytes))) → \(relPath)…")
+        promoteLog.notice("promote BEGIN \(entry.filename, privacy: .public) (\(fileBytes, privacy: .public) bytes) → \(relPath, privacy: .public)")
+        let reporter = PromoteProgressReporter()
+        let phaseProgress: @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { [weak self] phase, done in
+            guard let tick = reporter.tick(phase: phase, done: done, fileBytes: fileBytes) else { return }
+            let share = Double(fileBytes) / Double(totalBytes)
+            let within = (phase == .copying ? 0.0 : 0.5) + 0.5 * min(1.0, Double(done) / Double(fileBytes))
+            let overall = (Double(bytesDone) / Double(totalBytes)) + share * within
+            let verb = phase == .copying ? "Copying" : "Verifying"
+            let sub = "\(verb) \(filename) · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
+            Task { @MainActor [weak self] in
+                self?.applyProgress(overall)
+                self?.applyPhaseSubtitle(sub)
+            }
+        }
+        do {
+            let (published, stamp) = try await Self.copyOffMain(sourcePath: source.fullPath,
+                                                                root: ctx.root,
+                                                                relPath: relPath,
+                                                                expectedSHA: digest,
+                                                                progress: { _ in },
+                                                                phaseProgress: phaseProgress)
+            return .published(published, stamp)
+        } catch ArchivePromoteEngine.Failure.sourceChangedDuringCopy {
+            let retracted = await Self.retractIntentOffMain(intent, abandon: journalEntry.with(state: .abandoned),
+                                                            root: ctx.root)
+            return .refused(Self.changedDuringCopyRefusal(digest: digest, intentRetracted: retracted))
+        }
+    }
+
+    /// Retract this run's intent line, or — when it is no longer the last
+    /// line — close it with `abandoned`. Off-main: both take the
+    /// archive-index lock, which must never be waited for on the UI thread.
+    /// Returns true when the intent was retracted (journal bytes as before).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func retractIntentOffMain(_ intent: ArchivePromoteJournal.AppendReceipt,
+                                                 abandon: ArchivePromoteJournal.Entry,
+                                                 root: String) async -> Bool {
+        if ArchivePromoteJournal.retract(intent, rootPath: root) { return true }
+        _ = try? ArchivePromoteJournal.append(abandon, rootPath: root)
+        return false
+    }
+
+    /// The refusal when the engine saw the source change under the copy.
+    /// Pure; digest prefix only.
+    nonisolated static func changedDuringCopyRefusal(digest: String, intentRetracted: Bool) -> String {
+        let journal = intentRetracted
+            ? "the journal line was taken back"
+            : "the journal records it as abandoned (another job wrote after it)"
+        return "the source changed while it was being copied — its bytes no longer hash to the checked sha256 \(digest.prefix(12))…. Nothing was kept: the partial copy and the folders this run created were removed and \(journal). Promote it again once the file is settled"
     }
 
     // MARK: Text for the per-file begin/end lines

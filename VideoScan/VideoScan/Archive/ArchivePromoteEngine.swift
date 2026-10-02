@@ -257,20 +257,28 @@ enum ArchivePromoteEngine {
     /// (caller closes; the parent is never closed). A symlink at any depth
     /// is refused by the kernel (ELOOP) — no lstat/mkdir race.
     static func descend(from parentFD: Int32, components: [String], create: Bool,
-                        displayRoot: String) throws -> Int32 {
+                        displayRoot: String,
+                        created: ((_ components: [String]) -> Void)? = nil) throws -> Int32 {
         var current = dup(parentFD)
         guard current >= 0 else { throw Failure.createFailed(displayRoot, errno: errno) }
         var trail = displayRoot
+        var walked: [String] = []
         for comp in components {
             guard !comp.isEmpty, comp != ".", comp != "..", !comp.contains("/") else {
                 Darwin.close(current)
                 throw Failure.destinationEscapesRoot(trail + "/" + comp)
             }
             trail += "/" + comp
-            if create, mkdirat(current, comp, 0o755) != 0, errno != EEXIST {
-                let e = errno
-                Darwin.close(current)
-                throw Failure.createFailed(trail, errno: e)
+            walked.append(comp)
+            if create {
+                if mkdirat(current, comp, 0o755) == 0 {
+                    // THIS call made it — reported so a refusal can undo it.
+                    created?(walked)
+                } else if errno != EEXIST {
+                    let e = errno
+                    Darwin.close(current)
+                    throw Failure.createFailed(trail, errno: e)
+                }
             }
             let next = openat(current, comp, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             let e = errno
@@ -290,11 +298,35 @@ enum ArchivePromoteEngine {
 
     /// Open the archive root, then descend to the directory that will hold
     /// `relativePath` (creating it when `create`). Returns the leaf dirfd.
-    static func openDestinationDirectory(root: String, relativePath: String, create: Bool) throws -> Int32 {
+    static func openDestinationDirectory(root: String, relativePath: String, create: Bool,
+                                         created: ((_ components: [String]) -> Void)? = nil) throws -> Int32 {
         let comps = (relativePath as NSString).pathComponents.dropLast()
         let rootFD = try openDirectory(root)
         defer { Darwin.close(rootFD) }
-        return try descend(from: rootFD, components: Array(comps), create: create, displayRoot: root)
+        return try descend(from: rootFD, components: Array(comps), create: create, displayRoot: root,
+                           created: created)
+    }
+
+    /// Roll back directories THIS process created under `root` (each entry
+    /// = its components below the root), deepest first, through the dirfd
+    /// O_NOFOLLOW chain. `unlinkat(AT_REMOVEDIR)` removes only an EMPTY
+    /// directory — anything another writer put there in the meantime keeps
+    /// the folder (and is never touched). Returns how many were removed.
+    /// (codex 2026-10-02 #4: a refused Promote leaves no new folder behind.)
+    @discardableResult
+    static func removeCreatedDirectories(root: String, created: [[String]]) -> Int {
+        guard let rootFD = try? openDirectory(root) else { return 0 }
+        defer { Darwin.close(rootFD) }
+        var removed = 0
+        for comps in created.sorted(by: { $0.count > $1.count }) {
+            guard let leaf = comps.last,
+                  let parent = try? descend(from: rootFD, components: Array(comps.dropLast()),
+                                            create: false, displayRoot: root) else { continue }
+            if unlinkat(parent, leaf, AT_REMOVEDIR) == 0 { removed += 1 }
+            _ = barriers.fsync(parent)
+            Darwin.close(parent)
+        }
+        return removed
     }
 
     /// `00_Index/` descriptor under the root (never created here).
@@ -410,6 +442,12 @@ enum ArchivePromoteEngine {
     /// pass actually read must hash to it, or the source changed between
     /// that check and this copy — refused before verify/publish, partial
     /// removed, so a file that was never checked can never be published.
+    ///
+    /// Rollback (codex 2026-10-02 #4): when the source turns out to have
+    /// changed (`.sourceChangedDuringCopy` — stamp or digest), the partial
+    /// is removed AND every folder this call created is removed again
+    /// (empty-only), so the refusal leaves no new directory in the archive.
+    /// Folders that existed before the call are never touched.
     static func copyVerifyPublish(source: SourceHandle,
                                   root: String,
                                   relativePath: String,
@@ -424,11 +462,37 @@ enum ArchivePromoteEngine {
               destURL.path != PathScope.normalize(root) else {
             throw Failure.destinationEscapesRoot(destURL.path)
         }
+        var createdDirs: [[String]] = []
+        let dirfd = try openDestinationDirectory(root: root, relativePath: relativePath, create: true,
+                                                 created: { createdDirs.append($0) })
+        defer { Darwin.close(dirfd) }
+        do {
+            return try publishIntoDirectory(dirfd: dirfd, destURL: destURL, source: source,
+                                            relativePath: relativePath, expectedSourceSHA: expectedSourceSHA,
+                                            verifyBypassesPageCache: verifyBypassesPageCache,
+                                            progress: progress, phaseProgress: phaseProgress,
+                                            shouldCancel: shouldCancel)
+        } catch Failure.sourceChangedDuringCopy(let path) {
+            // The partial is already gone (publishIntoDirectory's defer).
+            removeCreatedDirectories(root: root, created: createdDirs)
+            throw Failure.sourceChangedDuringCopy(path)
+        }
+    }
+
+    /// The partial → copy → verify → publish body of `copyVerifyPublish`,
+    /// inside the already-open destination directory. On ANY failure the
+    /// partial is unlinked before this returns.
+    private static func publishIntoDirectory(dirfd: Int32,
+                                             destURL: URL,
+                                             source: SourceHandle,
+                                             relativePath: String,
+                                             expectedSourceSHA: String?,
+                                             verifyBypassesPageCache: Bool,
+                                             progress: (Int64) -> Void,
+                                             phaseProgress: (ProgressPhase, Int64) -> Void,
+                                             shouldCancel: () -> Bool) throws -> PublishResult {
         let name = (relativePath as NSString).lastPathComponent
         let partialName = name + ".partial"
-        let dirfd = try openDestinationDirectory(root: root, relativePath: relativePath, create: true)
-        defer { Darwin.close(dirfd) }
-
         let dfd = openat(dirfd, partialName, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
         guard dfd >= 0 else {
             if errno == EEXIST { throw Failure.partialExists(destURL.path + ".partial") }
@@ -852,6 +916,68 @@ enum ArchivePromoteJournal {
             defer { close(fd) }
             try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false, label: "journal append")
         }
+    }
+
+    /// What `appendRetractable` wrote: enough to take exactly those bytes
+    /// back out — and nothing else.
+    struct AppendReceipt: Equatable, Sendable {
+        /// Journal size before the append = where our line starts.
+        let offset: Int64
+        /// The exact bytes appended (one JSON line + newline).
+        let bytes: Data
+        /// True when this append CREATED the journal file.
+        let createdFile: Bool
+    }
+
+    /// `append`, returning a receipt for `retract`. Used for the Promote
+    /// INTENT, the one entry a refusal may need to take back (codex
+    /// 2026-10-02 #4). Same lock, same O_APPEND single write + fsync.
+    nonisolated static func appendRetractable(_ entry: Entry, rootPath: String) throws -> AppendReceipt {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var data = try encoder.encode(entry)
+        data.append(0x0A)
+        return try ArchiveIndexLock.withExclusive(root: rootPath, holder: "Promote journal append") {
+            let indexFD = try ArchivePromoteEngine.openIndexDirectory(root: rootPath)
+            defer { close(indexFD) }
+            let existed = ArchivePromoteEngine.FileIdentity.at(dirfd: indexFD, name: filename) != nil
+            let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: false)
+            defer { close(fd) }
+            guard let (before, _) = ArchivePromoteEngine.FileIdentity.of(fd: fd) else {
+                throw ArchivePromoteEngine.Failure.writeFailed("journal fstat")
+            }
+            try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false, label: "journal append")
+            return AppendReceipt(offset: before.size, bytes: data, createdFile: !existed)
+        }
+    }
+
+    /// Take back exactly the line `receipt` describes — ONLY when it is
+    /// still the journal's last line, byte for byte (nobody appended after
+    /// it). Truncates to the receipt's offset + fsync; when the append had
+    /// created the file and it is now empty, removes the file and fsyncs
+    /// 00_Index. Returns false — and changes NOTHING — in every other case;
+    /// the caller then appends an `abandoned` line instead (the ordinary
+    /// convergence record). Pre-existing journal bytes are never altered.
+    @discardableResult
+    nonisolated static func retract(_ receipt: AppendReceipt, rootPath: String) -> Bool {
+        (try? ArchiveIndexLock.withExclusive(root: rootPath, holder: "Promote journal retract") { () -> Bool in
+            let indexFD = try ArchivePromoteEngine.openIndexDirectory(root: rootPath)
+            defer { close(indexFD) }
+            let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: true)
+            defer { close(fd) }
+            guard let (now, _) = ArchivePromoteEngine.FileIdentity.of(fd: fd),
+                  now.size == receipt.offset + Int64(receipt.bytes.count) else { return false }
+            var tail = Data(count: receipt.bytes.count)
+            let n = tail.withUnsafeMutableBytes { pread(fd, $0.baseAddress, receipt.bytes.count, off_t(receipt.offset)) }
+            guard n == receipt.bytes.count, tail == receipt.bytes else { return false }
+            guard ftruncate(fd, off_t(receipt.offset)) == 0,
+                  ArchivePromoteEngine.barriers.fsync(fd) == 0 else { return false }
+            if receipt.createdFile, receipt.offset == 0 {
+                guard unlinkat(indexFD, filename, 0) == 0 else { return false }
+                _ = ArchivePromoteEngine.barriers.fsync(indexFD)
+            }
+            return true
+        }) ?? false
     }
 
     /// Latest entry per source id (a source can be journaled several
