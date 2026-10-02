@@ -18,7 +18,11 @@ struct CatalogJSONValueExactNumberTests {
 
     private func roundTrip(_ text: String) throws -> String {
         let value = try JSONDecoder().decode(CatalogJSONValue.self, from: Data(text.utf8))
-        return String(decoding: try JSONEncoder().encode(value), as: UTF8.self)
+        // .sortedKeys: JSONEncoder's object key order is per-process random
+        // (GH #165) and key order is not what these tests are about.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return String(decoding: try encoder.encode(value), as: UTF8.self)
     }
 
     @Test("codex's reproduction: UInt64.max round-trips byte for byte")

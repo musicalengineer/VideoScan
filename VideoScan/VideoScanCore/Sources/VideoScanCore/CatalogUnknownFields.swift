@@ -33,14 +33,33 @@
 
 import Foundation
 
-/// Any JSON value, kept losslessly enough to write back what we read:
-/// integers that fit Int64 stay integers, everything else numeric is a
-/// Double (a UInt64 above Int64.max or a >17-digit decimal loses its last
-/// digits — no catalog field has ever been shaped like that).
+/// Any JSON value, kept so that what we write back has the SAME VALUE we
+/// read (codex review 2026-10-02 #4 — before, every number outside Int64
+/// became a Double and UInt64.max came back as ...616).
+///
+/// Numbers are held in the narrowest exact type, tried in order:
+///   Int64 → UInt64 → Decimal (base-10, 38 significant digits, exponent
+///   roughly ±128) → Double (anything Decimal cannot hold, e.g. 1.5e300 or
+///   5e-324 — exactly the values a Double wrote in the first place).
+/// The VALUE survives; the SPELLING is JSONEncoder's (`1e3` → `1000`,
+/// `1.0` → `1`), so canonically spelled numbers come back byte for byte.
+/// The one value-loss left: a literal with more than 38 significant digits
+/// keeps 38 — no Swift numeric type can write such a literal
+/// (docs/practices/invariants/Catalog.md, "Known and accepted").
+///
+/// (For Rick: think `std::variant<int64_t, uint64_t, decimal128, double, …>`
+/// with the parser picking the first alternative that holds the text
+/// exactly.)
 public indirect enum CatalogJSONValue: Sendable, Equatable, Codable {
     case null
     case bool(Bool)
     case int(Int64)
+    /// Integers above Int64.max (UInt64 range).
+    case uint(UInt64)
+    /// Non-integers and integers beyond 64 bits, up to 38 significant
+    /// digits, held in base 10 so nothing is rounded to binary.
+    case decimal(Decimal)
+    /// What Decimal cannot hold (huge / tiny exponents) and negative zero.
     case double(Double)
     case string(String)
     case array([CatalogJSONValue])
@@ -72,7 +91,18 @@ public indirect enum CatalogJSONValue: Sendable, Equatable, Codable {
         // Bool before numbers: JSONDecoder refuses to read `1` as Bool and
         // `true` as a number, so the order only matters for clarity.
         if let b = try? c.decode(Bool.self) { self = .bool(b); return }
-        if let i = try? c.decode(Int64.self) { self = .int(i); return }
+        if let i = try? c.decode(Int64.self) {
+            // `-0.0` / `-0` decode as Int64 0; keep the sign.
+            if i == 0, let d = try? c.decode(Double.self), d.sign == .minus {
+                self = .double(d); return
+            }
+            self = .int(i); return
+        }
+        if let u = try? c.decode(UInt64.self) { self = .uint(u); return }
+        // JSONDecoder parses Decimal from the literal's digits (no binary
+        // detour) and REFUSES a literal outside Decimal's exponent range,
+        // which then falls through to Double — the type that wrote it.
+        if let m = try? c.decode(Decimal.self), m.isFinite { self = .decimal(m); return }
         if let d = try? c.decode(Double.self) { self = .double(d); return }
         if let s = try? c.decode(String.self) { self = .string(s); return }
         throw DecodingError.dataCorruptedError(in: c, debugDescription: "unrecognised JSON value")
@@ -86,6 +116,10 @@ public indirect enum CatalogJSONValue: Sendable, Equatable, Codable {
             var c = encoder.singleValueContainer(); try c.encode(b)
         case .int(let i):
             var c = encoder.singleValueContainer(); try c.encode(i)
+        case .uint(let u):
+            var c = encoder.singleValueContainer(); try c.encode(u)
+        case .decimal(let m):
+            var c = encoder.singleValueContainer(); try c.encode(m)
         case .double(let d):
             var c = encoder.singleValueContainer(); try c.encode(d)
         case .string(let s):
