@@ -885,3 +885,8 @@ both statistics routes. Found on the way: the router's year-bound peel
 recognizers saw it, so "how many … were born before 1900" counted everyone and
 read as complete — fixed, regression test in `HallieAncestorStatisticsTests`.
 New corpus rows `ts261001-001…012`.
+
+
+## 2026-10-02 — Donna demo (Release)
+- **"show ellen ronan" → catalog decline.** Tree person with no tagged videos but a filed birth certificate; the bare "show <name>" shape routed to the video catalog and answered "I don't have any videos tagged with ellen ronan yet", echoing the name in lowercase. Expected: when the catalog has nothing for a name the tree knows, fall back to the person (tree card / profile: vitals, documents count, "open in Family Tree"), name in canonical case. Corpus row `lv261002-001` (advisory).
+- Noted, not a defect: "tell me about Bessie Macgregor" → cited bio; "yes" to the photo offer → "There are 3 photos … [c1]" — check the photos actually rendered in the panel.
