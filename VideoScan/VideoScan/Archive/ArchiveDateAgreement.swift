@@ -115,14 +115,18 @@ enum ArchiveDateAgreement {
     // MARK: Sensor — report, never rewrite
 
     /// What disagrees for one archived record (empty = all agree). Pure.
-    /// - `relPath`: the index row's archive-relative path (its placement).
+    /// - `relPath`: the archived copy's CURRENT archive-relative path (its
+    ///   placement on disk) — not the index row's path, which may be stale
+    ///   after a fallback match (codex 2026-10-02 #5).
     /// - `manifestDate`: the row's record_date ("1947-xx-xx", "1940s", "").
     /// - `userDate` / `filedDate`: the catalog record's claim inputs.
+    /// Both legs use `agree` — equal at the coarser precision (codex
+    /// 2026-10-02 #6): a 2001-02-03 placement agrees with an index "2001".
     nonisolated static func problems(relPath: String, manifestDate: String,
                                      userDate: String?, filedDate: String?) -> [String] {
         let index = ArchiveRefile.hint(fromManifestDate: manifestDate)
         var out: [String] = []
-        if let placed = PromoteToArchiveJob.placementHint(relPath: relPath), placed != index {
+        if let placed = PromoteToArchiveJob.placementHint(relPath: relPath), !agree(placed, index) {
             out.append("index says \(ArchiveRefile.datedLabel(index)) but its folder/filename say \(ArchiveRefile.datedLabel(placed))")
         }
         if let claim = catalogClaim(userDate: userDate, filedDate: filedDate), !agree(claim, index) {

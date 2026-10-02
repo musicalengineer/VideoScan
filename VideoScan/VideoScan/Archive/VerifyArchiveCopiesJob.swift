@@ -464,11 +464,18 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             if row == nil { row = manifest.byRecordID[rec.id] }
             if row == nil, let src = rec.derivedFrom { row = manifest.bySourceID[src] }
             if let claimed = row?.relPath { claimedRelPaths.insert(claimed) }
-            // GH #219 sensor — O(1) per record, report only.
+            // GH #219 sensor — O(1) per record, report only. The placement
+            // judged is where the copy IS (its current relpath), not where
+            // the matched row says it was filed: after a record-id /
+            // source-id fallback match those differ, and comparing the row
+            // with itself hid the disagreement (codex 2026-10-02 #5). A copy
+            // outside the root has no archive placement; only its catalog
+            // date is then compared with the index.
             if let row {
-                let problems = ArchiveDateAgreement.problems(relPath: row.relPath, manifestDate: row.recordDate,
+                let placement = rel ?? row.relPath
+                let problems = ArchiveDateAgreement.problems(relPath: placement, manifestDate: row.recordDate,
                                                              userDate: rec.userDate, filedDate: rec.archiveFiledDate)
-                if !problems.isEmpty { dateDisagreements.append("\(row.relPath) — \(problems.joined(separator: "; "))") }
+                if !problems.isEmpty { dateDisagreements.append("\(placement) — \(problems.joined(separator: "; "))") }
             }
             // The manifest digest is the expected REFERENCE, never a path
             // redirect. A promoted catalog record may have been moved
