@@ -285,7 +285,55 @@ final class CatalogStore {
     /// mirrors it here on every change — this is the persistence slot,
     /// not the source of truth for the UI.
     /// (For Rick: ≈ a member the serializer reads; the model writes it.)
-    var masterArchive: MasterArchiveDesignation?
+    var masterArchive: MasterArchiveDesignation? {
+        didSet {
+            // A designation set again cancels a pending clear: only the
+            // save that follows Clear itself may carry the removal.
+            if masterArchive != nil { designationClearAuthorized = false }
+        }
+    }
+
+    // MARK: - Master Archive designation guard (GH #167)
+    //
+    // On 2026-08-20 catalog.json lost its designation with nothing logged.
+    // Whatever the writer, the rule is: a LIVE catalog save may change the
+    // designation from set to unset only right after the user cleared it.
+    // Any other null in the slot is a bug, and the save is refused before
+    // a byte is written — catalog.json keeps the designation. Every change
+    // of the designation on disk gets a START line before the write and an
+    // OUTCOME line after it.
+
+    /// The designation in the catalog file this session last loaded or
+    /// durably wrote — what is on disk as far as we know. nil = the file
+    /// carries none.
+    private(set) var persistedMasterArchive: MasterArchiveDesignation?
+
+    /// The designation carried by the NEWEST write this session ACCEPTED —
+    /// past the precondition, generation claimed — whether or not it has
+    /// landed yet (codex 2026-10-02 #2). An async save's completion runs
+    /// later on the main actor, so `persistedMasterArchive` alone misses a
+    /// first designation still in flight: a nil save without Clear passed
+    /// the guard, queued behind it on the serial write queue and overwrote
+    /// it. The guard refuses when EITHER this or the persisted value
+    /// carries a designation. Seeded by `load()`; never cleared by a failed
+    /// write (refusing more is the safe direction).
+    private(set) var acceptedMasterArchive: MasterArchiveDesignation?
+
+    /// Set by `authorizeDesignationClear` (Clear Master Archive); consumed
+    /// by the first durable write that carries no designation; cancelled
+    /// when a designation is set again.
+    private(set) var designationClearAuthorized = false
+
+    /// The refusal is reported (audit line + journal) once until a save
+    /// succeeds again, so a debounced save every few seconds cannot flood
+    /// catalog.log or the journal.
+    private var designationRefusalReported = false
+
+    /// Where START / OUTCOME / REFUSED lines go besides os_log. The model
+    /// installs one writing the console + catalog.log (`log`) and
+    /// videoscan.log (`appLog`) — the one sink. nil (tests, bare stores):
+    /// os_log only.
+    var designationAudit: (@MainActor (String) -> Void)?
 
     // MARK: - Cross-process write safety
     //
@@ -384,6 +432,18 @@ final class CatalogStore {
             return fail(.writesDisabled(reason))
         }
 
+        // GH #167 — before the lock, before any byte: never drop a
+        // designation nobody cleared.
+        if let refusal = designationLossRefusal() {
+            lastWriteError = refusal
+            if !designationRefusalReported {
+                designationRefusalReported = true
+                CatalogWriteJournal.record(refusal, catalogURL: fileURL)
+                auditDesignation("Master Archive designation: REFUSED catalog save — it would remove \(Self.describe(persistedMasterArchive ?? acceptedMasterArchive)) but nobody cleared it. Nothing was written; \(fileURL.lastPathComponent) keeps the designation. Later saves stay refused until the designation is set again (Archive tab ▸ Initialize) or cleared on purpose (GH #167).")
+            }
+            return refusal
+        }
+
         switch lock.acquire() {
         case .acquired:
             break
@@ -421,8 +481,23 @@ final class CatalogStore {
     /// lock and, on success, advances the session generation to what the
     /// write stamped on disk.
     private func finishWrite(success: Bool, wroteGeneration: Int,
+                             wroteDesignation: MasterArchiveDesignation?,
+                             designationChanging: Bool,
                              error: CatalogWriteError? = nil) {
         if success {
+            designationRefusalReported = false
+            // Only the NEWEST durable write says what is on disk: an async
+            // save's completion can land after a later saveNow's (see the
+            // max() below), and must not resurrect the designation it
+            // carried over the newer write's.
+            let newest = wroteGeneration > loadedGeneration
+            if newest, wroteDesignation != persistedMasterArchive {
+                auditDesignation("Master Archive designation: OUTCOME durable — catalog.json generation \(wroteGeneration) now carries \(Self.describe(wroteDesignation)) (was \(Self.describe(persistedMasterArchive))). The previous catalog is catalog.json.prev / the catalog.pre-* snapshots beside it.")
+                persistedMasterArchive = wroteDesignation
+            } else if !newest, designationChanging {
+                auditDesignation("Master Archive designation: OUTCOME superseded — catalog save generation \(wroteGeneration) landed, but a newer save already wrote \(Self.describe(persistedMasterArchive)).")
+            }
+            if newest, wroteDesignation == nil { designationClearAuthorized = false }
             // max(): completions can arrive out of order (an async save's
             // main-actor completion may land AFTER a later saveNow already
             // advanced us). Never regress -- a regression would make the
@@ -452,6 +527,9 @@ final class CatalogStore {
             lastWriteError = error
         } else if lastWriteError == nil {
             lastWriteError = .writeFailed("encode or atomic write failed")
+        }
+        if !success && designationChanging {
+            auditDesignation("Master Archive designation: OUTCOME FAILED — catalog save generation \(wroteGeneration) did not land (\(lastWriteError?.persistentDescription ?? "unknown")); catalog.json still carries \(Self.describe(persistedMasterArchive)).")
         }
         lock.release()
     }
@@ -577,6 +655,8 @@ final class CatalogStore {
             // so primary stays in place; replace any stale .prev.
             rotateBackup()
             masterArchive = master
+            persistedMasterArchive = master
+            acceptedMasterArchive = master
             lastLoadOutcome = .loaded(fromBackup: false)
             return records
         }
@@ -592,6 +672,8 @@ final class CatalogStore {
                                       probed: CatalogSnapshot.headerProbe(at: backupURL)?.generation,
                                       source: backupURL.lastPathComponent)
             masterArchive = master
+            persistedMasterArchive = master
+            acceptedMasterArchive = master
             lastLoadOutcome = .loaded(fromBackup: true)
             return records
         }
@@ -799,6 +881,33 @@ final class CatalogStore {
         return records
     }
 
+    /// The records currently in catalog.json (or .prev when the primary is
+    /// unreadable) for a READ-ONLY query, WITHOUT adopting the file as this
+    /// session's state (GH #167).
+    ///
+    /// `load()` is the SESSION load: it replaces the designation slot the
+    /// next save serialises, re-baselines the OCC generation and rotates
+    /// catalog.json → .prev. Person Finder used to call it at every job
+    /// start just to build a skip set, which nulled a designation set
+    /// inside the save debounce, reverted a rehomed one, adopted a foreign
+    /// writer's generation without merging (so our next save clobbered
+    /// it) and overwrote the one-generation-back backup. This read touches
+    /// none of that. Same test-host gate as `load()` for the shared store.
+    /// (≈ a const member function: it only reads the file.)
+    func readRecordsWithoutAdopting() -> [VideoRecord] {
+        if Self.isRunningTests && self === CatalogStore.shared { return [] }
+        let fm = FileManager.default
+        if fm.fileExists(atPath: fileURL.path),
+           let records = loadRecords(fromSnapshotAtPath: fileURL.path) {
+            return records
+        }
+        if fm.fileExists(atPath: backupURL.path),
+           let records = loadRecords(fromSnapshotAtPath: backupURL.path) {
+            return records
+        }
+        return []
+    }
+
     /// Copy primary → .prev so the previous-good snapshot is preserved one
     /// generation back. Best-effort: errors are logged but never thrown —
     /// a load that can't make a backup still proceeds with the primary.
@@ -854,6 +963,8 @@ final class CatalogStore {
         let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration,
                                        masterArchive: masterArchive)
+        let designationChanging = noteDesignationWriteStart(payload.masterArchive,
+                                                            generation: nextGeneration)
         var writeError: CatalogWriteError?
         // Captured on the main actor; the closure crosses to writeQueue.
         let seam = testAfterWriteBeforeVerify
@@ -873,7 +984,9 @@ final class CatalogStore {
         // Releases the per-write lock in both outcomes. The error is carried
         // through so lastWriteError names the real cause instead of a fixed
         // "encode or atomic write failed".
-        finishWrite(success: ok, wroteGeneration: nextGeneration, error: writeError)
+        finishWrite(success: ok, wroteGeneration: nextGeneration,
+                    wroteDesignation: payload.masterArchive,
+                    designationChanging: designationChanging, error: writeError)
         if ok {
             observer?.catalogStoreDidWrite(self)
         }
@@ -929,6 +1042,8 @@ final class CatalogStore {
         let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration,
                                        masterArchive: masterArchive)
+        let designationChanging = noteDesignationWriteStart(payload.masterArchive,
+                                                            generation: nextGeneration)
         let dest = fileURL
         let seam = testAfterWriteBeforeVerify
         catalogStoreLog.notice("catalog save (acknowledged): BEGIN \(records.count) records → \(dest.lastPathComponent, privacy: .public)")
@@ -940,7 +1055,9 @@ final class CatalogStore {
             }
         }
         let ok = writeError == nil
-        finishWrite(success: ok, wroteGeneration: nextGeneration, error: writeError)
+        finishWrite(success: ok, wroteGeneration: nextGeneration,
+                    wroteDesignation: payload.masterArchive,
+                    designationChanging: designationChanging, error: writeError)
         if ok { observer?.catalogStoreDidWrite(self) }
         catalogStoreLog.notice("catalog save (acknowledged): \(ok ? "durable" : "FAILED", privacy: .public)")
         return ok
@@ -979,6 +1096,9 @@ final class CatalogStore {
         let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration,
                                        masterArchive: masterArchive)
+        let designationChanging = noteDesignationWriteStart(payload.masterArchive,
+                                                            generation: nextGeneration)
+        let wroteDesignation = payload.masterArchive
         let snapshotMs = (CFAbsoluteTimeGetCurrent() - t0) * 1000
         catalogStoreLog.debug("catalog save: snapshot of \(records.count) records took \(snapshotMs, format: .fixed(precision: 1)) ms")
 
@@ -993,6 +1113,8 @@ final class CatalogStore {
             Task { @MainActor [weak self] in
                 self?.asyncSaveDidFinish(success: writeError == nil,
                                          wroteGeneration: nextGeneration,
+                                         wroteDesignation: wroteDesignation,
+                                         designationChanging: designationChanging,
                                          error: writeError)
             }
         }
@@ -1002,9 +1124,13 @@ final class CatalogStore {
     /// per-write lock, fires the observer, and, if anything went dirty
     /// while we were writing, starts the follow-up save.
     private func asyncSaveDidFinish(success: Bool, wroteGeneration: Int,
+                                    wroteDesignation: MasterArchiveDesignation?,
+                                    designationChanging: Bool,
                                     error: CatalogWriteError? = nil) {
         saveInFlight = false
-        finishWrite(success: success, wroteGeneration: wroteGeneration, error: error)
+        finishWrite(success: success, wroteGeneration: wroteGeneration,
+                    wroteDesignation: wroteDesignation,
+                    designationChanging: designationChanging, error: error)
         if success {
             // Notify the observer (CatalogSync on the master) so it can
             // refresh manifest.sha256. Skipped for the test singleton —
@@ -1290,6 +1416,57 @@ final class CatalogStore {
             }
             return err
         }
+    }
+}
+
+// MARK: - Master Archive designation guard (GH #167) — behaviour
+//
+// The state lives in the class above (stored properties cannot live in an
+// extension); the rules live here. Same file so `private` members stay
+// shared (≈ C++ member functions defined outside the class body).
+
+extension CatalogStore {
+
+    fileprivate func auditDesignation(_ line: String) {
+        catalogStoreLog.notice("\(line, privacy: .public)")
+        designationAudit?(line)
+    }
+
+    /// The user cleared the Master Archive designation (and only that).
+    /// Authorizes the NEXT durable save to write the catalog without it.
+    func authorizeDesignationClear(reason: String) {
+        designationClearAuthorized = true
+        auditDesignation("Master Archive designation: clear authorized (\(reason)); the next catalog save removes \(persistedMasterArchive == nil ? "nothing — none on disk" : Self.describe(persistedMasterArchive)).")
+    }
+
+    /// nil = this save may proceed as far as the designation goes.
+    fileprivate func designationLossRefusal() -> CatalogWriteError? {
+        // Baseline = what is on disk OR what an accepted write still in
+        // flight will put there (codex 2026-10-02 #2).
+        guard let was = persistedMasterArchive ?? acceptedMasterArchive, masterArchive == nil,
+              !designationClearAuthorized else { return nil }
+        return .designationLossRefused(targetPath: was.targetPath)
+    }
+
+    /// How a designation appears in the audit lines — which go to
+    /// catalog.log, videoscan.log and the unified log. By VOLUME UUID only:
+    /// the target and root paths name a volume and the family archive
+    /// folder (codex 2026-10-02 #7). The Archive tab shows the paths.
+    nonisolated static func describe(_ d: MasterArchiveDesignation?) -> String {
+        guard let d else { return "none" }
+        return "the designation on volume UUID \(d.volumeUUID ?? "unknown")"
+    }
+
+    /// START line for a save whose payload changes the designation on disk.
+    /// Returns whether it does, so the OUTCOME line can be paired with it.
+    fileprivate func noteDesignationWriteStart(_ payloadDesignation: MasterArchiveDesignation?,
+                                               generation: Int) -> Bool {
+        // Accepted from here on (codex 2026-10-02 #2): whatever this payload
+        // carries is what the disk will say once the queue reaches it.
+        acceptedMasterArchive = payloadDesignation
+        guard payloadDesignation != persistedMasterArchive else { return false }
+        auditDesignation("Master Archive designation: START catalog save generation \(generation) changes it \(Self.describe(persistedMasterArchive)) → \(Self.describe(payloadDesignation)) in \(fileURL.lastPathComponent).")
+        return true
     }
 }
 

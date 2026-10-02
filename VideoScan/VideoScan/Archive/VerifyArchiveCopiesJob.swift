@@ -41,6 +41,13 @@
 //                  without its user-immutable flag. REPORT ONLY — counted,
 //                  named in the log, never changed here ("Lock archive
 //                  files…" is the verb that locks). Never turns the row red.
+//   DATE DISAGREES → (GH #219 sensor, Rick 2026-10-02) an archived
+//                  record whose index row record_date, folder/filename
+//                  date and catalog date (Rick's userDate, else the filed
+//                  date) do not agree. REPORT ONLY — counted, named in the
+//                  log, never rewritten (archived = read-only to background
+//                  work; only Rick changes a date, via Update…). Never
+//                  turns the row red. Rule: ArchiveDateAgreement.
 //   UNMANIFESTED → catalog archive copy with no manifest row — re-hash
 //                  if the file exists, report; never append a manifest
 //                  row (the manifest is Promote's to write, and a fresh
@@ -97,6 +104,9 @@ struct VerifyArchiveManifestIndex: Sendable {
         let sizeBytes: Int64
         let recordID: UUID?
         let sourceRecordID: UUID?
+        /// The row's record_date cell ("1947-xx-xx", "1940s", "") — the
+        /// date-agreement sensor's index side (GH #219).
+        var recordDate: String = ""
     }
 
     let byRelPath: [String: Row]
@@ -119,7 +129,8 @@ struct VerifyArchiveManifestIndex: Sendable {
                           sha256: f[ArchiveManifestCSV.sha256Column].lowercased(),
                           sizeBytes: Int64(f[3]) ?? 0,
                           recordID: UUID(uuidString: f[6]),
-                          sourceRecordID: UUID(uuidString: f[ArchiveManifestCSV.sourceRecordIDColumn]))
+                          sourceRecordID: UUID(uuidString: f[ArchiveManifestCSV.sourceRecordIDColumn]),
+                          recordDate: f[8])
             byRelPath[row.relPath] = row
             if let id = row.recordID { byRecordID[id] = row }
             if let id = row.sourceRecordID { bySourceID[id] = row }
@@ -183,6 +194,9 @@ struct VerifyArchivePlan: Sendable {
     /// Manifest rows with no catalog record — reported, never hashed.
     let orphans: [VerifyArchiveManifestIndex.Row]
     let totalBytes: Int64
+    /// GH #219 sensor: "<relpath> — <what disagrees>" per archived record
+    /// whose index, placement and catalog dates do not agree. Report only.
+    var dateDisagreements: [String] = []
 }
 
 // MARK: - Job
@@ -260,6 +274,8 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         var changedUnderVerify = 0
         /// Present in the archive but NOT locked (report only).
         var notLocked = 0
+        /// Index / placement / catalog dates disagree (report only, GH #219).
+        var dateDisagreements = 0
         var bytesDone: Int64 = 0
     }
     private(set) var tally = Tally()
@@ -295,6 +311,8 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     var isLockedProbe: @Sendable (_ root: String, _ relPath: String) -> Bool? = ArchiveFileLock.liveIsLocked
     /// The in-archive files found NOT locked, archive-relative (report only).
     private(set) var notLockedFiles: [String] = []
+    /// GH #219 sensor: archived records whose dates disagree (report only).
+    private(set) var dateDisagreementLines: [String] = []
 
     var title: String { "Verify Archive Copies" }
     var subtitle: String {
@@ -433,6 +451,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         var items: [VerifyArchivePlan.Item] = []
         var claimedRelPaths = Set<String>()
         var total: Int64 = 0
+        var dateDisagreements: [String] = []
 
         let copies = pfActiveRecords(model.records).filter { rec in
             model.isArchiveCopy(rec) || ArchivePathResolver.isInside(path: rec.fullPath, root: root)
@@ -445,6 +464,19 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             if row == nil { row = manifest.byRecordID[rec.id] }
             if row == nil, let src = rec.derivedFrom { row = manifest.bySourceID[src] }
             if let claimed = row?.relPath { claimedRelPaths.insert(claimed) }
+            // GH #219 sensor — O(1) per record, report only. The placement
+            // judged is where the copy IS (its current relpath), not where
+            // the matched row says it was filed: after a record-id /
+            // source-id fallback match those differ, and comparing the row
+            // with itself hid the disagreement (codex 2026-10-02 #5). A copy
+            // outside the root has no archive placement; only its catalog
+            // date is then compared with the index.
+            if let row {
+                let placement = rel ?? row.relPath
+                let problems = ArchiveDateAgreement.problems(relPath: placement, manifestDate: row.recordDate,
+                                                             userDate: rec.userDate, filedDate: rec.archiveFiledDate)
+                if !problems.isEmpty { dateDisagreements.append("\(placement) — \(problems.joined(separator: "; "))") }
+            }
             // The manifest digest is the expected REFERENCE, never a path
             // redirect. A promoted catalog record may have been moved
             // outside the designated archive root; Verify must read that
@@ -467,7 +499,8 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             .sorted { $0.relPath < $1.relPath }
         let sorted = items.sorted { ($0.relPath ?? $0.fullPath) < ($1.relPath ?? $1.fullPath) }
         return VerifyArchivePlan(rootPath: root, items: sorted,
-                                 orphans: orphans, totalBytes: total)
+                                 orphans: orphans, totalBytes: total,
+                                 dateDisagreements: dateDisagreements.sorted())
     }
 
     /// `path` relative to `root` (component-wise, standardized), or nil
@@ -513,6 +546,10 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         let plan = Self.collectPlan(model: model, root: root, manifest: manifest)
         verifyArchiveLog.info("verify archive START: \(plan.items.count) copy record(s), \(manifest.rowCount) manifest row(s), \(plan.orphans.count) orphan(s) at \(root, privacy: .public)")
         isIndeterminateValue = false
+
+        // Date agreement (GH #219) — pure reporting, no I/O, nothing written.
+        tally.dateDisagreements = plan.dateDisagreements.count
+        dateDisagreementLines = plan.dateDisagreements
 
         // Orphans first — pure reporting, no I/O.
         for row in plan.orphans {
@@ -829,6 +866,12 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             model.log("Verify Archive: \(tally.notLocked) archived file(s) are NOT locked (report only — Promote locks new files; files from before locking existed are locked by the one-time catch-up): \(names)\(more)")
             appLog.write("verify archive NOT LOCKED (\(tally.notLocked)): \(notLockedFiles.joined(separator: ", "))")
         }
+        if tally.dateDisagreements > 0 {
+            let names = dateDisagreementLines.prefix(20).joined(separator: " | ")
+            let more = dateDisagreementLines.count > 20 ? " … and \(dateDisagreementLines.count - 20) more" : ""
+            model.log("Verify Archive: \(tally.dateDisagreements) archived file(s) whose index, folder/filename and catalog dates DISAGREE (report only — nothing was changed; fix each with Update…): \(names)\(more)")
+            appLog.write(Self.dateDisagreementLogLine(dateDisagreementLines))
+        }
         // ONE line per run for the race skips (never per-record spam).
         if tally.changedUnderVerify > 0 {
             model.log("Verify Archive: \(tally.changedUnderVerify) record(s) changed under Verify; re-run to settle them.")
@@ -851,6 +894,20 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     }
 
     /// Pure so tests can pin the wording per tally shape.
+    /// Entries named in the persistent DATE DISAGREES line (the console's
+    /// sample size too). The full list stays in the job's UI.
+    nonisolated static let dateDisagreementLogSample = 20
+
+    /// The persistent (videoscan.log) DATE DISAGREES line: the TOTAL plus a
+    /// sample of at most `dateDisagreementLogSample` entries — never the
+    /// whole list (codex 2026-10-02 #8: 50k entries in one message). Pure.
+    nonisolated static func dateDisagreementLogLine(_ lines: [String]) -> String {
+        let sample = lines.prefix(dateDisagreementLogSample).joined(separator: " | ")
+        let more = lines.count > dateDisagreementLogSample
+            ? " … and \(lines.count - dateDisagreementLogSample) more (full list in the Verify window)" : ""
+        return "verify archive DATE DISAGREES (\(lines.count)): \(sample)\(more)"
+    }
+
     nonisolated static func summaryLine(_ t: Tally) -> String {
         var parts: [String] = []
         if t.mismatch > 0 { parts.append("\(t.mismatch) MISMATCH — possible corruption") }
@@ -862,6 +919,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
         if t.failed > 0 { parts.append("\(t.failed) failed") }
         if t.changedUnderVerify > 0 { parts.append("\(t.changedUnderVerify) changed under Verify — re-run to settle") }
         if t.notLocked > 0 { parts.append("\(t.notLocked) not locked") }
+        if t.dateDisagreements > 0 { parts.append("\(t.dateDisagreements) date disagreement(s)") }
         return parts.joined(separator: " · ")
     }
 

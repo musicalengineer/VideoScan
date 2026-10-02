@@ -71,6 +71,9 @@ struct ArchiveView: View {
     /// Measured height of the right pane — the Angel region's cap is a
     /// share of it (ArchivePaneLayout). Written by onGeometryChange only.
     @State var fileListHeight: CGFloat = 0
+    /// GH #167: archive trees found on disk while nothing is designated —
+    /// offered for Re-adopt…, never adopted silently.
+    @State private var readoptCandidates: [MasterArchiveReadoptionCandidate] = []
 
     var body: some View {
         HSplitView {
@@ -395,6 +398,25 @@ struct ArchiveView: View {
                     Spacer()
                 }
                 .padding(.horizontal, 8)
+                // GH #167 recovery: an archive tree with its manifest is on a
+                // mounted volume but the catalog has no designation. Offer,
+                // never adopt — the Initialize sheet asks Rick to confirm.
+                ForEach(readoptCandidates) { candidate in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Found an archive on \(VolumeReachability.displayLabel(forPath: candidate.targetPath)) (\(candidate.manifestRows) manifest line(s)).")
+                            .font(.system(size: 13))
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Re-adopt \(VolumeReachability.displayLabel(forPath: candidate.targetPath)) as Master Archive…") {
+                            model.offerReadoptMasterArchive(candidate)
+                        }
+                        .controlSize(.small)
+                        .disabled(model.isReadOnly)
+                        .accessibilityIdentifier("archive.readopt")
+                        .help("Makes \(candidate.targetPath) the Master Archive again. You confirm in the next sheet; the tree, manifest and README are kept as they are.")
+                    }
+                    .padding(.leading, 8)
+                }
                 Button("Initialize Master Archive…") {
                     model.chooseAndOfferInitializeMasterArchive()
                 }
@@ -405,6 +427,12 @@ struct ArchiveView: View {
             }
         }
         .padding(.top, 12)
+        // Off-main stat of /Volumes/* + scan-target folders; re-runs when
+        // the designation appears or disappears.
+        .task(id: model.masterArchive == nil) {
+            readoptCandidates = model.masterArchive == nil
+                ? await model.findMasterArchivesAwaitingReadoption() : []
+        }
     }
 
     /// Reveal / Manifest / Verify copies… — housekeeping, one click away

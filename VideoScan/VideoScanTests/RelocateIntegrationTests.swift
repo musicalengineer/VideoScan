@@ -388,9 +388,13 @@ struct RelocateIntegrationTests {
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [rec]
 
-        // Scope must include the record: source root = the workspace root
-        // (parent of both source and dest); the record already lives under
-        // ws.dest, so it is skipped as already-at-destination.
+        // The only way a record in scope can already live under the
+        // destination is a destination INSIDE the source (here: the
+        // workspace root → its own dest/). GH #109 (2026-10-02): the job
+        // layer now refuses that pairing before anything is queued, as the
+        // sheet has since 2026-08-17. The skip-at-destination rule itself
+        // stays pinned by the pure RelocateReconcileTests
+        // .previouslyRelocatedRecordIsShortCircuited.
         model.relocateVolume(RelocateOptions(
             sourceVolumeRootPath: ws.root.path,
             destinationRoot: ws.dest,
@@ -398,13 +402,11 @@ struct RelocateIntegrationTests {
             dryRun: false,
             skipAlreadyRelocated: true
         ))
-        try await waitForRelocateDone(model)
 
-        #expect(model.dashboard.relocateSkipped == 1)
+        #expect(model.relocateQueue.isEmpty, "a destination inside the source is refused, never queued")
+        #expect(model.relocateRunnerTask == nil)
         #expect(rec.fullPath == src.path)  // unchanged
-        // Counter consistency: the skipped record is COUNTED, so the
-        // progress bar reaches the displayed total.
-        #expect(model.dashboard.relocateCompleted == model.dashboard.relocateTotal)
+        #expect(FileManager.default.fileExists(atPath: src.path))
     }
 
     // Regression (QA 2026-07-01): the `skipAlreadyRelocated = false` option

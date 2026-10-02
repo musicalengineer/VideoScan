@@ -16,6 +16,12 @@ import os
 //   1. Idempotency by SOURCE IDENTITY (source record id): a catalog copy
 //      or a manifest row already naming this source ⇒ never copy again
 //      (a manifest-only row is adopted into the catalog instead).
+//   1b. Idempotency by CONTENT (GH #190): the source's sha256 is looked up
+//      in the run's ArchiveDigestIndex (manifest + catalog archive fixity)
+//      and the model's process-wide claims BEFORE the journal intent; a hit
+//      is refused, naming the archived file. One date for the record
+//      (GH #219): a Promote date the record cannot carry must agree with
+//      the source's own date, or the file is refused here too.
 //   2. Resolve the destination name; on collision, compare the existing
 //      file's bytes with the source and ADOPT it if identical — `_NN` is
 //      minted only for a genuinely different file.
@@ -112,6 +118,28 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     /// on disk yet when the next file resolves. Folded into the collision
     /// check so two files in one batch can never pick the same name.
     var claimedNames = Set<String>()
+
+    /// GH #190: sha256 → archived file, read once per run from the 00_Index
+    /// manifest + the catalog's archive-copy fixity (ArchiveDigestIndex).
+    /// Checked, with the model's process-wide claims, before any byte of a
+    /// new file moves.
+    var archiveDigests = ArchiveDigestIndex()
+
+    /// Test seam (always nil in production): runs on the main actor after a
+    /// file's digest is claimed AND proven, before the destination is
+    /// chosen or the journal intent is written — so a test can change the
+    /// source under the copy, or cancel, at a deterministic point.
+    var testHookAfterSourceProof: ((VideoRecord) -> Void)?
+
+    /// "promote 1A2B3C4D item 3/12" — names the file being worked on in
+    /// PERSISTENT log lines without naming the file (codex 2026-10-02 #7).
+    /// The Promote window's outcome rows map it back to the file.
+    var currentOpLabel = "promote"
+
+    /// The operation label for item `index` (0-based) of `total`. Pure.
+    nonisolated static func opLabel(jobID: UUID, index: Int, total: Int) -> String {
+        "promote \(jobID.uuidString.prefix(8)) item \(index + 1)/\(total)"
+    }
 
     /// Journal entries this run brought to `published` (file + manifest
     /// durable, catalog link in memory). Advanced to `done` ONLY after
@@ -261,6 +289,26 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         promoteLog.info("promote START: \(total) file(s) → \(ctx.root, privacy: .public)")
         isIndeterminateValue = false
 
+        // GH #190 — what the archive already holds, by content. Read once,
+        // off-main; an index that cannot be read refuses the run (Promote
+        // could not prove a file is not already archived).
+        subtitleText = "Reading the archive index…"
+        do {
+            archiveDigests = try await ArchiveDigestIndex.loadOffMain(rootPath: ctx.root)
+        } catch {
+            let why = "The archive index could not be read to check for files already in the archive — \(Self.describe(error)). Nothing was copied."
+            model.log("Promote: refused — \(why)")
+            appLog.write("promote REFUSED: \(why)")
+            finish(failed: why)
+            return
+        }
+        archiveDigests.addArchiveCopies(model.records, root: ctx.root)
+        if archiveDigests.malformedRows > 0 {
+            model.log("Promote: \(archiveDigests.malformedRows) archive index row(s) could not be read and were skipped — a duplicate of the file(s) they name cannot be detected; repair the row(s) by hand.")
+            appLog.write("promote: \(archiveDigests.malformedRows) malformed manifest row(s) skipped by the duplicate check")
+        }
+        promoteLog.info("promote: archive holds \(self.archiveDigests.count, privacy: .public) distinct digest(s)")
+
         // Step 0 — converge anything an earlier run left half-done.
         subtitleText = "Checking the archive journal…"
         let reconciled = await reconcileJournal(model: model, ctx: ctx)
@@ -271,33 +319,10 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         for (index, entry) in plan.entries.enumerated() {
             if Task.isCancelled || state == .cancelling { break }
             subtitleText = "\(index + 1)/\(total) · \(entry.filename)"
+            currentOpLabel = Self.opLabel(jobID: id, index: index, total: total)
             let outcome = await promoteOne(entry: entry, model: model, ctx: ctx,
                                            bytesDone: tally.bytesDone)
-            switch outcome {
-            case .promoted(let relPath):
-                tally.promoted += 1
-                tally.bytesDone += entry.sizeBytes
-                record(.promoted, entry.filename, relPath, recordID: entry.recordID,
-                       notLocked: noteLockWarning(entry, &tally, model: model))
-            case .adopted(let relPath):
-                tally.adopted += 1
-                tally.bytesDone += entry.sizeBytes
-                record(.adopted, entry.filename, relPath, recordID: entry.recordID,
-                       notLocked: noteLockWarning(entry, &tally, model: model))
-                model.log("Promote: \(entry.filename) — an identical copy already sat at \(relPath); adopted it (no second copy).")
-            case .skipped(let why):
-                tally.skipped += 1
-                record(.skipped, entry.filename, why, recordID: entry.recordID)
-                model.log("Promote: skipped \(entry.filename) — \(why).")
-            case .failed(let why):
-                tally.failed += 1
-                tally.bytesDone += entry.sizeBytes
-                record(.failed, entry.filename, why, recordID: entry.recordID)
-                model.log("Promote: FAILED \(entry.filename) — \(why)")
-                promoteLog.error("promote FAILED \(entry.filename, privacy: .public): \(why, privacy: .public)")
-            case .cancelled:
-                break
-            }
+            settle(outcome, for: entry, tally: &tally, model: model)
             if case .cancelled = outcome { break }
         }
 
@@ -373,6 +398,58 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         let append = model.ledgerAppend(events)
         guard mirror else { return append }
         return model.mediaLedger.mirror(intoArchiveRoot: root)
+    }
+
+    /// Count, record and log one file's result (the run loop's body; split
+    /// out to keep `run()` readable).
+    private func settle(_ outcome: FileResult, for entry: ArchivePromotePlan.Entry,
+                        tally: inout Tally, model: VideoScanModel) {
+        switch outcome {
+        case .promoted(let relPath):
+            tally.promoted += 1
+            tally.bytesDone += entry.sizeBytes
+            record(.promoted, entry.filename, relPath, recordID: entry.recordID,
+                   notLocked: noteLockWarning(entry, &tally, model: model))
+        case .adopted(let relPath):
+            tally.adopted += 1
+            tally.bytesDone += entry.sizeBytes
+            record(.adopted, entry.filename, relPath, recordID: entry.recordID,
+                   notLocked: noteLockWarning(entry, &tally, model: model))
+            model.log("Promote: \(entry.filename) — an identical copy already sat at \(relPath); adopted it (no second copy).")
+        case .skipped(let why):
+            tally.skipped += 1
+            record(.skipped, entry.filename, why, recordID: entry.recordID)
+            model.log("Promote: skipped \(entry.filename) — \(why).")
+        case .failed(let why):
+            tally.failed += 1
+            tally.bytesDone += entry.sizeBytes
+            record(.failed, entry.filename, why, recordID: entry.recordID)
+            model.log("Promote: FAILED \(entry.filename) — \(why)")
+            promoteLog.error("promote FAILED \(entry.filename, privacy: .public): \(why, privacy: .public)")
+        case .refused(let refusal):
+            if refusal.kind == .skipped {
+                tally.skipped += 1
+            } else {
+                tally.failed += 1
+                tally.bytesDone += entry.sizeBytes
+            }
+            // The detail (names, paths, dates) goes to the outcome row
+            // only; the persistent lines carry the op id + code + facts.
+            record(refusal.kind, entry.filename, refusal.detail, recordID: entry.recordID)
+            noteRefusal(refusal, model: model)
+        case .cancelled:
+            break
+        }
+    }
+
+    /// The ONE place a Promote refusal reaches persistent logs (console +
+    /// catalog.log, videoscan.log, unified log): op id, code, path-free
+    /// facts (codex 2026-10-02 #7).
+    private func noteRefusal(_ refusal: Refusal, model: VideoScanModel) {
+        let op = currentOpLabel
+        model.log("Promote: \(op) refused [\(refusal.code.rawValue)] — \(refusal.logFacts). The file and the reason are listed in the Promote window.")
+        appLog.write("promote REFUSED [\(refusal.code.rawValue)] \(op): \(refusal.logFacts)")
+        promoteLog.notice("promote REFUSED [\(refusal.code.rawValue, privacy: .public)] \(op, privacy: .public): \(refusal.logFacts, privacy: .public)")
     }
 
     func record(_ kind: FileOutcome.Kind, _ filename: String, _ detail: String, recordID: UUID? = nil,

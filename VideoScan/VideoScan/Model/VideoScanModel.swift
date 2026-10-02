@@ -921,7 +921,10 @@ final class VideoScanModel: ObservableObject {
     // CatalogStore(directory:) instance — necessary because the shared
     // CatalogStore short-circuits saves under XCTest to avoid polluting
     // Application Support. Production code never reassigns this.
-    var catalogStore: CatalogStore = .shared
+    // didSet: the designation guard's audit lines follow the store (GH #167).
+    var catalogStore: CatalogStore = .shared {
+        didSet { installDesignationAuditSink() }
+    }
 
     /// Live-reload polling task — set by `startLiveDossierReload()` in
     /// VideoScanModel+LiveReload.swift, cancelled by
@@ -1004,6 +1007,9 @@ final class VideoScanModel: ObservableObject {
         dashboard = DashboardState(logDirectory: logDirectory)
         installLifecycleObservers()
         restoreScanTargets()
+        // GH #167: designation START / OUTCOME / REFUSED lines reach the
+        // console, catalog.log and videoscan.log from the very first load.
+        installDesignationAuditSink()
         // Restore previously-scanned records so the user can browse the
         // catalog even when source volumes are offline.
         let restored = catalogStore.load()
@@ -1473,6 +1479,13 @@ final class VideoScanModel: ObservableObject {
     /// memos. Reads are O(1); the O(records) rebuild runs once per
     /// catalog mutation, never in a view body.
     let archivePromotionIndex = ArchivePromotionIndex()
+
+    /// GH #190: sha256 digests landed or landing in a Master Archive during
+    /// THIS process, per normalized archive root → digest → archive-relative
+    /// path. Promote checks it beside the run's index so two identical files
+    /// (one batch, or two jobs at once) never both land. In memory only —
+    /// see ArchiveDigestIndex.swift for the lifecycle.
+    var promoteDigestClaims: [String: [String: String]] = [:]
 
     /// Live catalog-table selection, mirrored from CatalogView so the
     /// menu-bar command "Promote Selected to Archive" knows what is

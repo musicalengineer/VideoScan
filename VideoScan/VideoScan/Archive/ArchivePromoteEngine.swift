@@ -257,20 +257,28 @@ enum ArchivePromoteEngine {
     /// (caller closes; the parent is never closed). A symlink at any depth
     /// is refused by the kernel (ELOOP) — no lstat/mkdir race.
     static func descend(from parentFD: Int32, components: [String], create: Bool,
-                        displayRoot: String) throws -> Int32 {
+                        displayRoot: String,
+                        created: ((_ components: [String]) -> Void)? = nil) throws -> Int32 {
         var current = dup(parentFD)
         guard current >= 0 else { throw Failure.createFailed(displayRoot, errno: errno) }
         var trail = displayRoot
+        var walked: [String] = []
         for comp in components {
             guard !comp.isEmpty, comp != ".", comp != "..", !comp.contains("/") else {
                 Darwin.close(current)
                 throw Failure.destinationEscapesRoot(trail + "/" + comp)
             }
             trail += "/" + comp
-            if create, mkdirat(current, comp, 0o755) != 0, errno != EEXIST {
-                let e = errno
-                Darwin.close(current)
-                throw Failure.createFailed(trail, errno: e)
+            walked.append(comp)
+            if create {
+                if mkdirat(current, comp, 0o755) == 0 {
+                    // THIS call made it — reported so a refusal can undo it.
+                    created?(walked)
+                } else if errno != EEXIST {
+                    let e = errno
+                    Darwin.close(current)
+                    throw Failure.createFailed(trail, errno: e)
+                }
             }
             let next = openat(current, comp, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
             let e = errno
@@ -290,11 +298,35 @@ enum ArchivePromoteEngine {
 
     /// Open the archive root, then descend to the directory that will hold
     /// `relativePath` (creating it when `create`). Returns the leaf dirfd.
-    static func openDestinationDirectory(root: String, relativePath: String, create: Bool) throws -> Int32 {
+    static func openDestinationDirectory(root: String, relativePath: String, create: Bool,
+                                         created: ((_ components: [String]) -> Void)? = nil) throws -> Int32 {
         let comps = (relativePath as NSString).pathComponents.dropLast()
         let rootFD = try openDirectory(root)
         defer { Darwin.close(rootFD) }
-        return try descend(from: rootFD, components: Array(comps), create: create, displayRoot: root)
+        return try descend(from: rootFD, components: Array(comps), create: create, displayRoot: root,
+                           created: created)
+    }
+
+    /// Roll back directories THIS process created under `root` (each entry
+    /// = its components below the root), deepest first, through the dirfd
+    /// O_NOFOLLOW chain. `unlinkat(AT_REMOVEDIR)` removes only an EMPTY
+    /// directory — anything another writer put there in the meantime keeps
+    /// the folder (and is never touched). Returns how many were removed.
+    /// (codex 2026-10-02 #4: a refused Promote leaves no new folder behind.)
+    @discardableResult
+    static func removeCreatedDirectories(root: String, created: [[String]]) -> Int {
+        guard let rootFD = try? openDirectory(root) else { return 0 }
+        defer { Darwin.close(rootFD) }
+        var removed = 0
+        for comps in created.sorted(by: { $0.count > $1.count }) {
+            guard let leaf = comps.last,
+                  let parent = try? descend(from: rootFD, components: Array(comps.dropLast()),
+                                            create: false, displayRoot: root) else { continue }
+            if unlinkat(parent, leaf, AT_REMOVEDIR) == 0 { removed += 1 }
+            _ = barriers.fsync(parent)
+            Darwin.close(parent)
+        }
+        return removed
     }
 
     /// `00_Index/` descriptor under the root (never created here).
@@ -404,9 +436,22 @@ enum ArchivePromoteEngine {
     /// the device, not from RAM. Strictly STRONGER verification (it can
     /// catch a device that lied about the write), never weaker; every
     /// other contract is identical.
+    ///
+    /// `expectedSourceSHA` (GH #190): the digest the caller checked against
+    /// the archive's index BEFORE this call. When given, the bytes the copy
+    /// pass actually read must hash to it, or the source changed between
+    /// that check and this copy — refused before verify/publish, partial
+    /// removed, so a file that was never checked can never be published.
+    ///
+    /// Rollback (codex 2026-10-02 #4): when the source turns out to have
+    /// changed (`.sourceChangedDuringCopy` — stamp or digest), the partial
+    /// is removed AND every folder this call created is removed again
+    /// (empty-only), so the refusal leaves no new directory in the archive.
+    /// Folders that existed before the call are never touched.
     static func copyVerifyPublish(source: SourceHandle,
                                   root: String,
                                   relativePath: String,
+                                  expectedSourceSHA: String? = nil,
                                   verifyBypassesPageCache: Bool = false,
                                   progress: (Int64) -> Void = { _ in },
                                   phaseProgress: (ProgressPhase, Int64) -> Void = { _, _ in },
@@ -417,11 +462,37 @@ enum ArchivePromoteEngine {
               destURL.path != PathScope.normalize(root) else {
             throw Failure.destinationEscapesRoot(destURL.path)
         }
+        var createdDirs: [[String]] = []
+        let dirfd = try openDestinationDirectory(root: root, relativePath: relativePath, create: true,
+                                                 created: { createdDirs.append($0) })
+        defer { Darwin.close(dirfd) }
+        do {
+            return try publishIntoDirectory(dirfd: dirfd, destURL: destURL, source: source,
+                                            relativePath: relativePath, expectedSourceSHA: expectedSourceSHA,
+                                            verifyBypassesPageCache: verifyBypassesPageCache,
+                                            progress: progress, phaseProgress: phaseProgress,
+                                            shouldCancel: shouldCancel)
+        } catch Failure.sourceChangedDuringCopy(let path) {
+            // The partial is already gone (publishIntoDirectory's defer).
+            removeCreatedDirectories(root: root, created: createdDirs)
+            throw Failure.sourceChangedDuringCopy(path)
+        }
+    }
+
+    /// The partial → copy → verify → publish body of `copyVerifyPublish`,
+    /// inside the already-open destination directory. On ANY failure the
+    /// partial is unlinked before this returns.
+    private static func publishIntoDirectory(dirfd: Int32,
+                                             destURL: URL,
+                                             source: SourceHandle,
+                                             relativePath: String,
+                                             expectedSourceSHA: String?,
+                                             verifyBypassesPageCache: Bool,
+                                             progress: (Int64) -> Void,
+                                             phaseProgress: (ProgressPhase, Int64) -> Void,
+                                             shouldCancel: () -> Bool) throws -> PublishResult {
         let name = (relativePath as NSString).lastPathComponent
         let partialName = name + ".partial"
-        let dirfd = try openDestinationDirectory(root: root, relativePath: relativePath, create: true)
-        defer { Darwin.close(dirfd) }
-
         let dfd = openat(dirfd, partialName, O_RDWR | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0o644)
         guard dfd >= 0 else {
             if errno == EEXIST { throw Failure.partialExists(destURL.path + ".partial") }
@@ -443,6 +514,10 @@ enum ArchivePromoteEngine {
         // ---- Source unchanged? (dev/ino/size/mtime re-sampled on the SAME fd)
         guard let (after, _) = FileIdentity.of(fd: source.fd), after == source.identity,
               copied == source.identity.size else {
+            throw Failure.sourceChangedDuringCopy(source.path)
+        }
+        // ---- The bytes copied are the bytes that were checked (GH #190).
+        if let expectedSourceSHA, sourceSHA != expectedSourceSHA.lowercased() {
             throw Failure.sourceChangedDuringCopy(source.path)
         }
         // ---- 2. Verify pass through the SAME descriptor.
@@ -784,87 +859,6 @@ enum ArchivePromoteEngine {
             } else if errno != EINTR {
                 throw Failure.writeFailed("pread errno \(errno)")
             }
-        }
-        return out
-    }
-}
-
-// MARK: - Intent journal (convergence)
-
-/// `00_Index/.promote_journal.jsonl` — one JSON line per step per source
-/// so a crash at ANY point can be reconciled on the next run
-/// (codex QA rounds 2–3). Append-only, O_APPEND single writes + fsync,
-/// like the manifest. States, in order:
-///   intent    — dest resolved, copy about to start (partial may exist)
-///   renamed   — file published + durable (sha known)
-///   published — manifest row appended + durable (file + index agree)
-///   done      — the catalog link was written by a DURABLE catalog save
-///               (`saveCatalogNow()` returned true) — the ONLY state that
-///               reconcile trusts without re-checking the catalog
-///   abandoned — never published; partial dropped
-/// (`manifest` is the pre-R3 name of `published`, still decoded.)
-enum ArchivePromoteJournal {
-    static let filename = ".promote_journal.jsonl"
-
-    struct Entry: Codable, Equatable, Sendable {
-        enum State: String, Codable, Sendable {
-            case intent, renamed, published, done, abandoned
-            /// Legacy alias (pre-R3 writers) — treated as `.published`.
-            case manifest
-            var isPublished: Bool { self == .published || self == .manifest }
-        }
-        let sourceRecordID: UUID
-        let sourcePath: String
-        let destRelPath: String
-        let state: State
-        var sha256: String?
-        var copyRecordID: UUID?
-        let at: Date
-    }
-
-    static func url(rootPath: String) -> URL {
-        URL(fileURLWithPath: rootPath, isDirectory: true)
-            .appendingPathComponent(MasterArchiveLayout.indexFolder, isDirectory: true)
-            .appendingPathComponent(filename)
-    }
-
-    /// Append one entry (descriptor-relative open, O_NOFOLLOW, single
-    /// O_APPEND write + fsync). Throws on any failure — a promotion whose
-    /// intent cannot be journaled durably must not start.
-    nonisolated static func append(_ entry: Entry, rootPath: String) throws {
-        let encoder = JSONEncoder()
-        encoder.dateEncodingStrategy = .iso8601
-        var data = try encoder.encode(entry)
-        data.append(0x0A)
-        try ArchiveIndexLock.withExclusive(root: rootPath, holder: "Promote journal append") {
-            let fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: false)
-            defer { close(fd) }
-            try ArchivePromoteEngine.appendDurable(fd: fd, data: data, full: false, label: "journal append")
-        }
-    }
-
-    /// Latest entry per source id (a source can be journaled several
-    /// times — retries, later Refile). Unparseable lines are skipped.
-    /// Read THROUGH the validated index descriptor (openat O_NOFOLLOW,
-    /// regular file) — never re-opened by path (codex R5 major 3). A
-    /// missing journal is simply empty.
-    nonisolated static func latestBySource(rootPath: String) -> [UUID: Entry] {
-        let fd: Int32
-        do {
-            fd = try ArchivePromoteEngine.openIndexFile(root: rootPath, name: filename, mustExist: true)
-        } catch {
-            return [:]
-        }
-        defer { close(fd) }
-        guard let data = try? ArchivePromoteEngine.readAll(fd: fd),
-              let text = String(data: data, encoding: .utf8) else { return [:] }
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        var out: [UUID: Entry] = [:]
-        for line in ArchiveIndexText.lines(text) {   // CRLF-safe
-            guard let d = line.data(using: .utf8),
-                  let e = try? decoder.decode(Entry.self, from: d) else { continue }
-            out[e.sourceRecordID] = e
         }
         return out
     }

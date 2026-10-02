@@ -28,7 +28,32 @@ extension PromoteToArchiveJob {
         case adopted(relPath: String)
         case skipped(String)
         case failed(String)
+        /// A guard refused the file before anything was written (ARCH-7).
+        /// Logged by the run loop from `logFacts` only.
+        case refused(Refusal)
         case cancelled
+    }
+
+    /// One Promote refusal (codex 2026-10-02 #7). The identifying detail —
+    /// file names, archive paths, dates — goes to the outcome row in the
+    /// Promote window; persistent logs (catalog.log, videoscan.log, the
+    /// unified log) get the operation id, the code and `logFacts`, which
+    /// carry digest prefixes and counts only.
+    struct Refusal: Equatable {
+        enum Code: String {
+            case duplicate
+            case storedDigestMismatch = "stored-digest-mismatch"
+            case changedDuringCopy = "changed-during-copy"
+            case dateAgreement = "date-agreement"
+            case filingYear = "filing-year"
+        }
+        let code: Code
+        /// How the outcome row shows it (a duplicate is a skip, the rest fail).
+        let kind: FileOutcome.Kind
+        /// UI only — may name files, folders and dates.
+        let detail: String
+        /// Persistent logs only — NO paths, names or dates.
+        let logFacts: String
     }
 
     // MARK: Preflight
@@ -270,25 +295,55 @@ extension PromoteToArchiveJob {
         if let typed = plan.archiveDateOverrides[source.id] {
             facts = facts.withDateHint(typed)
         }
-        // Filing-year guard (Rick 2026-09-27): no video under a year before
-        // 1900 or after next year — refused BEFORE the journal intent, so
-        // nothing is written for it. The same function guards Refile.
-        if let refusal = ArchivePathResolver.filingYearRefusal(facts: facts) {
-            model.log("Promote: \(entry.filename) refused — \(refusal).")
-            appLog.write("promote: \(entry.filename) refused by the filing-year guard — \(refusal)")
-            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): filing-year guard (\(facts.dateHint.manifestDate, privacy: .public))")
-            return .failed(refusal)
+        // Date refusals (filing-year guard; GH #219 date agreement) — BEFORE
+        // the journal intent, so a refusal writes nothing.
+        if let refusal = dateRefusal(source: source, entry: entry, facts: facts, model: model) {
+            return .refused(refusal)
         }
+
+        // GH #190 — content idempotency, BEFORE the journal intent.
+        let provisional = ArchivePathResolver.baseRelativePath(facts: facts, title: plan.archiveTitles[source.id])
+        let claim = try await claimSourceDigest(source: source, entry: entry, provisional: provisional,
+                                                model: model, ctx: ctx)
+        guard case .claimed(let digest, let proven) = claim else { return claim.notClaimedResult }
+        var claimPath = provisional
+        var landed = false
+        defer { if !landed { model.releasePromoteDigest(digest, relPath: claimPath, root: ctx.root) } }
+
+        // Codex 2026-10-02 #1 / #4 — PROOF before any journal entry,
+        // directory or registration. A stored fixity is only a fast path
+        // for the duplicate lookup above; it is never evidence that the
+        // source's CURRENT bytes are these. Read them now (one full read)
+        // and refuse on any difference — nothing has been written yet.
+        if !proven {
+            guard let actual = try await proveSourceDigest(source: source, entry: entry) else {
+                return .cancelled
+            }
+            if actual != digest {
+                return .refused(Refusal(
+                    code: .storedDigestMismatch, kind: .failed,
+                    detail: Self.storedDigestMismatch(recorded: digest, actual: actual),
+                    logFacts: "stored sha256 \(digest.prefix(12))… ≠ current sha256 \(actual.prefix(12))…; nothing written"))
+            }
+        }
+        testHookAfterSourceProof?(source)
+        if Task.isCancelled { return .cancelled }
+
+        // `provenSourceSHA` is the digest just read from the source (never
+        // a cached one): adoption compares the existing file against it.
         let choice = try await Self.chooseDestinationOffMain(
             facts: facts, title: plan.archiveTitles[source.id],
             root: ctx.root, sourcePath: source.fullPath,
-            sourceSize: source.sizeBytes, claimed: claimedNames)
+            sourceSize: source.sizeBytes, claimed: claimedNames,
+            provenSourceSHA: digest)
         let destURL = URL(fileURLWithPath: ctx.root, isDirectory: true)
             .appendingPathComponent(choice.relPath).standardizedFileURL
         guard ArchivePathResolver.isInside(path: destURL.path, root: ctx.root) else {
             return .failed("resolved destination escapes the archive root (\(choice.relPath)) — refused")
         }
         claimedNames.insert(destURL.path)
+        model.notePromotedDigest(digest, relPath: choice.relPath, root: ctx.root)
+        claimPath = choice.relPath
 
         let sha: String
         // The source's promotion-time identity (copy path only — an
@@ -302,50 +357,28 @@ extension PromoteToArchiveJob {
         // Intent (or, for an adoption, "already published") BEFORE any
         // byte moves — the convergence contract. A journal that cannot be
         // written durably stops the file here.
-        try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
-
         if let existingSHA = choice.identicalExistingSHA {
-            sha = existingSHA
-        } else {
-            let totalBytes = max(1, plan.totalBytes)
-            let fileBytes = max(1, source.sizeBytes)
-            let filename = source.filename
-            // Each file is copied AND read back; the bar spends the first
-            // half of this file's share copying, the second half verifying.
-            // Throttled to ~4 UI updates/s — 69 GB in 1 MB chunks would
-            // otherwise post 70k main-actor hops.
-            // BEGIN LINE, before a single byte moves. Rick's rule applied
-            // literally: log that you are ENTERING the long operation.
-            // Until 2026-09-15 the normal path logged only on COMPLETION,
-            // so one 263 GB promote emitted a batch begin line and then
-            // five minutes of total log silence while a large file copied
-            // — indistinguishable, from the log alone, from the hang that
-            // cost two days that week. The window always showed live
-            // rate/ETA; it was the durable record that went quiet.
-            model.log("Promote: copying \(entry.filename) (\(Self.promoteByteText(fileBytes))) → \(choice.relPath)…")
-            promoteLog.notice("promote BEGIN \(entry.filename, privacy: .public) (\(fileBytes, privacy: .public) bytes) → \(choice.relPath, privacy: .public)")
-            let reporter = PromoteProgressReporter()
-            let phaseProgress: @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { [weak self] phase, done in
-                guard let tick = reporter.tick(phase: phase, done: done, fileBytes: fileBytes) else { return }
-                let share = Double(fileBytes) / Double(totalBytes)
-                let within = (phase == .copying ? 0.0 : 0.5) + 0.5 * min(1.0, Double(done) / Double(fileBytes))
-                let overall = (Double(bytesDone) / Double(totalBytes)) + share * within
-                let verb = phase == .copying ? "Copying" : "Verifying"
-                let sub = "\(verb) \(filename) · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
-                Task { @MainActor [weak self] in
-                    self?.applyProgress(overall)
-                    self?.applyPhaseSubtitle(sub)
-                }
-            }
-            let (published, stamp) = try await Self.copyOffMain(sourcePath: source.fullPath,
-                                                                root: ctx.root,
-                                                                relPath: choice.relPath,
-                                                                progress: { _ in },
-                                                                phaseProgress: phaseProgress)
-            sha = published.sha256
-            sourceStamp = stamp
-            journalEntry = journalEntry.with(state: .renamed, sha256: sha)
             try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
+            sha = existingSHA
+            landed = true          // the bytes are already in place
+        } else {
+            let receipt = try ArchivePromoteJournal.appendRetractable(journalEntry, rootPath: ctx.root)
+            switch try await copyRollingBackOnChange(source: source, entry: entry, model: model, ctx: ctx,
+                                                     relPath: choice.relPath, digest: digest,
+                                                     intent: receipt, journalEntry: journalEntry,
+                                                     bytesDone: bytesDone) {
+            case .refused(let refusal):
+                return .refused(refusal)
+            case .published(let published, let stamp):
+                sha = published.sha256
+                // Published: from here the bytes ARE in the archive whatever
+                // happens next (a failed manifest append converges next run via
+                // the journal), so the claim stays.
+                landed = true
+                sourceStamp = stamp
+                journalEntry = journalEntry.with(state: .renamed, sha256: sha)
+                try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
+            }
         }
         if Task.isCancelled { return .cancelled }
 
@@ -361,6 +394,103 @@ extension PromoteToArchiveJob {
         promoteLog.notice("promote DONE \(entry.filename, privacy: .public) → \(choice.relPath, privacy: .public) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
         return choice.identicalExistingSHA == nil ? .promoted(relPath: choice.relPath)
                                                   : .adopted(relPath: choice.relPath)
+    }
+
+    /// What the copy step produced.
+    enum CopyStep {
+        case published(ArchivePromoteEngine.PublishResult, FileIdentityStamp?)
+        /// The source changed during the copy; everything was rolled back.
+        case refused(Refusal)
+    }
+
+    /// Copy + verify + publish one file off-main (the intent is already
+    /// journaled as `intent`). If the source turns out to have changed
+    /// under the copy (codex 2026-10-02 #4) the engine has already removed
+    /// the partial and the folders it created; this takes the journal
+    /// intent back as well, so the refusal leaves the archive as it was.
+    /// When the intent is no longer the journal's last line (another job
+    /// appended after it) it cannot be retracted without touching their
+    /// bytes, so an `abandoned` line closes it instead — and the refusal
+    /// says so.
+    private func copyRollingBackOnChange(source: VideoRecord,
+                                         entry: ArchivePromotePlan.Entry,
+                                         model: VideoScanModel,
+                                         ctx: RunContext,
+                                         relPath: String,
+                                         digest: String,
+                                         intent: ArchivePromoteJournal.AppendReceipt,
+                                         journalEntry: ArchivePromoteJournal.Entry,
+                                         bytesDone: Int64) async throws -> CopyStep {
+        let totalBytes = max(1, plan.totalBytes)
+        let fileBytes = max(1, source.sizeBytes)
+        let filename = source.filename
+        // Each file is copied AND read back; the bar spends the first
+        // half of this file's share copying, the second half verifying.
+        // Throttled to ~4 UI updates/s — 69 GB in 1 MB chunks would
+        // otherwise post 70k main-actor hops.
+        // BEGIN LINE, before a single byte moves. Rick's rule applied
+        // literally: log that you are ENTERING the long operation.
+        // Until 2026-09-15 the normal path logged only on COMPLETION,
+        // so one 263 GB promote emitted a batch begin line and then
+        // five minutes of total log silence while a large file copied
+        // — indistinguishable, from the log alone, from the hang that
+        // cost two days that week. The window always showed live
+        // rate/ETA; it was the durable record that went quiet.
+        model.log("Promote: copying \(entry.filename) (\(Self.promoteByteText(fileBytes))) → \(relPath)…")
+        promoteLog.notice("promote BEGIN \(entry.filename, privacy: .public) (\(fileBytes, privacy: .public) bytes) → \(relPath, privacy: .public)")
+        let reporter = PromoteProgressReporter()
+        let phaseProgress: @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { [weak self] phase, done in
+            guard let tick = reporter.tick(phase: phase, done: done, fileBytes: fileBytes) else { return }
+            let share = Double(fileBytes) / Double(totalBytes)
+            let within = (phase == .copying ? 0.0 : 0.5) + 0.5 * min(1.0, Double(done) / Double(fileBytes))
+            let overall = (Double(bytesDone) / Double(totalBytes)) + share * within
+            let verb = phase == .copying ? "Copying" : "Verifying"
+            let sub = "\(verb) \(filename) · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
+            Task { @MainActor [weak self] in
+                self?.applyProgress(overall)
+                self?.applyPhaseSubtitle(sub)
+            }
+        }
+        do {
+            let (published, stamp) = try await Self.copyOffMain(sourcePath: source.fullPath,
+                                                                root: ctx.root,
+                                                                relPath: relPath,
+                                                                expectedSHA: digest,
+                                                                progress: { _ in },
+                                                                phaseProgress: phaseProgress)
+            return .published(published, stamp)
+        } catch ArchivePromoteEngine.Failure.sourceChangedDuringCopy {
+            let retracted = await Self.retractIntentOffMain(intent, abandon: journalEntry.with(state: .abandoned),
+                                                            root: ctx.root)
+            return .refused(Refusal(
+                code: .changedDuringCopy, kind: .failed,
+                detail: Self.changedDuringCopyRefusal(digest: digest, intentRetracted: retracted),
+                logFacts: "the source changed during the copy (checked sha256 \(digest.prefix(12))…); partial and new folders removed, journal intent \(retracted ? "retracted" : "closed as abandoned")"))
+        }
+    }
+
+    /// Retract this run's intent line, or — when it is no longer the last
+    /// line — close it with `abandoned`. Off-main: both take the
+    /// archive-index lock, which must never be waited for on the UI thread.
+    /// Returns true when the intent was retracted (journal bytes as before).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func retractIntentOffMain(_ intent: ArchivePromoteJournal.AppendReceipt,
+                                                 abandon: ArchivePromoteJournal.Entry,
+                                                 root: String) async -> Bool {
+        if ArchivePromoteJournal.retract(intent, rootPath: root) { return true }
+        _ = try? ArchivePromoteJournal.append(abandon, rootPath: root)
+        return false
+    }
+
+    /// The refusal when the engine saw the source change under the copy.
+    /// Pure; digest prefix only.
+    nonisolated static func changedDuringCopyRefusal(digest: String, intentRetracted: Bool) -> String {
+        let journal = intentRetracted
+            ? "the journal line was taken back"
+            : "the journal records it as abandoned (another job wrote after it)"
+        return "the source changed while it was being copied — its bytes no longer hash to the checked sha256 \(digest.prefix(12))…. Nothing was kept: the partial copy and the folders this run created were removed and \(journal). Promote it again once the file is settled"
     }
 
     // MARK: Text for the per-file begin/end lines
@@ -415,6 +545,10 @@ extension PromoteToArchiveJob {
         // manifest id already present in the catalog (or malformed) falls
         // back to fresh — never a duplicate id.
         let copyID = Self.recordID(fromManifestFields: ctx.manifestFields[sourceID], model: model)
+        // GH #190: these verified bytes are in the archive — every landing
+        // path (fresh copy, adoption, reconcile) makes them visible to the
+        // duplicate check for the rest of this run and any concurrent one.
+        model.notePromotedDigest(sha, relPath: relPath, root: ctx.root)
         // LOCK the verified copy (Rick 2026-09-27) before it is indexed. Every
         // caller verified the digest first. A failure never undoes a good
         // copy — it is recorded as "promoted — not locked" and reported.
@@ -627,6 +761,12 @@ extension PromoteToArchiveJob {
     /// `_NN`. Names claimed by this batch and in-flight `.partial`s count
     /// as taken. The source is hashed at most ONCE (lazily, only if a
     /// same-size collision needs it).
+    ///
+    /// `provenSourceSHA` MUST be a digest of the source's CURRENT bytes
+    /// read in this run (codex 2026-10-02 #1) — never a stored
+    /// `ContentFixity`, which can lie: adoption would then register a
+    /// different file as this source's archive copy. nil = read the source
+    /// here if a collision needs it.
     #if compiler(>=6.2)
     @concurrent
     #endif
@@ -635,12 +775,15 @@ extension PromoteToArchiveJob {
                                          root: String,
                                          sourcePath: String,
                                          sourceSize: Int64,
-                                         claimed: Set<String>) async throws -> DestinationChoice {
+                                         claimed: Set<String>,
+                                         provenSourceSHA: String? = nil) async throws -> DestinationChoice {
         let rootURL = URL(fileURLWithPath: root, isDirectory: true)
         let base = ArchivePathResolver.baseRelativePath(facts: facts, title: title)
         let ext = (base as NSString).pathExtension
         let stemPath = (base as NSString).deletingPathExtension
-        var cachedSourceSHA: String?
+        // The caller proved the source's digest this run — never read the
+        // source a second time for a same-size collision.
+        var cachedSourceSHA: String? = provenSourceSHA
         func sourceSHA() throws -> String? {
             if let cachedSourceSHA { return cachedSourceSHA }
             let s = try ArchivePromoteEngine.sha256(path: sourcePath, shouldCancel: { Task.isCancelled })
@@ -706,6 +849,7 @@ extension PromoteToArchiveJob {
     static func copyOffMain(sourcePath: String,
                             root: String,
                             relPath: String,
+                            expectedSHA: String? = nil,
                             progress: @escaping @Sendable (Int64) -> Void,
                             phaseProgress: @escaping @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { _, _ in })
         async throws -> (published: ArchivePromoteEngine.PublishResult, sourceStamp: FileIdentityStamp?) {
@@ -714,6 +858,7 @@ extension PromoteToArchiveJob {
         defer { source.close() }
         let published = try ArchivePromoteEngine.copyVerifyPublish(
             source: source, root: root, relativePath: relPath,
+            expectedSourceSHA: expectedSHA,
             progress: progress, phaseProgress: phaseProgress, shouldCancel: { Task.isCancelled })
         let stampAfter = FileIdentityStamp.capture(path: sourcePath)
         let stamp = (stampBefore != nil && stampBefore == stampAfter && stampBefore?.size == published.sizeBytes)

@@ -56,6 +56,12 @@ enum CatalogWriteError: Error, Equatable, Sendable {
     /// The lock file could not even be opened (permissions, missing dir).
     case lockUnavailable(String)
 
+    /// GH #167: this save would REMOVE the Master Archive designation that
+    /// catalog.json carries (`targetPath`), and nobody cleared it — only
+    /// Clear Master Archive authorizes that. Refused before any write, so
+    /// the designation on disk survives whatever nulled it in memory.
+    case designationLossRefused(targetPath: String)
+
     var userFacingDescription: String {
         switch self {
         case .lockedByAnotherProcess(let owner):
@@ -73,6 +79,23 @@ enum CatalogWriteError: Error, Equatable, Sendable {
             return "Could not obtain the catalog lock: \(detail)"
         case .verificationFailed(let expected, let actual, let bytes):
             return "The catalog failed verification after writing \(bytes) bytes (expected SHA-256 \(expected.prefix(12))…, read back \(actual.prefix(12))…). The previous copy is intact in catalog.json.prev."
+        case .designationLossRefused(let targetPath):
+            return "Catalog not saved: it would have removed the Master Archive designation (\(targetPath)) without anyone clearing it. catalog.json still carries it. Re-open the Archive tab: re-initialize the archive, or clear it there if that is what you meant."
+        }
+    }
+
+    /// The description written to PERSISTENT records — the write-error
+    /// journal beside catalog.json and the unified log. Identical to
+    /// `userFacingDescription` except where that names a path: the Master
+    /// Archive's target path names a volume and the family archive, so the
+    /// persistent wording omits it (codex 2026-10-02 #7). The UI keeps
+    /// `userFacingDescription`.
+    var persistentDescription: String {
+        switch self {
+        case .designationLossRefused:
+            return "Catalog not saved: it would have removed the Master Archive designation without anyone clearing it. catalog.json still carries it. Re-open the Archive tab: re-initialize the archive, or clear it there if that is what you meant."
+        default:
+            return userFacingDescription
         }
     }
 
@@ -86,6 +109,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .lockUnavailable:        return "lockUnavailable"
         case .verificationFailed:     return "verificationFailed"
         case .writesDisabled:         return "writesDisabled"
+        case .designationLossRefused: return "designationLoss"
         }
     }
 
@@ -100,6 +124,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .writeFailed:             return 5
         case .verificationFailed:      return 6
         case .writesDisabled:          return 7
+        case .designationLossRefused:  return 8
         }
     }
 
@@ -112,7 +137,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .lockedByAnotherProcess, .lockUnavailable: return true
         case .readOnlyViewer, .staleGeneration,
              .writeFailed, .verificationFailed,
-             .writesDisabled:                           return false
+             .writesDisabled, .designationLossRefused:  return false
         }
     }
 }
@@ -155,14 +180,14 @@ enum CatalogWriteJournal {
             at: Date(),
             code: error.code,
             kind: error.kind,
-            detail: error.userFacingDescription,
+            detail: error.persistentDescription,
             pid: getpid(),
             processName: ProcessInfo.processInfo.processName,
             hostname: ProcessInfo.processInfo.hostName
         )
 
         if emitLog {
-            writeErrorLog.error("catalog write refused [code \(error.code, privacy: .public) \(error.kind, privacy: .public)]: \(error.userFacingDescription, privacy: .public)")
+            writeErrorLog.error("catalog write refused [code \(error.code, privacy: .public) \(error.kind, privacy: .public)]: \(error.persistentDescription, privacy: .public)")
         }
 
         let url = journalURL(besideCatalogAt: catalogURL)
