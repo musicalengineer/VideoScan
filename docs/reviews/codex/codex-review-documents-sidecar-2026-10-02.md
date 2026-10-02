@@ -256,3 +256,7 @@ Output contract (required):
 - A line: Verdict: <merge | fix | block> — <one-line reason>
 
 Wanted: findings with file:line + a concrete reproduction (ideally a Swift Testing red test with synthetic data), and "read, no findings" per clean file. Privacy: public repo — no real family names, addresses or dates in any suggested fixture.
+
+## Closed
+
+Closed by `ac127f8d` at 2026-10-02T01:45:04Z.
