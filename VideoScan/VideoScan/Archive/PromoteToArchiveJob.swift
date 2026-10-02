@@ -16,6 +16,12 @@ import os
 //   1. Idempotency by SOURCE IDENTITY (source record id): a catalog copy
 //      or a manifest row already naming this source ⇒ never copy again
 //      (a manifest-only row is adopted into the catalog instead).
+//   1b. Idempotency by CONTENT (GH #190): the source's sha256 is looked up
+//      in the run's ArchiveDigestIndex (manifest + catalog archive fixity)
+//      and the model's process-wide claims BEFORE the journal intent; a hit
+//      is refused, naming the archived file. One date for the record
+//      (GH #219): a Promote date the record cannot carry must agree with
+//      the source's own date, or the file is refused here too.
 //   2. Resolve the destination name; on collision, compare the existing
 //      file's bytes with the source and ADOPT it if identical — `_NN` is
 //      minted only for a genuinely different file.
@@ -112,6 +118,12 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     /// on disk yet when the next file resolves. Folded into the collision
     /// check so two files in one batch can never pick the same name.
     var claimedNames = Set<String>()
+
+    /// GH #190: sha256 → archived file, read once per run from the 00_Index
+    /// manifest + the catalog's archive-copy fixity (ArchiveDigestIndex).
+    /// Checked, with the model's process-wide claims, before any byte of a
+    /// new file moves.
+    var archiveDigests = ArchiveDigestIndex()
 
     /// Journal entries this run brought to `published` (file + manifest
     /// durable, catalog link in memory). Advanced to `done` ONLY after
@@ -260,6 +272,26 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
         let total = plan.entries.count
         promoteLog.info("promote START: \(total) file(s) → \(ctx.root, privacy: .public)")
         isIndeterminateValue = false
+
+        // GH #190 — what the archive already holds, by content. Read once,
+        // off-main; an index that cannot be read refuses the run (Promote
+        // could not prove a file is not already archived).
+        subtitleText = "Reading the archive index…"
+        do {
+            archiveDigests = try await ArchiveDigestIndex.loadOffMain(rootPath: ctx.root)
+        } catch {
+            let why = "The archive index could not be read to check for files already in the archive — \(Self.describe(error)). Nothing was copied."
+            model.log("Promote: refused — \(why)")
+            appLog.write("promote REFUSED: \(why)")
+            finish(failed: why)
+            return
+        }
+        archiveDigests.addArchiveCopies(model.records, root: ctx.root)
+        if archiveDigests.malformedRows > 0 {
+            model.log("Promote: \(archiveDigests.malformedRows) archive index row(s) could not be read and were skipped — a duplicate of the file(s) they name cannot be detected; repair the row(s) by hand.")
+            appLog.write("promote: \(archiveDigests.malformedRows) malformed manifest row(s) skipped by the duplicate check")
+        }
+        promoteLog.info("promote: archive holds \(self.archiveDigests.count, privacy: .public) distinct digest(s)")
 
         // Step 0 — converge anything an earlier run left half-done.
         subtitleText = "Checking the archive journal…"

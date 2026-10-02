@@ -404,9 +404,16 @@ enum ArchivePromoteEngine {
     /// the device, not from RAM. Strictly STRONGER verification (it can
     /// catch a device that lied about the write), never weaker; every
     /// other contract is identical.
+    ///
+    /// `expectedSourceSHA` (GH #190): the digest the caller checked against
+    /// the archive's index BEFORE this call. When given, the bytes the copy
+    /// pass actually read must hash to it, or the source changed between
+    /// that check and this copy — refused before verify/publish, partial
+    /// removed, so a file that was never checked can never be published.
     static func copyVerifyPublish(source: SourceHandle,
                                   root: String,
                                   relativePath: String,
+                                  expectedSourceSHA: String? = nil,
                                   verifyBypassesPageCache: Bool = false,
                                   progress: (Int64) -> Void = { _ in },
                                   phaseProgress: (ProgressPhase, Int64) -> Void = { _, _ in },
@@ -443,6 +450,10 @@ enum ArchivePromoteEngine {
         // ---- Source unchanged? (dev/ino/size/mtime re-sampled on the SAME fd)
         guard let (after, _) = FileIdentity.of(fd: source.fd), after == source.identity,
               copied == source.identity.size else {
+            throw Failure.sourceChangedDuringCopy(source.path)
+        }
+        // ---- The bytes copied are the bytes that were checked (GH #190).
+        if let expectedSourceSHA, sourceSHA != expectedSourceSHA.lowercased() {
             throw Failure.sourceChangedDuringCopy(source.path)
         }
         // ---- 2. Verify pass through the SAME descriptor.

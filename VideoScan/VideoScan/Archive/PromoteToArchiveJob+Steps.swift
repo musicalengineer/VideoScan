@@ -279,16 +279,68 @@ extension PromoteToArchiveJob {
             promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): filing-year guard (\(facts.dateHint.manifestDate, privacy: .public))")
             return .failed(refusal)
         }
+        // GH #219 — the archived record must carry a date that agrees with
+        // where it is filed. When Promote will not write the chosen date on
+        // it (a decade, or a machine proposal), registration keeps the
+        // SOURCE's own userDate — refuse if that disagrees, before a byte
+        // moves (ARCH-6, ARCH-7).
+        if let refusal = recordDateRefusal(source: source, placement: facts.dateHint) {
+            model.log("Promote: \(entry.filename) refused — \(refusal).")
+            appLog.write("promote: \(entry.filename) refused by the date-agreement guard — \(refusal)")
+            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): date agreement (placement \(facts.dateHint.manifestDate, privacy: .public), own \(source.userDate ?? "", privacy: .public))")
+            return .failed(refusal)
+        }
+
+        // GH #190 — the source's whole-file digest BEFORE the journal
+        // intent: a stamp-bound fixity that still describes the file, else
+        // one full read (logged before it starts — it can take minutes).
+        let digest: String
+        if let trusted = await Self.trustedSourceDigestOffMain(path: source.fullPath, fixity: source.contentFixity) {
+            digest = trusted
+        } else {
+            model.log("Promote: checking \(entry.filename) (\(Self.promoteByteText(max(1, source.sizeBytes)))) against the archive before copying…")
+            promoteLog.notice("promote CHECK \(entry.filename, privacy: .public) (\(source.sizeBytes, privacy: .public) bytes) — hashing the source for the duplicate check")
+            let reporter = PromoteProgressReporter()
+            let fileBytes = max(1, source.sizeBytes)
+            let filename = source.filename
+            let checkProgress: @Sendable (Int64) -> Void = { [weak self] done in
+                guard let tick = reporter.tick(phase: .verifying, done: done, fileBytes: fileBytes) else { return }
+                let sub = "Checking \(filename) against the archive · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
+                Task { @MainActor [weak self] in self?.applyPhaseSubtitle(sub) }
+            }
+            guard let read = try await Self.hashSourceOffMain(path: source.fullPath, progress: checkProgress) else {
+                return .cancelled
+            }
+            digest = read
+        }
+        if Task.isCancelled { return .cancelled }
+        // Look up, then claim — one main-actor turn, so a second identical
+        // file (this batch, or another Promote job) cannot pass between.
+        let provisional = ArchivePathResolver.baseRelativePath(facts: facts, title: plan.archiveTitles[source.id])
+        if let held = archiveDigests.relPath(forDigest: digest)
+            ?? model.claimPromoteDigest(digest, relPath: provisional, root: ctx.root) {
+            let why = Self.duplicateRefusal(existingRelPath: held, digest: digest)
+            appLog.write("promote: \(entry.filename) refused — identical bytes (sha256 \(digest)) already in the archive as \(held); nothing copied")
+            promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): duplicate of \(held, privacy: .public) (sha256 \(digest, privacy: .public))")
+            return .skipped(why)
+        }
+        var claimPath = provisional
+        var landed = false
+        defer { if !landed { model.releasePromoteDigest(digest, relPath: claimPath, root: ctx.root) } }
+
         let choice = try await Self.chooseDestinationOffMain(
             facts: facts, title: plan.archiveTitles[source.id],
             root: ctx.root, sourcePath: source.fullPath,
-            sourceSize: source.sizeBytes, claimed: claimedNames)
+            sourceSize: source.sizeBytes, claimed: claimedNames,
+            knownSourceSHA: digest)
         let destURL = URL(fileURLWithPath: ctx.root, isDirectory: true)
             .appendingPathComponent(choice.relPath).standardizedFileURL
         guard ArchivePathResolver.isInside(path: destURL.path, root: ctx.root) else {
             return .failed("resolved destination escapes the archive root (\(choice.relPath)) — refused")
         }
         claimedNames.insert(destURL.path)
+        model.notePromotedDigest(digest, relPath: choice.relPath, root: ctx.root)
+        claimPath = choice.relPath
 
         let sha: String
         // The source's promotion-time identity (copy path only — an
@@ -306,6 +358,7 @@ extension PromoteToArchiveJob {
 
         if let existingSHA = choice.identicalExistingSHA {
             sha = existingSHA
+            landed = true          // the bytes are already in place
         } else {
             let totalBytes = max(1, plan.totalBytes)
             let fileBytes = max(1, source.sizeBytes)
@@ -340,9 +393,14 @@ extension PromoteToArchiveJob {
             let (published, stamp) = try await Self.copyOffMain(sourcePath: source.fullPath,
                                                                 root: ctx.root,
                                                                 relPath: choice.relPath,
+                                                                expectedSHA: digest,
                                                                 progress: { _ in },
                                                                 phaseProgress: phaseProgress)
             sha = published.sha256
+            // Published: from here the bytes ARE in the archive whatever
+            // happens next (a failed manifest append converges next run via
+            // the journal), so the claim stays.
+            landed = true
             sourceStamp = stamp
             journalEntry = journalEntry.with(state: .renamed, sha256: sha)
             try ArchivePromoteJournal.append(journalEntry, rootPath: ctx.root)
@@ -415,6 +473,10 @@ extension PromoteToArchiveJob {
         // manifest id already present in the catalog (or malformed) falls
         // back to fresh — never a duplicate id.
         let copyID = Self.recordID(fromManifestFields: ctx.manifestFields[sourceID], model: model)
+        // GH #190: these verified bytes are in the archive — every landing
+        // path (fresh copy, adoption, reconcile) makes them visible to the
+        // duplicate check for the rest of this run and any concurrent one.
+        model.notePromotedDigest(sha, relPath: relPath, root: ctx.root)
         // LOCK the verified copy (Rick 2026-09-27) before it is indexed. Every
         // caller verified the digest first. A failure never undoes a good
         // copy — it is recorded as "promoted — not locked" and reported.
@@ -635,12 +697,15 @@ extension PromoteToArchiveJob {
                                          root: String,
                                          sourcePath: String,
                                          sourceSize: Int64,
-                                         claimed: Set<String>) async throws -> DestinationChoice {
+                                         claimed: Set<String>,
+                                         knownSourceSHA: String? = nil) async throws -> DestinationChoice {
         let rootURL = URL(fileURLWithPath: root, isDirectory: true)
         let base = ArchivePathResolver.baseRelativePath(facts: facts, title: title)
         let ext = (base as NSString).pathExtension
         let stemPath = (base as NSString).deletingPathExtension
-        var cachedSourceSHA: String?
+        // The duplicate check already has the source's digest (GH #190) —
+        // never read the source a second time for a same-size collision.
+        var cachedSourceSHA: String? = knownSourceSHA
         func sourceSHA() throws -> String? {
             if let cachedSourceSHA { return cachedSourceSHA }
             let s = try ArchivePromoteEngine.sha256(path: sourcePath, shouldCancel: { Task.isCancelled })
@@ -706,6 +771,7 @@ extension PromoteToArchiveJob {
     static func copyOffMain(sourcePath: String,
                             root: String,
                             relPath: String,
+                            expectedSHA: String? = nil,
                             progress: @escaping @Sendable (Int64) -> Void,
                             phaseProgress: @escaping @Sendable (ArchivePromoteEngine.ProgressPhase, Int64) -> Void = { _, _ in })
         async throws -> (published: ArchivePromoteEngine.PublishResult, sourceStamp: FileIdentityStamp?) {
@@ -714,6 +780,7 @@ extension PromoteToArchiveJob {
         defer { source.close() }
         let published = try ArchivePromoteEngine.copyVerifyPublish(
             source: source, root: root, relativePath: relPath,
+            expectedSourceSHA: expectedSHA,
             progress: progress, phaseProgress: phaseProgress, shouldCancel: { Task.isCancelled })
         let stampAfter = FileIdentityStamp.capture(path: sourcePath)
         let stamp = (stampBefore != nil && stampBefore == stampAfter && stampBefore?.size == published.sizeBytes)
@@ -735,6 +802,54 @@ extension PromoteToArchiveJob {
     #endif
     static func hashOffMain(path: String) async throws -> String? {
         try ArchivePromoteEngine.sha256(path: path, shouldCancel: { Task.isCancelled })
+    }
+
+    // MARK: GH #190 / #219 guards
+
+    /// GH #219: the date-agreement refusal for this source at `placement`,
+    /// or nil. Promote writes the chosen date on the archived record only
+    /// when it is Rick's (typed / Review / a copy's) AND has a user-date
+    /// form; otherwise the record keeps the source's own `userDate`, which
+    /// must then agree with the placement.
+    func recordDateRefusal(source: VideoRecord, placement: ArchiveDateHint) -> String? {
+        let override = plan.archiveDateOverrides[source.id]
+        let whose = plan.archiveDateSources[source.id]
+        let writes = override != nil && whose != nil && ArchiveRefile.userDate(for: placement) != nil
+        return ArchiveDateAgreement.promoteRefusal(placement: placement,
+                                                   writesChosenDate: writes,
+                                                   sourceUserDate: source.userDate,
+                                                   sourceKnown: source.userDateStatus == .known,
+                                                   isMachineProposal: override != nil && whose == nil)
+    }
+
+    /// GH #190: the per-file refusal line naming the archived file. Pure.
+    nonisolated static func duplicateRefusal(existingRelPath: String, digest: String) -> String {
+        "already in the Master Archive as \(existingRelPath) — identical bytes (sha256 \(digest.prefix(12))…), so no second copy was made. To change that file's name or date, use Update… on it"
+    }
+
+    /// The source's digest WITHOUT reading it, when its stored fixity is
+    /// stamp-bound and still describes the file (the persistent digest
+    /// policy, `ContentFixity.describesFileNow`). nil = read it. The
+    /// engine's `expectedSourceSHA` re-proves it against the bytes copied.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func trustedSourceDigestOffMain(path: String, fixity: ContentFixity?) async -> String? {
+        guard let fixity, fixity.describesFileNow(FileIdentityStamp.capture(path: path)),
+              ArchiveDigestIndex.isSHA256(fixity.digest) else { return nil }
+        return fixity.digest.lowercased()
+    }
+
+    /// One full read of the source (symlink chain followed, regular file
+    /// only — the same open the copy uses), with progress. nil = cancelled.
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func hashSourceOffMain(path: String,
+                                              progress: @escaping @Sendable (Int64) -> Void) async throws -> String? {
+        let h = try ArchivePromoteEngine.openSource(path: path)
+        defer { h.close() }
+        return try ArchivePromoteEngine.sha256(fd: h.fd, shouldCancel: { Task.isCancelled }, progress: progress)
     }
 
     // MARK: Pure helpers

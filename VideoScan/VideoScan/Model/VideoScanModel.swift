@@ -1474,6 +1474,13 @@ final class VideoScanModel: ObservableObject {
     /// catalog mutation, never in a view body.
     let archivePromotionIndex = ArchivePromotionIndex()
 
+    /// GH #190: sha256 digests landed or landing in a Master Archive during
+    /// THIS process, per normalized archive root → digest → archive-relative
+    /// path. Promote checks it beside the run's index so two identical files
+    /// (one batch, or two jobs at once) never both land. In memory only —
+    /// see ArchiveDigestIndex.swift for the lifecycle.
+    var promoteDigestClaims: [String: [String: String]] = [:]
+
     /// Live catalog-table selection, mirrored from CatalogView so the
     /// menu-bar command "Promote Selected to Archive" knows what is
     /// selected. Plain `var` (not @Published) — the menu reads it at
