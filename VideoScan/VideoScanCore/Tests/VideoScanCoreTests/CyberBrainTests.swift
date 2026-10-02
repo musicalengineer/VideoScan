@@ -453,6 +453,7 @@ struct CyberBrainTests {
         // 4.5 s ceiling at load 24 from other processes, 2026-10-02).
         var resolution: CyberBrainIdentityResolution?
         var wall: Duration = .zero
+        let loadBefore = TimingBudget.sampleLoad()
         let elapsed = try TimingBudget.measureThreadCPUTime {
             wall = try ContinuousClock().measure {
                 let index = try CyberBrainIndex(archive: large)
@@ -465,12 +466,11 @@ struct CyberBrainTests {
             return
         }
         #expect(person.id == "person.99999")
-        // 3 s on a quiet machine; ×1.5 only for a busy Debug run (failed
-        // under full-battery load on the M5), ×3 only on GitHub. TimingBudget
-        // is the same rule the app tests use via PerformanceLane.
-        let ceiling = TimingBudget.loadAwareDebugCeiling(.seconds(3))
-        #expect(elapsed < ceiling,
-                "100k CyberBrain index+lookup took \(elapsed) CPU / \(wall) wall, ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+        // 3 s CPU. Strict on a quiet machine; a busy-machine miss within 3×
+        // is a known issue (GH #208, TimingBudget.judge).
+        print("[cyberbrain-scale] 100k people index+lookup: \(elapsed) CPU / \(wall) wall")
+        expectWithinTimingBudget("100k CyberBrain people index+lookup (CPU)", measured: elapsed,
+                                 budget: .seconds(3), loadBefore: loadBefore)
     }
 
     @Test(.timeLimit(.minutes(1)))
@@ -487,6 +487,7 @@ struct CyberBrainTests {
         // Thread CPU time (synchronous, single-threaded body); see above.
         var evidence: [CyberBrainItem] = []
         var wall: Duration = .zero
+        let loadBefore = TimingBudget.sampleLoad()
         let elapsed = try TimingBudget.measureThreadCPUTime {
             wall = try ContinuousClock().measure {
                 let index = try CyberBrainIndex(archive: large)
@@ -497,12 +498,11 @@ struct CyberBrainTests {
 
         #expect(evidence.count == 12)
         #expect(evidence.first?.id == "item.000000")
-        // The project's timing helper, like its peers: ×3 on GitHub-hosted
-        // runners, ×1.5 when a Debug host is busy (CI 2026-09-30: 3.68 s at
-        // load 11 on 3 cores against a flat 3 s).
-        let ceiling = TimingBudget.loadAwareDebugCeiling(.seconds(3))
-        #expect(elapsed < ceiling,
-                "100k CyberBrain item index+query took \(elapsed) CPU / \(wall) wall, ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+        // 3 s CPU (CI 2026-09-30: 3.68 s at load 11 on 3 cores). Strict on a
+        // quiet machine; busy or GitHub-hosted within 3× = known issue (GH #208).
+        print("[cyberbrain-scale] 100k items index+query: \(elapsed) CPU / \(wall) wall")
+        expectWithinTimingBudget("100k CyberBrain item index+query (CPU)", measured: elapsed,
+                                 budget: .seconds(3), loadBefore: loadBefore)
     }
 
     private func temporaryRoot() throws -> URL {

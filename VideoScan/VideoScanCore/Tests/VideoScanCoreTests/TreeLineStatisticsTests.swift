@@ -352,6 +352,7 @@ struct TreeLineStatisticsScaleTests {
         let rootPerson = try #require(graph.people[root])
         let other = try #require(graph.relatives(.siblings, of: rootPerson).first?.id
                                  ?? graph.people.keys.sorted().dropFirst(7).first)
+        let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
         let start = clock.now
         let pop = try #require(TreeLineStatistics.ancestors(of: [root, other], in: graph))
@@ -366,9 +367,10 @@ struct TreeLineStatisticsScaleTests {
         let deep = deepPair.count == 2 ? graph.bloodRelation(of: deepPair[1], to: deepPair[0]) : nil
         let kinElapsed = clock.now - kinStart
         print("[line-stats-scale] 100k: stats \(statsElapsed) over \(pop.members.count) ancestors; kinship \(kinElapsed) (\(relation?.name ?? "-"), \(deep?.name ?? "-")) (\(TimingBudget.loadDescription()))")
-        let ceiling = TimingBudget.loadAwareDebugCeiling(Self.budget)
-        #expect(statsElapsed < ceiling, "100k line stats took \(statsElapsed), ceiling \(ceiling)")
-        #expect(kinElapsed < ceiling, "100k kinship took \(kinElapsed), ceiling \(ceiling)")
+        expectWithinTimingBudget("100k line stats", measured: statsElapsed, budget: Self.budget,
+                                 loadBefore: loadBefore)
+        expectWithinTimingBudget("100k kinship", measured: kinElapsed, budget: Self.budget,
+                                 loadBefore: loadBefore)
         #expect(pop.members.count > 10_000)
         #expect(places.considered == pop.members.count)
         #expect(ages != nil)

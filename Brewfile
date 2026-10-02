@@ -16,7 +16,7 @@ brew "gh"            # GitHub CLI — issues, PRs, project board
 brew "swiftlint"     # Swift static analysis (pre-commit + CI)
 brew "periphery"     # Swift unused-code finder (pre-commit + CI)
 brew "pre-commit"    # git hook framework wiring swiftlint/periphery
-brew "jq"            # JSON in shell scripts (collect_metrics.sh, dashboard.sh)
+brew "jq"            # JSON in shell scripts
 
 # ---- GUI apps ----
 cask "claude"               # Anthropic Claude desktop chat app

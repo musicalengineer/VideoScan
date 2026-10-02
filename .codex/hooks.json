@@ -1,5 +1,5 @@
 {
-  "description": "Inject newly addressed local manager messages at the next user turn.",
+  "description": "Session-start digest (the team-channel message hook was retired 2026-10-02).",
   "hooks": {
     "SessionStart": [
       {
@@ -7,18 +7,6 @@
           {
             "type": "command",
             "command": "bash /Users/rickb/dev/VideoScan/.claude/scripts/session_morning_hook.sh"
-          }
-        ]
-      }
-    ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/tools/team-channel.py\" hook --agent auto --format codex",
-            "timeout": 3,
-            "statusMessage": "Checking the local team channel"
           }
         ]
       }

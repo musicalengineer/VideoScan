@@ -386,14 +386,15 @@ struct FamilyMapResolverTests {
         var resolved = 0
         // Thread CPU time (GH #208): a pure loop, budgeted on what it consumed.
         var wall: Duration = .zero
+        let loadBefore = TimingBudget.sampleLoad()
         let cpu = TimingBudget.measureThreadCPUTime {
             wall = ContinuousClock().measure {
                 for s in inputs where R.resolve(s) != nil { resolved += 1 }
             }
         }
-        let ceiling = TimingBudget.loadAwareDebugCeiling(.milliseconds(150))
         print("[family-map] resolve 40k: cpu \(cpu), wall \(wall), \(resolved) resolved (\(TimingBudget.loadDescription()))")
-        #expect(cpu < ceiling, "40k resolves took \(cpu) cpu / \(wall) wall, ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+        expectWithinTimingBudget("40k place resolves (CPU)", measured: cpu, budget: .milliseconds(150),
+                                 loadBefore: loadBefore)
         #expect(resolved > n * 9 / 10)
     }
 }

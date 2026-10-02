@@ -619,6 +619,7 @@ struct LifeAndTimesScaleTests {
 
     @Test func hundredThousandPeople() {
         let people = LifeAndTimesSynthetic.people(count: 100_000)
+        let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
         let start = clock.now
         var withFacts = 0, lines = 0
@@ -632,9 +633,9 @@ struct LifeAndTimesScaleTests {
         let scan = LT.serviceScan(subjects: people, options: year2026)
         let agg = LT.aggregate(label: "all", subjects: people, options: year2026)
         let elapsed = clock.now - start
-        let ceiling = TimingBudget.loadAwareDebugCeiling(Self.budget)
         print("[life-and-times-scale] 100k: \(elapsed) total; facts \(factsDone - start); \(withFacts) with facts, \(lines) lines, \(scan.candidates.count) candidates; \(agg.spoken.prefix(120)) (\(TimingBudget.loadDescription()))")
-        #expect(elapsed < ceiling, "100k took \(elapsed), ceiling \(ceiling)")
+        expectWithinTimingBudget("100k life-and-times", measured: elapsed, budget: Self.budget,
+                                 loadBefore: loadBefore)
         #expect(withFacts > 50_000)
         #expect(scan.candidates.count > 1_000)
     }

@@ -434,6 +434,61 @@ else
             fail "$f invented crashes: got '$got', want '0|[]'"
         fi
     done
+
+    # 8f: GH #208 (2026-10-02). A busy-machine timing miss within 3x is a
+    # Swift Testing KNOWN ISSUE. A test that passed with known issues prints
+    # "━ Test … passed after … with N known issue(s)." (real swift-testing
+    # shape) and must count as PASSED — not vanish from the total — and be
+    # counted in KNOWN_ISSUE_TESTS. Its "recorded a known issue" lines, the
+    # "━ Suite …" and "━ Test run with …" summaries must not count at all.
+    # A test that FAILED with a known issue among its issues is a failure
+    # only; the over-3x miss is a real failure and counts exactly once.
+    cat > "$SANDBOX/known_issue.log" <<'LOG'
+━ Test "settled keystroke" recorded a known issue at CatalogSearchBudgetSensorTests.swift:120:13: Issue recorded
+↳ [timing-budget] 100k settled keystroke 'mov' (median of 5): budget 165.0 ms, measured 210.4 ms (1.28×), load 9.1→9.4 on 16 cores, busy (busy) → known-issue
+━ Test settledKeystrokeBudgetAndAgreementAt100k() passed after 41.2 seconds with 1 known issue.
+━ Test "mapping" recorded a known issue at TimingBudgetTests.swift:147:30: Issue recorded
+━ Test "mapping" recorded a known issue at TimingBudgetTests.swift:149:34: Issue recorded
+━ Test "mapping: pass records nothing" passed after 0.001 seconds with 2 known issues.
+━ Suite "TimingBudget — shared test-budget rule" passed after 0.502 seconds with 2 known issues.
+✘ Test "tree walk" recorded an issue at TreeWalkScaleTests.swift:64:13: Issue recorded
+↳ [timing-budget] 100k tree walk: budget 8000.0 ms, measured 30100.0 ms (3.76×), load 12.0→12.2 on 16 cores, busy (busy) → fail
+✘ Test hundredThousandPeopleWalkAndCheckOffMain() failed after 30.4 seconds with 1 issue.
+✘ Test mixedIssues() failed after 1.0 seconds with 2 issues (including 1 known issue).
+✔ Test quietIsStrict() passed after 0.001 seconds.
+━ Test run with 5 tests in 2 suites passed after 72.0 seconds with 3 known issues.
+LOG
+    got=$(run_parse "$SANDBOX/known_issue.log")
+    want='3|2|0|["hundredThousandPeopleWalkAndCheckOffMain()", "mixedIssues()"]'
+    if [ "$got" = "$want" ]; then
+        pass "known-issue passes count as PASSED (3), failures count once (2), summaries ignored"
+    else
+        fail "known-issue fixture: got '$got', want '$want'"
+    fi
+    got=$( ( source "$PARSE_LIB"; parse_test_counts "$SANDBOX/known_issue.log"; echo "$KNOWN_ISSUE_TESTS" ) )
+    if [ "$got" = "2" ]; then
+        pass "KNOWN_ISSUE_TESTS=2 (tests that passed with known issues; issue lines and summaries excluded)"
+    else
+        fail "KNOWN_ISSUE_TESTS: got '$got', want '2'"
+    fi
+    # Every existing fixture has no known issues: the count must be a plain 0.
+    for f in "$FIXTURE_DIR/nightly_excerpt_green.log" "$FIXTURE_DIR/nightly_excerpt_one_failure.log" "$SANDBOX/empty.log"; do
+        got=$( ( source "$PARSE_LIB"; parse_test_counts "$f"; echo "$KNOWN_ISSUE_TESTS" ) )
+        if [ "$got" = "0" ]; then
+            pass "$(basename "$f"): KNOWN_ISSUE_TESTS=0"
+        else
+            fail "$(basename "$f"): KNOWN_ISSUE_TESTS got '$got', want '0'"
+        fi
+    done
+fi
+
+# 8g: GH #208 — the nightly pins strict timing (both spellings: swift test
+# reads the plain name, xcodebuild forwards TEST_RUNNER_<NAME> as <NAME>).
+if grep -qx 'export VIDEOSCAN_TIMING_STRICT=1' "$SCRIPT_DIR/nightly_local_tests.sh" &&
+   grep -qx 'export TEST_RUNNER_VIDEOSCAN_TIMING_STRICT=1' "$SCRIPT_DIR/nightly_local_tests.sh"; then
+    pass "nightly exports VIDEOSCAN_TIMING_STRICT=1 (+ TEST_RUNNER_ form)"
+else
+    fail "nightly no longer pins strict timing budgets (VIDEOSCAN_TIMING_STRICT=1)"
 fi
 
 # ───────────────────────────────────────────────────────────────────
@@ -864,6 +919,7 @@ OPTIONAL_WORK_FILE="$SANDBOX/timeout-optional-work-ran"
     FAILED=1
     SKIPPED=2
     TOTAL=7
+    KNOWN_ISSUE_TESTS=1   # GH #208: one of the 4 passes carried a known issue
     ELAPSED=9
     STATUS="failed"
     REASON="test-timeout:7s"
@@ -891,12 +947,12 @@ print("|".join([
     row["status"], row["reason"], str(row["passed"]), str(row["failed"]),
     str(row["skipped"]), str(row["total"]), str(row.get("coverage_logic_pct")),
     row["person_eval_status"], str(row["person_eval_readiness_pct"]),
-    row["configuration"],
+    row["configuration"], str(row.get("known_issue_tests")),
 ]))
 PY
 )
 if [ "$TIMEOUT_PUBLISH_RC" -eq 0 ] &&
-   [ "$TIMEOUT_ROW_SUMMARY" = "failed|test-timeout:7s|4|1|2|7|None|not-configured|0|Release" ] &&
+   [ "$TIMEOUT_ROW_SUMMARY" = "failed|test-timeout:7s|4|1|2|7|None|not-configured|0|Release|1" ] &&
    [ ! -e "$OPTIONAL_WORK_FILE" ]; then
     pass "timeout row retains partial counts/readiness and bypasses coverage + live evaluator"
 else

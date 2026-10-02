@@ -544,22 +544,23 @@ struct GedcomFamilyGraphTests {
         // The one-time index build (2026-08-28) is a compile-time cost —
         // the loader does it off the main thread and the compiled artifact
         // carries it — so it is budgeted separately from the lookup.
+        // 5 s build, 50 ms lookup. Strict on a quiet machine; a busy-machine
+        // miss within 3× is a known issue (GH #208, TimingBudget.judge).
+        let loadBefore = TimingBudget.sampleLoad()
         let buildStarted = ContinuousClock.now
         _ = largeGraph.index
         let build = buildStarted.duration(to: .now)
-        // 5 s on a quiet machine; ×1.5 only for a busy Debug run (failed
-        // under full-battery load on the M5), ×3 only on GitHub.
-        let buildCeiling = TimingBudget.loadAwareDebugCeiling(.seconds(5))
-        #expect(build < buildCeiling,
-                "100k index build took \(build), ceiling \(buildCeiling) (\(TimingBudget.loadDescription()))")
+        expectWithinTimingBudget("100k GEDCOM index build", measured: build,
+                                 budget: .seconds(5), loadBefore: loadBefore)
 
+        let lookupLoadBefore = TimingBudget.sampleLoad()
         let started = ContinuousClock.now
         let matches = largeGraph.people(matching: "Needle Archivist")
         let elapsed = started.duration(to: .now)
 
         #expect(matches.map(\.name) == ["Needle Archivist"])
-        #expect(elapsed < .milliseconds(50),
-                "100k GEDCOM lookup exceeded 50 ms: \(elapsed)")
+        expectWithinTimingBudget("100k GEDCOM name lookup", measured: elapsed,
+                                 budget: .milliseconds(50), loadBefore: lookupLoadBefore)
     }
 
     // MARK: Provenance canonical form + same-bytes fingerprint (codex #814/#817)

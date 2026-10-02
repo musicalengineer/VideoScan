@@ -256,15 +256,17 @@ struct FamilyMapTallyTests {
         var filtered: T.Result?
         // Thread CPU time (GH #208): the pass is synchronous and single-threaded.
         var wall: Duration = .zero
+        let loadBefore = TimingBudget.sampleLoad()
         let cpu = TimingBudget.measureThreadCPUTime {
             wall = ContinuousClock().measure {
                 plain = try? T.counts(people: people, visited: visited)
                 filtered = try? T.counts(people: people, visited: visited, mask: mask, yearCeiling: 1800)
             }
         }
-        let ceiling = TimingBudget.loadAwareDebugCeiling(.milliseconds(50)) * 2   // two tallies measured
         print("[family-map] tally 40k ×2: cpu \(cpu), wall \(wall) (\(TimingBudget.loadDescription()))")
-        #expect(cpu < ceiling, "two 40k tallies took \(cpu) cpu / \(wall) wall, ceiling \(ceiling) (\(TimingBudget.loadDescription()))")
+        expectWithinTimingBudget("two 40k family-map tallies (CPU)", measured: cpu,
+                                 budget: .milliseconds(50) * 2,   // two tallies measured
+                                 loadBefore: loadBefore)
         let r = try #require(plain)
         #expect(r.totals.considered == n)
         #expect(r.totals.unresolved == n / 25)

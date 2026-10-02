@@ -21091,10 +21091,11 @@
         "test_codex_review.py"
       ],
       "tests": [
-        "test_brief_without_contract_is_refused_before_anything_is_posted",
-        "test_channel_posts_are_off_by_default",
+        "test_brief_without_contract_is_refused_before_anything_is_recorded",
         "test_codex_nonzero_exit_fails",
         "test_corrupt_state_file_reads_as_empty",
+        "test_default_review_doc_uses_codex_reviews_directory",
+        "test_default_state_lives_in_its_own_folder_not_the_retired_channel",
         "test_findings_leave_cycle_fixing_then_close",
         "test_happy_path_merge_zero_closes",
         "test_hyphenated_verdict_is_kept_whole",
@@ -21106,7 +21107,8 @@
         "test_status_prints_last_five",
         "test_stdin_is_dev_null_even_when_caller_holds_a_pipe_open",
         "test_timeout_kills_codex_and_fails",
-        "test_track_registers_a_channel_driven_cycle_and_verdict_moves_it"
+        "test_track_registers_an_interactive_cycle_and_verdict_moves_it",
+        "test_wrapper_never_calls_the_retired_channel"
       ]
     },
     {
@@ -21670,6 +21672,7 @@
       ],
       "tests": [
         "test_a_rotated_log_is_read_from_the_start",
+        "test_alert_writes_the_morning_record_not_a_channel_post",
         "test_fallbacks_are_counted_only_since_the_last_run",
         "test_missing_engine_is_not_run_never_green",
         "test_no_log_and_no_state_is_zero_not_an_error",
@@ -22036,38 +22039,6 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
-      "path": "tests/test_team_channel.py",
-      "stage": "unit",
-      "suites": [
-        "test_team_channel.py"
-      ],
-      "tests": [
-        "test_ack_cannot_consume_another_agents_message",
-        "test_all_expands_to_every_other_manager",
-        "test_awaiting_lists_acknowledged_requests_with_no_reply",
-        "test_codex_hook_output_is_valid_json",
-        "test_concurrent_hooks_claim_a_message_only_once",
-        "test_delete_refuses_non_rick_and_missing_ids",
-        "test_delete_removes_message_and_recipients_and_unlinks_replies",
-        "test_existing_database_is_migrated_for_delivery_leases",
-        "test_explicit_agent_identity_and_qwen_seat_cannot_drain_it",
-        "test_hook_delivers_once_but_requires_explicit_acknowledgment",
-        "test_hook_notice_says_acknowledge_only_after_replying",
-        "test_legacy_watcher_and_launch_agent_fail_closed",
-        "test_locked_database_does_not_change_delivery_state",
-        "test_locked_database_hook_fails_open_for_user_prompt",
-        "test_manager_hook_configuration_is_local_mailbox_only",
-        "test_message_survives_reconnect_and_is_recipient_specific",
-        "test_reply_requires_an_existing_message",
-        "test_reviewer_can_post_but_all_never_addresses_it",
-        "test_schema_enforces_duplicate_recipient_delivery",
-        "test_transport_has_no_model_network_or_process_launcher",
-        "test_validation_rejects_unknown_self_and_oversize_payloads"
-      ]
-    },
-    {
-      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
-      "kind": "python",
       "path": "tests/test_test_host_detection_subprocess.py",
       "stage": "unit",
       "suites": [
@@ -22212,81 +22183,6 @@
         "test_dirty_target_is_unchanged",
         "test_explicit_legacy_gets_no_audited_flags",
         "test_hash_mismatch_writes_nothing"
-      ]
-    },
-    {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
-      "kind": "package",
-      "path": "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/BroadcastAndFlushTests.swift",
-      "stage": "unit",
-      "suites": [
-        "BroadcastAndFlushTests"
-      ],
-      "tests": [
-        "testDeleteGoesThroughTheCLIAsRickForTheWholeMessage",
-        "testFlushIsMonitorOnlyAndPrunesToOpenRows",
-        "testFlushKeepsRowsYoungerThanTheWIPWindow",
-        "testSubjectIsTheFirstLineCutAtAWordBoundary"
-      ]
-    },
-    {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
-      "kind": "package",
-      "path": "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/CodexWakeTests.swift",
-      "stage": "unit",
-      "suites": [
-        "CodexWakeTests"
-      ],
-      "tests": [
-        "testCommandKeepsThreadAndMessageAsSeparateArguments",
-        "testCommandTrimsTargetAndRejectsBlankTarget",
-        "testExecutableExpandsTildeInOverride",
-        "testExecutableFallsBackInSupportedOrder",
-        "testExecutableOverrideWins",
-        "testExecutableSkipsInvalidOverrideAndReturnsNilWhenNoCandidateWorks",
-        "testWakeDrainsOutputLargerThanPipeCapacity",
-        "testWakeLaunchesOverrideWithoutShellInterpretation",
-        "testWakeReportsProcessLaunchFailure",
-        "testWakeReportsStatusWhenToolFailsSilently",
-        "testWakeReturnsToolFailureOutput",
-        "testWakeTimesOutAndTerminatesChild",
-        "testWakeUsesDefaultSuccessMessageWhenToolIsSilent"
-      ]
-    },
-    {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
-      "kind": "package",
-      "path": "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/NudgeRowTests.swift",
-      "stage": "unit",
-      "suites": [
-        "NudgeRowTests"
-      ],
-      "tests": [
-        "testAStuckAgentMessageCanBeNudgedOnce",
-        "testAgentSubjectWithTheNudgePrefixIsNotRicksNudge",
-        "testRicksReminderIsANudgeAndCannotBeNudged",
-        "testRowsOwedByRickOrAlreadyAnsweredAreNotNudgeable"
-      ]
-    },
-    {
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
-      "kind": "package",
-      "path": "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/ReviewCyclesTests.swift",
-      "stage": "unit",
-      "suites": [
-        "ReviewCyclesTests"
-      ],
-      "tests": [
-        "testAbsentOrMalformedFileHidesTheSection",
-        "testClosedOlderThanADayIsHiddenButOpenOnesAreNot",
-        "testClosedStaysGreenAndShowsItsSha",
-        "testDecodesWhatThePythonWriterWrites",
-        "testFailedIsRedImmediately",
-        "testOnlyTheNewestThreeAreShown",
-        "testOwnPidIsAliveAndAnUnusedPidIsNot",
-        "testRunningLineReadsLikeTheSpec",
-        "testRunningWithDeadPidIsRedEvenWhenFresh",
-        "testThresholdBoundaries"
       ]
     }
   ],
@@ -24304,10 +24200,6 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "tests/test_team_channel.py",
-          "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
           "name": "tests/test_test_host_detection_subprocess.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -24330,22 +24222,6 @@
         {
           "name": "tools/poi-c02/test_tools.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/BroadcastAndFlushTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/CodexWakeTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/NudgeRowTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/ReviewCyclesTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 2061,

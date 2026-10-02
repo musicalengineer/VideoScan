@@ -318,6 +318,7 @@ struct PersonOfTheDayScaleTests {
         let months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"]
         let lines: [TreeWalk.Line] = [.first, .second, .both, .none]
         let clock = ContinuousClock()
+        let loadBefore = TimingBudget.sampleLoad()
         let start = clock.now
         var people: [PersonOfTheDay.Candidate] = []
         people.reserveCapacity(100_000)
@@ -341,8 +342,8 @@ struct PersonOfTheDayScaleTests {
         let elapsed = clock.now - start
         print("[potd-scale] 100k: build \(built - start), total \(elapsed); pick \(p.personID) \(p.reason) (\(TimingBudget.loadDescription()))")
         #expect(p.reason.isOnThisDay, "with 100k day-precise dates someone has an anniversary today")
-        let ceiling = TimingBudget.loadAwareDebugCeiling(Self.budget)
-        #expect(elapsed < ceiling, "100k Person of the Day took \(elapsed), ceiling \(ceiling)")
+        expectWithinTimingBudget("100k Person of the Day", measured: elapsed, budget: Self.budget,
+                                 loadBefore: loadBefore)
     }
 }
 

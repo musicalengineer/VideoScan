@@ -29,6 +29,7 @@
 
 import Testing
 import Foundation
+import VideoScanCore
 @testable import VideoScan
 
 @MainActor
@@ -104,6 +105,7 @@ struct CatalogSearchBudgetSensorTests {
             // Warm-up pass (first-use eligibility scans are memoized —
             // production pays them once per query string, then settles).
             _ = Self.settledPass(corpus, index, query)
+            let loadBefore = TimingBudget.sampleLoad()
             var times: [Double] = []
             var lastBadge = 0
             for _ in 0..<5 {
@@ -116,8 +118,14 @@ struct CatalogSearchBudgetSensorTests {
             print(String(format: "[#123-sensor] q='%@' settled_ms=%.1f budget_ms=%.0f badge=%d",
                          query, settled, budget, lastBadge))
             #if !DEBUG
-            #expect(settled <= budget,
-                    "settled keystroke for '\(query)' took \(settled) ms — budget \(budget) ms at 100k records")
+            // Strict on a quiet machine (the 2 AM nightly); in a busy full
+            // battery a miss within 3× is a known issue (GH #208: 85 ms alone
+            // vs this 165 ms budget, failed only under battery load).
+            expectWithinTimingBudget("100k settled keystroke '\(query)' (median of 5)",
+                                     measured: .milliseconds(settled), budget: .milliseconds(budget),
+                                     loadBefore: loadBefore)
+            #else
+            _ = loadBefore
             #endif
         }
 

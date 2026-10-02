@@ -6,14 +6,14 @@
         [--timeout 1800]
     python3 tools/codex_review.py close --title "⌘O" --closed-by <sha> [--note "..."]
     python3 tools/codex_review.py status
-    python3 tools/codex_review.py track --title "Map stage 1" --range a..b [--doc …] [--message-id N]
-        (a review codex runs interactively via the channel — shows on the status line)
+    python3 tools/codex_review.py track --title "Map stage 1" --range a..b [--doc …]
+        (a review codex runs interactively, outside `codex exec` — shows on the status line)
     python3 tools/codex_review.py verdict --title "Map stage 1" --verdict fix --findings 3 [--credits …]
 
-Phases, each written to the state file the menu-bar monitor reads:
-    briefed  -> brief validated, "started" message posted to codex on the channel
+Phases, each written to the state file the status line reads:
+    briefed  -> brief validated, cycle recorded
     running  -> `codex exec` is running (pid recorded, --timeout enforced)
-    verdict  -> output parsed, review doc written, reply posted
+    verdict  -> output parsed, review doc written
     closed   -> verdict merge with 0 findings, or `close` run after the fixes
     fixing   -> findings to close
     failed   -> timeout, codex error, or output that breaks the contract
@@ -26,8 +26,7 @@ CRITICAL: codex runs with stdin = /dev/null. With an inherited open stdin,
 `codex exec` prints "Reading additional input from stdin" and waits forever.
 
 Stdlib only. Test seams (environment):
-    VIDEOSCAN_REVIEW_CYCLES     state file (default: beside the channel DB)
-    VIDEOSCAN_TEAM_CHANNEL_DB   channel DB (honoured by tools/team-channel.py)
+    VIDEOSCAN_REVIEW_CYCLES     state file (default: DEFAULT_STATE below)
     VIDEOSCAN_CODEX_BIN         codex executable (default ~/.local/bin/codex)
 """
 
@@ -48,12 +47,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
-CHANNEL_SCRIPT = REPO / "tools" / "team-channel.py"
-DEFAULT_CHANNEL_DB = (
-    Path.home() / "Library" / "Application Support" / "VideoScan" / "team-channel" / "team-channel.sqlite3"
+# Its own folder since the team channel was retired (Rick, 2026-10-02); it
+# used to sit beside the channel DB in .../VideoScan/team-channel/.
+DEFAULT_STATE = (
+    Path.home() / "Library" / "Application Support" / "VideoScan" / "review-cycles" / "review-cycles.json"
 )
 MAX_CYCLES = 20
-MAX_SUBJECT = 160
 
 CONTRACT_RE = re.compile(r"Credits spent:.*Finding count:", re.IGNORECASE)
 FINDINGS_RE = re.compile(r"Finding count:\s*\**\s*(\d+)", re.IGNORECASE)
@@ -68,17 +67,9 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def channel_db_path() -> Path:
-    override = os.environ.get("VIDEOSCAN_TEAM_CHANNEL_DB")
-    return Path(override).expanduser() if override else DEFAULT_CHANNEL_DB
-
-
 def state_path() -> Path:
     override = os.environ.get("VIDEOSCAN_REVIEW_CYCLES")
-    if override:
-        return Path(override).expanduser()
-    # Same directory the monitor already reads (ChannelDB.path's parent).
-    return channel_db_path().parent / "review-cycles.json"
+    return Path(override).expanduser() if override else DEFAULT_STATE
 
 
 def output_dir() -> Path:
@@ -150,39 +141,13 @@ def new_cycle(title: str, rng: str, doc: str) -> dict:
         cycle = {
             "id": max((c.get("id", 0) for c in cycles), default=0) + 1,
             "title": title, "range": rng, "phase": "briefed", "phaseSince": now,
+            # messageIDs: always empty now; kept so records written while the
+            # team channel existed (cycles up to #26) and new ones share a shape.
             "startedAt": now, "messageIDs": [], "pid": None, "doc": doc,
             "tokens": None, "findings": None, "verdict": None, "failure": None,
         }
         cycles.append(cycle)
         return dict(cycle)
-
-
-# ---------------------------------------------------------------- channel
-
-def post(subject: str, body: str, reply_to: int | None = None) -> int | None:
-    """Optionally post a review-cycle line to the team channel.
-
-    OFF by default (Rick, 2026-09-27). The first version posted every start /
-    verdict / closed line "to codex"; codex is run directly by `codex exec`
-    and never replies on the channel, so Rick's monitor showed 19 red
-    "unanswered from codex" rows. The record of a cycle is review-cycles.json
-    (the monitor's Review cycles section + the status line) and the review
-    doc. Set VIDEOSCAN_REVIEW_ANNOUNCE=1 to post anyway (e.g. when a human
-    should see it in the channel). A channel failure never fails the review.
-    """
-    if os.environ.get("VIDEOSCAN_REVIEW_ANNOUNCE") != "1":
-        return None
-    args = [sys.executable, str(CHANNEL_SCRIPT), "post", "--from", "claude", "--to", "codex",
-            "--subject", subject[:MAX_SUBJECT], "--body", body]
-    if reply_to is not None:
-        args += ["--reply-to", str(reply_to)]
-    result = subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True)
-    match = re.search(r"Posted #(\d+)", result.stdout)
-    if result.returncode != 0 or not match:
-        print(f"codex_review: channel post failed: {result.stderr.strip() or result.stdout.strip()}",
-              file=sys.stderr)
-        return None
-    return int(match.group(1))
 
 
 # ---------------------------------------------------------------- parsing
@@ -270,11 +235,7 @@ def write_doc(doc: Path, cycle: dict, parsed: dict, stdout: str, brief_text: str
 
 def fail(cycle: dict, reason: str) -> int:
     update_cycle(cycle["id"], phase="failed", failure=reason)
-    start = cycle["messageIDs"][0] if cycle["messageIDs"] else None
-    post(f"Review {cycle['title']} — failed: {reason}",
-         f"Cycle #{cycle['id']} ({cycle['range']}) failed: {reason}. Output: {output_dir()}/{cycle['id']}.*",
-         start)
-    print(f"FAILED: {reason}", file=sys.stderr)
+    print(f"FAILED: {reason} (output: {output_dir()}/{cycle['id']}.*)", file=sys.stderr)
     return 1
 
 
@@ -294,9 +255,6 @@ def run_review(title: str, rng: str, brief: str, doc: str | None, timeout: float
 
     # briefed
     cycle = new_cycle(title, rng, display(doc_path))
-    start_id = post(f"Review {title} ({rng}) — started",
-                    f"Brief: {display(brief_path)}\nRange: {rng}\nCycle #{cycle['id']}")
-    cycle = update_cycle(cycle["id"], messageIDs=[start_id] if start_id else [])
 
     # running
     out_dir = output_dir()
@@ -336,12 +294,8 @@ def run_review(title: str, rng: str, brief: str, doc: str | None, timeout: float
     cycle = update_cycle(cycle["id"], phase="verdict", tokens=parsed["tokens"],
                          findings=parsed["findings"], verdict=parsed["verdict"])
     write_doc(doc_path, cycle, parsed, stdout, brief_text)
-    reply = post(f"Review {title} — {parsed['verdict']}, {parsed['findings']} findings → {display(doc_path)}",
-                 f"Verdict: {parsed['verdictText']}\nTokens: {parsed['tokens']}\nDoc: {display(doc_path)}",
-                 start_id)
     done = parsed["verdict"] == "merge" and parsed["findings"] == 0
-    fields = {"phase": "closed" if done else "fixing",
-              "messageIDs": cycle["messageIDs"] + ([reply] if reply else [])}
+    fields = {"phase": "closed" if done else "fixing"}
     if done:
         fields["closedBy"] = rng.split("..")[-1]
     update_cycle(cycle["id"], **fields)
@@ -371,13 +325,7 @@ def close_cycle(title: str, closed_by: str, note: str | None) -> int:
         print(f"codex_review: no cycle titled {title!r}", file=sys.stderr)
         return 2
     cycle = max(matches, key=lambda c: c.get("id", 0))
-    ids = list(cycle.get("messageIDs") or [])
-    start = ids[0] if ids else None
-    reply = post(f"Review {title} — closed by {closed_by}",
-                 f"Cycle #{cycle['id']} ({cycle.get('range')}) closed by {closed_by}."
-                 + (f"\n{note}" if note else ""), start)
-    update_cycle(cycle["id"], phase="closed", closedBy=closed_by, note=note,
-                 messageIDs=ids + ([reply] if reply else []))
+    update_cycle(cycle["id"], phase="closed", closedBy=closed_by, note=note)
     if cycle.get("doc"):
         doc = resolve(cycle["doc"])
         if doc.exists():
@@ -421,22 +369,19 @@ def status_lines(cycles: list[dict], now: datetime | None = None) -> list[str]:
 
 # ---------------------------------------------------------------- CLI
 
-def track_cycle(title: str, rng: str, doc: str | None, message_id: int | None) -> int:
-    """Register a review that codex runs INTERACTIVELY (Rick's own codex
-    session, driven by team-channel messages) so the status line and the
-    menu-bar monitor show it like a `codex exec` cycle (2026-09-29: three
-    Family Map handoffs went through the channel and the line stayed empty).
+def track_cycle(title: str, rng: str, doc: str | None) -> int:
+    """Register a review that codex runs INTERACTIVELY (outside `codex exec`)
+    so the status line shows it like a `codex exec` cycle (2026-09-29: three
+    Family Map handoffs ran that way and the line stayed empty).
     Phase `briefed` until `verdict`/`close`; the colour then says how long
     codex has had it."""
     cycle = new_cycle(title, rng, doc or "")
-    if message_id is not None:
-        update_cycle(cycle["id"], messageIDs=[message_id])
     print(f"#{cycle['id']} {title} ({rng}): tracking (briefed)")
     return 0
 
 
 def record_verdict(title: str, verdict: str, findings: int, credits: str | None) -> int:
-    """Record a verdict codex posted on the channel: `fixing` when there is
+    """Record a verdict from an interactive codex review: `fixing` when there is
     anything to close, `closed` when a merge verdict carries no findings."""
     matches = [c for c in load_cycles() if c.get("title") == title]
     if not matches:
@@ -458,9 +403,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--title", required=True)
         parser.add_argument("--range", required=True, dest="rng")
         parser.add_argument("--doc")
-        parser.add_argument("--message-id", type=int)
         args = parser.parse_args(argv[1:])
-        return track_cycle(args.title, args.rng, args.doc, args.message_id)
+        return track_cycle(args.title, args.rng, args.doc)
     if argv[:1] == ["verdict"]:
         parser = argparse.ArgumentParser(prog="codex_review.py verdict")
         parser.add_argument("--title", required=True)

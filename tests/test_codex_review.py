@@ -1,8 +1,8 @@
 """tools/codex_review.py — one-command codex review cycle.
 
-Every test runs against a FAKE codex executable and a temp channel DB + state
-file (VIDEOSCAN_TEAM_CHANNEL_DB / VIDEOSCAN_REVIEW_CYCLES), so nothing touches
-the real mailbox or spends codex credits.
+Every test runs against a FAKE codex executable and a temp state file
+(VIDEOSCAN_REVIEW_CYCLES), so nothing touches the real review-cycles.json or
+spends codex credits.
 """
 
 from __future__ import annotations
@@ -10,7 +10,6 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
-import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -68,9 +67,7 @@ def env(tmp_path, monkeypatch):
     brief = tmp_path / "brief.md"
     brief.write_text(BRIEF)
     monkeypatch.setenv("VIDEOSCAN_CODEX_BIN", str(fake))
-    monkeypatch.setenv("VIDEOSCAN_TEAM_CHANNEL_DB", str(tmp_path / "channel.sqlite3"))
     monkeypatch.setenv("VIDEOSCAN_REVIEW_CYCLES", str(tmp_path / "state" / "review-cycles.json"))
-    monkeypatch.setenv("VIDEOSCAN_REVIEW_ANNOUNCE", "1")   # channel posts are opt-in; the posting tests opt in
     monkeypatch.setenv("FAKE_CODEX_ARGS", str(tmp_path / "args.json"))
     monkeypatch.setenv("FAKE_CODEX_MODE", "merge0")   # registered so teardown restores it
     return tmp_path
@@ -85,11 +82,6 @@ def run(env: Path, mode: str, timeout: float = 20, title: str = "⌘O") -> tuple
     return code, cycles[-1]
 
 
-def channel_rows(env: Path) -> list[tuple]:
-    with sqlite3.connect(env / "channel.sqlite3") as db:
-        return db.execute("SELECT id, author, subject, reply_to FROM messages ORDER BY id").fetchall()
-
-
 def test_happy_path_merge_zero_closes(env):
     code, cycle = run(env, "merge0")
     assert code == 0
@@ -99,12 +91,7 @@ def test_happy_path_merge_zero_closes(env):
     doc = (env / "review.md").read_text()
     assert "- Tokens: 12345" in doc and "- Finding count: 0" in doc and "Credits spent: $0.40" in doc
     assert "## Brief" in doc and "Do not explore outside" in doc
-    rows = channel_rows(env)
-    assert [r[1] for r in rows] == ["claude", "claude"]
-    assert rows[0][2] == "Review ⌘O (de54a7ca..48708aba) — started"
-    assert rows[1][3] == rows[0][0]                       # verdict is a reply to the start
-    assert rows[1][2].startswith("Review ⌘O — merge, 0 findings → ")
-    assert cycle["messageIDs"] == [rows[0][0], rows[1][0]]
+    assert cycle["messageIDs"] == []                      # nothing is posted anywhere
     args = json.loads((env / "args.json").read_text())
     assert args[:3] == ["exec", "--sandbox", "read-only"] and "--skip-git-repo-check" in args
     assert args[-1] == BRIEF
@@ -119,7 +106,6 @@ def test_findings_leave_cycle_fixing_then_close(env):
     closed = codex_review.load_cycles()[-1]
     assert closed["phase"] == "closed" and closed["closedBy"] == "7d2a9674"
     assert "Closed by `7d2a9674`" in (env / "review.md").read_text()
-    assert channel_rows(env)[-1][3] == closed["messageIDs"][0]
 
 
 def test_second_run_appends_to_doc(env):
@@ -165,8 +151,6 @@ def test_malformed_output_fails_with_reason(env):
     assert cycle["phase"] == "failed"
     assert cycle["failure"] == "malformed output: no 'Finding count: N'"
     assert not (env / "review.md").exists()
-    rows = channel_rows(env)
-    assert "failed: malformed output" in rows[-1][2] and rows[-1][3] == rows[0][0]
 
 
 def test_codex_nonzero_exit_fails(env):
@@ -174,11 +158,11 @@ def test_codex_nonzero_exit_fails(env):
     assert code == 1 and cycle["failure"] == "codex exit 3"
 
 
-def test_brief_without_contract_is_refused_before_anything_is_posted(env):
+def test_brief_without_contract_is_refused_before_anything_is_recorded(env):
     (env / "brief.md").write_text("Please review a.swift.\n")
     assert codex_review.main(["--title", "x", "--range", "a..b", "--brief", str(env / "brief.md")]) == 2
     assert codex_review.load_cycles() == []
-    assert not (env / "channel.sqlite3").exists()
+    assert not codex_review.state_path().exists()
 
 
 def test_state_file_is_atomic_and_capped_at_twenty(env):
@@ -234,23 +218,33 @@ def test_hyphenated_verdict_is_kept_whole():
     assert out["findings"] == 5
 
 
-def test_channel_posts_are_off_by_default(env, monkeypatch):
-    """Rick 2026-09-27: 19 red 'unanswered from codex' rows — the wrapper must not post by default."""
-    monkeypatch.delenv("VIDEOSCAN_REVIEW_ANNOUNCE")
-    code, cycle = run(env, "merge0")
-    assert code == 0 and cycle["phase"] == "closed"
-    db = env / "channel.sqlite3"
-    assert not db.exists() or channel_rows(env) == []
+def test_default_state_lives_in_its_own_folder_not_the_retired_channel(monkeypatch):
+    """Team channel retired 2026-10-02: review-cycles.json moved out of
+    .../VideoScan/team-channel/ into .../VideoScan/review-cycles/."""
+    monkeypatch.delenv("VIDEOSCAN_REVIEW_CYCLES", raising=False)
+    path = codex_review.state_path()
+    assert path == (Path.home() / "Library" / "Application Support" / "VideoScan"
+                    / "review-cycles" / "review-cycles.json")
+    assert "team-channel" not in str(path) and "team-channel" not in str(codex_review.output_dir())
+    assert codex_review.output_dir().parent == path.parent
 
 
-def test_track_registers_a_channel_driven_cycle_and_verdict_moves_it(env, capsys):
-    """2026-09-29: three channel-driven map reviews never reached the status
+def test_wrapper_never_calls_the_retired_channel():
+    """No channel post, no channel script, no channel DB: the cycle record
+    (review-cycles.json) and the review doc are the whole output."""
+    source = SCRIPT.read_text()
+    for gone in ("team-channel.py", "VIDEOSCAN_TEAM_CHANNEL_DB", "VIDEOSCAN_REVIEW_ANNOUNCE", "def post("):
+        assert gone not in source, gone
+
+
+def test_track_registers_an_interactive_cycle_and_verdict_moves_it(env, capsys):
+    """2026-09-29: three interactive map reviews never reached the status
     line. `track` registers one as `briefed`; `verdict` moves it to fixing
     (findings) or closed (merge/0); `close` then works as for exec cycles."""
     assert codex_review.main(["track", "--title", "Map stage 1", "--range", "1ad0dd3a..2875900b",
-                              "--doc", "docs/x.md", "--message-id", "1776"]) == 0
+                              "--doc", "docs/x.md"]) == 0
     cycles = codex_review.load_cycles()
-    assert cycles[-1]["phase"] == "briefed" and cycles[-1]["messageIDs"] == [1776]
+    assert cycles[-1]["phase"] == "briefed" and cycles[-1]["messageIDs"] == []
     assert cycles[-1]["pid"] is None
     assert codex_review.main(["verdict", "--title", "Map stage 1", "--verdict", "fix", "--findings", "3"]) == 0
     assert codex_review.load_cycles()[-1]["phase"] == "fixing"

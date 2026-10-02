@@ -109,6 +109,37 @@ while IFS= read -r f; do
 done < <(find VideoScan/VideoScan VideoScan/VideoScanTests swift_cli \
              -name '*.swift' -not -path '*/build/*' -not -path '*/.build/*' 2>/dev/null)
 
+# ---------- Swift lines + files by folder (metrics page "Code size") ----------
+# Top-level app folder (Catalog, Hallie, …), plus Core, Tests and swift_cli.
+# Core is listed here but, for trend continuity, is NOT part of
+# total_swift_lines above (that number has always meant app + tests + CLI).
+# awk, not a bash associative array: macOS /bin/bash is 3.2.
+SWIFT_BY_FOLDER=$(find VideoScan/VideoScan VideoScan/VideoScanTests swift_cli \
+                       VideoScan/VideoScanCore/Sources \
+                       -name '*.swift' -not -path '*/build/*' -not -path '*/.build/*' -print0 2>/dev/null \
+    | xargs -0 wc -l 2>/dev/null \
+    | awk '
+        {
+            n = $1
+            p = substr($0, index($0, $2))
+            if (p == "total") next
+            if (p ~ /^VideoScan\/VideoScanCore\//)      f = "Core"
+            else if (p ~ /^VideoScan\/VideoScanTests\//) f = "Tests"
+            else if (p ~ /^swift_cli\//)                 f = "swift_cli"
+            else if (p ~ /^VideoScan\/VideoScan\/[^\/]+\//) {
+                split(p, parts, "/"); f = parts[3]
+            }
+            else f = "(app root)"
+            gsub(/["\\]/, "", f)
+            lines[f] += n; files[f] += 1
+        }
+        END {
+            out = ""; sep = ""
+            for (f in lines) { out = out sep "\"" f "\":{\"lines\":" lines[f] ",\"files\":" files[f] "}"; sep = "," }
+            if (out == "") print "null"; else print "{" out "}"
+        }')
+SWIFT_BY_FOLDER="${SWIFT_BY_FOLDER:-null}"
+
 # ---------- Test count ----------
 # Test count is cheap to derive from the xcresult bundle — but xcrun xcresulttool
 # requires knowing the schema, and we don't need it to be perfectly precise
@@ -141,5 +172,5 @@ fi
 # All numeric fields come from variables that are either a number or the
 # literal string "null" — both safely interpolate into JSON.
 cat <<JSON
-{"ts":"$TS","sha":"$SHORT_SHA","branch":"$BRANCH","coverage_overall_pct":$COV_OVERALL,"coverage_logic_pct":$COV_LOGIC,"logic_lines":$LOGIC_LINES,"logic_covered":$LOGIC_COVERED,"swiftlint_warnings":$SWIFTLINT_WARN,"swiftlint_errors":$SWIFTLINT_ERR,"periphery_findings":$PERIPHERY_FINDINGS,"total_swift_lines":$TOTAL_LINES,"open_issues":$OPEN_ISSUES,"files_over_1000":$FILES_OVER_1000,"worst_file":"$WORST_FILE","test_count":$TEST_COUNT,"regression_count":$REGRESSION_COUNT}
+{"ts":"$TS","sha":"$SHORT_SHA","branch":"$BRANCH","coverage_overall_pct":$COV_OVERALL,"coverage_logic_pct":$COV_LOGIC,"logic_lines":$LOGIC_LINES,"logic_covered":$LOGIC_COVERED,"swiftlint_warnings":$SWIFTLINT_WARN,"swiftlint_errors":$SWIFTLINT_ERR,"periphery_findings":$PERIPHERY_FINDINGS,"total_swift_lines":$TOTAL_LINES,"open_issues":$OPEN_ISSUES,"files_over_1000":$FILES_OVER_1000,"worst_file":"$WORST_FILE","test_count":$TEST_COUNT,"regression_count":$REGRESSION_COUNT,"swift_by_folder":$SWIFT_BY_FOLDER}
 JSON
