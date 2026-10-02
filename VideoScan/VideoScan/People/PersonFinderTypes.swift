@@ -1213,7 +1213,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
     var coverImage: NSImage? {
         guard let filename = coverImageFilename else { return nil }
         let url = URL(fileURLWithPath: referencePath).appendingPathComponent(filename)
-        return NSImage(contentsOf: url)
+        // Card-sized and cached: this is drawn in PersonCard grids (see PortraitThumbnailCache).
+        return PortraitThumbnailCache.thumbnail(at: url)
     }
 
     /// Same engine→threshold mapping as PersonFinderSettings.thresholdForEngine,

@@ -141,7 +141,7 @@ struct PersonCard: View {
     var body: some View {
         VStack(spacing: 4) {
             ZStack {
-                if let portrait, let img = NSImage(contentsOf: portrait.url) {
+                if let portrait, let img = PortraitThumbnailCache.thumbnail(at: portrait.url) {
                     CroppedCircleImage(
                         image: img,
                         scale: portrait.cropScale,
