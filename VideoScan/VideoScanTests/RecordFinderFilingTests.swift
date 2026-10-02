@@ -610,6 +610,161 @@ struct RecordFinderFilingTests {
         #expect(finding.documentPath == firstPath, "the document path this filing wrote is taken back")
     }
 
+    // MARK: Codex review — documents sidecar (2026-10-02)
+
+    /// F1 (codex's drafted red test): rolling back a NEW finding deleted it
+    /// even after another writer had saved lore on it. Only a finding still
+    /// exactly as this filing wrote it may be removed; otherwise it stays,
+    /// the document is still retired, and the outcome is `.mixedState`.
+    @Test func newFindingRollbackPreservesAnotherWritersLore() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let research = sb.research, key = sb.subject.key
+        let failing: @Sendable (CyberBrainWriter.Testimony) throws
+            -> CyberBrainWriter.Receipt = { _ in
+            let current = try #require(try research.loadDossier(key: key))
+            let finding = try #require(
+                current.findings.first { $0.source == .recordFinder })
+            try research.update(key: key) {
+                $0?.setLore("Synthetic later edit", for: finding.id)
+            }
+            throw BrainDown()
+        }
+        let file = try write(try pdf(), "synthetic.pdf", in: sb)
+        let outcome = await filer(sb, record: .some(failing))
+            .file(submission(file, read: true, words: "Synthetic filing text"))
+        let back = try research.loadDossier(key: key)
+        #expect(back?.findings.first?.lore == "Synthetic later edit")
+        guard case .mixedState(let why) = outcome else {
+            Issue.record("expected mixedState, got \(outcome)"); return
+        }
+        #expect(why.contains("changed after"), "says why the finding was left: \(why)")
+        // The document was still retired, as before.
+        #expect(sb.store.documents(for: sb.person).isEmpty)
+        let folder = try #require(sb.store.personFolders(for: sb.person).first)
+        let trash = FamilyAssetStore.documentsFolder(in: folder)
+            .appendingPathComponent(FamilyAssetStore.documentsTrashFolderName)
+        #expect(pdfs(in: trash).count == 1)
+    }
+
+    /// F1 sensor: the ownership comparison must see the finding as it LANDS
+    /// on disk. Dossier dates are ISO-8601 (whole seconds), so a clock with
+    /// a fraction — every production clock — must still roll back cleanly,
+    /// not be mistaken for another writer's change.
+    @Test func newFindingRollbackWithAFractionalClockStillRollsBackCleanly() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let fractional = fixedNow.addingTimeInterval(0.375)
+        let filer = RecordFinderFiler(assetStore: sb.store, assetPerson: sb.person, researchStore: sb.research,
+                                      subject: sb.subject, speakerName: "Tester",
+                                      record: { _ in throw BrainDown() },
+                                      log: { _ in }, now: { fractional })
+        let file = try write(try pdf(), "synthetic.pdf", in: sb)
+        let outcome = await filer.file(submission(file, read: true, words: "Synthetic words."))
+        guard case .rolledBack = outcome else { Issue.record("expected rolledBack, got \(outcome)"); return }
+        #expect(try sb.research.loadDossier(key: sb.subject.key) == nil, "this filing's finding was taken back")
+    }
+
+    /// F2: the re-attach rollback restored the PREPARE-time snapshot, so a
+    /// verdict and words saved between prepare and the locked write were
+    /// lost. It must restore the values its own write replaced.
+    @Test func reattachRollbackRestoresWhatItReplacedNotThePrepareSnapshot() async throws {
+        let base = try sandbox()
+        defer { try? fm.removeItem(at: base.base) }
+        let file = try write(try pdf(), "record.pdf", in: base)
+        guard case .filed(_, let id, _) = await filer(base).file(submission(file)) else {
+            Issue.record("initial filing failed"); return
+        }
+        let firstPath = try #require(try base.research.loadDossier(key: base.subject.key)?
+            .findings.first { $0.id == id }?.documentPath)
+        let document = try #require(base.store.documents(for: base.person).first)
+        try base.store.removeDocument(document, for: base.person)
+
+        // The import calls its clock after prepare() and before the
+        // finding is written: another writer saves there.
+        let research = base.research, key = base.subject.key, now = fixedNow
+        let fired = Counter()
+        var store = base.store
+        store.importClock = {
+            if fired.value == 0 {
+                fired.bump()
+                try? research.update(key: key) { dossier in
+                    guard let at = dossier?.findings.firstIndex(where: { $0.id == id }) else { return }
+                    dossier?.findings[at].verdict = .wrong
+                    dossier?.findings[at].fullText = "Synthetic intervening text"
+                }
+            }
+            return now
+        }
+        let sb = Sandbox(base: base.base, store: store, research: base.research, brain: base.brain,
+                         sources: base.sources, subject: base.subject, person: base.person)
+        let failing: @Sendable (CyberBrainWriter.Testimony) throws -> CyberBrainWriter.Receipt = { _ in throw BrainDown() }
+        let outcome = await filer(sb, record: .some(failing))
+            .file(submission(file, read: true, words: "Synthetic replacement"))
+        guard case .rolledBack = outcome else { Issue.record("expected rolledBack, got \(outcome)"); return }
+        #expect(fired.value == 1)
+
+        let back = try #require(try sb.research.loadDossier(key: sb.subject.key)?.findings.first { $0.id == id })
+        #expect(back.verdict == .wrong)
+        #expect(back.fullText == "Synthetic intervening text")
+        #expect(back.documentPath == firstPath, "the document path this filing wrote is taken back")
+    }
+
+    /// F3 (codex's drafted red test): a failed lore save was applied to the
+    /// pane's copy anyway; the retry compared against that optimistic copy,
+    /// skipped the save and cleared the edited mark — the words were lost.
+    @MainActor
+    @Test func aFailedLoreSaveIsActuallyRetried() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let file = try write(try pdf(), "synthetic.pdf", in: sb)
+        guard case .filed(_, let id, _) =
+            await filer(sb).file(submission(file)) else {
+            Issue.record("initial filing failed"); return
+        }
+        let model = pane(sb)
+        model.load()
+        let url = try sb.research.dossierURL(key: sb.subject.key)
+        let original = try Data(contentsOf: url)
+        try Data("{ damaged".utf8).write(to: url)
+        model.editLore("Synthetic unsaved draft", for: id)
+        model.commitLore(for: id)
+        #expect(model.errorMessage != nil)
+        try original.write(to: url)
+        model.commitLore(for: id)
+        let back = try sb.research.loadDossier(key: sb.subject.key)
+        #expect(back?.findings.first { $0.id == id }?.lore
+                == "Synthetic unsaved draft")
+    }
+
+    /// F3, the other half: a change that did not reach the disk is not shown
+    /// as if it had. The pane shows what is on disk; the draft stays typed.
+    @MainActor
+    @Test func aFailedSaveIsNotShownAsSaved() async throws {
+        let sb = try sandbox()
+        defer { try? fm.removeItem(at: sb.base) }
+        let file = try write(try pdf(), "synthetic.pdf", in: sb)
+        guard case .filed(_, let id, _) = await filer(sb).file(submission(file)) else {
+            Issue.record("initial filing failed"); return
+        }
+        let model = pane(sb)
+        model.load()
+        let url = try sb.research.dossierURL(key: sb.subject.key)
+        let original = try Data(contentsOf: url)
+        try Data("{ damaged".utf8).write(to: url)
+        model.setVerdict(.confirmed, for: id)
+        model.editLore("Synthetic draft", for: id)
+        model.commitLore(for: id)
+        #expect(model.errorMessage != nil)
+        #expect(model.findings.first { $0.id == id }?.verdict == .unreviewed, "a failed verdict save is not shown")
+        #expect(model.findings.first { $0.id == id }?.lore == "", "a failed lore save is not shown")
+        #expect(model.loreDrafts[id] == "Synthetic draft", "the typed draft is kept for the retry")
+        try original.write(to: url)
+        #expect(model.tellHallie() == 0, "nothing was confirmed on disk")
+        let back = try #require(try sb.research.loadDossier(key: sb.subject.key)?.findings.first { $0.id == id })
+        #expect(back.lore == "Synthetic draft", "Tell Hallie committed the still-edited draft")
+    }
+
     /// A store whose import clock damages documents.json AFTER both filer
     /// prechecks pass (the import calls it after validating the bytes,
     /// before writing). Optionally a regular FILE squats on `.trash`.
