@@ -9,7 +9,8 @@
 // model layer accepted anything.
 //
 // This guard decides by WHERE THE PATHS LIVE: each path is resolved
-// (symlinks followed for the part that exists, "."/".." collapsed), its
+// physically (symlinks followed for the part that exists BEFORE any ".."
+// is applied, as the kernel does; loops and dangling links refused), its
 // volume identified by UUID (or the filesystem id when there is none), and
 // the path compared as components below that volume's mount point —
 // case- and Unicode-folded when the volume is case-insensitive. Two paths
@@ -85,23 +86,46 @@ enum RelocatePathGuard {
 
     // MARK: Live resolution
 
-    /// Resolve `path` on the live filesystem. The destination usually does
-    /// not exist yet, so the deepest EXISTING ancestor is realpath'ed and
-    /// the missing tail re-appended. nil only when even that fails.
+    /// Resolve `path` on the live filesystem with PHYSICAL-path semantics
+    /// (codex 2026-10-02 #3): symlinks are followed component by component
+    /// BEFORE any `..` is applied, exactly as the kernel does — so
+    /// `other/alias/..` with alias → source/sub is `source`, not `other`.
+    /// The path is never standardized first (that collapses `..`
+    /// lexically and changes its meaning after a symlink).
+    ///
+    /// The destination usually does not exist yet, so the deepest EXISTING
+    /// ancestor is realpath'ed and the missing tail re-appended. Refused
+    /// (nil) — never guessed — when:
+    ///   • realpath fails for any reason but ENOENT (ELOOP = a symlink
+    ///     loop, ENOTDIR, EACCES …);
+    ///   • a component that does not resolve nevertheless EXISTS (a
+    ///     dangling symlink: its target is unknown territory, possibly
+    ///     inside the source);
+    ///   • the missing tail contains `..` (it would climb back into the
+    ///     resolved part through names that do not exist).
     nonisolated static func liveLocation(_ path: String) -> RelocatePathLocation? {
-        let standardized = URL(fileURLWithPath: path).standardizedFileURL.path
-        var existing = standardized
+        let absolute = path.hasPrefix("/")
+            ? path
+            : (FileManager.default.currentDirectoryPath as NSString).appendingPathComponent(path)
+        var existing = absolute
         var tail: [String] = []
         var resolvedExisting: String?
         while true {
+            errno = 0
             if let raw = realpath(existing, nil) {
                 resolvedExisting = String(cString: raw)
                 free(raw)
                 break
             }
+            guard errno == ENOENT else { return nil }               // loop, not-a-dir, no access
+            var st = stat()
+            if lstat(existing, &st) == 0 { return nil }             // exists but unresolvable: dangling link
             guard existing != "/", !existing.isEmpty else { break }
-            tail.insert((existing as NSString).lastPathComponent, at: 0)
+            let last = (existing as NSString).lastPathComponent
             existing = (existing as NSString).deletingLastPathComponent
+            if last == "." || last.isEmpty { continue }
+            if last == ".." { return nil }                           // climbing through names that do not exist
+            tail.insert(last, at: 0)
         }
         guard let base = resolvedExisting else { return nil }
 

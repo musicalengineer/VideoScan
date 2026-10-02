@@ -91,6 +91,82 @@ struct RelocateSourceDestGuardTests {
                                                  destination: ws.root.appendingPathComponent("SourceVol 1")) == nil)
     }
 
+    // MARK: Physical-path semantics (codex 2026-10-02 #3, P1)
+    //
+    // `..` after a symlink means "the parent of the symlink's TARGET" to the
+    // kernel. Collapsing `..` lexically first (standardizedFileURL) turned
+    // other/alias/.. into `other` — a sibling — while the filesystem means
+    // source itself.
+
+    /// root/source/sub, root/other, root/other/alias → root/source/sub.
+    private func dotDotWorkspace() throws -> (root: URL, source: URL, other: URL, alias: URL) {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory
+            .appendingPathComponent("test_109_dotdot_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        let source = root.appendingPathComponent("source", isDirectory: true)
+        let other = root.appendingPathComponent("other", isDirectory: true)
+        try fm.createDirectory(at: source.appendingPathComponent("sub", isDirectory: true), withIntermediateDirectories: true)
+        try fm.createDirectory(at: other, withIntermediateDirectories: true)
+        let alias = other.appendingPathComponent("alias")
+        try fm.createSymbolicLink(at: alias, withDestinationURL: source.appendingPathComponent("sub", isDirectory: true))
+        return (root, source, other, alias)
+    }
+
+    @Test("symlink followed by `..` is the symlink TARGET's parent: other/alias/.. ⇒ the source itself")
+    func symlinkThenDotDotIsPhysical() throws {
+        let ws = try dotDotWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+        #expect(RelocatePathGuard.refusal(source: ws.source.path, destination: ws.alias.path + "/..") == .identical)
+        #expect(RelocatePathGuard.refusal(source: ws.source.path,
+                                          destination: ws.alias.path + "/../not_yet_created") == .destinationInsideSource)
+        // The sheet and the model share the resolver.
+        #expect(RelocateSheet.destinationProblem(source: ws.source.path,
+                                                 destination: URL(fileURLWithPath: ws.alias.path + "/..")) != nil)
+        // No over-refusal: plain `..` with no symlink still means the lexical parent.
+        #expect(RelocatePathGuard.refusal(source: ws.source.path,
+                                          destination: ws.other.path + "/../other/new_dest") == nil)
+    }
+
+    @Test("a symlink LOOP in the destination is refused (unresolvable), never treated as a new folder")
+    func symlinkLoopRefused() throws {
+        let ws = try dotDotWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+        let a = ws.other.appendingPathComponent("loop_a"), b = ws.other.appendingPathComponent("loop_b")
+        try FileManager.default.createSymbolicLink(atPath: a.path, withDestinationPath: b.path)
+        try FileManager.default.createSymbolicLink(atPath: b.path, withDestinationPath: a.path)
+        let r1 = RelocatePathGuard.refusal(source: ws.source.path, destination: a.path)
+        let r2 = RelocatePathGuard.refusal(source: ws.source.path, destination: a.path + "/new_dest")
+        guard case .unresolvable = r1 else { Issue.record("loop leaf: \(String(describing: r1))"); return }
+        guard case .unresolvable = r2 else { Issue.record("loop prefix: \(String(describing: r2))"); return }
+    }
+
+    @Test("a DANGLING symlink pointing into the source is refused, never treated as a new folder beside it")
+    func danglingSymlinkIntoSourceRefused() throws {
+        let ws = try dotDotWorkspace()
+        defer { try? FileManager.default.removeItem(at: ws.root) }
+        let dangling = ws.other.appendingPathComponent("dangling")
+        try FileManager.default.createSymbolicLink(atPath: dangling.path,
+                                                   withDestinationPath: ws.source.appendingPathComponent("not_yet").path)
+        #expect(RelocatePathGuard.refusal(source: ws.source.path, destination: dangling.path) != nil)
+        #expect(RelocatePathGuard.refusal(source: ws.source.path, destination: dangling.path + "/deeper") != nil)
+    }
+
+    @Test("a folder we cannot search (EACCES) is refused — it may hide a symlink into the source")
+    func unsearchableFolderRefused() throws {
+        let ws = try dotDotWorkspace()
+        let locked = ws.other.appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: locked.appendingPathComponent("hidden").path,
+                                                   withDestinationPath: ws.source.path)
+        #expect(chmod(locked.path, 0o000) == 0)
+        defer {
+            _ = chmod(locked.path, 0o755)
+            try? FileManager.default.removeItem(at: ws.root)
+        }
+        let r = RelocatePathGuard.refusal(source: ws.source.path, destination: locked.path + "/hidden/new_dest")
+        guard case .unresolvable = r else { Issue.record("an unsearchable folder was guessed: \(String(describing: r))"); return }
+    }
+
     // MARK: Model / job layer (the gate that cannot be bypassed)
 
     private func model(ws: (root: URL, real: URL, alias: URL, other: URL, catalog: URL)) throws -> VideoScanModel {
