@@ -85,8 +85,12 @@ struct ArchiveUpdateSensorTests {
         let promote = Self.code(try Self.source("PromoteToArchiveJob+Steps.swift"))
         #expect(promote.contains("ArchivePathResolver.baseRelativePath(facts: facts, title: title)"),
                 "Promote's destination chooser starts from the same function")
-        // The filing-year guard is ONE function, asked by both.
-        #expect(promote.contains("ArchivePathResolver.filingYearRefusal(facts: facts)"))
+        // The filing-year guard is ONE function, asked by both. Promote asks
+        // it from its pre-intent guards (moved verbatim out of +Steps into
+        // +Guards, ff6b0764); +Steps still calls dateRefusal before the intent.
+        let guards = Self.code(try Self.source("PromoteToArchiveJob+Guards.swift"))
+        #expect(guards.contains("ArchivePathResolver.filingYearRefusal(facts: facts)"))
+        #expect(promote.contains("dateRefusal(source:"), "Promote's per-file flow still runs the date guards")
         let preview = Self.code(try Self.source("VideoScanModel+ArchiveUpdate.swift"))
         #expect(preview.contains("ArchivePathResolver.filingYearRefusal("))
     }
@@ -94,15 +98,21 @@ struct ArchiveUpdateSensorTests {
     @Test("ONE index-write lock: every 00_Index appender and the whole-file rewrite hold it (codex review #1)")
     func everyIndexWriterHoldsTheLock() throws {
         let lockSites = try Self.sites(of: "ArchiveIndexLock.withExclusive(")
-        #expect(lockSites == ["Archive/MasterArchive.swift": 1, "Archive/ArchivePromoteEngine.swift": 1,
+        #expect(lockSites == ["Archive/MasterArchive.swift": 1,
+                              // The promote journal (moved out of ArchivePromoteEngine.swift, ff6b0764):
+                              // append, appendRetractable (the Promote INTENT) and retract — which
+                              // truncates back ONLY its own last line, byte-checked, and unlinks the
+                              // journal only when its own append created it (codex 2026-10-02 #4).
+                              "Archive/ArchivePromoteJournal.swift": 3,
                               "Archive/ArchivePromoteDecisions.swift": 1, "Archive/VideoScanModel+BackupAttestations.swift": 1,
                               "Archive/ArchiveIndexRename.swift": 1,
                               // Not a writer: the one-time lock catch-up holds it per file so it
                               // can never flag a file mid-Update (codex r1 #1 on promote-dates-and-lock).
                               "Archive/ArchiveLockJob.swift": 1], "\(lockSites)")
-        // An index append is `appendDurable(fd:` — exactly the four above.
+        // An index append is `appendDurable(fd:` — every one inside a lock above
+        // (the journal's two: append + appendRetractable).
         let appends = try Self.sites(of: "ArchivePromoteEngine.appendDurable(fd:")
-        #expect(appends == ["Archive/MasterArchive.swift": 1, "Archive/ArchivePromoteEngine.swift": 1,
+        #expect(appends == ["Archive/MasterArchive.swift": 1, "Archive/ArchivePromoteJournal.swift": 2,
                             "Archive/ArchivePromoteDecisions.swift": 1, "Archive/VideoScanModel+BackupAttestations.swift": 1],
                 "a new 00_Index appender must take ArchiveIndexLock: \(appends)")
     }

@@ -414,7 +414,11 @@ def test_real_git_round_trip_against_a_local_bare_origin(sources, tmp_path):
     second worktree that has branch `metrics` checked out (as the 2 AM nightly's
     /tmp/nightly-metrics-wt does). The main checkout's HEAD and status are unchanged."""
     origin = tmp_path / "origin.git"
-    subprocess.run(["git", "init", "--bare", "-q", str(origin)], check=True)
+    # `-b main`: the bare origin's HEAD must name a branch we push. Without it
+    # HEAD follows the machine's init.defaultBranch ("master" on the Linux
+    # runner), the clone below has an unborn HEAD ("remote HEAD refers to
+    # nonexistent ref") and `rev-parse HEAD` exits 128 (CI 2026-10-02).
+    subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(origin)], check=True)
     seed = tmp_path / "seed"
     subprocess.run(["git", "init", "-q", "-b", "main", str(seed)], check=True)
     ident = ["-c", "user.name=t", "-c", "user.email=t@t"]

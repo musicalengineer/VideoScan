@@ -27,7 +27,8 @@ struct ArchiveIndexLineSplitSensorTests {
         "VerifyArchiveCopiesJob.swift":            "VerifyArchiveManifestIndex.parse (manifest)",
         "VideoScanModel+ArchivedAtBackfill.swift": "ArchivedAtBackfill.manifestDates (manifest)",
         "ArchiveRefile.swift":                     "ArchiveRefile.parseRows (manifest)",
-        "ArchivePromoteEngine.swift":              "ArchivePromoteJournal.latestBySource (promote journal)",
+        // Moved out of ArchivePromoteEngine.swift verbatim (ff6b0764, file length).
+        "ArchivePromoteJournal.swift":             "ArchivePromoteJournal.latestBySource (promote journal)",
         "VideoScanModel+BackupAttestations.swift": "ArchiveAttestationJournal.entries (attestation journal)",
     ]
 
