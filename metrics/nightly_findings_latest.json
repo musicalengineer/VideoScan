@@ -1,0 +1,1030 @@
+{
+  "v": 2,
+  "date": "2026-10-02",
+  "run_url": "https://github.com/musicalengineer/VideoScan/actions/runs/36997477195",
+  "dry_run": true,
+  "tools": {
+    "codeql": {
+      "input": true,
+      "complete": true,
+      "findings": 17,
+      "fingerprints": 15,
+      "notes": []
+    },
+    "strict-concurrency": {
+      "input": true,
+      "complete": true,
+      "findings": 409,
+      "fingerprints": 281,
+      "notes": []
+    },
+    "memory-safety": {
+      "input": true,
+      "complete": true,
+      "findings": 1597,
+      "fingerprints": 290,
+      "notes": []
+    },
+    "tsan": {
+      "input": false,
+      "complete": false,
+      "findings": 0,
+      "fingerprints": 0,
+      "notes": [
+        "no input artifact"
+      ]
+    },
+    "asan": {
+      "input": true,
+      "complete": true,
+      "findings": 0,
+      "fingerprints": 0,
+      "notes": []
+    },
+    "ubsan": {
+      "input": true,
+      "complete": true,
+      "findings": 2,
+      "fingerprints": 2,
+      "notes": []
+    },
+    "periphery": {
+      "input": true,
+      "complete": true,
+      "findings": 1488,
+      "fingerprints": 1458,
+      "notes": []
+    }
+  },
+  "fingerprints": 2046,
+  "by_severity": {
+    "high": 31,
+    "medium": 2,
+    "low": 2013
+  },
+  "new": [
+    {
+      "fp": "0ac0cc09b0372c0a",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore+Documents.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes '.lastPathComponent' to a log file. It may contain unencrypted sensitive data from sp\u2026",
+      "issue": 900001,
+      "url": null
+    },
+    {
+      "fp": "789821526065bbfe",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore+Documents.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes 'line' to a log file. It may contain unencrypted sensitive data from spouselessMarria\u2026",
+      "issue": 900002,
+      "url": null
+    },
+    {
+      "fp": "c3d04999f47118a5",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore+Documents.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes '... .+(_:_:) ...' to a log file. It may contain unencrypted sensitive data from spou\u2026",
+      "issue": 900003,
+      "url": null
+    },
+    {
+      "fp": "db6982e474ffef45",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore+Documents.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes 'key' to a log file. It may contain unencrypted sensitive data from spouselessMarriag\u2026",
+      "issue": 900004,
+      "url": null
+    },
+    {
+      "fp": "5d06fea7b2eeb437",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/codeql] FamilyTreeLiveModel.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouse.",
+      "issue": 900005,
+      "url": null
+    },
+    {
+      "fp": "e23e0c598803d995",
+      "tool": "codeql",
+      "rule": "swift/cleartext-storage-preferences",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyTreeLiveModel.swift: This operation stores 'key' in the user defaults database. It may contain unencrypted sensitive data from s\u2026",
+      "issue": 900006,
+      "url": null
+    },
+    {
+      "fp": "0482786c583d352b",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Drill.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator+Drill.swift: This operation writes 'word' to a log file. It may contain unencrypted sensitive data from spouse.",
+      "issue": 900007,
+      "url": null
+    },
+    {
+      "fp": "4c0c88add2af3c06",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Drill.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator+Drill.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouse.",
+      "issue": 900008,
+      "url": null
+    },
+    {
+      "fp": "86a4c6704fbda7f2",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Drill.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator+Drill.swift: This operation writes 'call to logLine(_:)' to a log file. It may contain unencrypted sensitive data from s\u2026",
+      "issue": 900009,
+      "url": null
+    },
+    {
+      "fp": "4b13a32a0b8f32ea",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Picker.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator+Picker.swift: This operation writes 'call to logLine(offered:)' to a log file. It may contain unencrypted sensitive data \u2026",
+      "issue": 900010,
+      "url": null
+    },
+    {
+      "fp": "af970c40d336a7d9",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouselessMarri\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "5989ad50928a7d06",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieLineageAnswer+GedcomAwareness.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieLineageAnswer+GedcomAwareness.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouselessMarri\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "3a3d13ee1184a3b9",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieShellCLI.swift: This operation writes 'call to logLine(question:ast:)' to a log file. It may contain unencrypted sensitive \u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "5ea23e007e4f86f6",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/codeql] HallieShellCLI.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouselessMarri\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "e8fdca4bb87f6583",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieShellCLI.swift: This operation writes 'effectiveQuestion' to a log file. It may contain unencrypted sensitive data from spo\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "ed3370d5a6b742e4",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] ArchiveAngelJob.swift: sending 'self' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "a3968cc9d36f6d72",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/ArchiveAngel/Review/VideoScanModel+ArchiveAngelBufferHygiene.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] VideoScanModel+ArchiveAngelBufferHygiene.swift: sending 'self' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "80cac8b5af596c63",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilySearchPullCoordinator.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] FamilySearchPullCoordinator.swift: passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "00be2f3b89f1a800",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLaunchBundle.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] FamilyTreeLaunchBundle.swift: passing closure as a 'sending' parameter risks causing data races between code in the current task and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "3eabc5ed4ec3bc21",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] FamilyTreeLiveModel.swift: passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "6d4eaafa4d3fbd8a",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeRecompileCenter.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] FamilyTreeRecompileCenter.swift: passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "fe502058200bc368",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] HallieShellCLI.swift: sending 'resolution' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "fe8325e4be046491",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] HallieShellCLI.swift: sending 'state.records' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "2ca47d456cc850c7",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Hallie/Voice/HallieSpeaker.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] HallieSpeaker.swift: sending 'synthesizer' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "b6e9c5ecf0a908b4",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Hallie/Voice/HallieSpeaker.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] HallieSpeaker.swift: converting non-Sendable function value to '@Sendable (AVAudioPlayerNodeCompletionCallbackType) -> Void' may\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "003042141afda2c7",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Media/ThumbnailPrecache.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] ThumbnailPrecache.swift: passing closure as a 'sending' parameter risks causing data races between code in the current task and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "fbcb8c95f0b331c1",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Media/VideoScanModel+Thumbnail.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] VideoScanModel+Thumbnail.swift: sending 'self' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "6c53bc78a5edbfa7",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/MediaOps/VerifyAudioSheet.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] VerifyAudioSheet.swift: sending 'action' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "c12316feb84bb4b6",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] VideoScanModel.swift: sending 'note' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "842aca68711047d3",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] PersonFinderModel+JobLifecycle.swift: passing closure as a 'sending' parameter risks causing data races between code in the current task and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "6c81567277c26925",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Shared/MLXSafety.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] MLXSafety.swift: sending value of non-Sendable type '() async throws -> R' risks causing data races; this is an error in the\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "176f0994b6d5f1be",
+      "tool": "ubsan",
+      "rule": "member call on null pointer of type 'NS",
+      "file": "DerivedData/SourcePackages/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/device.cpp",
+      "severity": "medium",
+      "count": 1,
+      "title": "[nightly/ubsan] device.cpp: member call on null pointer of type 'NS::Referencing<MTL::LinkedFunctions>'",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "4323dc35a5504161",
+      "tool": "ubsan",
+      "rule": "member call on misaligned address #x# for type 'NS",
+      "file": "DerivedData/SourcePackages/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/device.cpp",
+      "severity": "medium",
+      "count": 1,
+      "title": "[nightly/ubsan] device.cpp: member call on misaligned address 0x# for type 'NS::String', which requires 8 byte alignment",
+      "issue": null,
+      "url": null
+    }
+  ],
+  "new_high": [
+    {
+      "fp": "0ac0cc09b0372c0a",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore+Documents.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes '.lastPathComponent' to a log file. It may contain unencrypted sensitive data from sp\u2026",
+      "issue": 900001,
+      "url": null
+    },
+    {
+      "fp": "789821526065bbfe",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore+Documents.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes 'line' to a log file. It may contain unencrypted sensitive data from spouselessMarria\u2026",
+      "issue": 900002,
+      "url": null
+    },
+    {
+      "fp": "c3d04999f47118a5",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore+Documents.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes '... .+(_:_:) ...' to a log file. It may contain unencrypted sensitive data from spou\u2026",
+      "issue": 900003,
+      "url": null
+    },
+    {
+      "fp": "db6982e474ffef45",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyAssetStore+Documents.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes 'key' to a log file. It may contain unencrypted sensitive data from spouselessMarriag\u2026",
+      "issue": 900004,
+      "url": null
+    },
+    {
+      "fp": "5d06fea7b2eeb437",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/codeql] FamilyTreeLiveModel.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouse.",
+      "issue": 900005,
+      "url": null
+    },
+    {
+      "fp": "e23e0c598803d995",
+      "tool": "codeql",
+      "rule": "swift/cleartext-storage-preferences",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] FamilyTreeLiveModel.swift: This operation stores 'key' in the user defaults database. It may contain unencrypted sensitive data from s\u2026",
+      "issue": 900006,
+      "url": null
+    },
+    {
+      "fp": "0482786c583d352b",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Drill.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator+Drill.swift: This operation writes 'word' to a log file. It may contain unencrypted sensitive data from spouse.",
+      "issue": 900007,
+      "url": null
+    },
+    {
+      "fp": "4c0c88add2af3c06",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Drill.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator+Drill.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouse.",
+      "issue": 900008,
+      "url": null
+    },
+    {
+      "fp": "86a4c6704fbda7f2",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Drill.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator+Drill.swift: This operation writes 'call to logLine(_:)' to a log file. It may contain unencrypted sensitive data from s\u2026",
+      "issue": 900009,
+      "url": null
+    },
+    {
+      "fp": "4b13a32a0b8f32ea",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Picker.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator+Picker.swift: This operation writes 'call to logLine(offered:)' to a log file. It may contain unencrypted sensitive data \u2026",
+      "issue": 900010,
+      "url": null
+    },
+    {
+      "fp": "af970c40d336a7d9",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieAppTurnCoordinator.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouselessMarri\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "5989ad50928a7d06",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/HallieLineageAnswer+GedcomAwareness.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieLineageAnswer+GedcomAwareness.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouselessMarri\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "3a3d13ee1184a3b9",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieShellCLI.swift: This operation writes 'call to logLine(question:ast:)' to a log file. It may contain unencrypted sensitive \u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "5ea23e007e4f86f6",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/codeql] HallieShellCLI.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouselessMarri\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "e8fdca4bb87f6583",
+      "tool": "codeql",
+      "rule": "swift/cleartext-logging",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/codeql] HallieShellCLI.swift: This operation writes 'effectiveQuestion' to a log file. It may contain unencrypted sensitive data from spo\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "ed3370d5a6b742e4",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] ArchiveAngelJob.swift: sending 'self' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "a3968cc9d36f6d72",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/ArchiveAngel/Review/VideoScanModel+ArchiveAngelBufferHygiene.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] VideoScanModel+ArchiveAngelBufferHygiene.swift: sending 'self' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "80cac8b5af596c63",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilySearchPullCoordinator.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] FamilySearchPullCoordinator.swift: passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "00be2f3b89f1a800",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLaunchBundle.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] FamilyTreeLaunchBundle.swift: passing closure as a 'sending' parameter risks causing data races between code in the current task and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "3eabc5ed4ec3bc21",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] FamilyTreeLiveModel.swift: passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "6d4eaafa4d3fbd8a",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeRecompileCenter.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] FamilyTreeRecompileCenter.swift: passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "fe502058200bc368",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] HallieShellCLI.swift: sending 'resolution' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "fe8325e4be046491",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] HallieShellCLI.swift: sending 'state.records' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "2ca47d456cc850c7",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Hallie/Voice/HallieSpeaker.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] HallieSpeaker.swift: sending 'synthesizer' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "b6e9c5ecf0a908b4",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Hallie/Voice/HallieSpeaker.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] HallieSpeaker.swift: converting non-Sendable function value to '@Sendable (AVAudioPlayerNodeCompletionCallbackType) -> Void' may\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "003042141afda2c7",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Media/ThumbnailPrecache.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] ThumbnailPrecache.swift: passing closure as a 'sending' parameter risks causing data races between code in the current task and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "fbcb8c95f0b331c1",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Media/VideoScanModel+Thumbnail.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] VideoScanModel+Thumbnail.swift: sending 'self' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "6c53bc78a5edbfa7",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/MediaOps/VerifyAudioSheet.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] VerifyAudioSheet.swift: sending 'action' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "c12316feb84bb4b6",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] VideoScanModel.swift: sending 'note' risks causing data races; this is an error in the Swift 6 language mode",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "842aca68711047d3",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift",
+      "severity": "high",
+      "count": 2,
+      "title": "[nightly/strict-concurrency] PersonFinderModel+JobLifecycle.swift: passing closure as a 'sending' parameter risks causing data races between code in the current task and conc\u2026",
+      "issue": null,
+      "url": null
+    },
+    {
+      "fp": "6c81567277c26925",
+      "tool": "strict-concurrency",
+      "rule": "concurrency",
+      "file": "VideoScan/VideoScan/Shared/MLXSafety.swift",
+      "severity": "high",
+      "count": 1,
+      "title": "[nightly/strict-concurrency] MLXSafety.swift: sending value of non-Sendable type '() async throws -> R' risks causing data races; this is an error in the\u2026",
+      "issue": null,
+      "url": null
+    }
+  ],
+  "opened_or_reopened": 10,
+  "overflow": 23,
+  "commented": 0,
+  "missing_counted": 0,
+  "closed": 0,
+  "held_incomplete": 0,
+  "skipped_wontfix": 0,
+  "low_digests": {
+    "strict-concurrency": {
+      "tool": "strict-concurrency",
+      "count": 265,
+      "new": 265,
+      "gone": 0,
+      "first": true,
+      "new_items": [
+        "c7bd0829b5764602",
+        "558cc95dedf2c68c",
+        "619b261269498c84",
+        "d48de58800070f86",
+        "c63d85b45979eb47",
+        "2e4d2faa1f1d1976",
+        "ebe5c66146f87915",
+        "99d72bec06f3e1bc",
+        "f089aed8c3b21451",
+        "784026e2e741e27c",
+        "140af8bf4c31aeda",
+        "3ed055ddede9ba87",
+        "8eeb88c4e9db7f22",
+        "31422ada7855b1df",
+        "545e6aa2b727a2d2",
+        "5e4bfc8d86a8d809",
+        "b3f1c7c27225ee00",
+        "b786aa67446c689d",
+        "3c75fc69fc19b4f3",
+        "ac0292812d3e7b26"
+      ],
+      "action": "create"
+    },
+    "memory-safety": {
+      "tool": "memory-safety",
+      "count": 290,
+      "new": 290,
+      "gone": 0,
+      "first": true,
+      "new_items": [
+        "8ca555f76fd37d66",
+        "b60bbcc48f98192d",
+        "fb680c450a08e02f",
+        "f453b07b62334438",
+        "58b28c3922f93b4b",
+        "4c0bed63210dd6d6",
+        "4c7bd42e15c1fa96",
+        "12c89abe92bf3a26",
+        "45f1d35b74ba0831",
+        "ae588355477886e7",
+        "f10428555bf9a5f1",
+        "55dab28a0e69f282",
+        "0ec3bab6590d36f7",
+        "1eed0a414c529aac",
+        "b125a40af23ed187",
+        "f10820f12469223f",
+        "70ce9887f36fb41e",
+        "6dc8b6115ec40506",
+        "455b30bc204d220f",
+        "cbdc84c8803589d8"
+      ],
+      "action": "create"
+    },
+    "periphery": {
+      "tool": "periphery",
+      "count": 1458,
+      "new": 1458,
+      "gone": 0,
+      "first": true,
+      "new_items": [
+        "063da3f55a2e6cb2",
+        "858d9602f7f0b5de",
+        "e4942552e2c9c4b1",
+        "8f0d529be5f4c3ca",
+        "d4e8e395736654f7",
+        "c7bb76ab6ed693dc",
+        "d8ac3445f6202aa0",
+        "df3d5956188d1350",
+        "1e543a583077a41a",
+        "28a4c72d8cc4b479",
+        "58091c3fdc7e43aa",
+        "c4ebd12986a2f648",
+        "ccd021b6432426c8",
+        "e678f57150b6b806",
+        "ea7658b3d679fea8",
+        "4e277e8dfcca968b",
+        "397563baaec558dc",
+        "92b8572ac44411c4",
+        "ba8d93392e3083af",
+        "dd91d35d07332942"
+      ],
+      "action": "create"
+    }
+  },
+  "low_digests_held": [],
+  "plan": {
+    "would_open": [
+      {
+        "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes '.lastPathComponent' to a log file. It may contain unencrypted sensitive data from sp\u2026",
+        "fp": "0ac0cc09b0372c0a",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      },
+      {
+        "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes 'line' to a log file. It may contain unencrypted sensitive data from spouselessMarria\u2026",
+        "fp": "789821526065bbfe",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      },
+      {
+        "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes '... .+(_:_:) ...' to a log file. It may contain unencrypted sensitive data from spou\u2026",
+        "fp": "c3d04999f47118a5",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      },
+      {
+        "title": "[nightly/codeql] FamilyAssetStore+Documents.swift: This operation writes 'key' to a log file. It may contain unencrypted sensitive data from spouselessMarriag\u2026",
+        "fp": "db6982e474ffef45",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      },
+      {
+        "title": "[nightly/codeql] FamilyTreeLiveModel.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouse.",
+        "fp": "5d06fea7b2eeb437",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      },
+      {
+        "title": "[nightly/codeql] FamilyTreeLiveModel.swift: This operation stores 'key' in the user defaults database. It may contain unencrypted sensitive data from s\u2026",
+        "fp": "e23e0c598803d995",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      },
+      {
+        "title": "[nightly/codeql] HallieAppTurnCoordinator+Drill.swift: This operation writes 'word' to a log file. It may contain unencrypted sensitive data from spouse.",
+        "fp": "0482786c583d352b",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      },
+      {
+        "title": "[nightly/codeql] HallieAppTurnCoordinator+Drill.swift: This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouse.",
+        "fp": "4c0c88add2af3c06",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      },
+      {
+        "title": "[nightly/codeql] HallieAppTurnCoordinator+Drill.swift: This operation writes 'call to logLine(_:)' to a log file. It may contain unencrypted sensitive data from s\u2026",
+        "fp": "86a4c6704fbda7f2",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      },
+      {
+        "title": "[nightly/codeql] HallieAppTurnCoordinator+Picker.swift: This operation writes 'call to logLine(offered:)' to a log file. It may contain unencrypted sensitive data \u2026",
+        "fp": "4b13a32a0b8f32ea",
+        "labels": [
+          "nightly-finding",
+          "codeql",
+          "High Priority"
+        ],
+        "severity": "high",
+        "tool": "codeql"
+      }
+    ],
+    "would_reopen": [],
+    "would_comment": [],
+    "would_close": [],
+    "would_label": [],
+    "digests": [
+      {
+        "action": "create",
+        "issue": null,
+        "title": "[nightly] Findings waiting for their own issue",
+        "digest": "overflow",
+        "count": 23,
+        "body": "<!-- nightly-findings-digest {\"v\": 2, \"date\": \"2026-10-02\", \"fp8\": \"0030421400be2f3b176f09942ca47d453a3d13ee3eabc5ed4323dc355989ad505ea23e006c53bc786c8156726d4eaafa80cac8b5842aca68a3968cc9af970c40b6e9c5ecc12316fee8fdca4bed3370d5fbcb8c95fe502058fe8325e4\"} -->\n## 23 nightly findings waiting for their own issue\n\nThe nightly opens at most 10 issues per night, high severity first. These are the high/medium findings past that cap, as of 2026-10-02. They get their own issues on later nights; nothing to do here.\n\nSeverity: high 21, medium 2\nRun: https://github.com/musicalengineer/VideoScan/actions/runs/36997477195\n\n| Severity | Tool | File | Finding |\n|---|---|---|---|\n| high | codeql | `VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift` | This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouselessMarriages. This\u2026 (\u00d71) |\n| high | codeql | `VideoScan/VideoScan/Hallie/HallieLineageAnswer+GedcomAwareness.swift` | This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouselessMarriages. This\u2026 (\u00d71) |\n| high | codeql | `VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift` | This operation writes 'call to logLine(question:ast:)' to a log file. It may contain unencrypted sensitive data from \u2026 (\u00d71) |\n| high | codeql | `VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift` | This operation writes '\"...\"' to a log file. It may contain unencrypted sensitive data from spouselessMarriages. This\u2026 (\u00d72) |\n| high | codeql | `VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift` | This operation writes 'effectiveQuestion' to a log file. It may contain unencrypted sensitive data from spouselessMar\u2026 (\u00d71) |\n| high | strict-concurrency | `VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift` | sending 'self' risks causing data races; this is an error in the Swift 6 language mode (\u00d72) |\n| high | strict-concurrency | `VideoScan/VideoScan/ArchiveAngel/Review/VideoScanModel+ArchiveAngelBufferHygiene.swift` | sending 'self' risks causing data races; this is an error in the Swift 6 language mode (\u00d71) |\n| high | strict-concurrency | `VideoScan/VideoScan/FamilyTree/FamilySearchPullCoordinator.swift` | passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and concurrent exe\u2026 (\u00d72) |\n| high | strict-concurrency | `VideoScan/VideoScan/FamilyTree/FamilyTreeLaunchBundle.swift` | passing closure as a 'sending' parameter risks causing data races between code in the current task and concurrent exe\u2026 (\u00d71) |\n| high | strict-concurrency | `VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift` | passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and concurrent exe\u2026 (\u00d72) |\n| high | strict-concurrency | `VideoScan/VideoScan/FamilyTree/FamilyTreeRecompileCenter.swift` | passing closure as a 'sending' parameter risks causing data races between main actor-isolated code and concurrent exe\u2026 (\u00d71) |\n| high | strict-concurrency | `VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift` | sending 'resolution' risks causing data races; this is an error in the Swift 6 language mode (\u00d71) |\n| high | strict-concurrency | `VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift` | sending 'state.records' risks causing data races; this is an error in the Swift 6 language mode (\u00d72) |\n| high | strict-concurrency | `VideoScan/VideoScan/Hallie/Voice/HallieSpeaker.swift` | sending 'synthesizer' risks causing data races; this is an error in the Swift 6 language mode (\u00d71) |\n| high | strict-concurrency | `VideoScan/VideoScan/Hallie/Voice/HallieSpeaker.swift` | converting non-Sendable function value to '@Sendable (AVAudioPlayerNodeCompletionCallbackType) -> Void' may introduce\u2026 (\u00d72) |\n| high | strict-concurrency | `VideoScan/VideoScan/Media/ThumbnailPrecache.swift` | passing closure as a 'sending' parameter risks causing data races between code in the current task and concurrent exe\u2026 (\u00d72) |\n| high | strict-concurrency | `VideoScan/VideoScan/Media/VideoScanModel+Thumbnail.swift` | sending 'self' risks causing data races; this is an error in the Swift 6 language mode (\u00d72) |\n| high | strict-concurrency | `VideoScan/VideoScan/MediaOps/VerifyAudioSheet.swift` | sending 'action' risks causing data races; this is an error in the Swift 6 language mode (\u00d71) |\n| high | strict-concurrency | `VideoScan/VideoScan/Model/VideoScanModel.swift` | sending 'note' risks causing data races; this is an error in the Swift 6 language mode (\u00d71) |\n| high | strict-concurrency | `VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift` | passing closure as a 'sending' parameter risks causing data races between code in the current task and concurrent exe\u2026 (\u00d72) |\n| high | strict-concurrency | `VideoScan/VideoScan/Shared/MLXSafety.swift` | sending value of non-Sendable type '() async throws -> R' risks causing data races; this is an error in the Swift 6 l\u2026 (\u00d71) |\n| medium | ubsan | `DerivedData/SourcePackages/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/device.cpp` | member call on null pointer of type 'NS::Referencing<MTL::LinkedFunctions>' (\u00d71) |\n| medium | ubsan | `DerivedData/SourcePackages/checkouts/mlx-swift/Source/Cmlx/mlx/mlx/backend/metal/device.cpp` | member call on misaligned address 0x# for type 'NS::String', which requires 8 byte alignment (\u00d71) |"
+      },
+      {
+        "action": "create",
+        "issue": null,
+        "title": "[nightly/strict-concurrency] Low-severity findings (rolling digest)",
+        "digest": "low",
+        "tool": "strict-concurrency",
+        "count": 265,
+        "body": "<!-- nightly-low-digest {\"v\": 1, \"tool\": \"strict-concurrency\", \"date\": \"2026-10-02\", \"count\": 265, \"fp8\": \"0043946b03d454da050cbb810510763f07d2ad9209561daa09a381a60a18413f0ad776180b2847fb0c5aea0b0ec2fcbb0fd2facd1134a8531242c1dc127ab39212d73005138dbcbe140af8bf140c06a0145757c6153a26e11607833f173f86751a088bab1a63ffa51ab60e221b0664711bab18c71c2dc0d51c38d3831cf4949d1d2b07071e48ec2d1ff9d535201c4f3021b9212422bfe47922eb4dea248a5fe6259c4ba125d09979284c1dc1288b821c28fb059029b01ccc29ed93772e4d2faa2f1dd71a307c247f31397d9c31422ada31d1d58b31fab97c3242fd883269401232d4dd8e334668ae350cdf57371f74763761b977382bdf2c389edcab3925d3893c75fc693cd0004a3da6f9d33dc51f023ed055dd3ff0cdb84143c9e341d737e141e598a8426af70942eb57da43633bee441c16b0451dcb634592f06c4596a00c4747bd1f4807efc749e252014a47f9484e4b8c2650a8edae53190c93545e6aa2555993ea555fdf08558cc95d55a9d35b56c17b005808f96d581574fb58f5e0c75bd81a475c1fb7a65cb9597f5daa329c5e4bfc8d5ec3fe455ffc535a60683808610e22c9619b261264a831ee66c8db05679779ab6837cf77687ccea768f44b176aba9ae06af0fbe16d9633396e4cf9fb6edcdf4c70caedd6747f8edb74b47826772bb3cd7752b61d784026e2786580be7931d5bc79c97ab77a97e6817c2ba9917c5a52dc7ea026bd81129bae82640ddc82e5098c84490e8784a3ba88850b62a58575ee4f85a792bf8689ed7686ea4166895370cf8a932d2a8b62877d8c98c8228d060aca8d18ef8c8d20ec188ed536d78eeb88c48f717bc48fa54edd918381ca92b3dffa9353477295468b3595eb018096956e189734ed1797a73ab798f68aee99d72bec9a5fdb809d920e0ea162779aa5e268f1a5fe53fea65c2bc8a6bb11aea8a44af6a8d7148fab2ec31cac029281ac32d3f5acb12444ad36f1cdae3e3e96af0433e7b002f0ffb06312bdb0970cacb0fc4777b12d16e9b3331447b3f1c7c2b42e3921b456beddb4862f83b4e64842b61feb06b704c222b786aa67b7e2878cbb634d34bb84a0fcbd2ba038bdd18508be929994bf293494c08768a6c099eba0c2dc350fc34373f4c44ff908c48b7c99c549570cc63d85b4c7b55643c7bd0829c808d361cba8c08ecd23fba5cd5e6f65cf7a5623d0220f24d1f41dcbd239cecad48de588d6b47c4bd6eb4077d82a5232d880c7e5d8fa029fd928e771d9325cd3d9564995da164157da241ecfdce39b39dda5d407df399bfce07d5eeae11f801ee20cb46ce2210228e256e6dbe2ddec2ae45a57aae4ae9123e6c1b012e6ce745be9e1e2d5e9e73e10ea6c511ceb1eae6feb381fdaebe5c661ec9ac19befe06fccf025dd05f04e9c96f089aed8f18b848cf1bc444ef2ca68a3f46c6b14f66e8382f7f4ed63f96b26a2f9e5163ffa15990afab93630fad09a59fb21ff58fbe61c37fd662bb1\"} -->\n## `strict-concurrency`: 265 low-severity findings (385 occurrences), as of 2026-10-02\n\nFirst digest for this tool, so every finding counts as new.\n\nLow-severity findings get no individual issues (Manager ruling 2026-10-01). This issue is edited in place each night. Run: https://github.com/musicalengineer/VideoScan/actions/runs/36997477195\n\n### Top rules\n\n| Rule | Findings |\n|---|---:|\n| `concurrency` | 167 |\n| `upcoming-feature-or-other` | 98 |\n\n### New since the last digest (top 20 of 265)\n\n| Severity | File | Finding |\n|---|---|---|\n| low | `VideoScan/VideoScan/Archive/ArchiveLockJob.swift` | main actor-isolated static property 'title' can not be referenced from a nonisolated context; this is an error in the\u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift` | main actor-isolated static property 'coverageProjectionBudget' can not be referenced from a nonisolated autoclosure; \u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift` | main actor-isolated static property 'coverageProjectionBudget' can not be referenced from a nonisolated context; this\u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift` | main actor-isolated static property 'coverageLookBudget' can not be referenced from a nonisolated context; this is an\u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelAttention.swift` | main actor-isolated static property 'attentionKinds' can not be referenced from a nonisolated context; this is an err\u2026 (\u00d72) |\n| low | `VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelEvidenceStore.swift` | main actor-isolated static property 'filename' can not be referenced from a nonisolated context; this is an error in \u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/Catalog/CatalogWriteError.swift` | static property 'maxBytes' is not concurrency-safe because it is nonisolated global shared mutable state; this is an \u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/Catalog/DateTriangulator.swift` | 'nonisolated(unsafe)' is unnecessary for a constant with 'Sendable' type '[NSRegularExpression]', consider removing it (\u00d76) |\n| low | `VideoScan/VideoScan/Catalog/DateTriangulator.swift` | 'nonisolated(unsafe)' is unnecessary for a constant with 'Sendable' type 'NSRegularExpression?', consider removing it (\u00d72) |\n| low | `VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift` | main actor-isolated static property 'folderYearPriorRange' can not be referenced from a nonisolated context; this is \u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/Catalog/VideoScanModel+LiveReload.swift` | non-Sendable type 'Task<[VideoRecord]?, Never>' cannot exit main actor-isolated context in call to nonisolated proper\u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/Catalog/VideoScanModel+LiveReload.swift` | non-Sendable type '[VideoRecord]?' of nonisolated property 'value' cannot be sent to main actor-isolated context; thi\u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/Catalog/VideoScanModel+LiveReload.swift` | type 'VideoRecord' does not conform to the 'Sendable' protocol; this is an error in the Swift 6 language mode (\u00d73) |\n| low | `VideoScan/VideoScan/FamilyTree/FamilyAssetIdentityDirectory.swift` | concurrently-executed local function 'nicknameTokens' must be marked as '@Sendable' (\u00d71) |\n| low | `VideoScan/VideoScan/FamilyTree/FamilyAssetIdentityDirectory.swift` | capture of 'buffer' with non-Sendable type 'UnsafeMutableBufferPointer<FamilyAssetIdentityDirectory.Member>' in a '@S\u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/FamilyTree/FamilyAssetIdentityDirectory.swift` | mutable capture of 'inout' parameter 'buffer' is not allowed in concurrently-executing code (\u00d71) |\n| low | `VideoScan/VideoScan/FamilyTree/FamilyAssetIdentityDirectory.swift` | capture of 'nicknameTokens' with non-Sendable type '([String]) -> Set<String>' in a '@Sendable' closure (\u00d71) |\n| low | `VideoScan/VideoScan/FamilyTree/FamilyKinshipOverlay.swift` | converting function value of type '@MainActor @Sendable (POIProfile) -> ArchivistGraphProfileSnapshot' to '(POIProfil\u2026 (\u00d71) |\n| low | `VideoScan/VideoScan/FamilyTree/FamilySearchPullCenter.swift` | add '@preconcurrency' to suppress 'Sendable'-related warnings from module 'UserNotifications' (\u00d71) |\n| low | `VideoScan/VideoScan/FamilyTree/FamilySearchPullCenter.swift` | capture of 'center' with non-Sendable type 'UNUserNotificationCenter' in a '@Sendable' closure (\u00d71) |\n\n---\n_Managed by `tools/nightly_findings_to_issues.py`. The full list is in the `nightly-findings-summary` artifact. Add the `wontfix` label to silence this digest._"
+      },
+      {
+        "action": "create",
+        "issue": null,
+        "title": "[nightly/memory-safety] Low-severity findings (rolling digest)",
+        "digest": "low",
+        "tool": "memory-safety",
+        "count": 290,
+        "body": "<!-- nightly-low-digest {\"v\": 1, \"tool\": \"memory-safety\", \"date\": \"2026-10-02\", \"count\": 290, \"fp8\": \"0095707201186b2901c5355c03c147880533d3f405f9f73d0721fd9908646a6e090085ca0aa40cc90e0ee3870ebf69a20ec3bab610926a75111c59781261ce9a12c89abe13234f8513d99c4c14483670147de6e5147e6c5d15ce41f515cee5a515d7a26618ce8f061aab34171b5a7b3d1c86c9791de3cab31eed0a411ef577751f1cd5892059a57221f5193522a0df0b236d89c624ceabe325c160812bcec4f02be569f32d0b244d2ecaaff02f0054c92fafcfa6305d78c6305f325630b2b61e30c8d5ee311a7f7931ed3eb0326f826f342b8d26345bdeb4366a8fae367ead66368281503707f74739290a203b5c79933bd5036d3c91dbb43c9e60e83d14fc913e70128d3f818e33403bb31a44186594441dd85944ecff8d455b30bc45f1d35b47a4986a482d6f5e48325b1e487b9ef94c0bed634c7bd42e4c8e203e4d4a442f4e3471d34ec4ba3e4f2d82dc4f3f458b51180c5a547a654354cfb5b655210e87556a6a8355dab28a578e110f58454d1b58b28c3958c741f45addeb5d5b7924645b8139265c1571df5d9884885e4772845f0ac0266089bc95618388ad61b3ade061f4bd1b62835b2b62ee7ff4692b96dd6cc97f686dc8b6116dca8a566e9d90fe6f833a847024c50d70bdf1d770ce9887730ff04374c15c2676e8e30378e3f5637990e9a87b6f01277d8ecf357e8872c47f9fedbe824402958249d86c82bbf93a8399fe4084f6d4b78597ffe885f9a63b892a57028938672c89c565578ca555f78da940468eac84da8f190ed68f420e249023117d9030f555904a51e7911029f4917faaf891839540922d99ff9271089393287b3993c87ae8946cdabc94bb5a62950b5c5895f1fb31966e0bdd96f48851971d9971971ed16697cd949b97e5ca5f98c5253998f62da0997322ed99cd50b09a0fc21b9abd48a49ae2c3089b5c2e959c50fc0b9d2bdb9f9d9b49609dab7f149db086bd9ecf70059ef4d42aa1b849baa2e91de4a3e88262a44336cba4900146a4f9eb2aa7551cd0a85f93fba8f3e90ba96bb0f8a9896c25a9c1c8eea9d9d513aa259fbdab642601ac4cc0e0ae588355ae6e577caea22d90aeb01d05af01757caf768f24af86cbe8af9d799fb09fd801b125a40ab1280746b2347818b39a40aeb3eb7583b4946105b53e0acab5daf12cb60bbcc4b60cadd3b687c100b6a136b3b6e435b1b70378e2b7c7015dbb950d8ebd2cf111bdaa24b9be1b599bbe48059cbe6db2d3bec65be8bf4488ecbf597d26c0872cc1c349e9d6c3a16dfdc5e6fa69c6db98b7c7614867c9dea481ca0a6f38cbdc84c8cc3eba7acde8cedece3810c6ce6ed305cef1c59ecfecda81d08c8edbd1140a95d13efe7ad38f1ed2d3ab222ad4004abed416bc18d5c9c1aed685b9acd88d8c88d8b86b29d9183a2bda83235ddbe53ac3dc168797df32f081e0e0a3ece108df9ee166e1dee251dc20e8c1e991e99079e9ea89505aeb879d62ebe272c8ec17b9cdec2eba48ecbae175ed55b73fed62555ceda25538ee098364f0df61fef1042855f10820f1f2b35cc0f327dbc7f3689bf9f453b07bf5611320f8055a2cf9d08123fb4dba6dfb680c45fb710644fc395b9dfc5dc0f9fe7ecaf6feef6571ff845db5ffb309cc\"} -->\n## `memory-safety`: 290 low-severity findings (1597 occurrences), as of 2026-10-02\n\nFirst digest for this tool, so every finding counts as new.\n\nLow-severity findings get no individual issues (Manager ruling 2026-10-01). This issue is edited in place each night. Run: https://github.com/musicalengineer/VideoScan/actions/runs/36997477195\n\n### Top rules\n\n| Rule | Findings |\n|---|---:|\n| `memory-safety` | 290 |\n\n### New since the last digest (top 20 of 290)\n\n| Severity | File | Finding |\n|---|---|---|\n| low | `VideoScan/VideoScan/App/BundleExporter.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d72) |\n| low | `VideoScan/VideoScan/App/BundleImporter.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d71) |\n| low | `VideoScan/VideoScan/App/ConsoleView.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d71) |\n| low | `VideoScan/VideoScan/App/ContentView.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d72) |\n| low | `VideoScan/VideoScan/App/ExpandedDashboard.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d75) |\n| low | `VideoScan/VideoScan/App/RemoteViewerMode.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d72) |\n| low | `VideoScan/VideoScan/App/SettingsView.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d77) |\n| low | `VideoScan/VideoScan/App/VideoScanApp.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d728) |\n| low | `VideoScan/VideoScan/App/VideoScanModel+BundleImportExport.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d71) |\n| low | `VideoScan/VideoScan/App/main.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d720) |\n| low | `VideoScan/VideoScan/Archive/ArchiveFileLock.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d74) |\n| low | `VideoScan/VideoScan/Archive/ArchiveIndexLock.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d74) |\n| low | `VideoScan/VideoScan/Archive/ArchiveIndexRename.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d719) |\n| low | `VideoScan/VideoScan/Archive/ArchiveLockJob.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d73) |\n| low | `VideoScan/VideoScan/Archive/ArchivePromoteEngine.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d751) |\n| low | `VideoScan/VideoScan/Archive/ArchiveRefile.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d710) |\n| low | `VideoScan/VideoScan/Archive/ArchiveVolumeProtection.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d77) |\n| low | `VideoScan/VideoScan/Archive/BindFixityToVolumeJob.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/CopyFamilyAssessor.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/FixityRebind.swift` | expression uses unsafe constructs but is not marked with 'unsafe' (\u00d74) |\n\n---\n_Managed by `tools/nightly_findings_to_issues.py`. The full list is in the `nightly-findings-summary` artifact. Add the `wontfix` label to silence this digest._"
+      },
+      {
+        "action": "create",
+        "issue": null,
+        "title": "[nightly/periphery] Low-severity findings (rolling digest)",
+        "digest": "low",
+        "tool": "periphery",
+        "count": 1458,
+        "body": "<!-- nightly-low-digest {\"v\": 1, \"tool\": \"periphery\", \"date\": \"2026-10-02\", \"count\": 1458, \"fp8\": \"0009916b001882e10023627e0040ad7b00c6dcbd00f32ab60135f438013dbcb00169a10601c8be1301e967570208056e0210fb5202191e5f02321fa902e01ec602e2160502f8ed7a0400cf26041658d6044f4b0304698ec2046c36dd047bd3be04906d0e04ae9d6d04b4a87d0528c019058e9ce705b8450f05c4734e05c6704d061e3bd40634ff0606388528063da3f506496a86069a795806e8221407543a2007651a37077b998d0780be2707d2113d07e2c23f07e688a4080af137080e7a6e080e7d05081b97f8083777cb08379d3d0873ee9308943f9008ded0f608e28b0e090f960a0930a65c09c147370a30ca7f0a5b26c40a8de01a0a9721d10aa93e880aec9f3e0af6cc2f0b27f4950b62f29f0b90495d0b97ff210b9e8f5b0bfdddf70c0101d50c3180ea0c3fe8730c538f040c70a4d30c84c45a0c921f6c0d52e74d0d76d35c0d81ff320da33fd80db5d2d70dcfe63e0dd991af0df88f1a0e3bc2990e9c5a650ec2b1e50ec404490f4af7770f60d2bc0f610aa20f92c0240fa59a550ff8e22b10671742106a6f4e106ce968108cac8b1092f63910ade0b010cd7ad910e561f5112371e011478d261153308e11e8566011ecc87d1227fcb412d65f0d131e6e4f13272d1a13281c451337370e13b2256313fdba7e14009b4d1442ce90147807841515c3491554e26115879373158bb30a15f38a8515ff466316295f23164241f416c49f79174bc48b176d8b29176d9c8a17771cd717d988b51844423718656d23186a28e618b06a51190b07101965830319ada13f19b4dca21a0e3e5b1a196eac1ac968181ad10fb11ae478dc1ae533031af34fef1afb503a1b53803f1b7a021b1b831fd81b85b4c11b85e0dc1b9314e51b96cf8d1b97266f1bd38b5c1c15bcb31c769d331cccefaf1cec4ade1d22e3a41d28b89d1d77f8071da79a601dbbbd881dcdd87a1e06dbc91e12c5781e543a581e94a8441ea1ed441ebf77ad1ee2e4841eebf4861f02d3931f0553771f2f69611f3faa3d1f4b56002007b5f3200efcab203bf89d204b4a702079cf3020a40c212119ad0c21358628215fd6cf21c1ec2721da833421df104021e637e62202fd522218553e224baa3522ee02532331658923630972236fbc2423c02bcb23ea5271243b6915244ef0622468b4352474ee2524b292b8254702542570ad9f2575065525f5302225f64dc9260a149b26c123fb26e2820226eadbda271d8c1327319bae274b3462277746332786181627bebb6827d47a4f27df587427e19b9527f20c1827fbf93428295b71286fa35128a4c72d28b059ea28b6ba9e28e66f6e290373832905610529279f81293f842c295f5c34298da4af29e107a929fbb8fa2a034e9f2a0cb7622b1665a22b4accfa2b5fba812b82b0ef2bb538b72bf57aa22c0d71c82c109ad02c1b2ebd2c39fb512c3dcea62c41b60a2ce8a4fe2d1ae2892d5415bc2d938bbf2dd5ccd12df5a4752e08f42c2e6b44832e83f8692eb51a602ebf84442ec46f792ed9022d2ede63b32f0f6ccf2f7cb6ee2fcafb613074235f30749d3a3096800e30abacd330b88e3b3112936231138f0e31543050316d9ff631a7b3e231e106f031e977a031fcf2b83224e193325c4ecf32dcb71732e4dc5f32fc919a3314109e332e6f97334046e73395269f341d28763429ed3734467d69347c4885348df89134a8f29d3552afb6355fbbef35cecd9b35fd1571360610e43651455036b151a636b9a13136bc07c0374fb2fd37c0c8ef3808eb9f382e9020383a302e384e74ab3853e51c386982123883da8e38ea544138eb04b638fa81fc39269b1f397563ba397fe5e83998b69f3a1b10023a74f3e43a935dfb3a9fc26d3ab5242f3acde72e3b9e70103bb3e7ba3bc559923c0599ea3ca9c9ac3cc92b783cc9fff13d03cfec3d04bc853d1d133c3d283d773d3903da3d4db9133d55d7563d66ee103d68b9303d6c365b3d7c4c343d8682b63d8f78463db8b2a13e2fbc013e4c10f63e4f28a53e686e443e6d70253e8a0a403e9603b13ea6e8e53ed5c1b63eea53ff3f016e1b3f0636683f28093b3f40e38e3fc7fe7d3ffa3116400b766940224a1b402b27ca402b512c402daecb403003514069828740a844c740bf51cc40db0e8a410b57b9415958b84161bc3a41cdb4ae41df610841f9c8f841fa4bd741fa4c1a420af48742b5bb6a42cbcdb94312ffe3434739db435b61214370cd8043c26fae43d66cf043e3fe9044506d5a450613d64583a85745ca511a4614a0b446458c5a465166be4676ab404685c35f46eab1f146ee2e0246f4994c46fb59ad47417879477e1e1e4837d639484e59cb48c2db2848d35b0d48d9e87f48f71f9f49d5ec7449dcb4184a3e2c344a9e53174ab4f4654b3596ad4be250f74c358bb04c6525eb4c9075b14cd9f2094ce9bd8e4d1ae5cf4d5380ab4d59f7e64d6b160f4d7d3b264d8739214d9572fb4dce901e4df9ca8b4dfc026f4e016e6e4e277e8d4e2a424c4e3dcfbd4e52b9164f3c57ad4f45128a4f638ae74fbd4fae4fdf17135055bf9050f31a025110604e51125a2a5129188c514bd98c514f4eb7518392f651d51ad051df106351fb6459524cbdef5268613a52d6dd65530568f9531a1a52532a30565345b6ea534c97005371b8ee537bfaac537dd0f453f98c7b53fb8364540dd4515472b6ea54b25e7854d7337054eaaf47554c5a4d557522bb55b183c155c9886e5608dac2562598bd562d7fae56d8c667573597295771b62a57891303578cad7a5797bf7157ac641b57be675857cf2f3a57e5a83958091c3f5868626b58a6260e594261c45957f58f595dbcfc599f21b259cc0f2e5a00ab205a0a169c5a27a3df5a2894435aa0ba3d5accccef5b4a15b25b4b18ad5b8c90335bd708f15c02ca475c71154c5c8fb5885cd2985e5ce1aed25ce401205cea28b55d1097355d59e8695d67fad65d7c5a085d99da395d9c376f5dab3b115dac43d25dad0ef25dade88a5de93f815e08a8475e3407b25e8584855e8fb67e5eb05a2e5ee106fc5eeeb0d05ef545db5f0bb4a05f0ff17a5f21548c5f417ebd5f5afc365f71b36b60564cef608b723760d8f34260fc7df46106c73d61164312618d098861bfeef461e7120b623165af623203626248e0b1629c42f762a5789862cef63d62cf01fa62f737c56384083763ac0baa63bbd70763bd648063e19e166409022364434de66448808864beb29565052691651fd3dd6532c1226574794b659a837465e1a4906606239666079b73660e95eb6630b20866437e5d667baef66698b993669daf9766ab537f66bd7cb066d2bc7d66f81735671b7ace6736f37f67b20ba267d7d1396868666768abf1f868e3760a694054a169412343694f870c69538d5469cc11f869dbb12f6a2b84686a58157e6a6ffd186a8e037c6ab89e5a6b11a2a16b5c6ac06b5cd3086b5ee0c36b7fd9656b9faf866ba4f7a26bacd1826c143c756c1487886c2c7ed96c434f436c49b43c6c4d4b076c54e5176c8b39c66cbfd4366ced46926cf0dcdd6d2702896d4f27dc6d68aacc6d8aacf96d9543586d9af3656db519036dbc28cc6e0b72b26e153a946e2a0eba6e2f39656e44ce986e558f1c6e5a42a56e5bbe4b6e76906e6ea0c9a66ee3f18f6f21aa4a6f33d13e6f76b5656f8960d86fa835bd7002d1d8703edbb670a6a8fb70b7730b70b8f1e870f376ed7129b814712c58cd7131ad637149991e715ac37d715c6e1c716aba8171a964c471e224e971f5e0a97215a6697230b3ea723b1ba87274aaa572b483d572f6500b7312a884734f493f73591e0073701fb073b4b87173ce1d7773ce28b974025afa7427cae7747af2e6747cd84d74a916a874da4da57505d53b7573507775a4f8c6762426e57641a21e76ee7afe772e7b1077552b3e77585e69775f4107776f25297797e3ed77a56a9e77f619ad7805336378439196797e3bdd79b21c4a79d8456f79d908497a0113187a01fa3c7a05d8c17a1a6a3d7a3abbde7a3ea9a47a44a7b27a50302c7aac08077bfdee957c197ef57c2653887c6781a27c83aae87c95bcfd7ccc580b7cd736507cd818f97ce1d1ad7d29cd777db5d5927dc17d0d7dd904fc7e3033b97e810ace7eb4f92b7ebfa7c97eea7ab07eef7e5b7f8645377fe8773b7ff6ef6480153170806f7bcd806ff89a8071e00a80aedff980c35e0a80c9f7c6812e338281addf708262f3f982b2838a82ddd89782e090998388f92983a79ce483b562ed83facc63840aa937844135f784a9e0a584f417a1852b835e854a0e6a8560bc65858d9602859f75a88618a975862086e0862123fb86585d648665081786826ca186f454a58714ea76873d94dd874a65e88756192a8782550987a46ec387b35e8a88817bae88dccac688e9066188eeee7489207b84896b6f61897437bb897bf87d89db48e889ee367c8a4795128a9971888aad49068ac85f3b8b2c87738b32b7f88be2ab718bec888b8bfbe4be8cd650028cfbabf58d03815b8d04e1b88d2e0d828d3ce92e8d898fbc8da66d4f8deec9268e079a6a8e245c138e613dac8e6b08c88e9c41638ea827b48ed1712b8ee89b708ef9978d8f0d529b8f5c9eef8f8cc90f8f95da028f9a1cd08fa1cc5d8fe2d66b9008b139900cf52490364a0d9044b3129053805b90827e2490efe850917ba2f891bfd8f992b8572a92cada199306f1319322496b9360567d936f61349423812f9439ed0594512dff9496d2cc94a5d88e9518b6cb9518e3e19555d8c3955d3996956c2018957f46c9959b050495d0c8b995d203e1962a720f966a917c967c380a96b0888696ec685c9712da72971daa8b97342d25975ae62c97a7ff5397b68a1797d28d8c9845c739987e01aa98a0a13298b1730d992b260b992eefe79981325f99cfc60c99d09d4e99e93c7499f264529a440f269a7b95309aac652f9aed07969b040b2b9b3de49a9b9f41819bb73fa89bd3695f9be6f6479c1a91069c5463019c6b50379c6e90119c76325c9c931c119c932c669cabe4fc9cd9c0589d15cb729d656b119d66c2069d6904309d815ca29df08ee69e3811e09e5bb1749e6290a49ee001f69ee8a28f9eea4d1b9ef551479f1558519f7b13bd9f8e05629f90cd5a9fa0b587a01c8f1ea01fcb79a04eba57a06e4e2fa07601bfa082834aa08c07f7a0bedc9fa1b7759ea257be1ea2fd8b56a367c5aaa38a6d85a407a741a41ca855a423471ca4562666a493fbc5a4c80e4fa4d9736fa4ffdb19a5299a6fa545c704a5f7c182a6233e31a64b84d1a685cd83a693c10ba695cbefa6a7ac62a6adce70a6c7e150a6e8af4ba6f5079fa78cfe13a7914060a7d71f19a871c9fba935c1cba94583eda959e762a98d1ebaa9cd907ba9f4f25caa226aa8aa8101ebaad0c053ab57deccab718cd3ab7e6ec3abb45e6eac3b7b2aac3f2606ac5c452baca4419aad04f009ad0c487ead357a11ad979611adc4e3baae25628aae312e34ae4cb3acae80eec8ae878846ae8a7ba5aea018eeaee31898af188d4eaf4a476cafb0e727afd93c86afe1e524b0066f0bb011f5f7b0364981b037912cb054cfdab091c175b0b60144b15ecedab1fa1f36b21625e8b21d860fb22f6c2cb25add1eb2767875b280d520b31e54c1b371130fb38e07fbb3afab65b40ec123b426d464b46d8e76b4d7adb5b4f930c8b5038ee8b51648a8b592fd10b5b7c7bcb5b8363cb5c045f6b60bd8ffb60f1c77b61eca6db6b655eab6e2103cb6ff428cb70e0911b766a234b772f1bbb7823dc3b7f82152b8139eb1b833b242b89b2329b8bbd39fb909ab5ab93532bab9662be3b979186fb98d1bf9b99400ccb9abeef5b9d8cc6cb9d9521cba184218ba27fa6eba48b88cba6fd421ba8b4151ba8d9339bac1b99fbb4aacbfbb5d1606bb7e859fbba8b4dcbbb85694bbe0861ebbec1a2abc0834b5bc3a18febc3da02cbc48f13dbc50daa7bc639871bcba471fbcbc3ed4bcc67797bcdc9bfabd15f363bd417f2abd42d22dbd4488d8bdbe1b2bbe0b0596bee6d929bf0ab15ebf87f4b4bfa8b14fbfbbf084bfbe2e03bfc86c67bff1ea64c02e2eb0c0459280c052d5f7c05cd394c0845ec0c0af24e6c0e66594c165ddb5c28fbc7fc2a93c15c2e19395c3067cccc3444cedc3520c6ac35cb3f0c37de2f8c3875b2ac410b8d1c427737fc431eac8c4a3c287c4adec00c4aec044c4baab41c4c2c0bcc4c2c80fc4cc86d7c4ebd129c4fd429ac4ffd357c5b9f056c5de41a0c6226466c68ce1b2c6d5bb37c7258f45c72f71cbc741c452c74a350fc74df8abc7764714c7aab168c7bb76abc7dd87d0c7ee69aec7ffb594c884668dc8c99e56c8cf00aec926ff2dc96181cdc9840b2ac9fa0d3dc9fc910cca10246cca13cf0dca13cf37ca647a68cade32cdcaf501e1cafff3a2cb00b9a7cb65943ecbc401a1cbf35b83ccb3ae87ccb51d13ccc53b86ccd021b6ccd2284accf19260ccf418c7ccfe97e4cd0ee904cd2a201fcd766ff4cd9e3de0ce16b51ace59290dce68ca11ce78471bce8d78a0ceaa684eceb18461ceef20e4cf0ebc8ccf2b468acf39efbacf6a32aecffd5609d02298f9d0397865d04a4e49d05f6e28d0734d73d08c754fd0ace04cd0c89018d0cd17f5d1134b16d15b1049d1a15643d1c87375d1d15584d1fe6b16d1ff8a25d21d29d8d2285fd0d236937bd2828f71d28d7748d2973da6d29a3f01d2c00f0cd2e55acad306fd3ed338d7ead3758227d394657bd3a271c1d3d9ebdad41ac98cd4631280d47781eed4e8e395d4ed8a1ad56993edd573a8d9d5b3cfd3d5c7311ed5fccac1d6987afbd6be081dd6c707eed6dfd241d6f555d6d771d8b4d773e6bad7be3285d7d1cfdfd7e35705d829c507d855482fd8a98180d8ac3445d8b4ee26d8e89a64d8fa3db2d9192cb2d938cc6dd963fd7ad97cffe8d9976e8eda18528eda245281da75413cdb4899f5dbcd54c8dbd4d1e1dbf7a384dc0607fadc08667cdc0b75c8dc241706dc3f13cedc418698dc55bf32dcd28da1dd1067f4dd3ad799dd427a1fdd597959dd61e83edd8fab5add91d35ddda12a87ddc12d72ddd3a16adde00f40dde5f1f0ddf22be2de253f2fde416516de69c028de6d358cde75c31bdf28e1f9df3d5956df6939a6df9a94d6e09c1e9be0da000ae1567c6be1620365e29ac8e1e29f5202e2a22c34e2b365fce2ee63e1e2fff8d4e33e19b7e423e34fe424e38de454b2d9e4556393e4942552e49c6d8de4b76fe7e4c6c696e4cd9691e4e6dbcce583362ee585b855e599c0d5e5a32bfee61220e7e645b793e6492770e658fb47e678f571e67b322de67d9af6e6a2c2c7e6e305efe716b277e7188f8ee71dfe42e71f744ee73949ede75592eee75c41e4e7666139e7853461e7b06fe8e7f30ef8e82a34c6e8389abde86ee183e88539e1e94cba8ee9abeacfe9c860ffe9eedfefea47e865ea55f7eaea665edeea7658b3ea8b0719eaba5526eb259bd6eb28afbceb489a8aeb604d9ceb8a9ff1eb8f1bcbeb9262b9ebbd7decebc48720ec2eb8f7ec52b664ec5ce861ec6c992cec801ed4eca6aa36ecd553f2ed0922dced18d929ed70ffb1ed88d2dfee34766cee45c2c3ee8dfc9eeea9ef22eeb0a098eef9718aef0c7526ef321ac5ef7fd953ef8c6ba8efbe686eefedcbdceff52df9f04e4decf05c0476f0743ce7f0c043a9f0ce558af0e4b755f0fb4091f12bbef8f13445d0f14e89f1f155b99bf1600299f19baebff1b56ffdf1c6020cf211584af29bfc12f2bd331df300eb91f3b6c21bf3d4a55ff4066fbdf44b868ff4dc10ecf4e12e4bf569fc25f5772a57f59ccc5cf5d4644ff6086e7df63c08a3f652667ef676e624f68589cef685df69f68c0bf7f6a7ab49f6e9484ff72178a7f759d336f7c25269f7ce60e8f80fbe93f8124a62f86b1e91f86d50fef88c2b01f89a53b0f89f3efbf8bab123f8bfa831f8c739c3f8fa48f5f902b0d3f918b1b0f935e21bf936e7acf941f131f944cd69f9462caaf94e4983f9c3345df9d9b20ffa33a72cfa349dcdfa4c3d8afa5659a1fa93bca2facd397ffb209998fb5065e4fb6ff459fb926cf8fb982d8ffb997b18fb9a8f99fb9daa6bfbbdf149fc00dbf5fc23479bfcd39d22fd02febdfd2323e4fd32a749fd65da0cfd991fc6fe3a338cfed23e85fef22a61fefb76e8fefda539ff11d970ff608b89ff69f718ff74d399ffcfbf18ffed348afffb2fbb\"} -->\n## `periphery`: 1458 low-severity findings (1488 occurrences), as of 2026-10-02\n\nFirst digest for this tool, so every finding counts as new.\n\nLow-severity findings get no individual issues (Manager ruling 2026-10-01). This issue is edited in place each night. Run: https://github.com/musicalengineer/VideoScan/actions/runs/36997477195\n\n### Top rules\n\n| Rule | Findings |\n|---|---:|\n| `Assign-only property '\u2026' is assigned, but never used` | 555 |\n| `Unused function '\u2026'` | 416 |\n| `Unused property '\u2026'` | 303 |\n| `Unused parameter '\u2026'` | 47 |\n| `Unused struct '\u2026'` | 35 |\n| `Unused enum '\u2026'` | 23 |\n| `Unused initializer '\u2026'` | 22 |\n| `Redundant public accessibility for function '\u2026' (not used outside of VideoScanCore)` | 18 |\n| `Redundant public accessibility for enum '\u2026' (not used outside of VideoScanCore)` | 9 |\n| `Redundant public accessibility for property '\u2026' (not used outside of VideoScanCore)` | 8 |\n| `Unused imported module '\u2026'` | 8 |\n| `Unused extension '\u2026'` | 7 |\n| `Redundant public accessibility for struct '\u2026' (not used outside of VideoScanCore)` | 2 |\n| `Unused class '\u2026'` | 2 |\n| `Unused enum case '\u2026'` | 2 |\n\n### New since the last digest (top 20 of 1458)\n\n| Severity | File | Finding |\n|---|---|---|\n| low | `VideoScan/VideoScan/App/BundleExporter.swift` | Assign-only property 'path' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/App/BundleModels.swift` | Assign-only property 'version' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/App/BundleModels.swift` | Assign-only property 'savedAt' is assigned, but never used (\u00d72) |\n| low | `VideoScan/VideoScan/App/ConsoleView.swift` | Assign-only property 'scrollView' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchiveFileLock.swift` | Assign-only property 'isLocked' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchiveHomeState.swift` | Assign-only property 'persistedViewMode' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchiveIndexRename.swift` | Assign-only property 'createdAt' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchiveItemVersions.swift` | Assign-only property 'relPath' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchivePromoteDecisions.swift` | Assign-only property 'at' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchivePromoteDecisions.swift` | Assign-only property 'filename' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchivePromoteDecisions.swift` | Assign-only property 'detail' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchivePromoteDecisions.swift` | Assign-only property 'reason' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchivePromoteDecisions.swift` | Assign-only property 'decision' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchivePromoteDecisions.swift` | Assign-only property 'sourcePath' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchivePromoteDecisions.swift` | Assign-only property 'recordID' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchivePromoteEngine.swift` | Assign-only property 'at' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchiveReadiness.swift` | Assign-only property 'durationSeconds' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchiveReadiness.swift` | Assign-only property 'container' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchiveReadiness.swift` | Assign-only property 'audioSampleRate' is assigned, but never used (\u00d71) |\n| low | `VideoScan/VideoScan/Archive/ArchiveReadiness.swift` | Assign-only property 'audioChannels' is assigned, but never used (\u00d71) |\n\n---\n_Managed by `tools/nightly_findings_to_issues.py`. The full list is in the `nightly-findings-summary` artifact. Add the `wontfix` label to silence this digest._"
+      }
+    ],
+    "marker_edits": 0
+  },
+  "errors": []
+}
