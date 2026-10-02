@@ -41,7 +41,9 @@ struct NotesAuthorshipSensorTests {
     /// CyberBrain `notes` fields are included so the scan stays simple).
     static let notesWriters: Set<String> = [
         "BalanceAudioJob.swift", "BundleImporter.swift", "BundleModels.swift", "CleanupJob.swift",
-        "CyberBrainModels.swift", "DocumentIngest.swift", "HoldoutReviewQueue.swift", "MachineNote.swift", "MetadataCache.swift",
+        "CyberBrainModels.swift", "DocumentIngest.swift",
+        // Life & Times (#238): value-type inits of their own GEDCOM NOTE text — not record notes.
+        "GedcomLifeDetails.swift", "LifeAndTimes.swift", "HoldoutReviewQueue.swift", "MachineNote.swift", "MetadataCache.swift",
         "PersonEditSheet.swift", "PersonFinderTypes.swift", "PromoteToArchiveJob+Steps.swift", "RebuildAudioJob.swift", "ReformatJob.swift",
         "ScanEngine.swift", "ScanTargetPersistence.swift", "TranscodeJob.swift", "TrimJob.swift",
         "VideoRecord+Clone.swift", "VideoScanModel+ArchiveUpdate.swift", "VideoScanModel+Combine.swift", "VideoScanModel+DuplicateEnrichment.swift",

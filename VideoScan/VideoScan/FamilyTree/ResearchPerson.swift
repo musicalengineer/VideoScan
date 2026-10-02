@@ -439,6 +439,17 @@ struct ResearchFinding: Identifiable, Equatable, Sendable, Codable {
             && lore.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             && (fullText ?? "").isEmpty
     }
+
+    /// True when the finding carries anything of Rick's: a verdict, lore
+    /// (any non-empty text — even whitespace is something he typed), a
+    /// told Hallie item, a filed document, or it IS a record he filed.
+    /// A re-run or the 500-finding trim never drops such a finding
+    /// (adversarial review 2026-10-02 F2: an Unreviewed finding with lore
+    /// was dropped, lore and all, when its source failed).
+    var holdsRicksWork: Bool {
+        verdict != .unreviewed || !source.isSearchSource || !lore.isEmpty
+            || toldItemID != nil || documentPath != nil
+    }
 }
 
 /// Everything kept for one subject: People/<key>/research/dossier.json.
@@ -464,10 +475,12 @@ struct ResearchDossier: Equatable, Sendable, Codable {
 
     /// Merge a fresh run into the dossier: verdict, lore and told-id
     /// survive for findings whose id is already here; new ones are
-    /// appended unreviewed; findings no longer returned stay if reviewed
-    /// (Rick's work is never discarded by a source's whim) and are dropped
-    /// if unreviewed. Records Rick FILED (`.recordFinder`) are never a
-    /// source's output, so a run never drops or trims them, reviewed or not.
+    /// appended unreviewed; findings no longer returned stay if they carry
+    /// any of Rick's work (`holdsRicksWork`: a verdict, lore, a told item or
+    /// a filed document — a source's whim never discards it) and are
+    /// dropped only when they are bare search hits. Records Rick FILED
+    /// (`.recordFinder`) are never a source's output, so a run never drops
+    /// or trims them. The 500-finding trim spares the same set.
     mutating func merge(fresh: [ResearchFinding], at date: Date) {
         var byID: [String: ResearchFinding] = [:]
         for finding in findings { byID[finding.id] = finding }
@@ -482,13 +495,12 @@ struct ResearchDossier: Equatable, Sendable, Codable {
             }
             merged.append(finding)
         }
-        for finding in findings where !seen.contains(finding.id)
-            && (finding.verdict != .unreviewed || !finding.source.isSearchSource) {
+        for finding in findings where !seen.contains(finding.id) && finding.holdsRicksWork {
             merged.append(finding)
         }
         if merged.count > Self.maxFindings {
-            let kept = merged.filter { $0.verdict != .unreviewed || !$0.source.isSearchSource }
-            let trimmable = merged.filter { $0.verdict == .unreviewed && $0.source.isSearchSource }
+            let kept = merged.filter(\.holdsRicksWork)
+            let trimmable = merged.filter { !$0.holdsRicksWork }
             merged = kept + trimmable.prefix(max(0, Self.maxFindings - kept.count))
         }
         findings = merged

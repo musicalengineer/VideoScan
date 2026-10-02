@@ -48,3 +48,12 @@ def test_core_codecov_json_keeps_only_core_sources(tmp_path):
     path.write_text(json.dumps(blob))
     out = nc.core_files(path)
     assert out == [("/x/VideoScan/VideoScanCore/Sources/VideoScanCore/A.swift", 7, 10)]
+
+
+def test_a_file_declaring_a_swiftui_view_counts_as_a_view(tmp_path):
+    f = tmp_path / "SomePanel.swift"
+    f.write_text("import SwiftUI\nstruct SomePanel: View {\n var body: some View { Text(\"x\") }\n}\n")
+    g = tmp_path / "Logic.swift"
+    g.write_text("struct Logic { func f() -> Int { 1 } }\n")
+    assert nc.is_view(str(f))
+    assert not nc.is_view(str(g))

@@ -70,7 +70,7 @@ public struct GedcomLifeDetails: Sendable {
     /// One pass over the GEDCOM text.
     public init(gedcomText: String) {
         var reader = Reader()
-        for raw in gedcomText.split(whereSeparator: \.isNewline) {
+        for raw in gedcomText.split(whereSeparator: { $0.isNewline }) {
             // Leading whitespace and a stray CR only: a trailing space is
             // DATA in a value that a CONC continues ("worked as a " +
             // "compositor"), so it must survive.

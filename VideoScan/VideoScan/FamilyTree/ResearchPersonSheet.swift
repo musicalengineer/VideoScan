@@ -43,6 +43,18 @@ final class ResearchPersonModel: ObservableObject {
     /// a stale copy over lore another pane saved meanwhile.
     /// (C++: a dirty-bit set beside a cache.)
     private var editedLore: Set<String> = []
+    /// For each edited draft: the lore the field showed when the user
+    /// started typing (adversarial review 2026-10-02 F1). A commit writes
+    /// only when the draft differs from it, and only while the disk still
+    /// holds it (or already holds the draft). (C++: the "expected" value of
+    /// a compare-and-swap.)
+    private var loreBase: [String: String] = [:]
+    /// Findings whose edited draft was refused because the lore on disk
+    /// changed since the user started typing: id → the words now on disk.
+    /// Rick picks Keep mine / Keep theirs; until then the finding is not
+    /// told to Hallie.
+    @Published private(set) var loreConflicts: [String: String] = [:]
+    static let loreConflictMessage = "A note was changed elsewhere while you were typing — keep yours or theirs?"
 
     private let store: ResearchStore
     private let fetcher: any ResearchFetcher
@@ -92,6 +104,8 @@ final class ResearchPersonModel: ObservableObject {
                 if let savedPlan = saved.plan { plan = savedPlan }
                 loreDrafts = Dictionary(uniqueKeysWithValues: saved.findings.map { ($0.id, $0.lore) })
                 editedLore.removeAll()
+                loreBase.removeAll()
+                loreConflicts.removeAll()
                 statusLine = saved.lastRunAt.map { "Last run \(Self.shortDate($0)) · \(saved.findings.count) findings" }
                     ?? "Not run yet"
             } else {
@@ -164,6 +178,9 @@ final class ResearchPersonModel: ObservableObject {
     /// The user typed in a lore field: the draft is now theirs until it is
     /// committed, and a refresh from disk leaves it alone.
     func editLore(_ text: String, for id: String) {
+        if !editedLore.contains(id) {
+            loreBase[id] = loreDrafts[id] ?? dossier.findings.first { $0.id == id }?.lore ?? ""
+        }
         loreDrafts[id] = text
         editedLore.insert(id)
     }
@@ -172,18 +189,73 @@ final class ResearchPersonModel: ObservableObject {
     /// A draft the user never edited is not committed: it is the disk's own
     /// value, possibly older than what is on disk now.
     ///
-    /// An edited draft always goes through `mutate`, which compares it with
-    /// the lore ON DISK under the per-key lock (an equal value writes
-    /// nothing) — never with this pane's copy (codex review 2026-10-02 F3:
-    /// a failed save used to land in the copy, so the retry saw "already
-    /// saved", skipped the write and dropped the words). The edited mark
-    /// clears only after a save that is proven to have succeeded; a failed
-    /// one keeps it, so the next commit (or Tell Hallie) tries again.
+    /// An edited draft is compared with where the user STARTED (`loreBase`),
+    /// then with the lore ON DISK under the per-key lock — never with this
+    /// pane's copy (codex review 2026-10-02 F3: a failed save used to land
+    /// in the copy, so the retry saw "already saved" and dropped the words):
+    ///   • draft == start: typed and reverted, nothing to write; the draft
+    ///     follows the disk again (adversarial review 2026-10-02 F1: it
+    ///     used to write the old words over another pane's newer lore);
+    ///   • disk == start, or disk == draft: written (or already there);
+    ///   • otherwise BOTH changed: refused, nothing written, the conflict
+    ///     is shown (`loreConflicts`) for Keep mine / Keep theirs.
+    /// The edited mark clears only after a save proven to have succeeded;
+    /// a failed one keeps it, so the next commit (or Tell Hallie) retries.
     func commitLore(for id: String) {
         guard editedLore.contains(id) else { return }
         let draft = loreDrafts[id] ?? ""
-        guard mutate({ $0.setLore(draft, for: id) }) else { return }
+        let start = loreBase[id] ?? draft
+        if draft == start {
+            forgetLoreEdit(id)
+            mutate { _ in }                              // follow the disk again
+            return
+        }
+        var theirs: String?
+        let saved = mutate { dossier in
+            guard let onDisk = dossier.findings.first(where: { $0.id == id })?.lore else { return }
+            if onDisk != start && onDisk != draft {
+                theirs = onDisk                          // both changed: refuse
+                return
+            }
+            dossier.setLore(draft, for: id)
+        }
+        guard saved else { return }
+        if let theirs {
+            loreConflicts[id] = theirs
+            errorMessage = Self.loreConflictMessage
+            log("Research: lore not saved, changed elsewhere (1 conflict)")
+            return
+        }
+        forgetLoreEdit(id)
+    }
+
+    /// Conflict → keep the user's words: write them over the lore that was
+    /// shown in the conflict. Still a compare-and-swap: if the disk changed
+    /// AGAIN since, that is a new conflict, not an overwrite.
+    func keepMyLore(for id: String) {
+        guard let theirs = loreConflicts[id], editedLore.contains(id) else { return }
+        loreBase[id] = theirs
+        loreConflicts[id] = nil
+        commitLore(for: id)
+        clearConflictMessageIfResolved()
+    }
+
+    /// Conflict → keep theirs: drop the draft; the field follows the disk.
+    func keepTheirLore(for id: String) {
+        guard loreConflicts[id] != nil else { return }
+        forgetLoreEdit(id)
+        mutate { _ in }
+        clearConflictMessageIfResolved()
+    }
+
+    private func forgetLoreEdit(_ id: String) {
         editedLore.remove(id)
+        loreBase[id] = nil
+        loreConflicts[id] = nil
+    }
+
+    private func clearConflictMessageIfResolved() {
+        if loreConflicts.isEmpty, errorMessage == Self.loreConflictMessage { errorMessage = nil }
     }
 
     /// Confirmed, not-yet-told findings → CyberBrain attestations. Each is
@@ -197,7 +269,9 @@ final class ResearchPersonModel: ObservableObject {
         mutate { _ in }                                   // pick up other writers' changes
         var told = 0
         var failures: [String] = []
-        for finding in dossier.untoldConfirmed {
+        // A finding whose lore is in conflict waits for Rick's choice:
+        // telling either side now would put words in Hallie he did not pick.
+        for finding in dossier.untoldConfirmed where loreConflicts[finding.id] == nil {
             do {
                 let testimony = try ResearchAttestation.testimony(
                     for: finding, subject: subject, speakerName: speakerName, date: now())
@@ -415,7 +489,10 @@ struct ResearchPersonSheet: View {
                 get: { model.loreDrafts[finding.id] ?? finding.lore },
                 set: { model.editLore($0, for: finding.id) }),
             onVerdict: { model.setVerdict($0, for: finding.id) },
-            onCommitLore: { model.commitLore(for: finding.id) })
+            onCommitLore: { model.commitLore(for: finding.id) },
+            conflictingLore: model.loreConflicts[finding.id],
+            onKeepMine: { model.keepMyLore(for: finding.id) },
+            onKeepTheirs: { model.keepTheirLore(for: finding.id) })
         .listRowSeparator(.visible)
     }
 
@@ -443,6 +520,11 @@ private struct ResearchFindingRow: View {
     @Binding var lore: String
     let onVerdict: (ResearchVerdict) -> Void
     let onCommitLore: () -> Void
+    /// The lore another window saved while this draft was being typed
+    /// (adversarial review 2026-10-02 F1); nil when there is no conflict.
+    let conflictingLore: String?
+    let onKeepMine: () -> Void
+    let onKeepTheirs: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -493,6 +575,17 @@ private struct ResearchFindingRow: View {
                     .font(.system(size: 12))
                     .onSubmit(onCommitLore)
                     .masterOnly()
+            }
+            if let theirs = conflictingLore {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle").foregroundStyle(.orange)
+                    Text("This note was changed elsewhere: “\(theirs.isEmpty ? "(empty)" : theirs)”. Keep yours or theirs?")
+                        .font(.system(size: 11))
+                        .lineLimit(2)
+                    Spacer()
+                    Button("Keep mine", action: onKeepMine).masterOnly()
+                    Button("Keep theirs", action: onKeepTheirs).masterOnly()
+                }
             }
         }
         .padding(.vertical, 4)
