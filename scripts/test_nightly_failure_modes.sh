@@ -567,8 +567,16 @@ fi
 echo
 echo "== Test 11: deterministic process-group watchdog timeout =="
 WATCHDOG_LIB="$SANDBOX/watchdog_lib.sh"
+# The watchdog itself lives in scripts/lib/process_group_watchdog.sh (lifted
+# 2026-10-01); the nightly sources it. Test the real lib plus the nightly's
+# own helpers around it, minus the nightly's `source` line (it resolves
+# relative to the nightly script, not to this extracted copy).
+cat "$SCRIPT_DIR/lib/process_group_watchdog.sh" > "$WATCHDOG_LIB"
 awk '/^nightly_timeout_reason\(\)/,/^# Refresh the privacy-safe person-recognition fields/' \
-    "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' > "$WATCHDOG_LIB"
+    "$SCRIPT_DIR/nightly_local_tests.sh" | sed '$ d' \
+    | grep -v '^source .*process_group_watchdog\.sh' >> "$WATCHDOG_LIB"
+grep -q '^source .*lib/process_group_watchdog\.sh' "$SCRIPT_DIR/nightly_local_tests.sh" \
+    || fail "nightly_local_tests.sh no longer sources lib/process_group_watchdog.sh"
 WATCHDOG_FIXTURE="$SANDBOX/watchdog-fixture.sh"
 printf '%s\n' \
     '#!/usr/bin/env bash' \
