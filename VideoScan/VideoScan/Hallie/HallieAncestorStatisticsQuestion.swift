@@ -76,16 +76,41 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
     /// (QA P2-4) — never "ours", and never a PERSON named "Polwenna Branch"
     /// (generated-input AF3). Not a scope: "the other side" (the lineage
     /// reader's own phrase), "the deepest line", "the family line".
-    private static let unreadFamilyScope = /\bthe\s+(?!(?:other|same|whole|direct|deepest|longest|oldest|earliest|first|family|two|both)\b)[a-z][a-z'-]*(?:\s+[a-z][a-z'-]*)?\s+(?:family|line|side|clan|branch|lineage)\b/
+    ///
+    /// The surname may be one to four words, with periods, apostrophes and
+    /// any letters — "the van der quill line", "the st. quill side", "the
+    /// müllerby side", "the o'quill family" (adversarial review 2026-10-01,
+    /// 1a73b432: only one or two ASCII words were caught, so longer names
+    /// fell back to the whole family). A word of the name is never a
+    /// preposition, pronoun or possessive ("the average age at death on
+    /// donna's side" is a person's side, not a surname).
+    private static let unreadFamilyScope = /\bthe\s+(?!(?:other|same|whole|direct|deepest|longest|oldest|earliest|first|family|two|both)\b)(?:(?!(?:on|in|of|at|for|to|from|with|by|my|our|your|his|her|their|and|or|is|was|were|are|who|that|which)\b)\p{L}(?:[\p{L}.-]|'(?!s\b))*\s+){1,4}(?:family|line|side|clan|branch|lineage)\b/
     /// "… ancestors WHO VOTED", "… THAT fought in a war": a relative clause
     /// narrowing the ancestors, which none of these shapes can hold
     /// (generated-input AF3). The shapes' own predicates are not
-    /// constraints: "ancestors who were born in …" (birthplaces), "who
-    /// died …" (age at death).
-    private static let relativeClause = /\b(?:ancestors?|ancestry|forebears?|forefathers?|relatives|people|lines?|sides?|branch(?:es)?|family|families)\s+(?:who|that|which|whom|whose)\b(?!\s+(?:(?:were|was|are|is)\s+)?born\b)(?!\s+died\b)/
+    /// constraints: "ancestors who were born in …" (birthplaces), and a bare
+    /// closing "who died" (age at death — every age at death is of someone
+    /// who died). "who died IN IRELAND / YOUNG / BEFORE …" narrows the
+    /// group and is a constraint (adversarial review 2026-10-01, cce4ea0e).
+    private static let relativeClause = /\b(?:ancestors?|ancestry|forebears?|forefathers?|relatives|people|lines?|sides?|branch(?:es)?|family|families)\s+(?:who|that|which|whom|whose)\b(?!\s+(?:(?:were|was|are|is)\s+)?born\b)(?!\s+died\s*$)/
+    /// "… ancestors BURIED IN ohio", "… FROM ohio", "… BAPTIZED catholic":
+    /// a reduced relative clause or a place word narrowing the ancestors
+    /// (adversarial review 2026-10-01, 784f0da7). A place filter ("… IN
+    /// ohio") is `inFilter`.
+    private static let reducedRelative = /\b(?:from|at|near|with|without|under|over|buried|bapti[sz]ed|christened|raised|settled|naturali[sz]ed|enumerated|listed|found|lived)\b/
     /// Any constraint the age-at-death and birthplace shapes cannot hold.
     private static func hasUnreadConstraint(_ q: String) -> Bool {
         q.firstMatch(of: unreadFamilyScope) != nil || q.firstMatch(of: relativeClause) != nil
+    }
+    /// True when `text` (words said ABOUT the ancestors) narrows them: a
+    /// place filter or a reduced relative clause.
+    private static func narrowsAncestors(_ text: Substring) -> Bool {
+        text.firstMatch(of: inFilter) != nil || text.firstMatch(of: reducedRelative) != nil
+    }
+    /// The words after the first ancestor noun ("… of our ancestors <HERE>").
+    private static func afterAncestorNoun(_ q: String) -> Substring {
+        guard let noun = q.firstMatch(of: ancestorNoun) else { return "" }
+        return q[noun.range.upperBound...]
     }
     /// "in Ireland", "in the civil war" … — a place or event filter the
     /// earliest / deepest shapes cannot hold. "in my/our/the family tree"
@@ -168,6 +193,10 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
               q.firstMatch(of: ancestorNoun) != nil,
               // "… on the marrowby line", "… who fought in a war" (AF3).
               !hasUnreadConstraint(q),
+              // "… of our ancestors IN IRELAND", "… BURIED in ohio": the
+              // whole family's average is not the answer (cce4ea0e).
+              q.firstMatch(of: inFilter) == nil,
+              !narrowsAncestors(afterAncestorNoun(q)),
               let who = who(in: q, allowTree: false) else { return nil }
         return .ageAtDeath(who: who)
     }
@@ -183,10 +212,18 @@ enum HallieAncestorStatisticsQuestion: Equatable, Sendable {
               !hasUnreadConstraint(q),
               let who = who(in: q, allowTree: false),
               let m = q.firstMatch(of: /\b(?:born|birth\s*places?|places?\s+of\s+birth)\s+(?:in|at)\s+(.+)$/) else { return nil }
+        // Between the ancestors and "born in": "… ancestors IN OHIO were
+        // born …", "… BURIED in ohio …" narrow the count (784f0da7).
+        if let noun = q.firstMatch(of: ancestorNoun), noun.range.upperBound < m.range.lowerBound,
+           narrowsAncestors(q[noun.range.upperBound..<m.range.lowerBound]) {
+            return nil
+        }
         var tail = String(m.1)
         // The scope phrase may follow the places ("born in ireland among
-        // donna's ancestors"): cut there.
+        // donna's ancestors"): cut there — unless what follows it narrows
+        // them ("… among our ancestors buried in ohio").
         if let cut = tail.firstMatch(of: /\s+(?:among|on|in|of|for|within|across)\s+(?:my|our|[a-z][a-z .'-]*?'s?)\s+(?:own\s+)?(?:ancestors?|ancestry|forebears?|lines?|sides?|lineage|family\s+tree|tree|family)\b.*$|\s+(?:among|of)\s+(?:the\s+)?ancestors?\s+of\b.*$/) {
+            if narrowsAncestors(afterAncestorNoun(String(cut.output))) { return nil }
             tail = String(tail[tail.startIndex..<cut.range.lowerBound])
         }
         tail = tail.replacing(/\s+(?:in\s+total|total|altogether|overall|respectively)\s*$/, with: "")

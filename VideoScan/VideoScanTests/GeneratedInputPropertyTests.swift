@@ -128,12 +128,14 @@ struct HallieParaphrase: CustomStringConvertible {
     var description: String { "control \(control.debugDescription) / constrained \(constrained.debugDescription)" }
 }
 
-/// The seven constraint shapes. Each runs as its own test case, so one
+/// The constraint shapes. Each runs as its own test case, so one
 /// shape's bug cannot hide another's verdict.
 enum HallieShape: String, CaseIterable, CustomTestStringConvertible {
     case earliestToVerb, earliestOnSurnameLine, deepestSurnameLine
     case ageAtDeathOnSurnameSide, ageAtDeathWhoVerbed
     case birthplacesOnSurnameLine, birthplacesWhoVerbed
+    // Adversarial review 2026-10-01: cce4ea0e, 784f0da7, 1a73b432.
+    case ageAtDeathDiedOrPlace, birthplacesReducedOrPlace, longSurnameScope
     var testDescription: String { rawValue }
 }
 
@@ -145,6 +147,12 @@ enum HallieParaphraseGenerator {
     static let pastVerbs = ["fought in a war", "served in the army", "owned land", "went to college", "voted",
                             "became citizens", "worked in a mill", "bought a farm", "joined the navy", "left a will"]
     static let places = ["ireland", "england", "scotland", "wales", "new england", "canada", "france"]
+    /// Places a constraint names (any word: the recognizer must abstain
+    /// whether or not it knows the place).
+    static let filterPlaces = ["ohio", "ireland", "boston", "county cork", "the old country", "kent"]
+    /// Surnames of three words, with a period, or with non-ASCII letters.
+    static let longSurnames = ["van der quill", "de la fenlane", "st. larkspur", "müllerby", "ó testerly",
+                               "mac an polwenna", "o'glendarroch", "saint-marrowby"]
 
     static func lineWord(_ g: inout SeededGenerator) -> String { g.pick(["line", "side", "branch", "family"]) }
 
@@ -178,6 +186,37 @@ enum HallieParaphraseGenerator {
             let place = g.pick(places)
             pair = ("how many of \(whose) ancestors were born in \(place)",
                     "how many of \(whose) ancestors who \(g.pick(pastVerbs)) were born in \(place)")
+        case .ageAtDeathDiedOrPlace:
+            let base = "what was the average age at death of \(whose) ancestors"
+            let filter = g.pick(filterPlaces)
+            let constraint = g.pick(["who died in \(filter)", "who died young", "who died before the war",
+                                     "in \(filter)", "buried in \(filter)", "from \(filter)"])
+            pair = (base, "\(base) \(constraint)")
+        case .birthplacesReducedOrPlace:
+            let place = g.pick(places)
+            let filter = g.pick(filterPlaces)
+            let constraint = g.pick(["buried in \(filter)", "in \(filter)", "from \(filter)",
+                                     "baptized in \(filter)", "who died in \(filter)"])
+            pair = ("how many of \(whose) ancestors were born in \(place)",
+                    "how many of \(whose) ancestors \(constraint) were born in \(place)")
+        case .longSurnameScope:
+            let name = g.pick(longSurnames)
+            let line = lineWord(&g)
+            switch g.int(0...3) {
+            case 0:
+                pair = ("how many generations back does \(whose) tree go",
+                        "how many generations back does the \(name) \(line) go")
+            case 1:
+                pair = ("who is the earliest ancestor in \(whose) family tree",
+                        "who is the earliest ancestor on the \(name) \(line)")
+            case 2:
+                let base = "what was the average age at death of \(whose) ancestors"
+                pair = (base, "\(base) on the \(name) \(line)")
+            default:
+                let place = g.pick(places)
+                pair = ("how many of \(whose) ancestors were born in \(place)",
+                        "how many of \(whose) ancestors on the \(name) \(line) were born in \(place)")
+            }
         }
         // Surface variety: a capital, a question mark, all caps.
         func surface(_ s: String, _ g: inout SeededGenerator) -> String {

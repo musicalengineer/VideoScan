@@ -140,14 +140,32 @@ extension HallieLineageAnswer {
             // "N. H.", "Penna.") — the "." split above would leave "H" or
             // "Penna" as a "country".
             let lastPart = s.place.split(separator: ",").last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-            let (name, home) = lastPart.flatMap { USPlaceNames.stateName(endOf: String($0)) } != nil
-                ? ("the United States", true) : Self.canonicalCountry(last)
+            // "W.I." / "B.W.I." (West Indies) and "W.A." (Western
+            // Australia) are dotted forms the shared reader no longer takes
+            // for Wisconsin / Washington (adversarial review 2026-10-01,
+            // ea7b6739); name them, rather than the "I" the "." split leaves.
+            let dotted = lastPart.flatMap { Self.dottedRegionNames[Self.dottedKey(String($0))] }
+            let (name, home) = dotted.map { ($0, false) }
+                ?? (lastPart.flatMap { USPlaceNames.stateName(endOf: String($0)) } != nil
+                    ? ("the United States", true) : Self.canonicalCountry(last))
             if seen[name] == nil {
                 seen[name] = CountryStop(name: name, nearest: s, isHome: home)
                 order.append(name)
             }
         }
         return order.compactMap { seen[$0] }
+    }
+
+    /// Dotted regional forms written in a country's place → the country
+    /// named as the trail says it. Keys are `dottedKey` form.
+    static let dottedRegionNames: [String: String] = [
+        "w i": "the West Indies", "b w i": "the West Indies", "w a": "Australia",
+    ]
+
+    /// "W. I." / "w.i." / "W.I" → "w i".
+    static func dottedKey(_ raw: String) -> String {
+        raw.lowercased().replacingOccurrences(of: ".", with: " ")
+            .split(separator: " ").joined(separator: " ")
     }
 
     static let usStates: Set<String> = ["massachusetts", "ma", "new york", "ny", "vermont", "vt", "connecticut", "ct", "new hampshire", "nh", "maine", "me", "rhode island", "ri", "kentucky", "ky", "north carolina", "nc", "south carolina", "sc", "virginia", "va", "mississippi", "ms", "pennsylvania", "pa", "new jersey", "nj", "ohio", "oh", "illinois", "il", "california", "ca", "texas", "tx", "florida", "fl", "georgia", "ga", "maryland", "md", "delaware", "de", "tennessee", "tn", "indiana", "in", "michigan", "mi", "wisconsin", "wi", "minnesota", "mn", "missouri", "mo", "iowa", "ia", "louisiana", "la", "alabama", "al", "arkansas", "ar", "colorado", "co", "oregon", "or", "washington", "wa", "nevada", "nv", "arizona", "az", "utah", "ut", "kansas", "ks", "nebraska", "ne", "oklahoma", "ok", "west virginia", "wv"]

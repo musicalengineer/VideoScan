@@ -125,25 +125,46 @@ extension LifeAndTimes {
         let base = baseRegion(raw)
         // Belfast / the six counties, only when the place is otherwise Irish,
         // British or unplaced ("Antrim, New Hampshire" stays American).
-        if base == nil || base == .ireland || base == .britain, isNorthernIrish(raw) { return .northernIreland }
+        if base == nil || base == .ireland || base == .britain, isNorthernIrish(raw, base: base) { return .northernIreland }
         return base
     }
 
-    /// Whole comma parts. The bare county names (Antrim, Armagh, DOWN,
+    /// Whole comma parts. The bare county names (Antrim, Armagh,
     /// Fermanagh, Londonderry / Derry, Tyrone) count only because
     /// `region(ofPlace:)` consults this list when the place is otherwise
     /// Irish, British or unplaced — "Antrim, N. H." and "Derry, NH" are
     /// American first (the shared US reader) and never reach it.
-    /// Generated-input F5: "Down, Ireland" (County Down) was Ireland.
+    /// Bare "Down" is NOT here: it is also an English place ("Down, Kent")
+    /// and has its own, narrower rule (`bareDown`).
     static let northernIrishMarkers: Set<String> = [
         "northern ireland", "ni", "belfast", "antrim", "co antrim", "county antrim", "armagh", "co armagh",
-        "county armagh", "down", "co down", "county down", "fermanagh", "co fermanagh", "county fermanagh",
+        "county armagh", "co down", "county down", "fermanagh", "co fermanagh", "county fermanagh",
         "londonderry", "co londonderry", "county londonderry", "derry", "co derry", "county derry",
         "tyrone", "co tyrone", "county tyrone", "ulster northern ireland",
     ]
 
-    static func isNorthernIrish(_ raw: String) -> Bool {
-        raw.split(separator: ",").contains { northernIrishMarkers.contains(BirthplaceClassifier.normalize(String($0))) }
+    /// Generated-input F5: "Down, Ireland" (County Down) was Ireland. But
+    /// the bare word applies only when the place is otherwise Irish or
+    /// unplaced, and never beside "England" or an English county —
+    /// adversarial review 2026-10-01 (0bb392bd): "Down, Kent" and "Down,
+    /// Kent, United Kingdom" were Northern Ireland.
+    static let bareDown = "down"
+
+    static func isNorthernIrish(_ raw: String, base: Region?) -> Bool {
+        let keys = raw.split(separator: ",").map { BirthplaceClassifier.normalize(String($0)) }
+        if keys.contains(where: { northernIrishMarkers.contains($0) }) { return true }
+        guard keys.contains(bareDown), base == nil || base == .ireland else { return false }
+        return !keys.contains(where: namesEngland)
+    }
+
+    /// "England" (any spelling the region table knows) or an English
+    /// county, by the map resolver's alias table ("Kent", "Hants", "Yorks").
+    static func namesEngland(_ key: String) -> Bool {
+        if BirthplaceClassifier.regionTable[key] == .england { return true }
+        switch BirthplaceUnitResolver.tables[BirthplaceUnitResolver.undecorated(key)] {
+        case .unit(.england, _, _)?, .country(.england, _)?: return true
+        default: return false
+        }
     }
 
     static func baseRegion(_ raw: String) -> Region? {

@@ -46,6 +46,8 @@
 // same file again after its document was removed in the inspector finds the
 // old finding. It is re-attached to the new document (documentPath updated);
 // its verdict, lore and told state are kept, and Hallie is not told twice.
+// When it was never told, Hallie is told what the NEW sheet says (its type,
+// year and words), not the old finding's title or lore.
 //
 // Outcomes are named, and only `.filed` is success:
 //   .filed       everything requested landed and was proved
@@ -240,7 +242,7 @@ struct RecordFinderFiler {
         // ---- Write 1: the document, proved. ----
         let filed: FiledDocument
         switch writeDocument(s, pre) {
-        case .failure(let stop): return finish(stop.outcome, code: stop.code)
+        case .failure(let stop): return finish(stop.outcome, code: stop.code, file: stop.file)
         case .success(let document): filed = document
         }
 
@@ -254,7 +256,7 @@ struct RecordFinderFiler {
         let stored: ResearchFinding
         let wrote: FindingWrite
         switch writeFinding(fresh, confirmedRead: s.confirmedRead, pre: pre, filed: filed) {
-        case .failure(let stop): return finish(stop.outcome, code: stop.code)
+        case .failure(let stop): return finish(stop.outcome, code: stop.code, file: stop.file)
         case .success(let written): (stored, wrote) = (written.finding, written.write)
         }
         let code = pre.reattach == nil ? "filed" : "re-attached"
@@ -266,9 +268,16 @@ struct RecordFinderFiler {
         }
 
         // ---- Write 3: the CyberBrain (only after Rick read it). ----
+        // Told from THIS sheet (`fresh`: its type, year, words and the new
+        // document), never from the stored finding. A re-attach keeps the
+        // old finding's title and date and any working lore — and the sheet
+        // promised "Hallie repeats only this" (adversarial review
+        // 2026-10-01, 86953af8: lore was told as a confirmed event and the
+        // citation named the old type and year). For a new finding the two
+        // are the same.
         let receipt: CyberBrainWriter.Receipt
-        switch tellHallie(stored, pre: pre, filed: filed, wrote: wrote) {
-        case .failure(let stop): return finish(stop.outcome, code: stop.code)
+        switch tellHallie(fresh, pre: pre, filed: filed, wrote: wrote) {
+        case .failure(let stop): return finish(stop.outcome, code: stop.code, file: stop.file)
         case .success(let told): receipt = told
         }
 
@@ -280,7 +289,7 @@ struct RecordFinderFiler {
                                       + "\(filed.document.filename), but the research file could not record that "
                                       + "Hallie was told (\(error.localizedDescription)). Pressing Tell Hallie again "
                                       + "is safe: the same words from the same record are not recorded twice."),
-                          code: "told-unrecorded")
+                          code: "told-unrecorded", file: "Documents/\(filed.document.filename) (filed)")
         }
         return finish(.filed(documentFilename: filed.document.filename, findingID: stored.id,
                              toldItemID: receipt.itemID),
@@ -291,6 +300,16 @@ struct RecordFinderFiler {
     struct Stop: Error {
         let outcome: RecordFilingOutcome
         let code: String
+        /// The document's file name and where it is now, relative to the
+        /// person folder ("Documents/.trash/BC-….pdf") — for the log line,
+        /// which must name it without the person's folder (FT-7).
+        var file: String?
+    }
+
+    /// A document undo: the outcome, and where the file is now.
+    struct Undone {
+        let outcome: RecordFilingOutcome
+        let file: String
     }
 
     /// The document as filed and proved.
@@ -323,8 +342,10 @@ struct RecordFinderFiler {
         } catch let failure as FamilyAssetStore.DocumentImportFailure {
             // The document WAS written, then the import failed (codex review
             // #18 F4). Report what is on disk now, not what was hoped.
-            let outcome = Self.importFailureOutcome(failure, documentsDir: FamilyAssetStore.documentsFolder(in: folder))
-            return .failure(Stop(outcome: outcome, code: "import-failed"))
+            let documentsDir = FamilyAssetStore.documentsFolder(in: folder)
+            let outcome = Self.importFailureOutcome(failure, documentsDir: documentsDir)
+            return .failure(Stop(outcome: outcome, code: "import-failed",
+                                 file: Self.importFailureLocation(failure, documentsDir: documentsDir)))
         } catch let error as FamilyAssetStore.DocumentError {
             // Validation: thrown before any byte of the document is written.
             return .failure(Stop(outcome: .refused(error.localizedDescription), code: "import-refused"))
@@ -341,9 +362,9 @@ struct RecordFinderFiler {
         let listed = assetStore.documents(inPersonFolder: folder, for: assetPerson).first { $0.id == document.id }
         guard document.sha256 == pre.sha256, document.byteCount == pre.byteCount,
               let landedURL = listed?.fileURL, FileManager.default.fileExists(atPath: landedURL.path) else {
-            return .failure(Stop(outcome: undoDocument(document, folder: folder,
-                                                       why: "the file changed while it was being filed, or could not be found after writing"),
-                                 code: "document-unproved"))
+            let undone = undoDocument(document, folder: folder,
+                                      why: "the file changed while it was being filed, or could not be found after writing")
+            return .failure(Stop(outcome: undone.outcome, code: "document-unproved", file: undone.file))
         }
         return .success(FiledDocument(document: document, folder: folder,
                                       archivePath: CyberBrainWriter.photoLocator(landedURL.path)))
@@ -435,8 +456,8 @@ struct RecordFinderFiler {
             return .success(WrittenFinding(finding: stored, write: wrote))
         } catch let refusal as Refusal {
             // Nothing was written to the dossier; only the document to undo.
-            return .failure(Stop(outcome: undoDocument(filed.document, folder: filed.folder, why: refusal.message),
-                                 code: refusal.code))
+            let undone = undoDocument(filed.document, folder: filed.folder, why: refusal.message)
+            return .failure(Stop(outcome: undone.outcome, code: refusal.code, file: undone.file))
         } catch {
             return .failure(undoAll(pre: pre, findingID: fresh.id, filed: filed, wrote: wrote,
                                     why: "the research file could not be saved (\(error.localizedDescription))",
@@ -648,7 +669,7 @@ struct RecordFinderFiler {
                          why: String, code: String) -> Stop {
         let restored = restoreDossier(pre: pre, findingID: findingID, wrote: wrote)
         let undone = undoDocument(filed.document, folder: filed.folder, why: why)
-        return Stop(outcome: combine(undone, dossier: restored), code: code)
+        return Stop(outcome: combine(undone.outcome, dossier: restored), code: code, file: undone.file)
     }
 
     /// How the dossier undo ended.
@@ -718,17 +739,35 @@ struct RecordFinderFiler {
     }
 
     /// Move the just-filed document to Documents/.trash and drop its row.
-    private func undoDocument(_ document: PersonDocument, folder: URL, why: String) -> RecordFilingOutcome {
+    private func undoDocument(_ document: PersonDocument, folder: URL, why: String) -> Undone {
+        let trash = FamilyAssetStore.documentsTrashFolderName
         do {
             try assetStore.removeDocument(document, from: folder, for: assetPerson)
-            return .rolledBack("\(why). The file was moved to Documents/\(FamilyAssetStore.documentsTrashFolderName)/\(document.filename).")
+            return Undone(outcome: .rolledBack("\(why). The file was moved to Documents/\(trash)/\(document.filename)."),
+                          file: "Documents/\(trash)/\(document.filename)")
         } catch {
             let inPlace = FileManager.default.fileExists(
                 atPath: FamilyAssetStore.documentsFolder(in: folder).appendingPathComponent(document.filename).path)
-            return .mixedState(Self.undoFailureMessage(why: why, filename: document.filename,
-                                                       stillInDocuments: inPlace,
-                                                       error: error.localizedDescription))
+            return Undone(outcome: .mixedState(Self.undoFailureMessage(why: why, filename: document.filename,
+                                                                       stillInDocuments: inPlace,
+                                                                       error: error.localizedDescription)),
+                          file: inPlace ? "Documents/\(document.filename) (still listed)"
+                                        : "Documents/\(trash)/\(document.filename) (documents.json not rewritten)")
         }
+    }
+
+    /// Where an import that wrote its file and then failed left it, for the
+    /// log — the same cases `importFailureOutcome` reports to the sheet.
+    static func importFailureLocation(_ failure: FamilyAssetStore.DocumentImportFailure,
+                                      documentsDir: URL) -> String {
+        let fm = FileManager.default
+        let inDocuments = fm.fileExists(atPath: documentsDir.appendingPathComponent(failure.filename).path)
+        let trash = FamilyAssetStore.documentsTrashFolderName
+        if case .movedToTrash(let destination) = failure.rollback, !inDocuments, fm.fileExists(atPath: destination.path) {
+            return "Documents/\(trash)/\(destination.lastPathComponent)"
+        }
+        return inDocuments ? "Documents/\(failure.filename) (NOT listed)"
+                           : "\(failure.filename) (not in Documents/ or Documents/\(trash))"
     }
 
     /// An import that wrote its file and then failed: `.rolledBack` only
@@ -787,8 +826,15 @@ struct RecordFinderFiler {
 
     // MARK: Log
 
+    /// One OUTCOME line. Names the subject KEY, file names and locations
+    /// relative to the person folder — never the person's name, which the
+    /// CyberBrain item id carries in slug form, so the id is not logged
+    /// (adversarial review 2026-10-01, 31bd2de8). A rolledBack or mixed
+    /// state names the file and where it is now (267d107a): the sheet's
+    /// message is gone once the sheet closes.
     private func finish(_ outcome: RecordFilingOutcome, code: String,
-                        detail: PersonDocument? = nil, sha: String? = nil) -> RecordFilingOutcome {
+                        detail: PersonDocument? = nil, sha: String? = nil,
+                        file: String? = nil) -> RecordFilingOutcome {
         let kind: String
         switch outcome {
         case .filed: kind = "filed"
@@ -801,9 +847,11 @@ struct RecordFinderFiler {
             line += " — Documents/\(file)"
             if let sha { line += " sha256 \(sha.prefix(12))" }
             if let bytes = detail?.byteCount { line += ", \(FamilyAssetStore.displayBytes(bytes))" }
-            line += "; finding \(findingID); CyberBrain item \(told ?? "none (not yet read)")"
+            line += "; finding \(findingID); CyberBrain item \(told == nil ? "none (not yet read)" : "recorded")"
             line += ". Revert: Remove the document in the Family Tree inspector (moves to Documents/.trash)"
             if told != nil { line += "; the CyberBrain keeps a backup of the previous file under backups/" }
+        } else if let file {
+            line += " — document \(file)"
         } else if case .mixedState = outcome {
             line += " — see the sheet's message; files are named there"
         }
