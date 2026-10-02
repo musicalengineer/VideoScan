@@ -260,7 +260,10 @@ struct RescanPreservedFields: Sendable {
     /// Keys a NEWER build wrote on this record (GH #167). Their meaning is
     /// unknown to this build, so they are carried forward verbatim rather
     /// than guessed at — nothing silently lost on a rescan.
-    let unknownFields: [String: CatalogJSONValue]
+    /// `var` for the same reason as `archiveFixity`: the live reload may
+    /// change or add keys while the scan walks, and the apply-time value
+    /// must be the LIVE one (codex review 2026-10-02 #3).
+    var unknownFields: [String: CatalogJSONValue]
 
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
@@ -531,16 +534,32 @@ extension VideoScanModel {
         // onto a record that had nothing worth snapshotting at scan start).
         // Whatever is live wins over the scan-start copy; a record whose
         // old instance is already gone keeps the snapshot as the fallback.
+        //
+        // Unknown keys (GH #167, codex review 2026-10-02 #3) follow the
+        // same rule: the live reload merges a newer build's keys onto the
+        // OLD instance while the scan runs, so the scan-start copy is stale
+        // — a changed value would be reverted, an added key (even a
+        // record's FIRST one) dropped, and the next save would persist the
+        // loss. The live record's keys win.
         var fixityMovedDuringScan = 0
+        var unknownMovedDuringScan = 0
         for old in records where PathScope.contains(old.fullPath, within: target.searchPath) {
             if var snap = map[old.fullPath] {
+                var changed = false
                 if snap.archiveFixity != old.archiveFixity {
                     fixityMovedDuringScan += 1
                     snap.archiveFixity = old.archiveFixity
-                    map[old.fullPath] = snap
+                    changed = true
                 }
-            } else if old.archiveFixity != nil {
-                fixityMovedDuringScan += 1
+                if snap.unknownFields != old.unknownFields {
+                    unknownMovedDuringScan += 1
+                    snap.unknownFields = old.unknownFields
+                    changed = true
+                }
+                if changed { map[old.fullPath] = snap }
+            } else if old.archiveFixity != nil || !old.unknownFields.isEmpty {
+                if old.archiveFixity != nil { fixityMovedDuringScan += 1 }
+                if !old.unknownFields.isEmpty { unknownMovedDuringScan += 1 }
                 map[old.fullPath] = RescanPreservedFields(from: old)
             }
         }
@@ -564,6 +583,9 @@ extension VideoScanModel {
         }
         if fixityMovedDuringScan > 0 {
             appLog.write("Rescan preservation: \(fixityMovedDuringScan) record(s) had their archive fixity changed while the scan ran (Verify Archive Copies) under \(target.searchPath) — the live value was carried, not the scan-start snapshot")
+        }
+        if unknownMovedDuringScan > 0 {
+            appLog.write("Rescan preservation: \(unknownMovedDuringScan) record(s) gained or changed keys from a newer VideoScan while the scan ran (live reload) under \(target.searchPath) — the live keys were carried, not the scan-start snapshot (GH #167)")
         }
         // Re-link runs even when the preservation map is EMPTY (QA m1,
         // 2026-07-24): pendingRescanOldIDs was captured for exactly this
