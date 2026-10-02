@@ -13,7 +13,7 @@ datasets and the dashboard; they are retained, not treated as expendable prose.
 
 | Retired group | Files | Where useful material now lives |
 |---|---:|---|
-| July 15–25 Markdown team-channel messages | 145 | [Channel guide](../team-channel/README.md); durable design/evaluation material in the theme guides |
+| July 15–25 Markdown team-channel messages | 145 | [Channel guide](https://github.com/musicalengineer/VideoScan/blob/5395d0231a7af317b25c70b978c289917dd9b430/docs/team-channel/README.md) (channel retired 2026-10-02); durable design/evaluation material in the theme guides |
 | Recognition designs, experiments, research and April handoffs | 32 | [Facial recognition](facial-recognition.md) |
 | Hallie overviews, plans and duplicate topic notes | 17 | [Hallie](hallie.md) |
 | Archive, promotion, copy, cleanup and volume plans | 19 | [Media archive](media-archive.md) |

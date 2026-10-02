@@ -100,7 +100,7 @@ agent only ever produces *issues*, never edits the owner's branch. By
 
 ## Night protocol
 
-1. Rick picks the theme before bed (`/loop` with the theme id, or a line in the team channel).
+1. Rick picks the theme before bed (`/loop` with the theme id).
 2. The owner writes a one-line plan to the brief file first (`docs/morning_brief_<date>.md`), then starts.
 3. Every merge: focused suites green, SHA in the brief, one-line rationale.
 4. Anything outside scope → a GitHub issue with the theme label, not an edit.
@@ -114,6 +114,8 @@ agent only ever produces *issues*, never edits the owner's branch. By
 - If a theme's brief shows the same blocker two nights running, the theme is wrong, not the night.
 
 ## Check-in protocol (added 2026-09-10 — Rick: "make sure you and codex check with each other and don't allow one or the other to drop off into silence")
+
+> **Retired 2026-10-02** with the team channel it ran over: there is no separate codex session any more. Claude is the single orchestrator; codex reviews run headless through `tools/codex_review.py`. Kept below for history.
 
 - **Manager = Claude** for the night. The owner posts a checkpoint on the team channel **every 30 minutes** while working (what landed, SHA, suites, next step) and a **"holding"** line when waiting.
 - **Reviewer replies within 30 minutes** of a checkpoint: `blocker: <reason>` (owner stops merging that commit until resolved), `advisory: <notes>` (owner merges, notes go to the brief), or `clear`. **No reply in 30 min = review-not-received**, never a clear and never the reviewer's approval (codex 2026-09-10): the owner may proceed on **owner authority**, logs "proceeded on owner authority — review not received at <time>", and the brief lists every such merge so the reviewer can review it after the fact. Until the reviewer has posted `reviewer loop running` for the night, silence is NOT-GO: review-gated commits stay on their branch.

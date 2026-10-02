@@ -15,9 +15,11 @@ Two checks, because the 9/28 regression had two halves:
    is what actually happened (the engine was fine; the app killed it).
 
 Writes one JSON object (only `hallie_voice_*` keys — it never touches the
-row's status or test counts) and, when anything is wrong, posts a 🔴
-team-channel message to claude + rick so it is the first line of the next
-status.
+row's status or test counts) and an alert record, ALERT_FILE
+(~/Library/Logs/VideoScan/hallie-voice/latest.json). The session morning
+hook prints a 🔴 line from it when anything is wrong, so it is the first
+thing the next session sees. (It posted to the team channel until the
+channel was retired, 2026-10-02.)
 
     venv/bin/python scripts/nightly_hallie_voice.py --out /tmp/nightly-hallie-voice.json
 
@@ -41,6 +43,8 @@ ENGINE = Path.home() / "Library" / "Application Support" / "VideoScan" / "Hallie
 REFERENCE = REPO / "tests" / "fixtures" / "voice" / "hallie_bella_reference.json"
 APP_LOG = Path.home() / "Library" / "Logs" / "VideoScan" / "videoscan.log"
 STATE = Path.home() / "Library" / "Logs" / "VideoScan" / "nightly-hallie-voice.state.json"
+# Read by .claude/scripts/session_morning_hook.sh.
+ALERT_FILE = Path.home() / "Library" / "Logs" / "VideoScan" / "hallie-voice" / "latest.json"
 FALLBACK_MARK = "[hallie-voice] neural voice unavailable"
 WORKER_ENV_KEYS = {"HOME", "TMPDIR", "PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "LC_CTYPE", "__CF_USER_TEXT_ENCODING"}
 
@@ -112,19 +116,31 @@ def verdict(voice: dict, fallbacks: dict) -> dict:
     return row
 
 
-def alert(row: dict) -> None:
+def alert(row: dict, path: Path | None = None) -> None:
+    """Record tonight's verdict for the morning hook. Written every night
+    (so a stale file says the lane did not run); `alert` is true only when
+    something is wrong. Never raises — a lane never takes the nightly down."""
+    from datetime import datetime
+    path = path or ALERT_FILE
     status = row.get("hallie_voice_status")
-    if status in ("ok", "not-run"):
-        return
-    body = (f"Nightly Hallie voice lane: {status}.\n"
-            f"Voice check: {row.get('hallie_voice_reason', '-')}\n"
-            f"App fell back to Apple speech {row.get('hallie_voice_fallbacks', 0)} time(s) since the last nightly"
-            + (f"; last: {row['hallie_voice_fallback_last']}" if row.get("hallie_voice_fallback_last") else "")
-            + "\nReference: tests/fixtures/voice/hallie_bella_reference.wav · tool: scripts/hallie_voice_signature.py")
-    subprocess.run([sys.executable if Path(sys.executable).exists() else "python3", str(REPO / "tools" / "team-channel.py"),
-                    "post", "--from", "reviewer", "--to", "claude,rick",
-                    "--subject", f"🔴 Hallie's voice: {status}", "--body", body],
-                   capture_output=True, text=True, timeout=60)
+    raised = status not in ("ok", "not-run")
+    detail = (f"Voice check: {row.get('hallie_voice_reason', '-')}. "
+              f"App fell back to Apple speech {row.get('hallie_voice_fallbacks', 0)} time(s) since the last nightly"
+              + (f"; last: {row['hallie_voice_fallback_last']}" if row.get("hallie_voice_fallback_last") else "")
+              + ". Reference: tests/fixtures/voice/hallie_bella_reference.wav · tool: scripts/hallie_voice_signature.py")
+    now = datetime.now().astimezone()
+    record = {"date": now.date().isoformat(), "at": now.isoformat(timespec="seconds"),
+              "status": status, "alert": raised, "headline": f"Hallie's voice: {status}",
+              "detail": detail, "row": row}
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".latest.", suffix=".tmp")
+        with os.fdopen(fd, "w") as fh:
+            json.dump(record, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except OSError as e:
+        print(f"nightly_hallie_voice: cannot write {path}: {e}", file=sys.stderr)
 
 
 def main(argv: list[str] | None = None) -> int:

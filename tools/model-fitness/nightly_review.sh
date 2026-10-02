@@ -3,17 +3,34 @@
 #
 # codex is out of tokens until 2026-09-07, so the local brain stands in as
 # the reviewer who is not Claude. It reads every commit that landed on
-# main since the last run, keeps the raw verdicts, and mails a digest to
-# Claude on the team channel so the next session sees it before touching
-# anything. Measured 2026-08-31: 18 quiet / 3 flagged / 2 genuine over 21
-# real commits — adequate as an ADDITIVE reviewer, never a gate.
+# main since the last run, keeps the raw verdicts, and writes a summary the
+# first session of the day sees before touching anything. Measured
+# 2026-08-31: 18 quiet / 3 flagged / 2 genuine over 21 real commits —
+# adequate as an ADDITIVE reviewer, never a gate.
+#
+# Output (since the team channel was retired, Rick 2026-10-02):
+#   $STATE/<YYYY-MM-DD>/summary.md   headline + the whole digest
+#   $STATE/latest.json               status/counts; .claude/scripts/
+#                                    session_morning_hook.sh prints one line
+#                                    from it ("local review: N flagged, ...")
+# STATE defaults to ~/Library/Logs/VideoScan/model-review.
 #
 # Runs at 04:30 on the M4 (after the 02:00 test job has the machine).
 # Idempotent: nothing new since last time -> one line and exit 0.
 #
 #   tools/model-fitness/nightly_review.sh            # since last run
 #   RANGE=origin/main~5..origin/main tools/model-fitness/nightly_review.sh
+#   tools/model-fitness/nightly_review.sh --help     # this text; runs nothing
 set -u
+# Any argument other than --help is refused rather than ignored: an ignored
+# argument used to start a full review (the script takes none; launchd passes
+# none).
+if (( $# > 0 )); then
+  sed -n '2,/^set -u$/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
+  [[ $1 == -h || $1 == --help ]] && exit 0
+  print -u2 -- "nightly_review.sh: unexpected argument '$1' (use environment variables, e.g. RANGE=...)"
+  exit 2
+fi
 REPO=${REPO:-$HOME/dev/VideoScan}
 # STATE is overridable so a test harness can point it somewhere disposable
 # without repurposing HOME (codex #1160). Production is unchanged.
@@ -65,28 +82,36 @@ REVIEW_PREFLIGHT_RETRY_SECONDS=${REVIEW_PREFLIGHT_RETRY_SECONDS:-90}
 # review_real_commits.py will. Overridable for a one-off run.
 PYTHON=${REVIEW_PYTHON:-python3}
 PYTHON_BIN=$(command -v "$PYTHON" 2>/dev/null || print -r -- "$PYTHON")
-# tools/team-channel.py refuses a post over these (MAX_SUBJECT / MAX_BODY).
-# On 2026-09-25 a subject naming 46 abandoned SHAs was refused, so the digest
-# never arrived. test_nightly_review.sh reads the real values from the channel's
-# source and checks every post against them, so these cannot drift silently.
-CHANNEL_MAX_SUBJECT=160
-CHANNEL_MAX_BODY=20000
 mkdir -p "$STATE"
 
-# Post to the team channel, never over its limits. The subject is clipped (a
-# refused post is worse than a clipped one); the body is cut with a pointer
-# to the file that holds the whole of it.
-#   post_channel <subject> <body-file> [<full-text-path-for-the-note>]
-post_channel() {
-  local subject=$1 body_file=$2 full=${3:-$2} body note
-  (( ${#subject} > CHANNEL_MAX_SUBJECT )) && subject="${subject[1,$((CHANNEL_MAX_SUBJECT - 1))]}…"
-  body=$(<"$body_file")
-  if (( ${#body} > CHANNEL_MAX_BODY )); then
-    note=$'\n\n[truncated for the channel — the full text is '"$full"']'
-    body="${body[1,$((CHANNEL_MAX_BODY - ${#note} - 1))]}$note"
-  fi
-  print -r -- "$body" | "$PYTHON" tools/team-channel.py post --from reviewer --to claude \
-    --subject "$subject" --body - >> "$STATE/nightly.log" 2>&1
+# Publish the night's outcome as FILES (replaces the team-channel post,
+# 2026-10-02). Nothing is truncated — a file has no size limit to dodge.
+#   $STATE/<YYYY-MM-DD>/summary.md  "# <headline>" + the body file
+#   $STATE/latest.json              {date, at, status, headline, summary, key=value...}
+# latest.json is replaced atomically (temp + rename) so the morning hook
+# never reads half a file. Integer-looking values are stored as numbers.
+#   publish_summary <status> <headline> <body-file> [key=value ...]
+publish_summary() {
+  local run_status=$1 headline=$2 body_file=$3; shift 3
+  local day_dir="$STATE/$(date +%Y-%m-%d)"
+  mkdir -p "$day_dir"
+  { print -r -- "# $headline"; print; cat "$body_file"; } > "$day_dir/summary.md"
+  "$PYTHON" - "$STATE/latest.json" "$run_status" "$headline" "$day_dir/summary.md" "$@" \
+    >> "$STATE/nightly.log" 2>&1 <<'PY'
+import datetime, json, os, re, sys, tempfile
+path, status, headline, summary, *pairs = sys.argv[1:]
+now = datetime.datetime.now().astimezone()
+row = {"date": now.date().isoformat(), "at": now.isoformat(timespec="seconds"),
+       "status": status, "headline": headline, "summary": summary}
+for pair in pairs:
+    key, _, value = pair.partition("=")
+    row[key] = int(value) if re.fullmatch(r"-?\d+", value) else value
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".latest.", suffix=".tmp")
+with os.fdopen(fd, "w") as fh:
+    json.dump(row, fh, indent=2)
+    fh.write("\n")
+os.replace(tmp, path)
+PY
 }
 cd "$REPO" || exit 1
 
@@ -127,19 +152,23 @@ if [[ $count -eq 0 && -z $retry ]]; then
   # A SECOND quiet night in a row is not routine — the first time this
   # happened (2026-09-06/07) it meant the reviewer had gone blind on a ref it
   # should not have been following, and it said so in one line nobody reads.
-  # Silence that repeats gets escalated to the channel.
+  # Silence that repeats gets its own headline in the summary.
   noop=$(( $(cat "$quiet_file" 2>/dev/null || echo 0) + 1 ))
   echo "$noop" > "$quiet_file"
   echo "$stamp nothing new ($range) — $noop consecutive" >> "$STATE/nightly.log"
   echo "$head" > "$STATE/last_sha"
+  quiet_body="$STATE/$stamp.quiet.md"
   if [[ $noop -ge 2 ]]; then
-    "$PYTHON" tools/team-channel.py post --from reviewer --to claude \
-      --subject "nightly review: $noop quiet nights — is main moving?" \
-      --body "The nightly reviewer has found nothing to review for $noop consecutive nights (range $range, head $head).
+    quiet_headline="nightly review: $noop quiet nights — is main moving?"
+    print -r -- "The nightly reviewer has found nothing to review for $noop consecutive nights (range $range, head $head).
 
-That is either a genuinely quiet period or the reviewer is watching the wrong thing. It follows LOCAL main; if commits are landing on a branch that never merges to main, they are not being reviewed. Worth one look before assuming all is well." \
-      >> "$STATE/nightly.log" 2>&1
+That is either a genuinely quiet period or the reviewer is watching the wrong thing. It follows LOCAL main; if commits are landing on a branch that never merges to main, they are not being reviewed. Worth one look before assuming all is well." > "$quiet_body"
+  else
+    quiet_headline="nightly review: nothing new"
+    print -r -- "Nothing new on local main since the last run (range $range, head $head)." > "$quiet_body"
   fi
+  publish_summary quiet "$quiet_headline" "$quiet_body" \
+    reviewed=0 flagged=0 unreviewed=0 abandoned=0 quietNights=$noop "range=$range"
   exit 0
 fi
 echo 0 > "$quiet_file"
@@ -154,7 +183,7 @@ echo 0 > "$quiet_file"
 #
 # So: ask /api/tags once; if silent, wait REVIEW_PREFLIGHT_RETRY_SECONDS and
 # ask again. Still silent -> say "asleep" in ONE line (nightly.log + the
-# channel), advance NOTHING (last_sha and the retry queue are untouched, so
+# summary), advance NOTHING (last_sha and the retry queue are untouched, so
 # the next run picks up the same range) and exit 1. A host that answers but
 # lacks REVIEW_MODEL fails the same way with its own reason.
 #
@@ -217,7 +246,8 @@ if [[ -n $skip_reason ]]; then
     echo
     echo "$skip_advice"
   } > "$skip_body"
-  post_channel "nightly review: SKIPPED — $skip_short" "$skip_body"
+  publish_summary skipped "nightly review: SKIPPED — $skip_short" "$skip_body" \
+    reviewed=0 flagged=0 "unreviewed=$pending" abandoned=0 "range=$range" "reason=$skip_short"
   exit 1
 fi
 
@@ -319,12 +349,14 @@ fi
 } > "$out.digest.md"
 echo "$stamp reviewed $reviewed ($range): flagged $flagged errors $errors${abandoned:+ abandoned$abandoned}" >> "$STATE/nightly.log"
 
-# COUNTS IN THE SUBJECT, SHAS IN THE BODY (2026-09-25). The subject used to
-# end ", abandoned <every sha>"; the 09/25 run abandoned 46 and the channel
-# refused the post (MAX_SUBJECT 160), so no digest arrived. The digest body
-# already lists every abandoned SHA under "ABANDONED after N attempts".
-subject="nightly review: $reviewed commits, $flagged flagged"
-[[ $errors -gt 0 ]] && subject="$subject, $errors UNREVIEWED"
+# COUNTS IN THE HEADLINE, SHAS IN THE BODY (2026-09-25). The headline used
+# to end ", abandoned <every sha>"; the 09/25 run abandoned 46 and the line
+# ran past 160 characters. The digest body already lists every abandoned SHA
+# under "ABANDONED after N attempts".
+headline="nightly review: $reviewed commits, $flagged flagged"
+[[ $errors -gt 0 ]] && headline="$headline, $errors UNREVIEWED"
 abandoned_n=${#${(z)abandoned}}
-[[ $abandoned_n -gt 0 ]] && subject="$subject, $abandoned_n abandoned"
-post_channel "$subject" "$out.digest.md"
+[[ $abandoned_n -gt 0 ]] && headline="$headline, $abandoned_n abandoned"
+publish_summary reviewed "$headline" "$out.digest.md" \
+  "reviewed=$reviewed" "flagged=$flagged" "unreviewed=$errors" "abandoned=$abandoned_n" \
+  "range=$range" "digest=$out.digest.md" "rawVerdicts=$out" "exit=$rc"

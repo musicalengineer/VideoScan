@@ -67,3 +67,19 @@ def test_the_lane_never_raises_and_only_writes_voice_keys(tmp_path, monkeypatch)
     row = json.loads(out.read_text())
     assert row["hallie_voice_status"] == "incomplete"
     assert all(k.startswith("hallie_voice_") for k in row)
+
+
+def test_alert_writes_the_morning_record_not_a_channel_post(tmp_path):
+    """Team channel retired 2026-10-02: the lane's alert is a file the session
+    morning hook reads. Written every night; `alert` true only when wrong."""
+    path = tmp_path / "hallie-voice" / "latest.json"
+    lane.alert({"hallie_voice_status": "regressed", "hallie_voice_reason": "similarity 0.41",
+                "hallie_voice_fallbacks": 2}, path)
+    record = json.loads(path.read_text())
+    assert record["alert"] is True and record["status"] == "regressed"
+    assert record["headline"] == "Hallie's voice: regressed" and "similarity 0.41" in record["detail"]
+    assert len(record["date"]) == 10
+    lane.alert({"hallie_voice_status": "ok", "hallie_voice_fallbacks": 0}, path)
+    assert json.loads(path.read_text())["alert"] is False
+    assert [p.name for p in path.parent.iterdir()] == ["latest.json"], "temp file left behind"
+    assert "team-channel" not in (ROOT / "scripts" / "nightly_hallie_voice.py").read_text()

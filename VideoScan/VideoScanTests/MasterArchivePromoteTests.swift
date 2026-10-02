@@ -509,7 +509,11 @@ struct MasterArchivePromoteSensorTests {
     /// Excluding it makes the sensor STRONGER: what remains is the tree this
     /// app actually owns, which is the only part an isolation violation could
     /// show up in.
-    private static let foreignAppSupportSubtrees = ["team-channel/"]
+    ///
+    /// `review-cycles/` is the codex review state (tools/codex_review.py,
+    /// adversarial nightly). It sat inside `team-channel/` until the channel
+    /// was retired 2026-10-02, so it was excluded already; it keeps that.
+    private static let foreignAppSupportSubtrees = ["team-channel/", "review-cycles/"]
 
     private static func appSupportSnapshot() -> [String: String] {
         let dir = (CatalogStore.shared.fileLocation as NSString).deletingLastPathComponent

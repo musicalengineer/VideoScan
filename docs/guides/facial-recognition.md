@@ -150,7 +150,7 @@ Unified Review preserves two phases and two different answer schemas:
 **Private data:** family media, labels with private paths, and detailed reports stay local and ignored. The
 stricter C2 biometric rule applies to raw embedding dumps, reference audit paths/filenames, and per-face
 provenance: local `/private/tmp` scratch only, consumed in place; never git, issues/PRs, public or shared
-reports, app logs, or team-channel messages. Publish aggregate statistics and configuration hashes, not
+reports, or app logs. Publish aggregate statistics and configuration hashes, not
 biometric vectors or identifying path lists. Machine-consumed datasets, model artifacts, and JSONL metric
 streams are separate assets; consolidating Markdown does not authorize changing or retiring them.
 
