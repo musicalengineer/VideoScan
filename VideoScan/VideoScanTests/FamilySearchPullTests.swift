@@ -4,7 +4,7 @@
 // The load-bearing test in this file is `noOptionCombinationEverEmitsAPasswordFlag`.
 // The entire design rests on VideoScan never handling the user's FamilySearch
 // password: getmyancestors POSTs credentials directly rather than using OAuth,
-// and docs/familysearch_api_notes.md forbids VideoScan from collecting or
+// and docs/research/familysearch_api_notes.md forbids VideoScan from collecting or
 // proxying them. `-p`, `--save-settings`, and `--show-password` are the three
 // flags that would break that, so the option space is swept exhaustively
 // rather than spot-checked.

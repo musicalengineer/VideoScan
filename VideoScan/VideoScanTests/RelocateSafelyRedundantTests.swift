@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - RelocateSafelyRedundantTests
 //
-// End-to-end exercises for the safelyRedundant rule (docs/relocate_volume_plan.md
+// End-to-end exercises for the safelyRedundant rule (docs/design/relocate_volume_plan.md
 // §1A addendum). Covers the mutation, audit-trail format, and snapshot
 // rollback path. Hermetic — uses /tmp source + dest + catalog dirs.
 

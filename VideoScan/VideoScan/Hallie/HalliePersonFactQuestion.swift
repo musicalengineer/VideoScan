@@ -87,7 +87,7 @@ enum HalliePersonFactQuestion {
         "that", "these", "those", "some", "any", "all", "every", "each",
     ]
 
-    /// TREE MODE ONLY (docs/hallie_two_mode_design.md §3.4 C): the
+    /// TREE MODE ONLY (docs/design/hallie_two_mode_design.md §3.4 C): the
     /// biography opener matched, the remainder reads as a proper name —
     /// one to five capitalisable words, no article or possessive lead, no
     /// kin word, media noun or pronoun — and the identity oracle knows no

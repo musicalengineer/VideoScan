@@ -1,6 +1,6 @@
 // ArchiveVolumeProtectionCodex1642Tests.swift
 //
-// codex #1642 (review of main 7e0503a3, docs/codex-review-1633-1638-2026-09-23.md):
+// codex #1642 (review of main 7e0503a3, docs/reviews/codex/codex-review-1633-1638-2026-09-23.md):
 //
 //   D3 / P1 — a Master Archive designation whose path is not LITERALLY
 //   under /Volumes was classified as a boot-disk FOLDER, which switched

@@ -13,7 +13,7 @@ import Foundation
 //   2. propagation: a dated sibling → every undated same-content sibling
 //   3. folder-year: "/1991/" → 0.30 placeholder when nothing else spoke
 //
-// Five dimensions (docs/testing_retrospective_2026_07_05.md):
+// Five dimensions (docs/practices/testing_retrospective_2026_07_05.md):
 //   logic      every rule, every never-overwrite case
 //   scale      100k records / 5k groups inside a budget
 //   isolation  scratch CatalogStore — the real App Support is never written

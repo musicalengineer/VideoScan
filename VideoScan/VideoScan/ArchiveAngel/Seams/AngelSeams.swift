@@ -1,6 +1,6 @@
 // AngelSeams.swift
 // What the Archive Angel needs from the rest of the app, as protocols
-// (docs/archive_angel_consolidation_plan.md, "Target architecture"). The
+// (docs/design/archive_angel_consolidation_plan.md, "Target architecture"). The
 // façade (Facade/ArchiveAngel.swift) is composed from these; the app's
 // conformances are ALL in Seams/AppConformances.swift, so the Angel's whole
 // outbound surface can be read in two files.
@@ -49,7 +49,7 @@ protocol AngelCatalog: AnyObject {
     var lastUserInteractionAt: CFAbsoluteTime? { get }
     /// The person pressed something (an Angel row or strip button).
     func noteUserInteraction()
-    /// Keep footage current (docs/archive_angel_wise_design.md §5): how
+    /// Keep footage current (docs/design/archive_angel_wise_design.md §5): how
     /// many active records carry a footage group, and the newest run
     /// stamp among them. O(n), once per launch and rarely after.
     func footageCurrency() -> (grouped: Int, newestScan: Date?)
@@ -112,7 +112,7 @@ protocol AngelJobRunner: AnyObject {
     func startArchiveAngelByUser(count: Int, recordIDs: [UUID]?, makeLossless: Bool,
                                  model: VideoScanModel, bufferRoot: URL,
                                  policy: AngelRecommendationPolicy) -> ArchiveAngelJob
-    /// Angel Checks (docs/archive_angel_wise_design.md §4): the ordinary
+    /// Angel Checks (docs/design/archive_angel_wise_design.md §4): the ordinary
     /// Verify Audio job for one record, started on the APP's initiative —
     /// no user origin, so the MFO window stays where it is. nil = refused
     /// (a verify job for this record is already running).

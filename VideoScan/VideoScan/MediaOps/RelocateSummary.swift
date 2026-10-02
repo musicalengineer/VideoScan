@@ -4,7 +4,7 @@ import Foundation
 //
 // Payload for the post-Apply summary sheet. Captures everything the user
 // needs to feel "convinced the media is properly accounted for" before
-// the §1B Retire prompt can fire. See docs/relocate_volume_plan.md.
+// the §1B Retire prompt can fire. See docs/design/relocate_volume_plan.md.
 //
 // Two ways this summary is produced:
 //   1. Real run: counts come from `dashboard.relocate*` after every

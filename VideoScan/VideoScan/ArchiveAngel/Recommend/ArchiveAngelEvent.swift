@@ -1,6 +1,6 @@
 // ArchiveAngelEvent.swift
-// Rules v13 (2026-09-26, docs/footage_groups_gap_plan_2026-09-26.md Stage 2,
-// as bounded by docs/codex-review-angel-coverage-2026-09-26.md D2 / D3):
+// Rules v13 (2026-09-26, docs/design/footage_groups_gap_plan_2026-09-26.md Stage 2,
+// as bounded by docs/reviews/codex/codex-review-angel-coverage-2026-09-26.md D2 / D3):
 // the DAY a file records, and the one O(n) coverage pre-pass.
 //
 // Rick: "If AA recommends 5 different versions of the same Thanksgiving

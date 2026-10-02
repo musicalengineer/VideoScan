@@ -18,7 +18,7 @@
 // point date (what every existing reader sorts and files by), a year span
 // when only the year is known, a 0–1 confidence and the reason.
 //
-// Criteria and weights (docs/date_inference_catchup_and_propagation.md
+// Criteria and weights (docs/guides/date_inference_catchup_and_propagation.md
 // §GH #201 lists the same table):
 //   on-screen burn-in date   0.95 ≥3 frames · 0.85 2 frames · 0.75 1 frame   (day)
 //   camera stamp             0.90 — a MODEL or an action-camera maker         (day)

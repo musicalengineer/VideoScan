@@ -1,7 +1,7 @@
 // GauntletFixturePlan.swift
 //
 // PURE ffmpeg-invocation planning for the Gauntlet UI-regression suite
-// (docs/gauntlet.md). No I/O, no Process — just argument construction and
+// (docs/guides/gauntlet.md). No I/O, no Process — just argument construction and
 // the sampling arithmetic the flows rely on, so every fixture the Gauntlet
 // synthesizes is unit-testable here (`swift test` in VideoScanCore) while
 // the UI-test runner (VideoScanUITests/GauntletFixtures.swift) does the

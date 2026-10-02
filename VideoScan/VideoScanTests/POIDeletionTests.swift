@@ -11,7 +11,7 @@ import Foundation
 // M5 left him with 3 dud POIs and no in-app way to clean them out
 // without hand-editing Application Support.
 //
-// 2026-09-12: folders are keyed by uuid (docs/people_uuid_folders_design.md).
+// 2026-09-12: folders are keyed by uuid (docs/design/people_uuid_folders_design.md).
 // The SOURCE is `storeDir/<UUID>/`; the trash folder keeps the human name
 // so Rick can find it by eye.
 //

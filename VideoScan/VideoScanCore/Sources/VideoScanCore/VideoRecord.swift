@@ -149,7 +149,7 @@ public class VideoRecord: Identifiable, Decodable {
     /// Provenance: where this record's file lived before the most recent
     /// Relocate. Set once at first migration, never overwritten — so even
     /// after multiple relocates, this still points at the *original* home.
-    /// nil ⇒ never relocated. See docs/relocate_volume_plan.md §1.
+    /// nil ⇒ never relocated. See docs/design/relocate_volume_plan.md §1.
     public var originalFullPath: String?
 
     /// Friendly volume name at original location (the value of

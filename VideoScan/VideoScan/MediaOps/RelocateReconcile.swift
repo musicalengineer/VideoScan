@@ -47,7 +47,7 @@ import Foundation
 //
 // Pure & injectable: the file lists (with sizes) are passed in, and
 // the hash function is injectable. The real caller wraps an FS walk
-// and FileHasher.partialMD5. See docs/relocate_volume_plan.md §1A.
+// and FileHasher.partialMD5. See docs/design/relocate_volume_plan.md §1A.
 //
 // ── Sendable boundary (Seam D, VideoRecord-Sendable restructure,
 // 2026-06-29) ───────────────────────────────────────────────────────

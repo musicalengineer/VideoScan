@@ -1,6 +1,6 @@
 // KinshipValidation.swift
 // Save-time sanity checks for one candidate relationship row (design:
-// docs/kinship_inference_design.md §1 + amendment 8 after codex review,
+// docs/design/kinship_inference_design.md §1 + amendment 8 after codex review,
 // 2026-08-29). Deterministic; every rule is one helper with a unit test.
 //
 // Errors block the save and say why; warnings are shown once and the save

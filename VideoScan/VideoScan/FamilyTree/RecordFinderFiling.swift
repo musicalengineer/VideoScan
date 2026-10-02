@@ -1,7 +1,7 @@
 // RecordFinderFiling.swift
 // GH #230 Phase A — the "I found a record" bring-back.
 //
-// The workflow in one sentence (Rick's words, docs/irish_records_design):
+// The workflow in one sentence (Rick's words, docs/research/irish_records_design_2026-09-30.md):
 // "file the record I downloaded against this person, and once I've read it,
 // tell Hallie what it says."
 //

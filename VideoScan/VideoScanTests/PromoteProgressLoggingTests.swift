@@ -91,7 +91,7 @@ struct PromoteBeginLineSensorTests {
 
     /// Promote is irreversible, so its per-file outcome has to survive into
     /// the persisted log — `.info` is not persisted by default
-    /// (docs/findings_2026_09_14_overnight.md, row 14).
+    /// (docs/ops/findings_2026_09_14_overnight.md, row 14).
     @Test func theOsLogLinesArePersistedLevels() throws {
         let src = try Self.stepsSource()
         #expect(src.contains(#"promoteLog.notice("promote BEGIN"#))

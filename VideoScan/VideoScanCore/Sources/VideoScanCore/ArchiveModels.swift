@@ -53,7 +53,7 @@ public enum ArchiveStage: String, Codable, CaseIterable, Comparable, Sendable {
     case archived        = "Archived"
     // Out-of-band terminal states introduced by Relocate. Kept at the end
     // of the case list so Comparable ordering for the happy-path cases is
-    // unchanged. See docs/relocate_volume_plan.md §1, §1A.
+    // unchanged. See docs/design/relocate_volume_plan.md §1, §1A.
     case manuallyDeleted = "Manually Deleted"
     case salvageFailed   = "Salvage Failed"
 

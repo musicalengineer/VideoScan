@@ -3464,7 +3464,7 @@
       "category": "live",
       "text": "how old was dad breen when he passed?",
       "expect": "kinship",
-      "notes": "Rick 2026-09-21 13:52, tree mode. Came back as a biography of Matthew Rice (b. 1629). Dad Breen = People-tab alias of Richard Breen b. 1929-02-21 d. 2008-06-25 → 79. Wrong-person class; docs/hallie_live_failures.md 2026-09-21."
+      "notes": "Rick 2026-09-21 13:52, tree mode. Came back as a biography of Matthew Rice (b. 1629). Dad Breen = People-tab alias of Richard Breen b. 1929-02-21 d. 2008-06-25 → 79. Wrong-person class; docs/guides/hallie_live_failures.md 2026-09-21."
     },
     {
       "id": "lv260921-002",
@@ -6186,7 +6186,7 @@
       "expectedRoutes": [
         "graph"
       ],
-      "notes": "Rick 2026-09-26 16:46 ET. Live: the model's tree SUMMARY ('39249 people, birth years from 780 to 1959 … tell me whose tree you want') — not wrong, but not the person either. 'earliest ancestor' carries no born/birth word, so the superlative reader stays silent and the translator's familyTree summary answers. NOT fixed in fix/hallie-superlative-scope (one bug per dispatch); flagged in docs/hallie_live_failures.md 2026-09-26 as a follow-up candidate ('earliest/first ancestor' → earliestBorn over the owner's ancestors). Expectation unconfirmed. 2026-10-01: answered by the ancestor-line route (#200 item 1) — earliest birth over Rick's and Donna's lines with coverage; expectation set with the change, confirm live.",
+      "notes": "Rick 2026-09-26 16:46 ET. Live: the model's tree SUMMARY ('39249 people, birth years from 780 to 1959 … tell me whose tree you want') — not wrong, but not the person either. 'earliest ancestor' carries no born/birth word, so the superlative reader stays silent and the translator's familyTree summary answers. NOT fixed in fix/hallie-superlative-scope (one bug per dispatch); flagged in docs/guides/hallie_live_failures.md 2026-09-26 as a follow-up candidate ('earliest/first ancestor' → earliestBorn over the owner's ancestors). Expectation unconfirmed. 2026-10-01: answered by the ancestor-line route (#200 item 1) — earliest birth over Rick's and Donna's lines with coverage; expectation set with the change, confirm live.",
       "expectedOutcome": "answered",
       "mustContain": [
         "The earliest recorded birth among"

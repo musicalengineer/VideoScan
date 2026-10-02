@@ -1,0 +1,160 @@
+# Find Similar Footage — Rick's decisions (2026-09-23) → Phase 1 spec
+
+**Decided (Rick, 2026-09-23):**
+- **Phase 1 = "Find Similar Footage"** — SAME footage (copies, re-encodes, transcodes, exports, trims of one recording), not "similar content". A **Media File Operations verb** that **walks the catalog and records in the metadata** which files are probably the same footage. "It doesn't have to be 100% accurate… something to allow me to review media more quickly and stop seeing the same old videos over and over", and so the Angel doesn't archive too many copies.
+- **Part 2 = "Deep Analyze"** — improving metadata for search (the "search 100× better" north star) and curation (promote / delete), using state-of-the-art models, running in the background with **Analyze**. Semantic "similar content" belongs there, not in Find Similar Footage. Later.
+
+**Phase 1 spec (metadata only; no audio/visual fingerprints yet):**
+1. **Evidence (T0 + T1 of v1), each recorded with its reason:** same full content hash (identical); derivedFrom/derivationKind lineage; combinedFromPairID/pairGroupID; FCP `com.apple.proapps.mediaIdentifier` equality and Original Media ↔ Transcoded Media structure; duration within ±2 frames at the record's own frame rate AND a normalized-stem match (strip `.vs.*`, `_balanced/_trimmed/_cleaned/_converted`, `copy N`, `_02`-style collisions, date prefixes, case/punctuation). Duration alone never groups. Sampled/partial hashes only NOMINATE; only full hashes say Identical (codex).
+2. **Footage groups:** connected components over the evidence edges, with a confidence (Identical / Likely / Possible) and the edge reasons kept. Additive catalog fields (e.g. footageGroupID, footageConfidence, footageEvidence) — nothing removed or renamed.
+3. **Originality inside a group:** the v1 scorer (camera make/model, capture date, camera codec/name pattern, not in Transcoded Media, no transcoder encoder tag…) picks the likely original and labels the rest (re-encode / transcode / export / copy).
+4. **The MFO verb:** "Find Similar Footage" — whole catalog (or a selection/volume), off-main, honest progress, pause/stop, logged, reads catalog metadata only (no media bytes; one extra ffprobe tag captured by the existing embedded-date refresh for mediaIdentifier where missing). Re-runnable; incremental.
+5. **Using it:**
+   - right-click **Find Similar Footage** on one file → a read-only sheet: the group, the likely original, the evidence per member, playable side by side;
+   - Catalog: **"one per footage group"** view/filter + a group badge ("3 copies of the same footage") so Rick stops seeing repeats;
+   - Archive Angel: one recommendation per footage group (the likely original), companions noted.
+6. **Human decisions** ("same footage" / "not the same") persist on the records + Media Ledger, never in a cache, and override the machine forever. No date is written by Phase 1 (dates come later with Undo + provenance).
+7. **Later:** audio/visual fingerprints (after the labelled spike) add edges to the same groups; semantic similarity → Deep Analyze.
+
+---
+
+# Find Original / Find Related — design v2 (2026-09-23, after codex's independent review)
+
+**Status: DRAFT for Rick.** v1 (below, unchanged) proposed evidence tiers → an overnight fingerprint index → learned weights. Codex's review (docs/reviews/codex/codex-review-1633-1638-2026-09-23.md) found real gaps; Claude agrees with every point. v2 changes the plan, not the ambition.
+
+## What changes in v2
+
+1. **Two questions, two data models, one sheet.** *Find Original* is **provenance** ("where did this file come from, and when was it really shot?"). *Find Similar* is **semantic retrieval** ("what else looks/sounds like this?"). They can share a sheet, but they never share conclusions: **similarity never creates lineage and never moves a date.**
+2. **Identity is proven, not sampled.** A sampled/partial hash (`p:` keys, partialMD5) only *nominates* a candidate; only a full-content hash (`h:`) or a byte comparison may say **Identical**. v2 defines how a `p:` match is promoted to `h:` and what happens on conflict (the verified answer wins; the nomination is logged as wrong).
+3. **Typed relationships with ranges.** Keep the app's existing operation parents (Trim, Balance, Transcode — including trim offsets) exactly. Discovered ancestry gets its own types (`reEncodeOf`, `containsSegmentOf(range)`, `sharesAudioWith`, `sameEventAs`) and a compilation can have **many sources with many ranges**.
+4. **Containment doesn't give direction, and a compilation has no single date.** "A's audio is inside B" doesn't say which came first; a compilation of 1994 + 1997 clips can't take one source's capture date.
+5. **Matching audio = shared audio.** A reused soundtrack or a music bed proves nothing about the event.
+6. **Provenance and retraction ship in Phase 1** — every date/relationship the feature writes carries who/what/when/why and can be undone — not in a later learning phase.
+7. **"Mounted" ≠ "awake".** The indexing policy must state whether it may wake a mounted-but-sleeping drive (v1 only said "mounted volumes only").
+8. **Measure before indexing 9.6 TB.** A small **labelled** spike comes first (below). Learned weights wait until labels distinguish identity / derivation / shared event / semantic similarity and a held-out evaluation supports a change.
+
+## Revised phases
+
+- **Phase 1 — metadata provenance, human-decided (≈1 week).** T0 lineage + T1 duration/name candidates, explicit reasons, side-by-side inspection, and **durable human decisions** (This is the original / Not related / Use its date) stored OUTSIDE any disposable cache, with provenance + retraction from day one. The guitar case reaches the 2025-02-02 export here.
+- **Phase 2 — labelled retrieval spike (≈1–2 days, no big index).** A small hand-labelled corpus drawn from the real archive: re-encodes, trims, long uninterrupted takes, compilations, speech/room audio, reused music, same scene/different camera. Measure recall, false matches, alignment error, read/decode time, index memory for: (a) the existing perceptual baseline (PerceptualHash / feature prints), (b) Chromaprint (near-identical audio — its stated target), (c) ShazamKit (Apple, local custom catalog), (d) accelerated embeddings on the ANE/MLX for *semantic* candidates only. Pick the dependency from numbers, not from v1's guesses.
+- **Phase 3 — index what the spike justified**, overnight, one reader per spindle, explicit wake policy.
+- **Phase 4 — learned weights**, only with labelled identity/derivation/event/similarity data and a held-out test.
+
+## Decisions for Rick (v2)
+1. Accept the split: provenance (Find Original) vs similarity (Find Similar) — similarity never writes a date? *(recommend yes)*
+2. Phase 2 spike before any 9.6 TB index? *(recommend yes)*
+3. May the overnight index wake a mounted-but-sleeping drive? *(recommend: no by default; a per-drive opt-in)*
+4. The "Use its date" write is **your** decision with provenance and an Undo? *(recommend yes — unchanged from v1)*
+5. Where do human decisions live — the catalog (per record) plus the Media Ledger (history)? *(recommend yes; never in fingerprints.sqlite)*
+
+---
+
+# Find Original / Find Related — design (DRAFT for Rick, 2026-09-22)
+
+*Read-only study of the codebase. Numbers marked "verified" were read from the live catalog/files on 2026-09-22; "estimate" means to be measured.*
+
+## 0. The problem, on the guitar case
+
+Right-click `RickGuitarGravity_etc_2024.mov` (LaCieWorkspace, fcpbundle `Transcoded Media`) → you want: where did this come from, what else came from the same source, and when was it really shot.
+
+What the catalog **already knows** (verified):
+
+| Record | Evidence we already hold |
+|---|---|
+| `RicksGuitars2024.mov` on /Volumes/Projects | **Same `contentHash`** (`v1:d4f1d9de…`) as the LaCie file — byte-identical, different name |
+| `RicksGuitars2024.mp4` on CrucialX9 + Cheesegrater archive | duration 951.784 s vs 951.751 s → **1 frame apart at 29.97**; stem = the Projects twin's name; H.264, no make/model, embedded 2025-02-02. The CrucialX9 copy has **no contentHash yet** |
+| LaCie ProRes | `com.apple.proapps.mediaIdentifier=E2D2E261…`, `encoder=Apple ProRes 422`; GuitarJams event has **no `Original Media`** (FCP imported the source by reference) |
+
+Chain: *2024 camera clips (not found)* → `RicksGuitars2024.mp4` (edit export, 2025-02-02) → FCP ProRes transcode (2026-03-11), existing as 2 byte-identical copies with 2 names. Metadata alone (Phase 1) reaches the mp4; finding the camera clips *inside* a 15-min compilation needs content fingerprints (Phase 2/3).
+
+**On "train itself overnight":** nothing can be learned until every file has a fingerprint, so the overnight compute is **indexing** first. Learning is small and comes later: your Confirm / Not related clicks re-weight how much each evidence tier counts. No neural training.
+
+**Scale (verified):** 13,881 records; 7,356 active video > 5 s; 652 h / 9.6 TB across 8 volumes. 5,389 have no embedded creation date; 3,311 have no date of any kind. 810 groups share a duration within 0.1 s, 604 of them with *different* bytes — raw material for Find Related (and coincidences).
+
+## 1. Evidence tiers (strongest first)
+
+| Tier | Catches | Cost / file | Failure modes |
+|---|---|---|---|
+| **T0 Known lineage** | `contentHash` / `partialMD5+size` identity (same keys `OnlineCopyFinder` uses); `derivedFrom`+`derivationKind` (trim, balanceAudio, cleanup); `combinedFromPairID`, `pairGroupID`, `materialPackageUMID`; FCP structure `<event>/Transcoded Media/High Quality Media/X.mov` ↔ `<event>/Original Media/X.*` (verified on `12-27-23/MA5A3201.mov`: same stem, same duration to the µs, transcode stamped 36 s after original); `com.apple.proapps.mediaIdentifier` equality links **transcodes to each other** across copied libraries (the original doesn't carry it) | 0 — one new ffprobe tag captured by the existing embedded-date refresh | FCP "leave in place" imports (the guitar case) have no Original Media, so T0 stops at the transcode. `duplicateGroupID` is heuristic and **must not** count as identity (the 2026-09-12 date-propagation lesson) |
+| **T1 Duration + name** | Exports, transcodes, renamed copies. Duration within ±2 frames at the record's own frame rate (fallback 0.1 s); stem normalized with the existing `ArchiveAngelNaming.derivativeBaseStem` (`.vs.*`, `_trimmed`, `_balanced`, `_converted`, `copy 2`…), extended to strip `_02`, `_combined`, date tokens, case/punctuation | 0 I/O; one in-memory index, < 50 ms (estimate) | Trims/compilations change duration → miss. Unrelated equal-length clips → collisions, so **duration alone never scores above "possible"** |
+| **T2 Audio fingerprint** | Same recording through any re-encode/gain/container change; **sub-clip alignment** ("this clip is 03:12–04:40 of that compilation") | Bytes-bound: whole container read, ~150–200 MB/s on spinning disks (estimate); CPU negligible | Silent/muted footage; music bed laid over camera audio; heavy denoise; **two cameras at one event share room audio** → audio-only match means "same event", not "same footage" |
+| **T3 Visual fingerprint** | Trims, compilations, re-crops, transcodes without usable audio. Shot cuts via ffmpeg `scdet` (already in the installed ffmpeg); per shot a 64-bit dHash (reuse `PerceptualHash.swift`, already on main) + Vision `VNGenerateImageFeaturePrintRequest` vector (ANE); shot sequences aligned Smith-Waterman style. The installed ffmpeg also has the MPEG-7 `signature` filter — a zero-dependency near-duplicate detector worth a spike | Keyframe-only decode for long-GOP; ~2 fps for all-intra (ProRes/DV/FFV1); ~1–3 min compute per hour of footage on M4 Max (estimate) | Letterbox vs crop defeats dHash (documented in `PerceptualHash.swift`); black leaders/title cards (existing 5% trim rule helps); static tripod shots look alike |
+| **T4 People/faces** | Tiebreaker only | Reuses ArcFace / Person Finder results | "Man playing guitar who looks like Rick" matches **every** guitar video of Rick — face identity says who, not which shot. May rank ties among T2/T3 candidates; never nominates one |
+
+**Relationship verdicts shown:** Identical (T0 bytes) · Same footage, re-encoded (T1+T3 or T2+T3 full length) · Contained in / Contains (T2/T3 partial alignment) · Same event, other camera (T2 without T3) · Similar (T4 only, hidden by default).
+
+## 2. Which one is the original?
+
+A versioned, reason-printing scorer in the style of `DuplicateDetector.keeperScore`:
+
+- **For:** `originMake`/`originModel` present; `com.apple.quicktime.creationdate` present; camera-native codec/container (DV, AVCHD `.MTS`, iPhone HEVC, GoPro/DJI handler); camera filename pattern (`MA5A####`, `MVI_`, `IMG_`, `GX01…`); earliest *sanity-filtered* embedded date; being **contained in** a longer file (camera clips are the parts, compilations the whole); highest resolution/bitrate **within one codec family only** (a ProRes transcode always wins on raw bitrate).
+- **Against:** transcoder `originEncoder` (`Apple ProRes 422` from an FCP path, HandBrake, `Lavf…`); path contains `Transcoded Media`/`Proxy Media`/`Render Files`; `mediaIdentifier` tag present; non-nil `derivativeBaseStem`; `derivedFrom` set; embedded date equal to a known transcode/export time.
+
+**Output:** a chain (original → export → transcode) with each link labelled, plus **the capture date to propagate**, taken from the earliest node with camera evidence. If none has camera evidence, the sheet says so. For the guitar case: *"Original not in catalog. Best available: RicksGuitars2024.mp4 — export 2025-02-02, no camera tags; its date is an upper bound, not a shooting date. Filename suggests 2024 (year precision)."*
+
+## 3. Fingerprint index
+
+- **Storage:** `~/Library/Application Support/VideoScan/fingerprints.sqlite`, following the `MetadataCache` / `PersonFinderCache` pattern (SQLite3 C API, `NSLock`, per-process scratch DB under test hosts). Rows keyed by **content key** (`h:v1:…`, else `p:<md5>:<size>`, the existing `MediaLedgerEvent.contentKey`), so every copy shares one fingerprint and **offline files still match**. Rows with an empty key are content-hashed first via the existing backfill; nothing is keyed on path alone.
+- **Tables:** `files` (contentKey, last path, volume, size, mtime, duration, per-tier algorithm version, indexedAt, error); `audio_fp` (blob + algorithm version); `shots` (start, duration, dHash, float16 feature print). The query-time inverted index is built in memory from the blobs on first use (~1–2 s, estimate) and cached, not stored.
+- **Sizes (estimate):** audio ~115 KB/h → ~75 MB for 652 h; visual ~1.5 KB/shot at ~10 shots/min → ~0.9 MB/h → ~600 MB. **< 1 GB total**; disposable, always rebuildable (see `media-archive.md`).
+- **The job:** "Build Fingerprints" as a `MediaFileOperationJob` (pause/resume, MFO window). **One reader per physical disk**, never two on one spindle; disks in parallel. Mounted volumes only — **never wakes or spins up drives**; backs off when Drive Health flags a disk. Checkpoints every file into SQLite; resume skips rows at the current algorithm version. Honest progress: files and bytes per volume, measured MB/s, ETA from that rate; every file logged (Logger + job log). Runs on whichever Mac the drives are on (M4 Max now; M5 Ultra from late October); rows are content-keyed, so indexes from the M5 Pro/M1 Max merge without conflict.
+- **Priority:** (1) the 3,311 undated records + the 141 files inside FCP `Original Media`/`Transcoded Media`; (2) archive + Archive Angel candidates; (3) everything else, mounted volumes first.
+- **Throughput (estimate):** 9.6 TB at ~180 MB/s ≈ 15 disk-hours; across 8 volumes in parallel, **1–2 nights** for T2. T3 adds a second read pass plus ~11–33 compute-hours on M4 Max; a combined single pass is not v1.
+
+## 4. The verb and the sheet
+
+**Right-click → "Find Original…"** (next to the existing "Find Online Version") opens a sheet:
+
+- **Header:** the chain diagram and the "date to propagate" line with its honesty caveat.
+- **Ranked list:** thumbnail, name, volume (online/offline), codec, resolution, duration, embedded date, origin (`Canon EOS R6` / `HandBrake`); **evidence chips per tier** (`T0 identical`, `T1 Δ1 frame · stem`, `T2 audio 97% @03:12`, `T3 41/44 shots`, `T4 same people`); verdict; confidence (Certain / Likely / Possible); a "Why" popover with per-tier scores and current weights.
+- **Play side by side** (both online), synced at the aligned offset.
+- **Actions:**
+  - **This is the original** — records `derivedFrom`-style lineage with provenance.
+  - **Not related** — suppresses the pair for good.
+  - **Use its date for this file** — writes the date as *your* decision, provenance `"from original <id>, confirmed by Rick (Find Original)"`, Media Ledger `dateSet` (`by: .rick`). Offered to other chain members by checkbox, never auto-propagated (respects the 2026-09-12 rule: machine dates travel only between byte-verified copies).
+- **Learning:** each Confirm / Not related writes a ledger event (`lineageConfirmed` / `lineageRejected`) with the per-tier score vector. A nightly **logistic regression** refit over ~6 features (T0, T1 name, T1 duration, T2, T3, T4), L2-regularized, ~50 lines of Swift, no dependency. Hand-set weights until 30 answers; each weight set versioned ("weights v3 · 47 answers") and revertible. Learning only re-weights ranking; it never changes the index.
+
+## 5. Payoffs
+
+- **Transcode-date misfiling:** FCP transcodes/exports currently file under their render day; with confirmed lineage the whole family files under the original's capture date.
+- **Archive item versions:** the chain *is* the version set (original · preservation · access · editable · restored) — replaces filename guessing.
+- **Archive Angel:** real event families and a uniqueness score (the long-planned T11 in `archive_angel_curation_direction.md`), so "one Thanksgiving variant per batch" stops depending on names. Duplicate analysis gains "same footage, different encoding" — evidence can only **add**; deletion still requires `SignatureVerification` (per `media-archive.md`).
+
+## 6. Phasing and tests
+
+| Phase | Scope | Rough size |
+|---|---|---|
+| **1** | T0 (+ capture `mediaIdentifier` in `EmbeddedOriginTags`) + T1, originality scorer, sheet, date write. Instant, no index | ~1 week |
+| **2** | Audio fingerprints (T2) + Build Fingerprints job + sub-clip alignment; starts with a 1-day engine spike on the guitar case | ~1–2 weeks + nights |
+| **3** | Shot-level visual fingerprints (T3) + alignment; T4 as tiebreaker | ~2 weeks + nights |
+| **4** | Ledger events, nightly weight refit, "Why" popover | ~3 days |
+
+**Tests (5-dimension checklist):**
+1. **Logic** — table tests: stem normalizer; frame-rate-aware duration tolerance; originality reasons; chain building (ties, cycles, missing original); logistic fit on synthetic labels.
+2. **Scale** — 100k synthetic records: T1 index build < 1 s; one query < 50 ms; query against a synthetic 1,000-hour audio index < 1 s.
+3. **Media matrix** — ffmpeg `test_*` fixtures: one source rendered as mp4/h264, mov/prores, mkv/ffv1+pcm, mxf, avi/dv, plus a trimmed sub-clip, a 3-clip compilation, and a **same audio, different picture** negative. Every pair found with the right verdict; offsets within ±0.5 s; the negative says "same event", never "same footage".
+4. **Isolation** — a poisoned `fingerprints.sqlite` at the production path is never read under a test host.
+5. **Sensors** — the guitar case as a metadata-only replica pins the ranking and the "original not in catalog" message; a false-positive sensor: across 100k random-duration records, zero T1-only candidates rank above "Possible".
+
+## 7. Risks
+
+- **False positives** — same event/different camera (shared audio), tripod repeats, stock intros. *Mitigation:* verdict classes, T4 tiebreaker only, no automatic writes (every date/lineage write is your click).
+- **Compute and disk wear** — reading 9.6 TB wakes drives and seeks for hours. *Mitigation:* mounted volumes only, one reader per spindle, Drive Health back-off, overnight window, pause/resume.
+- **Privacy** — all on-device: Vision on the ANE, local SQLite, no network.
+- **New dependency** — `fpcalc` is not installed and Homebrew ffmpeg has no chromaprint muxer (both verified). Chromaprint (`brew "chromaprint"`, LGPL-2.1) would be a new external tool. *Alternative, no new dependency:* ShazamKit (`SHSignatureGenerator` + `SHCustomCatalog` works offline and reports match offsets; CLAUDE.md prefers macOS-native). *Unknown:* its behaviour on room audio and all-pairs queries.
+- **Index staleness** — rows carry an algorithm version; a changed file gets a new content key and is re-indexed.
+
+## Decisions for Rick
+
+1. **Audio engine: Chromaprint (new Homebrew dependency) or Apple ShazamKit?** *Recommend:* a 1-day spike of both on the guitar case; ship ShazamKit if its sub-clip offsets are reliable, else approve `chromaprint` in the Brewfile.
+2. **"Use its date" — your own date (`userDate`, ledger `dateSet by: rick`) or a high-confidence machine date?** *Recommend:* your date, full provenance string, offered to chain members by checkbox, never auto-propagated.
+3. **May the overnight index wake sleeping or unmounted drives?** *Recommend:* no — mounted only, one reader per disk, stop at a set morning hour.
+4. **Ship Phase 1 (metadata only, no index) before any overnight work?** *Recommend:* yes — it reaches the mp4 in the guitar case in ~1 week and gives you the sheet to judge Phases 2–3.
+5. **Learned weights: update nightly on their own, or wait for your approval?** *Recommend:* automatic once ≥ 30 answers, versioned and revertible, current weights visible in the "Why" popover.
+
+### Critical files for implementation
+- `VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift` — lineage, identity, `originMake/Model/Encoder`, `embeddedCreationDate`
+- `VideoScan/VideoScanCore/Sources/VideoScanCore/EmbeddedCreationDate.swift` — `EmbeddedOriginTags`: add `com.apple.proapps.mediaIdentifier`
+- `VideoScan/VideoScan/ArchiveAngelCandidate+Record.swift` — `ArchiveAngelNaming.derivativeBaseStem` (T1 normalizer to extend)
+- `VideoScan/VideoScan/OnlineCopyFinder.swift`, `CatalogContent+Table.swift` — pure same-content finder pattern + right-click verb
+- `VideoScan/VideoScan/PerceptualHash.swift`, `PerceptualFingerprinter.swift`, `MetadataCache.swift`, `MediaFileOperations.swift` — T3 base, SQLite sidecar pattern, MFO job protocol

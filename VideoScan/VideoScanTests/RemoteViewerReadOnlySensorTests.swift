@@ -1,6 +1,6 @@
 // RemoteViewerReadOnlySensorTests.swift
 // Phase 1 remote use, slice 4 — the viewer UI and the read-only
-// enforcement sensor (docs/remote_use_design.md §4/§5).
+// enforcement sensor (docs/design/remote_use_design.md §4/§5).
 //
 // Every write path a viewer could reach is enumerated here and asserted
 // to REFUSE in viewer mode with a log line naming it:

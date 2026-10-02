@@ -1,5 +1,5 @@
 // FamilyMapKey.swift (VideoScanCore/FamilyMap)
-// The family map (GH #227, docs/family_map_design_2026-09-29.md): regions
+// The family map (GH #227, docs/design/family_map_design_2026-09-29.md): regions
 // of the world shaded by how many ancestors were born there. This file is
 // the VOCABULARY the whole feature shares — the countries in scope, the
 // kinds of unit, a coordinate, a bounding box — and the ONE rule that turns

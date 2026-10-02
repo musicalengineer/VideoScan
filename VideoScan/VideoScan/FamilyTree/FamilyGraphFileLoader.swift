@@ -32,7 +32,7 @@ struct FamilyGraphFileLoader {
     var compiledStore: FamilyGraphCompiledStore? = nil
     /// Phase captions for the UI while a compile runs (>1 s on a big pull).
     var progress: (String) -> Void = { _ in }
-    /// Remote viewer (docs/remote_use_design.md Phase 1): the tree is
+    /// Remote viewer (docs/design/remote_use_design.md Phase 1): the tree is
     /// compiled on the master and arrives by verified sync. In this mode
     /// the loader ONLY decodes the promoted generation — it never parses
     /// a .ged, never ingests, never promotes — and a generation this build

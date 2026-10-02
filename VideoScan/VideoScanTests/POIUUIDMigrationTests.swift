@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import VideoScan
 
-// The name-folder → uuid-folder migration (docs/people_uuid_folders_design.md).
+// The name-folder → uuid-folder migration (docs/design/people_uuid_folders_design.md).
 //
 // Dimension 2 (scale), 4 (isolation) and 5 (sensors) of the feature-test
 // checklist, plus the 12-folder fixture that exercises every classification

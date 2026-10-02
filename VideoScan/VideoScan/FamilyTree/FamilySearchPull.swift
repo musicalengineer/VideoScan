@@ -6,7 +6,7 @@
 //
 //   getmyancestors authenticates by POSTing the user's FamilySearch username
 //   and password straight at ident.familysearch.org's login form — it does
-//   NOT use the sanctioned OAuth browser flow. docs/familysearch_api_notes.md
+//   NOT use the sanctioned OAuth browser flow. docs/research/familysearch_api_notes.md
 //   rules that VideoScan must "never collect or proxy the user's FamilySearch
 //   password". Terminal is therefore the seam: the tool prompts for the
 //   password itself (getpass, on its own tty) and VideoScan never sees,
@@ -36,7 +36,7 @@ struct FamilySearchPullRequest: Equatable {
     /// each person's parents individually — so there is no API ceiling here;
     /// FamilySearch's 8-generation limit belongs to its bulk `ancestry`
     /// resource, which the tool does not use. 40 is a PRODUCT safety cap
-    /// (docs/vs_app_gets_gedcom_data_using_own_script.md), not an API fact:
+    /// (docs/design/vs_app_gets_gedcom_data_using_own_script.md), not an API fact:
     /// it stops an accidental unbounded run; a sparse tree ends on its own
     /// long before. `-a 1` = the start person plus ONE parent step, hence
     /// the UI label "Ancestor steps".

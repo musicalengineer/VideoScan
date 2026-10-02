@@ -32,7 +32,7 @@
 //              year resolved to 1994 is Christmas 1994.
 //                "folder name says 'xmas'"
 //
-// Judgement calls (docs/archive_angel_policy.md, "Event labels"):
+// Judgement calls (docs/guides/archive_angel_policy.md, "Event labels"):
 //   • Whole words: "capetown" and "partyline" are NOT cape / party; "Cape
 //     Town" IS cape (accepted — a family archive's "Cape" is the Cape).
 //   • "party" / "parties" mean birthday only when nothing else in the SAME

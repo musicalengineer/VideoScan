@@ -1,0 +1,363 @@
+# Codex review — Refile
+
+- Range: `db083e71..765c0351`
+- Credits spent: unavailable
+- Tokens: 97983
+- Finding count: 5
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T17:39:06Z (cycle #1, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 5
+Verdict: merge-after-fixes
+
+1. **P1 — Concurrent writes can disappear.** `ArchiveIndexRename.swift:299` checks identity separately from publication; rollback at `:333` overwrites originals without checking intervening writes. `VideoScanModel+ArchiveRefile.swift:356` checks Promote activity only before the asynchronous engine call. Counterexample: append another promotion’s manifest row after the final identity check; Refile publishes its older snapshot, silently dropping that row while the promoted file remains. **Pin:** inject the append inside `indexPublisher` before publishing; require preservation or refusal. Archive writers need shared transaction exclusion through rollback.
+
+2. **P1 — A publisher that writes then throws escapes restoration.** `ArchiveIndexRename.swift:305` adds the file to `published` only after the publisher returns. Counterexample using the supported seam: publish the updated manifest, then throw. Rollback receives an empty `published` list, moves the media back, deletes the backup, and reports rollback success—manifest and disk disagree. **Pin:** publish-then-throw on both the first and second index files; require byte-identical restoration. This establishes a seam-contract defect; the out-of-scope `AtomicFilePublish` implementation’s failure guarantees were not inspected.
+
+3. **P1 — Failed move-back can leave the catalog identifying another file.** `VideoScanModel+ArchiveRefile.swift:414` updates the record only when the old path is absent. Counterexample: after the forward move, another writer creates a different file at the old path; verification fails and exclusive move-back returns `EEXIST`. Both paths exist, so the catalog still points to the replacement, while the archived original remains at the destination. **Pin:** create that blocker during destination hashing, then return a mismatch; require identity-based catalog reconciliation and preservation of both files.
+
+4. **P1 — Rollback durability failures are discarded.** `ArchiveRefile.swift:810` ignores both directory `fsync` results after moving back. Counterexample: forward directory flushing fails; rollback rename succeeds, but its directory flushes also fail. The engine reports `.rolledBack` and the backup is removed despite unconfirmed durability. A subsequent crash can leave disk inconsistent with the restored index. **Pin:** inject rollback-directory flush failures; require an explicit incomplete-recovery outcome and retained backup.
+
+5. **P2 — Step (e) failure still returns success.** `VideoScanModel+ArchiveRefile.swift:478` logs a failed catalog save and schedules a retry; `:485` queues the ledger append without awaiting persistence, then `:399` reports success. Counterexample: catalog storage stays unwritable and the app exits before retry; the persisted catalog retains the old path. This violates the approved “any failure → rollback” contract. **Pin:** fail catalog persistence and ledger persistence independently; require recovery or an explicit incomplete outcome, never unconditional success.
+
+Read, no findings in the scoped changes to: `ArchiveVolumeProtection.swift`, `MasterArchive.swift`, `PromoteToArchiveJob+Steps.swift`, `ArchiveRefileSheet.swift`, `ArchiveView.swift`, `ArchiveView+Table.swift`, `ArchiveView+Categories.swift`, `InspectorPanel.swift`, `CatalogHelpers.swift`, `VideoScanModel.swift`, `VideoScanModel+MediaLedger.swift`, `MediaLedgerEvent.swift`, and `LedgerNarrator.swift`.
+
+Specified tests read for coverage gaps. Findings are static counterexamples; no builds or tests run, and no files changed.
+
+## Brief
+
+Adversarial review, SCOPED to the Refile feature: commits db083e71..765c0351 on branch feat/archive-refile (4 commits: 7debb3e6 feature, 56580713 narrator split, 7b9441c7 tests, 765c0351 lint). Use `git diff db083e71..765c0351` and `git show <sha>`. Do not explore outside these files; read-only; do not build or run.
+
+WHY: Refile MOVES an already-archived file inside the Master Archive (FamilyArchive — the family's near-read-only master copy) to the folder its corrected date says, and rewrites the archive's 00_Index manifest and journals. A lost file, a duplicated file, or a manifest that disagrees with disk is the failure that matters. Rick's approved order: (a) refuse before any mutation — target exists, archive read-only/offline, source digest ≠ manifest digest; (b) same-volume rename, never copy + delete; (c) verify the file at the new path against the manifest digest; (d) update the manifest row under a backup taken with the GH #204 marker machinery; (e) ledger event + catalog record; (f) any failure → move back, restore the manifest from the backup, log it, say so.
+
+PRODUCTION FILES IN SCOPE (exactly these):
+- VideoScan/VideoScan/ArchiveRefile.swift (new) — `ArchiveRefile` (placement via ArchivePathResolver.baseRelativePath, Misfiled rule, Why line, `rewriteManifestRows`) and `ArchiveRefileEngine.execute` / `moveAndVerify` / `moveBack`.
+- VideoScan/VideoScan/ArchiveVolumeProtection.swift — appended `ArchiveRefileAuthorization` (private init, `grant`, `covers`).
+- VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift (new) — Misfiled refresh (sliced main-actor capture + `@concurrent` manifest read), `makeRefilePreview`, `refileArchiveCopy` (main-actor refusals, grant, engine hop, `applyRefiled`, rollback ledger), `archiveRelPath` fast path.
+- VideoScan/VideoScan/ArchiveIndexRename.swift — `csvCells` / `csvDecode` / `splice` made internal (no behaviour change); Refile reuses `readIndexFile`, `prepare`, `apply` (backup → recheck → move → publish → rollback), `livePublish`.
+- VideoScan/VideoScan/MasterArchive.swift — `ArchivePathResolver.filingYearRefusal` / `latestFilingYear`; README text.
+- VideoScan/VideoScan/PromoteToArchiveJob+Steps.swift — the guard call in `copyOrAdopt`.
+- VideoScan/VideoScan/ArchiveRefileSheet.swift (new), ArchiveView.swift, ArchiveView+Table.swift, ArchiveView+Categories.swift, InspectorPanel.swift, CatalogHelpers.swift, VideoScanModel.swift (two stored properties), VideoScanModel+MediaLedger.swift (refresh on date edit) — UI wiring.
+- VideoScan/VideoScanCore/Sources/VideoScanCore/MediaLedgerEvent.swift (+refiled, +refileRolledBack, +from/to/provenance keys), LedgerNarrator.swift (sentences; two sentence groups moved to helpers, same text).
+Tests (read for coverage gaps, not style): VideoScanTests/ArchiveRefileTests.swift, ArchiveRefileScaleTests.swift, ArchiveRefileSensorTests.swift, the `reviewedNoClobberRenames` addition in ArchiveVolumeProtectionTests.swift.
+
+INVARIANTS TO ATTACK:
+1. The file is never lost or duplicated. The move is ONE `renameatx_np(..., RENAME_EXCL)` between dirfds opened through the O_NOFOLLOW chain; there is no copy, no unlink; every failure after the move renames back (in `moveAndVerify` for (b)/(c) failures, via `undoMoveMedia` for (d) failures). Look for: a path where the rename succeeded but `moved` is not set before a throw; a failure between rename and fsync; the move-back itself failing (is that reported as mixedState with every path, and does the model point the catalog record at where the file IS?); a symlink or a case-insensitive twin at the target; EXDEV; a concurrent Promote/rename/refile creating the target between the existence check and the rename; the target folder created by mkdirat and left behind.
+2. The manifest never disagrees with disk. Row-targeted rewrite (relpath, record_date, date_confidence) + journals' exact old-path values, all prepared in memory, backed up with the #204 marker, identity-rechecked before and during publish, restored byte-for-byte on any publish failure. Look for: a publish that lands after the file moved back; `changedLines != mine.count`; several manifest rows for one relpath with one digest; a manifest append (Promote) between `readIndexFile` and publish (the recheck window); the journal rewrite touching a value that is not this file (exact-value collisions, the `filename` sibling rule); the rolled-back case leaving a non-complete backup folder or pruning a complete one.
+3. Nothing outside the Refile path can write to FamilyArchive. `ArchiveRefileAuthorization` has a private init; `grant` is called once (the model) and refuses anything not between two media buckets of this root; `execute` re-checks `covers`. Look for: another caller able to construct or reuse a grant (Equatable/Sendable copies, a stale grant replayed for a different move), a grant for 00_Index or 40_Family_Tree via `..`, `//`, or a non-standard root spelling, and whether the no-clobber rename inventory in the sensor could miss a new mover.
+4. The target always comes from Promote's placement function. `ArchiveRefile.targetRelPath` → `ArchivePathResolver.baseRelativePath(facts:title:)`; the filing-year guard is the one `filingYearRefusal` for both Promote and Refile. Look for: a place where the sheet's shown "To" and the executed target can differ (name trimming, empty name, the date-prefix strip in `currentName`), the Misfiled rule reading the archive filename's typo'd year (it must use the ORIGINAL's filename), and whether a sheet edit can produce a target outside the media buckets.
+5. Refusals happen before any mutation. Order in `execute`: grant → root open → read-only → containment → manifest read/parse → target on disk and in manifest → source present → source digest → index plan; only then `apply` (backup) and the rename. Look for: any write (mkdirat, backup folder, ledger line, catalog record) before a refusal returns; model-side refusals (read-only viewer, identity mismatch, Promote writing, catalog moved, guard, same place) after the grant's audit line (that line is a log line, not a mutation — confirm nothing else happens).
+
+EVIDENCE (M4, Debug, derivedData /private/tmp/dd-refile):
+- `xcodebuild test -only-testing` by SUITE at 765c0351: 260 tests in 46 suites passed — the 7 Refile suites (logic 11: happy path; target exists → refused, nothing moved; source digest mismatch → refused; read-only → refused; failure injected at (c) and at (d), and at (d) on the SECOND index file → file back at source, manifest + journal byte-identical, ledger `refileRolledBack`; user edits year + name; Refile guard 1884 / next year + 1; grant coverage; grant refusals — pure 5 incl. the exact Why line "You dated this 1984 (known) on 25 Sep 2026; it was filed on 1 Sep as 1884."; Promote guard end-to-end; mov/mp4/mkv names ×3; isolation 3: poisoned / absent manifest → Misfiled empty + logged, Refile refuses; scale 2; sensor 5) plus every Master Archive, archive-volume-protection (incl. the new no-clobber rename inventory), rename-backup, catalog-rename-index, Family Music and media-ledger suite.
+- Scale (Debug): Misfiled rule over 100k candidates 2.6 s off-main; one main-actor capture slice (2,000 copies) 50 ms; whole refresh over 100k archived records 8.7 s (off-main except the yielding slices); 200k badge reads O(1).
+- `swift test` VideoScanCore MediaLedgerEventTests + LedgerNarratorTests: 16 passed.
+- Not run: the full ~5k battery; no UI click-through (no app launch on the M4).
+
+OUTPUT (stdout, Markdown, under 600 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+---
+
+# Codex review — Refile r2
+
+- Range: `b0776c68..8f8be568`
+- Credits spent: unavailable
+- Tokens: 86188
+- Finding count: 4
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T18:09:32Z (cycle #2, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 4
+Verdict: merge-after-fixes
+
+1. **P1 — Mixed-state recovery still deletes its backup.** `ArchiveIndexRename.swift:322` retains backups only for `RetainsBackupOnFailure`. Counterexample: the existing `blockerAtOldPath` test forces read-back failure and `EEXIST` during move-back. `ArchiveRefile.swift:891` throws `StepError.notRolledBack`, so `apply` deletes the backup at `:325` despite unconfirmed recovery. **Pin:** extend `ArchiveRefileR2MoveBackIdentityTests.blockerAtOldPath` to require the backup and incomplete marker to survive.
+
+2. **P1 — Stale replay can redirect the catalog to another file.** `VideoScanModel+ArchiveRefile.swift:606` accepts path existence as sufficient evidence. Counterexample: A→B completes with catalog-save failure, leaving a pending entry; a later B→C refile succeeds. Another file occupies B. At restart, the stale entry moves the record from C to B and reapplies old dates, despite the archived original remaining at C. **Pin:** add this two-refile sequence to `ArchiveRefileR2StepEPersistenceTests`; require preservation of C and newer dates, with stale recovery explicitly reconciled.
+
+3. **P2 — Replay drops missing ledger events after a partial append.** `VideoScanModel+ArchiveRefile.swift:630` treats one matching `.refiled` event as proof that the entire batch landed. `MediaLedger.swift:411` can fail after writing a prefix. Counterexample: persist the first `.refiled` line, then fail before the accompanying `.dateSet` lines. Replay declares `ledgerDone`, clears the pending entry, and permanently omits those date events. **Pin:** inject a writer that durably writes only the first line and throws; replay must produce every intended event exactly once.
+
+4. **P2 — Bounded lock attempts accumulate into an unbounded UI stall.** `ArchiveIndexLock.swift:76` sleeps synchronously; `ArchivePromoteEngine.swift:839` introduces this wait into journal appends. Its direct caller, `PromoteToArchiveJob+Steps.swift:503`, loops through batch finalization on the main actor without yielding. Counterexample: another process holds the index lock while eight published entries finalize: eight Busy refusals block the UI for approximately two seconds; larger batches scale proportionally. **Pin:** extend `ArchiveRefileR2IndexLockTests` with contended multi-entry finalization and a main-actor heartbeat budget.
+
+Read, no additional findings in the scoped changes to `MasterArchive.swift`, `ArchivePromoteDecisions.swift`, `VideoScanModel+BackupAttestations.swift`, `ArchiveRefileSheet.swift`, and `VideoScanModel.swift`. Read the three changed test files and prior review document; the pins above cover gaps in those tests.
+
+Static review only. No builds, tests, or file changes.
+
+## Brief
+
+Re-review, SCOPED to the five fix commits for your Refile review (docs/reviews/codex/codex-review-refile-2026-09-27.md): range b0776c68..8f8be568 on feat/archive-refile. Use `git diff b0776c68..8f8be568` and `git show <sha>`. Do not explore outside these files; read-only; do not build or run.
+
+FIX COMMITS, one per finding, each red first (red by the new seam where one was needed):
+- 797a810c #2 — ArchiveIndexRename.swift: an index file is TOUCHED before its publisher is called; rollback restores every touched file whose on-disk bytes differ from the original, and judges a restore by the bytes on disk. A recheck-refused file is never touched. Pin: ArchiveRefileR2PublishThrowTests (publish-then-throw on the 1st and 2nd file).
+- 555f8ba1 #4 — ArchiveRefile.swift: `Seams.directoryFsync(fd, phase)`; the move back's two folder fsyncs are checked → `RecoveryNotDurable`; outcome `.incompleteRecovery`; at (c) the error is `RetainsBackupOnFailure`, so `apply` KEEPS the backup; at (d) the engine proves the index bytes and the file's place before calling it incompleteRecovery, otherwise mixedState. Sheet + ledger + loud log. Pin: ArchiveRefileR2RollbackDurabilityTests (at (c) and at (d)).
+- 41caa13d #3 — ArchiveRefile.swift, VideoScanModel+ArchiveRefile.swift: `.mixedState(text, originalRelPath:)`; `locateOriginal` finds the archived original by device+inode+size through the O_NOFOLLOW dirfd chain (not by path existence, and not re-hashed — it is the inode that just failed its read-back); the record follows it; nothing deleted; both paths named. Also splits `execute` into preflight / commit / failureOutcome (lint ceiling), behaviour unchanged. Pin: ArchiveRefileR2MoveBackIdentityTests (foreign file created at the old path during the read-back, then a mismatch).
+- a06080c4 #1 — new ArchiveIndexLock.swift: flock(LOCK_EX) on the 00_Index directory (opened via the dirfd chain), try-lock with a 250 ms bound, `Busy` refusal logged. Held by `ArchiveIndexRename.apply` for the whole backup → recheck → move → publish → rollback (Refile and Catalog rename), and by all four appenders (manifest, promote journal, decisions, attestation journal). CatalogRenameArchiveIndexTests M1 now accepts "refused (Busy) or preserved". Pins: ArchiveRefileR2IndexLockTests, plus a sensor (5 lock sites; the only 4 `appendDurable(fd:` sites).
+- 8f8be568 #5 — VideoScanModel+ArchiveRefile.swift, MediaLedger.swift, VideoScanModel.swift: step (e) awaits `saveCatalog` and `MediaLedger.appendConfirmed`; either failing → `.completedWithWarnings` (sheet + log); a durable `pending-refiles.json` (beside the ledger, AtomicFilePublish full fsync) is written BEFORE step (e) and replayed at launch (not under tests) to re-apply the record's path + dates and write the ledger lines once. Pin: ArchiveRefileR2StepEPersistenceTests (catalog and ledger failed independently, then replay).
+
+ATTACK:
+1. The lock: a path that writes an index file without it; a deadlock or self-refusal (an appender called while `apply` holds it); a Promote job appending on the main actor blocking > 250 ms; what the Promote job does after a `Busy` manifest/journal append (it must not claim the file).
+2. Restore: a touched file restored over another writer's bytes; a restore judged OK because the publisher threw after writing the original.
+3. incompleteRecovery vs mixedState classification; a backup removed or pruned while recovery is unconfirmed.
+4. Identity reconciliation: a case where `originalRelPath` names a file that is not the archived original, or the record is moved when it should not be.
+5. Replay: double-applied dates or ledger lines; a replay that clears an entry whose catalog save failed; the pending file failing to write while the outcome still says it will be retried.
+
+EVIDENCE (M4, Debug, derivedData /private/tmp/dd-refile): at 8f8be568, 363 tests in 63 suites passed, run by suite with `-only-testing` (the original 46, the 5 new r2 suites, and the attestation / verify / prune suites that exercise the locked appenders). Each r2 pin was run red before its fix.
+
+OUTPUT (stdout, Markdown, under 500 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `8f8be568` at 2026-09-27T18:11:43Z. all 5 first-pass findings fixed red-first (797a810c 555f8ba1 41caa13d a06080c4 8f8be568); re-review continues as 'Refile r2'
+
+## Closed
+
+Closed by `f06a93e0` at 2026-09-27T18:30:27Z. 4 r2 findings fixed red-first (e68abbfb a4c056aa 0535d2b7 f06a93e0); re-review continues as 'Refile r3'
+
+---
+
+# Codex review — Refile r3
+
+- Range: `f1b4e025..f06a93e0`
+- Credits spent: unavailable
+- Tokens: 89944
+- Finding count: 4
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T18:30:27Z (cycle #3, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 4
+Verdict: merge-after-fixes
+
+1. **P1 — Superseding loses recovery across two failed saves.** `VideoScanModel+ArchiveRefile.swift:551`, `:643`: A→B completes with catalog-save failure; B→C also fails to save; both ledger appends succeed. Superseding deletes A→B. After relaunch, the persisted record still points at A, so B→C is declared STALE and removed despite the correct file identity at C. The catalog permanently retains A. **Pin:** extend `ArchiveRefileR2StepEPersistenceTests` with both saves failing, prevent debounced persistence, reload the original catalog, and require replay to persist C and the latest dates.
+
+2. **P1 — A successful move-back does not prove original-file recovery.** `ArchiveRefile.swift:903`, `:917`, `:942`: after A→B, another writer relocates the original from B and puts a stranger at B. The identity check correctly fails, but `putBack` renames that stranger to A, flushes the folders, and returns `.rolledBack`. Its new `backupIsSafeToDiscard` contract then causes `ArchiveIndexRename.swift:330` to delete the backup. Recovery never verifies the returned file’s identity. **Pin:** use the `directoryFsync` seam to substitute B before the identity check; require mixed-state reporting, preservation of the stranger, and retention of the incomplete backup.
+
+3. **P2 — Existing pending files silently become empty.** `VideoScanModel+ArchiveRefile.swift:603`, `:737`: entries written by `f1b4e025` lack the newly required sequence, FROM path, identity, and digest fields. Synthesized decoding fails for the entire array; `loadPendingRefiles` returns `[]`. A subsequent update overwrites the recovery file, losing owed catalog and ledger work. **Pin:** load a pending-file fixture encoded with the baseline schema, then add another entry; require preservation and explicit migration or unresolved-recovery handling.
+
+4. **P2 — Keyless events duplicate on replay.** `VideoScanModel+ArchiveRefile.swift:674`: a pending entry created by `a4c056aa` has the current entry schema but no `idem` keys. If its first ledger line landed before failure, replay under `f06a93e0` treats every keyless event as missing and appends that first line again. Rewriting pending status preserves the missing keys. **Pin:** adapt `partialLedgerAppend` with an `a4c056aa` pending fixture; replay repeatedly and require every intended event exactly once.
+
+Read, no additional findings in scoped changes to `ArchiveIndexRename.swift`, `ArchiveIndexLock.swift`, `VideoScanModel+Rename.swift`, both `PromoteToArchiveJob` files, `MediaLedgerEvent.swift`, the changed tests, and the review document. Conservative retention of unclassified clean failures is acceptable.
+
+Static review only; no builds, tests, or writes. Untouched attestation/decisions callers were excluded by the requested scope.
+
+## Disposition (coordinator ruling, 2026-09-27)
+
+- 1 (P1, chain across two failed saves) — Closed by: ccd31101
+- 2 (P1, move back not proven to be the original) — Closed by: f6ba060d
+- 3 (P2, pending file silently emptied) — Closed by: c9bdaf6a (generalized: any unreadable / unknown-schema pending file is set aside, never overwritten; `version: 1` added for future migrations)
+- 4 (P2, keyless events duplicate on replay) — Declined: no pending file with that schema was ever written outside the feature branch; covered going forward by #3's version field.
+
+## Brief
+
+Re-review, SCOPED to the four fix commits for your Refile r2 findings (docs/reviews/codex/codex-review-refile-2026-09-27.md, section "Codex review — Refile r2"): range f1b4e025..f06a93e0 on feat/archive-refile (commits e68abbfb, a4c056aa, 0535d2b7, f06a93e0). Use `git diff f1b4e025..f06a93e0` and `git show <sha>`. Do not explore outside the files they touch; read-only; do not build or run.
+
+FIXES (each red first):
+- e68abbfb r2#1 — ArchiveIndexRename.swift, ArchiveRefile.swift, VideoScanModel+Rename.swift: after a failed media move, `apply` RETAINS the backup by default and discards it only when the error conforms to `BackupDisposition` and says `backupIsSafeToDiscard` (Refile: refusedBeforeMove, rolledBack-with-flushed-folders; Catalog rename: `.filesystem`). notRolledBack / incompleteRecovery keep it (incomplete marker). Pin: ArchiveRefileR2MoveBackIdentityTests.blockerAtOldPath now requires the backup + incomplete marker.
+- a4c056aa r2#2 — VideoScanModel+ArchiveRefile.swift, ArchiveRefile.swift: `Done` carries device/inode/size; a pending entry carries FROM path, identity, digest, sequence. Writing a new entry supersedes older entries' catalog step for the same record (their owed ledger step is kept). Replay applies only if the record points at FROM or TO AND lstat identity at TO matches; otherwise logged as STALE and dropped. Pin: ArchiveRefileR2StepEPersistenceTests.stalePendingNeverRedirects (A→B with failed save, B→C, stranger at B).
+- 0535d2b7 r2#3 — MediaLedgerEvent.swift (+`idem` detail key), VideoScanModel+ArchiveRefile.swift: each refile ledger line carries `refile:<pending id>:<index>`; replay appends exactly the keys absent from the ledger. Pin: partialLedgerAppend (writer lands only the first line, then throws).
+- f06a93e0 r2#4 — ArchiveIndexLock.swift, PromoteToArchiveJob(+Steps).swift: on the main thread the lock is tried ONCE (no sleep; busy = immediate refusal; the promote journal converges next run); `finalizeBatch` is async and appends its `done` entries off-main (@concurrent). Pin: ArchiveRefileR3MainActorLockTests (lock held by another writer, 8-entry finalization, main-actor heartbeat < 100 ms; was 2.2 s).
+
+ATTACK:
+1. Any path where a backup is still removed while the archive is not proven unchanged; any path that now LEAKS a backup on a proven-clean refusal (retention cost is acceptable, but say so).
+2. Replay: a legitimate pending entry wrongly judged stale (e.g. relaunch after a catalog-save failure — record back at FROM), a stale one applied, superseding dropping a ledger step that was owed.
+3. Idempotency: duplicate or missing lines when the pending entry itself was rewritten between attempts; events without a key.
+4. Main actor: any remaining index-lock acquisition that can wait on main (manifest / journal / attestation / decisions appends called from main), and whether a busy refusal on main is handled (not claimed as written) by every caller.
+
+EVIDENCE (M4, Debug): at f06a93e0, 366 tests in 64 suites passed, run by suite with `-only-testing` (the 63 suites of r2 plus ArchiveRefileR3MainActorLockTests; the r2 StepE and MoveBackIdentity suites carry the new pins); VideoScanCore MediaLedgerEventTests + LedgerNarratorTests 16 passed.
+
+OUTPUT (stdout, Markdown, under 500 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `c9bdaf6a` at 2026-09-27T18:47:39Z. #1 ccd31101, #2 f6ba060d, #3 c9bdaf6a (generalized), #4 declined (schema never shipped)
+
+---
+
+# Codex review — Refile r4
+
+- Range: `8dac4acf..c9bdaf6a`
+- Credits spent: unavailable
+- Tokens: 50971
+- Finding count: 2
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T18:47:39Z (cycle #4, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 2
+Verdict: merge-after-fixes
+
+1. **P1 — Inherited dates can undo a newer hand edit.** `VideoScanModel+ArchiveRefile.swift:549`, `:551`, `:713`: A→B sets both dates to 1984 but fails catalog persistence. Rick edits the source date to 1985, then refiles B→C using that source date. The second operation updates only the copy; the source already has the selected date. Consequently, merging retains the older pending **source=1984** update. If the second save also fails, replay persists copy=1985 but source=1984, undoing Rick’s correction. **Pin:** extend `ArchiveRefileR2StepEPersistenceTests` with this sequence, disable debounced saves, restore the original persisted catalog, and require both dates to recover as 1985.
+
+2. **P2 — A chain FROM does not establish that the record is still awaiting recovery.** `VideoScanModel+ArchiveRefile.swift:705–709`: after A→B→C with failed saves, Rick deliberately repoints the same record elsewhere and subsequently to a different file at A, saving that change. The pending entry still contains A; the archived original remains at C. Replay accepts both predicates, redirects the deliberately changed record to C, and saves it. Checking C’s identity proves which file is there, but cannot distinguish an old persisted catalog from a later user edit. **Pin:** extend `ArchiveRefileR2StepEPersistenceTests` with the saved repointing sequence; require replay to preserve the newer record assignment and flag the recovery conflict.
+
+Read, no additional findings in `ArchiveRefile.swift`, the changed tests in `ArchiveRefileR2Tests.swift`, `ArchiveVolumeProtectionTests.swift`, or the review document. The move-back check/rename window remains, but the post-rename mismatch is reported as mixed state rather than confirmed rollback.
+
+Pending-file preservation has no additional finding: a failed subsequent write leaves the set-aside bytes intact. Its warning reaches the console/logs; a successful current refile does not include that warning in its sheet result.
+
+Static review only; no builds or tests run. r3 #4 remains declined.
+
+## Disposition (coordinator ruling, 2026-09-27)
+
+- 1 (P1, inherited dates undo a newer hand edit) — Closed by: bdb3d955 (one rule with #2: every replayed write is conditional on the prior value it replaces)
+- 2 (P2, chain FROM does not prove the record is still awaiting recovery) — Closed by: bdb3d955 (the copy record's prior state — path + size + partial MD5 + content hash — must match; otherwise a logged "Refile recovery conflict", entry kept, nothing applied)
+
+## Brief
+
+Re-review, SCOPED to the three fix commits for your Refile r3 findings (docs/reviews/codex/codex-review-refile-2026-09-27.md, section "Codex review — Refile r3", with its Disposition block): range 8dac4acf..c9bdaf6a on feat/archive-refile (commits ccd31101, f6ba060d, c9bdaf6a). Use `git diff 8dac4acf..c9bdaf6a` and `git show <sha>`. Do not explore outside the files they touch; read-only; do not build or run. r3 #4 was DECLINED by the coordinator (no pending file with that schema ever existed outside this branch; covered by the new version field) — do not re-raise it.
+
+FIXES (each red first):
+- ccd31101 r3#1 — VideoScanModel+ArchiveRefile.swift: pending entries form a CHAIN. A new entry for a record inherits `chainFromPaths` (every FROM of older entries whose catalog step is still owed) and their date updates (newer wins per record); replay accepts the record at FROM, TO or any chain FROM, still requiring the lstat identity at TO. New seam `ArchiveRefilePersistence.scheduleRetrySave` (the debounced retry). Pin: ArchiveRefileR2StepEPersistenceTests.chainedFailedSavesRecover (A→B and B→C both fail to save, no debounced save, records reset to the on-disk state → replay lands C with the latest dates).
+- f6ba060d r3#2 — ArchiveRefile.swift: `moveBack` checks the identity (device+inode+size) of the file at the target BEFORE renaming it back, and at the old path AFTER; not the original → `NotTheOriginal` → notRolledBack → mixedState (backup kept, both paths named); the stranger is never moved. Pin: ArchiveRefileR4MoveBackVerifiesIdentityTests (directoryFsync seam swaps the original out and a stranger in between the rename and the identity check).
+- c9bdaf6a r3#3 (generalized) — VideoScanModel+ArchiveRefile.swift: pending-refiles.json is `{version: 1, entries}`; a file that fails to decode or carries another version is never overwritten — set aside by a no-clobber `renamex_np(RENAME_EXCL)` to `pending-refiles.json.unreadable-<UTC>`, logged to console + catalog.log + videoscan.log; if it cannot be moved aside, no new list is written over it. Inventoried in ArchiveVolumeProtectionSourceSensor.reviewedNoClobberRenames. Pin: ArchiveRefileR4PendingFilePreservedTests (corrupt / version 99).
+
+ATTACK:
+1. Chain: an entry wrongly accepted (the record moved elsewhere by the user between refiles and back to a chain FROM), merged dates overriding a later hand edit made after the refile, a chain that never terminates or grows without bound.
+2. Move back: the residual window between the identity check and renameatx_np; the post-rename check's failure path (a stranger now at the old path) — is it reported and the backup kept.
+3. Pending file: any path that still writes over an unreadable file; losing entries when the set-aside succeeds but the next write fails; the sheet/console surfacing.
+
+EVIDENCE (M4, Debug): at c9bdaf6a (docs 50cdfb90 after), 369 tests in 66 suites passed, run by suite with `-only-testing` (the 64 r3 suites plus ArchiveRefileR4MoveBackVerifiesIdentityTests and ArchiveRefileR4PendingFilePreservedTests; the chain pin is in ArchiveRefileR2StepEPersistenceTests). Each pin was run red before its fix.
+
+OUTPUT (stdout, Markdown, under 500 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `bdb3d955` at 2026-09-27T18:58:49Z. #1 and #2 closed by bdb3d955 (replay never overrides a newer edit)
+
+---
+
+# Codex review — Refile r5
+
+- Range: `036c910f..bdb3d955`
+- Credits spent: unavailable
+- Tokens: 51592
+- Finding count: 2
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T18:58:54Z (cycle #5, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 2
+Verdict: merge-after-fixes
+
+1. **P1 — Reverting a date defeats the “newer edit wins” guard.** [VideoScanModel+ArchiveRefile.swift:762](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:762)  
+   Counterexample: A→B types 1984; B→C types 1985; both catalog saves fail. Rick then changes the original back to 1984 with the same confidence as the earlier 1984 value, and persists the catalog. Relaunch at C. Replay skips the first update as already satisfied, then applies the second update because its expected value is 1984—overwriting Rick’s newer correction with 1985. Value equality cannot distinguish an unapplied update from an intentional reversion.  
+   **Pin:** `userDateRevertSurvivesReplay` in `ArchiveRefileR2StepEPersistenceTests`: restore that persisted state; assert the original remains 1984 after replay.
+
+2. **P2 — An offline archive becomes a permanent conflict when the catalog already reached the target.** [VideoScanModel+ArchiveRefile.swift:745](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:745)  
+   Counterexample: A→B’s immediate save fails; a subsequent debounced save persists B, leaving the pending entry. Relaunch with the archive disconnected. `atTarget` is true, so the unavailable-file retry branch is bypassed; the identity guard marks a conflict. Reconnecting the unchanged archive cannot recover: line 697 skips the entry forever. No newer edit or replacement file occurred.  
+   **Pin:** `offlineAlreadyAtTargetRemainsRetryable`: restore the persisted B state, temporarily make the archive unavailable, replay, restore access, replay again; assert no permanent conflict and eventual completion.
+
+`ArchiveRefileR2Tests.swift`: read, no findings in the added tests themselves; neither counterexample is covered. Other replayed fields and the normal conflict-retention/inheritance paths yielded no additional findings.
+
+Static review only; no builds or tests run. r3 #4 remains declined.
+
+## Disposition (coordinator ruling, 2026-09-27)
+
+- 1 (P1, a revert to the old value defeats the value guard) — Closed by: c1a4ae2d (the media ledger is checked first: a dateSet for that record after the update was made, not written by the refile machinery, makes that field a conflict; the value check remains the second guard)
+- 2 (P2, offline archive + catalog already at target → permanent conflict) — Closed by: 0dd2d1c4 (unreachable waits, never a conflict; only a positive mismatch is)
+
+## Brief
+
+Re-review, SCOPED to ONE fix commit for your Refile r4 findings (docs/reviews/codex/codex-review-refile-2026-09-27.md, section "Codex review — Refile r4", with its Disposition block): bdb3d955 on feat/archive-refile. Use `git show bdb3d955`. Do not explore outside the files it touches (VideoScanModel+ArchiveRefile.swift, VideoScanTests/ArchiveRefileR2Tests.swift); read-only; do not build or run. r3 #4 stays declined.
+
+THE ONE RULE (coordinator's ruling for r4 #1 and #2): replay never overrides a newer edit.
+- A pending entry records `priorCopyStates` — the archive copy record's state (fullPath, sizeBytes, partialMD5, contentHash) before EACH refile of its chain whose catalog save did not land (replaces `chainFromPaths`) — and every `DateUpdate` carries `expectedUserDate` / `expectedConfidence`, the value it replaced. The chain's date updates are kept in order, not merged.
+- `replayCatalogStep`: repoint the record only if it currently equals one of `priorCopyStates` (or already sits at the target) AND the lstat identity at the target is the refiled file; otherwise → `conflict` set on the entry, a "Refile recovery conflict" line (console + catalog.log + videoscan.log) naming the record, the entry and what differs; nothing applied; the entry is kept (never auto-removed) and re-announced on later replays. Each date update applies only while its field equals its expected value (already-at-target is fine); otherwise it is left alone and logged ("a newer edit wins").
+- Conflict entries are not inherited by, nor superseded by, a newer refile's chain.
+
+PINS (ArchiveRefileR2StepEPersistenceTests; debounced saves off; relaunch = the records reset to the persisted state):
+- inheritedDateNeverUndoesNewerEdit — A→B typed 1984 (save fails) → Rick sets the original to 1985 (persisted) → B→C with 1985 (save fails) → replay: both dates 1985, record at C. Red before (the original came back 1984).
+- userRepointWinsOverReplay — A→B→C both saves fail → relaunch, Rick repoints the record to a different file at A (persisted: size/md5 differ) → replay: record stays on Rick's file, entry kept as conflict, conflict line in the console. Red before (redirected to C).
+- chainedFailedSavesRecover (from r4) still lands C with the latest dates.
+
+ATTACK:
+1. A legitimate recovery wrongly flagged conflict (e.g. a rescan re-probing the copy between failure and relaunch changes sizeBytes / partialMD5 / contentHash).
+2. A newer edit that the fingerprint cannot see (a field outside path/size/md5/hash/dates) and that replay would still override.
+3. Order effects in the chain's sequential date updates (A→B→C→D; an intermediate state persisted by a successful debounced save).
+4. Conflict entries: never cleared automatically — is there any path that removes or re-applies one.
+
+EVIDENCE (M4, Debug): at bdb3d955 (docs 604e73e3 after), 371 tests in 66 suites passed, run by suite with `-only-testing` (the same 66 suites as r4; the two new pins are in ArchiveRefileR2StepEPersistenceTests). Both pins were run red before the fix.
+
+OUTPUT (stdout, Markdown, under 400 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `0dd2d1c4` at 2026-09-27T19:09:08Z. #1 c1a4ae2d (ledger-checked replay), #2 0dd2d1c4 (offline waits, not conflict)
+
+---
+
+# Codex review — Refile r6
+
+- Range: `1e931b3e..0dd2d1c4`
+- Credits spent: unavailable
+- Tokens: 51744
+- Finding count: 3
+- Verdict: merge-after-fixes
+- Run: 2026-09-27T19:09:08Z (cycle #6, tools/codex_review.py)
+
+## Codex answer
+
+Credits spent: unavailable | Finding count: 3
+Verdict: merge-after-fixes
+
+1. **P1 — Timestamp ordering still permits overwriting a newer correction.** [VideoScanModel+ArchiveRefile.swift:773](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:773)  
+   Counterexample: A→B sets 1984; B→C sets 1985; both saves fail. Rick persists a revert to 1984, but its ledger timestamp falls in the same millisecond as the second update—or earlier after a clock correction. Strict `>` misses the edit; the value guard accepts 1984 and overwrites it with 1985.  
+   **Pin:** `userDateRevertWithNonIncreasingTimestampSurvivesReplay`, parameterized for equal milliseconds and backward clock movement. Inject timestamps deterministically; assert 1984 survives.
+
+2. **P1 — A failed user ledger append defeats the protection entirely.** [VideoScanModel+ArchiveRefile.swift:769](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:769)  
+   Counterexample: use the same failed-save chain, then persist Rick’s 1984 revert while its fire-and-forget ledger append fails. Relaunch with a fresh ledger instance. No event identifies the correction; replay writes 1985 and can clear the pending entry. Absence of an audit event does not establish absence of an edit.  
+   **Pin:** `userDateRevertSurvivesFailedLedgerAppend`: inject a throwing ledger writer for the revert, persist the catalog, reopen the ledger, replay, and assert 1984 remains.
+
+3. **P2 — A subsequent Refile deletes the newly retained date conflict.** [VideoScanModel+ArchiveRefile.swift:795](/Users/rickb/dev/VideoScan/VideoScan/VideoScanModel+ArchiveRefile.swift:795), interacting with line 569.  
+   Counterexample: `userDateRevertSurvivesReplay` produces a conflict with `catalogDone == true` after successful partial persistence and `ledgerDone == true`. Refile that copy again: the cleanup at line 569 removes all completed entries for the copy without checking `conflict`. The unresolved conflict disappears automatically.  
+   **Pin:** `dateConflictSurvivesSubsequentRefile`: extend the existing pin with another Refile; assert the original conflict ID remains.
+
+`ArchiveRefileR2Tests.swift`: read, no findings in the added tests themselves; these cases remain uncovered.
+
+Offline recovery handles both expected record states. Permanently missing targets remain pending **with logging**. Refile’s own events carry the excluded prefix. Partial application follows the stated field-level policy.
+
+Static review only; no builds or tests run. r3 #4 remains declined.
+
+## Brief
+
+Re-review, SCOPED to the two fix commits for your Refile r5 findings (docs/reviews/codex/codex-review-refile-2026-09-27.md, section "Codex review — Refile r5", with its Disposition block): range 1e931b3e..0dd2d1c4 on feat/archive-refile (commits c1a4ae2d, 0dd2d1c4). Use `git diff 1e931b3e..0dd2d1c4` and `git show <sha>`. Do not explore outside the files they touch (VideoScanModel+ArchiveRefile.swift, VideoScanTests/ArchiveRefileR2Tests.swift); read-only; do not build or run. r3 #4 stays declined.
+
+FIXES (each red first):
+- c1a4ae2d r5#1 — `DateUpdate.createdAtMillis`; `replayCatalogStep` checks the media ledger FIRST: if the record has a `dateSet` later than the update was made that does NOT carry a `refile:` idempotency key (i.e. not written by the refile machinery — the Inspector, the Angel, any other path), that update is not replayed, the field is a "Refile recovery conflict" (logged), and the entry is kept marked conflict after the rest is applied and saved. The value check remains the second guard. The ledger has no repoint event kind, so repoints stay covered by the r5 copy fingerprint. Pin: userDateRevertSurvivesReplay (A→B 1984, B→C 1985, both saves fail; Rick reverts the original to 1984 through noteUserDateEdited; replay leaves 1984). This commit also adds the r5#2 pin, red until the next commit.
+- 0dd2d1c4 r5#2 — when the record is as expected (at the target or at a prior state) but the target file is unreachable (lstat nil), the entry WAITS ("archive offline — Refile recovery waits"), never a conflict; only a record that says something else, or a positive identity mismatch at the target, is a conflict. Pin: offlineAlreadyAtTargetRemainsRetryable (record persisted at B, archive folder moved away at replay → pending, no conflict; back → completes).
+
+ATTACK:
+1. The ledger guard: a same-millisecond edit; a user dateSet that failed to reach the ledger (fire-and-forget append) so the revert is invisible; clock skew between the refile's `now` and the ledger's `at`; the refile's own dateSet lines ever being counted as user edits.
+2. Partial application: dates applied and saved while another field is a conflict — can the saved state be one Rick never had?
+3. Offline: a target that is unreachable forever (file deleted, not offline) waiting silently forever; a record that is at a prior state while offline.
+
+EVIDENCE (M4, Debug): at 0dd2d1c4 (docs cb1746b7 after), 373 tests in 66 suites passed, run by suite with `-only-testing` (the same 66 suites as r5; both pins in ArchiveRefileR2StepEPersistenceTests). Both pins were run red before their fixes.
+
+OUTPUT (stdout, Markdown, under 400 words):
+first line exactly `Credits spent: <n or unavailable> | Finding count: <n>`
+then a line `Verdict: merge / merge-after-fixes / hold`
+then findings, each with file:line, a concrete counterexample, and the test that would pin it.
+
+## Closed
+
+Closed by `superseded` at 2026-09-27T20:10:06Z. Rick 2026-09-27: Refile cut down to right-click Update… {name, date}; the replay/date write-back paths these findings live in are removed

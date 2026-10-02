@@ -1,6 +1,6 @@
 // MediaStreamResolver.swift
 // Where a catalog record's bytes come from on a remote viewer (Phase 1,
-// docs/remote_use_design.md §2). Catalog paths are master-local
+// docs/design/remote_use_design.md §2). Catalog paths are master-local
 // (`/Volumes/FamilyArchive/…`); the porch Mac has none of those drives.
 //
 // Resolution order, per record:

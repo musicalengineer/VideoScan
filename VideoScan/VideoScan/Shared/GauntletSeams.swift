@@ -1,6 +1,6 @@
 // GauntletSeams.swift
 // Launch-argument seams for the Gauntlet UI-regression suite
-// (docs/gauntlet.md). The Gauntlet drives the REAL app the way Rick
+// (docs/guides/gauntlet.md). The Gauntlet drives the REAL app the way Rick
 // spot-tests it, but its fixtures live in per-run temp dirs — these
 // seams are how the runner tells the app-under-test where they are
 // without an NSOpenPanel (which XCUITest cannot drive reliably).

@@ -1,6 +1,6 @@
 // HallieAnswerPlan.swift
 // The typed boundary between "what Hallie is allowed to say" and "how she
-// says it" (docs/hallie_grounded_composition.md, docs/cyberbrain_design.md §9).
+// says it" (docs/hallie_grounded_composition.md, docs/design/cyberbrain_design.md §9).
 //
 // Every deterministic route already knows its facts before it writes prose.
 // This type captures those facts as numbered claims so an optional model

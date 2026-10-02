@@ -357,7 +357,7 @@ struct ChroniclingAmericaSource: ResearchSource {
 // There is deliberately NO Find a Grave adapter. Find a Grave's robots.txt
 // has disallowed /memorial/search since 2024-11-25; the app fetched it
 // anyway until Rick approved the demotion (2026-10-01, GH #230, survey
-// docs/uk_scotland_records_survey_2026-10-01.md §6.1). The search is now a
+// docs/research/uk_scotland_records_survey_2026-10-01.md §6.1). The search is now a
 // pre-filled Record Finder link ("us.findagrave" in VideoScanCore's
 // RecordFinder registry) that opens in the reader's browser, and what they
 // find comes back through "I found a record…". Findings already saved with

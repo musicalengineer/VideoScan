@@ -1,6 +1,6 @@
 // ArchiveUpdateSafetyTests.swift
 // The proven safety core of Update… (ported from the Refile review rounds
-// r1–r3, docs/codex-review-refile-2026-09-27.md): touched-before-publish
+// r1–r3, docs/reviews/codex/codex-review-refile-2026-09-27.md): touched-before-publish
 // restore, rollback fsync durability, a failed move back reconciled by
 // identity, the one 00_Index lock, no main-actor lock wait, and a move back
 // that only ever puts back the ORIGINAL. Sandbox archives only.

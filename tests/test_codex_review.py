@@ -262,3 +262,14 @@ def test_track_registers_a_channel_driven_cycle_and_verdict_moves_it(env, capsys
     assert codex_review.main(["status"]) == 0
     out = capsys.readouterr().out
     assert "Map stage 1" in out and "fixing" in out
+
+
+def test_default_review_doc_uses_codex_reviews_directory(env, monkeypatch):
+    monkeypatch.setattr(codex_review, "REPO", env)
+    assert codex_review.main(["--title", "default destination", "--range", "a..b",
+                              "--brief", str(env / "brief.md")]) == 0
+    cycle = codex_review.load_cycles()[-1]
+    doc = env / cycle["doc"]
+    assert doc.parent == env / "docs" / "reviews" / "codex"
+    assert doc.is_file()
+    assert "Finding count: 0" in doc.read_text()

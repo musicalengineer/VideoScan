@@ -15,7 +15,7 @@ move that substance into the relevant theme guide, issue or review report.
 Completed acknowledgments and handoffs do not need permanent docs.
 
 On September 16, 2026, the obsolete July Markdown transport history was moved
-out of the active docs tree. See the [documentation map](../documentation-map.md)
+out of the active docs tree. See the [documentation map](../guides/documentation-map.md)
 for recovery and review details. The live SQLite mailbox is a separate store;
 this docs cleanup does not delete its messages or Engineering Room transcripts.
 No automated mailbox expiry is enabled by this policy.
@@ -87,7 +87,7 @@ One command runs a whole codex pass: brief check, "started" post to codex,
 
 ```sh
 python3 tools/codex_review.py --title "⌘O" --range de54a7ca..48708aba \
-  --brief docs/briefs/<file>.md [--doc docs/codex-review-<slug>-<date>.md] [--timeout 1800]
+  --brief docs/reviews/briefs/<file>.md [--doc docs/reviews/codex/codex-review-<slug>-<date>.md] [--timeout 1800]
 python3 tools/codex_review.py close --title "⌘O" --closed-by <sha> [--note "…"]
 python3 tools/codex_review.py status        # last 5 cycles, one line each
 ```

@@ -4,7 +4,7 @@
 // upload of a png, jpg, or pdf. This should be stored as such in the
 // database.").
 //
-// Five dimensions (docs/testing_retrospective_2026_07_05.md):
+// Five dimensions (docs/practices/testing_retrospective_2026_07_05.md):
 //   Logic     — import PNG/JPG/PDF, sidecar round trip, kind naming, no
 //               overwrite, every refusal, missing-file drop, removal to .trash
 //   Scale     — 500 documents listed under a budget

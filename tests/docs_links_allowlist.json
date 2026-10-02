@@ -1,0 +1,354 @@
+{
+  ".github/workflows/ci.yml": {
+    "docs/gh-testing-19-may.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/App/ContentView.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/App/VideoScanApp.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/ArchiveHomeState.swift": {
+    "docs/archive-view.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/ArchivePromoteEngine.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/ArchiveTimelineModel.swift": {
+    "docs/archive-view.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/ArchiveView+Table.swift": {
+    "docs/archive-view.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/ArchiveView+Timeline.swift": {
+    "docs/archive-view.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/ArchiveView.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/ArchivedWhatNextSheet.swift": {
+    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/CopyFamilyAssessor.swift": {
+    "docs/promote-helper-workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/promote_helper_plan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/MasterArchive.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/PromoteToArchiveJob.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Archive/VideoScanModel+MediaLedger.swift": {
+    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift": {
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelPlan.swift": {
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Prepare/MediaFileOperations+ArchiveAngel.swift": {
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift": {
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelEvidenceStore.swift": {
+    "docs/archive_angel_phase2_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer.swift": {
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelSweep.swift": {
+    "docs/archive_angel_phase2_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ArchiveAngel/UI/ArchiveAngelReviewSheet.swift": {
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ArchiveAngel/UI/ArchiveAngelStartSheet.swift": {
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Catalog/CatalogContent+Promote.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift": {
+    "docs/find-and-tag-design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Catalog/CatalogStore.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Catalog/InspectorPanel.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreePersonMetadata.swift": {
+    "docs/hallie_titled_ancestors_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/FamilyTree/ResearchPerson.swift": {
+    "docs/research_person_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift": {
+    "docs/hallie_grounded_composition.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Hallie/HallieAncestorStatisticsQuestion.swift": {
+    "docs/hallie_intent_": "Wrapped source comment citing a retired design; full name continues on the next comment line."
+  },
+  "VideoScan/VideoScan/Hallie/HallieAnswerPlan.swift": {
+    "docs/hallie_grounded_composition.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Hallie/HallieTreeStatisticsQuestion.swift": {
+    "docs/hallie_intent_recognizer_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Hallie/LLM/OllamaQueryTranslator.swift": {
+    "docs/hallie_grounded_composition.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/MediaOps/MediaFileOperations.swift": {
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/find-and-tag-design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Model/VideoScanModel.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/ModelsUI/CatalogScanTarget.swift": {
+    "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/People/ConfirmPersonSheet.swift": {
+    "docs/design/unified-review.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/People/FindPersonJob.swift": {
+    "docs/find-and-tag-design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/People/HoldoutNavigation.swift": {
+    "docs/design/unified-review.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/People/NativeRecipeScorer.swift": {
+    "docs/find-and-tag-design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/People/PersonResolver.swift": {
+    "docs/family-archivist-phase1.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/People/RecipeScoring.swift": {
+    "docs/donna-recipe-smoke-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/find-and-tag-design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/People/UnifiedReviewSession.swift": {
+    "docs/design/unified-review.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/People/VideoScanModel+PeopleTags.swift": {
+    "docs/donna-recipe-v1.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Volumes/VideoScanModel+VolumeLifecycle.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Volumes/VideoScanModel+VolumeRoleMigration.swift": {
+    "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScan/Volumes/VolumesWindow.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/ArchiveFixity.swift": {
+    "docs/archive_promotion_": "Wrapped source comment citing a retired design; full name continues on the next comment line."
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/BackupAttestation.swift": {
+    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/MediaLedgerEvent.swift": {
+    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift": {
+    "docs/archived_duplicate_scrub_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/TreeStatistics.swift": {
+    "docs/hallie_tree_aggregate_queries.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/VolumeStatusEnums.swift": {
+    "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/ArchiveTimelineModelTests.swift": {
+    "docs/archive-view.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/CopyFamilyAssessorTests.swift": {
+    "docs/promote_helper_plan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/EvalPresenceRuleTests.swift": {
+    "docs/poi-cycles/cycle-03-minimum-hits.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/FamilyTreePersonMetadataTests.swift": {
+    "docs/hallie_titled_ancestors_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/HallieOwnerBindingAndBareNameTests.swift": {
+    "docs/hallie_spot_test_misses_2026_08_28.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/HallieWhichOneByYearTests.swift": {
+    "docs/hallie_spot_test_misses_2026_08_28.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/MasterArchiveLogicTests.swift": {
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/ResearchPersonTests.swift": {
+    "docs/research_person_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/UnifiedReviewSessionTests.swift": {
+    "docs/design/unified-review.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/VolumeRoleTaxonomyMigrationTests.swift": {
+    "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "VideoScan/VideoScanTests/VolumeRoleTests.swift": {
+    "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/design/analysis_ledger_design.md": {
+    "docs/immich_ideas.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/design/archive_angel_curation_direction.md": {
+    "docs/archive_angel_uniqueness_direction.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/design/family-tagging-and-search-roadmap.md": {
+    "docs/family_media_training_model.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/media_longterm_plan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/design/gauntlet-design-codex-2026-09-27.md": {
+    "docs/codex-ui-testing-handoff.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/metrics": "Historical brief text describing where the dashboard might publish; the dashboard lives on the metrics branch."
+  },
+  "docs/design/hallie_proposer_with_tools_design.md": {
+    "docs/hallie_tools.schema.json": "Proposed schema artifact in the retained Hallie design; not implemented."
+  },
+  "docs/design/hallie_two_mode_design.md": {
+    "docs/hallie_intent_recognizer_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/hallie_titled_ancestors_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/design/nightly_adversarial_review_design_2026-10-01.md": {
+    "docs/reviews/adversarial/declined.jsonl": "Planned generated ledger in the proposed nightly adversarial design; no implementation exists yet."
+  },
+  "docs/design/overnight_review_plan_2026_09_12.md": {
+    "docs/overnight-refactor-assessment-20260912": "Historical report branch name, not a document target."
+  },
+  "docs/design/web_interface.md": {
+    "../../VideoScan/VideoScan/HallieWebBridge.swift": "Dated design citation to a source-file location predating the feature-folder layout; outside the docs-path rewrite scope.",
+    "../../VideoScan/VideoScan/HallieWebServer.swift": "Dated design citation to a source-file location predating the feature-folder layout; outside the docs-path rewrite scope."
+  },
+  "docs/guides/documentation-map.md": {
+    "docs/donna-recipe-v1.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/guides/facial-recognition.md": {
+    "docs/catalog-aided-face-detection.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/design/unified-review.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/donna-gallery-report-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/donna-recipe-smoke-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/donna-recipe-v1.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/family_media_training_model.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/find-and-tag-design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/find_donna_scan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/hardening_audit_2026-06-20.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/immich_ideas.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/immich_reassessment_2026-06-20.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/issue-02-face-detection-accuracy.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/issue-03-dlib-rt-window.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/issue-04-hybrid-fd-mode.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/issue-06-custom-face-model.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/issue-07-multi-engine-simultaneous.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/issue-09-additional-fd-algorithms.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/morning_briefing_2026_04_23.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/person-eval-handoff-2026-07-11.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/person-recognition-evaluator.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/poi-cycles/cycle-01-aggregation.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/poi-cycles/cycle-02-refs-threshold.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/poi-cycles/cycle-03-minimum-hits.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/poi-cycles/cycle-04-donna-classifier.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/poi-cycles/cycle-05-embedding-quality.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/poi-cycles/ledger.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/research/immich-photoprism-face-audit-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/research/person-id-deep-research-2026-08-01.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/session_handoff_2026_04_24.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/synthetic_person_benchmark.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/tagging_people.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/test_gap_face_pipeline_2026-06-20.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/guides/media-archive.md": {
+    "docs/archive-view.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/archive_angel_alpha_status.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/archive_angel_phase2_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/archive_angel_uniqueness_direction.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/archive_readiness_indicator_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/archived_duplicate_scrub_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/issue-08-bad-file-triage.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/media_lifecycle_manager.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/media_longterm_plan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/plan_2026_08_11_cleanup_and_gold_archive.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/plan_2026_08_16_archive_init_and_redistribute.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/promote-helper-workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/promote_helper_plan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/runbook_2026_08_18_catalog_cleanup.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/video_classification.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/ops/codex_restart_handoff_2026_09_13.md": {
+    "docs/overnight-refactor-assessment-20260912": "Historical report branch name, not a document target."
+  },
+  "docs/ops/findings_2026_09_14_overnight.md": {
+    "docs/promote_and_prune_workflow_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/ops/morning_brief_2026-09-08.md": {
+    "docs/hallie_intent_recognizer_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/hallie_tree_aggregate_queries.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/practices/overnight_themes.md": {
+    "docs/archive_angel_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/practices/software_dev_policy.md": {
+    "docs/team-operations/rick-availability.local.md": "Optional local availability policy, not a tracked public document."
+  },
+  "docs/research/Media_Analyzer.md": {
+    "docs/issue-06-custom-face-model.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/media_longterm_plan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/research/pronunciation_training_research.md": {
+    "docs/pronunciation_drill_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/reviews/briefs/docs-reorg-brief.md": {
+    "docs/analysis": "The reorganization brief names the pre-reorganization folders it moved.",
+    "docs/metrics": "The reorganization brief names the pre-reorganization folders it moved.",
+    "docs/perf": "The reorganization brief names the pre-reorganization folders it moved."
+  },
+  "scripts/dashboard.sh": {
+    "docs/history.jsonl": "Generated dashboard data, intentionally gitignored; written by scripts/dashboard.sh from the metrics branch."
+  },
+  "scripts/find_donna_scan.py": {
+    "docs/find_donna_scan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "tests/test_codex_review.py": {
+    "docs/x.md": "Synthetic review-document path in an isolated test fixture; no repository document is read."
+  },
+  "tests/test_docs_links.py": {
+    "docs/guides/example.md": "Deliberately missing target used to test link-check failures and exact allowlisting.",
+    "docs/missing.md": "Deliberately missing target used to test link-check failures and exact allowlisting.",
+    "docs/new-missing.md": "Deliberately missing target used to test link-check failures and exact allowlisting.",
+    "docs/old-reviews/review-<slug>.md": "Deliberately missing target used to test link-check failures and exact allowlisting.",
+    "docs/retired.md": "Deliberately missing target used to test link-check failures and exact allowlisting."
+  },
+  "tools/donna-recipe/gallery_report.py": {
+    "docs/donna-gallery-report.md": "Example generated gallery-report output; tools/donna-recipe/gallery_report.py creates it when invoked.",
+    "docs/donna-recipe-v1.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "tools/person-eval/build_holdout_queue_skeleton.py": {
+    "docs/poi-holdout": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
+    "docs/poi-holdout/": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
+    "docs/team-channel/2026-07-23-1213-codex-poi-c4-c6-execution-handoff.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "tools/team-channel-monitor/Tests/TeamChannelMonitorTests/ReviewCyclesTests.swift": {
+    "docs/x.md": "Synthetic review-document path in an isolated test fixture; no repository document is read."
+  }
+}

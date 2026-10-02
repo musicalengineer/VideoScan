@@ -42,7 +42,7 @@ Output delta fields:
                               / \"imovie-project\" / \"fcp\"
 
 We deliberately do NOT set dossierProcessedAt — bundle metadata is
-NOT dossier work. The dial stays honest. Per docs/database_design.md.
+NOT dossier work. The dial stays honest. Per docs/guides/database_design.md.
 """
 from __future__ import annotations
 

@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - Provenance & Audit Trail value types
 //
 // These are the data envelopes for the three views in the
-// Provenance & Audit Trail feature (docs/relocate_volume_plan.md §2):
+// Provenance & Audit Trail feature (docs/design/relocate_volume_plan.md §2):
 //
 //   - VolumeProvenance    — "Where files from <volume> live now"
 //   - FileJourney         — "Following <filename>"

@@ -1,5 +1,5 @@
 // RemoteViewerSyncScopeTests.swift
-// Phase 1 remote use, slice 1 — sync scope (docs/remote_use_design.md).
+// Phase 1 remote use, slice 1 — sync scope (docs/design/remote_use_design.md).
 //
 // What a porch Mac mirrors from the master: catalog + POI (as before) PLUS
 // the compiled family tree (pointer + current generation + sources/), the

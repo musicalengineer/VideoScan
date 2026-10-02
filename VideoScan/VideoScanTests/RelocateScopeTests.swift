@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - RelocateScopeTests
 //
-// Covers the pure helpers from §2 of docs/relocate_volume_plan.md:
+// Covers the pure helpers from §2 of docs/design/relocate_volume_plan.md:
 //   - VideoScanModel.recordsScoped(to:in:)
 //   - VideoScanModel.rewrittenPath(forSourcePath:sourceRoot:destRoot:)
 //   - VideoScanModel.suggestDestinationName(forSourceVolumeName:now:)

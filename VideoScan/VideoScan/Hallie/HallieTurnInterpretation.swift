@@ -70,7 +70,7 @@ enum HallieConversationGuard {
         "your grandpa", "your uncle", "your aunt",
     ]
 
-    /// The archive vocabulary, split by FAMILY (docs/hallie_two_mode_design.md
+    /// The archive vocabulary, split by FAMILY (docs/design/hallie_two_mode_design.md
     /// step 1) so HallieModeClassifier can read each half; the guard itself
     /// still tests the UNION, so its behaviour is byte-identical to the one
     /// mixed set it had before. Catalog half: things one plays, counts or

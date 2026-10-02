@@ -19,7 +19,7 @@ import AppKit
 /// always reads from `/Volumes/CrucialX9/dossier-deltas/` (legacy name Crucial2TB accepted).
 ///
 /// The deltas are the write-ahead log behind catalog.json's dossier
-/// fields — see docs/database_design.md. Bundling them belt-and-suspenders
+/// fields — see docs/guides/database_design.md. Bundling them belt-and-suspenders
 /// covers the case where catalog.json itself is corrupt at restore time.
 enum DossierDeltaPaths {
     /// Live source directory in production. Tests override via
@@ -200,7 +200,7 @@ enum BundleExporter {
         // 5. Dossier JSONL deltas — the worker write-ahead log. catalog.json
         //    already carries the dossier fields, but the deltas are the
         //    durable source-of-truth that survives a corrupted catalog.
-        //    See docs/database_design.md for the recovery story. Resilient:
+        //    See docs/guides/database_design.md for the recovery story. Resilient:
         //    if the source dir is missing (Crucial2TB unmounted), the export
         //    still succeeds — Rick gets a warning, not a thrown error.
         let deltaSrcDir = dossierDeltaDirOverride ?? DossierDeltaPaths.liveDir

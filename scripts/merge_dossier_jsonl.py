@@ -110,7 +110,7 @@ class CatalogBusy(Exception):
 
 
 def atomic_write_catalog(catalog: dict, path: Path):
-    """External-writer contract (docs/catalog_write_safety_design.md §5),
+    """External-writer contract (docs/design/catalog_write_safety_design.md §5),
     same as scripts/catalog_reduce.py:
       1. flock catalog.lock non-blocking — the app holds it only for the
          milliseconds of its own write, so 'held' means retry next cycle;

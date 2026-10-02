@@ -1,6 +1,6 @@
 // ArchiveAngelCoverageTests.swift
-// Rules v13 coverage (2026-09-26, docs/footage_groups_gap_plan_2026-09-26.md
-// Stage 2, bounded by docs/codex-review-angel-coverage-2026-09-26.md).
+// Rules v13 coverage (2026-09-26, docs/design/footage_groups_gap_plan_2026-09-26.md
+// Stage 2, bounded by docs/reviews/codex/codex-review-angel-coverage-2026-09-26.md).
 // Rick: "If AA recommends 5 different versions of the same Thanksgiving
 // 1994, rather than misc birthdays, trips, christmas from other years not
 // yet archived, then AA is not working that well."
@@ -628,7 +628,7 @@ struct ArchiveAngelCoverageCutoffTests {
         #expect(projected < 40, "\(projected)")
     }
 
-    // MARK: codex final review (docs/codex-review-angel-coverage-final-2026-09-26.md)
+    // MARK: codex final review (docs/reviews/codex/codex-review-angel-coverage-final-2026-09-26.md)
 
     /// codex F1: A(1994, 100, proposed before) · B(1994, 99, fresh) ·
     /// C(2010, 98, proposed before) · D(2020, 97, fresh); count 2, year

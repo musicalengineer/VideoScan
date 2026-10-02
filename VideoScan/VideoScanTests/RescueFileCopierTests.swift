@@ -9,7 +9,7 @@
 // copy while adding the full source size to bytesWritten. On the drive
 // rescue path that is silent data loss with a green checkmark over it.
 //
-// Five dimensions (project policy, docs/testing_retrospective_2026_07_05.md):
+// Five dimensions (project policy, docs/practices/testing_retrospective_2026_07_05.md):
 //   1. Logic     — fresh / resumed / short destination / leftover .partial /
 //                  unreadable source, plus metadata preservation.
 //   2. Sensor    — "interrupted copy never leaves a final-named file" and

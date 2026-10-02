@@ -1,6 +1,6 @@
 // ArchiveAngelBufferHygiene.swift
 // Archive Angel curation Phase 2 — BUFFER HYGIENE, the pure half
-// (docs/archive_angel_curation_direction.md, Phase 2).
+// (docs/design/archive_angel_curation_direction.md, Phase 2).
 //
 // Rick 2026-09-19: the buffer held 82 GB on a disk with 11 GB free —
 // one ready batch of 70.7 GB untouched for four days, a ready batch with

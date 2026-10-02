@@ -1,6 +1,6 @@
 // ArchiveAngelAttention.swift
 // The Archive Angel's ATTENTION MEMORY — Phase 1 of
-// docs/archive_angel_curation_direction.md (Rick 2026-09-19: "AA keeps
+// docs/design/archive_angel_curation_direction.md (Rick 2026-09-19: "AA keeps
 // suggesting the same N files … the challenge is to get the AA to suggest
 // files that have not had any attention").
 //

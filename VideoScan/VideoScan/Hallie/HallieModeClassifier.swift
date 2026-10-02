@@ -1,6 +1,6 @@
 // HallieModeClassifier.swift
 // Pure, model-free decision of which FAMILY a turn belongs to — catalog
-// or family tree — before any lane runs (docs/hallie_two_mode_design.md
+// or family tree — before any lane runs (docs/design/hallie_two_mode_design.md
 // §3.3). It reads the sentence, the previous mode and at most two
 // identity-oracle answers; it never reads globals and never guesses:
 // when nothing settles the question the verdict is `.unknown`, which

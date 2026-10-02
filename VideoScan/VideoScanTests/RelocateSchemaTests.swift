@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - RelocateSchemaTests
 //
-// Covers the schema additions from §1 + §1B of docs/relocate_volume_plan.md:
+// Covers the schema additions from §1 + §1B of docs/design/relocate_volume_plan.md:
 //   - VideoRecord.originalFullPath: String?
 //   - VideoRecord.originVolume: String?
 //   - ArchiveStage.manuallyDeleted, .salvageFailed

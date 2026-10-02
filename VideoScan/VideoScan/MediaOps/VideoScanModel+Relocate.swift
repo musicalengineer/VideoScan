@@ -23,7 +23,7 @@ private let relocateLog = PersistentLog(name: "relocate")
 //
 // Source volume is NEVER deleted by this feature — Rick disconnects the
 // old drive at his discretion after verifying the migration. See
-// docs/relocate_volume_plan.md for the full spec.
+// docs/design/relocate_volume_plan.md for the full spec.
 
 // MARK: - Public types
 
@@ -743,7 +743,7 @@ extension VideoScanModel {
 
     /// Set `pendingRetireOffer` if the source volume is 100% disposed.
     /// Internal so tests can drive the same logic directly. See
-    /// docs/relocate_volume_plan.md §1B.
+    /// docs/design/relocate_volume_plan.md §1B.
     func maybeOfferRetire(for volumeRootPath: String) {
         guard Self.shouldOfferRetire(volumeRootPath: volumeRootPath, in: records) else {
             return

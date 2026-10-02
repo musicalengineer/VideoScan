@@ -150,7 +150,7 @@ struct ArchiveAngelFacadeTests {
         defaults.removePersistentDomain(forName: defaults.description)
     }
 
-    // MARK: Angel Checks + Keep footage current (docs/archive_angel_wise_design.md §4–§5)
+    // MARK: Angel Checks + Keep footage current (docs/design/archive_angel_wise_design.md §4–§5)
 
     @Test("settings: checks and footage-auto keys, ON when missing, persisted through the façade; a test host starts from the pristine defaults")
     func checksAndFootageSettings() throws {

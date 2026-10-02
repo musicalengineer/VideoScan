@@ -24,7 +24,7 @@
 //   tables     originality, delivery codecs, app-cache names, family folders
 //   coverage   (rules v13) one per event, the per-year share of a batch,
 //              the backlog bonus's numbers — additive, every key defaulted
-// See docs/archive_angel_policy.md for the reference and worked examples.
+// See docs/guides/archive_angel_policy.md for the reference and worked examples.
 //
 // An override is MERGED over the built-in rules, so a file may hold only
 // what it changes — `{"schemaVersion": 2, "weights": {"minimumDurationSeconds":
