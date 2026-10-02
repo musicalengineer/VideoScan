@@ -143,3 +143,10 @@ Scope: this scores the Master Archive (the designated archive tree on the `Famil
 - RFC 9043, *FFV1 Video Coding Format Versions 0, 1, and 3*: https://www.rfc-editor.org/rfc/rfc9043
 - Repo: `docs/guides/media-archive.md`; `docs/practices/invariants/Archive.md`; `docs/ops/morning_brief_2026-10-02.md`; `VideoScan/VideoScan/Archive/{ArchivePromoteEngine,ArchivePromoteJournal,VerifyArchiveCopiesJob,BindFixityToVolumeJob,ArchiveLockJob,ArchiveVolumeProtection,MediaLedger,PreservationChecklist,ArchiveReadiness}.swift`; `VideoScan/VideoScanCore/Sources/VideoScanCore/{ArchiveFixity,BackupAttestation,MediaLedgerEvent,ScanContext}.swift`; `VideoScan/VideoScan/MediaOps/TranscodeJob+Args.swift`. Feature dates come from `git log --follow`: Promote/Master Archive 2026-08-15, Verify Archive Copies 2026-08-20, Media Ledger 2026-09-13, volume protection 2026-09-22, Bind Fixity 2026-09-23, archive lock 2026-09-27.
 - Private memory notes (not in the repo; summarized generically): storage layout 2026-08-13, archive strategy, storage strategy, long-term plan, FamilyArchive read-only ruling, delete-safety principle, volume roles 2026-07-23.
+
+
+## 8. Answers from Rick (2026-10-02)
+
+- **Q1 off-site:** the catalog is backed up to a cloud provider; important videos are copied to the same provider piecemeal (not tracked). Planned: a 4 TB drive holding the most critical media, kept off-site with family, after junk/duplicate cleanup — target **2026-11-01**, then a full hard copy of everything. Effect: Storage reaches Level 1 for the critical set once the drive is off-site and verified against the 00_Index checksums; the piecemeal cloud copies count only for files the archive can prove are there.
+- **Proportionality (Rick):** this is a family archive, not life support or NASA — improve incrementally; the off-site critical copy is the priority, beyond it is judged case by case.
+- Q2–Q4: open.
