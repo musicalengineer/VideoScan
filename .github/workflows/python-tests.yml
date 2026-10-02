@@ -45,8 +45,12 @@ jobs:
       # numpy   — tests/test_find_person.py
       # openpyxl— scripts/VideoScan.py, imported by tests/test_videoscan_stress.py
       # pytest  — the runner, per the project's Python test convention
+      # pyyaml  — tests/test_nightly_findings_to_issues.py parses the nightly
+      #           workflow to pin least-privilege permissions (installed, not
+      #           importorskip'd: a skip would drop that check silently here,
+      #           the one place it matters)
       - name: Install minimal test dependencies
-        run: python -m pip install --disable-pip-version-check numpy openpyxl pytest
+        run: python -m pip install --disable-pip-version-check numpy openpyxl pytest pyyaml
 
       # Enforces the tracked-file list and both count floors. The local
       # nightly is intended to call this same script — that wiring is not

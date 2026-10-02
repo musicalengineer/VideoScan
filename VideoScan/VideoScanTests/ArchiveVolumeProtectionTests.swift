@@ -507,7 +507,19 @@ struct ArchiveVolumeProtectionSourceSensor {
     static let reviewed: [String: Int] = [
         "VideoScan/People/AdaFaceEngine.swift": 1, "VideoScan/People/ArcFaceEngine.swift": 1,
         "VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift": 1, "VideoScan/ArchiveAngel/Prepare/ArchiveAngelPlan.swift": 2,
-        "VideoScan/Archive/ArchivePromoteEngine.swift": 3, "VideoScan/Media/AudioTranscriber.swift": 1,
+        // ArchivePromoteEngine 3 → 4 (codex 2026-10-02 #4, 1ab2274f): + removeCreatedDirectories —
+        // unlinkat(AT_REMOVEDIR) (EMPTY dirs only; a file or symlink is ENOTDIR) of the folders
+        // THIS copyVerifyPublish call mkdirat'ed (reported only on mkdirat == 0), re-walked
+        // O_NOFOLLOW from the root, deepest first, only on .sourceChangedDuringCopy after the
+        // partial is gone. Pre-existing folders and anything another writer put there survive.
+        // The other three: this run's own .partial (removeContainedPartial; the publish defer)
+        // and the just-published name when the parent-dir fsync fails.
+        "VideoScan/Archive/ArchivePromoteEngine.swift": 4, "VideoScan/Media/AudioTranscriber.swift": 1,
+        // NEW 1 (codex 2026-10-02 #4, moved here by ff6b0764): ArchivePromoteJournal.retract unlinks
+        // 00_Index/.promote_journal.jsonl ONLY when this run's appendRetractable created it AND it
+        // still holds exactly that one line, byte for byte — under ArchiveIndexLock. Index data
+        // that this run wrote, never media.
+        "VideoScan/Archive/ArchivePromoteJournal.swift": 1,
         "VideoScan/Archive/ArchiveIndexRename.swift": 3,   // 2026-09-25: only 00_Index/.rename_backups/<stamp> folders (refused-rename cleanup + keep-newest-20 prune) — never media or index files. 2026-09-27 (codex review of GH #204): +1 `abandon` — a backup folder THIS process just claimed and failed to finish; prune now removes only real dirs carrying our complete marker. 2026-09-27 (codex re-review #1): −2 — the refused-rename cleanup removes only its own folder, under the lock, and never the `.rename_backups/` folder itself
         "VideoScan/MediaOps/BalanceAudioJob.swift": 1, "VideoScan/App/BundleExporter.swift": 1,
         "VideoScan/App/BundleImporter.swift": 2, "VideoScan/Media/CaptionRunner.swift": 2,
