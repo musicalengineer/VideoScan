@@ -921,7 +921,10 @@ final class VideoScanModel: ObservableObject {
     // CatalogStore(directory:) instance — necessary because the shared
     // CatalogStore short-circuits saves under XCTest to avoid polluting
     // Application Support. Production code never reassigns this.
-    var catalogStore: CatalogStore = .shared
+    // didSet: the designation guard's audit lines follow the store (GH #167).
+    var catalogStore: CatalogStore = .shared {
+        didSet { installDesignationAuditSink() }
+    }
 
     /// Live-reload polling task — set by `startLiveDossierReload()` in
     /// VideoScanModel+LiveReload.swift, cancelled by
@@ -1004,6 +1007,9 @@ final class VideoScanModel: ObservableObject {
         dashboard = DashboardState(logDirectory: logDirectory)
         installLifecycleObservers()
         restoreScanTargets()
+        // GH #167: designation START / OUTCOME / REFUSED lines reach the
+        // console, catalog.log and videoscan.log from the very first load.
+        installDesignationAuditSink()
         // Restore previously-scanned records so the user can browse the
         // catalog even when source volumes are offline.
         let restored = catalogStore.load()
