@@ -299,6 +299,14 @@ def test_skips_after_the_deadline(cenv, monkeypatch):
     assert "deadline" in confirm_results(cenv)["skipped"]
 
 
+def test_deadline_is_the_next_0930(monkeypatch):
+    from datetime import datetime
+    monkeypatch.delenv("VIDEOSCAN_ADV_DEADLINE", raising=False)
+    assert conf.set_deadline(datetime(2026, 10, 2, 5, 30)) == datetime(2026, 10, 2, 9, 30)
+    # A hand run in the evening (the 10-01 dry run tripped this) gets tomorrow morning.
+    assert conf.set_deadline(datetime(2026, 10, 1, 21, 56)) == datetime(2026, 10, 2, 9, 30)
+
+
 def test_sandbox_wrap_uses_the_profile(tmp_path, monkeypatch):
     monkeypatch.setenv("VIDEOSCAN_ADV_SANDBOX_EXEC", "/usr/bin/sandbox-exec")
     runner = conf.Runner(tmp_path / "wt", tmp_path, sandbox=True)

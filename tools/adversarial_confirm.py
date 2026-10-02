@@ -67,7 +67,7 @@ import re
 import shutil
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import adversarial_nightly as adv
@@ -190,10 +190,26 @@ def busy_reason() -> str | None:
     return None
 
 
+_deadline: datetime | None = None
+
+
+def set_deadline(now: datetime | None = None) -> datetime:
+    """The NEXT HH:MM (default 09:30) after the step starts: 05:30 → 09:30 the
+    same morning; a hand run at 22:00 → 09:30 tomorrow. An override of the
+    current minute or earlier today means 'already past' (tests)."""
+    global _deadline
+    now = now or datetime.now()
+    raw = os.environ.get("VIDEOSCAN_ADV_DEADLINE")
+    hh, mm = (raw or "09:30").split(":")
+    candidate = now.replace(hour=int(hh), minute=int(mm), second=0, microsecond=0)
+    if candidate <= now and not raw:
+        candidate += timedelta(days=1)
+    _deadline = candidate
+    return candidate
+
+
 def past_deadline() -> bool:
-    hh, mm = (os.environ.get("VIDEOSCAN_ADV_DEADLINE") or "09:30").split(":")
-    now = datetime.now()
-    return (now.hour, now.minute) >= (int(hh), int(mm))
+    return datetime.now() >= (_deadline or set_deadline())
 
 
 class Runner:
@@ -262,6 +278,10 @@ def xcode_common(worktree: Path, derived: Path) -> list[str]:
 
 def confirm(date: str, sandbox: bool = True, app_run: bool = True) -> int:
     started = time.monotonic()
+    set_deadline()
+    current = os.nice(0)
+    if current < 10:          # same as the LaunchAgent's Nice 10 when run by hand; children inherit
+        os.nice(10 - current)
     rdir = adv.run_dir(date)
     findings_file = rdir / "findings.json"
     adv.log_line("START", f"confirm {date} sandbox={sandbox} app_run={app_run}")
