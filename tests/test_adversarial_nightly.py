@@ -185,6 +185,17 @@ def test_name_status_filter_drops_renames_tests_docs_nonswift():
     assert dropped == {"rename": 1, "deleted": 1, "tests": 1, "docs": 1, "non-swift": 1}
 
 
+def test_comment_only_changes_are_dropped(env):
+    write(env["repo"], "VideoScan/VideoScan/Archive/Old.swift",
+          "// see the guide for details\n" + "struct Old { func keep() {} }\n" * 20)
+    sh(env["repo"], "commit", "-q", "-am", "comment only")
+    head = sh(env["repo"], "rev-parse", "HEAD").strip()
+    scope = adv.compute_scope(f"{env['base']}..{head}")
+    assert scope["files"] == [] and scope["dropped"]["comment-only"] == 1
+    assert adv.comment_only("+// a\n-// b\n+\n") and not adv.comment_only("+let x = 1\n+// a\n")
+    assert not adv.comment_only("")
+
+
 def test_scope_on_a_real_range(env):
     head = change_day(env["repo"])
     scope = adv.compute_scope(f"{env['base']}..{head}")

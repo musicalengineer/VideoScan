@@ -349,17 +349,30 @@ def filter_entries(entries: list[dict]) -> tuple[list[dict], dict]:
     return kept, dropped
 
 
+def comment_only(diff_text: str) -> bool:
+    """True when every changed line is blank or a Swift comment line — nothing
+    a reviewer could attack. An empty diff is not comment-only (mode change etc.)."""
+    changed = [line[1:].strip() for line in diff_text.splitlines()
+               if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+    return bool(changed) and all(not c or c.startswith(("//", "/*", "*", "*/")) for c in changed)
+
+
 def compute_scope(rng: str, inv_files: list | None = None) -> dict:
     inv_files = inv_files if inv_files is not None else invariants.load_all(invariants_dir())
     diff_range = rng if ".." in rng else f"{rng}~1..{rng}"
     raw = git("diff", "--name-status", "-M90%", diff_range)
     kept, dropped = filter_entries(parse_name_status(raw))
     files, out_of_scope = [], []
+    dropped["comment-only"] = 0
     for entry in kept:
         covering = invariants.covering(entry["path"], inv_files)
         bucket = invariants.bucket_for(entry["path"], inv_files)
         if not bucket:
             out_of_scope.append(entry["path"])
+            continue
+        if entry["status"] == "M" and comment_only(git("diff", "-U0", diff_range, "--", entry["path"], check=False)):
+            # e.g. the 10-01 docs/ reorg rewrote doc paths in 40 Swift comments
+            dropped["comment-only"] += 1
             continue
         primary = next((f for f in covering if f.tier == bucket), covering[0])
         files.append({**entry, "bucket": bucket, "group": primary.name,
@@ -976,6 +989,8 @@ def run(explicit_range: str | None, date: str | None, keep_worktree: bool = Fals
                 codex_review.update_cycle(cycle["id"], phase="failed", failure=why)
                 failure = failure or f"brief {b['index']}: {why}"
                 log_line("ERROR", f"brief {b['index']} failed: {why}")
+                if why == "interrupted":
+                    break           # a person stopped the run: do not start the next brief
                 continue
             b["answer"] = parsed["text"]
             found = parse_findings(parsed["text"])
