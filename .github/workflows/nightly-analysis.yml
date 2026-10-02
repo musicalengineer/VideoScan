@@ -206,15 +206,17 @@ jobs:
             exit 1
           fi
 
-      # Strict memory safety gets its OWN build (2026-10-01, validation run
-      # 36934781080). Folded into the build above, it added 1,590 warnings
-      # and moved the type-check timings the ratchet below gates on: median
-      # +12% over 126 shared functions, 148 → 168 slow identities, and one
-      # function (personCardEntry, 340 → 505 ms) tripped the 500 ms gate.
-      # The timing baseline was measured without the flag; keeping that
-      # build unchanged keeps the trend honest. Costs ~8 extra runner
-      # minutes. Reporting only: continue-on-error, and its outcome is
-      # passed to the findings job as the memory-safety tool's completeness.
+      # Strict memory safety gets its OWN build (2026-10-01). The type-check
+      # timing ratchet below gates on the build above, and its baseline was
+      # measured without this flag. Keeping that build byte-for-byte what it
+      # was keeps the timing trend comparable. (Validation: with the flag
+      # folded in, run 36934781080 tripped the 500 ms gate on
+      # personCardEntry at 505 ms; without it, run 36940500880 passed, yet
+      # timings were still ×1.17 vs the 10-01 nightly. So that trip was
+      # mostly runner jitter on a function sitting at the gate, not the
+      # flag.) Costs ~7 runner minutes. Reporting only: continue-on-error,
+      # and its outcome is the memory-safety tool's completeness in the
+      # findings job.
       - name: Build with strict memory safety (SE-0458), warnings only
         id: memsafe_build
         if: steps.build.outcome == 'success' && steps.memsafe.outputs.flag != ''
