@@ -280,16 +280,34 @@ extension PromoteToArchiveJob {
         let provisional = ArchivePathResolver.baseRelativePath(facts: facts, title: plan.archiveTitles[source.id])
         let claim = try await claimSourceDigest(source: source, entry: entry, provisional: provisional,
                                                 model: model, ctx: ctx)
-        guard case .claimed(let digest) = claim else { return claim.notClaimedResult }
+        guard case .claimed(let digest, let proven) = claim else { return claim.notClaimedResult }
         var claimPath = provisional
         var landed = false
         defer { if !landed { model.releasePromoteDigest(digest, relPath: claimPath, root: ctx.root) } }
 
+        // Codex 2026-10-02 #1 / #4 — PROOF before any journal entry,
+        // directory or registration. A stored fixity is only a fast path
+        // for the duplicate lookup above; it is never evidence that the
+        // source's CURRENT bytes are these. Read them now (one full read)
+        // and refuse on any difference — nothing has been written yet.
+        if !proven {
+            guard let actual = try await proveSourceDigest(source: source, entry: entry) else {
+                return .cancelled
+            }
+            if actual != digest {
+                return .failed(Self.storedDigestMismatch(recorded: digest, actual: actual))
+            }
+        }
+        testHookAfterSourceProof?(source)
+        if Task.isCancelled { return .cancelled }
+
+        // `provenSourceSHA` is the digest just read from the source (never
+        // a cached one): adoption compares the existing file against it.
         let choice = try await Self.chooseDestinationOffMain(
             facts: facts, title: plan.archiveTitles[source.id],
             root: ctx.root, sourcePath: source.fullPath,
             sourceSize: source.sizeBytes, claimed: claimedNames,
-            knownSourceSHA: digest)
+            provenSourceSHA: digest)
         let destURL = URL(fileURLWithPath: ctx.root, isDirectory: true)
             .appendingPathComponent(choice.relPath).standardizedFileURL
         guard ArchivePathResolver.isInside(path: destURL.path, root: ctx.root) else {
@@ -646,6 +664,12 @@ extension PromoteToArchiveJob {
     /// `_NN`. Names claimed by this batch and in-flight `.partial`s count
     /// as taken. The source is hashed at most ONCE (lazily, only if a
     /// same-size collision needs it).
+    ///
+    /// `provenSourceSHA` MUST be a digest of the source's CURRENT bytes
+    /// read in this run (codex 2026-10-02 #1) — never a stored
+    /// `ContentFixity`, which can lie: adoption would then register a
+    /// different file as this source's archive copy. nil = read the source
+    /// here if a collision needs it.
     #if compiler(>=6.2)
     @concurrent
     #endif
@@ -655,14 +679,14 @@ extension PromoteToArchiveJob {
                                          sourcePath: String,
                                          sourceSize: Int64,
                                          claimed: Set<String>,
-                                         knownSourceSHA: String? = nil) async throws -> DestinationChoice {
+                                         provenSourceSHA: String? = nil) async throws -> DestinationChoice {
         let rootURL = URL(fileURLWithPath: root, isDirectory: true)
         let base = ArchivePathResolver.baseRelativePath(facts: facts, title: title)
         let ext = (base as NSString).pathExtension
         let stemPath = (base as NSString).deletingPathExtension
-        // The duplicate check already has the source's digest (GH #190) —
-        // never read the source a second time for a same-size collision.
-        var cachedSourceSHA: String? = knownSourceSHA
+        // The caller proved the source's digest this run — never read the
+        // source a second time for a same-size collision.
+        var cachedSourceSHA: String? = provenSourceSHA
         func sourceSHA() throws -> String? {
             if let cachedSourceSHA { return cachedSourceSHA }
             let s = try ArchivePromoteEngine.sha256(path: sourcePath, shouldCancel: { Task.isCancelled })
@@ -790,7 +814,9 @@ extension PromoteToArchiveJob {
     /// What the duplicate check decided for one source.
     enum DigestClaim {
         /// Not in the archive; this digest is now claimed for `provisional`.
-        case claimed(String)
+        /// `proven` = the digest was READ from the source in this run; false =
+        /// it came from a stored fixity and must be proven before any write.
+        case claimed(String, proven: Bool)
         /// The archive (or a file landing right now) already holds these bytes.
         case alreadyArchived(String)
         case cancelled
@@ -813,9 +839,12 @@ extension PromoteToArchiveJob {
     func claimSourceDigest(source: VideoRecord, entry: ArchivePromotePlan.Entry, provisional: String,
                            model: VideoScanModel, ctx: RunContext) async throws -> DigestClaim {
         let digest: String
+        let proven: Bool
         if let trusted = await Self.trustedSourceDigestOffMain(path: source.fullPath, fixity: source.contentFixity) {
             digest = trusted
+            proven = false
         } else {
+            proven = true
             model.log("Promote: checking \(entry.filename) (\(Self.promoteByteText(max(1, source.sizeBytes)))) against the archive before copying…")
             promoteLog.notice("promote CHECK \(entry.filename, privacy: .public) (\(source.sizeBytes, privacy: .public) bytes) — hashing the source for the duplicate check")
             let reporter = PromoteProgressReporter()
@@ -838,7 +867,29 @@ extension PromoteToArchiveJob {
             promoteLog.notice("promote REFUSED \(entry.filename, privacy: .public): duplicate of \(held, privacy: .public) (sha256 \(digest, privacy: .public))")
             return .alreadyArchived(Self.duplicateRefusal(existingRelPath: held, digest: digest))
         }
-        return .claimed(digest)
+        return .claimed(digest, proven: proven)
+    }
+
+    /// Codex 2026-10-02 #1: one full read of the source, BEFORE the journal
+    /// intent, when its digest came from a stored fixity. nil = cancelled.
+    /// Logged before it starts (it can take minutes on a long tape).
+    func proveSourceDigest(source: VideoRecord, entry: ArchivePromotePlan.Entry) async throws -> String? {
+        model?.log("Promote: proving the source's current bytes (\(Self.promoteByteText(max(1, source.sizeBytes)))) before anything is written — a stored fingerprint is not evidence…")
+        let reporter = PromoteProgressReporter()
+        let fileBytes = max(1, source.sizeBytes)
+        let filename = source.filename
+        let proofProgress: @Sendable (Int64) -> Void = { [weak self] done in
+            guard let tick = reporter.tick(phase: .verifying, done: done, fileBytes: fileBytes) else { return }
+            let sub = "Reading \(filename) before copying · \(tick.doneText) of \(tick.totalText) · \(tick.rateText)\(tick.etaText)"
+            Task { @MainActor [weak self] in self?.applyPhaseSubtitle(sub) }
+        }
+        return try await Self.hashSourceOffMain(path: source.fullPath, progress: proofProgress)
+    }
+
+    /// The refusal when a stored fixity does not describe the bytes it is
+    /// stamped to (codex 2026-10-02 #1). Pure. Digest prefixes only.
+    nonisolated static func storedDigestMismatch(recorded: String, actual: String) -> String {
+        "the source changed since it was fingerprinted — its stored fingerprint (sha256 \(recorded.prefix(12))…) does not match its bytes now (sha256 \(actual.prefix(12))…) although the file's stamp is unchanged (a wrong fingerprint, or silent corruption). Nothing was written. Check the source file and re-fingerprint it before promoting"
     }
 
     /// GH #219: the date-agreement refusal for this source at `placement`,

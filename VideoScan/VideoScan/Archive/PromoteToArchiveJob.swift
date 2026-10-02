@@ -125,6 +125,12 @@ final class PromoteToArchiveJob: @MainActor MediaFileOperationJob {
     /// new file moves.
     var archiveDigests = ArchiveDigestIndex()
 
+    /// Test seam (always nil in production): runs on the main actor after a
+    /// file's digest is claimed AND proven, before the destination is
+    /// chosen or the journal intent is written — so a test can change the
+    /// source under the copy, or cancel, at a deterministic point.
+    var testHookAfterSourceProof: ((VideoRecord) -> Void)?
+
     /// Journal entries this run brought to `published` (file + manifest
     /// durable, catalog link in memory). Advanced to `done` ONLY after
     /// the batch-end `saveCatalogNow()` returns true (codex R3 blocker 5).
