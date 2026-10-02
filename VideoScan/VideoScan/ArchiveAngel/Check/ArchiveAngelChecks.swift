@@ -1,6 +1,6 @@
 // ArchiveAngelChecks.swift
 // Angel Checks — the Archive Angel does the checking before it asks
-// (docs/archive_angel_wise_design.md §4; Rick 2026-09-24: "if we already
+// (docs/design/archive_angel_wise_design.md §4; Rick 2026-09-24: "if we already
 // know we recommend 20 files and they all need audio balancing, can we do
 // that for the user or are we going to make him do it?"). Measured the
 // same day: 111 of the 113 recommended files had never been through Verify
@@ -476,7 +476,7 @@ final class ArchiveAngelChecks: ObservableObject {
 // MARK: - The "working hard enough" number
 
 /// Stalled = recommended rows on the page whose sound was never checked
-/// and that the checker is not handling (docs/archive_angel_wise_design.md
+/// and that the checker is not handling (docs/design/archive_angel_wise_design.md
 /// §1 Q5, §6). Target 0. Pure, O(rows shown).
 enum ArchiveAngelStalled {
     static func count(rows: [ArchiveAngelListRow], checking: Set<UUID>) -> Int {

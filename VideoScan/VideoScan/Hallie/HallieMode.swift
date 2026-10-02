@@ -1,6 +1,6 @@
 // HallieMode.swift
 // The two families of question Hallie answers, as a SESSION state
-// (docs/hallie_two_mode_design.md §3.1). Rick, 2026-09-13: "Hallie kinda
+// (docs/design/hallie_two_mode_design.md §3.1). Rick, 2026-09-13: "Hallie kinda
 // needs 2 modes (automatically switching): catalog/archive questions and
 // family-tree questions (including bios)." The mode lives on
 // ConversationMemory so every client (app, shell, web) gets it through

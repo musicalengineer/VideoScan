@@ -76,7 +76,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// The ledger's family key for this content ("h:…" / "p:…" / "");
     /// attention is looked up by record id AND content key.
     var contentKey: String
-    /// Phase 1 attention memory (docs/archive_angel_curation_direction.md):
+    /// Phase 1 attention memory (docs/design/archive_angel_curation_direction.md):
     /// what the Angel has already shown this person about this file.
     var attention: ArchiveAngelAttention
     /// Effective skips of the OTHER members of this file's event family
@@ -112,7 +112,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// The group's confidence — only Likely or stronger groups collapse
     /// (a Possible group is shown to the person, not decided for them).
     var footageConfidence: FootageConfidence?
-    /// Rules v12 (2026-09-25, docs/archive_angel_wise_design.md §3): the
+    /// Rules v12 (2026-09-25, docs/design/archive_angel_wise_design.md §3): the
     /// file lives under the Angel's OWN buffer root — a prepared companion
     /// (`.vs.archive.mov`, `.vs.preserve.mkv`, `_balanced`) waiting for
     /// review. Two of them reached the live list as "Worth a look". A
@@ -461,7 +461,7 @@ struct ArchiveAngelWeights: Sendable, Equatable, Codable {
     var downloadMaxKilobitsPerSecond = 4000.0
     var downloadMinimumDurationSeconds = 1200.0
     var downloadCapScore = 59
-    /// Phase 1 attention memory (docs/archive_angel_curation_direction.md,
+    /// Phase 1 attention memory (docs/design/archive_angel_curation_direction.md,
     /// 2026-09-19). Starting guesses; ArchiveAngelCurationSimulationTests
     /// is the instrument that tunes them.
     /// score × fatigueFactor^effectiveSkips. 0.5: a 200-point favourite
@@ -512,13 +512,13 @@ enum ArchiveAngelScorer {
     /// Ready/Master is a VOTE (no longer "already archived" — Rick
     /// 2026-09-22), and every record carries its recommendation class
     /// (Consolidation S3b); 12 = truthful readiness (2026-09-25,
-    /// docs/archive_angel_wise_design.md §3): the `angelWorkingCopy` safety
+    /// docs/design/archive_angel_wise_design.md §3): the `angelWorkingCopy` safety
     /// floor, a footage group's archived original excludes its other
     /// members (`archivedFootageOriginal`), the `recentDigitization` and
     /// `absurdBitrate` class rules, Person Finder compilations as app
     /// output, and RecordDateResolver's filename-year-beats-conversion-
     /// stamp rule — every v11 sidecar must rescore; 13 = coverage
-    /// (2026-09-26, docs/footage_groups_gap_plan_2026-09-26.md Stage 2):
+    /// (2026-09-26, docs/design/footage_groups_gap_plan_2026-09-26.md Stage 2):
     /// one pick per DAY per batch and a per-year share (both soft, both
     /// post-band), the `backlogBonus` signal over unique recordings, and
     /// the evidence file's `catalogRevision` stamp — every v12 sidecar

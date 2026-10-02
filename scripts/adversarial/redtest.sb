@@ -1,0 +1,39 @@
+;; sandbox-exec profile for the nightly adversarial review's drafted red tests
+;; (tools/adversarial_confirm.py, 2026-10-01).
+;;
+;;   sandbox-exec -f scripts/adversarial/redtest.sb -D HOME=$HOME -D CHECKOUT=$HOME/dev/VideoScan <cmd>
+;;
+;; A drafted test is code a model wrote at 00:30 and nobody has read. It runs
+;; inside a scratch worktree with synthetic data; this profile is the
+;; belt to the static lint's braces. It DENIES:
+;;   - writes anywhere under /Volumes (every family-media drive, the archive)
+;;   - writes to the app's real state: ~/Library/Application Support/VideoScan
+;;   - writes to the photo/movie/music libraries
+;;   - writes to the main checkout (the 2 AM nightly tests it)
+;;   - outbound network except loopback and unix sockets
+;; Everything else is allowed, because swift build / xcodebuild need their
+;; caches, module caches, temp dirs and the scratch worktree.
+;;
+;; LIMIT (documented in tools/adversarial_confirm.py): the sandbox is inherited
+;; by child processes only. `swift test` runs its test runner as a child, so
+;; Core drafts are fully inside it. An app-hosted XCTest bundle is launched by
+;; testmanagerd over XPC, NOT as a child of xcodebuild, so app drafts run
+;; OUTSIDE this profile; for them the lint and the app's TestEnvironment
+;; diversions are the guard. UserDefaults writes go through cfprefsd (XPC) and
+;; are not file writes this profile can see either.
+
+(version 1)
+(allow default)
+
+(deny file-write*
+    (subpath "/Volumes")
+    (subpath (string-append (param "HOME") "/Library/Application Support/VideoScan"))
+    (subpath (string-append (param "HOME") "/Pictures"))
+    (subpath (string-append (param "HOME") "/Movies"))
+    (subpath (string-append (param "HOME") "/Music"))
+    (subpath (param "CHECKOUT")))
+
+(deny network-outbound)
+(allow network-outbound
+    (remote unix-socket)
+    (remote ip "localhost:*"))

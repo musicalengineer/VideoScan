@@ -13,7 +13,7 @@
 // file — every field here is typed by a family member or derived
 // deterministically from what they typed.
 //
-// Durability, per docs/cyberbrain_design.md §7: temp file in the same
+// Durability, per docs/design/cyberbrain_design.md §7: temp file in the same
 // directory → full validation of the NEW archive → fsync → atomic rename over
 // cyberbrain.json, with the previous file copied to backups/ first. A crash
 // at any point leaves either the old file or the new file, never a torn one.
@@ -566,10 +566,12 @@ public enum CyberBrainWriter {
         caption: PhotoCaption,
         rootURL: URL
     ) throws -> Receipt {
-        let (root, existing) = try prepareRoot(rootURL)
-        let receipt = try appending(caption: caption, to: existing)
-        try save(receipt.archive, root: root, hadExisting: existing != nil)
-        return receipt
+        try withRootLock(rootURL) {
+            let (root, existing) = try prepareRoot(rootURL)
+            let receipt = try appending(caption: caption, to: existing)
+            try save(receipt.archive, root: root, hadExisting: existing != nil)
+            return receipt
+        }
     }
 
     /// Subject → CyberBrain person id, minting one when nobody matches. The
@@ -773,12 +775,14 @@ public enum CyberBrainWriter {
         saidAs: String?,
         rootURL: URL
     ) throws -> PronunciationReceipt {
-        let (root, existing) = try prepareRoot(rootURL)
-        guard let archive = existing else { throw WriteError.emptySubject }
-        let receipt = try settingPronunciation(
-            personID: personID, word: word, saidAs: saidAs, in: archive)
-        try save(receipt.archive, root: root, hadExisting: true)
-        return receipt
+        try withRootLock(rootURL) {
+            let (root, existing) = try prepareRoot(rootURL)
+            guard let archive = existing else { throw WriteError.emptySubject }
+            let receipt = try settingPronunciation(
+                personID: personID, word: word, saidAs: saidAs, in: archive)
+            try save(receipt.archive, root: root, hadExisting: true)
+            return receipt
+        }
     }
 
     /// Durable form of the by-name variant (mints the person if needed).
@@ -790,53 +794,36 @@ public enum CyberBrainWriter {
         saidAs: String?,
         rootURL: URL
     ) throws -> PronunciationReceipt {
-        let (root, existing) = try prepareRoot(rootURL)
-        let receipt = try settingPronunciation(
-            subjectName: subjectName, gedcomPersonID: gedcomPersonID, aliases: aliases,
-            word: word, saidAs: saidAs, in: existing)
-        try save(receipt.archive, root: root, hadExisting: existing != nil)
-        return receipt
+        try withRootLock(rootURL) {
+            let (root, existing) = try prepareRoot(rootURL)
+            let receipt = try settingPronunciation(
+                subjectName: subjectName, gedcomPersonID: gedcomPersonID, aliases: aliases,
+                word: word, saidAs: saidAs, in: existing)
+            try save(receipt.archive, root: root, hadExisting: existing != nil)
+            return receipt
+        }
     }
 
     // MARK: - Durable write
 
     /// Load (or start) the archive at `rootURL`, append, and save atomically.
     /// Returns the receipt for the saved archive. On any failure the file on
-    /// disk is exactly what it was before the call.
+    /// disk is exactly what it was before the call. Serialized per root
+    /// (`withRootLock`): a receipt always names a passage that is on disk.
     public static func record(
         _ testimony: Testimony,
         rootURL: URL
     ) throws -> Receipt {
-        let root = rootURL.standardizedFileURL
-        let fileManager = FileManager.default
-        if !fileManager.fileExists(atPath: root.path) {
-            do {
-                try fileManager.createDirectory(
-                    at: root, withIntermediateDirectories: true)
-            } catch {
-                throw WriteError.ioFailure(error.localizedDescription)
-            }
+        try withRootLock(rootURL) {
+            // Same root checks and load as every durable writer; a corrupt or
+            // unsafe archive propagates and is never replaced by a fresh one.
+            let (root, existing) = try prepareRoot(rootURL)
+            let receipt = try appending(testimony, to: existing)
+            // An idempotent repeat changes nothing — no rewrite, no backup churn.
+            if let existing, receipt.archive == existing { return receipt }
+            try save(receipt.archive, root: root, hadExisting: existing != nil)
+            return receipt
         }
-        let values = try? root.resourceValues(forKeys: [.isSymbolicLinkKey, .isDirectoryKey])
-        guard values?.isDirectory == true, values?.isSymbolicLink != true else {
-            throw WriteError.unsafeRoot(root.path)
-        }
-
-        let loader = CyberBrainLoader(rootURL: root)
-        let existing: CyberBrainArchive?
-        do {
-            existing = try loader.load()
-        } catch CyberBrainError.missingArchive {
-            existing = nil
-        }
-        // Any other loader error propagates: a corrupt or unsafe archive must
-        // never be silently replaced by a fresh one with a single passage.
-
-        let receipt = try appending(testimony, to: existing)
-        // An idempotent repeat changes nothing — no rewrite, no backup churn.
-        if let existing, receipt.archive == existing { return receipt }
-        try save(receipt.archive, root: root, hadExisting: existing != nil)
-        return receipt
     }
 
     /// Encoded exactly as the loader reads it back: ISO-8601 dates, stable

@@ -3,7 +3,7 @@
 // badge used to be `.help(aliasWarning)` — one tooltip for ten different
 // causes with ten different remedies.
 //
-// Dimensions (docs/testing_retrospective_2026_07_05):
+// Dimensions (docs/practices/testing_retrospective_2026_07_05.md):
 //   LOGIC   — one case per warning code, built from REAL overlay inputs
 //             (a relational alias, a row anchored at a deleted profile, a
 //             stale export pointer, each of the five pin failures, a

@@ -145,7 +145,7 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// instant before the move; one file at a time, Pause/Stop between
     /// files, held copies named in the row. PruneApplyJob.
     case pruneCopies
-    /// "Find Similar Footage" (Rick 2026-09-23, docs/find_original_design.md):
+    /// "Find Similar Footage" (Rick 2026-09-23, docs/design/find_original_design.md):
     /// walks the catalog METADATA — no media is read — and records which
     /// files are probably the same footage (copies, re-encodes, transcodes,
     /// exports). Pause/Stop between phases and apply slices.

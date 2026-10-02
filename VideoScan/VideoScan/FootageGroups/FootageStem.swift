@@ -1,6 +1,6 @@
 // FootageStem.swift
 // Find Similar Footage, Phase 1 — the NAME half of the "duration + name"
-// evidence rule (docs/find_original_design.md, top section).
+// evidence rule (docs/design/find_original_design.md, top section).
 //
 // Two files are name-matched when their normalized stems are equal. The
 // normalizer strips, in order:

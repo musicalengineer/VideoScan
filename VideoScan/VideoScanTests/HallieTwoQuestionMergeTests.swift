@@ -2,7 +2,7 @@
 // GH #210 (decided 2026-10-01): a two-question turn joins two Results into
 // one; the join dropped `superlative`, `subjectLifeStatus`, `refinableQuery`
 // and `retryOffer`, so "that is donna's line" right after a two-question
-// turn had no ranking to re-run. The rules (docs/hallie.md, "Two questions
+// turn had no ranking to re-run. The rules (docs/guides/hallie.md, "Two questions
 // in one turn"):
 //   • later clause wins (like `mode`): superlative, refinableQuery;
 //   • life status follows the subject the join names;

@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Nightly adversarial review, red-test confirm (05:30, after nightly_guarded.sh
+     ~02:00-03:30 and nightly_review.sh 04:30). Template: scripts/adversarial/install.sh
+     replaces __HOME__ and __CHECKOUT__. Cloned from com.videoscan.nightly-review.plist. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.videoscan.adversarial-confirm</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>__CHECKOUT__/tools/adversarial_nightly.py</string>
+        <string>confirm</string>
+        <!-- Shadow week: app drafts are BUILT (sandboxed) but the app-hosted test run,
+             which launches VideoScan.app as the XCTest host, is not executed. Remove
+             this line when Rick OKs app-hosted red tests at 05:30. Core drafts run. -->
+        <string>--no-app-run</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__CHECKOUT__</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>5</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/VideoScan/adversarial_review_launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/VideoScan/adversarial_review_launchd.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

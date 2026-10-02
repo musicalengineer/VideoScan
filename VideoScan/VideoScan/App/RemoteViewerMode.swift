@@ -1,6 +1,6 @@
 // RemoteViewerMode.swift
 // Process-wide "am I a viewer?" answer for Phase 1 of remote use
-// (docs/remote_use_design.md, Rick 2026-08-29: "when I am on the porch with
+// (docs/design/remote_use_design.md, Rick 2026-08-29: "when I am on the porch with
 // the M5 I can just launch the app … and talk to Hallie and play videos").
 //
 // CatalogSync decides master-vs-viewer from the hostname. That decision

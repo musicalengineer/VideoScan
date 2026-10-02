@@ -307,7 +307,7 @@ extension GedcomFamilyGraph.TreeIndex {
 /// The overlay file on disk. Every path comes from the injected
 /// `directory`; nothing else is consulted. Writes go through
 /// `AtomicFilePublish` (plain rename(2) — never `replaceItemAt`, which
-/// deadlocks in Sandbox.kext; docs/incident_2026_09_14_sandbox_rename_wedge.md).
+/// deadlocks in Sandbox.kext; docs/ops/incident_2026_09_14_sandbox_rename_wedge.md).
 ///
 /// The directory also holds each refresh's staging folder
 /// (`<FSID>-<stamp>/person.ged`). It must stay OUTSIDE every tree

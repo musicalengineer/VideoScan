@@ -19,7 +19,7 @@
 // record per rule would cost a second at 100k records); evaluation is enum
 // switches and set lookups.
 //
-// docs/archive_angel_policy.md is the user-facing reference (every field,
+// docs/guides/archive_angel_policy.md is the user-facing reference (every field,
 // operator and kind, with worked examples).
 //
 // (For Rick: think of this as a tiny interpreted rule table — the JSON is

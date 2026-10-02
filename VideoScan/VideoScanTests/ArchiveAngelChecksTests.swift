@@ -1,5 +1,5 @@
 // ArchiveAngelChecksTests.swift
-// Angel Checks (docs/archive_angel_wise_design.md §4): the background
+// Angel Checks (docs/design/archive_angel_wise_design.md §4): the background
 // Verify Audio loop — one at a time, parked behind the person and other
 // jobs, budgeted, once per record per launch, one log line per check —
 // driven here with a fake job, a fake clock and counting closures. No

@@ -222,6 +222,15 @@ struct ResearchStore: Sendable {
         }.sorted()
     }
 
+    /// A finding exactly as it reads back from dossier.json — dates at the
+    /// file's ISO-8601 whole-second precision. A writer that must later
+    /// recognise "the value I wrote" on disk compares against THIS, never
+    /// against its in-memory copy (whose `Date` may carry a fraction the
+    /// file does not keep). Codex review 2026-10-02 F1.
+    static func asStored(_ finding: ResearchFinding) throws -> ResearchFinding {
+        try decoder.decode(ResearchFinding.self, from: encoder.encode(finding))
+    }
+
     // MARK: Helpers
 
     private static let encoder: JSONEncoder = {

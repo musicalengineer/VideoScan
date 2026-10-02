@@ -47,7 +47,7 @@ private let publishLog = Logger(subsystem: "Rick-Breen.VideoScan",
 /// drift that way.
 ///
 /// Full evidence, both spindumps, the symbolicated kernel stacks and every
-/// harness: `docs/incident_2026_09_14_sandbox_rename_wedge.md`.
+/// harness: `docs/ops/incident_2026_09_14_sandbox_rename_wedge.md`.
 ///
 /// - Important: Do not reintroduce `FileManager.replaceItemAt` — or its other
 ///   spelling, `FileManager.replaceItem(at:withItemAt:backupItemName:options:
@@ -183,7 +183,7 @@ public enum AtomicFilePublish {
                         \(String(format: "%.0f", entry.age), privacy: .public)s — \
                         \(entry.destination, privacy: .public) \
                         (\(entry.byteCount, privacy: .public) bytes). If it never \
-                        completes, see docs/incident_2026_09_14_sandbox_rename_wedge.md
+                        completes, see docs/ops/incident_2026_09_14_sandbox_rename_wedge.md
                         """)
                 }
             }

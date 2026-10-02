@@ -357,7 +357,7 @@ struct ChroniclingAmericaSource: ResearchSource {
 // There is deliberately NO Find a Grave adapter. Find a Grave's robots.txt
 // has disallowed /memorial/search since 2024-11-25; the app fetched it
 // anyway until Rick approved the demotion (2026-10-01, GH #230, survey
-// docs/uk_scotland_records_survey_2026-10-01.md §6.1). The search is now a
+// docs/research/uk_scotland_records_survey_2026-10-01.md §6.1). The search is now a
 // pre-filled Record Finder link ("us.findagrave" in VideoScanCore's
 // RecordFinder registry) that opens in the reader's browser, and what they
 // find comes back through "I found a record…". Findings already saved with
@@ -366,40 +366,142 @@ struct ChroniclingAmericaSource: ResearchSource {
 // findagrave.com.
 
 // MARK: - Wikipedia / Wikidata
+//
+// Bug 2026-10-01: a full-text search for a 19th-century ancestor returned
+// the article on a 1965 film because a character in it shares the surname,
+// shown like any other finding. Every hit is now SCREENED (WikipediaVetting:
+// name on the title, Wikidata P31 = Q5, compatible P569/P570) and KEPT —
+// Rick's ruling: serendipity matters. Likely matches come first; the rest
+// follow as near-misses with a plain reason ("a film", "surname only",
+// "different era — born 1725", "couldn't be checked"). A check that cannot
+// run never yields a likely match. Requests per run, all batched:
+//   en.wikipedia.org  — 1 search + 1 prop=pageprops (QIDs, short descriptions)
+//   www.wikidata.org  — 1 wbsearchentities + 1 wbgetentities&props=claims
+// The fetcher's per-host pacing spaces each host independently.
 
 struct WikipediaSource: ResearchSource {
     let fetcher: any ResearchFetcher
     let kind: ResearchSourceKind = .wikipedia
+    /// The subject's own years, for the ± tolerance date check. Nil = only
+    /// the plan's year window applies.
+    let birthYear: Int?
+    let deathYear: Int?
+    /// Counts-only log sink (one line per run).
+    let log: @Sendable (String) -> Void
 
-    static let wikipediaAPI = "https://en.wikipedia.org/w/api.php"
-    static let wikidataAPI = "https://www.wikidata.org/w/api.php"
+    static let wikipediaHost = "en.wikipedia.org"
+    static let wikidataHost = "www.wikidata.org"
+    static let wikipediaAPI = "https://\(wikipediaHost)/w/api.php"
+    static let wikidataAPI = "https://\(wikidataHost)/w/api.php"
     static let limit = 5
+    /// Hard caps per run, per host (one search + one batched lookup each).
+    static let maxWikipediaRequests = 2
+    static let maxWikidataRequests = 2
+
+    init(fetcher: any ResearchFetcher, birthYear: Int? = nil, deathYear: Int? = nil,
+         log: @escaping @Sendable (String) -> Void = { _ in }) {
+        self.fetcher = fetcher
+        self.birthYear = birthYear
+        self.deathYear = deathYear
+        self.log = log
+    }
+
+    /// A search hit waiting for its checks.
+    struct Candidate: Equatable {
+        let source: ResearchSourceKind
+        let title: String
+        let excerpt: String
+        let url: String
+        var qid: String?
+        var description: String?
+        var pageID: Int?
+    }
 
     func search(plan: ResearchQueryPlan) async throws -> [ResearchFinding] {
         guard let primary = plan.nameVariants.first else { return [] }
-        var findings: [ResearchFinding] = []
+        let keys = WikipediaVetting.nameKeys(for: plan)
+        let lifespan = WikipediaVetting.Lifespan(birth: birthYear, death: deathYear, plan: plan)
+        var tally = WikipediaVetting.Tally()
+        var budget = [Self.wikipediaHost: Self.maxWikipediaRequests,
+                      Self.wikidataHost: Self.maxWikidataRequests]
+
+        /// Spends one request from the host's budget; nil when the URL is
+        /// nil or the budget is gone (the flow below never exceeds it).
+        func fetch(_ url: URL?) async throws -> ResearchFetchResult? {
+            guard let url, let host = url.host?.lowercased(), let left = budget[host], left > 0 else { return nil }
+            budget[host] = left - 1
+            try Task.checkCancellation()
+            return try await fetcher.fetch(url)
+        }
+
+        /// A screening lookup. Failure means "could not check": the hits
+        /// that needed it are kept as "couldn't be checked", the source
+        /// itself does not fail. Cancellation still propagates.
+        func lookup(_ url: URL?) async throws -> ResearchFetchResult? {
+            do {
+                return try await fetch(url)
+            } catch ResearchFetchError.cancelled {
+                throw ResearchFetchError.cancelled
+            } catch is CancellationError {
+                throw ResearchFetchError.cancelled
+            } catch {
+                return nil
+            }
+        }
+
+        // 1. Searches. A failed SEARCH still fails the source ("failed: …"),
+        //    exactly as before; only the screening lookups degrade.
+        var retrievedAt = Date()
+        var wikipediaHits: [Candidate] = []
+        if let result = try await fetch(Self.wikipediaURL(query: primary)) {
+            retrievedAt = result.retrievedAt
+            wikipediaHits = Self.parseWikipediaSearch(result.body)
+        }
+        var wikidataHits: [Candidate] = []
+        if let result = try await fetch(Self.wikidataURL(query: primary)) {
+            wikidataHits = Self.parseWikidataSearch(result.body)
+        }
+
+        // 2. Every Wikipedia page → its Wikidata item + short description,
+        //    in one batched request.
+        // (pagePropsURL is nil for no pages, so `lookup` makes no request.)
+        let props = try await lookup(Self.pagePropsURL(pageIDs: wikipediaHits.compactMap(\.pageID)))
+            .flatMap { Self.parsePageProps($0.body) }
+        for index in wikipediaHits.indices {
+            guard let id = wikipediaHits[index].pageID, let page = props?[id] else { continue }
+            wikipediaHits[index].qid = page.qid
+            wikipediaHits[index].description = page.shortDescription
+        }
+        let candidates = wikipediaHits + wikidataHits
+
+        // 3. One batched Wikidata lookup for P31 / P569 / P570.
+        var qids: [String] = []
+        for qid in candidates.compactMap(\.qid) where !qids.contains(qid) { qids.append(qid) }
+        // (entitiesURL is nil for no QIDs, so `lookup` makes no request.)
+        let facts = try await lookup(Self.entitiesURL(ids: qids))
+            .flatMap { WikipediaVetting.parseEntities($0.body) }
+
+        // 4. Screen, then rank: likely matches first, near-misses after,
+        //    each group in search order.
+        var likely: [ResearchFinding] = []
+        var nearMisses: [ResearchFinding] = []
         var seen: Set<String> = []
-        // Surname guard: a hit that does not even mention the surname is
-        // noise ("David" alone matches half the encyclopedia).
-        let surname = plan.surnameToken.isEmpty ? primary : plan.surnameToken
-        if let url = Self.wikipediaURL(query: primary) {
-            try Task.checkCancellation()
-            let result = try await fetcher.fetch(url)
-            for finding in Self.parseWikipedia(result.body, retrievedAt: result.retrievedAt, surname: surname)
-            where seen.insert(finding.id).inserted {
-                findings.append(finding)
-            }
+        for hit in candidates {
+            let evidence = WikipediaVetting.Evidence(title: hit.title, description: hit.description,
+                                                     facts: hit.qid.flatMap { facts?[$0] })
+            let screening = WikipediaVetting.screen(evidence, keys: keys, lifespan: lifespan)
+            let finding = ResearchFinding(source: hit.source, title: hit.title, date: nil,
+                                          excerpt: hit.excerpt, url: hit.url, retrievedAt: retrievedAt,
+                                          screening: screening)
+            guard seen.insert(finding.id).inserted else { continue }
+            tally.count(screening)
+            if screening.isNearMiss { nearMisses.append(finding) } else { likely.append(finding) }
         }
-        if let url = Self.wikidataURL(query: primary) {
-            try Task.checkCancellation()
-            let result = try await fetcher.fetch(url)
-            for finding in Self.parseWikidata(result.body, retrievedAt: result.retrievedAt, surname: surname)
-            where seen.insert(finding.id).inserted {
-                findings.append(finding)
-            }
-        }
-        return findings
+        log(tally.logLine)
+        return likely + nearMisses
     }
+
+    // MARK: URLs
 
     static func wikipediaURL(query: String) -> URL? {
         URL(string: wikipediaAPI + "?action=query&list=search&format=json&srlimit=\(limit)"
@@ -411,7 +513,27 @@ struct WikipediaSource: ResearchSource {
             + "&search=\(ResearchText.percentEncoded(query))")
     }
 
-    static func parseWikipedia(_ data: Data, retrievedAt: Date, surname: String) -> [ResearchFinding] {
+    /// `prop=pageprops` for up to `limit` pages: `wikibase_item` (the QID)
+    /// and `wikibase-shortdesc` (the one-line description).
+    static func pagePropsURL(pageIDs: [Int]) -> URL? {
+        guard !pageIDs.isEmpty else { return nil }
+        let ids = pageIDs.prefix(limit).map(String.init).joined(separator: "%7C")
+        return URL(string: wikipediaAPI + "?action=query&prop=pageprops"
+            + "&ppprop=wikibase_item%7Cwikibase-shortdesc&format=json&pageids=\(ids)")
+    }
+
+    /// `wbgetentities&props=claims` for every candidate QID in ONE request
+    /// (at most 2 × `limit`; the API allows 50).
+    static func entitiesURL(ids: [String]) -> URL? {
+        let safe = ids.filter { $0.range(of: #"^Q\d+$"#, options: .regularExpression) != nil }
+        guard !safe.isEmpty else { return nil }
+        return URL(string: wikidataAPI + "?action=wbgetentities&props=claims&format=json&ids="
+            + safe.prefix(limit * 2).joined(separator: "%7C"))
+    }
+
+    // MARK: Parsers (tolerant: shape drift yields nothing, never a throw)
+
+    static func parseWikipediaSearch(_ data: Data) -> [Candidate] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let query = root["query"] as? [String: Any],
               let hits = query["search"] as? [[String: Any]]
@@ -419,28 +541,48 @@ struct WikipediaSource: ResearchSource {
         return hits.compactMap { hit in
             guard let title = hit["title"] as? String, !title.isEmpty else { return nil }
             let snippet = ResearchText.stripHTML((hit["snippet"] as? String) ?? "")
-            let haystack = (title + " " + snippet).lowercased()
-            guard haystack.contains(surname.lowercased()) else { return nil }
             let slug = title.replacingOccurrences(of: " ", with: "_")
-            let url = "https://en.wikipedia.org/wiki/" + ResearchText.percentEncoded(slug)
-            return ResearchFinding(source: .wikipedia, title: title, date: nil,
-                                   excerpt: snippet, url: url, retrievedAt: retrievedAt)
+            return Candidate(source: .wikipedia, title: title, excerpt: snippet,
+                             url: "https://en.wikipedia.org/wiki/" + ResearchText.percentEncoded(slug),
+                             qid: nil, description: nil, pageID: hit["pageid"] as? Int)
         }
     }
 
-    static func parseWikidata(_ data: Data, retrievedAt: Date, surname: String) -> [ResearchFinding] {
+    static func parseWikidataSearch(_ data: Data) -> [Candidate] {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let hits = root["search"] as? [[String: Any]]
         else { return [] }
         return hits.compactMap { hit in
             guard let id = hit["id"] as? String, let label = hit["label"] as? String else { return nil }
             let description = (hit["description"] as? String) ?? ""
-            guard (label + " " + description).lowercased().contains(surname.lowercased()) else { return nil }
-            let url = (hit["concepturi"] as? String) ?? "https://www.wikidata.org/wiki/\(id)"
-            return ResearchFinding(source: .wikidata, title: label, date: nil,
-                                   excerpt: description.isEmpty ? "Wikidata item \(id)" : description,
-                                   url: url, retrievedAt: retrievedAt)
+            return Candidate(source: .wikidata, title: label,
+                             excerpt: description.isEmpty ? "Wikidata item \(id)" : description,
+                             url: (hit["concepturi"] as? String) ?? "https://www.wikidata.org/wiki/\(id)",
+                             qid: id, description: description, pageID: nil)
         }
+    }
+
+    struct PageProps: Equatable {
+        let qid: String?
+        let shortDescription: String?
+    }
+
+    /// pageid → (QID, short description). Nil when the body is not a
+    /// `query.pages` response at all, so every pending hit counts as
+    /// unverified.
+    static func parsePageProps(_ data: Data) -> [Int: PageProps]? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let query = root["query"] as? [String: Any],
+              let pages = query["pages"] as? [String: Any]
+        else { return nil }
+        var out: [Int: PageProps] = [:]
+        for raw in pages.values {
+            guard let page = raw as? [String: Any], let id = page["pageid"] as? Int else { continue }
+            let props = page["pageprops"] as? [String: Any]
+            out[id] = PageProps(qid: props?["wikibase_item"] as? String,
+                                shortDescription: props?["wikibase-shortdesc"] as? String)
+        }
+        return out
     }
 }
 
@@ -528,15 +670,21 @@ enum ResearchRunner {
 
         var status: String {
             if let failure { return "failed: \(failure)" }
-            return findings.isEmpty ? "no findings" : "\(findings.count) findings"
+            let nearMisses = findings.filter(\.isNearMiss).count
+            let kept = findings.count - nearMisses
+            let head = kept == 0 ? "no findings" : "\(kept) findings"
+            return nearMisses == 0 ? head : head + " · \(nearMisses) also turned up"
         }
     }
 
-    /// The general-web sources (no subject hints needed). Find a Grave is
-    /// not one of them any more (robots.txt; it is a Record Finder link).
-    static func sources(fetcher: any ResearchFetcher) -> [any ResearchSource] {
+    /// The general-web sources. Find a Grave is not one of them any more
+    /// (robots.txt; it is a Record Finder link). The subject's years, when
+    /// given, tighten Wikipedia's date check to ± tolerance of each.
+    static func sources(fetcher: any ResearchFetcher,
+                        birthYear: Int? = nil, deathYear: Int? = nil,
+                        log: @escaping @Sendable (String) -> Void = { _ in }) -> [any ResearchSource] {
         [ChroniclingAmericaSource(fetcher: fetcher),
-         WikipediaSource(fetcher: fetcher),
+         WikipediaSource(fetcher: fetcher, birthYear: birthYear, deathYear: deathYear, log: log),
          WebSearchSource(fetcher: fetcher)]
     }
 
@@ -548,9 +696,10 @@ enum ResearchRunner {
     /// Production source list for one subject: the general sources plus the
     /// record adapters (GH #230 Phase B), which read the subject's places,
     /// years and military flag and make NO request when they do not apply.
-    static func sources(fetcher: any ResearchFetcher, subject: ResearchSubject) -> [any ResearchSource] {
+    static func sources(fetcher: any ResearchFetcher, subject: ResearchSubject,
+                        log: @escaping @Sendable (String) -> Void = { _ in }) -> [any ResearchSource] {
         let hints = ResearchRecordHints(subject: subject)
-        return sources(fetcher: fetcher)
+        return sources(fetcher: fetcher, birthYear: subject.birthYear, deathYear: subject.deathYear, log: log)
             + [IrishCensusSource(fetcher: fetcher, hints: hints),
                TNADiscoverySource(fetcher: fetcher, hints: hints)]
     }

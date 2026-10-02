@@ -205,7 +205,7 @@ struct VolumeEditor: View {
         return f.string(from: d)
     }
 
-    // MARK: Remote viewer — SMB mapping (Phase 1, docs/remote_use_design.md)
+    // MARK: Remote viewer — SMB mapping (Phase 1, docs/design/remote_use_design.md)
 
     /// Per-volume opt-in: when this volume is mounted on the viewer (SMB
     /// share from the master, same name and identity), play files from the

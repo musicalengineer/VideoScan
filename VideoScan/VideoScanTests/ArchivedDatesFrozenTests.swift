@@ -12,7 +12,7 @@ import VideoScanCore
 // or anything inside the archive root) is never WRITTEN by a background
 // date writer. It may still DONATE its date to other copies.
 //
-// Five dimensions (docs/testing_retrospective_2026_07_05.md):
+// Five dimensions (docs/practices/testing_retrospective_2026_07_05.md):
 //   logic      every writer, both ways (control changes / archived frozen)
 //   scale      100k archive files through the whole-catalog pass, 0 written
 //   isolation  scratch CatalogStore + log dir; a fake archive root that is

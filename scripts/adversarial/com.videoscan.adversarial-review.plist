@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Nightly adversarial review, Tier A (00:30). Template: scripts/adversarial/install.sh
+     replaces __HOME__ and __CHECKOUT__ and installs it into ~/Library/LaunchAgents.
+     Cloned from com.videoscan.nightly-review.plist (PATH, Nice 10, Background, logs).
+     /usr/bin/python3 on purpose: Apple-signed, stdlib is all the tool needs. -->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.videoscan.adversarial-review</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>__CHECKOUT__/tools/adversarial_nightly.py</string>
+        <string>run</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>__CHECKOUT__</string>
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>0</integer>
+        <key>Minute</key>
+        <integer>30</integer>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>__HOME__/Library/Logs/VideoScan/adversarial_review_launchd.log</string>
+    <key>StandardErrorPath</key>
+    <string>__HOME__/Library/Logs/VideoScan/adversarial_review_launchd.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>__HOME__</string>
+    </dict>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>

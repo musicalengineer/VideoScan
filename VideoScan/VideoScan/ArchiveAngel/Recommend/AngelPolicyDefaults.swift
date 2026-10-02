@@ -62,7 +62,7 @@ struct AngelGradeBands: Codable, Sendable, Equatable {
 // MARK: - Coverage (rules v13; event labels v14)
 
 /// How a batch spreads across events and years (2026-09-26,
-/// docs/footage_groups_gap_plan_2026-09-26.md Stage 2). Rick: promote the
+/// docs/design/footage_groups_gap_plan_2026-09-26.md Stage 2). Rick: promote the
 /// most content with the most signal while avoiding noise — "if AA
 /// recommends 5 different versions of the same Thanksgiving 1994, rather
 /// than misc birthdays, trips, christmas from other years not yet
@@ -456,7 +456,7 @@ enum AngelPolicyDefaults {
         .init(field: .grade, op: .in, value: .strings(["A", "B"])),
     ])
 
-    /// Rules v12 (docs/archive_angel_wise_design.md §3.4): a file whose
+    /// Rules v12 (docs/design/archive_angel_wise_design.md §3.4): a file whose
     /// bytes per second no real recording reaches (the live catalog holds
     /// 116 above 1 Gbps — a 43 GB file for 37 s of picture) is a broken
     /// encode until a person has looked: Worth a look, never Ready.

@@ -291,16 +291,24 @@ struct ResearchSourceAdapterTests {
     // the demotion to a Record Finder link). RecordFinderAdapterTests pins
     // that no automated source requests findagrave.com.
 
-    @Test func wikipediaAndWikidataKeepOnlySurnameHits() async throws {
-        let source = WikipediaSource(fetcher: fetcher())
+    /// Was `wikipediaAndWikidataKeepOnlySurnameHits`, which pinned the 2026-10-01
+    /// bug: a place named for the surname was an ordinary finding. Now every
+    /// hit is kept but screened (Rick's ruling: serendipity, ranked and
+    /// labelled). This fixture has no pageprops / wbgetentities bodies, so
+    /// nothing can be checked and nothing is a likely match. The full matrix
+    /// is in WikipediaVettingTests.swift.
+    @Test func wikipediaAndWikidataHitsAreKeptButLabelledWhenUncheckable() async throws {
+        let recorder = FixtureResearchFetcher.RequestRecorder()
+        let source = WikipediaSource(fetcher: fetcher(recorder: recorder))
         let findings = try await source.search(plan: ResearchQueryPlan.build(subject: david(), now: now))
-        #expect(findings.map(\.source) == [.wikipedia, .wikidata])
-        try #require(findings.count == 2)
-        #expect(findings[0].title == "Latta, Pennsylvania")
+        #expect(findings.map(\.source) == [.wikipedia, .wikipedia, .wikidata, .wikidata])
+        #expect(findings.map { $0.screening?.reason } == ["surname only", "only mentions the name",
+                                                           "couldn't be checked", "a name page"])
+        #expect(findings.allSatisfy { $0.isNearMiss })
         #expect(findings[0].url == "https://en.wikipedia.org/wiki/Latta,_Pennsylvania")
         #expect(findings[0].excerpt == "Latta is a borough named for David Latta")
-        #expect(findings[1].title == "David Latta")
-        #expect(findings[1].url == "http://www.wikidata.org/entity/Q1234")
+        #expect(recorder.urls.contains { $0.contains("prop=pageprops") })
+        #expect(recorder.urls.contains { $0.contains("wbgetentities") })
     }
 
     @Test func webSearchUnwrapsRedirectsAndSurvivesNoParse() async throws {

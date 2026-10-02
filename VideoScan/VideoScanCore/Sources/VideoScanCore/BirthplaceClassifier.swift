@@ -106,11 +106,16 @@ public enum BirthplaceClassifier {
             return .unknown(raw)
         }
         if let place = lookup(last, raw: raw) { return place }
-        // "Lowell, Mass. U.S.A." — the last comma component is itself two
-        // dotted tokens; the rightmost token decides.
-        if let tail = last.split(separator: " ").last.map(String.init), tail != last,
-           let place = lookup(tail, raw: raw) {
-            return place
+        // "Lowell, Mass. U.S.A." — the last comma component is itself
+        // several tokens; the rightmost PHRASE the tables know decides,
+        // longest first, so "Sydney New South Wales" is New South Wales
+        // (Australia), never its last word "Wales" (generated-input F3), and
+        // "Belfast Northern Ireland" is Northern Ireland, not "Ireland".
+        let tokens = last.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+        if tokens.count > 1 {
+            for length in stride(from: min(4, tokens.count - 1), through: 1, by: -1) {
+                if let place = lookup(tokens.suffix(length).joined(separator: " "), raw: raw) { return place }
+            }
         }
         return .unknown(raw)
     }
@@ -124,7 +129,7 @@ public enum BirthplaceClassifier {
                          continent: entry.continent, mappedFromHistoricalName: entry.historical,
                          isAmbiguous: entry.ambiguous)
         }
-        if usStates.contains(key) || usAbbreviation(component.trimmingCharacters(in: .whitespaces)) {
+        if usStates.contains(key) || USPlaceNames.stateName(recorded: component) != nil {
             return Place(raw: raw, recordedCountry: recorded, country: unitedStates,
                          continent: .northAmerica, mappedFromHistoricalName: false)
         }
@@ -173,14 +178,19 @@ public enum BirthplaceClassifier {
     }
 
     /// A word that is written with a trailing period and is NOT the end
-    /// of a place: single letters ("U.S.A.", "N.Y."), the old written
-    /// state forms ("Mass.", "Conn."), and the place words ("St.", "Mt.").
+    /// of a place: single letters ("U.S.A.", "N.Y."), the state forms
+    /// written with a period ("Mass.", "Conn.", "Penna.", and the two-letter
+    /// "Va.", "Me.", "Ma." — generated-input F4: "Portsmouth Va. US" lost
+    /// its state when "Va." was taken for a sentence end), and the place
+    /// words ("St.", "Mt."). `word` arrives WITHOUT its period, so the state
+    /// check puts it back: the shared reader's case rule needs it.
     static func isAbbreviation(_ word: String) -> Bool {
         let letters = word.filter { $0.isLetter }
         guard !letters.isEmpty else { return false }
         if letters.count == 1 { return true }
         let key = normalize(word)
-        return usStates.contains(key) && key.count <= 5 || placeWordAbbreviations.contains(key)
+        if key.count <= 5, USPlaceNames.stateName(recorded: word + ".") != nil { return true }
+        return placeWordAbbreviations.contains(key)
     }
 
     static let placeWordAbbreviations: Set<String> = [
@@ -247,9 +257,13 @@ public enum BirthplaceClassifier {
         add(["barbados"], "Barbados", .northAmerica)
 
         // The British Isles.
-        add(["ireland", "eire", "republic of ireland"], "Ireland", .europe)
+        // "Eng.", "Scot.", "Ire." — the old written country forms the
+        // region table already knew (generated-input F6: "Leeds,
+        // Yorkshire, Eng." had no country and no continent here).
+        add(["ireland", "eire", "republic of ireland", "ire"], "Ireland", .europe)
         add(["england", "scotland", "wales", "northern ireland", "united kingdom", "uk", "u k",
-             "great britain", "britain", "isle of man", "guernsey", "channel islands"],
+             "great britain", "britain", "isle of man", "guernsey", "channel islands",
+             "eng", "engl", "scot"],
             unitedKingdom, .europe)
         // The continent: present-day countries.
         add(["germany", "deutschland"], "Germany", .europe)
@@ -295,7 +309,9 @@ public enum BirthplaceClassifier {
         add(["sicily", "sardinia", "tuscany", "piedmont", "lombardy", "kingdom of naples"], "Italy", .europe, historical: true)
         add(["flanders"], "Belgium", .europe, historical: true)
 
-        add(["australia"], "Australia", .oceania)
+        // New South Wales is Australia, whatever its last word says
+        // (generated-input F3: four readers flew the Welsh flag for it).
+        add(["australia", "new south wales", "colony of new south wales"], "Australia", .oceania)
         add(["new zealand"], "New Zealand", .oceania)
         add(["india"], "India", .asia)
         add(["china"], "China", .asia)
@@ -317,18 +333,10 @@ public enum BirthplaceClassifier {
         "new mexico", "new york", "north carolina", "north dakota", "ohio", "oklahoma", "oregon",
         "pennsylvania", "rhode island", "south carolina", "south dakota", "tennessee", "texas",
         "utah", "vermont", "virginia", "washington", "west virginia", "wisconsin", "wyoming",
-        "district of columbia", "washington dc", "washington d c", "d c",
-        // Old written short forms.
-        "mass", "conn", "penn", "penna", "calif", "wash", "tenn", "minn", "wisc", "okla", "nebr",
-        "colo", "ariz", "ind", "ill", "mich", "kans", "tex", "fla", "ala", "miss", "ore", "oreg",
-        "n carolina", "s carolina", "n dakota", "s dakota", "w virginia",
-    ]
-
-    static let usAbbreviations: Set<String> = [
-        "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA",
-        "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
-        "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT",
-        "VA", "WA", "WV", "WI", "WY", "DC",
+        "district of columbia",
+        // The old written short forms ("Conn.", "Penna.", "N. H.") live in
+        // the shared table, USPlaceNames.writtenForms — one list for every
+        // place reader.
     ]
 
     static let canadianProvinces: Set<String> = [
@@ -337,17 +345,12 @@ public enum BirthplaceClassifier {
         "alberta", "british columbia", "yukon", "northwest territories", "nunavut",
     ]
 
-    /// "KY" / "N.Y." / "Mass." are a state only when written as an
-    /// upper-case abbreviation — "in", "or", "me" in lower case are words.
-    /// "Mo." / "Ky." (capitalised, with the period) are the old written
-    /// forms and count too; "Portland, or" does not.
+    /// "KY" / "N.Y." are a state only when written as an upper-case
+    /// abbreviation — "in", "or", "me" in lower case are words. "Mo." /
+    /// "Ky." (capitalised, with the period) are the old written forms and
+    /// count too; "Portland, or" does not. The rule lives in USPlaceNames.
     static func usAbbreviation(_ recorded: String) -> Bool {
-        let letters = recorded.filter { $0.isLetter }
-        guard letters.count == 2,
-              recorded.allSatisfy({ $0.isLetter || $0 == "." || $0 == " " }),
-              usAbbreviations.contains(letters.uppercased()) else { return false }
-        if letters == letters.uppercased() { return true }
-        return letters.first?.isUppercase == true && recorded.hasSuffix(".")
+        USPlaceNames.isPostalAbbreviation(recorded)
     }
 
     /// Lower-cased, diacritics folded, periods removed, spaces collapsed.

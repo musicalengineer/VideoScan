@@ -73,7 +73,7 @@ protocol CaptionRunner: Sendable {
     /// MLXVLM runner) should override to issue the three prompts as
     /// a tight per-frame batch sharing one model load.
     ///
-    /// See `docs/family-tagging-and-search-roadmap.md` (item #4) and
+    /// See `docs/design/family-tagging-and-search-roadmap.md` (item #4) and
     /// `scripts/dossier_batch.py` (the original Python prototype) for
     /// the prompt wording and parse semantics this is parity with.
     func dossier(

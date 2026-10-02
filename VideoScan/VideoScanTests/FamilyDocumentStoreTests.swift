@@ -4,7 +4,7 @@
 // upload of a png, jpg, or pdf. This should be stored as such in the
 // database.").
 //
-// Five dimensions (docs/testing_retrospective_2026_07_05.md):
+// Five dimensions (docs/practices/testing_retrospective_2026_07_05.md):
 //   Logic     — import PNG/JPG/PDF, sidecar round trip, kind naming, no
 //               overwrite, every refusal, missing-file drop, removal to .trash
 //   Scale     — 500 documents listed under a budget
@@ -378,12 +378,22 @@ struct FamilyDocumentStoreTests {
         #expect(sb.store.documents(for: mary).isEmpty)
         #expect(try Data(contentsOf: sidecar) == Data("{ not json".utf8))
         // And an import refuses to guess: the new file is parked in .trash
-        // rather than listed against a list it cannot read.
-        #expect(throws: FamilyAssetStore.DocumentError.sidecarUnreadable(FamilyAssetStore.documentsSidecarName)) {
+        // rather than listed against a list it cannot read — and the error
+        // says so (codex review #18 F4: it used to be a bare
+        // sidecarUnreadable, indistinguishable from "nothing written").
+        let failure = #expect(throws: FamilyAssetStore.DocumentImportFailure.self) {
             try sb.store.importPersonDocument(from: pdf, kind: .death, note: "", into: folder)
         }
+        #expect((failure?.underlying as? FamilyAssetStore.DocumentError)
+                == .sidecarUnreadable(FamilyAssetStore.documentsSidecarName))
         let trash = documentsDir(folder).appendingPathComponent(FamilyAssetStore.documentsTrashFolderName)
-        #expect((try? fileManager.contentsOfDirectory(atPath: trash.path))?.count == 1)
+        let trashed = (try? fileManager.contentsOfDirectory(atPath: trash.path)) ?? []
+        #expect(trashed.count == 1)
+        if case .movedToTrash(let url) = failure?.rollback {
+            #expect(trashed == [url.lastPathComponent], "the failure names where the file went")
+        } else {
+            Issue.record("expected movedToTrash, got \(String(describing: failure?.rollback))")
+        }
     }
 
     /// Reflection review F3 (2026-09-21): when the rollback's move to
@@ -405,14 +415,60 @@ struct FamilyDocumentStoreTests {
         // A FILE where .trash should be: the rollback's move refuses.
         try Data("x".utf8).write(to: docs.appendingPathComponent(FamilyAssetStore.documentsTrashFolderName))
         let before = Set(try fileManager.contentsOfDirectory(atPath: docs.path))
-        #expect(throws: FamilyAssetStore.DocumentError.sidecarUnreadable(FamilyAssetStore.documentsSidecarName)) {
+        let failure = #expect(throws: FamilyAssetStore.DocumentImportFailure.self) {
             try sb.store.importPersonDocument(from: pdf, kind: .death, note: "", into: folder)
         }
+        #expect((failure?.underlying as? FamilyAssetStore.DocumentError)
+                == .sidecarUnreadable(FamilyAssetStore.documentsSidecarName))
         let orphans = Set(try fileManager.contentsOfDirectory(atPath: docs.path)).subtracting(before)
         #expect(orphans.count == 1, "behaviour unchanged: the orphan stays where it was written")
+        if case .leftInDocuments = failure?.rollback {
+            #expect(orphans == [failure?.filename ?? ""], "the failure names the file left behind")
+        } else {
+            Issue.record("expected leftInDocuments, got \(String(describing: failure?.rollback))")
+        }
         let logged = lock.withLock { lines }.filter { $0.contains("could not be moved to .trash") }
         #expect(logged.count == 1)
         if let orphan = orphans.first { #expect(logged.first?.contains(orphan) == true) }
+    }
+
+    /// Codex review #18 F5: the missing-file and unreadable-list diagnostics
+    /// named the person's FOLDER, and a folder name is a person's name. They
+    /// carry the person key now, and a damaged list is reported once, not on
+    /// every listing (each selection change lists).
+    @Test func diagnosticLogsNeverNameThePersonFolderAndAreNotRepeated() throws {
+        let sb = try sandbox()
+        defer { try? fileManager.removeItem(at: sb.base) }
+        var lines: [String] = []
+        let lock = NSLock()
+        PersonDocumentLog.shared.setExtraSink { line in lock.withLock { lines.append(line) } }
+        defer { PersonDocumentLog.shared.setExtraSink(nil) }
+        PersonDocumentLog.shared.resetMissing()
+        let synthetic = FamilyAssetPerson(gedcomID: "@I77@", name: "Synthetic Test Person")
+        let folder = try sb.store.folderForPhotoRequest(person: synthetic)
+        try #require(folder.lastPathComponent.contains("Synthetic_Test_Person"))
+
+        let pdf = try write(try pdfData(), named: "bc.pdf", in: sb)
+        let doc = try sb.store.importPersonDocument(from: pdf, kind: .birth, note: "", into: folder, for: synthetic)
+        try fileManager.removeItem(at: #require(doc.fileURL))
+        _ = sb.store.documents(for: synthetic)                 // missing file
+        _ = sb.store.documents(inPersonFolder: folder)        // the folder-only entry point too
+
+        let sidecar = documentsDir(folder).appendingPathComponent(FamilyAssetStore.documentsSidecarName)
+        try Data("{ not json".utf8).write(to: sidecar)
+        for _ in 0..<3 { _ = sb.store.documents(for: synthetic) }
+        _ = sb.store.documents(inPersonFolder: folder)
+
+        let captured = lock.withLock { lines }
+        #expect(captured.contains { $0.contains("missing on disk") && $0.contains(doc.filename) })
+        let unreadable = captured.filter { $0.contains("could not read") }
+        #expect(unreadable.count == 1, "a damaged list is reported once: \(unreadable)")
+        for line in captured {
+            #expect(!line.contains("Synthetic_Test_Person") && !line.contains("Synthetic Test Person"),
+                    "a diagnostic named the person: \(line)")
+        }
+        #expect(captured.contains { $0.contains("missing on disk") && $0.contains("@I77@") },
+                "the missing-file line carries the person key")
     }
 
     // MARK: Sensor — sidecar schema frozen
@@ -432,7 +488,13 @@ struct FamilyDocumentStoreTests {
         #expect(rows[0]["kind"] as? String == "BC")
         #expect(rows[0]["id"] as? String == doc.id.uuidString)
         #expect((rows[0]["addedAt"] as? String)?.contains("T") == true) // ISO-8601
-        #expect(Set(PersonDocumentKind.allCases.map(\.rawValue)) == ["BC", "DC", "MC", "Other"])
+        // MIL, CEN and DNA added 2026-10-01 (additive); the four original
+        // codes never change.
+        #expect(Set(PersonDocumentKind.allCases.map(\.rawValue)) == ["BC", "DC", "MC", "MIL", "CEN", "DNA", "Other"])
+        #expect(PersonDocumentKind.allCases == [.birth, .death, .marriage, .military, .census, .dna, .other],
+                "declaration order is the inspector's group order")
+        // DNA screenshots name living matches: the one private-by-default kind.
+        #expect(PersonDocumentKind.allCases.filter(\.isPrivate) == [.dna])
 
         // Round trip through the app's decoder: identical row.
         let decoded = try FamilyAssetStore.sidecarDecoder.decode(
@@ -444,6 +506,341 @@ struct FamilyDocumentStoreTests {
         #expect(decoded[0].id == expected.id)
         #expect(decoded[0].sha256 == expected.sha256)
         #expect(abs(decoded[0].addedAt.timeIntervalSince(expected.addedAt)) < 1)
+    }
+
+    // MARK: Compatibility — the kind codes (2026-10-01)
+
+    /// A sidecar exactly as the 2026-09-20 build wrote it (only BC/DC/MC/
+    /// Other, no extra keys) still lists every row.
+    @Test func aSidecarWrittenBeforeMilitaryAndCensusStillLoads() throws {
+        let sb = try sandbox()
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let folder = try sb.store.folderForPhotoRequest(person: mary)
+        let dir = documentsDir(folder)
+        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        let bytes = try pdfData()
+        let sha = FamilyAssetStore.sha256Hex(bytes)
+        var json: [String] = []
+        for (i, code) in ["BC", "DC", "MC", "Other"].enumerated() {
+            let name = "\(code)-20260920-10150\(i).pdf"
+            try bytes.write(to: dir.appendingPathComponent(name))
+            json.append("""
+            {"addedAt":"2026-09-20T10:15:0\(i)Z","byteCount":\(bytes.count),"filename":"\(name)",\
+            "id":"\(UUID().uuidString)","kind":"\(code)","note":"","originalFilename":"\(i).pdf","sha256":"\(sha)"}
+            """)
+        }
+        try Data("[\(json.joined(separator: ","))]".utf8)
+            .write(to: dir.appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+
+        let listed = sb.store.documents(for: mary)
+        #expect(listed.count == 4)
+        #expect(Set(listed.map(\.kind)) == [.birth, .death, .marriage, .other])
+        #expect(listed.allSatisfy { $0.unrecognizedKindCode == nil })
+    }
+
+    /// A code this build does not know (written by a newer one) reads as
+    /// Other — the rest of the list is NOT lost — and survives a rewrite of
+    /// the list (an import beside it). Codex review 2026-10-02 F4: it used
+    /// to be written back into `kind`, which the frozen legacy reader
+    /// rejects WHOLESALE (the old build then calls the entire list damaged).
+    /// Now `kind` is always BC/DC/MC/Other and the code travels in the
+    /// optional `category` key.
+    @Test func anUnknownKindCodeReadsAsOtherAndIsWrittenBackAsCategory() throws {
+        let sb = try sandbox(clock: fixedClock)
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let folder = try sb.store.folderForPhotoRequest(person: mary)
+        let dir = documentsDir(folder)
+        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        let bytes = try pdfData()
+        let name = "WILL-20300101-000000.pdf"
+        try bytes.write(to: dir.appendingPathComponent(name))
+        let futureID = UUID()
+        let row = """
+        [{"addedAt":"2030-01-01T00:00:00Z","byteCount":\(bytes.count),"filename":"\(name)",\
+        "id":"\(futureID.uuidString)","kind":"WILL","note":"from a newer build","originalFilename":"w.pdf",\
+        "sha256":"\(FamilyAssetStore.sha256Hex(bytes))"}]
+        """
+        try Data(row.utf8).write(to: dir.appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+
+        let listed = sb.store.documents(for: mary)
+        let future = try #require(listed.first { $0.id == futureID })
+        #expect(future.kind == .other)
+        #expect(future.unrecognizedKindCode == "WILL")
+
+        // Rewrite the list: import a military record beside it.
+        let pdf = try write(bytes, named: "mil.pdf", in: sb)
+        let added = try sb.store.importPersonDocument(from: pdf, kind: .military, note: "", into: folder)
+        #expect(added.filename.hasPrefix("MIL-"))
+        let rows = try sidecarRows(in: folder)
+        #expect(rows.count == 2)
+        let futureRow = rows.first { $0["id"] as? String == futureID.uuidString }
+        #expect(futureRow?["kind"] as? String == "Other", "`kind` only ever holds a code an older build knows")
+        #expect(futureRow?["category"] as? String == "WILL", "the newer build's code is kept, in `category`")
+        let rewritten = try Data(contentsOf:
+            documentsDir(folder).appendingPathComponent(
+                FamilyAssetStore.documentsSidecarName))
+        _ = try Self.legacySidecarDecoder.decode(
+            [LegacyPersonDocument].self, from: rewritten)
+        // And it round-trips: read again by this build, rewritten again.
+        let again = try #require(sb.store.documents(for: mary).first { $0.id == futureID })
+        #expect(again.kind == .other)
+        #expect(again.unrecognizedCategory == "WILL")
+        let pdf2 = try write(try pdfData(), named: "bc.pdf", in: sb)
+        try sb.store.importPersonDocument(from: pdf2, kind: .birth, note: "", into: folder)
+        let third = try sidecarRows(in: folder).first { $0["id"] as? String == futureID.uuidString }
+        #expect(third?["kind"] as? String == "Other")
+        #expect(third?["category"] as? String == "WILL")
+        // On disk the military row says "Other" (older builds read it) and
+        // carries its real kind in the optional `category` key.
+        let milRow = rows.first { $0["id"] as? String == added.id.uuidString }
+        #expect(milRow?["kind"] as? String == "Other")
+        #expect(milRow?["category"] as? String == "MIL")
+        #expect(Set(rows.flatMap { $0.keys })
+                    .isSubset(of: PersonDocument.sidecarKeys.union(PersonDocument.optionalSidecarKeys)),
+                "no keys beyond the frozen set and `category`")
+    }
+
+    // MARK: Compatibility — older builds read what this build writes
+
+    /// FROZEN LEGACY READER: `PersonDocumentKind` and `PersonDocument`
+    /// copied VERBATIM (names prefixed `Legacy`, doc comments trimmed) from
+    /// main at 41cba21b (FamilyAssetStore+Documents.swift), the last build
+    /// before MIL/CEN/DNA. Synthesized Codable, decoded the way that build's
+    /// `FamilyAssetStore.sidecarDecoder` did (plain JSONDecoder, ISO-8601
+    /// dates). Never edit this to make a test pass: it IS the old build.
+    private enum LegacyPersonDocumentKind: String, Codable, CaseIterable, Sendable {
+        case birth = "BC"
+        case death = "DC"
+        case marriage = "MC"
+        case other = "Other"
+    }
+
+    private struct LegacyPersonDocument: Codable, Identifiable, Equatable, Sendable {
+        let id: UUID
+        let kind: LegacyPersonDocumentKind
+        let filename: String
+        let originalFilename: String
+        let addedAt: Date
+        var note: String
+        let sha256: String
+        let byteCount: Int
+        var fileURL: URL? = nil
+
+        enum CodingKeys: String, CodingKey {
+            case id, kind, filename, originalFilename, addedAt, note, sha256, byteCount
+        }
+    }
+
+    private static let legacySidecarDecoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }()
+
+    /// File one document of every kind with THIS build, then read the list
+    /// with the frozen pre-2026-10-01 reader.
+    private func newFormatSidecar(_ sb: Sandbox) throws -> (folder: URL, data: Data, ids: [PersonDocumentKind: UUID]) {
+        let folder = try sb.store.folderForPhotoRequest(person: mary)
+        var ids: [PersonDocumentKind: UUID] = [:]
+        for kind in PersonDocumentKind.allCases {
+            let pdf = try write(try pdfData(), named: "\(kind.rawValue).pdf", in: sb)
+            ids[kind] = try sb.store.importPersonDocument(from: pdf, kind: kind, note: "", into: folder).id
+        }
+        let data = try Data(contentsOf: documentsDir(folder).appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+        return (folder, data, ids)
+    }
+
+    @Test func theFrozenLegacyReaderLoadsEveryRowOfANewFormatList() throws {
+        let sb = try sandbox(clock: fixedClock)
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let (_, data, ids) = try newFormatSidecar(sb)
+
+        // The old build's whole-list decode must not throw: a throw is what
+        // it reports as "damaged" (hides the list, refuses filing).
+        let legacy = try Self.legacySidecarDecoder.decode([LegacyPersonDocument].self, from: data)
+        #expect(legacy.count == PersonDocumentKind.allCases.count)
+        func legacyKind(_ kind: PersonDocumentKind) -> LegacyPersonDocumentKind? {
+            legacy.first { $0.id == ids[kind] }?.kind
+        }
+        #expect(legacyKind(.birth) == .birth)
+        #expect(legacyKind(.death) == .death)
+        #expect(legacyKind(.marriage) == .marriage)
+        for kind in [PersonDocumentKind.military, .census, .dna, .other] {
+            #expect(legacyKind(kind) == .other, "\(kind.rawValue) must read as Other in an older build")
+        }
+        // Every `kind` on disk is one the old enum knows.
+        let raw = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+        #expect(raw.allSatisfy { PersonDocumentKind.legacyCodes.contains($0["kind"] as? String ?? "") })
+    }
+
+    @Test func thisBuildRecoversTheRealKindsFromTheSameList() throws {
+        let sb = try sandbox(clock: fixedClock)
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let (_, _, ids) = try newFormatSidecar(sb)
+        let listed = sb.store.documents(for: mary)
+        #expect(listed.count == PersonDocumentKind.allCases.count)
+        for kind in PersonDocumentKind.allCases {
+            #expect(listed.first { $0.id == ids[kind] }?.kind == kind)
+        }
+        #expect(sb.store.documentSidecarIsReadable(inPersonFolder: try sb.store.folderForPhotoRequest(person: mary)))
+    }
+
+    /// An older build that rewrites the list (an import or removal there)
+    /// drops `category`. The generated file name still says DNA-/MIL-/CEN-,
+    /// so this build recovers the kind — a DNA row stays private.
+    @Test func aListRewrittenByAnOlderBuildKeepsItsKindsByFileName() throws {
+        let sb = try sandbox(clock: fixedClock)
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let (folder, data, ids) = try newFormatSidecar(sb)
+        let legacy = try Self.legacySidecarDecoder.decode([LegacyPersonDocument].self, from: data)
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        let rewritten = try encoder.encode(legacy)
+        let rawRewritten = try #require(try JSONSerialization.jsonObject(with: rewritten) as? [[String: Any]])
+        #expect(rawRewritten.allSatisfy { $0["category"] == nil }, "the old build drops category")
+        try rewritten.write(to: documentsDir(folder).appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+
+        let listed = sb.store.documents(for: mary)
+        for kind in PersonDocumentKind.allCases {
+            #expect(listed.first { $0.id == ids[kind] }?.kind == kind, "\(kind.rawValue) lost after an old rewrite")
+        }
+        #expect(listed.first { $0.id == ids[.dna] }?.kind.isPrivate == true)
+        #expect(PersonDocumentKind.newKind(fromFilename: "Other-20260920-101500.pdf") == nil)
+        #expect(PersonDocumentKind.newKind(fromFilename: "BC-20260920-101500.pdf") == nil)
+        #expect(PersonDocumentKind.newKind(fromFilename: "Mary_DNA.png") == nil)
+    }
+
+    /// A `category` a NEWER build invents reads as the row's `kind` and is
+    /// written back unchanged.
+    @Test func anUnknownCategoryIsKeptAndWrittenBack() throws {
+        let sb = try sandbox(clock: fixedClock)
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let folder = try sb.store.folderForPhotoRequest(person: mary)
+        let dir = documentsDir(folder)
+        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        let bytes = try pdfData()
+        let name = "Other-20300101-000000.pdf"
+        try bytes.write(to: dir.appendingPathComponent(name))
+        let futureID = UUID()
+        let row = """
+        [{"addedAt":"2030-01-01T00:00:00Z","byteCount":\(bytes.count),"category":"WILL","filename":"\(name)",\
+        "id":"\(futureID.uuidString)","kind":"Other","note":"","originalFilename":"w.pdf",\
+        "sha256":"\(FamilyAssetStore.sha256Hex(bytes))"}]
+        """
+        try Data(row.utf8).write(to: dir.appendingPathComponent(FamilyAssetStore.documentsSidecarName))
+        let future = try #require(sb.store.documents(for: mary).first { $0.id == futureID })
+        #expect(future.kind == .other)
+        #expect(future.unrecognizedCategory == "WILL")
+
+        let pdf = try write(bytes, named: "bc.pdf", in: sb)
+        try sb.store.importPersonDocument(from: pdf, kind: .birth, note: "", into: folder)
+        let rows = try sidecarRows(in: folder)
+        let back = rows.first { $0["id"] as? String == futureID.uuidString }
+        #expect(back?["kind"] as? String == "Other")
+        #expect(back?["category"] as? String == "WILL")
+    }
+
+    // MARK: Sensor — every write path stays readable by the old build
+
+    /// Codex review 2026-10-02 F4, the general sensor. A list seeded with
+    /// every awkward row this build can meet (an unknown future `kind`, an
+    /// unknown `category`, both at once, a new kind an older build already
+    /// rewrote without `category`) goes through EVERY write path the store
+    /// has — an import of each kind, a removal of a new-kind row, a removal
+    /// beside the unknown rows — and after each write the whole list must
+    /// decode with the frozen pre-2026-10-01 reader, `kind` must be a legacy
+    /// code on every row, and this build must still read every row.
+    @Test func everyWritePathEmitsAListTheFrozenLegacyReaderDecodes() throws {
+        let sb = try sandbox(clock: fixedClock)
+        defer { try? fileManager.removeItem(at: sb.base) }
+        let folder = try sb.store.folderForPhotoRequest(person: mary)
+        let dir = documentsDir(folder)
+        try fileManager.createDirectory(at: dir, withIntermediateDirectories: true)
+        let bytes = try pdfData()
+        let sha = FamilyAssetStore.sha256Hex(bytes)
+        // (filename, kind, category?) — the awkward seed rows.
+        let seeds: [(String, String, String?)] = [
+            ("WILL-20300101-000000.pdf", "WILL", nil),     // unknown kind
+            ("Other-20300101-000001.pdf", "Other", "PLAT"), // unknown category
+            ("LAND-20300101-000002.pdf", "LAND", "DEED"),  // both unknown
+            ("DNA-20300101-000003.pdf", "Other", nil),     // new kind, category dropped by an old rewrite
+            ("DEED-20300101-000004.pdf", "DEED", "DNA"),   // unknown kind, known category
+        ]
+        var rows: [String] = []
+        for (name, kind, category) in seeds {
+            try bytes.write(to: dir.appendingPathComponent(name))
+            let cat = category.map { "\"category\":\"\($0)\"," } ?? ""
+            rows.append("""
+            {"addedAt":"2030-01-01T00:00:00Z","byteCount":\(bytes.count),\(cat)"filename":"\(name)",\
+            "id":"\(UUID().uuidString)","kind":"\(kind)","note":"","originalFilename":"s.pdf","sha256":"\(sha)"}
+            """)
+        }
+        let sidecar = dir.appendingPathComponent(FamilyAssetStore.documentsSidecarName)
+        try Data("[\(rows.joined(separator: ","))]".utf8).write(to: sidecar)
+
+        var expectedCount = seeds.count
+        func check(_ step: String) throws {
+            let data = try Data(contentsOf: sidecar)
+            let legacy = try Self.legacySidecarDecoder.decode([LegacyPersonDocument].self, from: data)
+            #expect(legacy.count == expectedCount, "\(step): every row read by the old build")
+            let raw = try #require(try JSONSerialization.jsonObject(with: data) as? [[String: Any]])
+            #expect(raw.allSatisfy { PersonDocumentKind.legacyCodes.contains($0["kind"] as? String ?? "") },
+                    "\(step): only legacy codes in `kind`")
+            #expect(Set(raw.flatMap { $0.keys })
+                        .isSubset(of: PersonDocument.sidecarKeys.union(PersonDocument.optionalSidecarKeys)),
+                    "\(step): no keys beyond the frozen set and `category`")
+            #expect(sb.store.documents(for: mary).count == expectedCount, "\(step): this build reads every row")
+        }
+
+        // Write path 1: import, once per kind.
+        for kind in PersonDocumentKind.allCases {
+            let pdf = try write(bytes, named: "\(kind.rawValue).pdf", in: sb)
+            try sb.store.importPersonDocument(from: pdf, kind: kind, note: "", into: folder)
+            expectedCount += 1
+            try check("import \(kind.rawValue)")
+        }
+        // The seeded rows kept what they carried.
+        let listed = sb.store.documents(for: mary)
+        #expect(listed.first { $0.filename.hasPrefix("DNA-2030") }?.kind == .dna, "a DNA row stays DNA (private)")
+        #expect(listed.first { $0.filename.hasPrefix("DEED-") }?.kind == .dna, "a known category wins: private")
+        #expect(listed.first { $0.filename.hasPrefix("WILL-") }?.unrecognizedCategory == "WILL")
+        #expect(listed.first { $0.filename.hasPrefix("Other-2030") }?.unrecognizedCategory == "PLAT")
+
+        // Write path 2: removal — a new-kind row, then an unknown-kind row.
+        let dna = try #require(listed.first {
+            $0.kind == .dna && $0.filename.hasPrefix("DNA-") && !$0.filename.hasPrefix("DNA-2030")
+        })
+        try sb.store.removeDocument(dna, for: mary)
+        expectedCount -= 1
+        try check("remove DNA")
+        let will = try #require(sb.store.documents(for: mary).first { $0.filename.hasPrefix("WILL-") })
+        try sb.store.removeDocument(will, for: mary)
+        expectedCount -= 1
+        try check("remove WILL")
+    }
+
+    /// The encoder itself, exhaustively: every kind × every unknown-value
+    /// combination encodes to a row the frozen reader decodes.
+    @Test func everyEncodableRowDecodesWithTheFrozenLegacyReader() throws {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        var made = 0
+        for kind in PersonDocumentKind.allCases {
+            for code in [nil, "WILL"] as [String?] {
+                for category in [nil, "PLAT"] as [String?] {
+                    let row = PersonDocument(id: UUID(), kind: kind, filename: "\(kind.rawValue)-x.pdf",
+                                             originalFilename: "x.pdf", addedAt: fixedClock, note: "",
+                                             sha256: "00", byteCount: 1,
+                                             unrecognizedKindCode: code, unrecognizedCategory: category)
+                    let data = try encoder.encode([row])
+                    #expect(throws: Never.self, "\(kind.rawValue) code \(code ?? "-") category \(category ?? "-")") {
+                        _ = try Self.legacySidecarDecoder.decode([LegacyPersonDocument].self, from: data)
+                    }
+                    made += 1
+                }
+            }
+        }
+        #expect(made == PersonDocumentKind.allCases.count * 4)
     }
 
     // MARK: Scale

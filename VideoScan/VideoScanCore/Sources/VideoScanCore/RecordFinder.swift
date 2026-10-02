@@ -14,7 +14,7 @@
 // of query parameters drawn from the person (`Field`), and the conditions
 // under which it is worth offering (`Condition`). Adding an English or
 // Scottish archive is adding a value to `britain`, not writing code — the
-// sources in docs/uk_scotland_records_survey_2026-10-01.md §5 went in that
+// sources in docs/research/uk_scotland_records_survey_2026-10-01.md §5 went in that
 // way. A site whose query format could not be confirmed is a `formOnly`
 // site: it lands on the search form and says so (`isPrefilled == false`).
 //

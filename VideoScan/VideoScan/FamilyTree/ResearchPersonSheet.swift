@@ -34,8 +34,15 @@ final class ResearchPersonModel: ObservableObject {
     @Published private(set) var isRunning = false
     @Published private(set) var statusLine = ""
     @Published var errorMessage: String?
-    /// Lore drafts by finding id, committed on submit/blur.
-    @Published var loreDrafts: [String: String] = [:]
+    /// Lore drafts by finding id, committed on submit/blur. Changed only
+    /// through `editLore` (the user typing) or by following the disk.
+    @Published private(set) var loreDrafts: [String: String] = [:]
+    /// Findings whose draft the user has typed into since it last matched
+    /// the disk (codex review #18 F2). Only these are ever committed; every
+    /// other draft follows the file, so an untouched field can never write
+    /// a stale copy over lore another pane saved meanwhile.
+    /// (C++: a dirty-bit set beside a cache.)
+    private var editedLore: Set<String> = []
 
     private let store: ResearchStore
     private let fetcher: any ResearchFetcher
@@ -61,7 +68,8 @@ final class ResearchPersonModel: ObservableObject {
         self.record = record
         // Default: every source, including the record adapters that read
         // this subject's places and years (GH #230 Phase B).
-        self.makeSources = sources ?? { ResearchRunner.sources(fetcher: $0, subject: subject) }
+        // Wikipedia's vetting writes one counts-only line to the same log.
+        self.makeSources = sources ?? { ResearchRunner.sources(fetcher: $0, subject: subject, log: log) }
         self.log = log
         self.now = now
         self.plan = ResearchQueryPlan.build(subject: subject, now: now())
@@ -70,6 +78,9 @@ final class ResearchPersonModel: ObservableObject {
     }
 
     var findings: [ResearchFinding] { dossier.findings }
+    /// The two groups the list shows (≤ 500 findings: a cheap filter).
+    var mainFindings: [ResearchFinding] { dossier.mainFindings }
+    var nearMissFindings: [ResearchFinding] { dossier.nearMissFindings }
     var confirmedUntoldCount: Int { dossier.untoldConfirmed.count }
     var toldCount: Int { dossier.findings.filter { $0.toldItemID != nil }.count }
 
@@ -80,6 +91,7 @@ final class ResearchPersonModel: ObservableObject {
                 dossier = saved
                 if let savedPlan = saved.plan { plan = savedPlan }
                 loreDrafts = Dictionary(uniqueKeysWithValues: saved.findings.map { ($0.id, $0.lore) })
+                editedLore.removeAll()
                 statusLine = saved.lastRunAt.map { "Last run \(Self.shortDate($0)) · \(saved.findings.count) findings" }
                     ?? "Not run yet"
             } else {
@@ -138,7 +150,10 @@ final class ResearchPersonModel: ObservableObject {
         isRunning = false
         runTask = nil
         let failed = outcomes.filter { $0.failure != nil }.count
-        statusLine = "\(dossier.findings.count) findings from \(outcomes.count - failed) of \(outcomes.count) sources"
+        let nearMisses = dossier.nearMissFindings.count
+        statusLine = "\(dossier.findings.count - nearMisses) findings"
+            + (nearMisses == 0 ? "" : " (+\(nearMisses) also turned up)")
+            + " from \(outcomes.count - failed) of \(outcomes.count) sources"
         log("Research: run finished (\(dossier.findings.count) findings, \(failed) sources failed)")
     }
 
@@ -146,11 +161,29 @@ final class ResearchPersonModel: ObservableObject {
         mutate { $0.setVerdict(verdict, for: id) }
     }
 
+    /// The user typed in a lore field: the draft is now theirs until it is
+    /// committed, and a refresh from disk leaves it alone.
+    func editLore(_ text: String, for id: String) {
+        loreDrafts[id] = text
+        editedLore.insert(id)
+    }
+
     /// Commit the draft for one finding (Return in the field / focus lost).
+    /// A draft the user never edited is not committed: it is the disk's own
+    /// value, possibly older than what is on disk now.
+    ///
+    /// An edited draft always goes through `mutate`, which compares it with
+    /// the lore ON DISK under the per-key lock (an equal value writes
+    /// nothing) — never with this pane's copy (codex review 2026-10-02 F3:
+    /// a failed save used to land in the copy, so the retry saw "already
+    /// saved", skipped the write and dropped the words). The edited mark
+    /// clears only after a save that is proven to have succeeded; a failed
+    /// one keeps it, so the next commit (or Tell Hallie) tries again.
     func commitLore(for id: String) {
+        guard editedLore.contains(id) else { return }
         let draft = loreDrafts[id] ?? ""
-        guard dossier.findings.first(where: { $0.id == id })?.lore != draft else { return }
-        mutate { $0.setLore(draft, for: id) }
+        guard mutate({ $0.setLore(draft, for: id) }) else { return }
+        editedLore.remove(id)
     }
 
     /// Confirmed, not-yet-told findings → CyberBrain attestations. Each is
@@ -160,7 +193,7 @@ final class ResearchPersonModel: ObservableObject {
     /// the same passage — QA 2026-10-01 P3-5).
     @discardableResult
     func tellHallie() -> Int {
-        for id in dossier.findings.map(\.id) { commitLore(for: id) }
+        for id in editedLore.sorted() { commitLore(for: id) }   // only what the user typed
         mutate { _ in }                                   // pick up other writers' changes
         var told = 0
         var failures: [String] = []
@@ -189,9 +222,14 @@ final class ResearchPersonModel: ObservableObject {
     /// lock: read now → change → write), then show the result. Never saves
     /// this pane's in-memory copy over someone else's newer file — the
     /// "I found a record" filer or a second window (QA 2026-10-01 P2-1).
-    /// On a store error the change is still shown here, with the error.
-    private func mutate(_ change: (inout ResearchDossier) -> Void) {
+    /// On a store error the change is NOT applied here (codex review
+    /// 2026-10-02 F3): the pane keeps showing what is on disk — re-read if
+    /// the file is readable — and says what failed. Returns whether the
+    /// change reached the disk.
+    @discardableResult
+    private func mutate(_ change: (inout ResearchDossier) -> Void) -> Bool {
         let subject = self.subject
+        var saved = true
         do {
             let updated = try store.update(key: subject.key) { onDisk in
                 var working = onDisk ?? ResearchDossier(subject: subject)
@@ -201,12 +239,23 @@ final class ResearchPersonModel: ObservableObject {
             }
             if let updated { dossier = updated }
         } catch {
-            change(&dossier)
             errorMessage = error.localizedDescription
+            saved = false
+            do {
+                if let onDisk = try store.loadDossier(key: subject.key) { dossier = onDisk }
+            } catch {
+                // Unreadable too (the usual reason the save failed): keep
+                // the last copy that WAS on disk. The save error above is
+                // the one Rick needs to see; this read error is the same
+                // fault, so it is not shown twice.
+            }
         }
-        for finding in dossier.findings where loreDrafts[finding.id] == nil {
+        // Untouched drafts follow the dossier as it is NOW; the user's own
+        // unsaved typing is left alone (codex review #18 F2).
+        for finding in dossier.findings where !editedLore.contains(finding.id) {
             loreDrafts[finding.id] = finding.lore
         }
+        return saved
     }
 
     static func shortDate(_ date: Date) -> String {
@@ -222,6 +271,8 @@ final class ResearchPersonModel: ObservableObject {
 struct ResearchPersonSheet: View {
     @StateObject private var model: ResearchPersonModel
     let onClose: () -> Void
+    /// "Also turned up — probably not this person" starts collapsed.
+    @State private var showNearMisses = false
 
     init(model: ResearchPersonModel, onClose: @escaping () -> Void) {
         _model = StateObject(wrappedValue: model)
@@ -324,24 +375,55 @@ struct ResearchPersonSheet: View {
                 }
                 .frame(maxWidth: .infinity)
             } else {
-                List(model.findings) { finding in
-                    ResearchFindingRow(
-                        finding: finding,
-                        lore: Binding(
-                            get: { model.loreDrafts[finding.id] ?? finding.lore },
-                            set: { model.loreDrafts[finding.id] = $0 }),
-                        onVerdict: { model.setVerdict($0, for: finding.id) },
-                        onCommitLore: { model.commitLore(for: finding.id) })
-                    .listRowSeparator(.visible)
+                let nearMisses = model.nearMissFindings
+                List {
+                    ForEach(model.mainFindings) { finding in row(finding) }
+                    if !nearMisses.isEmpty {
+                        // Rick 2026-10-01: keep near-misses for serendipity,
+                        // but apart from the findings and folded away.
+                        Section {
+                            if showNearMisses {
+                                ForEach(nearMisses) { finding in row(finding) }
+                            }
+                        } header: {
+                            Button {
+                                showNearMisses.toggle()
+                            } label: {
+                                HStack(spacing: 6) {
+                                    Image(systemName: showNearMisses ? "chevron.down" : "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                    Text("Also turned up — probably not this person (\(nearMisses.count))")
+                                        .font(.system(size: 12, weight: .semibold))
+                                }
+                                .contentShape(Rectangle())
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(.secondary)
+                            .help("Search hits that failed a check: not a person, a different name, a different era, or couldn't be checked. Kept in case one is useful; nothing here goes to Hallie unless you confirm it.")
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }
         }
     }
 
+    private func row(_ finding: ResearchFinding) -> some View {
+        ResearchFindingRow(
+            finding: finding,
+            lore: Binding(
+                get: { model.loreDrafts[finding.id] ?? finding.lore },
+                set: { model.editLore($0, for: finding.id) }),
+            onVerdict: { model.setVerdict($0, for: finding.id) },
+            onCommitLore: { model.commitLore(for: finding.id) })
+        .listRowSeparator(.visible)
+    }
+
     private var footer: some View {
         HStack {
-            Text("\(model.findings.count) findings · \(model.findings.filter { $0.verdict == .confirmed }.count) confirmed · \(model.toldCount) told")
+            Text("\(model.findings.count - model.nearMissFindings.count) findings"
+                 + (model.nearMissFindings.isEmpty ? "" : " · \(model.nearMissFindings.count) also turned up")
+                 + " · \(model.findings.filter { $0.verdict == .confirmed }.count) confirmed · \(model.toldCount) told")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
             Spacer()
@@ -370,6 +452,15 @@ private struct ResearchFindingRow: View {
                     .padding(.horizontal, 6).padding(.vertical, 2)
                     .background(badgeColor.opacity(0.25))
                     .clipShape(Capsule())
+                if let screening = finding.screening {
+                    // "Likely match" in green; a near-miss's plain reason
+                    // ("a film", "surname only", …) in grey.
+                    Text(screening.isNearMiss ? screening.reason : "Likely match")
+                        .font(.system(size: 10, weight: .semibold))
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background((screening.isNearMiss ? Color.gray : Color.green).opacity(0.25))
+                        .clipShape(Capsule())
+                }
                 Text(finding.title).font(.system(size: 13, weight: .semibold)).lineLimit(1)
                 if let date = finding.date {
                     Text(date).font(.system(size: 11)).foregroundStyle(.secondary)

@@ -46,7 +46,7 @@ Personal video cataloging and person-finding suite for organizing family home vi
 | `VideoScan/VideoScan/Model/VideoScanModel.swift` | Core scanning, ffprobe, CSV export, audio/video correlation |
 | `VideoScan/VideoScan/People/PersonFinderModel.swift` | Multi-job face recognition engine, reference loading, job lifecycle |
 | `VideoScan/VideoScan/People/PersonFinderView.swift` | Person finder UI (reference bar, settings, jobs, results) |
-| `docs/source_layout.md` | Which feature folder under `VideoScan/VideoScan/` holds what; data-risk folders for review |
+| `docs/guides/source_layout.md` | Which feature folder under `VideoScan/VideoScan/` holds what; data-risk folders for review |
 | `tests/run_personfinder_tests.py` | Manifest-driven test runner for face recognition |
 | `tests/personfinder_cases.json` | Test case definitions and expectations |
 
@@ -80,7 +80,7 @@ Finding "Donna" across a large family home video collection. The project is dedi
 - Core features operational: cataloging, face detection, clip extraction, compilation
 - Recent work focused on PersonFinderModel and PersonFinderView
 
-## Feature-test checklist (adopted 2026-07-05 — see docs/testing_retrospective_2026_07_05.md)
+## Feature-test checklist (adopted 2026-07-05 — see docs/practices/testing_retrospective_2026_07_05.md)
 Every feature/fix ships with tests along FIVE dimensions, not just the first:
 1. **Logic** — ordinary unit tests
 2. **Scale** — if it iterates `records`: 100k synthetic records + explicit time budget
@@ -237,5 +237,5 @@ accumulated knowledge of this repo, and every pass costs real money. So:
 - **Close the loop:** each finding is closed against a pinning test or
   explicitly declined with a reason, in the review doc.
 - **Record spend:** put the credit cost of the pass and the finding count in
-  the header of `docs/codex-review-*.md` (findings per dollar) so the
+  the header of `docs/reviews/codex/codex-review-*.md` (findings per dollar) so the
   end-of-October review of this policy is evidence-based.

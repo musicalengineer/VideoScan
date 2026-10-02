@@ -136,9 +136,16 @@ extension LifeAndTimes {
         }
 
         /// The age in `year` for someone born `birth`; nil when they are
-        /// PROVEN not yet born (the whole interval is after `year`).
+        /// PROVEN not yet born (the whole interval is after `year`) — and
+        /// nil when a BOUNDED birth (BEF / AFT / BET / FROM / TO) leaves
+        /// them possibly not yet born, so the bound it would speak is 0
+        /// (generated-input F9/F10): "BEF 1947" in 1941 was "at least 0",
+        /// "TO 1868" in 1861 "at least 0", "FROM 1929" in 1929 "no more
+        /// than 0". Such a bound says nothing true; the sentence falls back
+        /// to its age-free form. ABT / exact keep their clamped arithmetic
+        /// (`low` 0 = "possibly born"), which no sentence speaks as a bound.
         public static func at(_ year: Int, birth: DatedYear) -> QualifiedAge? {
-            if let lo = birth.lower, lo > year { return nil }
+            if noAgeToSpeak(at: year, birth) { return nil }
             let low = birth.upper.map { max(0, year - $0) }
             let high = birth.lower.map { max(0, year - $0) }
             switch birth.qualifier {
@@ -164,6 +171,18 @@ extension LifeAndTimes {
             case .unknown:
                 return nil
             }
+        }
+
+        /// Proven not yet born in `year` (the whole interval after it), or
+        /// a BEF / AFT / BET / FROM / TO birth that may fall in or after
+        /// `year`: the latest possible birth is at or after it, or the
+        /// interval is open above and opens at or after it.
+        static func noAgeToSpeak(at year: Int, _ birth: DatedYear) -> Bool {
+            if let lo = birth.lower, lo > year { return true }
+            guard birth.qualifier == .before || birth.qualifier == .after || birth.qualifier == .between else { return false }
+            if let up = birth.upper { return up >= year }
+            if let lo = birth.lower { return lo >= year }
+            return false
         }
     }
 
@@ -385,9 +404,13 @@ extension LifeAndTimes {
     static func birthMoment(_ birth: DatedYear, event: HistoricalEvent) -> (LifeMoment, Int?)? {
         let s = event.startYear, e = event.endYear
         guard let upper = birth.upper else {
-            // Open-ended (AFT): born after the start → around it; else the
-            // age is an upper bound, hedged on being born (see spoken).
-            return (birth.lower ?? Int.min) > s ? (.bornAround, nil) : nil
+            // Open-ended (AFT / FROM): born in or after the start year →
+            // around it; else the age is an upper bound, hedged on being
+            // born (see spoken). `>=`, not `>`: "FROM 1929" opens IN the
+            // Depression's first year and spoke "no more than 0"
+            // (generated-input F9). The neighbouring tests already take the
+            // start year as "around" (`upper >= s` below).
+            return (birth.lower ?? Int.min) >= s ? (.bornAround, nil) : nil
         }
         guard upper >= s else { return nil }
         if let lower = birth.lower, lower == upper {

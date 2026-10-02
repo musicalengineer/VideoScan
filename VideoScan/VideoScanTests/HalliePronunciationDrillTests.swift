@@ -757,7 +757,7 @@ struct HalliePronunciationDrillTests {
         #expect(text.contains("interpreted: pronunciation question (local)"))
     }
 
-    // MARK: - 10. Phonemes (lexicon v2, docs/pronunciation_training_research.md)
+    // MARK: - 10. Phonemes (lexicon v2, docs/research/pronunciation_training_research.md)
 
     @Test func respellingsDeriveMisakiPhonemesDeterministically() {
         typealias P = HalliePhonemes

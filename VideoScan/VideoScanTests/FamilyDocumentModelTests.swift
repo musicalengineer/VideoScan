@@ -253,6 +253,11 @@ struct FamilyDocumentModelTests {
         let message = await model.removeDocument(row)
         #expect(message?.contains("no longer on disk") == true, "message: \(message ?? "nil")")
         #expect(log.first(containing: "missing on disk")?.contains(row.document.filename) == true)
+        // Codex review #18 F5 class: the person's folder (named after them)
+        // never reaches the app log — not through a full path either.
+        let folderName = fx.folder.lastPathComponent
+        #expect(log.first(containing: "refused to remove")?.contains(folderName) == false,
+                "the refusal line names the person's folder: \(log.first(containing: "refused to remove") ?? "")")
         await waitUntil("the listing drops the row") { model.selectedDocuments.isEmpty && !model.isLoadingSelectedDocuments }
         #expect(model.validateDocumentRemoval(row) == .notListed)
         // The sidecar was not rewritten: the entry is still there for the

@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - AdaFace plugin migration & persistence tests (GH #144)
 //
-// Five-dimension coverage notes (docs/testing_retrospective_2026_07_05.md):
+// Five-dimension coverage notes (docs/practices/testing_retrospective_2026_07_05.md):
 //  - Logic: token migration + threshold selection (here and in ModelTests /
 //    PersonFinderLifecycleTests).
 //  - Isolation / poisoned state: every persistence test below runs against

@@ -965,7 +965,7 @@ struct CatalogView: View {
         // §1B Retire Volume — surfaces automatically after a Relocate
         // run that leaves 100% of the source volume's records marked
         // .manuallyDeleted, AND only after the post-Apply summary has
-        // been acknowledged. See docs/relocate_volume_plan.md §1B.
+        // been acknowledged. See docs/design/relocate_volume_plan.md §1B.
         .sheet(item: $model.pendingRetireOffer) { offer in
             RelocateRetireSheet(offer: offer)
         }

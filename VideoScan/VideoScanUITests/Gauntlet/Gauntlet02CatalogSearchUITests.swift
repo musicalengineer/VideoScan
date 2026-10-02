@@ -11,7 +11,7 @@
 //  Known risk (documented in CombineWorkflowUITests): typeText into a
 //  SwiftUI TextField is the flakiest XCUITest primitive on macOS 26.5.
 //  If this flow flakes on the M1, the search step — not the assertion —
-//  is the suspect; see docs/gauntlet.md § Known limitations.
+//  is the suspect; see docs/guides/gauntlet.md § Known limitations.
 //
 
 import XCTest

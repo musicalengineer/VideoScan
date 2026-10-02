@@ -91,7 +91,7 @@ public struct FamilyGraphCompiledStore {
     /// The ingest gate. Injected so a test can force a failure.
     public var verify: (_ decoded: GedcomFamilyGraph, _ source: GedcomFamilyGraph) -> [String]
         = GedcomCompiledTree.verify(decoded:against:)
-    /// Remote-viewer read mode (docs/remote_use_design.md Phase 1): the
+    /// Remote-viewer read mode (docs/design/remote_use_design.md Phase 1): the
     /// generation was compiled on the MASTER and arrived by verified sync,
     /// so its raw sources are not on this disk (they name master paths).
     /// True skips the per-source re-hash in `usableManifest` — the sync

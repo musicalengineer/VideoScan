@@ -48,7 +48,7 @@
 //    *previous* live dir as `.sync-previous/` for one generation in
 //    case the new copy turns out to be wrong after the fact.
 //
-// Phase 1 remote use (docs/remote_use_design.md, 2026-08-29): the scope
+// Phase 1 remote use (docs/design/remote_use_design.md, 2026-08-29): the scope
 // grew from "catalog + POI" to everything the porch Mac needs to show
 // the same tree, people, notes and voice as the master — see
 // `CatalogSyncScope.phase1`. One entry (People/) normally lives on the

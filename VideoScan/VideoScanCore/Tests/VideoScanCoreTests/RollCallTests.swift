@@ -103,18 +103,47 @@ struct RollCallTests {
 
     // MARK: Privacy
 
-    @Test func livingPrivateLeftOutInnerCircleNameOnly() {
+    // Rick 2026-10-01: "we should refrain from showing living people such as
+    // me and Donna, someday we'll have a roll call but not yet." By default
+    // NO living person is in the credits — the inner circle included.
+    @Test func noLivingPersonByDefaultInnerCircleIncluded() {
         let people = [person(1, born: 1990, gen: 1, inner: false), person(2, born: 1960, gen: 0, inner: true),
                       person(3, born: 1850, gen: 3)]
         let list = RollCall.build(people) { p in
             p.id == "@I3@" ? .deceased : (p.isInnerCircle ? .livingInnerCircle : .livingPrivate)
         }
-        #expect(list.map(\.id).sorted() == ["@I2@", "@I3@"])
-        let home = list.first { $0.id == "@I2@" }!
-        #expect(home.isLiving && home.years == nil && home.place == nil && home.birthYear == nil)
+        #expect(list.map(\.id) == ["@I3@"])
+        #expect(!RollCall.Options().includesLivingInnerCircle, "the family roll call switch is off by default")
         let old = list.first { $0.id == "@I3@" }!
         #expect(old.years == "1850–1910")
         #expect(old.place == "Town0, Ireland")
+    }
+
+    // The future "family roll call": the switch brings the inner circle back,
+    // name only; a living person outside it is still left out.
+    @Test func familyRollCallSwitchShowsInnerCircleNameOnly() {
+        let people = [person(1, born: 1990, gen: 1, inner: false), person(2, born: 1960, gen: 0, inner: true),
+                      person(3, born: 1850, gen: 3)]
+        let list = RollCall.build(people, options: .init(includesLivingInnerCircle: true)) { p in
+            p.id == "@I3@" ? .deceased : (p.isInnerCircle ? .livingInnerCircle : .livingPrivate)
+        }
+        #expect(list.map(\.id).sorted() == ["@I2@", "@I3@"])
+        let home = list.first { $0.id == "@I2@" }!
+        #expect(home.isLiving && home.years == nil && home.place == nil && home.birthYear == nil)
+    }
+
+    // Sensor: across a large mixed walk, the default list never carries a
+    // living person, whatever the mix of inner circle and cousins.
+    @Test func pinNoLivingEntryInADefaultList() {
+        let people = (0..<2_000).map { i in
+            person(i, born: 1800 + i % 220, gen: i % 9, line: i % 2 == 0 ? .first : .second, inner: i % 7 == 0)
+        }
+        let list = RollCall.build(people, options: .init(limit: 200)) { p in
+            if (p.birthYear ?? 0) < 1925 { return .deceased }
+            return p.isInnerCircle ? .livingInnerCircle : .livingPrivate
+        }
+        #expect(!list.isEmpty)
+        #expect(list.allSatisfy { !$0.isLiving }, "a living person reached the default credits")
     }
 
     @Test func lifeIsAskedOnlyForTheRowsConsidered() {

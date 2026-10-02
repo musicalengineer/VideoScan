@@ -1432,7 +1432,7 @@ struct ClipResult: Identifiable {
     var plausibilitySortKey: Float { plausibility ?? 0.5 }
 }
 
-// MARK: - Compiled Output (one per bucket — see docs/compilation-bucketing.md)
+// MARK: - Compiled Output (one per bucket — see docs/guides/compilation-bucketing.md)
 
 struct CompiledOutput: Identifiable, Equatable, Hashable {
     let id = UUID()

@@ -93,6 +93,9 @@ struct FamilyTreeView: View {
     /// goes to the alert instead.
     @State private var researchTarget: ResearchTarget?
     @State private var researchRefusal: String?
+    /// Bumped when the Research pane closes, so the Documents panel's
+    /// "Research" line re-counts confirmed findings.
+    @State private var researchRevision = 0
     /// Add document… (2026-09-20): the person the sheet is for, and the
     /// last add/remove failure shown under the inspector's Documents list.
     @State private var documentAddTarget: FamilyDocumentAddTarget?
@@ -454,7 +457,10 @@ struct FamilyTreeView: View {
                         fetcher: URLSessionResearchFetcher(),
                         speakerName: model.noteAuthor,
                         record: { try model.recordTestimony($0) }),
-                    onClose: { researchTarget = nil })
+                    onClose: {
+                        researchTarget = nil
+                        researchRevision &+= 1
+                    })
             }
             .alert("Can't research this person", isPresented: Binding(
                 get: { researchRefusal != nil },
@@ -778,6 +784,10 @@ struct FamilyTreeView: View {
             HStack {
                 Label("Family Tree", systemImage: "point.3.connected.trianglepath.dotted")
                     .font(.title2.weight(.semibold))
+                // "Show me some memories…" (2026-10-01; GH #236): a quiet
+                // sparkle beside the title. Inert until clicked; the card
+                // gathers off the main actor (FamilyTreeMemoriesButton).
+                FamilyTreeMemoriesButton(model: model)
                 Spacer()
             }
             // The two people who joined the trees, framed under the title
@@ -806,7 +816,7 @@ struct FamilyTreeView: View {
             .labelsHidden()
             .accessibilityIdentifier("ft.peopleScope")
 
-            TextField("Search names — partial or approximate is fine", text: $model.searchText)
+            TextField("Search names or a FamilySearch ID (ABCD-123)", text: $model.searchText)
                 .textFieldStyle(.roundedBorder)
                 .focused($searchFocused)
                 // Return picks the first match; ↑/↓ walk the list without
@@ -2090,16 +2100,33 @@ struct FamilyTreeView: View {
 
     /// The inspector's Documents section. Rows are `model.selectedDocuments`
     /// (read once per selection, off the main actor, each row carrying its
-    /// owner); nothing here touches the store.
+    /// owner); nothing here touches the store. The research key is decided
+    /// for ONE person by the same privacy guard as Research Person… (a
+    /// living person gets no Research line); the panel reads the dossier
+    /// itself, off the main actor.
     private var documentsPanel: some View {
-        FamilyTreeDocumentsPanel(
+        let researchKey: String? = model.selectedID.flatMap { id in
+            if case .eligible(let subject) = ResearchEligibility.evaluate(model.treePerson(id: id)) {
+                return subject.key
+            }
+            return nil
+        }
+        return FamilyTreeDocumentsPanel(
             documents: model.selectedDocuments,
             isLoading: model.isLoadingSelectedDocuments,
             errorText: documentsError,
+            researchKey: researchKey,
+            researchStore: {
+                ResearchStore(peopleRoot: FamilyAssetConfigurationCenter.shared.snapshot().makeStore().peopleDirectory)
+            },
+            researchRevision: researchRevision,
             onAdd: {
                 if let id = model.selectedID { presentAddDocument(for: id) }
             },
-            onRemove: { removeDocument($0) })
+            onRemove: { removeDocument($0) },
+            onOpenResearch: {
+                if let id = model.selectedID { presentResearch(for: id) }
+            })
         .padding(14)
         .background(panelBackground)
     }

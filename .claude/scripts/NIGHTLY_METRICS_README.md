@@ -58,7 +58,7 @@ tail -f ~/Library/Logs/VideoScan/nightly-testdriver.log
 | `~/.launchagents/com.rick.videoscan.testdriver.plist` | launchd configuration (2 AM daily) |
 | `.claude/scripts/nightly-testdriver.sh` | Main test runner script |
 | `.claude/scripts/install-nightly.sh` | Installer/uninstaller |
-| `docs/nightly-metrics-setup.md` | Detailed docs |
+| `docs/practices/nightly-metrics-setup.md` | Detailed docs |
 | `~/Library/Logs/VideoScan/nightly-testdriver.log` | Job output |
 
 ---

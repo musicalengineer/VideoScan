@@ -244,6 +244,65 @@ struct FamilyTreeSearchTests {
         #expect(model.searchCaption == nil)
     }
 
+    // MARK: Search by FamilySearch ID (Rick 2026-10-01)
+
+    @Test func familySearchIDMatcherAcceptsOnlyTheIDShape() {
+        #expect(FamilyTreeFamilySearchIDQuery.normalizedID("ABCD-123") == "ABCD-123")
+        #expect(FamilyTreeFamilySearchIDQuery.normalizedID("kcgs-m89") == "KCGS-M89")
+        #expect(FamilyTreeFamilySearchIDQuery.normalizedID("  Ab1d-9Zx \n") == "AB1D-9ZX")
+        for notAnID in ["", "ABCD123", "ABC-1234", "ABCDE-123", "ABCD-12", "ABCD-1234", "AB D-123",
+                        "ABCD_123", "ÀBCD-123", "ABCD--12", "mary oconnor", "ABCD-123 x"] {
+            #expect(FamilyTreeFamilySearchIDQuery.normalizedID(notAnID) == nil, "\(notAnID) is not an ID")
+        }
+        let graph = GedcomFamilyGraph(gedcomText: fixtureGedcom)
+        #expect(FamilyTreeFamilySearchIDQuery.match("mrya-904", in: graph)?.id == "@I1@")
+        #expect(FamilyTreeFamilySearchIDQuery.match("MRYA-650", in: graph)?.id == "@I2@")
+        #expect(FamilyTreeFamilySearchIDQuery.match("MRYA-905", in: graph) == nil, "exact ID only, no near match")
+    }
+
+    @Test func typingAFamilySearchIDListsAndFocusesThatPersonOnly() {
+        let model = model()
+        model.searchText = "mrya-650"
+        #expect(ids(model) == ["@I2@"])
+        #expect(model.selectedID == "@I2@")
+        model.searchText = " MRYA-904 "
+        #expect(ids(model) == ["@I1@"])
+        #expect(model.selectedID == "@I1@")
+    }
+
+    @Test func anIDShapedQueryNobodyCarriesFallsThroughToTheNameSearch() {
+        let model = model()
+        model.select("@I6@")
+        model.searchText = "ZZZZ-999"
+        #expect(model.filteredPeople.isEmpty)
+        #expect(model.selectedID == "@I6@", "a miss never moves the selection")
+        // Shaped like an ID, but a name: still found by name.
+        model.searchText = "Mary-Ann"
+        #expect(model.selectedID == "@I6@")
+        model.searchText = "Lamb"
+        #expect(ids(model) == ["@I8@"])
+    }
+
+    @Test func familySearchIDReachesOutsideTheBookmarkScopeButNotAHiddenDuplicate() throws {
+        let scratch = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("FTSearchTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: scratch) }
+        let model = model(originals: scratch)
+        model.toggleBookmark("@I3@")
+        model.showsBookmarkedPeopleOnly = true
+        model.searchText = "MRYA-904"
+        #expect(model.selectedID == "@I1@")
+        #expect(!model.showsBookmarkedPeopleOnly, "focus widened the scope, as a focus does")
+        #expect(ids(model) == ["@I1@"])
+
+        model.searchText = ""
+        #expect(model.setRecordHidden(true, personID: "@I2@"))
+        model.searchText = "MRYA-650"
+        #expect(!ids(model).contains("@I2@"))
+        #expect(model.selectedID != "@I2@")
+    }
+
     @Test func returnPicksTheTopRankedRow() {
         let model = model()
         model.searchText = "richard breen"

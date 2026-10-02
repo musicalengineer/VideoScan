@@ -3,7 +3,7 @@
 //  VideoScanUITests — Gauntlet v1
 //
 //  Shared plumbing for the Gauntlet: the five UI flows that mimic Rick's
-//  real spot-test ritual (docs/gauntlet.md). Each flow is an independent
+//  real spot-test ritual (docs/guides/gauntlet.md). Each flow is an independent
 //  XCTestCase subclass of GauntletTestCase, which provides:
 //
 //    * the VS_GAUNTLET=1 positive gate (mirrors SmokeUITests' VS_UI_SMOKE
@@ -17,7 +17,7 @@
 //      for fixture folders — the NSOpenPanel replacement
 //    * a screenshot attached automatically on every failure
 //
-//  Machine policy (docs/gauntlet.md): EXECUTE on the M1 first; the M4
+//  Machine policy (docs/guides/gauntlet.md): EXECUTE on the M1 first; the M4
 //  only inside declared windows (midnight–10:00) — its testmanagerd
 //  bootstrap is flaky for UI-test runners, which is an environment
 //  problem, not a code signal.

@@ -120,8 +120,10 @@ extension GedcomFamilyGraph {
     /// line exceeds `noteChunk` characters (the 5.5.1 line-length rule;
     /// codex #780: continuations are SUBORDINATE to the NOTE, never
     /// level-1 siblings). Chunks never split at a space and never end in
-    /// one, because readers — this parser included — trim line ends; so
-    /// the note reads back identically. The parser keeps it in `headNote`.
+    /// one, because many readers trim line ends. This parser reads NOTE /
+    /// CONT / CONC values verbatim (2026-10-01, generated-input F11), so a
+    /// line that itself begins or ends with a space ("s ", " indented")
+    /// reads back identically too. The parser keeps it in `headNote`.
     static let noteChunk = 200
     static func appendNote(_ text: String, level: Int, to lines: inout [String]) {
         var first = true

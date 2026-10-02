@@ -1,5 +1,5 @@
 // FootageMembership.swift
-// Find Similar Footage, Phase 1 (Rick 2026-09-23, docs/find_original_design.md
+// Find Similar Footage, Phase 1 (Rick 2026-09-23, docs/design/find_original_design.md
 // top section): the catalog fields that record "these files are probably
 // the SAME footage" — copies, re-encodes, transcodes, exports, trims of one
 // recording. Not "similar content" (that is Deep Analyze, later).

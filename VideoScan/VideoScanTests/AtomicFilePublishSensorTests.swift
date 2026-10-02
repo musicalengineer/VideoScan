@@ -21,7 +21,7 @@
 //   precisely what an atomic-save store does when two saves race.
 //
 // Evidence, spindumps, symbolicated kernel stacks and the three repro arms:
-//   docs/incident_2026_09_14_sandbox_rename_wedge.md
+//   docs/ops/incident_2026_09_14_sandbox_rename_wedge.md
 //
 // This sensor is deliberately a SOURCE sensor, not a behavioural one. A test
 // that actually provoked the deadlock would wedge the test host and cost

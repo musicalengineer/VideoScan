@@ -1,5 +1,5 @@
 // KinshipInferenceTests.swift
-// Design docs/kinship_inference_design.md §1 (validation) + §2 (derivation)
+// Design docs/design/kinship_inference_design.md §1 (validation) + §2 (derivation)
 // with the amendments after codex review #830/#831/#833, 2026-08-29.
 // Five dimensions:
 //   1. Logic     — derivation matrix on Rick's family; validation rule matrix;

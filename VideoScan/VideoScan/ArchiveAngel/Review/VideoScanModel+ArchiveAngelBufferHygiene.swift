@@ -5,7 +5,7 @@
 // sheet's banner all land here — Rick's wrapper-over-N-call-sites rule:
 // one entry point, the safeguards, the logging, the red/green.
 //
-// What a clear IS (docs/archive_angel_curation_direction.md, Phase 2):
+// What a clear IS (docs/design/archive_angel_curation_direction.md, Phase 2):
 //   • only the Angel's DERIVED copies go — companions in the batch folder,
 //     regenerable; the originals on their source volumes are never touched;
 //   • the buffer space comes back;

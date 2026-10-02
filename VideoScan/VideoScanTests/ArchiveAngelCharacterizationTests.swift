@@ -1,5 +1,5 @@
 // ArchiveAngelCharacterizationTests.swift
-// S0 of the Archive Angel consolidation (docs/archive_angel_consolidation_plan.md):
+// S0 of the Archive Angel consolidation (docs/design/archive_angel_consolidation_plan.md):
 // CHARACTERIZATION ONLY — these tests pin what the code does TODAY so the
 // S1 file moves and the S2 seams can be shown to be behaviour-preserving.
 // Nothing here says the current behaviour is right (S3 changes the rules on

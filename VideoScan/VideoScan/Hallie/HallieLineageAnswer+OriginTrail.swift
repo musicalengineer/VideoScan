@@ -136,7 +136,12 @@ extension HallieLineageAnswer {
             let last = s.place.split(whereSeparator: { $0 == "," || $0 == "." })
                 .map { String($0).trimmingCharacters(in: .whitespaces) }
                 .last(where: { !$0.isEmpty }) ?? s.place
-            let (name, home) = Self.canonicalCountry(last)
+            // A US state in any spelling the shared reader knows ("Conn.",
+            // "N. H.", "Penna.") — the "." split above would leave "H" or
+            // "Penna" as a "country".
+            let lastPart = s.place.split(separator: ",").last { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+            let (name, home) = lastPart.flatMap { USPlaceNames.stateName(endOf: String($0)) } != nil
+                ? ("the United States", true) : Self.canonicalCountry(last)
             if seen[name] == nil {
                 seen[name] = CountryStop(name: name, nearest: s, isHome: home)
                 order.append(name)

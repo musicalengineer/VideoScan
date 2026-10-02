@@ -87,7 +87,7 @@ struct VolumesWindow: View {
     /// Retire — this is for orphan / typo / dangling scan targets
     /// (e.g. `/Volumes/rickb` with 0 records) that should never have
     /// been added. See `delete-vs-retire` note in
-    /// docs/relocate_volume_plan.md. Carries the pre-computed orphan
+    /// docs/design/relocate_volume_plan.md. Carries the pre-computed orphan
     /// count so the alert can render "N catalog records will become
     /// orphans" without re-walking records on each render.
     @State private var deleteTarget: DeleteTarget?
