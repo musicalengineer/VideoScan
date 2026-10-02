@@ -172,7 +172,9 @@ struct PersonDocument: Codable, Identifiable, Equatable, Sendable {
     /// The sidecar's `kind` code when this build does not know it (a newer
     /// build wrote something other than a legacy code); `kind` then reads
     /// `.other`. Kept so that rewriting the list (an import or a removal
-    /// beside it) writes the code back exactly as found.
+    /// beside it) does not lose it — but written back in `category`, NEVER
+    /// in `kind`: the frozen pre-2026-10-01 reader rejects an unknown `kind`
+    /// and with it the WHOLE list (codex review 2026-10-02 F4).
     var unrecognizedKindCode: String? = nil
     /// Likewise for a `category` value this build does not know.
     var unrecognizedCategory: String? = nil
@@ -203,7 +205,13 @@ extension PersonDocument.CodingKeys: CaseIterable {}
 // kind "Other" + category "MIL"/"CEN"/"DNA". Reading recovers the kind from,
 // in order: `category`; `kind`; and, for a row an older build rewrote
 // without `category`, the generated file name's prefix ("DNA-…"), so a DNA
-// row stays private even then. Unknown values are kept and written back.
+// row stays private even then. Unknown values are kept and written back,
+// always in `category` (codex review 2026-10-02 F4): `kind` on disk is
+// BC/DC/MC/Other on EVERY write path, whatever was read. When a row carries
+// more than `category` can hold, what decides the row's kind wins — an
+// unknown category, else a known new kind (DNA stays private), else the
+// unknown kind code. Such a row only comes from a build that broke the
+// "legacy codes in `kind`" contract.
 extension PersonDocument {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -232,12 +240,9 @@ extension PersonDocument {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(id, forKey: .id)
-        if let unrecognizedKindCode {
-            try c.encode(unrecognizedKindCode, forKey: .kind)
-        } else {
-            try c.encode(kind.isLegacy ? kind.rawValue : PersonDocumentKind.other.rawValue, forKey: .kind)
-        }
-        if let category = unrecognizedCategory ?? (kind.isLegacy ? nil : kind.rawValue) {
+        // Only a code the legacy enum decodes, ever.
+        try c.encode(kind.isLegacy ? kind.rawValue : PersonDocumentKind.other.rawValue, forKey: .kind)
+        if let category = unrecognizedCategory ?? (kind.isLegacy ? nil : kind.rawValue) ?? unrecognizedKindCode {
             try c.encode(category, forKey: .category)
         }
         try c.encode(filename, forKey: .filename)
