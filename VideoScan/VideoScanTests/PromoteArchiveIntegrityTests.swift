@@ -231,6 +231,25 @@ struct PromoteDuplicateBytesTests {
         #expect(FileManager.default.fileExists(atPath: b.fullPath), "the source is never touched")
     }
 
+    @Test("after a RELAUNCH (no process claims, no catalog link) the 00_Index manifest alone refuses the twin")
+    func manifestLegAloneRefuses() async throws {
+        let (sb, model) = try H.setup("190relaunch")
+        defer { sb.cleanup() }
+        let a = try H.source(sb, model, name: "test_tape_a.mov", seed: 17)
+        _ = try await H.run(model, ids: [a.id])
+        let relA = try #require(MasterArchiveTestSupport.archivedFiles(sb).first)
+        // A new process: in-memory claims gone; the catalog lost the copy
+        // record too (an unsaved catalog) — only the manifest knows.
+        model.promoteDigestClaims = [:]
+        model.records.removeAll { model.isArchiveCopy($0) }
+        let b = try H.twin(of: a, sb, model, name: "test_tape_b.mov")
+        let job = try await H.run(model, ids: [b.id])
+        let o = try #require(H.outcome(job, b.id))
+        #expect(o.kind == .skipped && o.detail.contains(relA), "\(o.kind) — \(o.detail)")
+        #expect(MasterArchiveTestSupport.archivedFiles(sb) == [relA])
+        #expect(MasterArchiveTestSupport.manifestRows(sb).count == 1)
+    }
+
     @Test("RACE: two identical files in ONE batch → one lands, the other is refused naming it")
     func sameBatchIdenticalBytes() async throws {
         let (sb, model) = try H.setup("190batch")
