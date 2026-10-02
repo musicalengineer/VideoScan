@@ -48,6 +48,27 @@ if [ -n "$UNMERGED" ]; then
         echo "   • $b ($when)"
     done <<< "$UNMERGED"
 fi
+# ── Nightly adversarial review (tools/adversarial_nightly.py, shadow mode) ──
+echo ""
+echo "── Adversarial review (00:30 Tier A + 05:30 red tests) ──"
+python3 - "$STAMP_DIR/adversarial-review/latest.json" "$(date +%Y-%m-%d)" <<'PY' 2>/dev/null || echo "🔴 adversarial review: latest.json unreadable"
+import json, sys
+path, today = sys.argv[1], sys.argv[2]
+try: s = json.load(open(path))
+except Exception: s = {}
+st, n = s.get("status"), s.get("newFindings") or {}
+p = ", ".join(f"{n[k]} {k}" for k in ("P0", "P1", "P2") if n.get(k))
+cr = s.get("confirmedRed"); conf = f" ({cr} confirmed-red)" if cr is not None else (" (red tests: " + (s.get("confirmSkipped") or "pending") + ")")
+nr = f"; {s['notReviewed']} NOT REVIEWED" if s.get("notReviewed") else ""
+if st == "disabled" or s.get("disabled"): print(f"🔴 adversarial review DISABLED after 3 failed nights — `python3 tools/adversarial_nightly.py status`")
+elif s.get("date") != today: print(f"🔴 adversarial review did not run last night (last: {s.get('date') or 'never'})")
+elif st == "failed": print(f"🔴 adversarial review FAILED: {s.get('failure')} (baseline kept; next night retries)")
+elif st == "findings" and p: print(f"🔴 adversarial review: {p}{conf}{nr} → {s.get('doc')}")
+elif st in ("findings", "clean"): print(f"🟢 adversarial review clean, {s.get('filesReviewed')} files{nr} (${s.get('costUsd')}) → {s.get('doc')}")
+elif st == "nothing": print("⚪ adversarial review: nothing in scope")
+else: print(f"🔴 adversarial review: unknown state {st!r}")
+PY
+
 echo "=== end digest — surface this to Rick and flag anything marked 'Needs a look'."
 echo "Then, per Rick's standing request: report how overnight tests went, and ASK him"
 echo "whether yesterday's spot-testing passed — if yes, propose purging the merged"
