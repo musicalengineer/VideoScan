@@ -23,6 +23,16 @@ private final class Receipts: @unchecked Sendable {
     var failures: [String] { lock.withLock { errors } }
 }
 
+private final class Words: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String] = []
+    private var errors: [String] = []
+    func add(_ word: String) { lock.withLock { stored.append(word) } }
+    func fail(_ error: Error) { lock.withLock { errors.append(String(describing: error)) } }
+    var all: [String] { lock.withLock { stored } }
+    var failures: [String] { lock.withLock { errors } }
+}
+
 @Suite("CyberBrain writer — concurrent writers")
 struct CyberBrainWriterConcurrencyTests {
 
@@ -102,5 +112,192 @@ struct CyberBrainWriterConcurrencyTests {
         #expect(CyberBrainWriter.rootLockKey(root) == CyberBrainWriter.rootLockKey(hop))
         #expect(CyberBrainWriter.rootLockKey(root) == CyberBrainWriter.rootLockKey(URL(fileURLWithPath: root.path + "/")))
         #expect(CyberBrainWriter.rootLockKey(root) != CyberBrainWriter.rootLockKey(other))
+    }
+
+    // MARK: Coverage gaps named by codex review 2026-10-02
+
+    private struct Boom: Error {}
+
+    private func testimony(_ text: String) -> CyberBrainWriter.Testimony {
+        .init(subjectName: "Synthetic Ancestor", speakerName: "Tester", text: text, date: told)
+    }
+
+    /// Run `work` on another thread and wait at most `seconds`. A lock that
+    /// is never released strands that thread, but the TEST still ends —
+    /// with a failure — instead of hanging the suite. (C++: std::async +
+    /// future.wait_for.)
+    private func completes(within seconds: Double, _ work: @escaping @Sendable () -> Void) -> Bool {
+        let done = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            work()
+            done.signal()
+        }
+        return done.wait(timeout: .now() + seconds) == .success
+    }
+
+    /// A writer that throws INSIDE the root lock must release it: the next
+    /// writer on that root proceeds. Both the raw lock and a real durable
+    /// writer that fails after taking it (no such person) are checked.
+    ///
+    /// Every acquisition that could meet a leaked lock runs through
+    /// `completes` (a fresh root per case, so the first acquisition is
+    /// always free): a regression FAILS this test, it cannot hang the suite.
+    @Test func aWriterThatThrowsReleasesTheRootLock() throws {
+        let raw = try temporaryRoot()
+        let durable = try temporaryRoot()
+        defer {
+            try? FileManager.default.removeItem(at: raw)
+            try? FileManager.default.removeItem(at: durable)
+        }
+        let receipts = Receipts()
+        let threw = Receipts()
+        // 1. The raw lock: a body that throws.
+        #expect(throws: Boom.self) {
+            try CyberBrainWriter.withRootLock(raw) { throw Boom() }
+        }
+        let rawAgain = testimony("Written after a throwing body.")
+        #expect(completes(within: 10) {
+            do { receipts.add(rawAgain.text, try CyberBrainWriter.record(rawAgain, rootURL: raw)) } catch { receipts.fail(error) }
+        }, "the raw lock was released by the throwing body")
+
+        // 2. A real durable writer refused INSIDE the lock (no archive yet,
+        // so no such person), then a writer on the same root.
+        #expect(completes(within: 10) {
+            do {
+                _ = try CyberBrainWriter.setPronunciation(personID: "person.none", token: "Synthetic",
+                                                          saidAs: "SIN-thet-ik", rootURL: durable)
+            } catch {
+                threw.fail(error)
+            }
+        })
+        #expect(threw.failures.count == 1, "the durable writer was refused")
+        let durableAgain = testimony("Written after a refused writer.")
+        #expect(completes(within: 10) {
+            do { receipts.add(durableAgain.text, try CyberBrainWriter.record(durableAgain, rootURL: durable)) } catch { receipts.fail(error) }
+        }, "the lock was released by the refused durable writer")
+
+        #expect(receipts.failures.isEmpty, "\(receipts.failures)")
+        #expect(receipts.all.count == 2)
+    }
+
+    /// Two roots make progress independently: while one root's lock is
+    /// HELD, a writer on the other root completes; a writer on the held
+    /// root waits until it is released, then completes too.
+    @Test func aHeldRootDoesNotBlockAnotherRoot() throws {
+        let held = try temporaryRoot()
+        let free = try temporaryRoot()
+        defer {
+            try? FileManager.default.removeItem(at: held)
+            try? FileManager.default.removeItem(at: free)
+        }
+        let holding = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let holderDone = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            CyberBrainWriter.withRootLock(held) {
+                holding.signal()
+                release.wait()
+            }
+            holderDone.signal()
+        }
+        try #require(holding.wait(timeout: .now() + 10) == .success)
+
+        let receipts = Receipts()
+        let onFree = testimony("Written to the free root.")
+        #expect(completes(within: 10) {
+            do { receipts.add(onFree.text, try CyberBrainWriter.record(onFree, rootURL: free)) } catch { receipts.fail(error) }
+        }, "the free root is not blocked by the held one")
+
+        let onHeld = testimony("Written to the held root.")
+        let heldWriter = DispatchSemaphore(value: 0)
+        DispatchQueue.global().async {
+            do { receipts.add(onHeld.text, try CyberBrainWriter.record(onHeld, rootURL: held)) } catch { receipts.fail(error) }
+            heldWriter.signal()
+        }
+        #expect(heldWriter.wait(timeout: .now() + 0.5) == .timedOut, "the held root's writer waits")
+        release.signal()
+        #expect(heldWriter.wait(timeout: .now() + 10) == .success, "and proceeds once released")
+        #expect(holderDone.wait(timeout: .now() + 10) == .success)
+        #expect(receipts.failures.isEmpty, "\(receipts.failures)")
+        #expect(receipts.all.count == 2)
+    }
+
+    /// Bounded deadlock check: two writers, two roots, opposite orders
+    /// (A,B,A,B… and B,A,B,A…), many rounds. Must finish within the bound
+    /// and every receipt must resolve to its passage on its root.
+    @Test func twoWritersOnTwoRootsInOppositeOrdersNeverDeadlock() throws {
+        let a = try temporaryRoot()
+        let b = try temporaryRoot()
+        defer {
+            try? FileManager.default.removeItem(at: a)
+            try? FileManager.default.removeItem(at: b)
+        }
+        let rounds = 12
+        let onA = Receipts(), onB = Receipts(), told = self.told
+        let finished = completes(within: 60) {
+            DispatchQueue.concurrentPerform(iterations: 2) { writer in
+                for round in 0..<rounds {
+                    let toA = (round + writer) % 2 == 0
+                    let text = "Synthetic writer \(writer) round \(round)."
+                    let t = CyberBrainWriter.Testimony(subjectName: "Synthetic Ancestor", speakerName: "Tester",
+                                                       text: text, date: told)
+                    let box = toA ? onA : onB
+                    do { box.add(text, try CyberBrainWriter.record(t, rootURL: toA ? a : b)) } catch { box.fail(error) }
+                }
+            }
+        }
+        #expect(finished, "two writers on two roots finished within the bound (no deadlock)")
+        for (root, box) in [(a, onA), (b, onB)] {
+            #expect(box.failures.isEmpty, "\(box.failures)")
+            let final = items(try CyberBrainLoader(rootURL: root).load())
+            #expect(box.all.allSatisfy { final[$0.receipt.itemID]?.text == $0.text })
+            #expect(final.count == box.all.count)
+        }
+        #expect(onA.all.count + onB.all.count == 2 * rounds)
+    }
+
+    /// Concurrent pronunciation writers (interleaved with testimony
+    /// writers) on one archive: every word set lands, and every testimony
+    /// receipt still resolves.
+    @Test func concurrentPronunciationWritersLoseNoEntry() throws {
+        let root = try temporaryRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let words = ["Aldwin", "Brannock", "Corvell", "Dunmere", "Elsworth", "Fenmarch", "Galloway", "Harrowby"]
+        let seed = try CyberBrainWriter.record(
+            .init(subjectName: words.joined(separator: " "), speakerName: "Tester",
+                  text: "Seed passage.", date: told), rootURL: root)
+        let personID = seed.personID
+        let said = Words()
+        let testified = Receipts()
+        let told = self.told
+        DispatchQueue.concurrentPerform(iterations: words.count * 2) { i in
+            if i % 2 == 0 {
+                let word = words[i / 2]
+                do {
+                    let receipt = try CyberBrainWriter.setPronunciation(
+                        personID: personID, token: word, saidAs: "said-\(word.lowercased())", rootURL: root)
+                    said.add(receipt.word)
+                } catch {
+                    said.fail(error)
+                }
+            } else {
+                let text = "Synthetic passage \(i)."
+                let t = CyberBrainWriter.Testimony(subjectName: words.joined(separator: " "), speakerName: "Tester",
+                                                   text: text, date: told)
+                do { testified.add(text, try CyberBrainWriter.record(t, rootURL: root)) } catch { testified.fail(error) }
+            }
+        }
+        #expect(said.failures.isEmpty, "\(said.failures)")
+        #expect(Set(said.all) == Set(words), "every writer got a receipt")
+        #expect(testified.failures.isEmpty, "\(testified.failures)")
+        let archive = try CyberBrainLoader(rootURL: root).load()
+        #expect(archive.people.count == 1)
+        let table = archive.people.first?.pronunciations ?? [:]
+        for word in words {
+            #expect(table[word] == "said-\(word.lowercased())", "lost the pronunciation of \(word)")
+        }
+        let final = items(archive)
+        #expect(testified.all.allSatisfy { final[$0.receipt.itemID]?.text == $0.text })
+        #expect(final.count == testified.all.count + 1)
     }
 }

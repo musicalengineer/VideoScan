@@ -153,6 +153,77 @@ Per-file disposition:
 | `FamilyTreeMemoriesTests.swift` | Read, no findings. |
 | `CyberBrainWriterConcurrencyTests.swift` | Read, no findings. |
 
+## Closure
+
+Closed 2026-10-01 (local evening) by the bug-fix agent, red-first, on branch
+`worktree-agent-a0e79b2fd348d7bc0` (not pushed). Red tests: `3d8aa676` (Debug:
+7 tests red, 26 issues, before any fix). All four findings are fixed; none
+was declined.
+
+| Finding | Fix SHA | Pinning test(s) | Red → green |
+|---|---|---|---|
+| F1 P1: new-finding rollback deletes another writer's lore | `e396ff1b` | `RecordFinderFilingTests.newFindingRollbackPreservesAnotherWritersLore` (codex's test, plus `.mixedState` + "changed after" + document-in-.trash assertions); sensor `newFindingRollbackWithAFractionalClockStillRollsBackCleanly` | red: lore nil, outcome `.rolledBack` → green. The sensor passes before and after the fix. Mutation-checked: comparing against the in-memory finding instead of `ResearchStore.asStored` turns it red, because dossier dates are ISO-8601 whole seconds and every production clock has a fraction. |
+| F2 P1: re-attach rollback restores the stale prepare snapshot | `e396ff1b` | `RecordFinderFilingTests.reattachRollbackRestoresWhatItReplacedNotThePrepareSnapshot` (codex's repro: the `importClock` hook writes `.wrong` + "Synthetic intervening text" between prepare and writeFinding); `reattachRollbackPreservesANewerVerdict` still green | red: `.unreviewed` / nil → green: `.wrong` / "Synthetic intervening text" survive, and documentPath is taken back |
+| F3 P2: a failed lore save is lost on retry | `86298cf5` | `RecordFinderFilingTests.aFailedLoreSaveIsActuallyRetried` (codex's test); `aFailedSaveIsNotShownAsSaved` (a failed verdict or lore save is not shown; the draft survives; Tell Hallie commits it) | red: empty lore → green |
+| F4 P2: an unknown kind code breaks the frozen Legacy reader | `8cd41721` | `FamilyDocumentStoreTests.anUnknownKindCodeReadsAsOtherAndIsWrittenBackAsCategory` (rewrote the test that expected `kind:"WILL"`; added codex's Legacy-decoder assertion and a second rewrite round trip); general sensors `everyWritePathEmitsAListTheFrozenLegacyReaderDecodes` (every import kind and both removals, over seeded unknown-kind, unknown-category, both-unknown, old-rewrite DNA and unknown-kind+DNA rows) and `everyEncodableRowDecodesWithTheFrozenLegacyReader` (7 kinds × 4 unknown-value combinations) | red: `DecodingError.dataCorrupted` at `[0].kind` → green |
+
+What the fixes do:
+
+- **F1/F2**: write 2 now records a `FindingWrite` inside the same locked
+  `researchStore.update` that does the writing. For a new finding it records
+  `.inserted` (the finding as it reads back from disk). For a re-attach it
+  records `.reattached` with `{previous, written}` per field. Rollback
+  removes a new finding only while it still equals the recorded value. If
+  another writer has changed it, rollback leaves it, still retires the
+  document, and reports `.mixedState` ("…it was changed after it was filed…").
+  A re-attached field gets its `previous` value back only while it still
+  holds `written`. The prepare-time snapshot is no longer used for undo.
+- **F3**: `mutate` no longer applies a failed change to the pane's copy.
+  Instead it re-reads the disk when that is readable and shows the save
+  error. `commitLore` always goes through `mutate`, which compares under the
+  per-key lock against the disk value (an equal value writes nothing).
+  `editedLore` clears only after a save that is proven to have succeeded.
+  Side effect: if saving a run's results fails, those results are not shown
+  until a re-run succeeds. The page cache makes a re-run cheap.
+- **F4**: `kind` on disk is always BC/DC/MC/Other. An unknown code goes into
+  `category`, with this precedence: an unknown category first, then a known
+  new kind (so DNA stays private), then the unknown kind code. A row can only
+  lose a value when it carries more unknowns than `category` holds, and only
+  a build that broke the legacy-`kind` contract can produce such a row.
+
+Coverage gaps named above, now closed (`4cc595b6`, `3fcd9efb`, in
+`CyberBrainWriterConcurrencyTests`):
+
+- error-unlock: `aWriterThatThrowsReleasesTheRootLock` (a raw body that
+  throws, and a durable writer refused inside the lock; bounded)
+- independent-root progress: `aHeldRootDoesNotBlockAnotherRoot`
+- bounded deadlock check: `twoWritersOnTwoRootsInOppositeOrdersNeverDeadlock`
+  (2 writers, 2 roots, opposite orders, 60 s bound)
+- concurrent pronunciation writers: `concurrentPronunciationWritersLoseNoEntry`
+  (8 pronunciation writers interleaved with 8 testimony writers)
+
+All four were mutation-checked against `withRootLock`. Unlocking only on
+success is caught in about 20 s. One lock for all roots is caught by the
+held-root test. No lock at all is caught by four tests. The first version of
+the error-unlock test deadlocked its own thread under the leak mutation;
+`3fcd9efb` makes every possibly-leaked acquisition bounded.
+
+Evidence (Debug, own `-derivedDataPath`, run by SUITE, counts confirmed; derivedData removed afterwards):
+
+- App: **148 tests / 17 suites, all passed**. The suites: RecordFinderFiling (35);
+  FamilyDocumentStore + FamilyDocumentModel; FamilyTreeDocumentsPanel;
+  FamilyTreeMemories; the 5 Research Person suites; and the 7
+  FamilyTreeLiveModel suites (Family tree (GEDCOM), layout shape, text
+  helpers, selection and search, profile snapshot isolation, scale, loader
+  isolation).
+- Core (`swift test --filter CyberBrain`): **82 tests / 14 suites, all passed**
+  (was 78 / 14). This includes CyberBrainWriterConcurrencyTests at 6 tests.
+
+Not addressed here (codex's invariant table, outside the four findings):
+the read-back mismatch and publication-failure import cases (invariant 4),
+the missing store START lines (invariant 7), and durable writers outside
+the scoped files.
+
 ## Brief
 
 Scoped data-risk pass (bundled, overnight 2026-10-01→02): (A) confirm the fixes for codex cycle #18 (Record Finder filing) and (B) attack the new person-documents sidecar encoding. Range 7f5c5864..c9caac20 — review ONLY the files below; the range also contains a docs/ reorganization and unrelated merges you must ignore.

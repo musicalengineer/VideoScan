@@ -32,7 +32,11 @@
 // under ResearchStore's per-key lock (`update(key:)`, QA 2026-10-01 P2-1).
 // Undo works the same way — it takes back only THIS filing's change from
 // what is on disk now, and retires a dossier.json this filing itself
-// created if nothing else was added to it meanwhile.
+// created if nothing else was added to it meanwhile. "This filing's
+// change" is recorded INSIDE the locked write that made it (the value
+// found and the value written, per field), and a field is put back only
+// while it still holds the value written — another writer's later edit is
+// never undone (codex review 2026-10-02 F1/F2).
 //
 // A failure after a write undoes the earlier writes — the document moves to
 // Documents/.trash (never deleted), this finding comes off the dossier —
@@ -248,10 +252,10 @@ struct RecordFinderFiler {
             documentPath: filed.archivePath, idSeed: "sha256:" + pre.sha256,
             fullText: pre.transcription)
         let stored: ResearchFinding
-        let wrote: ReattachWrite?
+        let wrote: FindingWrite
         switch writeFinding(fresh, confirmedRead: s.confirmedRead, pre: pre, filed: filed) {
         case .failure(let stop): return finish(stop.outcome, code: stop.code)
-        case .success(let written): (stored, wrote) = (written.finding, written.reattachWrite)
+        case .success(let written): (stored, wrote) = (written.finding, written.write)
         }
         let code = pre.reattach == nil ? "filed" : "re-attached"
         // Unread, or already told before (a re-attach): nothing more to write.
@@ -345,21 +349,43 @@ struct RecordFinderFiler {
                                       archivePath: CyberBrainWriter.photoLocator(landedURL.path)))
     }
 
-    /// Exactly what write 2 put on a RE-ATTACHED finding (codex review #18
-    /// F3). Undo may take back a field only while it still holds the value
-    /// written here: a verdict or words saved by the Research pane after
-    /// this filing began are someone else's, and are kept. Nil members were
-    /// not written. (C++: a small undo record of {field, value-we-set}.)
-    struct ReattachWrite: Equatable {
-        let documentPath: String?
-        let verdict: ResearchVerdict?
-        let fullText: String?
+    /// One field write 2 changed: the value it FOUND there and the value it
+    /// WROTE, both taken inside the same locked change (codex review
+    /// 2026-10-02 F2 — the old undo restored the prepare-time snapshot, so
+    /// a verdict saved between prepare and the write was lost). Undo puts
+    /// `previous` back only while the field still holds `written`.
+    /// (C++: an undo record {old, new} applied compare-and-swap style.)
+    struct FieldWrite<Value: Equatable>: Equatable {
+        let previous: Value
+        let written: Value
     }
 
-    /// The finding as stored, plus what was written to it when re-attaching.
+    /// Exactly what write 2 put on a RE-ATTACHED finding (codex review #18
+    /// F3). A verdict or words saved by the Research pane after this write
+    /// are someone else's, and are kept. Nil members were not written.
+    struct ReattachWrite: Equatable {
+        let documentPath: FieldWrite<String?>
+        let verdict: FieldWrite<ResearchVerdict>?
+        let fullText: FieldWrite<String?>?
+    }
+
+    /// What write 2 did, recorded inside the locked change that did it.
+    enum FindingWrite: Equatable {
+        /// Nothing reached the change (the read failed first).
+        case none
+        /// A new finding, exactly as it reads back from disk
+        /// (`ResearchStore.asStored`). Undo removes it only while the
+        /// finding on disk still EQUALS this (codex review 2026-10-02 F1:
+        /// lore or a verdict saved on it meanwhile used to be deleted).
+        case inserted(ResearchFinding)
+        /// An existing finding pointed at the new document.
+        case reattached(ReattachWrite)
+    }
+
+    /// The finding as stored, plus what was written.
     struct WrittenFinding {
         let finding: ResearchFinding
-        let reattachWrite: ReattachWrite?
+        let write: FindingWrite
     }
 
     /// Write 2, under the per-key lock: add the finding — or, re-attaching,
@@ -371,27 +397,33 @@ struct RecordFinderFiler {
         let reattaching = pre.reattach != nil
         // Set inside the (synchronous, non-escaping) change closure, before
         // the save — so even a save whose read-back fails knows what it
-        // may have written.
-        var wrote: ReattachWrite?
+        // may have written, and the "previous" values are the ones on disk
+        // under the lock, not the prepare() snapshot.
+        var wrote = FindingWrite.none
         do {
             try researchStore.update(key: subject.key) { onDisk in
                 var dossier = onDisk ?? ResearchDossier(subject: subject)
                 if let index = dossier.findings.firstIndex(where: { $0.id == fresh.id }) {
                     guard reattaching else { throw Refusal(code: "duplicate-finding", message: "this record is already filed") }
-                    dossier.findings[index].documentPath = fresh.documentPath
-                    var verdict: ResearchVerdict?
-                    var words: String?
-                    if confirmedRead, dossier.findings[index].toldItemID == nil {
-                        dossier.findings[index].verdict = .confirmed
-                        verdict = .confirmed
+                    var found = dossier.findings[index]
+                    let path = FieldWrite(previous: found.documentPath, written: fresh.documentPath)
+                    found.documentPath = fresh.documentPath
+                    var verdict: FieldWrite<ResearchVerdict>?
+                    var words: FieldWrite<String?>?
+                    if confirmedRead, found.toldItemID == nil {
+                        verdict = FieldWrite(previous: found.verdict, written: .confirmed)
+                        found.verdict = .confirmed
                         if let text = fresh.fullText {
-                            dossier.findings[index].fullText = text
-                            words = text
+                            words = FieldWrite(previous: found.fullText, written: text)
+                            found.fullText = text
                         }
                     }
-                    wrote = ReattachWrite(documentPath: fresh.documentPath, verdict: verdict, fullText: words)
+                    dossier.findings[index] = found
+                    wrote = .reattached(ReattachWrite(documentPath: path, verdict: verdict, fullText: words))
                 } else {
+                    let landing = try ResearchStore.asStored(fresh)
                     guard dossier.addFiled(fresh) else { throw Refusal(code: "duplicate-finding", message: "this record is already filed") }
+                    wrote = .inserted(landing)
                 }
                 onDisk = dossier
             }
@@ -400,7 +432,7 @@ struct RecordFinderFiler {
                   stored.documentPath == fresh.documentPath else {
                 throw ResearchStore.StoreError.ioFailure("the research file did not read back")
             }
-            return .success(WrittenFinding(finding: stored, reattachWrite: wrote))
+            return .success(WrittenFinding(finding: stored, write: wrote))
         } catch let refusal as Refusal {
             // Nothing was written to the dossier; only the document to undo.
             return .failure(Stop(outcome: undoDocument(filed.document, folder: filed.folder, why: refusal.message),
@@ -415,7 +447,7 @@ struct RecordFinderFiler {
     /// Write 3. The testimony for a CONFIRMED finding through the injected
     /// CyberBrain writer; any failure undoes writes 1 and 2.
     private func tellHallie(_ finding: ResearchFinding, pre: Prepared,
-                            filed: FiledDocument, wrote: ReattachWrite?) -> Result<CyberBrainWriter.Receipt, Stop> {
+                            filed: FiledDocument, wrote: FindingWrite) -> Result<CyberBrainWriter.Receipt, Stop> {
         guard let record else {
             // prepare() refused this already; kept so the type system agrees.
             return .failure(undoAll(pre: pre, findingID: finding.id, filed: filed, wrote: wrote,
@@ -612,46 +644,72 @@ struct RecordFinderFiler {
 
     /// Undo writes 1 and 2: this filing's change comes off the dossier ON
     /// DISK (not a stale copy written back), the document goes to .trash.
-    private func undoAll(pre: Prepared, findingID: String, filed: FiledDocument, wrote: ReattachWrite?,
+    private func undoAll(pre: Prepared, findingID: String, filed: FiledDocument, wrote: FindingWrite,
                          why: String, code: String) -> Stop {
         let restored = restoreDossier(pre: pre, findingID: findingID, wrote: wrote)
         let undone = undoDocument(filed.document, folder: filed.folder, why: why)
-        return Stop(outcome: combine(undone, dossierRestored: restored), code: code)
+        return Stop(outcome: combine(undone, dossier: restored), code: code)
     }
 
-    /// Take back exactly this filing's change, under the per-key lock:
-    /// a new finding is removed; a re-attached one gets back its old
-    /// document path, verdict and words — each ONLY while it still holds
-    /// the value this filing wrote (codex review #18 F3: a verdict saved in
-    /// the Research pane meanwhile used to be overwritten with the
-    /// pre-filing snapshot). Whatever else is on disk now (another window's
-    /// verdicts, a run's findings) is kept. A dossier.json this filing
-    /// created is retired if it is otherwise empty (QA P3-4).
-    private func restoreDossier(pre: Prepared, findingID: String, wrote: ReattachWrite?) -> Bool {
+    /// How the dossier undo ended.
+    enum DossierRestore: Equatable {
+        /// This filing's change is off the dossier (or never landed).
+        case restored
+        /// The NEW finding was changed by another writer after this filing
+        /// wrote it, so it was left exactly as it is now.
+        case keptChangedFinding
+        /// The research file could not be rewritten.
+        case failed
+    }
+
+    /// Take back exactly this filing's change, under the per-key lock,
+    /// from what is on disk NOW (not a stale copy written back):
+    ///   • a NEW finding is removed only while it still equals exactly what
+    ///     this filing wrote; changed meanwhile (lore, verdict…) it is
+    ///     someone else's work and stays → `.keptChangedFinding` (codex
+    ///     review 2026-10-02 F1);
+    ///   • a RE-ATTACHED finding gets back, per field, the value write 2
+    ///     found there — only while the field still holds the value write 2
+    ///     put there (codex review #18 F3; 2026-10-02 F2: the "found" value
+    ///     is captured under the same lock as the write, not at prepare()).
+    /// Whatever else is on disk (another window's verdicts, a run's
+    /// findings) is kept. A dossier.json this filing created is retired if
+    /// it is otherwise empty (QA P3-4).
+    private func restoreDossier(pre: Prepared, findingID: String, wrote: FindingWrite) -> DossierRestore {
         let subject = self.subject
+        var kept = false
         do {
             try researchStore.update(key: subject.key) { onDisk in
                 guard var dossier = onDisk else { return }
-                if let old = pre.reattach {
-                    if let wrote, let index = dossier.findings.firstIndex(where: { $0.id == findingID }) {
-                        if dossier.findings[index].documentPath == wrote.documentPath {
-                            dossier.findings[index].documentPath = old.documentPath
+                if let index = dossier.findings.firstIndex(where: { $0.id == findingID }) {
+                    switch wrote {
+                    case .none:
+                        break
+                    case .inserted(let mine):
+                        if dossier.findings[index] == mine {
+                            dossier.findings.remove(at: index)
+                        } else {
+                            kept = true
                         }
-                        if let verdict = wrote.verdict, dossier.findings[index].verdict == verdict {
-                            dossier.findings[index].verdict = old.verdict
+                    case .reattached(let write):
+                        var found = dossier.findings[index]
+                        if found.documentPath == write.documentPath.written {
+                            found.documentPath = write.documentPath.previous
                         }
-                        if let words = wrote.fullText, dossier.findings[index].fullText == words {
-                            dossier.findings[index].fullText = old.fullText
+                        if let verdict = write.verdict, found.verdict == verdict.written {
+                            found.verdict = verdict.previous
                         }
+                        if let words = write.fullText, found.fullText == words.written {
+                            found.fullText = words.previous
+                        }
+                        dossier.findings[index] = found
                     }
-                } else {
-                    dossier.findings.removeAll { $0.id == findingID }
                 }
                 onDisk = (!pre.priorExisted && dossier == ResearchDossier(subject: subject)) ? nil : dossier
             }
-            return true
+            return kept ? .keptChangedFinding : .restored
         } catch {
-            return false
+            return .failed
         }
     }
 
@@ -704,10 +762,19 @@ struct RecordFinderFiler {
             + "be rewritten (\(error)); the inspector will report it as missing and drop it from the list."
     }
 
-    private func combine(_ outcome: RecordFilingOutcome, dossierRestored: Bool) -> RecordFilingOutcome {
-        guard !dossierRestored else { return outcome }
-        let tail = " The research file could not be put back: it still lists this record although its document "
-            + "was removed. Filing the same file again re-attaches it."
+    private func combine(_ outcome: RecordFilingOutcome, dossier: DossierRestore) -> RecordFilingOutcome {
+        let tail: String
+        switch dossier {
+        case .restored:
+            return outcome
+        case .failed:
+            tail = " The research file could not be put back: it still lists this record although its document "
+                + "was removed. Filing the same file again re-attaches it."
+        case .keptChangedFinding:
+            tail = " The research file still lists this record: it was changed after it was filed (lore or a "
+                + "verdict saved elsewhere), so it was left as it is now, although its document was removed. "
+                + "Filing the same file again re-attaches it."
+        }
         switch outcome {
         case .rolledBack(let why), .mixedState(let why): return .mixedState(why + tail)
         default: return outcome
