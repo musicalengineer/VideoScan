@@ -90,9 +90,42 @@ private let expectedTopUnknowns: [String: Any] = [
     "futureScalar": 42,
 ]
 
+/// Canonical JSON bytes of a value (sorted keys). Two values are "the
+/// same" only if they serialize identically — stricter than NSDictionary
+/// equality, which would call `true` and `1` equal.
+private func canon(_ v: Any) -> Data? {
+    try? JSONSerialization.data(withJSONObject: [v], options: [.sortedKeys, .fragmentsAllowed])
+}
+
 private func same(_ a: Any?, _ b: Any?) -> Bool {
     guard let a, let b else { return a == nil && b == nil }
-    return NSDictionary(dictionary: ["v": a]).isEqual(to: ["v": b])
+    guard let ca = canon(a), let cb = canon(b) else { return false }
+    return ca == cb
+}
+
+/// EVERY file in `dir` and its bytes, minus the two bookkeeping files a
+/// refused write is allowed to touch: the refusal journal (it must record
+/// the refusal) and the advisory flock file. Anything else appearing,
+/// vanishing or changing is a write.
+private let allowedBookkeeping: Set<String> = ["catalog-write-errors.jsonl", "catalog.lock"]
+private func everyFile(_ dir: URL) -> [String: Data] {
+    let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+    var out: [String: Data] = [:]
+    for n in names where !allowedBookkeeping.contains(n) {
+        out[n] = (try? Data(contentsOf: dir.appendingPathComponent(n))) ?? Data()
+    }
+    return out
+}
+
+/// Records every URL CatalogStore.encodeAndWrite reached (its test seam
+/// fires after the bytes land). Any hit while a newer catalog is open is a
+/// write that got past the latch. (≈ a mutex-guarded vector the writer
+/// thread appends to.)
+private final class WriteTripwire: @unchecked Sendable {
+    private let lock = NSLock()
+    private var hits: [URL] = []
+    func hit(_ u: URL) { lock.lock(); hits.append(u); lock.unlock() }
+    var urls: [URL] { lock.lock(); defer { lock.unlock() }; return hits }
 }
 
 // MARK: - 1. Unknown keys survive
@@ -110,6 +143,11 @@ struct CatalogUnknownKeyPreservationTests {
         let store = CatalogStore(directory: dir)
         let records = store.load()
         #expect(records.count == 2)
+        // EDIT a known field on the record that carries unknown keys — the
+        // round trip must be load → edit → save, not a no-op re-encode.
+        let edited = try #require(records.first { $0.id.uuidString == fixedID1 })
+        edited.userNotes = "edited by this build"
+        edited.starRating = 3
         #expect(store.saveNow(records: records), "a current-version catalog must save")
 
         let top = try jsonObject(Data(contentsOf: catalogURL(dir)))
@@ -121,7 +159,9 @@ struct CatalogUnknownKeyPreservationTests {
         for (k, v) in expectedRecordUnknowns {
             #expect(same(future[k], v), "record unknown key \(k) was lost or changed: \(String(describing: future[k]))")
         }
-        // Known fields still come from the typed properties.
+        // Known fields still come from the typed properties — edits land.
+        #expect(future["userNotes"] as? String == "edited by this build")
+        #expect(future["starRating"] as? Int == 3)
         #expect(future["filename"] as? String == "future.mov")
         #expect(future["sizeBytes"] as? Int == 1234)
         // A record that carried no unknown keys gains none.
@@ -435,6 +475,9 @@ struct CatalogOlderVersionUpgradeTests {
 
         let probe = try #require(CatalogSnapshot.headerProbe(at: catalogURL(dir)))
         #expect(probe.version == CatalogSnapshot.currentVersion)
+        // Nothing lost: the load rotated the ORIGINAL old file, byte for
+        // byte, to .prev before the upgrade save replaced the primary.
+        #expect(try Data(contentsOf: prevURL(dir)) == Data(f.json.utf8), "\(f): .prev must hold the pre-upgrade bytes")
         let back = CatalogStore(directory: dir)
         let again = try #require(back.load().first)
         #expect(again.filename == "a.mov")
@@ -444,6 +487,136 @@ struct CatalogOlderVersionUpgradeTests {
         if f.json.contains("originVolume") { #expect(again.originVolume == "Old") }
         if f.json.contains("masterArchive") { #expect(back.masterArchive?.volumeUUID == "TEST-UUID-167") }
         if f.json.contains("archiveFixity") { #expect(again.archiveFixity?.digest == "abc") }
+
+        // ONCE: a second load → save of the upgraded file changes nothing
+        // but the stamps (generation / savedAt). No re-migration, no drift.
+        let upgradedRecords = try #require((try jsonObject(Data(contentsOf: catalogURL(dir))))["records"] as? [Any])
+        let third = CatalogStore(directory: dir)
+        #expect(third.saveNow(records: third.load()))
+        let top3 = try jsonObject(Data(contentsOf: catalogURL(dir)))
+        #expect(top3["version"] as? Int == CatalogSnapshot.currentVersion)
+        #expect(same(top3["records"], upgradedRecords), "\(f): second save must not re-migrate")
+    }
+}
+
+// MARK: - 2b. Poisoned state: no path writes while a newer catalog is open
+
+@Suite("GH #167 — poisoned state: zero writes from every save path while a newer catalog is open", .serialized)
+@MainActor
+struct CatalogNewerVersionNoWritePathTests {
+
+    @Test("manual, debounced, acknowledged, async, rescan snapshots, notes repair, live reload: zero bytes, encodeAndWrite never reached")
+    func everyPathIsHeld() async throws {
+        let dir = scratch("poison")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let future = CatalogSnapshot.currentVersion + 1
+        try Data(futureCatalogJSON(version: future).utf8).write(to: catalogURL(dir))
+        try Data(#"{"version":6,"generation":4,"records":[]}"#.utf8).write(to: prevURL(dir))
+        let before = everyFile(dir)
+
+        let store = CatalogStore(directory: dir)
+        let tripwire = WriteTripwire()
+        store.testAfterWriteBeforeVerify = { url in tripwire.hit(url) }
+        let records = store.load()
+        #expect(records.count == 2)
+
+        let m = VideoScanModel()
+        m.catalogStore = store
+        m.records = records
+        #expect(m.isReadOnly, "the flag every background job checks")
+        #expect(m.catalogSavingPausedNotice == CatalogStore.newerCatalogNotice)
+
+        // A user edit while paused — the thing a save would try to persist.
+        records[0].userNotes = "typed while paused"
+        records[0].unknownFields["mine"] = .string("not saved")
+
+        // Manual save (Save menu / quit-time applicationWillTerminate).
+        #expect(m.saveCatalogNow() == false)
+        // Autosave: debounced → saveAsync after 2 s.
+        m.saveCatalogDebounced()
+        // Acknowledged save (Archive Angel journal, Promote).
+        #expect(await m.saveCatalogAcknowledged() == false)
+        // Direct async + coalesced follow-up.
+        store.saveAsync(records: records)
+        store.saveAsync(records: records)
+        // Rescan / scan-merge / target-removal safety snapshots.
+        #expect(m.snapshotCatalog(prefix: "pre-merge") == nil)
+        #expect(await m.snapshotCatalogAsync(prefix: "pre-target-removal") == nil)
+        // One-time notes repair (writes a backup + marker when it runs).
+        #expect(m.repairMachineTextInUserNotes() == nil)
+        // Viewer-mode bookkeeping cannot lift the pause.
+        m.applyReadOnlyMode(false)
+        #expect(m.isReadOnly)
+        #expect(m.saveCatalogNow() == false)
+
+        // Let the debounce (2 s) and any queued async write run out.
+        try await Task.sleep(nanoseconds: 2_700_000_000)
+
+        #expect(tripwire.urls.isEmpty, "a catalog write got past the latch: \(tripwire.urls)")
+        #expect(everyFile(dir) == before,
+                "files changed while paused: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted()) / bytes differ")
+        let probe = try #require(CatalogSnapshot.headerProbe(at: catalogURL(dir)))
+        #expect(probe.version == future && probe.generation == 5, "never downgraded, never re-stamped")
+        #expect(store.lastWriteError?.kind == "writesDisabled")
+
+        // Live reload: the NEWER build saves again (generation 6, a new
+        // dossier field) while we browse. The tick must show it and write
+        // nothing — in particular no generation adoption into the sidecar.
+        let next = futureCatalogJSON(version: future, generation: 6)
+            .replacingOccurrences(of: #""filename":"plain.mov""#,
+                                  with: #""filename":"plain.mov","audioTranscript":"hello from the newer build","dossierProcessedAt":"2026-10-01T13:00:00Z""#)
+        try Data(next.utf8).write(to: catalogURL(dir))
+        let beforeReload = everyFile(dir)
+        m.lastLiveReloadMtime = .distantPast
+        await m.pollAndMergeDossierFromDisk()
+        #expect(m.records.first { $0.id.uuidString == fixedID2 }?.audioTranscript == "hello from the newer build",
+                "browsing shows what the newer build wrote")
+        #expect(everyFile(dir) == beforeReload,
+                "live reload wrote while paused: \(Set(everyFile(dir).keys).symmetricDifference(beforeReload.keys).sorted())")
+        #expect(m.saveCatalogNow() == false)
+        #expect(tripwire.urls.isEmpty)
+    }
+
+    @Test("a newer catalog that appears mid-session flips the banner and isReadOnly at once (not at the next live-reload tick)")
+    func midSessionLatchReachesTheModelImmediately() throws {
+        let dir = scratch("midmodel")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        let m = VideoScanModel()
+        m.catalogStore = store
+        #expect(m.saveCatalogNow(), "a fresh current-version catalog saves")
+        #expect(!m.isReadOnly)
+        #expect(m.catalogSavingPausedNotice == nil)
+
+        // Another Mac's newer build replaces catalog.json.
+        let future = CatalogSnapshot.currentVersion + 1
+        try Data(#"{"version":\#(future),"generation":\#(store.currentGeneration),"records":[]}"#.utf8)
+            .write(to: catalogURL(dir))
+        let newerBytes = try Data(contentsOf: catalogURL(dir))
+
+        #expect(m.saveCatalogNow() == false)
+        #expect(m.catalogSavingPausedNotice == CatalogStore.newerCatalogNotice, "banner up on the refused save itself")
+        #expect(m.isReadOnly, "background jobs gate on this — it must flip now")
+        #expect(try Data(contentsOf: catalogURL(dir)) == newerBytes)
+    }
+
+    @Test("isolation: a model on a newer-catalog store does not pause a model on a healthy store")
+    func pauseDoesNotLeakAcrossModels() throws {
+        let newerDir = scratch("leak_newer"), okDir = scratch("leak_ok")
+        defer {
+            try? FileManager.default.removeItem(at: newerDir)
+            try? FileManager.default.removeItem(at: okDir)
+        }
+        try Data(futureCatalogJSON(version: CatalogSnapshot.currentVersion + 1).utf8).write(to: catalogURL(newerDir))
+        let a = VideoScanModel()
+        let sa = CatalogStore(directory: newerDir)
+        _ = sa.load()
+        a.catalogStore = sa
+        let b = VideoScanModel()
+        b.catalogStore = CatalogStore(directory: okDir)
+        #expect(a.isReadOnly && a.catalogSavingPausedNotice != nil)
+        #expect(!b.isReadOnly && b.catalogSavingPausedNotice == nil)
+        #expect(b.saveCatalogNow())
     }
 }
 
@@ -512,6 +685,43 @@ struct CatalogKeySnapshotSensorTests {
         let live = CatalogSnapshot.topLevelKeyNames
         #expect(live == Self.topLevelKeys,
                 "added: \(live.subtracting(Self.topLevelKeys).sorted()) removed: \(Self.topLevelKeys.subtracting(live).sorted()). \(Self.howToFix)")
+    }
+
+    /// The body of the 4-space-indented method whose signature starts with
+    /// `signature`, up to its closing brace.
+    private static func methodBody(_ signature: String, in src: String) -> String? {
+        guard let start = src.range(of: signature),
+              let end = src.range(of: "\n    }\n", range: start.upperBound..<src.endIndex) else { return nil }
+        return String(src[start.lowerBound..<end.upperBound])
+    }
+
+    @Test("every catalog write entry point passes the newer-catalog latch; no unguarded writer exists")
+    func writeEntryPointsAreLatched() throws {
+        let src = try SourceTree.appSource(named: "CatalogStore.swift")
+        let gated: [(String, String)] = [
+            ("func saveNow(records:", "writePrecondition()"),
+            ("func saveAcknowledged(records:", "writePrecondition()"),
+            ("func saveAsync(records:", "writePrecondition()"),
+            ("func writeSnapshot(records:", "heldWriteRefusal()"),
+            ("func writeSnapshotAsync(records:", "heldWriteRefusal()"),
+        ]
+        for (sig, gate) in gated {
+            let body = try #require(Self.methodBody(sig, in: src), "\(sig) not found in CatalogStore.swift")
+            #expect(body.contains(gate), "\(sig) no longer calls \(gate) — a newer catalog could be overwritten (GH #167)")
+        }
+        // writePrecondition itself starts with the latch.
+        let pre = try #require(Self.methodBody("private func writePrecondition()", in: src))
+        #expect(pre.contains("heldWriteRefusal()"), "writePrecondition lost the latch check")
+        #expect(pre.contains("v > CatalogSnapshot.currentVersion"), "writePrecondition lost the mid-session version probe")
+        // Exactly the five gated entry points reach the byte writer. A sixth
+        // call site is a new write path: gate it, then update this count.
+        let calls = src.components(separatedBy: "Self.encodeAndWrite(").count - 1
+        #expect(calls == 5, "encodeAndWrite has \(calls) call sites (expected 5) — is the new one latched?")
+        // load() never rotates (.prev copy) a newer catalog.
+        let load = try #require(Self.methodBody("func load() -> [VideoRecord]", in: src))
+        let newer = try #require(load.range(of: "openedReadOnlyNewerVersion"))
+        let rotate = try #require(load.range(of: "rotateBackup()"))
+        #expect(newer.lowerBound < rotate.lowerBound, "load must decide newer-version BEFORE rotating")
     }
 
     @Test("currentVersion is 7 — bumped once for GH #167 (builds before it strip unknown keys)")
