@@ -52,16 +52,20 @@ the issues" -- a mix, biased to one ticket):
      so a rerun reports the same thing as the first run.
 
   2. Separate TRACKING issues, HIGH severity only (label nightly-finding +
-     tool + High Priority). At most --cap (3) opened or reopened per night;
-     issues already opened today count against the cap, so a rerun opens
-     nothing more. The rest wait, listed in the ticket as "queued".
-     Lifecycle (unchanged from 2026-10-01):
-       * open, and it changed        -> one comment
-       * gone for 3 complete nights  -> close with a comment
-       * came back after auto-close  -> reopen with a comment
+     tool + High Priority), ONE PER (tool, rule, file) -- coordinator
+     2026-10-02: four cleartext-logging hits in one file are one issue. Each
+     issue lists its instances with their fingerprints. At most --cap (3)
+     opened or reopened per night; issues already opened today count against
+     the cap, so a rerun opens nothing more. The rest wait, listed in the
+     ticket as "queued". Lifecycle:
+       * an instance appears, disappears or changes -> one CHANGED comment
+       * zero instances for 3 complete nights       -> close with a comment
+       * an instance comes back after auto-close    -> reopen with a comment
        * `wontfix` label, or closed as "not planned" -> never touched again
-     Medium findings live in the ticket only. An already-open tracking issue
-     whose finding dropped to medium keeps its lifecycle until it closes.
+     The ticket still lists every instance individually.
+     Medium findings live in the ticket only. A tracking issue holds only
+     HIGH instances: one that drops to medium leaves the issue (CHANGED), and
+     an issue with no high instance left counts clean nights and closes.
 
   3. Vendored / third-party code (SwiftPM checkouts, mlx-swift, Pods,
      anything outside the repo) is counted in ONE line of the ticket and
@@ -531,6 +535,13 @@ class ToolRun:
     complete: bool = False
     findings: list[Finding] = dataclasses.field(default_factory=list)
     notes: list[str] = dataclasses.field(default_factory=list)
+    job: str | None = None         # the job result passed with --job-result, if any
+
+    @property
+    def is_disabled(self) -> bool:
+        """The job never ran (disabled with `if: false`, or skipped): no
+        artifact and no failure. Still incomplete, just not alarming."""
+        return not self.input_found and self.job in (None, "skipped")
 
 
 def _status_complete(artifacts: Path, tool: str) -> bool | None:
@@ -566,6 +577,7 @@ def collect(artifacts: Path, job_results: dict[str, str], workspace: str | None)
     }
     for tool, (paths, parser) in sources.items():
         tr = runs[tool]
+        tr.job = job_results.get(tool)
         if not paths:
             tr.notes.append("no input artifact")
             continue
@@ -699,7 +711,7 @@ def list_all_issues(gh) -> list[Issue]:
 # Tracking issue rendering (high severity)
 # --------------------------------------------------------------------------
 
-MAX_OCCURRENCES_SHOWN = 40
+MAX_INSTANCES_SHOWN = 40
 GITHUB_BODY_LIMIT = 65536
 TICKET_BODY_BUDGET = 60000      # headroom under GitHub's limit
 MARKER_BUDGET = 36000           # the ticket's state marker, at most
@@ -708,43 +720,102 @@ DIGEST_FP_CHARS = 8             # 32 bits per fp: ~2,000 entries -> collision od
 
 
 def issue_title(g: FindingGroup) -> str:
+    """Title for ONE instance (used in the ticket and the summary)."""
     msg = normalise_detail(g.message)
     if len(msg) > 110:
         msg = msg[:107] + "…"
     return f"[nightly/{g.tool}] {Path(g.file).name}: {msg}"[:250]
 
 
+def group_key(tool: str, rule: str, file: str) -> str:
+    """Tracking-issue identity (coordinator 2026-10-02): one issue per
+    (tool, rule, file). The instances inside keep their own fingerprints."""
+    return hashlib.sha256("\x1f".join([tool, rule, file]).encode()).hexdigest()[:16]
+
+
+@dataclasses.dataclass
+class TrackGroup:
+    """Every instance (fingerprint) of one (tool, rule, file)."""
+    gk: str
+    tool: str
+    rule: str
+    file: str
+    instances: list[FindingGroup]
+
+    @property
+    def severity(self) -> str:
+        return min((i.severity for i in self.instances), key=lambda s: SEVERITY_RANK[s])
+
+    @property
+    def fps(self) -> list[str]:
+        return [i.fp for i in self.instances]
+
+
+def track_groups(groups: dict[str, FindingGroup]) -> dict[str, TrackGroup]:
+    """HIGH instances only. strict-concurrency files data races (high) and
+    isolation warnings (low) under the same rule, so grouping every severity
+    would pull lows into a high issue and keep it open after the race is
+    fixed. An instance that drops below high leaves its issue (a CHANGED
+    "gone" event); the nightly ticket still lists it."""
+    out: dict[str, TrackGroup] = {}
+    for g in sorted(groups.values(), key=lambda g: g.fp):
+        if g.severity not in TRACKED_SEVERITIES:
+            continue
+        gk = group_key(g.tool, g.rule, g.file)
+        tg = out.get(gk)
+        if tg is None:
+            out[gk] = TrackGroup(gk, g.tool, g.rule, g.file, [g])
+        else:
+            tg.instances.append(g)
+    return out
+
+
+def track_title(tg: TrackGroup) -> str:
+    """Set once at creation. A one-instance issue reads like the finding; a
+    multi-instance one names the rule and the count at creation."""
+    if len(tg.instances) == 1:
+        return issue_title(tg.instances[0])
+    return f"[nightly/{tg.tool}] {Path(tg.file).name}: {tg.rule} ({len(tg.instances)} instances)"[:250]
+
+
 def render_marker(state: dict) -> str:
     return f"<!-- nightly-finding {json.dumps(state, sort_keys=True)} -->"
 
 
-def render_body(g: FindingGroup, state: dict, run_url: str) -> str:
-    lines = sorted({o.line for o in g.occurrences if o.line is not None})
-    shown = ", ".join(str(n) for n in lines[:MAX_OCCURRENCES_SHOWN])
-    if len(lines) > MAX_OCCURRENCES_SHOWN:
-        shown += f", … (+{len(lines) - MAX_OCCURRENCES_SHOWN})"
-    details = sorted({normalise_detail(o.message) for o in g.occurrences})
-    detail_block = "\n".join(f"> {d}" for d in details[:10])
-    if len(details) > 10:
-        detail_block += f"\n> … and {len(details) - 10} more variants"
+def render_body(tg: TrackGroup, state: dict, run_url: str) -> str:
+    rows = []
+    for g in sorted(tg.instances, key=lambda g: (SEVERITY_RANK[g.severity], g.fp))[:MAX_INSTANCES_SHOWN]:
+        lines = sorted({o.line for o in g.occurrences if o.line is not None})
+        shown = ", ".join(str(n) for n in lines[:10]) + (" …" if len(lines) > 10 else "")
+        rows.append(f"| `{g.fp}` | {g.severity} | {g.count} | {shown or '–'} | "
+                    f"{_short(normalise_detail(g.message), 140)} |")
+    more = len(tg.instances) - len(rows)
+    carried = [fp for fp in (state.get("instances") or {}) if fp not in set(tg.fps)]
     return "\n".join([
         render_marker(state),
-        f"**Tool:** `{g.tool}` · **Rule:** `{g.rule}` · **Severity:** **{g.severity}**",
-        f"**File:** `{g.file}` · **Fingerprint:** `{g.fp}`",
+        f"**Tool:** `{tg.tool}` · **Rule:** `{tg.rule}` · **Severity:** **{tg.severity}**",
+        f"**File:** `{tg.file}` · **Group key:** `{tg.gk}`",
         "",
-        detail_block,
+        f"### Instances ({len(tg.instances)})",
         "",
-        f"**Occurrences when last updated:** {g.count}" + (f" (lines {shown})" if shown else ""),
-        "Line numbers are informational only. The fingerprint ignores them, so this issue",
-        "follows the finding when code moves.",
+        "| Fingerprint | Severity | Occurrences | Lines | Detail |",
+        "|---|---|---:|---|---|",
+        *rows,
+        *([f"| … | | | | and {more} more |"] if more > 0 else []),
+        *([""] + [f"Carried from the last complete run (tool incomplete tonight): "
+                  + ", ".join(f"`{fp}`" for fp in carried)] if carried else []),
+        "",
+        "Line numbers are informational only. Fingerprints ignore them, so instances follow",
+        "the code when it moves. An instance appearing or disappearing is a change, noted below.",
         "",
         f"First seen: {state.get('first_seen', '?')} · Run: {run_url or 'n/a'}",
         "",
         "---",
-        "_High-severity tracking issue, managed by `tools/nightly_findings_to_issues.py`; the "
-        "nightly `nightly-findings` ticket lists it every night it is open. It closes itself after "
-        f"the finding is absent from {CLOSE_AFTER_NIGHTS} consecutive complete nightly runs. To "
-        "silence it for good, add the `wontfix` label (or close it as not planned)._",
+        "_High-severity tracking issue (one per tool + rule + file), managed by "
+        "`tools/nightly_findings_to_issues.py`; the nightly `nightly-findings` ticket lists every "
+        f"instance every night. It closes itself after {CLOSE_AFTER_NIGHTS} consecutive complete "
+        "nightly runs with zero instances. To silence it for good, add the `wontfix` label (or "
+        "close it as not planned)._",
     ])
 
 
@@ -766,7 +837,8 @@ def blob_to_set(blob: str | None) -> set[str]:
     return {blob[i:i + k] for i in range(0, len(blob or ""), k)}
 
 
-def labels_for(g: FindingGroup) -> list[str]:
+def labels_for(g) -> list[str]:
+    """`g`: a FindingGroup or a TrackGroup (anything with .tool and .severity)."""
     labels = [BASE_LABEL, g.tool]
     if g.severity == "high":
         labels.append(HIGH_LABEL)
@@ -787,32 +859,38 @@ class Action:
     body: str = ""
     labels: list[str] = dataclasses.field(default_factory=list)
     comment: str = ""
-    fp: str = ""
+    fp: str = ""       # tracking actions: the group key
     meta: dict = dataclasses.field(default_factory=dict)
 
 
 @dataclasses.dataclass
 class TrackingPlan:
     actions: list[Action]
-    opened: list[str]              # fps getting a new or reopened tracking issue tonight
-    pending: list[FindingGroup]    # high, no tracking issue yet, past tonight's cap
-    skipped_wontfix: list[str]
-    commented: list[str]
+    opened: list[str]              # group keys getting a new or reopened tracking issue tonight
+    pending: list[TrackGroup]      # high groups with no tracking issue yet, past tonight's cap
+    skipped_wontfix: list[str]     # instance fingerprints silenced by a wontfix issue
+    commented: list[str]           # group keys whose open issue got a CHANGED comment
     missing_counted: list[str]
-    closed: list[str]
+    closed: list[str]              # group keys auto-closed tonight
     held_incomplete: list[str]     # open issues left alone because their tool was incomplete
     budget_used_before: int = 0    # tracking issues already opened earlier today (reruns)
 
 
 @dataclasses.dataclass
 class IssueIndex:
-    by_fp: dict[str, Issue]
+    by_gk: dict[str, Issue]
     tickets: list[Issue]
     legacy_digests: list[Issue]
 
+    def tracking_for(self, g: FindingGroup) -> Issue | None:
+        return self.by_gk.get(group_key(g.tool, g.rule, g.file))
+
 
 def index_issues(issues: list[Issue]) -> IssueIndex:
-    by_fp: dict[str, Issue] = {}
+    """Tracking issues are found by the group key in their marker. (The
+    per-fingerprint v1 markers of 2026-10-01 never reached GitHub: writes were
+    off until this design, so there is nothing to migrate.)"""
+    by_gk: dict[str, Issue] = {}
     tickets: list[Issue] = []
     legacy: list[Issue] = []
 
@@ -830,111 +908,149 @@ def index_issues(issues: list[Issue]) -> IssueIndex:
             legacy.append(iss)
             continue
         mk = iss.marker
-        if not mk or "fp" not in mk:
+        if not mk or "gk" not in mk:
             continue
-        if better(iss, by_fp.get(mk["fp"])):
-            by_fp[mk["fp"]] = iss
-    return IssueIndex(by_fp, tickets, legacy)
+        if better(iss, by_gk.get(mk["gk"])):
+            by_gk[mk["gk"]] = iss
+    return IssueIndex(by_gk, tickets, legacy)
+
+
+def _instances_state(tg: TrackGroup) -> dict[str, list]:
+    return {g.fp: [g.detail_digest, g.count, g.severity] for g in tg.instances}
+
+
+def _change_note(tg: TrackGroup, old: dict[str, list], new: dict[str, list],
+                 old_sev: str | None, today: str, run_url: str) -> str | None:
+    """None when nothing changed. Otherwise the CHANGED comment: instances
+    that appeared, disappeared, or changed (count / detail / severity)."""
+    appeared = sorted(set(new) - set(old))
+    gone = sorted(set(old) - set(new))
+    changed = sorted(fp for fp in set(new) & set(old) if list(old[fp])[:1] != list(new[fp])[:1])
+    if not (appeared or gone or changed or old_sev != tg.severity):
+        return None
+    by_fp = {g.fp: g for g in tg.instances}
+    note = [f"**Changed in the nightly of {today}.**"]
+    if old_sev != tg.severity:
+        note.append(f"Severity: {old_sev} → {tg.severity}")
+    if appeared:
+        note.append("New instance(s):\n" + "\n".join(
+            f"- `{fp}` {_short(normalise_detail(by_fp[fp].message), 120)}" for fp in appeared))
+    if gone:
+        note.append("Gone instance(s):\n" + "\n".join(f"- `{fp}`" for fp in gone))
+    for fp in changed:
+        o, n = old[fp], new[fp]
+        what = []
+        if len(o) > 1 and o[1] != n[1]:
+            what.append(f"occurrences {o[1]} → {n[1]}")
+        if len(o) > 2 and o[2] != n[2]:
+            what.append(f"severity {o[2]} → {n[2]}")
+        note.append(f"`{fp}`: " + ("; ".join(what) if what else "detail text changed"))
+    note.append(f"Instances now: {len(new)}. Run: {run_url or 'n/a'}")
+    return "\n\n".join(note)
 
 
 def plan_tracking(groups: dict[str, FindingGroup], idx: IssueIndex, complete: dict[str, bool],
                   today: str, run_url: str, cap: int = DEFAULT_CAP) -> TrackingPlan:
-    """High-severity tracking issues. `groups` must already exclude vendored code."""
-    by_fp = idx.by_fp
+    """High-severity tracking issues, one per (tool, rule, file). `groups`
+    must already exclude vendored code."""
+    by_gk = idx.by_gk
+    tgs = track_groups(groups)
     actions: list[Action] = []
     opened: list[str] = []
-    pending: list[FindingGroup] = []
+    pending: list[TrackGroup] = []
     skipped, commented, missing_counted, closed, held = [], [], [], [], []
     # A rerun the same night must not open another `cap` issues.
-    already = sum(1 for iss in by_fp.values()
+    already = sum(1 for iss in by_gk.values()
                   if (iss.marker or {}).get("opened_on") == today and not iss.is_wontfix)
     budget = max(0, cap - already)
 
-    ordered = sorted(groups.values(),
-                     key=lambda g: (SEVERITY_RANK[g.severity], g.tool, g.file, g.fp))
-    for g in ordered:
-        iss = by_fp.get(g.fp)
+    for tg in sorted(tgs.values(), key=lambda t: (SEVERITY_RANK[t.severity], t.tool, t.file, t.rule)):
+        iss = by_gk.get(tg.gk)
         if iss is not None and iss.is_wontfix:
-            skipped.append(g.fp)
+            skipped += tg.fps
             continue
         if iss is not None and iss.is_open:
-            # An issue already exists (even if the finding is now medium/low):
-            # keep its lifecycle going rather than orphan it.
+            # The issue exists: record instance changes (an empty group is
+            # handled below as a clean night).
             st = dict(iss.marker or {})
-            changed = st.get("digest") != g.detail_digest
+            old = dict(st.get("instances") or {})
+            new = _instances_state(tg)
+            if not complete.get(tg.tool, False):
+                # Incomplete tool: an instance missing tonight is unknown, not gone.
+                for fp, v in old.items():
+                    new.setdefault(fp, v)
+            note = _change_note(tg, old, new, st.get("severity"), today, run_url)
             was_missing = bool(st.get("missing_dates"))
-            if not (changed or was_missing):
+            if note is None and not was_missing:
                 continue
-            old_count, old_sev = st.get("count"), st.get("severity")
-            st.update({"digest": g.detail_digest, "count": g.count, "severity": g.severity,
-                       "missing_dates": []})
-            if changed:
-                body = render_body(g, st, run_url)
-                note = [f"**Changed in the nightly of {today}.**"]
-                if old_sev != g.severity:
-                    note.append(f"Severity: {old_sev} → {g.severity}")
-                if old_count != g.count:
-                    note.append(f"Occurrences: {old_count} → {g.count}")
-                if len(note) == 1:
-                    note.append("The detail text changed (see the updated description).")
-                note.append(f"Run: {run_url or 'n/a'}")
-                actions.append(Action("comment", iss.number, comment="\n\n".join(note), fp=g.fp,
-                                      title=iss.title))
-                actions.append(Action("edit", iss.number, body=body, fp=g.fp))
-                if g.severity == "high" and HIGH_LABEL not in iss.labels:
-                    actions.append(Action("add_label", iss.number, labels=[HIGH_LABEL], fp=g.fp))
-                commented.append(g.fp)
+            st.update({"instances": new, "severity": tg.severity, "missing_dates": []})
+            if note is not None:
+                actions.append(Action("comment", iss.number, comment=note, fp=tg.gk, title=iss.title))
+                actions.append(Action("edit", iss.number, body=render_body(tg, st, run_url), fp=tg.gk))
+                if tg.severity == "high" and HIGH_LABEL not in iss.labels:
+                    actions.append(Action("add_label", iss.number, labels=[HIGH_LABEL], fp=tg.gk))
+                commented.append(tg.gk)
             else:
-                actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=g.fp))
+                actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=tg.gk))
             continue
-        if g.severity not in TRACKED_SEVERITIES:
+        if tg.severity not in TRACKED_SEVERITIES:
             continue                       # medium and low live in the nightly ticket only
         if budget <= 0:
-            pending.append(g)
+            pending.append(tg)
             continue
         budget -= 1
-        opened.append(g.fp)
+        opened.append(tg.gk)
+        meta = {"severity": tg.severity, "tool": tg.tool, "instances": len(tg.instances)}
         if iss is None:
-            st = {"v": 1, "fp": g.fp, "tool": g.tool, "first_seen": today, "opened_on": today,
-                  "digest": g.detail_digest, "count": g.count, "severity": g.severity,
-                  "missing_dates": []}
-            actions.append(Action("create", title=issue_title(g), body=render_body(g, st, run_url),
-                                  labels=labels_for(g), fp=g.fp, meta={"severity": g.severity,
-                                                                       "tool": g.tool}))
+            st = {"v": 2, "gk": tg.gk, "tool": tg.tool, "rule": tg.rule, "file": tg.file,
+                  "first_seen": today, "opened_on": today, "severity": tg.severity,
+                  "instances": _instances_state(tg), "missing_dates": []}
+            actions.append(Action("create", title=track_title(tg), body=render_body(tg, st, run_url),
+                                  labels=labels_for(tg), fp=tg.gk, meta=meta))
         else:
             st = dict(iss.marker or {})
-            st.update({"digest": g.detail_digest, "count": g.count, "severity": g.severity,
+            st.update({"instances": _instances_state(tg), "severity": tg.severity,
                        "missing_dates": [], "opened_on": today})
-            actions.append(Action("reopen", iss.number, title=iss.title, fp=g.fp,
-                                  meta={"severity": g.severity, "tool": g.tool},
-                                  comment=f"**Reappeared in the nightly of {today}** after being closed. "
-                                          f"Run: {run_url or 'n/a'}"))
-            actions.append(Action("edit", iss.number, body=render_body(g, st, run_url), fp=g.fp))
+            actions.append(Action("reopen", iss.number, title=iss.title, fp=tg.gk, meta=meta,
+                                  comment=f"**Reappeared in the nightly of {today}** after being closed "
+                                          f"({len(tg.instances)} instance(s)). Run: {run_url or 'n/a'}"))
+            actions.append(Action("edit", iss.number, body=render_body(tg, st, run_url), fp=tg.gk))
 
-    # Open tracking issues whose finding is absent tonight.
-    for fp, iss in sorted(by_fp.items(), key=lambda kv: kv[1].number):
-        if fp in groups or not iss.is_open or iss.is_wontfix:
+    # Open tracking issues with ZERO instances tonight: a clean night.
+    for gk, iss in sorted(by_gk.items(), key=lambda kv: kv[1].number):
+        if gk in tgs or not iss.is_open or iss.is_wontfix:
             continue
         st = dict(iss.marker or {})
         tool = st.get("tool", "?")
         if not complete.get(tool, False):
-            held.append(fp)
+            held.append(gk)
             continue
         dates = list(st.get("missing_dates") or [])
         if today in dates:
             continue                       # this night was already counted
+        first_clean = not dates
         dates.append(today)
         st["missing_dates"] = dates
+        gone = sorted(st.get("instances") or {})
+        if first_clean and gone:
+            # The last instances disappearing is itself a change.
+            actions.append(Action("comment", iss.number, fp=gk, title=iss.title, comment=(
+                f"**Changed in the nightly of {today}.**\n\nGone instance(s):\n"
+                + "\n".join(f"- `{fp}`" for fp in gone)
+                + f"\n\nInstances now: 0. Closes after {CLOSE_AFTER_NIGHTS} clean nights. "
+                  f"Run: {run_url or 'n/a'}")))
+            commented.append(gk)
+        st["instances"] = {}
         if len(dates) >= CLOSE_AFTER_NIGHTS:
-            actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=fp))
-            actions.append(Action("close", iss.number, fp=fp, title=iss.title, comment=(
-                f"Not reported by `{tool}` in {CLOSE_AFTER_NIGHTS} consecutive complete nightly runs "
-                f"({', '.join(dates[-CLOSE_AFTER_NIGHTS:])}). Closing as fixed. It will reopen "
-                f"if the finding comes back. Run: {run_url or 'n/a'}")))
-            closed.append(fp)
+            actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=gk))
+            actions.append(Action("close", iss.number, fp=gk, title=iss.title, comment=(
+                f"Zero instances reported by `{tool}` in {CLOSE_AFTER_NIGHTS} consecutive complete "
+                f"nightly runs ({', '.join(dates[-CLOSE_AFTER_NIGHTS:])}). Closing as fixed. It will "
+                f"reopen if an instance comes back. Run: {run_url or 'n/a'}")))
+            closed.append(gk)
         else:
-            actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=fp))
-            missing_counted.append(fp)
+            actions.append(Action("edit", iss.number, body=with_state(iss.body, st), fp=gk))
+            missing_counted.append(gk)
 
     return TrackingPlan(actions, opened, pending, skipped, commented, missing_counted,
                         closed, held, min(already, cap))
@@ -948,8 +1064,8 @@ def ensure_labels(gh, needed: Iterable[str]) -> None:
 
 
 def apply(actions: list[Action], gh) -> tuple[dict[str, int], list[str]]:
-    """Executes tracking actions. Returns (fp -> issue number for creates and
-    reopens, errors). One failed call does not stop the rest; the caller
+    """Executes tracking actions. Returns (group key -> issue number for
+    creates and reopens, errors). One failed call does not stop the rest; the caller
     exits non-zero."""
     numbers: dict[str, int] = {}
     errors: list[str] = []
@@ -1158,31 +1274,33 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
     prev_hm8: dict[str, set[str]] = {t: blob_to_set(b) for t, b in (prev.get("hm8") or {}).items()}
     prev_hm8_all = set().union(*prev_hm8.values()) if prev_hm8 else set()
     prev_low: dict[str, dict] = dict(prev.get("low") or {})
-    by_fp = idx.by_fp
     wontfix = set(tp.skipped_wontfix)
 
-    # Tracking-issue reference per fingerprint.
+    # Tracking-issue reference per instance fingerprint, via its group key.
     refs: dict[str, str] = {}
-    pending_fps = {g.fp for g in tp.pending}
+    pending_gks = {t.gk for t in tp.pending}
     for fp, g in groups.items():
-        if g.severity not in ("high", "medium") or fp in wontfix:
+        if g.severity not in TRACKED_SEVERITIES or fp in wontfix:
             continue
-        n = numbers.get(fp)
-        iss = by_fp.get(fp)
+        gk = group_key(g.tool, g.rule, g.file)
+        n = numbers.get(gk)
+        iss = idx.by_gk.get(gk)
         if n is not None:
             verb = "reopened" if iss is not None else "opened"
             refs[fp] = f"tracking: would be {verb}" if dry_run else f"tracking #{n} ({verb} tonight)"
         elif iss is not None and iss.is_open:
             refs[fp] = f"tracking #{iss.number}"
-        elif fp in pending_fps:
+        elif gk in pending_gks:
             refs[fp] = f"tracking issue queued (cap {cap}/night)"
 
-    def known_before(fp: str) -> bool:
-        if fp in prev_hm or fp[:DIGEST_FP_CHARS] in prev_hm8_all:
+    def known_before(g: FindingGroup) -> bool:
+        if g.fp in prev_hm or g.fp[:DIGEST_FP_CHARS] in prev_hm8_all:
             return True
-        iss = by_fp.get(fp)
-        # A tracking issue that was already open before tonight also counts.
-        return iss is not None and iss.is_open and (iss.marker or {}).get("opened_on") != today
+        iss = idx.tracking_for(g)
+        # An instance already listed on a tracking issue open before tonight also counts.
+        mk = (iss.marker or {}) if iss is not None else {}
+        return (iss is not None and iss.is_open and mk.get("opened_on") != today
+                and g.fp in (mk.get("instances") or {}))
 
     new_high, new_medium, changed, still = [], [], [], []
     hm_now: dict[str, list] = {}
@@ -1190,11 +1308,13 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
         if g.severity not in ("high", "medium") or g.fp in wontfix:
             continue
         rec = prev_hm.get(g.fp)
-        if not known_before(g.fp):
+        if not known_before(g):
             (new_high if g.severity == "high" else new_medium).append(g)
             first_seen = today
         else:
-            tracked_first = (by_fp[g.fp].marker or {}).get("first_seen") if g.fp in by_fp else None
+            tiss = idx.tracking_for(g)
+            tracked_first = (tiss.marker or {}).get("first_seen") if tiss is not None and \
+                g.fp in ((tiss.marker or {}).get("instances") or {}) else None
             candidates = [d for d in (rec[2] if rec else None, tracked_first,
                                       None if rec else prev.get("date")) if d]
             first_seen = min(candidates) if candidates else today
@@ -1224,13 +1344,19 @@ def plan_ticket(groups: dict[str, FindingGroup], vendored: list[FindingGroup], i
             fixed += [(p, None) for p in sorted(gone)]
         elif gone:
             hm8_now.setdefault(tool, set()).update(gone)
-    fixed_closed = [(fp, by_fp[fp]) for fp in tp.closed if fp in by_fp]
-    for fp, _rec in fixed:
-        iss = by_fp.get(fp)
+    fixed_closed = [(gk, idx.by_gk[gk]) for gk in tp.closed if gk in idx.by_gk]
+    live_gks = {group_key(g.tool, g.rule, g.file) for g in groups.values()}
+    for fp, rec in fixed:
+        if rec is None:
+            continue
+        gk = group_key(rec[0], rec[5], rec[4])
+        iss = idx.by_gk.get(gk)
         if iss is None or iss.is_wontfix:
             continue
-        if fp in tp.closed:
+        if gk in tp.closed:
             refs[fp] = f"tracking #{iss.number} auto-closed tonight"
+        elif iss.is_open and gk in live_gks:
+            refs[fp] = f"instance gone from tracking #{iss.number} (other instances remain)"
         elif iss.is_open:
             refs[fp] = f"tracking #{iss.number} closes after {CLOSE_AFTER_NIGHTS} clean nights"
 
@@ -1383,8 +1509,9 @@ def render_ticket(state: dict, today: str, run_url: str, previous: Issue | None,
                        f"{g.severity}, since {fs}" + (f" · {refs[g.fp]}" if g.fp in refs else ""), run)
             for g, fs in oldest] or ["(none)"]
     if tp.pending:
-        out += ["", f"{len(tp.pending)} high finding(s) are queued for a tracking issue "
-                    f"(at most {cap} open per night)."]
+        n_inst = sum(len(t.instances) for t in tp.pending)
+        out += ["", f"{len(tp.pending)} high tracking issue(s) ({n_inst} instance(s)) are queued "
+                    f"(at most {cap} new per night; one issue per tool + rule + file)."]
     out.append("")
 
     out += ["## Low severity (counts and deltas; never filed)", "",
@@ -1424,7 +1551,12 @@ def render_ticket(state: dict, today: str, run_url: str, previous: Issue | None,
         notes.append(f"Vendored / third-party (not filed): {len(vendored)} finding(s) — "
                      + ", ".join(f"{t} {n}" for t, n in sorted(by_tool.items())) + " in "
                      + ", ".join(r for r, _ in sorted(roots.items(), key=lambda kv: -kv[1])[:5]) + ".")
-    incomplete = [t for t in TOOLS if not runs[t].complete]
+    # A job that did not run at all (e.g. TSan, `if: false` since 2026-05-12)
+    # is reported as disabled, not as a failure.
+    disabled = [t for t in TOOLS if not runs[t].complete and runs[t].is_disabled]
+    incomplete = [t for t in TOOLS if not runs[t].complete and not runs[t].is_disabled]
+    if disabled:
+        notes.append("Not run tonight (disabled job): " + ", ".join(disabled) + ".")
     if incomplete:
         notes.append("Incomplete tonight (nothing from these counted as fixed; state carried): "
                      + ", ".join(f"{t} ({'; '.join(runs[t].notes) or 'incomplete'})" for t in incomplete) + ".")
@@ -1480,16 +1612,25 @@ def _issue_url(repo: str, n: int | None, dry_run: bool) -> str | None:
 def build_summary(runs: dict[str, ToolRun], groups: dict[str, FindingGroup], tp: TrackingPlan,
                   tk: TicketPlan, idx: IssueIndex, numbers: dict[str, int], ticket_number: int | None,
                   errors: list[str], today: str, run_url: str, dry_run: bool, repo: str) -> dict:
-    def tracking_no(fp: str) -> int | None:
-        if fp in numbers:
-            return numbers[fp]
-        iss = idx.by_fp.get(fp)
+    def tracking_no(gk: str) -> int | None:
+        if gk in numbers:
+            return numbers[gk]
+        iss = idx.by_gk.get(gk)
         return iss.number if iss is not None and iss.is_open and not iss.is_wontfix else None
 
     def item(g: FindingGroup) -> dict:
-        n = tracking_no(g.fp)
-        return {"fp": g.fp, "tool": g.tool, "rule": g.rule, "file": g.file,
+        gk = group_key(g.tool, g.rule, g.file)
+        n = tracking_no(gk) if g.severity in TRACKED_SEVERITIES else None
+        return {"fp": g.fp, "gk": gk, "tool": g.tool, "rule": g.rule, "file": g.file,
                 "severity": g.severity, "count": g.count, "title": issue_title(g),
+                "issue": n, "url": _issue_url(repo, n, dry_run)}
+
+    tgs = track_groups(groups)
+
+    def group_item(tg: TrackGroup) -> dict:
+        n = tracking_no(tg.gk)
+        return {"gk": tg.gk, "tool": tg.tool, "rule": tg.rule, "file": tg.file,
+                "severity": tg.severity, "instances": tg.fps, "title": track_title(tg),
                 "issue": n, "url": _issue_url(repo, n, dry_run)}
 
     sev_counts = {"high": 0, "medium": 0, "low": 0}
@@ -1501,22 +1642,22 @@ def build_summary(runs: dict[str, ToolRun], groups: dict[str, FindingGroup], tp:
 
     # Open high tracking issues and when they were opened (the alert's ⚠️ age).
     open_high = []
-    for fp, iss in sorted(idx.by_fp.items(), key=lambda kv: kv[1].number):
+    for gk, iss in sorted(idx.by_gk.items(), key=lambda kv: kv[1].number):
         mk = iss.marker or {}
-        if not iss.is_open or iss.is_wontfix or fp in tp.closed:
+        if not iss.is_open or iss.is_wontfix or gk in tp.closed or gk in tp.opened:
             continue
         if mk.get("severity") != "high" and HIGH_LABEL not in iss.labels:
             continue
-        open_high.append({"issue": iss.number, "title": iss.title, "fp": fp,
+        open_high.append({"issue": iss.number, "title": iss.title, "gk": gk,
                           "since": mk.get("opened_on") or mk.get("first_seen"),
                           "url": _issue_url(repo, iss.number, False)})
-    for fp in tp.opened:
-        g = groups.get(fp)
-        if g is None or fp in {o["fp"] for o in open_high}:
+    for gk in tp.opened:
+        tg = tgs.get(gk)
+        if tg is None:
             continue
-        open_high.append({"issue": None if dry_run else numbers.get(fp), "title": issue_title(g),
-                          "fp": fp, "since": today,
-                          "url": _issue_url(repo, numbers.get(fp), dry_run)})
+        open_high.append({"issue": None if dry_run else numbers.get(gk), "title": track_title(tg),
+                          "gk": gk, "since": today,
+                          "url": _issue_url(repo, numbers.get(gk), dry_run)})
 
     ticket_action = "create" if tk.tonight is None else ("edit" if any(
         a.kind == "ticket_edit" for a in tk.actions) else "unchanged")
@@ -1544,10 +1685,12 @@ def build_summary(runs: dict[str, ToolRun], groups: dict[str, FindingGroup], tp:
                    "file": rec[4] if rec else None, "rule": rec[5] if rec else None}
                   for fp, rec in tk.fixed],
         "still_open": len(tk.still_open),
-        "tracking": {"opened": [item(groups[fp]) for fp in tp.opened if fp in groups],
-                     "pending": len(tp.pending), "commented": len(tp.commented),
+        "tracking": {"opened": [group_item(tgs[gk]) for gk in tp.opened if gk in tgs],
+                     "pending": len(tp.pending),
+                     "pending_instances": sum(len(t.instances) for t in tp.pending),
+                     "commented": len(tp.commented),
                      "missing_counted": len(tp.missing_counted),
-                     "closed": [idx.by_fp[fp].number for fp in tp.closed if fp in idx.by_fp],
+                     "closed": [idx.by_gk[gk].number for gk in tp.closed if gk in idx.by_gk],
                      "held_incomplete": len(tp.held_incomplete),
                      "skipped_wontfix": len(tp.skipped_wontfix),
                      "open_high": open_high},

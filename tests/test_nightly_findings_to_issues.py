@@ -7,7 +7,8 @@ through a fake subprocess runner to pin the exact `gh` argv.
 
 Design under test (Rick, 2026-10-02): ONE nightly ticket per night, rotated so
 only one is open (a human comment in the last 48 h keeps an old one open);
-separate tracking issues for HIGH severity only, at most 3 new per night;
+separate tracking issues for HIGH severity only, one per (tool, rule, file)
+with the instances listed inside, at most 3 new per night;
 vendored code reported in one line, never filed; morning 🔴 / ⚠️ lines.
 
 Five-dimension checklist (CLAUDE.md):
@@ -149,6 +150,16 @@ def F(tool="codeql", rule="r", file="a.swift", line=1, msg="m", sev="high"):
 def LOW(i, tool="periphery", rule="Unused function '…'"):
     return F(tool=tool, rule=rule, file=f"VideoScan/VideoScan/F{i}.swift", line=i,
              msg=f"Unused function 'f{i}()'", sev="low")
+
+
+def seeded_issue(number, finding, *, state, reason, labels):
+    """A pre-existing v2 tracking issue for `finding`'s (tool, rule, file),
+    whose stored instance detail is stale ("old")."""
+    (g,) = nf.group_findings([finding]).values()
+    st = {"v": 2, "gk": nf.group_key(g.tool, g.rule, g.file), "tool": g.tool, "rule": g.rule,
+          "file": g.file, "first_seen": "2026-09-30", "severity": g.severity,
+          "instances": {g.fp: ["old", 9, g.severity]}, "missing_dates": []}
+    return nf.Issue(number, "t", state, reason, labels, nf.render_marker(st) + "\nbody")
 
 
 def runs_from(findings, complete=None):
@@ -345,14 +356,14 @@ class TestTrackingLifecycle:
         (iss,) = gh.tracking()
         assert "High Priority" in iss.labels
 
-    def test_existing_open_medium_issue_keeps_its_lifecycle(self):
-        (g,) = nf.group_findings([F(sev="medium")]).values()
-        st = {"v": 1, "fp": g.fp, "tool": "codeql", "first_seen": "2026-09-30", "digest": "old",
-              "count": 1, "severity": "medium", "missing_dates": []}
-        gh = FakeGh([nf.Issue(5, "t", "OPEN", None, ["nightly-finding", "codeql"],
-                              nf.render_marker(st))])
-        night(gh, [F(sev="medium")], "2026-10-02")               # digest differs -> one comment
+    def test_issue_whose_only_instance_dropped_to_medium_closes(self):
+        """Tracking issues hold HIGH instances only; the medium one stays in
+        the ticket and the empty issue counts clean nights."""
+        gh = FakeGh([seeded_issue(5, F(sev="medium"), state="OPEN", reason=None,
+                                  labels=["nightly-finding", "codeql"])])
+        night(gh, [F(sev="medium")], "2026-10-02")               # gone from the issue: CHANGED
         assert len(gh.kinds("comment")) == 1
+        assert f"`{fp_of(F(sev='medium'))}`" in section(ticket_for(gh, "2026-10-02").body, "Still open")
         for d in ("2026-10-03", "2026-10-04", "2026-10-05"):
             night(gh, [], d)
         assert not gh.issues[5].is_open
@@ -362,7 +373,7 @@ class TestTrackingLifecycle:
         night(gh, [F(line=1)], "2026-10-02")
         night(gh, [F(line=1), F(line=2)], "2026-10-03")           # count 1 -> 2
         comments = gh.kinds("comment")
-        assert len(comments) == 1 and "Occurrences: 1 → 2" in comments[0][2]
+        assert len(comments) == 1 and "occurrences 1 → 2" in comments[0][2]
         night(gh, [F(line=1), F(line=2)], "2026-10-04")
         assert gh.kinds("comment") == []
 
@@ -418,15 +429,13 @@ class TestTrackingLifecycle:
         assert len(gh.kinds("reopen")) == 1
         assert [c for c in gh.kinds("create") if nf.BASE_LABEL in c[3]] == []
         assert gh.tracking()[0].is_open
-        assert [g.fp for g in res.ticket.new_high] == res.tracking.opened   # back = NEW again
+        # Back = NEW again in the ticket, and its group is what was reopened.
+        assert [nf.group_key(g.tool, g.rule, g.file) for g in res.ticket.new_high] == res.tracking.opened
 
 
 class TestWontfix:
     def _wontfix(self, finding, labels, reason="COMPLETED", state="CLOSED"):
-        (g,) = nf.group_findings([finding]).values()
-        st = {"v": 1, "fp": g.fp, "tool": g.tool, "digest": "old", "count": 9,
-              "severity": g.severity, "missing_dates": []}
-        return nf.Issue(7, "t", state, reason, labels, nf.render_marker(st) + "\nbody")
+        return seeded_issue(7, finding, state=state, reason=reason, labels=labels)
 
     def test_wontfix_label_is_never_reopened_or_duplicated(self):
         f = F(sev="high")
@@ -450,6 +459,136 @@ class TestWontfix:
             night(gh, [], d)
         assert gh.issues[7].is_open
         assert gh.issues[7].comments == []
+
+
+def CL(var, file="VideoScan/VideoScan/FamilyTree/FamilyAssetStore+Documents.swift", line=1):
+    """One cleartext-logging instance; `var` makes it a distinct fingerprint."""
+    return F(rule="swift/cleartext-logging", file=file, line=line,
+             msg=f"This operation writes '{var}' to a log file.")
+
+
+def fp_of(f):
+    return nf.fingerprint(f.tool, f.rule, f.file, f.message)
+
+
+class TestGroupedTracking:
+    """Coordinator 2026-10-02: one tracking issue per (tool, rule, file);
+    instances keep their fingerprints and come and go as CHANGED events."""
+
+    def test_four_instances_in_one_file_are_one_issue_listing_each(self):
+        gh = FakeGh()
+        hits = [CL(v) for v in ("lastPathComponent", "line", "+", "key")]
+        res = night(gh, hits, "2026-10-02")
+        (iss,) = gh.tracking()
+        assert len(iss.marker["instances"]) == 4 and res.tracking.opened == [iss.marker["gk"]]
+        assert "### Instances (4)" in iss.body
+        assert all(f"`{fp_of(h)}`" in iss.body for h in hits)
+        # The ticket still lists every instance, each pointing at the one issue.
+        new = section(ticket_for(gh, "2026-10-02").body, "🔴 NEW high")
+        assert new.count("\n- `") == 4 and new.count(f"tracking #{iss.number}") == 4
+
+    def test_low_and_medium_never_join_a_high_issue(self):
+        """strict-concurrency files races (high) and isolation warnings (low)
+        under one rule; the issue must hold the race only."""
+        gh = FakeGh()
+        race = F(tool="strict-concurrency", rule="concurrency", file="J.swift",
+                 msg="sending 'self' risks causing data races")
+        iso = F(tool="strict-concurrency", rule="concurrency", file="J.swift",
+                msg="main actor-isolated property 'x' can not be referenced", sev="low")
+        night(gh, [race, iso], "2026-10-02")
+        (iss,) = gh.tracking()
+        assert list(iss.marker["instances"]) == [fp_of(race)]
+        # Fixing the race empties the issue even though the low warning remains.
+        for d in ("2026-10-03", "2026-10-04", "2026-10-05"):
+            night(gh, [iso], d)
+        assert not gh.tracking()[0].is_open
+
+    def test_same_rule_other_file_or_other_rule_is_another_issue(self):
+        gh = FakeGh()
+        night(gh, [CL("a"), CL("a", file="Other.swift"),
+                   F(rule="swift/cleartext-storage", file=CL("a").file)], "2026-10-02")
+        assert len(gh.tracking()) == 3
+
+    def test_instance_appearing_is_one_changed_comment_and_new_in_ticket(self):
+        gh = FakeGh()
+        night(gh, [CL("a"), CL("b")], "2026-10-02")
+        res = night(gh, [CL("a"), CL("b"), CL("c")], "2026-10-03")
+        (c,) = gh.kinds("comment")
+        assert "New instance(s)" in c[2] and fp_of(CL("c")) in c[2] and "Instances now: 3" in c[2]
+        assert [g.fp for g in res.ticket.new_high] == [fp_of(CL("c"))]
+        assert len(gh.tracking()) == 1
+        night(gh, [CL("a"), CL("b"), CL("c")], "2026-10-04")
+        assert gh.tracking_calls() == []                         # unchanged: silent
+
+    def test_instance_disappearing_is_changed_not_a_clean_night(self):
+        gh = FakeGh()
+        night(gh, [CL("a"), CL("b")], "2026-10-02")
+        for d in ("2026-10-03", "2026-10-04", "2026-10-05", "2026-10-06"):
+            res = night(gh, [CL("a")], d)
+            if d == "2026-10-03":
+                (c,) = gh.kinds("comment")
+                assert "Gone instance(s)" in c[2] and fp_of(CL("b")) in c[2]
+                fixed = section(ticket_for(gh, d).body, "FIXED")
+                assert fp_of(CL("b")) in fixed and "other instances remain" in fixed
+        (iss,) = gh.tracking()
+        assert iss.is_open and iss.marker["missing_dates"] == []
+        assert list(iss.marker["instances"]) == [fp_of(CL("a"))]
+        assert res.tracking.closed == []
+
+    def test_zero_instances_three_clean_nights_closes(self):
+        gh = FakeGh()
+        night(gh, [CL("a"), CL("b")], "2026-10-02")
+        night(gh, [], "2026-10-03")
+        (c,) = gh.kinds("comment")                               # last instances gone: CHANGED
+        assert "Instances now: 0" in c[2]
+        night(gh, [], "2026-10-04")
+        assert gh.kinds("comment") == [] and gh.tracking()[0].is_open
+        night(gh, [], "2026-10-05")
+        assert not gh.tracking()[0].is_open
+        night(gh, [CL("b")], "2026-10-06")                       # one instance back -> reopen
+        assert len(gh.kinds("reopen")) == 1 and len(gh.tracking()) == 1
+
+    def test_incomplete_tool_keeps_missing_instances(self):
+        gh = FakeGh()
+        night(gh, [CL("a"), CL("b")], "2026-10-02")
+        night(gh, [CL("a")], "2026-10-03", complete={"codeql": False})
+        assert gh.kinds("comment") == []
+        assert set(gh.tracking()[0].marker["instances"]) == {fp_of(CL("a")), fp_of(CL("b"))}
+
+    def test_cap_counts_issues_not_instances(self):
+        gh = FakeGh()
+        hits = [CL(v, file=f"F{n}.swift") for n in range(5) for v in ("a", "b", "c")]
+        res = night(gh, hits, "2026-10-02")
+        assert len(gh.tracking()) == 3 and len(res.tracking.pending) == 2
+        new = section(ticket_for(gh, "2026-10-02").body, "🔴 NEW high")
+        assert new.count("\n- `") == 15 and new.count("queued (cap 3/night)") == 6
+        assert "2 high tracking issue(s) (6 instance(s)) are queued" in ticket_for(gh, "2026-10-02").body
+
+
+class TestDisabledJobNote:
+    def _runs(self, tsan_job):
+        runs = runs_from([F()])
+        runs["tsan"] = nf.ToolRun("tsan", input_found=False, complete=False,
+                                  notes=["no input artifact"], job=tsan_job)
+        return runs
+
+    @pytest.mark.parametrize("job", [None, "skipped"])
+    def test_a_job_that_never_ran_reads_as_disabled(self, job):
+        gh = FakeGh()
+        nf.run_night(gh, self._runs(job), "2026-10-02", at("2026-10-02"), "", 3)
+        body = ticket_for(gh, "2026-10-02").body
+        assert "Not run tonight (disabled job): tsan." in body and "Incomplete tonight" not in body
+
+    def test_a_failed_job_still_reads_as_incomplete(self):
+        gh = FakeGh()
+        nf.run_night(gh, self._runs("failure"), "2026-10-02", at("2026-10-02"), "", 3)
+        body = ticket_for(gh, "2026-10-02").body
+        assert "Incomplete tonight" in body and "tsan" in section(body, "Notes")
+        assert "disabled job" not in body
+
+    def test_collect_records_the_job_result(self, tmp_path):
+        runs = nf.collect(tmp_path, {"tsan": "skipped", "codeql": "failure"}, None)
+        assert runs["tsan"].is_disabled and not runs["codeql"].is_disabled
 
 
 class TestCap:
