@@ -296,10 +296,25 @@ def resolve_range(explicit: str | None) -> tuple[str, str, str | None]:
     return head, head, None
 
 
-def ends_at_main(head: str) -> bool:
-    """Only a range that ends at main moves the baseline (a one-off review of
-    an older range must not skip today's merges)."""
-    return head == git("rev-parse", "main", check=False).strip()
+def is_ancestor(a: str, b: str) -> bool:
+    return subprocess.run(["git", "-C", str(repo()), "merge-base", "--is-ancestor", a, b],
+                          capture_output=True, stdin=subprocess.DEVNULL).returncode == 0
+
+
+def may_advance(base: str | None, head: str) -> bool:
+    """Move the baseline to `head` only when that leaves no unreviewed gap:
+    head is on main's history (main may have moved on DURING the run — the
+    10-01 dry run saw two merges land), head is not behind the baseline, and
+    the reviewed range started at or before the baseline."""
+    if not is_ancestor(head, "main"):
+        return False
+    path = state_dir() / "last_sha"
+    current = path.read_text().strip() if path.exists() else ""
+    if not current or not is_ancestor(current, "main"):
+        return True          # no baseline, or a stale one (history rewritten): start fresh
+    if not is_ancestor(current, head):
+        return False
+    return base is not None and is_ancestor(base, current)
 
 
 def advance_baseline(head: str) -> None:
@@ -936,7 +951,7 @@ def run(explicit_range: str | None, date: str | None, keep_worktree: bool = Fals
         finish(date, "disabled", ctx, reason)
         return 0
     try:
-        rng, head, _base = resolve_range(explicit_range)
+        rng, head, base = resolve_range(explicit_range)
     except RuntimeError as error:
         log_line("START", f"run {date}")
         return fail_night(date, ctx, f"range: {error}")
@@ -946,7 +961,7 @@ def run(explicit_range: str | None, date: str | None, keep_worktree: bool = Fals
     log_line("START", f"run {date} range={rng} head={head[:8]} files-in-scope={len(scope['files'])} "
                       f"dropped={scope['dropped']} shadow={SHADOW_MODE}")
     if not scope["files"]:
-        if ends_at_main(head):
+        if may_advance(base, head):
             advance_baseline(head)
         set_failures(0)
         ctx["wall"] = time.monotonic() - started
@@ -1027,7 +1042,7 @@ def run(explicit_range: str | None, date: str | None, keep_worktree: bool = Fals
         if failure:
             return fail_night(date, ctx, failure)
         record_findings(ctx["findings"], date)
-        if ends_at_main(head):
+        if may_advance(base, head):
             advance_baseline(head)
         set_failures(0)
         new = severity_counts(ctx["findings"], True)

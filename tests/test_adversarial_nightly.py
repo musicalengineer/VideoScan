@@ -387,14 +387,32 @@ def test_a_success_resets_the_failure_count(env, monkeypatch):
     assert adv.consecutive_failures() == 0
 
 
-def test_explicit_older_range_does_not_move_the_baseline(env):
+def test_main_moving_during_the_run_still_advances_to_what_was_reviewed(env):
+    """10-01 dry run: two merges landed while it ran; the baseline stayed None."""
     first = change_day(env["repo"])
     write(env["repo"], "VideoScan/VideoScan/Catalog/Table.swift", "func t2() {}\n")
     sh(env["repo"], "add", "-A")
-    sh(env["repo"], "commit", "-q", "-m", "later")
+    sh(env["repo"], "commit", "-q", "-m", "later")                   # main is now past `first`
     set_baseline(env, env["base"])
     assert adv.run(f"{env['base']}..{first}", "2026-10-02") == 0
+    assert baseline(env) == first                                    # no gap: base..first was reviewed
+
+
+def test_a_range_that_skips_past_the_baseline_does_not_move_it(env):
+    first = change_day(env["repo"])
+    write(env["repo"], "VideoScan/VideoScan/Archive/Writer.swift", "struct Writer {\n    func save2() {}\n}\n")
+    sh(env["repo"], "commit", "-q", "-am", "second")
+    second = sh(env["repo"], "rev-parse", "HEAD").strip()
+    set_baseline(env, env["base"])
+    assert adv.run(f"{first}..{second}", "2026-10-02") == 0          # base..first never reviewed
     assert baseline(env) == env["base"]
+
+
+def test_a_stale_baseline_is_replaced(env):
+    head = change_day(env["repo"])
+    set_baseline(env, "0" * 40)                                      # not on main (history rewritten)
+    assert adv.run(f"{env['base']}..{head}", "2026-10-02") == 0
+    assert baseline(env) == head
 
 
 # ---------------------------------------------------------------- triage
