@@ -96,6 +96,15 @@ enum CatalogGenerationSidecar {
         return best
     }
 
+    /// Persist a bootstrapped mark computed earlier with `persist: false`
+    /// (GH #167: `load()` computes it before the decode and writes it only
+    /// once the decode has said the catalog is not newer). No-op when a
+    /// sidecar appeared meanwhile — never overwrites a recorded mark.
+    static func seedIfAbsent(_ generation: Int, besideCatalogAt catalogURL: URL) {
+        guard read(besideCatalogAt: catalogURL) == nil else { return }
+        write(generation, besideCatalogAt: catalogURL)   // even 0: the scan happens once
+    }
+
     /// Read the mark, bootstrapping it from sibling files on first use.
     /// `persistBootstrap: false` never writes (see `bootstrap`).
     static func load(besideCatalogAt catalogURL: URL, persistBootstrap: Bool = true) -> Int {

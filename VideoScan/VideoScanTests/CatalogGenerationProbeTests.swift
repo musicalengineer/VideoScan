@@ -173,18 +173,44 @@ final class CatalogGenerationProbeTests: XCTestCase {
         data.append(Data(String(repeating: "h", count: 6000).utf8))
         data.append(Data("\"}".utf8))
         try data.write(to: catalogURL)
-        XCTAssertNil(CatalogSnapshot.headerProbe(at: catalogURL), "fixture must defeat the probe")
+        // Since codex review 2026-10-02 #2 the probe no longer guesses when
+        // `version` is in neither window: it streams the whole file (top-
+        // level keys only) and finds both stamps.
+        let whole = try XCTUnwrap(CatalogSnapshot.headerProbe(at: catalogURL),
+                                  "a version > 4 KB from both ends is found by the whole-file pass")
+        XCTAssertEqual(whole.version, 6)
+        XCTAssertEqual(whole.generation, 31)
 
         let store = CatalogStore(directory: dir)
         XCTAssertEqual(store.load().count, 20)
-        XCTAssertEqual(store.loadedGeneration, 31, "the full decode is the truth when the probe cannot see")
-        let anomaly = try XCTUnwrap(store.lastGenerationAnomaly, "a probe miss on a stamped file must be recorded")
-        XCTAssertTrue(anomaly.contains("decodes with generation 31"), anomaly)
+        XCTAssertEqual(store.loadedGeneration, 31, "the full decode is the truth")
+        XCTAssertNil(store.lastGenerationAnomaly, "probe and decode agree — nothing to report")
 
         XCTAssertTrue(store.saveNow(records: []))
         XCTAssertEqual(CatalogSnapshot.headerProbe(at: catalogURL)?.generation, 32,
                        "and the rewrite is back in canonical layout, readable from the head")
         XCTAssertLessThan(try XCTUnwrap(generationOffset(in: catalogURL)), 4096)
+    }
+
+    @MainActor
+    func testLoadUsesDecodedGenerationWhenProbeMissesGenerationAndLogsAnomaly() throws {
+        // `version` in the head (so no whole-file pass), `generation` buried
+        // > 4 KB from both ends: the probe misses it; the decode is the
+        // truth and the miss is recorded.
+        let body = try recordsArrayJSON(fatRecords(20))
+        var data = Data("{\"version\":6,\"records\":".utf8)
+        data.append(body)
+        data.append(Data(",\"generation\":31,\"savedFromHost\":\"".utf8))
+        data.append(Data(String(repeating: "h", count: 6000).utf8))
+        data.append(Data("\"}".utf8))
+        try data.write(to: catalogURL)
+        XCTAssertEqual(CatalogSnapshot.headerProbe(at: catalogURL)?.generation, 0, "fixture must hide the generation")
+
+        let store = CatalogStore(directory: dir)
+        XCTAssertEqual(store.load().count, 20)
+        XCTAssertEqual(store.loadedGeneration, 31, "the full decode is the truth when the probe cannot see")
+        let anomaly = try XCTUnwrap(store.lastGenerationAnomaly, "a probe miss on a stamped file must be recorded")
+        XCTAssertTrue(anomaly.contains("31"), anomaly)
     }
 
     @MainActor

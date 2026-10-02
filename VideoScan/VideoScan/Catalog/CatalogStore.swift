@@ -173,55 +173,22 @@ struct CatalogSnapshot: Decodable {
     /// path is for history and for foreign writers (python json.dump of a
     /// pre-generation file appends `generation` at the END).
     ///
+    /// TOP-LEVEL keys only (codex review 2026-10-02 #2): a record's own
+    /// "version" key — before the catalog's in the head, or after it in
+    /// the tail — is not the catalog's version. `CatalogHeaderScanner`
+    /// tracks strings and object depth to tell them apart, and when the
+    /// version is in neither window (a hand-made layout) it scans the whole
+    /// file, streamed in constant memory, rather than guess "old".
+    ///
     /// Falls back to nil (not 0) when the file is missing or carries
-    /// NEITHER key in either window, so callers can distinguish "no file /
-    /// pre-generation" from "generation 0". A file whose keys are more
-    /// than 4 KB from both ends (only a hand-made pathological layout can
-    /// do that) reads as nil here; `CatalogStore.load()` then trusts the
-    /// full decode and logs the anomaly rather than silently downgrading.
+    /// NEITHER key, so callers can distinguish "no file / pre-generation"
+    /// from "generation 0". A file with no top-level `version` at all is a
+    /// v0 catalog and reads as version 0.
     static func headerProbe(at url: URL) -> (version: Int, generation: Int)? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        guard let head = try? handle.read(upToCount: probeWindowBytes) else { return nil }
-        // Lossy decode on purpose: a 4 KB cut can split a multibyte UTF-8
-        // sequence, and String(data:encoding:) would return nil for the
-        // WHOLE window. The keys we search for are ASCII.
-        let headText = String(decoding: head, as: UTF8.self)
-        var v = Self.intValue(forKey: "version", in: headText, last: false)
-        var g = Self.intValue(forKey: "generation", in: headText, last: false)
-        if v == nil || g == nil,
-           let size = try? handle.seekToEnd(), size > UInt64(head.count) {
-            let start = size > UInt64(probeWindowBytes) ? size - UInt64(probeWindowBytes) : 0
-            if (try? handle.seek(toOffset: start)) != nil,
-               let tail = try? handle.readToEnd() {
-                let tailText = String(decoding: tail, as: UTF8.self)
-                // LAST occurrence in the tail: the top-level keys come after
-                // the records array, so anything earlier in the window is
-                // record content (which cannot contain a bare `"key":` —
-                // quotes inside JSON strings are always escaped).
-                if v == nil { v = Self.intValue(forKey: "version", in: tailText, last: true) }
-                if g == nil { g = Self.intValue(forKey: "generation", in: tailText, last: true) }
-            }
-        }
-        // EITHER key is enough. Only a file with NEITHER key in either
-        // window reads as "no header".
-        guard v != nil || g != nil else { return nil }
-        return (v ?? 0, g ?? 0)
-    }
-
-    /// Parse `"key" : 123` (whitespace optional — pretty-printed files have
-    /// it, compact ones do not). `last` picks the final occurrence in
-    /// `text` instead of the first.
-    private static func intValue(forKey key: String, in text: String, last: Bool) -> Int? {
-        let needle = "\"\(key)\""
-        guard let r = last ? text.range(of: needle, options: .backwards) : text.range(of: needle) else {
-            return nil
-        }
-        var rest = text[r.upperBound...].drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" })
-        guard rest.first == ":" else { return nil }
-        rest = rest.dropFirst().drop(while: { $0 == " " || $0 == "\n" || $0 == "\t" || $0 == "\r" })
-        let digits = rest.prefix(while: { $0.isNumber })
-        return Int(digits)
+        guard let found = CatalogHeaderScanner.probe(fileAt: url, window: probeWindowBytes) else { return nil }
+        // EITHER key is enough. Only a file with NEITHER reads as "no header".
+        guard found.version != nil || found.generation != nil else { return nil }
+        return (found.version ?? 0, found.generation ?? 0)
     }
 }
 
@@ -738,15 +705,22 @@ final class CatalogStore {
         // known even if decode falls back to .prev — and even if there is
         // no catalog.json at all: a catalog that carried generation N
         // before must not restart at 1 just because the file was removed.
-        // GH #167: if the primary's header says a NEWER build wrote it, this
-        // session will write nothing beside it — not even the first-run
-        // sidecar bootstrap. (4 KB head+tail probe; the decode below
-        // re-checks the version authoritatively.)
-        let primaryLooksNewer = (CatalogSnapshot.headerProbe(at: fileURL)?.version ?? 0) > CatalogSnapshot.currentVersion
-        generationFloor = CatalogGenerationSidecar.load(besideCatalogAt: fileURL,
-                                                        persistBootstrap: !primaryLooksNewer)
+        // GH #167 (codex review 2026-10-02 #2): NOTHING is written beside
+        // the catalog until the authoritative decode below has said it is
+        // not newer — the first-run bootstrap is computed now but persisted
+        // only by `persistBootstrappedFloorIfNeeded()` on the writable
+        // branches. (Previously a cheap probe decided, and a probe can be
+        // fooled; the decode cannot.)
+        let sidecarExisted = CatalogGenerationSidecar.read(besideCatalogAt: fileURL) != nil
+        generationFloor = CatalogGenerationSidecar.load(besideCatalogAt: fileURL, persistBootstrap: false)
+        func persistBootstrappedFloorIfNeeded() {
+            if !sidecarExisted {
+                CatalogGenerationSidecar.seedIfAbsent(generationFloor, besideCatalogAt: fileURL)
+            }
+        }
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
             NSLog("VideoScan: CatalogStore.load() — no catalog file at %@", fileURL.path)
+            persistBootstrappedFloorIfNeeded()
             lastLoadOutcome = .missing
             return []
         }
@@ -772,6 +746,7 @@ final class CatalogStore {
                 unknownTopLevelFields = primary.unknownTopLevel
                 return primary.records
             }
+            persistBootstrappedFloorIfNeeded()
             reconcileLoadedGeneration(decoded: primary.generation,
                                       probed: lastPrimaryProbe,
                                       source: fileURL.lastPathComponent)
@@ -807,6 +782,7 @@ final class CatalogStore {
            let prev = decode(url: backupURL),
            prev.version <= CatalogSnapshot.currentVersion {
             NSLog("VideoScan: recovered catalog from %@ (%d records)", backupURL.path, prev.records.count)
+            persistBootstrappedFloorIfNeeded()
             // The records we hold are .prev's; baseline on ITS generation
             // (probe of the corrupt primary may well have been nil).
             reconcileLoadedGeneration(decoded: prev.generation,
@@ -820,6 +796,7 @@ final class CatalogStore {
             return prev.records
         }
         NSLog("VideoScan: no usable backup catalog; starting with empty records")
+        persistBootstrappedFloorIfNeeded()
         lastLoadOutcome = .corruptNoBackup
         return []
     }
