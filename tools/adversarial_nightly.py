@@ -1147,6 +1147,8 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("confirm")
     p.add_argument("--date")
     p.add_argument("--no-sandbox", action="store_true")
+    p.add_argument("--no-app-run", action="store_true",
+                   help="build app drafts but do not launch the app-hosted test run")
     p = sub.add_parser("close")
     p.add_argument("--fp", required=True)
     p.add_argument("--test", required=True)
@@ -1190,7 +1192,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "confirm":
         import adversarial_confirm  # stage 3 lives beside this file
         with run_lock():
-            return adversarial_confirm.confirm(args.date or today(), sandbox=not args.no_sandbox)
+            return adversarial_confirm.confirm(args.date or today(), sandbox=not args.no_sandbox,
+                                               app_run=not args.no_app_run)
     if args.cmd == "close":
         return close_finding(args.fp, args.test, args.sha)
     if args.cmd == "decline":
