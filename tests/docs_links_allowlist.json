@@ -217,7 +217,8 @@
     "docs/media_longterm_plan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
   "docs/design/gauntlet-design-codex-2026-09-27.md": {
-    "docs/codex-ui-testing-handoff.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+    "docs/codex-ui-testing-handoff.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery.",
+    "docs/metrics": "Historical brief text describing where the dashboard might publish; the dashboard lives on the metrics branch."
   },
   "docs/design/hallie_proposer_with_tools_design.md": {
     "docs/hallie_tools.schema.json": "Proposed schema artifact in the retained Hallie design; not implemented."
@@ -316,6 +317,11 @@
   },
   "docs/research/pronunciation_training_research.md": {
     "docs/pronunciation_drill_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/reviews/briefs/docs-reorg-brief.md": {
+    "docs/analysis": "The reorganization brief names the pre-reorganization folders it moved.",
+    "docs/metrics": "The reorganization brief names the pre-reorganization folders it moved.",
+    "docs/perf": "The reorganization brief names the pre-reorganization folders it moved."
   },
   "scripts/dashboard.sh": {
     "docs/history.jsonl": "Generated dashboard data, intentionally gitignored; written by scripts/dashboard.sh from the metrics branch."
