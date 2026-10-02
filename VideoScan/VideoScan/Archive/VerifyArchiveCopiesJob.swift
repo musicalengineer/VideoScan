@@ -870,7 +870,7 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
             let names = dateDisagreementLines.prefix(20).joined(separator: " | ")
             let more = dateDisagreementLines.count > 20 ? " … and \(dateDisagreementLines.count - 20) more" : ""
             model.log("Verify Archive: \(tally.dateDisagreements) archived file(s) whose index, folder/filename and catalog dates DISAGREE (report only — nothing was changed; fix each with Update…): \(names)\(more)")
-            appLog.write("verify archive DATE DISAGREES (\(tally.dateDisagreements)): \(dateDisagreementLines.joined(separator: " | "))")
+            appLog.write(Self.dateDisagreementLogLine(dateDisagreementLines))
         }
         // ONE line per run for the race skips (never per-record spam).
         if tally.changedUnderVerify > 0 {
@@ -894,6 +894,20 @@ final class VerifyArchiveCopiesJob: @MainActor MediaFileOperationJob {
     }
 
     /// Pure so tests can pin the wording per tally shape.
+    /// Entries named in the persistent DATE DISAGREES line (the console's
+    /// sample size too). The full list stays in the job's UI.
+    nonisolated static let dateDisagreementLogSample = 20
+
+    /// The persistent (videoscan.log) DATE DISAGREES line: the TOTAL plus a
+    /// sample of at most `dateDisagreementLogSample` entries — never the
+    /// whole list (codex 2026-10-02 #8: 50k entries in one message). Pure.
+    nonisolated static func dateDisagreementLogLine(_ lines: [String]) -> String {
+        let sample = lines.prefix(dateDisagreementLogSample).joined(separator: " | ")
+        let more = lines.count > dateDisagreementLogSample
+            ? " … and \(lines.count - dateDisagreementLogSample) more (full list in the Verify window)" : ""
+        return "verify archive DATE DISAGREES (\(lines.count)): \(sample)\(more)"
+    }
+
     nonisolated static func summaryLine(_ t: Tally) -> String {
         var parts: [String] = []
         if t.mismatch > 0 { parts.append("\(t.mismatch) MISMATCH — possible corruption") }
