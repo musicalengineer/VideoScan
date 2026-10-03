@@ -560,7 +560,17 @@ struct MasterArchiveHardeningTests {
             if viaBundle {
                 let url = sb.root.appendingPathComponent("remote.videoscanbundle")
                 _ = try BundleExporter.writeBundle(records: remote.records, scanTargets: [], to: url)
-                let payload = try BundleImporter.read(from: url)
+                var payload = try BundleImporter.read(from: url)
+                // This test is about catalog relinking. The exporter copied
+                // the WHOLE per-process People store into `people/`, and
+                // `applyBundlePayload` would install every one of them back
+                // into that shared store (and move the displaced folders to
+                // the real ~/dev/VideoScan/.trash — 48 dirs per nightly).
+                // Three imports in two wall-clock seconds collided on the
+                // per-second trash stamp on 2026-10-03, leaving sixteen
+                // `<name>.import-<uuid>` staging dirs that read as namesakes
+                // for the rest of the process. No people in this payload.
+                payload.poiFoldersInBundle = []
                 let r = await model.applyBundlePayload(payload, bundleURL: url)
                 return (r.recordsAdded, r.recordsSkipped)
             } else {
