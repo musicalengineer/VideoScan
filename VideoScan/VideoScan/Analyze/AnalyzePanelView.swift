@@ -97,7 +97,7 @@ struct AnalyzePanelView: View {
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 3) {
-                Text("Analyze")
+                Text(AnalyzeWindowOpener.windowTitle)
                     .font(.title.weight(.semibold))
                 Text("What the catalog keeps current about your files, and how far along each one is. These run in the background; nothing here changes or removes a file.")
                     .font(.body)

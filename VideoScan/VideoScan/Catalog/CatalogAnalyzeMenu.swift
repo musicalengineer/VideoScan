@@ -56,7 +56,7 @@ struct CatalogAnalyzeMenu: View {
     let onOpenCombineSheet: () -> Void
     let onOpenPanel: () -> Void
 
-    static let openPanelTitle = "Analyze…"
+    static let openPanelTitle = "Content Analysis…"
     static let analyzeSelectedPrefix = "Analyze Selected"
 
     /// "Duplicates — current · 13,842 of 13,842" / "… — running…"
@@ -111,7 +111,7 @@ struct CatalogAnalyzeMenu: View {
             // ⇧⌘O is declared ONCE, on the Window menu item (VideoScanApp);
             // a second key equivalent here would shadow it.
             Button(Self.openPanelTitle, action: onOpenPanel)
-                .help("Open the Analyze panel (⇧⌘O): every cycler's state, coverage by drive, Pause/Resume and Run now.")
+                .help("Open Content Analysis (⇧⌘O): what the catalog keeps current about your files, how far along each one is by drive, with Pause/Resume and Run now.")
                 .accessibilityIdentifier("catalog.analyze.openPanel")
         } label: {
             if running.isEmpty {

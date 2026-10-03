@@ -999,7 +999,7 @@ struct WindowMenuItems: View {
 
         // Phase A trial (2026-10-02): ⇧⌘O opens the Analyze PANEL; the old
         // dashboard keeps a plain item until Phase C retires it.
-        Button("Analyze") {
+        Button(AnalyzeWindowOpener.windowTitle) {
             AnalyzeWindowOpener.open(using: openWindow, source: "menu")
         }
         .keyboardShortcut("o", modifiers: [.command, .shift])
@@ -1030,7 +1030,7 @@ final class MainWindowHelper {
     /// looked hung.
     private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime",
                                    "Media File Operations", "Volumes", "Family Archivist",
-                                   "Settings", "Compare Volumes", "Catalog Info", "Analyze"]
+                                   "Settings", "Compare Volumes", "Catalog Info", "Analyze", "Content Analysis"]
 
     func openMainWindow() {
         // First try to find and unhide an existing main window

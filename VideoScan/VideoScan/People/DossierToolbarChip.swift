@@ -67,7 +67,7 @@ struct DossierToolbarChip: View {
     /// moment you click, and a number that changes on its own draws the
     /// eye away from the catalog for no decision it can inform.
     /// It remains in the tooltip.
-    private var buttonTitle: String { "Analyze Catalog" }
+    private var buttonTitle: String { "Content Analysis" }
 
     private var rateHelp: String {
         rate.hasEnoughSamples ? ". Rate \(rate.displayText)." : ""
