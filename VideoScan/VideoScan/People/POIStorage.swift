@@ -134,8 +134,16 @@ enum POIStorage {
     }
 
     /// Raw listing of POI-shaped folders under `root` — no migration, no
-    /// writes. The `.poi-rename-*` staging dirs of the 2026-09-12 rename fix
-    /// are excluded so a crashed rename never shows up as a person.
+    /// writes. Two kinds of STAGING dir live beside the real folders and
+    /// are excluded, so a crashed or refused operation never shows up as a
+    /// person:
+    ///   * `.poi-rename-*` — the 2026-09-12 rename fix.
+    ///   * `<name>.import-<UUID>` — `BundleImporter.safeInstallPOI`'s
+    ///     copy-validate-swap temp, deliberately LEFT BEHIND when the
+    ///     move-aside of the existing folder fails so a human can inspect
+    ///     it. Nightly 2026-10-03: sixteen of those (one per person) made
+    ///     `listAll()` report two "Donna"s, and `PersonNameGuard` then
+    ///     refused every name-keyed write for the rest of the process.
     static func poiFolders(in root: URL) -> [URL] {
         let fm = FileManager.default
         let contents = (try? fm.contentsOfDirectory(
@@ -143,9 +151,23 @@ enum POIStorage {
             includingPropertiesForKeys: [.isDirectoryKey]
         )) ?? []
         return contents.filter { url in
-            !url.lastPathComponent.hasPrefix(".poi-rename-")
+            !isStagingFolderName(url.lastPathComponent)
                 && (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
         }
+    }
+
+    /// The import staging suffix: `<folder name>.import-<UUID>`. One
+    /// spelling, shared with `BundleImporter.safeInstallPOI`.
+    static let importStagingMarker = ".import-"
+
+    /// True for a folder name that is a staging dir, never a person. The
+    /// import form is matched strictly — the text after the LAST
+    /// `.import-` must parse as a UUID — so a (far-fetched) legacy person
+    /// folder that merely contains the marker is still listed.
+    static func isStagingFolderName(_ name: String) -> Bool {
+        if name.hasPrefix(".poi-rename-") { return true }
+        guard let range = name.range(of: importStagingMarker, options: .backwards) else { return false }
+        return UUID(uuidString: String(name[range.upperBound...])) != nil
     }
 
     // MARK: - Safe trash (NEVER rm -rf, per project policy)

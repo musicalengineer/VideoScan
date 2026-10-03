@@ -126,6 +126,54 @@ struct POIUUIDFoldersSensorTests {
         try #require(POIStorage.storeDir.lastPathComponent.hasPrefix("VideoScanTestPOI-"))
     }
 
+    /// SENSOR `importStagingDirIsNeverAPerson` (nightly 2026-10-03): a
+    /// `<name>.import-<UUID>` dir that `BundleImporter.safeInstallPOI` left
+    /// behind after a failed move-aside holds a full profile.json for the
+    /// SAME person. It must not be listed as a second profile, must not
+    /// make the short name "shared", and `PersonNameGuard` must keep
+    /// letting name-keyed writes through. The rename staging dir and a
+    /// non-UUID lookalike pin both edges of the match.
+    @Test func importStagingDirIsNeverAPerson() throws {
+        try requireSandbox()
+        let fm = FileManager.default
+        let name = "Donna \(UUID().uuidString.prefix(6))"
+        let profile = POIProfile(name: name, referencePath: "")
+        try profile.save()
+        let folder = POIStorage.folder(for: profile)
+        defer { try? fm.removeItem(at: folder) }
+
+        // Exactly what the importer leaves: a sibling copy of the folder.
+        let staging = POIStorage.storeDir
+            .appendingPathComponent("\(name).import-\(UUID().uuidString)", isDirectory: true)
+        try fm.copyItem(at: folder, to: staging)
+        defer { try? fm.removeItem(at: staging) }
+        let renameStaging = POIStorage.storeDir
+            .appendingPathComponent(".poi-rename-\(UUID().uuidString)", isDirectory: true)
+        try fm.copyItem(at: folder, to: renameStaging)
+        defer { try? fm.removeItem(at: renameStaging) }
+
+        let listed = POIStorage.poiFolders(in: POIStorage.storeDir).map(\.lastPathComponent)
+        #expect(listed.contains(folder.lastPathComponent))
+        #expect(!listed.contains(staging.lastPathComponent), "import staging dir listed as a person")
+        #expect(!listed.contains(renameStaging.lastPathComponent), "rename staging dir listed as a person")
+
+        let namesakes = POIProfile.listAll().filter { $0.name == name }
+        #expect(namesakes.count == 1, "one person, not \(namesakes.count): \(listed)")
+        #expect(!PersonNameGuard.isShared(name, among: POIProfile.listAll()))
+        #expect(throws: Never.self) {
+            try PersonNameGuard.check(name, operation: "recording confirmation labels")
+        }
+
+        // Edges of the match: only a UUID after the LAST marker is staging.
+        #expect(POIStorage.isStagingFolderName("Donna.import-\(UUID().uuidString)"))
+        #expect(POIStorage.isStagingFolderName("a.import-b.import-\(UUID().uuidString)"))
+        #expect(POIStorage.isStagingFolderName(".poi-rename-anything"))
+        #expect(!POIStorage.isStagingFolderName("donna.import-notauuid"))
+        #expect(!POIStorage.isStagingFolderName("donna.import-"))
+        #expect(!POIStorage.isStagingFolderName("import-\(UUID().uuidString)"))
+        #expect(!POIStorage.isStagingFolderName(UUID().uuidString))
+    }
+
     /// SENSOR `renameNeverMovesPhotos`: the folder, its inode and every
     /// photo byte are exactly where they were after a rename.
     @Test func renameNeverMovesPhotos() throws {
