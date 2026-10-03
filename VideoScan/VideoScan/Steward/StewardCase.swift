@@ -5,6 +5,13 @@
 // do it / skip. Archive Angel's shape, second instance: the Angel's verb is
 // "keep forever"; this one's are "let go" and "belong together".
 //
+// EVENTS LEAD (Rick 2026-10-03: "it should help find events … the deletion
+// of dups is just to keep the database down"). An EVENT is an occasion the
+// catalog can already name from what is on the records — a holiday, a
+// family birthday, a word in a folder name (StewardEvents.swift, over
+// VideoScanCore.EventLabeler). Events and unnamed days come first in the
+// pane; same footage, reclaim space and junk follow as housekeeping.
+//
 // Everything here is a plain value type built off the main actor by
 // StewardCaseBuilder and read O(1) by the views. No case carries a
 // VideoRecord; record ids are carried so an action can look them up.
@@ -14,8 +21,13 @@
 
 import Foundation
 
-/// The three card types of the trial (Reclaim space has two shapes).
+/// The card types of the trial (Reclaim space has two shapes; an occasion
+/// is either named — an event — or a day nobody has named yet).
 enum StewardCaseKind: String, Sendable, Equatable, CaseIterable {
+    /// Clips of one occasion: a holiday, a birthday, a named trip.
+    case event
+    /// A day (or a few days running) with several clips and no name yet.
+    case unlabelledDay
     /// A whole drive's duplicate copies.
     case reclaimDrive
     /// One set of duplicate copies.
@@ -28,23 +40,31 @@ enum StewardCaseKind: String, Sendable, Equatable, CaseIterable {
     /// The chip on the card and on each "next up" row — words, not grades.
     var chip: String {
         switch self {
+        case .event: return "Event"
+        case .unlabelledDay: return "A day to name"
         case .reclaimDrive, .reclaimGroup: return "Reclaim space"
         case .sameFootage: return "Same footage"
         case .junk: return "Probably not worth keeping"
         }
     }
 
-    /// The queue's lane: the two Reclaim shapes take turns as one.
+    /// The pane's order (Rick 2026-10-03): events are the point, so they
+    /// lead; then the days nobody has named; then same footage; then the
+    /// housekeeping — reclaim space (its two shapes as one lane) and junk.
     var lane: Int {
         switch self {
-        case .reclaimDrive, .reclaimGroup: return 0
-        case .sameFootage: return 1
-        case .junk: return 2
+        case .event: return 0
+        case .unlabelledDay: return 1
+        case .sameFootage: return 2
+        case .reclaimDrive, .reclaimGroup: return 3
+        case .junk: return 4
         }
     }
 
     var systemImage: String {
         switch self {
+        case .event: return "calendar"
+        case .unlabelledDay: return "calendar.badge.plus"
         case .reclaimDrive: return "externaldrive"
         case .reclaimGroup: return "doc.on.doc"
         case .sameFootage: return "square.stack.3d.up"
@@ -135,6 +155,11 @@ struct StewardCopy: Sendable, Equatable, Identifiable {
     var standing: StewardCopyStanding
     /// Same footage: "likely original", "copy", "re-encode"…
     var roleLabel: String = ""
+    /// Event: why this clip is in it, in the labeller's own words ("Dec 25
+    /// — Christmas", "folder name says 'xmas'", "by matching footage").
+    var reason: String = ""
+    /// Event: the other occasions this clip also belongs to ("" = none).
+    var alsoIn: String = ""
 }
 
 /// The numbers a skip remembers, so a skipped case can come back when the
@@ -145,7 +170,10 @@ struct StewardFacts: Sendable, Equatable {
 }
 
 struct StewardCase: Sendable, Equatable, Identifiable {
-    /// Stable across launches and re-checks: "drive:<root>",
+    /// Stable across launches and re-checks:
+    /// "event:<kind>:<subject>:<year>" (the labeller's own key parts:
+    /// "event:christmas:-:1994", "event:birthday:alex:2006"),
+    /// "day:<yyyy-mm-dd>" (an unnamed day's first day), "drive:<root>",
     /// "dup:<the keeper's record id>" (a duplicate check gives the set a
     /// new group id every time; its keeper is what stays),
     /// "footage:<group id>" (the smallest member's record id by design —
@@ -198,20 +226,46 @@ struct StewardCase: Sendable, Equatable, Identifiable {
     var originalInCatalog: Bool = true
     /// The group's reasons, in the grouping's own words.
     var evidenceLines: [String] = []
-    var eventGuess: StewardEventGuess?
+    /// Same footage: the occasion the group's members point to, shown as a
+    /// question (StewardEvents.swift). Never stored, never logged.
+    var occasionGuess: StewardOccasionGuess?
     /// "27 clips on 3 drives — likely the same footage · Dec 2006"
     var plainDescription: String = ""
 
     // Probably not worth keeping
     var junkReason: String = ""
+
+    // Event / a day to name
+    /// The labeller's canonical occasion ("christmas", "birthday", "cape");
+    /// "" for an unnamed day. The ONLY event word a log line may carry.
+    var eventKind: String = ""
+    var eventYear: Int?
+    /// The clips' lengths added up.
+    var durationSeconds: Double = 0
+    /// "9 by date · 5 by folder name 'xmas' · 2 by matching footage"
+    var whyLine: String = ""
+    /// What is inside, from knowledge the catalog already has ("6 of these
+    /// are copies of each other (2 sets)", "3 are in the archive", …).
+    var insideLines: [String] = []
+    /// "5 of these are also in: Cape 1994 · Birthday 1994" ("" = none).
+    var alsoInLine: String = ""
+    /// The members that are copies of each other — "Review the copies in
+    /// this event" (capped at StewardCaseBuilder.maxIDsPerCase).
+    var copyReviewIDs: [UUID] = []
 }
 
 /// Everything the pane reads. Equality-gated by StewardSnapshot: an
 /// unchanged queue publishes nothing.
 struct StewardQueue: Sendable, Equatable {
-    /// Presentation order: the three lanes take turns, each in its own
-    /// payoff order (StewardCaseBuilder.interleave).
+    /// Presentation order: lane after lane (`StewardCaseKind.lane` —
+    /// events, days to name, same footage, reclaim space, junk), each in
+    /// its own order. The pane may narrow it or re-sort the events by year
+    /// (StewardCaseBuilder.arrange).
     var cases: [StewardCase] = []
+    /// Clips with a date good enough to place on a day (the Angel's
+    /// trusted-day rule), and the clips that were looked at.
+    var placedClips = 0
+    var placeableClips = 0
     /// Newest duplicate check among the active records.
     var duplicatesLastChecked: Date?
     /// False until the first build lands.

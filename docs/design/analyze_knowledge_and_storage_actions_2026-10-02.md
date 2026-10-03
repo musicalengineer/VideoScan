@@ -470,6 +470,36 @@ of the same event; (8) the puzzle is the UI/UX.
     behind them. GH #258 (the delete planner must leave alone what the
     Angel has chosen or Rick has filed as Archived) is the prerequisite
     and was approved the same day.
+  - *As built in the trial* (branch `feat/steward-events-lane`; what the
+    bullets above do not already say):
+    - An event is one labelled occasion in one year. A clip with several
+      labels is in each event ("also in: …"); a clip whose footage group
+      (Likely or stronger) has a member in an event joins it "by matching
+      footage" unless its own date says otherwise. A single clip is still
+      an event — the lane is ordered by clip count, then length, so those
+      sit at the end.
+    - An unlabelled day is 4 or more clips on one trusted day, or on up
+      to 3 days running.
+    - Lane after lane (nothing takes turns), with a filter above the list
+      (All · Events · Same footage · Space · Not worth keeping) and a "By
+      year" order for the events — both pure view state. The list keeps
+      200 events and 25 of each other kind (skipped ones ride along for
+      "Show skipped").
+    - The trusted day is the Angel's own (`ArchiveAngelEvent.derive`);
+      the Same-footage title guess is the labeller's majority among the
+      group's members that have one, and a tie is no guess.
+    - Event actions only look: the Catalog, the footage group when there
+      is exactly one, the copies among them. A card may list archived
+      clips and the Angel's picks because it proposes nothing about them.
+    - Nothing is stored: events are derived on every build; naming or
+      confirming one is shown as a gap. Log lines carry an event's kind
+      and counts, never its title.
+    - One rule is the steward's own: a 1 January day nobody typed is a
+      reset camera clock, so neither its day **nor its year** places
+      anything (a name word then explains but keys no event, and the clip
+      is free to join its footage twin's event). The Angel's resolver has
+      no such rule — **open question for Rick:** move it into the Angel's
+      day rule, or keep it here only.
 
 ## 6. Staging (each stage ships whole; nothing half-moved)
 
