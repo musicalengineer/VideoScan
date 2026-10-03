@@ -100,6 +100,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
 
     static let readOnlyMarkedAtField = "markedAt"
     static let readOnlyVolumeUUIDField = "volumeUUID"
+    static let readOnlyResolvedPathField = "resolvedPath"
+    static let readOnlyMountPointField = "mountPoint"
 
     /// The saved marks, keyed by searchPath. An entry without a date is
     /// still a mark (refuse over guess: a damaged entry must not un-protect
@@ -110,7 +112,9 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         for (path, value) in saved {
             let fields = value as? [String: Any] ?? [:]
             out[path] = VolumeReadOnlyMark(markedAt: fields[readOnlyMarkedAtField] as? Date ?? .distantPast,
-                                           volumeUUID: fields[readOnlyVolumeUUIDField] as? String)
+                                           volumeUUID: fields[readOnlyVolumeUUIDField] as? String,
+                                           resolvedPath: fields[readOnlyResolvedPathField] as? String,
+                                           mountPoint: fields[readOnlyMountPointField] as? String)
         }
         return out
     }
@@ -122,6 +126,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
             guard let mark = t.readOnlyMark else { continue }
             var fields: [String: Any] = [readOnlyMarkedAtField: mark.markedAt]
             if let uuid = mark.volumeUUID { fields[readOnlyVolumeUUIDField] = uuid }
+            if let resolved = mark.resolvedPath { fields[readOnlyResolvedPathField] = resolved }
+            if let mount = mark.mountPoint { fields[readOnlyMountPointField] = mount }
             map[t.searchPath] = fields
         }
         UserDefaults.standard.set(map, forKey: key)
@@ -307,10 +313,25 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         t.retiredAt = s.retiredAt
         t.retiredReason = s.retiredReason
         t.retiredWitnesses = s.retiredWitnesses
-        // "Read only" — a snapshot can SET the mark, never clear one made
-        // here (a safety flag is not undone by importing an older bundle).
+        // "Read only" — a snapshot can ADD the mark where there is none. It
+        // never clears one made here (a safety flag is not undone by
+        // importing an older bundle) and never ALTERS one: the drive
+        // identity of a mark made on this Mac is this Mac's own reading of
+        // the drive (codex #258 F3 — an import carrying no identity, or
+        // another drive's, used to replace it, and the marked drive became
+        // removable under its next mount name).
         if let at = s.readOnlyMarkedAt {
-            t.readOnlyMark = VolumeReadOnlyMark(markedAt: at, volumeUUID: s.readOnlyVolumeUUID)
+            let imported = VolumeReadOnlyMark(markedAt: at, volumeUUID: s.readOnlyVolumeUUID,
+                                              resolvedPath: s.readOnlyResolvedPath, mountPoint: s.readOnlyMountPoint)
+            if let local = t.readOnlyMark {
+                if local.volumeUUID != imported.volumeUUID || local.resolvedPath != imported.resolvedPath
+                    || local.mountPoint != imported.mountPoint {
+                    appLog.write("Read only: \(VolumeReachability.displayLabel(forPath: t.searchPath)) — the imported settings describe "
+                                 + "this mark's drive differently; the mark made on this Mac is kept as it is.")
+                }
+            } else {
+                t.readOnlyMark = imported
+            }
         }
         // Role LAST and legacy-aware: a pre-taxonomy bundle carrying
         // role "Retired" (no stamp) becomes an unassigned target — WITH a

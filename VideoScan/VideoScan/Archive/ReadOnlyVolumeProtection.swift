@@ -35,6 +35,17 @@
 // A mark on a FOLDER of the boot disk (a ~/Movies-style scan target)
 // protects that folder; no UUID is kept for it (every boot file shares one).
 //
+// DRIVE OR FOLDER — decided from the MOUNT, never from the spelling (codex
+// #258 F2, the archive volume's own lesson of #1642). When the mark is made
+// the path is resolved physically (realpath: symlinks first, then "..") and
+// its mount point read; the mark keeps both, plus the UUID of the volume it
+// really lives on. So a scan target that is a symlink into /Volumes/X, or a
+// drive mounted at a custom mount point, is a DRIVE: protected under its
+// real path and wherever that volume mounts next — not only under the
+// spelling that was marked. A marked FOLDER of an external drive is found
+// on the renamed / remounted drive by UUID + its place on the volume, at
+// removal time too, before any rebuild lands (F4).
+//
 // (For Rick: a Sendable value type, like ArchiveVolumeProtection — an
 // immutable snapshot you can hand to a disk thread by copy.)
 
@@ -44,9 +55,16 @@ import Foundation
 /// per-volume settings (UserDefaults, keyed by the target's path).
 struct VolumeReadOnlyMark: Sendable, Equatable {
     var markedAt: Date
-    /// The volume's persistent UUID when the mark was made; nil for a
-    /// folder on the boot disk, or when the drive was not connected.
+    /// The persistent UUID of the volume the marked path REALLY lived on
+    /// when the mark was made; nil for a folder on the boot disk, or when
+    /// the drive was not connected.
     var volumeUUID: String?
+    /// Where the marked path really lived then (realpath — symlinks
+    /// resolved before any ".."). nil = it could not be resolved (the drive
+    /// was away), or the mark predates this field. Additive.
+    var resolvedPath: String? = nil
+    /// The mount point of the volume it lived on then. Additive.
+    var mountPoint: String? = nil
 }
 
 struct ReadOnlyVolumeProtection: Sendable, Equatable {
@@ -55,15 +73,20 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
     struct Mark: Sendable, Equatable {
         let searchPath: String
         let volumeUUID: String?
+        var resolvedPath: String? = nil
+        var mountPoint: String? = nil
     }
 
     struct Entry: Sendable, Equatable {
         /// "SanDisk" — the name the refusal uses.
         let label: String
         /// Lower-cased canonical prefixes that are protected: the marked
-        /// path, and the same folder on any mount proven (by UUID) to be
-        /// the marked drive.
+        /// path and where it really lived (the first `markedRootCount`),
+        /// then the same folder on any mount proven (by UUID) to be the
+        /// marked drive.
         let roots: [String]
+        /// How many of `roots` are the mark's own spellings.
+        let markedRootCount: Int
         /// A different drive (another UUID) is mounted at the marked path.
         let differentDriveMounted: Bool
         /// The marked drive's UUID, for the removal-time re-check.
@@ -97,40 +120,97 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
 
     // MARK: Building
 
-    private static func split(_ searchPath: String) -> (spelled: String, volumeRoot: String?, subpath: String, label: String) {
-        let spelled = ArchiveVolumeProtection.canonical(searchPath)
-        let volumeRoot = ArchiveVolumeProtection.externalVolumeRoot(of: spelled)
-        let subpath = volumeRoot.map { String(spelled.dropFirst($0.count)) } ?? ""
-        let label = volumeRoot.map { String($0.dropFirst("/Volumes/".count)) } ?? (spelled as NSString).lastPathComponent
-        return (spelled, volumeRoot, subpath, label)
+    /// One mark, taken apart with NO disk access.
+    private struct Parts {
+        let spelled: String
+        /// Protected by string: the spelled path and, when the mark knows
+        /// it, where that path really lived. Lower-cased.
+        var markedRoots: [String]
+        /// The root of the volume the mark lives on — its mount point when
+        /// the mark recorded one, else the "/Volumes/<name>" of its
+        /// spelling. nil = a folder of the boot disk.
+        let volumeRoot: String?
+        /// The marked folder below that root ("" = the whole volume).
+        let subpath: String
+        let label: String
+        /// nil for a folder of the boot disk (every boot file shares one).
+        let volumeUUID: String?
     }
 
-    /// NO disk access: the marked paths themselves. Safe on the main thread.
+    private static func parts(of mark: Mark) -> Parts? {
+        let spelled = ArchiveVolumeProtection.canonical(mark.searchPath)
+        guard spelled.count > 1 else { return nil }   // never "/"
+        let spelledRoot = ArchiveVolumeProtection.externalVolumeRoot(of: spelled)
+        let label = spelledRoot.map { String($0.dropFirst("/Volumes/".count)) } ?? (spelled as NSString).lastPathComponent
+        var roots = [spelled.lowercased()]
+        var volumeRoot = spelledRoot
+        var located = spelled
+        // What the MOUNT said when the mark was made outranks the spelling
+        // (codex #258 F2): a symlink into a drive, a custom mount point.
+        if let resolved = mark.resolvedPath, let mount = mark.mountPoint {
+            let real = ArchiveVolumeProtection.canonical(resolved)
+            // Both spellings of the real place ("/private/var…" and the
+            // standardized one), as the archive's boot-folder rule keeps.
+            for spelling in [real, resolved] where spelling.count > 1 && !roots.contains(spelling.lowercased()) {
+                roots.append(spelling.lowercased())
+            }
+            if ArchiveVolumeProtection.isBootMountPoint(mount) {
+                volumeRoot = nil
+            } else {
+                volumeRoot = ArchiveVolumeProtection.canonical(mount)
+                located = real
+            }
+        }
+        let subpath = volumeRoot.map { root in
+            located.lowercased().hasPrefix(root.lowercased()) ? String(located.dropFirst(root.count)) : ""
+        } ?? ""
+        return Parts(spelled: spelled, markedRoots: roots, volumeRoot: volumeRoot, subpath: subpath, label: label,
+                     volumeUUID: volumeRoot == nil ? nil : mark.volumeUUID)
+    }
+
+    /// NO disk access: the marked paths themselves (as spelled, and where
+    /// they really lived when the mark was made). Safe on the main thread.
     static func provisional(marks: [Mark]) -> ReadOnlyVolumeProtection {
         let entries = marks.compactMap { mark -> Entry? in
-            let s = split(mark.searchPath)
-            guard s.spelled.count > 1 else { return nil }   // never "/"
-            return Entry(label: s.label, roots: [s.spelled.lowercased()], differentDriveMounted: false,
-                         volumeUUID: s.volumeRoot == nil ? nil : mark.volumeUUID, subpath: s.subpath)
+            guard let p = parts(of: mark) else { return nil }
+            return Entry(label: p.label, roots: p.markedRoots, markedRootCount: p.markedRoots.count,
+                         differentDriveMounted: false, volumeUUID: p.volumeUUID, subpath: p.subpath)
         }
         return ReadOnlyVolumeProtection(entries: entries, marks: marks, isBuilt: false)
     }
 
     /// The full build. DISK I/O (volume-UUID reads of the marked mount and,
     /// when the marked drive is not found there, of every mounted local
-    /// root) — never on the main thread. Network mounts are not read.
+    /// root; one realpath for a mark that never learned where it really
+    /// lives) — never on the main thread. Network mounts are not read.
     static func make(marks: [Mark],
                      mountedRoots: () -> [String] = { ArchiveVolumeProtection.mountedVolumeRootsProbe() },
-                     probe: (String) -> String? = { MasterArchiveDesignation.volumeUUID(forPath: $0) })
+                     probe: (String) -> String? = { MasterArchiveDesignation.volumeUUID(forPath: $0) },
+                     identity: (String) -> MountIdentity? = { ArchiveVolumeProtection.mountIdentityProbe($0) },
+                     networkRoots: () -> [String] = { ArchiveVolumeProtection.networkMountRootsProbe() })
         -> ReadOnlyVolumeProtection {
         var mounted: [String]?
+        var network: [String]?
         var entries: [Entry] = []
         for mark in marks {
-            let s = split(mark.searchPath)
-            guard s.spelled.count > 1 else { continue }
-            var roots = [s.spelled.lowercased()]
+            guard let s = parts(of: mark) else { continue }
+            var roots = s.markedRoots
+            // A mark that never learned where it really lives (made while
+            // the drive was away): when its spelling resolves now, the real
+            // place is protected too — by path; no identity is adopted.
+            if mark.resolvedPath == nil {
+                if network == nil { network = networkRoots().map { ArchiveVolumeProtection.canonical($0).lowercased() } }
+                let onNetwork = (network ?? []).contains { ArchiveVolumeProtection.isInsideLexically(path: s.spelled.lowercased(), root: $0) }
+                if !onNetwork, let id = identity(s.spelled) {
+                    for spelling in [ArchiveVolumeProtection.canonical(id.resolvedPath), id.resolvedPath]
+                    where spelling.count > 1 && !roots.contains(spelling.lowercased()) {
+                        roots.append(spelling.lowercased())
+                    }
+                }
+            }
+            let markedRootCount = roots.count
             var different = false
-            let uuid = s.volumeRoot == nil ? nil : mark.volumeUUID
+            let uuid = s.volumeUUID
             if let uuid, let volumeRoot = s.volumeRoot {
                 let here = probe(volumeRoot)
                 if let here, here != uuid { different = true }
@@ -147,8 +227,8 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
                     }
                 }
             }
-            entries.append(Entry(label: s.label, roots: roots, differentDriveMounted: different,
-                                 volumeUUID: uuid, subpath: s.subpath))
+            entries.append(Entry(label: s.label, roots: roots, markedRootCount: markedRootCount,
+                                 differentDriveMounted: different, volumeUUID: uuid, subpath: s.subpath))
         }
         return ReadOnlyVolumeProtection(entries: entries, marks: marks, isBuilt: true)
     }
@@ -161,9 +241,10 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
         for entry in entries {
             for (i, root) in entry.roots.enumerated() where lower.hasPrefix(root) {
                 guard ArchiveVolumeProtection.isInsideLexically(path: lower, root: root) else { continue }
-                // Only the MARKED spelling can be the displaced one; a root
-                // found by UUID is the drive itself.
-                return i == 0 && entry.differentDriveMounted ? .readOnlyDifferentDrive(entry.label) : .readOnly(entry.label)
+                // Only the MARKED spellings can be the displaced ones; a
+                // root found by UUID is the drive itself.
+                return i < entry.markedRootCount && entry.differentDriveMounted
+                    ? .readOnlyDifferentDrive(entry.label) : .readOnly(entry.label)
             }
         }
         return nil
@@ -173,7 +254,11 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
     /// the main actor: the string verdict; then the verdict for the file's
     /// REAL path (a symlinked parent); then a fresh read of the file's OWN
     /// volume UUID — the marked drive mounted since the snapshot, or under a
-    /// name the snapshot never saw.
+    /// name the snapshot never saw. A marked FOLDER is found the same way:
+    /// the volume's UUID, then the file's place on that volume (its real
+    /// path below its own mount point) inside the marked folder — so a
+    /// rename or remount protects it before any rebuild lands (codex #258
+    /// F4).
     func verdictAtRemoval(path: String, probe: (String) -> String?,
                           identity: (String) -> MountIdentity? = { ArchiveVolumeProtection.mountIdentityProbe($0) }) -> Verdict? {
         guard !entries.isEmpty else { return nil }
@@ -185,9 +270,32 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
             let real = ArchiveVolumeProtection.canonical(resolved)
             if real != path, let v = verdict(forPath: real) { return v }
         }
-        let wholeVolume = entries.filter { $0.volumeUUID != nil && $0.subpath.isEmpty }
-        guard !wholeVolume.isEmpty, let own = probe(path) else { return nil }
-        return wholeVolume.first { $0.volumeUUID == own }.map { .readOnly($0.label) }
+        let byIdentity = entries.filter { $0.volumeUUID != nil }
+        guard !byIdentity.isEmpty, let own = probe(path) else { return nil }
+        // Where the file sits on its own volume — asked once, and only for
+        // a marked folder.
+        var placed = false
+        var place: String?
+        for entry in byIdentity where entry.volumeUUID == own {
+            if entry.subpath.isEmpty { return .readOnly(entry.label) }
+            if !placed {
+                placed = true
+                let id = identity(path) ?? identity(parent).map {
+                    MountIdentity(resolvedPath: ($0.resolvedPath as NSString).appendingPathComponent((path as NSString).lastPathComponent),
+                                  mountPoint: $0.mountPoint)
+                }
+                place = id.map { id in
+                    let real = ArchiveVolumeProtection.canonical(id.resolvedPath).lowercased()
+                    let mount = ArchiveVolumeProtection.canonical(id.mountPoint).lowercased()
+                    return mount.count > 1 && real.hasPrefix(mount) ? String(real.dropFirst(mount.count)) : real
+                }
+            }
+            // On the marked drive, but where on it cannot be told: refuse
+            // over guess.
+            guard let place else { return .readOnly(entry.label) }
+            if ArchiveVolumeProtection.isInsideLexically(path: place, root: entry.subpath.lowercased()) { return .readOnly(entry.label) }
+        }
+        return nil
     }
 
     private static func canonicalIfNeeded(_ path: String) -> String {
@@ -235,7 +343,9 @@ extension VideoScanModel {
     /// The marks on the scan targets, in target order. O(targets).
     var readOnlyVolumeMarks: [ReadOnlyVolumeProtection.Mark] {
         scanTargets.compactMap { t in
-            t.readOnlyMark.map { .init(searchPath: t.searchPath, volumeUUID: $0.volumeUUID) }
+            t.readOnlyMark.map {
+                .init(searchPath: t.searchPath, volumeUUID: $0.volumeUUID, resolvedPath: $0.resolvedPath, mountPoint: $0.mountPoint)
+            }
         }
     }
 
@@ -263,7 +373,8 @@ extension VideoScanModel {
         var i = 0
         for t in scanTargets {
             guard let mark = t.readOnlyMark else { continue }
-            guard i < built.count, built[i].searchPath == t.searchPath, built[i].volumeUUID == mark.volumeUUID else { return false }
+            guard i < built.count, built[i].searchPath == t.searchPath, built[i].volumeUUID == mark.volumeUUID,
+                  built[i].resolvedPath == mark.resolvedPath, built[i].mountPoint == mark.mountPoint else { return false }
             i += 1
         }
         return i == built.count
@@ -341,10 +452,12 @@ extension VideoScanModel {
         return archiveVolumeProtection()?.verdict(forPath: target.searchPath) == .onArchiveVolume
     }
 
-    /// Mark a volume Read only, or allow changes again. One UUID read of the
-    /// volume at the moment of the click (like Initialize's); the mark is
-    /// saved with the other volume settings and logged — START and OUTCOME,
-    /// the volume's name only.
+    /// Mark a volume Read only, or allow changes again. At the moment of
+    /// the click (like Initialize's): one realpath + mount-point read of the
+    /// target and one UUID read of the volume it REALLY lives on — a drive
+    /// is a drive by its mount, never by its spelling (codex #258 F2). The
+    /// mark is saved with the other volume settings and logged — START and
+    /// OUTCOME, the volume's name only.
     func setVolumeReadOnly(_ on: Bool, for target: CatalogScanTarget, now: Date = Date()) {
         let name = VolumeReachability.displayLabel(forPath: target.searchPath)
         guard !isReadOnly else {
@@ -354,10 +467,7 @@ extension VideoScanModel {
         guard on != (target.readOnlyMark != nil) else { return }
         log("Read only: \(on ? "marking" : "allowing changes on") \(name) — START")
         if on {
-            let canonical = ArchiveVolumeProtection.canonical(target.searchPath)
-            let onExternal = ArchiveVolumeProtection.externalVolumeRoot(of: canonical) != nil
-            let uuid = onExternal && target.isReachable ? MasterArchiveDesignation.volumeUUID(forPath: target.searchPath) : nil
-            target.readOnlyMark = VolumeReadOnlyMark(markedAt: now, volumeUUID: uuid)
+            target.readOnlyMark = Self.readOnlyMark(forPath: target.searchPath, isReachable: target.isReachable, now: now)
         } else {
             target.readOnlyMark = nil
         }
@@ -370,5 +480,28 @@ extension VideoScanModel {
             : "Read only: \(name) allows changes again."
         log(outcome)
         appLog.write(outcome)
+    }
+
+    /// The mark for a target at `searchPath`, made now: where the path
+    /// really lives (realpath resolves symlinks before ".."), the mount it
+    /// is on, and — when that mount is not the boot disk's — the volume's
+    /// UUID read at the RESOLVED place. A drive that is away (or a path
+    /// that does not resolve) is marked by its spelling alone, as before.
+    /// A "/Volumes/X" that resolves onto the boot disk is the empty
+    /// leftover folder of an unmounted volume: nothing is recorded from it.
+    static func readOnlyMark(forPath searchPath: String, isReachable: Bool, now: Date) -> VolumeReadOnlyMark {
+        var mark = VolumeReadOnlyMark(markedAt: now, volumeUUID: nil)
+        guard isReachable else { return mark }
+        let spelledExternal = ArchiveVolumeProtection.externalVolumeRoot(of: ArchiveVolumeProtection.canonical(searchPath)) != nil
+        guard let id = ArchiveVolumeProtection.mountIdentityProbe(searchPath) else {
+            if spelledExternal { mark.volumeUUID = MasterArchiveDesignation.volumeUUID(forPath: searchPath) }
+            return mark
+        }
+        let onBootDisk = ArchiveVolumeProtection.isBootMountPoint(id.mountPoint)
+        if onBootDisk && spelledExternal { return mark }
+        mark.resolvedPath = id.resolvedPath
+        mark.mountPoint = id.mountPoint
+        if !onBootDisk { mark.volumeUUID = MasterArchiveDesignation.volumeUUID(forPath: id.resolvedPath) }
+        return mark
     }
 }
