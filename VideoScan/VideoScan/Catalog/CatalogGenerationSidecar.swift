@@ -65,9 +65,13 @@ enum CatalogGenerationSidecar {
     /// high-water mark from every catalog file in the directory —
     /// catalog.json, catalog.json.prev and the timestamped safety copies
     /// (`catalog.pre-*.json`, `catalog.manual-backup-*.json`, …) — using
-    /// the cheap head+tail probe on each (a few KB per file, never a full
-    /// decode). Whatever the highest stamp anyone wrote here was, that is
-    /// the floor. Writes the result so the scan happens once.
+    /// the version probe on each (never a full decode). Since GH #167 codex
+    /// cycle #30 R1 that probe reads each WHOLE file once (≈ 0.3 s per
+    /// 63 MB in Debug), so a directory of many large safety copies costs
+    /// seconds here — once per directory ever (the result is written), and
+    /// already behind us on Rick's machines. Perf agent's call if it
+    /// should ever be cheaper (QA r4 finding 6). Whatever the highest stamp
+    /// anyone wrote here was, that is the floor.
     ///
     /// Generic on purpose: no hard-coded numbers. If the true maximum was
     /// only ever observed (never written to a surviving file) the operator

@@ -207,10 +207,14 @@ struct CatalogSnapshot: Decodable {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else { return nil }
-        guard let found = CatalogHeaderScanner.probe(fileAt: url) else {
+        switch CatalogHeaderScanner.probe(fileAt: url) {
+        case .found(let found):
+            return Header(version: found.verdict, generation: found.generation)
+        case .notOpenable:
             return Header(version: .unknown, generation: nil)
+        case .unavailable(let e):
+            return Header(version: .unavailable("errno \(e) \(String(cString: strerror(e)))"), generation: nil)
         }
-        return Header(version: found.verdict, generation: found.generation)
     }
 
     /// Legacy tuple view of `header(at:)` for GENERATION readers (OCC
@@ -267,6 +271,11 @@ enum CatalogWriteHold: Equatable, Sendable {
         case .version(let v): return v > CatalogSnapshot.currentVersion ? .newerVersion(v) : nil
         case .confirmedAbsent: return nil
         case .unknown: return .versionUnknown
+        // Fail-closed DEFAULT only: every gate checks `.unavailable` before
+        // asking for a hold and refuses the one write without latching
+        // (QA r4 item 3). A gate that forgot would hold the session — the
+        // safe side.
+        case .unavailable: return .versionUnknown
         }
     }
 }
@@ -317,6 +326,16 @@ final class CatalogNewerLatchMirror: @unchecked Sendable {
 /// Residual: the window between this probe and rename(2) is microseconds
 /// and cannot be closed — rename is not conditional.
 struct CatalogWriteGate: Sendable {
+    /// The gate's answer. (≈ a three-way result code.)
+    enum Decision: Equatable, Sendable {
+        case write
+        /// Session hold — newer or unknown catalog; latched.
+        case hold(CatalogWriteHold)
+        /// The file could not be opened just now (QA r4 item 3): refuse
+        /// THIS write with `catalogUnavailable`, latch nothing.
+        case unavailable(String)
+    }
+
     let primaryURL: URL
     let latch: CatalogNewerLatchMirror
     /// Test seam: runs on the write queue AFTER the on-disk probe and
@@ -324,19 +343,20 @@ struct CatalogWriteGate: Sendable {
     /// exactly that window (codex cycle #29 F2). Always nil in production.
     var testAfterProbe: (@Sendable () -> Void)? = nil
 
-    /// nil = write; otherwise why not.
-    func writeHold() -> CatalogWriteHold? {
-        if let h = latch.hold { return h }
+    func writeHold() -> Decision {
+        if let h = latch.hold { return .hold(h) }
         let verdict = CatalogSnapshot.header(at: primaryURL)?.version
         testAfterProbe?()
         // The probe can be long (a whole-file pass on a legacy layout).
         // A latch the main actor raised MEANWHILE outranks whatever the
         // probe read of the file as it was (codex cycle #29 F2): read the
         // mirror again, immediately before answering.
-        if let h = latch.hold { return h }
-        guard let verdict, let h = CatalogWriteHold.from(verdict) else { return nil }
+        if let h = latch.hold { return .hold(h) }
+        guard let verdict else { return .write }
+        if case .unavailable(let why) = verdict { return .unavailable(why) }
+        guard let h = CatalogWriteHold.from(verdict) else { return .write }
         latch.note(h)
-        return h
+        return .hold(h)
     }
 }
 
@@ -664,20 +684,44 @@ final class CatalogStore {
     func refuseIfNewerCatalogOnDisk() -> CatalogWriteError? {
         adoptLatchFromWriteQueue()
         if let held = heldWriteRefusal() { return held }
-        if let hold = holdFromPrimaryOnDisk() {
+        switch checkPrimaryOnDisk() {
+        case .ours:
+            return nil
+        case .hold(let hold):
             latchWrites(off: hold)
             return heldWriteRefusal()
+        case .unavailable(let why):
+            return refuseThisWriteOnly(why)
         }
-        return nil
     }
 
-    /// Probe catalog.json NOW and say whether it may be written: nil = ours
-    /// (current/older version, or a confirmed v0 catalog, or no file);
-    /// otherwise the hold (newer, or version unknown — codex cycle #29 F1).
-    /// Pure read; the caller latches.
-    private func holdFromPrimaryOnDisk() -> CatalogWriteHold? {
-        guard let h = CatalogSnapshot.header(at: fileURL) else { return nil }
-        return CatalogWriteHold.from(h.version)
+    /// What the primary on disk is to this session right now.
+    private enum PrimaryCheck {
+        /// Current/older version, a confirmed v0 catalog, or no file.
+        case ours
+        /// Newer, or version unknown — a session hold (codex cycle #29 F1).
+        case hold(CatalogWriteHold)
+        /// Could not be opened just now (QA r4 item 3): refuse this once.
+        case unavailable(String)
+    }
+
+    /// Probe catalog.json NOW. Pure read; the caller latches or refuses.
+    private func checkPrimaryOnDisk() -> PrimaryCheck {
+        guard let h = CatalogSnapshot.header(at: fileURL) else { return .ours }
+        if case .unavailable(let why) = h.version { return .unavailable(why) }
+        if let hold = CatalogWriteHold.from(h.version) { return .hold(hold) }
+        return .ours
+    }
+
+    /// The non-latching refusal (QA r4 item 3): journalled and left in
+    /// `lastWriteError` like every refusal, but no banner, no hold — the
+    /// next save probes again.
+    private func refuseThisWriteOnly(_ why: String) -> CatalogWriteError {
+        let e = CatalogWriteError.catalogUnavailable(why)
+        lastWriteError = e
+        CatalogWriteJournal.record(e, catalogURL: fileURL)
+        catalogStoreLog.notice("catalog: could not open catalog.json to check its version (\(why, privacy: .public)) — this write refused, session NOT held (GH #167, QA r4)")
+        return e
     }
 
     /// After a write the write queue REFUSED (codex #1): carry a hold it
@@ -750,6 +794,14 @@ final class CatalogStore {
         // whose main-actor completion has not run yet is our own write, and
         // must not make the quit-time saveNow refuse itself as "stale".
         let header = CatalogSnapshot.header(at: fileURL)
+        // QA r4 item 3: the probe could not OPEN the file just now (EMFILE
+        // in a media scan…). Nothing is known, so nothing is written — but
+        // that is a fact about this moment, not the catalog: refuse this
+        // write only, hold nothing.
+        if case .unavailable(let why)? = header?.version {
+            lock.release()
+            return refuseThisWriteOnly(why)
+        }
         // GH #167 — never downgrade. A NEWER build may have replaced the
         // file since we loaded it (same machine, or a sync), possibly at a
         // generation the staleness check below cannot tell from ours. The
@@ -845,6 +897,10 @@ final class CatalogStore {
             // through the one-shot held line, like every other refusal.
             adoptLatchFromWriteQueue()
             _ = heldWriteRefusal()
+        } else if let error, case .catalogUnavailable(let why) = error {
+            // The queue gate could not open the file (QA r4 item 3): the
+            // write was refused, not held. Journal it; no latch.
+            _ = refuseThisWriteOnly(why)
         } else if let error {
             // An attempted write that FAILED is the current truth, so it
             // outranks whatever was in lastWriteError. The case that makes
@@ -890,11 +946,17 @@ final class CatalogStore {
     private func sidecarMayAdvance() -> Bool {
         adoptLatchFromWriteQueue()
         if writeHold != nil { return false }
-        if let hold = holdFromPrimaryOnDisk() {
+        switch checkPrimaryOnDisk() {
+        case .ours:
+            return true
+        case .hold(let hold):
             latchWrites(off: hold)
             return false
+        case .unavailable(let why):
+            // Not ours to touch THIS time; no latch (QA r4 item 3).
+            catalogStoreLog.notice("catalog: could not open catalog.json after a landed save (\(why, privacy: .public)) — sidecar and observer skipped this once, session NOT held (GH #167, QA r4)")
+            return false
         }
-        return true
     }
 
     /// Adopt the on-disk generation after in-memory state has been
@@ -911,6 +973,8 @@ final class CatalogStore {
         // there is nothing to adopt, and the sidecar is not ours to bump.
         guard writeHold == nil else { return }
         let header = CatalogSnapshot.header(at: fileURL)
+        // Could not open it just now: adopt nothing this tick (QA r4 item 3).
+        if case .unavailable? = header?.version { return }
         // The file may have become newer (or unreadable) since the reload
         // decoded it.
         if let header, let hold = CatalogWriteHold.from(header.version) {
@@ -1046,7 +1110,9 @@ final class CatalogStore {
             // beside a file every later save refuses to touch. Decision
             // (i): one gate — the probe — for load and save alike; the
             // decode supplies the records to BROWSE and nothing else.
-            if let hold = holdFromPrimaryOnDisk() {
+            var siblingsMayBeWritten = true
+            switch checkPrimaryOnDisk() {
+            case .hold(let hold):
                 latchWrites(off: hold)
                 if case .newerVersion(let probed) = hold {
                     lastLoadOutcome = .openedReadOnlyNewerVersion(found: probed)
@@ -1056,14 +1122,25 @@ final class CatalogStore {
                 masterArchive = primary.masterArchive   // shown, never saved
                 unknownTopLevelFields = primary.unknownTopLevel
                 return primary.records
+            case .unavailable(let why):
+                // QA r4 item 3: the decode read the file but the probe could
+                // not open it just now. Not a verdict, so no hold — but no
+                // sibling byte either (no bootstrap, no sidecar bump, no
+                // .prev rotation) until a probe has vouched for the file;
+                // the next save probes again and writes normally.
+                siblingsMayBeWritten = false
+                catalogStoreLog.notice("catalog: loaded catalog.json but could not open it to check its version (\(why, privacy: .public)) — no sibling written this launch, session NOT held (GH #167, QA r4)")
+            case .ours:
+                break
             }
-            persistBootstrappedFloorIfNeeded()
+            if siblingsMayBeWritten { persistBootstrappedFloorIfNeeded() }
             reconcileLoadedGeneration(decoded: primary.generation,
                                       probed: lastPrimaryProbe,
-                                      source: fileURL.lastPathComponent)
+                                      source: fileURL.lastPathComponent,
+                                      mayWriteSidecar: siblingsMayBeWritten)
             // Rotate primary → .prev on every successful load. Copy (not move)
             // so primary stays in place; replace any stale .prev.
-            rotateBackup()
+            if siblingsMayBeWritten { rotateBackup() }
             masterArchive = primary.masterArchive
             persistedMasterArchive = primary.masterArchive
             acceptedMasterArchive = primary.masterArchive
@@ -1080,7 +1157,8 @@ final class CatalogStore {
         // cycle #29 F1): the recovery below still shows .prev, but this
         // session writes nothing — not the sidecar, not catalog.json. The
         // way out is restoring the file, and the banner says so.
-        if let hold = holdFromPrimaryOnDisk() {
+        switch checkPrimaryOnDisk() {
+        case .hold(let hold):
             latchWrites(off: hold)
             if case .newerVersion(let probed) = hold {
                 lastLoadOutcome = .openedReadOnlyNewerVersion(found: probed)
@@ -1091,6 +1169,14 @@ final class CatalogStore {
                 }
                 return []
             }
+        case .unavailable(let why):
+            // Undecodable AND unopenable: nothing can be verified, and
+            // recovering from .prev with writes on would let the next save
+            // replace a file that may be newer. Fail closed (QA r4 item 3).
+            catalogStoreLog.notice("catalog: catalog.json neither decodes nor opens for the probe (\(why, privacy: .public)) — held as unknown (GH #167, QA r4)")
+            latchWrites(off: .versionUnknown)
+        case .ours:
+            break
         }
         // Primary unreadable — try .prev.
         NSLog("VideoScan: primary catalog.json unreadable; trying %@", backupURL.path)
@@ -1204,7 +1290,8 @@ final class CatalogStore {
     ///    the old maximum instead of restarting at 1, while staleness is
     ///    still judged against the true on-disk value.
     ///  - Otherwise advance the sidecar to what we loaded.
-    private func reconcileLoadedGeneration(decoded: Int, probed: Int?, source: String) {
+    private func reconcileLoadedGeneration(decoded: Int, probed: Int?, source: String,
+                                           mayWriteSidecar: Bool = true) {
         if probed == nil, decoded > 0 {
             let msg = "catalog OCC: header probe found no generation in the head or tail of \(source) but the file decodes with generation \(decoded) — using the decoded value (#165)"
             lastGenerationAnomaly = msg
@@ -1223,9 +1310,10 @@ final class CatalogStore {
             lastGenerationAnomaly = msg
             NSLog("VideoScan: %@", msg)
             catalogStoreLog.fault("\(msg, privacy: .public)")
-        } else if loadedGeneration > generationFloor, writeHold == nil {
+        } else if loadedGeneration > generationFloor, writeHold == nil, mayWriteSidecar {
             // (held: the sidecar beside an unreadable primary is not ours
-            // to touch — codex cycle #29 F1; in memory the floor is moot.)
+            // to touch — codex cycle #29 F1; in memory the floor is moot.
+            // Unverifiable this launch: not ours to touch either — QA r4.)
             generationFloor = CatalogGenerationSidecar.recordMax(loadedGeneration, besideCatalogAt: fileURL)
         }
     }
@@ -1807,9 +1895,15 @@ final class CatalogStore {
             // have replaced catalog.json since, or the latch fired. Not
             // journalled here — the main-actor completion reports it once
             // through `heldWriteRefusal` (no flooding).
-            if let hold = gate.writeHold() {
+            switch gate.writeHold() {
+            case .hold(let hold):
                 catalogStoreLog.notice("catalog write refused on the write queue: \(hold.reason, privacy: .public) — nothing written to \(fileURL.lastPathComponent, privacy: .public) (GH #167)")
                 return .writesDisabled(hold.reason)
+            case .unavailable(let why):
+                catalogStoreLog.notice("catalog write refused on the write queue: could not open the primary to check it (\(why, privacy: .public)) — nothing written to \(fileURL.lastPathComponent, privacy: .public), session not held (GH #167, QA r4)")
+                return .catalogUnavailable(why)
+            case .write:
+                break
             }
             // Atomic write so a crash mid-write doesn't truncate the file.
             // Foundation implements this as: write to a sibling tmp file,

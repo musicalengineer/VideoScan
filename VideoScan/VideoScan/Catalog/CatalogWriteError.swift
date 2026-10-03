@@ -62,6 +62,13 @@ enum CatalogWriteError: Error, Equatable, Sendable {
     /// the designation on disk survives whatever nulled it in memory.
     case designationLossRefused(targetPath: String)
 
+    /// The version probe could not OPEN catalog.json just now for a reason
+    /// that will pass (EMFILE/ENFILE during a media scan, EINTR, EAGAIN),
+    /// twice, 50 ms apart. Nothing is known about the file, so THIS write
+    /// is refused — but the session is not held (QA r4 item 3): a
+    /// descriptor shortage is a fact about the process, not the catalog.
+    case catalogUnavailable(String)
+
     var userFacingDescription: String {
         switch self {
         case .lockedByAnotherProcess(let owner):
@@ -81,6 +88,8 @@ enum CatalogWriteError: Error, Equatable, Sendable {
             return "The catalog failed verification after writing \(bytes) bytes (expected SHA-256 \(expected.prefix(12))…, read back \(actual.prefix(12))…). The previous copy is intact in catalog.json.prev."
         case .designationLossRefused(let targetPath):
             return "Catalog not saved: it would have removed the Master Archive designation (\(targetPath)) without anyone clearing it. catalog.json still carries it. Re-open the Archive tab: re-initialize the archive, or clear it there if that is what you meant."
+        case .catalogUnavailable(let detail):
+            return "Couldn't check the catalog file right now (\(detail)) — nothing was written; try again."
         }
     }
 
@@ -110,6 +119,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .verificationFailed:     return "verificationFailed"
         case .writesDisabled:         return "writesDisabled"
         case .designationLossRefused: return "designationLoss"
+        case .catalogUnavailable:     return "catalogUnavailable"
         }
     }
 
@@ -125,6 +135,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .verificationFailed:      return 6
         case .writesDisabled:          return 7
         case .designationLossRefused:  return 8
+        case .catalogUnavailable:      return 9
         }
     }
 
@@ -134,7 +145,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
     /// very lost update this guard exists to prevent.
     var isTransient: Bool {
         switch self {
-        case .lockedByAnotherProcess, .lockUnavailable: return true
+        case .lockedByAnotherProcess, .lockUnavailable, .catalogUnavailable: return true
         case .readOnlyViewer, .staleGeneration,
              .writeFailed, .verificationFailed,
              .writesDisabled, .designationLossRefused:  return false

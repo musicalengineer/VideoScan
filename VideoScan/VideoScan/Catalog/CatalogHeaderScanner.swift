@@ -47,6 +47,17 @@
 //                       guessing is not allowed.
 // A leading UTF-8 BOM is skipped, as Foundation's decoder skips it.
 //
+// WHAT "WELL-FORMED" MEANS HERE (QA r4). The scanner validates exactly:
+// bracket KINDS match (`]` cannot close `{`); string state (quotes and
+// backslash escapes); no raw byte < 0x20 anywhere except the four JSON
+// whitespace bytes between tokens (raw control bytes inside a string are
+// illegal JSON too — Foundation rejects them); header values are CANONICAL
+// non-negative integers (no sign, no leading zero, no fraction, no
+// exponent); nesting no deeper than `maxContainerDepth` (256) containers.
+// It is NOT a full JSON validator: a missing comma or colon, a bare word,
+// a stray high byte outside a string are all tolerated — they cannot
+// change where a top-level `version` key sits or what its integer is.
+//
 // COST (codex cycle #30 R4). The pass is O(file) — 0.3 s for a 63 MB /
 // 200k-record catalog in a Debug build on an M4 Max (the windowed scanner
 // it replaced took 1.2 s on the same file) — so its verdict is CACHED
@@ -65,6 +76,14 @@ enum CatalogVersionVerdict: Equatable, Sendable {
     case version(Int)
     case confirmedAbsent
     case unknown
+    /// The file could not be OPENED just now for a reason that will pass
+    /// (EMFILE/ENFILE during a media scan, EINTR, EAGAIN) — twice, with a
+    /// pause between. Nothing is known about the bytes, so nothing may be
+    /// written beside them THIS time; but unlike `.unknown` it is not a
+    /// verdict about the catalog, so it must not hold the session (QA r4
+    /// item 3). The gates refuse the one write with
+    /// `CatalogWriteError.catalogUnavailable` and latch nothing.
+    case unavailable(String)
 
     var number: Int? { if case .version(let v) = self { return v }; return nil }
 }
@@ -85,6 +104,12 @@ enum CatalogHeaderScanner {
 
     /// Bytes read per `FileHandle.read` during a pass.
     static let chunkBytes = 1 << 20
+
+    /// Deepest nesting followed (root included). Deeper aborts → unknown.
+    /// Bounds the container stack: a file of ten million `[` must not
+    /// grow it to ten million entries (QA r4 item 2). A real catalog is
+    /// 4–6 deep; Foundation would follow 300, but we refuse over guess.
+    static let maxContainerDepth = 256
 
     struct Found: Equatable {
         var version: Int?
@@ -191,7 +216,7 @@ enum CatalogHeaderScanner {
                         var j = i
                         while j < n {
                             let b = base[j]
-                            if b == CatalogHeaderScanner.quote || b == CatalogHeaderScanner.backslash { break }
+                            if b == CatalogHeaderScanner.quote || b == CatalogHeaderScanner.backslash || b < 0x20 { break }
                             j += 1
                         }
                         i = j
@@ -263,6 +288,9 @@ enum CatalogHeaderScanner {
                 endCapture()
             }
             if inString {
+                // A raw control byte inside a string is not JSON (QA r4 B):
+                // Foundation rejects the file, so no verdict may vouch for it.
+                if b < 0x20 { found.aborted = true; return }
                 if escape { escape = false; if collectingKey { appendKey(b) }; return }
                 if b == CatalogHeaderScanner.backslash {
                     escape = true
@@ -300,10 +328,12 @@ enum CatalogHeaderScanner {
                 pendingSlot = nil
             case CatalogHeaderScanner.comma:
                 if containers.count == 1 { expectingKey = true }
-            case CatalogHeaderScanner.openBrace:
-                containers.append(true)
-            case CatalogHeaderScanner.openBracket:
-                containers.append(false)
+            case CatalogHeaderScanner.openBrace, CatalogHeaderScanner.openBracket:
+                guard containers.count < CatalogHeaderScanner.maxContainerDepth else {
+                    found.aborted = true   // deeper than any catalog; bounded stack (QA r4)
+                    return
+                }
+                containers.append(b == CatalogHeaderScanner.openBrace)
             case CatalogHeaderScanner.closeBrace, CatalogHeaderScanner.closeBracket:
                 let wantsObject = b == CatalogHeaderScanner.closeBrace
                 guard let top = containers.popLast(), top == wantsObject else {
@@ -312,7 +342,9 @@ enum CatalogHeaderScanner {
                 }
                 if containers.isEmpty { closed = true }
             default:
-                break
+                // Between tokens only the four JSON whitespace bytes may be
+                // < 0x20 (QA r4 B); NUL or any other control byte is not JSON.
+                if b < 0x20 && !CatalogHeaderScanner.isSpace(b) { found.aborted = true }
             }
         }
 
@@ -401,16 +433,46 @@ enum CatalogHeaderScanner {
         return (FileHandle(fileDescriptor: fd, closeOnDealloc: true), 0)
     }
 
+    /// What `probe` could do with the file.
+    enum ProbeResult: Equatable {
+        /// Opened and read (or served from the cache).
+        case found(Found)
+        /// open(2) failed for a reason that will not pass on its own
+        /// (EACCES, EISDIR, …), or the path is not a regular file. The
+        /// caller treats it as unknown — a verdict about the file.
+        case notOpenable(errno: Int32)
+        /// open(2) failed twice, 50 ms apart, with a TRANSIENT errno —
+        /// EMFILE / ENFILE (a media scan holding every descriptor), EINTR,
+        /// EAGAIN. Not a verdict about the file (QA r4 item 3).
+        case unavailable(errno: Int32)
+    }
+
+    /// errnos that describe this moment, not this file.
+    static func isTransientOpenErrno(_ e: Int32) -> Bool {
+        e == EMFILE || e == ENFILE || e == EINTR || e == EAGAIN
+    }
+
+    /// Pause between the two open attempts.
+    static let openRetryDelayMicros: UInt32 = 50_000
+
     /// The probe `CatalogSnapshot.header` uses: the cached verdict when the
-    /// file is unchanged, else one complete pass. nil only when the file
-    /// cannot be opened or is not a regular file (the caller decides
-    /// whether that is "no file" or "unreadable").
-    static func probe(fileAt url: URL) -> Found? {
-        guard let handle = openForReading(url).handle else { return nil }
+    /// file is unchanged, else one complete pass. One retry after a short
+    /// pause when open(2) fails transiently.
+    static func probe(fileAt url: URL) -> ProbeResult {
+        var attempt = openForReading(url)
+        if attempt.handle == nil, isTransientOpenErrno(attempt.errno) {
+            usleep(openRetryDelayMicros)
+            attempt = openForReading(url)
+        }
+        guard let handle = attempt.handle else {
+            return isTransientOpenErrno(attempt.errno)
+                ? .unavailable(errno: attempt.errno)
+                : .notOpenable(errno: attempt.errno)
+        }
         defer { try? handle.close() }
-        guard let key = FileKey(fileDescriptor: handle.fileDescriptor) else { return nil }
+        guard let key = FileKey(fileDescriptor: handle.fileDescriptor) else { return .notOpenable(errno: 0) }
         let path = url.path
-        if let hit = verdictCache.withLock({ $0[path] }), hit.key == key { return hit.found }
+        if let hit = verdictCache.withLock({ $0[path] }), hit.key == key { return .found(hit.found) }
         wholeFilePasses.withLock { $0 += 1 }
         wholeFilePassesByPath.withLock { $0[path, default: 0] += 1 }
         var pass = Forward()
@@ -423,19 +485,21 @@ enum CatalogHeaderScanner {
         pass.finish()
         let found = pass.found
         verdictCache.withLock { $0[path] = CacheEntry(key: key, found: found) }
-        return found
+        return .found(found)
     }
 }
 
 extension CatalogHeaderScanner {
     /// Reads ONE header value, byte by byte, starting right after its `:`.
     /// `read` returns false at the first byte that is not part of a number
-    /// (that byte belongs to whatever follows).
+    /// (that byte belongs to whatever follows). A leading `-` is not
+    /// accepted: a stamp is a CANONICAL non-negative integer (QA r4 A), so
+    /// `-1` ends the value at once with nothing read → unreadable.
     struct ValueReader {
         private var bytes: [UInt8] = []
         private var started = false
         mutating func read(_ b: UInt8) -> Bool {
-            let isNumberByte = b == UInt8(ascii: "-") || (b >= UInt8(ascii: "0") && b <= UInt8(ascii: "9"))
+            let isNumberByte = (b >= UInt8(ascii: "0") && b <= UInt8(ascii: "9"))
                 || b == UInt8(ascii: ".") || b == UInt8(ascii: "e") || b == UInt8(ascii: "E") || b == UInt8(ascii: "+")
             if !started && (b == 0x20 || b == 0x0A || b == 0x0D || b == 0x09) { return true }
             guard isNumberByte, bytes.count < 32 else { return false }
@@ -443,11 +507,13 @@ extension CatalogHeaderScanner {
             bytes.append(b)
             return true
         }
-        /// Integer value, or nil for floats / exponents / non-numbers.
+        /// Integer value, or nil for anything that is not a canonical
+        /// non-negative integer: floats, exponents, a sign, a leading zero
+        /// (`07`, `00` — JSON forbids them and no encoder writes them; QA r4 B).
         var value: Int? {
             guard let first = bytes.first else { return nil }
-            let digits = first == UInt8(ascii: "-") ? bytes.dropFirst() : bytes[...]
-            guard !digits.isEmpty, digits.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }) else { return nil }
+            guard bytes.allSatisfy({ $0 >= UInt8(ascii: "0") && $0 <= UInt8(ascii: "9") }) else { return nil }
+            if first == UInt8(ascii: "0") && bytes.count > 1 { return nil }
             return Int(String(decoding: bytes, as: UTF8.self))
         }
     }

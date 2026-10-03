@@ -1989,6 +1989,7 @@ struct CatalogScannerNonCanonicalStampTests {
         func nested(_ n: Int) -> String {
             #"{"a":"# + String(repeating: "[", count: n) + String(repeating: "]", count: n) + "}"
         }
+        #expect(CatalogHeaderScanner.maxContainerDepth == 256, "the cap is part of CAT-3's wording")
         #expect(try verdict(nested(255), dir) == .confirmedAbsent)
         #expect(try verdict(nested(256), dir) == .unknown)
         #expect(try verdict(nested(300_000), dir) == .unknown)
