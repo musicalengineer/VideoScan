@@ -297,6 +297,42 @@ Discussion with Rick after the first draft:
   / out-of-scope shown as such, so 100% is reachable and means
   "everything I can see is current".
 
+### The governing distinction (Rick, 2026-10-02, later that evening)
+
+> "MFO holds file operations; Analyze holds these cross-volume analysis
+> 'operations' — but they're not operations, they're background metadata
+> cyclers that are continuous."
+
+- **MFO = file operations.** A person chose files (or a volume) and a
+  verb; it starts, runs, finishes. Combine, Trim, Verify, Promote, Delete
+  duplicates on X, Migrate.
+- **Analyze = metadata cyclers.** Detect Duplicates, Find Similar
+  Footage, Scene Captions, OCR, Transcribe, Correlate A/V, File
+  Signatures, Embedded Dates, date inference, and future ones
+  (fingerprints, SigLIP). Continuous; no "done", only "current"; natural
+  state is running quietly or paused, across every reachable volume.
+- **Consequences:**
+  1. Cycler passes are **not MFO rows** (supersedes §3.3/§4.2 where they
+     were). Their activity lives in the Analyze surface: one row per
+     cycler — name · state (Current / Cycling, N to go, ETA / Paused /
+     Waiting for drive / Off) · coverage · Pause/Resume · Run now ·
+     schedule (idle / overnight / off).
+  2. The one exception proves the rule: row-menu "Analyze now" on chosen
+     files is a *file operation* (a person picked files) → MFO row
+     (`AnalyzeJob`, as today). Same engine, different front door because
+     the intent differs.
+  3. **Analyze and the Background Activity panel (#195) are one
+     surface.** A continuous cycler's status, controls and schedule are
+     one row; nothing is left for a second panel.
+  4. The Analyze surface is therefore a quiet **control panel for the
+     cyclers** (Time Machine's pane, one row per cycler), not a
+     Migrate-style scope→preview→Start sheet. "Run now" and a per-volume
+     scope are the impatience controls, not the main event.
+  5. The scheduler's conflict rule (§4.2) still applies between cyclers
+     and file operations (e.g. Delete on X waits for the Dups cycler's
+     current pass over X, or vice versa) — it just isn't rendered in MFO
+     for the cycler side.
+
 ### Phasing — UI first, then refactor (Rick, 2026-10-02)
 
 > "Let's do a new UI without completely refactoring the code around it,
