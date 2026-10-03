@@ -68,19 +68,20 @@ final class CombineBulkWorkflowUITests: XCTestCase {
         )
         catalogTab.click()
 
-        // 2. Open the Correlate menu and trigger Find A/V Pairs.
-        let correlateMenu = app.menuButtons["catalog.correlate.menu"]
+        // 2. Open the Analyze menu (2026-10-02, Phase A — one knowledge
+        //    menu replaced Correlate + Duplicates) and click the A/V Pairs
+        //    row (its title carries live coverage, so match the prefix).
+        let correlateMenu = app.menuButtons["catalog.analyze.menu"]
         XCTAssertTrue(
             correlateMenu.waitForExistence(timeout: 120),
-            "Correlate menu never appeared. Catalog records may not have loaded."
+            "Analyze menu never appeared. Catalog records may not have loaded."
         )
         correlateMenu.click()
 
-        let findPairsPredicate = NSPredicate(format: "title == %@",
-                                             "Find A/V Pairs Across Volumes")
+        let findPairsPredicate = NSPredicate(format: "title BEGINSWITH %@", "A/V Pairs — ")
         let findPairsItem = app.menuItems.matching(findPairsPredicate).firstMatch
         XCTAssertTrue(findPairsItem.waitForExistence(timeout: 10),
-                      "Find A/V Pairs Across Volumes menu item never appeared.")
+                      "'A/V Pairs — …' menu item never appeared.")
         findPairsItem.click()
 
         // 3. Wait for correlation to finish.

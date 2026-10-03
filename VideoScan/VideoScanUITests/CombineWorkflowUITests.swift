@@ -65,14 +65,15 @@ final class CombineWorkflowUITests: XCTestCase {
         )
         catalogTab.click()
 
-        // 2. Open the Correlate menu. Rendered by SwiftUI Menu as an AppKit
-        //    MenuButton; matching on typed accessor `menuButtons[id]`
-        //    avoids the very slow `descendants(matching: .any)` traversal
-        //    against the 12k-row table.
-        let correlateMenu = app.menuButtons["catalog.correlate.menu"]
+        // 2. Open the Analyze menu (2026-10-02, Phase A: the Correlate and
+        //    Duplicates menus became one "Analyze" menu). Rendered by
+        //    SwiftUI Menu as an AppKit MenuButton; matching on typed
+        //    accessor `menuButtons[id]` avoids the very slow
+        //    `descendants(matching: .any)` traversal against the 12k-row table.
+        let correlateMenu = app.menuButtons["catalog.analyze.menu"]
         XCTAssertTrue(
             correlateMenu.waitForExistence(timeout: 120),
-            "Correlate menu never appeared. Records may not have loaded — check the videoscan.log for catalog load errors."
+            "Analyze menu never appeared. Records may not have loaded — check the videoscan.log for catalog load errors."
         )
         correlateMenu.click()
 
@@ -81,15 +82,17 @@ final class CombineWorkflowUITests: XCTestCase {
         //    NOT against `title` — and `accessibilityIdentifier()` set on a
         //    Button INSIDE a Menu does not propagate to the rendered
         //    NSMenuItem (Xcode 26.3 / macOS 26.5). So we match by title via
-        //    NSPredicate.
-        let findPairsPredicate = NSPredicate(format: "title == %@",
-                                             "Find A/V Pairs Across Volumes")
+        //    NSPredicate. The A/V Pairs row's title carries its live
+        //    coverage ("A/V Pairs — 0 pairs · …"), so match the prefix.
+        //    Clicking it runs the incremental correlate (model.correlate());
+        //    the across-volumes variant lives in the Analyze panel now.
+        let findPairsPredicate = NSPredicate(format: "title BEGINSWITH %@", "A/V Pairs — ")
         let findPairsItem = app.menuItems.matching(findPairsPredicate).firstMatch
         if !findPairsItem.waitForExistence(timeout: 10) {
-            print("[UI-TEST] Could not find Find A/V Pairs Across Volumes menu item.")
+            print("[UI-TEST] Could not find the A/V Pairs row in the Analyze menu.")
             print("[UI-TEST] AX dump:")
             print(app.debugDescription)
-            XCTFail("'Find A/V Pairs Across Volumes' menu item never appeared.")
+            XCTFail("'A/V Pairs — …' menu item never appeared.")
             return
         }
         findPairsItem.click()
