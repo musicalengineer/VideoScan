@@ -419,6 +419,27 @@ of the same event; (8) the puzzle is the UI/UX.
   Then Rick drives it; the recommender proper (ranking, cross-steward
   arbitration, Hallie queries, per-group actions) is built only on his
   go-ahead.
+- **Events are the unit the steward should eventually speak in** (Rick,
+  2026-10-03: "there are 12 copies or similar clips of [a son's] 1st
+  birthday … it helps demo the theme I am shooting for"). Duplicates and
+  footage groups are the machine's concepts; an *event* is the family's.
+  An Event = one footage group (later: neighbouring groups) + a name the
+  catalog proposes and the user confirms — the same propose-then-verify
+  shape as Hallie and the Angel. Ingredients already exist: footage
+  groups (same footage), dates (embedded / OCR / inferred), People-tab
+  birthdates (a group dated near a birthday anniversary ⇒ "Nth
+  birthday"; the arithmetic gives N), Find and Tag (who is in frame),
+  transcripts ("happy birthday"), calendar anchors (Christmas,
+  Thanksgiving, July 4).
+  - *In the trial:* the Same-footage card leads with the footage's name
+    when it has one, otherwise a clearly-labelled guess from the date
+    ("Around …'s 1st birthday?"), with "Name this footage…" pre-filled so
+    one click turns the guess into a fact. One pure function; the guess
+    is never written on its own.
+  - *Direction:* Events as the steward's top-level unit — clusters across
+    groups, people in frame, transcript cues, "the best copy of this
+    event" handed to the Angel; Hallie answers "show me [someone]'s first
+    birthday" from the same facts.
 
 ## 6. Staging (each stage ships whole; nothing half-moved)
 
