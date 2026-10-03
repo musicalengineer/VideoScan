@@ -3,7 +3,7 @@ import UniformTypeIdentifiers
 
 // MARK: - Triage Filter
 
-enum TriageFilter: String, CaseIterable {
+enum TriageFilter: String, CaseIterable, Sendable {
     case all          = "All Needing Triage"
     case untriaged    = "Untriaged"
     case important    = "Important"
@@ -61,40 +61,68 @@ enum TriageFilter: String, CaseIterable {
     /// never drift apart — previously they were two hand-duplicated
     /// switches that had to be edited in lockstep. Pure function
     /// (≈ a C++ free function: no view state), so it's unit-testable
-    /// without SwiftUI — see TriageCleanedFilterTests.
+    /// without SwiftUI — see TriageCleanedFilterTests. (2026-10-03: the
+    /// table and the badges are now built off-main in
+    /// TriageSnapshotBuilder, through this same predicate.)
     func matches(_ record: VideoRecord) -> Bool {
+        matches(disposition: record.mediaDisposition, workspaceActive: record.workspaceActive,
+                lifecycleStage: record.lifecycleStage, cleaned: record.cleanupRecipeID != nil)
+    }
+
+    /// The predicate itself, over the four facts it reads — so the live
+    /// record and the snapshot's row (`matches(_: TriageRow)`,
+    /// TriageSnapshot.swift) cannot answer differently.
+    func matches(disposition: MediaDisposition, workspaceActive: Bool,
+                 lifecycleStage: LifecycleStage, cleaned: Bool) -> Bool {
         switch self {
         case .all:           return true
-        case .untriaged:     return record.mediaDisposition == .unreviewed
-        case .important:     return record.mediaDisposition == .important
-        case .suspectedJunk: return record.mediaDisposition == .suspectedJunk
-        case .confirmedJunk: return record.mediaDisposition == .confirmedJunk
-        case .recoverable:   return record.mediaDisposition == .recoverable
-        case .workspace:     return record.workspaceActive
-        case .underConstruction: return record.lifecycleStage == .workbench
+        case .untriaged:     return disposition == .unreviewed
+        case .important:     return disposition == .important
+        case .suspectedJunk: return disposition == .suspectedJunk
+        case .confirmedJunk: return disposition == .confirmedJunk
+        case .recoverable:   return disposition == .recoverable
+        case .workspace:     return workspaceActive
+        case .underConstruction: return lifecycleStage == .workbench
         // Derived provenance: cleanupRecipeID is the stamp CleanupJob
         // writes when it catalogs a recipe's output file.
-        case .cleaned:       return record.cleanupRecipeID != nil
+        case .cleaned:       return cleaned
         }
     }
 }
 
 // MARK: - Triage Tab
 
+// PERF RULE (2026-10-03, measured): this view reads ONLY `snapshot` and
+// its own small @State. It does NOT observe the model or the job centre —
+// both publish many times a second during a long run, and each publish
+// used to re-run this body, which walked the whole catalog a dozen times
+// (85% of the main thread in a sample taken during Delete Duplicates).
+// Everything O(records) is built off-main in TriageSnapshotBuilder and
+// published, equality-gated, through the model's `triageSnapshot`. Records
+// are looked up by id in EVENT HANDLERS only. Pinned by
+// TriageViewSensorTests.
+//
+// (For Rick: `let model` ≈ holding a plain pointer — we can call it, but
+// SwiftUI does not subscribe this view to its change signal.
+// `@ObservedObject` IS the subscription, and it is to the snapshot alone.)
 struct TriageView: View {
-    @EnvironmentObject var model: VideoScanModel
-    // Pass C (Rick 2026-06-14): MFO verbs are available from triage too —
-    // Rick explicitly called this out. Pull in the same env objects the
-    // catalog tab uses so the Transcode menu can dispatch a job and open
-    // the Media File Operations window.
-    @EnvironmentObject var fileOpsCenter: MediaFileOperationsCenter
+    let model: VideoScanModel
+    @ObservedObject private var snapshot: TriageSnapshot
+    // Pass C (Rick 2026-06-14): MFO verbs are available from triage too.
+    // A plain reference (not @EnvironmentObject): the centre forwards every
+    // job's progress tick, and this view only needs "is a transcode of
+    // this file running?" at the moment a context menu opens.
+    @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
     @Environment(\.openWindow) private var openWindow
     @AppStorage("selectedTab") private var selectedTab: Int = 0
 
     @State private var selectedFilter: TriageFilter = .all
     @State private var selectedIDs: Set<UUID> = []
     @State private var searchText: String = ""
-    @State private var sortOrder = [KeyPathComparator(\VideoRecord.filename)]
+    @State private var sortOrder = TriageQuery.defaultSort
+    /// Search-as-you-type: the text is handed to the snapshot 200 ms after
+    /// the last keystroke.
+    @State private var searchDebounce: Task<Void, Never>?
     @State private var isAnalyzing = false
     @State private var analysisSummary: MediaAnalyzer.AnalysisSummary?
     @State private var showAnalysisSummary = false
@@ -136,28 +164,6 @@ struct TriageView: View {
     // the button.
     @State private var isImporting: Bool = false
 
-    /// Records the Delete Junk button operates on. Scoped to the same
-    /// `triageRecords` set the table renders so the button's count
-    /// matches what the user sees. Without this scoping the button
-    /// silently included archived-but-junk records the user had no
-    /// way to inspect — Rick 2026-06-15. Archived junk surfaces in
-    /// the status bar instead, with an explanatory tooltip.
-    private var confirmedJunk: [VideoRecord] {
-        triageRecords.filter { $0.mediaDisposition == .confirmedJunk }
-    }
-
-    /// Records tagged `.confirmedJunk` but already archived — outside
-    /// triage scope but still tagged junk. Surfaced in the status bar
-    /// so the discrepancy is visible, not silent. NOT included in the
-    /// Delete Junk button's target.
-    private var archivedConfirmedJunkCount: Int {
-        model.records.filter {
-            $0.mediaDisposition == .confirmedJunk
-                && $0.purgedAt == nil
-                && $0.lifecycleStage == .archived
-        }.count
-    }
-
     // Offline-aware filter. When on, the triage table hides any record
     // whose volume isn't currently mounted — useful when the user wants
     // to focus on what they can actually act on right now. Default off
@@ -167,41 +173,41 @@ struct TriageView: View {
     // relaunches.
     @AppStorage("triageShowOnlineOnly") private var showOnlineOnly: Bool = false
 
-    private var triageRecords: [VideoRecord] {
-        // Global-inert filter: purged records are out of scope for triage —
-        // a removed-from-catalog file shouldn't show up as something to
-        // review. Restoring puts it back in scope automatically.
-        pfActiveRecords(model.records).filter { $0.lifecycleStage != .archived }
+    init(model: VideoScanModel) {
+        self.model = model
+        // Property-wrapper backing init (`_snapshot` ≈ the wrapper struct
+        // itself, not the wrapped value).
+        self._snapshot = ObservedObject(wrappedValue: model.triageSnapshot)
     }
 
-    private var filteredRecords: [VideoRecord] {
-        // One pass through the shared TriageFilter.matches(_:) predicate;
-        // .all keeps its no-copy short-circuit from the old switch.
-        let filtered: [VideoRecord] = selectedFilter == .all
-            ? triageRecords
-            : triageRecords.filter { selectedFilter.matches($0) }
-        // The steward pane's "Review these below" narrows to its records.
-        let base: [VideoRecord] = stewardReviewIDs.isEmpty
-            ? filtered
-            : filtered.filter { stewardReviewIDs.contains($0.id) }
+    /// What the person is asking to see, as the snapshot's build key.
+    private var currentQuery: TriageQuery {
+        TriageQuery(filter: selectedFilter, search: searchText, onlineOnly: showOnlineOnly,
+                    reviewIDs: stewardReviewIDs, sortOrder: sortOrder)
+    }
 
-        // Apply the "Online volumes only" toggle BEFORE the search filter
-        // so the search runs over the smaller set. The reachability check
-        // is backed by VolumeReachability's 5s per-volume cache, so even
-        // with thousands of records this is at most one stat() per volume
-        // every five seconds.
-        let afterOnline = showOnlineOnly
-            ? base.filter { VolumeReachability.isReachable(path: $0.fullPath) }
-            : base
+    /// Hand the current filter / search / sort to the snapshot now (the
+    /// build is off-main; the rows on screen stay until it lands).
+    private func pushQuery() {
+        searchDebounce?.cancel()
+        searchDebounce = nil
+        model.setTriageQuery(currentQuery)
+    }
 
-        if searchText.isEmpty { return afterOnline }
-        let q = searchText.lowercased()
-        return afterOnline.filter {
-            $0.filename.lowercased().contains(q) ||
-            $0.directory.lowercased().contains(q) ||
-            $0.notes.lowercased().contains(q) ||
-            $0.volumeName.lowercased().contains(q)
+    private func pushQueryAfterTyping() {
+        searchDebounce?.cancel()
+        guard !searchText.isEmpty else { pushQuery(); return }
+        searchDebounce = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            guard !Task.isCancelled else { return }
+            model.setTriageQuery(currentQuery)
         }
+    }
+
+    /// An edit made here (a disposition, a promote, an import): show it
+    /// without waiting out the catalog-change debounce.
+    private func catalogEdited() {
+        model.refreshTriageSnapshotNow()
     }
 
     var body: some View {
@@ -218,7 +224,17 @@ struct TriageView: View {
         }
         .onAppear {
             restoreFocus()
+            model.triageViewAppeared(query: currentQuery)
         }
+        .onDisappear {
+            searchDebounce?.cancel()
+            model.triageViewDisappeared()
+        }
+        .onChange(of: selectedFilter) { _, _ in pushQuery() }
+        .onChange(of: showOnlineOnly) { _, _ in pushQuery() }
+        .onChange(of: stewardReviewIDs) { _, _ in pushQuery() }
+        .onChange(of: sortOrder) { _, _ in pushQuery() }
+        .onChange(of: searchText) { _, _ in pushQueryAfterTyping() }
     }
 
     private func restoreFocus() {
@@ -294,7 +310,7 @@ struct TriageView: View {
     }
 
     private func filterRow(_ filter: TriageFilter) -> some View {
-        let count = countFor(filter)
+        let count = snapshot.value.count(filter)
         return Button {
             selectedFilter = filter
             selectedIDs = []
@@ -323,20 +339,9 @@ struct TriageView: View {
         .buttonStyle(.plain)
     }
 
-    private func countFor(_ filter: TriageFilter) -> Int {
-        // Same mechanism as the sibling filters: computed per render via
-        // the shared matches(_:) predicate (one plain property read per
-        // record — no I/O, no stat()). If sidebar counts ever need the
-        // cached/off-main treatment, that's the VolumeStatusCache
-        // pattern, applied to ALL rows at once, not just one case.
-        filter == .all
-            ? triageRecords.count
-            : triageRecords.filter { filter.matches($0) }.count
-    }
-
     private var triageProgress: some View {
-        let total = triageRecords.count
-        let reviewed = triageRecords.filter { $0.mediaDisposition != .unreviewed }.count
+        let total = snapshot.value.triageTotal
+        let reviewed = snapshot.value.reviewed
         let pct = total > 0 ? Double(reviewed) / Double(total) : 0
 
         return VStack(alignment: .leading, spacing: 4) {
@@ -374,8 +379,13 @@ struct TriageView: View {
 
             Divider()
 
-            let rows = filteredRecords.sorted(using: sortOrder)
-            if rows.isEmpty {
+            // Built off-main (TriageSnapshotBuilder): filtered, searched,
+            // sorted. Blank — not "Nothing to triage" — until the first
+            // build lands.
+            let rows = snapshot.value.rows
+            if !snapshot.value.isReady {
+                Color.clear.frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if rows.isEmpty {
                 emptyState
             } else {
                 fileTable(rows: rows)
@@ -448,9 +458,18 @@ struct TriageView: View {
     /// Rick 2026-06-15.
     private var statusBar: some View {
         HStack(spacing: 8) {
-            Text("\(filteredRecords.count) \(selectedFilter.rawValue.lowercased())")
+            Text("\(snapshot.value.rows.count) \(selectedFilter.rawValue.lowercased())")
                 .font(.system(size: 11))
                 .foregroundColor(.secondary)
+
+            // The rows on screen are for the previous filter / search /
+            // sort until the new build lands (milliseconds; they stay put).
+            if snapshot.value.query != currentQuery {
+                Text("\u{00B7}").foregroundColor(.secondary)
+                Text("updating…")
+                    .font(.system(size: 11))
+                    .foregroundColor(.secondary)
+            }
 
             if !selectedIDs.isEmpty {
                 Text("\u{00B7}").foregroundColor(.secondary)
@@ -459,9 +478,9 @@ struct TriageView: View {
                     .foregroundColor(.secondary)
             }
 
-            if selectedFilter == .confirmedJunk && archivedConfirmedJunkCount > 0 {
+            if selectedFilter == .confirmedJunk && snapshot.value.archivedConfirmedJunk > 0 {
                 Text("\u{00B7}").foregroundColor(.secondary)
-                Text("\(archivedConfirmedJunkCount) archived (hidden)")
+                Text("\(snapshot.value.archivedConfirmedJunk) archived (hidden)")
                     .font(.system(size: 11))
                     .foregroundColor(.orange)
                     .help("Records tagged Confirmed Junk but already promoted to Archive. They are intentionally out of scope for the triage view and are NOT included in the Delete Junk button's count.")
@@ -494,13 +513,17 @@ struct TriageView: View {
             // Delete Junk — only visible when there's confirmed junk to act on.
             // Sheet pattern mirrors the catalog toolbar so the model code can
             // be reused (confirmedJunk + DeleteConfirmedJunkConfirmSheet).
-            if !confirmedJunk.isEmpty {
+            // Scoped to the same Triage set the table renders, so the count
+            // matches what the user sees (archived junk is in the status
+            // bar instead — Rick 2026-06-15). The records themselves are
+            // gathered at click time.
+            if snapshot.value.count(.confirmedJunk) > 0 {
                 Button {
                     // Never offer Master Archive files (tree or volume, 2026-09-22).
-                    junkConfirmRecords = model.recordsBulkVerbsMayRemove(confirmedJunk)
+                    junkConfirmRecords = model.recordsBulkVerbsMayRemove(model.triageConfirmedJunkRecords())
                     junkSheet = .confirm
                 } label: {
-                    Label("Delete Junk (\(confirmedJunk.count))",
+                    Label("Delete Junk (\(snapshot.value.count(.confirmedJunk)))",
                           systemImage: "trash.fill")
                 }
                 .buttonStyle(.bordered)
@@ -534,12 +557,12 @@ struct TriageView: View {
             .help("Import a media file from disk into the catalog as workspace-active")
 
             Menu {
-                Button("Analyze All (\(triageRecords.count))") {
-                    runAnalysis(records: triageRecords)
+                Button("Analyze All (\(snapshot.value.triageTotal))") {
+                    runAnalysis(records: model.triageScopeRecords())
                 }
                 if !selectedIDs.isEmpty {
                     Button("Analyze Selected (\(selectedIDs.count))") {
-                        let selected = triageRecords.filter { selectedIDs.contains($0.id) }
+                        let selected = model.triageScopeRecords().filter { selectedIDs.contains($0.id) }
                         runAnalysis(records: selected)
                     }
                 }
@@ -548,7 +571,7 @@ struct TriageView: View {
             }
             .menuStyle(.borderedButton)
             .controlSize(.large)
-            .disabled(triageRecords.isEmpty || isAnalyzing)
+            .disabled(snapshot.value.triageTotal == 0 || isAnalyzing)
             .help("Score and classify files using heuristics")
 
             // "Online volumes only" — sibling to the search field. Lives
@@ -622,6 +645,7 @@ struct TriageView: View {
                 let recs = selectedRecords
                 model.promoteWorkbenchToArchive(recs)
                 selectedIDs = []
+                catalogEdited()
             } label: {
                 Label("Promote", systemImage: "archivebox.fill")
             }
@@ -633,6 +657,7 @@ struct TriageView: View {
                 let recs = selectedRecords
                 model.dropWorkbenchToCatalog(recs)
                 selectedIDs = []
+                catalogEdited()
             } label: {
                 Label("Drop to Catalog", systemImage: "tray.and.arrow.down.fill")
             }
@@ -651,13 +676,15 @@ struct TriageView: View {
         }
     }
 
+    /// Event handlers only: the selection through the model's id index.
     private var selectedRecords: [VideoRecord] {
-        selectedIDs.compactMap { id in model.records.first { $0.id == id } }
+        model.triageRecords(withIDs: selectedIDs)
     }
 
     private func discardUnderConstruction(_ recs: [VideoRecord]) {
         let n = model.discardWorkbench(recs)
         selectedIDs = []
+        catalogEdited()
         if n > 0 {
             model.log("Under Construction: discarded \(n) file\(n == 1 ? "" : "s") to Trash")
         }
@@ -665,7 +692,11 @@ struct TriageView: View {
 
     // MARK: - Table
 
-    private func fileTable(rows: [VideoRecord]) -> some View {
+    /// `rows` are the snapshot's value rows (TriageRow), already in order.
+    /// Cells read the row; anything that WRITES goes to the live record by
+    /// id. The per-row reachability check is one cache read for each
+    /// VISIBLE row (the Table builds cells lazily), as before.
+    private func fileTable(rows: [TriageRow]) -> some View {
         Table(rows, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("") { rec in
                 // Under-construction rows wear the hammer instead of the
@@ -700,7 +731,7 @@ struct TriageView: View {
             .width(min: 150, ideal: 250)
 
             TableColumn("Type", value: \.streamTypeRaw) { rec in
-                Text(rec.streamType.rawValue)
+                Text(rec.streamTypeLabel)
                     .font(.system(size: 12))
                     .foregroundColor(.secondary)
             }
@@ -728,9 +759,11 @@ struct TriageView: View {
             .width(min: 80, ideal: 110)
 
             TableColumn("Rating") { rec in
+                // The live record (one index lookup), so a tap reads back
+                // at once; the row's copy catches up with the next build.
                 StarRatingView(rating: Binding(
-                    get: { rec.starRating },
-                    set: { rec.starRating = $0 }
+                    get: { model.record(forID: rec.id)?.starRating ?? rec.starRating },
+                    set: { model.record(forID: rec.id)?.starRating = $0 }
                 ), onCommit: { model.saveCatalogDebounced() })
             }
             .width(min: 60, ideal: 70)
@@ -767,8 +800,7 @@ struct TriageView: View {
             triageContextMenu(for: ids)
         } primaryAction: { ids in
             // Double-click / Return on row(s) → open in QuickTime.
-            let recs = ids.compactMap { id in rows.first { $0.id == id } }
-            MediaOpener.openInQuickTime(recs)
+            MediaOpener.openInQuickTime(model.triageRecords(withIDs: ids))
         }
     }
 
@@ -809,24 +841,27 @@ struct TriageView: View {
 
         // Under Construction verbs (ex-Workbench, merged 2026-08-19) —
         // only when the selection contains produced-file rows.
-        let ucRecs = ids.compactMap { id in model.records.first { $0.id == id } }
-            .filter { $0.lifecycleStage == .workbench }
-        if !ucRecs.isEmpty {
-            Section("Under Construction (\(ucRecs.count))") {
+        // Which of them are under construction is read off the snapshot's
+        // rows; the records are resolved when a button is pressed.
+        let ucIDs = ids.filter { snapshot.value.row($0)?.lifecycleStage == .workbench }
+        if !ucIDs.isEmpty {
+            Section("Under Construction (\(ucIDs.count))") {
                 Button {
-                    model.promoteWorkbenchToArchive(ucRecs)
+                    model.promoteWorkbenchToArchive(underConstructionRecords(ucIDs))
                     selectedIDs = []
+                    catalogEdited()
                 } label: {
                     Label("Promote to Archive", systemImage: "archivebox.fill")
                 }
                 Button {
-                    model.dropWorkbenchToCatalog(ucRecs)
+                    model.dropWorkbenchToCatalog(underConstructionRecords(ucIDs))
                     selectedIDs = []
+                    catalogEdited()
                 } label: {
                     Label("Drop to Catalog", systemImage: "tray.and.arrow.down.fill")
                 }
                 Button(role: .destructive) {
-                    discardUnderConstruction(ucRecs)
+                    discardUnderConstruction(underConstructionRecords(ucIDs))
                 } label: {
                     Label("Discard (move to Trash)", systemImage: "trash")
                 }
@@ -841,12 +876,12 @@ struct TriageView: View {
         // / Reveal in Finder above — these are per-file operations).
         // Disabled when the file is offline OR a transcode is already
         // running for it.
-        let singleRec: VideoRecord? = (count == 1)
-            ? ids.first.flatMap { id in model.records.first { $0.id == id } }
+        let singleRec: TriageRow? = (count == 1)
+            ? ids.first.flatMap { snapshot.value.row($0) }
             : nil
         let transcodeRunning: Bool = {
-            guard let r = singleRec else { return false }
-            return fileOpsCenter.jobs.contains { job in
+            guard let r = singleRec, let center = fileOpsCenterReference else { return false }
+            return center.jobs.contains { job in
                 guard job.state.isActive, let t = job as? TranscodeJob else { return false }
                 return t.record.id == r.id
             }
@@ -857,7 +892,7 @@ struct TriageView: View {
 
         Menu {
             Button("For Editing…") {
-                if let r = singleRec {
+                if let r = singleRec.flatMap({ model.record(forID: $0.id) }) {
                     configureTranscode(for: r, preset: .editingLT)
                 }
             }
@@ -868,7 +903,7 @@ struct TriageView: View {
             // access copy and a verified FFV1 v3 preservation master.
             Menu("For Archival…") {
                 Button("Access Copy (HEVC 10-bit)") {
-                    if let r = singleRec {
+                    if let r = singleRec.flatMap({ model.record(forID: $0.id) }) {
                         configureTranscode(for: r, preset: .archival)
                     }
                 }
@@ -876,7 +911,7 @@ struct TriageView: View {
                 .accessibilityIdentifier("catalog.row.transcodeArchival")
 
                 Button("Preservation Master (FFV1 v3, verified)") {
-                    if let r = singleRec {
+                    if let r = singleRec.flatMap({ model.record(forID: $0.id) }) {
                         configureTranscode(for: r, preset: .preservation)
                     }
                 }
@@ -900,7 +935,7 @@ struct TriageView: View {
         .disabled(count != 1)
 
         Button {
-            if let rec = ids.first.flatMap({ id in model.records.first { $0.id == id } }) {
+            if let rec = ids.first.flatMap({ model.record(forID: $0) }) {
                 NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
             }
         } label: {
@@ -936,15 +971,22 @@ struct TriageView: View {
         applyDisposition(disposition, to: selectedIDs)
     }
 
+    /// The under-construction records among `ids`, at click time.
+    private func underConstructionRecords(_ ids: Set<UUID>) -> [VideoRecord] {
+        model.triageRecords(withIDs: ids).filter { $0.lifecycleStage == .workbench }
+    }
+
+    /// O(selection): each id goes through the model's id index (this was
+    /// a linear scan of the catalog per selected id).
     private func applyDisposition(_ disposition: MediaDisposition, to ids: Set<UUID>) {
-        for id in ids {
-            guard let rec = model.records.first(where: { $0.id == id }) else { continue }
+        for rec in model.triageRecords(withIDs: ids) {
             rec.mediaDisposition = disposition
             if rec.lifecycleStage == .cataloged && disposition != .unreviewed {
                 rec.lifecycleStage = .reviewing
             }
         }
         model.saveCatalogDebounced()
+        catalogEdited()
     }
 
     private func showInCatalog(_ id: UUID) {
@@ -955,12 +997,12 @@ struct TriageView: View {
     }
 
     private func promoteSelectedToArchive() {
-        for id in selectedIDs {
-            guard let rec = model.records.first(where: { $0.id == id }) else { continue }
+        for rec in model.triageRecords(withIDs: selectedIDs) {
             rec.lifecycleStage = .archived
         }
         selectedIDs = []
         model.saveCatalogDebounced()
+        catalogEdited()
     }
 
     // MARK: - Import to Workspace (Pass B)
@@ -1032,6 +1074,7 @@ struct TriageView: View {
         // added, they'll see it there too — workspaceActive is true.
         selectedIDs = [rec.id]
         model.focusedMediaIDs = model.focusSet(for: rec.id)
+        catalogEdited()
     }
 
     // MARK: - Steward review (trial UI, 2026-10-03)
@@ -1089,6 +1132,8 @@ struct TriageView: View {
         analysisSummary = summary
         showAnalysisSummary = true
         isAnalyzing = false
+        // Scores and dispositions just changed in place.
+        catalogEdited()
     }
 
     private func analysisBanner(_ summary: MediaAnalyzer.AnalysisSummary) -> some View {

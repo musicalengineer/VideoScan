@@ -85,15 +85,6 @@ extension VideoScanModel {
         }
     }
 
-    /// What the event labeller is told, exactly as the Angel tells it: the
-    /// policy's birthday window and the People tab's birthdays — the
-    /// Angel's own reading of them (AngelFamilyBirthdays, read off the main
-    /// actor when the Angel starts and before each of its sweeps). The
-    /// labels themselves are always on here (StewardEvents.context).
-    func stewardEventContext() -> ArchiveAngelEventContext {
-        StewardEvents.context(coverage: archiveAngel.policy.coverage, birthdays: archiveAngel.familyBirthdays)
-    }
-
     /// Project on the main actor, build off it, publish once. A newer call
     /// cancels the in-flight one. Does nothing until the pane has asked.
     func scheduleStewardRefresh() {
@@ -102,7 +93,12 @@ extension VideoScanModel {
         let inputs = StewardCaseBuilder.project(records, protection: stewardProtectionRule())
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let alsoCleanUp = duplicateKeeperSettings.alsoCleanUpWorkingCopies
-        let events = stewardEventContext()
+        // What the event labeller is told, exactly as the Angel tells it:
+        // the policy's birthday window and the People tab's birthdays (the
+        // Angel's own reading of them, off the main actor when it starts
+        // and before each of its sweeps), captured by value. The labels
+        // themselves are always on for a reader.
+        let events = archiveAngel.occasionReader
         let now = Date()
         // What was skipped, so the per-kind limit is spent on the rest.
         let skipped = StewardSkipStore(defaults: stewardDefaults).snapshot()
@@ -120,7 +116,19 @@ extension VideoScanModel {
 
     /// The pane is on screen: start keeping the queue current.
     func stewardPaneAppeared() {
+        stewardPaneCount += 1
         stewardWanted = true
         scheduleStewardRefresh()
+    }
+
+    /// The pane left the screen (QA F9): stop rebuilding the queue on every
+    /// catalog change. The last queue stays published — it is ≤ 100 cases.
+    /// Counted, because the next pane's appear can arrive before this.
+    func stewardPaneDisappeared() {
+        stewardPaneCount = max(0, stewardPaneCount - 1)
+        guard stewardPaneCount == 0 else { return }
+        stewardWanted = false
+        stewardTask?.cancel()
+        stewardTask = nil
     }
 }

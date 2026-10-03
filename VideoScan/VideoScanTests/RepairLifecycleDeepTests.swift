@@ -455,7 +455,7 @@ struct SupersededVisibilityAuditTests {
     private static let auditedCallSites: [(file: String, minCount: Int)] = [
         ("Correlator.swift", 1),
         ("DuplicateDetector.swift", 1),
-        ("TriageView.swift", 1),
+        ("TriageSnapshot.swift", 1),   // 2026-10-03: the Triage tab's pfActiveRecords call moved here (off-main snapshot; TriageSnapshotBuilder.triageScope)
         ("ArchiveView+Categories.swift", 1),   // 2026-08-17: the Archive tab's pfActiveRecords call moved here (memoized snapshot)
         ("VolumeCompare.swift", 2),     // per-record backups + runCompare
         ("VideoScanModel+Duplicates.swift", 1),

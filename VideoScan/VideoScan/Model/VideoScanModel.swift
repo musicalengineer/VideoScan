@@ -246,6 +246,9 @@ final class VideoScanModel: ObservableObject {
         // writeback) reach the Archive Angel Assessment through here too —
         // the sweep debounces, so a burst is one re-score (2026-09-10).
         archiveAngel.catalogChanged()
+        // The Triage tab's snapshot (2026-10-03) — its own coalescing; a
+        // no-op unless the tab is on screen.
+        noteTriageCatalogChanged()
         guard !dossierCountsRefreshScheduled else { return }
         dossierCountsRefreshScheduled = true
         Task { @MainActor [weak self] in
@@ -298,8 +301,38 @@ final class VideoScanModel: ObservableObject {
     let stewardSnapshot = StewardSnapshot()
     var stewardTask: Task<Void, Never>?
     var stewardWanted = false
+    /// Steward panes on screen right now — `stewardWanted` follows it, so
+    /// the queue stops rebuilding when the Triage tab is left (QA F9).
+    var stewardPaneCount = 0
     /// Where the pane's Skip memory lives (tests hand in their own suite).
     var stewardDefaults: UserDefaults = .standard
+
+    /// Everything the Triage tab draws (2026-10-03): sidebar counts, the
+    /// status bar's numbers and the table's rows for the current filter /
+    /// search / sort — built off-main from one projection pass, only while
+    /// a Triage tab is on screen. The tab observes THIS, not the model.
+    /// Logic in Catalog/VideoScanModel+TriageSnapshot.swift; storage lives
+    /// here because extensions cannot add stored properties.
+    let triageSnapshot = TriageSnapshot()
+    var triageTask: Task<Void, Never>?
+    /// Triage tabs on screen right now (0 = nothing is built or kept).
+    var triageViewers = 0
+    var triageQuery = TriageQuery()
+    /// The last main-actor projection, reused when only the query changes;
+    /// nil = the catalog moved since. Dropped when the tab leaves the screen.
+    var triageProjection: TriageProjection?
+    /// A build that finishes after a NEWER one was started must not publish.
+    var triageGeneration: UInt64 = 0
+    var triageRefreshScheduled = false
+    var triageCatalogDirty = false
+    /// Test hook: how many times the O(records) projection actually ran.
+    var triageProjectionCount = 0
+    /// How long the last projection took — stretches the debounce on a
+    /// large catalog (see `triageDebounceNanos`).
+    var triageLastProjectionNanos: UInt64 = 0
+    /// "Is this path's drive connected?" — a seam so tests don't depend on
+    /// what is plugged in.
+    var triageReachability: @Sendable (String) -> Bool = { VolumeReachability.isReachable(path: $0) }
 
     /// Immediate recompute — the ONLY place the O(records) count runs.
     /// Piggybacked (2026-07-05): the pair flag and the deletable-dups
@@ -1398,6 +1431,9 @@ final class VideoScanModel: ObservableObject {
 
     func noteCatalogMutated() {
         catalogMutationRevision &+= 1
+        // Saved in-place edits reach the Triage tab's snapshot through
+        // here (debounced; a no-op unless the tab is on screen).
+        noteTriageCatalogChanged()
     }
 
     // MARK: - Soft-delete state (logic in VideoScanModel+SoftDelete.swift)

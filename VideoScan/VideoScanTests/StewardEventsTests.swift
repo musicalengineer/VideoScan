@@ -6,8 +6,9 @@
 //   * An event = the labeller's own (occasion, person, year): a holiday
 //     from a trusted day, a People-tab birthday, a word in a file or folder
 //     name with the year. The labels and the trusted day are the Angel's
-//     (ArchiveAngelEvent.derive over VideoScanCore.EventLabeler) — a parity
-//     test holds the steward to the Angel's answer.
+//     (ArchiveAngelEvent.derive over VideoScanCore.EventLabeler), asked
+//     through the Angel's front door (ArchiveAngel.OccasionReader) — a
+//     parity test holds the steward to the Angel's answer.
 //   * A clip with several labels is in each event; a footage sibling with
 //     no conflicting date is pulled in "by matching footage".
 //   * Days nobody has named: ≥ 4 clips on one trusted day (or up to three
@@ -60,14 +61,36 @@ private let family = [
     FamilyBirthday(name: "Jo", born: EventDay(year: 1955, month: 3, day: 20)),
 ]
 
-private func context(_ birthdays: [FamilyBirthday] = family) -> ArchiveAngelEventContext {
-    StewardEvents.context(coverage: .standard, birthdays: birthdays)
+/// The steward's side: the Angel's front door, built-in rules.
+private func reader(_ birthdays: [FamilyBirthday] = family) -> ArchiveAngel.OccasionReader {
+    ArchiveAngel.OccasionReader(birthdays: birthdays)
+}
+
+/// The Angel's side of the parity test: its own context, labels on. (The
+/// test target may name the Angel's inside; Steward/ may not —
+/// ArchiveAngelBoundarySensorTests.)
+private func angelContext(_ birthdays: [FamilyBirthday] = family) -> ArchiveAngelEventContext {
+    var rules = AngelCoverageRules.standard
+    rules.eventLabels = true
+    return ArchiveAngelEventContext(coverage: rules, birthdays: birthdays)
+}
+
+/// The day SPELLED in the Angel's event key ("e:christmas:1994|d:1994-12-25"
+/// → 25 Dec 1994; nil when the key carries no day). The steward read its
+/// day this way until 2026-10-03; it is kept here as the independent side
+/// of the parity test for the reader's typed day.
+private func dayInAngelKey(_ key: String) -> EventDay? {
+    guard !key.isEmpty, let part = key.split(separator: ArchiveAngelEvent.keySeparator).last,
+          part.hasPrefix("d:") else { return nil }
+    let numbers = part.dropFirst(2).split(separator: "-").compactMap { Int($0) }
+    guard numbers.count == 3 else { return nil }
+    return EventDay(year: numbers[0], month: numbers[1], day: numbers[2])
 }
 
 private func build(_ inputs: [StewardInput], birthdays: [FamilyBirthday] = family,
                    skipped: [String: StewardFacts] = [:]) -> StewardQueue {
     StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted, alsoCleanUpWorkingCopies: false,
-                             events: context(birthdays), skipped: skipped, calendar: utc, now: fixedNow)
+                             events: reader(birthdays), skipped: skipped, calendar: utc, now: fixedNow)
 }
 
 /// A clip whose date a person typed ("1994-12-25", "1994", or none).
@@ -180,23 +203,46 @@ struct StewardEventsLogicTests {
         for (r, labelled) in fixtures {
             // The Angel's side: its own projection of the record.
             let candidate = ArchiveAngelCandidate(recommendationFactsOf: r)
-            let angels = ArchiveAngelEvent.labels(candidate, now: fixedNow, context: context())
-            let key = ArchiveAngelEvent.resolve(candidate, now: fixedNow, context: context()).key
+            let angels = ArchiveAngelEvent.labels(candidate, now: fixedNow, context: angelContext())
+            let key = ArchiveAngelEvent.resolve(candidate, now: fixedNow, context: angelContext()).key
             // The steward's side: its own projection of the same record.
             let input = StewardInput(record: r, protection: .none, calendar: utc)
-            let mine = StewardEvents.place(input, now: fixedNow, context: context(), folders: &folders)
+            let mine = StewardEvents.place(input, now: fixedNow, reader: reader(), folders: &folders)
             #expect(mine.labels == angels, "\(r.filename): the labels differ from the Angel's")
             #expect(angels.contains { $0.key != nil } == labelled, "\(r.filename): fixture labelled = \(labelled)")
-            #expect(mine.day == StewardEvents.trustedDay(inKey: key), "\(r.filename): the day is the one in the Angel's key")
+            #expect(mine.day == dayInAngelKey(key), "\(r.filename): the day is the one in the Angel's key")
             #expect((mine.day != nil) == key.contains("d:"), "\(r.filename): a day exactly when the Angel's key has one")
         }
     }
 
+    /// The reader's day is TYPED (QA F4 — nobody outside the Angel parses
+    /// its key), and it is the day the key spells.
     @Test func theDayComesOutOfTheAngelsKey() {
-        #expect(StewardEvents.trustedDay(inKey: "e:christmas:1994|d:1994-12-25") == EventDay(year: 1994, month: 12, day: 25))
-        #expect(StewardEvents.trustedDay(inKey: "d:1994-11-24") == EventDay(year: 1994, month: 11, day: 24))
-        #expect(StewardEvents.trustedDay(inKey: "e:christmas:1994") == nil, "a name word with a year has no day")
-        #expect(StewardEvents.trustedDay(inKey: "") == nil)
+        #expect(dayInAngelKey("e:christmas:1994|d:1994-12-25") == EventDay(year: 1994, month: 12, day: 25))
+        #expect(dayInAngelKey("d:1994-11-24") == EventDay(year: 1994, month: 11, day: 24))
+        #expect(dayInAngelKey("e:christmas:1994") == nil, "a name word with a year has no day")
+        #expect(dayInAngelKey("") == nil)
+        var folders = EventLabeler.FolderWordCache()
+        func read(_ r: StewardInput, with door: ArchiveAngel.OccasionReader = reader()) -> ArchiveAngel.Occasions {
+            door.occasions(for: StewardEvents.facts(r), now: fixedNow, folders: &folders)
+        }
+        let christmas = read(clip("/Volumes/LaCie/t/a.mov", on: "1994-12-25"))
+        #expect(christmas.day == EventDay(year: 1994, month: 12, day: 25))
+        #expect(christmas.year == 1994 && christmas.isPersonDated)
+        #expect(christmas.labels.map(\.key) == ["e:christmas:1994"])
+        let plainDay = read(clip("/Volumes/LaCie/t/b.mov", on: "1994-11-02"))
+        #expect(plainDay.day == EventDay(year: 1994, month: 11, day: 2) && plainDay.labels.isEmpty)
+        let yearOnly = read(clip("/Volumes/LaCie/xmas/c.mov", on: "1994"))
+        #expect(yearOnly.day == nil && yearOnly.year == 1994, "a name word with a year has no day")
+        #expect(yearOnly.labels.map(\.key) == ["e:christmas:1994"])
+        #expect(read(clip("/Volumes/LaCie/t/d.mov")) == ArchiveAngel.Occasions(), "nothing dates it, nothing names it")
+        let half = read(clip("/Volumes/LaCie/t/jpegvideocomplement_1.mov", on: "1994-12-25"))
+        #expect(half == ArchiveAngel.Occasions(isLivePhotoMotion: true), "a Live Photo half carries nothing else")
+        // A policy with the Angel's event labels OFF still names the
+        // occasion for a reader (labels are forced on in a copy).
+        let off = read(clip("/Volumes/LaCie/t/a.mov", on: "1994-12-25"),
+                       with: ArchiveAngel.OccasionReader(coverage: .off, birthdays: []))
+        #expect(off.labels.map(\.key) == ["e:christmas:1994"])
     }
 
     /// QA F7 of the first trial, kept: no reset-clock 1 January, no
@@ -213,9 +259,9 @@ struct StewardEventsLogicTests {
         #expect(events(q).isEmpty && days(q).isEmpty)
         #expect(q.placedClips == 0 && q.placeableClips == 5)
         var folders = EventLabeler.FolderWordCache()
-        let reset = StewardEvents.place(resetClock, now: fixedNow, context: context(), folders: &folders)
+        let reset = StewardEvents.place(resetClock, now: fixedNow, reader: reader(), folders: &folders)
         #expect(reset.day == nil && reset.labels.isEmpty, "1 January that nobody typed is a reset clock, not New Year's Day")
-        let stamp = StewardEvents.place(copyStamp, now: fixedNow, context: context(), folders: &folders)
+        let stamp = StewardEvents.place(copyStamp, now: fixedNow, reader: reader(), folders: &folders)
         #expect(stamp.day == nil && stamp.year == nil, "a stamp with no camera behind it dates the copy")
         #expect(stamp.labels.map(\.key) == [nil], "the folder word explains, and keys nothing")
         // …but 1 January a PERSON typed is New Year's Day.
@@ -229,7 +275,7 @@ struct StewardEventsLogicTests {
     @Test func aResetClocksYearNamesNoEventEither() throws {
         let reset = StewardInput(fullPath: "/Volumes/LaCie/xmas/reset.mov", embeddedDate: day(2000, 1, 1), originModel: "Camcorder")
         var folders = EventLabeler.FolderWordCache()
-        let placed = StewardEvents.place(reset, now: fixedNow, context: context(), folders: &folders)
+        let placed = StewardEvents.place(reset, now: fixedNow, reader: reader(), folders: &folders)
         #expect(placed.day == nil)
         #expect(placed.year == nil, "the reset clock's year is kept: \(String(describing: placed.year))")
         #expect(placed.labels.map(\.key) == [nil], "the folder word explains, and keys nothing")
@@ -640,7 +686,7 @@ struct StewardEventsScaleTests {
         }
         let start = ContinuousClock.now
         let q = StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted, alsoCleanUpWorkingCopies: false,
-                                         events: StewardEvents.context(coverage: .standard, birthdays: birthdays),
+                                         events: ArchiveAngel.OccasionReader(birthdays: birthdays),
                                          calendar: utc, now: fixedNow)
         let elapsed = ContinuousClock.now - start
         #expect(q.count(of: .event) == StewardEvents.maxEventCases)
@@ -678,7 +724,7 @@ struct StewardEventsScaleTests {
         }
         let start = ContinuousClock.now
         let q = StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted, alsoCleanUpWorkingCopies: false,
-                                         events: StewardEvents.context(coverage: .standard, birthdays: []),
+                                         events: ArchiveAngel.OccasionReader(),
                                          calendar: utc, now: fixedNow)
         let elapsed = ContinuousClock.now - start
         let event = try #require(events(q).first)

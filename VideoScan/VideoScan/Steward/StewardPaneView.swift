@@ -109,6 +109,7 @@ struct StewardPaneView: View {
             model.stewardPaneAppeared()
             repartition()
         }
+        .onDisappear { model.stewardPaneDisappeared() }
         .onChange(of: snapshot.queue) { _, _ in repartition() }
         .onChange(of: filterRaw) { _, _ in viewChanged() }
         .onChange(of: eventsByYear) { _, _ in viewChanged() }

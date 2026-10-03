@@ -110,9 +110,9 @@ struct ContentView: View {
                 case 1:
                     CatalogView()
                 case 2:
-                    TriageView()
+                    TriageView(model: model)
                 case 3:
-                    TriageView()   // legacy Workbench selection
+                    TriageView(model: model)   // legacy Workbench selection
                 case 4:
                     ArchiveView()
                 case 5:
