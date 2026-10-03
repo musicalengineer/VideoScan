@@ -9,9 +9,15 @@
 // — every list it draws is already capped (StewardCaseBuilder
 // .maxCopiesPerCase) and it shows the first `visibleRows` of that.
 //
+// AN EVENT CARD (2026-10-03) says what belongs together: its name, how the
+// clips were placed in it (the labeller's reasons, counted, and per clip
+// when opened), and what is inside from knowledge the catalog already has.
+// It offers no way to let anything go — only ways to look.
+//
 // (For Rick: `@ViewBuilder` ≈ a function whose body is a list of views,
 // with `if`/`switch` allowed; `ViewThatFits` picks the first layout that
-// fits the width.)
+// fits the width; `@State` ≈ a member variable SwiftUI keeps for this card
+// while it is on screen.)
 
 import SwiftUI
 
@@ -22,6 +28,7 @@ struct StewardCardActions {
     var openFootageGroup: () -> Void = {}
     var showOnePerFootage: () -> Void = {}
     var reviewBelow: () -> Void = {}
+    var reviewCopies: () -> Void = {}
     var skip: () -> Void = {}
     var bringBack: () -> Void = {}
 }
@@ -41,6 +48,9 @@ struct StewardCardView: View {
 
     /// Evidence rows drawn before "and N more".
     static let visibleRows = 8
+
+    /// Event card: the per-clip reasons are opened.
+    @State private var showReasons = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -91,11 +101,53 @@ struct StewardCardView: View {
     @ViewBuilder
     private var evidenceSection: some View {
         switch item.kind {
+        case .event, .unlabelledDay: occasionEvidence
         case .reclaimDrive: driveEvidence
         case .reclaimGroup: groupEvidence
         case .sameFootage: footageEvidence
         case .junk: junkEvidence
         }
+    }
+
+    /// An event or a day to name: how the clips were placed, what is
+    /// inside, and — opened — why each clip is here.
+    @ViewBuilder
+    private var occasionEvidence: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !item.whyLine.isEmpty {
+                line(item.kind == .event ? "How these were placed: \(item.whyLine)" : item.whyLine + ".")
+                    .accessibilityIdentifier("steward.event.why")
+            }
+            if !item.insideLines.isEmpty {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Inside")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                    ForEach(item.insideLines, id: \.self) { text in
+                        line(text)
+                    }
+                }
+                .accessibilityIdentifier("steward.event.inside")
+            }
+            if !item.alsoInLine.isEmpty {
+                line(item.alsoInLine, faint: true)
+                    .accessibilityIdentifier("steward.event.alsoIn")
+            }
+            DisclosureGroup(isExpanded: $showReasons) {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(item.copies.prefix(Self.visibleRows)) { copy in
+                        copyRow(copy)
+                    }
+                    moreRowsNote
+                }
+                .padding(.top, 4)
+            } label: {
+                Text("Why each clip is here")
+                    .font(.system(size: 14, weight: .medium))
+            }
+            .accessibilityIdentifier("steward.event.reasons")
+        }
+        .accessibilityIdentifier("steward.card.evidence")
     }
 
     @ViewBuilder
@@ -223,6 +275,14 @@ struct StewardCardView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(.leading, 13)
             }
+            // Event rows: the labeller's reason, and the clip's other events.
+            if !copy.reason.isEmpty {
+                Text(copy.reason + (copy.alsoIn.isEmpty ? "" : " · also in: \(copy.alsoIn)"))
+                    .font(.system(size: 13))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.leading, 13)
+            }
         }
     }
 
@@ -253,6 +313,10 @@ struct StewardCardView: View {
     /// The lines under the buttons: why one is off, and what is not there yet.
     private var notes: [String] {
         switch item.kind {
+        case .event:
+            return [StewardActionGate.eventNamingGap]
+        case .unlabelledDay:
+            return [StewardActionGate.dayNamingGap]
         case .reclaimDrive:
             return deleteGate.isEnabled ? [] : [deleteGate.reason]
         case .reclaimGroup:
@@ -267,6 +331,24 @@ struct StewardCardView: View {
     @ViewBuilder
     private var actionButtons: some View {
         switch item.kind {
+        case .event, .unlabelledDay:
+            // Ways to LOOK only — an event card never lets anything go.
+            showInCatalogButton
+            if item.footageGroupID != nil {
+                button("Open the footage group", "square.stack.3d.up", ColorActionButton.Palette.info,
+                       id: "steward.event.openFootageGroup", enabled: true,
+                       help: "Every clip in the group, its part in it, and your say on whether they are the same footage",
+                       action: actions.openFootageGroup)
+            }
+            if item.kind == .event || !item.copyReviewIDs.isEmpty {
+                button(item.kind == .event ? "Review the copies in this event" : "Review the copies among these",
+                       "doc.on.doc", ColorActionButton.Palette.play,
+                       id: "steward.event.reviewCopies", enabled: !item.copyReviewIDs.isEmpty,
+                       help: item.copyReviewIDs.isEmpty
+                           ? "None of these clips are copies of each other, as far as the last duplicate check found"
+                           : "Goes to the Catalog with just the clips here that are copies of each other. Nothing is selected or changed.",
+                       action: actions.reviewCopies)
+            }
         case .reclaimDrive, .reclaimGroup:
             showInCatalogButton
             button("Delete duplicates on \(item.driveLabel.isEmpty ? "this drive" : item.driveLabel)…", "trash",
@@ -341,6 +423,8 @@ struct StewardKindChip: View {
 
     var color: Color {
         switch kind {
+        case .event: return .purple
+        case .unlabelledDay: return .teal
         case .reclaimDrive, .reclaimGroup: return .orange
         case .sameFootage: return .blue
         case .junk: return .secondary
