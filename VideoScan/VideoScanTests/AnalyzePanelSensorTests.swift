@@ -88,9 +88,20 @@ struct AnalyzePanelSensorTests {
         #expect(src.contains("ReclaimableEstimate.survivalRule"), "the rule is quoted from the tier decision")
         #expect(src.contains("accessibilityIdentifier(\"storage.reclaimable.delete\")"))
         #expect(src.contains("accessibilityIdentifier(\"storage.reclaimable.update\")"))
-        #expect(src.contains("startDeleteDuplicates(onVolume: confirmVolume, model: model)"),
-                "the Storage button runs TODAY's DeleteDuplicatesJob, unchanged")
-        #expect(src.contains("preselectedPath: deletableHere?.path"), "this drive is preselected in the picker")
+        // 2026-10-03: the picker → forecast → job front door moved, text
+        // for text, into the shared DeleteDuplicatesFlow modifier (the
+        // Triage tab's steward pane opens the same door). The card asks it
+        // to open with this drive preselected; the flow starts the job.
+        #expect(src.contains(".deleteDuplicatesFlow(picker: $picker, preselectedPath: deletableHere?.path, source: \"Storage tab\")"),
+                "the Storage button opens the shared Delete front door, this drive preselected")
+        let flow = code(try source("DeleteDuplicatesFlow.swift"))
+        for walk in recordsWalks {
+            #expect(!flow.contains(walk), "DeleteDuplicatesFlow walks records: `\(walk)`")
+        }
+        #expect(flow.contains("startDeleteDuplicates(onVolume: confirmVolume, model: model)"),
+                "the front door runs TODAY's DeleteDuplicatesJob, unchanged")
+        #expect(flow.contains("preselectedPath: preselectedPath"), "the host's drive is preselected in the picker")
+        #expect(!flow.contains("DeleteDuplicatesJob("), "the front door never builds a job itself")
     }
 
     @Test func detailPaneComputesTheEstimateOffMain() throws {

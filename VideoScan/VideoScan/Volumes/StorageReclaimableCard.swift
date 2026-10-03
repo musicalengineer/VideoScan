@@ -16,7 +16,8 @@
 // the volume picker (this drive preselected) → the forecast confirmation
 // → DeleteDuplicatesJob, unchanged (sibling proof at delete time,
 // checkpoints, Trash first). Nothing about safety moves; only the button
-// did. "Also clean up working copies" moved here from the old Duplicates
+// did. The flow itself is the shared `deleteDuplicatesFlow` modifier
+// (MediaOps/DeleteDuplicatesFlow.swift). "Also clean up working copies" moved here from the old Duplicates
 // menu (same persisted setting as the Volumes sheet).
 //
 // "Update" re-checks duplicates for this drive's records through the
@@ -37,21 +38,15 @@ import SwiftUI
 struct StorageReclaimableCard: View {
     @EnvironmentObject var model: VideoScanModel
     @Environment(\.mediaFileOperationsCenterReference) private var fileOpsCenterReference
-    @Environment(\.openWindow) private var openWindow
 
     let volumePath: String
     let isReachable: Bool
     let estimate: ReclaimableEstimate?
 
-    // Delete flow state (mirrors CatalogView's; see the file header).
+    // The Delete front door (picker → forecast → job) lives in
+    // DeleteDuplicatesFlow.swift since 2026-10-03, shared with the Triage
+    // tab's steward pane; this card only asks it to open.
     @State private var picker: DeleteDuplicatesVolumePickerRequest?
-    @State private var picked: CatalogDuplicatesMenu.Volume?
-    @State private var showConfirm = false
-    @State private var confirmVolume = ""
-    @State private var confirmCount = 0
-    @State private var confirmForecast = ""
-    @State private var confirmSummary = ""
-    @State private var confirmCrossMode = false
 
     /// The count the Delete flow itself would offer for this drive — the
     /// model's cached menu payload (O(volumes), computed off the debounced
@@ -102,42 +97,7 @@ struct StorageReclaimableCard: View {
                 .font(.headline)
         }
         .accessibilityIdentifier("storage.reclaimable")
-        .sheet(item: $picker, onDismiss: {
-            // Runs after the sheet is fully dismissed, so the alert never
-            // races the sheet (the chained-sheet antipattern).
-            guard let vol = picked else { return }
-            picked = nil
-            prepareConfirmation(path: vol.path, count: vol.count)
-        }) { _ in
-            DeleteDuplicatesVolumePicker(
-                volumes: model.deletableDupVolumes.map { CatalogDuplicatesMenu.Volume(path: $0.path, count: $0.count) },
-                onPick: { vol in
-                    appLog.write("Delete Duplicates: picked \(vol.path) (\(vol.count) candidate(s)) in the volume picker (Storage tab)")
-                    picked = vol
-                    picker = nil
-                },
-                onCancel: {
-                    picked = nil
-                    picker = nil
-                },
-                preselectedPath: deletableHere?.path)
-        }
-        .alert("Delete Duplicates", isPresented: $showConfirm) {
-            Button(DeleteDuplicatesForecast.confirmationButtonTitle, role: .destructive) {
-                // A Media File Operation since 2026-09-20 — the job is
-                // unchanged; only the button moved.
-                guard let center = fileOpsCenterReference else {
-                    model.log("Delete Duplicates: not started — Media File Operations is not available in this window.")
-                    return
-                }
-                _ = center.startedByUser { $0.startDeleteDuplicates(onVolume: confirmVolume, model: model) }
-                MediaFileOperationsWindowOpener.openInFront(openWindow)
-            }
-            .disabled(model.isReadOnly || model.isDeletingDuplicates)
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text(confirmMessage)
-        }
+        .deleteDuplicatesFlow(picker: $picker, preselectedPath: deletableHere?.path, source: "Storage tab")
     }
 
     // MARK: Lines
@@ -200,38 +160,6 @@ struct StorageReclaimableCard: View {
     }
 
     private func startDeleteFlow() {
-        picked = nil
         picker = DeleteDuplicatesVolumePickerRequest()
-    }
-
-    /// One O(records) pass at CLICK time (not in a body) so the alert can
-    /// state the mode, the split and the forecast honestly — the same
-    /// text CatalogView built.
-    private func prepareConfirmation(path: String, count: Int) {
-        confirmVolume = path
-        confirmCount = count
-        let volumeName = URL(fileURLWithPath: path).lastPathComponent
-        let selection = model.duplicateDeletionSelection(onVolume: path)
-        confirmSummary = selection.confirmationText(volumeName: volumeName)
-        confirmCrossMode = selection.crossVolumeMode
-        let forecast = model.deleteDuplicatesForecast(onVolume: path)
-        confirmForecast = forecast.confirmationText(volume: volumeName)
-        appLog.write(forecast.logLine(volume: volumeName) + " (Start confirmation, Storage tab)")
-        showConfirm = true
-    }
-
-    private var confirmMessage: String {
-        let volume = URL(fileURLWithPath: confirmVolume).lastPathComponent
-        var text = confirmForecast.isEmpty
-            ? "Check \(confirmCount) high-confidence duplicate(s) on \(volume).\n\n"
-            : confirmForecast + "\n\n"
-        if confirmCrossMode {
-            text += "\(confirmSummary)\n\n"
-            text += WorkingCopyCleanupText.confirmationOn + "\n\n"
-        } else {
-            text += WorkingCopyCleanupText.confirmationOff(volume: volume) + "\n\n"
-        }
-        text += "Are you sure? Do you have backups and/or are these really junk or duplicates?"
-        return text
     }
 }
