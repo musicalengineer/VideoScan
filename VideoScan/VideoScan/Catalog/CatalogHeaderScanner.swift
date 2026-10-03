@@ -74,6 +74,14 @@ enum CatalogHeaderScanner {
     /// mutex-guarded counter.)
     static let wholeFilePasses = OSAllocatedUnfairLock(initialState: 0)
 
+    /// Whole-file passes run against ONE path in this process. The test
+    /// sensor for the cost bound: immune to other suites probing other
+    /// files in parallel, which the process-wide counter is not.
+    static let wholeFilePassesByPath = OSAllocatedUnfairLock(initialState: [String: Int]())
+    static func wholeFilePasses(for url: URL) -> Int {
+        wholeFilePassesByPath.withLock { $0[url.path] ?? 0 }
+    }
+
     struct Found: Equatable {
         var version: Int?
         var generation: Int?
@@ -369,6 +377,7 @@ enum CatalogHeaderScanner {
         // first window; simpler than carrying state across the seek).
         // This is the pass that can say "confirmed absent".
         wholeFilePasses.withLock { $0 += 1 }
+        wholeFilePassesByPath.withLock { $0[url.path, default: 0] += 1 }
         guard (try? handle.seek(toOffset: 0)) != nil else { return found }   // verdict stays .unknown
         var whole = Forward()
         while !whole.isDone, let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
