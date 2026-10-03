@@ -365,9 +365,8 @@ struct CatalogView: View {
     /// 0 when the search is empty.
     @State private var searchHitCount: Int = 0
     @State private var showDeleteDuplicatesConfirm = false
-    /// Analysis-ledger (2026-07-05): Correlate All is incremental; the
-    /// from-scratch redo is destructive to manual pairs, so it confirms.
-    @State private var showClearRecorrelateConfirm = false
+    // (The "Clear & Re-correlate All" confirmation moved to the Analyze
+    // panel's Correlate row, 2026-10-02 — AnalyzePanelView.)
     @State private var deleteTargetVolume: String = ""
     @State private var deleteTargetCount: Int = 0
     /// The forecast block (2026-09-21: Rick should see "0 deletable" in
@@ -642,33 +641,24 @@ struct CatalogView: View {
             cacheCount: model.cacheCount,
             dashboard: model.dashboard,
             onStopCombine: { model.stopCombine() },
-            onCorrelateAll: {
-                model.log("\nCorrelating all audio-only and video-only files...")
-                Task { await model.correlate() }
+            // Analyze menu rows (Phase A trial, 2026-10-02): every "Update
+            // now" goes through the ONE runner, which writes the START line
+            // and calls the engine's existing entry point. The center is
+            // the non-observing reference (nil → the runner refuses out loud).
+            onUpdateNow: { cycler in
+                AnalyzeRunner(model: model, orchestrator: captionOrchestrator, center: fileOpsCenterReference)
+                    .runNow(cycler, source: "catalog menu")
+            },
+            onOpenAnalyzePanel: {
+                AnalyzeWindowOpener.open(using: openWindow, source: "analyze-menu")
             },
             onCorrelateSelected: {
                 model.log("\nCorrelating \(selectedIDs.count) selected files...")
                 Task { await model.correlate(selectedIDs: selectedIDs) }
             },
-            onCorrelateAcrossVolumes: {
-                model.log("\n━━ Finding Avid A/V pairs across all volumes ━━")
-                Task { await model.correlateAcrossVolumes() }
-            },
-            onClearAndRecorrelateAll: {
-                showClearRecorrelateConfirm = true
-            },
-            onAnalyzeDuplicatesAll: {
-                model.log("\nAnalyzing duplicate candidates across all scanned media...")
-                Task { await model.analyzeDuplicates() }
-            },
             onAnalyzeDuplicatesSelected: {
                 model.log("\nAnalyzing duplicate candidates in \(selectedIDs.count) selected files...")
                 Task { await model.analyzeDuplicates(selectedIDs: selectedIDs) }
-            },
-            onFindSimilarFootage: {
-                startFileOperation("Find Similar Footage") { center in
-                    center.startFindSimilarFootage(scope: .catalog, model: model)
-                }
             },
             onFindSimilarFootageOfSelected: {
                 let ids = selectedIDs
@@ -676,11 +666,6 @@ struct CatalogView: View {
                 startFileOperation("Find Similar Footage") { center in
                     center.startFindSimilarFootage(scope: .records(ids), model: model)
                 }
-            },
-            volumesWithDeletableDups: model.deletableDupVolumes,
-            onChooseVolumeToDeleteDuplicates: {
-                pickedDeleteDuplicatesVolume = nil
-                deleteDuplicatesVolumePicker = DeleteDuplicatesVolumePickerRequest()
             },
             onClearResults: { model.clearResults() },
             onClearCache: { _ = model.clearCache() },
@@ -1085,18 +1070,11 @@ struct CatalogView: View {
         }
     }
 
-    /// Re-correlate, purge/caption sheets and the catalog-wide confirmations.
+    /// Purge/caption sheets and the catalog-wide confirmations. ("Clear &
+    /// Re-correlate All…" — the only from-scratch redo — lives in the
+    /// Analyze panel's Correlate row since 2026-10-02, confirmation included.)
     private func withMaintenanceAlerts<V: View>(_ view: V) -> some View {
         view
-        .alert("Clear & Re-correlate All", isPresented: $showClearRecorrelateConfirm) {
-            Button("Clear All Pairs & Re-correlate", role: .destructive) {
-                model.log("\nClearing ALL pairs and re-correlating from scratch...")
-                Task { await model.clearAndRecorrelateAll() }
-            }
-            Button("Cancel", role: .cancel) { }
-        } message: {
-            Text("This wipes EVERY A/V pairing — including pairs you made by hand — and re-derives them all from file evidence.\n\nNormal \"Correlate All\" already handles new files and never touches existing pairs. Only use this if the pairings themselves are wrong.")
-        }
         // Catalog maintenance: the unified "Purge Non-Video Media…" dialog
         // (replaces the former cover-art + unrelated-audio sheets). Opened
         // from the Catalog menu (VideoScanApp) with all volumes selected; it

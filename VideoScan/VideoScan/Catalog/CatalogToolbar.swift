@@ -47,19 +47,17 @@ struct CatalogToolbar<Dashboard: View>: View {
     let cacheCount: Int
     let dashboard: DashboardState
     let onStopCombine: () -> Void
-    let onCorrelateAll: () -> Void
+    // Analyze menu (Phase A trial, 2026-10-02 — CatalogAnalyzeMenu.swift):
+    // ONE knowledge menu replaced the Correlate and Duplicates menus. A
+    // cycler row's "Update now" goes through `onUpdateNow`; the selection
+    // verbs keep their existing entry points. "Delete Duplicates on
+    // Volume…" moved to the Storage tab (StorageReclaimableCard).
+    let onUpdateNow: (AnalyzeCycler) -> Void
+    let onOpenAnalyzePanel: () -> Void
     let onCorrelateSelected: () -> Void
-    let onCorrelateAcrossVolumes: () -> Void
-    let onClearAndRecorrelateAll: () -> Void
-    let onAnalyzeDuplicatesAll: () -> Void
     let onAnalyzeDuplicatesSelected: () -> Void
-    /// Find Similar Footage (2026-09-23) — whole catalog / the selection.
-    let onFindSimilarFootage: () -> Void
+    /// Find Similar Footage (2026-09-23) — the selection.
     let onFindSimilarFootageOfSelected: () -> Void
-    let volumesWithDeletableDups: [(path: String, count: Int)]
-    /// Opens the Delete Duplicates volume picker (a sheet, not a submenu —
-    /// see CatalogDuplicatesMenu.swift).
-    let onChooseVolumeToDeleteDuplicates: () -> Void
     let onClearResults: () -> Void
     let onClearCache: () -> Void
     let onScanAvidBins: () -> Void
@@ -276,6 +274,17 @@ struct CatalogToolbar<Dashboard: View>: View {
         return hasCorrelatedPairs
     }
 
+    /// Which cyclers' engine flags are set right now — a handful of Bools
+    /// off the model, no records work. Drives the "running…" rows.
+    private var runningCyclers: Set<AnalyzeCycler> {
+        var s: Set<AnalyzeCycler> = []
+        if isAnalyzingDuplicates { s.insert(.duplicates) }
+        if isCorrelating { s.insert(.correlate) }
+        if model.isComputingSignatures { s.insert(.fileSignatures) }
+        if model.isRefreshingEmbeddedDates { s.insert(.embeddedDates) }
+        return s
+    }
+
     var body: some View {
         HStack(spacing: 10) {
             Menu {
@@ -295,57 +304,44 @@ struct CatalogToolbar<Dashboard: View>: View {
             Divider().frame(height: 22)
 
             VStack(spacing: 2) {
-                Menu {
-                    Button("Correlate A/V", action: onCorrelateAll)
-                    Button("Correlate A/V for Selected", action: onCorrelateSelected)
-                        .disabled(selectedIDs.isEmpty)
-                    Divider()
-                    Button("Find A/V Pairs Across Volumes", action: onCorrelateAcrossVolumes)
-                        .accessibilityIdentifier("catalog.correlate.findPairsAcrossVolumes")
-                    Divider()
-                    // Analysis-ledger (2026-07-05): Correlate All is
-                    // incremental — existing pairs are never touched. This
-                    // is the ONLY from-scratch redo, and it confirms first.
-                    Button("Clear && Re-correlate All…", role: .destructive,
-                           action: onClearAndRecorrelateAll)
-                        .accessibilityIdentifier("catalog.correlate.clearAndRecorrelate")
-                    Divider()
-                    Toggle("Show Pairs Only", isOn: $showPairsOnly)
-                        .disabled(!hasCorrelatedPairs)
-                    Divider()
-                    // BATCH combine. Moved off the toolbar row 2026-08-11
-                    // (Rick: the centre was too busy) but deliberately NOT
-                    // deleted: the row's right-click only offers "Combine
-                    // This Pair…", so removing this would have left no way
-                    // to mux thousands of MXF pairs in one pass — the app's
-                    // whole A/V-stitching mission. The Correlate menu is
-                    // arguably its right home anyway: combining is the step
-                    // AFTER correlating.
-                    Button("Combine All Correlated Pairs…") { showCombineSheet = true }
-                        .disabled(!canCombine && !isCombining)
-                        .accessibilityIdentifier("catalog.combine.openSheet")
-                } label: {
-                    if isCorrelating {
-                        HStack(spacing: 4) {
-                            ProgressView().controlSize(.small)
-                            Text("Correlating…")
-                        }
-                    } else {
-                        Label("Correlate A/V Pairs", systemImage: "arrow.triangle.2.circlepath")
-                    }
-                }
-                .menuStyle(.borderlessButton)
-                .disabled(isScanning || isCorrelating || !hasRecords)
-                .accessibilityIdentifier("catalog.correlate.menu")
-                .help("Match video-only files with their corresponding audio-only files (e.g. Avid MXF pairs)")
+                // Phase A trial (2026-10-02): the Correlate and Duplicates
+                // menus became ONE "Analyze" menu — a fact (coverage) and a
+                // verb (update now) per cycler, the selection verbs, the
+                // view filters, Combine All, and the panel. Never disabled
+                // as a whole: a running cycler reads "running…" on its row.
+                // Delete moved to the Storage tab; the from-scratch
+                // re-correlate moved into the panel's Correlate row.
+                CatalogAnalyzeMenu(
+                    coverage: model.analyzeCoverageSnapshot,
+                    running: runningCyclers,
+                    isReadOnly: model.isReadOnly,
+                    selectionCount: selectedIDs.count,
+                    hasCorrelatedPairs: hasCorrelatedPairs,
+                    canCombine: canCombine,
+                    isCombining: isCombining,
+                    showPairsOnly: $showPairsOnly,
+                    viewFilters: $viewFilters,
+                    onUpdateNow: onUpdateNow,
+                    onAnalyzeSelectedDuplicates: onAnalyzeDuplicatesSelected,
+                    onAnalyzeSelectedFootage: onFindSimilarFootageOfSelected,
+                    onAnalyzeSelectedCorrelate: onCorrelateSelected,
+                    onOpenCombineSheet: { showCombineSheet = true },
+                    onOpenPanel: onOpenAnalyzePanel)
 
-                if !correlateStatus.isEmpty {
+                // The engines' own progress words while one runs; the
+                // unpaired A/V count otherwise.
+                if isCorrelating && !correlateStatus.isEmpty {
                     Text(correlateStatus)
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(isCorrelating ? .secondary : .green)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                } else if isAnalyzingDuplicates && !duplicateStatus.isEmpty {
+                    Text(duplicateStatus)
+                        .font(.system(size: 11, weight: .medium, design: .monospaced))
+                        .foregroundColor(.secondary)
                         .lineLimit(1)
                 } else if videoOnlyCount > 0 || audioOnlyCount > 0 {
-                    Text("\(videoOnlyCount)V + \(audioOnlyCount)A candidates")
+                    Text("\(videoOnlyCount)V + \(audioOnlyCount)A unpaired")
                         .font(.system(size: 11, weight: .medium, design: .monospaced))
                         .foregroundColor(.secondary)
                         .lineLimit(1)
@@ -353,41 +349,6 @@ struct CatalogToolbar<Dashboard: View>: View {
             }
             .frame(minWidth: 120)
 
-            VStack(spacing: 2) {
-                // Rick 2026-09-22: the "Delete Duplicates on Volume"
-                // submenu flashed shut on every window update and could
-                // not be used. The volume is now chosen in a sheet the
-                // menu item opens — see CatalogDuplicatesMenu.swift.
-                CatalogDuplicatesMenu(
-                    isReadOnly: model.isReadOnly,
-                    isAnalyzing: isAnalyzingDuplicates,
-                    isDeleting: model.isDeletingDuplicates,
-                    isDisabled: isScanning || isAnalyzingDuplicates
-                        || model.isDeletingDuplicates || !hasRecords,
-                    hasSelection: !selectedIDs.isEmpty,
-                    volumes: volumesWithDeletableDups.map {
-                        CatalogDuplicatesMenu.Volume(path: $0.path, count: $0.count)
-                    },
-                    alsoCleanUpWorkingCopies: model.duplicateKeeperSettings.alsoCleanUpWorkingCopies,
-                    reanalyzeHint: model.duplicateReanalyzeHint,
-                    onFindDuplicates: onAnalyzeDuplicatesAll,
-                    onFindDuplicatesOfSelected: onAnalyzeDuplicatesSelected,
-                    onChooseVolumeToDelete: onChooseVolumeToDeleteDuplicates,
-                    onSetAlsoCleanUpWorkingCopies: { [model] on in
-                        model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = on
-                        model.noteDuplicateKeeperSettingsChanged()
-                    },
-                    onFindSimilarFootage: onFindSimilarFootage,
-                    onFindSimilarFootageOfSelected: onFindSimilarFootageOfSelected)
-
-                if !duplicateStatus.isEmpty {
-                    Text(duplicateStatus)
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundColor(isAnalyzingDuplicates ? .secondary : .yellow)
-                        .lineLimit(1)
-                }
-            }
-            .frame(minWidth: 120)
 
             if isCombining {
                 Button(action: onStopCombine) {
