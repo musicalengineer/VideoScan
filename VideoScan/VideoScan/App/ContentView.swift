@@ -485,6 +485,10 @@ struct CatalogView: View {
     /// made at the gesture (codex #1417). nil = no alert. See
     /// `presentDeleteVolumeCatalog(for:)` in CatalogView+ScanTargetsPane.
     @State var deleteVolumeCatalogPrompt: DeleteVolumeCatalogPrompt?
+    /// The multi-select "Forget Records for N Volumes…" confirmation — one
+    /// plan per selected volume, made at the gesture. nil = no alert. See
+    /// `presentDeleteVolumesCatalog(for:)` in CatalogView+ScanTargetsPane.
+    @State var deleteVolumesCatalogPrompt: DeleteVolumesCatalogPrompt?
     /// Selected volume IDs in the scan volumes table.
     @State var selectedVolumeIDs: Set<UUID> = []
     /// Per-volume aggregate cache (file count, error count, byte sum,
@@ -1119,13 +1123,15 @@ struct CatalogView: View {
         } message: { msg in
             Text(msg)
         }
-        .alert("Delete Catalog", isPresented: $showDeleteAllCatalogConfirm) {
-            Button("Delete All", role: .destructive) {
+        // Remove from Catalog — entire catalog (wording: Rick 2026-10-03).
+        // Catalog records only; the message says files are never touched.
+        .alert(RemoveFromCatalogWording.alertTitle, isPresented: $showDeleteAllCatalogConfirm) {
+            Button(RemoveFromCatalogWording.forgetButtonTitle(count: model.records.count), role: .destructive) {
                 model.deleteAllCatalog()
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This will delete all \(model.records.count) catalog records across every volume. The probe cache is unaffected.\n\nAre you sure?")
+            Text(RemoveFromCatalogWording.forgetAllMessage(count: model.records.count))
         }
         // Delete Volume Catalog (codex #1417): the message shows the count
         // of the plan made at the gesture, and Delete applies THAT plan.
@@ -1133,15 +1139,33 @@ struct CatalogView: View {
         // and hands back a fresh plan, which re-presents this alert with
         // the new count — never a silent extra removal.
         .alert(
-            "Delete Volume Catalog",
+            RemoveFromCatalogWording.alertTitle,
             isPresented: Binding(
                 get: { deleteVolumeCatalogPrompt != nil },
                 set: { if !$0 { deleteVolumeCatalogPrompt = nil } }
             ),
             presenting: deleteVolumeCatalogPrompt
         ) { prompt in
-            Button("Delete", role: .destructive) {
+            Button(prompt.confirmButtonTitle, role: .destructive) {
                 confirmDeleteVolumeCatalog(prompt)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { prompt in
+            Text(prompt.message)
+        }
+        // Several volumes at once (volume-table multi-select, Rick
+        // 2026-10-03): same contract — the plans made at the gesture are
+        // what the message counts and what the button applies.
+        .alert(
+            RemoveFromCatalogWording.alertTitle,
+            isPresented: Binding(
+                get: { deleteVolumesCatalogPrompt != nil },
+                set: { if !$0 { deleteVolumesCatalogPrompt = nil } }
+            ),
+            presenting: deleteVolumesCatalogPrompt
+        ) { prompt in
+            Button(prompt.confirmButtonTitle, role: .destructive) {
+                confirmDeleteVolumesCatalog(prompt)
             }
             Button("Cancel", role: .cancel) { }
         } message: { prompt in

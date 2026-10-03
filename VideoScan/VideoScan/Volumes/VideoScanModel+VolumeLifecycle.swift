@@ -191,9 +191,11 @@ extension VideoScanModel {
     }
 
     /// Delete all catalog records for a specific scan target's volume —
-    /// the UNCONFIRMED entry (multi-select context menu, retired-volume
-    /// cleanup prompt). Plans against the live catalog and removes on the
-    /// spot; there is no dialog whose count could have gone stale.
+    /// the entry with no plan to carry (retired-volume cleanup prompt).
+    /// Plans against the live catalog and removes on the spot; there is no
+    /// dialog whose count could have gone stale. The volume table's
+    /// multi-select item no longer comes here (2026-10-03): it confirms
+    /// through `DeleteVolumesCatalogPrompt` and the plan-taking overload.
     func deleteCatalogForTarget(_ target: CatalogScanTarget) {
         let path = target.searchPath
         let volName = VolumeReachability.volumeName(forPath: path)
