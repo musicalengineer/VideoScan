@@ -47,8 +47,9 @@
 //                       guessing is not allowed.
 // A leading UTF-8 BOM is skipped, as Foundation's decoder skips it.
 //
-// COST (codex cycle #30 R4). The pass is O(file) — about 1.2 s for a
-// 63 MB catalog in a Debug build on an M4 Max — so its verdict is CACHED
+// COST (codex cycle #30 R4). The pass is O(file) — 0.3 s for a 63 MB /
+// 200k-record catalog in a Debug build on an M4 Max (the windowed scanner
+// it replaced took 1.2 s on the same file) — so its verdict is CACHED
 // per path, keyed by the file's identity and timestamps (`FileKey`), and
 // every write this process verifies SEEDS the cache with the verdict of
 // the bytes it just proved on disk. Steady state: one open + fstat(2) per
