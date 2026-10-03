@@ -139,3 +139,22 @@ Output contract (required):
 - A line: Verdict: <merge | fix | block> — <one-line reason>
 
 Wanted: findings ranked by data-loss risk; "holds" per invariant; "read, no findings" per clean file. Privacy: public repo — no real family names, addresses or dates in any suggested fixture.
+
+## Findings closed (branch `fix/258-delete-planner-honours-angel`, 2026-10-03)
+
+Each finding is closed against a pinning test that was RED before its fix (on `4c616916`; F7c, F9 and F10 on `4c616916` plus a behaviour-neutral test seam) and red again when the fix is un-done (36 mutants, all red). Nothing declined.
+
+| # | Fix | Pinning test (suite · test) |
+|---|---|---|
+| F1 | ONE survivor rule, `duplicateSurvivorStandingRule(in:)` (VideoScanModel+Duplicates.swift): a row still to be decided, a row the run left alone for a hold or a Read-only mark, and an extra copy on the cleaned drive that is not a row of the run are never counted; the job, the forecast and the steward's proof all ask it | DeleteDuplicatesCodex258SurvivorTests · `holdingACopyNeverMakesAnotherCopysFateMorePermissive` (identical inputs, hold on vs off, 4 fixtures × 3 holds), `aCopyTheRunLeavesAloneIsNotASurvivorForAnotherCopy`, `withASiblingOnASecondDriveTheHeldCopyNeverEarnsTheOutrightDelete` (K,A,H,R), `theSurvivorRuleMemberByMember`, `theStewardsProofEqualsTheRunForTheHeldCopyAndTwoDriveFixtures` |
+| F2 | the mark resolves its path (realpath) and mount when made and keeps the real volume's UUID; protected by the spelled path, the real path, and the drive wherever it mounts (ReadOnlyVolumeProtection.swift) | ReadOnlyVolumeCodex258Tests · `aMarkMadeThroughAnAliasProtectsTheDriveItself`, `aMarkOnACustomMountPointKeepsTheDrivesIdentity` |
+| F3 | an import may add a mark, never alter or clear one (ScanTargetPersistence.applyVolumeSnapshot) | ReadOnlyVolumeCodex258Tests · `anImportNeverChangesAnExistingMarksDriveIdentity` |
+| F4 | removal-time check: UUID + the file's place on its own volume, for folder marks too | ReadOnlyVolumeCodex258Tests · `aMarkedFolderIsFoundByIdentityAtRemovalBeforeTheRebuildLands` |
+| F5 | the marks are read again for every file of a Junk Delete / Move to Trash batch | ReadOnlyVolumeCodex258Tests · `markingADriveReadOnlyMidRunProtectsTheFilesNotYetRemoved` |
+| F6 | the final verdict asks the holds (the buffer on disk, then the model's live word: hold rule + Read-only marks) immediately before the removal | DeleteDuplicatesCodex258HoldBoundaryTests · `aHoldAcquiredDuringPhaseTwosReReadStopsTheRemoval`, `aReadOnlyMarkMadeDuringPhaseTwosReReadStopsTheRemoval` |
+| F7 | hand-over at a Prepare's end; the buffer read from disk at every copy's turn; numbered readings (an older one never overwrites a newer) | DeleteDuplicatesCodex258HoldBoundaryTests · `aFinishedPrepareKeepsItsRecordsHeldUntilTheBufferHasBeenReRead`, `aBatchSavedAfterPlanningIsSeenAtTheCopysTurn`, `anOlderReadingOfTheBufferNeverOverwritesANewerOne`, `onlyAReadingBegunAfterThePrepareEndedCompletesTheHandOver` |
+| F8 | one key per mounted volume (DeleteDuplicatesDrives.swift) | DeleteDuplicatesCodex258DrivesTests · `oneVolumeKeyedTwoWaysIsOneDrive` |
+| F9 | a disk image or an unidentified volume never adds a drive (DiskArbitration, behind `DuplicateDrives.identityOverride`) | DeleteDuplicatesCodex258DrivesTests · `aDiskImageOrAnUnidentifiedVolumeNeverAddsADrive`, `whatTheSystemSaysAboutTheDeviceDecidesTheKind` |
+| F10 | the forecast asks the run's resolver (one stat per folder) | DeleteDuplicatesCodex258DrivesTests · `theForecastCountsDrivesAsTheRunDoes` |
+| F11 | `worthReading` reads a sibling on a second drive once three are counted on one; prove, forecast, steward and the job's drive reservation follow | DeleteDuplicatesCodex258DrivesTests · `aSiblingOnASecondDriveIsWorthReadingEvenWithThreeCounted`, `theRunReadsTheSecondDriveSiblingAndTheForecastSaysItWill` |
+
