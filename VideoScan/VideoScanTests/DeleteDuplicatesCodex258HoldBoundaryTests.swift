@@ -231,7 +231,9 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         #expect(saved.value, "fixture: the batch was saved during the first pair")
         // Seen AT ITS TURN — before a byte of it was read or it was moved
         // aside — not only by the removal boundary's own look at the disk.
-        #expect(!opened.value.contains(late.fullPath), "the batch's source was read (and quarantined) before the batch was seen")
+        // (The quarantine move keeps the file's name: no path of that name was opened.)
+        #expect(!opened.value.contains { ($0 as NSString).lastPathComponent == late.filename },
+                "the batch's source was moved aside and read before the batch was seen")
         let plan = try #require(job.plan)
         #expect(plan.entries.map(\.id) == rig.copies.map(\.id), "fixture: both copies were planned (the buffer was empty then)")
         let row = plan.entries[1]
