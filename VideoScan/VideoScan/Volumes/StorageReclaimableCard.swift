@@ -174,7 +174,7 @@ struct StorageReclaimableCard: View {
                 .controlSize(.small)
                 .disabled(model.isAnalyzingDuplicates || model.isReadOnly || !isReachable)
                 .help(isReachable
-                      ? "Re-check this drive's files for duplicates now. (Phase A: this clears and redoes this drive's duplicate marks — the catalog-wide pass in the Analyze panel is the incremental one.)"
+                      ? "Re-check this drive's files for duplicates now — from scratch: their duplicate marks are cleared and redone. (The catalog-wide Run now in the Analyze panel only checks new files.)"
                       : "Drive not connected.")
                 .accessibilityIdentifier("storage.reclaimable.update")
         }

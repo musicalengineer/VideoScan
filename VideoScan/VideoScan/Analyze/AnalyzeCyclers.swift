@@ -115,7 +115,7 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// Help text for a disabled Pause control.
-    static let notPausableHelp = "Not pausable yet — this pass runs to the end once started. Pausing arrives in Phase C."
+    static let notPausableHelp = "Can't be paused yet — once started, this pass runs to the end. Pausing is coming later."
 
     /// Whether the engine today offers a per-volume scope the panel can
     /// hand it (the row's disclosure shows a per-volume breakdown).
@@ -166,7 +166,7 @@ enum AnalyzeSchedule: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    static let phaseAHelp = "Scheduling arrives in Phase C. For now this only changes the label; Auto shows what already runs on its own today."
+    static let phaseAHelp = "Scheduling is coming later. For now this only changes the label; Auto shows what already runs on its own today."
 
     /// Read the stored choice (or the cycler's honest default).
     static func stored(for cycler: AnalyzeCycler, in defaults: UserDefaults = .standard) -> AnalyzeSchedule {
@@ -268,8 +268,8 @@ enum AnalyzeRowStateRule {
             // No per-record stamp exists for this cycler yet: say so
             // instead of inventing a percentage.
             return cycler.autoRunsToday
-                ? .auto(detail: "coverage unknown — no stamp yet")
-                : .manual(detail: "coverage unknown — no stamp yet")
+                ? .auto(detail: Self.coverageUnknownDetail)
+                : .manual(detail: Self.coverageUnknownDetail)
         }
         if remaining == 0 {
             if offlineRemaining > 0 {
@@ -286,11 +286,14 @@ enum AnalyzeRowStateRule {
             return .auto(detail: left)
         case .auto, .overnight:
             // Stored, not honoured yet — be honest on the row.
-            return .manual(detail: "\(left) · \(schedule.title) arrives in Phase C")
+            return .manual(detail: "\(left) · \(schedule.title) is coming later; by hand for now")
         case .manual:
             return .manual(detail: left)
         }
     }
+
+    /// The row's words when nothing records this cycler's check per file.
+    static let coverageUnknownDetail = "coverage unknown — nothing records this check yet"
 
     static func relative(_ date: Date, now: Date) -> String {
         let f = RelativeDateTimeFormatter()

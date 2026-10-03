@@ -113,8 +113,10 @@ vault/
 assets/Hallie/
 assets/hallie/
 
-# Per-worktree DerivedData (agents build with -derivedDataPath <worktree>/.build-dd)
+# Per-worktree DerivedData (agents build with -derivedDataPath <worktree>/.build-dd
+# or <worktree>/.dd)
 .build-dd/
+.dd/
 
 # agent scratch (never committed)
 .trash/

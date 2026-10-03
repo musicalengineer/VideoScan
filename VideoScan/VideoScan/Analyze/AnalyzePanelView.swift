@@ -135,7 +135,7 @@ struct AnalyzePanelView: View {
             onStop: { runner.stop(cycler); sampleLive() },
             onSetSchedule: { s in
                 UserDefaults.standard.set(s.rawValue, forKey: cycler.scheduleKey)
-                model.log("Analyze: \(cycler.title) — schedule set to \(s.title) (label only until Phase C)")
+                model.log("Analyze: \(cycler.title) — schedule set to \(s.title) (label only for now)")
                 scheduleRevision &+= 1
             },
             onFindPairsAcrossVolumes: { runner.findPairsAcrossVolumes(source: "panel") },
@@ -204,12 +204,12 @@ struct AnalyzePanelView: View {
             var s = "\(counts.secondary.formatted()) files grouped"
             if let d = counts.newestStamp { s += " · last run \(AnalyzeRowStateRule.relative(d, now: now))" }
             return (s, counts.sideLine,
-                    "coverage: unknown — only group members carry a stamp; a file in no group is a complete answer with no mark")
+                    "coverage: unknown — only files in a group carry a record of the check; a file in no group is a complete answer with no mark")
         case .ocr:
             return (counts.line, counts.sideLine,
-                    "\(counts.secondary.formatted()) with text found · OCR has no stamp of its own — the dossier pass stamp stands in")
+                    "\(counts.secondary.formatted()) with text found · OCR keeps no record of its own — the analysis pass's record stands in")
         case .embeddedDates:
-            return (counts.line, counts.sideLine, "a file whose camera wrote no date can never be covered — no stamp yet")
+            return (counts.line, counts.sideLine, "a file whose camera wrote no date can never be covered — nothing records that check yet")
         case .dateInference:
             return (counts.line,
                     counts.notApplicable > 0 ? "\(counts.notApplicable.formatted()) have a date you set" : "",
@@ -305,7 +305,7 @@ struct AnalyzePanelView: View {
 
     private var footnote: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Phase A trial: these rows drive the engines as they are today. Find Similar Footage still shows a row in Media File Operations while it runs; the per-cycler schedule is remembered but not yet acted on. The old dashboard is under Window ▸ Analyze Dashboard (legacy).")
+            Text("Trial: these rows drive the engines as they are today. Find Similar Footage still shows a row in Media File Operations while it runs; the schedule choice is remembered but not yet acted on. The old dashboard is under Window ▸ Analyze Dashboard (legacy).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -571,7 +571,10 @@ struct AnalyzeCyclerRow: View, Equatable {
                         Button("Run now") { onRunNow(v.root) }
                             .controlSize(.mini)
                             .disabled(!v.isReachable || facts.isRunning)
-                            .help(v.isReachable ? "Bring this drive's files up to date for \(cycler.title)." : "Drive not connected.")
+                            .help(!v.isReachable ? "Drive not connected."
+                                  : cycler == .duplicates
+                                    ? "Re-check this drive's files for duplicates from scratch — their duplicate marks are cleared and redone. (The catalog-wide Run now only checks new files.)"
+                                    : "Bring this drive's files up to date for \(cycler.title).")
                             .accessibilityIdentifier("analyze.row.\(cycler.rawValue).volume.runNow")
                     }
                 }
