@@ -279,9 +279,13 @@ struct StewardSensorTests {
         #expect(pane.lowerBound < toolbar.lowerBound && toolbar.lowerBound < table.lowerBound, "pane, then toolbar, then the table")
         #expect(src.contains("Label(isAnalyzing ? \"Analyzing...\" : \"Analyze\", systemImage: \"wand.and.stars\")"),
                 "Triage's own Analyze menu is still there")
-        #expect(src.contains("Button(\"Analyze All (\\(triageRecords.count))\")"))
+        // 2026-10-03 (perf/triage-view-snapshot): the count and the rows come
+        // from the model's off-main TriageSnapshot, not a records walk in body.
+        #expect(src.contains("Button(\"Analyze All (\\(snapshot.value.triageTotal))\")"))
         #expect(src.contains("Table(rows, selection: $selectedIDs, sortOrder: $sortOrder)"))
-        #expect(src.contains("stewardReviewIDs.contains($0.id)"), "Review these below narrows the table")
+        #expect(src.contains("reviewIDs: stewardReviewIDs"), "Review these below is part of the table's query")
+        #expect(code(try source("TriageSnapshot.swift")).contains("rows = rows.filter { query.reviewIDs.contains($0.id) }"),
+                "Review these below narrows the table")
         // The model's refresh rides the existing debounced pass.
         let model = code(try source("VideoScanModel.swift"))
         let refresh = try #require(model.range(of: "func refreshDossierCountsNow() {"))

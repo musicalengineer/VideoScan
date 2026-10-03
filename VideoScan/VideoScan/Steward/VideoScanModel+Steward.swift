@@ -119,7 +119,19 @@ extension VideoScanModel {
 
     /// The pane is on screen: start keeping the queue current.
     func stewardPaneAppeared() {
+        stewardPaneCount += 1
         stewardWanted = true
         scheduleStewardRefresh()
+    }
+
+    /// The pane left the screen (QA F9): stop rebuilding the queue on every
+    /// catalog change. The last queue stays published — it is ≤ 100 cases.
+    /// Counted, because the next pane's appear can arrive before this.
+    func stewardPaneDisappeared() {
+        stewardPaneCount = max(0, stewardPaneCount - 1)
+        guard stewardPaneCount == 0 else { return }
+        stewardWanted = false
+        stewardTask?.cancel()
+        stewardTask = nil
     }
 }

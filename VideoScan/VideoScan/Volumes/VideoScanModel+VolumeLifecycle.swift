@@ -118,6 +118,9 @@ extension VideoScanModel {
             let r = VolumeReachability.isReachable(path: t.searchPath)
             if t.isReachable != r { t.isReachable = r }
         }
+        // The Triage tab no longer observes the model (2026-10-03): tell
+        // its snapshot a drive came or went. A no-op while it is off screen.
+        noteTriageReachabilityChanged()
     }
 
     /// Attempt to wake/access an offline volume. For network shares this may trigger
