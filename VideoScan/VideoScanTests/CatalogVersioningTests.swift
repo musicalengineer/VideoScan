@@ -990,8 +990,20 @@ struct CatalogVersionProbeDepthTests {
         let dir = scratch("probe_esc")
         defer { try? FileManager.default.removeItem(at: dir) }
         let future = CatalogSnapshot.currentVersion + 1
+        // The escaped spellings are BUILT from a character code, not typed:
+        // a typed backslash-u sequence was silently unescaped on its way
+        // into this file once (2026-10-02), which made this test vacuous
+        // and let the mutation it exists to kill survive. The guards below
+        // prove the fixture is what it claims to be.
+        let backslash = String(UnicodeScalar(92))                       // "\"
+        let escVersion = "vers" + backslash + "u0069on"                 // version
+        let escGeneration = "gener" + backslash + "u0061tion"           // generation
+        #expect(!escVersion.contains("version") && escVersion.utf8.count == 12, "fixture must really be escaped")
         // Head window.
-        let head = #"{"version":\#(future),"generation":3,"records":[{"id":"\#(fixedID1)","version":1}]}"#
+        let head = #"{"\#(escVersion)":\#(future),"\#(escGeneration)":3,"records":[{"id":"\#(fixedID1)","\#(escVersion)":1}]}"#
+        #expect(!head.contains(#""version""#), "the plain key must appear nowhere in the fixture")
+        #expect(try JSONDecoder().decode(CatalogSnapshot.self, from: Data(head.utf8)).version == future,
+                "Foundation reads the escaped key as the catalog's version — so must the probe")
         try Data(head.utf8).write(to: catalogURL(dir))
         var p = try #require(CatalogSnapshot.headerProbe(at: catalogURL(dir)))
         #expect(p.version == future && p.generation == 3, "escaped header keys in the head: \(p)")
@@ -1002,13 +1014,13 @@ struct CatalogVersionProbeDepthTests {
         s1.relinquishLock()
         // Tail window (backward pass), keys after > 4 KB of records.
         let pad = String(repeating: "p", count: 6000)
-        let tail = #"{"padA":"\#(pad)","records":[{"id":"\#(fixedID1)","version":1}],"generation":4,"version":\#(future)}"#
+        let tail = #"{"padA":"\#(pad)","records":[{"id":"\#(fixedID1)","\#(escVersion)":1}],"\#(escGeneration)":4,"\#(escVersion)":\#(future)}"#
         try Data(tail.utf8).write(to: catalogURL(dir))
         p = try #require(CatalogSnapshot.headerProbe(at: catalogURL(dir)))
         #expect(p.version == future && p.generation == 4, "escaped header keys in the tail: \(p)")
         // Decoy: the escaped spelling ONLY at depth 2; a plain current
         // version at the top — this file is ours to write.
-        let decoy = #"{"version":\#(CatalogSnapshot.currentVersion),"generation":1,"records":[{"id":"\#(fixedID1)","version":\#(future)}]}"#
+        let decoy = #"{"version":\#(CatalogSnapshot.currentVersion),"generation":1,"records":[{"id":"\#(fixedID1)","\#(escVersion)":\#(future)}]}"#
         try Data(decoy.utf8).write(to: catalogURL(dir))
         #expect(CatalogSnapshot.headerProbe(at: catalogURL(dir))?.version == CatalogSnapshot.currentVersion)
         let s2 = CatalogStore(directory: dir)
