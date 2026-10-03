@@ -352,5 +352,23 @@
     "docs/poi-holdout": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
     "docs/poi-holdout/": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
     "docs/team-channel/2026-07-23-1213-codex-poi-c4-c6-execution-handoff.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
+  },
+  "docs/reviews/briefs/catalog-versioning-167-2026-10-02-brief.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/briefs/catalog-versioning-167-r2-2026-10-02-brief.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/briefs/catalog-versioning-167-r3-2026-10-02-brief.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/codex/codex-review-catalog-versioning-167-2026-10-02.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/codex/codex-review-catalog-versioning-167-r2-2026-10-02.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/codex/codex-review-catalog-versioning-167-r3-2026-10-02.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
   }
 }
