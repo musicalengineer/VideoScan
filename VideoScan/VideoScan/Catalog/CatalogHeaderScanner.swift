@@ -1,6 +1,7 @@
 // CatalogHeaderScanner.swift
 // Finds catalog.json's TOP-LEVEL "version" and "generation" without
-// decoding the records (GH #165 / #167; codex review 2026-10-02 #2).
+// decoding the records (GH #165 / #167; codex review 2026-10-02 #2, and
+// cycle #29 F1).
 //
 // Why this exists: the old probe took the first `"version":` string match
 // in the first 4 KB (or the last one in the last 4 KB). JSON key order is
@@ -29,27 +30,66 @@
 //              `version` is still unknown. A hand-made layout can put the
 //              key anywhere; a guessed "old" here would let a v7 save
 //              replace a newer catalog. Constant memory; linear time.
-// A forward pass that reaches the top-level object's closing brace is
-// complete: a key it did not see is genuinely absent (a v0 catalog).
+//
+// THE VERDICT IS THREE-WAY (codex cycle #29 F1). The probe answers one of:
+//   .version(n)       — the top-level key was read.
+//   .confirmedAbsent  — a forward pass read the WHOLE file as one complete
+//                       top-level object (only whitespace after its closing
+//                       brace) and saw no "version" key: a genuine
+//                       pre-versioning catalog, v0.
+//   .unknown          — anything else: not a JSON object this scanner can
+//                       follow (array root, UTF-16, garbage), truncated or
+//                       unterminated, bytes after the object, a "version"
+//                       key whose value is not an integer, an unreadable
+//                       file. Unknown is NEVER "old": every write gate
+//                       refuses on it. Foundation reads some of these (a
+//                       UTF-16 file, say) as a perfectly good newer
+//                       catalog, which is exactly why guessing is not
+//                       allowed.
+// A leading UTF-8 BOM is skipped, as Foundation's decoder skips it.
+//
+// Cost bound: the whole-file pass is O(file). It cannot repeat against
+// the same unchanged file on the write paths, because every verdict that
+// would re-run it latches the store for the session (newer → latch,
+// unknown → latch) or is followed by a save that rewrites the file in
+// canonical layout (old / absent → `version` is in the head from then
+// on). `wholeFilePasses` counts the passes so a test can pin that bound.
 
 import Foundation
 import os
 
+/// What the probe could learn about the catalog's own `version` key.
+enum CatalogVersionVerdict: Equatable, Sendable {
+    case version(Int)
+    case confirmedAbsent
+    case unknown
+
+    var number: Int? { if case .version(let v) = self { return v }; return nil }
+}
+
 enum CatalogHeaderScanner {
 
     /// How many times the whole-file pass (3) has run in this process.
-    /// Diagnostic + test sensor for the cost bound: the pass is O(file)
-    /// and must not repeat on every save against the same unchanged file
-    /// (codex cycle #29 F1 perf note). (≈ a mutex-guarded counter.)
+    /// Diagnostic + test sensor for the cost bound above. (≈ a
+    /// mutex-guarded counter.)
     static let wholeFilePasses = OSAllocatedUnfairLock(initialState: 0)
 
     struct Found: Equatable {
         var version: Int?
         var generation: Int?
-        /// True when a forward pass saw the top-level object close — what
-        /// it did not find is not in the file.
+        /// A forward pass saw a depth-1 "version" key — whatever its value.
+        var versionKeySeen = false
+        /// A forward pass over the WHOLE input reached the top-level
+        /// object's closing brace and nothing but whitespace followed.
         var complete = false
-        var isSettled: Bool { complete || (version != nil && generation != nil) }
+        /// The input is not a JSON object this scanner can follow.
+        var aborted = false
+
+        var verdict: CatalogVersionVerdict {
+            if let v = version { return .version(v) }
+            if versionKeySeen || aborted || !complete { return .unknown }
+            return .confirmedAbsent
+        }
     }
 
     private static let quote = UInt8(ascii: "\"")
@@ -65,6 +105,7 @@ enum CatalogHeaderScanner {
     private static let nine = UInt8(ascii: "9")
     private static let versionKey = Array("version".utf8)
     private static let generationKey = Array("generation".utf8)
+    private static let utf8BOM: [UInt8] = [0xEF, 0xBB, 0xBF]
 
     private static func isSpace(_ b: UInt8) -> Bool { b == 0x20 || b == 0x0A || b == 0x0D || b == 0x09 }
     private static func isDigit(_ b: UInt8) -> Bool { b >= zero && b <= nine }
@@ -91,8 +132,11 @@ enum CatalogHeaderScanner {
     /// (≈ a C struct of lexer registers, updated byte by byte.)
     struct Forward {
         private(set) var found = Found()
+        private var bomMatched = 0
+        private var pastBOM = false
         private var started = false
-        private var aborted = false
+        /// The top-level object's closing brace has been seen.
+        private var closed = false
         private var depth = 0
         private var inString = false
         private var escape = false
@@ -108,9 +152,12 @@ enum CatalogHeaderScanner {
         private var capturing: Slot?
         private var reader = ValueReader()
 
-        /// Done: nothing more to learn (both found, top level closed, or
-        /// the file is not a JSON object).
-        var isDone: Bool { aborted || found.isSettled }
+        /// Done: nothing more to learn. Not done merely because the object
+        /// closed — with no version in hand the bytes after the brace
+        /// decide between "confirmed absent" and "unknown".
+        var isDone: Bool {
+            found.aborted || (found.version != nil && (found.generation != nil || closed))
+        }
 
         mutating func feed(_ chunk: Data) {
             chunk.withUnsafeBytes { raw in
@@ -121,27 +168,51 @@ enum CatalogHeaderScanner {
             }
         }
 
-        /// Call at end of input: a number running to EOF is finished.
-        mutating func finish() { if capturing != nil { endCapture() } }
+        /// Call at end of input: a number running to EOF is finished, and
+        /// the pass learns whether it read one complete object.
+        mutating func finish() {
+            if capturing != nil { endCapture() }
+            found.complete = closed && !found.aborted
+        }
 
         private mutating func endCapture() {
             guard let slot = capturing else { return }
             capturing = nil
             let v = reader.value
             reader = ValueReader()
+            guard let v else { return }
+            // Duplicate keys: keep the HIGHER stamp. Foundation keeps the
+            // later one; whichever it is, the higher reading can only make
+            // the gate refuse more, never less.
             switch slot {
-            case .version: if found.version == nil { found.version = v }
-            case .generation: if found.generation == nil { found.generation = v }
+            case .version: found.version = max(found.version ?? v, v)
+            case .generation: found.generation = max(found.generation ?? v, v)
             }
         }
 
         private mutating func step(_ b: UInt8) {
+            if !pastBOM {
+                // Foundation strips one leading UTF-8 BOM; so do we. A
+                // partial BOM, or any other high byte here, is not JSON.
+                if b == CatalogHeaderScanner.utf8BOM[bomMatched] {
+                    bomMatched += 1
+                    if bomMatched == 3 { pastBOM = true }
+                    return
+                }
+                if bomMatched > 0 { found.aborted = true; return }
+                pastBOM = true
+            }
             if !started {
                 if CatalogHeaderScanner.isSpace(b) { return }
                 started = true
-                guard b == CatalogHeaderScanner.openBrace else { aborted = true; return }
+                guard b == CatalogHeaderScanner.openBrace else { found.aborted = true; return }
                 depth = 1
                 expectingKey = true
+                return
+            }
+            if closed {
+                // Only whitespace may follow the object (Foundation agrees).
+                if !CatalogHeaderScanner.isSpace(b) { found.aborted = true }
                 return
             }
             if capturing != nil {
@@ -163,6 +234,7 @@ enum CatalogHeaderScanner {
                         collectingKey = false
                         pendingSlot = keyTooLong ? nil
                             : CatalogHeaderScanner.slot(forKeyBytes: keyBytes, hasEscape: keyHasEscape)
+                        if pendingSlot == .version { found.versionKeySeen = true }
                     }
                     return
                 }
@@ -191,7 +263,7 @@ enum CatalogHeaderScanner {
                 depth += 1
             case CatalogHeaderScanner.closeBrace, CatalogHeaderScanner.closeBracket:
                 depth -= 1
-                if depth == 0 { found.complete = true }
+                if depth == 0 { closed = true }
             default:
                 break
             }
@@ -210,6 +282,7 @@ enum CatalogHeaderScanner {
     /// next string is a key and its value starts right after the colon.
     /// A quote is a delimiter unless an odd run of backslashes precedes
     /// it. Stops at the window's start (whatever is beyond it is unknown).
+    /// Fills values only; the verdict is the forward passes' business.
     static func scanTail(_ tail: [UInt8]) -> Found {
         var out = Found()
         var i = tail.count - 1
@@ -236,11 +309,12 @@ enum CatalogHeaderScanner {
                     if let slot = slot(forKeyBytes: raw, hasEscape: raw.contains(backslash)) {
                         var f = ValueReader()
                         for k in (c + 1)..<tail.count { if !f.read(tail[k]) { break } }
-                        switch slot {
-                        case .version: if out.version == nil { out.version = f.value }
-                        case .generation: if out.generation == nil { out.generation = f.value }
+                        if let v = f.value {
+                            switch slot {
+                            case .version: out.version = max(out.version ?? v, v)
+                            case .generation: out.generation = max(out.generation ?? v, v)
+                            }
                         }
-                        if out.version != nil && out.generation != nil { return out }
                     }
                     colonAt = nil
                 }
@@ -262,17 +336,26 @@ enum CatalogHeaderScanner {
 
     // MARK: Whole-file probe
 
-    /// The probe `CatalogSnapshot.headerProbe` uses: head → tail → whole.
+    /// The probe `CatalogSnapshot.header` uses: head → tail → whole.
+    /// nil only when the file cannot be opened (the caller decides whether
+    /// that is "no file" or "unreadable").
     static func probe(fileAt url: URL, window: Int) -> Found? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
-        guard let head = try? handle.read(upToCount: window) else { return nil }
+        // read(upToCount:) hands back nil at EOF — an empty file.
+        let head = (try? handle.read(upToCount: window)).flatMap { $0 } ?? Data()
         var fwd = Forward()
         fwd.feed(head)
-        var found = fwd.found
         let size = (try? handle.seekToEnd()) ?? UInt64(head.count)
-        if size <= UInt64(head.count) { fwd.finish(); found = fwd.found; found.complete = true }
-        if found.isSettled { return found }
+        if size <= UInt64(head.count) {
+            // The whole file is in hand: this pass IS the whole-file pass.
+            fwd.finish()
+            return fwd.found
+        }
+        var found = fwd.found
+        // Not a JSON object from its first byte: no window will change that.
+        if found.aborted { return found }
+        if found.version != nil && found.generation != nil { return found }
         // 2. Tail window, backward.
         let start = size > UInt64(window) ? size - UInt64(window) : 0
         if (try? handle.seek(toOffset: start)) != nil, let tail = try? handle.readToEnd() {
@@ -284,17 +367,17 @@ enum CatalogHeaderScanner {
         // 3. Whole file, forward, 1 MB at a time — only when the version
         // is still unknown. Resumes nothing from pass 1 (cheap to redo the
         // first window; simpler than carrying state across the seek).
+        // This is the pass that can say "confirmed absent".
         wholeFilePasses.withLock { $0 += 1 }
-        guard (try? handle.seek(toOffset: 0)) != nil else { return found }
+        guard (try? handle.seek(toOffset: 0)) != nil else { return found }   // verdict stays .unknown
         var whole = Forward()
         while !whole.isDone, let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
             whole.feed(chunk)
         }
         whole.finish()
-        if found.generation == nil { found.generation = whole.found.generation }
-        found.version = whole.found.version
-        found.complete = whole.found.complete
-        return found
+        var out = whole.found
+        if out.generation == nil { out.generation = found.generation }
+        return out
     }
 }
 

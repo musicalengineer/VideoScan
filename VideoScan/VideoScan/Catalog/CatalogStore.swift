@@ -180,15 +180,82 @@ struct CatalogSnapshot: Decodable {
     /// version is in neither window (a hand-made layout) it scans the whole
     /// file, streamed in constant memory, rather than guess "old".
     ///
-    /// Falls back to nil (not 0) when the file is missing or carries
-    /// NEITHER key, so callers can distinguish "no file / pre-generation"
-    /// from "generation 0". A file with no top-level `version` at all is a
-    /// v0 catalog and reads as version 0.
+    /// The version is a THREE-WAY verdict (codex cycle #29 F1): read,
+    /// confirmed absent (a complete object with no such key — a v0
+    /// catalog), or UNKNOWN (the file is not something the scanner can
+    /// follow: BOM-less garbage, UTF-16, an array root, truncated, bytes
+    /// after the object, a non-integer version). Unknown is never "old";
+    /// the write gates hold on it (`CatalogWriteHold.from`).
+    struct Header: Equatable, Sendable {
+        var version: CatalogVersionVerdict
+        var generation: Int?
+    }
+
+    /// nil ONLY when there is no file. A file that exists but cannot be
+    /// opened or followed is `.unknown`, not absent.
+    static func header(at url: URL) -> Header? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        guard let found = CatalogHeaderScanner.probe(fileAt: url, window: probeWindowBytes) else {
+            return Header(version: .unknown, generation: nil)
+        }
+        return Header(version: found.verdict, generation: found.generation)
+    }
+
+    /// Legacy tuple view of `header(at:)` for GENERATION readers (OCC
+    /// baseline, sidecar bootstrap, tests). nil (not 0) when the file is
+    /// missing or carries NEITHER stamp, so callers can distinguish "no
+    /// file / pre-generation" from "generation 0". `version` is 0 unless
+    /// the key was actually read — never use it as a write gate; gates
+    /// take the verdict from `header(at:)`.
     static func headerProbe(at url: URL) -> (version: Int, generation: Int)? {
-        guard let found = CatalogHeaderScanner.probe(fileAt: url, window: probeWindowBytes) else { return nil }
+        guard let h = header(at: url) else { return nil }
+        let v = h.version.number
         // EITHER key is enough. Only a file with NEITHER reads as "no header".
-        guard found.version != nil || found.generation != nil else { return nil }
-        return (found.version ?? 0, found.generation ?? 0)
+        guard v != nil || h.generation != nil else { return nil }
+        return (v ?? 0, h.generation ?? 0)
+    }
+}
+
+/// Why writes are held for the rest of the session (GH #167). One type
+/// for the main-actor latch, its write-queue mirror and the gate, so the
+/// three cannot disagree about what a hold is. (≈ a small tagged union.)
+enum CatalogWriteHold: Equatable, Sendable {
+    /// catalog.json carries a top-level `version` above `currentVersion`.
+    case newerVersion(Int)
+    /// catalog.json's version could not be DETERMINED (codex cycle #29
+    /// F1) — see `CatalogVersionVerdict.unknown`. The file may be a newer
+    /// catalog in a shape this build cannot follow; it is not replaced.
+    case versionUnknown
+
+    var newerVersion: Int? { if case .newerVersion(let v) = self { return v }; return nil }
+
+    /// The one-line reason journalled and shown with the refusal.
+    var reason: String {
+        switch self {
+        case .newerVersion(let v): return CatalogStore.newerCatalogReason(v)
+        case .versionUnknown: return CatalogStore.unreadableCatalogReason
+        }
+    }
+
+    /// Two holds, one answer: a KNOWN newer version is the more
+    /// informative; between two versions the higher wins.
+    func merged(with other: CatalogWriteHold) -> CatalogWriteHold {
+        switch (self, other) {
+        case (.newerVersion(let a), .newerVersion(let b)): return .newerVersion(max(a, b))
+        case (.newerVersion, _): return self
+        case (_, .newerVersion): return other
+        default: return self
+        }
+    }
+
+    /// The hold a probe verdict imposes, if any. nil = the file is ours to
+    /// write (current or older version, or a confirmed v0 catalog).
+    static func from(_ verdict: CatalogVersionVerdict) -> CatalogWriteHold? {
+        switch verdict {
+        case .version(let v): return v > CatalogSnapshot.currentVersion ? .newerVersion(v) : nil
+        case .confirmedAbsent: return nil
+        case .unknown: return .versionUnknown
+        }
     }
 }
 
@@ -218,13 +285,13 @@ protocol CatalogStoreObserver: AnyObject {
 /// (`CatalogStore.newerCatalogVersion`); this mirror lets a write that was
 /// QUEUED before the latch fired see it on the write queue, and lets the
 /// write queue record a newer catalog it discovers itself.
-/// (≈ a mutex-guarded `std::optional<int>` shared with the writer thread.)
+/// (≈ a mutex-guarded `std::optional<Hold>` shared with the writer thread.)
 final class CatalogNewerLatchMirror: @unchecked Sendable {
     private let lock = NSLock()
-    private var latched: Int?
-    var version: Int? { lock.lock(); defer { lock.unlock() }; return latched }
-    func note(_ version: Int) {
-        lock.lock(); latched = max(latched ?? 0, version); lock.unlock()
+    private var latched: CatalogWriteHold?
+    var hold: CatalogWriteHold? { lock.lock(); defer { lock.unlock() }; return latched }
+    func note(_ hold: CatalogWriteHold) {
+        lock.lock(); latched = latched.map { $0.merged(with: hold) } ?? hold; lock.unlock()
     }
 }
 
@@ -233,7 +300,8 @@ final class CatalogNewerLatchMirror: @unchecked Sendable {
 /// atomic write — under the per-write advisory lock for live saves. The
 /// main-actor `writePrecondition` runs when the save is QUEUED; a newer
 /// build can replace catalog.json (a sync, another Mac) between then and
-/// now. Refuses when the latch is set or the primary on disk is newer.
+/// now. Refuses when the latch is set or the primary on disk is newer —
+/// or cannot be told from newer (codex cycle #29 F1).
 /// Residual: the window between this probe and rename(2) is microseconds
 /// and cannot be closed — rename is not conditional.
 struct CatalogWriteGate: Sendable {
@@ -244,16 +312,14 @@ struct CatalogWriteGate: Sendable {
     /// exactly that window (codex cycle #29 F2). Always nil in production.
     var testAfterProbe: (@Sendable () -> Void)? = nil
 
-    /// nil = write; otherwise the newer catalog version that forbids it.
-    func newerVersion() -> Int? {
-        if let v = latch.version { return v }
-        let probed = CatalogSnapshot.headerProbe(at: primaryURL)?.version
+    /// nil = write; otherwise why not.
+    func writeHold() -> CatalogWriteHold? {
+        if let h = latch.hold { return h }
+        let verdict = CatalogSnapshot.header(at: primaryURL)?.version
         testAfterProbe?()
-        if let v = probed, v > CatalogSnapshot.currentVersion {
-            latch.note(v)
-            return v
-        }
-        return nil
+        guard let verdict, let h = CatalogWriteHold.from(verdict) else { return nil }
+        latch.note(h)
+        return h
     }
 }
 
@@ -450,7 +516,22 @@ final class CatalogStore {
     /// Set when load() found a catalog.json written by a NEWER build (GH
     /// #167): the version it carries. The records are browsable; every
     /// write path refuses (`writesDisabledReason` is latched alongside).
+    /// nil while the hold is `.versionUnknown` — see `writeHold`.
     private(set) var newerCatalogVersion: Int?
+
+    /// The session's write hold, if any (GH #167; codex cycle #29 F1): a
+    /// newer catalog, or one whose version cannot be determined. Never
+    /// cleared within a session. `writesDisabledReason` is its wording.
+    private(set) var writeHold: CatalogWriteHold?
+
+    /// The banner words for the current hold (nil = no banner).
+    var pauseNotice: String? {
+        switch writeHold {
+        case .newerVersion?: return Self.newerCatalogNotice
+        case .versionUnknown?: return Self.unreadableCatalogNotice
+        case nil: return nil
+        }
+    }
 
     /// Off-main mirror of the latch for the write queue (codex #1).
     private let newerLatchMirror = CatalogNewerLatchMirror()
@@ -478,10 +559,19 @@ final class CatalogStore {
         "catalog.json was saved by a newer VideoScan (catalog v\(version); this build reads up to v\(CatalogSnapshot.currentVersion))"
     }
 
+    /// The hold for a file whose version cannot be determined (codex
+    /// cycle #29 F1): not a JSON object this build can follow, truncated,
+    /// bytes after the object, a non-integer version…
+    nonisolated static let unreadableCatalogReason = "catalog.json could not be read as a catalog (its version could not be determined), so it is not replaced"
+
     /// The words the app shows while a newer catalog is open (Rick
     /// 2026-10-02). One constant so the banner, the console line and the
     /// tests agree.
     static let newerCatalogNotice = "This catalog was last saved by a newer VideoScan — you can browse, but saving is paused until you update this Mac's copy."
+
+    /// The words for an unreadable catalog.json (codex cycle #29 F1). It
+    /// says what happened and what to do; it never claims "newer".
+    static let unreadableCatalogNotice = "This catalog file could not be read — you can browse what was recovered, but saving is paused so the file is not replaced. Restore catalog.json from catalog.json.prev or a backup to resume."
 
     /// The held-save line is said once per session (not once per debounced
     /// save) — same etiquette as the designation refusal.
@@ -497,20 +587,34 @@ final class CatalogStore {
     /// never cleared within a session (a relaunch with a build that reads
     /// that version is the only way out — refuse over guess).
     private func latchNewerCatalog(found version: Int) {
-        let first = newerCatalogVersion == nil
-        newerCatalogVersion = max(newerCatalogVersion ?? 0, version)
-        newerLatchMirror.note(version)   // queued writes see it (codex #1)
-        writesDisabledReason = Self.newerCatalogReason(version)
-        if first {
+        latchWrites(off: .newerVersion(version))
+    }
+
+    /// Latch every write off for the session (GH #167). Idempotent; a
+    /// second hold only ever upgrades the wording (`merged(with:)`).
+    private func latchWrites(off hold: CatalogWriteHold) {
+        let before = writeHold
+        writeHold = before.map { $0.merged(with: hold) } ?? hold
+        newerCatalogVersion = writeHold?.newerVersion
+        newerLatchMirror.note(hold)   // queued writes see it (codex #1)
+        writesDisabledReason = writeHold?.reason
+        guard writeHold != before else { return }
+        switch writeHold {
+        case .newerVersion(let version)?:
             NSLog("VideoScan: catalog.json version %d is newer than this build (v%d) — opened read-only; every save is held",
                   version, CatalogSnapshot.currentVersion)
             catalogStoreLog.notice("catalog: v\(version) is newer than this build (v\(CatalogSnapshot.currentVersion)) — read-only, saves held (GH #167)")
-            // Tell the owner NOW, whichever path latched (load, the write
-            // probe, live reload) — so the banner and model.isReadOnly
-            // (which gates every background job) follow immediately rather
-            // than at the next live-reload tick.
-            onNewerCatalogLatched?()
+        case .versionUnknown?:
+            NSLog("VideoScan: catalog.json's version cannot be determined — opened read-only; every save is held so the file is not replaced")
+            catalogStoreLog.notice("catalog: version unknown (not a catalog this build can follow) — read-only, saves held (GH #167, codex cycle #29 F1)")
+        case nil:
+            break
         }
+        // Tell the owner NOW, whichever path latched (load, the write
+        // probe, live reload) — so the banner and model.isReadOnly
+        // (which gates every background job) follow immediately rather
+        // than at the next live-reload tick.
+        onNewerCatalogLatched?()
     }
 
     /// Called once, on the main actor, the first time this store latches
@@ -541,21 +645,30 @@ final class CatalogStore {
     /// ours since the last save or reload is discovered (and latched)
     /// before any sibling file is touched. nil = go.
     func refuseIfNewerCatalogOnDisk() -> CatalogWriteError? {
+        adoptLatchFromWriteQueue()
         if let held = heldWriteRefusal() { return held }
-        if let v = CatalogSnapshot.headerProbe(at: fileURL)?.version,
-           v > CatalogSnapshot.currentVersion {
-            latchNewerCatalog(found: v)
+        if let hold = holdFromPrimaryOnDisk() {
+            latchWrites(off: hold)
             return heldWriteRefusal()
         }
         return nil
     }
 
-    /// After a write the write queue REFUSED (codex #1): carry a newer
-    /// catalog it discovered into the main-actor latch, so the banner,
-    /// `isReadOnly` and every later save follow at once.
+    /// Probe catalog.json NOW and say whether it may be written: nil = ours
+    /// (current/older version, or a confirmed v0 catalog, or no file);
+    /// otherwise the hold (newer, or version unknown — codex cycle #29 F1).
+    /// Pure read; the caller latches.
+    private func holdFromPrimaryOnDisk() -> CatalogWriteHold? {
+        guard let h = CatalogSnapshot.header(at: fileURL) else { return nil }
+        return CatalogWriteHold.from(h.version)
+    }
+
+    /// After a write the write queue REFUSED (codex #1): carry a hold it
+    /// discovered into the main-actor latch, so the banner, `isReadOnly`
+    /// and every later save follow at once.
     private func adoptLatchFromWriteQueue() {
-        if newerCatalogVersion == nil, let v = newerLatchMirror.version {
-            latchNewerCatalog(found: v)
+        if let h = newerLatchMirror.hold, h != writeHold {
+            latchWrites(off: h)
         }
     }
 
@@ -579,6 +692,7 @@ final class CatalogStore {
             return e
         }
 
+        adoptLatchFromWriteQueue()
         if let refusal = heldWriteRefusal() { return refusal }
 
         // GH #167 — before the lock, before any byte: never drop a
@@ -618,18 +732,19 @@ final class CatalogStore {
         // have loaded: an in-flight async save that has already landed but
         // whose main-actor completion has not run yet is our own write, and
         // must not make the quit-time saveNow refuse itself as "stale".
-        let probe = CatalogSnapshot.headerProbe(at: fileURL)
+        let header = CatalogSnapshot.header(at: fileURL)
         // GH #167 — never downgrade. A NEWER build may have replaced the
         // file since we loaded it (same machine, or a sync), possibly at a
         // generation the staleness check below cannot tell from ours. The
-        // version in the same 4 KB probe settles it: latch read-only and
-        // hold, before a byte is written.
-        if let v = probe?.version, v > CatalogSnapshot.currentVersion {
+        // version in the same probe settles it: latch read-only and hold,
+        // before a byte is written. A version that cannot be DETERMINED
+        // holds too (codex cycle #29 F1) — unknown is never "old".
+        if let header, let hold = CatalogWriteHold.from(header.version) {
             lock.release()
-            latchNewerCatalog(found: v)
+            latchWrites(off: hold)
             return heldWriteRefusal()
         }
-        let onDisk = probe?.generation ?? 0
+        let onDisk = header?.generation ?? 0
         if onDisk > max(loadedGeneration, claimedGeneration) {
             lock.release()   // we will not be writing; do not squat on it
             return fail(.staleGeneration(loaded: loadedGeneration, onDisk: onDisk))
@@ -649,7 +764,10 @@ final class CatalogStore {
         if !writesDisabledReported {
             writesDisabledReported = true
             CatalogWriteJournal.record(e, catalogURL: fileURL)
-            auditCatalog("Catalog save held — \(reason). Nothing was written; \(fileURL.lastPathComponent) is untouched. Browsing works; saving (and every background job that would save) stays paused until this Mac runs a VideoScan that can read this catalog (GH #167).")
+            let wayOut = writeHold == .versionUnknown
+                ? "until catalog.json is restored from catalog.json.prev or a backup"
+                : "until this Mac runs a VideoScan that can read this catalog"
+            auditCatalog("Catalog save held — \(reason). Nothing was written; \(fileURL.lastPathComponent) is untouched. Browsing works; saving (and every background job that would save) stays paused \(wayOut) (GH #167).")
         }
         return e
     }
@@ -727,16 +845,17 @@ final class CatalogStore {
     /// first — adopting without merging is exactly the lost update the
     /// guard exists to prevent.
     func adoptOnDiskGenerationAfterReconcile() {
-        // GH #167: a newer catalog is open — this session will never save,
-        // so there is nothing to adopt, and the sidecar is not ours to bump.
-        guard newerCatalogVersion == nil else { return }
-        let probe = CatalogSnapshot.headerProbe(at: fileURL)
-        // The file may have become newer since the reload decoded it.
-        if let v = probe?.version, v > CatalogSnapshot.currentVersion {
-            latchNewerCatalog(found: v)
+        // GH #167: writes are held — this session will never save, so
+        // there is nothing to adopt, and the sidecar is not ours to bump.
+        guard writeHold == nil else { return }
+        let header = CatalogSnapshot.header(at: fileURL)
+        // The file may have become newer (or unreadable) since the reload
+        // decoded it.
+        if let header, let hold = CatalogWriteHold.from(header.version) {
+            latchWrites(off: hold)
             return
         }
-        let onDisk = probe?.generation ?? 0
+        let onDisk = header?.generation ?? 0
         if onDisk > loadedGeneration {
             catalogStoreLog.info("catalog OCC: adopting on-disk generation \(onDisk) after live reconcile (was \(self.loadedGeneration))")
             loadedGeneration = onDisk
@@ -822,7 +941,9 @@ final class CatalogStore {
         let sidecarExisted = CatalogGenerationSidecar.read(besideCatalogAt: fileURL) != nil
         generationFloor = CatalogGenerationSidecar.load(besideCatalogAt: fileURL, persistBootstrap: false)
         func persistBootstrappedFloorIfNeeded() {
-            if !sidecarExisted {
+            // Never a byte beside a held catalog (codex cycle #29 F1): the
+            // next writable load bootstraps for real.
+            if !sidecarExisted, writeHold == nil {
                 CatalogGenerationSidecar.seedIfAbsent(generationFloor, besideCatalogAt: fileURL)
             }
         }
@@ -873,16 +994,21 @@ final class CatalogStore {
         // falling back to .prev with writes enabled would let the next save
         // overwrite it with older data. Latch read-only first; .prev is
         // shown for browsing only (GH #167 — refuse over guess).
-        if let probed = CatalogSnapshot.headerProbe(at: fileURL)?.version,
-           probed > CatalogSnapshot.currentVersion {
-            latchNewerCatalog(found: probed)
-            lastLoadOutcome = .openedReadOnlyNewerVersion(found: probed)
-            if FileManager.default.fileExists(atPath: backupURL.path),
-               let prev = decode(url: backupURL) {
-                masterArchive = prev.masterArchive   // shown, never saved
-                return prev.records
+        // A version that cannot be DETERMINED latches the same way (codex
+        // cycle #29 F1): the recovery below still shows .prev, but this
+        // session writes nothing — not the sidecar, not catalog.json. The
+        // way out is restoring the file, and the banner says so.
+        if let hold = holdFromPrimaryOnDisk() {
+            latchWrites(off: hold)
+            if case .newerVersion(let probed) = hold {
+                lastLoadOutcome = .openedReadOnlyNewerVersion(found: probed)
+                if FileManager.default.fileExists(atPath: backupURL.path),
+                   let prev = decode(url: backupURL) {
+                    masterArchive = prev.masterArchive   // shown, never saved
+                    return prev.records
+                }
+                return []
             }
-            return []
         }
         // Primary unreadable — try .prev.
         NSLog("VideoScan: primary catalog.json unreadable; trying %@", backupURL.path)
@@ -1015,7 +1141,9 @@ final class CatalogStore {
             lastGenerationAnomaly = msg
             NSLog("VideoScan: %@", msg)
             catalogStoreLog.fault("\(msg, privacy: .public)")
-        } else if loadedGeneration > generationFloor {
+        } else if loadedGeneration > generationFloor, writeHold == nil {
+            // (held: the sidecar beside an unreadable primary is not ours
+            // to touch — codex cycle #29 F1; in memory the floor is moot.)
             generationFloor = CatalogGenerationSidecar.recordMax(loadedGeneration, besideCatalogAt: fileURL)
         }
     }
@@ -1596,9 +1724,9 @@ final class CatalogStore {
             // have replaced catalog.json since, or the latch fired. Not
             // journalled here — the main-actor completion reports it once
             // through `heldWriteRefusal` (no flooding).
-            if let newer = gate.newerVersion() {
-                catalogStoreLog.notice("catalog write refused on the write queue: catalog.json is v\(newer), newer than this build (v\(CatalogSnapshot.currentVersion)) — nothing written to \(fileURL.lastPathComponent, privacy: .public) (GH #167)")
-                return .writesDisabled(Self.newerCatalogReason(newer))
+            if let hold = gate.writeHold() {
+                catalogStoreLog.notice("catalog write refused on the write queue: \(hold.reason, privacy: .public) — nothing written to \(fileURL.lastPathComponent, privacy: .public) (GH #167)")
+                return .writesDisabled(hold.reason)
             }
             // Atomic write so a crash mid-write doesn't truncate the file.
             // Foundation implements this as: write to a sibling tmp file,

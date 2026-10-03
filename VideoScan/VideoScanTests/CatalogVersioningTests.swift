@@ -723,7 +723,7 @@ struct CatalogKeySnapshotSensorTests {
         // writePrecondition itself starts with the latch.
         let pre = try #require(Self.methodBody("private func writePrecondition()", in: src))
         #expect(pre.contains("heldWriteRefusal()"), "writePrecondition lost the latch check")
-        #expect(pre.contains("v > CatalogSnapshot.currentVersion"), "writePrecondition lost the mid-session version probe")
+        #expect(pre.contains("CatalogWriteHold.from(header.version)"), "writePrecondition lost the mid-session version probe (three-way verdict, codex cycle #29 F1)")
         // Exactly the five gated entry points reach the byte writer. A sixth
         // call site is a new write path: gate it, then update this count.
         let calls = src.components(separatedBy: "Self.encodeAndWrite(").count - 1
@@ -732,7 +732,7 @@ struct CatalogKeySnapshotSensorTests {
         // the encode and before the write (codex cycle #28 #1). `gate` is a
         // required parameter, so every call site carries it.
         let writer = try #require(Self.methodBody("nonisolated private static func encodeAndWrite(", in: src))
-        let check = try #require(writer.range(of: "gate.newerVersion()"), "encodeAndWrite lost its last-moment newer-catalog check")
+        let check = try #require(writer.range(of: "gate.writeHold()"), "encodeAndWrite lost its last-moment newer-catalog check")
         let write = try #require(writer.range(of: "data.write(to:"))
         #expect(check.lowerBound < write.lowerBound, "the newer-catalog check must run BEFORE the bytes land")
         #expect(writer.contains("gate: CatalogWriteGate,"), "gate must stay a required parameter")
@@ -1298,6 +1298,23 @@ struct CatalogVersionUnknownRefusesTests {
         #expect(everyFile(dir) == before, "load wrote beside an unreadable catalog: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted())")
         #expect(store.saveNow(records: shown) == false, "the recovered records must not replace a file whose version is unknown")
         #expect(everyFile(dir) == before)
+    }
+
+    @Test("the model says what happened — 'could not be read', never 'newer' — and reads as read-only")
+    func unknownHoldHasItsOwnWords() throws {
+        let dir = scratch("unk_words")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Self.fixture("truncated").write(to: catalogURL(dir))
+        let store = CatalogStore(directory: dir)
+        let m = VideoScanModel()
+        m.catalogStore = store
+        m.records = store.load()
+        #expect(m.isReadOnly)
+        #expect(m.catalogSavingPausedNotice == CatalogStore.unreadableCatalogNotice)
+        #expect(m.catalogSavingPausedNotice != CatalogStore.newerCatalogNotice)
+        #expect(store.newerCatalogVersion == nil, "an unknown version is not a known newer one")
+        #expect(store.writeHold == .versionUnknown)
+        #expect(CatalogStore.unreadableCatalogNotice.contains("catalog.json.prev"), "the words must say how to recover")
     }
 
     @Test("cost bound: an unknown file > both windows triggers the whole-file pass ONCE per session, not once per refused save")

@@ -1357,13 +1357,21 @@ final class VideoScanModel: ObservableObject {
     /// sink (console + catalog.log + videoscan.log). Never clears a pause
     /// the store still holds; the store never un-latches in a session.
     func applyCatalogVersionPause() {
-        let paused = catalogStore.newerCatalogVersion
-        let notice: String? = paused == nil ? nil : CatalogStore.newerCatalogNotice
+        let notice = catalogStore.pauseNotice
         let announce = notice != nil && catalogSavingPausedNotice == nil
         catalogSavingPausedNotice = notice
         isReadOnly = viewerModeReadOnly || notice != nil
-        if announce, let paused {
-            let line = "⚠ \(CatalogStore.newerCatalogNotice) (catalog.json is v\(paused); this build reads up to v\(CatalogSnapshot.currentVersion).) Background jobs that would save are held."
+        if announce, let notice {
+            let why: String
+            switch catalogStore.writeHold {
+            case .newerVersion(let paused)?:
+                why = "catalog.json is v\(paused); this build reads up to v\(CatalogSnapshot.currentVersion)."
+            case .versionUnknown?, nil:
+                // (codex cycle #29 F1) — the file is not a catalog this
+                // build can follow; the banner tells the user how to recover.
+                why = "catalog.json's version could not be determined."
+            }
+            let line = "⚠ \(notice) (\(why)) Background jobs that would save are held."
             log(line)
             appLog.write(line)
             publishFamilyAssetConfiguration()
