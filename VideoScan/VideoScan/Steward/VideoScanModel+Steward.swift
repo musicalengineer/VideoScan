@@ -31,6 +31,11 @@
 //   promoted it or is preparing it now ....... duplicateDeletionHoldRule()
 //                                              (VideoScanModel+Duplicates)
 //
+// Rule 2 is about what a card proposes to LET GO. An event card proposes
+// nothing of the kind — it lists what belongs together — so it may list an
+// archived clip or one the Angel has chosen, and says so ("3 are in the
+// archive").
+//
 // The Angel's sets change without a catalog mutation (a sweep, a batch); the
 // queue picks that up at the next catalog change or when the pane appears.
 // The run itself asks again at every copy's turn.
@@ -81,14 +86,13 @@ extension VideoScanModel {
         }
     }
 
-    /// The People tab's birthdays, as the event guess wants them — the
-    /// Angel's own reading of them (AngelFamilyBirthdays, read off the
-    /// main actor when the Angel starts and before each of its sweeps).
-    func stewardPeople() -> [StewardEventGuess.Person] {
-        archiveAngel.familyBirthdays.map {
-            StewardEventGuess.Person(displayName: $0.name, birthYear: $0.born.year,
-                                     birthMonth: $0.born.month, birthDay: $0.born.day)
-        }
+    /// What the event labeller is told, exactly as the Angel tells it: the
+    /// policy's birthday window and the People tab's birthdays — the
+    /// Angel's own reading of them (AngelFamilyBirthdays, read off the main
+    /// actor when the Angel starts and before each of its sweeps). The
+    /// labels themselves are always on here (StewardEvents.context).
+    func stewardEventContext() -> ArchiveAngelEventContext {
+        StewardEvents.context(coverage: archiveAngel.policy.coverage, birthdays: archiveAngel.familyBirthdays)
     }
 
     /// Project on the main actor, build off it, publish once. A newer call
@@ -99,14 +103,16 @@ extension VideoScanModel {
         let inputs = StewardCaseBuilder.project(records, protection: stewardProtectionRule())
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let alsoCleanUp = duplicateKeeperSettings.alsoCleanUpWorkingCopies
-        let people = stewardPeople()
+        let events = stewardEventContext()
+        let now = Date()
         // What was skipped, so the per-kind limit is spent on the rest.
         let skipped = StewardSkipStore(defaults: stewardDefaults).snapshot()
         stewardTask = Task { [weak self] in
             let queue = await Task.detached(priority: .utility) {
                 StewardCaseBuilder.build(inputs: inputs, volumes: volumes,
                                          mountedRoots: VolumeReachability.currentMountedRoots(),
-                                         alsoCleanUpWorkingCopies: alsoCleanUp, people: people, skipped: skipped)
+                                         alsoCleanUpWorkingCopies: alsoCleanUp, events: events, skipped: skipped,
+                                         now: now)
             }.value
             guard !Task.isCancelled, let self else { return }
             self.stewardSnapshot.publish(queue)

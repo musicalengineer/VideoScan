@@ -35,11 +35,19 @@
 // cluster: its first reason other than "duplicate extra copy" (those are
 // Reclaim's), with the numbers in brackets dropped, on its drive.
 //
-// MEMORY. One StewardInput per active record: ~230 bytes of flags, ids and
-// dates plus references to strings the record already owns ≈ 25–30 MB at
-// 100k, freed when the build ends. The queue keeps at most
-// `maxCasesPerKind` cases per kind, each with ≤ `maxCopiesPerCase` rows and
-// ≤ `maxIDsPerCase` ids (16 bytes each) — a few MB at the very worst.
+// EVENTS LEAD (Rick 2026-10-03). The occasion of each clip — a holiday, a
+// family birthday, a word in a folder name — is worked out by the Angel's
+// own derivation over VideoScanCore.EventLabeler (StewardEvents.swift);
+// this builder carries the date facts that derivation reads and puts the
+// lanes in order: events, days to name, same footage, reclaim space, junk.
+//
+// MEMORY. One StewardInput per active record: ~330 bytes of flags, ids and
+// dates plus references to strings the record already owns ≈ 35–40 MB at
+// 100k, and one StewardPlacement beside it (~8 MB), all freed when the
+// build ends. The queue keeps at most `StewardEvents.maxEventCases` events
+// and `maxCasesPerKind` of each other kind (plus the skipped ones kept for
+// "Show skipped"), each with ≤ `maxCopiesPerCase` rows and ≤
+// `maxIDsPerCase` ids (16 bytes each) — a few MB at the very worst.
 //
 // (For Rick: a pure `enum` namespace of static functions; `[UUID: [Int]]`
 // ≈ std::unordered_map<uuid, std::vector<int>> of indexes into `inputs`.)
@@ -78,10 +86,21 @@ struct StewardInput: Sendable, Equatable {
     var footageEvidence: [String]
 
     // Dates
-    /// The best date the catalog has (any precision) — the card's span.
+    /// The best date the catalog has (any precision) — the Same-footage
+    /// card's span. NOT what places a clip in an event: that is the
+    /// Angel's trusted-day rule over the facts below (StewardEvents.place).
     var bestDate: Date?
-    /// The same, only when it is known to the DAY (the event guess).
-    var dayPreciseDate: Date?
+    /// The date facts RecordDateResolver reads, as the Angel projects them
+    /// (ArchiveAngelCandidate+Record.swift).
+    var userDate: String?
+    var userDateConfidence: String?
+    var embeddedDate: Date?
+    var originMake: String?
+    var originModel: String?
+    var originEncoder: String?
+    var inferredDate: Date?
+    var inferredConfidence: Float?
+    var inferredRange: InferredDateRange?
 
     // Junk
     var junkScore: Int
@@ -99,7 +118,10 @@ struct StewardInput: Sendable, Equatable {
          protection: StewardProtection = .none, footageGroupID: UUID? = nil, footageStrength: Int = 0,
          footageRank: Int = 0, footageRoleLabel: String = "", footageLikelyOriginalID: UUID? = nil,
          footageOriginalInCatalog: Bool = true, footageEvidence: [String] = [], bestDate: Date? = nil,
-         dayPreciseDate: Date? = nil, junkScore: Int = 0, junkReasonKey: String? = nil,
+         userDate: String? = nil, userDateConfidence: String? = nil, embeddedDate: Date? = nil,
+         originMake: String? = nil, originModel: String? = nil, originEncoder: String? = nil,
+         inferredDate: Date? = nil, inferredConfidence: Float? = nil, inferredRange: InferredDateRange? = nil,
+         junkScore: Int = 0, junkReasonKey: String? = nil,
          isUndecided: Bool = true, inTriageTable: Bool = true) {
         self.id = id
         self.fullPath = fullPath
@@ -120,7 +142,15 @@ struct StewardInput: Sendable, Equatable {
         self.footageOriginalInCatalog = footageOriginalInCatalog
         self.footageEvidence = footageEvidence
         self.bestDate = bestDate
-        self.dayPreciseDate = dayPreciseDate
+        self.userDate = userDate
+        self.userDateConfidence = userDateConfidence
+        self.embeddedDate = embeddedDate
+        self.originMake = originMake
+        self.originModel = originModel
+        self.originEncoder = originEncoder
+        self.inferredDate = inferredDate
+        self.inferredConfidence = inferredConfidence
+        self.inferredRange = inferredRange
         self.junkScore = junkScore
         self.junkReasonKey = junkReasonKey
         self.isUndecided = isUndecided
@@ -130,10 +160,9 @@ struct StewardInput: Sendable, Equatable {
     /// Project one live record. Main actor (the record lives there).
     @MainActor
     init(record r: VideoRecord, protection: StewardProtection, calendar: Calendar) {
-        let dates = StewardCaseBuilder.dates(userDate: r.userDate, inferred: r.inferredRecordDate,
-                                             inferredIsARange: r.inferredDateRange != nil,
-                                             embedded: r.embeddedCreationDate, created: r.dateCreatedRaw,
-                                             calendar: calendar)
+        let best = StewardCaseBuilder.bestDate(userDate: r.userDate, inferred: r.inferredRecordDate,
+                                               embedded: r.embeddedCreationDate, created: r.dateCreatedRaw,
+                                               calendar: calendar)
         self.init(id: r.id,
                   fullPath: r.fullPath,
                   filename: r.filename,
@@ -152,8 +181,16 @@ struct StewardInput: Sendable, Equatable {
                   footageLikelyOriginalID: r.footage?.likelyOriginalID,
                   footageOriginalInCatalog: r.footage?.originalInCatalog ?? true,
                   footageEvidence: r.footage?.evidence ?? [],
-                  bestDate: dates.best,
-                  dayPreciseDate: dates.dayPrecise,
+                  bestDate: best,
+                  userDate: r.userDate,
+                  userDateConfidence: r.userDateConfidence,
+                  embeddedDate: r.embeddedCreationDate,
+                  originMake: r.originMake,
+                  originModel: r.originModel,
+                  originEncoder: r.originEncoder,
+                  inferredDate: r.inferredRecordDate,
+                  inferredConfidence: r.inferredDateConfidence,
+                  inferredRange: r.inferredDateRange,
                   junkScore: r.junkScore,
                   junkReasonKey: StewardCaseBuilder.junkReasonKey(r.junkReasons),
                   isUndecided: r.mediaDisposition == .unreviewed || r.mediaDisposition == .suspectedJunk,
@@ -201,15 +238,19 @@ enum StewardCaseBuilder {
     // MARK: Entry point
 
     /// `volumes`: every scan target's root + reachability. `mountedRoots`:
-    /// the kernel mount table. `people`: the People tab's birthdays (event
-    /// guess). Pure — no disk, no defaults, no clock.
+    /// the kernel mount table. `events`: the labeller's context as the
+    /// Angel holds it — the birthday window and the People tab's birthdays
+    /// (StewardEvents.context). `now` only bounds the date resolver's
+    /// search for a year in a file name; nothing in the result carries it.
+    /// Pure — no disk, no defaults.
     static func build(inputs: [StewardInput],
                       volumes: [AnalyzeVolumeFact],
                       mountedRoots: Set<String>,
                       alsoCleanUpWorkingCopies: Bool,
-                      people: [StewardEventGuess.Person] = [],
+                      events: ArchiveAngelEventContext = StewardEvents.context(coverage: .standard, birthdays: []),
                       skipped: [String: StewardFacts] = [:],
-                      calendar: Calendar = .current) -> StewardQueue {
+                      calendar: Calendar = .current,
+                      now: Date = Date()) -> StewardQueue {
         let scanRoots = volumes.map(\.root).sorted { $0.count > $1.count }
         var rootCache: [String: String] = [:]
         // The drive a path lives on, memoised per FOLDER (files in one
@@ -226,7 +267,11 @@ enum StewardCaseBuilder {
         var queue = StewardQueue()
         queue.isBuilt = true
 
-        // One pass: index the groups and the junk clusters.
+        // One pass: index the groups and the junk clusters, and ask the
+        // Angel's derivation what occasion each clip records.
+        var placements: [StewardPlacement] = []
+        placements.reserveCapacity(inputs.count)
+        var folders = EventLabeler.FolderWordCache()   // one per build: each folder's words scanned once
         var dupGroups: [UUID: [Int]] = [:]
         var footageGroups: [UUID: [Int]] = [:]
         var junk: [String: [Int]] = [:]
@@ -236,6 +281,12 @@ enum StewardCaseBuilder {
         for (i, r) in inputs.enumerated() {
             let root = drive(r.fullPath)
             roots.append(root)
+            let placement = StewardEvents.place(r, now: now, context: events, folders: &folders)
+            if placement.isCounted {
+                queue.placeableClips += 1
+                if placement.day != nil { queue.placedClips += 1 }
+            }
+            placements.append(placement)
             if let d = r.dupAnalyzedAt, queue.duplicatesLastChecked.map({ d > $0 }) ?? true {
                 queue.duplicatesLastChecked = d
             }
@@ -256,14 +307,16 @@ enum StewardCaseBuilder {
             + reclaimGroupCases(inputs: inputs, roots: roots, groups: dupGroups, online: online,
                                 alsoCleanUpWorkingCopies: alsoCleanUpWorkingCopies, skipped: skipped)
         let footage = footageCases(inputs: inputs, roots: roots, groups: footageGroups, online: online,
-                                   people: people, skipped: skipped, calendar: calendar)
+                                   placements: placements, skipped: skipped, calendar: calendar)
         let junkCases = junkCases(inputs: inputs, roots: roots, clusters: junk, online: online, skipped: skipped)
+        let occasions = StewardEvents.cases(
+            StewardEvents.Catalog(inputs: inputs, roots: roots, placements: placements,
+                                  footageGroups: footageGroups, skipped: skipped),
+            online: online)
 
-        queue.cases = interleave([
-            reclaim.sorted(by: reclaimOrder),
-            footage,
-            junkCases,
-        ])
+        // Lane after lane (Rick 2026-10-03: events are the point; the
+        // duplicates are housekeeping, lower in the order).
+        queue.cases = occasions.events + occasions.days + footage + reclaim.sorted(by: reclaimOrder) + junkCases
         return queue
     }
 
@@ -444,13 +497,10 @@ enum StewardCaseBuilder {
     // MARK: Same footage
 
     static func footageCases(inputs: [StewardInput], roots: [String], groups: [UUID: [Int]],
-                             online: (String) -> Bool, people: [StewardEventGuess.Person],
+                             online: (String) -> Bool, placements: [StewardPlacement],
                              skipped: [String: StewardFacts] = [:],
                              calendar: Calendar) -> [StewardCase] {
         var out: [StewardCase] = []
-        // The day-precise span of each group, kept aside: the event guess
-        // is worked out only for the groups that make the cut below.
-        var spans: [String: StewardEventGuess.DateSpan] = [:]
         for (groupID, unsorted) in groups {
             guard unsorted.count > 1 else { continue }
             // A group's confidence is its weakest link; every member
@@ -464,7 +514,6 @@ enum StewardCaseBuilder {
             var bytes: Int64 = 0
             var drives = Set<String>()
             var earliest: Date?, latest: Date?
-            var preciseEarliest: Date?, preciseLatest: Date?
             var evidence: [String] = []
             var seenEvidence = Set<String>()
             for i in members {
@@ -474,10 +523,6 @@ enum StewardCaseBuilder {
                 if let d = r.bestDate {
                     if earliest.map({ d < $0 }) ?? true { earliest = d }
                     if latest.map({ d > $0 }) ?? true { latest = d }
-                }
-                if let d = r.dayPreciseDate {
-                    if preciseEarliest.map({ d < $0 }) ?? true { preciseEarliest = d }
-                    if preciseLatest.map({ d > $0 }) ?? true { preciseLatest = d }
                 }
                 for line in r.footageEvidence where evidence.count < maxEvidenceLines && seenEvidence.insert(line).inserted {
                     evidence.append(line)
@@ -492,9 +537,6 @@ enum StewardCaseBuilder {
                 + (span.isEmpty ? "" : " · \(span)")
             var c = StewardCase(id: "footage:" + groupID.uuidString, kind: .sameFootage, title: description,
                                 facts: StewardFacts(bytes: bytes, count: n))
-            if let e = preciseEarliest, let l = preciseLatest {
-                spans[c.id] = StewardEventGuess.DateSpan(earliest: e, latest: l)
-            }
             c.payoffBytes = bytes
             c.memberCount = n
             c.recordIDs = members.prefix(maxIDsPerCase).map { inputs[$0].id }
@@ -518,15 +560,18 @@ enum StewardCaseBuilder {
             return $0.id < $1.id
         }
         var kept = limit(out, skipped: skipped)
-        // Title precedence: the person's name, else the event guess, else
-        // the description. Footage groups have nowhere to keep a name yet
-        // (shown as a gap on the card) — `name` is nil until they do.
+        // Title precedence: the person's name, else the occasion guess,
+        // else the description. Footage groups have nowhere to keep a name
+        // yet (shown as a gap on the card) — `name` is nil until they do.
+        // The guess is the labeller's (StewardEvents.footageGuess), worked
+        // out only for the groups that made the cut.
         for i in kept.indices {
-            let guess = StewardEventGuess.guess(groupDateSpan: spans[kept[i].id], people: people, calendar: calendar)
+            let members = kept[i].footageGroupID.flatMap { groups[$0] } ?? []
+            let guess = StewardEvents.footageGuess(members: members, placements: placements)
             let lines = StewardFootageTitle.lines(name: nil, guess: guess, description: kept[i].plainDescription)
             kept[i].title = lines.title
             kept[i].detail = lines.caption ?? ""
-            kept[i].eventGuess = guess
+            kept[i].occasionGuess = guess
         }
         return kept
     }
@@ -623,26 +668,48 @@ enum StewardCaseBuilder {
         "Very low resolution — below usable threshold": "very small pictures",
     ]
 
-    // MARK: Queue order
+    // MARK: What the pane shows
 
-    /// The lanes take turns (Reclaim, Same footage, Not worth keeping,
-    /// Reclaim, …), each in its own payoff order — bytes and clarity are
-    /// not the same currency, so no lane is ranked against another and
-    /// none can starve the others.
-    nonisolated static func interleave(_ lanes: [[StewardCase]]) -> [StewardCase] {
-        var out: [StewardCase] = []
-        out.reserveCapacity(lanes.reduce(0) { $0 + $1.count })
-        var position = 0
-        var added = true
-        while added {
-            added = false
-            for lane in lanes where position < lane.count {
-                out.append(lane[position])
-                added = true
+    /// The pane's filter above the list (pure view state).
+    enum Filter: String, Sendable, CaseIterable {
+        case all, events, footage, space, junk
+
+        var label: String {
+            switch self {
+            case .all: return "All"
+            case .events: return "Events"
+            case .footage: return "Same footage"
+            case .space: return "Space"
+            case .junk: return "Not worth keeping"
             }
-            position += 1
         }
-        return out
+
+        func shows(_ kind: StewardCaseKind) -> Bool {
+            switch self {
+            case .all: return true
+            case .events: return kind == .event || kind == .unlabelledDay
+            case .footage: return kind == .sameFootage
+            case .space: return kind == .reclaimDrive || kind == .reclaimGroup
+            case .junk: return kind == .junk
+            }
+        }
+    }
+
+    /// The list as the pane shows it: the built order (lane after lane),
+    /// narrowed by the filter; with `eventsByYear` the events are put in
+    /// year order (earliest first, the built order within a year) and
+    /// everything else keeps its place. O(n log n) over at most a few
+    /// hundred rows — called from the pane's event handlers, never a body.
+    nonisolated static func arrange(_ cases: [StewardCase], filter: Filter, eventsByYear: Bool) -> [StewardCase] {
+        let shown = filter == .all ? cases : cases.filter { filter.shows($0.kind) }
+        guard eventsByYear else { return shown }
+        let events = shown.enumerated().filter { $0.element.kind == .event }
+            .sorted { a, b in
+                let ya = a.element.eventYear ?? Int.max, yb = b.element.eventYear ?? Int.max
+                return ya != yb ? ya < yb : a.offset < b.offset
+            }
+            .map(\.element)
+        return events + shown.filter { $0.kind != .event }
     }
 
     // MARK: Small pure helpers
@@ -673,8 +740,8 @@ enum StewardCaseBuilder {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
-    private static func copy(_ r: StewardInput, root: String, online: Bool,
-                             standing: StewardCopyStanding) -> StewardCopy {
+    static func copy(_ r: StewardInput, root: String, online: Bool,
+                     standing: StewardCopyStanding) -> StewardCopy {
         let directory = (r.fullPath as NSString).deletingLastPathComponent
         var folder = directory.hasPrefix(root) ? String(directory.dropFirst(root.count)) : directory
         while folder.hasPrefix("/") { folder.removeFirst() }
@@ -715,32 +782,15 @@ enum StewardCaseBuilder {
         return "\(month(am, ay)) – \(month(bm, by))"
     }
 
-    /// A record's dates. `best`: the person's date when there is one (any
-    /// precision — "1994" reads as 1 Jan 1994), else the inferred date,
-    /// else the one in the file, else the file-system one. `dayPrecise`:
-    /// only a date known to the DAY — the person's full date, an inferred
-    /// date that is not a year range and not a 1 January placeholder, or
-    /// the date written in the file held to the SAME rules (QA F7): never
-    /// 1 January, and never as a stand-in when the inferred date is a
-    /// RANGE (the catalog has already said it only knows the years). A
-    /// file-system date never counts (usually the day the file was copied).
-    nonisolated static func dates(userDate: String?, inferred: Date?, inferredIsARange: Bool,
-                                  embedded: Date?, created: Date?, calendar: Calendar)
-        -> (best: Date?, dayPrecise: Date?) {
-        if let userDate, let parsed = parseUserDate(userDate, calendar: calendar) {
-            return (parsed.date, parsed.isDayPrecise ? parsed.date : nil)
-        }
-        func isPlaceholder(_ d: Date) -> Bool {
-            let c = calendar.dateComponents([.month, .day], from: d)
-            return c.month == 1 && c.day == 1
-        }
-        let embeddedDay = embedded.flatMap { isPlaceholder($0) ? nil : $0 }
-        if let inferred {
-            if inferredIsARange { return (inferred, nil) }
-            return (inferred, isPlaceholder(inferred) ? embeddedDay : inferred)
-        }
-        if let embedded { return (embedded, embeddedDay) }
-        return (created, nil)
+    /// The best date the catalog has for a record, at any precision: the
+    /// person's date when there is one ("1994" reads as 1 Jan 1994), else
+    /// the inferred date, else the one in the file, else the file-system
+    /// one. Only the Same-footage card's month span reads this; what DAY a
+    /// clip records is the Angel's rule (StewardEvents.place), not this.
+    nonisolated static func bestDate(userDate: String?, inferred: Date?, embedded: Date?, created: Date?,
+                                     calendar: Calendar) -> Date? {
+        if let userDate, let parsed = parseUserDate(userDate, calendar: calendar) { return parsed.date }
+        return inferred ?? embedded ?? created
     }
 
     /// "1994-12-25" → that day (precise); "1994-12" / "1994" / "1994-xx-xx"

@@ -440,6 +440,66 @@ of the same event; (8) the puzzle is the UI/UX.
     groups, people in frame, transcript cues, "the best copy of this
     event" handed to the Angel; Hallie answers "show me [someone]'s first
     birthday" from the same facts.
+- **Priority ruling (Rick, 2026-10-03, afternoon): events are the point;
+  duplicate deletion is housekeeping.** "It should help find events,
+  groups of similar events in time … we can't reliably find [a person]
+  in videos since the family looks too similar, [but] we can use
+  heuristic metadata, like AA does for promotion recommendations, to
+  identify [someone's] birthday or Christmas or Thanksgiving or 'down the
+  Cape' … The deletion of dups is just to keep the database down."
+  - The occasion labeller already exists: `VideoScanCore/EventLabeler`
+    (Angel rules v14, 2026-09-29) — calendar holidays, People-tab
+    birthdays, and a name lexicon over file and folder names ("xmas94",
+    "cape", trips), each with a human reason line. The Angel uses it only
+    for scoring; the steward makes it visible. **One labeller, two
+    stewards** — no second implementation (the trial's
+    `StewardEventGuess` is removed in favour of it).
+  - The pane leads with **Events** ("Christmas 1994 — 14 clips · 3 drives
+    · 2 h 10 m"), then **unlabelled days** (≥ 4 clips on one trusted day,
+    waiting for a name), then Same footage, then Reclaim space, then
+    Probably not worth keeping. An event card shows *why* (reasons,
+    counted) and *what's inside* (copies of each other, same footage, in
+    the archive); it never offers a delete.
+  - Evidence the labeller could gain later, in the Angel's
+    evidence-fusion spirit (and where face recognition stays demoted):
+    transcript cues ("happy birthday", carols), OCR'd title cards, user
+    places, GPS where a file has it, and recurrence (the same week every
+    summer ⇒ a trip).
+  - Cadence for the housekeeping side ("turn the dial over time"): as
+    files are promoted to the archive, duplicate-cleanup passes cycle
+    behind them. GH #258 (the delete planner must leave alone what the
+    Angel has chosen or Rick has filed as Archived) is the prerequisite
+    and was approved the same day.
+  - *As built in the trial* (branch `feat/steward-events-lane`; what the
+    bullets above do not already say):
+    - An event is one labelled occasion in one year. A clip with several
+      labels is in each event ("also in: …"); a clip whose footage group
+      (Likely or stronger) has a member in an event joins it "by matching
+      footage" unless its own date says otherwise. A single clip is still
+      an event — the lane is ordered by clip count, then length, so those
+      sit at the end.
+    - An unlabelled day is 4 or more clips on one trusted day, or on up
+      to 3 days running.
+    - Lane after lane (nothing takes turns), with a filter above the list
+      (All · Events · Same footage · Space · Not worth keeping) and a "By
+      year" order for the events — both pure view state. The list keeps
+      200 events and 25 of each other kind (skipped ones ride along for
+      "Show skipped").
+    - The trusted day is the Angel's own (`ArchiveAngelEvent.derive`);
+      the Same-footage title guess is the labeller's majority among the
+      group's members that have one, and a tie is no guess.
+    - Event actions only look: the Catalog, the footage group when there
+      is exactly one, the copies among them. A card may list archived
+      clips and the Angel's picks because it proposes nothing about them.
+    - Nothing is stored: events are derived on every build; naming or
+      confirming one is shown as a gap. Log lines carry an event's kind
+      and counts, never its title.
+    - One rule is the steward's own: a 1 January day nobody typed is a
+      reset camera clock, so neither its day **nor its year** places
+      anything (a name word then explains but keys no event, and the clip
+      is free to join its footage twin's event). The Angel's resolver has
+      no such rule — **open question for Rick:** move it into the Angel's
+      day rule, or keep it here only.
 
 ## 6. Staging (each stage ships whole; nothing half-moved)
 

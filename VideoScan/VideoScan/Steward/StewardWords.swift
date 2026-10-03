@@ -49,9 +49,20 @@ enum StewardFreshness {
     /// Analyze button last worked out.
     static let junk = "from the last time Analyze was run in this tab"
 
+    /// "1,204 of 9,310 clips have a date good enough to place" — the
+    /// Events lane's coverage, by the same trusted-day rule that places a
+    /// clip in an event (StewardEvents.place).
+    nonisolated static func events(placed: Int, of total: Int) -> String {
+        guard total > 0 else { return "no clips to place yet" }
+        return "\(placed.formatted()) of \(total.formatted()) clip\(total == 1 ? " has" : "s have") a date good enough to place"
+    }
+
     nonisolated static func line(for kind: StewardCaseKind, duplicatesLastChecked: Date?,
-                                 report: AnalyzeCoverageReport, now: Date) -> String {
+                                 report: AnalyzeCoverageReport, now: Date,
+                                 placedClips: Int = 0, placeableClips: Int = 0) -> String {
         switch kind {
+        case .event, .unlabelledDay:
+            return events(placed: placedClips, of: placeableClips)
         case .reclaimDrive, .reclaimGroup:
             return duplicates(lastChecked: duplicatesLastChecked, counts: report.counts(.duplicates), now: now)
         case .sameFootage:
@@ -72,6 +83,8 @@ struct StewardActionGate: Sendable, Equatable {
 
     static let perGroupDeleteGap = "Deleting just this set arrives later; for now this cleans the whole drive's duplicates."
     static let namingGap = "Naming a set of footage arrives later. For now the title is a description, or a guess from the date."
+    static let eventNamingGap = "Naming or confirming an event arrives later. For now the name comes from the date, a family birthday or a folder name."
+    static let dayNamingGap = "You could name this — naming arrives later."
 
     /// "Delete duplicates on <drive>…" — the existing flow, this drive
     /// preselected. `offeredByDeleteFlow`: the drive is in the flow's own
@@ -175,12 +188,15 @@ enum StewardLog {
     }
 
     /// "Tidy suggestions: skipped — Reclaim space [drive SanDisk] · 1,208 files · 412 GB".
-    /// The subject is the drive for drive and junk cases and the group id
-    /// for sets — never a filename, a title (an event guess can carry a
-    /// person's name) or a folder.
+    /// The subject is the drive for drive and junk cases, the group id for
+    /// sets, and for an event only its KIND ("christmas", "birthday",
+    /// "cape") — never a filename, a title (an event's title can carry a
+    /// person's name), a year or a folder.
     nonisolated static func line(_ verb: Verb, _ c: StewardCase, action: String? = nil) -> String {
         let subject: String
         switch c.kind {
+        case .event: subject = "occasion \(c.eventKind)"
+        case .unlabelledDay: subject = "a day with no name"
         case .reclaimDrive: subject = "drive \(c.driveLabel)"
         case .reclaimGroup: subject = "set \(c.duplicateGroupID?.uuidString.prefix(8) ?? "?")"
         case .sameFootage: subject = "footage \(c.footageGroupID?.uuidString.prefix(8) ?? "?")"
@@ -190,5 +206,11 @@ enum StewardLog {
         var text = "Tidy suggestions: \(verb.rawValue) — \(c.kind.chip) [\(subject)] · \(c.facts.count.formatted()) file\(c.facts.count == 1 ? "" : "s") · \(size)"
         if let action { text += " · \(action)" }
         return text
+    }
+
+    /// "Tidy suggestions: showing Events, by year · 42 listed" — one line
+    /// when the person changes the filter or the order.
+    nonisolated static func viewLine(filter: StewardCaseBuilder.Filter, eventsByYear: Bool, listed: Int) -> String {
+        "Tidy suggestions: showing \(filter.label)\(eventsByYear ? ", events by year" : "") · \(listed.formatted()) listed"
     }
 }

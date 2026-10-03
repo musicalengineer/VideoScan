@@ -3,13 +3,15 @@
 // design §5.6 of docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md).
 //
 // Five-dimension coverage (CLAUDE.md checklist):
-//   Logic     — each card type (Reclaim per drive, Reclaim per set, Same
-//               footage, Probably not worth keeping), queue order, the
-//               words (freshness, button states, keeper reason, log line),
-//               skip → stays away → comes back on a material change →
-//               Bring back.
+//   Logic     — each housekeeping card type (Reclaim per drive, Reclaim per
+//               set, Same footage, Probably not worth keeping), the lane
+//               order, the words (freshness, button states, keeper reason,
+//               log line), skip → stays away → comes back on a material
+//               change → Bring back. The Events lane is in
+//               StewardEventsTests.swift.
 //   Scale     — 100k records, 2k duplicate sets, 3k footage groups, 20k
-//               junk rows, 40 people for the event guess: explicit budget.
+//               junk rows, 57k dated clips labelled against 40 birthdays:
+//               explicit budget.
 //   Isolation — the skip memory and the Catalog door run against their own
 //               UserDefaults suite; a poisoned value never hides a case and
 //               never crashes.
@@ -17,13 +19,15 @@
 // Media matrix: N/A — catalog metadata only, no media is opened.
 //
 // The two §5.6 rules (proof = the Delete planner's; exclusions) are in
-// StewardRulesTests.swift. The event guess is in StewardEventGuessTests.swift.
+// StewardRulesTests.swift. Events, days to name and the Same-footage title
+// guess are in StewardEventsTests.swift.
 //
 // Suites: StewardCaseBuilderLogicTests · StewardWordsTests ·
 //         StewardSkipStoreTests · StewardScaleTests
 
 import Foundation
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 private let GB: Int64 = 1_000_000_000
@@ -45,10 +49,12 @@ private func day(_ y: Int, _ m: Int, _ d: Int) -> Date {
     utc.date(from: DateComponents(year: y, month: m, day: d, hour: 12)) ?? Date(timeIntervalSince1970: 0)
 }
 
-private func build(_ inputs: [StewardInput], crossMode: Bool = false,
-                   people: [StewardEventGuess.Person] = [], skipped: [String: StewardFacts] = [:]) -> StewardQueue {
+/// A fixed "now" (2026): it only bounds the resolver's search for a year in a name.
+private let fixedNow = Date(timeIntervalSince1970: 1_790_000_000)
+
+private func build(_ inputs: [StewardInput], crossMode: Bool = false, skipped: [String: StewardFacts] = [:]) -> StewardQueue {
     StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted,
-                             alsoCleanUpWorkingCopies: crossMode, people: people, skipped: skipped, calendar: utc)
+                             alsoCleanUpWorkingCopies: crossMode, skipped: skipped, calendar: utc, now: fixedNow)
 }
 
 private func keeper(_ path: String, _ g: UUID, bytes: Int64 = GB) -> StewardInput {
@@ -61,10 +67,10 @@ private func extra(_ path: String, _ g: UUID, bytes: Int64 = GB,
 }
 
 private func clip(_ path: String, footage g: UUID, strength: Int = 1, rank: Int = 0, original: UUID? = nil,
-                  best: Date? = nil, precise: Date? = nil, evidence: [String] = []) -> StewardInput {
+                  best: Date? = nil, evidence: [String] = []) -> StewardInput {
     StewardInput(fullPath: path, sizeBytes: GB, footageGroupID: g, footageStrength: strength, footageRank: rank,
                  footageRoleLabel: rank == 0 ? "likely original" : "copy", footageLikelyOriginalID: original,
-                 footageEvidence: evidence, bestDate: best ?? precise, dayPreciseDate: precise)
+                 footageEvidence: evidence, bestDate: best)
 }
 
 private func junk(_ path: String, score: Int = 5, reasons: [String] = ["Very short (2.1s)"],
@@ -162,23 +168,26 @@ struct StewardCaseBuilderLogicTests {
 
     @Test func aLikelyFootageGroupGetsACardWithItsMembersOriginalDatesAndReasons() throws {
         let g = UUID()
-        let original = clip("/Volumes/LaCie/tapes/xmas.mov", footage: g, rank: 0, best: day(2006, 12, 20),
-                            evidence: ["same name + length as xmas copy.mov"])
+        // `bestDate` alone (a file-system date, say) gives the card its
+        // month span and places nothing: no trusted day, no title guess.
+        let original = clip("/Volumes/LaCie/tapes/reel.mov", footage: g, rank: 0, best: day(2006, 12, 20),
+                            evidence: ["same name + length as reel copy.mov"])
         let q = build([
             original,
-            clip("/Volumes/SanDisk/xmas copy.mov", footage: g, rank: 1, original: original.id, best: day(2006, 12, 28),
-                 evidence: ["same name + length as xmas copy.mov", "re-encode of xmas.mov"]),
-            clip("/Volumes/SanDisk/xmas small.mov", footage: g, rank: 2, original: original.id, best: day(2006, 12, 22)),
+            clip("/Volumes/SanDisk/reel copy.mov", footage: g, rank: 1, original: original.id, best: day(2006, 12, 28),
+                 evidence: ["same name + length as reel copy.mov", "re-encode of reel.mov"]),
+            clip("/Volumes/SanDisk/reel small.mov", footage: g, rank: 2, original: original.id, best: day(2006, 12, 22)),
         ].map { var r = $0; r.footageLikelyOriginalID = original.id; return r })
         let c = try #require(q.cases.first { $0.kind == .sameFootage })
         #expect(c.id == "footage:" + g.uuidString)
         #expect(c.title == "3 clips on 2 drives — likely the same footage · Dec 2006")
-        #expect(c.plainDescription == c.title && c.eventGuess == nil && c.detail.isEmpty)
+        #expect(c.plainDescription == c.title && c.occasionGuess == nil && c.detail.isEmpty)
         #expect(c.memberCount == 3 && c.facts == StewardFacts(bytes: 3 * GB, count: 3))
-        #expect(c.likelyOriginalID == original.id && c.likelyOriginalName == "xmas.mov")
-        #expect(c.copies.map(\.filename) == ["xmas.mov", "xmas copy.mov", "xmas small.mov"], "likely original first")
+        #expect(c.likelyOriginalID == original.id && c.likelyOriginalName == "reel.mov")
+        #expect(c.copies.map(\.filename) == ["reel.mov", "reel copy.mov", "reel small.mov"], "likely original first")
         #expect(c.copies.first?.roleLabel == "likely original")
-        #expect(c.evidenceLines == ["same name + length as xmas copy.mov", "re-encode of xmas.mov"], "the group's reasons, once each")
+        #expect(c.evidenceLines == ["same name + length as reel copy.mov", "re-encode of reel.mov"], "the group's reasons, once each")
+        #expect(q.cases.allSatisfy { $0.kind != .event && $0.kind != .unlabelledDay }, "undated clips with plain names are in no event")
         #expect(c.driveRoot == nil, "a Same-footage card has no drive to clean")
     }
 
@@ -212,25 +221,17 @@ struct StewardCaseBuilderLogicTests {
         #expect(StewardCaseBuilder.dateSpanText(earliest: nil, latest: nil, calendar: utc).isEmpty)
     }
 
-    @Test func aRecordsDatesAreDayPreciseOnlyWhenTheyAreKnownToTheDay() {
-        let d = StewardCaseBuilder.dates
-        #expect(d("1994-12-25", nil, false, nil, nil, utc).dayPrecise == day(1994, 12, 25), "a full date the person typed")
-        #expect(d("1994-12", nil, false, nil, nil, utc).dayPrecise == nil)
-        #expect(d("1994", nil, false, day(1994, 6, 1), nil, utc).dayPrecise == nil, "the person's year wins over the file's own date")
-        #expect(d("1994", nil, false, nil, nil, utc).best == day(1994, 1, 1))
-        #expect(d(nil, day(2001, 5, 6), false, nil, nil, utc).dayPrecise == day(2001, 5, 6))
-        #expect(d(nil, day(2001, 5, 6), true, nil, nil, utc).dayPrecise == nil, "an inferred year RANGE is not a day")
-        #expect(d(nil, day(2001, 1, 1), false, nil, nil, utc).dayPrecise == nil, "1 January is a year placeholder")
-        #expect(d(nil, nil, false, day(2010, 7, 4), nil, utc).dayPrecise == day(2010, 7, 4), "the date written in the file")
-        // QA F7: the date in the file is held to the same rules when it stands in.
-        #expect(d(nil, day(2001, 5, 6), true, day(2001, 5, 6), nil, utc).dayPrecise == nil,
-                "an inferred RANGE never falls back to the file's date")
-        #expect(d(nil, day(2001, 1, 1), false, day(2001, 8, 9), nil, utc).dayPrecise == day(2001, 8, 9),
-                "a 1 January placeholder may fall back to a real day in the file")
-        #expect(d(nil, day(2001, 1, 1), false, day(2001, 1, 1), nil, utc).dayPrecise == nil, "…but not to another 1 January")
-        #expect(d(nil, nil, false, day(2010, 1, 1), nil, utc).dayPrecise == nil, "1 January in the file is a placeholder too")
-        let copied = d(nil, nil, false, nil, day(2020, 3, 3), utc)
-        #expect(copied.best == day(2020, 3, 3) && copied.dayPrecise == nil, "a file-system date is never day-precise")
+    /// The Same-footage card's month span reads the best date at ANY
+    /// precision. What day a clip records is the Angel's rule, tested in
+    /// StewardEventsTests.
+    @Test func theBestDateIsThePersonsThenTheInferredThenTheFilesThenTheFileSystems() {
+        let d = StewardCaseBuilder.bestDate
+        #expect(d("1994-12-25", day(2001, 5, 6), day(2010, 7, 4), nil, utc) == day(1994, 12, 25), "the person's date wins")
+        #expect(d("1994", nil, day(1994, 6, 1), nil, utc) == day(1994, 1, 1), "a year reads as 1 January of it")
+        #expect(d(nil, day(2001, 5, 6), day(2010, 7, 4), nil, utc) == day(2001, 5, 6))
+        #expect(d(nil, nil, day(2010, 7, 4), day(2020, 3, 3), utc) == day(2010, 7, 4))
+        #expect(d(nil, nil, nil, day(2020, 3, 3), utc) == day(2020, 3, 3))
+        #expect(d("not a date", nil, nil, nil, utc) == nil)
     }
 
     // Probably not worth keeping
@@ -277,7 +278,7 @@ struct StewardCaseBuilderLogicTests {
 
     // Queue
 
-    @Test func theThreeKindsTakeTurnsEachInItsOwnOrder() {
+    @Test func theHousekeepingLanesFollowInOrderEachInItsOwn() {
         let g = UUID(), h = UUID(), f = UUID()
         var inputs = [keeper("/Volumes/SanDisk/k1.mov", g), extra("/Volumes/SanDisk/c1.mov", g, bytes: 5 * GB),
                       keeper("/Volumes/LaCie/k2.mov", h), extra("/Volumes/LaCie/c2.mov", h, bytes: 2 * GB)]
@@ -285,10 +286,10 @@ struct StewardCaseBuilderLogicTests {
         inputs += (0..<2).map { junk("/Volumes/X9/j\($0).mov") }
         let q = build(inputs)
         #expect(q.isBuilt)
-        #expect(q.cases.map(\.kind.lane) == [0, 1, 2, 0, 0, 0], "Reclaim, Same footage, Not worth keeping, then the rest of Reclaim")
-        let reclaim = q.cases.filter { $0.kind.lane == 0 }
+        #expect(q.cases.map(\.kind.lane) == [2, 3, 3, 3, 3, 4], "Same footage, then Reclaim space, then Not worth keeping")
+        let reclaim = q.cases.filter { $0.kind.lane == 3 }
         #expect(reclaim.map(\.payoffBytes) == [5 * GB, 5 * GB, 2 * GB, 2 * GB], "largest first; a drive and its one set tie")
-        #expect(Set(q.cases.map(\.id)).count == q.cases.count, "case ids are unique")
+        #expect(Set(q.cases.map(\.id)).count == q.cases.count, "ids are unique")
     }
 
     @Test func theSameInputsBuildAnEqualQueue() {
@@ -379,6 +380,56 @@ struct StewardWordsTests {
         #expect(words(key(2, 30, 0, 10, "/a"), [key(2, 30, 0, 10, "/b")]) == "The copies are equal, so the first by name was chosen.")
         #expect(words(key(2, 30), [key(2, 99_999)]).contains("next duplicate check will choose again"),
                 "a keeper the current drive order would not choose is said to be stale, not defended")
+    }
+
+    @Test func theEventsCoverageLineSaysHowManyClipsCanBePlaced() {
+        #expect(StewardFreshness.events(placed: 1_204, of: 9_310) == "1,204 of 9,310 clips have a date good enough to place")
+        #expect(StewardFreshness.events(placed: 1, of: 1) == "1 of 1 clip has a date good enough to place")
+        #expect(StewardFreshness.events(placed: 0, of: 0) == "no clips to place yet")
+        let line = StewardFreshness.line(for: .event, duplicatesLastChecked: nil, report: AnalyzeCoverageReport(),
+                                         now: Date(timeIntervalSince1970: 0), placedClips: 3, placeableClips: 7)
+        #expect(line == "3 of 7 clips have a date good enough to place")
+        #expect(StewardFreshness.line(for: .unlabelledDay, duplicatesLastChecked: nil, report: AnalyzeCoverageReport(),
+                                      now: Date(timeIntervalSince1970: 0), placedClips: 3, placeableClips: 7) == line)
+    }
+
+    @Test func thePanesCountLineLeadsWithTheEvents() {
+        #expect(StewardPaneWords.countLine(events: 42, days: 6, tidy: 31) == "42 events · 6 days to name · 31 tidy suggestions")
+        #expect(StewardPaneWords.countLine(events: 1, days: 1, tidy: 1) == "1 event · 1 day to name · 1 tidy suggestion")
+        #expect(StewardPaneWords.countLine(events: 0, days: 0, tidy: 2) == "2 tidy suggestions")
+        #expect(StewardPaneWords.countLine(events: 0, days: 0, tidy: 0) == "nothing to show right now")
+        #expect(StewardPaneWords.emptyLine(showSkipped: false, filter: .events, anythingAtAll: true)
+                == "Nothing of this kind right now — choose All to see the rest.")
+        #expect(StewardPaneWords.emptyLine(showSkipped: true, filter: .all, anythingAtAll: true) == "Nothing is skipped.")
+        #expect(StewardPaneWords.emptyLine(showSkipped: false, filter: .all, anythingAtAll: false)
+                == "No events found yet, and nothing to tidy right now.")
+    }
+
+    /// An event's log line: its KIND and its counts. Never its title (it
+    /// can carry a person's name), never its year, never a filename.
+    @Test func anEventsLogLineCarriesItsKindAndCountsOnly() {
+        var c = StewardCase(id: "event:birthday:alex:1994", kind: .event, title: "Alex's 12th birthday",
+                            facts: StewardFacts(bytes: 3 * GB, count: 14))
+        c.eventKind = "birthday"
+        c.eventYear = 1994
+        c.detail = "14 clips · 3 drives · 2 h 10 m · Jun 10–12, 1994"
+        c.copies = [StewardCopy(id: UUID(), filename: "alex party.mov", drive: "SanDisk", folder: "Tapes/Alex",
+                                sizeBytes: GB, durationSeconds: 60, isOnline: true, standing: .member,
+                                reason: "2 days after Alex's 12th birthday")]
+        for verb in [StewardLog.Verb.shown, .skipped, .broughtBack, .acted] {
+            let line = StewardLog.line(verb, c, action: verb == .acted ? "Show these in the Catalog" : nil)
+            #expect(line.contains("— Event [occasion birthday] · 14 files · "))
+            #expect(!line.contains("Alex") && !line.contains("alex") && !line.contains("12th") && !line.contains("1994")
+                    && !line.contains("Tapes") && !line.contains(".mov"), "said: \(line)")
+        }
+        var d = StewardCase(id: "day:1996-07-14", kind: .unlabelledDay, title: "A day in July 1996",
+                            facts: StewardFacts(bytes: GB, count: 9))
+        d.eventYear = 1996
+        let dayLine = StewardLog.line(.shown, d)
+        #expect(dayLine.contains("— A day to name [a day with no name] · 9 files · ") && !dayLine.contains("1996"))
+        #expect(StewardLog.viewLine(filter: .events, eventsByYear: true, listed: 42)
+                == "Tidy suggestions: showing Events, events by year · 42 listed")
+        #expect(StewardLog.viewLine(filter: .space, eventsByYear: false, listed: 3) == "Tidy suggestions: showing Space · 3 listed")
     }
 
     /// No person's name, no title, no filename, no folder in a log line.
@@ -593,10 +644,11 @@ struct StewardSkipStoreTests {
 struct StewardScaleTests {
 
     /// 100k records over five drives: 2,000 duplicate sets of 4, 3,000
-    /// footage groups of 5 (each with a day-precise date; the 25 that make
-    /// the cut are guessed against 40 people), 20,000 junk rows in 40
-    /// clusters. One build under 3 s in
-    /// Debug — it runs off the main actor, once per debounced catalog change.
+    /// footage groups of 5, 20,000 junk rows in 40 clusters, and 57,000
+    /// clips with a day-precise date — every one resolved by the Angel's
+    /// derivation and labelled against 40 birthdays, one folder in forty
+    /// carrying an event word. One build under 4 s in Debug — it runs off
+    /// the main actor, once per debounced catalog change.
     @Test func hundredThousandRecordsBuildUnderBudget() {
         let drives = ["/Volumes/SanDisk", "/Volumes/LaCie", "/Volumes/X9", "/Volumes/Gone", "/Volumes/Extra"]
         let scaleVolumes = drives.map { AnalyzeVolumeFact(root: $0, isReachable: $0 != "/Volumes/Gone", isRetired: false) }
@@ -605,10 +657,12 @@ struct StewardScaleTests {
         let reasons = ["Very short (1.2s)", "Zero-byte file", "Avid render/precompute file", "System/hidden directory artifact",
                        "Filename suggests test/temp/sample content", "Zero duration", "File appears truncated (size << expected)",
                        "Screencast resolution (1920x1200), no audio"]
+        let folderWords = ["xmas", "cape", "vacation", "bday", "tapes", "misc", "camera", "imports", "old", "new"]
         var inputs: [StewardInput] = []
         inputs.reserveCapacity(100_000)
         for i in 0..<100_000 {
-            var r = StewardInput(fullPath: "\(drives[i % 5])/folder\(i % 400)/clip\(i).mov", sizeBytes: Int64(1 + i % 9) * 100_000_000)
+            let folder = i % 40 < 4 ? "\(folderWords[i % 40]) \(i % 400)" : "folder\(i % 400)"
+            var r = StewardInput(fullPath: "\(drives[i % 5])/\(folder)/clip\(i).mov", sizeBytes: Int64(1 + i % 9) * 100_000_000)
             if i < 8_000 {
                 r.duplicateGroupID = dupGroups[i % 2_000]
                 r.isKeeper = i < 2_000
@@ -621,47 +675,42 @@ struct StewardScaleTests {
                 r.footageStrength = 1 + g % 3
                 r.footageRank = (i - 8_000) / 3_000
                 r.footageEvidence = ["same name + length as clip\(g).mov"]
-                r.dayPreciseDate = day(1990 + g % 30, 1 + g % 12, 1 + g % 28)
-                r.bestDate = r.dayPreciseDate
+                r.bestDate = day(1990 + g % 30, 1 + g % 12, 1 + g % 28)
+                r.userDate = String(format: "%04d-%02d-%02d", 1990 + g % 30, 1 + g % 12, 1 + g % 28)
             } else if i < 43_000 {
                 r.junkScore = 5 + i % 4
                 r.junkReasonKey = StewardCaseBuilder.junkReasonKey([reasons[i % reasons.count]])
+            } else {
+                // A camera's stamp, a different day for most.
+                r.embeddedDate = day(1985 + (i / 7) % 35, 1 + (i / 3) % 12, 1 + i % 28)
+                r.originModel = "Camcorder"
             }
             r.dupAnalyzedAt = i % 4 == 0 ? nil : Date(timeIntervalSince1970: Double(i))
             inputs.append(r)
         }
-        let people = (0..<40).map {
-            StewardEventGuess.Person(displayName: "Person \($0)", birthYear: 1950 + $0, birthMonth: 1 + $0 % 12, birthDay: 1 + $0 % 28)
+        let birthdays = (0..<40).map {
+            FamilyBirthday(name: "Person \($0)", born: EventDay(year: 1950 + $0, month: 1 + $0 % 12, day: 1 + $0 % 28))
         }
         let start = ContinuousClock.now
         let q = StewardCaseBuilder.build(inputs: inputs, volumes: scaleVolumes,
                                          mountedRoots: ["/", "/Volumes/SanDisk", "/Volumes/LaCie", "/Volumes/X9", "/Volumes/Extra"],
-                                         alsoCleanUpWorkingCopies: true, people: people, calendar: utc)
+                                         alsoCleanUpWorkingCopies: true,
+                                         events: StewardEvents.context(coverage: .standard, birthdays: birthdays),
+                                         calendar: utc, now: fixedNow)
         let elapsed = ContinuousClock.now - start
         #expect(q.isBuilt)
         #expect(q.count(of: .reclaimGroup) == StewardCaseBuilder.maxCasesPerKind)
         #expect(q.count(of: .reclaimDrive) == 5)
         #expect(q.count(of: .sameFootage) == StewardCaseBuilder.maxCasesPerKind)
         #expect(q.count(of: .junk) == StewardCaseBuilder.maxCasesPerKind)
-        #expect(q.cases.count <= 4 * StewardCaseBuilder.maxCasesPerKind, "the queue is bounded whatever the catalog's size")
+        #expect(q.count(of: .event) == StewardEvents.maxEventCases, "far more events than the lane keeps")
+        #expect(q.count(of: .unlabelledDay) == StewardCaseBuilder.maxCasesPerKind)
+        #expect(q.placeableClips == 100_000 && q.placedClips > 50_000)
+        #expect(q.cases.count <= StewardEvents.maxEventCases + 5 * StewardCaseBuilder.maxCasesPerKind,
+                "the list is bounded whatever the catalog's size")
         #expect(q.cases.allSatisfy { $0.copies.count <= StewardCaseBuilder.maxCopiesPerCase && $0.recordIDs.count <= StewardCaseBuilder.maxIDsPerCase })
-        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(3_000)),
-                "steward build took \(elapsed) for 100k records — over the 3 s budget")
-    }
-
-    /// The guess is per GROUP, not per record: 3,000 groups × 40 people.
-    @Test func guessingForThreeThousandGroupsIsQuick() {
-        let people = (0..<40).map {
-            StewardEventGuess.Person(displayName: "Person \($0)", birthYear: 1950 + $0, birthMonth: 1 + $0 % 12, birthDay: 1 + $0 % 28)
-        }
-        let start = ContinuousClock.now
-        var guessed = 0
-        for g in 0..<3_000 {
-            let d = day(1990 + g % 30, 1 + g % 12, 1 + g % 28)
-            if StewardEventGuess.guess(groupDateSpan: .init(earliest: d, latest: d), people: people, calendar: utc) != nil { guessed += 1 }
-        }
-        let elapsed = ContinuousClock.now - start
-        #expect(guessed > 0)
-        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(1_500)), "3,000 guesses took \(elapsed)")
+        #expect(q.cases.map(\.kind.lane) == q.cases.map(\.kind.lane).sorted(), "lane after lane")
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(4_000)),
+                "steward build took \(elapsed) for 100k records — over the 4 s budget")
     }
 }
