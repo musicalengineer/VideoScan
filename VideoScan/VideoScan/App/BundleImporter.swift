@@ -523,8 +523,10 @@ enum BundleImporter {
     private static func safeInstallPOI(src: URL, dest: URL, folderName: String,
                                        trashDir: URL? = nil) throws {
         let fm = FileManager.default
+        // `<name>.import-<UUID>` — the one spelling POIStorage.poiFolders
+        // excludes, so a temp left behind below is never listed as a person.
         let temp = dest.deletingLastPathComponent()
-            .appendingPathComponent("\(folderName).import-\(UUID().uuidString)",
+            .appendingPathComponent("\(folderName)\(POIStorage.importStagingMarker)\(UUID().uuidString)",
                                     isDirectory: true)
 
         // Copy.
