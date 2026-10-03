@@ -7,10 +7,17 @@
 // the card swaps the charts for the metadata editor (VolumeEditor), so
 // nothing the old pane could do is lost.
 //
-// The pane owns the per-volume statistics (`VolumeDashboardStats`) so the
-// card's "Media here" tile and the charts read ONE computation: projected
-// on the main actor, aggregated in a detached task, refreshed on catalog
-// mutation — never O(records) inside a view body.
+// 2026-10-02 (Analyze redesign, Phase A): the Overview gained the
+// "Reclaimable" card (StorageReclaimableCard) between the info card and
+// the charts — duplicate copies on this drive, how current that knowledge
+// is, Update, and "Delete duplicates here…" (the Delete entry point moved
+// here from the Catalog's Duplicates menu; the job is unchanged).
+//
+// The pane owns the per-volume statistics (`VolumeDashboardStats`) AND
+// the reclaimable estimate so the card's "Media here" tile, the charts and
+// the Reclaimable card read ONE computation pass: projected on the main
+// actor, aggregated in a detached task, refreshed on catalog mutation —
+// never O(records) inside a view body.
 
 import SwiftUI
 
@@ -35,6 +42,8 @@ struct VolumeDetailPane: View {
     }
 
     @State private var stats: VolumeDashboardStats? = nil
+    /// The Reclaimable card's numbers — same compute pass as `stats`.
+    @State private var reclaimable: ReclaimableEstimate? = nil
     @State private var freeBytes: Int64? = nil
     /// Live total capacity from statfs when the drive is mounted; the
     /// card/dashboard prefer it over the hand-entered `capacityTB`.
@@ -56,6 +65,16 @@ struct VolumeDetailPane: View {
             Divider()
             switch mode.wrappedValue {
             case .overview:
+                // Reclaimable first (Rick's question), then the charts.
+                // Never offered on the Master Archive's volume — the whole
+                // FamilyArchive drive is near read-only (2026-09-22).
+                if !model.isMasterArchive(target), !target.isRetired {
+                    StorageReclaimableCard(volumePath: target.searchPath,
+                                           isReachable: target.isReachable,
+                                           estimate: reclaimable)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 12)
+                }
                 VolumeDashboardView(target: target,
                                     stats: stats,
                                     capacityBytes: capacityBytes,
@@ -73,6 +92,7 @@ struct VolumeDetailPane: View {
         }
         .onChange(of: model.volumeAggregatesRevision) { _, _ in recompute() }
         .onChange(of: target.isReachable) { _, _ in recompute() }
+        .onChange(of: model.duplicateKeeperSettings.alsoCleanUpWorkingCopies) { _, _ in recompute() }
         .onDisappear { computeTask?.cancel() }
     }
 
@@ -84,19 +104,27 @@ struct VolumeDetailPane: View {
 
     // MARK: - Compute
 
-    /// Main-actor projection of the records under this target, then one
-    /// detached aggregation (and a statfs for free space when the drive
-    /// is mounted). A newer call cancels the in-flight one.
+    /// Main-actor projection of the records under this target (and, for
+    /// the Reclaimable card, of every active record — the other copies can
+    /// be on any drive), then one detached aggregation (and a statfs for
+    /// free space when the drive is mounted). A newer call cancels the
+    /// in-flight one.
     private func recompute() {
         computeTask?.cancel()
         isComputing = true
         let root = target.searchPath
         let inputs = VolumeDashboardCalculator.project(model.records, under: root)
+        let reclaimInputs = ReclaimableCalculator.project(model.records)
+        let crossMode = model.duplicateKeeperSettings.alsoCleanUpWorkingCopies
         let probeFree = target.isReachable && !target.isRetired
         computeTask = Task {
-            let (result, free, cap) = await Task.detached(priority: .userInitiated) {
-                () -> (VolumeDashboardStats, Int64?, Int64?) in
+            let (result, reclaim, free, cap) = await Task.detached(priority: .userInitiated) {
+                () -> (VolumeDashboardStats, ReclaimableEstimate, Int64?, Int64?) in
                 let s = VolumeDashboardCalculator.compute(inputs: inputs, root: root)
+                let r = ReclaimableCalculator.compute(inputs: reclaimInputs,
+                                                      volumeRoot: root,
+                                                      mountedRoots: VolumeReachability.currentMountedRoots(),
+                                                      alsoCleanUpWorkingCopies: crossMode)
                 var f: Int64? = nil
                 var c: Int64? = nil
                 if probeFree {
@@ -106,10 +134,11 @@ struct VolumeDetailPane: View {
                         c = size.int64Value
                     }
                 }
-                return (s, f, c)
+                return (s, r, f, c)
             }.value
             if Task.isCancelled { return }
             stats = result
+            reclaimable = reclaim
             freeBytes = free
             liveCapacityBytes = cap
             isComputing = false
