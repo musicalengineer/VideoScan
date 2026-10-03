@@ -440,6 +440,45 @@ of the same event; (8) the puzzle is the UI/UX.
     groups, people in frame, transcript cues, "the best copy of this
     event" handed to the Angel; Hallie answers "show me [someone]'s first
     birthday" from the same facts.
+- **Events lead the pane (Rick, later on 2026-10-03):** "it should help
+  find events, groups of similar events in time … we can't reliably find
+  a person's face since the family looks too similar, but we can use
+  heuristic metadata, like the Archive Angel does for promotion
+  recommendations, to identify 'someone's birthday' or Christmas or
+  Thanksgiving or 'down the Cape' … The deletion of dups is just to keep
+  the database down." So the trial's order is now **Events → days to
+  name → Same footage → Reclaim space → Probably not worth keeping**,
+  lane after lane (no more taking turns), with a filter above the list
+  (All · Events · Same footage · Space · Not worth keeping) and a "By
+  year" order for the events.
+  - *An event* = the Angel's event label (rules v14, VideoScanCore
+    `EventLabeler`): a holiday from a trusted day, a People-tab birthday
+    within the window ("Alex's 12th birthday"), or a word in the file or
+    folder name with the year ("Cape 1996") — in one year. The trusted
+    day is the Angel's own (`ArchiveAngelEvent.derive`). There is no
+    second labeller and no second date rule; the first trial's
+    `StewardEventGuess` is deleted and the Same-footage title guess is
+    now the labeller's majority among the group's dated members.
+  - A clip with several labels is in each event ("also in: …"); a clip
+    whose footage group (Likely or stronger) has a member in an event
+    joins it "by matching footage" unless its own date says otherwise.
+  - *A day to name* = four or more clips on one trusted day (or up to
+    three days running) that carry no label.
+  - An event card says how its clips were placed (counted, and per clip
+    when opened) and what is inside from existing knowledge — copies of
+    each other, same footage, in the archive, the best copy where Find
+    Similar Footage already named one. Its actions only LOOK (the
+    Catalog, the footage group, the copies among them); it has no delete
+    action, and it may list archived clips and the Angel's picks because
+    it proposes nothing about them.
+  - **Nothing is stored.** Events are derived on every build; naming or
+    confirming one needs somewhere to keep the name and is shown as a
+    gap. Log lines carry an event's kind and counts, never its title.
+  - One rule of the trial's own, kept from its first QA: a 1 January day
+    nobody typed is a reset camera clock and places nothing. The Angel's
+    resolver has no such rule (it would call it New Year's Day) —
+    **open question for Rick:** move the rule into the Angel's day rule,
+    or keep it here only.
 
 ## 6. Staging (each stage ships whole; nothing half-moved)
 

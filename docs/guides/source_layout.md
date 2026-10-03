@@ -77,10 +77,11 @@ SwiftUI pieces.
 
 **Steward/** — the content steward's trial pane at the top of the Triage tab
 (2026-10-03; design §5.6 of
-`docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md`): the case
-builder over knowledge already on the records (duplicate sets, footage
-groups, junk scores), the skip memory, the event guess, the focused-card
-proof (the Delete planner's own functions) and the pane and card views. It
+`docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md`): the Events
+lane (`StewardEvents.swift` — occasions grouped from the Angel's event labels
+and trusted day; nothing stored), the case builder over knowledge already on
+the records (duplicate sets, footage groups, junk scores), the skip memory,
+the focused-card proof (the Delete planner's own functions) and the pane and card views. It
 deletes nothing itself — its only way to deletion is the shared Delete
 duplicates front door (`VideoScan/VideoScan/MediaOps/DeleteDuplicatesFlow.swift`);
 a source sensor pins that.
