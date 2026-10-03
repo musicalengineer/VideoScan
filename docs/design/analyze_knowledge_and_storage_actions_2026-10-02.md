@@ -440,6 +440,36 @@ of the same event; (8) the puzzle is the UI/UX.
     groups, people in frame, transcript cues, "the best copy of this
     event" handed to the Angel; Hallie answers "show me [someone]'s first
     birthday" from the same facts.
+- **Priority ruling (Rick, 2026-10-03, afternoon): events are the point;
+  duplicate deletion is housekeeping.** "It should help find events,
+  groups of similar events in time … we can't reliably find [a person]
+  in videos since the family looks too similar, [but] we can use
+  heuristic metadata, like AA does for promotion recommendations, to
+  identify [someone's] birthday or Christmas or Thanksgiving or 'down the
+  Cape' … The deletion of dups is just to keep the database down."
+  - The occasion labeller already exists: `VideoScanCore/EventLabeler`
+    (Angel rules v14, 2026-09-29) — calendar holidays, People-tab
+    birthdays, and a name lexicon over file and folder names ("xmas94",
+    "cape", trips), each with a human reason line. The Angel uses it only
+    for scoring; the steward makes it visible. **One labeller, two
+    stewards** — no second implementation (the trial's
+    `StewardEventGuess` is removed in favour of it).
+  - The pane leads with **Events** ("Christmas 1994 — 14 clips · 3 drives
+    · 2 h 10 m"), then **unlabelled days** (≥ 4 clips on one trusted day,
+    waiting for a name), then Same footage, then Reclaim space, then
+    Probably not worth keeping. An event card shows *why* (reasons,
+    counted) and *what's inside* (copies of each other, same footage, in
+    the archive); it never offers a delete.
+  - Evidence the labeller could gain later, in the Angel's
+    evidence-fusion spirit (and where face recognition stays demoted):
+    transcript cues ("happy birthday", carols), OCR'd title cards, user
+    places, GPS where a file has it, and recurrence (the same week every
+    summer ⇒ a trip).
+  - Cadence for the housekeeping side ("turn the dial over time"): as
+    files are promoted to the archive, duplicate-cleanup passes cycle
+    behind them. GH #258 (the delete planner must leave alone what the
+    Angel has chosen or Rick has filed as Archived) is the prerequisite
+    and was approved the same day.
 
 ## 6. Staging (each stage ships whole; nothing half-moved)
 
