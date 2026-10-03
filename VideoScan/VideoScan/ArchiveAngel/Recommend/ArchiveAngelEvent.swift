@@ -104,10 +104,13 @@ enum ArchiveAngelEvent {
     /// The one derivation behind `resolveDetailed` and `labels`.
     /// `keysOnly` (the pre-pass, once per catalog file): skip the labels
     /// that could never key anything — a file with no year, or only a
-    /// copy-era stamp's year, and no trusted day.
+    /// copy-era stamp's year, and no trusted day. `day` is the trusted
+    /// day itself, typed — the same day the key's "d:" part spells (nil
+    /// exactly when the key has none); the façade's occasion reader hands
+    /// it out so nobody outside parses the key.
     nonisolated static func derive(_ c: ArchiveAngelCandidate, now: Date, context: ArchiveAngelEventContext,
                                    keysOnly: Bool, folders: inout EventLabeler.FolderWordCache)
-    -> (key: String, year: Int?, claim: DateClaim?, labels: [EventLabel]) {
+    -> (key: String, year: Int?, claim: DateClaim?, labels: [EventLabel], day: EventDay?) {
         let r = RecordDateResolver.resolve(
             userDate: c.userDate,
             userDateConfidence: c.userDateConfidence,
@@ -123,7 +126,7 @@ enum ArchiveAngelEvent {
         guard let year = r.year else {
             let explain = context.labels && !keysOnly
             return ("", nil, nil, explain ? EventLabeler.nameLabels(filename: c.filename, fullPath: c.fullPath, year: nil,
-                                                                    cache: &folders) : [])
+                                                                    cache: &folders) : [], nil)
         }
         let claim = DateClaim(r)
         // A stamp with no camera behind it dates the COPY: it keys no day,
@@ -132,11 +135,11 @@ enum ArchiveAngelEvent {
         var day: EventDay?
         if r.precision == .day, trusted, let m = r.month, let dd = r.day { day = EventDay(year: year, month: m, day: dd) }
         let dayKey = day == nil ? "" : "d:" + r.isoString
-        guard context.labels, trusted || !keysOnly else { return (dayKey, year, claim, []) }
+        guard context.labels, trusted || !keysOnly else { return (dayKey, year, claim, [], day) }
         let labels = EventLabeler.labels(day: day, year: trusted ? year : nil, filename: c.filename, fullPath: c.fullPath,
                                          birthdays: context.birthdays, birthdayWindowDays: context.birthdayWindowDays,
                                          cache: &folders)
-        return (composeKey(labels, dayKey: dayKey), year, claim, labels)
+        return (composeKey(labels, dayKey: dayKey), year, claim, labels, day)
     }
 
     /// The label keys (each once, in label order) and then the day key,

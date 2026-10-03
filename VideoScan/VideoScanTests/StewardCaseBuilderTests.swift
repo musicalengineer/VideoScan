@@ -695,7 +695,7 @@ struct StewardScaleTests {
         let q = StewardCaseBuilder.build(inputs: inputs, volumes: scaleVolumes,
                                          mountedRoots: ["/", "/Volumes/SanDisk", "/Volumes/LaCie", "/Volumes/X9", "/Volumes/Extra"],
                                          alsoCleanUpWorkingCopies: true,
-                                         events: StewardEvents.context(coverage: .standard, birthdays: birthdays),
+                                         events: ArchiveAngel.OccasionReader(birthdays: birthdays),
                                          calendar: utc, now: fixedNow)
         let elapsed = ContinuousClock.now - start
         #expect(q.isBuilt)

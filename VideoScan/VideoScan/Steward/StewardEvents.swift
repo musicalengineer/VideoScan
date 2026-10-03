@@ -11,12 +11,14 @@
 // VideoScanCore.EventLabeler says it is (Archive Angel rules v14): a holiday
 // from a trusted day, a People-tab birthday within the window, a curated
 // word in the file or folder name with the year. And the DAY a clip is
-// trusted to record is the Angel's own answer — `ArchiveAngelEvent.derive`,
-// the one derivation behind the Angel's event key and its Occasion line:
-// RecordDateResolver (a person's date, a camera's stamp, the dossier's
-// date, a date in the name — never a file-system date, never a year range)
-// and the rule that a stamp with no camera behind it dates the COPY. This
-// file only GROUPS what those two say:
+// trusted to record is the Angel's own answer — asked through the Angel's
+// front door (`ArchiveAngel.OccasionReader`, Facade/ArchiveAngel+Occasions),
+// which runs the one derivation behind the Angel's event key and its
+// Occasion line: RecordDateResolver (a person's date, a camera's stamp,
+// the dossier's date, a date in the name — never a file-system date, never
+// a year range) and the rule that a stamp with no camera behind it dates
+// the COPY. The steward names nothing of the Angel's inside. This file
+// only GROUPS what those two say:
 //
 //   Event          every clip that carries the same labelled occasion in
 //                  the same year (the labeller's own key: "e:christmas:1994",
@@ -50,7 +52,7 @@
 // records already hold; no record, no catalog file and no log line ever
 // receives an event's name.
 //
-// COST. One `derive` per record (O(characters) of its name; each folder's
+// COST. One reader call per record (O(characters) of its name; each folder's
 // words are scanned once per build — the labeller's FolderWordCache), then
 // O(records) grouping. Only the events that make the cut get their rows
 // built. Memory: one StewardPlacement per record (~80 bytes, most with no
@@ -129,61 +131,37 @@ enum StewardEvents {
     /// Likely originals named on the "Best copy of each" line.
     static let maxBestCopyNames = 3
 
-    // MARK: The Angel's context, with labels always on
+    // MARK: One clip (the Angel's answer, through its front door)
 
-    /// The labeller's inputs as the Angel holds them — its birthday window
-    /// and the People tab's birthdays — with the labels switched ON: a
-    /// policy that turns the Angel's event labels off changes what the Angel
-    /// spreads a batch over, not what an occasion is.
-    nonisolated static func context(coverage: AngelCoverageRules, birthdays: [FamilyBirthday]) -> ArchiveAngelEventContext {
-        var rules = coverage
-        rules.eventLabels = true
-        return ArchiveAngelEventContext(coverage: rules, birthdays: birthdays)
+    /// The date and name facts the Angel's reader is asked about — the
+    /// same ones the Angel projects from a record.
+    nonisolated static func facts(_ r: StewardInput) -> ArchiveAngel.OccasionFacts {
+        ArchiveAngel.OccasionFacts(
+            id: r.id, filename: r.filename, fullPath: r.fullPath,
+            userDate: r.userDate, userDateConfidence: r.userDateConfidence,
+            embeddedDate: r.embeddedDate, originMake: r.originMake, originModel: r.originModel,
+            originEncoder: r.originEncoder,
+            inferredDate: r.inferredDate, inferredConfidence: r.inferredConfidence, inferredRange: r.inferredRange)
     }
 
-    // MARK: One clip (the Angel's derivation, reused)
-
-    /// The clip's trusted day, year and labels — `ArchiveAngelEvent.derive`
-    /// over the same date facts the Angel projects, then the one filter
-    /// described in the file header.
-    nonisolated static func place(_ r: StewardInput, now: Date, context: ArchiveAngelEventContext,
+    /// The clip's trusted day, year and labels — the Angel's own answer
+    /// (`reader`, taken from `archiveAngel.occasionReader`: labels always
+    /// on, the trusted day typed, a copy-era stamp's year already
+    /// withheld), then the one filter described in the file header.
+    nonisolated static func place(_ r: StewardInput, now: Date, reader: ArchiveAngel.OccasionReader,
                                   folders: inout EventLabeler.FolderWordCache) -> StewardPlacement {
-        let candidate = ArchiveAngelCandidate(
-            id: r.id, filename: r.filename, fullPath: r.fullPath,
-            userDate: r.userDate, inferredRecordDate: r.inferredDate, inferredDateConfidence: r.inferredConfidence,
-            deviceModel: r.originModel ?? "", captureDate: r.embeddedDate,
-            userDateConfidence: r.userDateConfidence, originMake: r.originMake, originEncoder: r.originEncoder,
-            inferredDateRange: r.inferredRange)
-        guard !candidate.isLivePhotoMotion else { return StewardPlacement(isCounted: false) }
-        let derived = ArchiveAngelEvent.derive(candidate, now: now, context: context, keysOnly: false, folders: &folders)
-        var placement = StewardPlacement(day: trustedDay(inKey: derived.key), year: nil, labels: derived.labels)
-        if let claim = derived.claim {
-            // The Angel lends a copy-era stamp's year to nothing; neither
-            // does this (same threshold, same constant).
-            let copyStamp = claim.sourceRank == 1
-                && claim.confidenceMilli < Int((ArchiveAngelEvent.dayKeyMinimumConfidence * 1000).rounded())
-            placement.year = copyStamp ? nil : derived.year
-            // QA F7 / F1: 1 January that nobody typed is a reset clock —
-            // its year is no better than its day. The name words stay as
-            // explanation, with no year, so they key nothing.
-            if let day = placement.day, day.month == 1, day.day == 1, claim.sourceRank != 0 {
-                placement.day = nil
-                placement.year = nil
-                placement.labels = placement.labels.filter { $0.source == .name }.map { var l = $0; l.year = nil; return l }
-            }
+        let occasions = reader.occasions(for: facts(r), now: now, folders: &folders)
+        guard !occasions.isLivePhotoMotion else { return StewardPlacement(isCounted: false) }
+        var placement = StewardPlacement(day: occasions.day, year: occasions.year, labels: occasions.labels)
+        // QA F7 / F1: 1 January that nobody typed is a reset clock — its
+        // year is no better than its day. The name words stay as
+        // explanation, with no year, so they key nothing.
+        if let day = placement.day, day.month == 1, day.day == 1, !occasions.isPersonDated {
+            placement.day = nil
+            placement.year = nil
+            placement.labels = placement.labels.filter { $0.source == .name }.map { var l = $0; l.year = nil; return l }
         }
         return placement
-    }
-
-    /// The day in the Angel's event key ("e:christmas:1994|d:1994-12-25" →
-    /// 25 Dec 1994); nil when the key carries no day — the file has no
-    /// trusted day.
-    nonisolated static func trustedDay(inKey key: String) -> EventDay? {
-        guard !key.isEmpty, let part = key.split(separator: ArchiveAngelEvent.keySeparator).last,
-              part.hasPrefix("d:") else { return nil }
-        let numbers = part.dropFirst(2).split(separator: "-").compactMap { Int($0) }
-        guard numbers.count == 3 else { return nil }
-        return EventDay(year: numbers[0], month: numbers[1], day: numbers[2])
     }
 
     // MARK: Words
