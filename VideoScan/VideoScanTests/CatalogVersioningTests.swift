@@ -1635,8 +1635,8 @@ struct CatalogLoadHonoursUnknownVerdictTests {
 struct CatalogObserverGatedByHoldTests {
 
     private final class CountingObserver: CatalogStoreObserver {
-        var count = 0
-        func catalogStoreDidWrite(_ store: CatalogStore) { count += 1 }
+        var callbacks = 0
+        func catalogStoreDidWrite(_ store: CatalogStore) { callbacks += 1 }
     }
 
     /// A landed async save, parked after verification and before its
@@ -1665,7 +1665,7 @@ struct CatalogObserverGatedByHoldTests {
         release.signal()
         await waitUntil(3) { store.currentGeneration == wrote }
         try await Task.sleep(nanoseconds: 100_000_000)
-        #expect(observer.count == 0, "catalogStoreDidWrite fired \(observer.count)× for a save whose primary was replaced by a newer catalog")
+        #expect(observer.callbacks == 0, "catalogStoreDidWrite fired \(observer.callbacks)× for a save whose primary was replaced by a newer catalog")
         #expect(store.newerCatalogVersion == futureVersion)
     }
 
@@ -1678,7 +1678,7 @@ struct CatalogObserverGatedByHoldTests {
         let observer = CountingObserver()
         store.observer = observer
         #expect(store.saveNow(records: []))
-        #expect(observer.count == 1, "control: a healthy save notifies once")
+        #expect(observer.callbacks == 1, "control: a healthy save notifies once")
         let g = store.currentGeneration
         // The seam runs on the write queue after verification: replace the
         // primary there, before the main-actor completion.
@@ -1686,7 +1686,7 @@ struct CatalogObserverGatedByHoldTests {
         store.testAfterVerifyBeforeCompletion = { written in try? newer.write(to: written, options: .atomic) }
         _ = await store.saveAcknowledged(records: [VideoRecord()])
         try await Task.sleep(nanoseconds: 100_000_000)
-        #expect(observer.count == 1, "catalogStoreDidWrite fired \(observer.count - 1)× for an acknowledged save whose primary was replaced")
+        #expect(observer.callbacks == 1, "catalogStoreDidWrite fired \(observer.callbacks - 1)× for an acknowledged save whose primary was replaced")
         #expect(store.newerCatalogVersion == futureVersion, "the completion must latch what it found")
         #expect(try Data(contentsOf: url) == newer)
     }

@@ -342,14 +342,88 @@ enum CatalogHeaderScanner {
         return out
     }
 
+    // MARK: Verdict cache (codex cycle #30 R4)
+
+    /// Identity of the BYTES a verdict was read from: device + inode (a
+    /// rename-in-place gives a new inode), size, and the modification AND
+    /// change timestamps at nanosecond resolution (ctime cannot be set from
+    /// user space, so an mtime-preserving copy tool still changes the key).
+    /// Taken with fstat(2) on the handle that is then read, so the key and
+    /// the bytes belong to the same file. (≈ the fields of `struct stat`
+    /// you would compare in C.)
+    struct FileKey: Equatable, Sendable {
+        let device: Int32
+        let inode: UInt64
+        let size: Int64
+        let mtimeSec: Int
+        let mtimeNsec: Int
+        let ctimeSec: Int
+        let ctimeNsec: Int
+
+        /// nil when fstat fails or the descriptor is not a regular file.
+        init?(fileDescriptor fd: Int32) {
+            var st = stat()
+            guard fstat(fd, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else { return nil }
+            device = st.st_dev
+            inode = st.st_ino
+            size = st.st_size
+            mtimeSec = st.st_mtimespec.tv_sec
+            mtimeNsec = st.st_mtimespec.tv_nsec
+            ctimeSec = st.st_ctimespec.tv_sec
+            ctimeNsec = st.st_ctimespec.tv_nsec
+        }
+    }
+
+    private struct CacheEntry {
+        var key: FileKey
+        var found: Found
+    }
+
+    /// One verdict per path for the life of the process, valid while the
+    /// file's `FileKey` is unchanged. Every probe costs one open + fstat;
+    /// the O(file) scan runs only when the key differs from the cached one
+    /// — i.e. when the file CHANGED. Declined in cycle #29 ("every verdict
+    /// that would re-scan latches or is followed by a canonical save");
+    /// codex showed the residual in cycle #30: a v0 file whose save is
+    /// refused for another reason (stale generation, lock) re-scanned per
+    /// attempt, and a v0 save scanned twice (precondition + queue gate).
+    private static let verdictCache = OSAllocatedUnfairLock(initialState: [String: CacheEntry]())
+
+    /// The bytes at `url` were just written by THIS process and proven on
+    /// disk (read-back SHA-256 equal to the encoded payload, read through
+    /// the handle `key` was taken from). Our encoder writes one complete
+    /// object with `version` and `generation` first and no other top-level
+    /// stamp (CAT-2), so this is exactly what a scan would find — recorded
+    /// so the probes that follow every save (completion bookkeeping, the
+    /// next save's precondition and gate) cost a stat, not a pass.
+    static func noteVerifiedWrite(at url: URL, key: FileKey, version: Int, generation: Int) {
+        var found = Found()
+        found.version = version
+        found.generation = generation
+        found.versionKeySeen = true
+        found.complete = true
+        verdictCache.withLock { $0[url.path] = CacheEntry(key: key, found: found) }
+    }
+
     // MARK: Whole-file probe
 
-    /// The probe `CatalogSnapshot.header` uses: head → tail → whole.
-    /// nil only when the file cannot be opened (the caller decides whether
-    /// that is "no file" or "unreadable").
+    /// The probe `CatalogSnapshot.header` uses: cached by `FileKey`, else
+    /// head → tail → whole. nil only when the file cannot be opened or is
+    /// not a regular file (the caller decides whether that is "no file" or
+    /// "unreadable").
     static func probe(fileAt url: URL, window: Int) -> Found? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
+        guard let key = FileKey(fileDescriptor: handle.fileDescriptor) else { return nil }
+        let path = url.path
+        if let hit = verdictCache.withLock({ $0[path] }), hit.key == key { return hit.found }
+        let found = scan(handle, path: path, window: window)
+        verdictCache.withLock { $0[path] = CacheEntry(key: key, found: found) }
+        return found
+    }
+
+    /// The uncached passes over an open handle positioned at byte 0.
+    private static func scan(_ handle: FileHandle, path: String, window: Int) -> Found {
         // read(upToCount:) hands back nil at EOF — an empty file.
         let head = (try? handle.read(upToCount: window)).flatMap { $0 } ?? Data()
         var fwd = Forward()
@@ -377,7 +451,7 @@ enum CatalogHeaderScanner {
         // first window; simpler than carrying state across the seek).
         // This is the pass that can say "confirmed absent".
         wholeFilePasses.withLock { $0 += 1 }
-        wholeFilePassesByPath.withLock { $0[url.path, default: 0] += 1 }
+        wholeFilePassesByPath.withLock { $0[path, default: 0] += 1 }
         guard (try? handle.seek(toOffset: 0)) != nil else { return found }   // verdict stays .unknown
         var whole = Forward()
         while !whole.isDone, let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {

@@ -1688,14 +1688,25 @@ final class CatalogStore {
     /// calling CatalogSync's: the dependency direction is CatalogSync →
     /// CatalogStore, never the reverse.)
     nonisolated static func sha256HexStreaming(fileURL: URL) throws -> String {
+        try sha256HexStreamingWithKey(fileURL: fileURL).sha256
+    }
+
+    /// `sha256HexStreaming` plus the `FileKey` of the bytes it hashed —
+    /// fstat(2) on the SAME handle, taken before the first read, so a
+    /// caller that proves the hash can record the verdict for exactly those
+    /// bytes (codex cycle #30 R4). A rename-replacement after the open is
+    /// a different inode; an in-place write after the fstat is a different
+    /// mtime/ctime; either way the key no longer matches the live file.
+    nonisolated static func sha256HexStreamingWithKey(fileURL: URL) throws -> (sha256: String, key: CatalogHeaderScanner.FileKey?) {
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
+        let key = CatalogHeaderScanner.FileKey(fileDescriptor: handle.fileDescriptor)
         var hasher = SHA256()
         let chunkSize = 1024 * 1024
         while let chunk = try handle.read(upToCount: chunkSize), !chunk.isEmpty {
             hasher.update(data: chunk)
         }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+        return (hasher.finalize().map { String(format: "%02x", $0) }.joined(), key)
     }
 
     /// Best-effort durability barrier for a just-renamed file: F_FULLFSYNC
@@ -1795,7 +1806,7 @@ final class CatalogStore {
             if TestEnvironment.isTestHost, let corrupt = afterWriteBeforeVerify {
                 corrupt(fileURL)
             }
-            let actual = try Self.sha256HexStreaming(fileURL: fileURL)
+            let (actual, verifiedKey) = try Self.sha256HexStreamingWithKey(fileURL: fileURL)
             guard expected == actual else {
                 let err = CatalogWriteError.verificationFailed(
                     expectedSHA256: expected, actualSHA256: actual, bytes: data.count)
@@ -1807,6 +1818,15 @@ final class CatalogStore {
                 NSLog("VideoScan: CATALOG VERIFICATION FAILED — %@", err.userFacingDescription)
                 catalogStoreLog.fault("catalog verification failed: expected \(expected, privacy: .public) got \(actual, privacy: .public)")
                 return err
+            }
+            // The bytes on disk are proven to be the payload we encoded, and
+            // `verifiedKey` identifies exactly those bytes: record their
+            // verdict so the probes that follow this save (completion
+            // bookkeeping, the next precondition, the queue gate) are a
+            // stat, not an O(file) pass (codex cycle #30 R4).
+            if let verifiedKey {
+                CatalogHeaderScanner.noteVerifiedWrite(at: fileURL, key: verifiedKey,
+                                                       version: payload.version, generation: payload.generation)
             }
             // Post-verification window (codex cycle #29 F4): the bytes are
             // proven on disk; the caller's completion has not run yet.
