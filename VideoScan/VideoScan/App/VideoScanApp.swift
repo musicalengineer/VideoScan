@@ -822,7 +822,21 @@ struct VideoScanApp: App {
         .windowResizability(.contentMinSize)
         .defaultPosition(.topTrailing)
 
-        Window("Analyze Dashboard", id: "dossier") {
+        // Analyze panel (Phase A trial, 2026-10-02): ⇧⌘O and the Catalog
+        // "Analyze Catalog" button open THIS window now. Same observation
+        // discipline as the legacy dashboard: plain references, and the
+        // view observes only two equality-gated snapshots.
+        Window(AnalyzeWindowOpener.windowTitle, id: AnalyzeWindowOpener.sceneID) {
+            AnalyzePanelView(model: catalogModel,
+                             orchestrator: captionOrchestrator,
+                             center: fileOpsCenter)
+        }
+        .windowResizability(.contentMinSize)
+        .defaultPosition(.topTrailing)
+
+        // The legacy dashboard — unchanged, reachable from Window ▸
+        // "Analyze Dashboard (legacy)" until Phase C retires it.
+        Window(DossierWindowOpener.windowTitle, id: DossierWindowOpener.sceneID) {
             // Direct references, NOT .environmentObject — the dashboard
             // deliberately holds model/orchestrator unobserved and
             // observes only the ≤2 Hz dashboardSnapshot (2026-07-14
@@ -983,10 +997,16 @@ struct WindowMenuItems: View {
         }
         .keyboardShortcut("v", modifiers: [.command, .shift])
 
-        Button("Analyze Dashboard") {
-            DossierWindowOpener.open(using: openWindow, source: "menu")
+        // Phase A trial (2026-10-02): ⇧⌘O opens the Analyze PANEL; the old
+        // dashboard keeps a plain item until Phase C retires it.
+        Button("Analyze") {
+            AnalyzeWindowOpener.open(using: openWindow, source: "menu")
         }
         .keyboardShortcut("o", modifiers: [.command, .shift])
+
+        Button("Analyze Dashboard (legacy)") {
+            DossierWindowOpener.open(using: openWindow, source: "menu")
+        }
     }
 }
 

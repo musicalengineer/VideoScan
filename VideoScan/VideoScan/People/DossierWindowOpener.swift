@@ -4,6 +4,12 @@ import os
 
 // MARK: - Dossier ("Analyze") window open path
 //
+// 2026-10-02 (Analyze redesign, Phase A): the ⇧⌘O shortcut and the
+// Catalog "Analyze Catalog" button now open the NEW Analyze panel (scene
+// "analyze", AnalyzeWindowOpener). This legacy dashboard stays reachable
+// from Window ▸ "Analyze Dashboard (legacy)", unchanged. The open funnel
+// below is shared by both (the sceneID/windowTitle overload).
+//
 // Punch-list #4: the Analyze dashboard window sometimes does NOT appear
 // when opened (⌘⇧O or the catalog toolbar chip). Both call sites used a
 // bare `openWindow(id: "dossier")`. That has three known failure modes on
@@ -44,12 +50,21 @@ enum DossierWindowOpener {
     /// Scene title — SwiftUI sets the NSWindow.title to this, so it is a
     /// reliable way to find the backing window (more so than the
     /// identifier, whose raw value format varies across SwiftUI versions).
-    static let windowTitle = "Analyze Dashboard"
+    static let windowTitle = "Analyze Dashboard (legacy)"
 
-    /// The single entry point both call sites use.
-    /// - source: "menu" (⌘⇧O) or "chip" (toolbar) — for the log trail.
+    /// The single entry point both legacy call sites use (Window menu
+    /// "Analyze Dashboard (legacy)").
+    /// - source: "menu" or "chip" — for the log trail.
     static func open(using openWindow: OpenWindowAction, source: String) {
-        dossierWindowLog.info("dossier dashboard open requested (source: \(source, privacy: .public))")
+        open(sceneID: sceneID, windowTitle: windowTitle, using: openWindow, source: source)
+    }
+
+    /// The same create → activate → find → clamp → raise funnel for ANY
+    /// single-instance Window scene (2026-10-02: the new Analyze panel
+    /// reuses it — AnalyzeWindowOpener). `windowTitle` is the scene title.
+    static func open(sceneID: String, windowTitle: String,
+                     using openWindow: OpenWindowAction, source: String) {
+        dossierWindowLog.info("\(windowTitle, privacy: .public) window open requested (source: \(source, privacy: .public))")
 
         // Create-or-surface the single-instance window.
         openWindow(id: sceneID)
@@ -62,19 +77,19 @@ enum DossierWindowOpener {
         // NSApp.windows synchronously — defer so we can find / log / clamp /
         // raise it. Bounded retry (NOT an unbounded loop) for the
         // first-ever-create case where one tick isn't enough.
-        surface(source: source, attemptsLeft: 3)
+        surface(sceneID: sceneID, windowTitle: windowTitle, source: source, attemptsLeft: 3)
     }
 
-    private static func surface(source: String, attemptsLeft: Int) {
+    private static func surface(sceneID: String, windowTitle: String, source: String, attemptsLeft: Int) {
         DispatchQueue.main.async {
-            guard let w = findWindow() else {
+            guard let w = findWindow(sceneID: sceneID, windowTitle: windowTitle) else {
                 if attemptsLeft > 1 {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        surface(source: source, attemptsLeft: attemptsLeft - 1)
+                        surface(sceneID: sceneID, windowTitle: windowTitle, source: source, attemptsLeft: attemptsLeft - 1)
                     }
                 } else {
                     dossierWindowLog.error(
-                        "dossier window NOT found in NSApp.windows after openWindow(id: \(sceneID, privacy: .public)) — source: \(source, privacy: .public). Scene may have failed to instantiate (failure B) or the id/title drifted.")
+                        "\(windowTitle, privacy: .public) window NOT found in NSApp.windows after openWindow(id: \(sceneID, privacy: .public)) — source: \(source, privacy: .public). Scene may have failed to instantiate (failure B) or the id/title drifted.")
                 }
                 return
             }
@@ -105,7 +120,7 @@ enum DossierWindowOpener {
     /// Find the backing NSWindow for the dossier scene. Title is the
     /// primary key (we set it in the scene); identifier substring is a
     /// belt-and-suspenders fallback.
-    private static func findWindow() -> NSWindow? {
+    private static func findWindow(sceneID: String, windowTitle: String) -> NSWindow? {
         NSApp.windows.first { w in
             w.title == windowTitle
             || (w.identifier?.rawValue.contains(sceneID) ?? false)
