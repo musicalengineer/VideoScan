@@ -145,6 +145,13 @@ struct DeleteDuplicatesWorkItem: Sendable {
     /// dispatch (`DeleteDuplicatesJob.removalBoundaryHold`); it is handed
     /// the path the file is at when it is asked (its quarantine path).
     var boundaryHold: (@Sendable (_ currentPath: String) -> String?)? = nil
+    /// THE MASTER ARCHIVE AT THE REMOVAL BOUNDARY: the archive rule asked
+    /// again by the final verdict, from the model's CURRENT designation
+    /// (`DeleteDuplicatesJob.removalBoundaryArchiveCheck`). nil = may go;
+    /// else the refusal's note — an ARCHIVE refusal, classified as main
+    /// classifies them (the row is refused, the record marked Review),
+    /// never a hold.
+    var boundaryArchive: (@Sendable (_ currentPath: String) -> (note: String, transient: Bool)?)? = nil
 }
 
 enum DeleteDuplicatesDiskOutcome: Sendable {
@@ -355,7 +362,9 @@ enum DeleteDuplicatesDiskWorker {
                                   keeperFilename: String,
                                   hooks: SignatureVerification.Hooks,
                                   archiveCheck: ArchiveRemovalCheck? = nil,
-                                  boundaryHold: (@Sendable (_ currentPath: String) -> String?)? = nil) -> DeleteDuplicatesPhaseTwo {
+                                  boundaryHold: (@Sendable (_ currentPath: String) -> String?)? = nil,
+                                  boundaryArchive: (@Sendable (_ currentPath: String) -> (note: String, transient: Bool)?)? = nil)
+        -> DeleteDuplicatesPhaseTwo {
         guard let decidedTier = decided.tier else {
             // Never reached — the caller releases a nil tier itself — but
             // a nil tier must never default to an unlink.
@@ -382,6 +391,13 @@ enum DeleteDuplicatesDiskWorker {
                     return .putBack(reason: refusal.note)
                 }
                 archiveRefusal = refusal
+                return .putBack(reason: refusal.note)
+            }
+            // The Master Archive, from TODAY's designation (the check above
+            // is the one captured at the copy's turn — an extra, earlier
+            // look that can only refuse; it is never what lets a file go).
+            if let boundaryArchive, let refusal = boundaryArchive(ticket.quarantinedPath) {
+                archiveRefusal = (refusal.note, refusal.transient, false)
                 return .putBack(reason: refusal.note)
             }
             // The holds, asked NOW — after every byte of the re-read, with
@@ -1047,7 +1063,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // The volume re-check travels with the pair (off-main)…
                 archiveCheck: model.archiveRemovalCheck(),
                 // …and so does the question it asks at the removal itself.
-                boundaryHold: Self.removalBoundaryHold(model: model, recordID: entry.id, path: entry.path))
+                boundaryHold: Self.removalBoundaryHold(model: model, recordID: entry.id, path: entry.path),
+                boundaryArchive: Self.removalBoundaryArchiveCheck(model: model, recordID: entry.id, path: entry.path))
             inFlight.insert(entry.id)
             peakInFlight = max(peakInFlight, inFlight.count)
             // The pair runs as its own main-actor task so a second SSD pair
@@ -1281,11 +1298,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 let preferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
                 let archiveCheck = item.archiveCheck
                 let boundaryHold = item.boundaryHold
+                let boundaryArchive = item.boundaryArchive
                 let phaseTwo = await runDetached(entryID: entry.id) { [hooks] in
                     DeleteDuplicatesDiskWorker.deleteQuarantined(ticket, decided: decided, facts: facts,
                                                                  preferTrash: preferTrash,
                                                                  keeperFilename: keeperName, hooks: hooks,
-                                                                 archiveCheck: archiveCheck, boundaryHold: boundaryHold)
+                                                                 archiveCheck: archiveCheck, boundaryHold: boundaryHold,
+                                                                 boundaryArchive: boundaryArchive)
                 }
                 outcome = phaseTwo.outcome
                 // Held at the removal itself (the Angel chose it, or its
@@ -1511,6 +1530,33 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let verdict = readOnly.verdict(forPath: path)
                 ?? readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)
             return verdict.map { DuplicateDeletionHold.leftAlonePrefix + VideoScanModel.readOnlyRefusalNote($0) }
+        }
+    }
+
+    /// The Master Archive rule at the removal boundary, FRESH (the sixth
+    /// thing the final verdict reads; MOPS-2): the model's CURRENT
+    /// designation through one synchronous hop to the main actor, then the
+    /// protection built from it on the disk thread, now
+    /// (`ArchiveVolumeProtection.make` — where the archive is mounted is
+    /// read afresh), and the removal-time physical check: the catalogued
+    /// path, then the path the file is at, its real path and its own
+    /// volume's UUID. Identical to the turn's answer when nothing changed.
+    /// The probes are captured at the turn, as the pair's own check does.
+    static func removalBoundaryArchiveCheck(model: VideoScanModel, recordID: UUID, path: String)
+        -> @Sendable (_ currentPath: String) -> (note: String, transient: Bool)? {
+        let uuidProbe = MasterArchiveDesignation.volumeUUIDProbe
+        let identityProbe = ArchiveVolumeProtection.mountIdentityProbe
+        return { [weak model] currentPath in
+            let now: (designation: MasterArchiveDesignation?, aliasCandidates: [String], isArchiveCopy: Bool) = onMainActor {
+                guard let model else { return (nil, [], false) }
+                return model.duplicateRemovalBoundaryArchive(recordID: recordID)
+            }
+            guard let designation = now.designation else { return nil }
+            if now.isArchiveCopy { return (VideoScanModel.bulkDeleteRefusalNote(.archiveTree, volume: ""), false) }
+            guard let protection = ArchiveVolumeProtection.make(designation: designation, aliasCandidates: now.aliasCandidates,
+                                                                probe: uuidProbe, identity: identityProbe) else { return nil }
+            let check = ArchiveRemovalCheck(protection: protection, probe: uuidProbe, identity: identityProbe)
+            return (check.refusal(forPath: path) ?? check.refusal(forPath: currentPath)).map { ($0.note, $0.transient) }
         }
     }
 

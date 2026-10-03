@@ -284,8 +284,18 @@ struct DeleteDuplicatesCodex258Round3Tests {
         let verdict = try body(job, from: "let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {",
                                to: "var outcome = map(result, proof: ticket.proof, keeper: keeperFilename)")
         #expect(verdict.contains("boundaryHold(ticket.quarantinedPath)") && verdict.contains("let now = facts.recheck()"))
+        #expect(verdict.contains("if let boundaryArchive, let refusal = boundaryArchive(ticket.quarantinedPath) {"),
+                "the final verdict no longer asks the Master Archive rule afresh")
+        // The Master Archive rule: today's designation, built into a protection there.
+        let archive = try body(job, from: "static func removalBoundaryArchiveCheck(", to: "nonisolated static func onMainActor")
+        #expect(archive.contains("return model.duplicateRemovalBoundaryArchive(recordID: recordID)"))
+        #expect(archive.contains("ArchiveVolumeProtection.make(designation: designation, aliasCandidates: now.aliasCandidates,"))
+        #expect(!archive.contains("archiveVolumeProtection()") && !archive.contains("archiveRemovalCheck()"),
+                "the boundary's Master Archive rule reads the model's cached snapshot")
+        #expect(job.contains("boundaryArchive: Self.removalBoundaryArchiveCheck(model: model, recordID: entry.id, path: entry.path))")
+                && job.contains("boundaryArchive: boundaryArchive)"))
         // The holds and the marks.
-        let boundary = try body(job, from: "static func removalBoundaryHold(", to: "nonisolated static func onMainActor")
+        let boundary = try body(job, from: "static func removalBoundaryHold(", to: "static func removalBoundaryArchiveCheck(")
         #expect(boundary.contains("model.archiveAngel.recordInBatchOnDiskFreshProbe()"))
         #expect(boundary.contains("ReadOnlyVolumeProtection.make(marks: word.readOnlyMarks, probe: uuidProbe, identity: identityProbe)"))
         #expect(!boundary.contains("Cached") && !boundary.contains("readOnlyVolumeProtection()") && !boundary.contains("recordIDsInBatchesOnDisk"),
@@ -315,6 +325,8 @@ struct DeleteDuplicatesCodex258Round3Tests {
         }
         let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md"), encoding: .utf8)
         #expect(invariants.contains("AT THE FINAL VERDICT IMMEDIATELY BEFORE A REMOVAL, NOTHING COMES FROM A CACHE"))
+        #expect(invariants.contains("the Master Archive rule (the current designation, turned into a protection there and then")
+                && invariants.contains("that makes six, all fresh"))
     }
 
     // MARK: R3-3

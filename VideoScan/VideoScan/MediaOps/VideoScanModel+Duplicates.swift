@@ -346,6 +346,18 @@ extension VideoScanModel {
         return (hold?.note, readOnlyVolumeMarks)
     }
 
+    /// The Master Archive half of the last word (codex #258, after round 3
+    /// — "at the final verdict nothing comes from a cache"): the CURRENT
+    /// designation and the scan targets' paths (the spellings a row can
+    /// carry), and whether the record is itself a promoted archive copy.
+    /// The disk worker builds the archive protection from these there and
+    /// then (`ArchiveVolumeProtection.make`) — not from the snapshot that
+    /// was captured at the copy's turn.
+    func duplicateRemovalBoundaryArchive(recordID: UUID)
+        -> (designation: MasterArchiveDesignation?, aliasCandidates: [String], isArchiveCopy: Bool) {
+        (masterArchive, archiveAliasCandidates, record(forID: recordID).map { isArchiveCopy($0) } ?? false)
+    }
+
     /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1, 2026-10-03):
     /// while the run cleaning `run.volumePath` decides one copy, may this
     /// OTHER member of the family be counted as a copy that remains?

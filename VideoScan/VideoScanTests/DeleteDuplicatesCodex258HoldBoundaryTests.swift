@@ -328,6 +328,40 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         #expect(rig.model.archiveAngel.recordIDsHandedOver.isEmpty, "nothing held, nothing handed over")
     }
 
+    /// The Master Archive is designated WHILE phase two re-reads the
+    /// quarantined duplicate, and the copy now lies on the archive's folder.
+    /// The removal boundary builds the archive protection from the model's
+    /// CURRENT designation (nothing at the final verdict comes from a
+    /// cache): refused as an ARCHIVE refusal — Review, as main classifies
+    /// archive refusals — and put back.
+    @Test func aMasterArchiveDesignatedDuringPhaseTwosReReadStopsTheRemoval() async throws {
+        let rig = makeRig("f6archive"); defer { rig.cleanup() }
+        #expect(rig.model.masterArchive == nil, "fixture: nothing designated at the copy's turn")
+        let chosen = rig.copies[0]
+        let armed = Shared(false), blocked = Shared(false)
+        let release = DispatchSemaphore(value: 0)
+        var hooks = SignatureVerification.Hooks.live.withScratchTrash(in: rig.dir)
+        hooks.didReadBlock = { label in
+            guard label == "quarantine", armed.value, !blocked.update({ was in defer { was = true }; return was }) else { return }
+            release.wait()
+        }
+        let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: hooks, planRoot: rig.root)
+        job.testHookAfterQuarantineSaved = { entry in if entry.id == chosen.id { armed.value = true } }
+        job.start()
+        await waitUntil("phase two's re-read of the quarantined duplicate") { blocked.value }
+        rig.model.masterArchive = MasterArchiveDesignation(targetPath: rig.dir.path,
+                                                           rootPath: rig.dir.appendingPathComponent("Test_Family_Archive").path, volumeUUID: nil)
+        release.signal()
+        await job.task?.value
+
+        #expect(FileManager.default.fileExists(atPath: chosen.fullPath), "removed from what is now the Master Archive's folder")
+        let row = try #require(job.plan?.entries.first { $0.id == chosen.id })
+        #expect(row.status == .refused && row.note.contains("the Master Archive"), "\(row.status): \(row.note)")
+        #expect(row.quarantineDirectory == nil, "put back at its path")
+        #expect(chosen.duplicateDisposition == .review, "an archive refusal keeps main's classification (Review) — it is not a hold")
+        #expect(job.result.deleted == 0)
+    }
+
     /// F6, the Read-only half: the drive is marked Read only WHILE phase
     /// two re-reads the quarantined duplicate. It is put back, untouched.
     @Test func aReadOnlyMarkMadeDuringPhaseTwosReReadStopsTheRemoval() async throws {
@@ -406,8 +440,8 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
             let text = try String(contentsOf: url, encoding: .utf8)
             #expect(!text.contains("SignatureVerification.deleteQuarantined("), "\(relative) removes a quarantined duplicate on its own")
         }
-        #expect(job.contains("boundaryHold: Self.removalBoundaryHold(model: model, recordID: entry.id, path: entry.path))"))
-        #expect(job.contains("archiveCheck: archiveCheck, boundaryHold: boundaryHold)"))
+        #expect(job.contains("boundaryHold: Self.removalBoundaryHold(model: model, recordID: entry.id, path: entry.path),"))
+        #expect(job.contains("archiveCheck: archiveCheck, boundaryHold: boundaryHold,"))
         #expect(job.contains("if inBatchOnDisk(recordID) { return DuplicateDeletionHold.inUseByAngel.note }")
                 && job.contains("return model.duplicateRemovalBoundaryWord(recordID: recordID)")
                 && job.contains("?? readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)"))
