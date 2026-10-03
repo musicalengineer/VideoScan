@@ -413,6 +413,63 @@ struct DeleteVolumeCatalogPlanTests {
         #expect(replan.message.contains("Nothing was deleted"))
     }
 
+    // MARK: - 8. Wording sensor (Rick's ruling 2026-10-03)
+    //
+    // "It should always be clear what we're deleting before we even click
+    // it." These gestures remove catalog records only; the menu section,
+    // both alert titles and both alert messages must say so.
+
+    @Test func removeFromCatalogWordingSaysFilesAreNeverTouched() throws {
+        // Section title: the literal in the menu source, and the shared constant.
+        let pane = try SourceTree.appSource(named: "CatalogView+ScanTargetsPane.swift")
+        #expect(pane.contains("Section(\"Remove from Catalog\")"))
+        #expect(!pane.contains("Section(\"Delete\")"), "the old ambiguous section title must be gone")
+        #expect(!pane.contains("\"Delete All ("), "the old ambiguous row label must be gone")
+        #expect(RemoveFromCatalogWording.sectionTitle == "Remove from Catalog")
+        #expect(pane.contains(".help(RemoveFromCatalogWording.menuHelp)"))
+        #expect(RemoveFromCatalogWording.menuHelp
+                == "Update the catalog, or forget records (files on disk are never touched)")
+
+        // Menu rows.
+        #expect(RemoveFromCatalogWording.forgetVolumeMenuTitle(volume: "LaCie", count: 12)
+                == "Forget LaCie's 12 records…")
+        #expect(RemoveFromCatalogWording.forgetVolumeMenuTitle(volume: "LaCie", count: 1)
+                == "Forget LaCie's 1 record…")
+        #expect(RemoveFromCatalogWording.forgetAllMenuTitle(count: 340)
+                == "Forget the entire catalog (340 records)…")
+
+        // Both alert messages contain the sentence.
+        #expect(RemoveFromCatalogWording.filesNeverTouched == "Files on disk are never touched.")
+        let all = RemoveFromCatalogWording.forgetAllMessage(count: 340)
+        #expect(all.contains("never touched"))
+        #expect(all.contains("all 340 catalog records"), "existing count wording kept")
+
+        let target = CatalogScanTarget(searchPath: "/Volumes/A")
+        let plan = TargetRemovalPlan(targetID: target.id, root: "/Volumes/A",
+                                     recordIDs: [UUID(), UUID()],
+                                     keptCoveredByOtherTargets: 0, revision: 1)
+        let prompt = DeleteVolumeCatalogPrompt(target: target, plan: plan, replacedStalePlan: nil)
+        #expect(prompt.message.contains("Files on disk are never touched."))
+        let stale = TargetRemovalPlan(targetID: target.id, root: "/Volumes/A",
+                                      recordIDs: [UUID()], keptCoveredByOtherTargets: 0, revision: 0)
+        let replan = DeleteVolumeCatalogPrompt(target: target, plan: plan, replacedStalePlan: stale)
+        #expect(replan.message.contains("never touched"), "the re-presented prompt says it too")
+
+        // Buttons: "Forget N Records", from the PLAN's count.
+        #expect(prompt.confirmButtonTitle == "Forget 2 Records")
+        #expect(RemoveFromCatalogWording.forgetButtonTitle(count: 1) == "Forget 1 Record")
+
+        // Both alerts in ContentView use the shared title and wording.
+        let cv = try SourceTree.appSource(named: "ContentView.swift")
+        #expect(RemoveFromCatalogWording.alertTitle == "Remove from Catalog?")
+        #expect(cv.contains(".alert(RemoveFromCatalogWording.alertTitle, isPresented: $showDeleteAllCatalogConfirm)"))
+        #expect(cv.contains("Text(RemoveFromCatalogWording.forgetAllMessage(count: model.records.count))"))
+        #expect(cv.contains("Button(prompt.confirmButtonTitle, role: .destructive)"))
+        for old in ["\"Delete Catalog\"", "\"Delete Volume Catalog\"", "Button(\"Delete All\""] {
+            #expect(!cv.contains(old), "\(old) is the pre-2026-10-03 wording; must be gone")
+        }
+    }
+
     @Test func plansAreEquivalentByIdsAndRootNotByRevision() {
         let id = UUID()
         let ids: Set<UUID> = [UUID(), UUID()]

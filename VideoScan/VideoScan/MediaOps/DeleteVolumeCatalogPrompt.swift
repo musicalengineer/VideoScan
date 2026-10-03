@@ -10,8 +10,56 @@
 // root under a stale count. Now the alert shows `plan.count`, the Delete
 // button hands `plan` back, and the model refuses a plan the catalog has
 // drifted from — re-presenting this prompt with the fresh plan.
+//
+// Wording (Rick's ruling 2026-10-03: "it should always be clear what
+// we're deleting before we even click it"): these gestures remove CATALOG
+// RECORDS ONLY, never media on disk, and they sit near Storage's "Delete
+// duplicates here…" which really removes files. So the menu says
+// "Remove from Catalog" / "Forget …", and both confirmations carry the
+// sentence in `RemoveFromCatalogWording.filesNeverTouched`.
 
 import Foundation
+
+/// The shared words for the two "remove catalog records" confirmations
+/// (one volume / the entire catalog). One place, so the menu, both alerts
+/// and the sensor test cannot drift apart.
+/// (A caseless `enum` ≈ a C++ namespace of constants and free functions:
+/// it cannot be instantiated.)
+enum RemoveFromCatalogWording {
+    /// Catalog Options menu section title.
+    static let sectionTitle = "Remove from Catalog"
+    /// Title of both confirmation alerts.
+    static let alertTitle = "Remove from Catalog?"
+    /// The sentence both alert messages must contain.
+    static let filesNeverTouched = "Files on disk are never touched."
+    /// Catalog Options menu tooltip.
+    static let menuHelp = "Update the catalog, or forget records (files on disk are never touched)"
+
+    /// "1 record" / "N records".
+    static func records(_ count: Int) -> String {
+        count == 1 ? "1 record" : "\(count) records"
+    }
+
+    /// Confirm button of both alerts: "Forget N Records".
+    static func forgetButtonTitle(count: Int) -> String {
+        count == 1 ? "Forget 1 Record" : "Forget \(count) Records"
+    }
+
+    /// Catalog Options row for one volume: "Forget <Volume>'s N records…".
+    static func forgetVolumeMenuTitle(volume: String, count: Int) -> String {
+        "Forget \(volume)'s \(records(count))…"
+    }
+
+    /// Catalog Options row for everything: "Forget the entire catalog (N records)…".
+    static func forgetAllMenuTitle(count: Int) -> String {
+        "Forget the entire catalog (\(records(count)))…"
+    }
+
+    /// Body of the entire-catalog confirmation. Pure over `count`.
+    static func forgetAllMessage(count: Int) -> String {
+        "This will delete all \(count) catalog records across every volume. \(filesNeverTouched) The probe cache is unaffected.\n\nAre you sure?"
+    }
+}
 
 struct DeleteVolumeCatalogPrompt {
     let target: CatalogScanTarget
@@ -23,6 +71,11 @@ struct DeleteVolumeCatalogPrompt {
     /// why the dialog came back.
     let replacedStalePlan: TargetRemovalPlan?
 
+    /// Confirm button label — the PLAN's count, same number as the message.
+    var confirmButtonTitle: String {
+        RemoveFromCatalogWording.forgetButtonTitle(count: plan.count)
+    }
+
     /// Alert body. Pure over the prompt's fields (no model read) so
     /// ContentView's alert stage stays O(1) and the text is unit-testable.
     var message: String {
@@ -33,6 +86,7 @@ struct DeleteVolumeCatalogPrompt {
             lines.append("")
         }
         lines.append("Delete \(plan.count) catalog record(s) for \(label)?")
+        lines.append(RemoveFromCatalogWording.filesNeverTouched)
         if plan.keptCoveredByOtherTargets > 0 {
             lines.append("")
             lines.append("\(plan.keptCoveredByOtherTargets) record(s) under this path also belong to another scan target and will be kept.")

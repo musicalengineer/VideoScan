@@ -1119,13 +1119,15 @@ struct CatalogView: View {
         } message: { msg in
             Text(msg)
         }
-        .alert("Delete Catalog", isPresented: $showDeleteAllCatalogConfirm) {
-            Button("Delete All", role: .destructive) {
+        // Remove from Catalog — entire catalog (wording: Rick 2026-10-03).
+        // Catalog records only; the message says files are never touched.
+        .alert(RemoveFromCatalogWording.alertTitle, isPresented: $showDeleteAllCatalogConfirm) {
+            Button(RemoveFromCatalogWording.forgetButtonTitle(count: model.records.count), role: .destructive) {
                 model.deleteAllCatalog()
             }
             Button("Cancel", role: .cancel) { }
         } message: {
-            Text("This will delete all \(model.records.count) catalog records across every volume. The probe cache is unaffected.\n\nAre you sure?")
+            Text(RemoveFromCatalogWording.forgetAllMessage(count: model.records.count))
         }
         // Delete Volume Catalog (codex #1417): the message shows the count
         // of the plan made at the gesture, and Delete applies THAT plan.
@@ -1133,14 +1135,14 @@ struct CatalogView: View {
         // and hands back a fresh plan, which re-presents this alert with
         // the new count — never a silent extra removal.
         .alert(
-            "Delete Volume Catalog",
+            RemoveFromCatalogWording.alertTitle,
             isPresented: Binding(
                 get: { deleteVolumeCatalogPrompt != nil },
                 set: { if !$0 { deleteVolumeCatalogPrompt = nil } }
             ),
             presenting: deleteVolumeCatalogPrompt
         ) { prompt in
-            Button("Delete", role: .destructive) {
+            Button(prompt.confirmButtonTitle, role: .destructive) {
                 confirmDeleteVolumeCatalog(prompt)
             }
             Button("Cancel", role: .cancel) { }
