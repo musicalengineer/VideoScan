@@ -107,6 +107,20 @@ final class ArchiveAngel: ObservableObject {
     @Published private(set) var batches = Batches()
     /// Records the batches ON DISK hold — see `refreshRecordIDsInBatchesOnDisk`.
     private(set) var recordIDsInBatchesOnDisk: Set<UUID> = []
+    /// THE HAND-OVER (codex #258 F7): what a Prepare that has just ENDED
+    /// was holding — still held here until a reading of the buffer that
+    /// began after it ended has been published (`notePrepareEnded`). Without
+    /// it there is a gap: the running job stops holding the instant it
+    /// ends, and the prepared set only says so at the next refresh.
+    private(set) var recordIDsHandedOver: Set<UUID> = []
+    /// Each handed-over id → the hand-over it came with; a reading clears
+    /// only the hand-overs made before it began.
+    private var handOverSequence: [UUID: UInt64] = [:]
+    private var handOverCount: UInt64 = 0
+    /// Readings of the buffer, in the order they BEGAN; an older one that
+    /// finishes late is dropped (it may predate a batch a newer one saw).
+    private var bufferReadingsBegun: UInt64 = 0
+    private var bufferReadingPublished: UInt64 = 0
     /// Keep footage current: the automatic run fires once after the first
     /// COMPLETE sweep of a launch, and again after a catalog change once
     /// `footageRearmSeconds` have passed since the last automatic run.
@@ -498,6 +512,20 @@ final class ArchiveAngel: ObservableObject {
     /// runner; empty when none is attached (then no job can be running).
     var recordIDsInRunningPrepare: Set<UUID> { jobRunner?.recordIDsInRunningPrepare ?? [] }
 
+    /// A Prepare just ended (finished, failed, cancelled or refused) holding
+    /// `ids`: they stay held — `recordIDsHandedOver` — until a reading of
+    /// the buffer that BEGINS after this call has been published; that
+    /// reading says what became of them (a ready batch holds them on; a
+    /// batch with nothing prepared frees them). A reading is started here.
+    /// Called by the job itself the moment its state turns inactive.
+    func notePrepareEnded(holding ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        handOverCount += 1
+        for id in ids { handOverSequence[id] = handOverCount }
+        recordIDsHandedOver.formUnion(ids)
+        Task { await self.refreshRecordIDsInBatchesOnDisk() }
+    }
+
     /// Re-read which records the buffer's batches hold, from their own
     /// plan.json files — the same rule Prepare uses to keep a second batch
     /// off the same rows (`ArchiveAngelPlanStore.inFlightRecordIDs`: ready
@@ -505,14 +533,46 @@ final class ArchiveAngel: ObservableObject {
     /// prepared right now). STRICTLY READ-ONLY: it lists and decodes; it
     /// never settles, removes or rewrites a batch folder (that is
     /// `refreshBatches`, which only the Archive tab asks for). Off the main
-    /// actor; called at launch, after every `refreshBatches`, and by Delete
-    /// Duplicates before it plans or resumes — so its hold never depends on
-    /// the Archive tab having been opened (GH #258).
+    /// actor; called at launch, after every `refreshBatches`, when a Prepare
+    /// ends, and by Delete Duplicates before it plans, before it resumes
+    /// and before EVERY copy's turn — so its hold never depends on the
+    /// Archive tab having been opened, nor on which route saved a batch
+    /// (GH #258; codex #258 F7).
+    ///
+    /// Readings may overlap. Each takes a number when it BEGINS; one that
+    /// finishes after a later-begun reading was published is dropped — an
+    /// older picture of the buffer never overwrites a newer one.
     func refreshRecordIDsInBatchesOnDisk() async {
         let root = environment.bufferRoot
-        let ids = await Self.readRecordIDsInBatches(bufferRoot: root)
+        bufferReadingsBegun += 1
+        let reading = bufferReadingsBegun
+        let handOversBefore = handOverCount
+        let ids: Set<UUID>
+        if let reader = diskBatchReaderForTests { ids = await reader(root) } else { ids = await Self.readRecordIDsInBatches(bufferRoot: root) }
+        guard reading > bufferReadingPublished else { return }
+        bufferReadingPublished = reading
         if ids != recordIDsInBatchesOnDisk { recordIDsInBatchesOnDisk = ids }
+        // The hand-over is complete for every Prepare that ended BEFORE this
+        // reading began: what became of its records is in `ids` now.
+        if !handOverSequence.isEmpty {
+            handOverSequence = handOverSequence.filter { $0.value > handOversBefore }
+            recordIDsHandedOver = Set(handOverSequence.keys)
+        }
     }
+
+    /// The DISK TRUTH for one record, for a disk thread: is it a row of a
+    /// batch in the buffer right now? Lists and decodes the buffer's plan
+    /// files at the moment of the call (read-only, no cache) — what Delete
+    /// Duplicates asks immediately before it removes a file (codex #258
+    /// F6/F7). DISK I/O: never call the returned probe on the main thread.
+    func recordInBatchOnDiskProbe() -> @Sendable (UUID) -> Bool {
+        let root = environment.bufferRoot
+        return { ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root).contains($0) }
+    }
+
+    /// TEST SEAM: stands in for the buffer read, so a test can make two
+    /// readings overlap. nil in production.
+    var diskBatchReaderForTests: (@Sendable (URL) async -> Set<UUID>)?
 
     #if compiler(>=6.2)
     @concurrent

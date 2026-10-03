@@ -276,7 +276,7 @@ struct DeleteDuplicatesAngelHoldTests {
 
     /// The Prepare job Rick started by hand is still running: its picks are
     /// in no published set yet (the batch is not `ready`), only in the job.
-    @Test func class3ACopyHandPickedForAPrepareStillRunningIsNeverATarget() {
+    @Test func class3ACopyHandPickedForAPrepareStillRunningIsNeverATarget() async {
         let dir = tempDir("c3")
         defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
@@ -296,10 +296,14 @@ struct DeleteDuplicatesAngelHoldTests {
         #expect(model.archiveAngel.recommendations.preparedIDs.isEmpty, "fixture: the pick is in no published set")
         #expect(model.duplicateDeletionSelection(onVolume: volume).targets.map(\.id) == [free.id])
 
-        // Once that Prepare is over, the copy is ordinary again (a batch
-        // that became ready is the prepared set's business — class 2).
+        // Once that Prepare is over it hands its records over (codex #258
+        // F7): still held until the buffer has been re-read; then the copy
+        // is ordinary again (a batch that became ready is the prepared
+        // set's business — class 2).
         job.refuseToStart(reason: "test: over")
         #expect(!job.state.isActive)
+        #expect(model.duplicateDeletionSelection(onVolume: volume).targets.map(\.id) == [free.id], "no gap at the Prepare's end")
+        await model.archiveAngel.refreshRecordIDsInBatchesOnDisk()
         #expect(Set(model.duplicateDeletionSelection(onVolume: volume).targets.map(\.id)) == [picked.id, free.id])
     }
 
@@ -737,7 +741,8 @@ struct DeleteDuplicatesAngelHoldTests {
         // running Prepare, the Triage filing and the promoted-copy mark.
         let rule = try body(of: "func duplicateDeletionHoldRule(", upTo: "func prepareDuplicateDeletion(")
         for read in ["archiveAngel.recommendations", "preparedIDs.contains(", "promotedIDs.contains(",
-                     "archiveAngel.recordIDsInBatchesOnDisk", "archiveAngel.recordIDsInRunningPrepare", "isArchiveCopy("] {
+                     "archiveAngel.recordIDsInBatchesOnDisk", "archiveAngel.recordIDsInRunningPrepare",
+                     "archiveAngel.recordIDsHandedOver", "isArchiveCopy("] {
             #expect(rule.contains(read), "the hold rule no longer reads `\(read)`")
         }
         // Ruling 2026-10-03: a merely-listed candidate and the Archived

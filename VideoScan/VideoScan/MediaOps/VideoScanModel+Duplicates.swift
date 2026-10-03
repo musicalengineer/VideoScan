@@ -287,8 +287,11 @@ extension VideoScanModel {
     ///        ..... archiveAngel.recommendations.preparedIDs / .promotedIDs
     ///              + archiveAngel.recordIDsInBatchesOnDisk (the buffer's
     ///              own plan files, read without the Archive tab)
-    ///   picked for a Prepare that is still running
+    ///   picked for a Prepare that is still running — or that has JUST
+    ///   ended and whose records no reading of the buffer has accounted for
+    ///   yet (the hand-over, codex #258 F7)
     ///        ..... archiveAngel.recordIDsInRunningPrepare
+    ///              + archiveAngel.recordIDsHandedOver
     ///
     /// NOT held: a copy the Angel merely lists as a candidate (the Angel
     /// never recommends an Extra copy — its own `extraCopy` rule, pinned in
@@ -309,13 +312,33 @@ extension VideoScanModel {
         let angel = archiveAngel.recommendations
         let onDisk = archiveAngel.recordIDsInBatchesOnDisk
         let preparing = archiveAngel.recordIDsInRunningPrepare
+        let handedOver = archiveAngel.recordIDsHandedOver
         // Used and dropped within one pass, so a strong `self` is fine.
         return { r in
             if self.isArchiveCopy(r) { return .promotedArchiveCopy }
             if angel.preparedIDs.contains(r.id) || angel.promotedIDs.contains(r.id)
-                || onDisk.contains(r.id) || preparing.contains(r.id) {
+                || onDisk.contains(r.id) || preparing.contains(r.id) || handedOver.contains(r.id) {
                 return .inUseByAngel
             }
+            return nil
+        }
+    }
+
+    /// THE LAST WORD at the removal boundary, on the main actor (codex #258
+    /// F6): asked by the disk worker's final verdict, in the same
+    /// synchronous stretch as the unlink / the move to the Trash — after
+    /// phase two's re-read, which can take minutes. The hold rule, live,
+    /// and the Read-only half of the bulk-verb gate, live (a drive marked
+    /// while the pair was being read). nil = nothing holds it; else the
+    /// row's note ("left alone — in use by the Archive Angel"). The Master
+    /// Archive half of the gate is the worker's own `ArchiveRemovalCheck`.
+    func duplicateRemovalBoundaryNote(recordID: UUID, path: String) -> String? {
+        if let rec = record(forID: recordID), let hold = duplicateDeletionHoldRule()(rec) { return hold.note }
+        switch readOnlyVolumeRefusal(forPath: path, effect: .removesFiles) {
+        case .readOnlyVolume(let name)?, .readOnlyVolumeDifferentDrive(let name)?:
+            log(Self.readOnlyVolumeRefusalLine(verb: "Delete Duplicates", count: 1, volume: name))
+            return DuplicateDeletionHold.leftAlonePrefix + Self.bulkDeleteRefusalNote(.readOnlyVolume(name), volume: name)
+        default:
             return nil
         }
     }

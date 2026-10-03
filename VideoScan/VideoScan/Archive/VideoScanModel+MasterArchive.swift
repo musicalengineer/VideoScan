@@ -760,7 +760,7 @@ extension VideoScanModel {
     /// The read-only half of the gate: a verb that REMOVES files is refused
     /// every file on a volume the person marked Read only. String work on
     /// a cached snapshot; nothing when no volume is marked.
-    private func readOnlyVolumeRefusal(forPath path: String, effect: BulkVerbEffect) -> BulkDeleteRefusal? {
+    func readOnlyVolumeRefusal(forPath path: String, effect: BulkVerbEffect) -> BulkDeleteRefusal? {
         guard effect == .removesFiles, !hasNoReadOnlyVolumeMarks else { return nil }
         switch readOnlyVolumeProtection().verdict(forPath: path) {
         case nil: return nil

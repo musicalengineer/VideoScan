@@ -57,7 +57,16 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
     @Published private(set) var plan: ArchiveAngelPlan
 
     @Published private(set) var state: MediaFileOperationState = .running {
-        didSet { if !state.isActive, finishedAt == nil { finishedAt = Date() } }
+        didSet {
+            if !state.isActive, finishedAt == nil { finishedAt = Date() }
+            // THE HAND-OVER (codex #258 F7): the instant this job stops
+            // being "a Prepare still running", what it held is handed to the
+            // façade, which keeps it held until the buffer has been re-read.
+            // Every way out (finished, failed, cancelled, refused) is here.
+            if oldValue.isActive, !state.isActive {
+                model?.archiveAngel.notePrepareEnded(holding: Self.heldRecordIDs(explicit: explicitRecordIDs, plan: plan))
+            }
+        }
     }
     @Published private(set) var finishedAt: Date?
     @Published private(set) var subtitleText = "Walking the catalog…"
@@ -155,7 +164,9 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
 
     /// The records this Prepare holds WHILE IT RUNS — what "Delete
     /// duplicates" must leave alone until the batch is ready (from then on
-    /// the prepared set says so). Empty once the job is over. O(entries).
+    /// the prepared set says so). Empty once the job is over — at that
+    /// instant the same ids are handed to the façade (`state`'s observer),
+    /// so there is no moment at which nobody holds them. O(entries).
     var heldRecordIDs: Set<UUID> {
         state.isActive ? Self.heldRecordIDs(explicit: explicitRecordIDs, plan: plan) : []
     }
