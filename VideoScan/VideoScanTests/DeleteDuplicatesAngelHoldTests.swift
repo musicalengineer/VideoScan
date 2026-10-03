@@ -1,16 +1,20 @@
 // DeleteDuplicatesAngelHoldTests.swift
 // GH #258 (Rick 2026-10-03): "Delete duplicates on <drive>" leaves alone
-// every copy the Archive Angel has chosen, every copy filed as Archived in
-// Triage, and every promoted archive copy — at SELECTION time and again at
-// the copy's TURN (delete time and resume), because the Angel's sets change
-// while a run is in flight.
+// every copy the Archive Angel is USING and every promoted archive copy —
+// at SELECTION time, again at the copy's TURN (delete time and resume) and
+// once more between a pair's read and its removal, because the Angel's
+// batches change while a run is in flight.
 //
-// The five classes, one test each:
-//   1. an Archive Angel candidate           (recommendations.candidateIDs)
-//   2. in a prepared batch / just promoted  (preparedIDs / promotedIDs)
-//   3. hand-picked for a Prepare STILL RUNNING (the running job's own list)
-//   4. filed as Archived in Triage          (lifecycleStage == .archived)
-//   5. a promoted archive copy while NO Master Archive is designated
+// The classes held (Rick's ruling 2026-10-03 — "a file in use", or an
+// archive copy), one test each:
+//   • in a prepared batch                   (recommendations.preparedIDs)
+//   • in a batch being / just promoted      (recommendations.promotedIDs)
+//   • in a batch ON DISK, whether or not the Archive tab was ever opened
+//                                           (recordIDsInBatchesOnDisk)
+//   • picked for a Prepare STILL RUNNING    (the running job's own list)
+//   • a promoted archive copy while NO Master Archive is designated
+// NOT held, and pinned as ordinary copies: one the Angel merely lists as a
+// candidate, and one labelled Archived in Triage.
 //
 // The survival rule is NOT weakened: a copy left alone is an ordinary
 // non-target sibling — it counts as a remaining copy only when its stored
@@ -89,48 +93,51 @@ struct DeleteDuplicatesAngelHoldTests {
 
     // MARK: Selection
 
-    /// QA's drafted shape: keeper + free + Angel candidate + filed-Archived
-    /// on one drive → only the free copy is a target.
-    @Test func theRunNeverTakesACopyTheAngelChoseOrYouFiled() {
+    /// One drive: keeper + free + in a prepared batch + merely listed by the
+    /// Angel + labelled Archived → the batch copy alone is left alone.
+    @Test func theRunLeavesAloneOnlyWhatTheAngelIsUsing() {
         let model = makeModel(tempDir("qa"))
         let g = UUID()
         let keeper = dupRecord(path: "\(volume)/keeper.mov", group: g, disposition: .keep)
         let free = dupRecord(path: "\(volume)/free.mov", group: g, disposition: .extraCopy)
-        let angel = dupRecord(path: "\(volume)/angel.mov", group: g, disposition: .extraCopy)
+        let inBatch = dupRecord(path: "\(volume)/batch.mov", group: g, disposition: .extraCopy)
+        let listed = dupRecord(path: "\(volume)/listed.mov", group: g, disposition: .extraCopy)
         let filed = dupRecord(path: "\(volume)/filed.mov", group: g, disposition: .extraCopy)
         filed.lifecycleStage = .archived
-        model.records = [keeper, free, angel, filed]
-        setAngel(model, candidates: [angel.id])
+        model.records = [keeper, free, inBatch, listed, filed]
+        setAngel(model, candidates: [listed.id], prepared: [inBatch.id])
 
         let selection = model.duplicateDeletionSelection(onVolume: volume)
-        #expect(selection.targets.map(\.id) == [free.id], "the Angel's pick and the filed copy were offered for deletion")
-        #expect(selection.skippedCount == 2)
-        #expect(model.volumesWithDeletableDuplicates().map(\.count) == [1], "the menu count agrees with the selection")
+        #expect(Set(selection.targets.map(\.id)) == [free.id, listed.id, filed.id],
+                "a merely-listed copy and an Archived-label copy are ordinary; the batch copy is not")
+        #expect(selection.skippedCount == 1)
+        #expect(model.volumesWithDeletableDuplicates().map(\.count) == [3], "the menu count agrees with the selection")
 
-        // Each copy left alone carries its reason…
-        let reasons = Dictionary(uniqueKeysWithValues: selection.held.map { ($0.record.id, $0.hold.note) })
-        #expect(reasons == [angel.id: "left alone — the Archive Angel has chosen this copy",
-                            filed.id: "left alone — you filed it as Archived"])
+        // The copy left alone carries its reason…
+        #expect(selection.held.map(\.record.id) == [inBatch.id])
+        #expect(selection.held.map(\.hold.note) == ["left alone — in use by the Archive Angel"])
         // …the count is said in one line (the Start confirmation and the
         // finished row use it)…
-        #expect(selection.leftAlone.line == "1 copy left alone for the Archive Angel · 1 archived copy left alone")
-        // …and the existing "Skipping N file(s) — …" log line names both.
-        #expect(Set(selection.skippedReasons.map(\.reason)) == ["left alone — the Archive Angel has chosen this copy",
-                                                                "left alone — you filed it as Archived"])
+        #expect(selection.leftAlone.line == "1 copy left alone — in use by the Archive Angel")
+        // …and the existing "Skipping N file(s) — …" log line names it.
+        #expect(selection.skippedReasons.map(\.reason) == ["left alone — in use by the Archive Angel"])
     }
 
-    /// The three reasons, word for word, and the summary's wording.
+    /// The two reasons, word for word, and the summary's wording.
     @Test func theReasonsAndTheSummaryLineSayItPlainly() {
-        #expect(DuplicateDeletionHold.angelChosen.note == "left alone — the Archive Angel has chosen this copy")
-        #expect(DuplicateDeletionHold.filedArchived.note == "left alone — you filed it as Archived")
+        #expect(DuplicateDeletionHold.inUseByAngel.note == "left alone — in use by the Archive Angel")
         #expect(DuplicateDeletionHold.promotedArchiveCopy.note == "left alone — it is a promoted archive copy")
-        #expect(Set(DuplicateDeletionHold.allCases.map(\.note)).count == 3, "the plan tells the kinds apart by their words")
+        #expect(DuplicateDeletionHold.allCases.count == 2, "a class was added or dropped — the ruling of 2026-10-03 names two")
+        #expect(Set(DuplicateDeletionHold.allCases.map(\.note)).count == 2, "the plan tells the kinds apart by their words")
         var counts = DeleteDuplicatesPlan.LeftAloneCounts()
         #expect(counts.line == nil && counts.total == 0)
-        counts.add(.angelChosen); counts.add(.angelChosen)
-        #expect(counts.line == "2 copies left alone for the Archive Angel")
-        counts.add(.filedArchived); counts.add(.promotedArchiveCopy)
-        #expect(counts.line == "2 copies left alone for the Archive Angel · 2 archived copies left alone" && counts.total == 4)
+        counts.add(.inUseByAngel)
+        #expect(counts.line == "1 copy left alone — in use by the Archive Angel")
+        counts.add(.inUseByAngel)
+        #expect(counts.line == "2 copies left alone — in use by the Archive Angel")
+        counts.add(.promotedArchiveCopy)
+        #expect(counts.line == "2 copies left alone — in use by the Archive Angel · 1 promoted archive copy left alone"
+                && counts.total == 3)
     }
 
     /// The plan lists them with their reasons (the detail view's rows) —
@@ -153,16 +160,16 @@ struct DeleteDuplicatesAngelHoldTests {
         #expect(plan.entries.map(\.id) == [free.id], "only the free copy is a row of the run")
         let listed = try #require(plan.leftAloneCopies)
         #expect(listed.map(\.id) == [angel.id, promoted.id])
-        #expect(listed.map(\.reason) == ["left alone — the Archive Angel has chosen this copy",
+        #expect(listed.map(\.reason) == ["left alone — in use by the Archive Angel",
                                          "left alone — it is a promoted archive copy"])
         #expect(listed.map(\.sizeBytes) == [30, 40] && listed.map(\.filename) == ["angel.mov", "promoted.mov"])
         #expect(plan.leftAloneAtPlan == DeleteDuplicatesPlan.LeftAloneCounts(forAngel: 1, archived: 1))
         #expect(plan.skippedBeforePlan == 2)
-        #expect(plan.leftAlone.line == "1 copy left alone for the Archive Angel · 1 archived copy left alone")
+        #expect(plan.leftAlone.line == "1 copy left alone — in use by the Archive Angel · 1 promoted archive copy left alone")
         // The detail view's words for them.
-        #expect(DeleteDuplicatesLeftAloneList.rowText(listed[0]).hasSuffix("— left alone — the Archive Angel has chosen this copy"))
+        #expect(DeleteDuplicatesLeftAloneList.rowText(listed[0]).hasSuffix("— left alone — in use by the Archive Angel"))
         #expect(DeleteDuplicatesLeftAloneList.headerText(summary: plan.leftAloneAtPlan?.line ?? "")
-                == "Never part of this run: 1 copy left alone for the Archive Angel · 1 archived copy left alone")
+                == "Never part of this run: 1 copy left alone — in use by the Archive Angel · 1 promoted archive copy left alone")
         #expect(DeleteDuplicatesLeftAloneList.moreText(total: 250, shown: 200) == "… and 50 more")
         #expect(DeleteDuplicatesLeftAloneList.moreText(total: 2, shown: 2) == nil)
 
@@ -189,7 +196,7 @@ struct DeleteDuplicatesAngelHoldTests {
         job.start()
         await job.task?.value
         #expect(job.state == .finished(summary: "No duplicates to delete on \(dir.lastPathComponent) — 2 skipped"
-                                       + " · 1 copy left alone for the Archive Angel · 1 archived copy left alone"), "\(job.state)")
+                                       + " · 1 copy left alone — in use by the Archive Angel · 1 promoted archive copy left alone"), "\(job.state)")
         #expect(job.plan?.leftAloneCopies?.count == 2 && job.plan?.entries.isEmpty == true)
     }
 
@@ -221,7 +228,7 @@ struct DeleteDuplicatesAngelHoldTests {
         let free = dupRecord(path: "\(volume)/free.mov", size: 100, group: g, disposition: .extraCopy)
         let angel = dupRecord(path: "\(volume)/angel.mov", size: 100, group: g, disposition: .extraCopy)
         model.records = [keeper, free, angel]
-        setAngel(model, candidates: [angel.id])
+        setAngel(model, prepared: [angel.id])
         let hold = model.duplicateDeletionHoldRule()
         let inputs = ReclaimableCalculator.project(model.records, leftAlone: { hold($0) != nil })
         #expect(inputs.map(\.isExtraCopy) == [false, true, false])
@@ -234,17 +241,19 @@ struct DeleteDuplicatesAngelHoldTests {
                                               mountedRoots: [volume], alsoCleanUpWorkingCopies: false).copies == 2)
     }
 
-    @Test func class1AnArchiveAngelCandidateIsNeverATarget() {
-        let model = makeModel(tempDir("c1"))
+    /// NOT held (ruling 2026-10-03): the Angel merely LISTS the copy as a
+    /// candidate. (It never does today — its own `extraCopy` rule keeps an
+    /// Extra copy out of the recommendations; ArchiveAngelExtraCopyGuardTests.)
+    @Test func aCopyTheAngelMerelyListsIsAnOrdinaryCopy() {
+        let model = makeModel(tempDir("listed"))
         let g = UUID()
-        let chosen = dupRecord(path: "\(volume)/chosen.mov", group: g, disposition: .extraCopy)
+        let listed = dupRecord(path: "\(volume)/listed.mov", group: g, disposition: .extraCopy)
         let free = dupRecord(path: "\(volume)/free.mov", group: g, disposition: .extraCopy)
-        model.records = [dupRecord(path: "\(volume)/keeper.mov", group: g, disposition: .keep), chosen, free]
-        setAngel(model, candidates: [chosen.id])
-        #expect(model.duplicateDeletionSelection(onVolume: volume).targets.map(\.id) == [free.id])
-        // …and the moment the Angel lets go, it is an ordinary copy again.
-        setAngel(model)
-        #expect(Set(model.duplicateDeletionSelection(onVolume: volume).targets.map(\.id)) == [chosen.id, free.id])
+        model.records = [dupRecord(path: "\(volume)/keeper.mov", group: g, disposition: .keep), listed, free]
+        setAngel(model, candidates: [listed.id])
+        let selection = model.duplicateDeletionSelection(onVolume: volume)
+        #expect(Set(selection.targets.map(\.id)) == [listed.id, free.id] && selection.held.isEmpty)
+        #expect(model.duplicateDeletionHoldRule()(listed) == nil)
     }
 
     @Test func class2ACopyInAPreparedBatchOrJustPromotedIsNeverATarget() {
@@ -282,7 +291,7 @@ struct DeleteDuplicatesAngelHoldTests {
                                   bufferRoot: dir.appendingPathComponent("buffer", isDirectory: true),
                                   explicitRecordIDs: [picked.id])
         #expect(center.add(job) && job.state.isActive)
-        #expect(model.archiveAngel.recommendations.candidateIDs.isEmpty, "fixture: the pick is in no published set")
+        #expect(model.archiveAngel.recommendations.preparedIDs.isEmpty, "fixture: the pick is in no published set")
         #expect(model.duplicateDeletionSelection(onVolume: volume).targets.map(\.id) == [free.id])
 
         // Once that Prepare is over, the copy is ordinary again (a batch
@@ -292,17 +301,92 @@ struct DeleteDuplicatesAngelHoldTests {
         #expect(Set(model.duplicateDeletionSelection(onVolume: volume).targets.map(\.id)) == [picked.id, free.id])
     }
 
-    @Test func class4ACopyFiledAsArchivedInTriageIsNeverATarget() {
-        let model = makeModel(tempDir("c4"))
+    /// NOT held (ruling 2026-10-03): the Archived label in Triage. The copy
+    /// may go; the label follows the keeper (DuplicateKeeperCarryOverTests).
+    @Test func aCopyLabelledArchivedInTriageIsAnOrdinaryCopy() {
+        let model = makeModel(tempDir("label"))
         let g = UUID()
         let filed = dupRecord(path: "\(volume)/filed.mov", group: g, disposition: .extraCopy)
         filed.lifecycleStage = .archived
         let free = dupRecord(path: "\(volume)/free.mov", group: g, disposition: .extraCopy)
         model.records = [dupRecord(path: "\(volume)/keeper.mov", group: g, disposition: .keep), filed, free]
-        #expect(model.duplicateDeletionSelection(onVolume: volume).targets.map(\.id) == [free.id])
-        // Back in Triage's table → an ordinary copy again.
-        filed.lifecycleStage = .reviewing
-        #expect(Set(model.duplicateDeletionSelection(onVolume: volume).targets.map(\.id)) == [filed.id, free.id])
+        let selection = model.duplicateDeletionSelection(onVolume: volume)
+        #expect(Set(selection.targets.map(\.id)) == [filed.id, free.id] && selection.held.isEmpty)
+        #expect(model.duplicateDeletionHoldRule()(filed) == nil)
+    }
+
+    /// A batch ON DISK holds its rows even when the Archive tab was never
+    /// opened this launch (nothing published `preparedIDs`) — read from the
+    /// buffer's own plan files, and STRICTLY read-only: a batch a quit left
+    /// `preparing` (which the Archive tab's refresh would settle or remove)
+    /// is not touched.
+    @Test func aBatchOnDiskHoldsItsRowsWithoutTheArchiveTabAndTheReadChangesNothing() async throws {
+        let dir = tempDir("ondisk")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = makeModel(dir)
+        var env = AngelEnvironment.app
+        env.bufferRoot = dir.appendingPathComponent("Buffer", isDirectory: true)
+        env.evidenceDirectory = dir.appendingPathComponent("evidence", isDirectory: true)
+        env.policyOverrideURL = dir.appendingPathComponent("no-policy.json")
+        env.isTestHost = true
+        model.archiveAngel = ArchiveAngel(model: model, environment: env)
+
+        let g = UUID()
+        let ready = dupRecord(path: "\(volume)/ready.mov", group: g, disposition: .extraCopy)
+        let promoting = dupRecord(path: "\(volume)/promoting.mov", group: g, disposition: .extraCopy)
+        let skipped = dupRecord(path: "\(volume)/skipped.mov", group: g, disposition: .extraCopy)
+        let interrupted = dupRecord(path: "\(volume)/interrupted.mov", group: g, disposition: .extraCopy)
+        let free = dupRecord(path: "\(volume)/free.mov", group: g, disposition: .extraCopy)
+        model.records = [dupRecord(path: "\(volume)/keeper.mov", group: g, disposition: .keep),
+                         ready, promoting, skipped, interrupted, free]
+
+        func batch(_ name: String, _ status: ArchiveAngelPlan.Status,
+                   _ rows: [(VideoRecord, ArchiveAngelPlan.EntryStatus)]) throws -> ArchiveAngelPlan {
+            let folder = env.bufferRoot.appendingPathComponent("batch-\(name)", isDirectory: true)
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            var plan = ArchiveAngelPlan(batchDir: folder.path, requestedCount: rows.count, makeLossless: false)
+            plan.status = status
+            plan.entries = rows.map { record, rowStatus in
+                var e = ArchiveAngelPlan.Entry(id: record.id, sourcePath: record.fullPath, filename: record.filename,
+                                               sizeBytes: 1, durationSeconds: 61, score: 0, evidence: [],
+                                               proposedName: record.filename)
+                e.status = rowStatus
+                return e
+            }
+            try ArchiveAngelPlanStore.save(plan)
+            return plan
+        }
+        _ = try batch("ready", .ready, [(ready, .ready), (skipped, .skipped)])
+        _ = try batch("promoting", .promoting, [(promoting, .ready)])
+        // A batch a quit left `preparing` two hours ago: interrupted — its
+        // rows are free again, and it is the Archive tab's to settle.
+        let stale = try batch("stale", .preparing, [(interrupted, .pending)])
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-7_200)],
+                                              ofItemAtPath: stale.planURL.path)
+        func fingerprint() throws -> [String] {
+            try FileManager.default.subpathsOfDirectory(atPath: env.bufferRoot.path).sorted().map { rel in
+                let path = env.bufferRoot.appendingPathComponent(rel).path
+                let attrs = try FileManager.default.attributesOfItem(atPath: path)
+                let bytes = (attrs[.type] as? FileAttributeType) == .typeRegular ? FileManager.default.contents(atPath: path) : nil
+                return "\(rel)|\(String(describing: attrs[.modificationDate]))|\(bytes?.count ?? -1)|\(bytes.map { sha256([UInt8]($0)) } ?? "")"
+            }
+        }
+        let before = try fingerprint()
+
+        // Nothing has been read yet, and no tab published anything.
+        #expect(model.archiveAngel.recommendations.preparedIDs.isEmpty && model.archiveAngel.recordIDsInBatchesOnDisk.isEmpty)
+        // Planning reads the buffer itself.
+        let plan = try #require(await model.prepareDuplicateDeletion(onVolume: volume))
+        #expect(model.archiveAngel.recordIDsInBatchesOnDisk == [ready.id, promoting.id])
+        #expect(Set(plan.entries.map(\.id)) == [skipped.id, interrupted.id, free.id],
+                "ready rows of a ready or promoting batch are held; a skipped row and an interrupted batch's rows are free")
+        #expect(plan.leftAloneCopies?.map(\.reason) == ["left alone — in use by the Archive Angel",
+                                                        "left alone — in use by the Archive Angel"])
+        #expect(try fingerprint() == before, "reading which records the batches hold changed the buffer")
+
+        // The same answer through the launch path's own function.
+        #expect(await ArchiveAngel.readRecordIDsInBatches(bufferRoot: env.bufferRoot) == [ready.id, promoting.id])
+        #expect(try fingerprint() == before)
     }
 
     /// `bulkDeleteRefusal` answers nil when no Master Archive is designated,
@@ -339,7 +423,7 @@ struct DeleteDuplicatesAngelHoldTests {
         model.records = [dupRecord(path: "/Volumes/LaCieWorkspace/keeper.mov", group: g, disposition: .keep), chosen, free]
         #expect(Set(model.duplicateDeletionSelection(onVolume: working).targets.map(\.id)) == [chosen.id, free.id],
                 "fixture: both working copies are eligible before the Angel chooses one")
-        setAngel(model, candidates: [chosen.id])
+        setAngel(model, prepared: [chosen.id])
         let selection = model.duplicateDeletionSelection(onVolume: working)
         #expect(selection.targets.map(\.id) == [free.id] && selection.crossVolumeCount == 1)
         #expect(model.volumesWithDeletableDuplicates().map(\.count) == [1])
@@ -388,13 +472,13 @@ struct DeleteDuplicatesAngelHoldTests {
         try DeleteDuplicatesPlanStore.save(plan, root: rig.root)
 
         // The Angel's sweep lands while the run is in flight.
-        setAngel(rig.model, candidates: [rig.copies[1].id])
+        setAngel(rig.model, prepared: [rig.copies[1].id])
 
         // The live authorization, asked directly…
         switch rig.model.authorizeDuplicateDeletion(entry: plan.entries[1], volumePath: rig.dir.path,
                                                     crossVolumeMode: false, stage: "before deletion") {
         case .skip(let note, _):
-            #expect(note == "left alone — the Archive Angel has chosen this copy")
+            #expect(note == "left alone — in use by the Archive Angel")
         case .authorized: Issue.record("authorized the Angel's copy for deletion")
         case .refuse(let note): Issue.record("refused (which re-marks the row Review) instead of leaving it alone: \(note)")
         }
@@ -409,7 +493,7 @@ struct DeleteDuplicatesAngelHoldTests {
         await job.task?.value
         let after = try #require(job.plan)
         #expect(after.entries.map(\.status) == [.deleted, .skipped], "\(after.entries.map(\.status))")
-        #expect(after.entries[1].note == "left alone — the Archive Angel has chosen this copy")
+        #expect(after.entries[1].note == "left alone — in use by the Archive Angel")
         #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
         #expect(FileManager.default.fileExists(atPath: rig.copies[1].fullPath), "the Angel's copy was unlinked or trashed")
         #expect(!FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash").path), "nothing went to the Trash")
@@ -442,13 +526,13 @@ struct DeleteDuplicatesAngelHoldTests {
         #expect(lock.withLock { started })
         #expect(job.plan?.entries.map(\.id) == rig.copies.map(\.id), "fixture: both copies were planned")
 
-        setAngel(rig.model, candidates: [rig.copies[1].id])
+        setAngel(rig.model, prepared: [rig.copies[1].id])
         release.signal()
         await job.task?.value
 
         let after = try #require(job.plan)
         #expect(after.entries.map(\.status) == [.deleted, .skipped], "\(after.entries.map(\.status))")
-        #expect(after.entries[1].note == "left alone — the Archive Angel has chosen this copy")
+        #expect(after.entries[1].note == "left alone — in use by the Archive Angel")
         #expect(FileManager.default.fileExists(atPath: rig.copies[1].fullPath), "the Angel's copy was unlinked or trashed")
         #expect(rig.copies[1].duplicateDisposition == .extraCopy)
         #expect(job.result.deleted == 1 && job.result.failed == 0)
@@ -470,7 +554,7 @@ struct DeleteDuplicatesAngelHoldTests {
         job.testHookAfterQuarantineSaved = { entry in
             guard entry.id == chosen.id else { return }
             sawQuarantine = true
-            setAngel(rig.model, candidates: [chosen.id])
+            setAngel(rig.model, prepared: [chosen.id])
         }
         job.start()
         await job.task?.value
@@ -478,7 +562,7 @@ struct DeleteDuplicatesAngelHoldTests {
         #expect(sawQuarantine, "fixture: the copy was verified and moved aside before the Angel chose it")
         let after = try #require(job.plan)
         #expect(after.entries.map(\.status) == [.skipped, .deleted], "\(after.entries.map(\.status))")
-        #expect(after.entries[0].note == "left alone — the Archive Angel has chosen this copy")
+        #expect(after.entries[0].note == "left alone — in use by the Archive Angel")
         #expect(after.entries[0].quarantineDirectory == nil && after.entries[0].tier == nil)
         #expect(FileManager.default.fileExists(atPath: chosen.fullPath), "the Angel's copy was removed after it was chosen")
         #expect(try Data(contentsOf: URL(fileURLWithPath: chosen.fullPath)) == before, "put back untouched")
@@ -490,22 +574,22 @@ struct DeleteDuplicatesAngelHoldTests {
                 "a skip — not the tier's ‘too few copies’, not a refusal")
         #expect(job.result.deleted == 1 && job.result.failed == 0)
         let freed = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
-        #expect(job.state == .finished(summary: "1 deleted · \(freed) freed · 1 copy left alone for the Archive Angel"),
+        #expect(job.state == .finished(summary: "1 deleted · \(freed) freed · 1 copy left alone — in use by the Archive Angel"),
                 "\(job.state)")
         await rig.model.mediaLedger.waitForPendingWrites()
         #expect(rig.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }.map(\.filename) == ["copy2.mov"])
     }
 
     /// A saved plan, revalidated later: every class is re-asked.
-    @Test func resumeLeavesAloneWhatTheAngelChoseOrYouFiledSinceThePlan() async throws {
+    @Test func resumeLeavesAloneWhatWentIntoABatchOrTheArchiveSinceThePlan() async throws {
         let rig = makeRig("resume"); defer { rig.cleanup() }
         let plan = try #require(await rig.model.prepareDuplicateDeletion(onVolume: rig.dir.path))
         try DeleteDuplicatesPlanStore.save(plan, root: rig.root)
 
         // Between sessions: one copy went into a prepared batch, the other
-        // was filed as Archived in Triage.
+        // was promoted (it is an archive copy now).
         setAngel(rig.model, prepared: [rig.copies[0].id])
-        rig.copies[1].lifecycleStage = .archived
+        rig.copies[1].derivationKind = ArchivePromotion.derivationKind
 
         rig.model.checkForUnfinishedDeleteDuplicatesPlans(root: rig.root)
         let pending = try #require(rig.model.pendingDeleteDuplicatesResume)
@@ -514,8 +598,8 @@ struct DeleteDuplicatesAngelHoldTests {
 
         let after = try #require(job.plan)
         #expect(after.entries.map(\.status) == [.skipped, .skipped])
-        #expect(after.entries[0].note == "left alone — the Archive Angel has chosen this copy")
-        #expect(after.entries[1].note == "left alone — you filed it as Archived")
+        #expect(after.entries[0].note == "left alone — in use by the Archive Angel")
+        #expect(after.entries[1].note == "left alone — it is a promoted archive copy")
         for copy in rig.copies {
             #expect(FileManager.default.fileExists(atPath: copy.fullPath))
             #expect(copy.duplicateDisposition == .extraCopy)
@@ -545,7 +629,7 @@ struct DeleteDuplicatesAngelHoldTests {
                                                                    byteCount: Int64(fileSize))
                 }
                 if heldByAngel {
-                    setAngel(rig.model, candidates: [sibling.id])
+                    setAngel(rig.model, prepared: [sibling.id])
                 } else {
                     sibling.duplicateDisposition = .review          // the control: a plain non-target sibling
                 }
@@ -571,7 +655,7 @@ struct DeleteDuplicatesAngelHoldTests {
         let rig = makeRig("tier", family: false); defer { rig.cleanup() }
         let free = rig.copies[0], angel = rig.copies[1]
         angel.contentFixity = ContentFixity.captured(path: angel.fullPath, digest: rig.digest, byteCount: Int64(fileSize))
-        setAngel(rig.model, candidates: [angel.id])
+        setAngel(rig.model, prepared: [angel.id])
         let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path,
                                       hooks: SignatureVerification.Hooks.live.withScratchTrash(in: rig.dir), planRoot: rig.root)
         job.start()
@@ -602,20 +686,20 @@ struct DeleteDuplicatesAngelHoldTests {
             switch (index - 1) % 20 {
             case 0: chosen.insert(r.id)
             case 1: prepared.insert(r.id)
-            case 2: r.lifecycleStage = .archived; filed += 1
+            case 2: r.lifecycleStage = .archived; filed += 1      // a label: NOT held
             default: break
             }
             catalog.append(r)
         }
         model.records = catalog
-        setAngel(model, candidates: chosen, prepared: prepared)
+        setAngel(model, prepared: chosen, promoted: prepared)
         #expect(chosen.count + prepared.count == 10_000)
 
         let start = ContinuousClock.now
         let selection = model.duplicateDeletionSelection(onVolume: scaleVolume)
         let elapsed = start.duration(to: .now)
-        #expect(selection.targets.count == 99_999 - 10_000 - filed)
-        #expect(selection.skippedCount == 10_000 + filed)
+        #expect(filed == 5_000 && selection.targets.count == 99_999 - 10_000)
+        #expect(selection.skippedCount == 10_000)
         #expect(elapsed < PerformanceLane.debugCeiling(.seconds(2)), "100k selection with 10k Angel ids took \(elapsed)")
     }
 
@@ -641,10 +725,19 @@ struct DeleteDuplicatesAngelHoldTests {
         // The rule itself reads the Angel's ONE set of numbers and the
         // running Prepare, the Triage filing and the promoted-copy mark.
         let rule = try body(of: "func duplicateDeletionHoldRule(", upTo: "func prepareDuplicateDeletion(")
-        for read in ["archiveAngel.recommendations", "candidateIDs.contains(", "preparedIDs.contains(", "promotedIDs.contains(",
-                     "archiveAngel.recordIDsInRunningPrepare", "lifecycleStage == .archived", "isArchiveCopy("] {
+        for read in ["archiveAngel.recommendations", "preparedIDs.contains(", "promotedIDs.contains(",
+                     "archiveAngel.recordIDsInBatchesOnDisk", "archiveAngel.recordIDsInRunningPrepare", "isArchiveCopy("] {
             #expect(rule.contains(read), "the hold rule no longer reads `\(read)`")
         }
+        // Ruling 2026-10-03: a merely-listed candidate and the Archived
+        // label are NOT holds — neither may creep back into the rule.
+        for dropped in ["candidateIDs", "lifecycleStage"] {
+            #expect(!rule.contains(dropped), "the hold rule reads `\(dropped)` again")
+        }
+        // The buffer is read before a run plans and before it resumes — the
+        // hold does not wait for the Archive tab.
+        let refresh = "archiveAngel.refreshRecordIDsInBatchesOnDisk()"
+        #expect(try body(of: "func prepareDuplicateDeletion(", upTo: "func captureStamps(").contains(refresh))
         // The steward asks the planner's rule — it has no list of its own.
         let steward = try SourceTree.appSource(named: "VideoScanModel+Steward.swift")
         #expect(steward.contains(call))

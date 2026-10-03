@@ -127,8 +127,8 @@ enum StewardStandingWords {
 
     /// The line under one copy on a Reclaim set card. "Never offered" is
     /// said of what the Delete planner itself leaves alone — which, since
-    /// GH #258, is every protected copy: the archive, its drive, the
-    /// Angel's picks and copies filed as Archived.
+    /// GH #258, is every protected copy: the archive, its drive, and a
+    /// copy the Archive Angel is using.
     nonisolated static func words(for copy: StewardCopy, proof: StewardCopyProof?) -> String? {
         switch copy.standing {
         case .keeper:

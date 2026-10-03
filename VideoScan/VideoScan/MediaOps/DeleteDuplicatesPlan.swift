@@ -524,8 +524,8 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     /// How many times this plan has been resumed.
     var resumeCount: Int = 0
     /// GH #258: extra copies on the volume that were NEVER rows of this run
-    /// because the Archive Angel has chosen them, they are filed as
-    /// Archived, or they are promoted archive copies — each with its
+    /// because the Archive Angel is using them (a batch, a running
+    /// Prepare) or they are promoted archive copies — each with its
     /// reason, for the detail view (at most `leftAloneListCap`; the counts
     /// below are the whole truth). Additive and optional: plans written
     /// before it decode nil, and nothing here is ever a deletion target.
@@ -539,12 +539,12 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         var path: String
         var filename: String
         var sizeBytes: Int64
-        /// "left alone — the Archive Angel has chosen this copy"
+        /// "left alone — in use by the Archive Angel"
         var reason: String
     }
 
-    /// Copies left alone, by kind: the Angel's, and archived ones (filed as
-    /// Archived, or a promoted archive copy).
+    /// Copies left alone, by kind: in use by the Angel, and promoted
+    /// archive copies (only while no Master Archive is designated).
     struct LeftAloneCounts: Codable, Sendable, Equatable {
         var forAngel = 0
         var archived = 0
@@ -552,17 +552,18 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
 
         mutating func add(_ hold: DuplicateDeletionHold) {
             switch hold {
-            case .angelChosen: forAngel += 1
-            case .filedArchived, .promotedArchiveCopy: archived += 1
+            case .inUseByAngel: forAngel += 1
+            case .promotedArchiveCopy: archived += 1
             }
         }
 
-        /// "2 copies left alone for the Archive Angel · 1 archived copy
-        /// left alone" — nil when there are none.
+        /// "2 copies left alone — in use by the Archive Angel" (and, for
+        /// promoted copies with no Master Archive designated, "· 1 promoted
+        /// archive copy left alone") — nil when there are none.
         var line: String? {
             var parts: [String] = []
-            if forAngel > 0 { parts.append("\(forAngel) cop\(forAngel == 1 ? "y" : "ies") left alone for the Archive Angel") }
-            if archived > 0 { parts.append("\(archived) archived cop\(archived == 1 ? "y" : "ies") left alone") }
+            if forAngel > 0 { parts.append("\(forAngel) cop\(forAngel == 1 ? "y" : "ies") left alone — in use by the Archive Angel") }
+            if archived > 0 { parts.append("\(archived) promoted archive cop\(archived == 1 ? "y" : "ies") left alone") }
             return parts.isEmpty ? nil : parts.joined(separator: " · ")
         }
     }

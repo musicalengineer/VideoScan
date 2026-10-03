@@ -50,7 +50,7 @@ extension VideoScanModel {
         /// the ">20% of the volume" snapshot tripwire.
         let volumeRecordCount: Int
         /// GH #258: extras on this volume the run leaves alone because the
-        /// Archive Angel has chosen them, they are filed as Archived, or
+        /// Archive Angel is using them (a batch, a running Prepare) or
         /// they are promoted archive copies — NEVER in `targets`, each
         /// with its reason. Counted in `skippedCount` / `skippedReasons`.
         var held: [(record: VideoRecord, hold: DuplicateDeletionHold)] = []
@@ -270,39 +270,51 @@ extension VideoScanModel {
     }
 
     /// THE ONE RULE for "does Delete Duplicates leave this extra copy
-    /// alone, although the archive rule (`bulkDeleteRefusal`) has nothing
-    /// to say about it?" (GH #258, Rick 2026-10-03). Asked by the
-    /// selection, by the menu count and — live, at every copy's turn and at
-    /// resume — by `authorizeDuplicateDeletion`; the content steward asks
-    /// it too, so its cards and the run can never disagree.
+    /// alone, although the bulk-verb gate (`bulkDeleteRefusal`: the Master
+    /// Archive, its volume, a drive marked Read only) has nothing to say
+    /// about it?" (GH #258, Rick 2026-10-03). Asked by the selection, by
+    /// the menu count and — live, at every copy's turn, at resume and once
+    /// more between a pair's read and its removal — by the job; the content
+    /// steward asks it too, so its cards and the run can never disagree.
     ///
-    ///   a promoted archive copy (also while NO Master Archive is
-    ///   designated, when `bulkDeleteRefusal` answers nil) ... isArchiveCopy
-    ///   filed as Archived in Triage ........... lifecycleStage == .archived
-    ///   the Archive Angel recommends it, holds it in a prepared batch,
-    ///   has just promoted it, or is preparing it right now
-    ///        ..... archiveAngel.recommendations (the Angel's ONE set of
-    ///              numbers) + archiveAngel.recordIDsInRunningPrepare
+    /// A FILE IN USE, or an archive copy — nothing else (Rick's ruling
+    /// 2026-10-03):
+    ///
+    ///   a promoted archive copy (reached here only while NO Master Archive
+    ///   is designated, when `bulkDeleteRefusal` answers nil) . isArchiveCopy
+    ///   in a prepared batch, or in a batch being / just promoted (Promote
+    ///   re-reads the source to re-prove its bytes)
+    ///        ..... archiveAngel.recommendations.preparedIDs / .promotedIDs
+    ///              + archiveAngel.recordIDsInBatchesOnDisk (the buffer's
+    ///              own plan files, read without the Archive tab)
+    ///   picked for a Prepare that is still running
+    ///        ..... archiveAngel.recordIDsInRunningPrepare
+    ///
+    /// NOT held: a copy the Angel merely lists as a candidate (the Angel
+    /// never recommends an Extra copy — its own `extraCopy` rule, pinned in
+    /// ArchiveAngelExtraCopyGuardTests), and a copy labelled Archived in
+    /// Triage (the label follows the keeper when the copy goes —
+    /// DuplicateKeeperCarryOverTests).
     ///
     /// Build ONCE per pass and call per record: the Angel's sets are
     /// captured here (copy-on-write — no copying), so each call is a few
     /// O(1) set lookups. The sets change without a catalog mutation (a
-    /// sweep, a batch), which is why the authorization builds a fresh rule
-    /// for every row instead of trusting the plan.
+    /// batch), which is why the authorization builds a fresh rule for every
+    /// row instead of trusting the plan.
     ///
     /// A copy left alone is NOT given any standing in the survival rule:
     /// it stays an ordinary sibling, counted as a remaining copy only when
     /// its stored evidence reproduces (`deletionTierCandidates`).
     func duplicateDeletionHoldRule() -> (VideoRecord) -> DuplicateDeletionHold? {
         let angel = archiveAngel.recommendations
+        let onDisk = archiveAngel.recordIDsInBatchesOnDisk
         let preparing = archiveAngel.recordIDsInRunningPrepare
         // Used and dropped within one pass, so a strong `self` is fine.
         return { r in
             if self.isArchiveCopy(r) { return .promotedArchiveCopy }
-            if r.lifecycleStage == .archived { return .filedArchived }
-            if angel.candidateIDs.contains(r.id) || angel.preparedIDs.contains(r.id)
-                || angel.promotedIDs.contains(r.id) || preparing.contains(r.id) {
-                return .angelChosen
+            if angel.preparedIDs.contains(r.id) || angel.promotedIDs.contains(r.id)
+                || onDisk.contains(r.id) || preparing.contains(r.id) {
+                return .inUseByAngel
             }
             return nil
         }
@@ -315,6 +327,9 @@ extension VideoScanModel {
     /// reason is already logged). Same log lines as before, so the
     /// existing sensors keep matching.
     func prepareDuplicateDeletion(onVolume volumePath: String) async -> DeleteDuplicatesPlan? {
+        // The buffer's own plan files, read now (off-main, read-only): the
+        // hold never depends on the Archive tab having been opened (GH #258).
+        await archiveAngel.refreshRecordIDsInBatchesOnDisk()
         let selection = duplicateDeletionSelection(onVolume: volumePath)
         // Master Archive files are never bulk-deleted, even as "extras".
         var targets = excludingMasterArchiveFiles(selection.targets, verb: "Delete Duplicates")
@@ -513,9 +528,9 @@ extension VideoScanModel {
                 : Self.masterArchiveUnprovableRefusalLine(verb: "Delete Duplicates", count: 1, volume: label))
             return .refuse(note: Self.bulkDeleteRefusalNote(refusal, volume: label) + " — refused \(stage)")
         }
-        // GH #258: the Archive Angel's sets, the Triage filing and the
-        // promoted-copy mark, asked LIVE — the Angel may have chosen this
-        // copy since the plan was made (or since the run began). Left
+        // GH #258: the Archive Angel's batches and the promoted-copy mark,
+        // asked LIVE — the copy may have gone into a batch since the plan
+        // was made (or since the run began). Left
         // alone, not refused: nothing is wrong with the pair, so the row is
         // NOT re-marked Review and a later run may take it once the Angel
         // lets go.
@@ -993,8 +1008,8 @@ extension VideoScanModel {
                 skipped[WorkingCopyCleanupText.reason(for: refusal), default: 0] += 1
                 continue
             }
-            // Never offered either (GH #258): the Archive Angel has chosen
-            // it, it is filed as Archived, or it is a promoted archive
+            // Never offered either (GH #258): the Archive Angel is using
+            // it (a batch, a running Prepare) or it is a promoted archive
             // copy — in EITHER mode, whatever drive its keeper is on.
             if let hold = holdRule(rec) {
                 skipped[hold.note, default: 0] += 1
@@ -1125,11 +1140,9 @@ extension VideoScanModel {
 /// although the archive rule has nothing to say about it (GH #258). The
 /// rule that decides it is `VideoScanModel.duplicateDeletionHoldRule()`.
 enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
-    /// Archive Angel recommends it, holds it in a prepared batch, has just
-    /// promoted it, or is preparing it right now.
-    case angelChosen
-    /// Filed as Archived in Triage.
-    case filedArchived
+    /// In a prepared batch, in a batch being or just promoted, or picked
+    /// for a Prepare that is still running: the Angel is using the file.
+    case inUseByAngel
     /// A promoted archive copy (reached here only while no Master Archive
     /// is designated — otherwise `bulkDeleteRefusal` has already said so).
     case promotedArchiveCopy
@@ -1137,8 +1150,7 @@ enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
     /// The reason, as the run's detail row, the plan and the console say it.
     var note: String {
         switch self {
-        case .angelChosen: return "left alone — the Archive Angel has chosen this copy"
-        case .filedArchived: return "left alone — you filed it as Archived"
+        case .inUseByAngel: return "left alone — in use by the Archive Angel"
         case .promotedArchiveCopy: return "left alone — it is a promoted archive copy"
         }
     }

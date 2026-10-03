@@ -186,7 +186,7 @@ struct StewardCardView: View {
             line(ReclaimableEstimate.survivalRule)
             line(StewardGroupEvidence.keeperCaveat, faint: true)
             if item.protectedCopies > 0 {
-                line("\(item.protectedCopies) cop\(item.protectedCopies == 1 ? "y is" : "ies are") never offered — in the archive, on its drive, filed as Archived or chosen by the Archive Angel.", faint: true)
+                line("\(item.protectedCopies) cop\(item.protectedCopies == 1 ? "y is" : "ies are") never offered — in the archive, on its drive, or in use by the Archive Angel.", faint: true)
             }
         }
         .accessibilityIdentifier("steward.card.evidence")

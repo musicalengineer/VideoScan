@@ -12,8 +12,8 @@
 // (StewardScaleTests).
 //
 // RULE 2 of §5.6 lives in the projection: a record the Delete planner's own
-// rules leave alone (archive copy / archive drive / filed as Archived /
-// Archive Angel's pick — see VideoScanModel+Steward.swift) arrives here
+// rules leave alone (archive copy / archive drive / in use by the
+// Archive Angel — see VideoScanModel+Steward.swift) arrives here
 // with `protection != .none`, and from then on it can be a KEEPER but never
 // a copy a case proposes to let go. A duplicate set whose only other copies
 // are protected produces no Reclaim card. Since GH #258 the run behind the
@@ -430,7 +430,7 @@ enum StewardCaseBuilder {
                     standing = .member
                 } else if r.protection.isProtected {
                     // The Delete planner leaves it alone (the archive, its
-                    // drive, the Angel's pick, filed as Archived): never
+                    // drive, a copy the Archive Angel is using): never
                     // proposed, never counted as reclaimable, never a row
                     // of the run.
                     protected += 1

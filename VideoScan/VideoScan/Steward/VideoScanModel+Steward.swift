@@ -16,19 +16,16 @@
 // RULE 2 of §5.6 — "one steward's cases are never another's loss" — is
 // decided HERE, per record, by the Delete planner's OWN two rules — the
 // steward has no list of its own, so a card and the run behind its button
-// can never disagree (GH #258, 2026-10-03: until then the Angel's picks and
-// filed-as-Archived copies were only the steward's restraint, and the card
-// had to say the drive's cleanup "would still check" them):
+// can never disagree (GH #258, 2026-10-03):
 //
 //   a file of the Master Archive, the
 //   archive's whole drive, or a drive that
 //   cannot be told apart from it ............. bulkDeleteRefusal(_:volume:)
 //                                              with archiveVolumeProtection()
 //   an archive copy while no Master Archive
-//   is designated; filed as Archived in
-//   Triage; Archive Angel recommends it,
-//   holds it in a prepared batch, has just
-//   promoted it or is preparing it now ....... duplicateDeletionHoldRule()
+//   is designated; in use by the Archive
+//   Angel (a prepared batch, a batch being
+//   or just promoted, a running Prepare) ..... duplicateDeletionHoldRule()
 //                                              (VideoScanModel+Duplicates)
 //
 // Rule 2 is about what a card proposes to LET GO. An event card proposes
@@ -79,8 +76,8 @@ extension VideoScanModel {
             case nil: break
             }
             switch hold(r) {
-            case .promotedArchiveCopy?, .filedArchived?: return .filedArchived
-            case .angelChosen?: return .angel
+            case .promotedArchiveCopy?: return .archiveCopy
+            case .inUseByAngel?: return .angel
             case nil: return .none
             }
         }

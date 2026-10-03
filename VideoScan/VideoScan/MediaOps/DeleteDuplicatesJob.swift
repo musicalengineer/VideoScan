@@ -1102,7 +1102,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         if failed > 0 { summaryParts.append("\(failed) not done") }
         if leftAlone > 0 { summaryParts.append("\(leftAlone) left alone") }
         // GH #258: copies never taken (or left at their turn) because the
-        // Archive Angel has chosen them or they are archived — the row's
+        // Archive Angel is using them — the row's
         // one-line summary only; the log lines above are unchanged.
         if let heldLine = finalPlan.leftAlone.line { summaryParts.append(heldLine) }
         let summary = summaryParts.joined(separator: " · ")
@@ -1200,7 +1200,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 }
             } else if let hold = model.duplicateDeletionHoldRule()(model.record(forID: entry.id) ?? record) {
                 // GH #258: the Archive Angel chose this copy (or it was
-                // filed as Archived) WHILE its pair was being read — after
+                // put in a batch) WHILE its pair was being read — after
                 // the turn's authorization, before anything is removed. The
                 // file goes back to its path, untouched; phase 2 never runs.
                 heldAfterRead = hold
@@ -1610,6 +1610,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             model.log("\nNot resuming Delete Duplicates on \(input.volumeName): \(away). Nothing was changed; the run stays offered.")
             return .failure(ResumeRefused(line: away))
         }
+        // The Archive Angel's batches on disk, read now (off-main,
+        // read-only) so the re-check below does not depend on the Archive
+        // tab having been opened this launch (GH #258).
+        await model.archiveAngel.refreshRecordIDsInBatchesOnDisk()
         var plan = input
         plan.resumeCount += 1
         model.log("\nResuming Delete Duplicates on \(plan.volumeName): \(plan.remainingCount) of \(plan.entries.count) remaining — re-checking every one against the catalog first…")

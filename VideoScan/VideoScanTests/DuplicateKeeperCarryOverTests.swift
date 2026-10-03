@@ -90,10 +90,7 @@ struct DuplicateKeeperCarryOverTests {
         extra.rejectedPeople = ["Rick", "Anna"]      // Rick confirmed on keeper → no; Anna → yes
         extra.userNotes = "extra note"
         extra.mediaDisposition = .confirmedJunk      // keeper reviewed → ignored
-        // (Not `.archived`: since GH #258 a copy filed as Archived is left
-        // alone by Delete Duplicates, so its stage can no longer arrive this
-        // way — pinned in DeleteDuplicatesAngelHoldTests.)
-        extra.lifecycleStage = .reviewing            // keeper cataloged → adopts
+        extra.lifecycleStage = .archived             // keeper cataloged → adopts
         extra.archiveStage = .backedUp               // keeper .none → adopts
         extra.userDate = "1990-01"                   // keeper has one → ignored
         extra.userDateConfidence = "estimated"
@@ -120,7 +117,7 @@ struct DuplicateKeeperCarryOverTests {
         #expect(keeper.rejectedPeople == ["donna", "Anna"],
                 "Rick must not be rejected — keeper had confirmed him")
         #expect(keeper.mediaDisposition == .important, "keeper's review is not clobbered")
-        #expect(keeper.lifecycleStage == .reviewing)
+        #expect(keeper.lifecycleStage == .archived)
         #expect(keeper.archiveStage == .backedUp)
         #expect(keeper.userDate == "1994-11" && keeper.userDateConfidence == "known")
         // Machine metadata untouched.

@@ -147,7 +147,7 @@ struct ReclaimableEstimate: Sendable, Equatable {
 enum ReclaimableCalculator {
 
     /// `leftAlone`: the Delete planner's own "this copy is left alone" rule
-    /// (GH #258 — the Archive Angel's picks, filed as Archived, a promoted
+    /// (GH #258 — a copy the Archive Angel is using, a promoted
     /// copy; `VideoScanModel.duplicateDeletionHoldRule`). Such a row is
     /// projected as "not an extra copy": it can still be a counted sibling,
     /// but it is never counted as reclaimable — the run would not take it.

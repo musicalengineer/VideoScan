@@ -78,11 +78,11 @@ enum StewardCaseKind: String, Sendable, Equatable, CaseIterable {
 ///
 /// ONE STRENGTH (GH #258, 2026-10-03). Every case here is something the
 /// Delete planner itself leaves alone — `.archived` / `.archiveDrive` by
-/// `bulkDeleteRefusal`, `.filedArchived` / `.angel` by
+/// `bulkDeleteRefusal`, `.archiveCopy` / `.angel` by
 /// `duplicateDeletionHoldRule` — so "never offered" is true of all of them
-/// whatever button is pressed. (Until #258 the last two were only the
-/// steward's own restraint, and the card had to say a drive's cleanup
-/// "would still check" them.)
+/// whatever button is pressed. A copy the Angel merely lists, or one
+/// labelled Archived in Triage, is an ORDINARY copy: the run may take it
+/// (Rick's ruling 2026-10-03), so it is not a case here.
 enum StewardProtection: String, Sendable, Equatable {
     case none
     /// A file of the Master Archive.
@@ -90,11 +90,10 @@ enum StewardProtection: String, Sendable, Equatable {
     /// Anywhere else on the Master Archive's drive, or a drive that cannot
     /// be told apart from it right now.
     case archiveDrive
-    /// Filed as Archived in Triage, or an archive copy while no Master
-    /// Archive is designated.
-    case filedArchived
-    /// Archive Angel recommends it, holds it in a prepared batch, has just
-    /// promoted it or is preparing it now.
+    /// A promoted archive copy while no Master Archive is designated.
+    case archiveCopy
+    /// In use by the Archive Angel: in a prepared batch, in a batch being
+    /// or just promoted, or picked for a Prepare that is still running.
     case angel
 
     /// The Delete planner leaves this file alone, and no card proposes it.
@@ -106,8 +105,8 @@ enum StewardProtection: String, Sendable, Equatable {
         case .none: return ""
         case .archived: return "In the archive"
         case .archiveDrive: return "On the archive drive"
-        case .filedArchived: return "You filed this copy as Archived"
-        case .angel: return "Archive Angel has chosen this copy"
+        case .archiveCopy: return "A promoted archive copy"
+        case .angel: return "In use by the Archive Angel"
         }
     }
 }
@@ -122,7 +121,7 @@ enum StewardCopyStanding: Sendable, Equatable {
     /// is off — the flow leaves it alone.
     case keeperOnAnotherDrive
     /// Not proposed, and the Delete duplicates flow leaves it alone too
-    /// (the archive, its drive, the Angel's pick, filed as Archived).
+    /// (the archive, its drive, a copy the Archive Angel is using).
     case protected(StewardProtection)
     /// Not a duplicate copy at all (a footage or junk row).
     case member
@@ -205,7 +204,7 @@ struct StewardCase: Sendable, Equatable, Identifiable {
     /// Copies the flow would leave alone because the keeper is elsewhere.
     var copiesNeedingWorkingCopyMode: Int = 0
     /// Copies the Delete planner leaves alone (the archive, its drive, the
-    /// Angel's picks, filed as Archived).
+    /// copies the Archive Angel is using).
     var protectedCopies: Int = 0
     /// Every copy of the set a Delete duplicates run would decide, with its
     /// drive — the WHOLE set, not the capped evidence rows (the proof's

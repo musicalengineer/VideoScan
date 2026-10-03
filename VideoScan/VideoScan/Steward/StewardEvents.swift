@@ -501,7 +501,7 @@ enum StewardEvents {
             if let g = inputs[i].footageGroupID, inputs[i].footageStrength >= StewardCaseBuilder.minFootageStrength {
                 byFootage[g, default: []].append(i)
             }
-            if inputs[i].protection == .archived || inputs[i].protection == .filedArchived { archived += 1 }
+            if inputs[i].protection == .archived || inputs[i].protection == .archiveCopy { archived += 1 }
         }
         let sets = bySet.filter { $0.value.count > 1 }
         let groups = byFootage.filter { $0.value.count > 1 }

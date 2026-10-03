@@ -231,9 +231,8 @@ struct StewardSensorTests {
         }
         // …and that rule still reads what rule 2 promises.
         let planner = code(try source("VideoScanModel+Duplicates.swift"))
-        for predicate in ["self.isArchiveCopy(r)", "r.lifecycleStage == .archived", "archiveAngel.recommendations",
-                          "angel.candidateIDs.contains(r.id)", "angel.preparedIDs.contains(r.id)",
-                          "angel.promotedIDs.contains(r.id)", "preparing.contains(r.id)"] {
+        for predicate in ["self.isArchiveCopy(r)", "archiveAngel.recommendations", "angel.preparedIDs.contains(r.id)",
+                          "angel.promotedIDs.contains(r.id)", "onDisk.contains(r.id)", "preparing.contains(r.id)"] {
             #expect(planner.contains(predicate), "the planner's hold rule no longer asks `\(predicate)`")
         }
         #expect(src.contains("archiveAngel.familyBirthdays"), "the People tab's birthdays come through the Angel's reading of them")

@@ -105,6 +105,8 @@ final class ArchiveAngel: ObservableObject {
     /// "Keep footage groups current" — ON by default (§5).
     @Published private(set) var footageAutoEnabled: Bool
     @Published private(set) var batches = Batches()
+    /// Records the batches ON DISK hold — see `refreshRecordIDsInBatchesOnDisk`.
+    private(set) var recordIDsInBatchesOnDisk: Set<UUID> = []
     /// Keep footage current: the automatic run fires once after the first
     /// COMPLETE sweep of a launch, and again after a catalog change once
     /// `footageRearmSeconds` have passed since the last automatic run.
@@ -291,6 +293,8 @@ final class ArchiveAngel: ObservableObject {
                                                          presence: { ArchiveAngelFilePresence.of($0) })
             // The evidence is read under the LOADED policy's stamp.
             await self.policyLoaded()
+            // Which records the buffer's batches hold (read-only; GH #258).
+            await self.refreshRecordIDsInBatchesOnDisk()
             // Attention memory first (the scorer reads it), then the grades.
             await self.attention.load(from: ledger.mediaLedger)
             let loaded = await self.store.load()
@@ -494,6 +498,29 @@ final class ArchiveAngel: ObservableObject {
     /// runner; empty when none is attached (then no job can be running).
     var recordIDsInRunningPrepare: Set<UUID> { jobRunner?.recordIDsInRunningPrepare ?? [] }
 
+    /// Re-read which records the buffer's batches hold, from their own
+    /// plan.json files — the same rule Prepare uses to keep a second batch
+    /// off the same rows (`ArchiveAngelPlanStore.inFlightRecordIDs`: ready
+    /// rows of a ready or promoting batch, and the rows of a batch being
+    /// prepared right now). STRICTLY READ-ONLY: it lists and decodes; it
+    /// never settles, removes or rewrites a batch folder (that is
+    /// `refreshBatches`, which only the Archive tab asks for). Off the main
+    /// actor; called at launch, after every `refreshBatches`, and by Delete
+    /// Duplicates before it plans or resumes — so its hold never depends on
+    /// the Archive tab having been opened (GH #258).
+    func refreshRecordIDsInBatchesOnDisk() async {
+        let root = environment.bufferRoot
+        let ids = await Self.readRecordIDsInBatches(bufferRoot: root)
+        if ids != recordIDsInBatchesOnDisk { recordIDsInBatchesOnDisk = ids }
+    }
+
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func readRecordIDsInBatches(bufferRoot: URL) async -> Set<UUID> {
+        ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: bufferRoot)
+    }
+
     func evidence(for id: UUID) -> Evidence? { store.record(for: id) }
 
     /// The record's EFFECTIVE class — stored evidence, the batches'
@@ -652,6 +679,8 @@ final class ArchiveAngel: ObservableObject {
                     }
                 }
                 self.batches = Batches(ready: ready, unreadable: unreadable, hygiene: hygiene)
+                // The same buffer, as the Delete planner's hold reads it.
+                Task { await self.refreshRecordIDsInBatchesOnDisk() }
                 // Prepared / promoted rows move between classes: recount.
                 self.rebuildRecommendations()
                 facadeLog.info("refreshBatches done — \(ready.count) ready batch(es), \(unreadable.count) unreadable, \(hygiene.batches.count) in the buffer (generation \(generation)); \(self.recommendations.headline, privacy: .public)")
