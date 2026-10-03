@@ -95,11 +95,19 @@ extension VideoScanModel {
 
         testAfterPlan?()
 
+        // codex cycle #29 F4: the scan above visited every record; the
+        // primary may have been replaced meanwhile. Re-check at the
+        // boundary, before ANY byte beside it — the clean-plan marker
+        // below is written with no other gate, and it would claim a
+        // repair of a file we never saved.
+        if catalogStore.refuseIfNewerCatalogOnDisk() != nil { return nil }
+
         guard !plan.isEmpty else {
             writeNotesRepairMarker(at: marker, summary: "clean")
             return NotesRepairSummary(recordsCleaned: 0, linesMoved: 0, humanNotesKept: humanKept, backupPath: nil)
         }
 
+        // (snapshotCatalog → writeSnapshot probes the primary again itself.)
         guard let backup = snapshotCatalog(prefix: "pre-notes-repair") else {
             log("  ⚠ notes repair: could not write catalog.pre-notes-repair snapshot — nothing changed (will retry next launch)")
             appLog.write("NOTES REPAIR (DEGRADED): pre-notes-repair snapshot failed; \(plan.count) record(s) left as-is")
@@ -114,7 +122,15 @@ extension VideoScanModel {
         }
         catalogStore.scheduleSave(records: records)
         let line = "notes repair: \(plan.count) records cleaned, \(humanKept) human notes kept, \(moved) machine lines moved back to notes, backup at \(backup)"
-        writeNotesRepairMarker(at: marker, summary: line)
+        // Same rule for the marker as for the backup: no sibling byte
+        // without a check right before it (codex cycle #29 F4). Held: the
+        // save above will be refused, the in-memory repair is never
+        // persisted, and the (idempotent) scan runs again next launch.
+        if catalogStore.refuseIfNewerCatalogOnDisk() == nil {
+            writeNotesRepairMarker(at: marker, summary: line)
+        } else {
+            appLog.write("NOTES REPAIR: catalog.json was replaced during the repair — marker not written; the repair runs again on the next writable launch")
+        }
         log(line)
         appLog.write(line)
         return NotesRepairSummary(recordsCleaned: plan.count, linesMoved: moved,

@@ -191,10 +191,14 @@ struct CatalogSnapshot: Decodable {
         var generation: Int?
     }
 
-    /// nil ONLY when there is no file. A file that exists but cannot be
+    /// nil ONLY when there is no file (or a DIRECTORY sits at the path — not
+    /// a catalog of any version; the write then fails honestly with EISDIR,
+    /// `CatalogWriteObservabilityTests`). A file that exists but cannot be
     /// opened or followed is `.unknown`, not absent.
     static func header(at url: URL) -> Header? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else { return nil }
         guard let found = CatalogHeaderScanner.probe(fileAt: url, window: probeWindowBytes) else {
             return Header(version: .unknown, generation: nil)
         }
@@ -807,8 +811,16 @@ final class CatalogStore {
             // High-water mark (GH #165). One tiny atomic write per save;
             // never decrements. Skipped when nothing advanced.
             if wroteGeneration > generationFloor {
-                generationFloor = CatalogGenerationSidecar.recordMax(wroteGeneration,
-                                                                     besideCatalogAt: fileURL)
+                // codex cycle #29 F4: the write landed, but this byte beside
+                // catalog.json is written LATER (an async save's completion).
+                // If a newer — or unreadable — catalog replaced ours
+                // meanwhile, or the latch fired, the sidecar is not ours.
+                if sidecarMayAdvance() {
+                    generationFloor = CatalogGenerationSidecar.recordMax(wroteGeneration,
+                                                                         besideCatalogAt: fileURL)
+                } else {
+                    catalogStoreLog.notice("catalog OCC: generation \(wroteGeneration) landed, but catalog.json has since been replaced or writes are held — \(CatalogGenerationSidecar.fileName, privacy: .public) left untouched (GH #167)")
+                }
             }
         } else if let error, case .writesDisabled = error {
             // The write queue's last-moment gate refused (codex #1): latch
@@ -838,6 +850,21 @@ final class CatalogStore {
             auditDesignation("Master Archive designation: OUTCOME FAILED — catalog save generation \(wroteGeneration) did not land (\(lastWriteError?.persistentDescription ?? "unknown")); catalog.json still carries \(Self.describe(persistedMasterArchive)).")
         }
         lock.release()
+    }
+
+    /// May a landed write's completion still touch catalog.generation.max?
+    /// Re-checks the latch (including what the write queue discovered) and
+    /// probes the primary NOW — the same gate as `refuseIfNewerCatalogOnDisk`
+    /// minus its "nothing was written" refusal line, because this write
+    /// DID land (codex cycle #29 F4). Latches what it finds.
+    private func sidecarMayAdvance() -> Bool {
+        adoptLatchFromWriteQueue()
+        if writeHold != nil { return false }
+        if let hold = holdFromPrimaryOnDisk() {
+            latchWrites(off: hold)
+            return false
+        }
+        return true
     }
 
     /// Adopt the on-disk generation after in-memory state has been
