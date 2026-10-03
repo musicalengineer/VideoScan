@@ -109,8 +109,9 @@ struct StewardProofRuleTests {
 
     /// The planner's answer for the same copy, asked directly.
     private func plannerAnswer(_ rig: Rig, copy: VideoRecord, keeper: VideoRecord, excluding: Set<UUID>,
+                               run: DuplicateRunScope? = nil,
                                digest: String) -> (facts: DeletionTierFacts, decision: DeletionTierDecision) {
-        let candidates = rig.model.deletionTierCandidates(record: copy, keeper: keeper, excluding: excluding)
+        let candidates = rig.model.deletionTierCandidates(record: copy, keeper: keeper, excluding: excluding, run: run)
         let facts = DeletionTierFacts.gather(candidates, digest: digest)
         return (facts, DeletionTierDecision.decide(facts: facts,
                                                    preferTrash: rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate))
@@ -200,9 +201,11 @@ struct StewardProofRuleTests {
     /// GH #258 (was QA F1, 2026-10-03): the Delete planner leaves alone a
     /// copy the Archive Angel is USING (here: in a prepared batch), so it is
     /// NOT a row of the run: the card says "never offered" and counts it as
-    /// the run does — an ordinary sibling, which counts when its stored
-    /// evidence reproduces. A copy merely labelled Archived in Triage is an
-    /// ordinary copy (ruling 2026-10-03): a row of the run, like any other.
+    /// the run does — NOT AT ALL (codex #258 F1: a copy the run leaves alone
+    /// is never a surviving copy for another copy of that run, whatever its
+    /// stored evidence says; this test used to pin the opposite). A copy
+    /// merely labelled Archived in Triage is an ordinary copy (ruling
+    /// 2026-10-03): a row of the run, like any other.
     @Test func copiesTheAngelIsUsingAreCountedAsTheRunCountsThem() throws {
         let rig = try rig()
         defer { try? FileManager.default.removeItem(at: rig.dir) }
@@ -225,11 +228,15 @@ struct StewardProofRuleTests {
         #expect(selection.held.map(\.record.id) == [angel.id])
 
         // The run's other rows still to decide (the filed copy) are not
-        // counted; the batch's copy is asked about as a sibling and reproduces.
+        // counted; neither is the batch's copy, although its stored
+        // evidence reproduces — the run's own survivor rule.
         let sameRun = Set(selection.targets.map(\.id)).subtracting([free.id])
         let proof = try stewardProof(rig, copy: free)
-        let run = plannerAnswer(rig, copy: free, keeper: keeper, excluding: sameRun, digest: digest)
-        #expect(run.facts.remainingVerifiedCopies == 2, "keeper + the copy left alone, with current evidence")
+        let run = plannerAnswer(rig, copy: free, keeper: keeper, excluding: [],
+                                run: DuplicateRunScope(volumePath: rig.dir.appendingPathComponent("here").path, pending: sameRun),
+                                digest: digest)
+        #expect(run.facts.remainingVerifiedCopies == 1, "the keeper alone — the copy the run leaves alone is not a survivor")
+        #expect(run.facts.notCounted.contains { $0.contains("angel.mov") && $0.contains("not counted (in use by the Archive Angel)") })
         #expect(proof.remaining == run.facts.remainingVerifiedCopies, "the card and the run count differently")
         #expect(proof.tier == run.decision.tier && proof.notCounted == run.facts.unverifiedCopies)
 

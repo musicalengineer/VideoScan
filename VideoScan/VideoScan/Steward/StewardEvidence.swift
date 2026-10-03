@@ -32,12 +32,14 @@
 // ROWS OF THE SAME RUN (QA F1, F6). Every other copy of the set that the
 // same drive's cleanup would decide — the WHOLE set's (`StewardCase
 // .runRows`, not the capped evidence rows) — is handed to the planner as
-// `excluding`: it may go too, so it is never counted as a copy that
-// remains. A copy the planner leaves alone (the Angel's picks, filed as
-// Archived — GH #258) is NOT a row of the run: it is asked about like any
-// other sibling and counts only if its stored evidence reproduces. And the
-// copy's own identity is stat'ed (`duplicateIdentity`) so a hard link of it
-// is not counted.
+// the run's rows still to be decided: it may go too, so it is never counted
+// as a copy that remains. A copy the planner leaves alone on that drive (in
+// use by the Archive Angel, on a folder marked Read only — GH #258) is not
+// a row of the run and is NOT counted either: the planner's own
+// survivor-counting rule (`duplicateSurvivorStandingRule`, codex #258 F1),
+// which the card asks through `deletionTierCandidates(…run:)` exactly as
+// the job does. And the copy's own identity is stat'ed
+// (`duplicateIdentity`) so a hard link of it is not counted.
 //
 // WHEN. Only for the ONE focused card, from the pane's `.task(id:)` — never
 // in a view body, never for the whole queue. `prepare` runs on the main
@@ -170,14 +172,15 @@ enum StewardEvidenceBuilder {
         // The copies a Delete duplicates run would decide, drive by drive:
         // the others on the SAME drive are rows of the same run, still to
         // be decided — the planner never counts those (they may go too).
-        // From the WHOLE set (`runRows`), the Angel's picks and filed
-        // copies included: the planner does not refuse them.
+        // From the WHOLE set (`runRows`); a copy the planner leaves alone
+        // there is never counted — the planner's own rule decides.
         let checkable = c.copies.filter { $0.standing == .wouldBeChecked }
         var questions: [Question] = []
         for row in checkable.prefix(maxProvedCopies) {
             guard let record = model.record(forID: row.id) else { continue }
             let sameRun = Set(c.runRows.filter { $0.driveRoot == row.driveRoot && $0.id != row.id }.map(\.id))
-            let candidates = model.deletionTierCandidates(record: record, keeper: keeper, excluding: sameRun)
+            let candidates = model.deletionTierCandidates(
+                record: record, keeper: keeper, run: DuplicateRunScope(volumePath: row.driveRoot, pending: sameRun))
             questions.append(Question(copyID: row.id, copyPath: record.fullPath, candidates: candidates,
                                       digest: usableDigest(record) ?? usableDigest(keeper)))
         }
@@ -201,15 +204,21 @@ enum StewardEvidenceBuilder {
         return out
     }
 
-    nonisolated static func proof(_ q: Question, preferTrash: Bool) -> StewardCopyProof {
+    /// `driveOf` = the planner's own test seam for where a copy sits (two
+    /// drives cannot be had in one temp folder); nil in production — the
+    /// planner's resolver, `DuplicateDrives`.
+    nonisolated static func proof(_ q: Question, preferTrash: Bool,
+                                  driveOf seam: ((_ path: String, _ stamp: FileIdentityStamp) -> DeletionTierFacts.Drive)? = nil)
+        -> StewardCopyProof {
         // The copy's own identity, as the job's worker sets it: a
         // candidate that is the same inode is not another copy.
         var candidates = q.candidates
         candidates.duplicateIdentity = FileIdentityStamp.capture(path: q.copyPath)
         let goal = SiblingProver.Allowance.goal(preferTrash: preferTrash)
 
+        var resolver = DuplicateDrives.Resolver()
         func drive(_ path: String, _ stamp: FileIdentityStamp) -> DeletionTierFacts.Drive {
-            .init(key: DeletionTierFacts.driveKey(stamp), label: DeletionTierFacts.driveLabel(forPath: path))
+            seam?(path, stamp) ?? resolver.drive(path: path, stamp: stamp)
         }
         /// The facts if the run read `copies` in order and each matched —
         /// reading only what its own rule would (`worthReading`: never a
@@ -223,7 +232,7 @@ enum StewardEvidenceBuilder {
                 guard SiblingProver.worthReading(count: hoped.remainingVerifiedCopies,
                                                  drives: Set(hoped.countedDrives.map(\.key)),
                                                  countsArchiveCopy: hoped.countsArchiveCopy,
-                                                 candidateDrive: d.key, goal: goal) else { continue }
+                                                 candidateDrive: d.kind.addsADrive ? d.key : nil, goal: goal) else { continue }
                 hoped.addCounted(drive: d, isArchive: copy.isArchive)
                 reads += 1
             }
@@ -239,7 +248,7 @@ enum StewardEvidenceBuilder {
             if !candidates.keeperPath.isEmpty, let k = FileIdentityStamp.capture(path: candidates.keeperPath) {
                 let d = drive(candidates.keeperPath, k)
                 facts.keeperDrive = d
-                facts.countedDrives = [d]
+                if d.kind.addsADrive { facts.countedDrives = [d] }
             }
             facts.countsArchiveCopy = candidates.keeperIsVerifiedArchive
             let decision = DeletionTierDecision.decide(facts: facts, preferTrash: preferTrash)
@@ -252,16 +261,15 @@ enum StewardEvidenceBuilder {
             let hoped = hoping(facts, reachable)
             return StewardCopyProof(copyID: q.copyID, remaining: decision.remainingVerifiedCopies,
                                     counted: [candidates.keeperLabel],
-                                    notCounted: others + candidates.alsoInThisRun.count,
+                                    notCounted: others + candidates.alsoInThisRun.count + candidates.leftAloneByRun.count,
                                     tier: decision.tier, hadStoredDigest: false,
                                     readsFirst: hoped.reads,
                                     tierIfTheyMatch: DeletionTierDecision.decide(facts: hoped.facts, preferTrash: preferTrash).tier)
         }
-        let facts = DeletionTierFacts.gather(candidates, digest: digest)
+        let facts = DeletionTierFacts.gather(candidates, digest: digest, driveOf: seam)
         let decision = DeletionTierDecision.decide(facts: facts, preferTrash: preferTrash)
         // The copies the run could read to prove (stat only here): it
-        // reads until the goal is reached, never more — and never one that
-        // could not change the tier.
+        // reads while a read can still lift the tier, never more.
         let readable = SiblingProver.readableSiblings(
             candidates, allowance: .init(goal: goal, readablePaths: Set(candidates.otherCopies.map(\.path)))).readable
         let hoped = hoping(facts, readable.map { (path: candidates.otherCopies[$0.index].path, stamp: $0.stamp, isArchive: false) })

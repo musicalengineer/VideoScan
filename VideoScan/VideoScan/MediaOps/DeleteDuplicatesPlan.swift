@@ -24,6 +24,8 @@
 // Copies' stamp-bound fixity lets it count:
 //     ≥ 3 remaining, on ≥ 2 different drives (or one of them the
 //       verified archive copy)   → PERMANENT   (space back now)
+//       — a "drive" is a mounted volume that is not a disk image and whose
+//       kind could be established (DeleteDuplicatesDrives.swift)
 //     ≥ 2 remaining otherwise     → TRASH       (to the volume's Trash, not gone)
 //     < 2 remaining               → LEFT ALONE  (put back untouched)
 // COPIES AND DRIVES (Rick 2026-10-03, after a ledger row that read
@@ -132,6 +134,14 @@ struct DeletionTierCandidates: Sendable, Equatable {
     /// decided — they may go too, so they never count (QA #3); named
     /// for the reason.
     var alsoInThisRun: [String] = []
+    /// Family members THIS run leaves alone on the drive it is cleaning —
+    /// in use by the Archive Angel, on a folder marked Read only, or simply
+    /// not a row of the run — each already worded ("sibling h.mov on X not
+    /// counted (in use by the Archive Angel)"). They are never counted:
+    /// main planned such a copy as a row of the run, "still to be decided",
+    /// and leaving it alone must not turn it into a new surviving copy for
+    /// the others (codex #258 F1). `VideoScanModel.duplicateSurvivorStandingRule`.
+    var leftAloneByRun: [String] = []
     /// Fixity-verified Master Archive copies of any family member.
     var archiveCopies: [ArchiveCopy] = []
     /// Every other active family member except the keeper and the
@@ -200,21 +210,31 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// Who did not, and why ("sibling b.mov on M4drive not verified yet").
     var notCounted: [String] = []
 
-    /// One drive a counted copy sits on. `key` is the volume's persistent
-    /// UUID as the fixity stamp carries it (`FileIdentityStamp.volumeUUID`
-    /// — the identity fixity binding already uses, so one volume spelled or
-    /// mounted two ways is one drive), else the stat's `st_dev`.
+    /// One drive a counted copy sits on. `key` names the mounted volume —
+    /// ONE key per volume, from the `st_dev` of the stat that proved the
+    /// copy (`DuplicateDrives.key`), so one volume spelled, linked or
+    /// mounted two ways is one drive, and a copy whose stamp carries a
+    /// volume UUID and one whose stamp does not are never keyed two ways
+    /// (codex #258 F8).
     struct Drive: Sendable, Equatable {
         let key: String
         /// "LaCieWorkspace" — for the reason.
         let label: String
+        /// What kind of volume it is: a disk image, or one whose kind cannot
+        /// be established, is never a drive of its own (codex #258 F9).
+        var kind: DuplicateDrives.VolumeKind = .physical
     }
     /// The keeper's drive (nil when it could not be stat'ed — then it adds
     /// no drive to the count).
     var keeperDrive: Drive?
-    /// The DISTINCT drives the counted copies sit on, the keeper's first.
+    /// The DISTINCT drives the counted copies sit on, the keeper's first —
+    /// only volumes that count as a drive (`DuplicateDrives.VolumeKind
+    /// .addsADrive`: never a disk image, never an unidentified volume).
     /// Empty when unknown (facts built without a stat) — counts as one.
     var countedDrives: [Drive] = []
+    /// Why a counted copy's volume did not add a drive ("a disk image is
+    /// not a second drive") — for the row's reason. Empty when all did.
+    var notADriveNotes: [String] = []
     /// A verified archive copy is among the COUNTED copies (or the keeper
     /// is it) — unlike `hasVerifiedArchive`, this is the count's evidence.
     var countsArchiveCopy: Bool = false
@@ -227,9 +247,9 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// How many different drives hold the copies that would remain (≥ 1).
     var distinctDriveCount: Int { max(1, countedDrives.count) }
 
-    /// The drive a stamp was read on.
+    /// The drive a stamp was read on — the one key per volume.
     nonisolated static func driveKey(_ stamp: FileIdentityStamp) -> String {
-        stamp.volumeUUID.map { "uuid:" + $0 } ?? "dev:\(stamp.device)"
+        DuplicateDrives.key(device: stamp.device)
     }
 
     /// "/Volumes/LaCie/a.mov" → "LaCie"; anything else → "this Mac".
@@ -239,6 +259,11 @@ struct DeletionTierFacts: Sendable, Equatable {
     }
 
     private mutating func noteDrive(_ drive: Drive) {
+        guard drive.kind.addsADrive else {
+            // A copy there is a copy; its volume is never the second drive.
+            if let note = drive.kind.notADriveNote, !notADriveNotes.contains(note) { notADriveNotes.append(note) }
+            return
+        }
         if !countedDrives.contains(where: { $0.key == drive.key }) { countedDrives.append(drive) }
     }
 
@@ -267,12 +292,15 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// duplicate's whole-file digest — a copy only counts when it holds
     /// THESE bytes.
     /// `driveOf` names the drive a stat'ed copy sits on (test seam: two
-    /// drives cannot be had inside one temp folder); production reads it
-    /// off the stamp.
+    /// drives cannot be had inside one temp folder); production (nil) asks
+    /// ONE resolver for every copy of the pass — `DuplicateDrives.Resolver`:
+    /// one key per volume, and whether that volume counts as a drive.
     nonisolated static func gather(_ candidates: DeletionTierCandidates, digest: String,
-                                   driveOf: (_ path: String, _ stamp: FileIdentityStamp) -> Drive = {
-                                       Drive(key: DeletionTierFacts.driveKey($1), label: DeletionTierFacts.driveLabel(forPath: $0))
-                                   }) -> DeletionTierFacts {
+                                   driveOf seam: ((_ path: String, _ stamp: FileIdentityStamp) -> Drive)? = nil) -> DeletionTierFacts {
+        var resolver = DuplicateDrives.Resolver()
+        func driveOf(_ path: String, _ stamp: FileIdentityStamp) -> Drive {
+            seam?(path, stamp) ?? resolver.drive(path: path, stamp: stamp)
+        }
         var facts = DeletionTierFacts()
         let wanted = digest.lowercased()
         facts.hasVerifiedArchive = candidates.keeperIsVerifiedArchive
@@ -289,7 +317,7 @@ struct DeletionTierFacts: Sendable, Equatable {
             seenInodes.insert(key(k))
             let drive = driveOf(candidates.keeperPath, k)
             facts.keeperDrive = drive
-            facts.countedDrives = [drive]
+            facts.noteDrive(drive)
         }
         func alreadyCounted(_ stamp: FileIdentityStamp, _ label: String) -> Bool {
             if let dup = candidates.duplicateIdentity, stamp.isSameFile(as: dup) {
@@ -366,6 +394,10 @@ struct DeletionTierFacts: Sendable, Equatable {
             facts.unverifiedCopies += 1
             facts.notCounted.append("\(label) still to be decided in this run")
         }
+        for words in candidates.leftAloneByRun {
+            facts.unverifiedCopies += 1
+            facts.notCounted.append(words)
+        }
         return facts
     }
 
@@ -424,10 +456,12 @@ struct DeletionTierDecision: Equatable, Sendable {
     static let minimumForPermanent = 3
     /// An outright delete needs the remaining copies on at least this many
     /// DIFFERENT drives — unless one of them is the verified archive copy.
-    /// A "drive" is a volume (its persistent UUID, else `st_dev`). KNOWN
-    /// LIMIT, documented, not solved: two APFS volumes in one container —
-    /// one physical disk — count as two drives
-    /// (docs/practices/invariants/MediaOps.md, MOPS-2).
+    /// A "drive" is a mounted volume (`DuplicateDrives`): a local volume on
+    /// a physical device, or a network share — never a disk image, never a
+    /// volume whose kind cannot be established. KNOWN LIMIT, documented,
+    /// not solved: two volumes on one physical device (two APFS volumes in
+    /// one container, two partitions of one disk or RAID) count as two
+    /// drives (docs/practices/invariants/MediaOps.md, MOPS-2).
     static let minimumDrivesForPermanent = 2
 
     /// The survival rule in one sentence, from the constants — every place
@@ -462,8 +496,9 @@ struct DeletionTierDecision: Equatable, Sendable {
             // Enough copies, but all on ONE drive and none of them the
             // archive's: the Trash, never an outright delete.
             let drive = facts.countedDrives.first?.label ?? "one drive"
+            let notADrive = facts.notADriveNotes.isEmpty ? "" : " — " + facts.notADriveNotes.joined(separator: "; ")
             return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
-                                        reason: "to the Trash, not gone — the \(n) copies that remain are all on \(drive) (\(who))")
+                                        reason: "to the Trash, not gone — the \(n) copies that remain are all on \(drive)\(notADrive) (\(who))")
         }
         return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
                                     reason: "only two verified copies would remain — to the Trash, not gone (\(who))")
@@ -680,6 +715,25 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     }
 
     static let leftAloneListCap = 2_000
+
+    /// This run's rows, as the survivor count needs them (codex #258 F1):
+    /// which are still to be decided, which the run settled by LEAVING THEM
+    /// ALONE for a hold or a Read-only mark, and which it decided on their
+    /// merits. `deciding` is the row being decided now (never listed); nil
+    /// for the forecast. O(entries).
+    func runScope(deciding id: UUID?) -> DuplicateRunScope {
+        var scope = DuplicateRunScope(volumePath: volumePath)
+        for e in entries where e.id != id {
+            if !e.status.isSettled {
+                scope.pending.insert(e.id)
+            } else if e.status == .skipped, let why = DuplicateDeletionHold.leftAloneWhy(note: e.note) {
+                scope.leftAlone[e.id] = why
+            } else {
+                scope.decided.insert(e.id)
+            }
+        }
+        return scope
+    }
 
     /// Left alone when the plan was made PLUS rows the run left alone at
     /// their turn for the same reasons (the Angel's sets change mid-run).

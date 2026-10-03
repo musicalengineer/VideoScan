@@ -4,8 +4,10 @@
 // "0 deletable" in seconds, not after ninety minutes).
 //
 // From the catalog and the fixities already stored on its records ALONE —
-// no file is opened, nothing is stat'ed — each row of the run is put in
-// one bucket:
+// no file is opened — each row of the run is put in one bucket. (Which
+// DRIVE a copy sits on is asked of the disk, exactly as the run asks it —
+// one stat per folder met, `DuplicateDrives.Resolver` — never read off the
+// path's spelling: codex #258 F10.)
 //     permanent          — ≥ 3 copies with stored evidence would remain,
 //                          on ≥ 2 different drives or with the archive
 //                          copy among them (the tier's own rule,
@@ -31,8 +33,11 @@
 // evidence for anything. The simulation walks the rows in plan order the
 // way the job does: an earlier row forecast to go is gone for later rows;
 // one forecast to stay is a sibling for them (unproven, so a read); a
-// later row is "still to be decided" and never counted; a sibling read
-// once is known for the rest of the run; a keeper read once is known.
+// later row is "still to be decided" and never counted; a copy the run
+// LEAVES ALONE on the drive it cleans (in use by the Archive Angel, on a
+// folder marked Read only) is never counted and never read — the run's own
+// survivor-counting rule (codex #258 F1); a sibling read once is known for
+// the rest of the run; a keeper read once is known.
 // Optimistic where the run must read to know (a sibling is assumed to
 // match; a duplicate is assumed identical unless the catalog says not).
 //
@@ -88,11 +93,16 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         /// over-count those, and the run (which stats) counts them once.
         /// Empty = unknown (the id stands in).
         var pathKey: String = ""
-        /// The drive the copy sits on, from its PATH (no stat — the run
-        /// reads the volume's identity): "/volumes/<name>", or "boot".
-        /// Empty = not given (a hand-built input): the copy then counts as
-        /// a drive of its own.
+        /// The drive the copy sits on — the run's own key for the volume
+        /// (`DuplicateDrives.key`), or `notADrive` when its volume never
+        /// counts as one (a disk image, unidentified, could not be
+        /// stat'ed). Empty = not given (a hand-built input): the copy then
+        /// counts as a drive of its own.
         var drive: String = ""
+        /// The run leaves this copy alone on the drive it is cleaning
+        /// (`VideoScanModel.duplicateSurvivorStandingRule`): never counted
+        /// as a copy that remains, never read to prove it.
+        var leftAloneByRun = false
     }
 
     /// One row of the run, in plan order.
@@ -135,6 +145,9 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
     /// Trash rows that one more proven sibling would make permanent.
     var trashMayBecomePermanent = 0
 
+    /// `Copy.drive` for a copy whose volume never counts as a drive.
+    static let notADrive = "-"
+
     func tally(_ bucket: Bucket) -> Tally { buckets[bucket] ?? Tally() }
     var total: Tally {
         buckets.values.reduce(into: Tally()) { $0.files += $1.files; $0.bytes += $1.bytes }
@@ -175,8 +188,13 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
             var counted = 1
             // Where the counted copies sit — an outright delete needs two
             // drives or the archive copy (2026-10-03), exactly as the tier.
-            func drive(_ c: Copy) -> String { c.drive.isEmpty ? "id:" + c.id.uuidString : c.drive }
-            var drives: Set<String> = [drive(keeper)]
+            // nil = its volume is not a drive (it never adds one).
+            func drive(_ c: Copy) -> String? {
+                c.drive.isEmpty ? "id:" + c.id.uuidString : (c.drive == Self.notADrive ? nil : c.drive)
+            }
+            var drives: Set<String> = []
+            func note(_ c: Copy) { if let d = drive(c) { drives.insert(d) } }
+            note(keeper)
             var archiveCounted = keeper.isArchive && keeper.digest != nil
             var readable: [Copy] = []
             var offline = 0
@@ -190,19 +208,20 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
                 if copy.isArchive {
                     if copy.online, let d = copy.digest, copy.archiveDigest == d, let wanted, d == wanted {
                         counted += 1
-                        drives.insert(drive(copy))
+                        note(copy)
                         archiveCounted = true
                     }
                     continue
                 }
                 if let p = position[memberID], p > i { continue }        // still to be decided in this run
+                if copy.leftAloneByRun { continue }                      // left alone by the run: never a survivor
                 if removed.contains(memberID) || notACopy.contains(memberID) { continue }
                 guard copy.online else { offline += 1; continue }
                 if let d = copy.digest, let wanted {
-                    if d == wanted { counted += 1; drives.insert(drive(copy)) }
+                    if d == wanted { counted += 1; note(copy) }
                     continue
                 }
-                if proven.contains(memberID) { counted += 1; drives.insert(drive(copy)); continue }
+                if proven.contains(memberID) { counted += 1; note(copy); continue }
                 readable.append(copy)
             }
 
@@ -245,7 +264,7 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
                 for copy in readable where SiblingProver.worthReading(count: n, drives: drives, countsArchiveCopy: archiveCounted,
                                                                       candidateDrive: drive(copy), goal: goal) {
                     proven.insert(copy.id)
-                    drives.insert(drive(copy))
+                    note(copy)
                     n += 1
                     made += 1
                     out.siblingReads += 1
@@ -254,13 +273,16 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
                 }
                 return (n, made)
             }
-            if counted >= goal {
-                put(permanent(counted) ? .permanent : .trash, row)
+            if counted >= DeletionTierDecision.minimumForTrash, permanent(counted) {
+                put(.permanent, row)
                 removed.insert(row.id)
             } else if counted >= DeletionTierDecision.minimumForTrash {
-                // Two with evidence (and Prefer the Trash off): the Trash
-                // at least; a proven sibling more may make it permanent —
-                // when it brings a second drive, or two are already spanned.
+                // Two or more with evidence, not (yet) an outright delete:
+                // the Trash at least; a proven sibling more may make it
+                // permanent — when it brings a second drive (however many
+                // are counted on the first: codex #258 F11), or two are
+                // already spanned. The prover's own rule says which reads
+                // are made (none under Prefer the Trash).
                 put(.trash, row)
                 let after = read(from: counted)
                 if after.made > 0, permanent(after.count) { out.trashMayBecomePermanent += 1 }
@@ -274,13 +296,6 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
             }
         }
         return out
-    }
-
-    /// The drive a path names, without a stat: "/volumes/<name>" for an
-    /// external volume, "boot" for anything else.
-    static func drive(ofPath path: String) -> String {
-        guard path.hasPrefix("/Volumes/") else { return "boot" }
-        return "/volumes/" + path.dropFirst(9).prefix { $0 != "/" }.lowercased()
     }
 
     // MARK: Words
@@ -377,7 +392,8 @@ extension VideoScanModel {
             return .init(id: r.id, sizeBytes: r.sizeBytes, record: r,
                          keeperID: r.duplicateGroupID.flatMap { selection.keepers[$0]?.id })
         }
-        return deleteDuplicatesForecast(rows: rows)
+        // Every row is still to be decided; the simulation orders them.
+        return deleteDuplicatesForecast(rows: rows, run: DuplicateRunScope(volumePath: volumePath, pending: Set(rows.map(\.id))))
     }
 
     /// The forecast for a plan about to run (fresh or resumed): its
@@ -388,13 +404,23 @@ extension VideoScanModel {
             let live = (r.map { !$0.isPurged && $0.fullPath == e.path } ?? false) ? r : nil
             return .init(id: e.id, sizeBytes: e.sizeBytes, record: live, keeperID: e.keeperPath.isEmpty ? nil : e.keeperID)
         }
-        return deleteDuplicatesForecast(rows: rows)
+        return deleteDuplicatesForecast(rows: rows, run: plan.runScope(deciding: nil))
     }
 
     /// Build the pure input: the families of every row from ONE pass over
     /// `records`, keepers and promotion-linked archive copies added,
-    /// drives checked against the mount table once (no stat of any file).
-    func deleteDuplicatesForecast(rows: [DeleteDuplicatesForecastRow]) -> DeleteDuplicatesForecast {
+    /// drives checked against the mount table once. Where each connected
+    /// copy sits is asked the run's way (`DuplicateDrives.Resolver`): one
+    /// stat per FOLDER met, never per file, and nothing for a copy whose
+    /// drive is not connected.
+    /// `run` = the run being forecast: a family member the run leaves alone
+    /// on the drive it cleans is marked so — the run's own rule.
+    func deleteDuplicatesForecast(rows: [DeleteDuplicatesForecastRow], run: DuplicateRunScope? = nil) -> DeleteDuplicatesForecast {
+        let standing = run.map { duplicateSurvivorStandingRule(in: $0) }
+        func leftAlone(_ r: VideoRecord) -> Bool {
+            if case .leftAlone? = standing?(r) { return true }
+            return false
+        }
         let mounted = VolumeReachability.currentMountedRoots()
         var mountCache: [Substring: Bool] = [:]
         func online(_ path: String) -> Bool {
@@ -410,13 +436,24 @@ extension VideoScanModel {
             return f.digest
         }
         var copies: [UUID: DeleteDuplicatesForecast.Copy] = [:]
+        var drives = DuplicateDrives.Resolver()
+        /// The run's own key for the copy's volume; `notADrive` when that
+        /// volume never counts as one or could not be asked.
+        func drive(_ r: VideoRecord, online: Bool) -> String {
+            guard online, let d = drives.drive(forPath: r.fullPath), d.kind.addsADrive else {
+                return DeleteDuplicatesForecast.notADrive
+            }
+            return d.key
+        }
         func add(_ r: VideoRecord) {
             guard copies[r.id] == nil else { return }
             let archive = isArchiveCopy(r) ? r.archiveFixity : nil
-            copies[r.id] = .init(id: r.id, sizeBytes: r.sizeBytes, digest: usableDigest(r), online: online(r.fullPath),
+            let isOnline = online(r.fullPath)
+            copies[r.id] = .init(id: r.id, sizeBytes: r.sizeBytes, digest: usableDigest(r), online: isOnline,
                                  isArchive: archive != nil, archiveDigest: archive?.digest.lowercased(),
                                  pathKey: (r.fullPath as NSString).standardizingPath.lowercased(),
-                                 drive: DeleteDuplicatesForecast.drive(ofPath: r.fullPath))
+                                 drive: drive(r, online: isOnline),
+                                 leftAloneByRun: leftAlone(r))
         }
         var groups = Set<UUID>()
         for row in rows { if let g = row.record?.duplicateGroupID { groups.insert(g) } }

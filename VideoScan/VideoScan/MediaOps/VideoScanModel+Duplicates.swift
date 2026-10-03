@@ -302,9 +302,9 @@ extension VideoScanModel {
     /// batch), which is why the authorization builds a fresh rule for every
     /// row instead of trusting the plan.
     ///
-    /// A copy left alone is NOT given any standing in the survival rule:
-    /// it stays an ordinary sibling, counted as a remaining copy only when
-    /// its stored evidence reproduces (`deletionTierCandidates`).
+    /// A copy left alone is NEVER a surviving copy for another copy of the
+    /// same run (`duplicateSurvivorStandingRule` — codex #258 F1): main
+    /// planned it as a row "still to be decided", which never counted.
     func duplicateDeletionHoldRule() -> (VideoRecord) -> DuplicateDeletionHold? {
         let angel = archiveAngel.recommendations
         let onDisk = archiveAngel.recordIDsInBatchesOnDisk
@@ -317,6 +317,54 @@ extension VideoScanModel {
                 return .inUseByAngel
             }
             return nil
+        }
+    }
+
+    /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1, 2026-10-03):
+    /// while the run cleaning `run.volumePath` decides one copy, may this
+    /// OTHER member of the family be counted as a copy that remains?
+    ///
+    ///   a row of this run still to be decided ........ no  (main's rule: it
+    ///                                                  may go too)
+    ///   a row this run settled by LEAVING IT ALONE for
+    ///   a hold or a Read-only mark ................... no
+    ///   a row this run decided on its merits (left
+    ///   alone by the tier, refused, …) ............... by the sibling rules
+    ///   an extra copy on the drive being cleaned that
+    ///   is NOT a row of this run — held by the Angel,
+    ///   on a folder marked Read only, or never planned  no
+    ///   …except one the Master Archive rule protects
+    ///   (main never planned those either, and counted
+    ///   them) ........................................ by the sibling rules
+    ///   anything else (the keeper's drive, another
+    ///   drive, a Review row, a Read-only drive that is
+    ///   not the one being cleaned) ................... by the sibling rules
+    ///
+    /// "By the sibling rules" = `DeletionTierFacts.gather`: counted only
+    /// when its stored evidence reproduces. So holding a copy can make
+    /// another copy's fate stricter than main's, never more permissive: on
+    /// main the held copy was a row of the same run, and a row is counted
+    /// only after the run decided it on its merits and kept it.
+    ///
+    /// Build ONCE per row decided (it captures the Angel's sets and the
+    /// archive-volume snapshot); each call is O(1).
+    func duplicateSurvivorStandingRule(in run: DuplicateRunScope) -> (VideoRecord) -> DuplicateSurvivorStanding {
+        let archiveVolume = archiveVolumeProtection()
+        let hold = duplicateDeletionHoldRule()
+        // Used and dropped within one pass, so a strong `self` is fine.
+        return { m in
+            if run.pending.contains(m.id) { return .pendingRow }
+            if let why = run.leftAlone[m.id] { return .leftAlone(why) }
+            if run.decided.contains(m.id) { return .bySiblingRules }
+            guard m.duplicateDisposition == .extraCopy,
+                  PathScope.contains(m.fullPath, within: run.volumePath) else { return .bySiblingRules }
+            switch self.bulkDeleteRefusal(m, volume: archiveVolume) {
+            case .archiveTree?, .archiveVolume?, .archiveVolumeUnprovable?: return .bySiblingRules
+            case .readOnlyVolume?, .readOnlyVolumeDifferentDrive?: return .leftAlone("on a drive marked Read only")
+            case nil: break
+            }
+            if let held = hold(m) { return .leftAlone(held.why) }
+            return .leftAlone("not a row of this run")
         }
     }
 
@@ -526,7 +574,7 @@ extension VideoScanModel {
             // alone — nothing is wrong with the pair, so the row is NOT
             // re-marked Review.
             log(Self.readOnlyVolumeRefusalLine(verb: "Delete Duplicates", count: 1, volume: name))
-            let note = "left alone — " + Self.bulkDeleteRefusalNote(.readOnlyVolume(name), volume: name)
+            let note = DuplicateDeletionHold.leftAlonePrefix + Self.bulkDeleteRefusalNote(.readOnlyVolume(name), volume: name)
             return .skip(note: note, log: "Skipped \(e.filename): \(note)")
         case let refusal?:
             let label = archiveVolume?.label ?? "the archive volume"
@@ -692,8 +740,12 @@ extension VideoScanModel {
     /// worker as "verified this pair". Sendable value: paths + fixities.
     /// `excluding` are the ids of THIS run's rows still to be decided —
     /// they may go too, so they are named but never counted (QA #3).
+    /// `run` is the whole run (the job, the forecast and the steward pass
+    /// it): every member is then put through THE survivor-counting rule,
+    /// `duplicateSurvivorStandingRule` (codex #258 F1).
     func deletionTierCandidates(record: VideoRecord, keeper: VideoRecord,
-                                excluding: Set<UUID> = []) -> DeletionTierCandidates {
+                                excluding: Set<UUID> = [], run: DuplicateRunScope? = nil) -> DeletionTierCandidates {
+        let standing = run.map { duplicateSurvivorStandingRule(in: $0) }
         var out = DeletionTierCandidates()
         out.keeperPath = keeper.fullPath
         var seenArchive = Set<UUID>()
@@ -730,9 +782,14 @@ extension VideoScanModel {
         }
         for member in members where member.id != keeper.id && !seenArchive.contains(member.id) {
             let label = "sibling \(member.filename) on \(volume(member))"
-            if excluding.contains(member.id) {
+            let how: DuplicateSurvivorStanding = excluding.contains(member.id)
+                ? .pendingRow : (standing?(member) ?? .bySiblingRules)
+            switch how {
+            case .pendingRow:
                 out.alsoInThisRun.append(label)
-            } else {
+            case .leftAlone(let why):
+                out.leftAloneByRun.append("\(label) not counted (\(why))")
+            case .bySiblingRules:
                 out.otherCopies.append(.init(path: member.fullPath, fixity: member.contentFixity, label: label,
                                              recordID: member.id))
             }
@@ -1154,13 +1211,52 @@ enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
     /// is designated — otherwise `bulkDeleteRefusal` has already said so).
     case promotedArchiveCopy
 
-    /// The reason, as the run's detail row, the plan and the console say it.
-    var note: String {
+    /// Every "left alone for a hold or a Read-only mark" note starts so —
+    /// the run's survivor count tells such a row from one it decided on its
+    /// merits by it (`DeleteDuplicatesPlan.runScope`).
+    static let leftAlonePrefix = "left alone — "
+
+    /// "in use by the Archive Angel".
+    var why: String {
         switch self {
-        case .inUseByAngel: return "left alone — in use by the Archive Angel"
-        case .promotedArchiveCopy: return "left alone — it is a promoted archive copy"
+        case .inUseByAngel: return "in use by the Archive Angel"
+        case .promotedArchiveCopy: return "it is a promoted archive copy"
         }
     }
+
+    /// The reason, as the run's detail row, the plan and the console say it.
+    var note: String { Self.leftAlonePrefix + why }
+
+    /// The "why" of a row the run left alone for a hold or a Read-only
+    /// mark; nil for any other note.
+    static func leftAloneWhy(note: String) -> String? {
+        note.hasPrefix(leftAlonePrefix) ? String(note.dropFirst(leftAlonePrefix.count)) : nil
+    }
+}
+
+/// One Delete Duplicates run, as the survivor count needs to know it
+/// (`VideoScanModel.duplicateSurvivorStandingRule`).
+struct DuplicateRunScope: Sendable, Equatable {
+    /// The drive (or folder) the run is cleaning.
+    var volumePath: String
+    /// Rows still to be decided — they may go too.
+    var pending: Set<UUID> = []
+    /// Rows the run settled by leaving them alone for a hold or a
+    /// Read-only mark: id → why.
+    var leftAlone: [UUID: String] = [:]
+    /// Rows the run decided on their merits.
+    var decided: Set<UUID> = []
+}
+
+/// What the survivor-counting rule says about one family member.
+enum DuplicateSurvivorStanding: Equatable, Sendable {
+    /// Asked about on disk like any sibling: counted only when its stored
+    /// evidence reproduces.
+    case bySiblingRules
+    /// A row of the run still to be decided: never counted.
+    case pendingRow
+    /// Left alone by the run (the reason): never counted.
+    case leftAlone(String)
 }
 
 /// Human-readable reason a verified deletion was refused (shared by the

@@ -267,8 +267,10 @@ struct StewardSensorTests {
 
     @Test func ruleOneCallsThePlannersOwnFunctions() throws {
         let src = code(try source("StewardEvidence.swift"))
-        for call in ["model.deletionTierCandidates(record: record, keeper: keeper, excluding: sameRun)",
-                     "DeletionTierFacts.gather(candidates, digest: digest)",
+        for call in ["model.deletionTierCandidates(",
+                     "record: record, keeper: keeper, run: DuplicateRunScope(volumePath: row.driveRoot, pending: sameRun))",
+                     "DeletionTierFacts.gather(candidates, digest: digest, driveOf: seam)",
+                     "seam?(path, stamp) ?? resolver.drive(path: path, stamp: stamp)",
                      "SiblingProver.readableSiblings(",
                      "candidates.duplicateIdentity = FileIdentityStamp.capture(path: q.copyPath)",
                      "c.runRows.filter { $0.driveRoot == row.driveRoot && $0.id != row.id }",

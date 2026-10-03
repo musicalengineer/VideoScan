@@ -740,11 +740,17 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     }
 
     /// Catalog only, no disk: the siblings a read might have to prove for
-    /// this row — none when the copies with stored evidence (usable
-    /// fixity, this digest) already reach `goal`; otherwise every sibling
-    /// without usable stored evidence. Siblings whose stored stamp turns
-    /// out stale are found by the worker's stat and may be read only if
-    /// their drive fits the weight reserved from this list.
+    /// this row — every sibling without usable stored evidence, unless no
+    /// read could earn anything: the copies with stored evidence (usable
+    /// fixity, this digest) already reach `goal` AND either the goal is the
+    /// Trash's two ("Prefer the Trash") or the archive copy is among them
+    /// (an outright delete already). With three stored on what may be ONE
+    /// drive, a sibling on a second drive is the read that earns the
+    /// outright delete (codex #258 F11) — where the copies sit is the
+    /// worker's stat to say, so the sibling's drive is reserved for it.
+    /// Siblings whose stored stamp turns out stale are found by the
+    /// worker's stat and may be read only if their drive fits the weight
+    /// reserved from this list.
     nonisolated static func siblingsThatMayNeedReading(_ candidates: DeletionTierCandidates,
                                                        keeperDigest keeperFixity: ContentFixity?,
                                                        goal: Int) -> [String] {
@@ -754,9 +760,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             return wanted == nil || f.digest == wanted
         }
         var stored = 1
-        stored += candidates.archiveCopies.filter { holds($0.fixity) }.count
+        let archiveStored = candidates.archiveCopies.filter { holds($0.fixity) }.count
+        stored += archiveStored
         stored += candidates.otherCopies.filter { holds($0.fixity) }.count
-        guard stored < goal else { return [] }
+        if stored >= goal {
+            let archiveCounted = candidates.keeperIsVerifiedArchive || archiveStored > 0
+            if goal < DeletionTierDecision.minimumForPermanent || archiveCounted { return [] }
+        }
         return candidates.otherCopies.filter { !($0.fixity?.isUsableForVerification ?? false) }.map(\.path)
     }
 
@@ -913,8 +923,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // COPY-COUNT TIER: the family's other copies, from the fresh
             // catalog; the disk is asked about them once the digest is in
             // hand. The archive is not required (Rick, late 2026-09-20).
-            let alsoPending = Set(current.entries.filter { !$0.status.isSettled && $0.id != entry.id }.map(\.id))
-            let candidates = model.deletionTierCandidates(record: record, keeper: keeper, excluding: alsoPending)
+            // THE survivor-counting rule decides who may count: never a row
+            // still to be decided, never a copy this run leaves alone (a
+            // hold, a Read-only mark) — codex #258 F1.
+            let candidates = model.deletionTierCandidates(record: record, keeper: keeper,
+                                                          run: current.runScope(deciding: entry.id))
 
             // ONE READ PER SIBLING PER RUN: a sibling another pair in flight
             // may be reading right now is not read twice beside it — this

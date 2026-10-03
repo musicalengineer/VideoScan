@@ -268,7 +268,11 @@ struct DeleteDuplicatesTwoDrivesTests {
         #expect(worth(2, ["A"], "B"), "…but a sibling on a second drive would make it permanent")
         #expect(worth(2, ["A", "B"], "A"), "two drives already spanned: the third copy anywhere counts")
         #expect(worth(2, ["A"], "A", archive: true), "the archive copy is counted: the third copy anywhere counts")
-        #expect(!worth(3, ["A"], "B"), "at the goal: no more reads")
+        // Codex #258 F11 (this line used to pin the denial): three counted on
+        // ONE drive — a sibling on a second drive is the read that earns the
+        // outright delete; one more on the same drive still changes nothing.
+        #expect(worth(3, ["A"], "B"), "three on A: a sibling on B is worth reading")
+        #expect(!worth(3, ["A"], "A") && !worth(3, ["A", "B"], "C"), "no read that cannot lift the tier")
         #expect(!worth(2, ["A"], "B", goal: 2), "Prefer the Trash: the goal is two")
     }
 
@@ -317,6 +321,10 @@ struct DeleteDuplicatesTwoDrivesTests {
         #expect(unread.bucket(for: row) == .trash && unread.siblingReads == 0 && unread.trashMayBecomePermanent == 0)
         let secondDrive = run("/volumes/a", "/volumes/c", s2Digest: nil)
         #expect(secondDrive.bucket(for: row) == .trash && secondDrive.siblingReads == 1 && secondDrive.trashMayBecomePermanent == 1)
-        #expect(F.drive(ofPath: "/Volumes/LaCie/a/b.mov") == "/volumes/lacie" && F.drive(ofPath: "/Users/x/Movies/a.mov") == "boot")
+        // A copy whose volume is not a drive (a disk image, unidentified)
+        // never adds one — and is not worth a read once two are counted.
+        #expect(run("/volumes/a", F.notADrive).bucket(for: row) == .trash)
+        let imageUnread = run("/volumes/a", F.notADrive, s2Digest: nil)
+        #expect(imageUnread.bucket(for: row) == .trash && imageUnread.siblingReads == 0 && imageUnread.trashMayBecomePermanent == 0)
     }
 }

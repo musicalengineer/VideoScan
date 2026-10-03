@@ -16,9 +16,11 @@
 // NOT held, and pinned as ordinary copies: one the Angel merely lists as a
 // candidate, and one labelled Archived in Triage.
 //
-// The survival rule is NOT weakened: a copy left alone is an ordinary
-// non-target sibling — it counts as a remaining copy only when its stored
-// evidence reproduces, exactly like any other sibling.
+// The survival rule is NOT weakened (codex #258 F1): a copy the run leaves
+// alone is NEVER counted as a copy that remains for another copy of the
+// same run — on main it was a row of that run, "still to be decided", and
+// leaving it alone must not turn it into a new survivor. The identical-input
+// comparison (hold on vs hold off) is DeleteDuplicatesCodex258SurvivorTests.
 //
 // Dimensions: Logic (below) · Scale (100k records, 10k Angel ids, the
 // selection's existing 2 s budget) · Media matrix N/A (no media is opened
@@ -610,10 +612,11 @@ struct DeleteDuplicatesAngelHoldTests {
 
     // MARK: The survival rule is unchanged
 
-    /// A copy left alone is an ordinary sibling: it is asked about with the
-    /// same question, and counts only when its stored evidence reproduces
-    /// — exactly as the same file would as a plain non-target sibling.
-    @Test func aCopyLeftAloneCountsOnlyAsAnyOtherSiblingWould() throws {
+    /// A copy the run leaves alone is NEVER counted for another copy of the
+    /// run, whatever its stored evidence says (codex #258 F1); a plain
+    /// non-target sibling (a Review row — never a row of the run on main
+    /// either) counts when its stored evidence reproduces.
+    @Test func aCopyLeftAloneIsNeverCountedAndAPlainSiblingCountsByItsEvidence() throws {
         let other = String(repeating: "cd", count: 32)
         for (label, evidence, expected) in [("matching", Optional("same"), 2), ("different", Optional(other), 1),
                                             ("none", String?.none, 1)] {
@@ -635,23 +638,30 @@ struct DeleteDuplicatesAngelHoldTests {
                 }
                 let selection = rig.model.duplicateDeletionSelection(onVolume: rig.dir.path)
                 #expect(selection.targets.map(\.id) == [free.id], "\(label), Angel \(heldByAngel)")
-                // As the job asks: the run's other rows still to decide are
-                // not counted; everything else is asked about on disk.
-                let alsoPending = Set(selection.targets.map(\.id)).subtracting([free.id])
-                let candidates = rig.model.deletionTierCandidates(record: free, keeper: rig.keeper, excluding: alsoPending)
-                #expect(candidates.otherCopies.map(\.recordID) == [sibling.id], "asked about as a sibling, nothing more")
+                // As the job asks: through the run's own survivor rule.
+                var run = DuplicateRunScope(volumePath: rig.dir.path)
+                run.pending = Set(selection.targets.map(\.id)).subtracting([free.id])
+                let candidates = rig.model.deletionTierCandidates(record: free, keeper: rig.keeper, run: run)
+                if heldByAngel {
+                    #expect(candidates.otherCopies.isEmpty, "the held copy is not asked about as a sibling")
+                    #expect(candidates.leftAloneByRun == ["sibling copy2.mov on \(VolumeReachability.volumeName(forPath: sibling.fullPath)) not counted (in use by the Archive Angel)"])
+                } else {
+                    #expect(candidates.otherCopies.map(\.recordID) == [sibling.id] && candidates.leftAloneByRun.isEmpty)
+                }
                 #expect(candidates.archiveCopies.isEmpty && candidates.alsoInThisRun.isEmpty)
                 remaining.append(DeletionTierFacts.gather(candidates, digest: rig.digest).remainingVerifiedCopies)
             }
-            #expect(remaining == [expected, expected],
-                    "\(label) evidence: the Angel's copy counted \(remaining[0]), a plain sibling \(remaining[1])")
+            #expect(remaining == [1, expected],
+                    "\(label) evidence: the Angel's copy counted \(remaining[0]) (must be the keeper alone), a plain sibling \(remaining[1])")
         }
     }
 
-    /// End to end: keeper + the Angel's verified copy remain → exactly two →
-    /// the free copy goes to the Trash (never outright), and the Angel's
-    /// copy is never a row of the run.
-    @Test func withTheAngelsCopyVerifiedTheFreeCopyGoesToTheTrashNotOutright() async throws {
+    /// End to end (codex #258 F1 — this test used to pin the opposite):
+    /// keeper + the Angel's verified copy + a free copy. The Angel's copy is
+    /// never a row of the run AND never a survivor for the free copy — only
+    /// the keeper would remain, so the free copy is left alone, exactly as
+    /// on main, where the Angel's copy was a pending row of the same run.
+    @Test func theAngelsVerifiedCopyDoesNotEarnTheFreeCopyTheTrash() async throws {
         let rig = makeRig("tier", family: false); defer { rig.cleanup() }
         let free = rig.copies[0], angel = rig.copies[1]
         angel.contentFixity = ContentFixity.captured(path: angel.fullPath, digest: rig.digest, byteCount: Int64(fileSize))
@@ -662,8 +672,9 @@ struct DeleteDuplicatesAngelHoldTests {
         await job.task?.value
         let plan = try #require(job.plan)
         #expect(plan.entries.map(\.id) == [free.id], "the Angel's copy is not a row of the run")
-        #expect(plan.entries.first?.status == .trashed, "\(String(describing: plan.entries.first?.status)) — \(plan.entries.first?.note ?? "")")
-        #expect(plan.entries.first?.remainingVerifiedCopies == 2)
+        #expect(plan.entries.first?.status == .skipped, "\(String(describing: plan.entries.first?.status)) — \(plan.entries.first?.note ?? "")")
+        #expect(plan.entries.first?.remainingVerifiedCopies == 1)
+        #expect(FileManager.default.fileExists(atPath: free.fullPath), "the free copy left the drive on the strength of a held copy")
         #expect(FileManager.default.fileExists(atPath: angel.fullPath) && FileManager.default.fileExists(atPath: rig.keeper.fullPath))
         #expect(angel.duplicateDisposition == .extraCopy)
     }
