@@ -359,6 +359,67 @@ Discussion with Rick after the first draft:
   versioned stamps, scheduler conflict table, retire ad-hoc flags and the
   old dashboard (§6 stages 1–3, full discipline).
 
+## 5.6 The content steward (Rick, 2026-10-03) — Archive Angel's shape, second instance
+
+Rick, after a morning with the Phase A trial: "I am dreaming of a new
+angel … Content Angel, BUT we're not gonna call it that." What he wants:
+(1) runs in the background; (2) can run in the foreground on the catalog
+or a volume with feedback; (3) queryable from menus and, later, Hallie;
+(4) finds dups and related footage, provides transcripts and captions,
+decodes OCR, infers dates; (5) helps the user *see and understand* the
+content so it is easier to manage; (6) can recommend ("2 GB occupied by 4
+dups over 3 volumes — clean up?"); (7) where AA guides *promotion*, this
+guides *content management* — what to let go, big payoffs, large groups
+of the same event; (8) the puzzle is the UI/UX.
+
+**The answer to (8): do not invent a shape — reuse Archive Angel's.**
+
+| | Archive Angel | the content steward |
+|---|---|---|
+| verb | keep forever | **let go**, and **belong together** |
+| knowledge | fixity, dates, originality, footage groups | dup groups + keepers, footage groups, junk score, dates, transcripts, captions, OCR (the §5.5 cyclers) |
+| recommender | readiness | **payoff** — bytes reclaimed, or clarity gained |
+| case | "this clip is ready to promote" | "4 copies over 3 drives, 2 GB — keep LaCie's, reclaim 1.5 GB" · "27 clips, 3 tapes, Christmas 2006 — one event; name it?" |
+| action | Promote | Delete duplicates (existing job) · set disposition · group / name footage · hand to the Angel |
+
+- **Home: the Triage tab, evolved** (Rick: "Triage (or whatever) is the
+  place to review the content en masse or individually; unlike the Catalog
+  view, which is file-oriented, Triage/Content is associations,
+  recommendations, groups"). The Catalog stays the inventory; Storage
+  keeps the per-drive view; the cyclers' panel (§5.5) is the steward's
+  engine room, opened from the tab. **Name stays "Triage" for the trial**
+  — decided by use, like Analyze was (candidates: Content, Tidy).
+- **A queue of payoffs, one focused case at a time** (the librarian
+  model): what · why (evidence you can open) · payoff · do it / skip.
+  A skip is remembered (the Angel's attention-memory lesson: never
+  re-propose what was declined).
+- **Two rules that are the first tests:**
+  1. *Delete cards show the proof, not the score* — "3 verified copies
+     remain: LaCie, FamilyArchive, SanDisk", with dates, on the card.
+  2. *One steward's cases are never another's loss* — never propose
+     letting go of an archived copy, a file the Angel has designated or
+     is preparing, or anything on the FamilyArchive volume (near
+     read-only ruling, 2026-09-22). Short clips are low signal, not
+     delete candidates (2026-09-26 ruling): junk cards propose a
+     *disposition review*, never a deletion.
+- **Trial (UI-first, same phasing as §5.5):** three card types over
+  knowledge that already exists on the records, wired to actions that
+  already exist, inside the existing Triage tab with its table retained:
+  1. **Reclaim space** — per-drive ("SanDisk: 412 GB in 1,208 duplicate
+     copies") and the largest individual dup groups; evidence = each
+     copy, its drive and the verified copies that would remain; action =
+     the existing Delete-duplicates flow preselected to that drive, and
+     "Show in Catalog". (Per-group delete does not exist; shown as a gap.)
+  2. **Same footage** — footage groups by size; evidence = members,
+     likely original, date span; actions = the existing group sheet,
+     name-this-footage, One Per Footage.
+  3. **Probably not worth keeping** — junk-score clusters by reason
+     ("38 clips under 5 s"); action = review / set disposition in the
+     Triage table. Never delete.
+  Then Rick drives it; the recommender proper (ranking, cross-steward
+  arbitration, Hallie queries, per-group actions) is built only on his
+  go-ahead.
+
 ## 6. Staging (each stage ships whole; nothing half-moved)
 
 | Stage | What | Risk class | Tests |
