@@ -603,7 +603,7 @@ struct ReadOnlyVolumeSensorTests {
         #expect(snapshot.contains("guard protection != nil || !readOnly.isEmpty else { return nil }"))
         #expect(snapshot.contains("readOnly: readOnly)") && snapshot.contains("noteReadOnlyVolumeSnapshotStale()"))
         let check = try code("ArchiveVolumeProtection.swift")
-        #expect(check.contains("if let verdict = readOnly.verdictAtRemoval(path: path, probe: probe, identity: identity) {"))
+        #expect(check.contains("switch readOnly.verdictAtRemoval(path: path, probe: probe, identity: identity) {"))
     }
 
     /// Each verb that removes, trashes or replaces a media file, and the

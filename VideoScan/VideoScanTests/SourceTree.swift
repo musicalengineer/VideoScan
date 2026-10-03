@@ -104,6 +104,35 @@ enum SourceTree {
         return hits[0].url
     }
 
+    /// `text` with its comments removed: full-line `//` comments dropped,
+    /// a trailing `// …` cut (outside a string literal). A sensor that
+    /// matches CODE must not be satisfied by the expected text surviving in
+    /// a comment after the code itself was removed (codex #258 r2).
+    static func strippingComments(_ text: String) -> String {
+        text.split(separator: "\n", omittingEmptySubsequences: false).compactMap { line -> String? in
+            if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") { return nil }
+            var inString = false
+            var previous: Character = " "
+            var index = line.startIndex
+            while index < line.endIndex {
+                let c = line[index]
+                if c == "\"" && previous != "\\" { inString.toggle() }
+                if !inString, c == "/", previous == "/" {
+                    return String(line[line.startIndex..<line.index(before: index)])
+                }
+                previous = c
+                index = line.index(after: index)
+            }
+            return String(line)
+        }.joined(separator: "\n")
+    }
+
+    /// The CODE of the ONE app source file called `name` — comments removed.
+    static func appCode(named name: String,
+                        sourceLocation: SourceLocation = #_sourceLocation) throws -> String {
+        strippingComments(try appSource(named: name, sourceLocation: sourceLocation))
+    }
+
     /// The text of the ONE app source file called `name` (see
     /// `appSourceURL(named:)`); throws when it is missing or ambiguous.
     static func appSource(named name: String,

@@ -201,6 +201,11 @@ extension VideoScanModel {
         // Unregistered when the model is released (NotificationObserverBag).
         for name in names {
             let token = nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+                // The drive generation moves HERE, synchronously with the
+                // notification — a disk thread reads it at its next gather
+                // or re-check without waiting for a main-actor task (codex
+                // #258 r2-3).
+                DuplicateDrives.resetVolumeCache()
                 let what = note.name.rawValue
                 Task { @MainActor in self?.noteArchiveVolumeSnapshotStale(reason: what) }
             }

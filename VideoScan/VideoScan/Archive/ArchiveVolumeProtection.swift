@@ -565,21 +565,16 @@ struct ArchiveRemovalCheck: Sendable {
     /// The volumes the person marked Read only (2026-10-03).
     var readOnly: ReadOnlyVolumeProtection = .none
 
-    /// nil = may be removed; else the note, and whether the refusal is
-    /// only transient (provisional snapshot + unprovable).
-    func refusal(forPath path: String) -> (note: String, transient: Bool)? {
-        if let protection {
-            let verdict = protection.verdictAtRemoval(path: path, probe: probe, identity: identity)
-            if let note = Self.note(verdict, label: protection.label) {
-                return (note, (isProvisional || protection.isProvisional) && verdict == .unprovable)
-            }
-        }
-        // A read-only mark is never transient: the marked path is refused
-        // by string alone.
-        if let verdict = readOnly.verdictAtRemoval(path: path, probe: probe, identity: identity) {
-            return (VideoScanModel.readOnlyRefusalNote(verdict), false)
-        }
-        return nil
+    /// nil = may be removed; else the note, whether the refusal is only
+    /// transient (provisional snapshot + unprovable), and whether it is a
+    /// HOLD (`BulkDeleteRefusal.leavesAlone` — a Read-only mark): the file
+    /// is left alone, the record is not marked, the copy is not counted.
+    /// A read-only mark is never transient: the marked path is refused by
+    /// string alone.
+    func refusal(forPath path: String) -> (note: String, transient: Bool, leavesAlone: Bool)? {
+        guard let found = bulkRefusal(forPath: path) else { return nil }
+        let transient = found.refusal == .archiveVolumeUnprovable && (isProvisional || protection?.isProvisional == true)
+        return (VideoScanModel.bulkDeleteRefusalNote(found.refusal, volume: found.volume), transient, found.refusal.leavesAlone)
     }
 
     /// The same answer as the gate's own value, for a verb that words its
@@ -597,14 +592,6 @@ struct ArchiveRemovalCheck: Sendable {
         case .readOnly(let name)?: return (.readOnlyVolume(name), name)
         case .readOnlyDifferentDrive(let name)?: return (.readOnlyVolumeDifferentDrive(name), name)
         case nil: return nil
-        }
-    }
-
-    private static func note(_ verdict: ArchiveVolumeProtection.Verdict, label: String) -> String? {
-        switch verdict {
-        case .clear: return nil
-        case .onArchiveVolume: return VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: label)
-        case .unprovable: return VideoScanModel.bulkDeleteRefusalNote(.archiveVolumeUnprovable, volume: label)
         }
     }
 

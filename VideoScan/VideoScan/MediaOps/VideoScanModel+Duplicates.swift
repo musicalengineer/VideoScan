@@ -332,15 +332,15 @@ extension VideoScanModel {
     /// while the pair was being read). nil = nothing holds it; else the
     /// row's note ("left alone — in use by the Archive Angel"). The Master
     /// Archive half of the gate is the worker's own `ArchiveRemovalCheck`.
-    func duplicateRemovalBoundaryNote(recordID: UUID, path: String) -> String? {
-        if let rec = record(forID: recordID), let hold = duplicateDeletionHoldRule()(rec) { return hold.note }
-        switch readOnlyVolumeRefusal(forPath: path, effect: .removesFiles) {
-        case .readOnlyVolume(let name)?, .readOnlyVolumeDifferentDrive(let name)?:
-            log(Self.readOnlyVolumeRefusalLine(verb: "Delete Duplicates", count: 1, volume: name))
-            return DuplicateDeletionHold.leftAlonePrefix + Self.bulkDeleteRefusalNote(.readOnlyVolume(name), volume: name)
-        default:
-            return nil
-        }
+    ///
+    /// Returns the hold's note (nil = no hold) AND today's Read-only
+    /// snapshot: the disk worker runs ITS removal-time check — the path,
+    /// the real path, the file's own volume identity — against the marks as
+    /// they are NOW, not as they were when the pair began (codex #258
+    /// r2-2: a mark made during phase two that matches only by identity).
+    func duplicateRemovalBoundaryWord(recordID: UUID) -> (holdNote: String?, readOnly: ReadOnlyVolumeProtection) {
+        let hold = record(forID: recordID).flatMap { duplicateDeletionHoldRule()($0) }
+        return (hold?.note, readOnlyVolumeProtection())
     }
 
     /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1, 2026-10-03):
@@ -1250,10 +1250,17 @@ enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
     /// The reason, as the run's detail row, the plan and the console say it.
     var note: String { Self.leftAlonePrefix + why }
 
+    /// What every Read-only refusal note says, whichever code path worded it.
+    static let readOnlyMarker = "which you marked Read only"
+
     /// The "why" of a row the run left alone for a hold or a Read-only
-    /// mark; nil for any other note.
+    /// mark; nil for any other note. Also recognises a row an EARLIER build
+    /// settled as an ordinary refusal for a Read-only mark found on the
+    /// disk thread ("lives on X, which you marked Read only — nothing
+    /// moved"): a resumed plan classifies it the same way (codex #258 r2-1).
     static func leftAloneWhy(note: String) -> String? {
-        note.hasPrefix(leftAlonePrefix) ? String(note.dropFirst(leftAlonePrefix.count)) : nil
+        if note.hasPrefix(leftAlonePrefix) { return String(note.dropFirst(leftAlonePrefix.count)) }
+        return note.contains(readOnlyMarker) ? note : nil
     }
 }
 

@@ -709,6 +709,20 @@ extension VideoScanModel {
         /// Under the name of a volume marked Read only, where a DIFFERENT
         /// drive is mounted now: left alone, and said so.
         case readOnlyVolumeDifferentDrive(String)
+
+        /// THE classification (codex #258 r2-1): is this refusal a HOLD — the
+        /// file is simply left alone (a drive the person marked Read only) —
+        /// rather than a judgment that something is wrong with the pair? A
+        /// hold never marks the record Review and its copy is never counted
+        /// as a survivor for another copy of the same run, WHEREVER the
+        /// refusal was found: the selection, the copy's turn, the disk
+        /// worker's physical check, the removal boundary.
+        var leavesAlone: Bool {
+            switch self {
+            case .readOnlyVolume, .readOnlyVolumeDifferentDrive: return true
+            case .archiveTree, .archiveVolume, .archiveVolumeUnprovable: return false
+            }
+        }
     }
 
     // The whole-volume snapshot, `archiveVolumeProtection()`, is cached

@@ -480,7 +480,7 @@ struct DeleteDuplicatesCodex258DrivesTests {
         #expect(D.liveKind(forPath: "/test_codex258_no_such_folder_\(UUID().uuidString)") == .unknown)
         var resolver = D.Resolver()
         #expect(resolver.drive(forPath: "/test_codex258_no_such_folder/a.mov") == nil, "a folder that cannot be stat'ed has no drive")
-        let here = resolver.drive(forPath: (NSTemporaryDirectory() as NSString).appendingPathComponent("a.mov"))
+        let here = resolver.drive(forPath: NSTemporaryDirectory())
         #expect(here != nil && here?.key.isEmpty == false)
     }
 

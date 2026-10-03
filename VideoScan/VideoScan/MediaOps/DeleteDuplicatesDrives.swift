@@ -56,10 +56,26 @@
 // Nothing here is stored across a remount: the key is asked afresh in every
 // counting pass, and the removal boundary re-stats every counted copy.
 //
+// THE GENERATION (codex #258 r2-3). What DiskArbitration said is cached, and
+// a cache can be stale: volume X is unmounted and another volume takes its
+// st_dev and device node before the mount notification is delivered. Two
+// defences, both needed:
+//   1. the cache key carries the volume's own UUID (st_dev | node | UUID),
+//      so a different volume at a reused number and node MISSES the cache;
+//      a volume that reports no UUID is never cached at all;
+//   2. `generation` — one process-wide counter, moved (and the cache
+//      emptied) by every mount / unmount / rename, synchronously with the
+//      notification, and by every run start. `DeletionTierFacts` records
+//      the generation it was gathered under; `recheck` — the final verdict,
+//      on the disk thread — reads the counter again and, when it has moved,
+//      asks afresh which device every counted copy is on and re-decides the
+//      tier. Evidence gathered before a mount change never survives it.
+//
 // Cost: one statfs per volume per counting pass (the `Resolver`'s memo), and
-// ONE DiskArbitration description per mounted volume per run — the
-// process-wide `VolumeCache`, emptied when a run starts and whenever a
-// volume is mounted, unmounted or renamed. Nothing per record.
+// ONE DiskArbitration description per mounted volume per generation — the
+// process-wide `VolumeCache`. The forecast stats each connected copy once
+// (the FILE, as the run does — a file symlink onto another device is placed
+// where its bytes are: codex #258 r2-4). Nothing else per record.
 //
 // (For Rick: `@TaskLocal` ≈ a thread_local a test installs for one scope;
 // `Resolver` is a small struct with a memo table, passed by reference.)
@@ -110,10 +126,23 @@ enum DuplicateDrives {
     }
 
     /// TEST SEAM — task-local, never process-global. When set it answers
-    /// (by path) instead of the disk: two drives cannot be had inside one
-    /// temp folder, and a disk image must not be mounted by a unit test.
+    /// instead of the disk: two drives cannot be had inside one temp
+    /// folder, and a disk image must not be mounted by a unit test. It is
+    /// asked with the copy's RESOLVED path (realpath — the file its bytes
+    /// are in, as a stat sees it), by the run and by the forecast alike.
     /// nil for a path = ask the disk as usual.
     @TaskLocal static var identityOverride: (@Sendable (String) -> Identity?)? = nil
+
+    /// TEST SEAM — task-local: stands in for the DiskArbitration lookup of
+    /// one mounted volume (its device node, its st_dev), so a test can run
+    /// the REAL cache through a mount / unmount schedule. nil = ask
+    /// DiskArbitration.
+    @TaskLocal static var lookupOverride: (@Sendable (_ node: String, _ device: UInt64) -> Identity)? = nil
+
+    /// TEST SEAM — task-local: a prefix on this task's cache keys, so a test
+    /// that walks the cache through a schedule is not disturbed by other
+    /// suites looking up the same real volume. "" in production.
+    @TaskLocal static var cacheScope: String = ""
 
     /// The key of a volume no physical device is known for.
     nonisolated static func key(device: UInt64) -> String { "dev:\(device)" }
@@ -137,14 +166,14 @@ enum DuplicateDrives {
     /// forecast, which has no stamps) the volume of each folder met.
     struct Resolver {
         private var volumes: [UInt64: Identity] = [:]
-        private var folders: [String: Identity?] = [:]
+        private var uuids: [UInt64: String?] = [:]
 
         init() {}
 
         /// The volume of a copy that was just stat'ed (`stamp`).
         mutating func identity(path: String, stamp: FileIdentityStamp) -> Identity {
-            if let override = DuplicateDrives.identityOverride, let given = override(path) { return given }
-            return volume(device: stamp.device, path: path)
+            if let given = DuplicateDrives.overridden(path) { return given }
+            return volume(device: stamp.device, volumeUUID: stamp.volumeUUID, path: path)
         }
 
         /// The drive of a copy that was just stat'ed.
@@ -153,39 +182,47 @@ enum DuplicateDrives {
         }
 
         /// The drive of a copy known only by its PATH (the forecast): one
-        /// stat of its folder, memoised per folder — files of one folder sit
-        /// on one volume. nil when the folder cannot be stat'ed (its drive
-        /// is then unknown and never adds one).
+        /// stat of the FILE ITSELF — the same question the run's stamp
+        /// answers, so a file symlink onto another device is placed where
+        /// its bytes are (codex #258 r2-4) — then this pass's memo of the
+        /// volume. nil when the file cannot be stat'ed (its drive is then
+        /// unknown and never adds one).
         mutating func drive(forPath path: String) -> DeletionTierFacts.Drive? {
-            let id: Identity?
-            if let override = DuplicateDrives.identityOverride, let given = override(path) {
-                id = given
-            } else {
-                let folder = (path as NSString).deletingLastPathComponent
-                if let known = folders[folder] {
-                    id = known
-                } else {
-                    var info = stat()
-                    id = stat(folder, &info) == 0 ? volume(device: UInt64(info.st_dev), path: folder) : nil
-                    folders[folder] = id
-                }
+            if let given = DuplicateDrives.overridden(path) { return DuplicateDrives.drive(given, path: path) }
+            var info = stat()
+            guard stat(path, &info) == 0 else { return nil }
+            let device = UInt64(info.st_dev)
+            let uuid: String?
+            if let known = uuids[device] { uuid = known } else {
+                uuid = VolumeIdentity.uuid(forPath: path)
+                uuids[device] = uuid
             }
-            return id.map { DuplicateDrives.drive($0, path: path) }
+            return DuplicateDrives.drive(volume(device: device, volumeUUID: uuid, path: path), path: path)
         }
 
-        private mutating func volume(device: UInt64, path: String) -> Identity {
+        private mutating func volume(device: UInt64, volumeUUID: String?, path: String) -> Identity {
             if let known = volumes[device] { return known }
-            let found = DuplicateDrives.liveIdentity(forPath: path, device: device)
+            let found = DuplicateDrives.liveIdentity(forPath: path, device: device, volumeUUID: volumeUUID)
             volumes[device] = found
             return found
         }
     }
 
+    /// The seam's answer for a copy: asked with the path the copy's bytes
+    /// are really at (symlinks resolved), as a stat would see it.
+    nonisolated static func overridden(_ path: String) -> Identity? {
+        guard let override = identityOverride else { return nil }
+        guard let real = realpath(path, nil) else { return override(path) }
+        defer { free(real) }
+        return override(String(cString: real))
+    }
+
     // MARK: Asking the disk
 
-    /// What DiskArbitration said about mounted volumes, kept for the run:
-    /// keyed by st_dev + device node, so a number or a node handed to
-    /// another volume later is never mistaken for this one.
+    /// What DiskArbitration said about mounted volumes, kept for one
+    /// generation: keyed by `cacheKey` — st_dev + device node + the
+    /// volume's UUID — so a number and a node handed to ANOTHER volume are
+    /// never mistaken for this one.
     struct VolumeCache: Sendable {
         private(set) var entries: [String: Identity] = [:]
         /// How many times the disk was actually asked (tests read it).
@@ -205,21 +242,38 @@ enum DuplicateDrives {
     private final class CacheBox: @unchecked Sendable {
         let lock = NSLock()
         var cache = VolumeCache()
+        var generation: UInt64 = 0
     }
     private static let shared = CacheBox()
 
-    /// Forget what was learned about the mounted volumes: a Delete
-    /// Duplicates run is starting, or a volume was mounted / unmounted /
-    /// renamed.
+    /// The drive-evidence generation (see the file header): moved by every
+    /// `resetVolumeCache`. Readable from any thread.
+    nonisolated static var generation: UInt64 { shared.lock.withLock { shared.generation } }
+
+    /// Forget what was learned about the mounted volumes AND revoke every
+    /// piece of drive evidence gathered so far (the generation moves): a
+    /// Delete Duplicates run is starting, or a volume was mounted /
+    /// unmounted / renamed. Synchronous; callable from any thread.
     nonisolated static func resetVolumeCache() {
-        shared.lock.withLock { shared.cache.removeAll() }
+        shared.lock.withLock {
+            shared.cache.removeAll()
+            shared.generation &+= 1
+        }
+    }
+
+    /// The cache key of one mounted volume, or nil when it must not be
+    /// cached: a volume that reports no UUID cannot be told from another
+    /// one that later takes its st_dev and device node.
+    nonisolated static func cacheKey(device: UInt64, node: String, volumeUUID: String?) -> String? {
+        guard let volumeUUID, !volumeUUID.isEmpty else { return nil }
+        return "\(device)|\(node)|\(volumeUUID)"
     }
 
     /// Ask the disk which volume holds `path` (whose stat said `device`):
     /// its kind and its physical device. DISK I/O (statfs; one
     /// DiskArbitration lookup the first time a volume is met in a run):
     /// never per record — go through `Resolver`.
-    nonisolated static func liveIdentity(forPath path: String, device: UInt64) -> Identity {
+    nonisolated static func liveIdentity(forPath path: String, device: UInt64, volumeUUID: String?) -> Identity {
         var fs = statfs()
         guard statfs(path, &fs) == 0 else { return Identity(device: device, kind: .unknown) }
         let node = withUnsafePointer(to: &fs.f_mntfromname) {
@@ -229,16 +283,16 @@ enum DuplicateDrives {
         guard fs.f_flags & UInt32(MNT_LOCAL) != 0 else {
             return Identity(device: device, kind: .network, physicalDevice: "net:" + node)
         }
-        return shared.lock.withLock {
-            shared.cache.identity(for: "\(device)|\(node)") { describe(node: node, device: device) }
-        }
+        let lookup = { lookupOverride?(node, device) ?? describe(node: node, device: device) }
+        guard let key = cacheKey(device: device, node: node, volumeUUID: volumeUUID) else { return lookup() }
+        return shared.lock.withLock { shared.cache.identity(for: cacheScope + key, lookup: lookup) }
     }
 
     /// The kind alone (see `liveIdentity`).
     nonisolated static func liveKind(forPath path: String) -> VolumeKind {
         var info = stat()
         guard stat(path, &info) == 0 else { return .unknown }
-        return liveIdentity(forPath: path, device: UInt64(info.st_dev)).kind
+        return liveIdentity(forPath: path, device: UInt64(info.st_dev), volumeUUID: VolumeIdentity.uuid(forPath: path)).kind
     }
 
     private nonisolated static func describe(node: String, device: UInt64) -> Identity {

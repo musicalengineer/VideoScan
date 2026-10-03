@@ -251,8 +251,9 @@ struct DeleteDuplicatesPhysicalDriveTests {
     @Test func theBootVolumeAndTheDataVolumeAreOneDrive() {
         var root = stat(), home = stat()
         guard stat("/", &root) == 0, stat(NSHomeDirectory(), &home) == 0 else { return }
-        let a = DuplicateDrives.liveIdentity(forPath: "/", device: UInt64(root.st_dev))
-        let b = DuplicateDrives.liveIdentity(forPath: NSHomeDirectory(), device: UInt64(home.st_dev))
+        let a = DuplicateDrives.liveIdentity(forPath: "/", device: UInt64(root.st_dev), volumeUUID: VolumeIdentity.uuid(forPath: "/"))
+        let b = DuplicateDrives.liveIdentity(forPath: NSHomeDirectory(), device: UInt64(home.st_dev),
+                                             volumeUUID: VolumeIdentity.uuid(forPath: NSHomeDirectory()))
         #expect(a.kind != .network && b.kind != .network)
         if a.kind == .physical, b.kind == .physical {
             #expect(a.physicalDevice != nil && DuplicateDrives.key(for: a) == DuplicateDrives.key(for: b),
@@ -261,14 +262,14 @@ struct DeleteDuplicatesPhysicalDriveTests {
     }
 
     @Test func theSourcesKeyByDeviceAndTheInvariantSaysSo() throws {
-        let drives = try SourceTree.appSource(named: "DeleteDuplicatesDrives.swift")
+        let drives = try SourceTree.appCode(named: "DeleteDuplicatesDrives.swift")
         #expect(drives.contains("devicePath: description[kDADiskDescriptionDevicePathKey as String] as? String)"))
         #expect(drives.contains("DeletionTierFacts.Drive(key: key(for: identity),"), "a drive is keyed by the volume again")
         #expect(drives.contains("guard let devicePath, !devicePath.isEmpty else { return Identity(device: device, kind: .unknown) }"))
         #expect(drives.contains("return Identity(device: device, kind: .network, physicalDevice: \"net:\" + node)"),
                 "a network share is one drive per server + share")
-        #expect(try SourceTree.appSource(named: "DeleteDuplicatesJob.swift").contains("DuplicateDrives.resetVolumeCache()"))
-        #expect(try SourceTree.appSource(named: "VideoScanModel+ArchiveVolumeSnapshot.swift").contains("DuplicateDrives.resetVolumeCache()"))
+        #expect(try SourceTree.appCode(named: "DeleteDuplicatesJob.swift").contains("DuplicateDrives.resetVolumeCache()"))
+        #expect(try SourceTree.appCode(named: "VideoScanModel+ArchiveVolumeSnapshot.swift").contains("DuplicateDrives.resetVolumeCache()"))
         var repo = try #require(SourceTree.appSourceURL(named: "DeleteDuplicatesPlan.swift"))
         while repo.path != "/", !FileManager.default.fileExists(atPath: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md").path) {
             repo = repo.deletingLastPathComponent()
@@ -344,28 +345,28 @@ struct BulkVerbRemovalBoundaryTests {
     /// Sensors: each bulk remove verb's removal site asks the gate there.
     @Test func everyBulkVerbAsksTheGateWhereTheFileGoes() throws {
         // Workbench Discard: the removal-time check, per file, before the Trash.
-        let discard = try SourceTree.appSource(named: "VideoScanModel+Workbench.swift")
+        let discard = try SourceTree.appCode(named: "VideoScanModel+Workbench.swift")
         let loop = try #require(discard.range(of: "for rec in recs {"))
         let trash = try #require(discard.range(of: "if (try? trash(url)) != nil", range: loop.upperBound..<discard.endIndex))
         #expect(String(discard[loop.upperBound..<trash.lowerBound]).contains("if let held = archiveRemovalCheck()?.bulkRefusal(forPath: rec.fullPath) {"),
                 "Discard no longer asks the gate for each file before it trashes it")
         // Junk Delete's sheet and Prune Apply both move files ONLY through
         // deleteConfirmedJunk, whose loop re-reads the marks for every file.
-        #expect(try SourceTree.appSource(named: "JunkDeleteAction.swift").contains("await model.deleteConfirmedJunk(targets, mode: mode)"))
-        let prune = try SourceTree.appSource(named: "VideoScanModel+PruneApply.swift")
+        #expect(try SourceTree.appCode(named: "JunkDeleteAction.swift").contains("await model.deleteConfirmedJunk(targets, mode: mode)"))
+        let prune = try SourceTree.appCode(named: "VideoScanModel+PruneApply.swift")
         #expect(prune.contains("let result = await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)"))
         #expect(prune.contains("if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {"), "each copy is asked at its turn too")
         for file in ["JunkDeleteAction.swift", "VideoScanModel+PruneApply.swift", "VideoScanModel+Workbench.swift"] {
-            let text = try SourceTree.appSource(named: file)
+            let text = try SourceTree.appCode(named: file)
             #expect(!text.contains("removeItem(") && !text.contains("FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil"),
                     "\(file) removes a media file on its own")
         }
-        let junk = try SourceTree.appSource(named: "VideoScanModel+JunkDelete.swift")
+        let junk = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
         #expect(junk.contains("let readOnlyVolumes = await readOnlyNow()"))
         // Transcode's Replace Existing: policy and check are taken AT the
         // publish, and the publish asks the check for the file it would Trash.
-        let transcode = try SourceTree.appSource(named: "TranscodeJob.swift")
+        let transcode = try SourceTree.appCode(named: "TranscodeJob.swift")
         #expect(transcode.contains("partial: partialPath, final: outputURL, policy: existingFilePolicy(),\n                archiveCheck: model?.archiveRemovalCheck(), trash: DerivativeOutputPublish.trashItem)"))
-        #expect(try SourceTree.appSource(named: "DerivativeOutputPublish.swift").contains("} else if let note = archiveCheck?.refusalNote(forPath: final.path) {"))
+        #expect(try SourceTree.appCode(named: "DerivativeOutputPublish.swift").contains("} else if let note = archiveCheck?.refusalNote(forPath: final.path) {"))
     }
 }

@@ -255,6 +255,16 @@ struct DeletionTierFacts: Sendable, Equatable {
     var countedArchivePaths: Set<String> = []
     /// The keeper is itself the verified archive copy (for `recheck`).
     var keeperIsArchiveCopy: Bool = false
+    /// The keeper's path — so `recheck` can ask again which drive it is on.
+    var keeperPath: String = ""
+    /// THE GENERATION the drive evidence was gathered under
+    /// (`DuplicateDrives.generation`, read BEFORE the first lookup): every
+    /// mount / unmount / rename and every run start moves it. `recheck`
+    /// compares; when it has moved, which drive each copy is on is asked
+    /// again from scratch (codex #258 r2-3 — evidence gathered before a
+    /// mount change must not survive it). nil = the drives were given by a
+    /// test seam or the facts were built by hand: never re-derived.
+    var driveGeneration: UInt64?
 
     /// How many different drives hold the copies that would remain (≥ 1).
     var distinctDriveCount: Int { max(1, countedDrives.count) }
@@ -323,11 +333,16 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// one key per volume, and whether that volume counts as a drive.
     nonisolated static func gather(_ candidates: DeletionTierCandidates, digest: String,
                                    driveOf seam: ((_ path: String, _ stamp: FileIdentityStamp) -> Drive)? = nil) -> DeletionTierFacts {
+        // Read BEFORE any lookup: a mount change during this pass leaves the
+        // facts on the OLD generation, and `recheck` asks again.
+        let generation = DuplicateDrives.generation
         var resolver = DuplicateDrives.Resolver()
         func driveOf(_ path: String, _ stamp: FileIdentityStamp) -> Drive {
             seam?(path, stamp) ?? resolver.drive(path: path, stamp: stamp)
         }
         var facts = DeletionTierFacts()
+        facts.driveGeneration = seam == nil ? generation : nil
+        facts.keeperPath = candidates.keeperPath
         let wanted = digest.lowercased()
         facts.hasVerifiedArchive = candidates.keeperIsVerifiedArchive
         facts.keeperIsArchiveCopy = candidates.keeperIsVerifiedArchive
@@ -436,6 +451,16 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// keeper is not touched (phase two checks its identity itself).
     /// Returns `self` unchanged when every stamp reproduces, so an
     /// unchanged row is never rewritten.
+    ///
+    /// THE DRIVES are evidence too (codex #258 r2-3). When the drive
+    /// generation has moved since the facts were gathered — a volume was
+    /// mounted, unmounted or renamed, or a run started — the keeper and
+    /// every copy that still holds are asked AGAIN which physical device
+    /// they are on, through a fresh resolver (the cache was emptied by the
+    /// same event). If the drives come out differently, that is said in
+    /// `droppedAtBoundary`, so the final verdict re-decides the tier. (A
+    /// DIFFERENT volume now at a copy's path fails the copy's stamp — the
+    /// stamp carries the volume's UUID — and the copy is dropped above.)
     nonisolated func recheck() -> DeletionTierFacts {
         var still: [CountedCopy] = []
         var dropped: [String] = []
@@ -450,30 +475,66 @@ struct DeletionTierFacts: Sendable, Equatable {
             }
             still.append(copy)
         }
-        guard !dropped.isEmpty else { return self }
+        let generationNow = DuplicateDrives.generation
+        let drivesMayBeStale = driveGeneration.map { $0 != generationNow } ?? false
+        guard !dropped.isEmpty || drivesMayBeStale else { return self }
         var out = self
+        var drivesChanged: [String] = []
+        if drivesMayBeStale {
+            // Ask again, from scratch: nothing learned before the mount
+            // change is trusted.
+            var resolver = DuplicateDrives.Resolver()
+            var fresh = DeletionTierFacts()
+            if !keeperPath.isEmpty, let k = FileIdentityStamp.capture(path: keeperPath) {
+                let drive = resolver.drive(path: keeperPath, stamp: k)
+                fresh.keeperDrive = drive
+                fresh.noteDrive(drive)
+            }
+            var rekeyed: [CountedCopy] = []
+            for copy in still {
+                let drive = resolver.drive(path: copy.path, stamp: copy.stamp)
+                fresh.noteDrive(drive)
+                rekeyed.append(CountedCopy(recordID: copy.recordID, path: copy.path, label: copy.label, stamp: copy.stamp,
+                                           digest: copy.digest, driveKey: drive.key))
+            }
+            let stillKeys = Set(still.map { $0.driveKey ?? Self.driveKey($0.stamp) })
+            let before = Set(countedDrives.filter { $0.key == keeperDrive?.key || stillKeys.contains($0.key) }.map(\.key))
+            if before != Set(fresh.countedDrives.map(\.key)) {
+                drivesChanged = ["a volume was mounted or unmounted since the copies were counted — the drives were asked again"]
+            }
+            still = rekeyed
+            out.keeperDrive = fresh.keeperDrive
+            out.countedDrives = fresh.countedDrives
+            out.notADriveNotes = fresh.notADriveNotes
+            out.driveGeneration = generationNow
+            out.countedCopies = still
+            // Same copies, same drives: nothing for the verdict to re-decide.
+            if dropped.isEmpty && drivesChanged.isEmpty { return out }
+        } else {
+            // The drives follow what still holds: a dropped copy takes its
+            // drive with it unless another copy is there.
+            let stillKeys = Set(still.map { $0.driveKey ?? Self.driveKey($0.stamp) })
+            out.countedDrives = countedDrives.filter { $0.key == keeperDrive?.key || stillKeys.contains($0.key) }.map { drive in
+                // …and each drive names only the volumes that still hold a copy.
+                var drive = drive
+                var on: [String] = []
+                if let keeperDrive, keeperDrive.key == drive.key { on.append(keeperDrive.label) }
+                for copy in still where (copy.driveKey ?? Self.driveKey(copy.stamp)) == drive.key {
+                    let volume = Self.driveLabel(forPath: copy.path)
+                    if !on.contains(volume) { on.append(volume) }
+                }
+                if !on.isEmpty, drive.volumes.count > 1 { drive.volumes = drive.volumes.filter { on.contains($0) } }
+                return drive
+            }
+        }
         out.countedCopies = still
         out.remainingVerifiedCopies = 1 + still.count
-        // The drives and the archive exception follow what still holds: a
-        // dropped copy takes its drive with it unless another copy is there.
-        let stillKeys = Set(still.map { $0.driveKey ?? Self.driveKey($0.stamp) })
-        out.countedDrives = countedDrives.filter { $0.key == keeperDrive?.key || stillKeys.contains($0.key) }.map { drive in
-            // …and each drive names only the volumes that still hold a copy.
-            var drive = drive
-            var on: [String] = []
-            if let keeperDrive, keeperDrive.key == drive.key { on.append(keeperDrive.label) }
-            for copy in still where (copy.driveKey ?? Self.driveKey(copy.stamp)) == drive.key {
-                let volume = Self.driveLabel(forPath: copy.path)
-                if !on.contains(volume) { on.append(volume) }
-            }
-            if !on.isEmpty, drive.volumes.count > 1 { drive.volumes = drive.volumes.filter { on.contains($0) } }
-            return drive
-        }
+        // The archive exception follows what still holds.
         out.countsArchiveCopy = keeperIsArchiveCopy || still.contains { countedArchivePaths.contains($0.path) }
         out.counted = [keeperCounted] + still.map(\.label)
         out.unverifiedCopies += dropped.count
         out.notCounted = dropped + notCounted
-        out.droppedAtBoundary = dropped
+        out.droppedAtBoundary = dropped + drivesChanged
         return out
     }
 }
@@ -764,7 +825,7 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         for e in entries where e.id != id {
             if !e.status.isSettled {
                 scope.pending.insert(e.id)
-            } else if e.status == .skipped, let why = DuplicateDeletionHold.leftAloneWhy(note: e.note) {
+            } else if e.status == .skipped || e.status == .refused, let why = DuplicateDeletionHold.leftAloneWhy(note: e.note) {
                 scope.leftAlone[e.id] = why
             } else {
                 scope.decided.insert(e.id)

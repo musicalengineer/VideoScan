@@ -526,8 +526,15 @@ enum ArchiveAngelPlanStore {
     nonisolated static func inFlightRecordIDs(bufferRoot: URL, now: Date = Date(),
                                               staleAfter: TimeInterval = 3600,
                                               fileManager fm: FileManager = .default) -> Set<UUID> {
+        inFlightRecordIDs(in: listBatches(bufferRoot: bufferRoot), now: now, staleAfter: staleAfter, fileManager: fm)
+    }
+
+    /// The same rule over plans already in hand.
+    nonisolated static func inFlightRecordIDs(in plans: [ArchiveAngelPlan], now: Date = Date(),
+                                              staleAfter: TimeInterval = 3600,
+                                              fileManager fm: FileManager = .default) -> Set<UUID> {
         var ids: Set<UUID> = []
-        for plan in listBatches(bufferRoot: bufferRoot) {
+        for plan in plans {
             switch plan.status {
             case .ready, .promoting:
                 for e in plan.entries where e.status == .ready { ids.insert(e.id) }
@@ -540,6 +547,72 @@ enum ArchiveAngelPlanStore {
             }
         }
         return ids
+    }
+
+    // MARK: The buffer, read for Delete Duplicates' holds
+    //
+    // Delete Duplicates asks "is this record in a batch on disk?" before
+    // every copy's turn and again at every removal (codex #258 F6/F7).
+    // Decoding every plan.json each time costs O(rows × buffered entries)
+    // (codex #258 r2). So the DECODED plans are kept per buffer root and
+    // reused while the buffer's FINGERPRINT is unchanged: the batch folder
+    // names and, for each plan.json, its inode, modification time (ns) and
+    // size — one directory listing and one stat per batch, no file opened.
+    // Every save of a plan is an atomic replace (a new inode), so a changed
+    // batch always changes the fingerprint. The rule itself (which rows
+    // hold, which batch is interrupted, which is live) is applied afresh on
+    // every call. Strictly read-only.
+
+    /// What the buffer looks like without opening a file.
+    nonisolated static func bufferFingerprint(bufferRoot: URL) -> String {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: bufferRoot.path) else { return "" }
+        var parts: [String] = []
+        for name in names.sorted() where name.hasPrefix("batch-") {
+            let dir = bufferRoot.appendingPathComponent(name).path
+            var link = stat(), info = stat()
+            let isLink = lstat(dir, &link) == 0 && (link.st_mode & S_IFMT) == S_IFLNK
+            let plan = dir + "/" + ArchiveAngelPlan.planFilename
+            if stat(plan, &info) == 0 {
+                parts.append("\(name)|\(isLink ? "L" : "D")|\(info.st_ino)|\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)|\(info.st_size)")
+            } else {
+                parts.append("\(name)|\(isLink ? "L" : "D")|-")
+            }
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    private final class HoldReadings: @unchecked Sendable {
+        let lock = NSLock()
+        var byRoot: [String: (fingerprint: String, plans: [ArchiveAngelPlan])] = [:]
+        var decodes = 0
+    }
+    private static let holdReadings = HoldReadings()
+
+    /// How many times the buffer's plans were actually decoded for the
+    /// holds (tests read it).
+    nonisolated static var holdReadingDecodes: Int { holdReadings.lock.withLock { holdReadings.decodes } }
+
+    /// `inFlightRecordIDs` for Delete Duplicates' holds: the same answer,
+    /// decoding the buffer only when its fingerprint changed. DISK I/O (a
+    /// listing + one stat per batch) — never on the main thread.
+    nonisolated static func inFlightRecordIDsForHolds(bufferRoot: URL, now: Date = Date()) -> Set<UUID> {
+        let fingerprint = bufferFingerprint(bufferRoot: bufferRoot)
+        let key = bufferRoot.path
+        let cached: [ArchiveAngelPlan]? = holdReadings.lock.withLock {
+            guard let hit = holdReadings.byRoot[key], hit.fingerprint == fingerprint else { return nil }
+            return hit.plans
+        }
+        let plans: [ArchiveAngelPlan]
+        if let cached {
+            plans = cached
+        } else {
+            plans = listBatches(bufferRoot: bufferRoot)
+            holdReadings.lock.withLock {
+                holdReadings.byRoot[key] = (fingerprint, plans)
+                holdReadings.decodes += 1
+            }
+        }
+        return inFlightRecordIDs(in: plans, now: now)
     }
 
     /// Every readable batch under the buffer root, newest first.

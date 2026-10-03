@@ -364,21 +364,27 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         let target = scanTarget(rig.dir.path)
         rig.model.scanTargets = [target]
         let copy = rig.copies[0]
-        #expect(rig.model.duplicateRemovalBoundaryNote(recordID: copy.id, path: copy.fullPath) == nil)
+        // The question as the disk worker asks it (it hands over the path
+        // the file is at then).
+        let ask = DeleteDuplicatesJob.removalBoundaryHold(model: rig.model, recordID: copy.id, path: copy.fullPath)
+        let here = copy.fullPath
+        #expect(rig.model.duplicateRemovalBoundaryWord(recordID: copy.id).holdNote == nil)
+        #expect(await Task.detached { ask(here) }.value == nil)
         setAngel(rig.model, prepared: [copy.id])
-        #expect(rig.model.duplicateRemovalBoundaryNote(recordID: copy.id, path: copy.fullPath) == "left alone — in use by the Archive Angel")
+        #expect(rig.model.duplicateRemovalBoundaryWord(recordID: copy.id).holdNote == "left alone — in use by the Archive Angel")
+        #expect(await Task.detached { ask(here) }.value == "left alone — in use by the Archive Angel")
         setAngel(rig.model)
         rig.model.setVolumeReadOnly(true, for: target)
-        #expect(rig.model.duplicateRemovalBoundaryNote(recordID: copy.id, path: copy.fullPath)
+        #expect(!rig.model.duplicateRemovalBoundaryWord(recordID: copy.id).readOnly.isEmpty, "today's marks travel to the disk thread")
+        #expect(await Task.detached { ask(here) }.value
                 == "left alone — lives on \(rig.dir.lastPathComponent), which you marked Read only")
         rig.model.setVolumeReadOnly(false, for: target)
 
-        // The question as the disk worker asks it: the buffer on disk first…
-        let ask = DeleteDuplicatesJob.removalBoundaryHold(model: rig.model, recordID: copy.id, path: copy.fullPath)
-        #expect(await Task.detached { ask() }.value == nil)
+        // The buffer on disk comes first…
+        #expect(await Task.detached { ask(here) }.value == nil)
         try ArchiveAngelPlanStore.save(try readyBatch(for: copy, in: rig.environment, name: "boundary"))
         #expect(rig.model.archiveAngel.recordIDsInBatchesOnDisk.isEmpty, "fixture: the façade has not re-read the buffer")
-        #expect(await Task.detached { ask() }.value == "left alone — in use by the Archive Angel",
+        #expect(await Task.detached { ask(here) }.value == "left alone — in use by the Archive Angel",
                 "a batch on disk the façade has not read yet is not seen at the removal boundary")
         // …and the hop itself runs its body on the main actor, from either side.
         #expect(DeleteDuplicatesJob.onMainActor { MainActor.assertIsolated(); return 7 } == 7)
@@ -391,7 +397,7 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         let job = try SourceTree.appSource(named: "DeleteDuplicatesJob.swift")
         let verdict = try #require(job.range(of: "let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {"))
         let recheck = try #require(job.range(of: "let now = facts.recheck()", range: verdict.upperBound..<job.endIndex))
-        #expect(String(job[verdict.upperBound..<recheck.lowerBound]).contains("if let boundaryHold, let note = boundaryHold() {"),
+        #expect(String(job[verdict.upperBound..<recheck.lowerBound]).contains("if let boundaryHold, let note = boundaryHold(ticket.quarantinedPath) {"),
                 "the final verdict no longer asks the holds before the removal")
         #expect(job.components(separatedBy: "SignatureVerification.deleteQuarantined(").count == 2,
                 "a second path reaches the removal — it must ask the holds too")
@@ -403,7 +409,8 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         #expect(job.contains("boundaryHold: Self.removalBoundaryHold(model: model, recordID: entry.id, path: entry.path))"))
         #expect(job.contains("archiveCheck: archiveCheck, boundaryHold: boundaryHold)"))
         #expect(job.contains("if inBatchOnDisk(recordID) { return DuplicateDeletionHold.inUseByAngel.note }")
-                && job.contains("return model.duplicateRemovalBoundaryNote(recordID: recordID, path: path)"))
+                && job.contains("return model.duplicateRemovalBoundaryWord(recordID: recordID)")
+                && job.contains("?? word.readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)"))
         let dispatch = try #require(job.range(of: "private func dispatchPairs("))
         let authorize = try #require(job.range(of: "switch model.authorizeDuplicateDeletion(entry: entry, volumePath: volumePath,",
                                                range: dispatch.upperBound..<job.endIndex))
