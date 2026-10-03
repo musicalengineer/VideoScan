@@ -791,11 +791,18 @@ final class CatalogStore {
 
     /// Balances a successful writePrecondition(). Releases the per-write
     /// lock and, on success, advances the session generation to what the
-    /// write stamped on disk.
+    /// write stamped on disk, then — if the primary is still ours — tells
+    /// the observer (the ONE place `catalogStoreDidWrite` is fired; codex
+    /// cycle #30 R3).
     private func finishWrite(success: Bool, wroteGeneration: Int,
                              wroteDesignation: MasterArchiveDesignation?,
                              designationChanging: Bool,
                              error: CatalogWriteError? = nil) {
+        // May this landed write's deferred SIBLING effects still happen —
+        // the catalog.generation.max bump and the observer's
+        // manifest.sha256 refresh (CatalogSync)? One probe, one answer
+        // for both (codex cycle #29 F4, cycle #30 R3).
+        var siblingsMayFollow = false
         if success {
             designationRefusalReported = false
             // Only the NEWEST durable write says what is on disk: an async
@@ -816,14 +823,16 @@ final class CatalogStore {
             // next save see its own predecessor as a foreign, newer write.
             loadedGeneration = max(loadedGeneration, wroteGeneration)
             lastWriteError = nil
+            // codex cycle #29 F4: the write landed, but every byte beside
+            // catalog.json from here on is written LATER (an async save's
+            // completion). If a newer — or unreadable — catalog replaced
+            // ours meanwhile, or the latch fired, those siblings are not
+            // ours: not the sidecar, not the manifest the observer refreshes.
+            siblingsMayFollow = sidecarMayAdvance()
             // High-water mark (GH #165). One tiny atomic write per save;
             // never decrements. Skipped when nothing advanced.
             if wroteGeneration > generationFloor {
-                // codex cycle #29 F4: the write landed, but this byte beside
-                // catalog.json is written LATER (an async save's completion).
-                // If a newer — or unreadable — catalog replaced ours
-                // meanwhile, or the latch fired, the sidecar is not ours.
-                if sidecarMayAdvance() {
+                if siblingsMayFollow {
                     generationFloor = CatalogGenerationSidecar.recordMax(wroteGeneration,
                                                                          besideCatalogAt: fileURL)
                 } else {
@@ -858,6 +867,19 @@ final class CatalogStore {
             auditDesignation("Master Archive designation: OUTCOME FAILED — catalog save generation \(wroteGeneration) did not land (\(lastWriteError?.persistentDescription ?? "unknown")); catalog.json still carries \(Self.describe(persistedMasterArchive)).")
         }
         lock.release()
+        // After the lock, as the call sites always did. The observer
+        // (CatalogSync on the master) refreshes manifest.sha256 beside the
+        // catalog — a deferred sibling write of the same class as the
+        // sidecar, gated by the same probe (codex cycle #30 R3). A save
+        // that landed beside a since-replaced primary is durable, but it
+        // is not an event anyone may act on.
+        if success {
+            if siblingsMayFollow {
+                observer?.catalogStoreDidWrite(self)
+            } else {
+                catalogStoreLog.notice("catalog save: generation \(wroteGeneration) landed, but catalog.json has since been replaced or writes are held — observer not notified, no manifest refresh (GH #167)")
+            }
+        }
     }
 
     /// May a landed write's completion still touch catalog.generation.max?
@@ -1416,9 +1438,6 @@ final class CatalogStore {
         finishWrite(success: ok, wroteGeneration: nextGeneration,
                     wroteDesignation: payload.masterArchive,
                     designationChanging: designationChanging, error: writeError)
-        if ok {
-            observer?.catalogStoreDidWrite(self)
-        }
         return ok
     }
 
@@ -1491,7 +1510,6 @@ final class CatalogStore {
         finishWrite(success: ok, wroteGeneration: nextGeneration,
                     wroteDesignation: payload.masterArchive,
                     designationChanging: designationChanging, error: writeError)
-        if ok { observer?.catalogStoreDidWrite(self) }
         catalogStoreLog.notice("catalog save (acknowledged): \(ok ? "durable" : "FAILED", privacy: .public)")
         return ok
     }
@@ -1558,8 +1576,9 @@ final class CatalogStore {
     }
 
     /// Back on the main actor after a background write. Releases the
-    /// per-write lock, fires the observer, and, if anything went dirty
-    /// while we were writing, starts the follow-up save.
+    /// per-write lock (finishWrite, which also notifies the observer when
+    /// the primary is still ours), and, if anything went dirty while we
+    /// were writing, starts the follow-up save.
     private func asyncSaveDidFinish(success: Bool, wroteGeneration: Int,
                                     wroteDesignation: MasterArchiveDesignation?,
                                     designationChanging: Bool,
@@ -1568,13 +1587,6 @@ final class CatalogStore {
         finishWrite(success: success, wroteGeneration: wroteGeneration,
                     wroteDesignation: wroteDesignation,
                     designationChanging: designationChanging, error: error)
-        if success {
-            // Notify the observer (CatalogSync on the master) so it can
-            // refresh manifest.sha256. Skipped for the test singleton —
-            // tests construct their own CatalogStore(directory:) and can
-            // wire an observer if they need to assert the callback.
-            observer?.catalogStoreDidWrite(self)
-        }
         if let pending = pendingRecords {
             pendingRecords = nil
             saveAsync(records: pending)

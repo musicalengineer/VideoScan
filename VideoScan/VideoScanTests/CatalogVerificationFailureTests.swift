@@ -123,11 +123,25 @@ struct CatalogVerificationFailureTests {
         #expect(try await waitForCatalogLockRelease(at: catalogURL),
                 "the failed save must release the lock — probed from outside, before any same-store save")
 
-        // Only now the weaker, caller-visible consequence: the store still works.
+        // Only now the caller-visible consequence. The tampered file is a
+        // complete object FOLLOWED BY BYTES — not a catalog the version
+        // probe can vouch for (GH #167 codex cycle #30 R1: a verdict needs
+        // the whole, well-formed object). Under CAT-3 a corrupt catalog.json
+        // pauses saving for the session instead of being overwritten, so the
+        // next save is REFUSED, says why, and still notifies nobody. (Until
+        // R1 the probe's head window read our own version stamp off the
+        // tampered file and this save went through — the window hid the
+        // interaction. Whether a write THIS process failed to verify should
+        // stay replaceable is Rick's call; see the cycle #30 report.)
         store.testAfterWriteBeforeVerify = nil
-        #expect(store.saveNow(records: [makeRecord(name: "b.mov")]) == true)
-        #expect(store.lastWriteError == nil, "a successful save clears the error")
-        #expect(counter.writes == 1, "the successful save notifies exactly once")
+        #expect(store.saveNow(records: [makeRecord(name: "b.mov")]) == false,
+                "a catalog.json left malformed by a failed write is held, not overwritten (CAT-3)")
+        #expect(store.lastWriteError?.kind == "writesDisabled",
+                "got \(String(describing: store.lastWriteError))")
+        #expect(store.writeHold == .versionUnknown)
+        #expect(counter.writes == 0, "a held save notifies nobody")
+        #expect(try await waitForCatalogLockRelease(at: catalogURL),
+                "a refused save must not leave the lock held")
     }
 
     // MARK: 2. Asynchronous live write
