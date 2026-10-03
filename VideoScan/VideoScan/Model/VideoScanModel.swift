@@ -289,6 +289,16 @@ final class VideoScanModel: ObservableObject {
         didSet { if analyzeCoverageScope != oldValue { scheduleAnalyzeCoverageRefresh() } }
     }
 
+    /// The Triage tab's steward pane (trial UI, 2026-10-03; design §5.6):
+    /// the queue of cases, built off-main from one projection pass on the
+    /// same debounced catalog-change pass — but only once the pane has
+    /// been on screen this launch (`stewardWanted`). Logic in
+    /// Steward/VideoScanModel+Steward.swift; storage lives here because
+    /// extensions cannot add stored properties.
+    let stewardSnapshot = StewardSnapshot()
+    var stewardTask: Task<Void, Never>?
+    var stewardWanted = false
+
     /// Immediate recompute — the ONLY place the O(records) count runs.
     /// Piggybacked (2026-07-05): the pair flag and the deletable-dups
     /// menu payload ride the same debounced catalog-change pass, so
@@ -323,6 +333,9 @@ final class VideoScanModel: ObservableObject {
         scheduleUserPlaceRosterRefresh()
         // Analyze coverage (2026-10-02) — same pass, same off-main pattern.
         scheduleAnalyzeCoverageRefresh()
+        // Steward pane cases (2026-10-03) — same pass; a no-op until the
+        // pane has been shown.
+        scheduleStewardRefresh()
     }
 
     // MARK: - Cached per-volume retire statuses (2026-07-05 beachball fix)
