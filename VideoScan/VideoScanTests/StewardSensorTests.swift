@@ -11,6 +11,13 @@
 //     FileManager, no direct start of the job anywhere in the folder.
 //   * The "Probably not worth keeping" card has NO delete action (ruling
 //     2026-09-26: short clips are low signal, not delete candidates).
+//   * An EVENT card (2026-10-03) has no delete action either — it says
+//     what belongs together and offers only ways to look.
+//   * The occasion is the Angel's labeller's and the trusted day is the
+//     Angel's: no second labeller, no second date rule, and the first
+//     trial's StewardEventGuess is gone.
+//   * The filter and the "By year" order are pure view state, applied in
+//     event handlers.
 //   * Rule 2's predicates are the canonical ones, and rule 1's proof calls
 //     the Delete planner's own functions.
 //   * The Triage tab still has its table and its Analyze menu, with the
@@ -60,7 +67,7 @@ struct StewardSensorTests {
     @Test func theFolderIsFoundAndHasItsFiles() throws {
         let names = Set(try stewardFolder().map(\.name))
         #expect(names == ["Steward/StewardCardView.swift", "Steward/StewardCase.swift", "Steward/StewardCaseBuilder.swift",
-                          "Steward/StewardEventGuess.swift", "Steward/StewardEvidence.swift", "Steward/StewardPaneView.swift",
+                          "Steward/StewardEvents.swift", "Steward/StewardEvidence.swift", "Steward/StewardPaneView.swift",
                           "Steward/StewardSkipStore.swift", "Steward/StewardWords.swift", "Steward/VideoScanModel+Steward.swift"],
                 "a file was added to or removed from Steward/ — review it against these sensors, then update this list")
     }
@@ -84,6 +91,98 @@ struct StewardSensorTests {
         let body = String(pane[bodyStart.upperBound..<bodyEnd.lowerBound])
         #expect(!body.contains("StewardEvidenceBuilder.prepare("))
         #expect(!body.contains("skipStore.partition("), "the skip memory is read in event handlers, not per render")
+        #expect(!body.contains("StewardCaseBuilder.arrange("), "the list is narrowed and ordered in event handlers, not per render")
+    }
+
+    /// The filter and "By year" are pure view state: two stored settings,
+    /// one pure function, applied when something changes.
+    @Test func theFilterAndTheYearOrderArePureViewState() throws {
+        let pane = code(try source("StewardPaneView.swift"))
+        #expect(pane.contains("@AppStorage(\"steward.pane.filter\") private var filterRaw"))
+        #expect(pane.contains("@AppStorage(\"steward.pane.eventsByYear\") private var eventsByYear"))
+        #expect(pane.contains("visible = StewardCaseBuilder.arrange(showSkipped ? skipped : active, filter: filter, eventsByYear: eventsByYear)"))
+        #expect(pane.contains("@State private var visible: [StewardCase] = []"), "the list on screen is state, not recomputed per render")
+        #expect(pane.contains(".onChange(of: filterRaw) { _, _ in viewChanged() }"))
+        #expect(pane.contains(".onChange(of: eventsByYear) { _, _ in viewChanged() }"))
+        #expect(pane.contains("StewardLog.viewLine(filter: filter, eventsByYear: eventsByYear, listed: visible.count)"),
+                "one log line when the person changes the view")
+        #expect(pane.contains("Here is what is in the catalog, by occasion — and what would tidy it"), "the header leads with content")
+        #expect(pane.contains("StewardFreshness.events(placed: snapshot.queue.placedClips, of: snapshot.queue.placeableClips)"),
+                "the Events lane's coverage line reads the cached numbers")
+        // The builder's order is lane after lane; nothing takes turns any more.
+        let builder = code(try source("StewardCaseBuilder.swift"))
+        #expect(builder.contains("queue.cases = occasions.events + occasions.days + footage + reclaim.sorted(by: reclaimOrder) + junkCases"))
+        #expect(!builder.contains("interleave"))
+        #expect(StewardCaseKind.allCases.sorted { $0.lane < $1.lane }.map(\.lane) == [0, 1, 2, 3, 3, 4])
+        #expect(StewardCaseKind.event.lane < StewardCaseKind.unlabelledDay.lane
+                && StewardCaseKind.unlabelledDay.lane < StewardCaseKind.sameFootage.lane
+                && StewardCaseKind.sameFootage.lane < StewardCaseKind.reclaimGroup.lane
+                && StewardCaseKind.reclaimGroup.lane < StewardCaseKind.junk.lane)
+    }
+
+    /// An event card says what belongs together. It never offers to let
+    /// anything go — no Delete, no Trash, no "review below" for marking.
+    @Test func anEventCardHasNoDeleteAction() throws {
+        let card = code(try source("StewardCardView.swift"))
+        let buttons = try #require(card.range(of: "private var actionButtons: some View {"))
+        let start = try #require(card.range(of: "case .event, .unlabelledDay:", range: buttons.upperBound..<card.endIndex))
+        let end = try #require(card.range(of: "case .reclaimDrive, .reclaimGroup:", range: start.upperBound..<card.endIndex))
+        let arm = String(card[start.upperBound..<end.lowerBound])
+        #expect(arm.contains("showInCatalogButton"))
+        #expect(arm.contains("steward.event.openFootageGroup") && arm.contains("steward.event.reviewCopies"))
+        #expect(arm.contains("if item.footageGroupID != nil {"), "Open the footage group only when there is exactly one")
+        for word in ["deleteDuplicates", "Delete", "delete", "trash", "Trash", "reviewBelow", "deleteGate"] {
+            #expect(!arm.contains(word), "the event card offers `\(word)`")
+        }
+        // The lines under its buttons are the naming gap, never a Delete reason.
+        let notes = try #require(card.range(of: "private var notes: [String] {"))
+        let notesEvent = try #require(card.range(of: "case .event:", range: notes.upperBound..<card.endIndex))
+        let notesEnd = try #require(card.range(of: "case .reclaimDrive:", range: notesEvent.upperBound..<card.endIndex))
+        let notesArm = String(card[notesEvent.upperBound..<notesEnd.lowerBound])
+        #expect(notesArm.contains("StewardActionGate.eventNamingGap") && notesArm.contains("StewardActionGate.dayNamingGap"))
+        #expect(!notesArm.contains("deleteGate"))
+        #expect(StewardActionGate.dayNamingGap == "You could name this — naming arrives later.")
+        // Its actions in the pane only ever focus the Catalog.
+        let pane = code(try source("StewardPaneView.swift"))
+        #expect(pane.contains("model.showInCatalog(focus: Set(c.copyReviewIDs), label:"))
+        // …and the builder gives an event nothing a cleanup could act on.
+        let events = code(try source("StewardEvents.swift"))
+        for field in ["driveRoot =", "estimate =", "keeperID =", "runRows", "actionableBytes", "duplicateGroupID ="] {
+            #expect(!events.contains(field), "an event card carries `\(field)`")
+        }
+        #expect(StewardCaseKind.event.chip == "Event")
+    }
+
+    /// Do NOT write a second labeller: the occasion and the trusted day
+    /// are the Angel's, called — not copied.
+    @Test func theOccasionIsTheAngelsLabellerAndTheFirstTrialsGuessIsGone() throws {
+        #expect(SourceTree.appSources.allSatisfy { !$0.relative.hasSuffix("StewardEventGuess.swift") }, "StewardEventGuess.swift is back")
+        let folder = try stewardFolder()
+        let all = folder.map(\.code).joined(separator: "\n")
+        #expect(!all.contains("StewardEventGuess"), "the first trial's own guesser is referenced again")
+        for own in ["RecordDateResolver.resolve(", "thanksgivingDay", "easterSunday", "nthWeekday(", "calendarLabels(", "birthdayLabels(",
+                    "nameLabels(", "\"xmas\"", "\"christmas\"", "\"thanksgiving\"", "\"halloween\"", "\"easter\"", "(12, 25)", "(7, 4)"] {
+            #expect(!all.contains(own), "Steward/ has `\(own)` — a second labeller or a second date rule")
+        }
+        let events = code(try source("StewardEvents.swift"))
+        #expect(events.contains("ArchiveAngelEvent.derive(candidate, now: now, context: context, keysOnly: false, folders: &folders)"),
+                "the trusted day and the labels come from the Angel's one derivation")
+        #expect(events.contains("trustedDay(inKey: derived.key)"), "the day is read out of the Angel's own event key")
+        #expect(events.contains("ArchiveAngelEvent.dayKeyMinimumConfidence"), "the copy-era stamp rule is the Angel's constant")
+        #expect(events.contains("guard !candidate.isLivePhotoMotion else"), "Live Photo halves are left out by the Angel's own test")
+        #expect(events.contains("rules.eventLabels = true"))
+        let builder = code(try source("StewardCaseBuilder.swift"))
+        #expect(builder.contains("StewardEvents.place(r, now: now, context: events, folders: &folders)"), "once per record, in the build pass")
+        #expect(builder.contains("var folders = EventLabeler.FolderWordCache()"), "one folder-word memo per build")
+        #expect(builder.contains("StewardEvents.footageGuess(members: members, placements: placements)"),
+                "the Same-footage title guess is the labeller's too")
+        #expect(!builder.contains("dayPrecise"), "the builder has a day rule of its own again")
+        let model = code(try source("VideoScanModel+Steward.swift"))
+        #expect(model.contains("StewardEvents.context(coverage: archiveAngel.policy.coverage, birthdays: archiveAngel.familyBirthdays)"))
+        // Nothing is stored: the folder never writes a record or the catalog.
+        for write in ["catalogStore", "saveCatalog", "scheduleSave", "markDirty", "userNotes", ".tags"] {
+            #expect(!all.contains(write), "Steward/ touches `\(write)` — events are derived, never stored")
+        }
     }
 
     @Test func theFolderReachesDeletionOnlyThroughTheExistingFrontDoor() throws {
@@ -200,6 +299,12 @@ struct StewardSensorTests {
             }
         }
         #expect(seen >= 20, "found only \(seen) identifiers — the scan is reading nothing")
+        // The Events lane's own identifiers are `steward.event.…`.
+        let eventIDs = try stewardFolder().flatMap { matches(#""steward\.event\.[A-Za-z.]+""#, in: $0.code) }
+        #expect(Set(eventIDs).isSuperset(of: ["\"steward.event.why\"", "\"steward.event.inside\"", "\"steward.event.alsoIn\"",
+                                              "\"steward.event.reasons\"", "\"steward.event.reviewCopies\"",
+                                              "\"steward.event.openFootageGroup\"", "\"steward.event.byYear\"",
+                                              "\"steward.event.coverage\""]), "found: \(Set(eventIDs).sorted())")
         let triage = code(try source("TriageView.swift"))
         #expect(triage.contains("accessibilityIdentifier(\"steward.review.banner\")"))
     }
@@ -222,7 +327,8 @@ struct StewardSensorTests {
                     #expect(!lower.contains(word), "\(file.name): \(literal) says “\(word)”")
                 }
                 if lower.hasPrefix("\"steward.") || lower.hasPrefix("\"dup:") || lower.hasPrefix("\"footage:")
-                    || lower.hasPrefix("\"junk:") || lower.hasPrefix("\"drive:") { continue }
+                    || lower.hasPrefix("\"junk:") || lower.hasPrefix("\"drive:") || lower.hasPrefix("\"event:")
+                    || lower.hasPrefix("\"day:") { continue }
                 for word in bannedWords where !matches("\\b\(word)\\b", in: lower).isEmpty {
                     Issue.record("\(file.name): \(literal) says “\(word)”")
                 }

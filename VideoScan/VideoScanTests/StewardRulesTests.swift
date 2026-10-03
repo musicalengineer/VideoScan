@@ -498,6 +498,33 @@ struct StewardExclusionRuleTests {
         #expect(Set(card.recordIDs) == [a.id, b.id, suggested.id])
     }
 
+    /// Rule 2 is about what a card proposes to LET GO. An event proposes
+    /// nothing of the kind, so it may list an archived clip and one the
+    /// Angel has chosen — and it says which are in the archive.
+    @Test func anEventMayListArchivedAndAngelRecordsBecauseItProposesNothing() throws {
+        let model = isolatedModel()
+        designateFamilyArchive(model)
+        let inArchive = record("/Volumes/FamilyArchive/Test_Family_Archive/1990s/a.mov")
+        let plain = record("/Volumes/SanDisk/b.mov")
+        let chosen = record("/Volumes/SanDisk/chosen.mov")
+        for (r, date) in [(inArchive, "1994-12-25"), (plain, "1994-12-24"), (chosen, "1994-12-25")] { r.userDate = date }
+        model.records = [inArchive, plain, chosen]
+        var summary = model.archiveAngel.recommendations
+        summary.candidateIDs = [chosen.id]
+        summary.revision += 1
+        model.archiveAngel.publishRecommendations(summary)
+
+        let q = queue(model)
+        let event = try #require(q.cases.first { $0.kind == .event })
+        #expect(q.cases.count == 1, "one event and nothing proposed to let go: \(q.cases.map(\.kind))")
+        #expect(event.id == "event:christmas:-:1994")
+        #expect(Set(event.recordIDs) == [inArchive.id, plain.id, chosen.id])
+        #expect(event.insideLines == ["1 is in the archive"])
+        #expect(event.driveRoot == nil && event.actionableBytes == 0 && event.runRows.isEmpty && event.estimate == nil,
+                "nothing on the card a cleanup could act on")
+        #expect(q.placedClips == 3 && q.placeableClips == 3)
+    }
+
     @Test func hiddenRecordsNeverReachTheBuilder() {
         let model = isolatedModel()
         let g = UUID()
