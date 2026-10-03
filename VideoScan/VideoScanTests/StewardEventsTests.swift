@@ -220,7 +220,7 @@ struct StewardEventsLogicTests {
         #expect(fourth.copies.first?.alsoIn == "Cape 1996")
         #expect(fourth.alsoInLine == "1 of these is also in: Cape 1996")
         #expect(cape.alsoInLine == "1 of these is also in: Fourth of July 1996")
-        #expect(cape.copies.first { $0.id == capeOnly.id }?.alsoIn == "")
+        #expect(cape.copies.first { $0.id == capeOnly.id }?.alsoIn.isEmpty == true)
         // A date AND a name for the same occasion is one membership, both reasons.
         let twice = clip("/Volumes/LaCie/xmas/morning.mov", on: "1994-12-25")
         let e = try #require(events(build([twice])).first)
