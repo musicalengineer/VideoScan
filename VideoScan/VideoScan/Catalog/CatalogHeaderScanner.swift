@@ -387,12 +387,26 @@ enum CatalogHeaderScanner {
 
     // MARK: Probe
 
+    /// Test seam: an errno `probe` should treat open(2) as having failed
+    /// with for this URL (nil = open for real). Consulted on every attempt,
+    /// so a test can fail the first attempt only. Always nil in production.
+    static let testOpenErrno = OSAllocatedUnfairLock<(@Sendable (URL) -> Int32?)?>(initialState: nil)
+
+    /// open(2) for reading, with the errno on failure (FileHandle's thrown
+    /// NSError buries it). (≈ `fd = open(path, O_RDONLY); if (fd < 0) errno`.)
+    private static func openForReading(_ url: URL) -> (handle: FileHandle?, errno: Int32) {
+        if let inject = testOpenErrno.withLock({ $0 }), let code = inject(url) { return (nil, code) }
+        let fd = open(url.path, O_RDONLY | O_CLOEXEC)
+        guard fd >= 0 else { return (nil, errno) }
+        return (FileHandle(fileDescriptor: fd, closeOnDealloc: true), 0)
+    }
+
     /// The probe `CatalogSnapshot.header` uses: the cached verdict when the
     /// file is unchanged, else one complete pass. nil only when the file
     /// cannot be opened or is not a regular file (the caller decides
     /// whether that is "no file" or "unreadable").
     static func probe(fileAt url: URL) -> Found? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
+        guard let handle = openForReading(url).handle else { return nil }
         defer { try? handle.close() }
         guard let key = FileKey(fileDescriptor: handle.fileDescriptor) else { return nil }
         let path = url.path

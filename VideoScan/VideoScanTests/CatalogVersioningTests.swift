@@ -1562,6 +1562,15 @@ struct CatalogVerdictNeedsCompleteObjectTests {
         let foundation = try JSONDecoder().decode(CatalogSnapshot.self, from: Data(later.utf8)).version
         #expect(foundation == currentVersion || foundation == futureVersion, "fixture: Foundation reads one of the two stamps, got \(foundation)")
         let across = #"{"version":\#(currentVersion),"padA":"\#(Self.pad)","records":[],"padB":"\#(Self.pad)","version":\#(futureVersion),"generation":2}"#
+        // QA r4 7a: prove the two stamps really sit in DIFFERENT 4 KB windows
+        // — the old one in the head, the newer one in the tail, > 8 KB apart.
+        let acrossBytes = Array(across.utf8)
+        let stamp = Array(#""version":"#.utf8)
+        let stampOffsets = acrossBytes.indices.filter { $0 + stamp.count <= acrossBytes.count && Array(acrossBytes[$0..<($0 + stamp.count)]) == stamp }
+        #expect(stampOffsets.count == 2, "fixture must hold exactly two top-level stamps")
+        #expect(stampOffsets[0] < 4096, "the old stamp must be inside the head window (at \(stampOffsets[0]))")
+        #expect(stampOffsets[1] > acrossBytes.count - 4096, "the newer stamp must be inside the tail window (at \(stampOffsets[1]) of \(acrossBytes.count))")
+        #expect(stampOffsets[1] - stampOffsets[0] > 8192, "stamps must be > 8 KB apart")
         let first = #"{"version":\#(futureVersion),"generation":0,"records":[],"version":\#(currentVersion)}"#
         for (label, text) in [("later", later), ("across", across), ("first", first)] {
             try Data(text.utf8).write(to: catalogURL(dir))
@@ -1887,5 +1896,260 @@ struct CatalogCycle30PredictedSurvivorTests {
                 "notes-repair.v1.done written beside a newer catalog — the DIRTY branch's final re-check is missing")
         #expect(m.isReadOnly, "the discovery reaches the model")
         #expect(try Data(contentsOf: url) == newer)
+    }
+}
+
+// MARK: - 9. QA review of round 4 (2026-10-02) — fail-closed tightenings
+//
+// Each test failed on 83a2ec70 before its fix landed (the controls did not).
+
+/// Makes `CatalogHeaderScanner.probe` believe open(2) failed with `code`
+/// for ONE url, for the first `times` attempts (default: every attempt),
+/// and counts the attempts it refused. Scoped by path so parallel suites
+/// probing other files are untouched. (≈ an errno-injecting LD_PRELOAD
+/// shim, scoped to one path.)
+private final class OpenFailureInjector: @unchecked Sendable {
+    private let lock = NSLock()
+    private var refused = 0
+    var count: Int { lock.lock(); defer { lock.unlock() }; return refused }
+    init(url: URL, errno code: Int32, times: Int = .max) {
+        let path = url.path
+        CatalogHeaderScanner.testOpenErrno.withLock { seam in
+            seam = { [self] u in
+                guard u.path == path else { return nil }
+                self.lock.lock(); defer { self.lock.unlock() }
+                guard self.refused < times else { return nil }
+                self.refused += 1
+                return code
+            }
+        }
+    }
+    func clear() { CatalogHeaderScanner.testOpenErrno.withLock { $0 = nil } }
+}
+
+@Suite("GH #167 QA r4 (1, 2) — non-canonical stamps and malformed bytes are unknown: negative, leading zero, control bytes, depth cap", .serialized)
+@MainActor
+struct CatalogScannerNonCanonicalStampTests {
+
+    private func verdict(_ text: String, _ dir: URL) throws -> CatalogVersionVerdict {
+        try Data(text.utf8).write(to: catalogURL(dir))
+        return try #require(CatalogSnapshot.header(at: catalogURL(dir))).version
+    }
+
+    static let negative: [String] = [
+        #"{"version":-1,"records":[]}"#,
+        #"{"version":-\#(futureVersion),"records":[]}"#,
+        #"{"version":\#(currentVersion),"version":-1,"records":[]}"#,
+    ]
+
+    @Test("A: a negative version is not a stamp this build can vouch for", arguments: negative)
+    func negativeVersionIsUnknown(_ text: String) throws {
+        let dir = scratch("neg")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(try verdict(text, dir) == .unknown, "\(text)")
+    }
+
+    @Test("A control: 0 and a plain positive integer are stamps")
+    func canonicalIntegersAreStamps() throws {
+        let dir = scratch("neg_ctl")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(try verdict(#"{"version":0,"records":[]}"#, dir) == .version(0))
+        #expect(try verdict(#"{"version": 12 ,"records":[]}"#, dir) == .version(12))
+    }
+
+    static let malformed: [String] = [
+        "{\"version\":\(currentVersion),\u{00}\"records\":[]}",        // NUL between tokens
+        "{\"version\":\(currentVersion)\u{00}}",                         // NUL after a number
+        "{\"version\":\(currentVersion),\"records\":[]\u{01}}",          // SOH before the closing brace
+        "{\"version\":\(currentVersion),\"records\":[\"a\u{00}b\"]}",    // raw NUL inside a string (JSON forbids it; Foundation rejects the file)
+        "{\"version\":0\(currentVersion),\"records\":[]}",               // leading zero
+        "{\"version\":00,\"records\":[]}",
+    ]
+
+    @Test("B: control bytes anywhere but as escapes, and a leading zero, make the file unknown", arguments: malformed)
+    func controlBytesAndLeadingZerosAreUnknown(_ text: String) throws {
+        let dir = scratch("ctl")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        #expect(try verdict(text, dir) == .unknown, "\(text.debugDescription)")
+    }
+
+    @Test("B control: JSON whitespace between tokens and ESCAPED control characters inside strings are fine")
+    func whitespaceAndEscapesAreFine() throws {
+        let dir = scratch("ctl_ok")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let text = "{\n\t\"version\":\r\(currentVersion) ,\"note\":\"a\\u0000b\\n\\t\",\"records\":[]}\n"
+        #expect(try JSONDecoder().decode(CatalogSnapshot.self, from: Data(text.utf8)).version == currentVersion, "fixture: Foundation reads it")
+        #expect(try verdict(text, dir) == .version(currentVersion))
+    }
+
+    @Test("depth cap: 255 nested containers inside the root are followed; 256 abort (a 10 M-bracket file must not grow the stack)")
+    func depthIsCapped() throws {
+        let dir = scratch("depth")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        func nested(_ n: Int) -> String {
+            #"{"a":"# + String(repeating: "[", count: n) + String(repeating: "]", count: n) + "}"
+        }
+        #expect(try verdict(nested(255), dir) == .confirmedAbsent)
+        #expect(try verdict(nested(256), dir) == .unknown)
+        #expect(try verdict(nested(300_000), dir) == .unknown)
+    }
+}
+
+@Suite("GH #167 QA r4 (3) — a TRANSIENT open failure refuses this write only; a permanent one holds the session", .serialized)
+@MainActor
+struct CatalogProbeOpenFailureTests {
+
+    @Test("EMFILE on every attempt: saveNow refuses with catalogUnavailable, nothing written, NO session hold; the next save lands")
+    func transientFailureRefusesWithoutLatching() throws {
+        let dir = scratch("emfile")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let before = everyFile(dir)
+        let inj = OpenFailureInjector(url: catalogURL(dir), errno: EMFILE)
+        defer { inj.clear() }
+        #expect(store.saveNow(records: [VideoRecord()]) == false)
+        #expect(store.lastWriteError?.kind == "catalogUnavailable", "\(String(describing: store.lastWriteError))")
+        #expect(store.writeHold == nil, "a transient open failure must not hold the session")
+        #expect(store.writesDisabledReason == nil)
+        #expect(everyFile(dir) == before)
+        #expect(inj.count >= 2, "the probe must retry once before giving up (\(inj.count) attempt(s))")
+        inj.clear()
+        #expect(store.saveNow(records: [VideoRecord()]), "\(String(describing: store.lastWriteError))")
+        #expect(store.lastWriteError == nil)
+    }
+
+    @Test("EMFILE on the FIRST attempt only: the retry succeeds and the save lands")
+    func firstAttemptFailureIsRetried() throws {
+        let dir = scratch("emfile_once")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let inj = OpenFailureInjector(url: catalogURL(dir), errno: EMFILE, times: 1)
+        defer { inj.clear() }
+        #expect(store.saveNow(records: [VideoRecord()]) == true, "\(String(describing: store.lastWriteError))")
+        #expect(inj.count == 1)
+        #expect(store.writeHold == nil)
+    }
+
+    @Test("EACCES: a permanent open failure still holds the session (unknown), as before")
+    func permanentFailureHolds() throws {
+        let dir = scratch("eacces")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let inj = OpenFailureInjector(url: catalogURL(dir), errno: EACCES)
+        defer { inj.clear() }
+        #expect(store.saveNow(records: [VideoRecord()]) == false)
+        #expect(store.writeHold == .versionUnknown)
+        #expect(store.lastWriteError?.kind == "writesDisabled")
+    }
+
+    @Test("write-queue gate: a save queued against a healthy file hits EMFILE on the queue — refused, not held, bytes untouched; the next save lands")
+    func queuedGateTransientRefusesWithoutLatching() async throws {
+        let dir = scratch("emfile_queue")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let url = catalogURL(dir)
+        let before = try Data(contentsOf: url)
+        store.testWriteDelay = 0.3
+        store.saveAsync(records: [VideoRecord()])          // passes the main-actor gate, sleeps on the queue
+        let inj = OpenFailureInjector(url: url, errno: EMFILE)
+        defer { inj.clear() }
+        await waitUntil(3) { store.lastWriteError != nil }
+        try await Task.sleep(nanoseconds: 200_000_000)
+        #expect(store.lastWriteError?.kind == "catalogUnavailable", "\(String(describing: store.lastWriteError))")
+        #expect(store.writeHold == nil)
+        #expect(try Data(contentsOf: url) == before)
+        inj.clear()
+        #expect(store.saveNow(records: [VideoRecord()]), "\(String(describing: store.lastWriteError))")
+    }
+
+    @Test("snapshot writers: EMFILE in refuseIfNewerCatalogOnDisk refuses the snapshot, no latch; cleared, it writes")
+    func snapshotTransientRefusesWithoutLatching() async throws {
+        let dir = scratch("emfile_snap")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let inj = OpenFailureInjector(url: catalogURL(dir), errno: EMFILE)
+        defer { inj.clear() }
+        let snap = dir.appendingPathComponent("catalog.pre-emfile.json").path
+        #expect(store.writeSnapshot(records: [], toPath: snap) == false)
+        #expect(await store.writeSnapshotAsync(records: [], toPath: snap) == false)
+        #expect(store.writeHold == nil)
+        #expect(!FileManager.default.fileExists(atPath: snap))
+        inj.clear()
+        #expect(store.writeSnapshot(records: [], toPath: snap))
+    }
+
+    @Test("load: a healthy catalog whose probe hits EMFILE loads its records, writes no sibling THIS launch, does not hold; the next save lands")
+    func loadTransientSkipsSiblingsWithoutLatching() throws {
+        let dir = scratch("emfile_load")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let s0 = CatalogStore(directory: dir)
+        let r = VideoRecord(); r.filename = "kept.mov"
+        #expect(s0.saveNow(records: [r]))
+        s0.relinquishLock()
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(CatalogGenerationSidecar.fileName))
+        let before = everyFile(dir)
+        let inj = OpenFailureInjector(url: catalogURL(dir), errno: EMFILE)
+        defer { inj.clear() }
+        let store = CatalogStore(directory: dir)
+        let shown = store.load()
+        #expect(shown.first?.filename == "kept.mov")
+        #expect(store.writeHold == nil, "a transient failure at load must not hold the session")
+        #expect(store.lastLoadOutcome == .loaded(fromBackup: false))
+        #expect(everyFile(dir) == before, "load wrote a sibling it could not vouch for: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted())")
+        inj.clear()
+        #expect(store.saveNow(records: shown), "\(String(describing: store.lastWriteError))")
+    }
+
+    @Test("fail-closed control: an UNDECODABLE primary whose probe hits EMFILE holds (nothing can be verified)")
+    func undecodableAndUnavailableHolds() throws {
+        let dir = scratch("emfile_corrupt")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try CatalogVersionUnknownRefusesTests.fixture("truncated").write(to: catalogURL(dir))
+        let inj = OpenFailureInjector(url: catalogURL(dir), errno: EMFILE)
+        defer { inj.clear() }
+        let store = CatalogStore(directory: dir)
+        _ = store.load()
+        #expect(store.writeHold == .versionUnknown)
+    }
+}
+
+@Suite("GH #167 QA r4 (7b) — the FileKey needs ctime: an in-place edit with its mtime restored is still re-scanned", .serialized)
+@MainActor
+struct CatalogProbeCacheKeyCompositionTests {
+
+    @Test("same inode, same size, mtime restored with utimensat(2): only ctime differs — the cache must miss")
+    func restoredMtimeStillInvalidates() throws {
+        let dir = scratch("key_ctime")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = catalogURL(dir)
+        let text = #"{"records":[],"version":\#(currentVersion)}"#
+        try Data(text.utf8).write(to: url)
+        var st = stat()
+        #expect(stat(url.path, &st) == 0)
+        let originalMtime = st.st_mtimespec
+        let p0 = CatalogHeaderScanner.wholeFilePasses(for: url)
+        #expect(CatalogSnapshot.header(at: url)?.version == .version(currentVersion))
+        #expect(CatalogHeaderScanner.wholeFilePasses(for: url) - p0 == 1)
+
+        usleep(20_000)   // let the clock move so the edit's mtime differs before we restore it
+        let h = try FileHandle(forWritingTo: url)
+        try h.seek(toOffset: UInt64(text.utf8.count - 2))
+        try h.write(contentsOf: Data("\(futureVersion)}".utf8))   // 7} → 8} — same size
+        try h.close()
+        var times = [originalMtime, originalMtime]
+        #expect(utimensat(AT_FDCWD, url.path, &times, 0) == 0)
+        var st2 = stat()
+        #expect(stat(url.path, &st2) == 0)
+        #expect(st2.st_ino == st.st_ino && st2.st_size == st.st_size, "fixture: same inode, same size")
+        #expect(st2.st_mtimespec.tv_sec == originalMtime.tv_sec && st2.st_mtimespec.tv_nsec == originalMtime.tv_nsec, "fixture: mtime restored to the nanosecond")
+        #expect(st2.st_ctimespec.tv_sec != st.st_ctimespec.tv_sec || st2.st_ctimespec.tv_nsec != st.st_ctimespec.tv_nsec, "fixture: ctime moved")
+
+        #expect(CatalogSnapshot.header(at: url)?.version == .version(futureVersion), "a cache keyed without ctime served the stale verdict")
+        #expect(CatalogHeaderScanner.wholeFilePasses(for: url) - p0 == 2)
     }
 }
