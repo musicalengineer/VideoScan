@@ -194,6 +194,10 @@ struct DeleteDuplicatesCodex258SurvivorTests {
     @Test func aCopyTheRunLeavesAloneIsNotASurvivorForAnotherCopy() async throws {
         let rig = makeRig(.kah); defer { rig.cleanup() }
         apply(.prepared, to: rig)
+        // The forecast says what the run will do — it asks the same rule.
+        let forecast = rig.model.deleteDuplicatesForecast(onVolume: rig.dir.path)
+        #expect(forecast.bucket(for: rig.a.id) == .leftAlone && forecast.total.files == 1,
+                "the forecast promised \(String(describing: forecast.bucket(for: rig.a.id))) on the strength of the held copy")
         let plan = try #require(await run(rig))
         #expect(plan.entries.map(\.id) == [rig.a.id], "the Angel's copy is not a row of the run")
         let row = try #require(plan.entries.first)
@@ -280,6 +284,51 @@ struct DeleteDuplicatesCodex258SurvivorTests {
                                     readOnly.id: "lives on TestDrive, which you marked Read only"])
         #expect(scope.decided == [byTier.id, refused.id])
         #expect(plan.runScope(deciding: nil).pending == [deciding.id, pending.id])
+    }
+
+    /// THE rule, member by member (the table in its doc comment).
+    @Test func theSurvivorRuleMemberByMember() {
+        let model = makeModel(tempDir("rule"))
+        let drive = "/Volumes/TestCleaned", other = "/Volumes/TestOther", clips = "/Volumes/TestCleaned/Clips"
+        model.scanTargets = [scanTarget(drive), scanTarget(clips), scanTarget(other)]
+        let g = UUID()
+        func member(_ path: String, _ disposition: DuplicateDisposition) -> VideoRecord {
+            dupRecord(path: path, size: 1, group: g, disposition: disposition)
+        }
+        let pending = member("\(drive)/pending.mov", .extraCopy)
+        let skippedForHold = member("\(drive)/held-row.mov", .extraCopy)
+        let decided = member("\(drive)/decided.mov", .extraCopy)
+        let heldNow = member("\(drive)/held-now.mov", .extraCopy)
+        let onReadOnlyFolder = member("\(clips)/readonly.mov", .extraCopy)
+        let neverPlanned = member("\(drive)/never-planned.mov", .extraCopy)
+        let review = member("\(drive)/review.mov", .review)
+        let elsewhere = member("\(other)/elsewhere.mov", .extraCopy)
+        let heldElsewhere = member("\(other)/held-elsewhere.mov", .extraCopy)
+        model.records = [pending, skippedForHold, decided, heldNow, onReadOnlyFolder, neverPlanned, review, elsewhere, heldElsewhere]
+        setAngel(model, prepared: [heldNow.id, heldElsewhere.id])
+        model.scanTargets[1].readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil)
+
+        var run = DuplicateRunScope(volumePath: drive)
+        run.pending = [pending.id]
+        run.leftAlone = [skippedForHold.id: "in use by the Archive Angel"]
+        run.decided = [decided.id]
+        let rule = model.duplicateSurvivorStandingRule(in: run)
+        #expect(rule(pending) == .pendingRow)
+        #expect(rule(skippedForHold) == .leftAlone("in use by the Archive Angel"))
+        #expect(rule(decided) == .bySiblingRules, "a row the run decided on its merits counts by its evidence — as on main")
+        #expect(rule(heldNow) == .leftAlone("in use by the Archive Angel"))
+        #expect(rule(onReadOnlyFolder) == .leftAlone("on a drive marked Read only"))
+        #expect(rule(neverPlanned) == .leftAlone("not a row of this run"),
+                "an extra copy on the cleaned drive that the run never planned may be the next run's row")
+        #expect(rule(review) == .bySiblingRules, "a Review row was never a row of the run on main either")
+        #expect(rule(elsewhere) == .bySiblingRules && rule(heldElsewhere) == .bySiblingRules,
+                "another drive's copies — held or not, Read only or not — count by their evidence when THIS drive is cleaned")
+
+        // Main never planned a Master-Archive-protected extra either — and counted it.
+        model.masterArchive = MasterArchiveDesignation(targetPath: drive, rootPath: "\(drive)/Test_Family_Archive", volumeUUID: nil)
+        let protected = member("\(drive)/loose.mov", .extraCopy)
+        model.records.append(protected)
+        #expect(model.duplicateSurvivorStandingRule(in: run)(protected) == .bySiblingRules)
     }
 
     /// The steward's proof for the same fixture is the run's answer — the
