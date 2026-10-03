@@ -79,7 +79,7 @@ struct AnalyzePanelView: View {
             }
             .padding(20)
         }
-        .frame(minWidth: 760, minHeight: 620)
+        .frame(minWidth: 940, minHeight: 720)
         .accessibilityIdentifier("analyze.panel")
         .onAppear { sampleLive() }
         .onReceive(tick) { _ in sampleLive() }
@@ -100,19 +100,19 @@ struct AnalyzePanelView: View {
                 Text("Analyze")
                     .font(.title.weight(.semibold))
                 Text("What the catalog keeps current about your files, and how far along each one is. These run in the background; nothing here changes or removes a file.")
-                    .font(.callout)
+                    .font(.body)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer()
             VStack(alignment: .trailing, spacing: 2) {
                 Text("\(coverage.report.activeRecords.formatted()) files in the catalog")
-                    .font(.caption)
+                    .font(.callout)
                     .foregroundStyle(.secondary)
                 if coverage.report.computedAt.timeIntervalSince1970 > 0 {
                     Text("counts as of \(MediaDistributionFormat.timeString(coverage.report.computedAt))")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }
@@ -265,24 +265,24 @@ struct AnalyzePanelView: View {
                 HStack(spacing: 10) {
                     Toggle("Include music and other audio-only files", isOn: includeAudioBinding)
                         .toggleStyle(.checkbox)
-                        .font(.system(size: 11))
+                        .font(.system(size: 13))
                         .help("Off (recommended): Scene Captions, OCR and Transcribe focus on files with video. On: audio-only files (music, voice recordings) are transcribed too. Either way, nothing is tagged or removed — set-aside files just wait.")
                         .accessibilityIdentifier("analyze.scope.includeAudio")
                     Spacer()
                     Text("Photos and camera raw files are never analyzed here.")
-                        .font(.system(size: 10))
+                        .font(.system(size: 12))
                         .foregroundStyle(.secondary)
                 }
                 Toggle("Resume Scene Captions, OCR and Transcribe on launch", isOn: $autoResume)
                     .toggleStyle(.checkbox)
-                    .font(.system(size: 11))
+                    .font(.system(size: 13))
                     .help("When on, volumes still in line from the last session start again by themselves a moment after launch. Off: they wait in line until you press Resume.")
                     .accessibilityIdentifier("analyze.resumeOnLaunch")
             }
             .padding(.vertical, 2)
             .padding(.horizontal, 4)
         } label: {
-            Text("Analysis Scope").font(.headline)
+            Text("Analysis Scope").font(.title3.weight(.semibold))
         }
     }
 
@@ -306,7 +306,7 @@ struct AnalyzePanelView: View {
     private var footnote: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text("Trial: these rows drive the engines as they are today. Find Similar Footage still shows a row in Media File Operations while it runs; the schedule choice is remembered but not yet acted on. The old dashboard is under Window ▸ Analyze Dashboard (legacy).")
-                .font(.caption)
+                .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -415,27 +415,31 @@ struct AnalyzeCyclerRow: View, Equatable {
                 if hasDisclosure {
                     Button(action: onToggleExpanded) {
                         Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
-                            .font(.system(size: 10, weight: .semibold))
-                            .frame(width: 12)
+                            .font(.system(size: 12, weight: .semibold))
+                            .frame(width: 14)
                     }
                     .buttonStyle(.plain)
                     .accessibilityIdentifier("analyze.row.\(cycler.rawValue).disclose")
                 } else {
-                    Color.clear.frame(width: 12)
+                    Color.clear.frame(width: 14)
                 }
+                // The icon sits in a tinted tile in its family's colour — the
+                // same darkened hues as the Media File Operations verb chips,
+                // so the two windows read as one family (Rick 2026-10-03).
                 Image(systemName: cycler.systemImage)
-                    .font(.system(size: 14))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 20)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(cycler.familyTint)
+                    .frame(width: 34, height: 34)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(cycler.familyTint.opacity(0.16)))
 
-                VStack(alignment: .leading, spacing: 2) {
+                VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
                         Text(cycler.title)
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 16, weight: .semibold))
                         stateChip
                         if !facts.state.detail.isEmpty {
                             Text(facts.state.detail)
-                                .font(.system(size: 11))
+                                .font(.system(size: 13))
                                 .foregroundStyle(.secondary)
                                 .lineLimit(1)
                                 .truncationMode(.tail)
@@ -443,19 +447,19 @@ struct AnalyzeCyclerRow: View, Equatable {
                     }
                     HStack(spacing: 8) {
                         Text(facts.coverageLine)
-                            .font(.system(size: 11, design: .monospaced))
+                            .font(.system(size: 13, design: .monospaced))
                             .monospacedDigit()
                             .accessibilityIdentifier("analyze.row.\(cycler.rawValue).coverage")
                         if !facts.sideLine.isEmpty {
                             Text(facts.sideLine)
-                                .font(.system(size: 10))
-                                .foregroundStyle(.tertiary)
+                                .font(.system(size: 12))
+                                .foregroundStyle(.secondary)
                         }
                     }
                     if !facts.note.isEmpty {
                         Text(facts.note)
-                            .font(.system(size: 10))
-                            .foregroundStyle(.tertiary)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.tail)
                     }
@@ -466,20 +470,23 @@ struct AnalyzeCyclerRow: View, Equatable {
 
                 controls
             }
-            .padding(.vertical, 6)
-            .padding(.horizontal, 8)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.07)))
+            .padding(.vertical, 10)
+            .padding(.horizontal, 12)
+            // A gentle wash of the family colour, with a thin edge so the
+            // row holds together in both light and dark appearance.
+            .background(RoundedRectangle(cornerRadius: 10).fill(cycler.familyTint.opacity(0.075)))
+            .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(cycler.familyTint.opacity(0.18), lineWidth: 1))
             .accessibilityIdentifier("analyze.row.\(cycler.rawValue)")
 
-            if isExpanded { disclosure.padding(.leading, 52) }
+            if isExpanded { disclosure.padding(.leading, 72) }
         }
     }
 
     private var stateChip: some View {
         Text(facts.state.chipText)
-            .font(.system(size: 10, weight: .bold))
-            .padding(.horizontal, 7)
-            .padding(.vertical, 2)
+            .font(.system(size: 12, weight: .bold))
+            .padding(.horizontal, 9)
+            .padding(.vertical, 3)
             .background(chipColor.opacity(0.15), in: Capsule())
             .foregroundStyle(chipColor)
             .accessibilityIdentifier("analyze.row.\(cycler.rawValue).state")
@@ -530,11 +537,11 @@ struct AnalyzeCyclerRow: View, Equatable {
                 }
             }
             .labelsHidden()
-            .frame(width: 100)
+            .frame(width: 124)
             .help(AnalyzeSchedule.phaseAHelp)
             .accessibilityIdentifier("analyze.row.\(cycler.rawValue).schedule")
         }
-        .controlSize(.small)
+        .controlSize(.large)
     }
 
     @ViewBuilder
@@ -549,27 +556,27 @@ struct AnalyzeCyclerRow: View, Equatable {
                         .help("The only from-scratch redo: wipes EVERY pairing, including ones you made by hand, and asks first.")
                         .accessibilityIdentifier("analyze.correlate.clearAndRecorrelate")
                 }
-                .controlSize(.small)
+                .controlSize(.regular)
             }
             ForEach(facts.volumes) { v in
                 HStack(spacing: 10) {
                     Image(systemName: v.isReachable ? "externaldrive.fill" : "externaldrive.badge.xmark")
-                        .font(.system(size: 11))
+                        .font(.system(size: 13))
                         .foregroundStyle(v.isReachable ? Color.secondary : Color.orange)
-                        .frame(width: 16)
+                        .frame(width: 18)
                     Text(v.label)
-                        .font(.system(size: 11, weight: .medium))
-                        .frame(width: 160, alignment: .leading)
+                        .font(.system(size: 13, weight: .medium))
+                        .frame(width: 190, alignment: .leading)
                         .lineLimit(1)
                     Text(v.text)
-                        .font(.system(size: 11, design: .monospaced))
+                        .font(.system(size: 13, design: .monospaced))
                         .monospacedDigit()
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                     Spacer()
                     if v.root != AnalyzeCoverageCalculator.otherRoot {
                         Button("Run now") { onRunNow(v.root) }
-                            .controlSize(.mini)
+                            .controlSize(.small)
                             .disabled(!v.isReachable || facts.isRunning)
                             .help(!v.isReachable ? "Drive not connected."
                                   : cycler == .duplicates
@@ -580,6 +587,36 @@ struct AnalyzeCyclerRow: View, Equatable {
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
+    }
+}
+
+// MARK: - Family colours (Rick 2026-10-03)
+
+/// Each row carries the colour of the FAMILY its cycler belongs to — gentle
+/// hues taken from the Media File Operations verb chips (the darkened,
+/// legible set of 2026-07-31), so the Analyze window and the MFO window
+/// read as one family, and the rows fall into bands down the list:
+///   finding copies        → Compare's cobalt        (Detect Duplicates,
+///                           Find Similar Footage)
+///   understanding content → Analyze's dark cyan     (Scene Captions, OCR,
+///                           Transcribe — the MFO "Analyze" verb's own colour)
+///   pairing A/V           → Combine's forest green  (Correlate A/V — its
+///                           pairs are what Combine joins)
+///   facts about the file  → Verify's dark goldenrod (File Signatures,
+///                           Embedded Dates, Inferred Dates)
+/// View-layer only: the registry (AnalyzeCyclers.swift) stays colour-free.
+extension AnalyzeCycler {
+    var familyTint: Color {
+        switch self {
+        case .duplicates, .footage:
+            return Color(red: 0.08, green: 0.32, blue: 0.72)
+        case .correlate:
+            return Color(red: 0.10, green: 0.45, blue: 0.16)
+        case .sceneCaptions, .ocr, .transcribe:
+            return Color(red: 0.00, green: 0.42, blue: 0.58)
+        case .fileSignatures, .embeddedDates, .dateInference:
+            return Color(red: 0.72, green: 0.53, blue: 0.04)
+        }
     }
 }
