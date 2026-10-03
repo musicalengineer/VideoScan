@@ -37,10 +37,14 @@ import Foundation
 /// read (codex review 2026-10-02 #4 — before, every number outside Int64
 /// became a Double and UInt64.max came back as ...616).
 ///
-/// Numbers are held in the narrowest exact type, tried in order:
-///   Int64 → UInt64 → Decimal (base-10, 38 significant digits, exponent
-///   roughly ±128) → Double (anything Decimal cannot hold, e.g. 1.5e300 or
-///   5e-324 — exactly the values a Double wrote in the first place).
+/// Numbers are held in the narrowest exact type. Decimal is read FIRST —
+/// JSONDecoder builds it from the literal's digits in base 10, so it is
+/// the exact reading — and Int64 / UInt64 are accepted only when they
+/// EQUAL that reading (codex cycle #29 F3: Foundation's Int64 slow path
+/// rounds "1.0000000000000001" through Double to 1 and would otherwise
+/// have been taken at its word). What Decimal cannot hold (exponents
+/// beyond roughly ±128, e.g. 1.5e300 or 5e-324 — exactly the values a
+/// Double wrote in the first place) is a Double.
 /// The VALUE survives; the SPELLING is JSONEncoder's (`1e3` → `1000`,
 /// `1.0` → `1`), so canonically spelled numbers come back byte for byte.
 /// The one value-loss left: a literal with more than 38 significant digits
@@ -48,8 +52,8 @@ import Foundation
 /// (docs/practices/invariants/Catalog.md, "Known and accepted").
 ///
 /// (For Rick: think `std::variant<int64_t, uint64_t, decimal128, double, …>`
-/// with the parser picking the first alternative that holds the text
-/// exactly.)
+/// where the parser reads the exact decimal first and only then asks
+/// "does a narrower alternative hold this very value?")
 public indirect enum CatalogJSONValue: Sendable, Equatable, Codable {
     case null
     case bool(Bool)
@@ -91,18 +95,21 @@ public indirect enum CatalogJSONValue: Sendable, Equatable, Codable {
         // Bool before numbers: JSONDecoder refuses to read `1` as Bool and
         // `true` as a number, so the order only matters for clarity.
         if let b = try? c.decode(Bool.self) { self = .bool(b); return }
-        if let i = try? c.decode(Int64.self) {
-            // `-0.0` / `-0` decode as Int64 0; keep the sign.
-            if i == 0, let d = try? c.decode(Double.self), d.sign == .minus {
+        // Decimal FIRST: JSONDecoder parses it from the literal's digits (no
+        // binary detour), so it is the exact reading the integer cases are
+        // validated against (codex cycle #29 F3 — Foundation's Int64 slow
+        // path accepts "1.0000000000000001" as 1 by way of Double). It
+        // REFUSES a literal outside Decimal's exponent range, which then
+        // falls through to Double — the type that wrote it.
+        if let m = try? c.decode(Decimal.self), m.isFinite {
+            // `-0` / `-0.0`: Decimal has no negative zero; keep the sign.
+            if m == 0, let d = try? c.decode(Double.self), d.sign == .minus {
                 self = .double(d); return
             }
-            self = .int(i); return
+            if let i = try? c.decode(Int64.self), Decimal(i) == m { self = .int(i); return }
+            if let u = try? c.decode(UInt64.self), Decimal(u) == m { self = .uint(u); return }
+            self = .decimal(m); return
         }
-        if let u = try? c.decode(UInt64.self) { self = .uint(u); return }
-        // JSONDecoder parses Decimal from the literal's digits (no binary
-        // detour) and REFUSES a literal outside Decimal's exponent range,
-        // which then falls through to Double — the type that wrote it.
-        if let m = try? c.decode(Decimal.self), m.isFinite { self = .decimal(m); return }
         if let d = try? c.decode(Double.self) { self = .double(d); return }
         if let s = try? c.decode(String.self) { self = .string(s); return }
         throw DecodingError.dataCorruptedError(in: c, debugDescription: "unrecognised JSON value")
