@@ -317,6 +317,11 @@ struct CatalogWriteGate: Sendable {
         if let h = latch.hold { return h }
         let verdict = CatalogSnapshot.header(at: primaryURL)?.version
         testAfterProbe?()
+        // The probe can be long (a whole-file pass on a legacy layout).
+        // A latch the main actor raised MEANWHILE outranks whatever the
+        // probe read of the file as it was (codex cycle #29 F2): read the
+        // mirror again, immediately before answering.
+        if let h = latch.hold { return h }
         guard let verdict, let h = CatalogWriteHold.from(verdict) else { return nil }
         latch.note(h)
         return h
