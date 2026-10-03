@@ -704,6 +704,11 @@ extension VideoScanModel {
         /// The archive volume is not connected and this file's drive
         /// cannot be proven to be a different one.
         case archiveVolumeUnprovable
+        /// On a volume the person marked Read only (2026-10-03) — its name.
+        case readOnlyVolume(String)
+        /// Under the name of a volume marked Read only, where a DIFFERENT
+        /// drive is mounted now: left alone, and said so.
+        case readOnlyVolumeDifferentDrive(String)
     }
 
     // The whole-volume snapshot, `archiveVolumeProtection()`, is cached
@@ -713,10 +718,14 @@ extension VideoScanModel {
     /// is the verb's snapshot (pass the same one for every record of the
     /// verb); nil with `.removesFiles` builds one here (single-record
     /// callers). O(1) per record once the snapshot exists.
+    ///
+    /// Two halves, in this order: the Master Archive (its tree, and the
+    /// volume that hosts it — read-only BY RULE), then the volumes the
+    /// person marked Read only (2026-10-03; `.removesFiles` verbs only — a
+    /// catalog-only removal touches no file).
     func bulkDeleteRefusal(_ r: VideoRecord, effect: BulkVerbEffect = .removesFiles,
                            volume: ArchiveVolumeProtection? = nil) -> BulkDeleteRefusal? {
-        guard masterArchive != nil else { return nil }
-        if isArchiveCopy(r) { return .archiveTree }
+        if masterArchive != nil, isArchiveCopy(r) { return .archiveTree }
         return bulkDeleteRefusal(forPath: r.fullPath, effect: effect, volume: volume)
     }
 
@@ -724,7 +733,15 @@ extension VideoScanModel {
     /// the catalog (Transcode's "Replace Existing" target, 2026-09-22).
     func bulkDeleteRefusal(forPath path: String, effect: BulkVerbEffect = .removesFiles,
                            volume: ArchiveVolumeProtection? = nil) -> BulkDeleteRefusal? {
-        guard masterArchive != nil else { return nil }
+        if masterArchive != nil, let refusal = masterArchiveRefusal(forPath: path, effect: effect, volume: volume) {
+            return refusal
+        }
+        return readOnlyVolumeRefusal(forPath: path, effect: effect)
+    }
+
+    /// The Master Archive half of the gate (a designation exists).
+    private func masterArchiveRefusal(forPath path: String, effect: BulkVerbEffect,
+                                      volume: ArchiveVolumeProtection?) -> BulkDeleteRefusal? {
         if isInsideMasterArchive(path: path) { return .archiveTree }
         guard effect != .catalogOnly,
               let snapshot = volume ?? archiveVolumeProtection() else { return nil }
@@ -740,11 +757,23 @@ extension VideoScanModel {
         }
     }
 
+    /// The read-only half of the gate: a verb that REMOVES files is refused
+    /// every file on a volume the person marked Read only. String work on
+    /// a cached snapshot; nothing when no volume is marked.
+    private func readOnlyVolumeRefusal(forPath path: String, effect: BulkVerbEffect) -> BulkDeleteRefusal? {
+        guard effect == .removesFiles, !hasNoReadOnlyVolumeMarks else { return nil }
+        switch readOnlyVolumeProtection().verdict(forPath: path) {
+        case nil: return nil
+        case .readOnly(let name)?: return .readOnlyVolume(name)
+        case .readOnlyDifferentDrive(let name)?: return .readOnlyVolumeDifferentDrive(name)
+        }
+    }
+
     /// The OFFER-side form of the rule: which of `recs` a verb that
     /// removes files may be offered for. Silent (a menu being built is not
     /// a refusal worth a console line); O(recs) after one snapshot.
     func recordsBulkVerbsMayRemove(_ recs: [VideoRecord]) -> [VideoRecord] {
-        guard masterArchive != nil, !recs.isEmpty else { return recs }
+        guard masterArchive != nil || !hasNoReadOnlyVolumeMarks, !recs.isEmpty else { return recs }
         let snapshot = archiveVolumeProtection()
         return recs.filter { bulkDeleteRefusal($0, volume: snapshot) == nil }
     }
@@ -760,18 +789,23 @@ extension VideoScanModel {
     /// are safe to act on and logs what was protected, one line per kind.
     func excludingMasterArchiveFiles(_ recs: [VideoRecord], verb: String,
                                      effect: BulkVerbEffect = .removesFiles) -> [VideoRecord] {
-        guard masterArchive != nil, !recs.isEmpty else { return recs }
+        guard masterArchive != nil || !hasNoReadOnlyVolumeMarks, !recs.isEmpty else { return recs }
         let snapshot = effect != .catalogOnly ? archiveVolumeProtection() : nil
         var kept: [VideoRecord] = []
         kept.reserveCapacity(recs.count)
         var tree = 0, onVolume = 0, unprovable = 0
+        var readOnly: [String: Int] = [:]
         for r in recs {
             switch bulkDeleteRefusal(r, effect: effect, volume: snapshot) {
             case nil: kept.append(r)
             case .archiveTree?: tree += 1
             case .archiveVolume?: onVolume += 1
             case .archiveVolumeUnprovable?: unprovable += 1
+            case .readOnlyVolume(let name)?, .readOnlyVolumeDifferentDrive(let name)?: readOnly[name, default: 0] += 1
             }
+        }
+        for (name, count) in readOnly.sorted(by: { $0.key < $1.key }) {
+            log(Self.readOnlyVolumeRefusalLine(verb: verb, count: count, volume: name))
         }
         let label = snapshot?.label ?? "the archive volume"
         if tree > 0 { log(Self.masterArchiveRefusalLine(verb: verb, count: tree)) }
@@ -804,6 +838,20 @@ extension VideoScanModel {
         "\(verb): left \(count) file(s) alone — they live on \(volume), the Master Archive volume, which only archive actions may change."
     }
 
+    /// The same sentence for files on a volume the person marked Read
+    /// only (2026-10-03) — the existing shape; the volume's name only.
+    nonisolated static func readOnlyVolumeRefusalLine(verb: String, count: Int, volume: String) -> String {
+        "\(verb): left \(count) file(s) alone — they live on \(volume), which you marked Read only."
+    }
+
+    /// Row / detail wording for a read-only verdict (the removal-time check).
+    nonisolated static func readOnlyRefusalNote(_ verdict: ReadOnlyVolumeProtection.Verdict) -> String {
+        switch verdict {
+        case .readOnly(let name): return bulkDeleteRefusalNote(.readOnlyVolume(name), volume: name)
+        case .readOnlyDifferentDrive(let name): return bulkDeleteRefusalNote(.readOnlyVolumeDifferentDrive(name), volume: name)
+        }
+    }
+
     /// …and for files whose drive cannot be told apart from it.
     nonisolated static func masterArchiveUnprovableRefusalLine(verb: String, count: Int, volume: String) -> String {
         "\(verb): left \(count) file(s) alone — \(volume), the Master Archive volume, is not connected, so VideoScan cannot prove their drive is not it."
@@ -822,6 +870,9 @@ extension VideoScanModel {
         case .archiveTree: return "lives in the Master Archive, which only archive actions may change"
         case .archiveVolume: return "lives on \(volume), the Master Archive volume, which only archive actions may change"
         case .archiveVolumeUnprovable: return "\(volume), the Master Archive volume, is not connected — cannot prove this drive is not it"
+        case .readOnlyVolume(let name): return "lives on \(name), which you marked Read only"
+        case .readOnlyVolumeDifferentDrive(let name):
+            return "is under \(name), which you marked Read only — a different drive is mounted there now, so it is left alone"
         }
     }
 

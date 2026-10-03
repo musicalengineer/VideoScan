@@ -288,7 +288,29 @@ struct VolumeEditor: View {
                 }
                 Spacer()
             }
+            readOnlyRow
         }
+    }
+
+    /// "Read only" (Rick 2026-10-03): a safety switch that keeps the drive
+    /// off every delete list. The Master Archive's volume is read-only by
+    /// rule — shown on, and not changeable here.
+    @ViewBuilder
+    private var readOnlyRow: some View {
+        let byRule = model.isReadOnlyByRule(target)
+        VStack(alignment: .leading, spacing: 3) {
+            Toggle(byRule ? VolumeReadOnlyText.byRuleLabel : VolumeReadOnlyText.toggleLabel, isOn: Binding(
+                get: { byRule || target.readOnlyMark != nil },
+                set: { model.setVolumeReadOnly($0, for: target) }))
+                .toggleStyle(.checkbox)
+                .disabled(byRule || model.isReadOnly)
+                .accessibilityIdentifier("volumeEditor.readOnlyToggle")
+            Text(VolumeReadOnlyText.caption)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.top, 4)
     }
 
     private var hardwareSection: some View {

@@ -82,7 +82,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedNotesKey: String,
         savedRetiredAtKey: String,
         savedRetiredReasonKey: String,
-        savedRetiredWitnessesKey: String
+        savedRetiredWitnessesKey: String,
+        savedReadOnlyKey: String? = nil
     ) -> [CatalogScanTarget] {
         restoreReporting(
             existing: existing, savedTargetsKey: savedTargetsKey, savedDatesKey: savedDatesKey,
@@ -91,7 +92,39 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
             savedPurchaseYearKey: savedPurchaseYearKey, savedCapacityKey: savedCapacityKey,
             savedNotesKey: savedNotesKey, savedRetiredAtKey: savedRetiredAtKey,
             savedRetiredReasonKey: savedRetiredReasonKey,
-            savedRetiredWitnessesKey: savedRetiredWitnessesKey).targets
+            savedRetiredWitnessesKey: savedRetiredWitnessesKey,
+            savedReadOnlyKey: savedReadOnlyKey).targets
+    }
+
+    // MARK: - "Read only" marks (2026-10-03)
+
+    static let readOnlyMarkedAtField = "markedAt"
+    static let readOnlyVolumeUUIDField = "volumeUUID"
+
+    /// The saved marks, keyed by searchPath. An entry without a date is
+    /// still a mark (refuse over guess: a damaged entry must not un-protect
+    /// a drive) — it is given the distant past.
+    static func readOnlyMarks(forKey key: String?) -> [String: VolumeReadOnlyMark] {
+        guard let key, let saved = UserDefaults.standard.dictionary(forKey: key) else { return [:] }
+        var out: [String: VolumeReadOnlyMark] = [:]
+        for (path, value) in saved {
+            let fields = value as? [String: Any] ?? [:]
+            out[path] = VolumeReadOnlyMark(markedAt: fields[readOnlyMarkedAtField] as? Date ?? .distantPast,
+                                           volumeUUID: fields[readOnlyVolumeUUIDField] as? String)
+        }
+        return out
+    }
+
+    static func persistReadOnlyMarks(_ targets: [CatalogScanTarget], key: String?) {
+        guard let key else { return }
+        var map: [String: [String: Any]] = [:]
+        for t in targets {
+            guard let mark = t.readOnlyMark else { continue }
+            var fields: [String: Any] = [readOnlyMarkedAtField: mark.markedAt]
+            if let uuid = mark.volumeUUID { fields[readOnlyVolumeUUIDField] = uuid }
+            map[t.searchPath] = fields
+        }
+        UserDefaults.standard.set(map, forKey: key)
     }
 
     /// `restore` plus the legacy-role count (see `RestoreReport`).
@@ -109,7 +142,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedNotesKey: String,
         savedRetiredAtKey: String,
         savedRetiredReasonKey: String,
-        savedRetiredWitnessesKey: String
+        savedRetiredWitnessesKey: String,
+        savedReadOnlyKey: String? = nil
     ) -> RestoreReport {
         var report = RestoreReport()
         let paths = UserDefaults.standard.stringArray(forKey: savedTargetsKey) ?? []
@@ -127,6 +161,9 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         let retiredAt = UserDefaults.standard.dictionary(forKey: savedRetiredAtKey) as? [String: Date] ?? [:]
         let retiredReason = UserDefaults.standard.dictionary(forKey: savedRetiredReasonKey) as? [String: String] ?? [:]
         let retiredWitnesses = UserDefaults.standard.dictionary(forKey: savedRetiredWitnessesKey) as? [String: [String]] ?? [:]
+        // "Read only" marks — absent key (every install before 2026-10-03)
+        // = no volume is marked.
+        let readOnly = readOnlyMarks(forKey: savedReadOnlyKey)
 
         var result: [CatalogScanTarget] = []
         // Restore-time screen + heal: pre-fix builds could persist the
@@ -161,6 +198,7 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
                 t.retiredAt = retiredAt[p]
                 t.retiredReason = retiredReason[p]
                 t.retiredWitnesses = retiredWitnesses[p]
+                t.readOnlyMark = readOnly[p]
                 // Role last: legacy-aware (may stamp retiredAt — see above).
                 if let raw = roles[p] {
                     let d = applyPersistedRole(raw, to: t)
@@ -192,8 +230,10 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         savedNotesKey: String,
         savedRetiredAtKey: String,
         savedRetiredReasonKey: String,
-        savedRetiredWitnessesKey: String
+        savedRetiredWitnessesKey: String,
+        savedReadOnlyKey: String? = nil
     ) {
+        persistReadOnlyMarks(targets, key: savedReadOnlyKey)
         var dates: [String: Date] = [:]
         var phases: [String: String] = [:]
         var roles: [String: String] = [:]
@@ -267,6 +307,11 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
         t.retiredAt = s.retiredAt
         t.retiredReason = s.retiredReason
         t.retiredWitnesses = s.retiredWitnesses
+        // "Read only" — a snapshot can SET the mark, never clear one made
+        // here (a safety flag is not undone by importing an older bundle).
+        if let at = s.readOnlyMarkedAt {
+            t.readOnlyMark = VolumeReadOnlyMark(markedAt: at, volumeUUID: s.readOnlyVolumeUUID)
+        }
         // Role LAST and legacy-aware: a pre-taxonomy bundle carrying
         // role "Retired" (no stamp) becomes an unassigned target — WITH a
         // stamp only when the target is new (see `isNewTarget`);

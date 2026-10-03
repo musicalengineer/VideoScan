@@ -597,6 +597,23 @@ struct VolumesWindow: View {
 
         Divider()
 
+        // "Read only" (2026-10-03): keeps the drive off every delete list.
+        // The Master Archive's volume is read-only by rule.
+        if model.isReadOnlyByRule(target) {
+            Button(VolumeReadOnlyText.byRuleLabel) { }
+                .disabled(true)
+                .accessibilityIdentifier("volumeRow.readOnlyByRule")
+        } else {
+            Button(VolumeReadOnlyText.menuTitle(isMarked: target.readOnlyMark != nil)) {
+                model.setVolumeReadOnly(target.readOnlyMark == nil, for: target)
+            }
+            .disabled(model.isReadOnly)
+            .help(VolumeReadOnlyText.caption)
+            .accessibilityIdentifier("volumeRow.toggleReadOnly")
+        }
+
+        Divider()
+
         if target.isRetired {
             Button("Reinstate \(volumeName(target))") {
                 reinstateTarget = ReinstateTarget(
@@ -752,6 +769,15 @@ private struct VolumeListRow: View {
                         retirePill(text: "Master Archive",
                                    bg: .yellow,
                                    identifier: "volumeRow.masterArchiveBadge")
+                    }
+                    // Read only — by the person's mark, or (the Master
+                    // Archive) by rule: a small lock.
+                    if isMasterArchive || target.readOnlyMark != nil {
+                        Image(systemName: "lock.fill")
+                            .font(.system(size: 11 * scale))
+                            .foregroundColor(.secondary)
+                            .help(VolumeReadOnlyText.badgeHelp)
+                            .accessibilityIdentifier("volumeRow.readOnlyBadge")
                     }
                     // §1B retired badge. "Retired YYYY-MM-DD" — replaces
                     // the policy badge visually because a retired volume

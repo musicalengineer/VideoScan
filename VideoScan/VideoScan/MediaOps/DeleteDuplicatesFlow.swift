@@ -70,7 +70,8 @@ struct DeleteDuplicatesFlow: ViewModifier {
                         picked = nil
                         picker = nil
                     },
-                    preselectedPath: preselectedPath)
+                    preselectedPath: preselectedPath,
+                    readOnlyVolumeNames: model.readOnlyVolumeNamesForPicker)
             }
             .alert("Delete Duplicates", isPresented: $showConfirm) {
                 Button(DeleteDuplicatesForecast.confirmationButtonTitle, role: .destructive) {

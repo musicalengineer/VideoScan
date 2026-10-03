@@ -68,7 +68,17 @@ struct VolumeDetailPane: View {
                 // Reclaimable first (Rick's question), then the charts.
                 // Never offered on the Master Archive's volume — the whole
                 // FamilyArchive drive is near read-only (2026-09-22).
-                if !model.isMasterArchive(target), !target.isRetired {
+                // A Read-only drive (the Master Archive's by rule, any
+                // other by the person's mark) has nothing to reclaim.
+                if model.isVolumeReadOnly(target) {
+                    Label(VolumeReadOnlyText.reclaimableNotice, systemImage: "lock.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal, 18)
+                        .padding(.top, 12)
+                        .accessibilityIdentifier("storage.readOnlyNotice")
+                } else if !target.isRetired {
                     StorageReclaimableCard(volumePath: target.searchPath,
                                            isReachable: target.isReachable,
                                            estimate: reclaimable)
@@ -187,6 +197,9 @@ struct VolumeInfoCard: View {
                         .lineLimit(1)
                     if isMasterArchive {
                         chip("MASTER ARCHIVE", color: .indigo, icon: "crown.fill")
+                    }
+                    if isMasterArchive || target.readOnlyMark != nil {
+                        chip(VolumeReadOnlyText.chip, color: .gray, icon: "lock.fill")
                     }
                     if target.isRetired {
                         chip("RETIRED", color: .brown, icon: "archivebox.fill")

@@ -28,6 +28,9 @@ struct DeleteDuplicatesVolumePicker: View {
     /// The drive the caller already has in hand (Storage tab); nil from
     /// a catalog-wide entry point.
     var preselectedPath: String? = nil
+    /// Drives marked Read only (and the Master Archive's): listed, never
+    /// choosable, with the reason (2026-10-03).
+    var readOnlyVolumeNames: [String] = []
 
     /// The preselected drive when it is in the list (a drive with no
     /// deletable duplicates is not offered, preselected or not).
@@ -102,6 +105,14 @@ struct DeleteDuplicatesVolumePicker: View {
                     }
                     .frame(maxHeight: 320)
                 }
+            }
+
+            ForEach(readOnlyVolumeNames, id: \.self) { name in
+                Label(VolumeReadOnlyText.pickerRow(name), systemImage: "lock.fill")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("catalog.duplicates.readOnlyVolume.\(name)")
             }
 
             HStack {

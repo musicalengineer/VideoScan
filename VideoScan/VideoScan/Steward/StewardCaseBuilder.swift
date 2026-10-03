@@ -415,6 +415,7 @@ enum StewardCaseBuilder {
             var drives = Set<String>()
             var copies: [StewardCopy] = []
             var runRows: [StewardRunRow] = []
+            var readOnlyByDrive: [String: Int] = [:]
             for i in members {
                 let r = inputs[i]
                 let root = roots[i]
@@ -433,7 +434,7 @@ enum StewardCaseBuilder {
                     // drive, a copy the Archive Angel is using): never
                     // proposed, never counted as reclaimable, never a row
                     // of the run.
-                    protected += 1
+                    if r.protection == .readOnlyDrive { readOnlyByDrive[root, default: 0] += 1 } else { protected += 1 }
                     standing = .protected(r.protection)
                 } else {
                     reclaimableCopies += 1
@@ -480,6 +481,9 @@ enum StewardCaseBuilder {
             c.keeperID = inputs[keeperIndex].id
             c.copiesNeedingWorkingCopyMode = needMode
             c.protectedCopies = protected
+            c.readOnlyNotes = readOnlyByDrive.sorted { $0.key < $1.key }.map {
+                StewardStandingWords.readOnlyFooter(count: $0.value, drive: driveLabel($0.key))
+            }
             c.runRows = runRows
             out.append(c)
         }

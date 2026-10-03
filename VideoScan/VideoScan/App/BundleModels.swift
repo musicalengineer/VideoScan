@@ -60,6 +60,9 @@ struct VolumeMetadataSnapshot: Codable {
     var retiredAt: Date?
     var retiredReason: String?
     var retiredWitnesses: [String]?
+    // "Read only" (2026-10-03) — optional; older bundles decode nil.
+    var readOnlyMarkedAt: Date?
+    var readOnlyVolumeUUID: String?
 
     @MainActor
     init(from target: CatalogScanTarget) {
@@ -76,6 +79,8 @@ struct VolumeMetadataSnapshot: Codable {
         self.retiredAt = target.retiredAt
         self.retiredReason = target.retiredReason
         self.retiredWitnesses = target.retiredWitnesses
+        self.readOnlyMarkedAt = target.readOnlyMark?.markedAt
+        self.readOnlyVolumeUUID = target.readOnlyMark?.volumeUUID
     }
 }
 

@@ -125,6 +125,11 @@ struct StewardActionGate: Sendable, Equatable {
 
 enum StewardStandingWords {
 
+    /// "2 copies on SanDisk are never offered — it is Read only."
+    nonisolated static func readOnlyFooter(count n: Int, drive: String) -> String {
+        "\(n.formatted()) cop\(n == 1 ? "y" : "ies") on \(drive) \(n == 1 ? "is" : "are") never offered — it is Read only."
+    }
+
     /// The line under one copy on a Reclaim set card. "Never offered" is
     /// said of what the Delete planner itself leaves alone — which, since
     /// GH #258, is every protected copy: the archive, its drive, and a

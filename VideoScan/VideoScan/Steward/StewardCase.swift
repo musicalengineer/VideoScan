@@ -95,6 +95,8 @@ enum StewardProtection: String, Sendable, Equatable {
     /// In use by the Archive Angel: in a prepared batch, in a batch being
     /// or just promoted, or picked for a Prepare that is still running.
     case angel
+    /// On a drive the person marked Read only (2026-10-03).
+    case readOnlyDrive
 
     /// The Delete planner leaves this file alone, and no card proposes it.
     var isProtected: Bool { self != .none }
@@ -107,6 +109,7 @@ enum StewardProtection: String, Sendable, Equatable {
         case .archiveDrive: return "On the archive drive"
         case .archiveCopy: return "A promoted archive copy"
         case .angel: return "In use by the Archive Angel"
+        case .readOnlyDrive: return "On a drive you marked Read only"
         }
     }
 }
@@ -206,6 +209,9 @@ struct StewardCase: Sendable, Equatable, Identifiable {
     /// Copies the Delete planner leaves alone (the archive, its drive, the
     /// copies the Archive Angel is using).
     var protectedCopies: Int = 0
+    /// One line per Read-only drive holding copies of the set: "2 copies
+    /// on SanDisk are never offered — it is Read only".
+    var readOnlyNotes: [String] = []
     /// Every copy of the set a Delete duplicates run would decide, with its
     /// drive — the WHOLE set, not the capped evidence rows (the proof's
     /// "rows of the same run").

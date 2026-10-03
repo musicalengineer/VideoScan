@@ -20,7 +20,8 @@
 //
 //   a file of the Master Archive, the
 //   archive's whole drive, or a drive that
-//   cannot be told apart from it ............. bulkDeleteRefusal(_:volume:)
+//   cannot be told apart from it; a drive
+//   the person marked Read only .............. bulkDeleteRefusal(_:volume:)
 //                                              with archiveVolumeProtection()
 //   an archive copy while no Master Archive
 //   is designated; in use by the Archive
@@ -73,6 +74,7 @@ extension VideoScanModel {
             switch self.bulkDeleteRefusal(r, volume: archiveDrive) {
             case .archiveTree?: return .archived
             case .archiveVolume?, .archiveVolumeUnprovable?: return .archiveDrive
+            case .readOnlyVolume?, .readOnlyVolumeDifferentDrive?: return .readOnlyDrive
             case nil: break
             }
             switch hold(r) {

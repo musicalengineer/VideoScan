@@ -287,6 +287,8 @@ extension VideoScanModel {
         // inherit task-locals.
         let archiveVolume = archiveVolumeProtection()
         let uuidProbe = MasterArchiveDesignation.volumeUUIDProbe
+        // …and the volumes the person marked Read only (2026-10-03).
+        let readOnlyVolumes = readOnlyVolumeProtection()
         let detachedResults: [(Int, JunkDeletionOutcome)] =
             await Task.detached(priority: .userInitiated) {
                 let fm = FileManager.default
@@ -320,6 +322,12 @@ extension VideoScanModel {
                                 .archiveVolumeUnprovable, volume: archiveVolume.label) + " — nothing moved")))
                             continue
                         }
+                    }
+
+                    // A volume marked Read only: the same last word.
+                    if let verdict = readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe) {
+                        results.append((item.index, .refused(Self.readOnlyRefusalNote(verdict) + " — nothing moved")))
+                        continue
                     }
 
                     // Missing-file branch. We do NOT pre-flight every

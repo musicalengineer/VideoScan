@@ -102,6 +102,14 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     /// without re-querying every record. Deduped at retire time.
     @Published var retiredWitnesses: [String]?
 
+    /// "Read only" (Rick 2026-10-03): VideoScan's bulk verbs never remove,
+    /// trash, move out or replace a file on this volume; its files still
+    /// count as copies when other drives are cleaned up. nil = changes
+    /// allowed (the default). Set through `VideoScanModel.setVolumeReadOnly`;
+    /// enforced by the ONE bulk-verb gate (`bulkDeleteRefusal`). The Master
+    /// Archive's volume is read-only by rule and carries no mark.
+    @Published var readOnlyMark: VolumeReadOnlyMark?
+
     /// ONE definition of "retired" (codex #385 / docs/volume_taxonomy_proposal.md
     /// — retirement used to have two owners: this stamp AND a `.retired`
     /// VolumeRole case). The taxonomy cleanup (2026-08-16) removed the

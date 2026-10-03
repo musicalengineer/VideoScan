@@ -521,6 +521,13 @@ extension VideoScanModel {
             // Review (QA 2026-09-22). The row says to try again.
             return .skip(note: "skipped — the drive list was refreshing; try again",
                          log: "Skipped \(e.filename): the drive list was refreshing (a drive was just mounted or unmounted) — try again")
+        case .readOnlyVolume(let name)?, .readOnlyVolumeDifferentDrive(let name)?:
+            // Marked Read only since the plan was made (2026-10-03): left
+            // alone — nothing is wrong with the pair, so the row is NOT
+            // re-marked Review.
+            log(Self.readOnlyVolumeRefusalLine(verb: "Delete Duplicates", count: 1, volume: name))
+            let note = "left alone — " + Self.bulkDeleteRefusalNote(.readOnlyVolume(name), volume: name)
+            return .skip(note: note, log: "Skipped \(e.filename): \(note)")
         case let refusal?:
             let label = archiveVolume?.label ?? "the archive volume"
             log(refusal == .archiveVolume

@@ -553,7 +553,8 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
 /// (`VideoScanModel.bulkDeleteRefusalNote`), so a Delete Duplicates row,
 /// a Junk row and a Transcode "kept beside" line read the same.
 struct ArchiveRemovalCheck: Sendable {
-    let protection: ArchiveVolumeProtection
+    /// nil = no Master Archive is designated (then only `readOnly` speaks).
+    let protection: ArchiveVolumeProtection?
     let probe: @Sendable (String) -> String?
     /// Captured while the model's snapshot was being rebuilt (the
     /// provisional one). Its "unprovable" is then TRANSIENT — the caller
@@ -561,13 +562,24 @@ struct ArchiveRemovalCheck: Sendable {
     var isProvisional: Bool = false
     /// realpath + statfs, captured with the UUID probe (codex #1642).
     var identity: @Sendable (String) -> MountIdentity? = ArchiveVolumeProtection.mountIdentityProbe
+    /// The volumes the person marked Read only (2026-10-03).
+    var readOnly: ReadOnlyVolumeProtection = .none
 
     /// nil = may be removed; else the note, and whether the refusal is
     /// only transient (provisional snapshot + unprovable).
     func refusal(forPath path: String) -> (note: String, transient: Bool)? {
-        let verdict = protection.verdictAtRemoval(path: path, probe: probe, identity: identity)
-        guard let note = Self.note(verdict, label: protection.label) else { return nil }
-        return (note, (isProvisional || protection.isProvisional) && verdict == .unprovable)
+        if let protection {
+            let verdict = protection.verdictAtRemoval(path: path, probe: probe, identity: identity)
+            if let note = Self.note(verdict, label: protection.label) {
+                return (note, (isProvisional || protection.isProvisional) && verdict == .unprovable)
+            }
+        }
+        // A read-only mark is never transient: the marked path is refused
+        // by string alone.
+        if let verdict = readOnly.verdictAtRemoval(path: path, probe: probe, identity: identity) {
+            return (VideoScanModel.readOnlyRefusalNote(verdict), false)
+        }
+        return nil
     }
 
     private static func note(_ verdict: ArchiveVolumeProtection.Verdict, label: String) -> String? {

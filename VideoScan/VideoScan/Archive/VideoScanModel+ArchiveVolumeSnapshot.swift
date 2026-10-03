@@ -101,15 +101,23 @@ extension VideoScanModel {
     /// seams do not follow a detached task) for a removal-time re-check
     /// on a disk thread. nil = no designation.
     func archiveRemovalCheck() -> ArchiveRemovalCheck? {
-        guard let protection = archiveVolumeProtection() else { return nil }
+        let protection = archiveVolumeProtection()
+        // …and the volumes the person marked Read only (2026-10-03): the
+        // same last word, on the same disk thread.
+        let readOnly = readOnlyVolumeProtection()
+        guard protection != nil || !readOnly.isEmpty else { return nil }
         return ArchiveRemovalCheck(protection: protection, probe: MasterArchiveDesignation.volumeUUIDProbe,
                                    isProvisional: !isArchiveVolumeSnapshotFresh,
-                                   identity: ArchiveVolumeProtection.mountIdentityProbe)
+                                   identity: ArchiveVolumeProtection.mountIdentityProbe,
+                                   readOnly: readOnly)
     }
 
     /// Something the snapshot depends on changed (designation, a mount, an
     /// unmount, a rename): drop it and rebuild off-main.
     func noteArchiveVolumeSnapshotStale(reason: String) {
+        // What is mounted where changed: the read-only volumes' snapshot is
+        // as stale as the archive's.
+        noteReadOnlyVolumeSnapshotStale()
         archiveVolumeSnapshotCache.generation &+= 1
         archiveVolumeSnapshotCache.isFresh = false
         archiveVolumeSnapshotTask = nil
