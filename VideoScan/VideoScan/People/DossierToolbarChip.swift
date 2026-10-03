@@ -46,12 +46,14 @@ struct DossierToolbarChip: View {
         // ONLY while analysis is incomplete, so the row still tells you
         // there is work outstanding without carrying a permanent gauge.
         Button {
-            DossierWindowOpener.open(using: openWindow, source: "chip")
+            // Phase A trial (2026-10-02): opens the Analyze PANEL. The old
+            // dashboard stays under Window ▸ Analyze Dashboard (legacy).
+            AnalyzeWindowOpener.open(using: openWindow, source: "chip")
         } label: {
             Label(buttonTitle, systemImage: "wand.and.stars")
         }
         .buttonStyle(.bordered)
-        .help("Catalog analysis: \(headlineCount) (\(percentLabel))\(rateHelp). Click for the dashboard (⌘⇧O).")
+        .help("Catalog analysis: \(headlineCount) (\(percentLabel))\(rateHelp). Click for the Analyze panel (⌘⇧O).")
         .accessibilityIdentifier("catalog.analyzeCatalog")
         .onAppear { rate.record(count: dossieredCount, at: Date()) }
         .onReceive(refreshTimer) { _ in

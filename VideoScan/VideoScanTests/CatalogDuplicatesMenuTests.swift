@@ -107,22 +107,49 @@ struct CatalogDuplicatesMenuStructureTests {
         #expect(src.contains("Button(Self.deleteOnVolumeTitle, action: onChooseVolumeToDelete)"))
     }
 
-    /// The toolbar no longer builds its own delete-per-volume items.
+    /// The toolbar no longer builds its own delete-per-volume items —
+    /// and since 2026-10-02 (Analyze redesign, Phase A) it offers no
+    /// Delete at all: the entry point is the Storage tab's Reclaimable
+    /// card (StorageReclaimableCard.swift), which opens the same picker
+    /// with the drive preselected.
     @Test func toolbarDoesNotBuildVolumeItems() throws {
         let src = code(try appSource("CatalogToolbar.swift"))
         #expect(!src.contains("Menu(\"Delete Duplicates on Volume"))
         #expect(!src.contains("onDeleteDuplicates"))
-        #expect(src.contains("onChooseVolumeToDelete: onChooseVolumeToDeleteDuplicates"))
+        #expect(!src.contains("onChooseVolumeToDelete"), "Delete left the toolbar for the Storage tab (2026-10-02)")
+        let card = code(try appSource("StorageReclaimableCard.swift"))
+        #expect(card.contains("DeleteDuplicatesVolumePicker("), "the Storage card reuses the picker")
     }
 
     /// The picker's choice becomes the confirmation only from onDismiss —
-    /// never an alert raised while the sheet is still up.
+    /// never an alert raised while the sheet is still up. Pinned on BOTH
+    /// hosts: CatalogView's original flow (kept, unreachable from the
+    /// toolbar since 2026-10-02 — Phase C removes it) and the Storage card.
     @Test func confirmationIsRaisedFromThePickerOnDismiss() throws {
         let src = code(try appSource("ContentView.swift"))
         #expect(src.contains(".sheet(item: $deleteDuplicatesVolumePicker, onDismiss: {"))
         #expect(src.contains("prepareDeleteDuplicatesConfirmation(path: vol.path, count: vol.count)"))
         // The only place that raises the alert is the helper.
         #expect(src.components(separatedBy: "showDeleteDuplicatesConfirm = true").count - 1 == 1)
+
+        let card = code(try appSource("StorageReclaimableCard.swift"))
+        #expect(card.contains(".sheet(item: $picker, onDismiss: {"))
+        #expect(card.contains("prepareConfirmation(path: vol.path, count: vol.count)"))
+        #expect(card.components(separatedBy: "showConfirm = true").count - 1 == 1)
+    }
+
+    /// The picker's preselection: this drive first (when it has deletable
+    /// duplicates), the rest in order; an absent or unknown path changes
+    /// nothing.
+    @Test func pickerPreselectsTheGivenDrive() {
+        let vols: [CatalogDuplicatesMenu.Volume] = [.init(path: "/Volumes/SanDisk", count: 12),
+                                                    .init(path: "/Volumes/X9", count: 3)]
+        #expect(DeleteDuplicatesVolumePicker.preselected(in: vols, path: "/Volumes/X9") == vols[1])
+        #expect(DeleteDuplicatesVolumePicker.others(in: vols, path: "/Volumes/X9") == [vols[0]])
+        #expect(DeleteDuplicatesVolumePicker.preselected(in: vols, path: "/Volumes/Nope") == nil)
+        #expect(DeleteDuplicatesVolumePicker.others(in: vols, path: "/Volumes/Nope") == vols)
+        #expect(DeleteDuplicatesVolumePicker.preselected(in: vols, path: nil) == nil)
+        #expect(DeleteDuplicatesVolumePicker.others(in: vols, path: nil) == vols)
     }
 }
 

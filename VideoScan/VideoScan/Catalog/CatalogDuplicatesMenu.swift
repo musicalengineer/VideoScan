@@ -1,7 +1,15 @@
 // CatalogDuplicatesMenu.swift
-// The Catalog toolbar's "Duplicates" menu (Find Duplicates, Find
+// The Catalog toolbar's FORMER "Duplicates" menu (Find Duplicates, Find
 // Duplicates of Selected, Delete Duplicates on Volume…, the working-copy
 // toggle and the re-analyze hint), extracted from CatalogToolbar.swift.
+//
+// RETIRED FROM THE TOOLBAR 2026-10-02 (Analyze redesign, Phase A trial):
+// the toolbar now shows ONE "Analyze" menu (CatalogAnalyzeMenu.swift);
+// Delete Duplicates moved to the Storage tab's Reclaimable card. This file
+// stays for its `Volume` type (the picker, the model's menu payload and
+// the Storage card all use it), its title helpers, and the structure
+// lesson below, which CatalogAnalyzeMenu inherits. The view itself is no
+// longer constructed by the app; Phase C removes it.
 //
 // WHY "Delete Duplicates on Volume…" IS A BUTTON, NOT A SUBMENU
 // (Rick 2026-09-22, Release b334247b): "when I try to delete dups from the
