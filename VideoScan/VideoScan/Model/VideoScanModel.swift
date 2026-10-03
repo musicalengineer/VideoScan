@@ -298,6 +298,8 @@ final class VideoScanModel: ObservableObject {
     let stewardSnapshot = StewardSnapshot()
     var stewardTask: Task<Void, Never>?
     var stewardWanted = false
+    /// Where the pane's Skip memory lives (tests hand in their own suite).
+    var stewardDefaults: UserDefaults = .standard
 
     /// Immediate recompute — the ONLY place the O(records) count runs.
     /// Piggybacked (2026-07-05): the pair flag and the deletable-dups

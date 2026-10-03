@@ -172,8 +172,108 @@ struct StewardProofRuleTests {
         #expect(optimistic.facts.remainingVerifiedCopies == 2, "fixture: counting the same-run row would say two")
         #expect(asTheRunAsks.facts.remainingVerifiedCopies == 1)
         #expect(proof.remaining == asTheRunAsks.facts.remainingVerifiedCopies)
-        #expect(proof.tier == nil && proof.outcomeLine == "It would be left alone.")
+        #expect(proof.tier == nil && proof.outcomeLine == "As things stand, it would be left alone.")
         #expect(proof.notCounted == asTheRunAsks.facts.unverifiedCopies)
+        #expect(proof.caveatLine == "1 other copy was not counted — not connected, different, or part of the same cleanup.")
+    }
+
+    /// QA F2 (2026-10-03): a sibling with no stored evidence is one the run
+    /// READS — and then this copy goes. The card must not say "left alone".
+    @Test func aCopyTheRunWouldRemoveAfterReadingASiblingIsNotPromisedAsLeftAlone() throws {
+        let rig = try rig()
+        defer { try? FileManager.default.removeItem(at: rig.dir) }
+        let keeper = try file(rig, "here/keeper.mov", .keep, evidence: digest)
+        let copy = try file(rig, "here/copy.mov", .extraCopy, evidence: digest)
+        let unread = try file(rig, "elsewhere/unread.mov", .extraCopy, evidence: nil)
+        rig.model.records = [keeper, copy, unread]
+        let proof = try stewardProof(rig, copy: copy)
+        #expect(proof.remaining == 1, "fixture: as things stand only the keeper is verified")
+        #expect(!proof.outcomeLine.contains("left alone"), "said: \(proof.outcomeLine)")
+        #expect(proof.outcomeLine.contains("reads 1 more copy first"))
+        #expect(proof.outcomeLine.contains("Trash"), "keeper + the sibling once read = two → the Trash")
+    }
+
+    /// QA F1 (2026-10-03): the Delete planner has no Archive Angel guard and
+    /// no filed-as-Archived guard, so a drive's cleanup checks those copies
+    /// too. The card must count them as the run does — rows of the same
+    /// run, never survivors — and must not call them "never offered".
+    @Test func copiesTheAngelChoseOrYouFiledAreCountedAsTheRunCountsThem() throws {
+        let rig = try rig()
+        defer { try? FileManager.default.removeItem(at: rig.dir) }
+        let keeper = try file(rig, "here/keeper.mov", .keep, evidence: digest)
+        let free = try file(rig, "here/free.mov", .extraCopy, evidence: digest)
+        let angel = try file(rig, "here/angel.mov", .extraCopy, evidence: digest)
+        let filed = try file(rig, "here/filed.mov", .extraCopy, evidence: digest)
+        filed.lifecycleStage = .archived
+        rig.model.records = [keeper, free, angel, filed]
+        var summary = rig.model.archiveAngel.recommendations
+        summary.candidateIDs = [angel.id]
+        summary.revision += 1
+        rig.model.archiveAngel.publishRecommendations(summary)
+
+        // What the run would select on this drive: all three copies.
+        let selected = rig.model.duplicateDeletionSelection(onVolume: rig.dir.appendingPathComponent("here").path).targets
+        #expect(Set(selected.map(\.id)) == [free.id, angel.id, filed.id], "fixture: the planner guards neither")
+
+        let proof = try stewardProof(rig, copy: free)
+        let run = plannerAnswer(rig, copy: free, keeper: keeper, excluding: [angel.id, filed.id], digest: digest)
+        #expect(run.facts.remainingVerifiedCopies == 1)
+        #expect(proof.remaining == run.facts.remainingVerifiedCopies, "the card counted copies the run would also decide")
+
+        // (1) The words on the Angel's and the filed rows.
+        let set = try #require(queue(rig.model).cases.first { $0.kind == .reclaimGroup })
+        let rows = Dictionary(uniqueKeysWithValues: set.copies.map { ($0.id, $0) })
+        let angelRow = try #require(rows[angel.id]), filedRow = try #require(rows[filed.id])
+        #expect(angelRow.standing == .stillChecked(.angel) && filedRow.standing == .stillChecked(.filedArchived))
+        let angelWords = try #require(StewardStandingWords.words(for: angelRow, proof: nil))
+        let filedWords = try #require(StewardStandingWords.words(for: filedRow, proof: nil))
+        #expect(angelWords == "Archive Angel has chosen this copy — but “Delete duplicates on here” would still check it.")
+        #expect(filedWords == "You filed this copy as Archived — but “Delete duplicates on here” would still check it.")
+        for words in [angelWords, filedWords] {
+            #expect(words.contains("would still check") && !words.contains("never offered"))
+        }
+        // …they are not reclaimable, not proposed, and not asked about.
+        #expect(set.payoffBytes == free.sizeBytes && set.protectedCopies == 0)
+        let prepared = try #require(StewardEvidenceBuilder.prepare(model: rig.model, for: set))
+        #expect(prepared.questions.map(\.copyID) == [free.id])
+
+        // (3) The caution above the button counts exactly the rows the
+        // run would select that no card proposes.
+        let rule = rig.model.stewardProtectionRule()
+        let stillChecked = selected.filter { rule($0).isProtected && !rule($0).plannerRefuses }.count
+        #expect(stillChecked == 2)
+        #expect(set.stillCheckedOnDrive == stillChecked)
+        #expect(StewardActionGate.stillCheckedCaution(set.stillCheckedOnDrive)
+                == "This drive's cleanup would also check 2 copies the Archive Angel has chosen or you filed as Archived.")
+        let drive = try #require(queue(rig.model).cases.first { $0.kind == .reclaimDrive })
+        #expect(drive.stillCheckedOnDrive == stillChecked && drive.estimate?.copies == 1)
+        #expect(StewardActionGate.stillCheckedCaution(0) == nil)
+        #expect(StewardActionGate.stillCheckedCaution(1)?.contains("1 copy the Archive Angel") == true)
+    }
+
+    /// QA F6: a hard link of the copy itself is the same bytes on the same
+    /// platter — never "another copy that remains".
+    @Test func aHardLinkOfTheCopyItselfIsNotCounted() throws {
+        let rig = try rig()
+        defer { try? FileManager.default.removeItem(at: rig.dir) }
+        let keeper = try file(rig, "here/keeper.mov", .keep, evidence: digest)
+        let copy = try file(rig, "here/copy.mov", .extraCopy, evidence: digest)
+        let linkURL = rig.dir.appendingPathComponent("elsewhere/link.mov")
+        try FileManager.default.linkItem(at: URL(fileURLWithPath: copy.fullPath), to: linkURL)
+        // The link changed the inode's ctime: re-bind both records' evidence.
+        copy.contentFixity = try #require(ContentFixity.captured(path: copy.fullPath, digest: digest, byteCount: copy.sizeBytes))
+        let link = VideoRecord()
+        link.fullPath = linkURL.path
+        link.filename = "link.mov"
+        link.directory = linkURL.deletingLastPathComponent().path
+        link.sizeBytes = copy.sizeBytes
+        link.duplicateGroupID = rig.group
+        link.duplicateDisposition = .extraCopy
+        link.contentFixity = try #require(ContentFixity.captured(path: linkURL.path, digest: digest, byteCount: copy.sizeBytes))
+        rig.model.records = [keeper, copy, link]
+        let proof = try stewardProof(rig, copy: copy)
+        #expect(proof.remaining == 1, "the hard link was counted as a second copy")
+        #expect(proof.notCounted == 1)
     }
 
     @Test func aSiblingWithDifferentBytesOrChangedSinceIsNotCounted() throws {
@@ -187,7 +287,9 @@ struct StewardProofRuleTests {
         let planner = plannerAnswer(rig, copy: copy, keeper: keeper, excluding: [], digest: digest)
         #expect(planner.facts.remainingVerifiedCopies == 1)
         #expect(proof.remaining == 1 && proof.notCounted == planner.facts.unverifiedCopies && proof.notCounted == 1)
-        #expect(proof.caveatLine == "1 other copy could not be counted yet — the run reads them if it needs to.")
+        #expect(proof.caveatLine == "1 other copy was not counted — not connected, different, or part of the same cleanup.")
+        #expect(proof.readsFirst == 0 && proof.outcomeLine == "As things stand, it would be left alone.",
+                "its evidence is current and says different bytes: no read would change that")
     }
 
     @Test func withNoStoredDigestOnlyTheKeeperIsCountedAndTheCardSaysTheRunReadsFirst() throws {
@@ -200,7 +302,10 @@ struct StewardProofRuleTests {
         let proof = try stewardProof(rig, copy: copy)
         #expect(proof.remaining == 1 && proof.tier == nil && !proof.hadStoredDigest)
         #expect(proof.notCounted == 1)
-        #expect(proof.caveatLine?.contains("The run reads it first") == true)
+        // QA F2: not "left alone" — the run reads the copy, and the sibling may then count.
+        #expect(proof.readsFirst == 1 && proof.tierIfTheyMatch == .trash)
+        #expect(proof.outcomeLine == "The run reads this copy first; if the other copy matches, it would go to the Trash, not be deleted.")
+        #expect(proof.caveatLine == nil)
         #expect(proof.counted.count == 1 && proof.counted[0].hasPrefix("keeper on "))
     }
 
@@ -263,7 +368,13 @@ struct StewardExclusionRuleTests {
 
         let filed = record("/Volumes/SanDisk/filed.mov")
         filed.lifecycleStage = .archived
-        #expect(rule(filed) == .archived, "filed as Archived in Triage")
+        #expect(rule(filed) == .filedArchived, "filed as Archived in Triage — the steward's own restraint")
+        #expect(!rule(filed).plannerRefuses && rule(promoted).plannerRefuses)
+
+        // With NO Master Archive designated the planner refuses nothing,
+        // so a promoted copy is the steward's restraint only.
+        let bare = isolatedModel()
+        #expect(bare.stewardProtectionRule()(promoted) == .filedArchived)
     }
 
     @Test func thePredicateAgreesWithTheDeletePlannersOwnRefusal() {
@@ -274,9 +385,13 @@ struct StewardExclusionRuleTests {
         for path in ["/Volumes/FamilyArchive/Test_Family_Archive/x.mov", "/Volumes/FamilyArchive/y.mov",
                      "/Volumes/SanDisk/z.mov", "/Users/someone/Movies/w.mov"] {
             let r = record(path)
-            #expect((model.bulkDeleteRefusal(r, volume: snapshot) != nil) == rule(r).isProtected,
+            #expect((model.bulkDeleteRefusal(r, volume: snapshot) != nil) == rule(r).plannerRefuses,
                     "\(path): the steward and the Delete planner disagree")
         }
+        // …and for what only the steward holds back, the planner does NOT refuse.
+        let filed = record("/Volumes/SanDisk/filed.mov")
+        filed.lifecycleStage = .archived
+        #expect(model.bulkDeleteRefusal(filed, volume: snapshot) == nil && rule(filed).isProtected && !rule(filed).plannerRefuses)
     }
 
     @Test func archiveAngelsPicksAndPreparedBatchesAreProtected() {
@@ -327,10 +442,11 @@ struct StewardExclusionRuleTests {
         let q = queue(model, crossMode: true)
         let set = try #require(q.cases.first { $0.kind == .reclaimGroup })
         #expect(set.payoffBytes == 100 && set.actionableBytes == 100, "only the free copy could come back")
-        #expect(set.protectedCopies == 3)
+        #expect(set.protectedCopies == 2, "the two the planner itself refuses")
+        #expect(set.stillCheckedOnDrive == 1, "the Angel's pick on SanDisk: not proposed, but the cleanup would check it")
         let standing = Dictionary(uniqueKeysWithValues: set.copies.map { ($0.id, $0.standing) })
         #expect(standing[free.id] == .wouldBeChecked)
-        #expect(standing[angel.id] == .protected(.angel))
+        #expect(standing[angel.id] == .stillChecked(.angel))
         #expect(standing[archived.id] == .protected(.archived))
         #expect(standing[onArchiveDrive.id] == .protected(.archiveDrive))
 
@@ -400,6 +516,10 @@ struct StewardExclusionRuleTests {
         let g = UUID()
         model.records = [record("/Volumes/SanDisk/keep.mov", size: 10, group: g, disposition: .keep),
                          record("/Volumes/SanDisk/copy.mov", size: 10, group: g, disposition: .extraCopy)]
+        // The Skip memory the refresh reads: a suite of its own, never Rick's.
+        let suite = "steward-tests-\(UUID().uuidString)"
+        model.stewardDefaults = try #require(UserDefaults(suiteName: suite))
+        defer { model.stewardDefaults.removePersistentDomain(forName: suite) }
         model.scheduleStewardRefresh()
         #expect(model.stewardTask == nil && !model.stewardSnapshot.queue.isBuilt, "no work before the pane appears")
 

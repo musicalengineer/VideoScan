@@ -121,7 +121,7 @@ struct StewardSensorTests {
 
     @Test func ruleTwoUsesTheCanonicalPredicates() throws {
         let src = code(try source("VideoScanModel+Steward.swift"))
-        for predicate in ["archiveVolumeProtection()", "bulkDeleteRefusal(r, volume: archiveDrive)", "isArchiveElement(r)",
+        for predicate in ["archiveVolumeProtection()", "self.bulkDeleteRefusal(r, volume: archiveDrive)", "isArchiveElement(r)",
                           "r.lifecycleStage == .archived", "archiveAngel.recommendations", "angel.preparedIDs.contains(r.id)",
                           "angel.candidateIDs.contains(r.id)", "angel.promotedIDs.contains(r.id)"] {
             #expect(src.contains(predicate), "rule 2 no longer asks `\(predicate)`")
@@ -129,6 +129,10 @@ struct StewardSensorTests {
         #expect(src.contains("archiveAngel.familyBirthdays"), "the People tab's birthdays come through the Angel's reading of them")
         #expect(src.contains("guard stewardWanted else { return }"), "no work until the pane has been shown")
         let builder = code(try source("StewardCaseBuilder.swift"))
+        #expect(builder.contains("} else if r.protection.plannerRefuses {"),
+                "“never offered” is said only of what the Delete planner itself refuses")
+        #expect(code(try source("StewardCardView.swift")).contains("StewardActionGate.stillCheckedCaution(item.stillCheckedOnDrive)"),
+                "the caution about still-checked copies is on the card, above the buttons")
         #expect(builder.contains("isExtraCopy: r.isExtraCopy && !r.protection.isProtected"),
                 "a protected row is never counted as reclaimable on a drive card")
         #expect(builder.contains("ReclaimableCalculator.compute("), "per-drive numbers are the Storage tab's arithmetic")
@@ -138,7 +142,10 @@ struct StewardSensorTests {
     @Test func ruleOneCallsThePlannersOwnFunctions() throws {
         let src = code(try source("StewardEvidence.swift"))
         for call in ["model.deletionTierCandidates(record: record, keeper: keeper, excluding: sameRun)",
-                     "DeletionTierFacts.gather(q.candidates, digest: digest)",
+                     "DeletionTierFacts.gather(candidates, digest: digest)",
+                     "SiblingProver.readableSiblings(",
+                     "candidates.duplicateIdentity = FileIdentityStamp.capture(path: q.copyPath)",
+                     "c.runRows.filter { $0.driveRoot == row.driveRoot && $0.id != row.id }",
                      "DeletionTierDecision.decide(facts: facts, preferTrash: preferTrash)"] {
             #expect(src.contains(call), "the proof no longer calls `\(call)`")
         }
@@ -166,6 +173,20 @@ struct StewardSensorTests {
         #expect(String(model[refresh.upperBound...].prefix(2_500)).contains("scheduleStewardRefresh()"))
     }
 
+    /// QA F3: "Review these below" narrows the table and selects NOTHING —
+    /// one click on Junk must never mark a whole cluster by accident.
+    @Test func reviewTheseBelowNarrowsTheTableButSelectsNothing() throws {
+        let src = code(try source("TriageView.swift"))
+        let start = try #require(src.range(of: "private func reviewFromSteward("))
+        let end = try #require(src.range(of: "private var stewardReviewBanner", range: start.upperBound..<src.endIndex))
+        let body = String(src[start.upperBound..<end.lowerBound])
+        #expect(body.contains("stewardReviewIDs = ids"), "it narrows the table")
+        #expect(!body.contains("selectedIDs = ids"), "it must not select the records")
+        #expect(body.contains("selectedIDs = []"), "…and it clears whatever was selected before")
+        let card = code(try source("StewardCardView.swift"))
+        #expect(!card.contains("in the table below, selected"), "the button's help no longer promises a selection")
+    }
+
     @Test func everyIdentifierStartsWithSteward() throws {
         var seen = 0
         for file in try stewardFolder() {
@@ -187,6 +208,9 @@ struct StewardSensorTests {
     /// person reads (string literals only — comments and code may use them).
     @Test func noEngineRoomWordsInWhatAPersonReads() throws {
         let banned = ["stamp", "cycler", "orchestrator", "heuristic", "phase", "fixity", "digest", "ledger", "predicate"]
+        // QA F10: whole words a person should never meet either. (Identifier
+        // and settings-key literals — "steward.…" — are not read by anyone.)
+        let bannedWords = ["steward", "case", "payoff", "score", "queue"]
         var literals = 0
         var files = try stewardFolder()
         files.append((name: "TriageView.swift (steward banner)", code: try stewardBannerCode()))
@@ -196,6 +220,11 @@ struct StewardSensorTests {
                 let lower = literal.lowercased()
                 for word in banned {
                     #expect(!lower.contains(word), "\(file.name): \(literal) says “\(word)”")
+                }
+                if lower.hasPrefix("\"steward.") || lower.hasPrefix("\"dup:") || lower.hasPrefix("\"footage:")
+                    || lower.hasPrefix("\"junk:") || lower.hasPrefix("\"drive:") { continue }
+                for word in bannedWords where !matches("\\b\(word)\\b", in: lower).isEmpty {
+                    Issue.record("\(file.name): \(literal) says “\(word)”")
                 }
             }
         }

@@ -1037,14 +1037,16 @@ struct TriageView: View {
     // MARK: - Steward review (trial UI, 2026-10-03)
 
     /// "Review these below" on a steward card: show just those records in
-    /// the table — every disposition, no search — and select them, so the
-    /// Keep / Repair / Junk buttons act on the lot. Nothing is changed.
+    /// the table — every disposition, no search — with NOTHING selected
+    /// (QA 2026-10-03, F3: one click on Junk must never mark a whole
+    /// cluster by accident; the person selects what they mean). Nothing is
+    /// changed.
     private func reviewFromSteward(_ ids: Set<UUID>, label: String) {
         selectedFilter = .all
         searchText = ""
         stewardReviewIDs = ids
         stewardReviewLabel = label
-        selectedIDs = ids
+        selectedIDs = []
     }
 
     private var stewardReviewBanner: some View {

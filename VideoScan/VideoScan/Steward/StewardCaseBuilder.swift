@@ -14,9 +14,12 @@
 // RULE 2 of §5.6 lives in the projection: a record the canonical predicates
 // protect (archive copy / archive drive / Archive Angel's pick — see
 // VideoScanModel+Steward.swift) arrives here with `protection != .none`,
-// and from then on it can be a KEEPER or a counted sibling but never a copy
-// a case proposes to let go. A duplicate set whose only other copies are
-// protected produces no Reclaim card.
+// and from then on it can be a KEEPER but never a copy a case proposes to
+// let go. A duplicate set whose only other copies are protected produces no
+// Reclaim card. The Angel's picks and filed-as-Archived copies are NOT
+// refused by the Delete planner, though: where a drive's cleanup would
+// still check them the card says so (`.stillChecked`, `stillCheckedOnDrive`)
+// and the proof counts them as rows of the run (QA 2026-10-03, F1).
 //
 // WHAT A RECLAIM SET COUNTS. "Reclaimable" = extra copies that are not
 // protected. "The flow would check" = those whose keeper is on the same
@@ -169,8 +172,11 @@ enum StewardCaseBuilder {
     static let junkThreshold = 5
     /// A junk "cluster" is at least this many files.
     static let minJunkCluster = 2
-    /// Cases kept per kind (the queue shows one at a time; the rest wait).
+    /// Cases kept per kind that are NOT skipped (one is shown at a time; the
+    /// rest wait).
     static let maxCasesPerKind = 25
+    /// Skipped cases kept per kind beside them, for "Show skipped".
+    static let maxSkippedPerKind = 100
     static let maxCopiesPerCase = 50
     static let maxIDsPerCase = 20_000
     /// FootageConfidence.likely.strength — "Likely or stronger".
@@ -203,6 +209,7 @@ enum StewardCaseBuilder {
                       mountedRoots: Set<String>,
                       alsoCleanUpWorkingCopies: Bool,
                       people: [StewardEventGuess.Person] = [],
+                      skipped: [String: StewardFacts] = [:],
                       calendar: Calendar = .current) -> StewardQueue {
         let scanRoots = volumes.map(\.root).sorted { $0.count > $1.count }
         var rootCache: [String: String] = [:]
@@ -246,12 +253,12 @@ enum StewardCaseBuilder {
 
         let reclaim = reclaimDriveCases(inputs: inputs, roots: roots, groups: dupGroups,
                                         drives: drivesWithReclaimable, mountedRoots: mountedRoots,
-                                        alsoCleanUpWorkingCopies: alsoCleanUpWorkingCopies)
+                                        alsoCleanUpWorkingCopies: alsoCleanUpWorkingCopies, skipped: skipped)
             + reclaimGroupCases(inputs: inputs, roots: roots, groups: dupGroups, online: online,
-                                alsoCleanUpWorkingCopies: alsoCleanUpWorkingCopies)
+                                alsoCleanUpWorkingCopies: alsoCleanUpWorkingCopies, skipped: skipped)
         let footage = footageCases(inputs: inputs, roots: roots, groups: footageGroups, online: online,
-                                   people: people, calendar: calendar)
-        let junkCases = junkCases(inputs: inputs, roots: roots, clusters: junk, online: online)
+                                   people: people, skipped: skipped, calendar: calendar)
+        let junkCases = junkCases(inputs: inputs, roots: roots, clusters: junk, online: online, skipped: skipped)
 
         queue.cases = interleave([
             reclaim.sorted(by: reclaimOrder),
@@ -259,6 +266,27 @@ enum StewardCaseBuilder {
             junkCases,
         ])
         return queue
+    }
+
+    /// The per-kind limit, spent on what is NOT skipped (QA F4: 25 skips
+    /// must bring the next 25 forward, not empty the lane). `sorted` is in
+    /// payoff order; the order is kept. Skipped cases ride along (up to
+    /// `maxSkippedPerKind`) so "Show skipped" can bring them back.
+    nonisolated static func limit(_ sorted: [StewardCase], skipped: [String: StewardFacts]) -> [StewardCase] {
+        var out: [StewardCase] = []
+        var active = 0, hidden = 0
+        for c in sorted {
+            if StewardSkipStore.isSkipped(c, remembered: skipped[c.id]) {
+                guard hidden < maxSkippedPerKind else { continue }
+                hidden += 1
+            } else {
+                guard active < maxCasesPerKind else { continue }
+                active += 1
+            }
+            out.append(c)
+            if active >= maxCasesPerKind, hidden >= maxSkippedPerKind { break }
+        }
+        return out
     }
 
     // MARK: Reclaim space — per drive
@@ -269,17 +297,25 @@ enum StewardCaseBuilder {
     /// the keeper or a counted sibling but is never counted as reclaimable.
     static func reclaimDriveCases(inputs: [StewardInput], roots: [String], groups: [UUID: [Int]],
                                   drives: Set<String>, mountedRoots: Set<String>,
-                                  alsoCleanUpWorkingCopies: Bool) -> [StewardCase] {
+                                  alsoCleanUpWorkingCopies: Bool,
+                                  skipped: [String: StewardFacts] = [:]) -> [StewardCase] {
         guard !drives.isEmpty else { return [] }
         // The copies behind each drive's number, for "Show these in the
         // Catalog": the calculator's rule again (keeper on this drive, or
         // any drive when working copies are cleaned too).
         var idsByDrive: [String: [UUID]] = [:]
+        // …and the copies no card proposes but the drive's cleanup would
+        // still check (the Angel's picks, filed as Archived) — QA F1.
+        var stillCheckedByDrive: [String: Int] = [:]
         for members in groups.values {
             guard let keeper = members.first(where: { inputs[$0].isKeeper }) else { continue }
-            for i in members where inputs[i].isExtraCopy && !inputs[i].protection.isProtected
+            for i in members where inputs[i].isExtraCopy && !inputs[i].protection.plannerRefuses
                 && (roots[i] == roots[keeper] || alsoCleanUpWorkingCopies) {
-                if idsByDrive[roots[i], default: []].count < maxIDsPerCase { idsByDrive[roots[i], default: []].append(inputs[i].id) }
+                if inputs[i].protection.isProtected {
+                    stillCheckedByDrive[roots[i], default: 0] += 1
+                } else if idsByDrive[roots[i], default: []].count < maxIDsPerCase {
+                    idsByDrive[roots[i], default: []].append(inputs[i].id)
+                }
             }
         }
         let rows = inputs.map { r in
@@ -310,16 +346,18 @@ enum StewardCaseBuilder {
             c.driveConnected = isConnected(root, mountedRoots: mountedRoots)
             c.estimate = e
             c.recordIDs = idsByDrive[root] ?? []
+            c.stillCheckedOnDrive = stillCheckedByDrive[root] ?? 0
             out.append(c)
         }
         out.sort { $0.payoffBytes != $1.payoffBytes ? $0.payoffBytes > $1.payoffBytes : $0.id < $1.id }
-        return Array(out.prefix(maxCasesPerKind))
+        return limit(out, skipped: skipped)
     }
 
     // MARK: Reclaim space — one set of copies
 
     static func reclaimGroupCases(inputs: [StewardInput], roots: [String], groups: [UUID: [Int]],
-                                  online: (String) -> Bool, alsoCleanUpWorkingCopies: Bool) -> [StewardCase] {
+                                  online: (String) -> Bool, alsoCleanUpWorkingCopies: Bool,
+                                  skipped: [String: StewardFacts] = [:]) -> [StewardCase] {
         var out: [StewardCase] = []
         for (groupID, members) in groups {
             guard members.count > 1, let keeperIndex = members.first(where: { inputs[$0].isKeeper }) else { continue }
@@ -330,11 +368,14 @@ enum StewardCaseBuilder {
             var actionableByDrive: [String: Int64] = [:]
             var drives = Set<String>()
             var copies: [StewardCopy] = []
+            var stillCheckedByDrive: [String: Int] = [:]
+            var runRows: [StewardRunRow] = []
             for i in members {
                 let r = inputs[i]
                 let root = roots[i]
                 drives.insert(root)
                 total += max(0, r.sizeBytes)
+                let flowWouldCheck = root == keeperRoot || alsoCleanUpWorkingCopies
                 let standing: StewardCopyStanding
                 if r.isKeeper {
                     standing = .keeper
@@ -342,16 +383,28 @@ enum StewardCaseBuilder {
                     // In the set, but not marked as an extra copy (a
                     // "review" row): never proposed.
                     standing = .member
-                } else if r.protection.isProtected {
+                } else if r.protection.plannerRefuses {
                     protected += 1
                     standing = .protected(r.protection)
+                } else if r.protection.isProtected {
+                    // The steward's own restraint (the Angel's pick, filed
+                    // as Archived): never proposed, never counted as
+                    // reclaimable — but the planner does not refuse it.
+                    if flowWouldCheck {
+                        stillCheckedByDrive[root, default: 0] += 1
+                        if runRows.count < maxIDsPerCase { runRows.append(StewardRunRow(id: r.id, driveRoot: root)) }
+                        standing = .stillChecked(r.protection)
+                    } else {
+                        standing = .protected(r.protection)
+                    }
                 } else {
                     reclaimableCopies += 1
                     reclaimable += max(0, r.sizeBytes)
                     bytesByDrive[root, default: 0] += max(0, r.sizeBytes)
-                    if root == keeperRoot || alsoCleanUpWorkingCopies {
+                    if flowWouldCheck {
                         actionable += max(0, r.sizeBytes)
                         actionableByDrive[root, default: 0] += max(0, r.sizeBytes)
+                        if runRows.count < maxIDsPerCase { runRows.append(StewardRunRow(id: r.id, driveRoot: root)) }
                         standing = .wouldBeChecked
                     } else {
                         needMode += 1
@@ -370,7 +423,9 @@ enum StewardCaseBuilder {
                 .max { $0.value != $1.value ? $0.value < $1.value : $0.key > $1.key }?.key
             let keeperLabel = driveLabel(keeperRoot)
             let n = members.count
-            var c = StewardCase(id: "dup:" + groupID.uuidString, kind: .reclaimGroup,
+            // Keyed by the KEEPER's record id: a duplicate check renumbers
+            // the group every time, and a skip must survive that (QA F5).
+            var c = StewardCase(id: "dup:" + inputs[keeperIndex].id.uuidString, kind: .reclaimGroup,
                                 title: "\(n) copies over \(drives.count) drive\(drives.count == 1 ? "" : "s") · \(size(total))"
                                     + " · keep the one on \(keeperLabel) · reclaim \(size(reclaimable))",
                                 facts: StewardFacts(bytes: reclaimable, count: n))
@@ -387,10 +442,12 @@ enum StewardCaseBuilder {
             c.keeperID = inputs[keeperIndex].id
             c.copiesNeedingWorkingCopyMode = needMode
             c.protectedCopies = protected
+            c.stillCheckedOnDrive = target.flatMap { stillCheckedByDrive[$0] } ?? 0
+            c.runRows = runRows
             out.append(c)
         }
         out.sort(by: reclaimOrder)
-        return Array(out.prefix(maxCasesPerKind))
+        return limit(out, skipped: skipped)
     }
 
     /// What the flow would reclaim today first, then what could be, then id.
@@ -404,6 +461,7 @@ enum StewardCaseBuilder {
 
     static func footageCases(inputs: [StewardInput], roots: [String], groups: [UUID: [Int]],
                              online: (String) -> Bool, people: [StewardEventGuess.Person],
+                             skipped: [String: StewardFacts] = [:],
                              calendar: Calendar) -> [StewardCase] {
         var out: [StewardCase] = []
         // The day-precise span of each group, kept aside: the event guess
@@ -475,7 +533,7 @@ enum StewardCaseBuilder {
             if $0.payoffBytes != $1.payoffBytes { return $0.payoffBytes > $1.payoffBytes }
             return $0.id < $1.id
         }
-        var kept = Array(out.prefix(maxCasesPerKind))
+        var kept = limit(out, skipped: skipped)
         // Title precedence: the person's name, else the event guess, else
         // the description. Footage groups have nowhere to keep a name yet
         // (shown as a gap on the card) — `name` is nil until they do.
@@ -500,7 +558,7 @@ enum StewardCaseBuilder {
     // MARK: Probably not worth keeping
 
     static func junkCases(inputs: [StewardInput], roots: [String], clusters: [String: [Int]],
-                          online: (String) -> Bool) -> [StewardCase] {
+                          online: (String) -> Bool, skipped: [String: StewardFacts] = [:]) -> [StewardCase] {
         var out: [StewardCase] = []
         for (key, members) in clusters where members.count >= minJunkCluster {
             guard let first = members.first, let reason = inputs[first].junkReasonKey else { continue }
@@ -529,7 +587,7 @@ enum StewardCaseBuilder {
             if $0.payoffBytes != $1.payoffBytes { return $0.payoffBytes > $1.payoffBytes }
             return $0.id < $1.id
         }
-        return Array(out.prefix(maxCasesPerKind))
+        return limit(out, skipped: skipped)
     }
 
     /// The cluster key for a record's reasons: the first one that is not
@@ -636,7 +694,7 @@ enum StewardCaseBuilder {
         let directory = (r.fullPath as NSString).deletingLastPathComponent
         var folder = directory.hasPrefix(root) ? String(directory.dropFirst(root.count)) : directory
         while folder.hasPrefix("/") { folder.removeFirst() }
-        return StewardCopy(id: r.id, filename: r.filename, drive: driveLabel(root), folder: folder,
+        return StewardCopy(id: r.id, filename: r.filename, drive: driveLabel(root), driveRoot: root, folder: folder,
                            sizeBytes: r.sizeBytes, durationSeconds: r.durationSeconds, isOnline: online,
                            standing: standing)
     }
@@ -647,9 +705,10 @@ enum StewardCaseBuilder {
             switch s {
             case .keeper: return 0
             case .wouldBeChecked: return 1
-            case .keeperOnAnotherDrive: return 2
-            case .member: return 3
-            case .protected: return 4
+            case .stillChecked: return 2
+            case .keeperOnAnotherDrive: return 3
+            case .member: return 4
+            case .protected: return 5
             }
         }
         let wa = weight(a.standing), wb = weight(b.standing)
@@ -676,22 +735,28 @@ enum StewardCaseBuilder {
     /// A record's dates. `best`: the person's date when there is one (any
     /// precision — "1994" reads as 1 Jan 1994), else the inferred date,
     /// else the one in the file, else the file-system one. `dayPrecise`:
-    /// only a date known to the DAY — the person's full date, the date
-    /// written in the file, or an inferred date that is not a year range
-    /// and not a 1 January placeholder. A file-system date never counts
-    /// (it is usually the day the file was copied).
+    /// only a date known to the DAY — the person's full date, an inferred
+    /// date that is not a year range and not a 1 January placeholder, or
+    /// the date written in the file held to the SAME rules (QA F7): never
+    /// 1 January, and never as a stand-in when the inferred date is a
+    /// RANGE (the catalog has already said it only knows the years). A
+    /// file-system date never counts (usually the day the file was copied).
     nonisolated static func dates(userDate: String?, inferred: Date?, inferredIsARange: Bool,
                                   embedded: Date?, created: Date?, calendar: Calendar)
         -> (best: Date?, dayPrecise: Date?) {
         if let userDate, let parsed = parseUserDate(userDate, calendar: calendar) {
             return (parsed.date, parsed.isDayPrecise ? parsed.date : nil)
         }
-        if let inferred {
-            let c = calendar.dateComponents([.month, .day], from: inferred)
-            let placeholder = c.month == 1 && c.day == 1
-            return (inferred, inferredIsARange || placeholder ? embedded : inferred)
+        func isPlaceholder(_ d: Date) -> Bool {
+            let c = calendar.dateComponents([.month, .day], from: d)
+            return c.month == 1 && c.day == 1
         }
-        if let embedded { return (embedded, embedded) }
+        let embeddedDay = embedded.flatMap { isPlaceholder($0) ? nil : $0 }
+        if let inferred {
+            if inferredIsARange { return (inferred, nil) }
+            return (inferred, isPlaceholder(inferred) ? embeddedDay : inferred)
+        }
+        if let embedded { return (embedded, embeddedDay) }
         return (created, nil)
     }
 

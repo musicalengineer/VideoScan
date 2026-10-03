@@ -108,6 +108,20 @@ struct StewardEventGuessTests {
         #expect(guess(span(day(2004, 1, 2)), [yearEndBaby])?.text == "Jo's 3rd birthday", "30 December 2003 was three days back")
     }
 
+    /// QA F7: a 29 February birthday. In a year with no 29 February the
+    /// calendar puts the anniversary on 1 March — pinned, so a change in
+    /// that behaviour is seen.
+    @Test func aLeapDayBirthdayFallsOnTheFirstOfMarchInOtherYears() {
+        let leap = StewardEventGuess.Person(displayName: "Jo", birthYear: 2004, birthMonth: 2, birthDay: 29)
+        #expect(guess(span(day(2008, 2, 29)), [leap])?.text == "Jo's 4th birthday", "a leap year: the day itself")
+        #expect(guess(span(day(2005, 3, 1)), [leap])?.text == "Jo's 1st birthday", "2005 has no 29 February → 1 March")
+        #expect(guess(span(day(2005, 2, 26)), [leap])?.text == "Jo's 1st birthday", "three days before 1 March")
+        #expect(guess(span(day(2005, 2, 25)), [leap]) == nil, "four days before")
+        #expect(guess(span(day(2005, 3, 4)), [leap])?.text == "Jo's 1st birthday")
+        #expect(guess(span(day(2005, 3, 5)), [leap]) == nil)
+        #expect(guess(span(day(2004, 2, 29)), [leap])?.text == "the day Jo was born")
+    }
+
     @Test func nobodyOlderThanTheCapAndNobodyWithoutAName() {
         #expect(StewardEventGuess.maxAge == 110)
         let longAgo = StewardEventGuess.Person(displayName: "Alex", birthYear: 1850, birthMonth: 6, birthDay: 15)

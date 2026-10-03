@@ -55,26 +55,41 @@ enum StewardCaseKind: String, Sendable, Equatable, CaseIterable {
 
 /// Why the steward will never propose letting a file go (rule 2 of §5.6:
 /// one steward's cases are never another's loss).
+///
+/// TWO STRENGTHS (QA 2026-10-03, F1). `.archived` and `.archiveDrive` are
+/// refused by the Delete planner itself (`bulkDeleteRefusal`), so "never
+/// offered" is true of them whatever button is pressed. `.angel` and
+/// `.filedArchived` are the steward's OWN restraint: no card proposes them
+/// — but the Delete planner has no such guard, so a whole-drive cleanup
+/// would still check them. The card says exactly that, and counts them as
+/// rows of the run, never as copies that remain.
 enum StewardProtection: String, Sendable, Equatable {
     case none
-    /// A promoted copy, a file inside the Master Archive, or a file filed
-    /// as Archived in Triage.
+    /// A file of the Master Archive (the planner refuses it).
     case archived
-    /// Anywhere else on the Master Archive's drive (or a drive that cannot
-    /// be told apart from it right now).
+    /// Anywhere else on the Master Archive's drive, or a drive that cannot
+    /// be told apart from it right now (the planner refuses it).
     case archiveDrive
-    /// Archive Angel recommends it, or holds it in a prepared batch.
+    /// Filed as Archived in Triage, or an archive copy while no Master
+    /// Archive is designated — the steward's restraint only.
+    case filedArchived
+    /// Archive Angel recommends it, or holds it in a prepared batch — the
+    /// steward's restraint only.
     case angel
 
     var isProtected: Bool { self != .none }
 
-    /// The words on a copy's row.
+    /// The Delete planner itself refuses this file.
+    var plannerRefuses: Bool { self == .archived || self == .archiveDrive }
+
+    /// What it is, as the start of a sentence on the copy's row.
     var words: String {
         switch self {
         case .none: return ""
-        case .archived: return "in the archive — never offered"
-        case .archiveDrive: return "on the archive drive — never offered"
-        case .angel: return "Archive Angel has chosen it — never offered"
+        case .archived: return "In the archive"
+        case .archiveDrive: return "On the archive drive"
+        case .filedArchived: return "You filed this copy as Archived"
+        case .angel: return "Archive Angel has chosen this copy"
         }
     }
 }
@@ -88,9 +103,20 @@ enum StewardCopyStanding: Sendable, Equatable {
     /// The keeper is on another drive and "Also clean up working copies"
     /// is off — the flow leaves it alone.
     case keeperOnAnotherDrive
+    /// Not proposed, and the Delete duplicates flow would not check it
+    /// either (the planner refuses it, or the keeper is on another drive).
     case protected(StewardProtection)
+    /// Not proposed by any card — but the Delete duplicates flow on its
+    /// drive WOULD still check it (the Angel's pick, or filed as Archived).
+    case stillChecked(StewardProtection)
     /// Not a duplicate copy at all (a footage or junk row).
     case member
+}
+
+/// One copy a Delete duplicates run would decide: its record and drive.
+struct StewardRunRow: Sendable, Equatable {
+    var id: UUID
+    var driveRoot: String
 }
 
 /// One file on a card's evidence list.
@@ -99,6 +125,8 @@ struct StewardCopy: Sendable, Equatable, Identifiable {
     var filename: String
     /// "SanDisk"
     var drive: String
+    /// "/Volumes/SanDisk"
+    var driveRoot: String = ""
     /// The folder under the drive ("Tapes/2006"), "" at the top.
     var folder: String
     var sizeBytes: Int64
@@ -117,8 +145,11 @@ struct StewardFacts: Sendable, Equatable {
 }
 
 struct StewardCase: Sendable, Equatable, Identifiable {
-    /// Stable across launches: "drive:<root>", "dup:<group id>",
-    /// "footage:<group id>", "junk:<reason>|<drive root>".
+    /// Stable across launches and re-checks: "drive:<root>",
+    /// "dup:<the keeper's record id>" (a duplicate check gives the set a
+    /// new group id every time; its keeper is what stays),
+    /// "footage:<group id>" (the smallest member's record id by design —
+    /// FootageMembership.groupID), "junk:<reason>|<drive root>".
     var id: String
     var kind: StewardCaseKind
     /// The big line.
@@ -150,7 +181,15 @@ struct StewardCase: Sendable, Equatable, Identifiable {
     var keeperID: UUID?
     /// Copies the flow would leave alone because the keeper is elsewhere.
     var copiesNeedingWorkingCopyMode: Int = 0
+    /// Copies the Delete planner itself refuses (the archive, its drive).
     var protectedCopies: Int = 0
+    /// Copies on `driveRoot` that no card proposes but that drive's cleanup
+    /// would still check (the Angel's picks, filed as Archived).
+    var stillCheckedOnDrive: Int = 0
+    /// Every copy of the set a Delete duplicates run would decide, with its
+    /// drive — the WHOLE set, not the capped evidence rows (the proof's
+    /// "rows of the same run").
+    var runRows: [StewardRunRow] = []
 
     // Same footage
     var footageGroupID: UUID?

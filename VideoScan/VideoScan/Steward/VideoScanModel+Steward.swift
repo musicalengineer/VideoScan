@@ -17,11 +17,16 @@
 // decided HERE, per record, by the predicates the rest of the app already
 // uses. None is new:
 //
-//   archive copy / inside the archive ........ isArchiveElement(_:)
-//   the archive's whole drive, or a drive
-//   that cannot be told apart from it ........ bulkDeleteRefusal(_:volume:)
+//   REFUSED BY THE DELETE PLANNER TOO (`plannerRefuses`):
+//   a file of the Master Archive, the
+//   archive's whole drive, or a drive that
+//   cannot be told apart from it ............. bulkDeleteRefusal(_:volume:)
 //                                              with archiveVolumeProtection()
 //                                              (the Delete planner's own rule)
+//   THE STEWARD'S OWN RESTRAINT (the planner has no such guard — QA F1;
+//   the card says a drive's cleanup would still check these):
+//   an archive copy while no Master Archive
+//   is designated ............................ isArchiveElement(_:)
 //   filed as Archived in Triage .............. lifecycleStage == .archived
 //                                              (Triage's own table rule)
 //   Archive Angel recommends it, holds it in
@@ -65,12 +70,12 @@ extension VideoScanModel {
         let angel = archiveAngel.recommendations
         // Used and dropped within one pass, so a strong `self` is fine.
         return { r in
-            if self.isArchiveElement(r) || r.lifecycleStage == .archived { return .archived }
             switch self.bulkDeleteRefusal(r, volume: archiveDrive) {
             case .archiveTree?: return .archived
             case .archiveVolume?, .archiveVolumeUnprovable?: return .archiveDrive
             case nil: break
             }
+            if self.isArchiveElement(r) || r.lifecycleStage == .archived { return .filedArchived }
             if angel.preparedIDs.contains(r.id) || angel.candidateIDs.contains(r.id) || angel.promotedIDs.contains(r.id) {
                 return .angel
             }
@@ -97,11 +102,13 @@ extension VideoScanModel {
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let alsoCleanUp = duplicateKeeperSettings.alsoCleanUpWorkingCopies
         let people = stewardPeople()
+        // What was skipped, so the per-kind limit is spent on the rest.
+        let skipped = StewardSkipStore(defaults: stewardDefaults).snapshot()
         stewardTask = Task { [weak self] in
             let queue = await Task.detached(priority: .utility) {
                 StewardCaseBuilder.build(inputs: inputs, volumes: volumes,
                                          mountedRoots: VolumeReachability.currentMountedRoots(),
-                                         alsoCleanUpWorkingCopies: alsoCleanUp, people: people)
+                                         alsoCleanUpWorkingCopies: alsoCleanUp, people: people, skipped: skipped)
             }.value
             guard !Task.isCancelled, let self else { return }
             self.stewardSnapshot.publish(queue)

@@ -10,9 +10,11 @@
 //
 // Storage for the trial: UserDefaults, one key per case,
 // `steward.skipped.<caseID>`, whose value is the facts at the moment of the
-// skip ("v1|<bytes>|<count>"). The case id is stable across launches (the
-// drive root / duplicate group id / footage group id / junk reason +
-// drive). A value that cannot be read (another build's, a hand edit) is
+// skip ("v1|<bytes>|<count>"). The case id is chosen to outlive a re-check:
+// the drive root; a duplicate set's KEEPER record id (the group id is
+// renumbered by every duplicate check); the footage group id (the smallest
+// member's record id, by FootageMembership's design); the junk reason +
+// drive. A set whose keeper changes is a new case, and is shown again. A value that cannot be read (another build's, a hand edit) is
 // treated as "not skipped" — the case is shown again rather than hidden
 // forever — and never crashes. Keys of cases that no longer exist are left
 // behind; they are a few bytes each.
@@ -59,8 +61,24 @@ struct StewardSkipStore {
 
     /// Skipped, and the facts have not moved materially since.
     func isSkipped(_ c: StewardCase) -> Bool {
-        guard let then = rememberedFacts(caseID: c.id) else { return false }
-        return !Self.isMaterialChange(from: then, to: c.facts)
+        Self.isSkipped(c, remembered: rememberedFacts(caseID: c.id))
+    }
+
+    nonisolated static func isSkipped(_ c: StewardCase, remembered: StewardFacts?) -> Bool {
+        guard let remembered else { return false }
+        return !isMaterialChange(from: remembered, to: c.facts)
+    }
+
+    /// Everything remembered, by case id — a Sendable copy for the case
+    /// builder, so its per-kind limit is spent on what is NOT skipped.
+    /// One pass over the defaults' keys; unreadable values are left out.
+    func snapshot() -> [String: StewardFacts] {
+        var out: [String: StewardFacts] = [:]
+        for (key, value) in defaults.dictionaryRepresentation() where key.hasPrefix(Self.keyPrefix) {
+            guard let raw = value as? String, let facts = Self.decode(raw) else { continue }
+            out[String(key.dropFirst(Self.keyPrefix.count))] = facts
+        }
+        return out
     }
 
     /// The queue, split: what to show, and what was skipped (same order).

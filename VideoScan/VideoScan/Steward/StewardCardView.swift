@@ -134,7 +134,7 @@ struct StewardCardView: View {
             line(ReclaimableEstimate.survivalRule)
             line(StewardGroupEvidence.keeperCaveat, faint: true)
             if item.protectedCopies > 0 {
-                line("\(item.protectedCopies) cop\(item.protectedCopies == 1 ? "y is" : "ies are") in the archive's care and never offered.", faint: true)
+                line("\(item.protectedCopies) cop\(item.protectedCopies == 1 ? "y is" : "ies are") in the archive or on its drive and never offered.", faint: true)
             }
         }
         .accessibilityIdentifier("steward.card.evidence")
@@ -216,7 +216,7 @@ struct StewardCardView: View {
                 }
                 Spacer(minLength: 0)
             }
-            if let words = standingWords(copy) {
+            if let words = StewardStandingWords.words(for: copy, proof: evidence?.proofs?[copy.id]) {
                 Text(words)
                     .font(.system(size: 13))
                     .foregroundStyle(copy.standing == .keeper ? Color.primary : Color.secondary)
@@ -226,29 +226,20 @@ struct StewardCardView: View {
         }
     }
 
-    private func standingWords(_ copy: StewardCopy) -> String? {
-        switch copy.standing {
-        case .keeper:
-            return "The one to keep."
-        case .wouldBeChecked:
-            if let proof = evidence?.proofs?[copy.id] {
-                return (["If this copy goes, \(proof.remainLine).", proof.outcomeLine] + [proof.caveatLine].compactMap { $0 })
-                    .joined(separator: " ")
-            }
-            return "Delete duplicates on \(copy.drive) would check this copy."
-        case .keeperOnAnotherDrive:
-            return "Left alone for now — the copy to keep is on another drive."
-        case .protected(let why):
-            return why.words.prefix(1).uppercased() + why.words.dropFirst() + "."
-        case .member:
-            return nil
-        }
-    }
-
     // MARK: Do it / skip
 
     private var buttons: some View {
         VStack(alignment: .leading, spacing: 6) {
+            // Said ABOVE the Delete button: the drive's cleanup is wider
+            // than this card (QA 2026-10-03, F1).
+            if item.kind == .reclaimDrive || item.kind == .reclaimGroup,
+               let caution = StewardActionGate.stillCheckedCaution(item.stillCheckedOnDrive) {
+                Label(caution, systemImage: "exclamationmark.triangle.fill")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("steward.card.caution")
+            }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { actionButtons }
                 VStack(alignment: .leading, spacing: 8) { actionButtons }
@@ -297,12 +288,12 @@ struct StewardCardView: View {
         case .junk:
             button("Review these below", "arrow.down.to.line", ColorActionButton.Palette.showInCatalog,
                    id: "steward.action.reviewBelow", enabled: true,
-                   help: "Shows just these files in the table below, selected, so you can keep them or mark them",
+                   help: "Shows just these files in the table below. Nothing is selected or changed — pick the ones you mean, then keep them or mark them",
                    action: actions.reviewBelow)
         }
         if isSkipped {
             button("Bring back", "arrow.uturn.backward", .secondary, id: "steward.action.bringBack", enabled: true,
-                   help: "Put this back in the queue", action: actions.bringBack)
+                   help: "Put this back among the suggestions", action: actions.bringBack)
         } else {
             button("Skip", "forward.end", .secondary, id: "steward.action.skip", enabled: true,
                    help: "Not now. It stays away until its files or its size change by a tenth or more.",

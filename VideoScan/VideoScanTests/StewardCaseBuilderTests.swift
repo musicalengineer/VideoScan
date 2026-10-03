@@ -46,9 +46,9 @@ private func day(_ y: Int, _ m: Int, _ d: Int) -> Date {
 }
 
 private func build(_ inputs: [StewardInput], crossMode: Bool = false,
-                   people: [StewardEventGuess.Person] = []) -> StewardQueue {
+                   people: [StewardEventGuess.Person] = [], skipped: [String: StewardFacts] = [:]) -> StewardQueue {
     StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted,
-                             alsoCleanUpWorkingCopies: crossMode, people: people, calendar: utc)
+                             alsoCleanUpWorkingCopies: crossMode, people: people, skipped: skipped, calendar: utc)
 }
 
 private func keeper(_ path: String, _ g: UUID, bytes: Int64 = GB) -> StewardInput {
@@ -109,7 +109,8 @@ struct StewardCaseBuilderLogicTests {
         let q = build([k, extra("/Volumes/SanDisk/b/copy1.mov", g), extra("/Volumes/SanDisk/c/copy2.mov", g)])
         let set = try #require(q.cases.first { $0.kind == .reclaimGroup })
         let size = { (b: Int64) in ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
-        #expect(set.id == "dup:" + g.uuidString)
+        #expect(set.id == "dup:" + k.id.uuidString, "keyed by the keeper's record id (QA F5)")
+        #expect(set.duplicateGroupID == g)
         #expect(set.title == "3 copies over 1 drive · \(size(3 * GB)) · keep the one on SanDisk · reclaim \(size(2 * GB))")
         #expect(set.payoffBytes == 2 * GB && set.actionableBytes == 2 * GB)
         #expect(set.facts == StewardFacts(bytes: 2 * GB, count: 3))
@@ -221,6 +222,13 @@ struct StewardCaseBuilderLogicTests {
         #expect(d(nil, day(2001, 5, 6), true, nil, nil, utc).dayPrecise == nil, "an inferred year RANGE is not a day")
         #expect(d(nil, day(2001, 1, 1), false, nil, nil, utc).dayPrecise == nil, "1 January is a year placeholder")
         #expect(d(nil, nil, false, day(2010, 7, 4), nil, utc).dayPrecise == day(2010, 7, 4), "the date written in the file")
+        // QA F7: the date in the file is held to the same rules when it stands in.
+        #expect(d(nil, day(2001, 5, 6), true, day(2001, 5, 6), nil, utc).dayPrecise == nil,
+                "an inferred RANGE never falls back to the file's date")
+        #expect(d(nil, day(2001, 1, 1), false, day(2001, 8, 9), nil, utc).dayPrecise == day(2001, 8, 9),
+                "a 1 January placeholder may fall back to a real day in the file")
+        #expect(d(nil, day(2001, 1, 1), false, day(2001, 1, 1), nil, utc).dayPrecise == nil, "…but not to another 1 January")
+        #expect(d(nil, nil, false, day(2010, 1, 1), nil, utc).dayPrecise == nil, "1 January in the file is a placeholder too")
         let copied = d(nil, nil, false, nil, day(2020, 3, 3), utc)
         #expect(copied.best == day(2020, 3, 3) && copied.dayPrecise == nil, "a file-system date is never day-precise")
     }
@@ -382,29 +390,43 @@ struct StewardWordsTests {
         c.copies = [StewardCopy(id: UUID(), filename: "alex party.mov", drive: "SanDisk", folder: "Tapes/Alex",
                                 sizeBytes: GB, durationSeconds: 60, isOnline: true, standing: .member)]
         let line = StewardLog.line(.shown, c)
-        #expect(line.hasPrefix("Steward: shown — Same footage [footage \(g.uuidString.prefix(8))] · 12 files · "))
+        #expect(line.hasPrefix("Tidy suggestions: shown — Same footage [footage \(g.uuidString.prefix(8))] · 12 files · "))
         #expect(!line.contains("Alex") && !line.contains("alex") && !line.contains("Tapes"))
 
         var d = StewardCase(id: "drive:/Volumes/SanDisk", kind: .reclaimDrive, title: "t", facts: StewardFacts(bytes: GB, count: 1))
         d.driveLabel = "SanDisk"
         #expect(StewardLog.line(.acted, d, action: "Show these in the Catalog")
-                == "Steward: acted — Reclaim space [drive SanDisk] · 1 file · \(ByteCountFormatter.string(fromByteCount: GB, countStyle: .file)) · Show these in the Catalog")
-        #expect(StewardLog.line(.skipped, d).hasPrefix("Steward: skipped — "))
-        #expect(StewardLog.line(.broughtBack, d).hasPrefix("Steward: brought back — "))
+                == "Tidy suggestions: acted — Reclaim space [drive SanDisk] · 1 file · \(ByteCountFormatter.string(fromByteCount: GB, countStyle: .file)) · Show these in the Catalog")
+        #expect(StewardLog.line(.skipped, d).hasPrefix("Tidy suggestions: skipped — "))
+        #expect(StewardLog.line(.broughtBack, d).hasPrefix("Tidy suggestions: brought back — "))
     }
 
     @Test func aProofReadsAsWhoRemainsAndWhatWouldHappen() {
         let id = UUID()
         let three = StewardCopyProof(copyID: id, remaining: 3, counted: ["keeper on LaCie", "archive copy on FamilyArchive", "sibling b.mov on X9"],
-                                     notCounted: 0, tier: .permanent, hadStoredDigest: true)
+                                     notCounted: 0, tier: .permanent, hadStoredDigest: true, tierIfTheyMatch: .permanent)
         #expect(three.remainLine == "3 verified copies would remain: keeper on LaCie, archive copy on FamilyArchive, sibling b.mov on X9")
         #expect(three.outcomeLine == "It would be deleted outright." && three.caveatLine == nil)
-        let two = StewardCopyProof(copyID: id, remaining: 2, counted: ["keeper on LaCie", "sibling"], notCounted: 1, tier: .trash, hadStoredDigest: true)
-        #expect(two.outcomeLine == "It would go to the Trash, not be deleted.")
-        #expect(two.caveatLine == "1 other copy could not be counted yet — the run reads them if it needs to.")
-        let one = StewardCopyProof(copyID: id, remaining: 1, counted: ["keeper on LaCie"], notCounted: 0, tier: nil, hadStoredDigest: false)
-        #expect(one.remainLine == "1 verified copy would remain: keeper on LaCie" && one.outcomeLine == "It would be left alone.")
-        #expect(one.caveatLine?.contains("has not been read yet") == true)
+        // QA F2: an outcome is flat ONLY when nothing was left uncounted.
+        let two = StewardCopyProof(copyID: id, remaining: 2, counted: ["keeper on LaCie", "sibling"], notCounted: 1, tier: .trash,
+                                   hadStoredDigest: true, tierIfTheyMatch: .trash)
+        #expect(two.outcomeLine == "As things stand, it would go to the Trash, not be deleted.")
+        #expect(two.caveatLine == "1 other copy was not counted — not connected, different, or part of the same cleanup.")
+        let reads = StewardCopyProof(copyID: id, remaining: 2, counted: ["keeper on LaCie", "sibling"], notCounted: 1, tier: .trash,
+                                     hadStoredDigest: true, readsFirst: 1, tierIfTheyMatch: .permanent)
+        #expect(reads.outcomeLine == "The run reads 1 more copy first; if it matches, this copy would be deleted outright.")
+        #expect(reads.caveatLine == nil)
+        let twoReads = StewardCopyProof(copyID: id, remaining: 1, counted: ["keeper on LaCie"], notCounted: 2, tier: nil,
+                                        hadStoredDigest: true, readsFirst: 2, tierIfTheyMatch: .permanent)
+        #expect(twoReads.outcomeLine == "The run reads 2 more copies first; if they match, this copy would be deleted outright.")
+        let unread = StewardCopyProof(copyID: id, remaining: 1, counted: ["keeper on LaCie"], notCounted: 1, tier: nil,
+                                      hadStoredDigest: false, readsFirst: 1, tierIfTheyMatch: .trash)
+        #expect(unread.remainLine == "1 verified copy would remain: keeper on LaCie")
+        #expect(unread.outcomeLine == "The run reads this copy first; if the other copy matches, it would go to the Trash, not be deleted.")
+        let alone = StewardCopyProof(copyID: id, remaining: 1, counted: ["keeper on LaCie"], notCounted: 0, tier: nil, hadStoredDigest: false)
+        #expect(alone.outcomeLine == "The run reads this copy first; as things stand only the keeper would remain, so it would be left alone.")
+        let flat = StewardCopyProof(copyID: id, remaining: 1, counted: ["keeper on LaCie"], notCounted: 0, tier: nil, hadStoredDigest: true)
+        #expect(flat.outcomeLine == "It would be left alone.", "nothing uncounted, nothing to read: a flat outcome is honest")
     }
 }
 
@@ -422,6 +444,13 @@ struct StewardSkipStoreTests {
         }
         defer { defaults.removePersistentDomain(forName: name) }
         body(StewardSkipStore(defaults: defaults), defaults)
+    }
+
+    private func withStoreThrowing(_ body: (StewardSkipStore, UserDefaults) throws -> Void) throws {
+        let name = "steward-tests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        try body(StewardSkipStore(defaults: defaults), defaults)
     }
 
     private func item(_ id: String = "dup:A", bytes: Int64 = 10 * GB, count: Int = 4) -> StewardCase {
@@ -491,6 +520,47 @@ struct StewardSkipStoreTests {
             // A skip after the poison writes a good value over it.
             store.skip(a)
             #expect(store.isSkipped(a))
+        }
+    }
+
+    /// QA F4: the per-kind limit must not be spent on skipped cases.
+    @Test func skippingTheFirstTwentyFiveSetsBringsTheNextOnesForward() {
+        withStore { store, _ in
+            var inputs: [StewardInput] = []
+            for i in 0..<30 {
+                let g = UUID()
+                inputs.append(keeper("/Volumes/SanDisk/k\(i).mov", g))
+                inputs.append(extra("/Volumes/SanDisk/c\(i).mov", g, bytes: Int64(100 - i) * GB))
+            }
+            let first = store.partition(build(inputs).cases).active.filter { $0.kind == .reclaimGroup }
+            #expect(first.count == StewardCaseBuilder.maxCasesPerKind)
+            first.forEach(store.skip)
+            // The model hands the builder what was skipped (`snapshot`).
+            #expect(store.snapshot().count == 25)
+            let after = store.partition(build(inputs, skipped: store.snapshot()).cases)
+            #expect(after.active.filter { $0.kind == .reclaimGroup }.count == 5, "the five sets behind the limit come forward")
+            #expect(after.skipped.filter { $0.kind == .reclaimGroup }.count == 25, "…and the skipped ones can still be brought back")
+            // A skipped set whose facts moved materially is not "skipped" to the limit either.
+            var moved = inputs
+            moved[1].sizeBytes *= 3
+            let again = store.partition(build(moved, skipped: store.snapshot()).cases)
+            #expect(again.active.filter { $0.kind == .reclaimGroup }.count == 6)
+        }
+    }
+
+    /// QA F5: every duplicate check gives a set a new group id; the skip
+    /// must follow the set (its keeper), not the number.
+    @Test func aSkippedSetStaysSkippedWhenTheDuplicateCheckRenumbersItsGroup() throws {
+        try withStoreThrowing { store, _ in
+            let before = UUID(), after = UUID()
+            var inputs = [keeper("/Volumes/SanDisk/k.mov", before), extra("/Volumes/SanDisk/c.mov", before)]
+            let set = try #require(build(inputs).cases.first { $0.kind == .reclaimGroup })
+            store.skip(set)
+            for i in inputs.indices { inputs[i].duplicateGroupID = after }
+            let again = try #require(build(inputs).cases.first { $0.kind == .reclaimGroup })
+            #expect(again.id == set.id, "the case id moved with the group number")
+            #expect(store.isSkipped(again))
+            #expect(again.id == "dup:" + inputs[0].id.uuidString, "keyed by the keeper's record id")
         }
     }
 

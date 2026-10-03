@@ -71,7 +71,7 @@ struct StewardPaneView: View {
     static let nextUpRows = 7
     static let expandedHeight: CGFloat = 330
 
-    private var skipStore: StewardSkipStore { StewardSkipStore(defaults: .standard) }
+    private var skipStore: StewardSkipStore { StewardSkipStore(defaults: model.stewardDefaults) }
 
     /// The list on screen: the queue, or the skipped cases.
     private var visible: [StewardCase] { showSkipped ? skipped : active }
@@ -152,7 +152,7 @@ struct StewardPaneView: View {
                 .accessibilityIdentifier("steward.pane.showSkipped")
             }
             Button("What the catalog knows…") {
-                AnalyzeWindowOpener.open(using: openWindow, source: "steward")
+                AnalyzeWindowOpener.open(using: openWindow, source: "triage-suggestions")
             }
             .buttonStyle(.link)
             .font(.system(size: 14))
@@ -325,12 +325,16 @@ struct StewardPaneView: View {
                 skipStore.skip(c)
                 focusedID = nil
                 repartition()
+                // Rebuild so the next one behind the per-kind limit comes
+                // forward (QA F4).
+                model.scheduleStewardRefresh()
             },
             bringBack: {
                 note(.broughtBack, c)
                 skipStore.bringBack(caseID: c.id)
                 focusedID = nil
                 repartition()
+                model.scheduleStewardRefresh()
             })
     }
 
