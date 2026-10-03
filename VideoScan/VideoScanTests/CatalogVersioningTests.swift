@@ -260,6 +260,17 @@ struct CatalogUnknownKeyPreservationTests {
         #expect(same(snapTop["futureScalar"], 42))
         let rec = try #require((snapTop["records"] as? [[String: Any]])?.first { $0["id"] as? String == fixedID1 })
         #expect(same(rec["futureList"], ["one", "two"]))
+
+        // ASYNC snapshot — its own payload (codex cycle #29 predicted that
+        // dropping unknownTopLevel from writeSnapshotAsync alone survives:
+        // the async-snapshot suites check refusal, not content).
+        let snapAsync = dir.appendingPathComponent("catalog.pre-test-async.json").path
+        #expect(await store.writeSnapshotAsync(records: records, toPath: snapAsync))
+        let asyncSnapTop = try jsonObject(Data(contentsOf: URL(fileURLWithPath: snapAsync)))
+        #expect(same(asyncSnapTop["futureScalar"], 42), "writeSnapshotAsync dropped a top-level unknown key")
+        #expect(same(asyncSnapTop["futureTopLevel"], expectedTopUnknowns["futureTopLevel"]))
+        let asyncSnapRec = try #require((asyncSnapTop["records"] as? [[String: Any]])?.first { $0["id"] as? String == fixedID1 })
+        #expect(same(asyncSnapRec["futureList"], ["one", "two"]))
     }
 
     @Test("live reload carries an external writer's new unknown keys onto in-memory records")
@@ -732,8 +743,13 @@ struct CatalogKeySnapshotSensorTests {
         // the encode and before the write (codex cycle #28 #1). `gate` is a
         // required parameter, so every call site carries it.
         let writer = try #require(Self.methodBody("nonisolated private static func encodeAndWrite(", in: src))
+        let encode = try #require(writer.range(of: "payload.encoded(using:"), "encodeAndWrite no longer encodes via payload.encoded(using:)")
         let check = try #require(writer.range(of: "gate.writeHold()"), "encodeAndWrite lost its last-moment newer-catalog check")
         let write = try #require(writer.range(of: "data.write(to:"))
+        // Both sides pinned (codex cycle #29 predicted a surviving mutation):
+        // moved BEFORE the encode, the check still precedes the write but the
+        // window it closes grows by the whole encode time (seconds at 73 MB).
+        #expect(encode.lowerBound < check.lowerBound, "the newer-catalog check must run AFTER the encode (as late as possible)")
         #expect(check.lowerBound < write.lowerBound, "the newer-catalog check must run BEFORE the bytes land")
         #expect(writer.contains("gate: CatalogWriteGate,"), "gate must stay a required parameter")
         // load() never rotates (.prev copy) a newer catalog.
@@ -962,6 +978,41 @@ struct CatalogVersionProbeDepthTests {
         try Data(json.utf8).write(to: catalogURL(dir))
         #expect(CatalogSnapshot.headerProbe(at: catalogURL(dir))?.version == CatalogSnapshot.currentVersion + 1)
         #expect(CatalogSnapshot.headerProbe(at: catalogURL(dir))?.generation == 2)
+    }
+
+    @Test("escaped header keys: \"vers\\u0069on\" at the top level IS the catalog's version (head and tail); the same spelling inside a record is not")
+    func escapedHeaderKeysRecognised() throws {
+        // codex cycle #29 predicted that dropping the escape decoding in
+        // slot(forKeyBytes:) would survive: the fixtures escaped VALUES, not
+        // header KEYS. python json.dumps(ensure_ascii=True) never escapes
+        // ASCII, but any writer MAY spell a key this way and Foundation
+        // reads it as "version".
+        let dir = scratch("probe_esc")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let future = CatalogSnapshot.currentVersion + 1
+        // Head window.
+        let head = #"{"version":\#(future),"generation":3,"records":[{"id":"\#(fixedID1)","version":1}]}"#
+        try Data(head.utf8).write(to: catalogURL(dir))
+        var p = try #require(CatalogSnapshot.headerProbe(at: catalogURL(dir)))
+        #expect(p.version == future && p.generation == 3, "escaped header keys in the head: \(p)")
+        let before = everyFile(dir)
+        let s1 = CatalogStore(directory: dir)
+        #expect(s1.saveNow(records: []) == false, "an escaped top-level \"version\" is still the catalog's version")
+        #expect(everyFile(dir) == before)
+        s1.relinquishLock()
+        // Tail window (backward pass), keys after > 4 KB of records.
+        let pad = String(repeating: "p", count: 6000)
+        let tail = #"{"padA":"\#(pad)","records":[{"id":"\#(fixedID1)","version":1}],"generation":4,"version":\#(future)}"#
+        try Data(tail.utf8).write(to: catalogURL(dir))
+        p = try #require(CatalogSnapshot.headerProbe(at: catalogURL(dir)))
+        #expect(p.version == future && p.generation == 4, "escaped header keys in the tail: \(p)")
+        // Decoy: the escaped spelling ONLY at depth 2; a plain current
+        // version at the top — this file is ours to write.
+        let decoy = #"{"version":\#(CatalogSnapshot.currentVersion),"generation":1,"records":[{"id":"\#(fixedID1)","version":\#(future)}]}"#
+        try Data(decoy.utf8).write(to: catalogURL(dir))
+        #expect(CatalogSnapshot.headerProbe(at: catalogURL(dir))?.version == CatalogSnapshot.currentVersion)
+        let s2 = CatalogStore(directory: dir)
+        #expect(s2.saveNow(records: s2.load()), "a record's escaped \"version\" must not hold the catalog")
     }
 
     @Test("our own encoder's header still probes at once, and a v0 file (no version key) still reads as old")
