@@ -99,6 +99,13 @@ struct TriageView: View {
     @State private var analysisSummary: MediaAnalyzer.AnalysisSummary?
     @State private var showAnalysisSummary = false
 
+    // The steward pane's "Review these below" (trial UI, 2026-10-03;
+    // design §5.6): the table shows JUST these records, selected, until
+    // "Show everything" — a view state like the search field, nothing
+    // stored. Empty = the table as it always was.
+    @State private var stewardReviewIDs: Set<UUID> = []
+    @State private var stewardReviewLabel: String = ""
+
     // Delete-Junk sheet state — mirror of the catalog-toolbar pattern in
     // CatalogHelpers.swift. Users naturally expect to tag-then-delete in
     // the same view, so we expose the same workflow here.
@@ -170,9 +177,13 @@ struct TriageView: View {
     private var filteredRecords: [VideoRecord] {
         // One pass through the shared TriageFilter.matches(_:) predicate;
         // .all keeps its no-copy short-circuit from the old switch.
-        let base: [VideoRecord] = selectedFilter == .all
+        let filtered: [VideoRecord] = selectedFilter == .all
             ? triageRecords
             : triageRecords.filter { selectedFilter.matches($0) }
+        // The steward pane's "Review these below" narrows to its records.
+        let base: [VideoRecord] = stewardReviewIDs.isEmpty
+            ? filtered
+            : filtered.filter { stewardReviewIDs.contains($0.id) }
 
         // Apply the "Online volumes only" toggle BEFORE the search filter
         // so the search runs over the smaller set. The reachability check
@@ -344,10 +355,21 @@ struct TriageView: View {
 
     private var mainContent: some View {
         VStack(spacing: 0) {
+            // The content steward's pane (trial UI, 2026-10-03; design
+            // §5.6): what would tidy the catalog most, one case at a time.
+            // Collapsible; everything below it is the Triage tab as before.
+            StewardPaneView(snapshot: model.stewardSnapshot,
+                            coverage: model.analyzeCoverageSnapshot,
+                            onReviewBelow: { ids, label in reviewFromSteward(ids, label: label) })
+
             toolbar
 
             if let summary = analysisSummary, showAnalysisSummary {
                 analysisBanner(summary)
+            }
+
+            if !stewardReviewIDs.isEmpty {
+                stewardReviewBanner
             }
 
             Divider()
@@ -1010,6 +1032,47 @@ struct TriageView: View {
         // added, they'll see it there too — workspaceActive is true.
         selectedIDs = [rec.id]
         model.focusedMediaIDs = model.focusSet(for: rec.id)
+    }
+
+    // MARK: - Steward review (trial UI, 2026-10-03)
+
+    /// "Review these below" on a steward card: show just those records in
+    /// the table — every disposition, no search — with NOTHING selected
+    /// (QA 2026-10-03, F3: one click on Junk must never mark a whole
+    /// cluster by accident; the person selects what they mean). Nothing is
+    /// changed.
+    private func reviewFromSteward(_ ids: Set<UUID>, label: String) {
+        selectedFilter = .all
+        searchText = ""
+        stewardReviewIDs = ids
+        stewardReviewLabel = label
+        selectedIDs = []
+    }
+
+    private var stewardReviewBanner: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                .foregroundColor(.accentColor)
+            Text("Showing \(stewardReviewLabel)")
+                .font(.system(size: 13, weight: .medium))
+                .lineLimit(1)
+            if showOnlineOnly {
+                Text("· files on drives that are not connected are hidden")
+                    .font(.system(size: 12))
+                    .foregroundColor(.secondary)
+            }
+            Spacer()
+            Button("Show everything") {
+                stewardReviewIDs = []
+                stewardReviewLabel = ""
+                selectedIDs = []
+            }
+            .accessibilityIdentifier("steward.review.showEverything")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 6)
+        .background(Color.accentColor.opacity(0.08))
+        .accessibilityIdentifier("steward.review.banner")
     }
 
     // MARK: - Analysis

@@ -117,8 +117,12 @@ struct CatalogDuplicatesMenuStructureTests {
         #expect(!src.contains("Menu(\"Delete Duplicates on Volume"))
         #expect(!src.contains("onDeleteDuplicates"))
         #expect(!src.contains("onChooseVolumeToDelete"), "Delete left the toolbar for the Storage tab (2026-10-02)")
+        // 2026-10-03: the card opens the shared front door
+        // (DeleteDuplicatesFlow.swift), which presents the picker.
         let card = code(try appSource("StorageReclaimableCard.swift"))
-        #expect(card.contains("DeleteDuplicatesVolumePicker("), "the Storage card reuses the picker")
+        #expect(card.contains(".deleteDuplicatesFlow(picker: $picker"), "the Storage card opens the shared Delete front door")
+        let flow = code(try appSource("DeleteDuplicatesFlow.swift"))
+        #expect(flow.contains("DeleteDuplicatesVolumePicker("), "the front door reuses the picker")
     }
 
     /// The picker's choice becomes the confirmation only from onDismiss —
@@ -132,10 +136,12 @@ struct CatalogDuplicatesMenuStructureTests {
         // The only place that raises the alert is the helper.
         #expect(src.components(separatedBy: "showDeleteDuplicatesConfirm = true").count - 1 == 1)
 
-        let card = code(try appSource("StorageReclaimableCard.swift"))
-        #expect(card.contains(".sheet(item: $picker, onDismiss: {"))
-        #expect(card.contains("prepareConfirmation(path: vol.path, count: vol.count)"))
-        #expect(card.components(separatedBy: "showConfirm = true").count - 1 == 1)
+        // The Storage card's flow lives in the shared front door since
+        // 2026-10-03 (also opened by the Triage tab's steward pane).
+        let flow = code(try appSource("DeleteDuplicatesFlow.swift"))
+        #expect(flow.contains(".sheet(item: $picker, onDismiss: {"))
+        #expect(flow.contains("prepareConfirmation(path: vol.path, count: vol.count)"))
+        #expect(flow.components(separatedBy: "showConfirm = true").count - 1 == 1)
     }
 
     /// The picker's preselection: this drive first (when it has deletable
