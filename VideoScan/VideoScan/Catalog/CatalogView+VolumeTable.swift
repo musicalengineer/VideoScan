@@ -588,15 +588,21 @@ extension CatalogView {
                     Label("Backfill All Volume Names", systemImage: "arrow.triangle.2.circlepath")
                 }
             }
+            // Forget catalog records — never files on disk (wording: Rick
+            // 2026-10-03). Both branches plan at the gesture and confirm
+            // first; the multi-select branch used to remove on the spot
+            // with no dialog.
             Button(role: .destructive, action: {
                 if single {
                     presentDeleteVolumeCatalog(for: first)
                 } else {
-                    for t in targets { model.deleteCatalogForTarget(t) }
+                    presentDeleteVolumesCatalog(for: targets)
                 }
             }) {
-                Label("Delete Catalog", systemImage: "trash")
+                Label(RemoveFromCatalogWording.contextMenuTitle(volumeCount: targets.count),
+                      systemImage: "xmark.bin")
             }
+            .help(RemoveFromCatalogWording.contextMenuHelp)
             if targets.contains(where: { $0.status == .complete || $0.status == .stopped || $0.status == .error }) {
                 Button(action: {
                     for t in targets { model.resetTarget(t) }

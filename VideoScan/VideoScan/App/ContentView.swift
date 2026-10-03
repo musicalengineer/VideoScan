@@ -485,6 +485,10 @@ struct CatalogView: View {
     /// made at the gesture (codex #1417). nil = no alert. See
     /// `presentDeleteVolumeCatalog(for:)` in CatalogView+ScanTargetsPane.
     @State var deleteVolumeCatalogPrompt: DeleteVolumeCatalogPrompt?
+    /// The multi-select "Forget Records for N Volumes…" confirmation — one
+    /// plan per selected volume, made at the gesture. nil = no alert. See
+    /// `presentDeleteVolumesCatalog(for:)` in CatalogView+ScanTargetsPane.
+    @State var deleteVolumesCatalogPrompt: DeleteVolumesCatalogPrompt?
     /// Selected volume IDs in the scan volumes table.
     @State var selectedVolumeIDs: Set<UUID> = []
     /// Per-volume aggregate cache (file count, error count, byte sum,
@@ -1144,6 +1148,24 @@ struct CatalogView: View {
         ) { prompt in
             Button(prompt.confirmButtonTitle, role: .destructive) {
                 confirmDeleteVolumeCatalog(prompt)
+            }
+            Button("Cancel", role: .cancel) { }
+        } message: { prompt in
+            Text(prompt.message)
+        }
+        // Several volumes at once (volume-table multi-select, Rick
+        // 2026-10-03): same contract — the plans made at the gesture are
+        // what the message counts and what the button applies.
+        .alert(
+            RemoveFromCatalogWording.alertTitle,
+            isPresented: Binding(
+                get: { deleteVolumesCatalogPrompt != nil },
+                set: { if !$0 { deleteVolumesCatalogPrompt = nil } }
+            ),
+            presenting: deleteVolumesCatalogPrompt
+        ) { prompt in
+            Button(prompt.confirmButtonTitle, role: .destructive) {
+                confirmDeleteVolumesCatalog(prompt)
             }
             Button("Cancel", role: .cancel) { }
         } message: { prompt in

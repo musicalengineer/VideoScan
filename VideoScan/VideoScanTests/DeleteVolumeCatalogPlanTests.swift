@@ -388,8 +388,8 @@ struct DeleteVolumeCatalogPlanTests {
     @Test func bothDeleteGesturesRouteThroughThePlanningPresenter() throws {
         let pane = try SourceTree.appSource(named: "CatalogView+ScanTargetsPane.swift")
         let table = try SourceTree.appSource(named: "CatalogView+VolumeTable.swift")
-        #expect(pane.contains("presentDeleteVolumeCatalog(for: target)"), "Catalog Options › Delete row")
-        #expect(table.contains("presentDeleteVolumeCatalog(for: first)"), "volume context menu › Delete Catalog (single)")
+        #expect(pane.contains("presentDeleteVolumeCatalog(for: target)"), "Catalog Options › Remove from Catalog row")
+        #expect(table.contains("presentDeleteVolumeCatalog(for: first)"), "volume context menu › Forget This Volume's Records… (single)")
         for stale in ["deleteVolumeCatalogTarget", "showDeleteVolumeCatalogConfirm"] {
             #expect(!pane.contains(stale) && !table.contains(stale),
                     "\(stale) is the pre-#1417 target-only state; must be gone")
@@ -402,7 +402,8 @@ struct DeleteVolumeCatalogPlanTests {
                                      recordIDs: [UUID(), UUID()],
                                      keptCoveredByOtherTargets: 1, revision: 7)
         let fresh = DeleteVolumeCatalogPrompt(target: target, plan: plan, replacedStalePlan: nil)
-        #expect(fresh.message.contains("Delete 2 catalog record(s)"))
+        #expect(fresh.message.contains("Forget 2 catalog record(s) for "))
+        #expect(!fresh.message.contains("Delete"), "one verb: title, button and body all say Forget")
         #expect(fresh.message.contains("1 record(s) under this path also belong to another scan target"))
         #expect(!fresh.message.contains("changed while this was open"))
 
@@ -410,7 +411,7 @@ struct DeleteVolumeCatalogPlanTests {
                                       recordIDs: [UUID()], keptCoveredByOtherTargets: 0, revision: 5)
         let replan = DeleteVolumeCatalogPrompt(target: target, plan: plan, replacedStalePlan: stale)
         #expect(replan.message.contains("was 1 record(s), now 2"))
-        #expect(replan.message.contains("Nothing was deleted"))
+        #expect(replan.message.contains("Nothing was removed"))
     }
 
     // MARK: - 8. Wording sensor (Rick's ruling 2026-10-03)
@@ -432,9 +433,9 @@ struct DeleteVolumeCatalogPlanTests {
 
         // Menu rows.
         #expect(RemoveFromCatalogWording.forgetVolumeMenuTitle(volume: "LaCie", count: 12)
-                == "Forget LaCie's 12 records…")
-        #expect(RemoveFromCatalogWording.forgetVolumeMenuTitle(volume: "LaCie", count: 1)
-                == "Forget LaCie's 1 record…")
+                == "Forget 12 records from LaCie…")
+        #expect(RemoveFromCatalogWording.forgetVolumeMenuTitle(volume: "RicksBackups", count: 1)
+                == "Forget 1 record from RicksBackups…", "no possessive; singular")
         #expect(RemoveFromCatalogWording.forgetAllMenuTitle(count: 340)
                 == "Forget the entire catalog (340 records)…")
 
@@ -442,7 +443,8 @@ struct DeleteVolumeCatalogPlanTests {
         #expect(RemoveFromCatalogWording.filesNeverTouched == "Files on disk are never touched.")
         let all = RemoveFromCatalogWording.forgetAllMessage(count: 340)
         #expect(all.contains("never touched"))
-        #expect(all.contains("all 340 catalog records"), "existing count wording kept")
+        #expect(all.contains("This will forget all 340 catalog records across every volume"))
+        #expect(!all.contains("delete"), "one verb: forget")
 
         let target = CatalogScanTarget(searchPath: "/Volumes/A")
         let plan = TargetRemovalPlan(targetID: target.id, root: "/Volumes/A",
@@ -468,6 +470,116 @@ struct DeleteVolumeCatalogPlanTests {
         for old in ["\"Delete Catalog\"", "\"Delete Volume Catalog\"", "Button(\"Delete All\""] {
             #expect(!cv.contains(old), "\(old) is the pre-2026-10-03 wording; must be gone")
         }
+    }
+
+    // MARK: - 9. Several volumes: no removal without confirmation (Rick 2026-10-03)
+    //
+    // The volume table's multi-select item used to loop
+    // `model.deleteCatalogForTarget(t)` with no dialog. It now plans every
+    // selected volume at the gesture and confirms once.
+
+    @Test func multiSelectRemovalIsNeverUnconfirmed() throws {
+        let table = try SourceTree.appSource(named: "CatalogView+VolumeTable.swift")
+        #expect(!table.contains("model.deleteCatalogForTarget("),
+                "the volume context menu must not remove catalog records directly — confirm first")
+        #expect(table.contains("presentDeleteVolumesCatalog(for: targets)"), "multi-select routes through the planning presenter")
+        #expect(table.contains("RemoveFromCatalogWording.contextMenuTitle(volumeCount: targets.count)"))
+        #expect(!table.contains("\"Delete Catalog\""), "the old ambiguous label must be gone")
+        #expect(RemoveFromCatalogWording.contextMenuTitle(volumeCount: 1) == "Forget This Volume's Records…")
+        #expect(RemoveFromCatalogWording.contextMenuTitle(volumeCount: 3) == "Forget Records for 3 Volumes…")
+
+        let pane = try SourceTree.appSource(named: "CatalogView+ScanTargetsPane.swift")
+        #expect(pane.contains("DeleteVolumesCatalogPrompt.plan(for: targets, model: model)"))
+        #expect(pane.contains("prompt.apply(to: model)"))
+        let cv = try SourceTree.appSource(named: "ContentView.swift")
+        #expect(cv.contains("presenting: deleteVolumesCatalogPrompt"))
+        #expect(cv.contains("confirmDeleteVolumesCatalog(prompt)"))
+    }
+
+    @Test func multiVolumePromptCountsThePlansAndListsUpToFiveVolumes() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let names = ["A", "B", "C", "D", "E", "F", "G"]
+        let targets = names.map { CatalogScanTarget(searchPath: "/Volumes/\($0)") }
+        let untouched = CatalogScanTarget(searchPath: "/Volumes/Keep")
+        model.scanTargets = targets + [untouched]
+        // A has 1 record, B has 2, … G has 7  ⇒ 28 in total, plus one to keep.
+        var recs: [VideoRecord] = [makeRecord("/Volumes/Keep/k.mov")]
+        for (idx, name) in names.enumerated() {
+            for n in 0...idx { recs.append(makeRecord("/Volumes/\(name)/clip\(n).mov")) }
+        }
+        model.records = recs
+
+        // Hand the targets over out of order: the selection is a Set.
+        let prompt = DeleteVolumesCatalogPrompt.plan(for: targets.reversed(), model: model)
+        #expect(prompt.items.count == 7)
+        #expect(prompt.totalCount == 28)
+        #expect(prompt.confirmButtonTitle == "Forget 28 Records")
+        let msg = prompt.message
+        #expect(msg.contains("Forget 28 catalog record(s) for 7 volume(s)?"))
+        #expect(msg.contains("Files on disk are never touched."))
+        #expect(msg.contains("— 1 record\n"), "singular")
+        #expect(msg.contains("— 5 records\n"))
+        #expect(!msg.contains("— 6 records"), "only the first five volumes are listed")
+        #expect(msg.contains("and 2 more"))
+        #expect(!msg.contains("Delete") && !msg.contains("delete"))
+        #expect(!msg.contains("changed while this was open"))
+        #expect(model.records.count == 29, "planning removes nothing")
+
+        // Confirm: exactly the planned records, nothing else.
+        #expect(prompt.apply(to: model) == nil, "nothing stale ⇒ nothing to re-present")
+        #expect(paths(model) == ["/Volumes/Keep/k.mov"])
+        #expect(targets.allSatisfy { $0.phase == .noCatalog })
+    }
+
+    @Test func multiVolumeStalePlanIsRefusedAndRePresented() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let a = CatalogScanTarget(searchPath: "/Volumes/A")
+        let b = CatalogScanTarget(searchPath: "/Volumes/B")
+        model.scanTargets = [a, b]
+        model.records = [makeRecord("/Volumes/A/a0.mov"),
+                         makeRecord("/Volumes/B/b0.mov"), makeRecord("/Volumes/B/b1.mov")]
+        b.phase = .cataloged
+
+        let prompt = DeleteVolumesCatalogPrompt.plan(for: [a, b], model: model)
+        #expect(prompt.totalCount == 3)
+
+        // A file lands under B while the alert is up.
+        model.records.append(makeRecord("/Volumes/B/late.mov"))
+
+        let again = try #require(prompt.apply(to: model), "a stale plan must come back for re-confirmation")
+        // A was exactly as shown ⇒ forgotten. B was not ⇒ untouched.
+        #expect(paths(model) == ["/Volumes/B/b0.mov", "/Volumes/B/b1.mov", "/Volumes/B/late.mov"])
+        #expect(b.phase == .cataloged, "a refused plan leaves target state untouched")
+        #expect(again.items.count == 1)
+        #expect(again.items.first?.target === b)
+        #expect(again.totalCount == 3, "the fresh plan carries the live count")
+        #expect(again.replaced == .init(staleCount: 2, alreadyRemoved: 1, alreadyRemovedVolumes: 1))
+        #expect(again.message.contains("was 2 record(s), now 3"))
+        #expect(again.message.contains("Nothing was removed for the volume(s) below"))
+        #expect(again.message.contains("Forgot 1 record from 1 volume(s), as shown."))
+        #expect(again.message.contains("never touched"))
+
+        // Confirming the fresh prompt removes exactly it.
+        #expect(again.apply(to: model) == nil)
+        #expect(model.records.isEmpty)
+    }
+
+    @Test func multiVolumeTargetGoneRemovesNothingAndDoesNotRePresent() throws {
+        let (model, tmp) = try makeModel()
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        let a = CatalogScanTarget(searchPath: "/Volumes/A")
+        let b = CatalogScanTarget(searchPath: "/Volumes/B")
+        model.scanTargets = [a, b]
+        model.records = [makeRecord("/Volumes/A/a0.mov"), makeRecord("/Volumes/B/b0.mov")]
+        let prompt = DeleteVolumesCatalogPrompt.plan(for: [a, b], model: model)
+
+        // B leaves the scan-targets list while the alert is up: its
+        // records are orphans now, not this prompt's to remove (#1431).
+        model.scanTargets = [a]
+        #expect(prompt.apply(to: model) == nil, "target gone is a cancel, never a re-confirm")
+        #expect(paths(model) == ["/Volumes/B/b0.mov"])
     }
 
     @Test func plansAreEquivalentByIdsAndRootNotByRevision() {

@@ -345,6 +345,23 @@ extension CatalogView {
         }
     }
 
+    /// Open the confirmation for forgetting SEVERAL volumes' catalog
+    /// records (volume-table multi-select). Until 2026-10-03 this gesture
+    /// removed on the spot with no dialog. Plans every selected volume
+    /// now — one O(records) pass each, on an explicit gesture.
+    func presentDeleteVolumesCatalog(for targets: [CatalogScanTarget]) {
+        deleteVolumesCatalogPrompt = DeleteVolumesCatalogPrompt.plan(for: targets, model: model)
+    }
+
+    /// The multi-volume alert's confirm button. Applies the carried plans;
+    /// volumes whose plan went stale come back as a fresh prompt on the
+    /// next turn (same reason as above: the dismissing alert's binding
+    /// clears the state synchronously).
+    func confirmDeleteVolumesCatalog(_ prompt: DeleteVolumesCatalogPrompt) {
+        guard let replacement = prompt.apply(to: model) else { return }
+        DispatchQueue.main.async { deleteVolumesCatalogPrompt = replacement }
+    }
+
     /// Look up the CatalogScanTarget for a VolumeRow ID.
     func target(for id: UUID) -> CatalogScanTarget? {
         model.scanTargets.first { $0.id == id }
