@@ -88,15 +88,6 @@ extension VideoScanModel {
         }
     }
 
-    /// What the event labeller is told, exactly as the Angel tells it: the
-    /// policy's birthday window and the People tab's birthdays — the
-    /// Angel's own reading of them (AngelFamilyBirthdays, read off the main
-    /// actor when the Angel starts and before each of its sweeps). The
-    /// labels themselves are always on here (StewardEvents.context).
-    func stewardEventContext() -> ArchiveAngelEventContext {
-        StewardEvents.context(coverage: archiveAngel.policy.coverage, birthdays: archiveAngel.familyBirthdays)
-    }
-
     /// Project on the main actor, build off it, publish once. A newer call
     /// cancels the in-flight one. Does nothing until the pane has asked.
     func scheduleStewardRefresh() {
@@ -105,7 +96,12 @@ extension VideoScanModel {
         let inputs = StewardCaseBuilder.project(records, protection: stewardProtectionRule())
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let alsoCleanUp = duplicateKeeperSettings.alsoCleanUpWorkingCopies
-        let events = stewardEventContext()
+        // What the event labeller is told, exactly as the Angel tells it:
+        // the policy's birthday window and the People tab's birthdays (the
+        // Angel's own reading of them, off the main actor when it starts
+        // and before each of its sweeps), captured by value. The labels
+        // themselves are always on for a reader.
+        let events = archiveAngel.occasionReader
         let now = Date()
         // What was skipped, so the per-kind limit is spent on the rest.
         let skipped = StewardSkipStore(defaults: stewardDefaults).snapshot()

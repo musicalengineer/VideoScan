@@ -92,7 +92,7 @@ struct StewardInput: Sendable, Equatable {
     /// Angel's trusted-day rule over the facts below (StewardEvents.place).
     var bestDate: Date?
     /// The date facts RecordDateResolver reads, as the Angel projects them
-    /// (ArchiveAngelCandidate+Record.swift).
+    /// (StewardEvents.facts hands them to the Angel's occasion reader).
     var userDate: String?
     var userDateConfidence: String?
     var embeddedDate: Date?
@@ -239,16 +239,17 @@ enum StewardCaseBuilder {
     // MARK: Entry point
 
     /// `volumes`: every scan target's root + reachability. `mountedRoots`:
-    /// the kernel mount table. `events`: the labeller's context as the
-    /// Angel holds it — the birthday window and the People tab's birthdays
-    /// (StewardEvents.context). `now` only bounds the date resolver's
+    /// the kernel mount table. `events`: the Angel's occasion reader — the
+    /// birthday window and the People tab's birthdays as the Angel holds
+    /// them (`archiveAngel.occasionReader`; the default is the built-in
+    /// rules with no birthdays). `now` only bounds the date resolver's
     /// search for a year in a file name; nothing in the result carries it.
     /// Pure — no disk, no defaults.
     static func build(inputs: [StewardInput],
                       volumes: [AnalyzeVolumeFact],
                       mountedRoots: Set<String>,
                       alsoCleanUpWorkingCopies: Bool,
-                      events: ArchiveAngelEventContext = StewardEvents.context(coverage: .standard, birthdays: []),
+                      events: ArchiveAngel.OccasionReader = ArchiveAngel.OccasionReader(),
                       skipped: [String: StewardFacts] = [:],
                       calendar: Calendar = .current,
                       now: Date = Date()) -> StewardQueue {
@@ -282,7 +283,7 @@ enum StewardCaseBuilder {
         for (i, r) in inputs.enumerated() {
             let root = drive(r.fullPath)
             roots.append(root)
-            let placement = StewardEvents.place(r, now: now, context: events, folders: &folders)
+            let placement = StewardEvents.place(r, now: now, reader: events, folders: &folders)
             if placement.isCounted {
                 queue.placeableClips += 1
                 if placement.day != nil { queue.placedClips += 1 }

@@ -164,21 +164,34 @@ struct StewardSensorTests {
                     "nameLabels(", "\"xmas\"", "\"christmas\"", "\"thanksgiving\"", "\"halloween\"", "\"easter\"", "(12, 25)", "(7, 4)"] {
             #expect(!all.contains(own), "Steward/ has `\(own)` — a second labeller or a second date rule")
         }
+        // The steward asks through the Angel's front door (2026-10-03, the
+        // boundary fix) and names nothing of the Angel's inside…
         let events = code(try source("StewardEvents.swift"))
-        #expect(events.contains("ArchiveAngelEvent.derive(candidate, now: now, context: context, keysOnly: false, folders: &folders)"),
+        #expect(events.contains("reader.occasions(for: facts(r), now: now, folders: &folders)"),
+                "the trusted day and the labels come from the Angel's reader")
+        #expect(events.contains("StewardPlacement(day: occasions.day, year: occasions.year, labels: occasions.labels)"),
+                "the day is the reader's typed day — not parsed out of a key")
+        #expect(events.contains("guard !occasions.isLivePhotoMotion else"), "Live Photo halves are left out by the Angel's own test")
+        for inside in ["ArchiveAngelEvent", "ArchiveAngelCandidate", "AngelCoverageRules", "trustedDay(inKey", "\"d:\""] {
+            #expect(!all.contains(inside), "Steward/ names `\(inside)` — the Angel's inside, or its key format")
+        }
+        // …and the front door is the Angel's ONE derivation, called.
+        let door = code(try source("ArchiveAngel+Occasions.swift"))
+        #expect(door.contains("ArchiveAngelEvent.derive(candidate, now: now, context: context, keysOnly: false, folders: &folders)"),
                 "the trusted day and the labels come from the Angel's one derivation")
-        #expect(events.contains("trustedDay(inKey: derived.key)"), "the day is read out of the Angel's own event key")
-        #expect(events.contains("ArchiveAngelEvent.dayKeyMinimumConfidence"), "the copy-era stamp rule is the Angel's constant")
-        #expect(events.contains("guard !candidate.isLivePhotoMotion else"), "Live Photo halves are left out by the Angel's own test")
-        #expect(events.contains("rules.eventLabels = true"))
+        #expect(door.contains("Occasions(labels: derived.labels, day: derived.day)"), "the day is the derivation's own")
+        #expect(door.contains("ArchiveAngelEvent.dayKeyMinimumConfidence"), "the copy-era stamp rule is the Angel's constant")
+        #expect(door.contains("guard !candidate.isLivePhotoMotion else"), "Live Photo halves are told apart by the Angel's own test")
+        #expect(door.contains("rules.eventLabels = true"))
+        #expect(door.contains("OccasionReader(coverage: policy.coverage, birthdays: familyBirthdays)"))
         let builder = code(try source("StewardCaseBuilder.swift"))
-        #expect(builder.contains("StewardEvents.place(r, now: now, context: events, folders: &folders)"), "once per record, in the build pass")
+        #expect(builder.contains("StewardEvents.place(r, now: now, reader: events, folders: &folders)"), "once per record, in the build pass")
         #expect(builder.contains("var folders = EventLabeler.FolderWordCache()"), "one folder-word memo per build")
         #expect(builder.contains("StewardEvents.footageGuess(members: members, placements: placements)"),
                 "the Same-footage title guess is the labeller's too")
         #expect(!builder.contains("dayPrecise"), "the builder has a day rule of its own again")
         let model = code(try source("VideoScanModel+Steward.swift"))
-        #expect(model.contains("StewardEvents.context(coverage: archiveAngel.policy.coverage, birthdays: archiveAngel.familyBirthdays)"))
+        #expect(model.contains("let events = archiveAngel.occasionReader"), "the Angel's rules and birthdays, captured on the main actor")
         // Nothing is stored: the folder never writes a record or the catalog.
         for write in ["catalogStore", "saveCatalog", "scheduleSave", "markDirty", "userNotes", ".tags"] {
             #expect(!all.contains(write), "Steward/ touches `\(write)` — events are derived, never stored")
@@ -225,7 +238,10 @@ struct StewardSensorTests {
                           "angel.candidateIDs.contains(r.id)", "angel.promotedIDs.contains(r.id)"] {
             #expect(src.contains(predicate), "rule 2 no longer asks `\(predicate)`")
         }
-        #expect(src.contains("archiveAngel.familyBirthdays"), "the People tab's birthdays come through the Angel's reading of them")
+        // The Angel's front door carries them (ArchiveAngel+Occasions:
+        // `OccasionReader(coverage: policy.coverage, birthdays: familyBirthdays)`,
+        // pinned in theOccasionIsTheAngelsLabeller…).
+        #expect(src.contains("archiveAngel.occasionReader"), "the People tab's birthdays come through the Angel's reading of them")
         #expect(src.contains("guard stewardWanted else { return }"), "no work until the pane has been shown")
         let builder = code(try source("StewardCaseBuilder.swift"))
         #expect(builder.contains("} else if r.protection.plannerRefuses {"),
