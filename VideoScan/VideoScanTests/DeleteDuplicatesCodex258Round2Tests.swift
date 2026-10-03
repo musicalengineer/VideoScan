@@ -257,7 +257,7 @@ struct DeleteDuplicatesCodex258Round2Tests {
                 D.$lookupOverride.withValue({ _, device in
                     asked.lock.withLock { asked.n += 1 }
                     return .init(device: device, kind: .physical, physicalDevice: "test-device")
-                }) { D.liveIdentity(forPath: path, device: device, volumeUUID: volumeUUID) }
+                }) { D.liveIdentityCached(forPath: path, device: device, volumeUUID: volumeUUID) }
             }
         }
         let before = D.generation
@@ -329,7 +329,7 @@ struct DeleteDuplicatesCodex258Round2Tests {
         let clock = ContinuousClock()
         let start = clock.now
         var answers = 0
-        for _ in 0..<2_000 { answers += ArchiveAngelPlanStore.inFlightRecordIDsForHolds(bufferRoot: root).count }
+        for _ in 0..<2_000 { answers += ArchiveAngelPlanStore.inFlightRecordIDsCached(bufferRoot: root).count }
         let elapsed = start.duration(to: clock.now)
         print("[angel-buffer-scale] 2,000 readings of 50 batches × 100 rows: \(elapsed)")
         #expect(answers == 2_000 * 5_000)
@@ -341,7 +341,7 @@ struct DeleteDuplicatesCodex258Round2Tests {
         let freed = changed.entries[0].id
         changed.entries[0].status = .skipped
         try ArchiveAngelPlanStore.save(changed)
-        #expect(!ArchiveAngelPlanStore.inFlightRecordIDsForHolds(bufferRoot: root).contains(freed), "a changed batch was answered from the cache")
+        #expect(!ArchiveAngelPlanStore.inFlightRecordIDsCached(bufferRoot: root).contains(freed), "a changed batch was answered from the cache")
         // …and so is a batch that appears, and one that goes.
         let folder = root.appendingPathComponent("batch-test-new", isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
@@ -352,10 +352,10 @@ struct DeleteDuplicatesCodex258Round2Tests {
         e.status = .ready
         added.entries = [e]
         try ArchiveAngelPlanStore.save(added)
-        #expect(ArchiveAngelPlanStore.inFlightRecordIDsForHolds(bufferRoot: root).contains(e.id))
+        #expect(ArchiveAngelPlanStore.inFlightRecordIDsCached(bufferRoot: root).contains(e.id))
         try FileManager.default.removeItem(at: folder)
-        #expect(!ArchiveAngelPlanStore.inFlightRecordIDsForHolds(bufferRoot: root).contains(e.id))
-        #expect(ArchiveAngelPlanStore.inFlightRecordIDsForHolds(bufferRoot: root) == ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root))
+        #expect(!ArchiveAngelPlanStore.inFlightRecordIDsCached(bufferRoot: root).contains(e.id))
+        #expect(ArchiveAngelPlanStore.inFlightRecordIDsCached(bufferRoot: root) == ArchiveAngelPlanStore.inFlightRecordIDs(bufferRoot: root))
     }
 
     // MARK: Sensors (code only — never a comment)
@@ -384,15 +384,13 @@ struct DeleteDuplicatesCodex258Round2Tests {
         #expect(check.contains("found.refusal.leavesAlone)"))
         let plan = try SourceTree.appCode(named: "DeleteDuplicatesPlan.swift")
         #expect(plan.contains("} else if e.status == .skipped || e.status == .refused, let why = DuplicateDeletionHold.leftAloneWhy(note: e.note) {"))
-        #expect(plan.contains("let drivesMayBeStale = driveGeneration.map { $0 != generationNow } ?? false"))
+        #expect(plan.contains("let askDrivesAfresh = driveGeneration != nil"))
         #expect(plan.contains("let generation = DuplicateDrives.generation\n        var resolver = DuplicateDrives.Resolver()"),
                 "the generation must be read BEFORE the first lookup of a gather")
-        let snapshot = try SourceTree.appCode(named: "VideoScanModel+ArchiveVolumeSnapshot.swift")
-        let observer = try #require(snapshot.range(of: "nc.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in"))
-        let hop = try #require(snapshot.range(of: "Task { @MainActor in self?.noteArchiveVolumeSnapshotStale(reason: what) }",
-                                              range: observer.upperBound..<snapshot.endIndex))
-        #expect(String(snapshot[observer.upperBound..<hop.lowerBound]).contains("DuplicateDrives.resetVolumeCache()"),
-                "the generation must move synchronously with the mount notification, not in a later task")
+        // (The mount observer still moves the generation synchronously, but
+        // since codex #258 r3-1 safety does not rest on it — the final
+        // verdict asks the drives afresh whatever the generation says — so
+        // no sensor pins that ordering any more.)
         let drives = try SourceTree.appCode(named: "DeleteDuplicatesDrives.swift")
         #expect(drives.contains("guard stat(path, &info) == 0 else { return nil }") && !drives.contains("deletingLastPathComponent"),
                 "the forecast's drive question stats the folder again")

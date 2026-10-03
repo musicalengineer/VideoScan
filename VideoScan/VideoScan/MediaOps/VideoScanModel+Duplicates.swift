@@ -333,14 +333,17 @@ extension VideoScanModel {
     /// row's note ("left alone — in use by the Archive Angel"). The Master
     /// Archive half of the gate is the worker's own `ArchiveRemovalCheck`.
     ///
-    /// Returns the hold's note (nil = no hold) AND today's Read-only
-    /// snapshot: the disk worker runs ITS removal-time check — the path,
-    /// the real path, the file's own volume identity — against the marks as
-    /// they are NOW, not as they were when the pair began (codex #258
-    /// r2-2: a mark made during phase two that matches only by identity).
-    func duplicateRemovalBoundaryWord(recordID: UUID) -> (holdNote: String?, readOnly: ReadOnlyVolumeProtection) {
+    /// Returns the hold's note (nil = no hold) AND today's Read-only MARKS
+    /// — the marks themselves, as the scan targets carry them now, not the
+    /// model's cached snapshot of where they are mounted (codex #258 r3:
+    /// nothing at the final verdict comes from a cache). The disk worker
+    /// builds the protection from them there and then
+    /// (`ReadOnlyVolumeProtection.make`) and runs its removal-time check —
+    /// the path, the real path, the file's own volume identity (r2-2: a
+    /// mark made during phase two that matches only by identity).
+    func duplicateRemovalBoundaryWord(recordID: UUID) -> (holdNote: String?, readOnlyMarks: [ReadOnlyVolumeProtection.Mark]) {
         let hold = record(forID: recordID).flatMap { duplicateDeletionHoldRule()($0) }
-        return (hold?.note, readOnlyVolumeProtection())
+        return (hold?.note, readOnlyVolumeMarks)
     }
 
     /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1, 2026-10-03):

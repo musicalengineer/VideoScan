@@ -452,15 +452,20 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// Returns `self` unchanged when every stamp reproduces, so an
     /// unchanged row is never rewritten.
     ///
-    /// THE DRIVES are evidence too (codex #258 r2-3). When the drive
-    /// generation has moved since the facts were gathered — a volume was
-    /// mounted, unmounted or renamed, or a run started — the keeper and
-    /// every copy that still holds are asked AGAIN which physical device
-    /// they are on, through a fresh resolver (the cache was emptied by the
-    /// same event). If the drives come out differently, that is said in
-    /// `droppedAtBoundary`, so the final verdict re-decides the tier. (A
-    /// DIFFERENT volume now at a copy's path fails the copy's stamp — the
-    /// stamp carries the volume's UUID — and the copy is dropped above.)
+    /// THE DRIVES are evidence too, and AT THE FINAL VERDICT NOTHING COMES
+    /// FROM A CACHE (codex #258 r3-1; MOPS-2). Whatever the gather learned
+    /// — it may have been served by the drive cache — the keeper and every
+    /// copy that still holds are asked AGAIN, here, which physical device
+    /// they are on: `DuplicateDrives.Resolver(fresh: true)`, statfs +
+    /// DiskArbitration now, the cache untouched. ALWAYS, whatever the
+    /// generation says (a re-enumerated disk moves no generation until its
+    /// notification arrives). If the drives come out differently, that is
+    /// said in `droppedAtBoundary`, and the final verdict re-decides the
+    /// tier from the fresh evidence alone — in either direction. Facts
+    /// whose drives were given by a test seam (or built by hand) carry no
+    /// generation and are left as given. (A DIFFERENT volume now at a
+    /// copy's path fails the copy's stamp — the stamp carries the volume's
+    /// UUID — and the copy is dropped above.)
     nonisolated func recheck() -> DeletionTierFacts {
         var still: [CountedCopy] = []
         var dropped: [String] = []
@@ -476,14 +481,13 @@ struct DeletionTierFacts: Sendable, Equatable {
             still.append(copy)
         }
         let generationNow = DuplicateDrives.generation
-        let drivesMayBeStale = driveGeneration.map { $0 != generationNow } ?? false
-        guard !dropped.isEmpty || drivesMayBeStale else { return self }
+        let askDrivesAfresh = driveGeneration != nil
+        guard !dropped.isEmpty || askDrivesAfresh else { return self }
         var out = self
         var drivesChanged: [String] = []
-        if drivesMayBeStale {
-            // Ask again, from scratch: nothing learned before the mount
-            // change is trusted.
-            var resolver = DuplicateDrives.Resolver()
+        if askDrivesAfresh {
+            // Ask again, uncached: nothing learned earlier is trusted.
+            var resolver = DuplicateDrives.Resolver(fresh: true)
             var fresh = DeletionTierFacts()
             if !keeperPath.isEmpty, let k = FileIdentityStamp.capture(path: keeperPath) {
                 let drive = resolver.drive(path: keeperPath, stamp: k)
@@ -500,7 +504,7 @@ struct DeletionTierFacts: Sendable, Equatable {
             let stillKeys = Set(still.map { $0.driveKey ?? Self.driveKey($0.stamp) })
             let before = Set(countedDrives.filter { $0.key == keeperDrive?.key || stillKeys.contains($0.key) }.map(\.key))
             if before != Set(fresh.countedDrives.map(\.key)) {
-                drivesChanged = ["a volume was mounted or unmounted since the copies were counted — the drives were asked again"]
+                drivesChanged = ["the drives were asked again before removal and are not what was counted"]
             }
             still = rekeyed
             out.keeperDrive = fresh.keeperDrive

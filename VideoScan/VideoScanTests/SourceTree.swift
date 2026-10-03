@@ -104,27 +104,66 @@ enum SourceTree {
         return hits[0].url
     }
 
-    /// `text` with its comments removed: full-line `//` comments dropped,
-    /// a trailing `// …` cut (outside a string literal). A sensor that
-    /// matches CODE must not be satisfied by the expected text surviving in
-    /// a comment after the code itself was removed (codex #258 r2).
+    /// `text` with its comments removed, so a sensor that matches CODE is
+    /// never satisfied by the expected text surviving in a comment after
+    /// the code itself was removed (codex #258 r2, r3):
+    ///   • `// …` to the end of the line;
+    ///   • `/* … */`, NESTED as Swift allows, across lines;
+    ///   • a line that held nothing but a comment disappears altogether, so
+    ///     the code on either side of it stays adjacent.
+    /// Text inside a string literal ("…", with `\"` escapes, and `"""`
+    /// blocks) is not a comment and is kept.
+    /// NOT handled: raw strings (`#"…"#`) containing an unescaped quote, a
+    /// comment inside a string interpolation, regex literals — a `//` or
+    /// `/*` there may be cut (it can only make a sensor stricter).
     static func strippingComments(_ text: String) -> String {
-        text.split(separator: "\n", omittingEmptySubsequences: false).compactMap { line -> String? in
-            if line.trimmingCharacters(in: .whitespaces).hasPrefix("//") { return nil }
-            var inString = false
-            var previous: Character = " "
-            var index = line.startIndex
-            while index < line.endIndex {
-                let c = line[index]
-                if c == "\"" && previous != "\\" { inString.toggle() }
-                if !inString, c == "/", previous == "/" {
-                    return String(line[line.startIndex..<line.index(before: index)])
-                }
-                previous = c
-                index = line.index(after: index)
+        let chars = Array(text)
+        var out: [String] = []
+        var line = ""
+        var lineHadComment = false
+        var depth = 0
+        var inLineComment = false, inString = false, inTextBlock = false
+        func isTripleQuote(at i: Int) -> Bool {
+            i + 2 < chars.count && chars[i] == "\"" && chars[i + 1] == "\"" && chars[i + 2] == "\""
+        }
+        func endLine() {
+            if !(lineHadComment && line.trimmingCharacters(in: .whitespaces).isEmpty) { out.append(line) }
+            line = ""
+            lineHadComment = depth > 0
+            inLineComment = false
+            inString = false
+        }
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            let next: Character? = i + 1 < chars.count ? chars[i + 1] : nil
+            if c == "\n" { endLine(); i += 1; continue }
+            if depth > 0 {
+                lineHadComment = true
+                if c == "/", next == "*" { depth += 1; i += 2 } else if c == "*", next == "/" { depth -= 1; i += 2 } else { i += 1 }
+                continue
             }
-            return String(line)
-        }.joined(separator: "\n")
+            if inLineComment { i += 1; continue }
+            if inTextBlock {
+                if isTripleQuote(at: i) { inTextBlock = false; line += "\"\"\""; i += 3 } else { line.append(c); i += 1 }
+                continue
+            }
+            if inString {
+                line.append(c)
+                if c == "\\", let next, next != "\n" { line.append(next); i += 2; continue }
+                if c == "\"" { inString = false }
+                i += 1
+                continue
+            }
+            if isTripleQuote(at: i) { inTextBlock = true; line += "\"\"\""; i += 3; continue }
+            if c == "\"" { inString = true; line.append(c); i += 1; continue }
+            if c == "/", next == "/" { inLineComment = true; lineHadComment = true; i += 2; continue }
+            if c == "/", next == "*" { depth = 1; lineHadComment = true; i += 2; continue }
+            line.append(c)
+            i += 1
+        }
+        endLine()
+        return out.joined(separator: "\n")
     }
 
     /// The CODE of the ONE app source file called `name` — comments removed.

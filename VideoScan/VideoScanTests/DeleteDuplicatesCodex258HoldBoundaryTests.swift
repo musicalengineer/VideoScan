@@ -375,7 +375,7 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         #expect(await Task.detached { ask(here) }.value == "left alone — in use by the Archive Angel")
         setAngel(rig.model)
         rig.model.setVolumeReadOnly(true, for: target)
-        #expect(!rig.model.duplicateRemovalBoundaryWord(recordID: copy.id).readOnly.isEmpty, "today's marks travel to the disk thread")
+        #expect(!rig.model.duplicateRemovalBoundaryWord(recordID: copy.id).readOnlyMarks.isEmpty, "today's marks travel to the disk thread")
         #expect(await Task.detached { ask(here) }.value
                 == "left alone — lives on \(rig.dir.lastPathComponent), which you marked Read only")
         rig.model.setVolumeReadOnly(false, for: target)
@@ -410,7 +410,7 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         #expect(job.contains("archiveCheck: archiveCheck, boundaryHold: boundaryHold)"))
         #expect(job.contains("if inBatchOnDisk(recordID) { return DuplicateDeletionHold.inUseByAngel.note }")
                 && job.contains("return model.duplicateRemovalBoundaryWord(recordID: recordID)")
-                && job.contains("?? word.readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)"))
+                && job.contains("?? readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)"))
         let dispatch = try #require(job.range(of: "private func dispatchPairs("))
         let authorize = try #require(job.range(of: "switch model.authorizeDuplicateDeletion(entry: entry, volumePath: volumePath,",
                                                range: dispatch.upperBound..<job.endIndex))

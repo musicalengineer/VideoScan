@@ -556,12 +556,17 @@ enum ArchiveAngelPlanStore {
     // Decoding every plan.json each time costs O(rows × buffered entries)
     // (codex #258 r2). So the DECODED plans are kept per buffer root and
     // reused while the buffer's FINGERPRINT is unchanged: the batch folder
-    // names and, for each plan.json, its inode, modification time (ns) and
-    // size — one directory listing and one stat per batch, no file opened.
-    // Every save of a plan is an atomic replace (a new inode), so a changed
-    // batch always changes the fingerprint. The rule itself (which rows
-    // hold, which batch is interrupted, which is live) is applied afresh on
-    // every call. Strictly read-only.
+    // names and, for each plan.json, its inode, modification time (ns),
+    // CHANGE time (ns — kernel-set; an in-place rewrite with its mtime put
+    // back still moves it) and size — one directory listing and one stat
+    // per batch, no file opened. The rule itself (which rows hold, which
+    // batch is interrupted, which is live) is applied afresh on every call.
+    // Strictly read-only.
+    //
+    // THE CACHE IS FOR THE PER-TURN PRE-CHECK ONLY (codex #258 r3-2;
+    // MOPS-2): a fingerprint is not the content. The FINAL VERDICT before a
+    // removal reads the buffer's plan files themselves —
+    // `inFlightRecordIDsFresh`.
 
     /// What the buffer looks like without opening a file.
     nonisolated static func bufferFingerprint(bufferRoot: URL) -> String {
@@ -573,7 +578,8 @@ enum ArchiveAngelPlanStore {
             let isLink = lstat(dir, &link) == 0 && (link.st_mode & S_IFMT) == S_IFLNK
             let plan = dir + "/" + ArchiveAngelPlan.planFilename
             if stat(plan, &info) == 0 {
-                parts.append("\(name)|\(isLink ? "L" : "D")|\(info.st_ino)|\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)|\(info.st_size)")
+                parts.append("\(name)|\(isLink ? "L" : "D")|\(info.st_ino)|\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
+                             + "|\(info.st_ctimespec.tv_sec).\(info.st_ctimespec.tv_nsec)|\(info.st_size)")
             } else {
                 parts.append("\(name)|\(isLink ? "L" : "D")|-")
             }
@@ -592,10 +598,18 @@ enum ArchiveAngelPlanStore {
     /// holds (tests read it).
     nonisolated static var holdReadingDecodes: Int { holdReadings.lock.withLock { holdReadings.decodes } }
 
-    /// `inFlightRecordIDs` for Delete Duplicates' holds: the same answer,
-    /// decoding the buffer only when its fingerprint changed. DISK I/O (a
-    /// listing + one stat per batch) — never on the main thread.
-    nonisolated static func inFlightRecordIDsForHolds(bufferRoot: URL, now: Date = Date()) -> Set<UUID> {
+    /// FRESH — for the final verdict before a removal: every plan.json in
+    /// the buffer is read and decoded NOW. No cache is read or written.
+    /// DISK I/O — never on the main thread.
+    nonisolated static func inFlightRecordIDsFresh(bufferRoot: URL, now: Date = Date()) -> Set<UUID> {
+        inFlightRecordIDs(in: listBatches(bufferRoot: bufferRoot), now: now)
+    }
+
+    /// CACHED — advisory (the per-turn pre-check, the façade's published
+    /// set): the same answer, decoding the buffer only when its fingerprint
+    /// changed. NEVER the final verdict's source. DISK I/O (a listing + one
+    /// stat per batch) — never on the main thread.
+    nonisolated static func inFlightRecordIDsCached(bufferRoot: URL, now: Date = Date()) -> Set<UUID> {
         let fingerprint = bufferFingerprint(bufferRoot: bufferRoot)
         let key = bufferRoot.path
         let cached: [ArchiveAngelPlan]? = holdReadings.lock.withLock {

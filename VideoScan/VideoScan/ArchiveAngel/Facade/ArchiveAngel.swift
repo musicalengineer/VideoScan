@@ -561,14 +561,14 @@ final class ArchiveAngel: ObservableObject {
     }
 
     /// The DISK TRUTH for one record, for a disk thread: is it a row of a
-    /// batch in the buffer right now? Asks the buffer at the moment of the
-    /// call (read-only: a listing and a stat per batch; the plans are
-    /// decoded again only when one changed — `inFlightRecordIDsForHolds`) — what Delete
-    /// Duplicates asks immediately before it removes a file (codex #258
-    /// F6/F7). DISK I/O: never call the returned probe on the main thread.
-    func recordInBatchOnDiskProbe() -> @Sendable (UUID) -> Bool {
+    /// batch in the buffer right now? FRESH: every plan.json is read and
+    /// decoded at the moment of the call — no cache, no fingerprint (codex
+    /// #258 r3-2) — because this is what Delete Duplicates asks at the
+    /// FINAL VERDICT, immediately before it removes a file (F6/F7).
+    /// Read-only. DISK I/O: never call the returned probe on the main thread.
+    func recordInBatchOnDiskFreshProbe() -> @Sendable (UUID) -> Bool {
         let root = environment.bufferRoot
-        return { ArchiveAngelPlanStore.inFlightRecordIDsForHolds(bufferRoot: root).contains($0) }
+        return { ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: root).contains($0) }
     }
 
     /// TEST SEAM: stands in for the buffer read, so a test can make two
@@ -579,7 +579,7 @@ final class ArchiveAngel: ObservableObject {
     @concurrent
     #endif
     nonisolated static func readRecordIDsInBatches(bufferRoot: URL) async -> Set<UUID> {
-        ArchiveAngelPlanStore.inFlightRecordIDsForHolds(bufferRoot: bufferRoot)
+        ArchiveAngelPlanStore.inFlightRecordIDsCached(bufferRoot: bufferRoot)
     }
 
     func evidence(for id: UUID) -> Evidence? { store.record(for: id) }

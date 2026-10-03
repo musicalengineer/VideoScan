@@ -1473,36 +1473,43 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     }
 
     /// The question the disk worker asks at the removal boundary (codex #258
-    /// F6/F7), built on the main actor at the copy's turn:
-    ///   1. the Angel's buffer ON DISK, read on the disk thread at that
-    ///      instant (no cache) — a batch that landed during the re-read;
+    /// F6/F7), built on the main actor at the copy's turn. NOTHING HERE
+    /// COMES FROM A CACHE (r3; MOPS-2):
+    ///   1. the Angel's buffer ON DISK, every plan file read and decoded on
+    ///      the disk thread at that instant — a batch that landed, or
+    ///      changed, during the re-read;
     ///   2. the model's live word — the hold rule (prepared / promoting /
     ///      a running Prepare / the hand-over / a promoted archive copy) and
-    ///      TODAY's Read-only snapshot — through ONE synchronous hop to the
+    ///      TODAY's Read-only marks — through ONE synchronous hop to the
     ///      main actor. The main actor never waits on the disk worker (it
     ///      awaits it), so the hop cannot deadlock; it costs one main-queue
     ///      turn per removal, after a whole-file read;
-    ///   3. today's Read-only marks, checked HERE on the disk thread the way
-    ///      every removal-time check is: the catalogued path, then the
-    ///      file's real path and its own volume's identity (codex #258
-    ///      r2-2 — a mark made during phase two that matches only by
-    ///      identity). The UUID / mount probes are captured at the turn,
-    ///      where the pair's own removal check captures its probes.
+    ///   3. those marks turned into a protection HERE, now, on the disk
+    ///      thread (`ReadOnlyVolumeProtection.make` — where each marked
+    ///      drive is mounted is read afresh, not taken from the model's
+    ///      snapshot) and checked the way every removal-time check is: the
+    ///      catalogued path, then the file's real path and its own volume's
+    ///      identity (codex #258 r2-2 — a mark made during phase two that
+    ///      matches only by identity). The UUID / mount probes are captured
+    ///      at the turn, where the pair's own removal check captures its
+    ///      probes.
     /// The returned question takes the path the file is at when it is asked
     /// (its quarantine path). A catalog that went away holds everything.
     static func removalBoundaryHold(model: VideoScanModel, recordID: UUID, path: String) -> @Sendable (_ currentPath: String) -> String? {
-        let inBatchOnDisk = model.archiveAngel.recordInBatchOnDiskProbe()
+        let inBatchOnDisk = model.archiveAngel.recordInBatchOnDiskFreshProbe()
         let uuidProbe = MasterArchiveDesignation.volumeUUIDProbe
         let identityProbe = ArchiveVolumeProtection.mountIdentityProbe
         return { [weak model] currentPath in
             if inBatchOnDisk(recordID) { return DuplicateDeletionHold.inUseByAngel.note }
-            let word: (holdNote: String?, readOnly: ReadOnlyVolumeProtection) = onMainActor {
-                guard let model else { return (DuplicateDeletionHold.leftAlonePrefix + "the catalog is no longer open", .none) }
+            let word: (holdNote: String?, readOnlyMarks: [ReadOnlyVolumeProtection.Mark]) = onMainActor {
+                guard let model else { return (DuplicateDeletionHold.leftAlonePrefix + "the catalog is no longer open", []) }
                 return model.duplicateRemovalBoundaryWord(recordID: recordID)
             }
             if let note = word.holdNote { return note }
-            let verdict = word.readOnly.verdict(forPath: path)
-                ?? word.readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)
+            guard !word.readOnlyMarks.isEmpty else { return nil }
+            let readOnly = ReadOnlyVolumeProtection.make(marks: word.readOnlyMarks, probe: uuidProbe, identity: identityProbe)
+            let verdict = readOnly.verdict(forPath: path)
+                ?? readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)
             return verdict.map { DuplicateDeletionHold.leftAlonePrefix + VideoScanModel.readOnlyRefusalNote($0) }
         }
     }

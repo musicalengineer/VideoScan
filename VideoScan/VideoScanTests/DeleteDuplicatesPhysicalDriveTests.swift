@@ -251,8 +251,8 @@ struct DeleteDuplicatesPhysicalDriveTests {
     @Test func theBootVolumeAndTheDataVolumeAreOneDrive() {
         var root = stat(), home = stat()
         guard stat("/", &root) == 0, stat(NSHomeDirectory(), &home) == 0 else { return }
-        let a = DuplicateDrives.liveIdentity(forPath: "/", device: UInt64(root.st_dev), volumeUUID: VolumeIdentity.uuid(forPath: "/"))
-        let b = DuplicateDrives.liveIdentity(forPath: NSHomeDirectory(), device: UInt64(home.st_dev),
+        let a = DuplicateDrives.liveIdentityCached(forPath: "/", device: UInt64(root.st_dev), volumeUUID: VolumeIdentity.uuid(forPath: "/"))
+        let b = DuplicateDrives.liveIdentityCached(forPath: NSHomeDirectory(), device: UInt64(home.st_dev),
                                              volumeUUID: VolumeIdentity.uuid(forPath: NSHomeDirectory()))
         #expect(a.kind != .network && b.kind != .network)
         if a.kind == .physical, b.kind == .physical {
@@ -266,7 +266,7 @@ struct DeleteDuplicatesPhysicalDriveTests {
         #expect(drives.contains("devicePath: description[kDADiskDescriptionDevicePathKey as String] as? String)"))
         #expect(drives.contains("DeletionTierFacts.Drive(key: key(for: identity),"), "a drive is keyed by the volume again")
         #expect(drives.contains("guard let devicePath, !devicePath.isEmpty else { return Identity(device: device, kind: .unknown) }"))
-        #expect(drives.contains("return Identity(device: device, kind: .network, physicalDevice: \"net:\" + node)"),
+        #expect(drives.contains("return Identity(device: device, kind: .network, physicalDevice: \"net:\" + mount.node)"),
                 "a network share is one drive per server + share")
         #expect(try SourceTree.appCode(named: "DeleteDuplicatesJob.swift").contains("DuplicateDrives.resetVolumeCache()"))
         #expect(try SourceTree.appCode(named: "VideoScanModel+ArchiveVolumeSnapshot.swift").contains("DuplicateDrives.resetVolumeCache()"))

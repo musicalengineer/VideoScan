@@ -71,6 +71,16 @@
 //      asks afresh which device every counted copy is on and re-decides the
 //      tier. Evidence gathered before a mount change never survives it.
 //
+// AT THE FINAL VERDICT NOTHING COMES FROM A CACHE (codex #258 r3-1; MOPS-2).
+// The generation is an early signal, not what safety rests on: a disk
+// re-enumerated on another attachment keeps its UUID, number and node, and
+// the cache goes on answering with the old device path until a notification
+// arrives. So `DeletionTierFacts.recheck` — the final verdict — asks through
+// `Resolver(fresh: true)`, which goes to `liveIdentityFresh` (statfs +
+// DiskArbitration, the cache neither read nor written), and re-decides the
+// tier from that evidence alone. `liveIdentityCached` serves the per-turn
+// gather, the forecast and the steward's card — all advisory.
+//
 // Cost: one statfs per volume per counting pass (the `Resolver`'s memo), and
 // ONE DiskArbitration description per mounted volume per generation — the
 // process-wide `VolumeCache`. The forecast stats each connected copy once
@@ -167,8 +177,13 @@ enum DuplicateDrives {
     struct Resolver {
         private var volumes: [UInt64: Identity] = [:]
         private var uuids: [UInt64: String?] = [:]
+        /// true = the final verdict's resolver: every volume is asked of the
+        /// disk NOW (`liveIdentityFresh`); the process-wide cache is neither
+        /// read nor written. (This pass's own memo — one answer per volume
+        /// within the one synchronous verdict — is not a cache of the past.)
+        let fresh: Bool
 
-        init() {}
+        init(fresh: Bool = false) { self.fresh = fresh }
 
         /// The volume of a copy that was just stat'ed (`stamp`).
         mutating func identity(path: String, stamp: FileIdentityStamp) -> Identity {
@@ -202,7 +217,9 @@ enum DuplicateDrives {
 
         private mutating func volume(device: UInt64, volumeUUID: String?, path: String) -> Identity {
             if let known = volumes[device] { return known }
-            let found = DuplicateDrives.liveIdentity(forPath: path, device: device, volumeUUID: volumeUUID)
+            let found = fresh
+                ? DuplicateDrives.liveIdentityFresh(forPath: path, device: device)
+                : DuplicateDrives.liveIdentityCached(forPath: path, device: device, volumeUUID: volumeUUID)
             volumes[device] = found
             return found
         }
@@ -269,30 +286,47 @@ enum DuplicateDrives {
         return "\(device)|\(node)|\(volumeUUID)"
     }
 
-    /// Ask the disk which volume holds `path` (whose stat said `device`):
-    /// its kind and its physical device. DISK I/O (statfs; one
-    /// DiskArbitration lookup the first time a volume is met in a run):
-    /// never per record — go through `Resolver`.
-    nonisolated static func liveIdentity(forPath path: String, device: UInt64, volumeUUID: String?) -> Identity {
+    /// The mounted volume holding `path`: its device node, and whether it
+    /// is local. nil when the path cannot be asked.
+    private nonisolated static func mount(of path: String) -> (node: String, isLocal: Bool)? {
         var fs = statfs()
-        guard statfs(path, &fs) == 0 else { return Identity(device: device, kind: .unknown) }
+        guard statfs(path, &fs) == 0 else { return nil }
         let node = withUnsafePointer(to: &fs.f_mntfromname) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
         }
+        return (node, fs.f_flags & UInt32(MNT_LOCAL) != 0)
+    }
+
+    /// FRESH — for the final verdict before a removal: which volume holds
+    /// `path` (whose stat said `device`), asked of the disk NOW: statfs +
+    /// one DiskArbitration description. The cache is neither read nor
+    /// written. DISK I/O; one call per volume per removal.
+    nonisolated static func liveIdentityFresh(forPath path: String, device: UInt64) -> Identity {
+        guard let mount = mount(of: path) else { return Identity(device: device, kind: .unknown) }
         // A network share: one drive per server + share.
-        guard fs.f_flags & UInt32(MNT_LOCAL) != 0 else {
-            return Identity(device: device, kind: .network, physicalDevice: "net:" + node)
-        }
+        guard mount.isLocal else { return Identity(device: device, kind: .network, physicalDevice: "net:" + mount.node) }
+        return lookupOverride?(mount.node, device) ?? describe(node: mount.node, device: device)
+    }
+
+    /// CACHED — advisory uses only (the per-turn gather, the forecast, the
+    /// steward's card): the same question, answered from the process-wide
+    /// cache when this volume was already asked about in this generation.
+    /// NEVER the final verdict's source. DISK I/O (statfs; DiskArbitration
+    /// on a miss): never per record — go through `Resolver`.
+    nonisolated static func liveIdentityCached(forPath path: String, device: UInt64, volumeUUID: String?) -> Identity {
+        guard let mount = mount(of: path) else { return Identity(device: device, kind: .unknown) }
+        guard mount.isLocal else { return Identity(device: device, kind: .network, physicalDevice: "net:" + mount.node) }
+        let node = mount.node
         let lookup = { lookupOverride?(node, device) ?? describe(node: node, device: device) }
         guard let key = cacheKey(device: device, node: node, volumeUUID: volumeUUID) else { return lookup() }
         return shared.lock.withLock { shared.cache.identity(for: cacheScope + key, lookup: lookup) }
     }
 
-    /// The kind alone (see `liveIdentity`).
+    /// The kind alone (see `liveIdentityCached`).
     nonisolated static func liveKind(forPath path: String) -> VolumeKind {
         var info = stat()
         guard stat(path, &info) == 0 else { return .unknown }
-        return liveIdentity(forPath: path, device: UInt64(info.st_dev), volumeUUID: VolumeIdentity.uuid(forPath: path)).kind
+        return liveIdentityCached(forPath: path, device: UInt64(info.st_dev), volumeUUID: VolumeIdentity.uuid(forPath: path)).kind
     }
 
     private nonisolated static func describe(node: String, device: UInt64) -> Identity {
