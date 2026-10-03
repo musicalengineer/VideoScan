@@ -146,6 +146,21 @@ struct AnalyzeCoverageCounts: Sendable, Equatable {
     var remaining: Int { max(0, eligible - covered) }
     var percent: Double { eligible > 0 ? Double(covered) / Double(eligible) * 100 : 100 }
 
+    /// Count one record into the right bucket (and remember the newest
+    /// stamp / the secondary tally).
+    mutating func record(applies: Bool, reachable: Bool, covered: Bool, stamp: Date?, secondary: Bool) {
+        if !applies {
+            notApplicable += 1
+        } else if !reachable {
+            offline += 1
+        } else {
+            eligible += 1
+            if covered { self.covered += 1 }
+        }
+        if secondary { self.secondary += 1 }
+        if let stamp, newestStamp.map({ stamp > $0 }) ?? true { newestStamp = stamp }
+    }
+
     /// "1,204 of 1,513 eligible · 80%"
     var line: String {
         guard eligible > 0 else { return "nothing eligible" }
@@ -294,25 +309,17 @@ enum AnalyzeCoverageCalculator {
         var corr = AnalyzeCorrelateCounts()
         var pairedRecords = 0
 
-        /// Tally one record for one cycler. `applies` = the cycler is
-        /// meant for this record at all; `covered` = its stamp is present.
+        /// Tally one record for one cycler — catalog-wide and, where the
+        /// cycler has a volume scope, for its volume. `applies` = the cycler
+        /// is meant for this record at all; `covered` = its stamp is present.
         func tally(_ c: AnalyzeCycler, root: String, reachable: Bool,
                    applies: Bool, covered: Bool, stamp: Date? = nil, secondary: Bool = false) {
-            var k = by[c] ?? AnalyzeCoverageCounts()
-            var v = byVol[c]?[root] ?? AnalyzeCoverageCounts()
-            if !applies {
-                k.notApplicable += 1; v.notApplicable += 1
-            } else if !reachable {
-                k.offline += 1; v.offline += 1
-            } else {
-                k.eligible += 1; v.eligible += 1
-                if covered { k.covered += 1; v.covered += 1 }
-            }
-            if secondary { k.secondary += 1; v.secondary += 1 }
-            if let stamp, k.newestStamp.map({ stamp > $0 }) ?? true { k.newestStamp = stamp }
-            if let stamp, v.newestStamp.map({ stamp > $0 }) ?? true { v.newestStamp = stamp }
-            by[c] = k
-            if byVol[c] != nil { byVol[c]![root] = v }
+            by[c, default: AnalyzeCoverageCounts()]
+                .record(applies: applies, reachable: reachable, covered: covered, stamp: stamp, secondary: secondary)
+            // Optional-chained subscript write: a no-op for cyclers with no
+            // per-volume table (≈ `if (p) p->at(root).record(…)`).
+            byVol[c]?[root, default: AnalyzeCoverageCounts()]
+                .record(applies: applies, reachable: reachable, covered: covered, stamp: stamp, secondary: secondary)
         }
 
         for r in inputs {

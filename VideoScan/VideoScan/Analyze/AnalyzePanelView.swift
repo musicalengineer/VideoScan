@@ -166,36 +166,7 @@ struct AnalyzePanelView: View {
                                               offlineRemaining: offline, coverageKnown: known,
                                               schedule: schedule)
 
-        let coverageLine: String
-        let sideLine: String
-        var note = ""
-        switch cycler {
-        case .correlate:
-            coverageLine = report.correlate.line
-            sideLine = report.correlate.offlineCandidates > 0
-                ? "\(report.correlate.offlineCandidates.formatted()) candidates offline" : ""
-        case .footage:
-            var s = "\(counts.secondary.formatted()) files grouped"
-            if let d = counts.newestStamp { s += " · last run \(AnalyzeRowStateRule.relative(d, now: Date()))" }
-            coverageLine = s
-            sideLine = counts.sideLine
-            note = "coverage: unknown — only group members carry a stamp; a file in no group is a complete answer with no mark"
-        case .ocr:
-            coverageLine = counts.line
-            sideLine = counts.sideLine
-            note = "\(counts.secondary.formatted()) with text found · OCR has no stamp of its own — the dossier pass stamp stands in"
-        case .embeddedDates:
-            coverageLine = counts.line
-            sideLine = counts.sideLine
-            note = "a file whose camera wrote no date can never be covered — no stamp yet"
-        case .dateInference:
-            coverageLine = counts.line
-            sideLine = counts.notApplicable > 0 ? "\(counts.notApplicable.formatted()) have a date you set" : ""
-            note = "over files with no date of yours; some may never get one"
-        default:
-            coverageLine = counts.line
-            sideLine = counts.sideLine
-        }
+        let words = Self.coverageWords(for: cycler, counts: counts, report: report)
 
         var volumes: [AnalyzeRowFacts.VolumeLine] = []
         if cycler.hasVolumeScope, let perVolume = report.byVolume[cycler] {
@@ -216,9 +187,36 @@ struct AnalyzePanelView: View {
             }
         }
 
-        return AnalyzeRowFacts(cycler: cycler, state: state, coverageLine: coverageLine, sideLine: sideLine,
-                               note: note, schedule: schedule, isPaused: liveRule.isPaused,
+        return AnalyzeRowFacts(cycler: cycler, state: state, coverageLine: words.line, sideLine: words.side,
+                               note: words.note, schedule: schedule, isPaused: liveRule.isPaused,
                                isRunning: liveRule.isRunning, volumes: volumes)
+    }
+
+    /// The coverage line, its small side note and the honesty note per
+    /// cycler — words only, from the cached counts.
+    static func coverageWords(for cycler: AnalyzeCycler, counts: AnalyzeCoverageCounts,
+                              report: AnalyzeCoverageReport, now: Date = Date()) -> (line: String, side: String, note: String) {
+        switch cycler {
+        case .correlate:
+            let offline = report.correlate.offlineCandidates
+            return (report.correlate.line, offline > 0 ? "\(offline.formatted()) candidates offline" : "", "")
+        case .footage:
+            var s = "\(counts.secondary.formatted()) files grouped"
+            if let d = counts.newestStamp { s += " · last run \(AnalyzeRowStateRule.relative(d, now: now))" }
+            return (s, counts.sideLine,
+                    "coverage: unknown — only group members carry a stamp; a file in no group is a complete answer with no mark")
+        case .ocr:
+            return (counts.line, counts.sideLine,
+                    "\(counts.secondary.formatted()) with text found · OCR has no stamp of its own — the dossier pass stamp stands in")
+        case .embeddedDates:
+            return (counts.line, counts.sideLine, "a file whose camera wrote no date can never be covered — no stamp yet")
+        case .dateInference:
+            return (counts.line,
+                    counts.notApplicable > 0 ? "\(counts.notApplicable.formatted()) have a date you set" : "",
+                    "over files with no date of yours; some may never get one")
+        default:
+            return (counts.line, counts.sideLine, "")
+        }
     }
 
     /// The engine facts for the state rule, per cycler.
