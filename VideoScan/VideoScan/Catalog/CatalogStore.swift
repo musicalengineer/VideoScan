@@ -152,15 +152,18 @@ struct CatalogSnapshot: Decodable {
         unknownFields = try CatalogUnknownFields.capture(from: decoder, known: Self.topLevelKeyNames)
     }
 
-    /// Bytes read from each end of the file by `headerProbe`. The header
-    /// keys (`version`, `generation`, `savedAt`, `savedFromHost`,
-    /// `masterArchive`) total well under 1 KB, so whichever side of the
-    /// records array they land on, a 4 KB window sees them.
+    /// The bounded header our own writer puts BEFORE the records array
+    /// (`version`, `generation`, `savedAt`, `savedFromHost`,
+    /// `masterArchive` total well under 1 KB). Readers that only need that
+    /// header — the Hallie shell's designation lookup — read this much.
+    /// NOT a probe window any more: the version probe reads the whole
+    /// object (codex cycle #30 R1) and caches the verdict (R4).
     static let probeWindowBytes = 4096
 
     /// Cheap OCC read: extract version + generation WITHOUT decoding 36+ MB
-    /// of records. Reads the first 4 KB and, if either key is missing
-    /// there, the last 4 KB.
+    /// of records. One open + fstat(2) when the file is unchanged since
+    /// the last probe or since this process verified writing it; otherwise
+    /// one complete streaming pass (`CatalogHeaderScanner`).
     ///
     /// Why both ends (GH #165): JSONEncoder on this OS builds keyed objects
     /// in a Dictionary, so key order is per-process random — CodingKeys
@@ -174,11 +177,11 @@ struct CatalogSnapshot: Decodable {
     /// pre-generation file appends `generation` at the END).
     ///
     /// TOP-LEVEL keys only (codex review 2026-10-02 #2): a record's own
-    /// "version" key — before the catalog's in the head, or after it in
-    /// the tail — is not the catalog's version. `CatalogHeaderScanner`
-    /// tracks strings and object depth to tell them apart, and when the
-    /// version is in neither window (a hand-made layout) it scans the whole
-    /// file, streamed in constant memory, rather than guess "old".
+    /// "version" key is not the catalog's version. `CatalogHeaderScanner`
+    /// tracks strings and the container stack to tell them apart, and it
+    /// reads the WHOLE object (codex cycle #30 R1) — a later duplicate
+    /// stamp, a truncation or trailing bytes all change the verdict — in
+    /// constant memory, rather than guess from a window.
     ///
     /// The version is a THREE-WAY verdict (codex cycle #29 F1): read,
     /// confirmed absent (a complete object with no such key — a v0
@@ -199,7 +202,7 @@ struct CatalogSnapshot: Decodable {
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else { return nil }
-        guard let found = CatalogHeaderScanner.probe(fileAt: url, window: probeWindowBytes) else {
+        guard let found = CatalogHeaderScanner.probe(fileAt: url) else {
             return Header(version: .unknown, generation: nil)
         }
         return Header(version: found.verdict, generation: found.generation)

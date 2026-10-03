@@ -11,7 +11,8 @@
 //    logic     -- probe finds the stamps wherever a legacy/foreign writer
 //                 put them (records-first, tail-only, pretty-printed)
 //    scale     -- 100k-record encode + probe inside a stated budget; the
-//                 probe itself is O(8 KB) regardless of file size
+//                 probe after our own verified write is a stat (the
+//                 verdict cache, GH #167 codex cycle #30 R4), not a pass
 //    isolation -- every test uses its own temp dir; poisoned-layout files
 //                 (keys reachable from NEITHER end) and a regressed
 //                 counter are fed to a fresh store
@@ -193,10 +194,13 @@ final class CatalogGenerationProbeTests: XCTestCase {
     }
 
     @MainActor
-    func testLoadUsesDecodedGenerationWhenProbeMissesGenerationAndLogsAnomaly() throws {
-        // `version` in the head (so no whole-file pass), `generation` buried
-        // > 4 KB from both ends: the probe misses it; the decode is the
-        // truth and the miss is recorded.
+    func testProbeFindsAGenerationBuriedPastBothWindowsAndLoadAgrees() throws {
+        // `version` in the head, `generation` buried > 4 KB from both ends.
+        // Until GH #167 codex cycle #30 R1 the probe stopped once a window
+        // had answered and MISSED this stamp (the decode then had to be the
+        // truth, with an anomaly logged). The probe now reads the whole
+        // object, so it sees the stamp, agrees with the decode, and there
+        // is nothing to report.
         let body = try recordsArrayJSON(fatRecords(20))
         var data = Data("{\"version\":6,\"records\":".utf8)
         data.append(body)
@@ -204,13 +208,14 @@ final class CatalogGenerationProbeTests: XCTestCase {
         data.append(Data(String(repeating: "h", count: 6000).utf8))
         data.append(Data("\"}".utf8))
         try data.write(to: catalogURL)
-        XCTAssertEqual(CatalogSnapshot.headerProbe(at: catalogURL)?.generation, 0, "fixture must hide the generation")
+        let off = try XCTUnwrap(generationOffset(in: catalogURL))
+        XCTAssertTrue(off > 4096 && off < data.count - 4096, "fixture must bury the generation past both 4 KB windows (at \(off) of \(data.count))")
+        XCTAssertEqual(CatalogSnapshot.headerProbe(at: catalogURL)?.generation, 31, "the whole-object pass sees a stamp no window can")
 
         let store = CatalogStore(directory: dir)
         XCTAssertEqual(store.load().count, 20)
-        XCTAssertEqual(store.loadedGeneration, 31, "the full decode is the truth when the probe cannot see")
-        let anomaly = try XCTUnwrap(store.lastGenerationAnomaly, "a probe miss on a stamped file must be recorded")
-        XCTAssertTrue(anomaly.contains("31"), anomaly)
+        XCTAssertEqual(store.loadedGeneration, 31)
+        XCTAssertNil(store.lastGenerationAnomaly, "probe and decode agree — nothing to report")
     }
 
     @MainActor
@@ -483,7 +488,9 @@ final class CatalogGenerationProbeTests: XCTestCase {
     func testHundredThousandRecordEncodeAndProbeWithinBudget() throws {
         // 100k slim records (the M4 catalog is ~8.8k fat ones; this is the
         // checklist's scale bar). Budget: encode+write ≤ 20 s in Debug,
-        // probe ≤ 50 ms because it reads 8 KB whatever the file size.
+        // probe ≤ 50 ms because the verified write seeded the verdict
+        // cache — a probe of a file we just wrote is a stat, whatever the
+        // file size (GH #167 codex cycle #30 R4).
         let records: [VideoRecord] = (0..<100_000).map { i in
             let r = VideoRecord()
             r.filename = "clip_\(i).mov"
@@ -503,7 +510,7 @@ final class CatalogGenerationProbeTests: XCTestCase {
         let probe = try XCTUnwrap(CatalogSnapshot.headerProbe(at: catalogURL))
         let probeTime = CFAbsoluteTimeGetCurrent() - t1
         XCTAssertEqual(probe.generation, 1)
-        XCTAssertLessThan(probeTime, 0.05, "probe of a \(size)-byte file took \(probeTime)s — it must not scale with file size")
+        XCTAssertLessThan(probeTime, 0.05, "probe of a \(size)-byte file we just wrote took \(probeTime)s — the verified write must seed the verdict cache")
         XCTAssertLessThan(try XCTUnwrap(generationOffset(in: catalogURL)), 64)
     }
 }
