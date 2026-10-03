@@ -130,7 +130,7 @@ enum DuplicateDrives {
 
     nonisolated static func drive(_ identity: Identity, path: String) -> DeletionTierFacts.Drive {
         DeletionTierFacts.Drive(key: key(for: identity), label: DeletionTierFacts.driveLabel(forPath: path),
-                                kind: identity.kind, device: identity.deviceLabel)
+                                kind: identity.kind, model: identity.deviceLabel)
     }
 
     /// One pass's memo: the identity of each volume met, and (for the

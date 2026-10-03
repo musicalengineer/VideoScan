@@ -185,7 +185,7 @@ struct DeleteDuplicatesPhysicalDriveTests {
         typealias Drive = DeletionTierFacts.Drive
         // One RAID, two of its volumes; then the same plus a second device.
         let raid = DeletionTierFacts.gather(c, digest: fileDigest) { path, _ in
-            Drive(key: "disk:raid", label: path.hasSuffix("s2.mov") ? "TestProjects" : "TestArchive", device: "Test RAID")
+            Drive(key: "disk:raid", label: path.hasSuffix("s2.mov") ? "TestProjects" : "TestArchive", model: "Test RAID")
         }
         #expect(raid.distinctDriveCount == 1 && raid.countedDrives.first?.name == "Test RAID [TestArchive, TestProjects]")
         let trash = DeletionTierDecision.decide(facts: raid, preferTrash: false)
@@ -195,8 +195,8 @@ struct DeleteDuplicatesPhysicalDriveTests {
         #expect(trash.reason.contains(" — on 1 drive (Test RAID [TestArchive, TestProjects])"), Comment(rawValue: trash.reason))
 
         let two = DeletionTierFacts.gather(c, digest: fileDigest) { path, _ in
-            path.hasSuffix("s1.mov") ? Drive(key: "disk:lacie", label: "TestLaCie", device: "Test d2")
-                : Drive(key: "disk:raid", label: path.hasSuffix("s2.mov") ? "TestProjects" : "TestArchive", device: "Test RAID")
+            path.hasSuffix("s1.mov") ? Drive(key: "disk:lacie", label: "TestLaCie", model: "Test d2")
+                : Drive(key: "disk:raid", label: path.hasSuffix("s2.mov") ? "TestProjects" : "TestArchive", model: "Test RAID")
         }
         let permanent = DeletionTierDecision.decide(facts: two, preferTrash: false)
         #expect(permanent.tier == .permanent)

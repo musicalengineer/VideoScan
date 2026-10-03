@@ -224,7 +224,7 @@ struct DeletionTierFacts: Sendable, Equatable {
         /// be established, is never a drive of its own (codex #258 F9).
         var kind: DuplicateDrives.VolumeKind = .physical
         /// The physical device's model ("Pegasus32 R4"), when known.
-        var device: String? = nil
+        var model: String? = nil
         /// The volumes of this drive the counted copies sit on (filled as
         /// copies are counted; empty = just `label`).
         var volumes: [String] = []
@@ -233,7 +233,7 @@ struct DeletionTierFacts: Sendable, Equatable {
         /// "Pegasus32 R4 [FamilyArchive, Projects]".
         var name: String {
             let on = volumes.isEmpty ? [label] : volumes
-            return on.count == 1 ? on[0] : "\(device ?? "one device") [\(on.joined(separator: ", "))]"
+            return on.count == 1 ? on[0] : "\(model ?? "one device") [\(on.joined(separator: ", "))]"
         }
     }
     /// The keeper's drive (nil when it could not be stat'ed — then it adds
@@ -279,7 +279,7 @@ struct DeletionTierFacts: Sendable, Equatable {
         if let i = countedDrives.firstIndex(where: { $0.key == drive.key }) {
             // Another volume of a device already counted: named, not added.
             if !countedDrives[i].volumes.contains(drive.label) { countedDrives[i].volumes.append(drive.label) }
-            if countedDrives[i].device == nil { countedDrives[i].device = drive.device }
+            if countedDrives[i].model == nil { countedDrives[i].model = drive.model }
         } else {
             var first = drive
             if first.volumes.isEmpty { first.volumes = [first.label] }
