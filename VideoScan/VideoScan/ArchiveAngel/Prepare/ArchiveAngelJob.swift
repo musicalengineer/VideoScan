@@ -151,6 +151,26 @@ final class ArchiveAngelJob: @MainActor MediaFileOperationJob {
         return ArchiveAngelSelection(picks: picks, overflow: 0, rejected: rejected)
     }
 
+    // MARK: What this run holds (GH #258)
+
+    /// The records this Prepare holds WHILE IT RUNS — what "Delete
+    /// duplicates" must leave alone until the batch is ready (from then on
+    /// the prepared set says so). Empty once the job is over. O(entries).
+    var heldRecordIDs: Set<UUID> {
+        state.isActive ? Self.heldRecordIDs(explicit: explicitRecordIDs, plan: plan) : []
+    }
+
+    /// Pure: the plan's rows still on their way into the batch (pending /
+    /// preparing / ready — the same statuses `inFlightRecordIDs` reserves
+    /// for a live batch; a skipped or failed row is free), and — until the
+    /// plan has rows — the records picked by hand for it.
+    nonisolated static func heldRecordIDs(explicit: [UUID]?, plan: ArchiveAngelPlan) -> Set<UUID> {
+        var ids = Set<UUID>()
+        for entry in plan.entries where entry.status.isUnsettled || entry.status == .ready { ids.insert(entry.id) }
+        if plan.entries.isEmpty, let explicit { ids.formUnion(explicit) }
+        return ids
+    }
+
     // MARK: Lifecycle
 
     /// Why this job must not start (nil = go). Mirrors Promote's gates.

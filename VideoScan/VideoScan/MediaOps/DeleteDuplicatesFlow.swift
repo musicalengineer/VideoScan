@@ -47,6 +47,8 @@ struct DeleteDuplicatesFlow: ViewModifier {
     @State private var confirmForecast = ""
     @State private var confirmSummary = ""
     @State private var confirmCrossMode = false
+    /// GH #258: "2 copies left alone for the Archive Angel" — "" for none.
+    @State private var confirmLeftAlone = ""
 
     func body(content: Content) -> some View {
         content
@@ -99,6 +101,7 @@ struct DeleteDuplicatesFlow: ViewModifier {
         let selection = model.duplicateDeletionSelection(onVolume: path)
         confirmSummary = selection.confirmationText(volumeName: volumeName)
         confirmCrossMode = selection.crossVolumeMode
+        confirmLeftAlone = selection.leftAlone.line ?? ""
         let forecast = model.deleteDuplicatesForecast(onVolume: path)
         confirmForecast = forecast.confirmationText(volume: volumeName)
         appLog.write(forecast.logLine(volume: volumeName) + " (Start confirmation, \(source))")
@@ -110,6 +113,8 @@ struct DeleteDuplicatesFlow: ViewModifier {
         var text = confirmForecast.isEmpty
             ? "Check \(confirmCount) high-confidence duplicate(s) on \(volume).\n\n"
             : confirmForecast + "\n\n"
+        // The copies the run will not consider at all (GH #258).
+        if !confirmLeftAlone.isEmpty { text += "Not part of this: \(confirmLeftAlone).\n\n" }
         if confirmCrossMode {
             text += "\(confirmSummary)\n\n"
             text += WorkingCopyCleanupText.confirmationOn + "\n\n"

@@ -488,6 +488,12 @@ final class ArchiveAngel: ObservableObject {
     /// classes, the same numbers the Archive tab shows).
     var candidateIDs: Set<UUID> { recommendations.candidateIDs }
 
+    /// The records a Prepare that is still running holds (GH #258) — not
+    /// in `recommendations` yet: a batch joins the prepared set only once
+    /// it is ready. Read from the running job itself, through the job
+    /// runner; empty when none is attached (then no job can be running).
+    var recordIDsInRunningPrepare: Set<UUID> { jobRunner?.recordIDsInRunningPrepare ?? [] }
+
     func evidence(for id: UUID) -> Evidence? { store.record(for: id) }
 
     /// The record's EFFECTIVE class — stored evidence, the batches'

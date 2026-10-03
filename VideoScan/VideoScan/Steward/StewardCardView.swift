@@ -134,7 +134,7 @@ struct StewardCardView: View {
             line(ReclaimableEstimate.survivalRule)
             line(StewardGroupEvidence.keeperCaveat, faint: true)
             if item.protectedCopies > 0 {
-                line("\(item.protectedCopies) cop\(item.protectedCopies == 1 ? "y is" : "ies are") in the archive or on its drive and never offered.", faint: true)
+                line("\(item.protectedCopies) cop\(item.protectedCopies == 1 ? "y is" : "ies are") never offered — in the archive, on its drive, filed as Archived or chosen by the Archive Angel.", faint: true)
             }
         }
         .accessibilityIdentifier("steward.card.evidence")
@@ -230,16 +230,6 @@ struct StewardCardView: View {
 
     private var buttons: some View {
         VStack(alignment: .leading, spacing: 6) {
-            // Said ABOVE the Delete button: the drive's cleanup is wider
-            // than this card (QA 2026-10-03, F1).
-            if item.kind == .reclaimDrive || item.kind == .reclaimGroup,
-               let caution = StewardActionGate.stillCheckedCaution(item.stillCheckedOnDrive) {
-                Label(caution, systemImage: "exclamationmark.triangle.fill")
-                    .font(.system(size: 14, weight: .medium))
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("steward.card.caution")
-            }
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 12) { actionButtons }
                 VStack(alignment: .leading, spacing: 8) { actionButtons }

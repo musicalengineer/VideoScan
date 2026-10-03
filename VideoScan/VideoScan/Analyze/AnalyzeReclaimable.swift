@@ -146,12 +146,20 @@ struct ReclaimableEstimate: Sendable, Equatable {
 
 enum ReclaimableCalculator {
 
+    /// `leftAlone`: the Delete planner's own "this copy is left alone" rule
+    /// (GH #258 — the Archive Angel's picks, filed as Archived, a promoted
+    /// copy; `VideoScanModel.duplicateDeletionHoldRule`). Such a row is
+    /// projected as "not an extra copy": it can still be a counted sibling,
+    /// but it is never counted as reclaimable — the run would not take it.
     @MainActor
-    static func project(_ records: [VideoRecord]) -> [ReclaimableInput] {
+    static func project(_ records: [VideoRecord],
+                        leftAlone: (VideoRecord) -> Bool = { _ in false }) -> [ReclaimableInput] {
         var out: [ReclaimableInput] = []
         out.reserveCapacity(records.count)
         for r in records where !(r.isPurged || r.isSetAside || r.isSuperseded) {
-            out.append(ReclaimableInput(record: r))
+            var input = ReclaimableInput(record: r)
+            if input.isExtraCopy, leftAlone(r) { input.isExtraCopy = false }
+            out.append(input)
         }
         return out
     }

@@ -106,6 +106,10 @@ protocol AngelJobRunner: AnyObject {
     var isBusy: Bool { get }
     /// Any Media File Operations job is active (Angel Checks park).
     var hasActiveJobs: Bool { get }
+    /// The records a Prepare that is STILL RUNNING holds (GH #258): its
+    /// plan's rows on their way into the batch, and the records picked by
+    /// hand for it. Empty when no Prepare is running.
+    var recordIDsInRunningPrepare: Set<UUID> { get }
     /// Start a batch the USER asked for (claims user origin, so the MFO
     /// window comes forward). `recordIDs` nil = the Angel picks `count`.
     @discardableResult

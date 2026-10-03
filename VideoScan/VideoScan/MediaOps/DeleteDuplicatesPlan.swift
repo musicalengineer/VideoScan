@@ -523,6 +523,61 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     var log: [String] = []
     /// How many times this plan has been resumed.
     var resumeCount: Int = 0
+    /// GH #258: extra copies on the volume that were NEVER rows of this run
+    /// because the Archive Angel has chosen them, they are filed as
+    /// Archived, or they are promoted archive copies — each with its
+    /// reason, for the detail view (at most `leftAloneListCap`; the counts
+    /// below are the whole truth). Additive and optional: plans written
+    /// before it decode nil, and nothing here is ever a deletion target.
+    var leftAloneCopies: [LeftAloneCopy]?
+    /// How many were left alone when the plan was made, by kind.
+    var leftAloneAtPlan: LeftAloneCounts?
+
+    /// One copy the run never considered (GH #258).
+    struct LeftAloneCopy: Codable, Sendable, Identifiable, Equatable {
+        var id: UUID
+        var path: String
+        var filename: String
+        var sizeBytes: Int64
+        /// "left alone — the Archive Angel has chosen this copy"
+        var reason: String
+    }
+
+    /// Copies left alone, by kind: the Angel's, and archived ones (filed as
+    /// Archived, or a promoted archive copy).
+    struct LeftAloneCounts: Codable, Sendable, Equatable {
+        var forAngel = 0
+        var archived = 0
+        var total: Int { forAngel + archived }
+
+        mutating func add(_ hold: DuplicateDeletionHold) {
+            switch hold {
+            case .angelChosen: forAngel += 1
+            case .filedArchived, .promotedArchiveCopy: archived += 1
+            }
+        }
+
+        /// "2 copies left alone for the Archive Angel · 1 archived copy
+        /// left alone" — nil when there are none.
+        var line: String? {
+            var parts: [String] = []
+            if forAngel > 0 { parts.append("\(forAngel) cop\(forAngel == 1 ? "y" : "ies") left alone for the Archive Angel") }
+            if archived > 0 { parts.append("\(archived) archived cop\(archived == 1 ? "y" : "ies") left alone") }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+    }
+
+    static let leftAloneListCap = 2_000
+
+    /// Left alone when the plan was made PLUS rows the run left alone at
+    /// their turn for the same reasons (the Angel's sets change mid-run).
+    var leftAlone: LeftAloneCounts {
+        var counts = leftAloneAtPlan ?? LeftAloneCounts()
+        for entry in entries where entry.status == .skipped {
+            if let hold = DuplicateDeletionHold.allCases.first(where: { $0.note == entry.note }) { counts.add(hold) }
+        }
+        return counts
+    }
 
     init(id: UUID = UUID(), createdAt: Date = Date(), volumePath: String, catalogLocation: String,
          crossVolumeMode: Bool, skippedBeforePlan: Int, summaryLine: String,

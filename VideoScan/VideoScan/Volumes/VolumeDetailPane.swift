@@ -114,7 +114,10 @@ struct VolumeDetailPane: View {
         isComputing = true
         let root = target.searchPath
         let inputs = VolumeDashboardCalculator.project(model.records, under: root)
-        let reclaimInputs = ReclaimableCalculator.project(model.records)
+        // The copies the Delete run would leave alone for the Archive Angel
+        // or the archive are not reclaimable (GH #258) — the run's own rule.
+        let hold = model.duplicateDeletionHoldRule()
+        let reclaimInputs = ReclaimableCalculator.project(model.records, leftAlone: { hold($0) != nil })
         let crossMode = model.duplicateKeeperSettings.alsoCleanUpWorkingCopies
         let probeFree = target.isReachable && !target.isRetired
         computeTask = Task {

@@ -821,7 +821,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // The old "(0, 0, skipped, 0)" — nothing to run, nothing to save.
             result = (0, 0, prepared.skippedBeforePlan, 0)
             finish(success: "No duplicates to delete on \(volumeName)"
-                   + (prepared.skippedBeforePlan > 0 ? " — \(prepared.skippedBeforePlan) skipped" : ""))
+                   + (prepared.skippedBeforePlan > 0 ? " — \(prepared.skippedBeforePlan) skipped" : "")
+                   + (prepared.leftAlone.line.map { " · \($0)" } ?? ""))
             return
         }
         await savePlan(context: "plan made")
@@ -1100,6 +1101,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         if refused > 0 { summaryParts.append("\(refused) refused") }
         if failed > 0 { summaryParts.append("\(failed) not done") }
         if leftAlone > 0 { summaryParts.append("\(leftAlone) left alone") }
+        // GH #258: copies never taken (or left at their turn) because the
+        // Archive Angel has chosen them or they are archived — the row's
+        // one-line summary only; the log lines above are unchanged.
+        if let heldLine = finalPlan.leftAlone.line { summaryParts.append(heldLine) }
         let summary = summaryParts.joined(separator: " · ")
         logSummary(planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "done"))
         if planSaveFailed {
@@ -1126,6 +1131,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let preAwait = record.snapshotClone()
         let pairStarted = Date()
         var decision: DeletionTierDecision?
+        // Set when the copy became one the run leaves alone during its read.
+        var heldAfterRead: DuplicateDeletionHold?
         let trashVolume = VolumeReachability.volumeName(forPath: entry.path)
 
         // Phase 1: hold + hash once (or verify twice on the first pair of
@@ -1191,6 +1198,15 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                     DeleteDuplicatesDiskWorker.release(ticket, reason: "stopped after quarantine",
                                                        keeperFilename: keeperName)
                 }
+            } else if let hold = model.duplicateDeletionHoldRule()(model.record(forID: entry.id) ?? record) {
+                // GH #258: the Archive Angel chose this copy (or it was
+                // filed as Archived) WHILE its pair was being read — after
+                // the turn's authorization, before anything is removed. The
+                // file goes back to its path, untouched; phase 2 never runs.
+                heldAfterRead = hold
+                outcome = await runDetached(entryID: entry.id) {
+                    DeleteDuplicatesDiskWorker.release(ticket, reason: hold.note, keeperFilename: keeperName, leftAlone: facts)
+                }
             } else if let tier = decided.tier {
                 // Phase 2: re-stat the counted copies and re-decide (codex
                 // 1611), re-check the file and the keeper, unlink or move
@@ -1244,8 +1260,16 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let seconds = Date().timeIntervalSince(pairStarted)
         let concurrency = inFlight.count
 
-        settle(outcome, entry: entry, keeper: keeper, preAwait: preAwait, decision: decision,
-               facts: finalFacts, trashVolume: trashVolume, model: model)
+        if let hold = heldAfterRead, case .leftAlone(_, let facts) = outcome {
+            // Put back for the Archive Angel / the archive: the same answer
+            // as at the copy's turn — a skip, not the tier's "too few
+            // copies would remain" and not a refusal. (A put-back that
+            // failed is `.retained` and settles below, named.)
+            settleHeld(hold, entry: entry, facts: facts, model: model)
+        } else {
+            settle(outcome, entry: entry, keeper: keeper, preAwait: preAwait, decision: decision,
+                   facts: finalFacts, trashVolume: trashVolume, model: model)
+        }
 
         rate.add(bytes: entry.sizeBytes, seconds: seconds, concurrency: concurrency)
         publishProgress()
@@ -1358,6 +1382,23 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                        keeperMatchedByStoredFixity: !proof.keeperReadInFull)
             }
         }
+    }
+
+    /// GH #258: the copy was put back because it became one the run leaves
+    /// alone while its pair was being read. Counted and worded as the same
+    /// answer at the copy's turn is (`.skip`); the row is not re-marked.
+    private func settleHeld(_ hold: DuplicateDeletionHold, entry: DeleteDuplicatesPlan.Entry,
+                            facts: DeletionTierFacts, model: VideoScanModel) {
+        tally.skipped += 1
+        tally.bytesSkipped += entry.sizeBytes
+        rowLog("skipped", entry, hold.note + " — put back, nothing removed")
+        mutatePlan {
+            $0.set(entry.id, .skipped, note: hold.note)
+            $0.setTier(entry.id, DeletionTierDecision(tier: nil, remainingVerifiedCopies: facts.remainingVerifiedCopies,
+                                                      reason: hold.note),
+                       hasVerifiedArchive: facts.hasVerifiedArchive)
+        }
+        model.log("  Skipped \(entry.filename): \(hold.note) — put back, nothing removed")
     }
 
     private func settleRefused(reason: String, cancelled: Bool, entry: DeleteDuplicatesPlan.Entry, model: VideoScanModel) {

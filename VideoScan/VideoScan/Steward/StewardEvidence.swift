@@ -29,11 +29,13 @@
 //
 // ROWS OF THE SAME RUN (QA F1, F6). Every other copy of the set that the
 // same drive's cleanup would decide — the WHOLE set's (`StewardCase
-// .runRows`, not the capped evidence rows), INCLUDING copies no card
-// proposes but the planner does not refuse (the Angel's picks, filed as
-// Archived) — is handed to the planner as `excluding`: it may go too, so
-// it is never counted as a copy that remains. And the copy's own identity
-// is stat'ed (`duplicateIdentity`) so a hard link of it is not counted.
+// .runRows`, not the capped evidence rows) — is handed to the planner as
+// `excluding`: it may go too, so it is never counted as a copy that
+// remains. A copy the planner leaves alone (the Angel's picks, filed as
+// Archived — GH #258) is NOT a row of the run: it is asked about like any
+// other sibling and counts only if its stored evidence reproduces. And the
+// copy's own identity is stat'ed (`duplicateIdentity`) so a hard link of it
+// is not counted.
 //
 // WHEN. Only for the ONE focused card, from the pane's `.task(id:)` — never
 // in a view body, never for the whole queue. `prepare` runs on the main

@@ -11,15 +11,14 @@
 // model and read O(1) by the views. Budgeted for 100k records
 // (StewardScaleTests).
 //
-// RULE 2 of §5.6 lives in the projection: a record the canonical predicates
-// protect (archive copy / archive drive / Archive Angel's pick — see
-// VideoScanModel+Steward.swift) arrives here with `protection != .none`,
-// and from then on it can be a KEEPER but never a copy a case proposes to
-// let go. A duplicate set whose only other copies are protected produces no
-// Reclaim card. The Angel's picks and filed-as-Archived copies are NOT
-// refused by the Delete planner, though: where a drive's cleanup would
-// still check them the card says so (`.stillChecked`, `stillCheckedOnDrive`)
-// and the proof counts them as rows of the run (QA 2026-10-03, F1).
+// RULE 2 of §5.6 lives in the projection: a record the Delete planner's own
+// rules leave alone (archive copy / archive drive / filed as Archived /
+// Archive Angel's pick — see VideoScanModel+Steward.swift) arrives here
+// with `protection != .none`, and from then on it can be a KEEPER but never
+// a copy a case proposes to let go. A duplicate set whose only other copies
+// are protected produces no Reclaim card. Since GH #258 the run behind the
+// card leaves every one of them alone too, so a protected copy is never a
+// row of the run: it is an ordinary sibling the proof may count.
 //
 // WHAT A RECLAIM SET COUNTS. "Reclaimable" = extra copies that are not
 // protected. "The flow would check" = those whose keeper is on the same
@@ -304,16 +303,11 @@ enum StewardCaseBuilder {
         // Catalog": the calculator's rule again (keeper on this drive, or
         // any drive when working copies are cleaned too).
         var idsByDrive: [String: [UUID]] = [:]
-        // …and the copies no card proposes but the drive's cleanup would
-        // still check (the Angel's picks, filed as Archived) — QA F1.
-        var stillCheckedByDrive: [String: Int] = [:]
         for members in groups.values {
             guard let keeper = members.first(where: { inputs[$0].isKeeper }) else { continue }
-            for i in members where inputs[i].isExtraCopy && !inputs[i].protection.plannerRefuses
+            for i in members where inputs[i].isExtraCopy && !inputs[i].protection.isProtected
                 && (roots[i] == roots[keeper] || alsoCleanUpWorkingCopies) {
-                if inputs[i].protection.isProtected {
-                    stillCheckedByDrive[roots[i], default: 0] += 1
-                } else if idsByDrive[roots[i], default: []].count < maxIDsPerCase {
+                if idsByDrive[roots[i], default: []].count < maxIDsPerCase {
                     idsByDrive[roots[i], default: []].append(inputs[i].id)
                 }
             }
@@ -346,7 +340,6 @@ enum StewardCaseBuilder {
             c.driveConnected = isConnected(root, mountedRoots: mountedRoots)
             c.estimate = e
             c.recordIDs = idsByDrive[root] ?? []
-            c.stillCheckedOnDrive = stillCheckedByDrive[root] ?? 0
             out.append(c)
         }
         out.sort { $0.payoffBytes != $1.payoffBytes ? $0.payoffBytes > $1.payoffBytes : $0.id < $1.id }
@@ -368,7 +361,6 @@ enum StewardCaseBuilder {
             var actionableByDrive: [String: Int64] = [:]
             var drives = Set<String>()
             var copies: [StewardCopy] = []
-            var stillCheckedByDrive: [String: Int] = [:]
             var runRows: [StewardRunRow] = []
             for i in members {
                 let r = inputs[i]
@@ -383,20 +375,13 @@ enum StewardCaseBuilder {
                     // In the set, but not marked as an extra copy (a
                     // "review" row): never proposed.
                     standing = .member
-                } else if r.protection.plannerRefuses {
+                } else if r.protection.isProtected {
+                    // The Delete planner leaves it alone (the archive, its
+                    // drive, the Angel's pick, filed as Archived): never
+                    // proposed, never counted as reclaimable, never a row
+                    // of the run.
                     protected += 1
                     standing = .protected(r.protection)
-                } else if r.protection.isProtected {
-                    // The steward's own restraint (the Angel's pick, filed
-                    // as Archived): never proposed, never counted as
-                    // reclaimable — but the planner does not refuse it.
-                    if flowWouldCheck {
-                        stillCheckedByDrive[root, default: 0] += 1
-                        if runRows.count < maxIDsPerCase { runRows.append(StewardRunRow(id: r.id, driveRoot: root)) }
-                        standing = .stillChecked(r.protection)
-                    } else {
-                        standing = .protected(r.protection)
-                    }
                 } else {
                     reclaimableCopies += 1
                     reclaimable += max(0, r.sizeBytes)
@@ -442,7 +427,6 @@ enum StewardCaseBuilder {
             c.keeperID = inputs[keeperIndex].id
             c.copiesNeedingWorkingCopyMode = needMode
             c.protectedCopies = protected
-            c.stillCheckedOnDrive = target.flatMap { stillCheckedByDrive[$0] } ?? 0
             c.runRows = runRows
             out.append(c)
         }
@@ -705,7 +689,6 @@ enum StewardCaseBuilder {
             switch s {
             case .keeper: return 0
             case .wouldBeChecked: return 1
-            case .stillChecked: return 2
             case .keeperOnAnotherDrive: return 3
             case .member: return 4
             case .protected: return 5
