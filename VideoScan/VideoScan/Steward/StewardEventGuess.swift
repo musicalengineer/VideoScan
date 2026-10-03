@@ -99,6 +99,42 @@ struct StewardEventGuess: Sendable, Equatable {
         guard let year = parts.year, let month = parts.month, let dayOfMonth = parts.day else { return nil }
 
         // 2. Birthdays — the youngest N wins; a tie on it means no guess.
+        switch birthdayMatch(people: people, day: day, year: year, month: month, calendar: calendar) {
+        case .tie: return nil
+        case .person(let name, let n):
+            return n == 0
+                ? StewardEventGuess(kind: .bornDay, text: "the day \(name) was born")
+                : StewardEventGuess(kind: .birthday, text: "\(name)'s \(ordinal(n)) birthday")
+        case .nobody: break
+        }
+
+        // 3. Calendar anchors.
+        switch (month, dayOfMonth) {
+        case (12, 24), (12, 25): return StewardEventGuess(kind: .christmas, text: "Christmas \(year)")
+        case (12, 31): return StewardEventGuess(kind: .newYear, text: "New Year's \(year + 1)")
+        case (1, 1): return StewardEventGuess(kind: .newYear, text: "New Year's \(year)")
+        case (7, 4): return StewardEventGuess(kind: .fourthOfJuly, text: "Fourth of July \(year)")
+        case (10, 31): return StewardEventGuess(kind: .halloween, text: "Halloween \(year)")
+        default: break
+        }
+        if month == 11, let turkey = thanksgivingDay(year: year, calendar: calendar),
+           abs(dayOfMonth - turkey) <= 1 {
+            return StewardEventGuess(kind: .thanksgiving, text: "Thanksgiving \(year)")
+        }
+        return nil
+    }
+
+    // MARK: Pieces (pure; tested directly)
+
+    enum BirthdayMatch: Equatable {
+        case nobody
+        case person(name: String, number: Int)
+        /// Two different people on the same, youngest number.
+        case tie
+    }
+
+    nonisolated static func birthdayMatch(people: [Person], day: Date, year: Int, month: Int,
+                                          calendar: Calendar) -> BirthdayMatch {
         var best: (n: Int, name: String)?
         var tied = false
         for person in people where !person.displayName.isEmpty {
@@ -119,30 +155,9 @@ struct StewardEventGuess: Sendable, Equatable {
                 best = (n, person.displayName)
             }
         }
-        if let best {
-            if tied { return nil }
-            return best.n == 0
-                ? StewardEventGuess(kind: .bornDay, text: "the day \(best.name) was born")
-                : StewardEventGuess(kind: .birthday, text: "\(best.name)'s \(ordinal(best.n)) birthday")
-        }
-
-        // 3. Calendar anchors.
-        switch (month, dayOfMonth) {
-        case (12, 24), (12, 25): return StewardEventGuess(kind: .christmas, text: "Christmas \(year)")
-        case (12, 31): return StewardEventGuess(kind: .newYear, text: "New Year's \(year + 1)")
-        case (1, 1): return StewardEventGuess(kind: .newYear, text: "New Year's \(year)")
-        case (7, 4): return StewardEventGuess(kind: .fourthOfJuly, text: "Fourth of July \(year)")
-        case (10, 31): return StewardEventGuess(kind: .halloween, text: "Halloween \(year)")
-        default: break
-        }
-        if month == 11, let turkey = thanksgivingDay(year: year, calendar: calendar),
-           abs(dayOfMonth - turkey) <= 1 {
-            return StewardEventGuess(kind: .thanksgiving, text: "Thanksgiving \(year)")
-        }
-        return nil
+        guard let best else { return .nobody }
+        return tied ? .tie : .person(name: best.name, number: best.n)
     }
-
-    // MARK: Pieces (pure; tested directly)
 
     /// N when `day` is within ±`windowDays` of the person's Nth birthday
     /// (0 = the day they were born; the date must not precede the birth).

@@ -555,29 +555,31 @@ enum StewardCaseBuilder {
     /// Family words for each of MediaAnalyzer's reasons ("38 very short
     /// clips on SanDisk"). An unknown reason is quoted as it stands.
     nonisolated static func junkNoun(_ key: String) -> String {
-        switch key {
-        case "Very short": return "very short clips"
-        case "Probe failed — file may be corrupted": return "files that could not be read"
-        case "No audio or video streams found": return "files with no picture or sound"
-        case "Zero duration": return "clips with no length"
-        case "Zero-byte file": return "empty files"
-        case "Short audio-only clip, no pair found": return "short sound-only clips"
-        case "Audio-only file, no pair found": return "sound-only files with no matching picture"
-        case "Video-only file, no audio pair found": return "picture-only files with no matching sound"
-        case "Low audio sample rate — voicemail/VoIP", "Mono 8kHz — likely phone recording":
-            return "phone-quality recordings"
-        case "Screencast resolution, no audio": return "screen recordings"
-        case "Short clip at screencast resolution": return "short screen recordings"
-        case "Avid render/precompute file": return "Avid render files"
-        case "Final Cut Pro render/scratch file": return "Final Cut render files"
-        case "System/hidden directory artifact": return "system leftovers"
-        case "Filename suggests test/temp/sample content": return "test or temporary clips"
-        case "Filename suggests NLE transition or render output": return "editing transitions and renders"
-        case "File appears truncated": return "files that look cut off"
-        case "Very low resolution — below usable threshold": return "very small pictures"
-        default: return "files marked “\(key)”"
-        }
+        junkNouns[key] ?? "files marked “\(key)”"
     }
+
+    /// MediaAnalyzer's reason (brackets dropped) → the words on the card.
+    nonisolated static let junkNouns: [String: String] = [
+        "Very short": "very short clips",
+        "Probe failed — file may be corrupted": "files that could not be read",
+        "No audio or video streams found": "files with no picture or sound",
+        "Zero duration": "clips with no length",
+        "Zero-byte file": "empty files",
+        "Short audio-only clip, no pair found": "short sound-only clips",
+        "Audio-only file, no pair found": "sound-only files with no matching picture",
+        "Video-only file, no audio pair found": "picture-only files with no matching sound",
+        "Low audio sample rate — voicemail/VoIP": "phone-quality recordings",
+        "Mono 8kHz — likely phone recording": "phone-quality recordings",
+        "Screencast resolution, no audio": "screen recordings",
+        "Short clip at screencast resolution": "short screen recordings",
+        "Avid render/precompute file": "Avid render files",
+        "Final Cut Pro render/scratch file": "Final Cut render files",
+        "System/hidden directory artifact": "system leftovers",
+        "Filename suggests test/temp/sample content": "test or temporary clips",
+        "Filename suggests NLE transition or render output": "editing transitions and renders",
+        "File appears truncated": "files that look cut off",
+        "Very low resolution — below usable threshold": "very small pictures",
+    ]
 
     // MARK: Queue order
 
