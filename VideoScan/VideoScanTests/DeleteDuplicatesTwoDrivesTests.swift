@@ -170,7 +170,8 @@ struct DeleteDuplicatesTwoDrivesTests {
             repo = repo.deletingLastPathComponent()
         }
         let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md"), encoding: .utf8)
-        #expect(invariants.contains("two different drives") && invariants.contains("APFS volumes in one container"))
+        #expect(invariants.contains("two different drives") && invariants.contains("APFS volumes in one container")
+                && invariants.contains("PHYSICAL DEVICE"))
     }
 
     // MARK: gather — which drives the counted copies sit on

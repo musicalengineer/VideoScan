@@ -826,6 +826,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         }
         model.isDeletingDuplicates = true
         defer { model.isDeletingDuplicates = false }
+        // Which physical device each volume is on is asked once per run.
+        DuplicateDrives.resetVolumeCache()
 
         var prepared: DeleteDuplicatesPlan
         if let resumed = resumingPlan {

@@ -481,7 +481,7 @@ struct DeleteDuplicatesCodex258DrivesTests {
         var resolver = D.Resolver()
         #expect(resolver.drive(forPath: "/test_codex258_no_such_folder/a.mov") == nil, "a folder that cannot be stat'ed has no drive")
         let here = resolver.drive(forPath: (NSTemporaryDirectory() as NSString).appendingPathComponent("a.mov"))
-        #expect(here?.key.hasPrefix("dev:") == true)
+        #expect(here != nil && here?.key.isEmpty == false)
     }
 
     /// Sensors: ONE question about drives, asked by the run, the prover,
@@ -504,7 +504,7 @@ struct DeleteDuplicatesCodex258DrivesTests {
             repo = repo.deletingLastPathComponent()
         }
         let invariants = try String(contentsOf: repo.appendingPathComponent("docs/practices/invariants/MediaOps.md"), encoding: .utf8)
-        #expect(invariants.contains("a mounted disk image") && invariants.contains("a network volume (one drive per share)")
+        #expect(invariants.contains("a mounted disk image") && invariants.contains("a network volume (one drive per server + share)")
                 && invariants.contains("APFS volumes in one container"))
     }
 

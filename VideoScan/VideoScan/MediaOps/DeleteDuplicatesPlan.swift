@@ -24,8 +24,9 @@
 // Copies' stamp-bound fixity lets it count:
 //     ≥ 3 remaining, on ≥ 2 different drives (or one of them the
 //       verified archive copy)   → PERMANENT   (space back now)
-//       — a "drive" is a mounted volume that is not a disk image and whose
-//       kind could be established (DeleteDuplicatesDrives.swift)
+//       — a "drive" is a PHYSICAL DEVICE: two volumes of one device are
+//       one drive; a disk image or a volume whose device cannot be
+//       established never adds one (DeleteDuplicatesDrives.swift)
 //     ≥ 2 remaining otherwise     → TRASH       (to the volume's Trash, not gone)
 //     < 2 remaining               → LEFT ALONE  (put back untouched)
 // COPIES AND DRIVES (Rick 2026-10-03, after a ledger row that read
@@ -210,12 +211,11 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// Who did not, and why ("sibling b.mov on M4drive not verified yet").
     var notCounted: [String] = []
 
-    /// One drive a counted copy sits on. `key` names the mounted volume —
-    /// ONE key per volume, from the `st_dev` of the stat that proved the
-    /// copy (`DuplicateDrives.key`), so one volume spelled, linked or
-    /// mounted two ways is one drive, and a copy whose stamp carries a
-    /// volume UUID and one whose stamp does not are never keyed two ways
-    /// (codex #258 F8).
+    /// One drive a counted copy sits on. `key` names the PHYSICAL DEVICE
+    /// (`DuplicateDrives.key(for:)`): every volume of one device — two APFS
+    /// volumes of one container, two partitions of one RAID — is the same
+    /// drive, and one volume spelled, linked or mounted two ways is too
+    /// (codex #258 F8; "a drive is a physical device", 2026-10-03).
     struct Drive: Sendable, Equatable {
         let key: String
         /// "LaCieWorkspace" — for the reason.
@@ -223,6 +223,18 @@ struct DeletionTierFacts: Sendable, Equatable {
         /// What kind of volume it is: a disk image, or one whose kind cannot
         /// be established, is never a drive of its own (codex #258 F9).
         var kind: DuplicateDrives.VolumeKind = .physical
+        /// The physical device's model ("Pegasus32 R4"), when known.
+        var device: String? = nil
+        /// The volumes of this drive the counted copies sit on (filled as
+        /// copies are counted; empty = just `label`).
+        var volumes: [String] = []
+
+        /// "LaCie" — or, with copies on several volumes of the one device,
+        /// "Pegasus32 R4 [FamilyArchive, Projects]".
+        var name: String {
+            let on = volumes.isEmpty ? [label] : volumes
+            return on.count == 1 ? on[0] : "\(device ?? "one device") [\(on.joined(separator: ", "))]"
+        }
     }
     /// The keeper's drive (nil when it could not be stat'ed — then it adds
     /// no drive to the count).
@@ -264,7 +276,15 @@ struct DeletionTierFacts: Sendable, Equatable {
             if let note = drive.kind.notADriveNote, !notADriveNotes.contains(note) { notADriveNotes.append(note) }
             return
         }
-        if !countedDrives.contains(where: { $0.key == drive.key }) { countedDrives.append(drive) }
+        if let i = countedDrives.firstIndex(where: { $0.key == drive.key }) {
+            // Another volume of a device already counted: named, not added.
+            if !countedDrives[i].volumes.contains(drive.label) { countedDrives[i].volumes.append(drive.label) }
+            if countedDrives[i].device == nil { countedDrives[i].device = drive.device }
+        } else {
+            var first = drive
+            if first.volumes.isEmpty { first.volumes = [first.label] }
+            countedDrives.append(first)
+        }
     }
 
     /// One more verified copy, on `drive` — used by `gather`, and by the
@@ -276,12 +296,18 @@ struct DeletionTierFacts: Sendable, Equatable {
     }
 
     /// "2 verified remain: keeper on LaCieWorkspace, archive copy on
-    /// FamilyArchive — on 2 drives; sibling b.mov on M4drive not verified
-    /// yet".
+    /// FamilyArchive — on 2 drives (LaCie · Pegasus32 R4 [FamilyArchive,
+    /// Projects]); sibling b.mov on M4drive not verified yet". The drives
+    /// are NAMED whenever there are two or more, or one device holds the
+    /// copies on several of its volumes — so the ledger shows which
+    /// physical devices the count rests on.
     var summary: String {
         var text = "\(remainingVerifiedCopies) verified remain: " + counted.joined(separator: ", ")
         if remainingVerifiedCopies >= 2, !countedDrives.isEmpty {
             text += " — on \(distinctDriveCount) drive\(distinctDriveCount == 1 ? "" : "s")"
+            if countedDrives.count >= 2 || countedDrives.contains(where: { $0.volumes.count > 1 }) {
+                text += " (" + countedDrives.map(\.name).joined(separator: " · ") + ")"
+            }
         }
         if !notCounted.isEmpty { text += "; " + notCounted.joined(separator: ", ") }
         return text
@@ -431,7 +457,18 @@ struct DeletionTierFacts: Sendable, Equatable {
         // The drives and the archive exception follow what still holds: a
         // dropped copy takes its drive with it unless another copy is there.
         let stillKeys = Set(still.map { $0.driveKey ?? Self.driveKey($0.stamp) })
-        out.countedDrives = countedDrives.filter { $0.key == keeperDrive?.key || stillKeys.contains($0.key) }
+        out.countedDrives = countedDrives.filter { $0.key == keeperDrive?.key || stillKeys.contains($0.key) }.map { drive in
+            // …and each drive names only the volumes that still hold a copy.
+            var drive = drive
+            var on: [String] = []
+            if let keeperDrive, keeperDrive.key == drive.key { on.append(keeperDrive.label) }
+            for copy in still where (copy.driveKey ?? Self.driveKey(copy.stamp)) == drive.key {
+                let volume = Self.driveLabel(forPath: copy.path)
+                if !on.contains(volume) { on.append(volume) }
+            }
+            if !on.isEmpty, drive.volumes.count > 1 { drive.volumes = drive.volumes.filter { on.contains($0) } }
+            return drive
+        }
         out.countsArchiveCopy = keeperIsArchiveCopy || still.contains { countedArchivePaths.contains($0.path) }
         out.counted = [keeperCounted] + still.map(\.label)
         out.unverifiedCopies += dropped.count
@@ -456,12 +493,13 @@ struct DeletionTierDecision: Equatable, Sendable {
     static let minimumForPermanent = 3
     /// An outright delete needs the remaining copies on at least this many
     /// DIFFERENT drives — unless one of them is the verified archive copy.
-    /// A "drive" is a mounted volume (`DuplicateDrives`): a local volume on
-    /// a physical device, or a network share — never a disk image, never a
-    /// volume whose kind cannot be established. KNOWN LIMIT, documented,
-    /// not solved: two volumes on one physical device (two APFS volumes in
-    /// one container, two partitions of one disk or RAID) count as two
-    /// drives (docs/practices/invariants/MediaOps.md, MOPS-2).
+    /// A "drive" is a PHYSICAL DEVICE (`DuplicateDrives`): every volume of
+    /// one device is one drive; a network share is one; a disk image or a
+    /// volume whose device cannot be established never adds one. What
+    /// cannot be seen stays a known limit: a hardware RAID is ONE drive
+    /// (its redundancy is not a second one); two disks in one enclosure
+    /// that present as two devices are two
+    /// (docs/practices/invariants/MediaOps.md, MOPS-2).
     static let minimumDrivesForPermanent = 2
 
     /// The survival rule in one sentence, from the constants — every place
@@ -495,7 +533,7 @@ struct DeletionTierDecision: Equatable, Sendable {
         if n >= minimumForPermanent {
             // Enough copies, but all on ONE drive and none of them the
             // archive's: the Trash, never an outright delete.
-            let drive = facts.countedDrives.first?.label ?? "one drive"
+            let drive = facts.countedDrives.first?.name ?? "one drive"
             let notADrive = facts.notADriveNotes.isEmpty ? "" : " — " + facts.notADriveNotes.joined(separator: "; ")
             return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
                                         reason: "to the Trash, not gone — the \(n) copies that remain are all on \(drive)\(notADrive) (\(who))")

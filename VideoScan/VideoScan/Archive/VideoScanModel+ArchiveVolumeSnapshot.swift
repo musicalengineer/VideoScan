@@ -118,6 +118,9 @@ extension VideoScanModel {
         // What is mounted where changed: the read-only volumes' snapshot is
         // as stale as the archive's.
         noteReadOnlyVolumeSnapshotStale()
+        // …and so is what Delete Duplicates learned about which physical
+        // device each volume is on.
+        DuplicateDrives.resetVolumeCache()
         archiveVolumeSnapshotCache.generation &+= 1
         archiveVolumeSnapshotCache.isFresh = false
         archiveVolumeSnapshotTask = nil
