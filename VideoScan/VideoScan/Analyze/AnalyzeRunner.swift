@@ -46,6 +46,7 @@ struct AnalyzeRunner {
     /// `volume`: a scan-target root to scope the pass, or nil for "all
     /// reachable". `source`: who clicked ("panel", "menu", "storage card").
     func runNow(_ cycler: AnalyzeCycler, volume: String? = nil, source: String) {
+        guard engineIsFree(for: cycler) else { return }
         let scopeText = volume.map { VolumeReachability.displayLabel(forPath: $0) } ?? "all reachable"
         start(cycler, "START — \(scopeText) (\(source))")
 
@@ -75,15 +76,14 @@ struct AnalyzeRunner {
             if let volume {
                 orchestrator.enqueueAnalyze(volumePrefix: volume, model: model)
             } else {
-                // Every reachable volume with dossier work left — the same
-                // choice the legacy dashboard's Analyze All makes.
-                let report = model.analyzeCoverageSnapshot.report
-                let remaining = report.byVolume[.sceneCaptions] ?? [:]
-                let prefixes = CatalogScanTarget.analyzeCandidates(model.scanTargets)
-                    .map(\.searchPath)
-                    .filter { (remaining[VolumeDashboardCalculator.normalizedRoot($0)]?.remaining ?? 0) > 0 }
+                // Every reachable volume, as the legacy dashboard's Analyze
+                // All did; enqueueAnalyze's own guards skip a volume already
+                // queued or running, and a volume with nothing left settles
+                // as "nothing to do" (QA 2026-10-02: no coverage pre-filter
+                // here — the three dossier rows share one queue).
+                let prefixes = CatalogScanTarget.analyzeCandidates(model.scanTargets).map(\.searchPath)
                 if prefixes.isEmpty {
-                    outcome(cycler, "nothing to do — every reachable volume is current")
+                    outcome(cycler, "nothing to do — no reachable volume")
                 } else {
                     orchestrator.enqueueAnalyzeAll(volumePrefixes: prefixes, model: model)
                 }
@@ -118,6 +118,7 @@ struct AnalyzeRunner {
     // MARK: Correlate extras (the row's disclosure)
 
     func findPairsAcrossVolumes(source: String) {
+        guard engineIsFree(for: .correlate) else { return }
         start(.correlate, "START — find A/V pairs across all volumes (\(source))")
         Task { [model] in
             await model.correlateAcrossVolumes()
@@ -127,11 +128,35 @@ struct AnalyzeRunner {
 
     /// The ONLY from-scratch redo; the caller confirms first.
     func clearAndRecorrelateAll(source: String) {
+        guard engineIsFree(for: .correlate) else { return }
         start(.correlate, "START — clear ALL pairs and re-correlate from scratch (\(source))")
         Task { [model] in
             await model.clearAndRecorrelateAll()
             outcome(.correlate, model.correlateStatus.isEmpty ? "finished" : model.correlateStatus)
         }
+    }
+
+    // MARK: Engine gates (QA on the Phase A branch, 2026-10-02)
+
+    /// analyzeDuplicates() and correlate() have NO reentrancy guard of their
+    /// own (the two backfills do): a second pass started from another
+    /// surface would run concurrently and its `defer` would clear the first
+    /// pass's flag. Refuse — out loud — while the engine is busy, and while
+    /// a scan runs (both old toolbar menus were disabled during a scan).
+    /// The other engines guard themselves (backfills) or queue (dossier,
+    /// footage). False = refused and logged.
+    func engineIsFree(for cycler: AnalyzeCycler) -> Bool {
+        switch cycler {
+        case .duplicates:
+            if model.isAnalyzingDuplicates { refuse(cycler, "already running"); return false }
+            if model.isScanning { refuse(cycler, "a scan is running — try again when it finishes"); return false }
+        case .correlate:
+            if model.isCorrelating { refuse(cycler, "already running"); return false }
+            if model.isScanning { refuse(cycler, "a scan is running — try again when it finishes"); return false }
+        default:
+            break
+        }
+        return true
     }
 
     // MARK: Pause / Resume / Stop (only where the engine has them)

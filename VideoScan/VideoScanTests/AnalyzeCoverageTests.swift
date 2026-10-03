@@ -268,15 +268,17 @@ struct AnalyzeRowStateTests {
     }
 
     @Test func unknownCoverageSaysSoInsteadOfAPercentage() {
-        #expect(state(.footage, remaining: 0, known: false) == .auto(detail: "coverage unknown — no stamp yet"))
-        #expect(state(.ocr, remaining: 0, known: false) == .auto(detail: "coverage unknown — no stamp yet"))
-        #expect(state(.duplicates, remaining: 0, known: false) == .manual(detail: "coverage unknown — no stamp yet"))
+        let unknown = AnalyzeRowStateRule.coverageUnknownDetail
+        #expect(unknown == "coverage unknown — nothing records this check yet")
+        #expect(state(.footage, remaining: 0, known: false) == .auto(detail: unknown))
+        #expect(state(.ocr, remaining: 0, known: false) == .auto(detail: unknown))
+        #expect(state(.duplicates, remaining: 0, known: false) == .manual(detail: unknown))
     }
 
     @Test func scheduleLabelsAreHonestInPhaseA() {
         #expect(state(.duplicates, remaining: 3, schedule: .manual) == .manual(detail: "3 to go"))
-        #expect(state(.duplicates, remaining: 3, schedule: .auto) == .manual(detail: "3 to go · Auto arrives in Phase C"))
-        #expect(state(.duplicates, remaining: 3, schedule: .overnight) == .manual(detail: "3 to go · Overnight arrives in Phase C"))
+        #expect(state(.duplicates, remaining: 3, schedule: .auto) == .manual(detail: "3 to go · Auto is coming later; by hand for now"))
+        #expect(state(.duplicates, remaining: 3, schedule: .overnight) == .manual(detail: "3 to go · Overnight is coming later; by hand for now"))
         #expect(state(.dateInference, remaining: 3, schedule: .auto) == .auto(detail: "3 to go"))
         var live = AnalyzeRowStateRule.Live()
         live.lastAutoRunAt = Date(timeIntervalSince1970: 10_000 - 7_200)
@@ -408,5 +410,51 @@ struct AnalyzeCoverageCacheTests {
         // The report carries `computedAt`, so an identical catalog still
         // differs by the clock; what must NOT happen is a publish storm.
         #expect(model.analyzeCoverageSnapshot.publishCount - before <= 1)
+    }
+}
+
+// MARK: - Engine gates (QA on the Phase A branch, 2026-10-02)
+//
+// analyzeDuplicates() / correlate() carry no reentrancy guard of their own
+// (the two backfills do), and three surfaces now feed the runner while the
+// panel samples flags on a 1 s tick — so a second concurrent pass could
+// start and its `defer` would clear the first pass's flag. The runner must
+// refuse while the engine's flag is set, and while a scan runs (both old
+// menus were disabled during a scan). RED on 9429e9a1, then green.
+
+@Suite("Analyze runner — engine gates", .serialized)
+@MainActor
+struct AnalyzeRunnerGateTests {
+
+    private func settle() async throws { try await Task.sleep(nanoseconds: 400_000_000) }
+
+    @Test func runNowDoesNotStartASecondDuplicatesPass() async throws {
+        let model = VideoScanModel()
+        model.isAnalyzingDuplicates = true          // a pass is "running"
+        AnalyzeRunner(model: model, orchestrator: nil, center: nil).runNow(.duplicates, source: "test")
+        try await settle()
+        #expect(model.isAnalyzingDuplicates, "a second pass ran and its defer cleared the first pass's flag")
+    }
+
+    @Test func runNowDoesNotStartASecondCorrelatePass() async throws {
+        let model = VideoScanModel()
+        model.isCorrelating = true
+        AnalyzeRunner(model: model, orchestrator: nil, center: nil).runNow(.correlate, source: "test")
+        try await settle()
+        #expect(model.isCorrelating, "a second correlate ran and its defer cleared the first pass's flag")
+    }
+
+    @Test func runNowRefusesWhileAScanIsRunning() async throws {
+        let model = VideoScanModel()
+        model.isScanning = true
+        let runner = AnalyzeRunner(model: model, orchestrator: nil, center: nil)
+        runner.runNow(.correlate, source: "test")
+        runner.runNow(.duplicates, source: "test")
+        runner.findPairsAcrossVolumes(source: "test")
+        runner.clearAndRecorrelateAll(source: "test")
+        try await settle()
+        #expect(model.correlateStatus.isEmpty, "correlate ran during a scan: \(model.correlateStatus)")
+        #expect(!model.isAnalyzingDuplicates && model.duplicateStatus.isEmpty,
+                "duplicates ran during a scan: \(model.duplicateStatus)")
     }
 }
