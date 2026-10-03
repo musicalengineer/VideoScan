@@ -274,6 +274,21 @@ final class VideoScanModel: ObservableObject {
     @Published var userPlaceRoster = UserPlaceRoster()
     var userPlaceRosterTask: Task<Void, Never>?
 
+    /// Analyze panel + Catalog "Analyze" menu coverage (Phase A trial,
+    /// 2026-10-02). ONE observed object, equality-gated, refreshed off-main
+    /// on the same debounced catalog-change pass as `dossierCounts` — so
+    /// the menu and the panel read O(1) and never walk `records`. Logic in
+    /// Analyze/VideoScanModel+AnalyzeCoverage.swift; storage lives here
+    /// because extensions cannot add stored properties.
+    let analyzeCoverageSnapshot = AnalyzeCoverageSnapshot()
+    var analyzeCoverageTask: Task<Void, Never>?
+    /// The dossier Analysis Scope the coverage math uses (decides which
+    /// audio-only files are "eligible"). The Analyze panel mirrors the
+    /// orchestrator's live scope into this; default = the app default.
+    var analyzeCoverageScope = AnalysisScope() {
+        didSet { if analyzeCoverageScope != oldValue { scheduleAnalyzeCoverageRefresh() } }
+    }
+
     /// Immediate recompute — the ONLY place the O(records) count runs.
     /// Piggybacked (2026-07-05): the pair flag and the deletable-dups
     /// menu payload ride the same debounced catalog-change pass, so
@@ -306,6 +321,8 @@ final class VideoScanModel: ObservableObject {
         }
         // Place picker roster (2026-09-12) — projected here, counted off-main.
         scheduleUserPlaceRosterRefresh()
+        // Analyze coverage (2026-10-02) — same pass, same off-main pattern.
+        scheduleAnalyzeCoverageRefresh()
     }
 
     // MARK: - Cached per-volume retire statuses (2026-07-05 beachball fix)
