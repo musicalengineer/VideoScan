@@ -1625,6 +1625,7 @@ struct CatalogLoadHonoursUnknownVerdictTests {
         #expect(everyFile(dir) == before,
                 "load wrote beside a held catalog: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted()) / bytes differ")
         #expect(store.pauseNotice == CatalogStore.unreadableCatalogNotice)
+        #expect(store.lastLoadOutcome == .openedReadOnlyVersionUnknown)
         #expect(store.saveNow(records: shown) == false, "load and the save gate must agree")
         #expect(everyFile(dir) == before)
     }

@@ -50,6 +50,11 @@ enum CatalogLoadOutcome: Equatable {
     /// its records are shown for browsing, every write is refused, and the
     /// app says so. Never an error, never a downgrade.
     case openedReadOnlyNewerVersion(found: Int)
+    /// Foundation DECODED catalog.json, but the version probe could not
+    /// follow it (`CatalogVersionVerdict.unknown` — a UTF-16 file, say;
+    /// GH #167 codex cycle #30 R2). The decoded records are shown for
+    /// browsing; every write is held, exactly as the save gates would.
+    case openedReadOnlyVersionUnknown
     case corruptNoBackup                    // primary unreadable AND no usable .prev backup
 }
 
@@ -1006,6 +1011,26 @@ final class CatalogStore {
                 // adoption: this session writes no catalog bytes.
                 latchNewerCatalog(found: primary.version)
                 lastLoadOutcome = .openedReadOnlyNewerVersion(found: primary.version)
+                masterArchive = primary.masterArchive   // shown, never saved
+                unknownTopLevelFields = primary.unknownTopLevel
+                return primary.records
+            }
+            // codex cycle #30 R2 — the decode succeeded, but does the PROBE
+            // agree the file is ours? The save gates hold on an unknown
+            // verdict (a UTF-16 file, an integral-but-not-integer spelling
+            // Foundation accepts, a duplicate stamp the scanner reads
+            // higher than the decoder does). Load must hold on the same
+            // rule, or load would write the sidecar and rotate .prev
+            // beside a file every later save refuses to touch. Decision
+            // (i): one gate — the probe — for load and save alike; the
+            // decode supplies the records to BROWSE and nothing else.
+            if let hold = holdFromPrimaryOnDisk() {
+                latchWrites(off: hold)
+                if case .newerVersion(let probed) = hold {
+                    lastLoadOutcome = .openedReadOnlyNewerVersion(found: probed)
+                } else {
+                    lastLoadOutcome = .openedReadOnlyVersionUnknown
+                }
                 masterArchive = primary.masterArchive   // shown, never saved
                 unknownTopLevelFields = primary.unknownTopLevel
                 return primary.records
