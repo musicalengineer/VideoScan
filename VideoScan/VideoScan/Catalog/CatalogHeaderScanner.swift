@@ -33,8 +33,15 @@
 // complete: a key it did not see is genuinely absent (a v0 catalog).
 
 import Foundation
+import os
 
 enum CatalogHeaderScanner {
+
+    /// How many times the whole-file pass (3) has run in this process.
+    /// Diagnostic + test sensor for the cost bound: the pass is O(file)
+    /// and must not repeat on every save against the same unchanged file
+    /// (codex cycle #29 F1 perf note). (≈ a mutex-guarded counter.)
+    static let wholeFilePasses = OSAllocatedUnfairLock(initialState: 0)
 
     struct Found: Equatable {
         var version: Int?
@@ -277,6 +284,7 @@ enum CatalogHeaderScanner {
         // 3. Whole file, forward, 1 MB at a time — only when the version
         // is still unknown. Resumes nothing from pass 1 (cheap to redo the
         // first window; simpler than carrying state across the seek).
+        wholeFilePasses.withLock { $0 += 1 }
         guard (try? handle.seek(toOffset: 0)) != nil else { return found }
         var whole = Forward()
         while !whole.isDone, let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {

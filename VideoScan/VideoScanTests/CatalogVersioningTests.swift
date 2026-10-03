@@ -20,6 +20,7 @@
 // the test host never loads), sensor (key snapshot + version pin).
 
 import Foundation
+import os
 import Testing
 @testable import VideoScan
 
@@ -1053,14 +1054,15 @@ struct CatalogUnknownNumberExactnessTests {
     func exactNumbersSurviveCatalogSave() throws {
         let dir = scratch("numbers")
         defer { try? FileManager.default.removeItem(at: dir) }
-        let nums = #"{"u":18446744073709551615,"neg":-9223372036854775809,"big":-99999999999999999999999,"dec":3.14159265358979323846264338327950288,"tiny":5e-324,"huge":1.5e300,"mixed":12345678901234567890.123456789}"#
+        let nums = #"{"u":18446744073709551615,"neg":-9223372036854775809,"big":-99999999999999999999999,"dec":3.14159265358979323846264338327950288,"tiny":5e-324,"huge":1.5e300,"mixed":12345678901234567890.123456789,"nearInt":1.0000000000000001}"#
         let json = #"{"version":\#(CatalogSnapshot.currentVersion),"generation":1,"futureNums":\#(nums),"records":[{"id":"\#(fixedID1)","futureNums":\#(nums),"futureList":[\#(nums)]}]}"#
         try Data(json.utf8).write(to: catalogURL(dir))
         let store = CatalogStore(directory: dir)
         #expect(store.saveNow(records: store.load()))
         let text = String(decoding: try Data(contentsOf: catalogURL(dir)), as: UTF8.self)
         for literal in ["18446744073709551615", "-9223372036854775809", "-99999999999999999999999",
-                        "3.14159265358979323846264338327950288", "12345678901234567890.123456789"] {
+                        "3.14159265358979323846264338327950288", "12345678901234567890.123456789",
+                        "1.0000000000000001" /* codex cycle #29 F3: Double rounds it to 1 */] {
             // Three copies: top level, record, nested inside an array.
             #expect(text.components(separatedBy: literal).count - 1 == 3, "\(literal) not preserved exactly: \(text)")
         }
@@ -1170,5 +1172,258 @@ struct CatalogReadOnlyLiveReloadTickTests {
         #expect(everyFile(dir) == before, "the read-only tick wrote: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted()) / bytes differ")
         #expect(CatalogGenerationSidecar.read(besideCatalogAt: catalogURL(dir)) == 5)
         #expect(store.currentGeneration == 0, "no generation adopted while paused")
+    }
+}
+
+// MARK: - 7. Codex review 2026-10-02 (cycle #29) — one red test per finding
+//
+// docs/reviews/codex/codex-review-catalog-versioning-167-r2-2026-10-02.md.
+// Each test failed on b912eb4d before its fix landed.
+
+private let futureVersion = CatalogSnapshot.currentVersion + 1
+
+@Suite("GH #167 codex #29 F1 — an UNKNOWN version is never 'old': every write gate refuses", .serialized)
+@MainActor
+struct CatalogVersionUnknownRefusesTests {
+
+    /// Files whose top-level `version` the probe cannot DETERMINE. Not one
+    /// of them is a confirmed pre-versioning catalog, so not one may be
+    /// replaced. (Foundation's own view differs per fixture — it reads the
+    /// BOM and the UTF-16 file, rejects the rest — which is exactly why the
+    /// probe must say "unknown" rather than guess either way.)
+    static let unknownFixtures = ["truncated", "array-root", "trailing-bytes", "utf16-bom",
+                                  "string-version", "unterminated-string", "empty"]
+
+    static func fixture(_ name: String) -> Data {
+        switch name {
+        case "truncated":           // EOF mid-object; the version (if any) was cut off
+            return Data(#"{"records":[{"id":"\#(fixedID1)","filename":"a.mov""#.utf8)
+        case "array-root":
+            return Data(#"[{"version":\#(futureVersion),"records":[]}]"#.utf8)
+        case "trailing-bytes":      // a complete object with no version, then more
+            return Data(#"{"records":[]} {"version":\#(futureVersion)}"#.utf8)
+        case "utf16-bom":           // Foundation decodes this as v(current+1); the byte scanner cannot follow it
+            var d = Data([0xFF, 0xFE])
+            d.append(#"{"version":\#(futureVersion),"generation":0,"records":[]}"#.data(using: .utf16LittleEndian)!)
+            return d
+        case "string-version":      // the key is there; its value is not an integer
+            return Data(#"{"version":"\#(futureVersion)","records":[]}"#.utf8)
+        case "unterminated-string":
+            return Data(#"{"savedFromHost":"abc"#.utf8)
+        case "empty":
+            return Data()
+        default:
+            fatalError("unknown fixture \(name)")
+        }
+    }
+
+    @Test("codex's reproduction: a UTF-8 BOM before a newer catalog — Foundation reads it, the probe must too")
+    func bomNewerCatalogCannotBeOverwritten() throws {
+        let dir = scratch("bom")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var bytes = Data([0xEF, 0xBB, 0xBF])
+        bytes.append(Data(#"{"version":\#(futureVersion),"generation":0,"records":[]}"#.utf8))
+        #expect(try JSONDecoder().decode(CatalogSnapshot.self, from: bytes).version == futureVersion)
+        try bytes.write(to: catalogURL(dir))
+        let before = everyFile(dir)
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []) == false)
+        #expect(everyFile(dir) == before)
+        #expect(store.newerCatalogVersion == futureVersion, "the BOM file is a NEWER catalog and must latch as one")
+    }
+
+    @Test("a version the probe cannot determine refuses saveNow, saveAcknowledged, writeSnapshot and writeSnapshotAsync; zero bytes",
+          arguments: unknownFixtures)
+    func unknownVersionRefusesEveryPath(_ name: String) async throws {
+        let dir = scratch("unk_\(name)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Self.fixture(name).write(to: catalogURL(dir))
+        let before = everyFile(dir)
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []) == false, "\(name): saveNow replaced a file whose version is unknown")
+        #expect(await store.saveAcknowledged(records: []) == false, "\(name): saveAcknowledged")
+        #expect(store.writeSnapshot(records: [], toPath: dir.appendingPathComponent("catalog.pre-u.json").path) == false, "\(name): writeSnapshot")
+        #expect(await store.writeSnapshotAsync(records: [], toPath: dir.appendingPathComponent("catalog.pre-v.json").path) == false, "\(name): writeSnapshotAsync")
+        #expect(everyFile(dir) == before, "\(name): bytes changed: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted())")
+        #expect(store.writesDisabledReason != nil, "\(name): the hold must be latched for the session")
+        #expect(store.lastWriteError?.kind == "writesDisabled")
+    }
+
+    @Test("a genuine pre-versioning catalog (complete object, no version key) still upgrades on save; a missing file still saves")
+    func confirmedAbsentAndMissingStillWrite() throws {
+        let dir = scratch("absent")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store0 = CatalogStore(directory: dir)
+        #expect(store0.saveNow(records: []), "no file: the first save must succeed")
+        store0.relinquishLock()
+        try Data(#"{"records":[{"id":"\#(fixedID1)","version":99}]}"#.utf8).write(to: catalogURL(dir))
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: store.load()), "a v0 catalog is confirmed OLD, not unknown — it upgrades")
+        #expect(try jsonObject(Data(contentsOf: catalogURL(dir)))["version"] as? Int == CatalogSnapshot.currentVersion)
+    }
+
+    @Test("codex's variant: BOM + undecodable newer primary — load latches read-only and writes nothing (no sidecar)")
+    func bomUndecodableNewerLoadWritesNothing() throws {
+        let dir = scratch("bom_undecodable")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        var bytes = Data([0xEF, 0xBB, 0xBF])
+        bytes.append(Data(#"{"version":\#(futureVersion),"generation":0,"records":"not an array"}"#.utf8))
+        try bytes.write(to: catalogURL(dir))
+        let before = everyFile(dir)
+        let store = CatalogStore(directory: dir)
+        _ = store.load()
+        #expect(store.newerCatalogVersion == futureVersion)
+        #expect(everyFile(dir) == before, "load wrote beside a newer catalog: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted())")
+        #expect(store.saveNow(records: []) == false)
+        #expect(everyFile(dir) == before)
+    }
+
+    @Test("an undecodable primary whose version is UNKNOWN: load persists no sidecar and holds writes; .prev is still shown")
+    func unknownUndecodableLoadWritesNothing() throws {
+        let dir = scratch("unk_load")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        // A healthy .prev to recover from, then an unreadable primary.
+        let s0 = CatalogStore(directory: dir)
+        let r = VideoRecord(); r.filename = "kept.mov"
+        #expect(s0.saveNow(records: [r]))
+        s0.relinquishLock()
+        try FileManager.default.copyItem(at: catalogURL(dir), to: prevURL(dir))
+        try FileManager.default.removeItem(at: dir.appendingPathComponent(CatalogGenerationSidecar.fileName))
+        try Self.fixture("unterminated-string").write(to: catalogURL(dir))
+        let before = everyFile(dir)
+        let store = CatalogStore(directory: dir)
+        let shown = store.load()
+        #expect(shown.first?.filename == "kept.mov", "browsing .prev is still allowed")
+        #expect(store.lastLoadOutcome == .loaded(fromBackup: true))
+        #expect(everyFile(dir) == before, "load wrote beside an unreadable catalog: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted())")
+        #expect(store.saveNow(records: shown) == false, "the recovered records must not replace a file whose version is unknown")
+        #expect(everyFile(dir) == before)
+    }
+
+    @Test("cost bound: an unknown file > both windows triggers the whole-file pass ONCE per session, not once per refused save")
+    func wholeFilePassRunsOncePerSession() throws {
+        let dir = scratch("unk_bound")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let pad = String(repeating: "p", count: 6000)
+        try Data(#"{"padA":"\#(pad)","records":[{"id":"\#(fixedID1)","padB":"\#(pad)""#.utf8).write(to: catalogURL(dir))
+        let store = CatalogStore(directory: dir)
+        let n0 = CatalogHeaderScanner.wholeFilePasses.withLock { $0 }
+        for _ in 0..<3 { #expect(store.saveNow(records: []) == false) }
+        let passes = CatalogHeaderScanner.wholeFilePasses.withLock { $0 } - n0
+        #expect(passes == 1, "whole-file pass ran \(passes) times for three refused saves against one unchanged file")
+    }
+}
+
+@Suite("GH #167 codex #29 F2 — a latch that fires DURING the write gate's probe is honoured", .serialized)
+@MainActor
+struct CatalogGateLatchDuringProbeTests {
+
+    @Test("saveAsync: the gate's probe sees an OLD file, the main actor latches before the gate answers — the write refuses")
+    func latchDuringProbeRefuses() async throws {
+        let dir = scratch("gate_probe")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: []))
+        let before = try Data(contentsOf: catalogURL(dir))
+        let g = store.currentGeneration
+
+        // Runs on the write queue between the probe and the gate's answer.
+        // The main actor is free (this test is suspended in waitUntil), so
+        // hopping to it is deadlock-free; it would not be from saveNow.
+        store.testGateAfterProbe = {
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated { store.noteNewerCatalogOnDisk(version: futureVersion) }
+            }
+        }
+        store.saveAsync(records: [VideoRecord()])
+        await waitUntil(3) { store.lastWriteError != nil || store.currentGeneration > g }
+        try await Task.sleep(nanoseconds: 100_000_000)
+
+        #expect(try Data(contentsOf: catalogURL(dir)) == before, "a latch raised during the probe was missed — the write landed")
+        #expect(store.currentGeneration == g)
+        #expect(store.lastWriteError?.kind == "writesDisabled")
+        #expect(store.newerCatalogVersion == futureVersion)
+    }
+}
+
+@Suite("GH #167 codex #29 F4 — deferred sibling writes re-check at the mutation boundary", .serialized)
+@MainActor
+struct CatalogDeferredSiblingWritesTests {
+
+    /// A landed async save, parked after verification and before its
+    /// completion runs on the main actor. Returns the semaphore that
+    /// releases it and the generation it wrote.
+    private func parkLandedAsyncSave(_ store: CatalogStore, at url: URL) async throws -> (DispatchSemaphore, Int) {
+        #expect(store.saveNow(records: []))
+        let g = store.currentGeneration
+        let release = DispatchSemaphore(value: 0)
+        store.testAfterVerifyBeforeCompletion = { _ in release.wait() }
+        store.saveAsync(records: [VideoRecord()])
+        await waitUntil(3) { CatalogSnapshot.headerProbe(at: url)?.generation == g + 1 }
+        #expect(CatalogSnapshot.headerProbe(at: url)?.generation == g + 1, "precondition: the async write landed")
+        #expect(CatalogGenerationSidecar.read(besideCatalogAt: url) == g, "precondition: sidecar not yet advanced")
+        return (release, g + 1)
+    }
+
+    @Test("a landed async save whose completion runs AFTER the latch fired does not advance catalog.generation.max")
+    func finishWriteSkipsSidecarAfterLatch() async throws {
+        let dir = scratch("defer_latch")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        let url = catalogURL(dir)
+        let (release, wrote) = try await parkLandedAsyncSave(store, at: url)
+        let sidecarBefore = CatalogGenerationSidecar.read(besideCatalogAt: url)
+
+        let newer = newerBytes(generation: wrote)
+        try newer.write(to: url, options: .atomic)
+        store.noteNewerCatalogOnDisk(version: futureVersion)
+        let before = everyFile(dir)
+        release.signal()
+        await waitUntil(3) { store.currentGeneration == wrote }
+
+        #expect(CatalogGenerationSidecar.read(besideCatalogAt: url) == sidecarBefore,
+                "finishWrite advanced catalog.generation.max beside a newer catalog")
+        #expect(everyFile(dir) == before, "completion wrote: \(Set(everyFile(dir).keys).symmetricDifference(before.keys).sorted()) / bytes differ")
+        #expect(try Data(contentsOf: url) == newer)
+    }
+
+    @Test("same window, no latch call: finishWrite discovers the newer primary itself and skips the sidecar")
+    func finishWriteDiscoversNewerPrimary() async throws {
+        let dir = scratch("defer_disc")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        let url = catalogURL(dir)
+        let (release, wrote) = try await parkLandedAsyncSave(store, at: url)
+        let sidecarBefore = CatalogGenerationSidecar.read(besideCatalogAt: url)
+
+        try newerBytes(generation: wrote).write(to: url, options: .atomic)
+        let before = everyFile(dir)
+        release.signal()
+        await waitUntil(3) { store.currentGeneration == wrote }
+
+        #expect(CatalogGenerationSidecar.read(besideCatalogAt: url) == sidecarBefore)
+        #expect(everyFile(dir) == before)
+        #expect(store.newerCatalogVersion == futureVersion, "the completion must latch what it found")
+    }
+
+    @Test("notes repair: the primary is replaced after planning and before the clean-plan marker — no marker")
+    func notesRepairRechecksBeforeMarker() throws {
+        let dir = scratch("defer_notes")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = CatalogStore(directory: dir)
+        #expect(store.saveNow(records: [VideoRecord()]))
+        let m = VideoScanModel()
+        m.catalogStore = store
+        m.records = []
+        var before: [String: Data] = [:]
+        let url = catalogURL(dir)
+        let result = m.repairMachineTextInUserNotes(testAfterPlan: {
+            try? newerBytes(generation: store.currentGeneration).write(to: url, options: .atomic)
+            before = everyFile(dir)
+        })
+        #expect(result == nil)
+        #expect(!FileManager.default.fileExists(atPath: m.notesRepairMarkerPath), "notes-repair.v1.done written beside a newer catalog")
+        #expect(everyFile(dir) == before)
+        #expect(m.isReadOnly, "the discovery reaches the model at once")
     }
 }

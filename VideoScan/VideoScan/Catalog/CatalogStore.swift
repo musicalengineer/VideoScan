@@ -239,12 +239,17 @@ final class CatalogNewerLatchMirror: @unchecked Sendable {
 struct CatalogWriteGate: Sendable {
     let primaryURL: URL
     let latch: CatalogNewerLatchMirror
+    /// Test seam: runs on the write queue AFTER the on-disk probe and
+    /// before the gate answers, so a test can latch the main actor in
+    /// exactly that window (codex cycle #29 F2). Always nil in production.
+    var testAfterProbe: (@Sendable () -> Void)? = nil
 
     /// nil = write; otherwise the newer catalog version that forbids it.
     func newerVersion() -> Int? {
         if let v = latch.version { return v }
-        if let v = CatalogSnapshot.headerProbe(at: primaryURL)?.version,
-           v > CatalogSnapshot.currentVersion {
+        let probed = CatalogSnapshot.headerProbe(at: primaryURL)?.version
+        testAfterProbe?()
+        if let v = probed, v > CatalogSnapshot.currentVersion {
             latch.note(v)
             return v
         }
@@ -452,8 +457,21 @@ final class CatalogStore {
 
     /// The gate every `encodeAndWrite` call carries (codex #1 / #5).
     private var writeGate: CatalogWriteGate {
-        CatalogWriteGate(primaryURL: fileURL, latch: newerLatchMirror)
+        CatalogWriteGate(primaryURL: fileURL, latch: newerLatchMirror,
+                         testAfterProbe: testGateAfterProbe)
     }
+
+    /// Test seam handed to every `CatalogWriteGate` this store builds (see
+    /// `CatalogWriteGate.testAfterProbe`). Always nil in production.
+    internal var testGateAfterProbe: (@Sendable () -> Void)?
+
+    /// Test seam (codex cycle #29 F4): runs on the write queue after the
+    /// read-back verification PASSED and before the write's completion
+    /// reaches the main actor — the window in which a landed save's
+    /// bookkeeping (`finishWrite`) has not yet run. Always nil in
+    /// production; same nil-default protection as
+    /// `testAfterWriteBeforeVerify`.
+    internal var testAfterVerifyBeforeCompletion: (@Sendable (URL) -> Void)?
 
     /// Why writes are held, worded once for the latch and the write queue.
     nonisolated static func newerCatalogReason(_ version: Int) -> String {
@@ -1270,13 +1288,15 @@ final class CatalogStore {
                                                             generation: nextGeneration)
         let dest = fileURL
         let seam = testAfterWriteBeforeVerify
+        let afterVerify = testAfterVerifyBeforeCompletion
         let gate = writeGate
         catalogStoreLog.notice("catalog save (acknowledged): BEGIN \(records.count) records → \(dest.lastPathComponent, privacy: .public)")
         let writeError: CatalogWriteError? = await withCheckedContinuation { cont in
             writeQueue.async {
                 cont.resume(returning: Self.encodeAndWrite(payload: payload, to: dest,
                                                            purpose: .liveCatalog, gate: gate,
-                                                           afterWriteBeforeVerify: seam))
+                                                           afterWriteBeforeVerify: seam,
+                                                           afterVerify: afterVerify))
             }
         }
         let ok = writeError == nil
@@ -1331,12 +1351,14 @@ final class CatalogStore {
         let dest = fileURL
         let delay = testWriteDelay
         let seam = testAfterWriteBeforeVerify
+        let afterVerify = testAfterVerifyBeforeCompletion
         let gate = writeGate
         writeQueue.async {
             if delay > 0 { Thread.sleep(forTimeInterval: delay) }
             let writeError = Self.encodeAndWrite(payload: payload, to: dest,
                                                  purpose: .liveCatalog, gate: gate,
-                                                 afterWriteBeforeVerify: seam)
+                                                 afterWriteBeforeVerify: seam,
+                                                 afterVerify: afterVerify)
             Task { @MainActor [weak self] in
                 self?.asyncSaveDidFinish(success: writeError == nil,
                                          wroteGeneration: nextGeneration,
@@ -1562,7 +1584,8 @@ final class CatalogStore {
                                                    to fileURL: URL,
                                                    purpose: WritePurpose,
                                                    gate: CatalogWriteGate,
-                                                   afterWriteBeforeVerify: (@Sendable (URL) -> Void)? = nil) -> CatalogWriteError? {
+                                                   afterWriteBeforeVerify: (@Sendable (URL) -> Void)? = nil,
+                                                   afterVerify: (@Sendable (URL) -> Void)? = nil) -> CatalogWriteError? {
         let t0 = CFAbsoluteTimeGetCurrent()
         do {
             let encoder = JSONEncoder()
@@ -1624,6 +1647,11 @@ final class CatalogStore {
                 NSLog("VideoScan: CATALOG VERIFICATION FAILED — %@", err.userFacingDescription)
                 catalogStoreLog.fault("catalog verification failed: expected \(expected, privacy: .public) got \(actual, privacy: .public)")
                 return err
+            }
+            // Post-verification window (codex cycle #29 F4): the bytes are
+            // proven on disk; the caller's completion has not run yet.
+            if TestEnvironment.isTestHost, let hold = afterVerify {
+                hold(fileURL)
             }
 
             let ms = (CFAbsoluteTimeGetCurrent() - t0) * 1000

@@ -42,9 +42,23 @@ struct CatalogJSONValueExactNumberTests {
             "3.14159265358979323846264338327950288",    // 36 significant digits
             "12345678901234567890.123456789",
             "0.1", "-7", "0", "42",
+            // codex cycle #29 F3: decimals a Double rounds to an integer.
+            "1.0000000000000001",                       // 17 significant digits; Double → 1
+            "123456789012345678.9",                     // Double → 123456789012345680
+            "-9007199254740993.5",                      // past 2^53, Double → ...992 or ...994
           ])
     func canonicalNumbersAreByteExact(_ literal: String) throws {
         #expect(try roundTrip(literal) == literal)
+    }
+
+    @Test("codex cycle #29 F3: a Decimal near an integer is not accepted as the integer")
+    func decimalNearIntegerRemainsExact() throws {
+        let encoder = JSONEncoder()
+        let decimal = try #require(Decimal(string: "1.0000000000000001"))
+        let source = try encoder.encode(decimal)
+        let value = try JSONDecoder().decode(CatalogJSONValue.self, from: source)
+        #expect(try encoder.encode(value) == source, "\(String(decoding: source, as: UTF8.self)) came back as \(value)")
+        #expect(value == .decimal(decimal))
     }
 
     @Test("exponents and values outside Decimal's range keep their exact value",

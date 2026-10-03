@@ -63,8 +63,12 @@ extension VideoScanModel {
     /// Caller (restoreCatalogFromDisk) runs this right after
     /// migrateLegacyUserNotes and BEFORE the search index is built, so the
     /// haystacks see the repaired fields.
+    ///
+    /// `testAfterPlan` (codex cycle #29 F4): a test seam that runs after
+    /// the records scan and before any file is touched — the window in
+    /// which the primary may have been replaced. Always nil in production.
     @discardableResult
-    func repairMachineTextInUserNotes() -> NotesRepairSummary? {
+    func repairMachineTextInUserNotes(testAfterPlan: (() -> Void)? = nil) -> NotesRepairSummary? {
         if TestEnvironment.isTestHost && catalogStore === CatalogStore.shared { return nil }
         if catalogStore.isReadOnly { return nil }
         // GH #167: a newer catalog is open — or has replaced ours on disk
@@ -88,6 +92,8 @@ extension VideoScanModel {
                 humanKept += 1
             }
         }
+
+        testAfterPlan?()
 
         guard !plan.isEmpty else {
             writeNotesRepairMarker(at: marker, summary: "clean")
