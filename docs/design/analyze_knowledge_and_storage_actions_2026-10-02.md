@@ -267,6 +267,62 @@ Worked out for today's verbs:
 - "Duplicates" stops being a menu and becomes a fact (coverage row, filter,
   Storage card).
 
+## 5.5 Revision 2026-10-02 (evening): Analyze is a FRONT DOOR, not a window
+
+Discussion with Rick after the first draft:
+
+- MFO is a *tool* window (verb, operand, result, done). The Analyze
+  Dashboard is a *steward* wearing a tool's clothes — it describes a
+  condition (how current is the catalog's knowledge), and conditions are
+  maintained, not finished. That is why it "never seems done".
+- Rick's reframe: Duplicates, Similar Footage, Correlate, Dossier are
+  **bulk commands on or across volumes**, unlike MFO's per-file verbs —
+  so should Analyze be like **Compare…** and **Migrate…**? Yes, in the
+  *front door*: Migrate's shape is scope → preview of what would happen →
+  commit → job. Not in the *running*: MFO already runs catalog-wide jobs
+  (Find Similar Footage, Verify Archive Copies, Delete on a volume) and
+  the rule stays one job window. (Migrate's own jobs panel + progress
+  sheet is a wart to fold into MFO, #242 — copy its front door, not its
+  plumbing.)
+- Operand taxonomy: file(s) → row menu → MFO; a volume → Storage tab row
+  / sheet → MFO; the catalog across volumes → **Analyze… sheet** → MFO.
+- **Analyze… sheet** = scope picker (volumes × analyzers) → "what's due
+  now" preview ("Dates: 1,206 on LaCie · Dups: 0 · Dossier: 2,340, ~6 h")
+  → Start → one MFO row per analyzer. Open, decide, close. "Done" means
+  those jobs finished — a real done. The coverage grid of §3.3 becomes
+  the sheet's preview pane (plus, optionally, a quiet toolbar chip); the
+  schedule lives in Settings ▸ Background Activity (#195). §3.3 as a
+  persistent window is **withdrawn pending the trial below**.
+- Coverage denominator = *eligible and reachable* records; offline / DRM
+  / out-of-scope shown as such, so 100% is reachable and means
+  "everything I can see is current".
+
+### Phasing — UI first, then refactor (Rick, 2026-10-02)
+
+> "Let's do a new UI without completely refactoring the code around it,
+> just rewire the code to bring the UI up to par to match my workflow
+> idea; then as I use it and confirm that it is what makes sense to a
+> human … I can give the go-ahead to refactor the code to match the UI
+> properly."
+
+- **Phase A — trial UI** (own branch, Debug; after #167 lands): the
+  Analyze… sheet wired to the EXISTING entry points (`enqueueAnalyze`,
+  `analyzeDuplicates`, `startFindSimilarFootage`, `correlate`, signature /
+  embedded-date backfills); "due" from the stamps that exist today
+  (`dupAnalyzedAt`, `dossierProcessedAt`, `footage.scannedAt`,
+  `contentHashAt`, `embeddedCreationDate`) — rows without a stamp say
+  "due: unknown" honestly; **thin MFO wrapper rows** for Duplicates /
+  Correlate / Signatures / Embedded Dates (Stop-only until the code
+  checkpoints); Storage-tab Reclaimable card + "Delete duplicates
+  here…" opening today's forecast sheet; Duplicates menu → Analyze menu
+  (+ Correlate). The old Analyze Dashboard stays reachable from the
+  Window menu, untouched. No catalog write paths change.
+- **Phase B — Rick uses it** for hours to a day; a running list of what
+  fights him; nothing "fixed" mid-trial unless broken.
+- **Phase C — refactor to match**, only on Rick's go-ahead: registry +
+  versioned stamps, scheduler conflict table, retire ad-hoc flags and the
+  old dashboard (§6 stages 1–3, full discipline).
+
 ## 6. Staging (each stage ships whole; nothing half-moved)
 
 | Stage | What | Risk class | Tests |
