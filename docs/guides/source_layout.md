@@ -75,6 +75,16 @@ and subprocess environment, file hashing, path scope, RAM disk, memory and
 stall monitors, test-host detection, notification observer bag, and generic
 SwiftUI pieces.
 
+**Steward/** — the content steward's trial pane at the top of the Triage tab
+(2026-10-03; design §5.6 of
+`docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md`): the case
+builder over knowledge already on the records (duplicate sets, footage
+groups, junk scores), the skip memory, the event guess, the focused-card
+proof (the Delete planner's own functions) and the pane and card views. It
+deletes nothing itself — its only way to deletion is the shared Delete
+duplicates front door (`VideoScan/VideoScan/MediaOps/DeleteDuplicatesFlow.swift`);
+a source sensor pins that.
+
 Folders that pre-date this layout are unchanged: **ArchiveAngel/** (the
 Archive Angel, by stage), **FootageGroups/**, **FamilyMusic/**, **ModelsUI/**.
 
