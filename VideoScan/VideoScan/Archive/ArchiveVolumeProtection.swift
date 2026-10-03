@@ -582,6 +582,24 @@ struct ArchiveRemovalCheck: Sendable {
         return nil
     }
 
+    /// The same answer as the gate's own value, for a verb that words its
+    /// own log line (Workbench Discard): the refusal and the volume it
+    /// names. DISK I/O, like `refusal(forPath:)`.
+    func bulkRefusal(forPath path: String) -> (refusal: VideoScanModel.BulkDeleteRefusal, volume: String)? {
+        if let protection {
+            switch protection.verdictAtRemoval(path: path, probe: probe, identity: identity) {
+            case .clear: break
+            case .onArchiveVolume: return (.archiveVolume, protection.label)
+            case .unprovable: return (.archiveVolumeUnprovable, protection.label)
+            }
+        }
+        switch readOnly.verdictAtRemoval(path: path, probe: probe, identity: identity) {
+        case .readOnly(let name)?: return (.readOnlyVolume(name), name)
+        case .readOnlyDifferentDrive(let name)?: return (.readOnlyVolumeDifferentDrive(name), name)
+        case nil: return nil
+        }
+    }
+
     private static func note(_ verdict: ArchiveVolumeProtection.Verdict, label: String) -> String? {
         switch verdict {
         case .clear: return nil
