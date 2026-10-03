@@ -33,9 +33,18 @@
 //
 // ONE RULE OF ITS OWN, kept from the first trial's QA (F7): a 1 January day
 // that no person typed is a camera whose clock was reset far more often
-// than it is New Year's Day, so it places nothing. It is a filter on the
-// Angel's answer, not a second resolver. Live Photo motion halves (the
-// Angel's `isLivePhotoMotion`) are parts of photos and are left out.
+// than it is New Year's Day, so it places nothing — neither its day NOR
+// ITS YEAR (a reset clock's year is as wrong as its day): the clip keeps no
+// date at all, a word in its name explains but keys no event (exactly as
+// for a copy-era stamp), and it is free to join its footage twin's event.
+// It is a filter on the Angel's answer, not a second resolver. Live Photo
+// motion halves (the Angel's `isLivePhotoMotion`) are parts of photos and
+// are left out.
+//
+// KNOWN LIMIT (QA F5, left for after the trial): a birthday event's subject
+// key is the person's DISPLAY NAME as the People tab has it ("alex"), not
+// the person's id — renaming a person, or two people sharing a display
+// name, changes or merges their birthday events and their skip keys.
 //
 // NOTHING IS STORED. Events are derived on every build from what the
 // records already hold; no record, no catalog file and no log line ever
@@ -154,10 +163,13 @@ enum StewardEvents {
             let copyStamp = claim.sourceRank == 1
                 && claim.confidenceMilli < Int((ArchiveAngelEvent.dayKeyMinimumConfidence * 1000).rounded())
             placement.year = copyStamp ? nil : derived.year
-            // QA F7: 1 January that nobody typed is a reset clock.
+            // QA F7 / F1: 1 January that nobody typed is a reset clock —
+            // its year is no better than its day. The name words stay as
+            // explanation, with no year, so they key nothing.
             if let day = placement.day, day.month == 1, day.day == 1, claim.sourceRank != 0 {
                 placement.day = nil
-                placement.labels.removeAll { $0.source != .name }
+                placement.year = nil
+                placement.labels = placement.labels.filter { $0.source == .name }.map { var l = $0; l.year = nil; return l }
             }
         }
         return placement
@@ -277,6 +289,19 @@ enum StewardEvents {
         var bytes: Int64 = 0
         var seconds: Double = 0
         var count: Int { direct.count + pulled.count }
+
+        mutating func add(direct i: Int, _ r: StewardInput, dated isDated: Bool) {
+            direct.append(i)
+            bytes += max(0, r.sizeBytes)
+            seconds += max(0, r.durationSeconds)
+            if isDated { dated += 1 }
+        }
+
+        mutating func add(pulled i: Int, _ r: StewardInput) {
+            pulled.append(i)
+            bytes += max(0, r.sizeBytes)
+            seconds += max(0, r.durationSeconds)
+        }
     }
 
     /// The Events lane and the days-to-name lane, each in its own order
@@ -325,12 +350,11 @@ enum StewardEvents {
             for label in placements[i].labels {
                 guard let key = label.key, !joined.contains(key) else { continue }
                 joined.append(key)
-                var b = buckets[key] ?? Bucket(label: label)
-                b.direct.append(i)
-                b.bytes += max(0, inputs[i].sizeBytes)
-                b.seconds += max(0, inputs[i].durationSeconds)
-                if placements[i].labels.contains(where: { $0.key == key && $0.source != .name }) { b.dated += 1 }
-                buckets[key] = b
+                // In place (QA F6): reading the bucket out and writing it
+                // back copies its member array on every insert — quadratic
+                // in the size of one event.
+                let dated = placements[i].labels.contains { $0.key == key && $0.source != .name }
+                buckets[key, default: Bucket(label: label)].add(direct: i, inputs[i], dated: dated)
             }
             if joined.isEmpty, let day = placements[i].day {
                 unlabelled[dayNumber(day), default: []].append(i)
@@ -355,16 +379,14 @@ enum StewardEvents {
                 }
             }
             for key in keys.sorted() {
-                guard var b = buckets[key], let year = b.label.year else { continue }
+                guard let label = buckets[key]?.label, let year = label.year else { continue }
+                let hasDated = (buckets[key]?.dated ?? 0) > 0
                 for m in members where placements[m].isCounted
                     && !placements[m].labels.contains(where: { $0.key == key })
-                    && !conflicts(placements[m], event: b.label.event, year: year, hasDatedMembers: b.dated > 0) {
-                    b.pulled.append(m)
-                    b.bytes += max(0, inputs[m].sizeBytes)
-                    b.seconds += max(0, inputs[m].durationSeconds)
+                    && !conflicts(placements[m], event: label.event, year: year, hasDatedMembers: hasDated) {
+                    buckets[key]?.add(pulled: m, inputs[m])           // in place (QA F6)
                     pulledKeys[m, default: []].append(key)
                 }
-                buckets[key] = b
             }
         }
         return pulledKeys

@@ -142,29 +142,53 @@ struct StewardEventsLogicTests {
 
     // The Angel's trusted day, and the one filter on it
 
+    /// QA F3: the expected side is the Angel's OWN projection of a real
+    /// VideoRecord (ArchiveAngelCandidate+Record.swift, the one its Occasion
+    /// line uses) — not a hand copy of what `place` builds — so a date fact
+    /// the steward's projection drops, renames or the Angel starts reading
+    /// shows up here as a difference.
+    @MainActor
     @Test func theLabelsAndTheDayAreTheAngelsOwn() {
-        let inputs = [
-            clip("/Volumes/LaCie/xmas94/tape2.mov", on: "1994-12-25"),
-            clip("/Volumes/LaCie/Cape/a.mov", on: "1996-07-04"),
-            clip("/Volumes/LaCie/tapes/b.mov", on: "1994-06-12"),
-            StewardInput(fullPath: "/Volumes/LaCie/tapes/cam.mov", embeddedDate: day(2006, 11, 23), originModel: "Camcorder"),
-            StewardInput(fullPath: "/Volumes/LaCie/tapes/inferred.mov", inferredDate: day(2006, 10, 31), inferredConfidence: 0.9),
-            clip("/Volumes/LaCie/tapes/2003-12-25 morning.mov"),
+        func record(_ path: String, _ setUp: (VideoRecord) -> Void) -> VideoRecord {
+            let r = VideoRecord()
+            r.fullPath = path
+            r.filename = (path as NSString).lastPathComponent
+            r.directory = (path as NSString).deletingLastPathComponent
+            setUp(r)
+            return r
+        }
+        // (record, labelled?) — every date fact RecordDateResolver reads is exercised.
+        let fixtures: [(VideoRecord, Bool)] = [
+            (record("/Volumes/LaCie/xmas94/tape2.mov") { $0.userDate = "1994-12-25" }, true),
+            (record("/Volumes/LaCie/Cape/a.mov") { $0.userDate = "1996-07-04"; $0.userDateConfidence = UserDateConfidence.known.rawValue }, true),
+            (record("/Volumes/LaCie/tapes/b.mov") { $0.userDate = "1994-06-12" }, true),
+            (record("/Volumes/LaCie/tapes/cam.mov") { $0.embeddedCreationDate = day(2006, 11, 23); $0.originModel = "Camcorder" }, true),
+            (record("/Volumes/LaCie/tapes/gopro.mov") { $0.embeddedCreationDate = day(2006, 10, 31); $0.originMake = "GoPro" }, true),
+            (record("/Volumes/LaCie/tapes/unknown.mov") { $0.embeddedCreationDate = day(2006, 12, 24) }, true),
+            (record("/Volumes/LaCie/tapes/inferred.mov") { $0.inferredRecordDate = day(2006, 10, 31); $0.inferredDateConfidence = 0.9 }, true),
+            (record("/Volumes/LaCie/tapes/2003-12-25 morning.mov") { _ in }, true),
+            (record("/Volumes/LaCie/xmas/year.mov") { $0.userDate = "1994"; $0.embeddedCreationDate = day(1994, 12, 26)
+                                                      $0.originModel = "Camcorder" }, true),
+            // Not good enough to place — the two must agree on that too.
+            (record("/Volumes/LaCie/tapes/export.mov") { $0.embeddedCreationDate = day(2006, 12, 25); $0.originEncoder = "Lavf58.29.100" }, false),
+            (record("/Volumes/LaCie/tapes/apple.mov") { $0.embeddedCreationDate = day(2006, 12, 25); $0.originMake = "Apple" }, false),
+            (record("/Volumes/LaCie/tapes/range.mov") { $0.inferredRecordDate = day(2006, 12, 25); $0.inferredDateConfidence = 0.9
+                                                        $0.inferredDateRange = InferredDateRange(startYear: 2005, endYear: 2007) }, false),
+            (record("/Volumes/LaCie/tapes/weak.mov") { $0.inferredRecordDate = day(2006, 12, 25); $0.inferredDateConfidence = 0.3 }, false),
         ]
         var folders = EventLabeler.FolderWordCache()
-        for r in inputs {
-            let candidate = ArchiveAngelCandidate(
-                id: r.id, filename: r.filename, fullPath: r.fullPath, userDate: r.userDate,
-                inferredRecordDate: r.inferredDate, inferredDateConfidence: r.inferredConfidence,
-                deviceModel: r.originModel ?? "", captureDate: r.embeddedDate, userDateConfidence: r.userDateConfidence,
-                originMake: r.originMake, originEncoder: r.originEncoder, inferredDateRange: r.inferredRange)
+        for (r, labelled) in fixtures {
+            // The Angel's side: its own projection of the record.
+            let candidate = ArchiveAngelCandidate(recommendationFactsOf: r)
             let angels = ArchiveAngelEvent.labels(candidate, now: fixedNow, context: context())
             let key = ArchiveAngelEvent.resolve(candidate, now: fixedNow, context: context()).key
-            let mine = StewardEvents.place(r, now: fixedNow, context: context(), folders: &folders)
+            // The steward's side: its own projection of the same record.
+            let input = StewardInput(record: r, protection: .none, calendar: utc)
+            let mine = StewardEvents.place(input, now: fixedNow, context: context(), folders: &folders)
             #expect(mine.labels == angels, "\(r.filename): the labels differ from the Angel's")
-            #expect(!angels.isEmpty, "\(r.filename): fixture should be labelled")
-            #expect(mine.day.map { String(format: "d:%04d-%02d-%02d", $0.year, $0.month, $0.day) }.map(key.hasSuffix) == true,
-                    "\(r.filename): the day is the one in the Angel's key")
+            #expect(angels.contains { $0.key != nil } == labelled, "\(r.filename): fixture labelled = \(labelled)")
+            #expect(mine.day == StewardEvents.trustedDay(inKey: key), "\(r.filename): the day is the one in the Angel's key")
+            #expect((mine.day != nil) == key.contains("d:"), "\(r.filename): a day exactly when the Angel's key has one")
         }
     }
 
@@ -196,6 +220,32 @@ struct StewardEventsLogicTests {
         #expect(stamp.labels.map(\.key) == [nil], "the folder word explains, and keys nothing")
         // …but 1 January a PERSON typed is New Year's Day.
         #expect(events(build([clip("/Volumes/LaCie/t/typed.mov", on: "2000-01-01")])).first?.id == "event:newyear:-:2000")
+    }
+
+    /// QA F1 (2026-10-03): a reset clock's YEAR is as wrong as its day. A
+    /// camcorder clip stamped 2000-01-01 in a folder "xmas" must not become
+    /// "Christmas 2000", and the stale year must not keep it out of its
+    /// footage twin's real event.
+    @Test func aResetClocksYearNamesNoEventEither() throws {
+        let reset = StewardInput(fullPath: "/Volumes/LaCie/xmas/reset.mov", embeddedDate: day(2000, 1, 1), originModel: "Camcorder")
+        var folders = EventLabeler.FolderWordCache()
+        let placed = StewardEvents.place(reset, now: fixedNow, context: context(), folders: &folders)
+        #expect(placed.day == nil)
+        #expect(placed.year == nil, "the reset clock's year is kept: \(String(describing: placed.year))")
+        #expect(placed.labels.map(\.key) == [nil], "the folder word explains, and keys nothing")
+        #expect(events(build([reset])).isEmpty, "said: \(events(build([reset])).map(\.title))")
+
+        // With a twin that a person dated, it joins the twin's real event.
+        let g = UUID()
+        var twin = clip("/Volumes/SanDisk/t/tape.mov", on: "1994-12-25")
+        var copy = reset
+        twin.footageGroupID = g
+        twin.footageStrength = 1
+        copy.footageGroupID = g
+        copy.footageStrength = 1
+        let found = events(build([twin, copy]))
+        #expect(found.map(\.id) == ["event:christmas:-:1994"])
+        #expect(found.first?.memberCount == 2, "the reset-clock copy belongs where its twin belongs")
     }
 
     @Test func livePhotoHalvesAreLeftOutAndTheCoverageCountsTheRest() {
@@ -606,5 +656,37 @@ struct StewardEventsScaleTests {
         let arrangeStart = ContinuousClock.now
         for _ in 0..<100 { _ = StewardCaseBuilder.arrange(q.cases, filter: .all, eventsByYear: true) }
         #expect(ContinuousClock.now - arrangeStart < PerformanceLane.debugCeiling(.milliseconds(1_000)))
+    }
+
+    /// QA F6: ONE event of 50,000 clips (a decade of phone clips in a folder
+    /// called "vacation", all typed as one year), half of them pulled in by
+    /// matching footage. Inserting into a bucket must not copy its member
+    /// array each time — the build stays inside the same budget.
+    @Test func oneEventOfFiftyThousandClipsBuildsUnderTheSameBudget() throws {
+        let groups = (0..<25_000).map { _ in UUID() }
+        var inputs: [StewardInput] = []
+        inputs.reserveCapacity(50_000)
+        for i in 0..<50_000 {
+            let direct = i < 25_000
+            // The twin of each clip sits in a plain folder with no date: only its footage places it.
+            var r = StewardInput(fullPath: direct ? "/Volumes/LaCie/vacation/clip\(i).mov" : "/Volumes/SanDisk/plain/clip\(i).mov",
+                                 sizeBytes: 1_000_000, durationSeconds: 30, userDate: direct ? "1999" : nil)
+            r.footageGroupID = groups[i % 25_000]
+            r.footageStrength = 1
+            r.footageRank = direct ? 0 : 1
+            inputs.append(r)
+        }
+        let start = ContinuousClock.now
+        let q = StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted, alsoCleanUpWorkingCopies: false,
+                                         events: StewardEvents.context(coverage: .standard, birthdays: []),
+                                         calendar: utc, now: fixedNow)
+        let elapsed = ContinuousClock.now - start
+        let event = try #require(events(q).first)
+        #expect(events(q).count == 1 && event.id == "event:vacation:-:1999")
+        #expect(event.memberCount == 50_000 && event.facts.count == 50_000)
+        #expect(event.whyLine == "25,000 by folder name 'vacation' · 25,000 by matching footage")
+        #expect(event.recordIDs.count == StewardCaseBuilder.maxIDsPerCase && event.copies.count == StewardCaseBuilder.maxCopiesPerCase)
+        #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(4_000)),
+                "one event of 50k clips took \(elapsed) — over the 4 s budget")
     }
 }
