@@ -501,6 +501,50 @@ of the same event; (8) the puzzle is the UI/UX.
       no such rule — **open question for Rick:** move it into the Angel's
       day rule, or keep it here only.
 
+## 5.7 One election, two stewards (Rick + Claude, 2026-10-03)
+
+Rick's statement of the goal: "the goal of AA and CA is to curate content
+and recommend **saving unique content** and **eliminating dups that have
+been over-copied** and … keep showing up no matter [what]."
+
+- **One question, asked once per set of identical files: which copy is
+  the one?** The duplicate analysis's keeper election answers it. The
+  Angel promotes *that* copy; the cleanup removes the others once enough
+  verified copies remain — and the archive copy counts toward "enough".
+  Two stewards, one answer.
+- **Measured 2026-10-03** (live catalog + the Angel's evidence store):
+  12,286 active records · 998 keepers · 2,818 extra copies · 419 records
+  the Angel is considering · **0 of those 419 are extra copies.** The
+  Angel already defers to the keeper election. So a delete-time "protect
+  the Angel's pick" rule guards a case that does not occur; it is made a
+  rule by a guard test instead ("the Angel never recommends an extra
+  copy").
+- **Holds are for files in use, not for opinions.** Delete Duplicates
+  leaves alone: a file in a running or ready Angel batch (Promote re-reads
+  the source to re-prove its bytes), a promoted archive copy, and anything
+  on a **Read-only volume**. It does *not* hold copies the Angel merely
+  lists, nor copies wearing the lifecycle "Archived" label — that label
+  already follows the keeper (GH #258 as reshaped).
+- **Read only ≠ ignore.** A Read-only volume (user toggle in Storage;
+  FamilyArchive by rule) is never deleted from, moved from or rewritten
+  by a bulk verb, but its files **still count as copies** when other
+  drives are cleaned — that is what an archive drive is for. "Ignore /
+  don't count as a backup" is a different notion (cf. retired drives) and
+  is not this flag.
+- **Why duplicates "keep showing up no matter", from the 2026-10-03
+  runs:** (1) false duplicates are never forgotten — 408 "content
+  differs — NOT a duplicate" refusals, re-read and re-refused each run
+  (GH #259); (2) most true duplicates exist in exactly two places, so
+  removing one would leave a single copy and the run leaves it alone
+  every time (SanDisk: 103 of 114) — they clear only when a third
+  verified copy exists, which promotion creates; (3) nothing records a
+  human "keep both — decided", so decided sets return.
+- **The dial (Rick: "low-hanging fruit, turn the dial over time; as files
+  promote to archive, we cycle on delete-dup passes"):** promotion is
+  what *unlocks* cleanup. A natural steward card, later: "Promote these N
+  ready clips → M GB of over-copies become removable", and after a
+  Promote, queue a cleanup pass behind it.
+
 ## 6. Staging (each stage ships whole; nothing half-moved)
 
 | Stage | What | Risk class | Tests |
