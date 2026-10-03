@@ -6,8 +6,12 @@
 // From the catalog and the fixities already stored on its records ALONE —
 // no file is opened, nothing is stat'ed — each row of the run is put in
 // one bucket:
-//     permanent          — ≥ 3 copies with stored evidence would remain
-//     trash              — exactly 2 would remain (or "Prefer the Trash")
+//     permanent          — ≥ 3 copies with stored evidence would remain,
+//                          on ≥ 2 different drives or with the archive
+//                          copy among them (the tier's own rule,
+//                          `DeletionTierDecision.earnsPermanent`)
+//     trash              — 2 or more would remain otherwise (or "Prefer
+//                          the Trash")
 //     needsSiblingReads  — the count falls short, but siblings WITHOUT
 //                          stored evidence are online; the run will read
 //                          N of them to decide
@@ -84,6 +88,11 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         /// over-count those, and the run (which stats) counts them once.
         /// Empty = unknown (the id stands in).
         var pathKey: String = ""
+        /// The drive the copy sits on, from its PATH (no stat — the run
+        /// reads the volume's identity): "/volumes/<name>", or "boot".
+        /// Empty = not given (a hand-built input): the copy then counts as
+        /// a drive of its own.
+        var drive: String = ""
     }
 
     /// One row of the run, in plan order.
@@ -164,6 +173,11 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
             // 3, F-1): such a sibling is unproven, never counted.
             let wanted = keeper.digest ?? row.digest
             var counted = 1
+            // Where the counted copies sit — an outright delete needs two
+            // drives or the archive copy (2026-10-03), exactly as the tier.
+            func drive(_ c: Copy) -> String { c.drive.isEmpty ? "id:" + c.id.uuidString : c.drive }
+            var drives: Set<String> = [drive(keeper)]
+            var archiveCounted = keeper.isArchive && keeper.digest != nil
             var readable: [Copy] = []
             var offline = 0
             var seen = Set<UUID>()
@@ -176,6 +190,8 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
                 if copy.isArchive {
                     if copy.online, let d = copy.digest, copy.archiveDigest == d, let wanted, d == wanted {
                         counted += 1
+                        drives.insert(drive(copy))
+                        archiveCounted = true
                     }
                     continue
                 }
@@ -183,10 +199,10 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
                 if removed.contains(memberID) || notACopy.contains(memberID) { continue }
                 guard copy.online else { offline += 1; continue }
                 if let d = copy.digest, let wanted {
-                    if d == wanted { counted += 1 }
+                    if d == wanted { counted += 1; drives.insert(drive(copy)) }
                     continue
                 }
-                if proven.contains(memberID) { counted += 1; continue }
+                if proven.contains(memberID) { counted += 1; drives.insert(drive(copy)); continue }
                 readable.append(copy)
             }
 
@@ -217,32 +233,54 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
                 notACopy.insert(row.id)
                 continue
             }
-            func read(_ n: Int) {
-                for copy in readable.prefix(n) {
+            func permanent(_ n: Int) -> Bool {
+                !input.preferTrash && DeletionTierDecision.earnsPermanent(count: n, distinctDrives: drives.count,
+                                                                          countsArchiveCopy: archiveCounted)
+            }
+            // The reads the run would make, each assumed to match — the
+            // prover's own rule (`SiblingProver.worthReading`): none that
+            // cannot change the tier. Returns the count they would reach.
+            func read(from start: Int) -> (count: Int, made: Int) {
+                var n = start, made = 0
+                for copy in readable where SiblingProver.worthReading(count: n, drives: drives, countsArchiveCopy: archiveCounted,
+                                                                      candidateDrive: drive(copy), goal: goal) {
                     proven.insert(copy.id)
+                    drives.insert(drive(copy))
+                    n += 1
+                    made += 1
                     out.siblingReads += 1
                     out.siblingReadBytes += copy.sizeBytes
                     out.bytesToRead += copy.sizeBytes
                 }
+                return (n, made)
             }
             if counted >= goal {
-                put(counted >= DeletionTierDecision.minimumForPermanent && !input.preferTrash ? .permanent : .trash, row)
+                put(permanent(counted) ? .permanent : .trash, row)
                 removed.insert(row.id)
             } else if counted >= DeletionTierDecision.minimumForTrash {
                 // Two with evidence (and Prefer the Trash off): the Trash
-                // at least; one proven sibling more would make it permanent.
+                // at least; a proven sibling more may make it permanent —
+                // when it brings a second drive, or two are already spanned.
                 put(.trash, row)
-                if !readable.isEmpty { read(1); out.trashMayBecomePermanent += 1 }
+                let after = read(from: counted)
+                if after.made > 0, permanent(after.count) { out.trashMayBecomePermanent += 1 }
                 removed.insert(row.id)
             } else if counted + readable.count >= DeletionTierDecision.minimumForTrash {
                 put(.needsSiblingReads, row)
-                read(min(readable.count, goal - counted))
+                _ = read(from: counted)
                 removed.insert(row.id)
             } else {
                 put(aloneBucket, row)
             }
         }
         return out
+    }
+
+    /// The drive a path names, without a stat: "/volumes/<name>" for an
+    /// external volume, "boot" for anything else.
+    static func drive(ofPath path: String) -> String {
+        guard path.hasPrefix("/Volumes/") else { return "boot" }
+        return "/volumes/" + path.dropFirst(9).prefix { $0 != "/" }.lowercased()
     }
 
     // MARK: Words
@@ -377,7 +415,8 @@ extension VideoScanModel {
             let archive = isArchiveCopy(r) ? r.archiveFixity : nil
             copies[r.id] = .init(id: r.id, sizeBytes: r.sizeBytes, digest: usableDigest(r), online: online(r.fullPath),
                                  isArchive: archive != nil, archiveDigest: archive?.digest.lowercased(),
-                                 pathKey: (r.fullPath as NSString).standardizingPath.lowercased())
+                                 pathKey: (r.fullPath as NSString).standardizingPath.lowercased(),
+                                 drive: DeleteDuplicatesForecast.drive(ofPath: r.fullPath))
         }
         var groups = Set<UUID>()
         for row in rows { if let g = row.record?.duplicateGroupID { groups.insert(g) } }

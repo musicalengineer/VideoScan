@@ -215,7 +215,11 @@ struct DeleteDuplicatesSiblingProofTests {
         #expect(sink.joined.contains("for a-copy1.mov — matches"))
     }
 
-    @Test func twoUnprovenSiblingsAreBothReadAndTheCopyIsDeletedOutright() async throws {
+    /// Two unproven siblings on the keeper's own drive: ONE is read (to
+    /// reach the Trash's two); the second is not — a third copy on the same
+    /// drive could not make the row permanent (2026-10-03) — and the copy
+    /// goes to the Trash.
+    @Test func ofTwoUnprovenSiblingsOnTheKeepersDriveOneIsReadAndTheCopyGoesToTheTrash() async throws {
         let dir = tempDir("two"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
         let fam = addFamily(to: model, in: dir, name: "b", siblings: 2)
@@ -224,25 +228,28 @@ struct DeleteDuplicatesSiblingProofTests {
         job.start(); await job.task?.value
 
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .deleted && row.tier == .permanent && row.remainingVerifiedCopies == 3,
+        #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 2,
                 "\(row.status): \(row.tierReason ?? row.note)")
-        #expect(probe.blocks("sibling") == 6)
-        #expect(!FileManager.default.fileExists(atPath: fam.copies[0].fullPath))
-        #expect(!FileManager.default.fileExists(atPath: dir.appendingPathComponent("Trash").path), "nothing went to a Trash")
-        #expect(fam.siblings.allSatisfy { $0.contentFixity?.isUsableForVerification == true })
+        #expect(probe.blocks("sibling") == 3, "one sibling read in full; the other could not change the tier")
+        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("Trash/b-copy1.mov").path))
+        #expect(fam.siblings.map { $0.contentFixity?.isUsableForVerification == true } == [true, false])
     }
 
+    /// With the archive copy among the counted (keeper + archive = two), a
+    /// third copy anywhere makes the row permanent: ONE sibling is read,
+    /// the goal of three is reached, and the rest are not read.
     @Test func readsStopAtTheGoal() async throws {
         let dir = tempDir("goal"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        _ = addFamily(to: model, in: dir, name: "g", siblings: 4)
+        let fam = addFamily(to: model, in: dir, name: "g", siblings: 4)
+        addVerifiedArchiveFamily(to: model, keeper: fam.keeper, withSibling: false)
         let probe = Probe(); let sink = InMemoryLogSink()
         let job = makeJob(model, dir, probe, sink: sink)
         job.start(); await job.task?.value
 
         #expect(job.plan?.entries.first?.status == .deleted)
-        #expect(probe.blocks("sibling") == 6, "two siblings reach three copies; the other two are not read")
-        #expect(job.runTally.siblingReads == 2)
+        #expect(probe.blocks("sibling") == 3, "one sibling reaches three copies (with the archive's); the other three are not read")
+        #expect(job.runTally.siblingReads == 1)
     }
 
     @Test func aSiblingThatDiffersIsNotACopyTheRowIsLeftAloneAndNamed() async throws {
@@ -506,7 +513,10 @@ struct DeleteDuplicatesForecastTests {
     @Test func forecastMatchesTheRunOnAFixturePlan() async throws {
         let dir = tempDir("forecast"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        let permanent = addFamily(to: model, in: dir, name: "p", siblings: 2, siblingFixity: true, seed: 1)
+        // "Permanent" needs the archive copy among the counted, or a second
+        // drive (2026-10-03) — one temp folder is one drive, so: the archive.
+        let permanent = addFamily(to: model, in: dir, name: "p", siblings: 1, siblingFixity: true, seed: 1)
+        addVerifiedArchiveFamily(to: model, keeper: permanent.keeper, withSibling: false)
         let trash = addFamily(to: model, in: dir, name: "t", siblings: 1, siblingFixity: true, seed: 2)
         let needs = addFamily(to: model, in: dir, name: "n", siblings: 1, seed: 3)
         let alone = addFamily(to: model, in: dir, name: "l", seed: 4)
@@ -636,7 +646,10 @@ struct DeleteDuplicatesRowLoggingTests {
     @Test func everyOutcomeGetsOneLineAndTheSummaryHasCountsAndSizes() async throws {
         let dir = tempDir("logging"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        _ = addFamily(to: model, in: dir, name: "p", siblings: 2, siblingFixity: true, seed: 1)
+        // The archive copy among the counted earns the outright delete on
+        // this one drive (2026-10-03).
+        let p = addFamily(to: model, in: dir, name: "p", siblings: 1, siblingFixity: true, seed: 1)
+        addVerifiedArchiveFamily(to: model, keeper: p.keeper, withSibling: false)
         _ = addFamily(to: model, in: dir, name: "t", siblings: 1, siblingFixity: true, seed: 2)
         _ = addFamily(to: model, in: dir, name: "n", siblings: 1, seed: 3)
         _ = addFamily(to: model, in: dir, name: "l", seed: 4)
@@ -654,7 +667,7 @@ struct DeleteDuplicatesRowLoggingTests {
             return hits.first
         }
         let deleted = try #require(one("[dupjob] deleted p-copy1.mov (\(sizeText)) — 3 verified copies remain: keeper on "))
-        #expect(deleted.contains("sibling p-sib1.mov on ") && deleted.contains("sibling p-sib2.mov on "), Comment(rawValue: deleted))
+        #expect(deleted.contains("sibling p-sib1.mov on ") && deleted.contains("archive copy on "), Comment(rawValue: deleted))
         let trashed = try #require(one("[dupjob] trashed t-copy1.mov (\(sizeText)) — 2 verified copies remain: keeper on "))
         #expect(trashed.contains("sibling t-sib1.mov on ") && trashed.contains("in the Trash of "), Comment(rawValue: trashed))
         _ = one("[dupjob] read sibling n-sib1.mov on ")

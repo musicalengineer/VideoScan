@@ -132,12 +132,10 @@ struct ReclaimableEstimate: Sendable, Equatable {
     }
 
     /// The rule, quoted from DeletionTierDecision (not paraphrased):
-    /// ≥ 3 verified copies remaining → permanent; exactly 2 → the Trash;
-    /// < 2 → left alone.
-    static var survivalRule: String {
-        "Only copies with at least \(DeletionTierDecision.minimumForPermanent) verified copies remaining are ever deleted outright; "
-        + "with exactly \(DeletionTierDecision.minimumForTrash) they go to the Trash, with fewer they are left alone."
-    }
+    /// ≥ 3 verified copies remaining on ≥ 2 drives (or with the archive
+    /// copy among them) → permanent; ≥ 2 otherwise → the Trash; < 2 →
+    /// left alone.
+    static var survivalRule: String { DeletionTierDecision.ruleSentence }
 
     static let estimateNote = "Estimate from the catalog's duplicate groups — the Delete step shows the real forecast and the run proves every copy before it acts."
 }

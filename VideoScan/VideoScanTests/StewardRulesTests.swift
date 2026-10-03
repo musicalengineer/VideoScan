@@ -138,7 +138,10 @@ struct StewardProofRuleTests {
         #expect(proof.remainLine.hasPrefix("2 verified copies would remain: keeper on "))
     }
 
-    @Test func aThirdVerifiedCopyMakesItPermanentExactlyAsThePlannerDecides() throws {
+    /// Three verified copies would remain — all on ONE drive (the rig is
+    /// one temp folder), so since 2026-10-03 the planner says the Trash, and
+    /// the card says exactly that.
+    @Test func aThirdVerifiedCopyOnTheSameDriveMeansTheTrashExactlyAsThePlannerDecides() throws {
         let rig = try rig()
         defer { try? FileManager.default.removeItem(at: rig.dir) }
         try FileManager.default.createDirectory(at: rig.dir.appendingPathComponent("third"), withIntermediateDirectories: true)
@@ -152,7 +155,8 @@ struct StewardProofRuleTests {
         let planner = plannerAnswer(rig, copy: copy, keeper: keeper, excluding: [], digest: digest)
         #expect(planner.facts.remainingVerifiedCopies == DeletionTierDecision.minimumForPermanent)
         #expect(proof.remaining == planner.facts.remainingVerifiedCopies && proof.tier == planner.decision.tier)
-        #expect(proof.tier == .permanent)
+        #expect(planner.facts.distinctDriveCount == 1 && proof.tier == .trash)
+        #expect(proof.outcomeLine == "It would go to the Trash, not be deleted.")
     }
 
     /// The other copies on the SAME drive are rows of the same run, still
@@ -336,7 +340,8 @@ struct StewardProofRuleTests {
     /// The rule printed on the card is the planner's constants, quoted.
     @Test func theSurvivalRuleOnTheCardQuotesThePlannersConstants() {
         #expect(ReclaimableEstimate.survivalRule.contains("at least \(DeletionTierDecision.minimumForPermanent) verified copies"))
-        #expect(ReclaimableEstimate.survivalRule.contains("exactly \(DeletionTierDecision.minimumForTrash)"))
+        #expect(ReclaimableEstimate.survivalRule.contains("at least \(DeletionTierDecision.minimumDrivesForPermanent) different drives"))
+        #expect(ReclaimableEstimate.survivalRule.contains("with \(DeletionTierDecision.minimumForTrash) or more remaining otherwise it goes to the Trash"))
     }
 }
 

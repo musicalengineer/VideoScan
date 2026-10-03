@@ -22,10 +22,15 @@
 // not current evidence: a same-size rewrite of the archive leaves size
 // and digest-on-record intact (codex 1606 #1), so only Verify Archive
 // Copies' stamp-bound fixity lets it count:
-//     ≥ 3 remaining → PERMANENT   (space back now)
-//     = 2 remaining → TRASH       (to the volume's Trash, not gone)
-//     < 2 remaining → LEFT ALONE  (put back untouched)
-// Purely the count — the archive is NOT required (Rick, late 2026-09-20:
+//     ≥ 3 remaining, on ≥ 2 different drives (or one of them the
+//       verified archive copy)   → PERMANENT   (space back now)
+//     ≥ 2 remaining otherwise     → TRASH       (to the volume's Trash, not gone)
+//     < 2 remaining               → LEFT ALONE  (put back untouched)
+// COPIES AND DRIVES (Rick 2026-10-03, after a ledger row that read
+// "permanent — 3 verified remain: keeper on A, sibling on A, sibling on
+// A"): three copies on ONE drive are one drive failure away from none, so
+// they earn the Trash, not an outright delete.
+// The archive is NOT required (Rick, late 2026-09-20:
 // "the low-hanging fruit is a file with ten copies regardless of
 // promotion"); an archive copy counts like any verified copy, and the
 // row says "not yet archived" for information only. "Prefer the Trash
@@ -159,6 +164,10 @@ struct DeletionTierFacts: Sendable, Equatable {
         let label: String
         let stamp: FileIdentityStamp
         let digest: String
+        /// The drive it was counted on (`DeletionTierFacts.Drive.key`).
+        /// Additive: rows written before 2026-10-03 decode nil, and the
+        /// stamp's own volume identity stands in.
+        var driveKey: String? = nil
     }
 
     /// Verified copies that remain after this deletion: keeper + archive
@@ -191,10 +200,64 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// Who did not, and why ("sibling b.mov on M4drive not verified yet").
     var notCounted: [String] = []
 
+    /// One drive a counted copy sits on. `key` is the volume's persistent
+    /// UUID as the fixity stamp carries it (`FileIdentityStamp.volumeUUID`
+    /// — the identity fixity binding already uses, so one volume spelled or
+    /// mounted two ways is one drive), else the stat's `st_dev`.
+    struct Drive: Sendable, Equatable {
+        let key: String
+        /// "LaCieWorkspace" — for the reason.
+        let label: String
+    }
+    /// The keeper's drive (nil when it could not be stat'ed — then it adds
+    /// no drive to the count).
+    var keeperDrive: Drive?
+    /// The DISTINCT drives the counted copies sit on, the keeper's first.
+    /// Empty when unknown (facts built without a stat) — counts as one.
+    var countedDrives: [Drive] = []
+    /// A verified archive copy is among the COUNTED copies (or the keeper
+    /// is it) — unlike `hasVerifiedArchive`, this is the count's evidence.
+    var countsArchiveCopy: Bool = false
+    /// Paths of the counted archive copies, so `recheck` can tell whether
+    /// one still holds.
+    var countedArchivePaths: Set<String> = []
+    /// The keeper is itself the verified archive copy (for `recheck`).
+    var keeperIsArchiveCopy: Bool = false
+
+    /// How many different drives hold the copies that would remain (≥ 1).
+    var distinctDriveCount: Int { max(1, countedDrives.count) }
+
+    /// The drive a stamp was read on.
+    nonisolated static func driveKey(_ stamp: FileIdentityStamp) -> String {
+        stamp.volumeUUID.map { "uuid:" + $0 } ?? "dev:\(stamp.device)"
+    }
+
+    /// "/Volumes/LaCie/a.mov" → "LaCie"; anything else → "this Mac".
+    nonisolated static func driveLabel(forPath path: String) -> String {
+        let comps = (path as NSString).pathComponents
+        return comps.count >= 3 && comps[1] == "Volumes" ? comps[2] : "this Mac"
+    }
+
+    private mutating func noteDrive(_ drive: Drive) {
+        if !countedDrives.contains(where: { $0.key == drive.key }) { countedDrives.append(drive) }
+    }
+
+    /// One more verified copy, on `drive` — used by `gather`, and by the
+    /// previews (the steward's proof) that ask "what if this copy matched?".
+    mutating func addCounted(drive: Drive, isArchive: Bool = false) {
+        remainingVerifiedCopies += 1
+        noteDrive(drive)
+        if isArchive { countsArchiveCopy = true }
+    }
+
     /// "2 verified remain: keeper on LaCieWorkspace, archive copy on
-    /// FamilyArchive; sibling b.mov on M4drive not verified yet".
+    /// FamilyArchive — on 2 drives; sibling b.mov on M4drive not verified
+    /// yet".
     var summary: String {
         var text = "\(remainingVerifiedCopies) verified remain: " + counted.joined(separator: ", ")
+        if remainingVerifiedCopies >= 2, !countedDrives.isEmpty {
+            text += " — on \(distinctDriveCount) drive\(distinctDriveCount == 1 ? "" : "s")"
+        }
         if !notCounted.isEmpty { text += "; " + notCounted.joined(separator: ", ") }
         return text
     }
@@ -203,10 +266,18 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// disk worker); one `stat` per candidate, no reads. `digest` is the
     /// duplicate's whole-file digest — a copy only counts when it holds
     /// THESE bytes.
-    nonisolated static func gather(_ candidates: DeletionTierCandidates, digest: String) -> DeletionTierFacts {
+    /// `driveOf` names the drive a stat'ed copy sits on (test seam: two
+    /// drives cannot be had inside one temp folder); production reads it
+    /// off the stamp.
+    nonisolated static func gather(_ candidates: DeletionTierCandidates, digest: String,
+                                   driveOf: (_ path: String, _ stamp: FileIdentityStamp) -> Drive = {
+                                       Drive(key: DeletionTierFacts.driveKey($1), label: DeletionTierFacts.driveLabel(forPath: $0))
+                                   }) -> DeletionTierFacts {
         var facts = DeletionTierFacts()
         let wanted = digest.lowercased()
         facts.hasVerifiedArchive = candidates.keeperIsVerifiedArchive
+        facts.keeperIsArchiveCopy = candidates.keeperIsVerifiedArchive
+        facts.countsArchiveCopy = candidates.keeperIsVerifiedArchive
         facts.keeperCounted = candidates.keeperLabel + (candidates.keeperIsVerifiedArchive ? " (the archive copy)" : "")
         facts.counted.append(facts.keeperCounted)
         // One inode counts once: a hard link (or a second spelling of one
@@ -216,6 +287,9 @@ struct DeletionTierFacts: Sendable, Equatable {
         func key(_ s: FileIdentityStamp) -> String { "\(s.device):\(s.inode)" }
         if !candidates.keeperPath.isEmpty, let k = FileIdentityStamp.capture(path: candidates.keeperPath) {
             seenInodes.insert(key(k))
+            let drive = driveOf(candidates.keeperPath, k)
+            facts.keeperDrive = drive
+            facts.countedDrives = [drive]
         }
         func alreadyCounted(_ stamp: FileIdentityStamp, _ label: String) -> Bool {
             if let dup = candidates.duplicateIdentity, stamp.isSameFile(as: dup) {
@@ -257,10 +331,12 @@ struct DeletionTierFacts: Sendable, Equatable {
                 continue
             }
             if alreadyCounted(stamp, archive.label) { continue }
-            facts.remainingVerifiedCopies += 1
+            let drive = driveOf(archive.path, stamp)
+            facts.addCounted(drive: drive, isArchive: true)
+            facts.countedArchivePaths.insert(archive.path)
             facts.counted.append(archive.label)
             facts.countedCopies.append(CountedCopy(recordID: archive.recordID, path: archive.path, label: archive.label,
-                                                   stamp: stamp, digest: wanted))
+                                                   stamp: stamp, digest: wanted, driveKey: drive.key))
         }
         for copy in candidates.otherCopies {
             guard let fixity = copy.fixity, fixity.isUsableForVerification else {
@@ -280,10 +356,11 @@ struct DeletionTierFacts: Sendable, Equatable {
                 continue
             }
             if alreadyCounted(stamp, copy.label) { continue }
-            facts.remainingVerifiedCopies += 1
+            let drive = driveOf(copy.path, stamp)
+            facts.addCounted(drive: drive)
             facts.counted.append(copy.label)
             facts.countedCopies.append(CountedCopy(recordID: copy.recordID, path: copy.path, label: copy.label,
-                                                   stamp: stamp, digest: wanted))
+                                                   stamp: stamp, digest: wanted, driveKey: drive.key))
         }
         for label in candidates.alsoInThisRun {
             facts.unverifiedCopies += 1
@@ -319,6 +396,11 @@ struct DeletionTierFacts: Sendable, Equatable {
         var out = self
         out.countedCopies = still
         out.remainingVerifiedCopies = 1 + still.count
+        // The drives and the archive exception follow what still holds: a
+        // dropped copy takes its drive with it unless another copy is there.
+        let stillKeys = Set(still.map { $0.driveKey ?? Self.driveKey($0.stamp) })
+        out.countedDrives = countedDrives.filter { $0.key == keeperDrive?.key || stillKeys.contains($0.key) }
+        out.countsArchiveCopy = keeperIsArchiveCopy || still.contains { countedArchivePaths.contains($0.path) }
         out.counted = [keeperCounted] + still.map(\.label)
         out.unverifiedCopies += dropped.count
         out.notCounted = dropped + notCounted
@@ -327,9 +409,11 @@ struct DeletionTierFacts: Sendable, Equatable {
     }
 }
 
-/// The tier rule, pure and table-testable. Purely the COUNT (Rick
-/// 2026-09-20, late): the archive is not required — "the low-hanging
-/// fruit is a file with ten copies regardless of promotion".
+/// The tier rule, pure and table-testable. The COUNT (Rick 2026-09-20,
+/// late: the archive is not required — "the low-hanging fruit is a file
+/// with ten copies regardless of promotion") AND, for an outright delete,
+/// WHERE the copies sit (Rick 2026-10-03): three copies on one drive are
+/// one failure from none.
 struct DeletionTierDecision: Equatable, Sendable {
     /// nil → left alone (not deleted, not refused as "not identical").
     let tier: DeletionTier?
@@ -338,6 +422,26 @@ struct DeletionTierDecision: Equatable, Sendable {
 
     static let minimumForTrash = 2
     static let minimumForPermanent = 3
+    /// An outright delete needs the remaining copies on at least this many
+    /// DIFFERENT drives — unless one of them is the verified archive copy.
+    /// A "drive" is a volume (its persistent UUID, else `st_dev`). KNOWN
+    /// LIMIT, documented, not solved: two APFS volumes in one container —
+    /// one physical disk — count as two drives
+    /// (docs/practices/invariants/MediaOps.md, MOPS-2).
+    static let minimumDrivesForPermanent = 2
+
+    /// The survival rule in one sentence, from the constants — every place
+    /// that prints the rule quotes this.
+    static var ruleSentence: String {
+        "Only a copy with at least \(minimumForPermanent) verified copies remaining on at least "
+        + "\(minimumDrivesForPermanent) different drives (or with a verified archive copy among them) is ever deleted outright; "
+        + "with \(minimumForTrash) or more remaining otherwise it goes to the Trash; with fewer it is left alone."
+    }
+
+    /// Would `n` verified copies on these drives earn an outright delete?
+    static func earnsPermanent(count n: Int, distinctDrives: Int, countsArchiveCopy: Bool) -> Bool {
+        n >= minimumForPermanent && (distinctDrives >= minimumDrivesForPermanent || countsArchiveCopy)
+    }
 
     static func decide(facts: DeletionTierFacts, preferTrash: Bool) -> DeletionTierDecision {
         let n = facts.remainingVerifiedCopies
@@ -350,9 +454,16 @@ struct DeletionTierDecision: Equatable, Sendable {
             return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
                                         reason: "to the Trash by your setting (\(who))")
         }
-        if n >= minimumForPermanent {
+        if earnsPermanent(count: n, distinctDrives: facts.distinctDriveCount, countsArchiveCopy: facts.countsArchiveCopy) {
             return DeletionTierDecision(tier: .permanent, remainingVerifiedCopies: n,
                                         reason: "space back now (\(who))")
+        }
+        if n >= minimumForPermanent {
+            // Enough copies, but all on ONE drive and none of them the
+            // archive's: the Trash, never an outright delete.
+            let drive = facts.countedDrives.first?.label ?? "one drive"
+            return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
+                                        reason: "to the Trash, not gone — the \(n) copies that remain are all on \(drive) (\(who))")
         }
         return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
                                     reason: "only two verified copies would remain — to the Trash, not gone (\(who))")
@@ -363,7 +474,7 @@ struct DeletionTierDecision: Equatable, Sendable {
 enum DeletionTierText {
     static let notYetArchived = "not yet archived"
     static let preferTrashToggleLabel = "Prefer the Trash for every duplicate"
-    static let preferTrashCaption = "Off: a duplicate with three or more verified copies left behind (the keeper, an archive copy, siblings whose stored fixity still reproduces) is deleted outright; with exactly two left, it goes to the drive's Trash instead; with fewer, it is left alone. On: every duplicate goes to the Trash, whatever the count. An archive copy counts but is not required."
+    static let preferTrashCaption = "Off: a duplicate with three or more verified copies left behind (the keeper, an archive copy, siblings whose stored fixity still reproduces) on at least two different drives — or with the archive copy among them — is deleted outright; with two or more left otherwise, it goes to the drive's Trash instead; with fewer, it is left alone. On: every duplicate goes to the Trash, whatever the count. An archive copy counts but is not required."
     static func inTheTrashOf(_ volume: String) -> String { "in the Trash of \(volume)" }
     /// "1 file on SanDisk is waiting to be put back from quarantine".
     static func waitingToBePutBack(_ n: Int, volume: String) -> String {

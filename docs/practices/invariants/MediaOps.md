@@ -39,7 +39,7 @@ paths:
 
 ## Invariants
 1. **MOPS-1** Delete safety: a file is trashed or deleted only after proving, at delete time, that a surviving copy exists (sibling proof / signature re-read now, not a cached verdict). When in doubt, refuse. Trash over permanent unlink.
-2. **MOPS-2** Duplicate delete leaves the policy's number of verified copies; a keeper is never elected on a retired, offline or scratch volume; no group ever loses every member, whatever the order or concurrency of the job.
+2. **MOPS-2** Duplicate delete leaves the policy's number of verified copies — and an OUTRIGHT delete additionally requires those copies on at least two different drives, or the verified archive copy among them (`DeletionTierDecision.minimumDrivesForPermanent`, 2026-10-03); otherwise the copy goes to the Trash. A "drive" is a volume (persistent volume UUID, else `st_dev`). Known limit, documented and not solved: two APFS volumes in one container (one physical disk) count as two drives; a keeper is never elected on a retired, offline or scratch volume; no group ever loses every member, whatever the order or concurrency of the job.
 3. **MOPS-3** No MediaOps lane (delete, prune, purge, relocate, cleanup) deletes, moves or trashes anything on the FamilyArchive volume or inside the Master Archive tree.
 4. **MOPS-4** Outputs never clobber: a derivative, combine, transcode, trim, reformat, rebuild or rescue output is written under a partial name and published with an exclusive create/rename. Only the job's own partial file may be removed or trashed.
 5. **MOPS-5** Source media is never modified by a job that produces an output. Combine (A/V stitch) muxes with `-c copy` only; no re-encode; the output is verified (streams, duration) before it is announced.

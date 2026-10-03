@@ -23,8 +23,12 @@
 // rides on the row as a `CountedCopy`, and is re-stat'ed at the removal
 // boundary by `DeletionTierFacts.recheck` — still the last word.
 //
-// Rules that stand, unchanged: ≥ 3 verified copies remaining → permanent;
-// exactly 2 → the Trash; < 2 → left alone. A sibling offline is not
+// Rules that stand: ≥ 3 verified copies remaining on ≥ 2 different drives
+// (or with the archive copy among them) → permanent; ≥ 2 otherwise → the
+// Trash; < 2 → left alone. A read exists to reach a tier, so (2026-10-03)
+// once two are counted on ONE drive, a sibling on that same drive is NOT
+// read: a third copy there cannot lift the row past the Trash
+// (`worthReading`). A sibling offline is not
 // counted (unavailable ≠ absent). A sibling that is the same inode as the
 // keeper or as the duplicate (a hard link, two spellings of one name) is
 // never read and never counted. A sibling that is itself a row of this
@@ -107,6 +111,21 @@ enum SiblingProver {
         }
     }
 
+    /// Is one more sibling read worth making? `count` verified copies so
+    /// far on `drives` (keys); the candidate sits on `candidateDrive`.
+    /// Below the Trash's two: always. At two or more with the goal at
+    /// three: only if a third copy could make the row PERMANENT — the
+    /// copies already span two drives (or include the archive copy), or
+    /// this sibling would add the second drive. Pure; shared by the run,
+    /// the steward's proof and the forecast.
+    nonisolated static func worthReading(count: Int, drives: Set<String>, countsArchiveCopy: Bool,
+                                         candidateDrive: String, goal: Int) -> Bool {
+        guard count < goal else { return false }
+        if count < DeletionTierDecision.minimumForTrash { return true }
+        if countsArchiveCopy || drives.count >= DeletionTierDecision.minimumDrivesForPermanent { return true }
+        return !drives.contains(candidateDrive)
+    }
+
     /// A sibling a read could prove: its index in `otherCopies` and the
     /// stamp it has now.
     struct Readable: Sendable, Equatable {
@@ -149,9 +168,14 @@ enum SiblingProver {
     /// bytes". Offline siblings get the note "offline — not counted".
     /// Returns every read made, in order. Off the main actor.
     nonisolated static func prove(_ candidates: inout DeletionTierCandidates, digest: String,
-                                  allowance: Allowance, hooks: SignatureVerification.Hooks) -> [SiblingRead] {
+                                  allowance: Allowance, hooks: SignatureVerification.Hooks,
+                                  driveOf: (_ path: String, _ stamp: FileIdentityStamp) -> DeletionTierFacts.Drive = {
+                                      .init(key: DeletionTierFacts.driveKey($1), label: DeletionTierFacts.driveLabel(forPath: $0))
+                                  }) -> [SiblingRead] {
         let wanted = digest.lowercased()
-        let start = DeletionTierFacts.gather(candidates, digest: wanted).remainingVerifiedCopies
+        let before = DeletionTierFacts.gather(candidates, digest: wanted, driveOf: driveOf)
+        let start = before.remainingVerifiedCopies
+        var drives = Set(before.countedDrives.map(\.key))
         guard start < allowance.goal else { return [] }
         let (readable, offline) = readableSiblings(candidates, allowance: allowance)
         for i in offline { candidates.otherCopies[i].unverifiedNote = "offline — not counted" }
@@ -162,12 +186,16 @@ enum SiblingProver {
         var matched = 0
         for candidate in readable where start + matched < allowance.goal {
             let copy = candidates.otherCopies[candidate.index]
+            let drive = driveOf(copy.path, candidate.stamp).key
+            // No read that cannot change the tier (see `worthReading`).
+            guard worthReading(count: start + matched, drives: drives, countsArchiveCopy: before.countsArchiveCopy,
+                               candidateDrive: drive, goal: allowance.goal) else { continue }
             let outcome = SignatureVerification.wholeFileFixity(path: copy.path, label: "sibling", hooks: hooks)
             switch outcome {
             case .fixity(let fixity):
                 candidates.otherCopies[candidate.index].fixity = fixity
                 let same = fixity.digest == wanted
-                if same { matched += 1 }
+                if same { matched += 1; drives.insert(drive) }
                 reads.append(SiblingRead(recordID: copy.recordID, path: copy.path, label: copy.label,
                                          bytes: fixity.byteCount, result: same ? .matches : .differs, fixity: fixity))
             case .unavailable:

@@ -145,13 +145,17 @@ private func quarantineFolders(in dir: URL) -> [String] {
 @Suite("Copy-count tier — the rule")
 struct DeletionTierRuleTests {
 
+    /// Copies on TWO drives (since 2026-10-03 an outright delete needs
+    /// that; the one-drive rows are in DeleteDuplicatesTwoDrivesTests).
     private func facts(_ remaining: Int, archive: Bool) -> DeletionTierFacts {
-        DeletionTierFacts(remainingVerifiedCopies: remaining, hasVerifiedArchive: archive, unverifiedCopies: 0)
+        var f = DeletionTierFacts(remainingVerifiedCopies: remaining, hasVerifiedArchive: archive, unverifiedCopies: 0)
+        f.countedDrives = [.init(key: "A", label: "LaCie"), .init(key: "B", label: "X9")]
+        return f
     }
 
-    /// Purely the count (Rick, late 2026-09-20: the archive is NOT
+    /// The count, on two drives (Rick, late 2026-09-20: the archive is NOT
     /// required). The `archive` column only says whether the family has
-    /// one — it must never change the verdict.
+    /// one ON RECORD — that must never change the verdict.
     @Test(arguments: [
         (3, true, false, DeletionTier?.some(.permanent)),
         (3, false, false, DeletionTier?.some(.permanent)),
@@ -211,7 +215,8 @@ struct DeletionTierRuleTests {
         #expect(f.notCounted == ["archive copy on Projects holds different bytes", "archive copy on MyBook offline",
                                  "archive copy on Pegasus not verified now (no stamp-bound fixity — run Verify Archive Copies)",
                                  "sibling stale.mov on SanDisk changed since it was verified", "sibling nofixity.mov on M4drive not verified yet"])
-        #expect(f.summary == "3 verified remain: keeper on LaCieWorkspace, archive copy on FamilyArchive, sibling copy.mov on SanDisk; archive copy on Projects holds different bytes, archive copy on MyBook offline, archive copy on Pegasus not verified now (no stamp-bound fixity — run Verify Archive Copies), sibling stale.mov on SanDisk changed since it was verified, sibling nofixity.mov on M4drive not verified yet")
+        #expect(f.countsArchiveCopy && f.distinctDriveCount == 1, "one temp folder is one drive; the archive copy is among the counted")
+        #expect(f.summary == "3 verified remain: keeper on LaCieWorkspace, archive copy on FamilyArchive, sibling copy.mov on SanDisk — on 1 drive; archive copy on Projects holds different bytes, archive copy on MyBook offline, archive copy on Pegasus not verified now (no stamp-bound fixity — run Verify Archive Copies), sibling stale.mov on SanDisk changed since it was verified, sibling nofixity.mov on M4drive not verified yet")
         let d = DeletionTierDecision.decide(facts: f, preferTrash: false)
         #expect(d.tier == .permanent && d.reason == "space back now (\(f.summary))")
 
@@ -238,13 +243,19 @@ struct DeletionTierRuleTests {
         inRun.alsoInThisRun = ["sibling copy2.mov on SanDisk"]
         let r = DeletionTierFacts.gather(inRun, digest: digest)
         #expect(r.remainingVerifiedCopies == 1 && r.notCounted == ["sibling copy2.mov on SanDisk still to be decided in this run"])
-        // No archive anywhere, two verified siblings: the count alone decides.
+        // No archive anywhere, two verified siblings — all on one drive:
+        // enough copies, but the Trash (2026-10-03); on two drives, permanent.
         var noArchive = DeletionTierCandidates()
         noArchive.otherCopies = [.init(path: copyOK.path, fixity: ContentFixity.captured(path: copyOK.path, digest: digest, byteCount: 4_096), label: "sibling a"),
                                  .init(path: archiveOK.path, fixity: ContentFixity.captured(path: archiveOK.path, digest: digest, byteCount: 4_096), label: "sibling b")]
         let h = DeletionTierFacts.gather(noArchive, digest: digest)
         #expect(!h.hasVerifiedArchive && h.remainingVerifiedCopies == 3)
-        #expect(DeletionTierDecision.decide(facts: h, preferTrash: false).tier == .permanent, "an archive copy counts but is not required")
+        #expect(DeletionTierDecision.decide(facts: h, preferTrash: false).tier == .trash, "three on one drive: the Trash")
+        let twoDrives = DeletionTierFacts.gather(noArchive, digest: digest) { path, _ in
+            path == copyOK.path ? .init(key: "B", label: "X9") : .init(key: "A", label: "LaCie")
+        }
+        #expect(DeletionTierDecision.decide(facts: twoDrives, preferTrash: false).tier == .permanent,
+                "an archive copy counts but is not required — two drives are")
     }
 
     @Test func subtitleAndSummaryNameTheTrash() {
@@ -566,10 +577,11 @@ struct DeleteDuplicatesTierAndSpeedTests {
     }
 
     /// The archive is not required: a keeper + one verified sibling is
-    /// two remaining → the Trash; + two verified siblings → permanent.
-    /// An unverified sibling is named and does not count.
+    /// two remaining → the Trash; + two verified siblings is three — but
+    /// the rig is ONE drive, so (2026-10-03) still the Trash, never an
+    /// outright delete. An unverified sibling is named and does not count.
     @Test func verifiedSiblingsWithoutAnyArchiveCopyDecideTheTier() async throws {
-        for (verifiedSiblings, expected) in [(1, DeletionTier.trash), (2, DeletionTier.permanent)] {
+        for (verifiedSiblings, expected) in [(1, DeletionTier.trash), (2, DeletionTier.trash)] {
             let rig = makeRig("nosiblings-\(verifiedSiblings)", copies: 1, keeperFixity: true); defer { rig.cleanup() }
             let group = rig.keeper.duplicateGroupID!
             for i in 0..<verifiedSiblings {
@@ -579,10 +591,10 @@ struct DeleteDuplicatesTierAndSpeedTests {
                 rig.model.records.append(s)
             }
             // Since sibling proving (2026-09-21) a sibling with no fixity is
-            // READ when the count falls short of three — so this one holds
-            // DIFFERENT bytes: read (with one verified sibling) and named
-            // "holds different bytes", or not needed (with two) and named
-            // "not verified yet". Either way it never counts.
+            // READ when that could change the tier. Here it cannot: two (or
+            // three) are already counted on this one drive, and a further
+            // copy on the SAME drive still means the Trash (2026-10-03) — so
+            // it is not read and is named "not verified yet". It never counts.
             var otherBytes = rig.bytes; otherBytes[7] ^= 0x5A
             let unverified = rig.dir.appendingPathComponent("unverified.mov"); write(unverified, otherBytes)
             rig.model.records.append(dupRecord(path: unverified.path, size: Int64(fileSize), group: group, disposition: .review))
@@ -597,7 +609,8 @@ struct DeleteDuplicatesTierAndSpeedTests {
             #expect(row.hasVerifiedArchive == false && row.tierLabel.hasSuffix(" · not yet archived"))
             let reason = try #require(row.tierReason)
             #expect(reason.contains("keeper on ") && reason.contains("sibling sibling0.mov on ") && reason.contains("sibling unverified.mov on "))
-            let unverifiedWords = verifiedSiblings == 1 ? "holds different bytes)" : "not verified yet)"
+            let unverifiedWords = "not verified yet)"
+            #expect(job.runTally.siblingReads == 0, "a same-drive read that cannot change the tier")
             #expect(reason.contains("unverified.mov on") && reason.hasSuffix(unverifiedWords), Comment(rawValue: reason))
             #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
             #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy1.mov").path) == (expected == .trash))

@@ -14,8 +14,10 @@
 //   SiblingProver.readableSiblings(_:allowance:)
 //        which copies WITHOUT current evidence the run could read to prove
 //   DeletionTierDecision.decide(facts:preferTrash:)
-//        ≥ 3 remain → deleted outright · exactly 2 → the Trash · fewer →
-//        left alone
+//        ≥ 3 remain on ≥ 2 drives (or with the archive copy) → deleted
+//        outright · ≥ 2 otherwise → the Trash · fewer → left alone
+//   SiblingProver.worthReading(…)
+//        which of those reads the run would actually make
 //
 // What differs from the run, said on the card: the run READS the copy and
 // the keeper in full before it counts anything, and reads siblings that
@@ -206,37 +208,69 @@ enum StewardEvidenceBuilder {
         candidates.duplicateIdentity = FileIdentityStamp.capture(path: q.copyPath)
         let goal = SiblingProver.Allowance.goal(preferTrash: preferTrash)
 
-        /// The tier if `more` further copies were proven.
-        func tier(_ facts: DeletionTierFacts, plus more: Int) -> DeletionTier? {
+        func drive(_ path: String, _ stamp: FileIdentityStamp) -> DeletionTierFacts.Drive {
+            .init(key: DeletionTierFacts.driveKey(stamp), label: DeletionTierFacts.driveLabel(forPath: path))
+        }
+        /// The facts if the run read `copies` in order and each matched —
+        /// reading only what its own rule would (`worthReading`: never a
+        /// copy that cannot change the tier). Returns how many it reads.
+        func hoping(_ facts: DeletionTierFacts,
+                    _ copies: [(path: String, stamp: FileIdentityStamp, isArchive: Bool)]) -> (facts: DeletionTierFacts, reads: Int) {
             var hoped = facts
-            hoped.remainingVerifiedCopies += more
-            return DeletionTierDecision.decide(facts: hoped, preferTrash: preferTrash).tier
+            var reads = 0
+            for copy in copies {
+                let d = drive(copy.path, copy.stamp)
+                guard SiblingProver.worthReading(count: hoped.remainingVerifiedCopies,
+                                                 drives: Set(hoped.countedDrives.map(\.key)),
+                                                 countsArchiveCopy: hoped.countsArchiveCopy,
+                                                 candidateDrive: d.key, goal: goal) else { continue }
+                hoped.addCounted(drive: d, isArchive: copy.isArchive)
+                reads += 1
+            }
+            return (hoped, reads)
         }
 
         guard let digest = q.digest else {
             // Nothing stored to ask with: the planner would count the
             // keeper alone until it has read this copy. The other copies
-            // (not rows of the same run) might match once it has.
-            let facts = DeletionTierFacts()
+            // (not rows of the same run) might match once it has — where
+            // they sit (one stat each) decides what that would earn.
+            var facts = DeletionTierFacts()
+            if !candidates.keeperPath.isEmpty, let k = FileIdentityStamp.capture(path: candidates.keeperPath) {
+                let d = drive(candidates.keeperPath, k)
+                facts.keeperDrive = d
+                facts.countedDrives = [d]
+            }
+            facts.countsArchiveCopy = candidates.keeperIsVerifiedArchive
             let decision = DeletionTierDecision.decide(facts: facts, preferTrash: preferTrash)
             let others = candidates.archiveCopies.count + candidates.otherCopies.count
-            let useful = min(others, max(0, goal - facts.remainingVerifiedCopies))
+            let reachable = candidates.archiveCopies.compactMap { c in
+                FileIdentityStamp.capture(path: c.path).map { (path: c.path, stamp: $0, isArchive: true) }
+            } + candidates.otherCopies.compactMap { c in
+                FileIdentityStamp.capture(path: c.path).map { (path: c.path, stamp: $0, isArchive: false) }
+            }
+            let hoped = hoping(facts, reachable)
             return StewardCopyProof(copyID: q.copyID, remaining: decision.remainingVerifiedCopies,
                                     counted: [candidates.keeperLabel],
                                     notCounted: others + candidates.alsoInThisRun.count,
                                     tier: decision.tier, hadStoredDigest: false,
-                                    readsFirst: useful, tierIfTheyMatch: tier(facts, plus: useful))
+                                    readsFirst: hoped.reads,
+                                    tierIfTheyMatch: DeletionTierDecision.decide(facts: hoped.facts, preferTrash: preferTrash).tier)
         }
         let facts = DeletionTierFacts.gather(candidates, digest: digest)
         let decision = DeletionTierDecision.decide(facts: facts, preferTrash: preferTrash)
         // The copies the run could read to prove (stat only here): it
-        // reads until the goal is reached, never more.
+        // reads until the goal is reached, never more — and never one that
+        // could not change the tier.
         let readable = SiblingProver.readableSiblings(
-            candidates, allowance: .init(goal: goal, readablePaths: Set(candidates.otherCopies.map(\.path)))).readable.count
-        let reads = min(readable, max(0, goal - facts.remainingVerifiedCopies))
+            candidates, allowance: .init(goal: goal, readablePaths: Set(candidates.otherCopies.map(\.path)))).readable
+        let hoped = hoping(facts, readable.map { (path: candidates.otherCopies[$0.index].path, stamp: $0.stamp, isArchive: false) })
         return StewardCopyProof(copyID: q.copyID, remaining: decision.remainingVerifiedCopies,
                                 counted: facts.counted, notCounted: facts.unverifiedCopies,
                                 tier: decision.tier, hadStoredDigest: true,
-                                readsFirst: reads, tierIfTheyMatch: reads > 0 ? tier(facts, plus: reads) : decision.tier)
+                                readsFirst: hoped.reads,
+                                tierIfTheyMatch: hoped.reads > 0
+                                    ? DeletionTierDecision.decide(facts: hoped.facts, preferTrash: preferTrash).tier
+                                    : decision.tier)
     }
 }
