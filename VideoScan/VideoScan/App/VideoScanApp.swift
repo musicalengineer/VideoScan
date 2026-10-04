@@ -899,6 +899,18 @@ struct VideoScanApp: App {
         .defaultSize(width: 720, height: 480)
         .defaultPosition(.center)
 
+        // Footage Spectrum (trial, 2026-10-03): the page "Compare Footage…"
+        // writes, in a web view that reads only its own run folder. Shows
+        // whichever run FootageSpectrumViewer holds (the newest, or the one
+        // an MFO row's Open put back).
+        Window(FootageSpectrumWindowOpener.windowTitle, id: FootageSpectrumWindowOpener.sceneID) {
+            FootageSpectrumWindowView(viewer: FootageSpectrumViewer.shared, model: catalogModel)
+                .environment(\.mediaFileOperationsCenterReference, fileOpsCenter)
+        }
+        .windowResizability(.contentMinSize)
+        .defaultSize(width: 1280, height: 860)
+        .defaultPosition(.center)
+
         Window("Settings", id: "settings") {
             SettingsTabView(
                 settings: Binding(
@@ -1030,7 +1042,8 @@ final class MainWindowHelper {
     /// looked hung.
     private let auxiliaryTitles = ["Dashboard", "Console", "About", "Realtime",
                                    "Media File Operations", "Volumes", "Family Archivist",
-                                   "Settings", "Compare Volumes", "Catalog Info", "Analyze", "Content Analysis"]
+                                   "Settings", "Compare Volumes", "Catalog Info", "Analyze", "Content Analysis",
+                                   "Footage Spectrum"]
 
     func openMainWindow() {
         // First try to find and unhide an existing main window

@@ -531,6 +531,20 @@ struct TriageView: View {
                 .help("Move to Trash or delete permanently — sheet shows the split between reachable and offline volumes")
             }
 
+            // Footage Spectrum trial (2026-10-03): 2–8 rows → one MFO job,
+            // the result in its own window. The ids are resolved when the
+            // button is pressed, never here.
+            Button {
+                compareFootage(selectedIDs)
+            } label: {
+                Label("Compare Footage…", systemImage: "waveform.path.ecg.rectangle")
+            }
+            .buttonStyle(.bordered)
+            .tint(.purple)
+            .disabled(!FootageSpectrumPlanner.selectionAllowed(selectedIDs.count))
+            .help(FootageSpectrumPlanner.selectionHelp(selectedIDs.count))
+            .accessibilityIdentifier("triage.compareFootage")
+
             Button {
                 promoteSelectedToArchive()
             } label: {
@@ -926,6 +940,16 @@ struct TriageView: View {
         Divider()
 
         Button {
+            compareFootage(ids)
+        } label: {
+            Label("Compare Footage…", systemImage: "waveform.path.ecg.rectangle")
+        }
+        .disabled(!FootageSpectrumPlanner.selectionAllowed(count))
+        .help(FootageSpectrumPlanner.selectionHelp(count))
+
+        Divider()
+
+        Button {
             if let id = ids.first {
                 showInCatalog(id)
             }
@@ -987,6 +1011,19 @@ struct TriageView: View {
         }
         model.saveCatalogDebounced()
         catalogEdited()
+    }
+
+    /// "Compare Footage…": the selection, through the
+    /// model's id index (O(selection)) → an MFO job → the Footage Spectrum
+    /// window, which says "Preparing…" until the page exists.
+    private func compareFootage(_ ids: Set<UUID>) {
+        guard let center = fileOpsCenterReference,
+              FootageSpectrumPlanner.selectionAllowed(ids.count) else { return }
+        // The planner orders them (archive copy, then the biggest).
+        // nil = refused outright (a viewer): the console says why, no window.
+        guard model.startFootageSpectrum(ids: Array(ids), title: "\(ids.count) videos from Triage",
+                                         center: center, source: "Triage") != nil else { return }
+        FootageSpectrumWindowOpener.open(using: openWindow, source: "triage")
     }
 
     private func showInCatalog(_ id: UUID) {

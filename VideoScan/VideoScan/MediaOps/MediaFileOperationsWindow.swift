@@ -444,6 +444,7 @@ struct MediaFileOperationRow: View {
     /// pendingCatalogSelection mechanism the dashboard uses. Rick
     /// 2026-06-14.
     @EnvironmentObject var model: VideoScanModel
+    @Environment(\.openWindow) private var openWindow
 
     /// Re-render driver: the job is an existential, so @ObservedObject
     /// can't watch it directly. We subscribe to its objectWillChange
@@ -563,6 +564,12 @@ struct MediaFileOperationRow: View {
 
             if isExpanded, let lock = job as? ArchiveLockJob {
                 ArchiveLockDetailView(job: lock)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
+            if isExpanded, let spectrum = job as? FootageSpectrumJob {
+                FootageSpectrumDetailView(job: spectrum)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
@@ -692,6 +699,10 @@ struct MediaFileOperationRow: View {
                     finishedChip(summary)
                     revealButton(published)
                     showInCatalogButton(published)
+                } else if let spectrum = job as? FootageSpectrumJob {
+                    // Compare Footage: the one-line verdict, and the window.
+                    finishedChip(summary)
+                    openSpectrumButton(spectrum)
                 } else if let promote = job as? PromoteToArchiveJob,
                           let line = promote.protectionLine {
                     // Promote (stage 2): when every copy landed verified
@@ -815,6 +826,21 @@ struct MediaFileOperationRow: View {
         .help("Jump to this file's row in the Catalog tab")
     }
 
+    /// "Open" on a finished Compare Footage row: show THIS run in the
+    /// Footage Spectrum window.
+    private func openSpectrumButton(_ job: FootageSpectrumJob) -> some View {
+        Button {
+            FootageSpectrumViewer.shared.show(job)
+            FootageSpectrumWindowOpener.open(using: openWindow, source: "mfo-row")
+        } label: {
+            Label("Open", systemImage: "waveform.path.ecg.rectangle")
+                .font(.system(size: 11))
+        }
+        .buttonStyle(.bordered)
+        .help("Show this comparison in the Footage Spectrum window")
+        .accessibilityIdentifier("mfo.row.openSpectrum")
+    }
+
     /// Same as showInCatalogButton, but keyed by record UUID — used by
     /// AnalyzeJob where the record is already in the catalog and we
     /// don't need a path-based lookup.
@@ -900,7 +926,7 @@ extension MediaFileOperationKind {
     var hasDetailView: Bool {
         switch self {
         case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies, .verifyVideo, .lockArchive:
+             .pruneCopies, .verifyVideo, .lockArchive, .compareFootage:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -997,6 +1023,10 @@ extension MediaFileOperationKind {
         // Lock files already in the archive (2026-09-27) — deep navy slate: "the vault".
         // Δ ≥ 0.22 from every other fill; contrast vs white ≈ 13.
         case .lockArchive: return Color(red: 0.10, green: 0.20, blue: 0.30)
+        // Compare Footage / Footage Spectrum (2026-10-03) — plum: a reading
+        // verb like Compare's cobalt, but its own family. Δ ≥ 0.22 from every
+        // other fill (nearest: Balance's raspberry), contrast vs white ≈ 9.
+        case .compareFootage: return Color(red: 0.50, green: 0.10, blue: 0.45)
         }
     }
 }

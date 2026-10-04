@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Footage Spectrum — prototype</title>
+<title>Footage Spectrum</title>
 <style>
 :root{--bg:#f5f5f2;--surface:#ffffff;--fg:#1c1c1e;--muted:#5d6166;--line:#d4d4d0;--lane:#e9e8e3;--accent:#1a62d6;--accent-rgb:26,98,214;
   --same:#1f8a43;--close:#b88a00;--diff:#c93a32;--none:#7d8186;--sel:#eaf1fd;--barh:60px}
@@ -93,7 +93,7 @@ footer li{margin:2px 0}
 </head>
 <body>
 <header>
-  <h1>Footage Spectrum — prototype</h1>
+  <h1>Footage Spectrum</h1>
   <p>Each strip is a video: left to right is time; each thin column is the colours of one moment, top of the frame at the top. Bands that line up are the same pictures. The coloured ribbon under a strip says how well it matches the reference at each moment.</p>
 </header>
 <div id="picker"></div>
@@ -476,6 +476,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', lay
 
 // ---------------------------------------------------------------- picker, footer, go
 D.sets.forEach((s,i)=>{ const b=el('button',null,s.title); b.addEventListener('click',()=>buildSet(i)); $('picker').appendChild(b); });
+if(D.sets.length<2) $('picker').style.display='none';   // one set: nothing to pick
 (function(){ const p=D.params, f=$('foot'), ul=el('ul');
   [['Picture',p.picture],['Viewer frames',p.frames],['Sound',p.sound],['Alignment',p.align],['Match ribbon',p.ribbon],['Script',p.script],['Built',p.built]].forEach(([a,b])=>ul.appendChild(el('li',null,a+': '+b)));
   Object.values(D.files).forEach(x=>ul.appendChild(el('li',null,x.name+': '+x.T+' columns, '+x.method+', extracted in '+x.sec+' s')));
