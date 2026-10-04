@@ -176,6 +176,17 @@ struct FootageSpectrumStore: Sendable, Equatable {
     @discardableResult
     func pruneOldRuns(now: Date = Date(), fileManager: FileManager = .default) -> Int {
         let runsPath = runsDir.standardizedFileURL.resolvingSymlinksInPath().path
+        // QA P3-1: `runs` itself must be a real folder directly under the
+        // root — a symlinked `runs` (or one whose resolved path is not
+        // <resolved root>/runs) is never followed.
+        let expected = root.standardizedFileURL.resolvingSymlinksInPath().appendingPathComponent("runs").path
+        let runsType = (try? fileManager.attributesOfItem(atPath: runsDir.path))?[.type] as? FileAttributeType
+        guard runsType == .typeDirectory, runsPath == expected else {
+            if runsType != nil {
+                spectrumLog.error("spectrum prune refused: \(runsDir.path, privacy: .public) is not a plain folder under the store root")
+            }
+            return 0
+        }
         guard let entries = try? fileManager.contentsOfDirectory(
             at: runsDir, includingPropertiesForKeys: [.contentModificationDateKey, .isDirectoryKey],
             options: [.skipsHiddenFiles]) else { return 0 }
@@ -187,6 +198,9 @@ struct FootageSpectrumStore: Sendable, Equatable {
         }
         var removed = 0
         for url in Self.runsToPrune(dated, now: now) {
+            // A run folder that is itself a symlink is skipped, never followed.
+            let entryType = (try? fileManager.attributesOfItem(atPath: url.path))?[.type] as? FileAttributeType
+            guard entryType == .typeDirectory else { continue }
             let canonical = url.standardizedFileURL.resolvingSymlinksInPath()
             guard canonical.deletingLastPathComponent().path == runsPath,
                   UUID(uuidString: canonical.lastPathComponent) != nil else {

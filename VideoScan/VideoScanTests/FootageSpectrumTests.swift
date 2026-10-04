@@ -482,6 +482,36 @@ struct FootageSpectrumIsolationTests {
         #expect(FileManager.default.fileExists(atPath: notARun.path), "only UUID run folders are pruned")
     }
 
+    /// QA P3-1: a `runs` folder that is a symlink is never followed — the
+    /// prune must not delete anything at its destination.
+    @Test func aSymlinkedRunsFolderIsNeverFollowedByThePrune() throws {
+        let base = FileManager.default.temporaryDirectory.appendingPathComponent("spectrum-link-\(UUID().uuidString)")
+        let root = base.appendingPathComponent("root"), outside = base.appendingPathComponent("outside")
+        let victim = outside.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: victim, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-60 * 86_400)],
+                                              ofItemAtPath: victim.path)
+        try FileManager.default.createSymbolicLink(at: root.appendingPathComponent("runs"), withDestinationURL: outside)
+        #expect(FootageSpectrumStore(root: root).pruneOldRuns() == 0)
+        #expect(FileManager.default.fileExists(atPath: victim.path), "the prune followed a symlinked runs folder")
+    }
+
+    /// QA P3-2: two offline copies with one name are two rows, not one id.
+    @Test func twoOfflineCopiesWithOneNameGetDistinctDetailRows() throws {
+        let cands = [candidate("test_a.mov", size: 3), candidate("test_b.mov", size: 2),
+                     candidate("test_same.mov", readable: false, volume: "Alpha"),
+                     candidate("test_same.mov", readable: false, volume: "Beta")]
+        let p = try FootageSpectrumPlanner.plan(candidates: cands, title: "t").get()
+        let unused = FileManager.default.temporaryDirectory.appendingPathComponent("spectrum-unused-\(UUID().uuidString)")
+        let job = FootageSpectrumJob(plan: p, requestedIDs: cands.map(\.id), preferredFirst: nil,
+                                     tools: .failure(.init(reason: "unused")), store: FootageSpectrumStore(root: unused),
+                                     gates: [], launcher: { _, _ in FootageSpectrumHelper.Exit(code: 0, stderrTail: "") })
+        let ids = job.detailLines.map(\.id)
+        #expect(ids.count == 4 && Set(ids).count == 4, "\(job.detailLines)")
+    }
+
     @Test func thePruneRuleIsPure() {
         let now = Date()
         let runs: [(url: URL, modified: Date)] = [
@@ -499,6 +529,30 @@ struct FootageSpectrumIsolationTests {
 @Suite("Footage Spectrum — scale")
 struct FootageSpectrumScaleTests {
 
+    private final class Probes { var count = 0 }
+
+    /// QA P2-3: a steward group can be hundreds of clips; the main actor
+    /// stats only as many as one run can compare (in the planner's order),
+    /// and keeps going past offline ones until it has eight.
+    @Test func aBigStewardGroupStatsAtMostWhatOneRunCanCompare() throws {
+        let model = VideoScanModel()
+        model.records = TriageFixture.records(40)
+        let ids = model.records.map(\.id)
+        let probes = Probes()
+        let all = model.footageSpectrumCandidates(forIDs: ids, readable: { _ in probes.count += 1; return true })
+        #expect(probes.count <= FootageSpectrumPlanner.maxFiles, "stat'ed \(probes.count) of \(ids.count)")
+        #expect(all.count == 40)
+        let plan = try FootageSpectrumPlanner.plan(candidates: all, title: "big").get()
+        #expect(plan.members.count == 8 && plan.leftOut.count == 32)
+        // Every third probe is offline: 11 probes find 8 readable, then stop.
+        let some = Probes()
+        let mixed = model.footageSpectrumCandidates(forIDs: ids, readable: { _ in some.count += 1; return some.count % 3 != 0 })
+        #expect(some.count == 11)
+        let p2 = try FootageSpectrumPlanner.plan(candidates: mixed, title: "mixed").get()
+        #expect(p2.members.count == 8)
+        #expect(p2.leftOut.filter { $0.reason.contains("not connected") }.count == 3)
+    }
+
     /// 100k records, 8 chosen: candidates come through the id index (one
     /// index build, then O(chosen)) — a per-id catalog scan would be 800k
     /// comparisons and show up here.
@@ -514,7 +568,7 @@ struct FootageSpectrumScaleTests {
         }
         let elapsed = ContinuousClock.now - start
         #expect(candidates.count == 8)
-        #expect(candidates.map(\.id) == ids)
+        #expect(Set(candidates.map(\.id)) == Set(ids))
         #expect(elapsed < PerformanceLane.debugCeiling(.milliseconds(1_500)), "50 resolutions of 8 ids took \(elapsed)")
         let plan = try FootageSpectrumPlanner.plan(candidates: candidates, title: "scale").get()
         #expect(plan.members.count == 8)
@@ -575,6 +629,18 @@ struct FootageSpectrumSensorTests {
         #expect(window.contains("decisionHandler(.cancel)"))
         #expect(window.contains("compileContentRuleList("))
         #expect(!window.contains("URLSession") && !window.contains("load(URLRequest"))
+    }
+
+    /// QA P3-5: on a viewer the Center refuses the job — the row says why
+    /// and no window opens over a job that will never run.
+    @Test func aViewerRefusalNeverOpensTheWindow() throws {
+        let job = try code("FootageSpectrumJob.swift")
+        #expect(job.contains("guard add(job) else {") && job.contains("job.refuseToStart(reason:"))
+        let model = try code("VideoScanModel+FootageSpectrum.swift")
+        #expect(model.contains("guard !job.refusedOnViewer else"))
+        #expect(try code("TriageView.swift").contains("guard model.startFootageSpectrum("))
+        #expect(try code("StewardPaneView.swift").contains("guard model.startFootageSpectrum("))
+        #expect(try code("FootageSpectrumWindow.swift").contains("model.startFootageSpectrum("))
     }
 
     @Test func theKindAndTheEntryPointsAreWired() throws {
