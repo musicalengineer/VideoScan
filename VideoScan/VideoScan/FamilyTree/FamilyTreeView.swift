@@ -926,8 +926,14 @@ struct FamilyTreeView: View {
     }
 
     private var treeCanvas: some View {
-        VStack(spacing: 0) {
-            // Glass toolbar controls (Liquid Glass refresh, 2026-10-04).
+        // Floating glass toolbar (Liquid Glass refresh, Rick 2026-10-04): no
+        // bar — the controls float over the canvas and the tree scrolls
+        // UNDER them, so the glass refracts real content. The canvas gets a
+        // top content margin so it starts below the controls.
+        ZStack(alignment: .top) {
+            canvasContent
+                .contentMargins(.top, Self.floatingToolbarInset, for: .scrollContent)
+            GlassEffectContainer(spacing: 10) {
             HStack(spacing: 12) {
                 Button {
                     toggleSidebar()
@@ -940,6 +946,9 @@ struct FamilyTreeView: View {
                 Text(model.lineChain?.title ?? canvasTitle)
                     .font(.headline)
                     .lineLimit(1)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 6)
+                    .glassEffect(.regular, in: .capsule)
                 Spacer()
                 if let chain = model.lineChain {
                     Button {
@@ -1003,21 +1012,25 @@ struct FamilyTreeView: View {
                     .buttonStyle(.glass)
                     .help("Fit the tree to the canvas (⌥⌘0)")
                 }
-                // Zoom: buttons (⌘− / ⌘+), slider, pinch on the canvas.
-                Button { zoom = FamilyTreeZoomMath.zoomOut(zoom) } label: {
-                    Image(systemName: "minus.magnifyingglass")
+                // Zoom: buttons (⌘− / ⌘+), slider, pinch on the canvas —
+                // one glass capsule so the slider has backing over the tree.
+                HStack(spacing: 8) {
+                    Button { zoom = FamilyTreeZoomMath.zoomOut(zoom) } label: {
+                        Image(systemName: "minus.magnifyingglass")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Zoom out (⌘−)")
+                    Slider(value: $zoom, in: FamilyTreeZoomMath.range)
+                        .frame(width: 130)
+                    Button { zoom = FamilyTreeZoomMath.zoomIn(zoom) } label: {
+                        Image(systemName: "plus.magnifyingglass")
+                    }
+                    .buttonStyle(.borderless)
+                    .help("Zoom in (⌘+)")
                 }
-                .buttonStyle(.glass)
-                .help("Zoom out (⌘−)")
-                Slider(value: $zoom, in: FamilyTreeZoomMath.range)
-                    .frame(width: 130)
-                Button { zoom = FamilyTreeZoomMath.zoomIn(zoom) } label: {
-                    Image(systemName: "plus.magnifyingglass")
-                }
-                .buttonStyle(.glass)
-                .help("Zoom in (⌘+)")
-
-                Divider().frame(height: 16)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                .glassEffect(.regular, in: .capsule)
 
                 // Donna, 2026-08-30. Beside zoom because it is the same
                 // kind of control: how the tree is presented, not what it
@@ -1043,32 +1056,10 @@ struct FamilyTreeView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 10)
-            .background(palette.controlBar)
-
-            if let chain = model.lineChain {
-                // Chain mode: O(path length) cards, no tree layout at all.
-                FamilyTreeLineChainView(
-                    chain: chain,
-                    selectedID: model.selectedID,
-                    zoom: zoom,
-                    onSelect: { model.select($0) })
-                .gesture(magnifyGesture)
-                .background(
-                    LinearGradient(
-                        colors: [
-                            palette.canvasTop,
-                            palette.canvasBottom
-                        ],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-            } else {
-                treeScroll
             }
         }
-        // Viewport for Fit: the whole canvas column (header included — a
-        // ~46 pt overestimate the fit padding absorbs). One place, both
+        // Viewport for Fit: the whole canvas column (the floating controls
+        // overlap its top ~58 pt — an overestimate the fit padding absorbs). One place, both
         // modes, so the value is never stale after a sidebar toggle.
         .background {
             GeometryReader { proxy in
@@ -1085,6 +1076,35 @@ struct FamilyTreeView: View {
             zoom = title == nil ? FamilyTreeZoomMath.default : 1.0
         }
     }
+
+    /// The tree or the line chain, under the floating toolbar.
+    @ViewBuilder private var canvasContent: some View {
+        if let chain = model.lineChain {
+            // Chain mode: O(path length) cards, no tree layout at all.
+            FamilyTreeLineChainView(
+                chain: chain,
+                selectedID: model.selectedID,
+                zoom: zoom,
+                onSelect: { model.select($0) })
+            .gesture(magnifyGesture)
+            .background(
+                LinearGradient(
+                    colors: [
+                        palette.canvasTop,
+                        palette.canvasBottom
+                    ],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+            )
+        } else {
+            treeScroll
+        }
+    }
+
+    /// Top content margin so the canvas starts below the floating glass
+    /// controls (≈ control height + the 10 pt padding either side).
+    private static let floatingToolbarInset: CGFloat = 58
 
     // MARK: Canvas navigation (sidebar, zoom, fit, export)
 
