@@ -127,6 +127,12 @@ def progress_line(file, of, label, phase, fraction):
                                      "phase": phase, "fraction": round(frac, 3)})
 
 
+def align_progress(done, total, n_files):
+    """One PROGRESS line per pair lined up — the app's stall watchdog and time left
+    keep moving through a long alignment (a few pairs of two-hour tapes)."""
+    emit(progress_line(n_files, n_files, "", "aligning", done / max(total, 1)))
+
+
 def emit(line):
     if MACHINE:
         print(line, flush=True)
@@ -709,11 +715,13 @@ def run(args):
             say("   set skipped — fewer than two of its files could be read")
             continue
 
-        emit(progress_line(n_files, n_files, "", "aligning", 0.0))
+        n = len(members)
+        n_pairs = (n - 1) + ((n - 1) * (n - 2) // 2 if n <= 6 else 0)
+        aligned = 0
+        align_progress(0, n_pairs, n_files)
         raw = [band_feature(d["cols"]) for _, d in members]
         pf = [unit_rows(x) for x in raw]
         sf = [unit_rows(d["bands"]) if d["meta"]["has_audio"] else None for _, d in members]
-        n = len(members)
         short = [f["label"].split(" ")[0] for f, _ in members]
 
         # every candidate against the reference (index 0)
@@ -729,6 +737,8 @@ def run(args):
             offsets[j], scores[j], ribbons[j] = off, round(whole, 3), rib
             pic["whole"] = round(whole, 3)
             pairs.append({"a": a, "b": b, "pic": pic, "snd": snd})
+            aligned += 1
+            align_progress(aligned, n_pairs, n_files)
             T = len(rib)
             q = quantize_ribbon(rib)
             v = verdict(q, len(raw[0]))
@@ -749,6 +759,8 @@ def run(args):
                     a, b = (i, j) if len(pf[i]) >= len(pf[j]) else (j, i)
                     pairs.append({"a": a, "b": b, "pic": slide(pf[a], pf[b]),
                                   "snd": slide(sf[a], sf[b]) if (sf[a] is not None and sf[b] is not None) else None})
+                    aligned += 1
+                    align_progress(aligned, n_pairs, n_files)
 
         out_files = []
         for idx, (f, d) in enumerate(members):

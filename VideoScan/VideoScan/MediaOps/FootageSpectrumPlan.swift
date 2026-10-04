@@ -358,7 +358,8 @@ enum FootageSpectrumETA {
     /// Reading is 0…0.94 of the bar; aligning and writing take the rest.
     static func overallFraction(estimates: [Double], at p: Position) -> Double {
         switch p.phase {
-        case .aligning: return 0.96
+        // The helper reports one aligning line per pair (QA P3-4).
+        case .aligning: return 0.94 + 0.04 * min(max(p.fraction, 0), 1)
         case .writing: return 0.98
         case .reading:
             let total = max(estimates.reduce(0, +), 0.0001)

@@ -280,7 +280,7 @@ def test_aligning_reports_a_fraction_per_pair():
     try:
         orig = fs.emit
         fs.emit = lines.append
-        fs.align_progress(3, 4, 4, 2)
+        fs.align_progress(2, 3, 4)       # 2 of 3 pairs lined up, 4 files
     finally:
         fs.emit = orig
         fs.MACHINE = False
