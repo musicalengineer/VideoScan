@@ -47,9 +47,12 @@ extension ArchiveView {
             Divider()
 
             // How far along the archive is — one big bar above the story
-            // (Rick 2026-08-21). O(1) per render: both inputs are memoized.
+            // (Rick 2026-08-21). O(1) per render: both inputs are cached,
+            // the unique totals computed off the main actor.
             if selectedCategory == .archived {
-                ArchiveProgressBar(progress: archiveProgress)
+                if let progress = archiveProgress {
+                    ArchiveProgressBar(progress: progress)
+                }
                 // Archive Angel — ONE strip (Rick 2026-09-22), its cards and
                 // sheets (ArchiveAngel/UI/ArchiveAngelStrip.swift, S2).
                 // Bounded (bug 2026-09-24): the strip's turndown, hygiene
@@ -451,14 +454,39 @@ extension ArchiveView {
 }
 
 extension ArchiveView {
-    /// Verified ÷ unique, from two already-memoized computations.
+    /// Verified ÷ unique. O(1): the promotion index's cached totals and the
+    /// unique-file totals computed OFF the main actor
+    /// (`refreshArchiveStorageTotals`, 2026-10-04 perf — the first render
+    /// after every catalog change used to compute them here, in body).
+    /// nil until the first computation lands: the bar is not drawn rather
+    /// than drawn against a zero denominator (which would read 100%).
     @MainActor
-    var archiveProgress: ArchiveProgress {
-        let key = RecordsVersion(count: model.records.count,
-                                 revision: model.volumeAggregatesRevision)
-        let storage = storageTotalsMemo.value(for: key) {
-            CatalogStorageTotalsCalculator.compute(records: model.records)
-        }
+    var archiveProgress: ArchiveProgress? {
+        guard let storage = archiveStorageTotals else { return nil }
         return ArchiveProgress.from(totals: model.masterArchiveTotals, storage: storage)
+    }
+
+    /// What the unique-file totals depend on. O(1).
+    var archiveStorageKey: RecordsVersion {
+        RecordsVersion(count: model.records.count, revision: model.volumeAggregatesRevision)
+    }
+
+    /// Recompute the unique-file totals: project the rows here, compute
+    /// them in a detached task with the footer's own generic calculator.
+    /// Called from `.task(id: archiveStorageKey)`; a newer key cancels it.
+    /// The previous totals stay on screen until the new ones land.
+    func refreshArchiveStorageTotals() async {
+        let rows = CatalogStorageRow.projectForStorageTotals(model.records)
+        let dateFacts = ArchiveCategorySnapshot.projectDateFacts(model.records)
+        let (totals, needsDate) = await Task.detached(priority: .utility) {
+            (CatalogStorageTotalsCalculator.compute(facts: rows),
+             ArchiveCategorySnapshot.needsDateIDs(dateFacts))
+        }.value
+        if Task.isCancelled { return }
+        if totals != archiveStorageTotals { archiveStorageTotals = totals }
+        if needsDate != needsDateIDs {
+            needsDateIDs = needsDate
+            needsDateGeneration &+= 1
+        }
     }
 }
