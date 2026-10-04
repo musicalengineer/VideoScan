@@ -488,6 +488,22 @@ struct StewardEventsLogicTests {
         #expect(monthEnd.first?.detail == "4 clips · 1 drive · 4 m · Jul 31 – Aug 1, 1997")
     }
 
+    /// Events QA F7: a day card is keyed by its busiest day (the earliest of
+    /// a tie), not its first — so a clip arriving on the day before does not
+    /// change the id (and lose a Skip) of a run it merely extends.
+    @Test func aDayCardKeepsItsIdWhenAClipArrivesOnAnAdjacentDay() {
+        let base = (0..<4).map { clip("/Volumes/LaCie/t/july\($0).mov", on: "1996-07-14") }
+        #expect(days(build(base)).map(\.id) == ["day:1996-07-14"])
+        let before = base + [clip("/Volumes/LaCie/t/early.mov", on: "1996-07-13")]
+        #expect(days(build(before)).map(\.id) == ["day:1996-07-14"], "a clip the day before keeps the id")
+        #expect(days(build(before)).first?.memberCount == 5, "…and joins the run")
+        let after = base + [clip("/Volumes/LaCie/t/late.mov", on: "1996-07-15")]
+        #expect(days(build(after)).map(\.id) == ["day:1996-07-14"], "a clip the day after keeps the id")
+        // A tie between two days: the earlier one.
+        func pair(_ date: String) -> [StewardInput] { (0..<2).map { clip("/Volumes/LaCie/t/\(date)-\($0).mov", on: date) } }
+        #expect(days(build(pair("1996-08-10") + pair("1996-08-11"))).map(\.id) == ["day:1996-08-10"])
+    }
+
     @Test func aLabelledClipIsNeverCountedTowardsAnUnnamedDay() {
         // Four clips on Christmas Day are an event, not "a day to name".
         let q = build((0..<4).map { clip("/Volumes/LaCie/t/c\($0).mov", on: "1994-12-25") })

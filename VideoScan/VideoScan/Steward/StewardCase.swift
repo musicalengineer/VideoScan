@@ -173,7 +173,7 @@ struct StewardCase: Sendable, Equatable, Identifiable {
     /// Stable across launches and re-checks:
     /// "event:<kind>:<subject>:<year>" (the labeller's own key parts:
     /// "event:christmas:-:1994", "event:birthday:alex:2006"),
-    /// "day:<yyyy-mm-dd>" (an unnamed day's first day), "drive:<root>",
+    /// "day:<yyyy-mm-dd>" (an unnamed run's busiest day), "drive:<root>",
     /// "dup:<the keeper's record id>" (a duplicate check gives the set a
     /// new group id every time; its keeper is what stays),
     /// "footage:<group id>" (the smallest member's record id by design —

@@ -475,11 +475,13 @@ of the same event; (8) the puzzle is the UI/UX.
     - An event is one labelled occasion in one year. A clip with several
       labels is in each event ("also in: …"); a clip whose footage group
       (Likely or stronger) has a member in an event joins it "by matching
-      footage" unless its own date says otherwise. A single clip is still
-      an event — the lane is ordered by clip count, then length, so those
-      sit at the end.
+      footage" unless its own date says otherwise. An event card needs two
+      clips, or one clip of 20 minutes or more (a whole tape) — QA F8,
+      2026-10-03. The lane is ordered by clip count, then length.
     - An unlabelled day is 4 or more clips on one trusted day, or on up
-      to 3 days running.
+      to 3 days running. Its card is keyed by the run's busiest day (the
+      earliest of a tie), so a clip arriving on an adjacent day does not
+      change the id or lose a Skip (QA F7).
     - Lane after lane (nothing takes turns), with a filter above the list
       (All · Events · Same footage · Space · Not worth keeping) and a "By
       year" order for the events — both pure view state. The list keeps

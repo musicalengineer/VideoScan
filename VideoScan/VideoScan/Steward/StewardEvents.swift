@@ -30,6 +30,8 @@
 //                  date still belongs where its twin belongs.
 //   A day to name  `minDayCluster` or more clips that share one trusted day
 //                  (or up to `maxDayRun` days running) and carry no label.
+//                  Keyed by the run's busiest day (QA F7), so a clip on an
+//                  adjacent day does not change it.
 //   Same footage   the title guess: the occasion most of the group's dated
 //                  members carry; a tie is no guess.
 //
@@ -591,7 +593,11 @@ enum StewardEvents {
             }
             let span = end - at + 1
             let month = (1...12).contains(first.month) ? monthNames[first.month - 1] : ""
-            var c = StewardCase(id: String(format: "day:%04d-%02d-%02d", first.year, first.month, first.day),
+            // Events F7: keyed by the run's BUSIEST day (the earliest of a
+            // tie), not its first — a clip arriving on the day before must
+            // not change the id (and lose a Skip) of a run it extends.
+            let anchor = anchorDay(days[at...end], unlabelled: unlabelled, placements: catalog.placements) ?? first
+            var c = StewardCase(id: String(format: "day:%04d-%02d-%02d", anchor.year, anchor.month, anchor.day),
                                 kind: .unlabelledDay,
                                 title: (span == 1 ? "A day" : "\(span) days") + " in \(month) \(first.year)",
                                 facts: StewardFacts(bytes: bytes, count: members.count))
@@ -617,6 +623,16 @@ enum StewardEvents {
             return $0.id < $1.id
         }
         return StewardCaseBuilder.limit(out, skipped: catalog.skipped)
+    }
+
+    /// The day of a run with the most clips; the earliest of a tie.
+    nonisolated static func anchorDay(_ run: ArraySlice<Int>, unlabelled: [Int: [Int]],
+                                      placements: [StewardPlacement]) -> EventDay? {
+        let busiest = run.max { a, b in
+            let ca = unlabelled[a]?.count ?? 0, cb = unlabelled[b]?.count ?? 0
+            return ca != cb ? ca < cb : a > b
+        }
+        return busiest.flatMap { unlabelled[$0]?.first }.flatMap { placements[$0].day }
     }
 
     // MARK: The Same-footage title guess
