@@ -135,6 +135,8 @@ struct FamilyTreeMapView: View {
     var onRollCall: ((RollCall.Order) -> Void)? = nil
     /// The credits are being prepared (the button shows a spinner).
     var rollCallBusy = false
+    /// Credits or Drifting names (2026-10-04); read by the walk sheet.
+    @AppStorage(RollCallStyle.storageKey) private var rollCallStyleRaw = RollCallStyle.credits.rawValue
 
     /// A camera region in plain degrees — MapKit-free so a test can pin it
     /// without importing MapKit (which would load the framework from the
@@ -318,6 +320,13 @@ struct FamilyTreeMapView: View {
                 Button("Newest first") { play(.newestFirst) }
                 Button("Generation by generation") { play(.generationOutward) }
                 Button("From the furthest back") { play(.generationInward) }
+                Divider()
+                Picker("Style", selection: $rollCallStyleRaw) {
+                    ForEach(RollCallStyle.allCases, id: \.self) { style in
+                        Text(style.label).tag(style.rawValue)
+                    }
+                }
+                .pickerStyle(.inline)
             } primaryAction: {
                 play(FamilyTreeWalkSheet.defaultRollCallOrder)
             }

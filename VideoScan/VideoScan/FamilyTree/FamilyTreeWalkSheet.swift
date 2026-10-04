@@ -80,6 +80,8 @@ struct FamilyTreeWalkSheet: View {
     @State private var rollCall: RollCallPlayback?
     @State private var rollCallCache: [RollCall.Order: RollCallPlayback] = [:]
     @State private var rollCallTask: Task<Void, Never>?
+    /// Credits or Drifting names — chosen in the map's Roll Call menu.
+    @AppStorage(RollCallStyle.storageKey) private var rollCallStyleRaw = RollCallStyle.credits.rawValue
 
     /// The order the Roll Call plays in unless asked otherwise.
     static let defaultRollCallOrder: RollCall.Order = .oldestFirst
@@ -126,7 +128,8 @@ struct FamilyTreeWalkSheet: View {
             stageContent
                 .overlay {
                     if let rollCall {
-                        RollCallOverlay(playback: rollCall) {
+                        RollCallOverlay(playback: rollCall,
+                                        style: RollCallStyle(rawValue: rollCallStyleRaw) ?? .credits) {
                             // Only the showing that finished clears itself
                             // (a replay started meanwhile has a new id).
                             if self.rollCall?.id == rollCall.id { self.rollCall = nil }
@@ -345,7 +348,10 @@ struct FamilyTreeWalkSheet: View {
     /// the overlay appears when it is ready). A request while one is being
     /// prepared is ignored.
     private func playRollCall(_ highlighter: TreeWalkHighlighter, order: RollCall.Order) {
-        if let cached = rollCallCache[order] {
+        // Every 3rd play is a shuffled mix (Rick 2026-10-04) — prepared
+        // fresh, never from or into the cache, so the usual picks stay put.
+        let mixSeed: UInt64? = RollCallMix.advance() ? UInt64.random(in: .min ... .max) : nil
+        if mixSeed == nil, let cached = rollCallCache[order] {
             rollCall = cached.replay()
             appLog.write("Roll Call: replay (\(cached.entries.count) names, \(order.rawValue))")
             return
@@ -366,16 +372,18 @@ struct FamilyTreeWalkSheet: View {
             let playback = await RollCallPlayback.prepare(result: result, graph: graph, visited: visited,
                                                           knowledge: knowledge, displayNames: names,
                                                           birthCountries: flags, assets: assets,
-                                                          ownerFamilySearchID: owner, order: order)
+                                                          ownerFamilySearchID: owner, order: order,
+                                                          shuffleSeed: mixSeed)
             guard !Task.isCancelled else { return }
-            rollCallCache[order] = playback
+            if mixSeed == nil { rollCallCache[order] = playback }
             guard !playback.entries.isEmpty else {
                 appLog.write("Roll Call: nobody to show for this walk")
                 return
             }
             rollCall = playback
             appLog.write("Roll Call: \(playback.entries.count) names of \(playback.walked.formatted()) walked, "
-                + "\(playback.portraits.count) portraits, \(Int(playback.duration)) s, \(order.rawValue)")
+                + "\(playback.portraits.count) portraits, \(Int(playback.duration)) s, \(order.rawValue)"
+                + (playback.isMix ? ", mix" : "") + ", \(rollCallStyleRaw)")
         }
     }
 

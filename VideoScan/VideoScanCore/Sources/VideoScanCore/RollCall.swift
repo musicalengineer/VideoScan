@@ -10,7 +10,9 @@
 //      walk's "likely duplicate" shape) — the row with a portrait, then the
 //      nearer generation, is kept. A name alone is never identity: two
 //      undated John Smiths stay two rows.
-//   2. CHOOSE ≤ `limit` (default 36 ≈ 32 s of credits) — the people with a
+//   2. CHOOSE ≤ `limit` (default 36 ≈ 32 s of credits) — with
+//      `Options.shuffleSeed` set, a seeded shuffle (the every-3rd "mix");
+//      otherwise the people with a
 //      portrait first, then family notes, then dated-and-placed, then the
 //      nearest generations; taken ROUND-ROBIN across Rick's line, Donna's
 //      line and the rest, so a long credits roll is never all one side.
@@ -104,11 +106,19 @@ public enum RollCall {
         /// 2026-10-01). Living people outside the inner circle are never
         /// shown, whatever this says.
         public var includesLivingInnerCircle: Bool
+        /// THE MIX (Rick 2026-10-04: "it always picks the same people …
+        /// every 3rd time we get a random selection"). When set, step 2
+        /// takes the walked people in a SEEDED shuffle instead of priority
+        /// order — still round-robin across the lines, still the same
+        /// privacy. Same seed → same list (testable); nil → today's list.
+        public var shuffleSeed: UInt64?
 
-        public init(order: Order = .oldestFirst, limit: Int = 36, includesLivingInnerCircle: Bool = false) {
+        public init(order: Order = .oldestFirst, limit: Int = 36, includesLivingInnerCircle: Bool = false,
+                    shuffleSeed: UInt64? = nil) {
             self.order = order
             self.limit = max(0, limit)
             self.includesLivingInnerCircle = includesLivingInnerCircle
+            self.shuffleSeed = shuffleSeed
         }
     }
 
@@ -131,12 +141,18 @@ public enum RollCall {
             (p.hasPortrait ? 4 : 0) + (p.storyCount > 0 ? 2 : 0)
                 + (p.birthYear != nil && PersonOfTheDay.clean(p.birthPlace) != nil ? 1 : 0)
         }
-        let ordered = unique.indices.sorted { i, j in
-            if priority[i] != priority[j] { return priority[i] > priority[j] }
-            let ga = unique[i].generation ?? Int.max, gb = unique[j].generation ?? Int.max
-            if ga != gb { return ga < gb }
-            return unique[i].id < unique[j].id
-        }.map { unique[$0] }
+        let ordered: [Person]
+        if let seed = options.shuffleSeed {
+            var rng = SeededGenerator(seed: seed)
+            ordered = unique.shuffled(using: &rng)
+        } else {
+            ordered = unique.indices.sorted { i, j in
+                if priority[i] != priority[j] { return priority[i] > priority[j] }
+                let ga = unique[i].generation ?? Int.max, gb = unique[j].generation ?? Int.max
+                if ga != gb { return ga < gb }
+                return unique[i].id < unique[j].id
+            }.map { unique[$0] }
+        }
         // Round-robin over three buckets: first line, second line, the rest.
         var buckets: [[Person]] = [[], [], []]
         for p in ordered {
@@ -250,5 +266,22 @@ public enum RollCall {
                 }
             }
         }
+    }
+}
+
+/// SplitMix64 — a tiny, fast, seedable generator (≈ a seeded std::mt19937
+/// stand-in) so a shuffled Roll Call is reproducible in tests. Not for
+/// anything security-related.
+public struct SeededGenerator: RandomNumberGenerator, Sendable {
+    private var state: UInt64
+
+    public init(seed: UInt64) { state = seed }
+
+    public mutating func next() -> UInt64 {
+        state &+= 0x9E37_79B9_7F4A_7C15
+        var z = state
+        z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
+        z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
+        return z ^ (z >> 31)
     }
 }
