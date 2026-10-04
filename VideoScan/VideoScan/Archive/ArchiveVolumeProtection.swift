@@ -453,8 +453,21 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
             // the boot disk, and only its FOLDER is protected (answered above).
             return .clear
         case .externalVolume:
-            if let uuid = expectedUUID, probe(path) == uuid { return .onArchiveVolume }
-            return .clear
+            guard let uuid = expectedUUID else { return .clear }
+            guard let own = probe(path) else {
+                // The file's own volume identity cannot be read (codex #258
+                // r5-4): clear only what is PROVABLY another volume — the
+                // boot disk, a network share, or (the archive found mounted
+                // by its UUID) a mount that is not the archive's.
+                let parent = (path as NSString).deletingLastPathComponent
+                if let mount = (identity(path) ?? identity(parent))?.mountPoint {
+                    if Self.isBootMountPoint(mount) { return .clear }
+                    if archiveRoots.contains(Self.canonical(mount).lowercased()) { return .onArchiveVolume }
+                    if isResolved { return .clear }
+                }
+                return Self.isNetworkMount(path) ? .clear : .unprovable
+            }
+            return own == uuid ? .onArchiveVolume : .clear
         case .unknown:
             // Could be a boot folder (every boot file shares its UUID):
             // cannot tell yet — transient, never a recorded refusal.
@@ -511,6 +524,14 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
 
     /// Mount points that belong to the boot disk: "/" and the APFS
     /// system/data group under "/System/Volumes/" (Data, Preboot, VM, …).
+    /// The path is on a network share (statfs says not MNT_LOCAL) — never a
+    /// local drive's volume. False when it cannot be asked.
+    static func isNetworkMount(_ path: String) -> Bool {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0 else { return false }
+        return fs.f_flags & UInt32(MNT_LOCAL) == 0
+    }
+
     static func isBootMountPoint(_ mountPoint: String) -> Bool {
         mountPoint == "/" || mountPoint.hasPrefix("/System/Volumes/")
     }

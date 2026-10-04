@@ -670,4 +670,161 @@ struct DeleteDuplicatesCodex258Round4Tests {
         #expect(answer.holdNote == nil && answer.archive?.note.contains("the Master Archive") == true && answer.preferTrash)
         #expect(DuplicateRemovalBoundaryNow.catalogGone.holdNote != nil && DuplicateRemovalBoundaryNow.catalogGone.preferTrash)
     }
+
+    // MARK: - Round 5 (codex cycle #38)
+
+    /// S1 — codex r5 #2, the archive-candidate route: A is given promoted-copy
+    /// provenance during phase two, so the boundary holds it (no Master
+    /// Archive designated). Verified again, it must NOT enter B's archive
+    /// copies: main removed A and Trashed B on the keeper + S1.
+    @Test func r5aRowOfThisRunNeverEntersTheArchiveCopies() async throws {
+        let rig = makeRig("r5arch"); defer { rig.cleanup() }
+        let job = try await run(rig, during: {
+            rig.a.derivedFrom = rig.keeper.id
+            rig.a.derivationKind = ArchivePromotion.derivationKind
+            rig.a.archiveFixity = ArchiveFixity(digest: fileDigest, verifiedAt: Date(), sizeBytes: Int64(fileSize))
+        }, between: { _ in verifyAgain(rig.a) })
+        let rows = try #require(job.plan?.entries)
+        #expect(FileManager.default.fileExists(atPath: rig.a.fullPath) && rows[0].status == .skipped, "fixture: A held (\(rows[0].status): \(rows[0].note))")
+        #expect(rows[1].status != .deleted && rows[1].remainingVerifiedCopies == 2,
+                "B was decided \(rows[1].status) counting the run's own row A as an archive copy: \(rows[1].tierReason ?? rows[1].note)")
+    }
+
+    /// S1 — codex r5 #3: a plan written before `notCountedWhy` existed (the
+    /// field absent), its row A retained by the fresh archive boundary (the
+    /// note is the same as main's own refusal) or put back after a failed
+    /// put-back and recovered. Resumed, A is a row of this run: never counted.
+    @Test func r5bALegacyPlansRowIsNeverCountedOnResume() throws {
+        let rig = makeRig("r5legacy", sibling: false); defer { rig.cleanup() }
+        verifyAgain(rig.a)
+        for (status, note) in [(DeleteDuplicatesPlan.EntryStatus.refused,
+                                "lives on TestArchive, the Master Archive volume, which only archive actions may change — put back, nothing removed"),
+                               (.failed, "retained safely at /Volumes/TestDrive/q/a.mov: left alone — recovered at resume"),
+                               (.skipped, "only 1 verified copy would remain — left alone (1 verified remain: keeper on TestDrive)")] {
+            var a = DeleteDuplicatesPlan.Entry(id: rig.a.id, path: rig.a.fullPath, filename: rig.a.filename, sizeBytes: rig.a.sizeBytes,
+                                               keeperID: rig.keeper.id, keeperPath: rig.keeper.fullPath, keeperFilename: rig.keeper.filename)
+            a.status = status
+            a.note = note
+            let b = DeleteDuplicatesPlan.Entry(id: rig.b.id, path: rig.b.fullPath, filename: rig.b.filename, sizeBytes: rig.b.sizeBytes,
+                                               keeperID: rig.keeper.id, keeperPath: rig.keeper.fullPath, keeperFilename: rig.keeper.filename)
+            let written = DeleteDuplicatesPlan(volumePath: rig.dir.path, catalogLocation: "test", crossVolumeMode: false,
+                                               skippedBeforePlan: 0, summaryLine: "", entries: [a, b])
+            let legacy = try JSONDecoder().decode(DeleteDuplicatesPlan.self, from: try JSONEncoder().encode(written))
+            #expect(legacy.entries[0].notCountedWhy == nil, "fixture: a plan without the field")
+            let candidates = rig.model.deletionTierCandidates(record: rig.b, keeper: rig.keeper, run: legacy.runScope(deciding: rig.b.id))
+            let facts = DeletionTierFacts.gather(candidates, digest: fileDigest)
+            #expect(facts.remainingVerifiedCopies == 1 && DeletionTierDecision.decide(facts: facts, preferTrash: false).tier == nil,
+                    "\(status): the run's own row A was counted for B (\(facts.summary))")
+        }
+    }
+
+    /// S1, member by member: EVERY row of this run, whatever became of it,
+    /// is never a survivor for another row.
+    @Test func r5cEveryRowOfTheRunIsNeverASurvivor() {
+        let rig = makeRig("r5rule"); defer { rig.cleanup() }
+        var run = DuplicateRunScope(volumePath: rig.dir.path)
+        run.decided = [rig.a.id]
+        #expect(rig.model.duplicateSurvivorStandingRule(in: run)(rig.a) != .bySiblingRules, "a row decided on its merits was counted")
+        #expect(rig.model.duplicateSurvivorStandingRule(in: run)(try! #require(rig.s1)) == .bySiblingRules, "a Review sibling counts by its evidence")
+    }
+
+    /// R5 #1 — the preference that produced the recorded Trash travels
+    /// through phase two. Recorded with "Prefer the Trash" ON; turned OFF
+    /// right after the ticket is saved; then a counted copy changes, so the
+    /// final verdict re-decides. Keeper + archive copy + verified sibling
+    /// still earn the archive exception — but the recorded Trash must stand.
+    @Test func r5dThePreferenceThatRecordedTheTrashIsCarriedThroughPhaseTwo() async throws {
+        let rig = makeRig("r5pref", archiveFamily: true); defer { rig.cleanup() }
+        rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate = true
+        let s1 = try #require(rig.s1)
+        let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path,
+                                      hooks: SignatureVerification.Hooks.live.withScratchTrash(in: rig.dir), planRoot: rig.root)
+        let first = rig.a.id
+        job.testHookAfterQuarantineSaved = { entry in
+            guard entry.id == first else { return }
+            rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate = false
+            Thread.sleep(forTimeInterval: 0.01)
+            try? Data(fileBytes).write(to: URL(fileURLWithPath: s1.fullPath))   // same bytes, new stamp: dropped at the boundary
+        }
+        job.start()
+        await job.task?.value
+        let row = try #require(job.plan?.entries.first)
+        #expect(row.status == .trashed, "recorded Trash (preference on) became \(row.status): \(row.tierReason ?? row.note)")
+    }
+
+    /// R5 #4 (L), Read-only: marked as /Volumes/TestOld (UUID TEST-U), the
+    /// drive is now mounted as /Volumes/TestNew and its UUID cannot be read.
+    @Test func r5eAReadOnlyDriveWhoseIdentityCannotBeReadIsNotCleared() {
+        let marks = [ReadOnlyVolumeProtection.Mark(searchPath: "/Volumes/TestOld", volumeUUID: "TEST-U")]
+        let protection = ReadOnlyVolumeProtection.make(marks: marks, mountedRoots: { ["/Volumes/TestNew"] }, probe: { _ in nil },
+                                                       identity: { _ in nil }, networkRoots: { [] })
+        let path = "/Volumes/TestNew/clips/extra.mov"
+        func at(_ mount: String, uuid: String?) -> ReadOnlyVolumeProtection.Verdict? {
+            protection.verdictAtRemoval(path: path, probe: { _ in uuid },
+                                        identity: { _ in MountIdentity(resolvedPath: path, mountPoint: mount) })
+        }
+        #expect(at("/Volumes/TestNew", uuid: nil) != nil, "a file on a drive whose identity cannot be read was cleared")
+        #expect(at("/Volumes/TestNew", uuid: "TEST-OTHER") == nil, "a drive proven to be another one is clear")
+        #expect(at("/", uuid: nil) == nil && at("/System/Volumes/Data", uuid: nil) == nil, "the boot disk is never a marked external drive")
+        let refused = at("/Volumes/TestNew", uuid: nil).map { VideoScanModel.readOnlyRefusalNote($0) } ?? ""
+        #expect(refused.contains("could not read"), Comment(rawValue: refused))
+    }
+
+    /// R5 #4 (L), Master Archive: designated as /Volumes/TestArchive (UUID
+    /// TEST-U), now mounted at a custom path outside /Volumes; no UUID can
+    /// be read. A file there is not provably off the archive drive.
+    @Test func r5fAnArchiveDriveAtACustomMountWhoseIdentityCannotBeReadIsUnprovable() throws {
+        let designation = MasterArchiveDesignation(targetPath: "/Volumes/TestArchive", rootPath: "/Volumes/TestArchive/Test_Family_Archive",
+                                                   volumeUUID: "TEST-U")
+        let custom: (String) -> MountIdentity? = { p in p.hasPrefix("/TestCustom") ? MountIdentity(resolvedPath: p, mountPoint: "/TestCustom") : nil }
+        let protection = try #require(ArchiveVolumeProtection.make(designation: designation, mountedRoots: { ["/TestCustom"] }, probe: { _ in nil },
+                                                                   identity: custom, networkRoots: { [] }))
+        let path = "/TestCustom/clips/extra.mov"
+        #expect(protection.verdictAtRemoval(path: path, probe: { _ in nil }, identity: custom) == .unprovable,
+                "a file on what may be the archive drive was cleared")
+        #expect(protection.verdictAtRemoval(path: path, probe: { _ in "TEST-OTHER" }, identity: custom) == .clear, "another drive, proven by its UUID")
+        #expect(protection.verdictAtRemoval(path: path, probe: { _ in "TEST-U" }, identity: custom) == .onArchiveVolume)
+        #expect(protection.verdictAtRemoval(path: "/Users/test/x.mov", probe: { _ in nil },
+                                            identity: { p in MountIdentity(resolvedPath: p, mountPoint: "/System/Volumes/Data") }) == .clear,
+                "the boot disk is never the external archive")
+    }
+
+    /// R5 #5 — a `batch-` symlink is never read through, and never "free".
+    @Test func r5gASymlinkedBatchIsUncertain() throws {
+        let rig = makeRig("r5link"); defer { rig.cleanup() }
+        let elsewhere = rig.dir.appendingPathComponent("elsewhere", isDirectory: true)
+        let fakeEnv: AngelEnvironment = { var e = rig.environment; e.bufferRoot = elsewhere; return e }()
+        try readyBatch(for: rig.a, in: fakeEnv, name: "real")
+        try FileManager.default.createDirectory(at: rig.environment.bufferRoot, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: rig.environment.bufferRoot.appendingPathComponent("batch-link"),
+                                                   withDestinationURL: elsewhere.appendingPathComponent("batch-real"))
+        if case .uncertain = ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: rig.environment.bufferRoot) {} else {
+            Issue.record("a symlinked batch read as \(ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: rig.environment.bufferRoot))")
+        }
+    }
+
+    /// R5 #5 — a missing buffer is "never made" only when the drive it lives
+    /// on is MOUNTED: a leftover mount directory, a symlink into one, a
+    /// dangling symlink are all uncertain.
+    @Test func r5hAMissingBufferOnALeftoverMountDirectoryIsUncertain() throws {
+        let dir = tempDir("r5mount"); defer { try? FileManager.default.removeItem(at: dir) }
+        let volumes = URL(fileURLWithPath: SourceTree.canonicalPath(dir)).appendingPathComponent("Volumes", isDirectory: true)
+        let leftover = volumes.appendingPathComponent("TestDrive", isDirectory: true)
+        try FileManager.default.createDirectory(at: leftover, withIntermediateDirectories: true)
+        let alias = volumes.deletingLastPathComponent().appendingPathComponent("alias")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: leftover)
+        let dangling = volumes.deletingLastPathComponent().appendingPathComponent("dangling")
+        try FileManager.default.createSymbolicLink(at: dangling, withDestinationURL: volumes.appendingPathComponent("TestGone"))
+        ArchiveAngelPlanStore.$volumesRoot.withValue(volumes.path) {
+            #expect(!ArchiveAngelPlanStore.bufferIsAbsent(leftover.appendingPathComponent("Buffer/ArchiveAngel")), "a leftover mount directory")
+            #expect(!ArchiveAngelPlanStore.bufferIsAbsent(alias.appendingPathComponent("Buffer")), "a symlink into a leftover mount directory")
+            #expect(!ArchiveAngelPlanStore.bufferIsAbsent(dangling.appendingPathComponent("Buffer")), "a dangling symlink")
+            #expect(!ArchiveAngelPlanStore.bufferIsAbsent(volumes.appendingPathComponent("TestGone/Buffer")), "a drive that is not there")
+        }
+        // A drive that IS mounted: a buffer never made there holds nothing.
+        ArchiveAngelPlanStore.$volumesRoot.withValue("/System/Volumes") {
+            #expect(ArchiveAngelPlanStore.bufferIsAbsent(URL(fileURLWithPath: "/System/Volumes/Data/test-no-such-\(UUID().uuidString)/Buffer")))
+        }
+        #expect(ArchiveAngelPlanStore.bufferIsAbsent(dir.appendingPathComponent("never-made/Buffer")), "on the boot disk, never made = empty")
+    }
 }

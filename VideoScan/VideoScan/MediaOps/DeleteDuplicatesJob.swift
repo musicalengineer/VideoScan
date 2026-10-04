@@ -1310,8 +1310,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         if case .quarantined(let ticket, let facts) = outcome {
             finalFacts = facts
             // COPY-COUNT TIER, part 2 — with the digest in hand.
-            let decided = DeletionTierDecision.decide(
-                facts: facts, preferTrash: model.duplicateKeeperSettings.preferTrashForEveryDuplicate)
+            // The preference this decision is made under travels with it to
+            // the removal (codex #258 r5-1): a later sample never undoes it.
+            let recordedPreferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
+            let decided = DeletionTierDecision.decide(facts: facts, preferTrash: recordedPreferTrash)
             decision = decided
             // Record WHERE the file is and how it will go before it can be
             // removed (#2).
@@ -1354,7 +1356,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // Phase 2: re-stat the counted copies and re-decide (codex
                 // 1611), re-check the file and the keeper, unlink or move
                 // to the Trash.
-                let preferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
+                // Recorded OR now (and the final verdict adds the value read
+                // at the removal): only ever more conservative.
+                let preferTrash = recordedPreferTrash || model.duplicateKeeperSettings.preferTrashForEveryDuplicate
                 let archiveCheck = item.archiveCheck
                 let boundary = item.boundary
                 let phaseTwo = await runDetached(entryID: entry.id) { [hooks] in

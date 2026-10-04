@@ -386,41 +386,30 @@ extension VideoScanModel {
                                            preferTrash: duplicateKeeperSettings.preferTrashForEveryDuplicate)
     }
 
-    /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1, 2026-10-03):
-    /// while the run cleaning `run.volumePath` decides one copy, may this
-    /// OTHER member of the family be counted as a copy that remains?
+    /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1; SIMPLIFIED in
+    /// round 5, S1): while the run cleaning `run.volumePath` decides one
+    /// copy, may this OTHER member of the family be counted as a copy that
+    /// remains?
     ///
-    ///   a row of this run still to be decided ........ no  (main's rule: it
-    ///                                                  may go too)
-    ///   a row this run planned as a target and then
-    ///   RETAINED FOR A PROTECTION found at its turn or
-    ///   at its removal boundary — an Angel hold, a
-    ///   Read-only mark, Angel evidence that could not
-    ///   be read, or the Master Archive rule refusing
-    ///   it from the designation AS IT WAS AT THE
-    ///   REMOVAL where the check captured at its turn
-    ///   had let it go (`Entry.notCountedWhy`, r4-1) .. no  (main would have
-    ///                                                  removed it)
-    ///   a row this run decided on its merits — left
-    ///   alone by the tier, refused as not a duplicate,
-    ///   refused by the archive rule at its turn or by
-    ///   the check captured there (main asked those
-    ///   too, kept the file and counted it) ........... by the sibling rules
-    ///   an extra copy on the drive being cleaned that
-    ///   is NOT a row of this run — held by the Angel,
-    ///   on a folder marked Read only, or never planned  no
-    ///   …except one the Master Archive rule protects
-    ///   (main never planned those either, and counted
-    ///   them) ........................................ by the sibling rules
-    ///   anything else (the keeper's drive, another
-    ///   drive, a Review row, a Read-only drive that is
-    ///   not the one being cleaned) ................... by the sibling rules
+    ///   ANY ROW OF THIS RUN — pending, removed, left alone by the tier,
+    ///   refused, held, failed, put back; a new plan or an old one ........ no
+    ///   an extra copy on the drive being cleaned that is NOT a row of this
+    ///   run — held by the Angel, on a folder marked Read only, or never
+    ///   planned .......................................................... no
+    ///   …except one the Master Archive rule protects (main never planned
+    ///   those either, and counted them) .................. by the sibling rules
+    ///   anything else (the keeper's drive, another drive, a Review row, a
+    ///   Read-only drive that is not the one being cleaned) by the sibling rules
     ///
-    /// "By the sibling rules" = `DeletionTierFacts.gather`: counted only
-    /// when its stored evidence reproduces. So holding a copy can make
-    /// another copy's fate stricter than main's, never more permissive: on
-    /// main the held copy was a row of the same run, and a row is counted
-    /// only after the run decided it on its merits and kept it.
+    /// The same holds at the archive door: a row of this run is never one of
+    /// the family's archive copies either (`deletionTierCandidates`).
+    /// "By the sibling rules" = `DeletionTierFacts.gather`: counted only when
+    /// its stored evidence reproduces. Survivors are therefore the keeper and
+    /// copies that are NOT rows of this run — strictly fewer than main counted
+    /// (main also counted rows it had decided and kept), so this rule can only
+    /// make a removal more conservative. The row's `notCountedWhy` and the
+    /// note fallback are WORDS for the row's reason only; counting does not
+    /// depend on them.
     ///
     /// Build ONCE per row decided (it captures the Angel's sets and the
     /// archive-volume snapshot); each call is O(1).
@@ -429,9 +418,11 @@ extension VideoScanModel {
         let hold = duplicateDeletionHoldRule()
         // Used and dropped within one pass, so a strong `self` is fine.
         return { m in
+            // S1 (codex #258 r5): a row of THIS run is never a survivor,
+            // whatever became of it. The why is words only.
             if run.pending.contains(m.id) { return .pendingRow }
             if let why = run.leftAlone[m.id] { return .leftAlone(why) }
-            if run.decided.contains(m.id) { return .bySiblingRules }
+            if run.decided.contains(m.id) { return .leftAlone(DuplicateDeletionHold.rowOfThisRunWhy) }
             guard m.duplicateDisposition == .extraCopy,
                   PathScope.contains(m.fullPath, within: run.volumePath) else { return .bySiblingRules }
             switch self.bulkDeleteRefusal(m, volume: archiveVolume) {
@@ -825,6 +816,10 @@ extension VideoScanModel {
     func deletionTierCandidates(record: VideoRecord, keeper: VideoRecord,
                                 excluding: Set<UUID> = [], run: DuplicateRunScope? = nil) -> DeletionTierCandidates {
         let standing = run.map { duplicateSurvivorStandingRule(in: $0) }
+        // S1: a row of this run never counts — not as a sibling, and not as
+        // an archive copy either (codex #258 r5-2: a row given promoted-copy
+        // provenance mid-run went in through the archive door).
+        func isRowOfThisRun(_ id: UUID) -> Bool { excluding.contains(id) || run?.isRow(id) == true }
         var out = DeletionTierCandidates()
         out.keeperPath = keeper.fullPath
         var seenArchive = Set<UUID>()
@@ -837,7 +832,8 @@ extension VideoScanModel {
         func volume(_ r: VideoRecord) -> String { VolumeReachability.volumeName(forPath: r.fullPath) }
         out.keeperLabel = "keeper on \(volume(keeper))"
         func noteArchive(_ copy: VideoRecord) {
-            guard !copy.isPurged, !seenArchive.contains(copy.id), let fixity = copy.archiveFixity else { return }
+            guard !copy.isPurged, !seenArchive.contains(copy.id), !isRowOfThisRun(copy.id),
+                  let fixity = copy.archiveFixity else { return }
             seenArchive.insert(copy.id)
             // The promote-time digest is the record; the stamp-bound
             // `contentFixity` (Verify Archive Copies) is the only thing
@@ -1310,6 +1306,8 @@ enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
     /// the designation as it was then; the check captured at its turn had
     /// let it go) is not counted for another copy of the run: main would
     /// have removed it (codex #258 r4-1).
+    static let rowOfThisRunWhy = "a row of this run"
+
     static let archiveRuleAtRemovalWhy = "the Master Archive rule stopped its removal in this run"
 
     /// Why a copy is left alone when the Angel's buffer could not be read
@@ -1359,8 +1357,13 @@ struct DuplicateRunScope: Sendable, Equatable {
     /// unreadable Angel evidence, the Master Archive rule found only at the
     /// removal): id → why. Never counted.
     var leftAlone: [UUID: String] = [:]
-    /// Rows the run decided on their merits.
+    /// The run's other settled rows (left alone by the tier, refused,
+    /// failed, …). Since codex #258 r5 (S1) they are NOT counted either.
     var decided: Set<UUID> = []
+
+    /// Is `id` a row of this run (any status)? Such a copy is never a
+    /// surviving copy for another row (S1).
+    func isRow(_ id: UUID) -> Bool { pending.contains(id) || leftAlone[id] != nil || decided.contains(id) }
 }
 
 /// What the survivor-counting rule says about one family member.

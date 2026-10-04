@@ -315,7 +315,9 @@ struct DeleteDuplicatesCodex258SurvivorTests {
         let rule = model.duplicateSurvivorStandingRule(in: run)
         #expect(rule(pending) == .pendingRow)
         #expect(rule(skippedForHold) == .leftAlone("in use by the Archive Angel"))
-        #expect(rule(decided) == .bySiblingRules, "a row the run decided on its merits counts by its evidence — as on main")
+        // MORE CONSERVATIVE than main since codex #258 r5 (S1): a row of
+        // this run is never a survivor for another row, whatever became of it.
+        #expect(rule(decided) == .leftAlone(DuplicateDeletionHold.rowOfThisRunWhy), "a row of this run was counted")
         #expect(rule(heldNow) == .leftAlone("in use by the Archive Angel"))
         #expect(rule(onReadOnlyFolder) == .leftAlone("on a drive marked Read only"))
         #expect(rule(neverPlanned) == .leftAlone("not a row of this run"),

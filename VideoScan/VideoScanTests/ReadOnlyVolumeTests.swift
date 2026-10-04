@@ -166,7 +166,14 @@ struct ReadOnlyVolumeSnapshotTests {
         let check = ArchiveRemovalCheck(protection: nil, probe: { _ in nil }, identity: { _ in nil }, readOnly: p)
         #expect(check.refusal(forPath: "/Volumes/SanDisk/a.mov")?.note == "lives on SanDisk, which you marked Read only")
         #expect(check.refusal(forPath: "/Volumes/SanDisk/a.mov")?.transient == false)
-        #expect(check.refusal(forPath: "/Volumes/X9/a.mov") == nil)
+        // MORE CONSERVATIVE since codex #258 r5-4: a file whose own drive
+        // identity cannot be read (no UUID, no mount) is not cleared while a
+        // mark carries a UUID — it may be the marked drive under a new name.
+        // A drive proven to be another one by its UUID still is.
+        #expect(check.refusal(forPath: "/Volumes/X9/a.mov")?.leavesAlone == true)
+        #expect(check.refusal(forPath: "/Volumes/X9/a.mov")?.note.contains("could not read this drive's identity") == true)
+        let other = ArchiveRemovalCheck(protection: nil, probe: { _ in "BBB" }, identity: { _ in nil }, readOnly: p)
+        #expect(other.refusal(forPath: "/Volumes/X9/a.mov") == nil)
     }
 }
 

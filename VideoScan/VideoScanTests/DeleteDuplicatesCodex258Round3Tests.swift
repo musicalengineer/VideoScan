@@ -315,7 +315,8 @@ struct DeleteDuplicatesCodex258Round3Tests {
         // …and it FAILS CLOSED (r4-2): it never goes through the readers that skip what they cannot read.
         #expect(!fresh.contains("listBatches(") && !fresh.contains("scanBatches(") && !fresh.contains("try? load"),
                 "the fresh buffer reading skips a batch it cannot read")
-        #expect(fresh.components(separatedBy: "return .uncertain(").count == 4, "a failed listing, an unreadable plan and an unexaminable one are each uncertain")
+        #expect(fresh.components(separatedBy: "return .uncertain(").count == 5,
+                "a failed listing, a symlinked batch (r5-5), an unreadable plan and an unexaminable one are each uncertain")
         #expect(boundary.contains("case .uncertain(let why):") && !boundary.contains("default:"), "the boundary no longer holds on unreadable evidence")
         // The drives.
         let plan = try SourceTree.appCode(named: "DeleteDuplicatesPlan.swift")

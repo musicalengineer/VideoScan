@@ -271,7 +271,16 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
             if real != path, let v = verdict(forPath: real) { return v }
         }
         let byIdentity = entries.filter { $0.volumeUUID != nil }
-        guard !byIdentity.isEmpty, let own = probe(path) else { return nil }
+        guard !byIdentity.isEmpty else { return nil }
+        guard let own = probe(path) else {
+            // The file's own volume identity cannot be read (codex #258
+            // r5-4): it may be a marked drive under a name nobody marked.
+            // Clear only the provably-other: the boot disk, a network share.
+            if let mount = (identity(path) ?? identity(parent))?.mountPoint, ArchiveVolumeProtection.isBootMountPoint(mount) { return nil }
+            if ArchiveVolumeProtection.isNetworkMount(path) { return nil }
+            let names = byIdentity.map(\.label).joined(separator: " or ")
+            return .readOnly("\(names) (VideoScan could not read this drive's identity, so it cannot rule that out)")
+        }
         // Where the file sits on its own volume — asked once, and only for
         // a marked folder.
         var placed = false

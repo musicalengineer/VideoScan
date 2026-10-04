@@ -640,8 +640,9 @@ enum ArchiveAngelPlanStore {
         var plans: [ArchiveAngelPlan] = []
         for name in names.sorted() where name.hasPrefix("batch-") {
             let dir = bufferRoot.appendingPathComponent(name).path
-            // An alias is not a batch (see `scanBatches`): never read through.
-            if isSymlink(dir, fm: fm) { continue }
+            // An alias is never read through (see `scanBatches`) — and what
+            // it points at is unknown, so it is not "free" (codex #258 r5-5).
+            if isSymlink(dir, fm: fm) { return .uncertain("\(name) is a symlink — not read through") }
             let plan: ArchiveAngelPlan
             do {
                 plan = try load(batchDir: dir)
@@ -664,18 +665,56 @@ enum ArchiveAngelPlanStore {
     }
 
     /// The buffer folder is NOT THERE — a definite answer (no batch was
-    /// ever prepared), so it holds nothing. Not definite: any other failure
-    /// (permissions, I/O), and a buffer that lives on a drive under
-    /// /Volumes that is not connected now — its batches exist, unread.
+    /// ever prepared), so it holds nothing. Only when the drive it lives on
+    /// is MOUNTED (codex #258 r5-5): the configured path, and the nearest
+    /// part of it that exists (symlinks resolved), must not lead under a
+    /// drive root (`/Volumes/<name>`) that is not a mount point right now —
+    /// a leftover mount directory after a disconnection, a symlink into one.
+    /// A dangling symlink on the way, or any failure other than "no such
+    /// file", is not definite either.
     nonisolated static func bufferIsAbsent(_ bufferRoot: URL) -> Bool {
         var info = stat()
         guard lstat(bufferRoot.path, &info) != 0, errno == ENOENT else { return false }
-        let parts = bufferRoot.standardizedFileURL.pathComponents
-        if parts.count >= 3, parts[1] == "Volumes" {
-            return FileManager.default.fileExists(atPath: "/Volumes/" + parts[2])
+        let volumes = canonicalVolumesRoot()
+        func driveIsMounted(under path: String) -> Bool {
+            guard path.hasPrefix(volumes), let name = path.dropFirst(volumes.count).split(separator: "/").first else { return true }
+            return isMountPoint(volumes + name)
+        }
+        guard driveIsMounted(under: bufferRoot.standardizedFileURL.path) else { return false }
+        var ancestor = bufferRoot.standardizedFileURL.deletingLastPathComponent()
+        while ancestor.path != "/" {
+            if lstat(ancestor.path, &info) == 0 {
+                guard let real = realpath(ancestor.path, nil) else { return false }   // a dangling symlink
+                defer { free(real) }
+                return driveIsMounted(under: String(cString: real) + "/")
+            }
+            ancestor = ancestor.deletingLastPathComponent()
         }
         return true
     }
+
+    /// `volumesRoot` with a trailing "/", symlinks resolved when it exists.
+    private nonisolated static func canonicalVolumesRoot() -> String {
+        var root = volumesRoot
+        if let real = realpath(root, nil) { root = String(cString: real); free(real) }
+        return root.hasSuffix("/") ? root : root + "/"
+    }
+
+    /// Something is mounted exactly here (statfs says this is its mount point).
+    private nonisolated static func isMountPoint(_ path: String) -> Bool {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0, let real = realpath(path, nil) else { return false }
+        defer { free(real) }
+        let mountedOn = withUnsafePointer(to: &fs.f_mntonname) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+        return mountedOn == String(cString: real)
+    }
+
+    /// TEST SEAM — task-local: where external drives are mounted ("/Volumes"
+    /// in production), so a test can make a leftover mount directory without
+    /// writing into /Volumes.
+    @TaskLocal static var volumesRoot = "/Volumes"
 
     /// CACHED — advisory (the per-turn pre-check, the façade's published
     /// set): the same answer, decoding the buffer only when its fingerprint
