@@ -117,6 +117,16 @@ extension VideoScanModel {
             || archivedCopy(of: rec) != nil
     }
 
+    /// `isArchived` WITHOUT its path half — the two record lookups (a
+    /// promoted copy; content with a master copy). For a pass that asks the
+    /// path half off the main actor with the root captured
+    /// (`VideoScanModel.isInsideMasterArchive(path:root:)`; the Catalog's
+    /// size line, 2026-10-04 perf). The two halves OR'd ARE `isArchived` —
+    /// pinned record for record by CatalogOffMainTotalsTests.
+    func isArchivedExceptPath(_ rec: VideoRecord) -> Bool {
+        isArchiveCopy(rec) || archivedCopy(of: rec) != nil
+    }
+
     /// Derivation kinds that FIX damaged media rather than re-express
     /// good media; these never inherit "archived" from their source. THE
     /// set lives in VideoScanCore (`VideoRecord.repairDerivationKinds`,

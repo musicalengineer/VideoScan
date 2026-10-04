@@ -658,7 +658,13 @@ extension VideoScanModel {
     /// True when `path` lies inside the Master Archive root — canonical,
     /// component-wise (codex QA major c), never a string prefix.
     func isInsideMasterArchive(path: String) -> Bool {
-        guard let root = masterArchiveRootPath else { return false }
+        Self.isInsideMasterArchive(path: path, root: masterArchiveRootPath)
+    }
+
+    /// The same question with the root captured — for a pass off the main
+    /// actor (`BulkDeleteGate`, the catalog's size projections).
+    nonisolated static func isInsideMasterArchive(path: String, root: String?) -> Bool {
+        guard let root else { return false }
         // The catalog filter asks this once per record (2026-09-11). A
         // scanned path is already standardized, so one that does not even
         // start with the root string can only be inside it through a "."
@@ -781,6 +787,79 @@ extension VideoScanModel {
         case .readOnly(let name)?: return .readOnlyVolume(name)
         case .readOnlyDifferentDrive(let name)?: return .readOnlyVolumeDifferentDrive(name)
         }
+    }
+
+    // MARK: The same gate as a VALUE, for a pass off the main actor
+
+    /// What the gate reads of one record — captured on the main actor (the
+    /// record lives there), asked anywhere.
+    struct BulkDeleteSubject: Sendable, Equatable {
+        let path: String
+        let isArchiveCopy: Bool
+    }
+
+    /// `bulkDeleteRefusal(_:effect:volume:)` with every input it reads
+    /// captured ONCE, by value, on the main actor: whether a Master Archive
+    /// is designated and its root, the archive-volume snapshot, and the
+    /// read-only snapshot (nil when that half has nothing to say — no mark,
+    /// or not a verb that removes files). `refusal(for:)` is then pure string
+    /// work and may run on any thread (2026-10-04 perf: the steward's 100k
+    /// per-record asks came off the main thread).
+    ///
+    /// The SAME two halves in the SAME order as the instance rule above,
+    /// over the same leaf predicates (`isInsideMasterArchive(path:root:)`,
+    /// `ArchiveVolumeProtection.verdict`, `ReadOnlyVolumeProtection.verdict`).
+    /// Same inputs → same refusal, record for record: pinned by
+    /// BulkDeleteGateEquivalenceTests across every effect and verdict. A
+    /// change to the rule above must be made here too — that suite fails
+    /// otherwise.
+    struct BulkDeleteGate: Sendable {
+        let hasMasterArchive: Bool
+        let archiveRoot: String?
+        let effect: BulkVerbEffect
+        let volume: ArchiveVolumeProtection?
+        let readOnly: ReadOnlyVolumeProtection?
+
+        func refusal(for s: BulkDeleteSubject) -> BulkDeleteRefusal? {
+            if hasMasterArchive {
+                if s.isArchiveCopy { return .archiveTree }
+                if VideoScanModel.isInsideMasterArchive(path: s.path, root: archiveRoot) { return .archiveTree }
+                if effect != .catalogOnly, let snapshot = volume {
+                    switch snapshot.verdict(forPath: s.path) {
+                    case .clear: break
+                    case .onArchiveVolume: return .archiveVolume
+                    case .unprovable:
+                        // As masterArchiveRefusal: allowed for a catalog
+                        // removal once the snapshot is built.
+                        if !(effect == .catalogRemoval && !snapshot.isProvisional) { return .archiveVolumeUnprovable }
+                    }
+                }
+            }
+            guard let readOnly else { return nil }
+            switch readOnly.verdict(forPath: s.path) {
+            case nil: return nil
+            case .readOnly(let name)?: return .readOnlyVolume(name)
+            case .readOnlyDifferentDrive(let name)?: return .readOnlyVolumeDifferentDrive(name)
+            }
+        }
+    }
+
+    /// The subject the gate reads for `r`.
+    func bulkDeleteSubject(_ r: VideoRecord) -> BulkDeleteSubject {
+        BulkDeleteSubject(path: r.fullPath, isArchiveCopy: isArchiveCopy(r))
+    }
+
+    /// Capture the gate for one pass. `volume` as for `bulkDeleteRefusal`
+    /// (the verb's snapshot; nil builds one). O(targets), no disk.
+    func bulkDeleteGate(effect: BulkVerbEffect = .removesFiles,
+                        volume: ArchiveVolumeProtection? = nil) -> BulkDeleteGate {
+        let hasArchive = masterArchive != nil
+        let readOnlyHalfAsks = effect == .removesFiles && !hasNoReadOnlyVolumeMarks
+        return BulkDeleteGate(hasMasterArchive: hasArchive,
+                              archiveRoot: masterArchiveRootPath,
+                              effect: effect,
+                              volume: hasArchive && effect != .catalogOnly ? (volume ?? archiveVolumeProtection()) : nil,
+                              readOnly: readOnlyHalfAsks ? readOnlyVolumeProtection() : nil)
     }
 
     /// The OFFER-side form of the rule: which of `recs` a verb that

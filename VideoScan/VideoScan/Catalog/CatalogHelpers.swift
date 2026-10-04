@@ -203,12 +203,15 @@ struct CatalogContent: View {
     /// time memo needs. See CatalogPerfMemo.swift.
     @State private var duplicateGroupMemo = RenderMemo<DuplicateGroupMemoKey, [VideoRecord]>()
     @State private var trimDerivativesMemo = RenderMemo<TrimDerivativesMemoKey, [VideoRecord]>()
-    /// Music-triage candidate memo (GH #124 layer 2). The O(n) detection
-    /// pass runs once per catalog change / purge / tidy event — NEVER per
-    /// body re-eval (the no-O(records)-in-body rule). Keyed on the purge
-    /// and tidy batches too because purging doesn't change records.count
-    /// or the aggregates revision, yet must shrink the chip.
-    @State private var musicTriageMemo = RenderMemo<MusicTriageMemoKey, [UUID]>()
+    /// Music-triage candidates (GH #124 layer 2). The O(n) detection pass
+    /// runs once per catalog change / purge / tidy event — NEVER in body
+    /// (the no-O(records)-in-body rule) and, since 2026-10-04 (perf: 0.28 s
+    /// in body on first visit in Rick's trace), OFF the main actor: a
+    /// `.task(id: musicTriageKey)` projects Sendable rows and computes
+    /// there. Keyed on the purge and tidy batches too because purging
+    /// doesn't change records.count or the aggregates revision, yet must
+    /// shrink the chip.
+    @State private var musicTriageCandidateIDs: [UUID] = []
     /// Non-nil presents the music-triage review sheet with a snapshot of
     /// the candidate IDs taken at click time (.sheet(item:) discipline —
     /// never chained isPresented).
@@ -243,18 +246,27 @@ struct CatalogContent: View {
         let candidateIDs: [UUID]
     }
 
-    /// Memoized music-library candidate IDs. See MusicTriage.candidateIDs
-    /// for the precision rules (MXF halves / paired / same-stem NEVER
-    /// suggested — pinned by MusicTriageTests).
-    private var musicTriageCandidateIDs: [UUID] {
-        let key = MusicTriageMemoKey(
+    /// What the music-library candidates depend on. O(1).
+    private var musicTriageKey: MusicTriageMemoKey {
+        MusicTriageMemoKey(
             version: recordsVersion,
             purge: model.lastPurgedBatch,
             tidy: model.lastTidyBatch
         )
-        return musicTriageMemo.value(for: key) {
-            MusicTriage.candidateIDs(in: records)
-        }
+    }
+
+    /// Recompute the music-library candidate IDs off the main actor. See
+    /// MusicTriage.candidateIDs for the precision rules (MXF halves /
+    /// paired / same-stem NEVER suggested — pinned by MusicTriageTests);
+    /// the SAME generic function runs over the rows. Called from
+    /// `.task(id: musicTriageKey)`: a newer key cancels this one.
+    private func refreshMusicTriageCandidates() async {
+        let rows = CatalogStorageRow.project(records)
+        let ids = await Task.detached(priority: .utility) {
+            MusicTriage.candidateIDs(in: rows)
+        }.value
+        if Task.isCancelled { return }
+        if ids != musicTriageCandidateIDs { musicTriageCandidateIDs = ids }
     }
 
     private struct TrimDerivativesMemoKey: Equatable {
@@ -858,6 +870,8 @@ struct CatalogContent: View {
         .sheet(item: $verifyAudioRequest) { request in
             VerifyAudioSheet(request: request)
         }
+        // Music-triage candidates, off the main actor (2026-10-04 perf).
+        .task(id: musicTriageKey) { await refreshMusicTriageCandidates() }
         // Music-triage review list (GH #124). Same .sheet(item:) shape.
         .sheet(item: $musicTriagePayload) { payload in
             MusicTriageSheet(candidateIDs: payload.candidateIDs)

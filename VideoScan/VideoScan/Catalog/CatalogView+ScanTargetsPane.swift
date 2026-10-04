@@ -181,11 +181,10 @@ extension CatalogView {
                 .filter { $0.isReachable && !$0.searchPath.isEmpty }
                 .map { VolumeReachability.volumeName(forPath: $0.searchPath) }
         )
-        storageTotals = CatalogStorageTotalsCalculator.compute(
-            records: model.records,
-            onlineVolumes: onlineVolumes
-        )
-        scheduleManuallyDeletedProbe(onlineVolumes: onlineVolumes)
+        // 2026-10-04 perf: projected here (plain field reads), computed
+        // OFF the main actor by the same generic calculator; the probe
+        // starts once the totals it amends have landed.
+        scheduleStorageTotals(onlineVolumes: onlineVolumes)
         // The Catalog's TOTAL CATALOG · ARCHIVED · UNIQUE line rides the
         // same triggers (Rick 2026-09-11) — projected here, grouped
         // off-main, see scheduleSizeTotals().
@@ -247,6 +246,26 @@ extension CatalogView {
         volumeAggregateCache = built
     }
 
+    /// The TOTAL MEDIA footer, off the main actor (2026-10-04 perf; Rick's
+    /// Release trace had `CatalogStorageTotalsCalculator.compute` — the
+    /// music stem keys, the library-path test and a volume name per record
+    /// — on the main thread). Project the rows here, compute them in a
+    /// detached task with the SAME generic calculator the tests pin, and
+    /// publish under a cancellation guard. The manually-deleted probe
+    /// amends the totals, so it is started only after they land.
+    func scheduleStorageTotals(onlineVolumes: Set<String>) {
+        storageTotalsTask?.cancel()
+        let rows = CatalogStorageRow.projectForStorageTotals(model.records)
+        storageTotalsTask = Task {
+            let totals = await Task.detached(priority: .utility) {
+                CatalogStorageTotalsCalculator.compute(facts: rows, onlineVolumes: onlineVolumes)
+            }.value
+            if Task.isCancelled { return }   // superseded by a newer recompute
+            storageTotals = totals
+            scheduleManuallyDeletedProbe(onlineVolumes: onlineVolumes)
+        }
+    }
+
     /// The footer's "+ X TB marked deleted, still on disk" figure needs
     /// one `stat` per manually-deleted record — filesystem I/O that must
     /// never run inside `recomputeVolumeAggregates()` on the main actor.
@@ -298,12 +317,16 @@ extension CatalogView {
     /// ~8 MB worst case at 100k records; freed when the task completes.
     func scheduleSizeTotals() {
         sizeTotalsTask?.cancel()
-        let entries = CatalogSizeTotals.project(model.records) { model.isArchived($0) }
+        // 2026-10-04 perf: the path half of `isArchived` (the Master Archive
+        // containment test, 0.3 s per pass in Rick's trace) is asked in
+        // the detached task with the root captured here.
+        let entries = CatalogSizeTotals.projectDeferringArchivePath(model.records) { model.isArchivedExceptPath($0) }
+        let archiveRoot = model.masterArchiveRootPath
         sizeTotalsTask = Task {
             // (`Task.detached` ≈ a worker thread that does NOT inherit
             // the caller's actor; only Sendable values cross.)
             let totals = await Task.detached(priority: .utility) {
-                CatalogSizeTotals.compute(entries)
+                CatalogSizeTotals.compute(entries, archiveRoot: archiveRoot)
             }.value
             if Task.isCancelled { return }   // superseded by a newer recompute
             sizeTotals = totals

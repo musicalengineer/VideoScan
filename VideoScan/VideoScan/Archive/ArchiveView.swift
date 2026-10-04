@@ -40,9 +40,17 @@ struct ArchiveView: View {
     /// Timeline extension lives in its own file.
     @State var timelineItemMemo = RenderMemo<RecordsVersion, [ArchiveTimelineItem]>()
     /// Unique-file totals for the progress bar (ArchiveProgress.swift),
-    /// memoized per records version — CatalogStorageTotals.compute is
-    /// O(records) and must never run in body.
-    @State var storageTotalsMemo = RenderMemo<RecordsVersion, CatalogStorageTotals>()
+    /// computed OFF the main actor per records version
+    /// (`refreshArchiveStorageTotals`, 2026-10-04 perf) —
+    /// CatalogStorageTotals.compute is O(records) and must never run in
+    /// body. nil until the first computation lands.
+    @State var archiveStorageTotals: CatalogStorageTotals?
+    /// The "Needs a date" answer, worked out OFF the main actor per records
+    /// version (`refreshArchiveStorageTotals`, 2026-10-04 perf — the date
+    /// resolver per record was most of the snapshot's first-render cost).
+    /// nil until the first pass lands; the generation keys the snapshot memo.
+    @State var needsDateIDs: Set<UUID>?
+    @State var needsDateGeneration = 0
     /// "timeline" | "files" — the Archived category's in-session view
     /// switch (ArchiveViewMode.rawValue). Timeline is the default and
     /// every tab ENTRY resets to it (ArchiveHomeState rule 1/2): the
@@ -126,6 +134,9 @@ struct ArchiveView: View {
         // I/O) — refreshed on entry and when the MFO job list changes (the
         // strip refreshes after its own sheets and cards).
         .task { model.archiveAngel.refreshBatches(reason: "Archive tab entry") }
+        // The progress bar's unique-file totals and the "Needs a date"
+        // answer, off the main actor.
+        .task(id: archiveStorageKey) { await refreshArchiveStorageTotals() }
         .onChange(of: fileOpsCenter.jobs.map(\.id)) { _, _ in
             model.archiveAngel.refreshBatches(reason: "job list changed")
         }
@@ -182,7 +193,9 @@ struct ArchiveView: View {
     var snapshot: ArchiveCategorySnapshot {
         ArchiveCategorySnapshot.cached(in: categoryMemo,
                                        model: model,
-                                       volumeSearchPaths: visibleVolumeTargets.map(\.searchPath))
+                                       volumeSearchPaths: visibleVolumeTargets.map(\.searchPath),
+                                       needsDate: needsDateIDs.map { .precomputed($0) } ?? .pending,
+                                       needsDateGeneration: needsDateGeneration)
     }
 
     /// True when the record has a Master Archive copy (any status but

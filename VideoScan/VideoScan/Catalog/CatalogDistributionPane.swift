@@ -119,6 +119,19 @@ enum CatalogDistributionCalculator {
         var distribution: MediaDistributionCachedInputs
         var dashboard: [VolumeDashboardInput]
         var tierByDrive: [String: StorageTier]
+        /// Search paths of the RETIRED drives: dashboard rows under any of
+        /// them are dropped in `compute`, off the main actor (2026-10-04
+        /// perf — the filter used to run in `recompute()`, reading two
+        /// @Published getters per record per target on the main thread).
+        var dashboardRetiredPrefixes: [String] = []
+    }
+
+    /// Same scope as the donut: present records on non-retired drives.
+    /// `row.fullPath.hasPrefix` per retired prefix — exactly the old
+    /// `!targets.contains { $0.isRetired && row.fullPath.hasPrefix($0.searchPath) }`.
+    static func dashboardRows(_ rows: [VolumeDashboardInput], retiredPrefixes: [String]) -> [VolumeDashboardInput] {
+        guard !retiredPrefixes.isEmpty else { return rows }
+        return rows.filter { row in !retiredPrefixes.contains { row.fullPath.hasPrefix($0) } }
     }
 
     static func compute(_ inputs: Inputs, now: Date = Date()) -> CatalogDistributionStats {
@@ -147,7 +160,8 @@ enum CatalogDistributionCalculator {
             s.tierBytes[t, default: 0] += max(0, row.sizeBytes)
             s.tierFiles[t, default: 0] += 1
         }
-        let dash = VolumeDashboardCalculator.compute(inputs: inputs.dashboard, root: "/", now: now)
+        let dash = VolumeDashboardCalculator.compute(
+            inputs: dashboardRows(inputs.dashboard, retiredPrefixes: inputs.dashboardRetiredPrefixes), root: "/", now: now)
         s.copies = dash.copies
         s.archive = dash.archive
         return s
@@ -588,16 +602,20 @@ struct CatalogDistributionPane: View {
             // "Mac (home)"); keep the WORST tier so the lens never flatters.
             tiers[label] = max(tiers[label] ?? .safe, tier)
         }
+        // Read each target's @Published getters ONCE here (O(targets)),
+        // never per record (2026-10-04 perf).
+        let retiredPrefixes = targets.filter(\.isRetired).map(\.searchPath)
         let inputs = CatalogDistributionCalculator.Inputs(
             distribution: MediaDistributionCachedInputs(
                 inputs: MediaDistributionCalculator.project(records),
-                retiredPrefixes: targets.filter(\.isRetired).map(\.searchPath),
+                retiredPrefixes: retiredPrefixes,
                 reachableVolumes: Set(live.filter(\.isReachable).map { MediaDistributionCalculator.volumeLabel(forPath: $0.searchPath) }),
                 knownVolumes: Set(live.map { MediaDistributionCalculator.volumeLabel(forPath: $0.searchPath) })),
-            // Same scope as the donut: present records on non-retired drives.
-            dashboard: VolumeDashboardCalculator.project(records, under: "/")
-                .filter { row in !targets.contains { $0.isRetired && row.fullPath.hasPrefix($0.searchPath) } },
-            tierByDrive: tiers)
+            // Same scope as the donut: present records on non-retired
+            // drives — filtered in `compute`, off the main actor.
+            dashboard: VolumeDashboardCalculator.project(records, under: "/"),
+            tierByDrive: tiers,
+            dashboardRetiredPrefixes: retiredPrefixes)
         computeTask = Task {
             let result = await Task.detached(priority: .userInitiated) {
                 CatalogDistributionCalculator.compute(inputs)

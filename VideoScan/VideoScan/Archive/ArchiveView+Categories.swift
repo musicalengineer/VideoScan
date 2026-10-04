@@ -162,7 +162,8 @@ struct ArchiveCategorySnapshot {
     static func compute(active: [VideoRecord],
                         allRecords: [VideoRecord],
                         model: VideoScanModel,
-                        volumeSearchPaths: [String]) -> ArchiveCategorySnapshot {
+                        volumeSearchPaths: [String],
+                        needsDate source: NeedsDateSource = .resolveHere) -> ArchiveCategorySnapshot {
         var snap = ArchiveCategorySnapshot()
         snap.archived.reserveCapacity(active.count / 8)
         snap.notYetArchived.reserveCapacity(active.count)
@@ -185,7 +186,7 @@ struct ArchiveCategorySnapshot {
                 if let d = copy.resolvedArchivedAt { snap.archivedDates[rec.id] = d }
             } else {
                 snap.notYetArchived.append(rec)
-                if needsDate(rec) { snap.needsDate.append(rec) }
+                if source.needsDate(rec) { snap.needsDate.append(rec) }
             }
         }
         // Volume counts: O(records × targets); targets are a handful.
@@ -236,17 +237,86 @@ struct ArchiveCategorySnapshot {
     /// The SAME resolver the promote flow uses for placement, so this list
     /// is exactly "would land in Undated/".
     static func needsDate(_ rec: VideoRecord) -> Bool {
-        let r = RecordDateResolver.resolve(userDate: rec.userDate,
-                                           userDateConfidence: rec.userDateConfidence,
-                                           embeddedCreationDate: rec.embeddedCreationDate,
-                                           originMake: rec.originMake,
-                                           originModel: rec.originModel,
-                                           originEncoder: rec.originEncoder,
-                                           inferredRecordDate: rec.inferredRecordDate,
-                                           inferredDateConfidence: rec.inferredDateConfidence,
-                                           inferredDateRange: rec.inferredDateRange,
-                                           filename: rec.filename.isEmpty ? nil : rec.filename)
+        needsDate(DateFacts(rec))
+    }
+
+    /// The date fields `needsDate` reads, copied on the main actor so the
+    /// resolver — `FilenameDatePattern.match` per record, the bulk of this
+    /// snapshot's cost in Rick's 2026-10-04 trace — can run off it.
+    struct DateFacts: Sendable {
+        let id: UUID
+        let userDate: String?
+        let userDateConfidence: String?
+        let embeddedCreationDate: Date?
+        let originMake: String?
+        let originModel: String?
+        let originEncoder: String?
+        let inferredRecordDate: Date?
+        let inferredDateConfidence: Float?
+        let inferredDateRange: InferredDateRange?
+        let filename: String
+
+        init(_ rec: VideoRecord) {
+            id = rec.id
+            userDate = rec.userDate
+            userDateConfidence = rec.userDateConfidence
+            embeddedCreationDate = rec.embeddedCreationDate
+            originMake = rec.originMake
+            originModel = rec.originModel
+            originEncoder = rec.originEncoder
+            inferredRecordDate = rec.inferredRecordDate
+            inferredDateConfidence = rec.inferredDateConfidence
+            inferredDateRange = rec.inferredDateRange
+            filename = rec.filename
+        }
+    }
+
+    static func needsDate(_ f: DateFacts) -> Bool {
+        let r = RecordDateResolver.resolve(userDate: f.userDate,
+                                           userDateConfidence: f.userDateConfidence,
+                                           embeddedCreationDate: f.embeddedCreationDate,
+                                           originMake: f.originMake,
+                                           originModel: f.originModel,
+                                           originEncoder: f.originEncoder,
+                                           inferredRecordDate: f.inferredRecordDate,
+                                           inferredDateConfidence: f.inferredDateConfidence,
+                                           inferredDateRange: f.inferredDateRange,
+                                           filename: f.filename.isEmpty ? nil : f.filename)
         return r.precision >= .decade
+    }
+
+    /// Main-actor half of the off-main "Needs a date" pass: the date facts
+    /// of every active record. Plain field reads.
+    @MainActor
+    static func projectDateFacts(_ records: [VideoRecord]) -> [DateFacts] {
+        pfActiveRecords(records).map(DateFacts.init)
+    }
+
+    /// Off-main half: the ids `needsDate` says yes to. Pure.
+    static func needsDateIDs(_ facts: [DateFacts]) -> Set<UUID> {
+        var out = Set<UUID>()
+        for f in facts where needsDate(f) { out.insert(f.id) }
+        return out
+    }
+
+    /// Where `compute` gets the "Needs a date" answer from.
+    enum NeedsDateSource {
+        /// Ask the resolver here, per record (tests; HallieWebAccess).
+        case resolveHere
+        /// Precomputed off the main actor (`needsDateIDs`) — the Archive
+        /// tab. A record not in the set does not need a date.
+        case precomputed(Set<UUID>)
+        /// The Archive tab before its first off-main pass lands: the list
+        /// is empty for that moment rather than resolved in body.
+        case pending
+
+        func needsDate(_ rec: VideoRecord) -> Bool {
+            switch self {
+            case .resolveHere: return ArchiveCategorySnapshot.needsDate(rec)
+            case .precomputed(let ids): return ids.contains(rec.id)
+            case .pending: return false
+            }
+        }
     }
 
     /// Per-row status from O(1) lookups. `archiveRoot` = the master
@@ -283,22 +353,33 @@ struct ArchiveCategorySnapshot {
 struct ArchiveCategoryKey: Equatable {
     let version: RecordsVersion
     let volumeSearchPaths: [String]
+    /// Which off-main "Needs a date" answer the snapshot was built with
+    /// (-1 = resolved in place). A generation number, never the set: the
+    /// key is compared on every render.
+    var needsDateGeneration: Int = -1
 }
 
 extension ArchiveCategorySnapshot {
     /// Get-or-compute through `memo`; exactly one compute per key change.
+    /// `needsDate` + `needsDateGeneration`: the Archive tab passes its
+    /// off-main answer (2026-10-04 perf) and bumps the generation each
+    /// time one lands; the default resolves in place, as before.
     @MainActor
     static func cached(in memo: RenderMemo<ArchiveCategoryKey, ArchiveCategorySnapshot>,
                        model: VideoScanModel,
-                       volumeSearchPaths: [String]) -> ArchiveCategorySnapshot {
+                       volumeSearchPaths: [String],
+                       needsDate: NeedsDateSource = .resolveHere,
+                       needsDateGeneration: Int = -1) -> ArchiveCategorySnapshot {
         let key = ArchiveCategoryKey(version: RecordsVersion(count: model.records.count,
                                                              revision: model.volumeAggregatesRevision),
-                                     volumeSearchPaths: volumeSearchPaths)
+                                     volumeSearchPaths: volumeSearchPaths,
+                                     needsDateGeneration: needsDateGeneration)
         return memo.value(for: key) {
             compute(active: pfActiveRecords(model.records),
                     allRecords: model.records,
                     model: model,
-                    volumeSearchPaths: volumeSearchPaths)
+                    volumeSearchPaths: volumeSearchPaths,
+                    needsDate: needsDate)
         }
     }
 }
