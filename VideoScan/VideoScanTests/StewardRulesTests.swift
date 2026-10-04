@@ -591,4 +591,48 @@ struct StewardExclusionRuleTests {
         await model.stewardTask?.value
         #expect(model.stewardSnapshot.publishCount == 1, "an unchanged queue is not re-published")
     }
+
+    /// The pane's queue, as the model builds it, once `until` holds (≤ 5 s).
+    private func shownQueue(_ model: VideoScanModel, until: (StewardQueue) -> Bool) async throws -> StewardQueue {
+        for _ in 0..<100 where !until(model.stewardSnapshot.queue) {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        await model.stewardTask?.value
+        return model.stewardSnapshot.queue
+    }
+
+    /// Steward QA F9: the Angel's picks change without a catalog change (a
+    /// sweep, a prepared batch). While the pane is on screen the queue is
+    /// rebuilt when they do; once it has left, nothing is.
+    @Test func anAngelChangeRebuildsTheQueueWhileThePaneIsShown() async throws {
+        let model = isolatedModel()
+        let suite = "steward-tests-\(UUID().uuidString)"
+        model.stewardDefaults = try #require(UserDefaults(suiteName: suite))
+        defer { model.stewardDefaults.removePersistentDomain(forName: suite) }
+        let g = UUID()
+        let copy = record("/Volumes/SanDisk/copy.mov", size: 10, group: g, disposition: .extraCopy)
+        model.records = [record("/Volumes/SanDisk/keep.mov", size: 10, group: g, disposition: .keep), copy]
+        model.stewardPaneAppeared()
+        #expect(try await shownQueue(model) { $0.isBuilt }.count(of: .reclaimGroup) == 1)
+        // Let the catalog-change pass (250 ms debounce) that setting the
+        // records started run out first: only the Angel's change may follow.
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        await model.stewardTask?.value
+        #expect(model.stewardSnapshot.queue.count(of: .reclaimGroup) == 1)
+
+        var summary = model.archiveAngel.recommendations
+        summary.candidateIDs = [copy.id]
+        summary.revision += 1
+        model.archiveAngel.publishRecommendations(summary)
+        let after = try await shownQueue(model) { $0.count(of: .reclaimGroup) == 0 }
+        #expect(after.count(of: .reclaimGroup) == 0, "the Angel now holds the only other copy: no card")
+
+        model.stewardPaneDisappeared()
+        let published = model.stewardSnapshot.publishCount
+        summary.candidateIDs = []
+        summary.revision += 1
+        model.archiveAngel.publishRecommendations(summary)
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        #expect(model.stewardSnapshot.publishCount == published, "off screen: the Angel's change builds nothing")
+    }
 }

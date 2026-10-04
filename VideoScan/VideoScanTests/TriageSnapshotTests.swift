@@ -560,8 +560,10 @@ struct TriageSnapshotModelTests {
         model.stewardPaneAppeared()
         model.stewardPaneDisappeared()
         #expect(model.stewardWanted, "another pane is still on screen")
+        #expect(model.stewardAngelWatch != nil, "the Angel is watched while a pane is up")
         model.stewardPaneDisappeared()
         #expect(!model.stewardWanted && model.stewardTask == nil)
+        #expect(model.stewardAngelWatch == nil, "…and not once the last pane has gone")
         model.stewardPaneDisappeared()
         #expect(model.stewardPaneCount == 0)
     }

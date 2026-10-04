@@ -40,8 +40,11 @@
 // archived clip or one the Angel has chosen, and says so ("3 are in the
 // archive").
 //
-// The Angel's sets change without a catalog mutation (a sweep, a batch); the
-// queue picks that up at the next catalog change or when the pane appears.
+// The Angel's sets change without a catalog mutation (a sweep, a batch).
+// While a pane is on screen the model watches the Angel's published
+// recommendations (`archiveAngel.$recommendations`, its public surface) and
+// rebuilds the queue — debounced, and only when the three sets rule 2 reads
+// actually changed (QA F9). Off screen, nothing is watched.
 //
 // (For Rick: `Task.detached` ≈ a worker thread that does NOT inherit the
 // caller's actor; only Sendable values cross.)
@@ -121,7 +124,30 @@ extension VideoScanModel {
     func stewardPaneAppeared() {
         stewardPaneCount += 1
         stewardWanted = true
+        watchTheAngelForSteward()
         scheduleStewardRefresh()
+    }
+
+    /// How long the Angel's changes are gathered before one rebuild.
+    static let stewardAngelDebounceMS = 300
+
+    /// QA F9: the Angel's picks are rule 2's input, and they change without
+    /// any catalog change. Watch its published recommendations (the
+    /// façade's public surface) while the pane is up. `@Published` sends
+    /// BEFORE the value is stored, so the debounce also lets it land.
+    /// (For Rick: a Combine pipeline ≈ an observer callback with a
+    /// coalescing timer in front; the AnyCancellable is its RAII handle.)
+    func watchTheAngelForSteward() {
+        guard stewardAngelWatch == nil else { return }
+        stewardAngelWatch = archiveAngel.$recommendations
+            .dropFirst()
+            .removeDuplicates {
+                $0.candidateIDs == $1.candidateIDs && $0.preparedIDs == $1.preparedIDs && $0.promotedIDs == $1.promotedIDs
+            }
+            .debounce(for: .milliseconds(Self.stewardAngelDebounceMS), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.scheduleStewardRefresh() }
+            }
     }
 
     /// The pane left the screen (QA F9): stop rebuilding the queue on every
@@ -131,6 +157,8 @@ extension VideoScanModel {
         stewardPaneCount = max(0, stewardPaneCount - 1)
         guard stewardPaneCount == 0 else { return }
         stewardWanted = false
+        stewardAngelWatch?.cancel()
+        stewardAngelWatch = nil
         stewardTask?.cancel()
         stewardTask = nil
     }
