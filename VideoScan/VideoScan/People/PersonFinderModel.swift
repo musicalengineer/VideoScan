@@ -496,6 +496,13 @@ final class PersonFinderModel: ObservableObject {
 
     // MARK: Reference loading
 
+    /// Serial, OFF the Swift cooperative pool: Vision's perform() blocks its
+    /// thread, and a pool full of blocked Vision calls deadlocks.
+    nonisolated static let referenceLoadQueue = DispatchQueue(
+        label: "Rick-Breen.VideoScan.referenceLoad", qos: .userInitiated)
+    /// Bumped by every loadReference; only the newest may finish.
+    nonisolated static let referenceLoadGeneration = ReferenceLoadGeneration()
+
     /// Append reference photos from `path` to the existing pool (does not clear previous loads).
     func loadReference(from path: String? = nil) async {
         let p = path ?? settings.referencePath
@@ -504,11 +511,24 @@ final class PersonFinderModel: ObservableObject {
         isLoadingReference = true
         referenceLoadError = nil
 
+        // Latest selection wins (Rick 2026-10-04: arrowing through People
+        // started ~17 concurrent loads; each blocked a Swift cooperative
+        // thread inside Vision until the pool was exhausted and Vision
+        // deadlocked — the whole app's async work, Quit included, hung).
+        // Loads now run one at a time on their own serial queue (never the
+        // cooperative pool); a superseded load stops between photos and its
+        // result is dropped instead of being appended to the strip.
+        let generation = Self.referenceLoadGeneration.next()
         let largestOnly = settings.largestFaceOnly
         let rejected = Set(settings.rejectedReferenceFiles)
-        let (faces, failures, errMsg) = await Task.detached(priority: .userInitiated) {
-            pfLoadReferencePhotos(from: p, largestFaceOnly: largestOnly)
-        }.value
+        let (faces, failures, errMsg) = await withCheckedContinuation { cont in
+            Self.referenceLoadQueue.async {
+                cont.resume(returning: pfLoadReferencePhotos(
+                    from: p, largestFaceOnly: largestOnly,
+                    shouldContinue: { Self.referenceLoadGeneration.isCurrent(generation) }))
+            }
+        }
+        guard Self.referenceLoadGeneration.isCurrent(generation) else { return }
 
         // Surface load failures (photos that couldn't produce a face)
         let newFailures = rejected.isEmpty
@@ -1059,3 +1079,13 @@ final class PersonFinderModel: ObservableObject {
 // MARK: - ArcFace engine dispatch
 // pfRunArcFaceEngine moved to PersonFinderEngineDispatch.swift
 // (step 4 of 6 PersonFinderModel split).
+
+/// Thread-safe "newest request wins" counter for reference loads (read from
+/// the load queue, bumped on the main actor).
+final class ReferenceLoadGeneration: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func next() -> Int { lock.withLock { value += 1; return value } }
+    func isCurrent(_ generation: Int) -> Bool { lock.withLock { value == generation } }
+}

@@ -30,7 +30,10 @@ private let pfFeaturePrintFailLock = OSAllocatedUnfairLock(initialState: 0)
 
 // MARK: - detection-internal — do not call from outside PersonFinderDetection.swift
 // Returns ([ReferenceFace], errorMessage) — errorMessage is nil on success.
-nonisolated func pfLoadReferencePhotos(from path: String, largestFaceOnly: Bool) -> ([ReferenceFace], [ReferenceLoadFailure], String?) {
+/// `shouldContinue` is checked before each photo; returning false stops the
+/// load early (a newer People selection superseded this one — 2026-10-04).
+nonisolated func pfLoadReferencePhotos(from path: String, largestFaceOnly: Bool,
+                                       shouldContinue: () -> Bool = { true }) -> ([ReferenceFace], [ReferenceLoadFailure], String?) {
     let fm = FileManager.default
     let imageExts: Set<String> = ["jpg", "jpeg", "png", "heic", "heif", "tiff", "tif", "bmp", "gif"]
     var imagePaths: [String] = []
@@ -52,6 +55,7 @@ nonisolated func pfLoadReferencePhotos(from path: String, largestFaceOnly: Bool)
     var faces: [ReferenceFace] = []
     var failures: [ReferenceLoadFailure] = []
     for imgPath in imagePaths {
+        if !shouldContinue() { break }
         let filename = (imgPath as NSString).lastPathComponent
         guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: imgPath) as CFURL, nil),
               let img = CGImageSourceCreateImageAtIndex(src, 0, nil) else {
