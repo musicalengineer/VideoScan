@@ -42,6 +42,9 @@ import time
 from pathlib import Path
 
 
+WORKER_CACHE_LIMIT_BYTES = 1024 * 1024 * 1024  # MLX buffer-cache ceiling
+
+
 def respond(payload: dict) -> None:
     """Write one protocol line to stdout and flush — the parent blocks
     on this line, so buffering would deadlock the pipeline."""
@@ -108,6 +111,15 @@ def main() -> int:
         log("hint: pip install mlx-whisper (in venv-mlx)")
         return 3
 
+    # Bound MLX's buffer cache (Rick 2026-10-04: this worker sat at 20 GB
+    # alongside a 49 GB TTS worker and beachballed the M4). MLX keeps freed
+    # GPU buffers for reuse and by default lets the cache grow to the whole
+    # working set; a long-lived worker fed files of every length never
+    # gives it back. The model weights (~0.5 GB) are live arrays, not
+    # cache, so they stay loaded.
+    import mlx.core as mx
+    mx.set_cache_limit(WORKER_CACHE_LIMIT_BYTES)
+
     log(f"ready — model {args.model} (loads on first request, then cached)")
 
     for line in sys.stdin:
@@ -121,6 +133,7 @@ def main() -> int:
             respond({"id": None, "ok": False, "error": f"bad request JSON: {e}"})
             continue
         respond(handle_request(req, args.model))
+        mx.clear_cache()
 
     log("stdin EOF — exiting cleanly")
     return 0

@@ -123,6 +123,9 @@ private func synthesize(
     )
 }
 
+/// MLX buffer-cache ceiling for the TTS worker (see `main`).
+private let workerCacheLimitBytes = 256 * 1024 * 1024
+
 private func writeResponse(_ response: WorkerResponse) {
     guard let data = try? JSONEncoder().encode(response) else { return }
     FileHandle.standardOutput.write(Data(responsePrefix.utf8))
@@ -140,6 +143,13 @@ private enum HallieKokoroHelper {
             let outputURL = URL(fileURLWithPath: arguments.outputDirectory, isDirectory: true)
             try FileManager.default.createDirectory(at: outputURL, withIntermediateDirectories: true)
 
+            // Bound MLX's buffer cache (Rick 2026-10-04: this worker reached
+            // 49 GB and beachballed the M4 while Hallie spoke during a
+            // footage compare). MLX keeps freed GPU buffers for reuse and,
+            // by default, lets that cache grow to the whole working set;
+            // a long-lived worker synthesizing many differently-sized
+            // chunks never gives it back. The model itself is ~330 MB.
+            MLX.GPU.set(cacheLimit: workerCacheLimitBytes)
             let engine = KokoroTTS(modelPath: modelURL)
             guard let voices = NpyzReader.read(fileFromPath: voicesURL) else {
                 throw UsageError("Could not load voice embeddings at \(voicesURL.path)")
@@ -161,6 +171,9 @@ private enum HallieKokoroHelper {
                             voiceName: request.voiceName,
                             speed: request.speed,
                             text: request.text)
+                        // Hand back what this utterance used; the next one
+                        // is seconds away at the earliest.
+                        MLX.GPU.clearCache()
                         writeResponse(WorkerResponse(id: request.id, ok: true, error: nil))
                     } catch {
                         // `String(describing:)` names the enum case
