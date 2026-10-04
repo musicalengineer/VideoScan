@@ -21,6 +21,8 @@ struct ArchivistTabButton: View {
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("archivist.name") private var archivistName: String = "Hallie Mae"
+    /// Hover lift + brighter sparkle glow (Liquid Glass refresh, 2026-10-04).
+    @State private var isHovering = false
 
     private static let gradient = LinearGradient(
         colors: [Color(red: 0.98, green: 0.45, blue: 0.70), Color.purple],
@@ -39,7 +41,8 @@ struct ArchivistTabButton: View {
                         .foregroundStyle(Self.gradient)
                         .opacity(a)
                         .scaleEffect(s)
-                        .shadow(color: Color.pink.opacity(0.35 * a), radius: 6)
+                        .shadow(color: Color.pink.opacity((isHovering ? 0.6 : 0.35) * a),
+                                radius: isHovering ? 9 : 6)
                 }
                 Text(archivistName.isEmpty || archivistName == "Name TBD" ? "Archivist" : "Ask " + archivistName)
                     .font(.system(size: fontSize, weight: .semibold))
@@ -50,6 +53,9 @@ struct ArchivistTabButton: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .scaleEffect(isHovering && !reduceMotion ? 1.04 : 1)
+        .animation(.spring(response: 0.3, dampingFraction: 0.6), value: isHovering)
+        .onHover { isHovering = $0 }
         .help("Chat with the Family Archivist — “show me Donna down the cape 1990 to 1995”")
         .accessibilityIdentifier("tab.Archivist")
     }

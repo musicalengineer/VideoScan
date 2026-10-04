@@ -31,6 +31,9 @@ struct GlassTabStrip<Badge: View>: View {
 
     @Namespace private var glassNS
     @State private var hoveredTag: Int?
+    /// Per-tab click counter — drives the icon's one-shot bounce, so only
+    /// the tab you just picked bounces (not the one you left).
+    @State private var bounceTicks: [Int: Int] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var isLarge: Bool { fontSize >= 16 }
@@ -75,7 +78,16 @@ struct GlassTabStrip<Badge: View>: View {
 
     private func tabLabel(_ item: Item) -> some View {
         let isSelected = selection == item.tag
-        return Label(item.label, systemImage: item.icon)
+        return Label {
+            Text(item.label)
+        } icon: {
+            // Selected icon picks up the accent; it bounces once when picked.
+            // Neither changes layout, so the glass layer's hidden copy
+            // still matches this one exactly.
+            Image(systemName: item.icon)
+                .foregroundStyle(isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                .symbolEffect(.bounce.up, options: .speed(1.4), value: bounceTicks[item.tag, default: 0])
+        }
             .font(.system(size: fontSize, weight: isSelected ? .semibold : .regular))
             .foregroundStyle(isSelected ? .primary : .secondary)
             .overlay(alignment: .topTrailing) {
@@ -108,12 +120,15 @@ struct GlassTabStrip<Badge: View>: View {
 
     private func tabButton(_ item: Item) -> some View {
         Button {
+            if selection != item.tag, !reduceMotion {
+                bounceTicks[item.tag, default: 0] += 1
+            }
             selection = item.tag
         } label: {
             tabLabel(item)
                 .contentShape(Capsule())
         }
-        .buttonStyle(.plain)
+        .buttonStyle(GlassTabPressStyle(reduceMotion: reduceMotion))
         .onHover { hovering in
             if hovering {
                 hoveredTag = item.tag
@@ -123,6 +138,18 @@ struct GlassTabStrip<Badge: View>: View {
         }
         // XCUITest hook: e.g. "tab.Catalog".
         .accessibilityIdentifier("tab.\(item.label)")
+    }
+}
+
+/// A tab press dips the label slightly and springs back — the tactile half
+/// of the glass (the glass layer itself takes no clicks).
+private struct GlassTabPressStyle: ButtonStyle {
+    let reduceMotion: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
+            .animation(.spring(response: 0.22, dampingFraction: 0.55), value: configuration.isPressed)
     }
 }
 
