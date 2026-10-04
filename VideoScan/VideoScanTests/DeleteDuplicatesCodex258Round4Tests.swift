@@ -342,7 +342,7 @@ struct DeleteDuplicatesCodex258Round4Tests {
                 "A is left out by the rule, and the row says why: \(notCounted)")
     }
 
-    enum Protection: String, CaseIterable { case archiveDesignated, angelPrepared, batchOnDisk, readOnlyMark }
+    enum Protection: String, CaseIterable { case archiveDesignated, angelPrepared, batchOnDisk, readOnlyMark, unreadableBatch }
     enum Fixture: String, CaseIterable { case siblingStays, siblingGoesAway }
 
     /// NO WEAKENING, as a property: for every protection that can be
@@ -368,6 +368,7 @@ struct DeleteDuplicatesCodex258Round4Tests {
             case .angelPrepared: setAngel(on.model, prepared: [on.a.id])
             case .batchOnDisk: try readyBatch(for: on.a, in: on.environment, name: "late")
             case .readOnlyMark: on.model.setVolumeReadOnly(true, for: on.target)
+            case .unreadableBatch: _ = try damagedBatch(in: on.environment, name: "partial")
             }
         }, between: { _ in
             try between(on) {
@@ -376,6 +377,7 @@ struct DeleteDuplicatesCodex258Round4Tests {
                 case .angelPrepared: setAngel(on.model)
                 case .batchOnDisk: try FileManager.default.removeItem(at: on.environment.bufferRoot.appendingPathComponent("batch-late"))
                 case .readOnlyMark: on.model.setVolumeReadOnly(false, for: on.target)
+                case .unreadableBatch: try FileManager.default.removeItem(at: on.environment.bufferRoot.appendingPathComponent("batch-partial"))
                 }
             }
         })
@@ -388,5 +390,146 @@ struct DeleteDuplicatesCodex258Round4Tests {
         #expect(fateOff >= 0 && fateOn >= 0, "fixture: B was decided in both runs (\(rowsOff[1].status), \(rowsOn[1].status): \(rowsOn[1].note))")
         #expect(fateOn <= fateOff,
                 "\(protection.rawValue)/\(fixture.rawValue): retaining A made B's fate MORE permissive (\(rowsOff[1].status) → \(rowsOn[1].status): \(rowsOn[1].tierReason ?? rowsOn[1].note))")
+    }
+
+    // MARK: R4-2
+
+    /// Codex's test: a batch folder whose plan.json is half written appears
+    /// after the copy's turn. The boundary cannot say the record is free.
+    @Test func anUnreadableBatchRefusesTheRemovalBoundary() async throws {
+        let rig = makeRig("unreadable"); defer { rig.cleanup() }
+        let copy = rig.a
+        let ask = DeleteDuplicatesJob.removalBoundaryHold(model: rig.model, recordID: copy.id, path: copy.fullPath)
+        let path = copy.fullPath
+        #expect(await Task.detached { ask(path) }.value == nil)
+        _ = try damagedBatch(in: rig.environment, name: "partial")
+        #expect(await Task.detached { ask(path) }.value != nil)
+    }
+
+    /// A batch being written: its folder exists, its plan.json does not yet.
+    @Test func aBatchFolderWithNoPlanYetRefusesTheRemovalBoundary() async throws {
+        let rig = makeRig("noplan"); defer { rig.cleanup() }
+        let copy = rig.a
+        let ask = DeleteDuplicatesJob.removalBoundaryHold(model: rig.model, recordID: copy.id, path: copy.fullPath)
+        let path = copy.fullPath
+        #expect(await Task.detached { ask(path) }.value == nil)
+        try FileManager.default.createDirectory(at: rig.environment.bufferRoot.appendingPathComponent("batch-being-written", isDirectory: true),
+                                                withIntermediateDirectories: true)
+        #expect(await Task.detached { ask(path) }.value != nil)
+    }
+
+    /// The buffer folder itself cannot be listed (its permissions are gone).
+    @Test func aBufferThatCannotBeListedRefusesTheRemovalBoundary() async throws {
+        let rig = makeRig("listing"); defer { rig.cleanup() }
+        let copy = rig.a
+        let ask = DeleteDuplicatesJob.removalBoundaryHold(model: rig.model, recordID: copy.id, path: copy.fullPath)
+        let path = copy.fullPath
+        try FileManager.default.createDirectory(at: rig.environment.bufferRoot, withIntermediateDirectories: true)
+        #expect(await Task.detached { ask(path) }.value == nil, "fixture: an empty, readable buffer holds nothing")
+        try #require(chmod(rig.environment.bufferRoot.path, 0o000) == 0)
+        guard (try? FileManager.default.contentsOfDirectory(atPath: rig.environment.bufferRoot.path)) == nil else { return }  // (running as root)
+        #expect(await Task.detached { ask(path) }.value != nil)
+    }
+
+    /// End to end: the damaged batch appears during phase two's re-read.
+    /// The file is put back and the row says why.
+    @Test func anUnreadableBatchAppearingDuringPhaseTwoStopsTheRemoval() async throws {
+        let rig = makeRig("unreadablerun"); defer { rig.cleanup() }
+        var folder: URL?
+        let job = try await run(rig, during: { folder = try damagedBatch(in: rig.environment, name: "partial") },
+                                between: { _ in try FileManager.default.removeItem(at: try #require(folder)) })
+        let rows = try #require(job.plan?.entries)
+        #expect(FileManager.default.fileExists(atPath: rig.a.fullPath), "removed although the Angel's buffer could not be read")
+        #expect(rows[0].status == .skipped && rows[0].note.hasPrefix("left alone — the Archive Angel's batches could not be read just now"),
+                "\(rows[0].status): \(rows[0].note)")
+        #expect(rig.a.duplicateDisposition == .extraCopy && rows[0].quarantineDirectory == nil, "put back, not marked")
+    }
+
+    /// The reading itself, three ways. A buffer that was never made holds
+    /// nothing; one on a drive that is not connected is unknown.
+    @Test func theFreshReadingSaysWhatItCouldNotRead() throws {
+        let rig = makeRig("reading"); defer { rig.cleanup() }
+        let root = rig.environment.bufferRoot
+        typealias Store = ArchiveAngelPlanStore
+        #expect(!FileManager.default.fileExists(atPath: root.path), "fixture: no buffer yet")
+        #expect(Store.inFlightRecordIDsFresh(bufferRoot: root) == .ids([]), "a buffer that was never made holds nothing")
+        let away = URL(fileURLWithPath: "/Volumes/TestNotConnected-\(UUID().uuidString.prefix(8))/Buffer")
+        if case .ids = Store.inFlightRecordIDsFresh(bufferRoot: away) { Issue.record("a buffer on a drive that is not connected read as empty") }
+        #expect(!Store.bufferIsAbsent(away) && Store.bufferIsAbsent(root))
+
+        try readyBatch(for: rig.a, in: rig.environment, name: "good")
+        #expect(Store.inFlightRecordIDsFresh(bufferRoot: root) == .ids([rig.a.id]))
+        // One damaged batch beside a good one: NOTHING is certain — not even for a record the good batch does not list.
+        let damaged = try damagedBatch(in: rig.environment, name: "partial")
+        if case .uncertain(let why) = Store.inFlightRecordIDsFresh(bufferRoot: root) {
+            #expect(why.hasPrefix("batch-partial's plan.json can't be read"), Comment(rawValue: why))
+        } else {
+            Issue.record("a damaged batch beside a good one read as certain")
+        }
+        let probe = rig.model.archiveAngel.recordInBatchOnDiskFreshProbe()
+        if case .uncertain = probe(rig.b.id) {} else { Issue.record("B read as \(probe(rig.b.id)) beside an unreadable batch") }
+        // The advisory readers still skip it (a list on screen is not a verdict).
+        #expect(Store.inFlightRecordIDsCached(bufferRoot: root) == [rig.a.id] && Store.listBatches(bufferRoot: root).count == 1)
+        try FileManager.default.removeItem(at: damaged)
+        // A plan.json that exists and cannot be opened.
+        let locked = root.appendingPathComponent("batch-good/plan.json").path
+        try #require(chmod(locked, 0o000) == 0)
+        defer { chmod(locked, 0o644) }
+        if (try? Data(contentsOf: URL(fileURLWithPath: locked))) == nil {   // (not when running as root)
+            if case .uncertain = Store.inFlightRecordIDsFresh(bufferRoot: root) {} else { Issue.record("an unopenable plan.json read as certain") }
+        }
+    }
+
+    // MARK: Fail closed — the other inputs of the final verdict
+
+    /// The record left the catalog while its pair was being read. No record
+    /// is not "no hold": the Angel's sets are sets of ids and are still asked.
+    @Test func aRecordThatLeftTheCatalogIsStillAskedOfTheAngelByID() {
+        let rig = makeRig("gone"); defer { rig.cleanup() }
+        let id = rig.a.id
+        setAngel(rig.model, prepared: [id])
+        rig.model.records.removeAll { $0.id == id }
+        #expect(rig.model.record(forID: id) == nil, "fixture: the record is gone")
+        #expect(rig.model.duplicateRemovalBoundaryWord(recordID: id).holdNote == DuplicateDeletionHold.inUseByAngel.note)
+        setAngel(rig.model)
+        #expect(rig.model.duplicateRemovalBoundaryWord(recordID: id).holdNote == nil)
+    }
+
+    /// PIN: at the final verdict a volume the fresh lookup cannot identify
+    /// never adds a drive — two drives at the turn, one at the removal, and
+    /// the outright delete becomes the Trash.
+    @Test func aDriveTheFreshLookupCannotIdentifyNeverAddsADrive() {
+        let dir = tempDir("unknown"); defer { try? FileManager.default.removeItem(at: dir) }
+        for name in ["keeper.mov", "s1.mov", "s2.mov"] {
+            FileManager.default.createFile(atPath: dir.appendingPathComponent(name).path, contents: Data(fileBytes))
+        }
+        var c = DeletionTierCandidates()
+        c.keeperPath = dir.appendingPathComponent("keeper.mov").path
+        c.keeperLabel = "keeper"
+        c.otherCopies = ["s1.mov", "s2.mov"].map {
+            let path = dir.appendingPathComponent($0).path
+            return .init(path: path, fixity: ContentFixity.captured(path: path, digest: fileDigest, byteCount: Int64(fileSize)), label: $0)
+        }
+        let q = DuplicateDrives.Identity(device: 1, kind: .physical, physicalDevice: "test-device-Q")
+        let p = DuplicateDrives.Identity(device: 1, kind: .physical, physicalDevice: "test-device-P")
+        // keeper + s1 are on Q by the identity seam; s2's volume is LOOKED UP.
+        let others: @Sendable (String) -> DuplicateDrives.Identity? = { $0.hasSuffix("s2.mov") ? nil : q }
+        let scope = "test-r4-unknown-\(UUID().uuidString)|"
+        let gathered = DuplicateDrives.$cacheScope.withValue(scope) {
+            DuplicateDrives.$lookupOverride.withValue({ _, _ in p }) {
+                DuplicateDrives.$identityOverride.withValue(others) { DeletionTierFacts.gather(c, digest: fileDigest) }
+            }
+        }
+        #expect(gathered.distinctDriveCount == 2 && DeletionTierDecision.decide(facts: gathered, preferTrash: false).tier == .permanent,
+                "fixture: two drives at the turn (\(gathered.summary))")
+        // At the verdict the lookup cannot say what s2's device is.
+        let checked = DuplicateDrives.$cacheScope.withValue(scope) {
+            DuplicateDrives.$lookupOverride.withValue({ _, device in .init(device: device, kind: .unknown) }) {
+                DuplicateDrives.$identityOverride.withValue(others) { gathered.recheck() }
+            }
+        }
+        #expect(checked.remainingVerifiedCopies == 3, "the copy still counts as a COPY")
+        #expect(checked.distinctDriveCount == 1, "an unidentified volume added a drive at the final verdict: \(checked.countedDrives)")
+        #expect(!checked.droppedAtBoundary.isEmpty && DeletionTierDecision.decide(facts: checked, preferTrash: false).tier == .trash)
     }
 }

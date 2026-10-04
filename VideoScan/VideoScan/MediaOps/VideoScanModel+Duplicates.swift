@@ -309,18 +309,25 @@ extension VideoScanModel {
     /// same run (`duplicateSurvivorStandingRule` — codex #258 F1): main
     /// planned it as a row "still to be decided", which never counted.
     func duplicateDeletionHoldRule() -> (VideoRecord) -> DuplicateDeletionHold? {
+        let inUseByAngel = duplicateAngelUseRule()
+        // Used and dropped within one pass, so a strong `self` is fine.
+        return { r in
+            if self.isArchiveCopy(r) { return .promotedArchiveCopy }
+            return inUseByAngel(r.id) ? .inUseByAngel : nil
+        }
+    }
+
+    /// The Angel's half of the hold rule, BY ID — the Angel's sets are sets
+    /// of record ids, so the question can still be asked of a record that
+    /// has left the catalog (the removal boundary does, r4-2).
+    func duplicateAngelUseRule() -> (UUID) -> Bool {
         let angel = archiveAngel.recommendations
         let onDisk = archiveAngel.recordIDsInBatchesOnDisk
         let preparing = archiveAngel.recordIDsInRunningPrepare
         let handedOver = archiveAngel.recordIDsHandedOver
-        // Used and dropped within one pass, so a strong `self` is fine.
-        return { r in
-            if self.isArchiveCopy(r) { return .promotedArchiveCopy }
-            if angel.preparedIDs.contains(r.id) || angel.promotedIDs.contains(r.id)
-                || onDisk.contains(r.id) || preparing.contains(r.id) || handedOver.contains(r.id) {
-                return .inUseByAngel
-            }
-            return nil
+        return { id in
+            angel.preparedIDs.contains(id) || angel.promotedIDs.contains(id)
+                || onDisk.contains(id) || preparing.contains(id) || handedOver.contains(id)
         }
     }
 
@@ -342,7 +349,14 @@ extension VideoScanModel {
     /// the path, the real path, the file's own volume identity (r2-2: a
     /// mark made during phase two that matches only by identity).
     func duplicateRemovalBoundaryWord(recordID: UUID) -> (holdNote: String?, readOnlyMarks: [ReadOnlyVolumeProtection.Mark]) {
-        let hold = record(forID: recordID).flatMap { duplicateDeletionHoldRule()($0) }
+        let hold: DuplicateDeletionHold?
+        if let rec = record(forID: recordID) {
+            hold = duplicateDeletionHoldRule()(rec)
+        } else {
+            // The record left the catalog while its pair was being read:
+            // no record is not "no hold" — the Angel's sets are asked by id.
+            hold = duplicateAngelUseRule()(recordID) ? .inUseByAngel : nil
+        }
         return (hold?.note, readOnlyVolumeMarks)
     }
 
@@ -1283,6 +1297,11 @@ enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
     /// let it go) is not counted for another copy of the run: main would
     /// have removed it (codex #258 r4-1).
     static let archiveRuleAtRemovalWhy = "the Master Archive rule stopped its removal in this run"
+
+    /// Why a copy is left alone when the Angel's buffer could not be read
+    /// in full at its removal (codex #258 r4-2): what could not be read may
+    /// hold it. The row adds what exactly could not be read.
+    static let angelBufferUnreadableWhy = "the Archive Angel's batches could not be read just now"
 
     /// What every Read-only refusal note says, whichever code path worded it.
     static let readOnlyMarker = "which you marked Read only"

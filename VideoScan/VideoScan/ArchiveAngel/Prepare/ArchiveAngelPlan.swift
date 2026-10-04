@@ -598,11 +598,83 @@ enum ArchiveAngelPlanStore {
     /// holds (tests read it).
     nonisolated static var holdReadingDecodes: Int { holdReadings.lock.withLock { holdReadings.decodes } }
 
+    /// What a FRESH reading of the buffer can say (codex #258 r4-2). There
+    /// is no "probably nothing": either every batch folder was read — then
+    /// these are the records the buffer holds — or something could not be
+    /// read, and then NOTHING is known about what that something holds.
+    enum FreshHoldReading: Sendable, Equatable {
+        case ids(Set<UUID>)
+        /// The reason, for the row ("batch-… has no plan.json yet").
+        case uncertain(String)
+    }
+
+    /// One record, asked of a fresh reading.
+    enum FreshHold: Sendable, Equatable {
+        case free
+        case held
+        case uncertain(String)
+    }
+
     /// FRESH — for the final verdict before a removal: every plan.json in
     /// the buffer is read and decoded NOW. No cache is read or written.
     /// DISK I/O — never on the main thread.
-    nonisolated static func inFlightRecordIDsFresh(bufferRoot: URL, now: Date = Date()) -> Set<UUID> {
-        inFlightRecordIDs(in: listBatches(bufferRoot: bufferRoot), now: now)
+    ///
+    /// FAILS CLOSED (codex #258 r4-2): this reading authorizes a removal, so
+    /// anything it could not read is `.uncertain`, never "holds nothing" —
+    /// the buffer folder that cannot be listed, a `batch-` folder with no
+    /// plan.json yet (a batch being written), a plan.json that cannot be
+    /// read or decoded, a batch being prepared whose plan.json cannot be
+    /// examined (its age decides whether it is live). (The listing readers
+    /// above — `listBatches`, `scanBatches` — skip what they cannot read:
+    /// right for a list on screen, wrong for this.) A buffer folder that is
+    /// simply NOT THERE holds nothing — unless its drive is not connected.
+    nonisolated static func inFlightRecordIDsFresh(bufferRoot: URL, now: Date = Date()) -> FreshHoldReading {
+        let fm = FileManager.default
+        let names: [String]
+        do {
+            names = try fm.contentsOfDirectory(atPath: bufferRoot.path)
+        } catch {
+            if bufferIsAbsent(bufferRoot) { return .ids([]) }
+            return .uncertain("its buffer folder could not be listed: \(error.localizedDescription)")
+        }
+        var plans: [ArchiveAngelPlan] = []
+        for name in names.sorted() where name.hasPrefix("batch-") {
+            let dir = bufferRoot.appendingPathComponent(name).path
+            // An alias is not a batch (see `scanBatches`): never read through.
+            if isSymlink(dir, fm: fm) { continue }
+            let plan: ArchiveAngelPlan
+            do {
+                plan = try load(batchDir: dir)
+            } catch {
+                let planPath = URL(fileURLWithPath: dir).appendingPathComponent(ArchiveAngelPlan.planFilename).path
+                return .uncertain(fm.fileExists(atPath: planPath)
+                                  ? "\(name)'s plan.json can't be read (\(describe(error)))"
+                                  : "\(name) has no plan.json yet")
+            }
+            // A batch being prepared holds its rows while it is live — in
+            // this app now, or by the age of its plan.json. An age that
+            // cannot be read is not "old".
+            if plan.status == .preparing, !ArchiveAngelLiveBatches.isLive(plan.batchDir),
+               (try? fm.attributesOfItem(atPath: plan.planURL.path))?[.modificationDate] == nil {
+                return .uncertain("\(name)'s plan.json could not be examined")
+            }
+            plans.append(plan)
+        }
+        return .ids(inFlightRecordIDs(in: plans, now: now))
+    }
+
+    /// The buffer folder is NOT THERE — a definite answer (no batch was
+    /// ever prepared), so it holds nothing. Not definite: any other failure
+    /// (permissions, I/O), and a buffer that lives on a drive under
+    /// /Volumes that is not connected now — its batches exist, unread.
+    nonisolated static func bufferIsAbsent(_ bufferRoot: URL) -> Bool {
+        var info = stat()
+        guard lstat(bufferRoot.path, &info) != 0, errno == ENOENT else { return false }
+        let parts = bufferRoot.standardizedFileURL.pathComponents
+        if parts.count >= 3, parts[1] == "Volumes" {
+            return FileManager.default.fileExists(atPath: "/Volumes/" + parts[2])
+        }
+        return true
     }
 
     /// CACHED — advisory (the per-turn pre-check, the façade's published

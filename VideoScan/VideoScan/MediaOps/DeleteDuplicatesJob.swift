@@ -1538,7 +1538,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// COMES FROM A CACHE (r3; MOPS-2):
     ///   1. the Angel's buffer ON DISK, every plan file read and decoded on
     ///      the disk thread at that instant — a batch that landed, or
-    ///      changed, during the re-read;
+    ///      changed, during the re-read. A buffer that cannot be read in
+    ///      full (a failed listing, a batch folder with no plan.json yet, a
+    ///      plan that does not decode) HOLDS the copy: unreadable evidence
+    ///      never authorizes a removal (r4-2);
     ///   2. the model's live word — the hold rule (prepared / promoting /
     ///      a running Prepare / the hand-over / a promoted archive copy) and
     ///      TODAY's Read-only marks — through ONE synchronous hop to the
@@ -1561,7 +1564,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let uuidProbe = MasterArchiveDesignation.volumeUUIDProbe
         let identityProbe = ArchiveVolumeProtection.mountIdentityProbe
         return { [weak model] currentPath in
-            if inBatchOnDisk(recordID) { return DuplicateDeletionHold.inUseByAngel.note }
+            switch inBatchOnDisk(recordID) {
+            case .free: break
+            case .held: return DuplicateDeletionHold.inUseByAngel.note
+            case .uncertain(let why):
+                // FAIL CLOSED (codex #258 r4-2): what could not be read may
+                // hold this very record. A hold for this removal.
+                return DuplicateDeletionHold.leftAlonePrefix + DuplicateDeletionHold.angelBufferUnreadableWhy + " (\(why))"
+            }
             let word: (holdNote: String?, readOnlyMarks: [ReadOnlyVolumeProtection.Mark]) = onMainActor {
                 guard let model else { return (DuplicateDeletionHold.leftAlonePrefix + "the catalog is no longer open", []) }
                 return model.duplicateRemovalBoundaryWord(recordID: recordID)

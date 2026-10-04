@@ -565,10 +565,18 @@ final class ArchiveAngel: ObservableObject {
     /// decoded at the moment of the call — no cache, no fingerprint (codex
     /// #258 r3-2) — because this is what Delete Duplicates asks at the
     /// FINAL VERDICT, immediately before it removes a file (F6/F7).
+    /// THREE answers (codex #258 r4-2): free, held, or UNCERTAIN — part of
+    /// the buffer could not be read, so nothing is known about what that
+    /// part holds; the caller must not treat that as free.
     /// Read-only. DISK I/O: never call the returned probe on the main thread.
-    func recordInBatchOnDiskFreshProbe() -> @Sendable (UUID) -> Bool {
+    func recordInBatchOnDiskFreshProbe() -> @Sendable (UUID) -> ArchiveAngelPlanStore.FreshHold {
         let root = environment.bufferRoot
-        return { ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: root).contains($0) }
+        return { id in
+            switch ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: root) {
+            case .ids(let ids): return ids.contains(id) ? .held : .free
+            case .uncertain(let why): return .uncertain(why)
+            }
+        }
     }
 
     /// TEST SEAM: stands in for the buffer read, so a test can make two

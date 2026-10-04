@@ -442,7 +442,7 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         }
         #expect(job.contains("boundaryHold: Self.removalBoundaryHold(model: model, recordID: entry.id, path: entry.path),"))
         #expect(job.contains("archiveCheck: archiveCheck, boundaryHold: boundaryHold,"))
-        #expect(job.contains("if inBatchOnDisk(recordID) { return DuplicateDeletionHold.inUseByAngel.note }")
+        #expect(job.contains("case .held: return DuplicateDeletionHold.inUseByAngel.note")
                 && job.contains("return model.duplicateRemovalBoundaryWord(recordID: recordID)")
                 && job.contains("?? readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)"))
         let dispatch = try #require(job.range(of: "private func dispatchPairs("))
@@ -451,7 +451,8 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         #expect(String(job[dispatch.upperBound..<authorize.lowerBound]).contains("await model.archiveAngel.refreshRecordIDsInBatchesOnDisk()"),
                 "a copy's turn no longer reads the Angel's buffer from disk first")
         let model = try SourceTree.appSource(named: "VideoScanModel+Duplicates.swift")
-        #expect(model.contains("|| onDisk.contains(r.id) || preparing.contains(r.id) || handedOver.contains(r.id) {"))
+        #expect(model.contains("|| onDisk.contains(id) || preparing.contains(id) || handedOver.contains(id)")
+                && model.contains("return inUseByAngel(r.id) ? .inUseByAngel : nil"))
         let prepare = try SourceTree.appSource(named: "ArchiveAngelJob.swift")
         #expect(prepare.contains("model?.archiveAngel.notePrepareEnded(holding: Self.heldRecordIDs(explicit: explicitRecordIDs, plan: plan))"))
         let facade = try SourceTree.appSource(named: "ArchiveAngel.swift")

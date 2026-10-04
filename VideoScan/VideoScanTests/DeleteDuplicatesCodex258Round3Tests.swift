@@ -175,8 +175,8 @@ struct DeleteDuplicatesCodex258Round3Tests {
 
         // The boundary's question (asked on a disk thread).
         let inBatch = model.archiveAngel.recordInBatchOnDiskFreshProbe()
-        #expect(await Task.detached { inBatch(incoming) }.value, "the removal boundary did not see the record the batch now holds")
-        #expect(await Task.detached { !inBatch(outgoing) }.value)
+        #expect(await Task.detached { inBatch(incoming) }.value == .held, "the removal boundary did not see the record the batch now holds")
+        #expect(await Task.detached { inBatch(outgoing) }.value == .free)
         // The pre-check's cache notices too: ctime is part of the fingerprint.
         #expect(ArchiveAngelPlanStore.bufferFingerprint(bufferRoot: root) != fingerprint, "the fingerprint cannot see an in-place rewrite")
         #expect(ArchiveAngelPlanStore.inFlightRecordIDsCached(bufferRoot: root) == [incoming])
@@ -198,7 +198,7 @@ struct DeleteDuplicatesCodex258Round3Tests {
         var start = clock.now
         let read = ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: root)
         let bufferTime = start.duration(to: clock.now)
-        #expect(read == held)
+        #expect(read == .ids(held))
         // The topology: one statfs + one DiskArbitration description per volume.
         var info = stat()
         try #require(stat(root.path, &info) == 0)
@@ -308,7 +308,13 @@ struct DeleteDuplicatesCodex258Round3Tests {
         #expect(probe.contains("ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: root)") && !probe.contains("Cached"))
         let store = try SourceTree.appCode(named: "ArchiveAngelPlan.swift")
         let fresh = try body(store, from: "static func inFlightRecordIDsFresh(", to: "static func inFlightRecordIDsCached(")
-        #expect(fresh.contains("listBatches(bufferRoot: bufferRoot)") && !fresh.contains("holdReadings"), "the fresh buffer reading touches the cache")
+        #expect(fresh.contains("plan = try load(batchDir: dir)") && !fresh.contains("holdReadings") && !fresh.contains("Cached("),
+                "the fresh buffer reading touches the cache")
+        // …and it FAILS CLOSED (r4-2): it never goes through the readers that skip what they cannot read.
+        #expect(!fresh.contains("listBatches(") && !fresh.contains("scanBatches(") && !fresh.contains("try? load"),
+                "the fresh buffer reading skips a batch it cannot read")
+        #expect(fresh.components(separatedBy: "return .uncertain(").count == 4, "a failed listing, an unreadable plan and an unexaminable one are each uncertain")
+        #expect(boundary.contains("case .uncertain(let why):") && !boundary.contains("default:"), "the boundary no longer holds on unreadable evidence")
         // The drives.
         let plan = try SourceTree.appCode(named: "DeleteDuplicatesPlan.swift")
         let recheck = try body(plan, from: "nonisolated func recheck() -> DeletionTierFacts {", to: "struct DeletionTierDecision")
