@@ -507,6 +507,10 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// ruling 2026-09-12: "the first alias listed is usually the nickname
     /// most people use in the family").
     var aliases: [String] = []
+    /// The videos Rick hand-picked for this person's People-tab page
+    /// ("Show in People tab ▸ Donna", 2026-10-04) — about ten that are
+    /// DEFINITELY them. Order = the order they were added.
+    var featuredVideos: [FeaturedVideo] = []
     /// The folder this profile lived in before the uuid migration
     /// (2026-09-12) — audit only, so "what happened to X and when" can be
     /// answered from the JSON alone. nil for profiles created after.
@@ -699,6 +703,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case treeIdentityAttestation, notInFamilyTree
         case photoChosenAt
         case legacyFolderName
+        case featuredVideos
     }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
@@ -762,6 +767,9 @@ struct POIProfile: Codable, Identifiable, Equatable {
         coverImageFilename = try c.decodeIfPresent(String.self, forKey: .coverImageFilename)
         notes             = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
         aliases           = try c.decodeIfPresent([String].self, forKey: .aliases) ?? []
+        // Hand-picked People-tab videos (2026-10-04). Tolerant: an unreadable
+        // list degrades to empty rather than bricking the profile load.
+        featuredVideos    = Self.decodeIdentityField([FeaturedVideo].self, forKey: .featuredVideos, from: c) ?? []
         // Family-name fields (2026-09-04). decodeIfPresent so older files
         // load unchanged, and cleaned on the way in so a blank written by any
         // path — an older build, a hand-edited json — is absent, not "".

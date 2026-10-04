@@ -919,6 +919,10 @@ extension CatalogContent {
                         // keeps manual tags joined to the recognition
                         // gallery. Multi-select toggles across the whole
                         // selection, same semantics as the Tags menu.
+                        // Hand-pick for a person's People-tab page
+                        // (Rick 2026-10-04, GH #272) — separate from
+                        // tagging: a tag says "in it", this says "show it".
+                        ShowInPeopleTabMenu(records: selectedRecs)
                         Menu("People") {
                             // Family wildcard first: "lots of us are in
                             // this one" — surfaces for ANY person search.

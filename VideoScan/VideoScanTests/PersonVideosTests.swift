@@ -102,3 +102,74 @@ struct PersonVideosTests {
         #expect(source.contains("paths(forPersonNamesExactly:"))
     }
 }
+
+// MARK: - Hand-picked videos (2026-10-04) + the born-before guard
+
+@Suite("People — hand-picked videos")
+@MainActor
+struct FeaturedVideosTests {
+
+    private func rec(_ path: String, hash: String = "") -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path
+        r.filename = (path as NSString).lastPathComponent
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        r.contentHash = hash
+        return r
+    }
+
+    @Test func aPickIsFoundByIdPathOrContentHash() {
+        let r = rec("/Volumes/X/a.mov", hash: "abc")
+        let byID = FeaturedVideo(recordID: r.id, path: "/old/elsewhere.mov", filename: "", contentHash: nil, addedAt: Date())
+        let byPath = FeaturedVideo(recordID: UUID(), path: "/Volumes/X/a.mov", filename: "", contentHash: nil, addedAt: Date())
+        let byHash = FeaturedVideo(recordID: UUID(), path: "/renamed.mov", filename: "", contentHash: "abc", addedAt: Date())
+        let none = FeaturedVideo(recordID: UUID(), path: "/nope.mov", filename: "", contentHash: "", addedAt: Date())
+        #expect(FeaturedVideos.matches(byID, r))
+        #expect(FeaturedVideos.matches(byPath, r))
+        #expect(FeaturedVideos.matches(byHash, r))
+        #expect(!FeaturedVideos.matches(none, r), "an empty hash never matches an unhashed record")
+    }
+
+    @Test func olderAndDamagedProfilesStillLoad() throws {
+        let old = #"{"name":"Donna","referencePath":""}"#
+        let p1 = try JSONDecoder().decode(POIProfile.self, from: Data(old.utf8))
+        #expect(p1.featuredVideos.isEmpty)
+        let damaged = #"{"name":"Donna","referencePath":"","featuredVideos":"not a list"}"#
+        let p2 = try JSONDecoder().decode(POIProfile.self, from: Data(damaged.utf8))
+        #expect(p2.featuredVideos.isEmpty, "a bad list degrades to empty, never bricks the profile")
+    }
+
+    @Test func picksRoundTripThroughProfileJSON() throws {
+        var p = POIProfile(name: "Donna", referencePath: "")
+        p.featuredVideos = [FeaturedVideo(recordID: UUID(), path: "/Volumes/X/a.mov", filename: "a.mov",
+                                          contentHash: "abc", addedAt: Date(timeIntervalSince1970: 1_000))]
+        let back = try JSONDecoder().decode(POIProfile.self, from: JSONEncoder().encode(p))
+        #expect(back.featuredVideos == p.featuredVideos)
+    }
+
+    @Test func resolveFindsPicksInOrderAndCountsTheMissing() {
+        let a = rec("/Volumes/X/a.mov"), b = rec("/Volumes/X/b.mov")
+        let m = VideoScanModel()
+        m.records = [a, b]
+        var p = POIProfile(name: "Donna", referencePath: "")
+        p.featuredVideos = [
+            FeaturedVideo(recordID: b.id, path: b.fullPath, filename: b.filename, contentHash: nil, addedAt: Date()),
+            FeaturedVideo(recordID: UUID(), path: "/Volumes/Gone/x.mov", filename: "x.mov", contentHash: nil, addedAt: Date()),
+            FeaturedVideo(recordID: a.id, path: a.fullPath, filename: a.filename, contentHash: nil, addedAt: Date()),
+        ]
+        let r = FeaturedVideos.resolve(p, in: m)
+        #expect(r.videos.map(\.id) == [b.id, a.id], "pick order kept")
+        #expect(r.missing == 1)
+    }
+
+    @Test func notShownWhenDatedBeforeTheyWereBorn() {
+        func row(_ year: Int?) -> PersonVideoRow {
+            PersonVideoRow(id: UUID(), path: "", title: "", year: year, durationSeconds: 0,
+                           tier: .tagged, isArchived: false, volume: "")
+        }
+        #expect(!PersonVideos.plausible(row(1947), bornYear: 1957), "Donna wasn't alive in 1947")
+        #expect(PersonVideos.plausible(row(1957), bornYear: 1957))
+        #expect(PersonVideos.plausible(row(nil), bornYear: 1957), "undated passes")
+        #expect(PersonVideos.plausible(row(1947), bornYear: nil), "no birthdate, no guard")
+    }
+}

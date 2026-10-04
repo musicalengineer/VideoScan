@@ -117,21 +117,36 @@ enum PersonVideos {
             if !model.isArchiveCopy(rec), let copy = model.archivedCopy(of: rec), paths.contains(copy.fullPath) {
                 continue   // its archive copy carries the row
             }
-            let date = RecordDateResolver.resolve(
-                userDate: rec.userDate, userDateConfidence: rec.userDateConfidence,
-                embeddedCreationDate: rec.embeddedCreationDate,
-                originMake: rec.originMake, originModel: rec.originModel, originEncoder: rec.originEncoder,
-                inferredRecordDate: rec.inferredRecordDate, inferredDateConfidence: rec.inferredDateConfidence,
-                inferredDateRange: rec.inferredDateRange,
-                filename: rec.filename.isEmpty ? nil : rec.filename, now: now)
-            out.append(PersonVideoRow(
-                id: rec.id, path: rec.fullPath,
-                title: (rec.filename as NSString).deletingPathExtension,
-                year: date.year, durationSeconds: rec.durationSeconds, tier: tier,
-                isArchived: model.isArchived(rec),
-                volume: VolumeReachability.displayLabel(forPath: rec.fullPath)))
+            out.append(row(rec, tier: tier, in: model, now: now))
         }
         return sorted(out)
+    }
+
+    /// One row for `rec` (the shared date + archive rules).
+    @MainActor
+    static func row(_ rec: VideoRecord, tier: PersonVideoTier, in model: VideoScanModel,
+                    now: Date = Date()) -> PersonVideoRow {
+        let date = RecordDateResolver.resolve(
+            userDate: rec.userDate, userDateConfidence: rec.userDateConfidence,
+            embeddedCreationDate: rec.embeddedCreationDate,
+            originMake: rec.originMake, originModel: rec.originModel, originEncoder: rec.originEncoder,
+            inferredRecordDate: rec.inferredRecordDate, inferredDateConfidence: rec.inferredDateConfidence,
+            inferredDateRange: rec.inferredDateRange,
+            filename: rec.filename.isEmpty ? nil : rec.filename, now: now)
+        return PersonVideoRow(
+            id: rec.id, path: rec.fullPath,
+            title: (rec.filename as NSString).deletingPathExtension,
+            year: date.year, durationSeconds: rec.durationSeconds, tier: tier,
+            isArchived: model.isArchived(rec),
+            volume: VolumeReachability.displayLabel(forPath: rec.fullPath))
+    }
+
+    /// Rick 2026-10-04: "Donna wasn't alive in 1947." A row dated before
+    /// the person's birth year cannot be them. Undated rows, and people
+    /// with no birthdate, pass.
+    static func plausible(_ row: PersonVideoRow, bornYear: Int?) -> Bool {
+        guard let bornYear, let year = row.year else { return true }
+        return year >= bornYear
     }
 
     /// Oldest first; undated last; then title.
@@ -166,75 +181,88 @@ struct PersonVideosSection: View {
     let profile: POIProfile
     /// A plain reference — NOT observed (the catalog model publishes many
     /// times a second during long jobs). Refresh is by person, on appear,
-    /// and by the ↻ button.
+    /// when a pick changes, and by the ↻ button.
     let catalogModel: VideoScanModel
     let onShowInCatalog: (String) -> Void
 
-    @State private var rows: [PersonVideoRow] = []
+    /// Hand-picked (primary).
+    @State private var featured: [PersonVideoRow] = []
+    @State private var missingPicks = 0
+    /// Automatic, from tags (secondary, folded away).
+    @State private var tagged: [PersonVideoRow] = []
+    @State private var hiddenBeforeBirth = 0
     @State private var loaded = false
     @State private var refreshTick = 0
     @AppStorage("people.videos.showMaybes") private var showMaybes = false
+    @AppStorage("people.videos.showTagged") private var showTagged = false
 
-    private var maybeCount: Int { rows.filter { $0.tier == .maybe }.count }
-    private var shown: [PersonVideoRow] { showMaybes ? rows : rows.filter { $0.tier != .maybe } }
+    private var maybeCount: Int { tagged.filter { $0.tier == .maybe }.count }
+    private var taggedShown: [PersonVideoRow] {
+        let featuredIDs = Set(featured.map(\.id))
+        return tagged.filter { !featuredIDs.contains($0.id) && (showMaybes || $0.tier != .maybe) }
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             header
             if !loaded {
                 ProgressView().controlSize(.small).padding(16)
-            } else if shown.isEmpty {
-                emptyState
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 4, pinnedViews: [.sectionHeaders]) {
-                        ForEach(PersonVideos.byDecade(shown), id: \.decade) { group in
-                            Section {
-                                ForEach(group.rows) { row in
-                                    PersonVideoRowView(row: row, catalogModel: catalogModel,
-                                                       onShowInCatalog: onShowInCatalog)
-                                }
-                            } header: {
-                                Text(group.decade)
-                                    .font(.system(size: 15, weight: .semibold))
-                                    .padding(.horizontal, 14).padding(.vertical, 4)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(.ultraThinMaterial)
-                            }
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        if featured.isEmpty {
+                            pickHint
+                        } else {
+                            ForEach(featured) { row in rowView(row) }
                         }
+                        if missingPicks > 0 {
+                            Text("\(missingPicks) picked video\(missingPicks == 1 ? "" : "s") can't be found in the catalog right now.")
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                                .padding(.horizontal, 14)
+                        }
+                        taggedDisclosure
                     }
                     .padding(.bottom, 8)
                 }
             }
         }
-        .task(id: "\(profile.uuid)-\(refreshTick)") {
-            loaded = false
-            rows = PersonVideos.rows(for: profile, in: catalogModel)
-            loaded = true
-            appLog.write("People: videos of \(profile.displayName) — \(rows.count) "
-                + "(\(rows.filter(\.isArchived).count) in the Archive, \(maybeCount) maybe)")
+        .task(id: "\(profile.uuid)-\(refreshTick)") { reload() }
+        .onReceive(NotificationCenter.default.publisher(for: FeaturedVideos.changed)) { note in
+            if (note.object as? UUID) == profile.uuid { refreshTick += 1 }
         }
+    }
+
+    private func reload() {
+        loaded = false
+        // Fresh from disk: a pick made in the Catalog saved profile.json,
+        // and the People tab's copy of the profile may predate it.
+        let current = POIProfile.listAll().first { $0.uuid == profile.uuid } ?? profile
+        let picks = FeaturedVideos.resolve(current, in: catalogModel)
+        featured = picks.videos.map { PersonVideos.row($0, tier: .tagged, in: catalogModel) }
+        missingPicks = picks.missing
+        let born = current.birthdate.map { Calendar.current.component(.year, from: $0) }
+        let all = PersonVideos.rows(for: current, in: catalogModel)
+        tagged = all.filter { PersonVideos.plausible($0, bornYear: born) }
+        hiddenBeforeBirth = all.count - tagged.count
+        loaded = true
+        appLog.write("People: \(current.displayName)'s page — \(featured.count) picked, "
+            + "\(tagged.count) tagged (\(hiddenBeforeBirth) dated before birth hidden, \(maybeCount) maybe)")
     }
 
     private var header: some View {
         HStack(spacing: 10) {
             Text("Videos of \(profile.displayName)")
                 .font(.system(size: 17, weight: .semibold))
-            if loaded {
-                Text("\(shown.count)")
+            if loaded, !featured.isEmpty {
+                Text("\(featured.count)")
                     .font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
-                let archived = shown.filter(\.isArchived).count
+                let archived = featured.filter(\.isArchived).count
                 if archived > 0 {
                     Label("\(archived) in the Archive", systemImage: "archivebox.fill")
                         .font(.system(size: 13)).foregroundStyle(.green)
                 }
             }
             Spacer()
-            if maybeCount > 0 {
-                Toggle("Include \(maybeCount) maybe\(maybeCount == 1 ? "" : "s")", isOn: $showMaybes)
-                    .toggleStyle(.checkbox)
-                    .help("Videos where \(profile.displayName) is only a guess")
-            }
             Button { refreshTick += 1 } label: { Image(systemName: "arrow.clockwise") }
                 .buttonStyle(.glass)
                 .help("Look again")
@@ -242,17 +270,51 @@ struct PersonVideosSection: View {
         .padding(.horizontal, 14).padding(.vertical, 8)
     }
 
-    private var emptyState: some View {
-        VStack(spacing: 6) {
-            Text("No videos of \(profile.displayName) are known yet.")
+    private var pickHint: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("No videos picked for \(profile.displayName) yet.")
                 .font(.system(size: 15))
-            Text(maybeCount > 0
-                 ? "There \(maybeCount == 1 ? "is" : "are") \(maybeCount) maybe — tick “Include maybes” to see \(maybeCount == 1 ? "it" : "them")."
-                 : "Tag \(profile.displayName) on a video in the Catalog, or use Search below.")
+            Text("Right-click a video in the Catalog or the Archive ▸ Show in People tab ▸ \(profile.displayName).")
                 .font(.system(size: 13)).foregroundStyle(.secondary)
         }
-        .frame(maxWidth: .infinity)
-        .padding(20)
+        .padding(.horizontal, 14).padding(.vertical, 10)
+    }
+
+    /// The automatic list, folded away: it is evidence, not the page.
+    @ViewBuilder private var taggedDisclosure: some View {
+        let rows = taggedShown
+        if !rows.isEmpty || maybeCount > 0 {
+            DisclosureGroup(isExpanded: $showTagged) {
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack(spacing: 12) {
+                        if maybeCount > 0 {
+                            Toggle("Include \(maybeCount) maybe\(maybeCount == 1 ? "" : "s")", isOn: $showMaybes)
+                                .toggleStyle(.checkbox)
+                        }
+                        if hiddenBeforeBirth > 0 {
+                            Text("\(hiddenBeforeBirth) dated before \(profile.displayName) was born — not shown")
+                                .font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 14)
+                    ForEach(PersonVideos.byDecade(rows), id: \.decade) { group in
+                        Text(group.decade)
+                            .font(.system(size: 14, weight: .semibold))
+                            .padding(.horizontal, 14).padding(.top, 6)
+                        ForEach(group.rows) { row in rowView(row) }
+                    }
+                }
+            } label: {
+                Text("More videos tagged \(profile.displayName) (\(rows.count))")
+                    .font(.system(size: 14, weight: .medium))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 10).padding(.top, 10)
+        }
+    }
+
+    private func rowView(_ row: PersonVideoRow) -> some View {
+        PersonVideoRowView(row: row, catalogModel: catalogModel, onShowInCatalog: onShowInCatalog)
     }
 }
 
@@ -310,13 +372,21 @@ private struct PersonVideoRowView: View {
                 NSWorkspace.shared.selectFile(row.path, inFileViewerRootedAtPath: "")
             }
             Button("Show in Catalog") { onShowInCatalog(row.title) }
+            Divider()
+            ShowInPeopleTabMenu(records: catalogModel.record(forPath: row.path).map { [$0] } ?? [])
         }
         .help("Double-click to play")
         .task(id: row.path) { await loadCachedThumbnail() }
     }
 
     private func play() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: row.path))
+        // Same smart open as the Archive table: QuickTime when the codecs
+        // allow, else VLC.
+        if let rec = catalogModel.record(forPath: row.path) {
+            MediaOpener.open([rec])
+        } else {
+            NSWorkspace.shared.open(URL(fileURLWithPath: row.path))
+        }
         appLog.write("People: play \(row.title)")
     }
 
