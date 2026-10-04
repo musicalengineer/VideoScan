@@ -35,6 +35,39 @@ struct ContentView: View {
         ("Family Tree", "person.3.fill", 5)
     ]
     @Environment(\.openWindow) private var openWindow
+    /// Shared geometry id for the sliding selected-tab capsule.
+    @Namespace private var tabSelection
+
+    private func tabButton(_ tab: (label: String, icon: String, tag: Int)) -> some View {
+        let isSelected = selectedTab == tab.tag
+        return Button {
+            withAnimation(.smooth(duration: 0.3)) { selectedTab = tab.tag }
+        } label: {
+            Label(tab.label, systemImage: tab.icon)
+                .font(.system(size: tabFontSize, weight: isSelected ? .semibold : .regular))
+                .foregroundStyle(isSelected ? .primary : .secondary)
+                .overlay(alignment: .topTrailing) {
+                    if tab.tag == 5 {
+                        FamilySearchPullStatusDot(status: pullCenter.status)
+                            .offset(x: 6, y: -4)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 7)
+                .background {
+                    if isSelected {
+                        Capsule()
+                            .fill(Color.accentColor.opacity(0.18))
+                            .matchedGeometryEffect(id: "selectedTab", in: tabSelection)
+                    }
+                }
+                .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        // XCUITest hook: e.g. "tab.Catalog" — added for the
+        // first UI test. Only used by tests; UI is unchanged.
+        .accessibilityIdentifier("tab.\(tab.label)")
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -43,62 +76,41 @@ struct ContentView: View {
             if catalogSync.mode == .viewer {
                 CatalogSyncBanner(sync: catalogSync)
             }
-            // Custom tab bar — centered with traffic-light inset
+            // Custom tab bar — a floating Liquid Glass capsule, centered with
+            // traffic-light inset (Rick 2026-10-04, macOS 27 refresh). The
+            // selected tab rides a tinted capsule that slides between tabs;
+            // Hallie's door is its own glass button beside the bar. Glass is
+            // for this navigation layer only — content keeps solid backing.
             HStack(spacing: 0) {
                 // Reserve space for window traffic-light buttons
                 Color.clear.frame(width: 76, height: 1)
 
                 Spacer()
-                HStack(spacing: 24) {
-                    ForEach(tabs, id: \.tag) { tab in
-                        Button {
-                            selectedTab = tab.tag
-                        } label: {
-                            Label(tab.label, systemImage: tab.icon)
-                                .font(.system(size: tabFontSize, weight: selectedTab == tab.tag ? .bold : .regular))
-                                .foregroundStyle(selectedTab == tab.tag ? .primary : .secondary)
-                                .overlay(alignment: .topTrailing) {
-                                    if tab.tag == 5 {
-                                        FamilySearchPullStatusDot(status: pullCenter.status)
-                                            .offset(x: 6, y: -4)
-                                    }
-                                }
-                                .padding(.horizontal, 14)
-                                .padding(.vertical, 8)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        // XCUITest hook: e.g. "tab.Catalog" — added for the
-                        // first UI test. Only used by tests; UI is unchanged.
-                        .accessibilityIdentifier("tab.\(tab.label)")
-                        .background(
-                            selectedTab == tab.tag
-                                ? Color.accentColor.opacity(0.12)
-                                : Color.clear
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: 6))
-                        .overlay(alignment: .bottom) {
-                            if selectedTab == tab.tag {
-                                RoundedRectangle(cornerRadius: 1)
-                                    .fill(Color.accentColor)
-                                    .frame(height: 2.5)
+                GlassEffectContainer(spacing: 16) {
+                    HStack(spacing: 16) {
+                        HStack(spacing: 4) {
+                            ForEach(tabs, id: \.tag) { tab in
+                                tabButton(tab)
                             }
                         }
-                    }
-                    // Family Archivist — the door to Hallie Mae's window,
-                    // after Family Tree, twinkling (Rick 2026-08-16). Not
-                    // a content tab: the conversation stays in its own
-                    // always-on-top window so the catalog remains the
-                    // display surface.
-                    ArchivistTabButton(fontSize: tabFontSize) {
-                        openWindow(id: "archivist")
+                        .padding(5)
+                        .glassEffect(.regular, in: .capsule)
+
+                        // Family Archivist — the door to Hallie Mae's window,
+                        // after Family Tree, twinkling (Rick 2026-08-16). Not
+                        // a content tab: the conversation stays in its own
+                        // always-on-top window so the catalog remains the
+                        // display surface.
+                        ArchivistTabButton(fontSize: tabFontSize) {
+                            openWindow(id: "archivist")
+                        }
+                        .glassEffect(.regular.tint(Color.pink.opacity(0.12)).interactive(), in: .capsule)
                     }
                 }
                 Spacer()
             }
-            .padding(.vertical, 6)
-            .background(Color(NSColor.windowBackgroundColor))
-            Divider()
+            .padding(.top, 8)
+            .padding(.bottom, 10)
 
             // Tab content — fill all available space to prevent layout jumps
             Group {

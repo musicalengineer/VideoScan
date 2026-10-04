@@ -93,6 +93,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TestEnvironment.isUnitTestProcess
     }
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // No macOS window tabs (Rick 2026-10-04): on macOS 27 the grey tab
+        // strip's "+" cloned the main window — a second ContentView over the
+        // same models that findMainWindow() can't tell apart. Set before any
+        // window exists; also drops View ▸ Show Tab Bar.
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Second check covers the UI-test target (VS_UI_TEST=1): the app
         // under XCUITest runs this delegate for real, and the RAM-disk
