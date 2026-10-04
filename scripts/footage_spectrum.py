@@ -58,6 +58,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 try:
     import numpy as np
@@ -339,7 +340,11 @@ def extract(path, cache_dir, refresh, tw, info=None, limit_s=0, on_progress=None
     dur = info["duration"]
     step = 2 if dur < 180 else 5
     step = max(step, math.ceil(dur / THUMB_CAP))
-    tmp = os.path.join(cache_dir, key + ".tmp")
+    # Temp and part names are unique per extraction: two runs over the same file (no
+    # read gate on an SSD or the internal disk) must never write the same temp file.
+    # Only the final atomic rename lands on the shared <key>.npz.
+    uniq = f"{os.getpid()}-{uuid.uuid4().hex[:12]}"
+    tmp = os.path.join(cache_dir, f"{key}.{uniq}.tmp")
     t0 = time.time()
     method = "single pass, VideoToolbox decode, 1 sample/s"
     res, err = single_pass(path, info, step, tmp, True, tw, limit_s, on_progress)
@@ -358,7 +363,7 @@ def extract(path, cache_dir, refresh, tw, info=None, limit_s=0, on_progress=None
     meta = dict(info, T=T, thumb_step=step, thumb_w=tw, method=method, extract_seconds=round(time.time() - t0, 1),
                 has_audio=bool(has_audio), size=size)
     # Written beside its final name, then renamed: a Stop mid-write never leaves a half entry.
-    part = os.path.join(cache_dir, key + ".part.npz")
+    part = os.path.join(cache_dir, f"{key}.{uniq}.part.npz")
     try:
         np.savez_compressed(part, cols=cols, loud=loud, bands=bands, thumb_blob=blob, thumb_offs=offs,
                             meta=np.array(json.dumps(meta)))
