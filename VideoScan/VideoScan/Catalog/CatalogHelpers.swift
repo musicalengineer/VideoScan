@@ -757,9 +757,8 @@ struct CatalogContent: View {
         // Space-toggle monitor lives for the catalog pane's on-screen
         // lifetime — installed here, torn down (and the mode reset) on
         // disappear so it can't fire from another tab.
-        // Keep-alive tabs: also stops while the Catalog tab is hidden.
-        .onTabActiveChange(appear: { installSpaceKeyMonitor() },
-                           disappear: { removeSpaceKeyMonitor() })
+        .onAppear { installSpaceKeyMonitor() }
+        .onDisappear { removeSpaceKeyMonitor() }
         .sheet(isPresented: $showRenameSheet) {
             RenameSheet(
                 filename: $renameText,

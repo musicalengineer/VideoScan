@@ -35,41 +35,6 @@ struct ContentView: View {
         ("Family Tree", "person.3.fill", 5)
     ]
     @Environment(\.openWindow) private var openWindow
-    /// Tabs built so far this session (keep-alive; see TabActivity.swift).
-    @State private var visitedTabs: Set<Int> = []
-    /// Stable order for the keep-alive ZStack (tags, not positions).
-    private static let keepAliveOrder = [0, 1, 6, 2, 4, 5]
-
-    /// `selectedTab` normalised: legacy Workbench (3) is Triage; anything
-    /// unknown falls back to People, as the old switch's default did.
-    private var activeTab: Int {
-        if selectedTab == 3 { return 2 }
-        return Self.keepAliveOrder.contains(selectedTab) ? selectedTab : 0
-    }
-
-    /// Visited tabs plus the current one (so the first frame isn't empty
-    /// before onAppear records it).
-    private var renderedTabs: Set<Int> { visitedTabs.union([activeTab]) }
-
-    @ViewBuilder
-    private func tabContent(_ tag: Int) -> some View {
-        switch tag {
-        case 1:
-            CatalogView()
-        case 2:
-            TriageView(model: model)
-        case 4:
-            ArchiveView()
-        case 5:
-            FamilyTreeView(sharedModel: familyTreeModel)
-        case 6:
-            VolumesWindow(embedded: true)
-        default:
-            PeopleTabView()
-                .environmentObject(personFinderModel)
-                .environmentObject(identifyFamilyModel)
-        }
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -124,27 +89,31 @@ struct ContentView: View {
                 .ignoresSafeArea(edges: .top)
             }
 
-            // Tab content — KEEP-ALIVE (Rick 2026-10-04, see TabActivity.swift).
-            // Each tab is built on its first visit and then only hidden, so
-            // switching back is instant instead of rebuilding the tab and
-            // re-running its catalog-wide recounts. Hidden tabs are disabled
-            // (their ⌘I / ⌘Z / ⌘F shortcuts must not fire from another tab),
-            // take no clicks, are invisible to accessibility, and see
-            // isActiveTab == false so visibility hooks stop.
-            ZStack {
-                ForEach(Self.keepAliveOrder.filter { renderedTabs.contains($0) }, id: \.self) { tag in
-                    let isActive = tag == activeTab
-                    tabContent(tag)
-                        .opacity(isActive ? 1 : 0)
-                        .allowsHitTesting(isActive)
-                        .accessibilityHidden(!isActive)
-                        .disabled(!isActive)
-                        .environment(\.isActiveTab, isActive)
-                        .zIndex(isActive ? 1 : 0)
+            // Tab content — fill all available space to prevent layout jumps
+            Group {
+                switch selectedTab {
+                case 0:
+                    PeopleTabView()
+                        .environmentObject(personFinderModel)
+                        .environmentObject(identifyFamilyModel)
+                case 1:
+                    CatalogView()
+                case 2:
+                    TriageView(model: model)
+                case 3:
+                    TriageView(model: model)   // legacy Workbench selection
+                case 4:
+                    ArchiveView()
+                case 5:
+                    FamilyTreeView(sharedModel: familyTreeModel)
+                case 6:
+                    VolumesWindow(embedded: true)
+                default:
+                    PeopleTabView()
+                        .environmentObject(personFinderModel)
+                        .environmentObject(identifyFamilyModel)
                 }
             }
-            .onAppear { visitedTabs.insert(activeTab) }
-            .onChange(of: selectedTab) { visitedTabs.insert(activeTab) }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         }
         .frame(minWidth: 900, minHeight: 600)
@@ -875,11 +844,11 @@ struct CatalogView: View {
             // A Master Archive designated AFTER first run flips the default
             // to the to-do view once (never again — the user's choice wins).
             .onChange(of: model.masterArchive != nil) { seedDefaultViewFiltersIfUntouched() }
-            .onTabActiveChange(appear: {}, disappear: {
+            .onDisappear {
                 // CatalogView's @State selection ceases to be a visible
-                // current row when this tab is hidden or leaves the hierarchy.
+                // current row when this tab leaves the hierarchy.
                 model.hallieCurrentSelectionID = nil
-            })
+            }
             .onChange(of: model.archivistSearchRequest) {
                 // Family Archivist chat window → catalog search field
                 // (2026-08-07). Applied undebounced: the archivist
