@@ -189,6 +189,11 @@ struct DeleteDuplicatesPhaseOne: Sendable {
     /// sibling's record so no later row or run reads it again while its
     /// stamp holds.
     var siblingReads: [SiblingRead] = []
+    /// Set when the worker left the copy alone for a PROTECTION it found
+    /// itself (a drive marked Read only, seen only by the file's own
+    /// identity): the why. The row is then never counted as a surviving
+    /// copy for another copy of this run (`DeleteDuplicatesPlan.Entry.notCountedWhy`).
+    var notCountedWhy: String? = nil
 
     struct RetainedInQuarantine: Sendable, Equatable {
         let directory: String
@@ -211,6 +216,13 @@ struct DeleteDuplicatesPhaseTwo: Sendable {
     /// Archive Angel, on a drive marked Read only since its turn): the note.
     /// The file was put back; the row is a skip, never a refusal.
     var heldNote: String? = nil
+    /// Set when the copy was RETAINED for a protection found at the removal
+    /// boundary — a hold (the why of `heldNote`), or the Master Archive rule
+    /// refusing it from TODAY's designation where the check captured at its
+    /// turn had let it go (codex #258 r4-1). Main would have removed this
+    /// file; so it is never counted as a surviving copy for another copy of
+    /// this run (`DeleteDuplicatesPlan.Entry.notCountedWhy`).
+    var notCountedWhy: String? = nil
 }
 
 /// A locked slot for the fixity the gate reports from the disk thread.
@@ -244,7 +256,8 @@ enum DeleteDuplicatesDiskWorker {
                 : refusal.transient
                     ? .leftAlone(reason: Self.driveListRefreshing, facts: DeletionTierFacts())
                     : .refused(reason: refusal.note + " — nothing moved", cancelled: false)
-            return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: nil)
+            return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: nil,
+                                            notCountedWhy: refusal.leavesAlone ? refusal.note : nil)
         }
         let box = FixityBox()
         var observing = hooks
@@ -380,33 +393,47 @@ enum DeleteDuplicatesDiskWorker {
         var boundary: (decision: DeletionTierDecision, facts: DeletionTierFacts)?
         // Set by the final verdict when the file's own volume turns out to
         // be the Master Archive's (the same last word Junk has).
-        var archiveRefusal: (note: String, transient: Bool, leavesAlone: Bool)?
+        var archiveRefusal: (note: String, transient: Bool)?
         // Set by the final verdict when the copy is HELD at this instant.
         var heldNote: String?
+        // Set by the final verdict when the copy is retained for a
+        // protection that main would not have found: never counted as a
+        // surviving copy for another copy of this run (codex #258 r4-1).
+        var notCountedWhy: String?
         let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {
-            if let archiveCheck, let refusal = archiveCheck.refusal(forPath: ticket.quarantinedPath) {
-                if refusal.leavesAlone {
-                    // A Read-only mark, by the check captured at the turn: a hold.
-                    heldNote = DuplicateDeletionHold.leftAlonePrefix + refusal.note
-                    return .putBack(reason: refusal.note)
-                }
-                archiveRefusal = refusal
-                return .putBack(reason: refusal.note)
-            }
-            // The Master Archive, from TODAY's designation (the check above
-            // is the one captured at the copy's turn — an extra, earlier
-            // look that can only refuse; it is never what lets a file go).
-            if let boundaryArchive, let refusal = boundaryArchive(ticket.quarantinedPath) {
-                archiveRefusal = (refusal.note, refusal.transient, false)
-                return .putBack(reason: refusal.note)
+            // The check captured at the copy's turn: an extra, earlier look
+            // that can only refuse — it is never what lets a file go.
+            let captured = archiveCheck?.refusal(forPath: ticket.quarantinedPath)
+            if let captured, captured.leavesAlone {
+                // A Read-only mark, by the check captured at the turn: a hold.
+                heldNote = DuplicateDeletionHold.leftAlonePrefix + captured.note
+                notCountedWhy = captured.note
+                return .putBack(reason: captured.note)
             }
             // The holds, asked NOW — after every byte of the re-read, with
             // nothing but the copy-evidence re-stat between this and the
             // removal (codex #258 F6). EVERY path that removes goes through
-            // this closure.
+            // this closure. Asked even when the Master Archive rule already
+            // refuses the file (r4-1): a copy that is BOTH is a hold — the
+            // classification that is never counted wins.
             if let boundaryHold, let note = boundaryHold(ticket.quarantinedPath) {
                 heldNote = note
+                notCountedWhy = DuplicateDeletionHold.leftAloneWhy(note: note) ?? note
                 return .putBack(reason: note)
+            }
+            if let captured {
+                // Main's own refusal (it captured this check too): the row is
+                // refused and, as on main, counts by its evidence.
+                archiveRefusal = (captured.note, captured.transient)
+                return .putBack(reason: captured.note)
+            }
+            // The Master Archive, from TODAY's designation. Main, with only
+            // the captured check, would have REMOVED this file: retained
+            // here, it is never a survivor for another copy of this run.
+            if let boundaryArchive, let refusal = boundaryArchive(ticket.quarantinedPath) {
+                archiveRefusal = (refusal.note, refusal.transient)
+                notCountedWhy = DuplicateDeletionHold.archiveRuleAtRemovalWhy
+                return .putBack(reason: refusal.note)
             }
             let now = facts.recheck()
             guard !now.droppedAtBoundary.isEmpty else {
@@ -440,14 +467,15 @@ enum DeleteDuplicatesDiskWorker {
                     ? .leftAlone(reason: Self.driveListRefreshing, facts: facts)
                     : .refused(reason: archiveRefusal.note + " — put back, nothing removed", cancelled: false)
             }
-            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
+            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false,
+                                            notCountedWhy: notCountedWhy)
         }
         if let heldNote {
             // Put back at its path: left alone (a skip), not a refusal. A
             // failed put-back stays `.retained`, named.
             if case .refused(_, true) = outcome { outcome = .leftAlone(reason: heldNote, facts: facts) }
             return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false,
-                                            heldNote: heldNote)
+                                            heldNote: heldNote, notCountedWhy: notCountedWhy)
         }
         guard let boundary else {
             return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
@@ -966,8 +994,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                                                     stage: "before deletion") {
             case .authorized(let r, let k):
                 record = r; keeper = k
-            case .skip(let note, let line):
-                mutatePlan { $0.set(entry.id, .skipped, note: note) }
+            case .skip(let note, let line, let notCountedWhy):
+                mutatePlan {
+                    $0.set(entry.id, .skipped, note: note)
+                    if let notCountedWhy { $0.setNotCounted(entry.id, why: notCountedWhy) }
+                }
                 model.log("  " + line)
                 tally.skipped += 1
                 tally.bytesSkipped += entry.sizeBytes
@@ -1217,6 +1248,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         // (the note): asked before phase two starts AND, by the disk worker,
         // at the removal itself.
         var heldAfterRead: String?
+        // Set when the copy was retained for a PROTECTION (a hold, a
+        // Read-only mark, the Master Archive rule found only at the
+        // removal): recorded on the row, which is then never counted as a
+        // surviving copy for another copy of this run (codex #258 r4-1).
+        var notCountedWhy: String?
         let trashVolume = VolumeReachability.volumeName(forPath: entry.path)
 
         // Phase 1: hold + hash once (or verify twice on the first pair of
@@ -1225,6 +1261,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             DeleteDuplicatesDiskWorker.verifyAndQuarantine(item, hooks: hooks)
         }
         var outcome = phaseOne.outcome
+        notCountedWhy = phaseOne.notCountedWhy
         if let retained = phaseOne.retainedInQuarantine {
             // Phase one moved the file and could not put it back: the
             // folder goes ON THE ROW, exactly as a ticket's would, so the
@@ -1288,6 +1325,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // the turn's authorization, before anything is removed. The
                 // file goes back to its path, untouched; phase 2 never runs.
                 heldAfterRead = hold.note
+                notCountedWhy = hold.why
                 outcome = await runDetached(entryID: entry.id) {
                     DeleteDuplicatesDiskWorker.release(ticket, reason: hold.note, keeperFilename: keeperName, leftAlone: facts)
                 }
@@ -1310,6 +1348,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // Held at the removal itself (the Angel chose it, or its
                 // drive was marked Read only, during phase two's re-read).
                 if let note = phaseTwo.heldNote { heldAfterRead = note }
+                notCountedWhy = phaseTwo.notCountedWhy
                 if phaseTwo.evidenceChanged {
                     finalFacts = phaseTwo.facts
                     // The count the file goes by is the boundary's, not the
@@ -1360,6 +1399,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             settle(outcome, entry: entry, keeper: keeper, preAwait: preAwait, decision: decision,
                    facts: finalFacts, trashVolume: trashVolume, model: model)
         }
+        // EXPLICIT on the row, whatever became of the put-back: this copy was
+        // kept for a protection, not on its merits.
+        if let notCountedWhy { mutatePlan { $0.setNotCounted(entry.id, why: notCountedWhy) } }
 
         rate.add(bytes: entry.sizeBytes, seconds: seconds, concurrency: concurrency)
         publishProgress()
@@ -1804,9 +1846,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         }
         for i in plan.entries.indices where !plan.entries[i].status.isSettled {
             let e = plan.entries[i]
-            func skip(_ why: String, log line: String) {
+            func skip(_ why: String, log line: String, notCountedWhy: String? = nil) {
                 plan.entries[i].status = .skipped
                 plan.entries[i].note = why
+                if let notCountedWhy { plan.entries[i].notCountedWhy = notCountedWhy }
                 plan.entries[i].settledAt = now
                 skippedNow += 1
                 model.log("  " + line)
@@ -1855,8 +1898,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             }
             switch model.authorizeDuplicateDeletion(entry: e, volumePath: plan.volumePath,
                                                     crossVolumeMode: plan.crossVolumeMode, stage: "at resume") {
-            case .skip(let note, let line):
-                skip(note, log: line); continue
+            case .skip(let note, let line, let notCountedWhy):
+                skip(note, log: line, notCountedWhy: notCountedWhy); continue
             case .refuse(let note):
                 refuse(note); continue
             case .authorized:

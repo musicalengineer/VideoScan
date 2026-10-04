@@ -527,7 +527,7 @@ struct ArchiveSnapshotStaleWindowQATests {
                                                         crossVolumeMode: false, stage: "t") {
                 case .refuse(let note):
                     Issue.record("stale snapshot refused (and re-marks Review) an X10 extra copy: \(note)")
-                case .skip(let note, _):
+                case .skip(let note, _, _):
                     #expect(note.contains("refreshing"), "\(note)")
                 case .authorized:
                     break

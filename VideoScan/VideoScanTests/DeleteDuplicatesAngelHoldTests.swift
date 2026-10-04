@@ -483,7 +483,7 @@ struct DeleteDuplicatesAngelHoldTests {
         // The live authorization, asked directly…
         switch rig.model.authorizeDuplicateDeletion(entry: plan.entries[1], volumePath: rig.dir.path,
                                                     crossVolumeMode: false, stage: "before deletion") {
-        case .skip(let note, _):
+        case .skip(let note, _, _):
             #expect(note == "left alone — in use by the Archive Angel")
         case .authorized: Issue.record("authorized the Angel's copy for deletion")
         case .refuse(let note): Issue.record("refused (which re-marks the row Review) instead of leaving it alone: \(note)")

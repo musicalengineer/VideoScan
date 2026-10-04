@@ -710,6 +710,21 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// of these bytes (nil until decided). The detail row says
         /// "not yet archived" when false; the tier does not care.
         var hasVerifiedArchive: Bool?
+        /// NOT COUNTABLE (codex #258 r4-1). Set — with the why — when this
+        /// run planned the row as a target and then RETAINED the file
+        /// because of a protection found at its turn or at its removal
+        /// boundary: in use by the Archive Angel, on a drive marked Read
+        /// only, the Angel's buffer unreadable, or the Master Archive rule
+        /// refusing it from the designation as it was AT THE REMOVAL where
+        /// the check captured at its turn had let it go. Main (8aa4acde)
+        /// would have removed such a file, so it is NEVER counted as a
+        /// surviving copy for another copy of this run
+        /// (`runScope` → `VideoScanModel.duplicateSurvivorStandingRule`).
+        /// nil for a row decided on its merits — left alone by the tier,
+        /// refused as not a duplicate, refused by the archive rule main
+        /// itself asked — which keeps main's treatment. Additive: rows
+        /// written before it decode nil and are classified by their note.
+        var notCountedWhy: String?
 
         var keeperVolumeName: String { VolumeReachability.volumeName(forPath: keeperPath) }
 
@@ -819,17 +834,23 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
 
     static let leftAloneListCap = 2_000
 
-    /// This run's rows, as the survivor count needs them (codex #258 F1):
-    /// which are still to be decided, which the run settled by LEAVING THEM
-    /// ALONE for a hold or a Read-only mark, and which it decided on their
-    /// merits. `deciding` is the row being decided now (never listed); nil
+    /// This run's rows, as the survivor count needs them (codex #258 F1,
+    /// r4-1): which are still to be decided, which the run RETAINED FOR A
+    /// PROTECTION found at their turn or at their removal boundary (a hold,
+    /// a Read-only mark, unreadable Angel evidence, the Master Archive rule
+    /// found only at the removal — `Entry.notCountedWhy`), and which it
+    /// decided on their merits. `deciding` is the row being decided now (never listed); nil
     /// for the forecast. O(entries).
     func runScope(deciding id: UUID?) -> DuplicateRunScope {
         var scope = DuplicateRunScope(volumePath: volumePath)
         for e in entries where e.id != id {
             if !e.status.isSettled {
                 scope.pending.insert(e.id)
+            } else if let why = e.notCountedWhy {
+                // The row says so itself: retained for a protection (r4-1).
+                scope.leftAlone[e.id] = why
             } else if e.status == .skipped || e.status == .refused, let why = DuplicateDeletionHold.leftAloneWhy(note: e.note) {
+                // A row written before `notCountedWhy` existed: by its note.
                 scope.leftAlone[e.id] = why
             } else {
                 scope.decided.insert(e.id)
@@ -989,6 +1010,14 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         entries[i].trashedOnVolume = decision.tier == .trash ? trashVolume : nil
         if let hasVerifiedArchive { entries[i].hasVerifiedArchive = hasVerifiedArchive }
         if let evidence { entries[i].countedCopies = evidence }
+    }
+
+    /// The row was retained for a protection, not on its merits: it is
+    /// never counted as a surviving copy for another copy of this run
+    /// (`Entry.notCountedWhy`, codex #258 r4-1).
+    mutating func setNotCounted(_ id: UUID, why: String) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].notCountedWhy = why
     }
 
     /// The row left quarantine (deleted, or put back): forget the folder.

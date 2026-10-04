@@ -364,10 +364,20 @@ extension VideoScanModel {
     ///
     ///   a row of this run still to be decided ........ no  (main's rule: it
     ///                                                  may go too)
-    ///   a row this run settled by LEAVING IT ALONE for
-    ///   a hold or a Read-only mark ................... no
-    ///   a row this run decided on its merits (left
-    ///   alone by the tier, refused, …) ............... by the sibling rules
+    ///   a row this run planned as a target and then
+    ///   RETAINED FOR A PROTECTION found at its turn or
+    ///   at its removal boundary — an Angel hold, a
+    ///   Read-only mark, Angel evidence that could not
+    ///   be read, or the Master Archive rule refusing
+    ///   it from the designation AS IT WAS AT THE
+    ///   REMOVAL where the check captured at its turn
+    ///   had let it go (`Entry.notCountedWhy`, r4-1) .. no  (main would have
+    ///                                                  removed it)
+    ///   a row this run decided on its merits — left
+    ///   alone by the tier, refused as not a duplicate,
+    ///   refused by the archive rule at its turn or by
+    ///   the check captured there (main asked those
+    ///   too, kept the file and counted it) ........... by the sibling rules
     ///   an extra copy on the drive being cleaned that
     ///   is NOT a row of this run — held by the Angel,
     ///   on a folder marked Read only, or never planned  no
@@ -564,8 +574,10 @@ extension VideoScanModel {
         case authorized(record: VideoRecord, keeper: VideoRecord)
         /// The catalog decided differently (record gone / moved / no
         /// longer an extra copy): left alone, not a refusal — the row is
-        /// NOT re-marked Review.
-        case skip(note: String, log: String)
+        /// NOT re-marked Review. `notCountedWhy` is set when the reason is
+        /// a PROTECTION (a hold, a Read-only mark): the row is then never
+        /// counted as a surviving copy for another copy of the run.
+        case skip(note: String, log: String, notCountedWhy: String? = nil)
         /// The pair no longer lines up (keeper / group / archive /
         /// eligibility): refused, and the extra copy is marked Review.
         case refuse(note: String)
@@ -612,8 +624,9 @@ extension VideoScanModel {
             // alone — nothing is wrong with the pair, so the row is NOT
             // re-marked Review.
             log(Self.readOnlyVolumeRefusalLine(verb: "Delete Duplicates", count: 1, volume: name))
-            let note = DuplicateDeletionHold.leftAlonePrefix + Self.bulkDeleteRefusalNote(.readOnlyVolume(name), volume: name)
-            return .skip(note: note, log: "Skipped \(e.filename): \(note)")
+            let why = Self.bulkDeleteRefusalNote(.readOnlyVolume(name), volume: name)
+            let note = DuplicateDeletionHold.leftAlonePrefix + why
+            return .skip(note: note, log: "Skipped \(e.filename): \(note)", notCountedWhy: why)
         case let refusal?:
             let label = archiveVolume?.label ?? "the archive volume"
             log(refusal == .archiveVolume
@@ -628,7 +641,7 @@ extension VideoScanModel {
         // NOT re-marked Review and a later run may take it once the Angel
         // lets go.
         if let hold = duplicateDeletionHoldRule()(rec) {
-            return .skip(note: hold.note, log: "Skipped \(e.filename): \(hold.note)")
+            return .skip(note: hold.note, log: "Skipped \(e.filename): \(hold.note)", notCountedWhy: hold.why)
         }
         if !PathScope.contains(keeper.fullPath, within: volumePath) {
             // A working copy: the keeper is on another drive. The policy
@@ -1265,6 +1278,12 @@ enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
     /// The reason, as the run's detail row, the plan and the console say it.
     var note: String { Self.leftAlonePrefix + why }
 
+    /// Why a copy the Master Archive rule refused ONLY AT ITS REMOVAL (from
+    /// the designation as it was then; the check captured at its turn had
+    /// let it go) is not counted for another copy of the run: main would
+    /// have removed it (codex #258 r4-1).
+    static let archiveRuleAtRemovalWhy = "the Master Archive rule stopped its removal in this run"
+
     /// What every Read-only refusal note says, whichever code path worded it.
     static let readOnlyMarker = "which you marked Read only"
 
@@ -1286,8 +1305,9 @@ struct DuplicateRunScope: Sendable, Equatable {
     var volumePath: String
     /// Rows still to be decided — they may go too.
     var pending: Set<UUID> = []
-    /// Rows the run settled by leaving them alone for a hold or a
-    /// Read-only mark: id → why.
+    /// Rows the run retained for a PROTECTION (a hold, a Read-only mark,
+    /// unreadable Angel evidence, the Master Archive rule found only at the
+    /// removal): id → why. Never counted.
     var leftAlone: [UUID: String] = [:]
     /// Rows the run decided on their merits.
     var decided: Set<UUID> = []

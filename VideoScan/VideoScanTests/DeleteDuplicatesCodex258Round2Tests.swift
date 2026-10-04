@@ -375,7 +375,7 @@ struct DeleteDuplicatesCodex258Round2Tests {
         let job = try SourceTree.appCode(named: "DeleteDuplicatesJob.swift")
         #expect(job.contains("let outcome: DeleteDuplicatesDiskOutcome = refusal.leavesAlone\n                ? .leftAlone(reason: DuplicateDeletionHold.leftAlonePrefix + refusal.note, facts: DeletionTierFacts())"),
                 "the worker's own Read-only refusal is an ordinary refusal again")
-        #expect(job.contains("if refusal.leavesAlone {\n") && job.contains("heldNote = DuplicateDeletionHold.leftAlonePrefix + refusal.note"),
+        #expect(job.contains("if let captured, captured.leavesAlone {\n") && job.contains("heldNote = DuplicateDeletionHold.leftAlonePrefix + captured.note"),
                 "phase two's captured check refuses a Read-only file instead of holding it")
         #expect(job.contains("if let boundaryHold, let note = boundaryHold(ticket.quarantinedPath) {"))
         let gate = try SourceTree.appCode(named: "VideoScanModel+MasterArchive.swift")
