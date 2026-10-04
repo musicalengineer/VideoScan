@@ -331,6 +331,7 @@ def extract(path, cache_dir, refresh, tw, info=None, limit_s=0, on_progress=None
         if d is not None:
             return d
     key, size = file_key(path)
+    os.makedirs(cache_dir, exist_ok=True)
     npz = os.path.join(cache_dir, key + ".npz")
     info = info or probe(path)
     dur = info["duration"]
