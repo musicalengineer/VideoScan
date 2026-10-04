@@ -95,8 +95,10 @@ struct StewardSensorTests {
         // Events F9: the "next up" rows and the focused card are worked out
         // with the list, in event handlers — not by a filter over the
         // (up to ~425) listed cases on every render.
+        // From the top of the view (its computed properties too) to the actions.
+        let viewStart = try #require(pane.range(of: "struct StewardPaneView: View {"))
         let actions = try #require(pane.range(of: "private func actions(for c: StewardCase)"))
-        let viewBuilding = String(pane[bodyStart.upperBound..<actions.lowerBound])
+        let viewBuilding = String(pane[viewStart.upperBound..<actions.lowerBound])
         for scan in ["visible.filter", "visible.first", "visible.contains", "skipped.filter", "active.filter"] {
             #expect(!viewBuilding.contains(scan), "a view-building property scans the list: `\(scan)`")
         }
