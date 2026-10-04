@@ -69,6 +69,9 @@ struct StewardPaneView: View {
     /// The list on screen: the suggestions (or the skipped ones), narrowed
     /// and ordered. Set by `rearrange()` in event handlers, never in body.
     @State private var visible: [StewardCase] = []
+    /// The focused card and the "next up" rows, worked out with `visible`
+    /// in event handlers (Events QA F9) — never a scan of the list per render.
+    @State private var layout = StewardPaneLayout.NextUp()
     @State private var showSkipped = false
     @State private var counts = StewardPaneWords.Counts()
     @State private var focusedID: String?
@@ -87,9 +90,7 @@ struct StewardPaneView: View {
 
     private var filter: StewardCaseBuilder.Filter { StewardCaseBuilder.Filter(rawValue: filterRaw) ?? .all }
 
-    private var focused: StewardCase? {
-        visible.first { $0.id == focusedID } ?? visible.first
-    }
+    private var focused: StewardCase? { layout.focused }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -241,7 +242,7 @@ struct StewardPaneView: View {
                 }
                 .frame(maxWidth: .infinity)
                 Divider()
-                nextUp(after: c)
+                nextUp
                     .frame(width: 340)
             }
         } else {
@@ -270,9 +271,8 @@ struct StewardPaneView: View {
         }
     }
 
-    private func nextUp(after focused: StewardCase) -> some View {
-        let rows = visible.filter { $0.id != focused.id }
-        return VStack(alignment: .leading, spacing: 0) {
+    private var nextUp: some View {
+        VStack(alignment: .leading, spacing: 0) {
             Text(showSkipped ? "Skipped" : "Next up")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.secondary)
@@ -280,9 +280,10 @@ struct StewardPaneView: View {
                 .padding(.vertical, 8)
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    ForEach(rows.prefix(Self.nextUpRows)) { c in
+                    ForEach(layout.rows) { c in
                         Button {
                             focusedID = c.id
+                            relayout()
                             noteShownIfChanged()
                         } label: {
                             VStack(alignment: .leading, spacing: 3) {
@@ -308,13 +309,13 @@ struct StewardPaneView: View {
                         .accessibilityIdentifier("steward.nextUp.row")
                         Divider()
                     }
-                    if rows.count > Self.nextUpRows {
-                        Text("and \((rows.count - Self.nextUpRows).formatted()) more after these")
+                    if layout.more > 0 {
+                        Text("and \(layout.more.formatted()) more after these")
                             .font(.system(size: 13))
                             .foregroundStyle(.tertiary)
                             .padding(12)
                     }
-                    if rows.isEmpty {
+                    if layout.rows.isEmpty {
                         Text("Nothing else is waiting.")
                             .font(.system(size: 14))
                             .foregroundStyle(.tertiary)
@@ -438,7 +439,13 @@ struct StewardPaneView: View {
         if focusedID == nil || !visible.contains(where: { $0.id == focusedID }) {
             focusedID = visible.first?.id
         }
+        relayout()
         noteShownIfChanged()
+    }
+
+    /// The focused card and the next-up rows for the list as it stands.
+    private func relayout() {
+        layout = StewardPaneLayout.nextUp(visible, focusedID: focusedID, limit: Self.nextUpRows)
     }
 
     /// The person changed the filter or the order: one line, then re-list.
@@ -485,6 +492,32 @@ struct StewardPaneView: View {
         var done = prepared.evidence
         done.proofs = proofs
         evidence = done
+    }
+}
+
+/// What the pane draws around the list: the focused card and the rows of
+/// "next up" (Events QA F9). Pure; one pass over the listed cases, called
+/// when the list or the focus changes — never from a view body.
+enum StewardPaneLayout {
+    struct NextUp: Equatable {
+        var focused: StewardCase?
+        /// At most `limit` rows after the focused one, in list order.
+        var rows: [StewardCase] = []
+        /// How many more are listed beyond `rows`.
+        var more = 0
+    }
+
+    nonisolated static func nextUp(_ visible: [StewardCase], focusedID: String?, limit: Int) -> NextUp {
+        let focused = visible.first { $0.id == focusedID } ?? visible.first
+        var out = NextUp(focused: focused)
+        out.rows.reserveCapacity(min(limit, visible.count))
+        var others = 0
+        for c in visible where c.id != focused?.id {
+            others += 1
+            if out.rows.count < limit { out.rows.append(c) }
+        }
+        out.more = max(0, others - limit)
+        return out
     }
 }
 

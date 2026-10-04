@@ -788,6 +788,25 @@ struct StewardEventsScaleTests {
         #expect(ContinuousClock.now - arrangeStart < PerformanceLane.debugCeiling(.milliseconds(1_000)))
     }
 
+    /// Events QA F9: the pane's focused card and "next up" rows are one
+    /// pass over the listed cases, worked out when the list or the focus
+    /// changes. Pinned: what it returns, and that the whole lane (~425
+    /// rows) costs nothing beside a render.
+    @Test func theNextUpRowsAreOnePassOverTheListedCases() {
+        let listed = (0..<425).map { StewardCase(id: "event:x:-:\($0)", kind: .event, title: "\($0)", facts: StewardFacts(bytes: 1, count: 2)) }
+        let first = StewardPaneLayout.nextUp(listed, focusedID: nil, limit: 30)
+        #expect(first.focused?.id == listed[0].id && first.rows.first?.id == listed[1].id)
+        #expect(first.rows.count == 30 && first.more == 424 - 30)
+        let middle = StewardPaneLayout.nextUp(listed, focusedID: listed[10].id, limit: 30)
+        #expect(middle.focused?.id == listed[10].id && !middle.rows.contains { $0.id == listed[10].id })
+        #expect(StewardPaneLayout.nextUp(listed, focusedID: "gone", limit: 30).focused?.id == listed[0].id, "a focus that left falls back")
+        #expect(StewardPaneLayout.nextUp([], focusedID: nil, limit: 30) == StewardPaneLayout.NextUp())
+        let start = ContinuousClock.now
+        for i in 0..<2_000 { _ = StewardPaneLayout.nextUp(listed, focusedID: listed[i % 425].id, limit: 30) }
+        #expect(ContinuousClock.now - start < PerformanceLane.debugCeiling(.milliseconds(1_000)),
+                "2,000 relayouts of a 425-row lane over budget")
+    }
+
     /// QA F6: ONE event of 50,000 clips (a decade of phone clips in a folder
     /// called "vacation", all typed as one year), half of them pulled in by
     /// matching footage. Inserting into a bucket must not copy its member

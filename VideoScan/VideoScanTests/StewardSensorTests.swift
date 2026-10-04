@@ -92,6 +92,14 @@ struct StewardSensorTests {
         #expect(!body.contains("StewardEvidenceBuilder.prepare("))
         #expect(!body.contains("skipStore.partition("), "the skip memory is read in event handlers, not per render")
         #expect(!body.contains("StewardCaseBuilder.arrange("), "the list is narrowed and ordered in event handlers, not per render")
+        // Events F9: the "next up" rows and the focused card are worked out
+        // with the list, in event handlers — not by a filter over the
+        // (up to ~425) listed cases on every render.
+        let actions = try #require(pane.range(of: "private func actions(for c: StewardCase)"))
+        let viewBuilding = String(pane[bodyStart.upperBound..<actions.lowerBound])
+        for scan in ["visible.filter", "visible.first", "visible.contains", "skipped.filter", "active.filter"] {
+            #expect(!viewBuilding.contains(scan), "a view-building property scans the list: `\(scan)`")
+        }
     }
 
     /// The filter and "By year" are pure view state: two stored settings,
