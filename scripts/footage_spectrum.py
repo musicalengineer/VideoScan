@@ -114,7 +114,9 @@ def say(msg=""):
 
 
 def machine_line(kind, payload):
-    return f"{kind} {json.dumps(payload, separators=(',', ':'), ensure_ascii=False)}"
+    """One machine line, 7-bit only: the app's line reader decodes each pipe chunk on its
+    own and a chunk that ends mid-character is lost, so non-ASCII is JSON-escaped."""
+    return f"{kind} {json.dumps(payload, separators=(',', ':'), ensure_ascii=True)}"
 
 
 def progress_line(file, of, label, phase, fraction):

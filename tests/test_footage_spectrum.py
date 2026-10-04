@@ -239,3 +239,50 @@ def test_end_to_end_excerpt_aligns_at_its_offset(tmp_path):
     assert before == {p: (os.path.getsize(p), os.path.getmtime(p)) for p in (full, part)}
     # no stray temp files in the cache
     assert all(f.endswith(".npz") and ".part" not in f for f in os.listdir(tmp_path / "cache"))
+
+
+# ------------------------------------------------------------ QA 2026-10-03
+
+def test_machine_lines_are_pure_ascii_so_a_split_pipe_read_cannot_drop_them():
+    # Labels carry " · " (U+00B7) and names may carry é, ü… ProcessRunner's line
+    # streamer decodes each pipe chunk on its own and drops a chunk that ends
+    # mid-character, so every machine line must be 7-bit (JSON escapes keep it exact).
+    for line in (fs.progress_line(1, 2, "A · Café.mov", "reading", 0.5),
+                 fs.machine_line("DONE", {"results": [{"label": "B · Ürlaub.mov"}]}),
+                 fs.machine_line("ERROR", {"message": "could not be read (Ü)", "skipped": []})):
+        assert line.isascii(), line
+    assert json.loads(fs.progress_line(1, 2, "A · Café.mov", "reading", 0.5)[9:])["label"] == "A · Café.mov"
+
+
+def test_two_extractions_of_one_file_never_share_temp_files(tmp_path, monkeypatch):
+    # Two runs over the same file share the cache folder; a shared <key>.tmp.cols
+    # would let one ffmpeg -y truncate the other's output and cache a damaged strip.
+    clip = tmp_path / "test_clip.mov"
+    clip.write_bytes(b"x" * 1024)
+    seen = []
+
+    def fake_single_pass(path, info, step, tmp, hwaccel, tw, limit_s=0, on_progress=None):
+        seen.append(tmp)
+        return None, "timeout"
+
+    monkeypatch.setattr(fs, "single_pass", fake_single_pass)
+    info = {"duration": 10.0, "codec": "h264", "width": 320, "height": 240, "audio": None}
+    for _ in range(2):
+        with pytest.raises(RuntimeError):
+            fs.extract(str(clip), str(tmp_path / "cache"), True, 160, info=info)
+    assert len(seen) == 2 and seen[0] != seen[1], seen
+
+
+def test_aligning_reports_a_fraction_per_pair():
+    # P3-4: the alignment phase keeps the watchdog and the time left honest.
+    lines = []
+    fs.MACHINE = True
+    try:
+        orig = fs.emit
+        fs.emit = lines.append
+        fs.align_progress(3, 4, 4, 2)
+    finally:
+        fs.emit = orig
+        fs.MACHINE = False
+    body = json.loads(lines[0][9:])
+    assert body["phase"] == "aligning" and body["fraction"] == 0.667 and body["file"] == 4
