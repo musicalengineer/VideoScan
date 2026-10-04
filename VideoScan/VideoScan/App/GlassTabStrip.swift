@@ -81,11 +81,12 @@ struct GlassTabStrip<Badge: View>: View {
         return Label {
             Text(item.label)
         } icon: {
-            // Selected icon picks up the accent; it bounces once when picked.
-            // Neither changes layout, so the glass layer's hidden copy
-            // still matches this one exactly.
+            // Vibrant system colours on glass, never a custom tint (Apple HIG;
+            // an accent icon on the accent-tinted lens lost contrast in dark
+            // mode). The icon bounces once when picked — no layout change,
+            // so the glass layer's hidden copy still matches exactly.
             Image(systemName: item.icon)
-                .foregroundStyle(isSelected ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.secondary))
+                .foregroundStyle(isSelected ? .primary : .secondary)
                 .symbolEffect(.bounce.up, options: .speed(1.4), value: bounceTicks[item.tag, default: 0])
         }
             .font(.system(size: fontSize, weight: isSelected ? .semibold : .regular))
@@ -108,7 +109,7 @@ struct GlassTabStrip<Badge: View>: View {
             .background {
                 if isSelected {
                     Color.clear
-                        .glassEffect(.regular.tint(Color.accentColor.opacity(0.30)), in: .capsule)
+                        .glassEffect(.regular.tint(Color.accentColor.opacity(0.22)), in: .capsule)
                         .glassEffectID("selection", in: glassNS)
                 } else if isHovered {
                     Color.clear
