@@ -565,6 +565,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         // publish and the delete-on-collision are gone; what remains
         // removes this run's own partial after a stall / cancel / failure.
         "VideoScan/MediaOps/ReformatJob.swift": 5,
+        // FootageSpectrumHelper 1 (2026-10-03, Compare Footage trial): the
+        // 14-day prune of its own run folders under
+        // ~/Library/Caches/VideoScan/spectrum/runs (UUID-named, canonical
+        // parent re-checked) — app cache, never a catalog record's file.
+        "VideoScan/MediaOps/FootageSpectrumHelper.swift": 1,
         "VideoScan/MediaOps/RelocateEngine.swift": 1, "VideoScan/MediaOps/RescueFileCopier.swift": 3,
         "VideoScan/Media/ReviewThumbnailRenderer.swift": 1, "VideoScan/Volumes/ScanCheckpoint.swift": 1,
         "VideoScan/Volumes/ScanJobsStorage.swift": 2, "VideoScan/MediaOps/SignatureVerification.swift": 2,

@@ -29,6 +29,8 @@ struct StewardCardActions {
     var showOnePerFootage: () -> Void = {}
     var reviewBelow: () -> Void = {}
     var reviewCopies: () -> Void = {}
+    /// "Compare these…" — the Footage Spectrum trial (2026-10-03).
+    var compareFootage: () -> Void = {}
     var skip: () -> Void = {}
     var bringBack: () -> Void = {}
 }
@@ -342,6 +344,7 @@ struct StewardCardView: View {
                            : "Goes to the Catalog with just the clips here that are copies of each other. Nothing is selected or changed.",
                        action: actions.reviewCopies)
             }
+            compareFootageButton(id: "steward.event.compareFootage")
         case .reclaimDrive, .reclaimGroup:
             showInCatalogButton
             button("Delete duplicates on \(item.driveLabel.isEmpty ? "this drive" : item.driveLabel)…", "trash",
@@ -353,6 +356,7 @@ struct StewardCardView: View {
                    help: "Every clip in the group, its part in it, and your say on whether they are the same footage",
                    action: actions.openFootageGroup)
             showInCatalogButton
+            compareFootageButton(id: "steward.action.compareFootage")
             button("Show one per footage in the Catalog", "rectangle.stack", ColorActionButton.Palette.play,
                    id: "steward.action.onePerFootage", enabled: true,
                    help: "Turns on “One Per Footage” in the Catalog's Show menu and goes there: each set of the same footage is shown once",
@@ -374,6 +378,16 @@ struct StewardCardView: View {
                    help: "Not now. It stays away until its files or its size change by a tenth or more.",
                    action: actions.skip)
         }
+    }
+
+    /// Looks only: the clips' pictures and sound side by side in the
+    /// Footage Spectrum window (up to 8; the archive copy or likely
+    /// original first, then the biggest).
+    private func compareFootageButton(id: String) -> some View {
+        button("Compare these…", "waveform.path.ecg.rectangle", ColorActionButton.Palette.info,
+               id: id, enabled: item.recordIDs.count >= FootageSpectrumPlanner.minFiles,
+               help: "Lays up to \(FootageSpectrumPlanner.maxFiles) of these clips side by side on one time line — picture and sound — in its own window, the archive copy or likely original first. Nothing is changed.",
+               action: actions.compareFootage)
     }
 
     private var showInCatalogButton: some View {

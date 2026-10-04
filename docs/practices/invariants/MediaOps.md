@@ -32,6 +32,7 @@ paths:
   - VideoScan/VideoScan/MediaOps/BalanceAudioJob.swift
   - VideoScan/VideoScan/MediaOps/CleanupJob.swift
   - VideoScan/VideoScan/MediaOps/CleanupFFmpegEngine.swift
+  - VideoScan/VideoScan/MediaOps/FootageSpectrum*.swift
   - VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift
   - VideoScan/VideoScanCore/Sources/VideoScanCore/CleanupEngine.swift
 ---
@@ -47,6 +48,7 @@ paths:
 7. **MOPS-7** Catalog and disk agree after every item: a record is marked deleted, trashed or moved only after the filesystem call succeeded. Stop and Pause leave a resumable state, never a half-applied item.
 8. **MOPS-8** A path used for a destructive call comes from the catalog record and stays inside its volume root; symlinks are not followed onto another volume; a renamed or replaced file (identity changed since planning) is refused.
 9. **MOPS-9** Every destructive lane logs START, a result line per item and OUTCOME through the one sink (console, catalog.log, videoscan.log) and shows as an MFO row; nothing destructive runs silently.
+10. **MOPS-10** Compare Footage (Footage Spectrum) only READS media: it writes nothing but its own run folder and extraction cache under `~/Library/Caches/VideoScan/spectrum`, and its one deletion is the 14-day prune of UUID-named run folders directly under `<root>/runs` (canonical parent re-checked) — never the cache, never anything else.
 
 ## Known and accepted (do not report)
 - A crash can leave a partial-named output behind; partial-file naming and cleanup find it later.
