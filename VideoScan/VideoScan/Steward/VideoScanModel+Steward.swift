@@ -29,6 +29,13 @@
 //   or just promoted, a running Prepare) ..... duplicateDeletionHoldRule()
 //                                              (VideoScanModel+Duplicates)
 //
+// WHERE rule 2 runs (2026-10-04 perf; Rick's Time Profiler trace had it at
+// 1.1 s of main thread per refresh): the gate's inputs and each record's
+// subject + hold are captured on the main actor; the per-record gate runs
+// in the detached build task. WHAT it decides is unchanged — the main-actor
+// reference `stewardProtectionRule()` and the off-main path are pinned
+// equal record for record (StewardOffMainProtectionTests).
+//
 // Rule 2 is about what a card proposes to LET GO. An event card proposes
 // nothing of the kind — it lists what belongs together — so it may list an
 // archived clip or one the Angel has chosen, and says so ("3 are in the
@@ -63,8 +70,32 @@ final class StewardSnapshot: ObservableObject {
     }
 }
 
+/// Moves the projected rows into the detached build exactly once, so the
+/// build owns the only reference and can fill in `protection` in place.
+/// (For Rick: ≈ a std::move through a heap cell; the lock makes the single
+/// hand-over safe across threads.)
+final class StewardInputHandoff: @unchecked Sendable {
+    private var rows: [StewardInput]?
+    private let lock = NSLock()
+
+    init(_ rows: [StewardInput]) { self.rows = rows }
+
+    func take() -> [StewardInput] {
+        lock.lock()
+        defer { lock.unlock() }
+        let taken = rows ?? []
+        rows = nil
+        return taken
+    }
+}
+
 extension VideoScanModel {
 
+    /// THE REFERENCE for rule 2, asked record by record on the main actor.
+    /// The live refresh asks the very same rules as captured values off the
+    /// main actor (`stewardRuleCapture` + `resolveStewardProtection`);
+    /// StewardOffMainProtectionTests pins the two equal.
+    ///
     /// The rule-2 answer for one record, from the Delete planner's own two
     /// rules (see the file header), in the planner's own order. Build ONCE
     /// per pass and call per record: the archive-drive snapshot and the
@@ -88,12 +119,71 @@ extension VideoScanModel {
         }
     }
 
+    /// What rule 2 needs of one record, captured on the main actor: the
+    /// bulk-verb gate's subject and the planner's hold (a few set lookups).
+    struct StewardRuleFacts: Sendable, Equatable {
+        let subject: BulkDeleteSubject
+        let hold: DuplicateDeletionHold?
+    }
+
+    /// The main-actor half of the off-main rule 2 (2026-10-04 perf): the
+    /// Delete planner's bulk-verb gate captured as a value
+    /// (`bulkDeleteGate(volume: archiveDrive)`, the same archive-drive
+    /// snapshot `stewardProtectionRule` uses) and, per record, its subject
+    /// and the hold rule's answer. The gate itself — the per-record path
+    /// work the 2026-10-04 trace caught on the main thread — runs in
+    /// `resolveStewardProtection`, off it.
+    func stewardRuleCapture() -> (gate: BulkDeleteGate, facts: (VideoRecord) -> StewardRuleFacts) {
+        let archiveDrive = archiveVolumeProtection()
+        let gate = bulkDeleteGate(volume: archiveDrive)
+        let hold = duplicateDeletionHoldRule()
+        // Used and dropped within one pass, so a strong `self` is fine.
+        return (gate, { r in StewardRuleFacts(subject: self.bulkDeleteSubject(r), hold: hold(r)) })
+    }
+
+    /// Rule 2's answer from the gate's refusal and the hold, in the
+    /// planner's order — the mapping `stewardProtectionRule` makes.
+    nonisolated static func stewardProtection(refusal: BulkDeleteRefusal?, hold: DuplicateDeletionHold?) -> StewardProtection {
+        switch refusal {
+        case .archiveTree?: return .archived
+        case .archiveVolume?, .archiveVolumeUnprovable?: return .archiveDrive
+        case .readOnlyVolume?, .readOnlyVolumeDifferentDrive?: return .readOnlyDrive
+        case nil: break
+        }
+        switch hold {
+        case .promotedArchiveCopy?: return .archiveCopy
+        case .inUseByAngel?: return .angel
+        case nil: return .none
+        }
+    }
+
+    /// Off the main actor: fill every row's `protection` from its facts.
+    /// Pure. Same answer as `stewardProtectionRule()` asked of the same
+    /// records at capture time — pinned by StewardOffMainProtectionTests.
+    nonisolated static func resolveStewardProtection(_ inputs: inout [StewardInput], facts: [StewardRuleFacts],
+                                                     gate: BulkDeleteGate) {
+        precondition(inputs.count == facts.count, "facts are index for index with the rows")
+        for i in inputs.indices {
+            let f = facts[i]
+            inputs[i].protection = stewardProtection(refusal: gate.refusal(for: f.subject), hold: f.hold)
+        }
+    }
+
     /// Project on the main actor, build off it, publish once. A newer call
     /// cancels the in-flight one. Does nothing until the pane has asked.
+    /// Rule 2 — the per-record gate — is resolved in the detached task
+    /// from facts captured here (2026-10-04 perf: 1.1 s on the main thread
+    /// per refresh in Rick's trace).
     func scheduleStewardRefresh() {
         guard stewardWanted else { return }
         stewardTask?.cancel()
-        let inputs = StewardCaseBuilder.project(records, protection: stewardProtectionRule())
+        let rule = stewardRuleCapture()
+        let gate = rule.gate
+        let projected = StewardCaseBuilder.project(records, facts: rule.facts)
+        // Handed to the detached task by moving, so filling in `protection`
+        // there mutates in place instead of copying ~35 MB at 100k.
+        let handoff = StewardInputHandoff(projected.inputs)
+        let ruleFacts = projected.facts
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let alsoCleanUp = duplicateKeeperSettings.alsoCleanUpWorkingCopies
         // QA F6(a): the Delete planner's own policy (a Sendable value), so
@@ -114,7 +204,9 @@ extension VideoScanModel {
         let reviewed = store.reviewedSnapshot()
         stewardTask = Task { [weak self] in
             let queue = await Task.detached(priority: .utility) {
-                StewardCaseBuilder.build(inputs: inputs, volumes: volumes,
+                var inputs = handoff.take()
+                VideoScanModel.resolveStewardProtection(&inputs, facts: ruleFacts, gate: gate)
+                return StewardCaseBuilder.build(inputs: inputs, volumes: volumes,
                                          mountedRoots: VolumeReachability.currentMountedRoots(),
                                          alsoCleanUpWorkingCopies: alsoCleanUp, workingCopyPolicy: workingCopyPolicy,
                                          events: events, skipped: skipped, reviewed: reviewed,

@@ -240,6 +240,25 @@ enum StewardCaseBuilder {
         return out
     }
 
+    /// The same pass, with rule 2 left for OFF the main actor (2026-10-04
+    /// perf): every row's `protection` is `.none` here, and `facts` gives,
+    /// index for index, what the rule needs of each row's record — the
+    /// model resolves them in its detached task
+    /// (`VideoScanModel.resolveStewardProtection`) before `build`.
+    @MainActor
+    static func project<Facts>(_ records: [VideoRecord], calendar: Calendar = .current,
+                               facts: (VideoRecord) -> Facts) -> (inputs: [StewardInput], facts: [Facts]) {
+        var out: [StewardInput] = []
+        var side: [Facts] = []
+        out.reserveCapacity(records.count)
+        side.reserveCapacity(records.count)
+        for r in records where !(r.isPurged || r.isSetAside || r.isSuperseded) {
+            out.append(StewardInput(record: r, protection: .none, calendar: calendar))
+            side.append(facts(r))
+        }
+        return (out, side)
+    }
+
     // MARK: Entry point
 
     /// `volumes`: every scan target's root + reachability. `mountedRoots`:
