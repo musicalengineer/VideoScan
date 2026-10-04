@@ -336,6 +336,9 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// Where family-tree-bookmarks.json lives. nil in tests that inject an
     /// originals directory, which is what keeps them off the real archive.
     private var bookmarksDirectory: URL?
+    /// Last "context menu opened" log time per person (NOT @Published —
+    /// writing it must never redraw anything).
+    private var menuLogStamps: [String: Date] = [:]
     private let bookmarksFollowSource: Bool
     private var bookmarkSourceTransition = false
     /// People the reader marked to come back to (Rick, 2026-08-30).
@@ -2176,6 +2179,16 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     func isBookmarked(_ personID: String) -> Bool { bookmarks.contains(personID) }
 
+    /// One "context menu opened" line per person per this interval.
+    static let menuLogInterval: TimeInterval = 10 * 60
+
+    /// True (and stamps now) when this person's menu line is due.
+    func menuLogDue(_ personID: String, now: Date = Date()) -> Bool {
+        if let last = menuLogStamps[personID], now.timeIntervalSince(last) < Self.menuLogInterval { return false }
+        menuLogStamps[personID] = now
+        return true
+    }
+
     /// Archives worth a look for this person, chosen from their places.
     /// Derived per call — nothing stored, nothing fetched.
     ///
@@ -2183,14 +2196,20 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// for this, ie, right click, bookmark, research etc."): this is only
     /// ever called while the card's context menu is being built, so a line
     /// here is also proof that the right-click reached the card at all.
+    ///
+    /// THROTTLED (2026-10-04): SwiftUI builds a card's context menu with the
+    /// card's body, not only on right-click, so this ran on every redraw —
+    /// 400–2,800 log writes a minute on the main thread while the tree was
+    /// live. Now at most one line per person per `menuLogInterval`.
     func researchLinks(for personID: String, logMenuOpen: Bool = true) -> [FamilyTreeResearchLinks.Link] {
+        let shouldLog = logMenuOpen && menuLogDue(personID)
         guard let graph, let person = graph.people[personID] else {
-            if logMenuOpen {
+            if shouldLog {
                 appLog.write("Family Tree: context menu opened on \(personID) but the tree has no such person")
             }
             return []
         }
-        if logMenuOpen {
+        if shouldLog {
             appLog.write("Family Tree: context menu opened on \(person.name) (\(personID))")
         }
         // GH #230: the death year narrows the Record Finder's year windows;

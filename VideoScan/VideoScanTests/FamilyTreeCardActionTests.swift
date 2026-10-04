@@ -140,3 +140,21 @@ struct FamilyTreeCardActionTests {
         #expect(model.selectedID == before, "a bad id must not become the selection")
     }
 }
+
+// MARK: - Context-menu log throttle (2026-10-04)
+
+@Suite("Family Tree — context-menu log throttle")
+struct FamilyTreeMenuLogThrottleTests {
+    /// The menu is built with every card redraw; the "opened" line must not
+    /// be written per redraw (it was 400–2,800 lines a minute).
+    @Test @MainActor func oneLinePerPersonPerInterval() {
+        let model = FamilyTreeLiveModel(
+            originalsDirectory: URL(fileURLWithPath: "/nonexistent/never-read"))
+        let t0 = Date()
+        #expect(model.menuLogDue("@I1@", now: t0))
+        #expect(!model.menuLogDue("@I1@", now: t0.addingTimeInterval(1)))
+        #expect(!model.menuLogDue("@I1@", now: t0.addingTimeInterval(FamilyTreeLiveModel.menuLogInterval - 1)))
+        #expect(model.menuLogDue("@I2@", now: t0), "per person, not global")
+        #expect(model.menuLogDue("@I1@", now: t0.addingTimeInterval(FamilyTreeLiveModel.menuLogInterval)))
+    }
+}
