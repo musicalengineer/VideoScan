@@ -162,6 +162,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// flag on each archived file promoted before locking existed.
     /// Metadata only — no media is read. ArchiveLockJob.
     case lockArchive
+    /// "Compare Footage…" (Footage Spectrum trial, 2026-10-03): 2–8 chosen
+    /// videos read once each by scripts/footage_spectrum.py and shown as
+    /// colour-over-time strips on one time line in the Footage Spectrum
+    /// window. Read-only on media; output only under
+    /// ~/Library/Caches/VideoScan/spectrum. FootageSpectrumJob.
+    case compareFootage
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -197,6 +203,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .findSimilarFootage: return "Footage"
         case .bindFixity: return "Bind"
         case .lockArchive: return "Lock"
+        case .compareFootage: return "Spectrum"
         }
     }
 
@@ -229,6 +236,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .findSimilarFootage: return "find similar footage"
         case .bindFixity: return "bind fixity"
         case .lockArchive: return "lock archive files"
+        case .compareFootage: return "compare footage"
         }
     }
 }

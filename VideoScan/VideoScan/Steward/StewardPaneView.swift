@@ -391,6 +391,16 @@ struct StewardPaneView: View {
                 note(.acted, c, action: "Review the copies (\(c.copyReviewIDs.count.formatted()))")
                 model.showInCatalog(focus: Set(c.copyReviewIDs), label: "Copies in \(c.title)")
             },
+            compareFootage: {
+                guard let center = fileOpsCenterReference else { return }
+                note(.acted, c, action: "Compare these")
+                // The run's title names the kind and the count — never an
+                // event's title (log lines carry kinds and counts only).
+                model.startFootageSpectrum(ids: c.recordIDs, title: "\(c.kind.chip) — \(c.recordIDs.count) clips",
+                                           preferredFirst: c.likelyOriginalID, center: center,
+                                           source: "Triage suggestions")
+                FootageSpectrumWindowOpener.open(using: openWindow, source: "triage-suggestions")
+            },
             skip: {
                 note(.skipped, c)
                 skipStore.skip(c)
