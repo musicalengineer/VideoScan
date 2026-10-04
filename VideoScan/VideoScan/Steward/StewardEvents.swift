@@ -20,7 +20,8 @@
 // the COPY. The steward names nothing of the Angel's inside. This file
 // only GROUPS what those two say:
 //
-//   Event          every clip that carries the same labelled occasion in
+//   Event          (two clips at least, or one whole tape of 20 minutes —
+//                  QA F8) every clip that carries the same labelled occasion in
 //                  the same year (the labeller's own key: "e:christmas:1994",
 //                  "e:birthday:alex:2006"). A clip with several labels is in
 //                  each of its events, and its card row says "also in: …".
@@ -130,6 +131,10 @@ enum StewardEvents {
     /// Events kept that are NOT skipped (the headline lane: far more than
     /// the housekeeping lanes' `maxCasesPerKind`).
     static let maxEventCases = 200
+    /// Events F8: an event card needs this many clips…
+    static let minEventClips = 2
+    /// …unless its one clip is a whole tape (20 minutes or more).
+    static let wholeTapeSeconds: Double = 20 * 60
     static let maxSkippedEvents = 100
     /// Other occasions named on the "also in" line before "and N more".
     static let maxAlsoInNames = 3
@@ -344,7 +349,7 @@ enum StewardEvents {
         var events: [StewardCase] = []
         var active = 0, hidden = 0
         for (key, bucket) in ordered {
-            guard let id = caseID(bucket.label) else { continue }
+            guard let id = caseID(bucket.label), isEventSized(bucket.count, seconds: bucket.seconds) else { continue }
             let facts = StewardFacts(bytes: bucket.bytes, count: bucket.count)
             if let remembered = catalog.skipped[id], !StewardSkipStore.isMaterialChange(from: remembered, to: facts) {
                 guard hidden < maxSkippedEvents else { continue }
@@ -358,6 +363,12 @@ enum StewardEvents {
             if active >= maxEventCases, hidden >= maxSkippedEvents { break }
         }
         return (events, dayCases(unlabelled, catalog: catalog, online: online))
+    }
+
+    /// Events F8: one short clip is not an event — two clips (placed
+    /// directly or by matching footage), or one whole tape.
+    nonisolated static func isEventSized(_ clips: Int, seconds: Double) -> Bool {
+        clips >= minEventClips || seconds >= wholeTapeSeconds
     }
 
     /// Step 1 — each clip joins each of its labelled occasions once; a
