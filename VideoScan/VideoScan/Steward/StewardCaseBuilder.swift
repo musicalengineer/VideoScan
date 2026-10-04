@@ -257,6 +257,7 @@ enum StewardCaseBuilder {
                       workingCopyPolicy: DuplicateKeeperPolicy = .unconfigured,
                       events: ArchiveAngel.OccasionReader = ArchiveAngel.OccasionReader(),
                       skipped: [String: StewardFacts] = [:],
+                      reviewed: [String: StewardFacts] = [:],
                       calendar: Calendar = .current,
                       now: Date = Date()) -> StewardQueue {
         let scanRoots = volumes.map(\.root).sorted { $0.count > $1.count }
@@ -317,7 +318,8 @@ enum StewardCaseBuilder {
                                 workingCopyPolicy: workingCopyPolicy, skipped: skipped)
         let footage = footageCases(inputs: inputs, roots: roots, groups: footageGroups, online: online,
                                    placements: placements, skipped: skipped, calendar: calendar)
-        let junkCases = junkCases(inputs: inputs, roots: roots, clusters: junk, online: online, skipped: skipped)
+        let junkCases = junkCases(inputs: inputs, roots: roots, clusters: junk, online: online, skipped: skipped,
+                                  reviewed: reviewed)
         let occasions = StewardEvents.cases(
             StewardEvents.Catalog(inputs: inputs, roots: roots, placements: placements,
                                   footageGroups: footageGroups, skipped: skipped),
@@ -630,7 +632,8 @@ enum StewardCaseBuilder {
     // MARK: Probably not worth keeping
 
     static func junkCases(inputs: [StewardInput], roots: [String], clusters: [String: [Int]],
-                          online: (String) -> Bool, skipped: [String: StewardFacts] = [:]) -> [StewardCase] {
+                          online: (String) -> Bool, skipped: [String: StewardFacts] = [:],
+                          reviewed: [String: StewardFacts] = [:]) -> [StewardCase] {
         var out: [StewardCase] = []
         for (key, members) in clusters where members.count >= minJunkCluster {
             guard let first = members.first, let reason = inputs[first].junkReasonKey else { continue }
@@ -652,6 +655,9 @@ enum StewardCaseBuilder {
                 copy(inputs[$0], root: root, online: online(root), standing: .member)
             }
             c.junkReason = reason
+            // QA F8: a person decided every clip here from "Review these
+            // below" — gone until the facts move (StewardSkipStore header).
+            if let done = reviewed[c.id], !StewardSkipStore.isMaterialChange(from: done, to: c.facts) { continue }
             out.append(c)
         }
         out.sort {

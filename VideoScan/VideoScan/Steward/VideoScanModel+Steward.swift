@@ -111,13 +111,16 @@ extension VideoScanModel {
         let events = archiveAngel.occasionReader
         let now = Date()
         // What was skipped, so the per-kind limit is spent on the rest.
-        let skipped = StewardSkipStore(defaults: stewardDefaults).snapshot()
+        let store = StewardSkipStore(defaults: stewardDefaults)
+        let skipped = store.snapshot()
+        // …and the junk cards a person has finished from the table (QA F8).
+        let reviewed = store.reviewedSnapshot()
         stewardTask = Task { [weak self] in
             let queue = await Task.detached(priority: .utility) {
                 StewardCaseBuilder.build(inputs: inputs, volumes: volumes,
                                          mountedRoots: VolumeReachability.currentMountedRoots(),
                                          alsoCleanUpWorkingCopies: alsoCleanUp, workingCopyPolicy: workingCopyPolicy,
-                                         events: events, skipped: skipped,
+                                         events: events, skipped: skipped, reviewed: reviewed,
                                          now: now)
             }.value
             guard !Task.isCancelled, let self else { return }

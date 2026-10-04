@@ -62,7 +62,8 @@ struct StewardPaneView: View {
     @AppStorage("steward.pane.eventsByYear") private var eventsByYear = false
 
     /// "Review these below": the Triage table shows just these, selected.
-    let onReviewBelow: (_ ids: Set<UUID>, _ label: String) -> Void
+    /// `caseID` lets the Triage tab mark the card finished (QA F8).
+    let onReviewBelow: (_ ids: Set<UUID>, _ label: String, _ caseID: String) -> Void
 
     @State private var active: [StewardCase] = []
     @State private var skipped: [StewardCase] = []
@@ -385,7 +386,7 @@ struct StewardPaneView: View {
             },
             reviewBelow: {
                 note(.acted, c, action: "Review these below")
-                onReviewBelow(Set(c.recordIDs), c.title)
+                onReviewBelow(Set(c.recordIDs), c.title, c.id)
             },
             reviewCopies: {
                 guard !c.copyReviewIDs.isEmpty else { return }

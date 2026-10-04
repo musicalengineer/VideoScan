@@ -639,6 +639,45 @@ struct StewardSkipStoreTests {
         }
     }
 
+    /// Steward QA F8: Junk pressed from "Review these below" writes the same
+    /// Suspected Junk the analyzer writes, so the cluster never empties by
+    /// itself. When a person has decided every clip of the card, its card
+    /// is finished — gone until its facts move, and not offered as skipped.
+    @Test func aJunkCardIsFinishedWhenEveryClipHasAPersonsDecision() throws {
+        try withStoreThrowing { store, defaults in
+            let a = junk("/Volumes/SanDisk/a.mov"), b = junk("/Volumes/SanDisk/b.mov"), c = junk("/Volumes/SanDisk/c.mov")
+            let card = try #require(build([a, b, c]).cases.first { $0.kind == .junk })
+            // The Triage tab: Junk on two, Keep on the third (one at a time).
+            var review = StewardReview(caseID: card.id, ids: Set(card.recordIDs))
+            let step1 = review.note(.suspectedJunk, on: [a.id, b.id])
+            #expect(!step1, "one still undecided")
+            let step2 = review.note(.unreviewed, on: [b.id])
+            #expect(!step2, "Undo takes a decision back")
+            let step3 = review.note(.important, on: [c.id, UUID()])
+            #expect(!step3, "a row outside the card counts for nothing")
+            let step4 = review.note(.suspectedJunk, on: [b.id])
+            #expect(step4, "every clip decided")
+            #expect(review.markedJunk == [a.id, b.id])
+            var idle = StewardReview()
+            let idleDone = idle.note(.suspectedJunk, on: [a.id])
+            #expect(!idleDone, "no card under review: nothing to finish")
+            // What the tab stores: the card as it will be rebuilt — the two
+            // marked Junk (Keep took the third out of the cluster).
+            store.markReviewed(caseID: card.id, facts: StewardFacts(bytes: a.sizeBytes + b.sizeBytes, count: 2))
+            #expect(defaults.string(forKey: "steward.reviewed.\(card.id)") != nil, "key = steward.reviewed.<caseID>")
+            #expect(store.snapshot().isEmpty, "finished is not skipped")
+            var kept = c
+            kept.isUndecided = false
+            let rebuilt = buildReviewed([a, b, kept], reviewed: store.reviewedSnapshot())
+            #expect(!rebuilt.cases.contains { $0.kind == .junk }, "the finished card came back")
+            // New junk of the same kind on the drive: a material change — it is back.
+            let more = [a, b, kept, junk("/Volumes/SanDisk/d.mov")]
+            #expect(buildReviewed(more, reviewed: store.reviewedSnapshot()).cases.contains { $0.id == card.id })
+            // Without the memory (the base behaviour) the card would stay.
+            #expect(build([a, b, kept]).cases.contains { $0.id == card.id })
+        }
+    }
+
     @Test func factsRoundTripThroughTheStoredValue() {
         let facts = StewardFacts(bytes: 412_000_000_000, count: 1_208)
         #expect(StewardSkipStore.decode(StewardSkipStore.encode(facts)) == facts)
