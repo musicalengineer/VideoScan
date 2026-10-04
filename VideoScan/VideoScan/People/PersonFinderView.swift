@@ -182,6 +182,18 @@ struct PersonFinderView: View {
             }
             Divider()
 
+            // Videos of <person> — the PRIMARY view (Rick 2026-10-04, GH
+            // #272 trial): what we already know this person is in, catalog
+            // and archive together. Searches below are demoted.
+            if let profile = activeVideosProfile {
+                PersonVideosSection(profile: profile, catalogModel: catalogModel) { title in
+                    catalogModel.archivistSearchRequest = title
+                    selectedTab = 1
+                }
+                .frame(minHeight: 200, maxHeight: .infinity)
+                Divider()
+            }
+
             // Section 2: Searches
             sectionHeader("Searches", icon: "magnifyingglass",
                           collapsed: $searchesCollapsed,
@@ -204,6 +216,12 @@ struct PersonFinderView: View {
             }
         }
         .frame(minWidth: 960, maxHeight: .infinity, alignment: .top)
+    }
+
+    /// The selected person, when exactly one card is active.
+    private var activeVideosProfile: POIProfile? {
+        guard let uuid = model.settings.activeProfileUUID else { return nil }
+        return model.savedProfiles.first { $0.uuid == uuid }
     }
 
     private func sectionHeader(_ title: String, icon: String,

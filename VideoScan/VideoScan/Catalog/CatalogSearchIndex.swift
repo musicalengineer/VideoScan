@@ -386,6 +386,16 @@ final class CatalogSearchIndex {
         return out
     }
 
+    /// fullPaths tagged with any of `names` EXACTLY (lowercased, whole
+    /// name) in any of the three lists — the People tab's "Videos of …"
+    /// (2026-10-04). Exact, unlike `people:` search's substring rule, so
+    /// "Don" never pulls in "Donna"; no "family" wildcard. O(names).
+    func paths(forPersonNamesExactly names: Set<String>) -> Set<String> {
+        var out: Set<String> = []
+        for name in names { if let bucket = personIndex[name] { out.formUnion(bucket) } }
+        return out
+    }
+
     /// Person-name vocabulary with record counts, most-tagged first.
     /// Archivist autocomplete/hints; later, translator prompt seeding.
     func knownPeople() -> [(name: String, count: Int)] {
