@@ -372,6 +372,20 @@ extension VideoScanModel {
         (masterArchive, archiveAliasCandidates, record(forID: recordID).map { isArchiveCopy($0) } ?? false)
     }
 
+    /// EVERYTHING the removal boundary needs from the model, read in ONE
+    /// synchronous hop (codex #258 r4): the hold and today's Read-only marks
+    /// (`duplicateRemovalBoundaryWord`), the current Master Archive
+    /// designation (`duplicateRemovalBoundaryArchive`) and "Prefer the Trash
+    /// for every duplicate" as it is set now.
+    func duplicateRemovalBoundaryNow(recordID: UUID) -> DuplicateRemovalBoundaryNow {
+        let word = duplicateRemovalBoundaryWord(recordID: recordID)
+        let archive = duplicateRemovalBoundaryArchive(recordID: recordID)
+        return DuplicateRemovalBoundaryNow(holdNote: word.holdNote, readOnlyMarks: word.readOnlyMarks,
+                                           designation: archive.designation, aliasCandidates: archive.aliasCandidates,
+                                           isArchiveCopy: archive.isArchiveCopy,
+                                           preferTrash: duplicateKeeperSettings.preferTrashForEveryDuplicate)
+    }
+
     /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1, 2026-10-03):
     /// while the run cleaning `run.volumePath` decides one copy, may this
     /// OTHER member of the family be counted as a copy that remains?
@@ -1315,6 +1329,23 @@ enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
         if note.hasPrefix(leftAlonePrefix) { return String(note.dropFirst(leftAlonePrefix.count)) }
         return note.contains(readOnlyMarker) ? note : nil
     }
+}
+
+/// The model's part of the removal boundary, as one value that crosses to
+/// the disk thread (`VideoScanModel.duplicateRemovalBoundaryNow`).
+struct DuplicateRemovalBoundaryNow: Sendable {
+    var holdNote: String?
+    var readOnlyMarks: [ReadOnlyVolumeProtection.Mark]
+    var designation: MasterArchiveDesignation?
+    var aliasCandidates: [String]
+    var isArchiveCopy: Bool
+    var preferTrash: Bool
+
+    /// The catalog went away mid-pair: everything is held, and the most
+    /// conservative setting stands.
+    static let catalogGone = DuplicateRemovalBoundaryNow(
+        holdNote: DuplicateDeletionHold.leftAlonePrefix + "the catalog is no longer open", readOnlyMarks: [],
+        designation: nil, aliasCandidates: [], isArchiveCopy: false, preferTrash: true)
 }
 
 /// One Delete Duplicates run, as the survivor count needs to know it

@@ -627,4 +627,47 @@ struct DeleteDuplicatesCodex258Round4Tests {
             #expect(SourceTree.scan(try SourceTree.appSource(named: name)).unsupported.isEmpty, "\(name)")
         }
     }
+
+    // MARK: H — "Prefer the Trash for every duplicate", read at the removal
+
+    /// The setting is turned ON while phase two re-reads the pair in flight:
+    /// that very file goes to the Trash, not away.
+    @Test func preferTrashTurnedOnDuringPhaseTwoTrashesThePairInFlight() async throws {
+        let rig = makeRig("prefer", archiveFamily: true); defer { rig.cleanup() }
+        #expect(!rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate, "fixture: off at the copy's turn")
+        let job = try await run(rig, during: { rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate = true })
+        let rows = try #require(job.plan?.entries)
+        #expect(rows[0].status == .trashed && rows[0].tier == .trash,
+                "the pair in flight was \(rows[0].status) although \"Prefer the Trash\" was on before its removal: \(rows[0].tierReason ?? "")")
+        #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/a.mov").path), "A is in the Trash")
+        #expect(rows[1].status == .trashed, "and so is the next row (\(rows[1].status))")
+        #expect(job.runTally.deleted == 0 && job.runTally.trashed == 2)
+    }
+
+    /// Turned OFF mid-pair: the recorded Trash stands — the fresh reading
+    /// only ever makes the outcome more conservative.
+    @Test func preferTrashTurnedOffDuringPhaseTwoNeverUpgradesTheRecordedTrash() async throws {
+        let rig = makeRig("preferoff", archiveFamily: true); defer { rig.cleanup() }
+        rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate = true
+        let job = try await run(rig, during: { rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate = false })
+        let rows = try #require(job.plan?.entries)
+        #expect(rows[0].status == .trashed, "a recorded Trash was upgraded mid-pair (\(rows[0].status))")
+        #expect(rows[1].status == .deleted, "the NEXT row is decided afresh, with the setting off (\(rows[1].status))")
+    }
+
+    /// The model's part of the boundary is ONE value, read in one hop: the
+    /// hold, the marks, the designation and the setting together; a catalog
+    /// that went away holds, with the most conservative setting.
+    @Test func theBoundaryReadsTheModelOnceAndAGoneCatalogHolds() async throws {
+        let rig = makeRig("onehop"); defer { rig.cleanup() }
+        rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate = true
+        designateArchive(rig)
+        let now = rig.model.duplicateRemovalBoundaryNow(recordID: rig.a.id)
+        #expect(now.preferTrash && now.designation != nil && now.holdNote == nil && now.readOnlyMarks.isEmpty)
+        let ask = DeleteDuplicatesJob.removalBoundary(model: rig.model, recordID: rig.a.id, path: rig.a.fullPath)
+        let path = rig.a.fullPath
+        let answer = await Task.detached { ask(path) }.value
+        #expect(answer.holdNote == nil && answer.archive?.note.contains("the Master Archive") == true && answer.preferTrash)
+        #expect(DuplicateRemovalBoundaryNow.catalogGone.holdNote != nil && DuplicateRemovalBoundaryNow.catalogGone.preferTrash)
+    }
 }

@@ -431,7 +431,7 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
         let job = try SourceTree.appSource(named: "DeleteDuplicatesJob.swift")
         let verdict = try #require(job.range(of: "let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {"))
         let recheck = try #require(job.range(of: "let now = facts.recheck()", range: verdict.upperBound..<job.endIndex))
-        #expect(String(job[verdict.upperBound..<recheck.lowerBound]).contains("if let boundaryHold, let note = boundaryHold(ticket.quarantinedPath) {"),
+        #expect(String(job[verdict.upperBound..<recheck.lowerBound]).contains("let word = ask?(ticket.quarantinedPath)\n            if let note = word?.holdNote {"),
                 "the final verdict no longer asks the holds before the removal")
         #expect(job.components(separatedBy: "SignatureVerification.deleteQuarantined(").count == 2,
                 "a second path reaches the removal — it must ask the holds too")
@@ -440,10 +440,10 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
             let text = try String(contentsOf: url, encoding: .utf8)
             #expect(!text.contains("SignatureVerification.deleteQuarantined("), "\(relative) removes a quarantined duplicate on its own")
         }
-        #expect(job.contains("boundaryHold: Self.removalBoundaryHold(model: model, recordID: entry.id, path: entry.path),"))
-        #expect(job.contains("archiveCheck: archiveCheck, boundaryHold: boundaryHold,"))
-        #expect(job.contains("case .held: return DuplicateDeletionHold.inUseByAngel.note")
-                && job.contains("return model.duplicateRemovalBoundaryWord(recordID: recordID)")
+        #expect(job.contains("boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path))"))
+        #expect(job.contains("archiveCheck: archiveCheck, boundary: boundary)"))
+        #expect(job.contains("case .held: answer.holdNote = DuplicateDeletionHold.inUseByAngel.note")
+                && job.contains("return model.duplicateRemovalBoundaryNow(recordID: recordID)")
                 && job.contains("?? readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)"))
         let dispatch = try #require(job.range(of: "private func dispatchPairs("))
         let authorize = try #require(job.range(of: "switch model.authorizeDuplicateDeletion(entry: entry, volumePath: volumePath,",

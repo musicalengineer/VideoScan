@@ -377,7 +377,7 @@ struct DeleteDuplicatesCodex258Round2Tests {
                 "the worker's own Read-only refusal is an ordinary refusal again")
         #expect(job.contains("if let captured, captured.leavesAlone {\n") && job.contains("heldNote = DuplicateDeletionHold.leftAlonePrefix + captured.note"),
                 "phase two's captured check refuses a Read-only file instead of holding it")
-        #expect(job.contains("if let boundaryHold, let note = boundaryHold(ticket.quarantinedPath) {"))
+        #expect(job.contains("if let note = word?.holdNote {"))
         let gate = try SourceTree.appCode(named: "VideoScanModel+MasterArchive.swift")
         #expect(gate.components(separatedBy: "var leavesAlone: Bool {").count == 2, "ONE classification of a refusal")
         let check = try SourceTree.appCode(named: "ArchiveVolumeProtection.swift")

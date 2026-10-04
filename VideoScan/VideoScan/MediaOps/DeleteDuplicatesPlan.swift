@@ -612,6 +612,9 @@ struct DeletionTierDecision: Equatable, Sendable {
 enum DeletionTierText {
     static let notYetArchived = "not yet archived"
     static let preferTrashToggleLabel = "Prefer the Trash for every duplicate"
+    /// Why a pair recorded for an outright delete went to the Trash: the
+    /// setting was turned on while it was being read (codex #258 r4 H).
+    static let preferTrashTurnedOn = "\"\(preferTrashToggleLabel)\" was turned on before the removal"
     static let preferTrashCaption = "Off: a duplicate with three or more verified copies left behind (the keeper, an archive copy, siblings whose stored fixity still reproduces) on at least two different drives — or with the archive copy among them — is deleted outright; with two or more left otherwise, it goes to the drive's Trash instead; with fewer, it is left alone. On: every duplicate goes to the Trash, whatever the count. An archive copy counts but is not required."
     static func inTheTrashOf(_ volume: String) -> String { "in the Trash of \(volume)" }
     /// "1 file on SanDisk is waiting to be put back from quarantine".
