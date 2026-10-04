@@ -927,13 +927,14 @@ struct FamilyTreeView: View {
 
     private var treeCanvas: some View {
         VStack(spacing: 0) {
+            // Glass toolbar controls (Liquid Glass refresh, 2026-10-04).
             HStack(spacing: 12) {
                 Button {
                     toggleSidebar()
                 } label: {
                     Image(systemName: "sidebar.left")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .help(isSidebarVisible ? "Hide the sidebar (⌥⌘S)" : "Show the sidebar (⌥⌘S)")
                 .accessibilityIdentifier("ft.toggleSidebar")
                 Text(model.lineChain?.title ?? canvasTitle)
@@ -948,7 +949,7 @@ struct FamilyTreeView: View {
                     } label: {
                         Label("Fit line", systemImage: "arrow.up.left.and.arrow.down.right")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .help("Scale the line to the canvas width (⌥⌘0)")
                     Menu {
                         Button("Export as PDF…") { exportLine(format: .pdf) }
@@ -964,7 +965,7 @@ struct FamilyTreeView: View {
                         Label("Export line", systemImage: "square.and.arrow.up")
                     }
                     .menuStyle(.button)
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .fixedSize()
                     .help("Save or print this line as a strip: names, years, places, photos")
                     .accessibilityIdentifier("ft.exportLine")
@@ -973,7 +974,7 @@ struct FamilyTreeView: View {
                     } label: {
                         Label("Show full tree", systemImage: "point.3.connected.trianglepath.dotted")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                 } else {
                     if model.isLive {
                         // Back to the first root (Rick) after wandering up
@@ -984,7 +985,7 @@ struct FamilyTreeView: View {
                         } label: {
                             Label("Home", systemImage: "house")
                         }
-                        .buttonStyle(.bordered)
+                        .buttonStyle(.glass)
                         .help("Focus the tree's root person")
                     }
                     Button {
@@ -993,27 +994,27 @@ struct FamilyTreeView: View {
                     } label: {
                         Label("Center", systemImage: "scope")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     Button {
                         fitToViewport()
                     } label: {
                         Image(systemName: "arrow.up.left.and.arrow.down.right")
                     }
-                    .buttonStyle(.bordered)
+                    .buttonStyle(.glass)
                     .help("Fit the tree to the canvas (⌥⌘0)")
                 }
                 // Zoom: buttons (⌘− / ⌘+), slider, pinch on the canvas.
                 Button { zoom = FamilyTreeZoomMath.zoomOut(zoom) } label: {
                     Image(systemName: "minus.magnifyingglass")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .help("Zoom out (⌘−)")
                 Slider(value: $zoom, in: FamilyTreeZoomMath.range)
                     .frame(width: 130)
                 Button { zoom = FamilyTreeZoomMath.zoomIn(zoom) } label: {
                     Image(systemName: "plus.magnifyingglass")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .help("Zoom in (⌘+)")
 
                 Divider().frame(height: 16)
@@ -1032,8 +1033,9 @@ struct FamilyTreeView: View {
                 } label: {
                     Image(systemName: effectiveScheme == .dark ? "moon.fill" : "sun.max.fill")
                 }
-                .menuStyle(.borderlessButton)
-                .frame(width: 38)
+                .menuStyle(.button)
+                .buttonStyle(.glass)
+                .fixedSize()
                 .help("Light or dark tree. Printing a line is always on white — see Export line.")
                 .onChange(of: appearance) { _, choice in
                     FamilyTreeAppearancePreference.save(choice, to: preferences)
