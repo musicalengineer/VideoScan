@@ -535,8 +535,14 @@ enum StewardCatalogDoor {
     static let viewFiltersKey = "catalog.viewFilters"
 
     static func turnOnOnePerFootage(in defaults: UserDefaults) {
-        var filters = CatalogShowingSummary.decode(defaults.string(forKey: viewFiltersKey) ?? "")
+        let raw = defaults.string(forKey: viewFiltersKey) ?? ""
+        var filters = CatalogShowingSummary.decode(raw)
         filters.insert(.onePerFootage)
-        defaults.set(CatalogShowingSummary.encode(filters), forKey: viewFiltersKey)
+        // QA F11: a filter this build does not know (another build's) is
+        // not ours to drop — it is kept, after the ones this build knows.
+        let unknown = raw.split(separator: Character(CatalogShowingSummary.separator)).map(String.init)
+            .filter { CatalogViewFilter(rawValue: $0) == nil }
+        let tokens = [CatalogShowingSummary.encode(filters)] + unknown
+        defaults.set(tokens.filter { !$0.isEmpty }.joined(separator: CatalogShowingSummary.separator), forKey: viewFiltersKey)
     }
 }

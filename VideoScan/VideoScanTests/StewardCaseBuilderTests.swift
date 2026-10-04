@@ -636,6 +636,23 @@ struct StewardSkipStoreTests {
             #expect(CatalogShowingSummary.decode(defaults.string(forKey: StewardCatalogDoor.viewFiltersKey) ?? "") == [.onePerFootage])
         }
     }
+
+    /// F11: a filter this build does not know (a later build's, renamed) is
+    /// KEPT when the door re-writes the setting — it is not ours to drop.
+    @Test func theCatalogDoorKeepsFiltersThisBuildDoesNotKnow() {
+        withStore { _, defaults in
+            let key = StewardCatalogDoor.viewFiltersKey
+            let unknown = "A Filter From Another Build"
+            defaults.set(CatalogShowingSummary.encode([.notYetArchived]) + CatalogShowingSummary.separator + unknown, forKey: key)
+            StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
+            let raw = defaults.string(forKey: key) ?? ""
+            #expect(raw.split(separator: Character(CatalogShowingSummary.separator)).map(String.init).contains(unknown),
+                    "the unknown filter was dropped: \(raw)")
+            #expect(CatalogShowingSummary.decode(raw) == [.notYetArchived, .onePerFootage])
+            StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
+            #expect(defaults.string(forKey: key) == raw, "idempotent, unknown filter included")
+        }
+    }
 }
 
 // MARK: - Scale
