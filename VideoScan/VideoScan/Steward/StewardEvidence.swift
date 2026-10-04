@@ -6,7 +6,7 @@
 // The proof on a Reclaim set card is worked out with the Delete planner's
 // OWN facts, by the planner's OWN functions — nothing is re-implemented:
 //
-//   VideoScanModel.deletionTierCandidates(record:keeper:excluding:)
+//   VideoScanModel.deletionTierCandidates(record:keeper:run:)
 //        the family's copies the job would ask the disk about
 //   DeletionTierFacts.gather(_:digest:)
 //        one stat per copy: does its stored evidence still describe the
@@ -28,6 +28,12 @@
 // keeper, only the keeper can be counted and the card says the run reads
 // the copy first. The keeper itself is counted here as the run counts it —
 // once it has been read.
+//
+// DIGESTS THAT DISAGREE (QA F6(b)). When the copy and the keeper both carry
+// stored evidence and it names different bytes, the run — which reads the
+// copy against the keeper — would refuse the pair. The card counts nothing
+// for that copy and says so ("These differ; the run would refuse this
+// pair."), rather than counting the keeper.
 //
 // ROWS OF THE SAME RUN (QA F1, F6). Every other copy of the set that the
 // same drive's cleanup would decide — the WHOLE set's (`StewardCase
@@ -73,6 +79,13 @@ struct StewardCopyProof: Sendable, Equatable {
     var readsFirst: Int = 0
     /// The tier if every one of those matches — nil = still left alone.
     var tierIfTheyMatch: DeletionTier?
+    /// QA F6(b): the copy's stored digest and the keeper's say DIFFERENT
+    /// bytes. The run reads the copy against the keeper and refuses the
+    /// pair, so the keeper is not counted for it and no outcome but the
+    /// refusal is promised.
+    var digestsDiffer = false
+
+    static let differLine = "These differ; the run would refuse this pair."
 
     /// "3 verified copies would remain: keeper on LaCie, archive copy on
     /// FamilyArchive, sibling b.mov on X9"
@@ -92,6 +105,7 @@ struct StewardCopyProof: Sendable, Equatable {
     /// What the run would do with it, by the survival rule — flat only
     /// when nothing stands between now and the decision.
     var outcomeLine: String {
+        if digestsDiffer { return Self.differLine }
         let n = readsFirst
         if !hadStoredDigest {
             let lead = "The run reads this copy first"
@@ -112,7 +126,7 @@ struct StewardCopyProof: Sendable, Equatable {
 
     /// Why some copies were not counted, when no read would change that.
     var caveatLine: String? {
-        guard hadStoredDigest, notCounted > 0, readsFirst == 0 else { return nil }
+        guard !digestsDiffer, hadStoredDigest, notCounted > 0, readsFirst == 0 else { return nil }
         return "\(notCounted) other cop\(notCounted == 1 ? "y was" : "ies were") not counted — not connected, different, or part of the same cleanup."
     }
 }
@@ -144,6 +158,9 @@ enum StewardEvidenceBuilder {
         /// The digest to ask with: the copy's own stored one, else the
         /// keeper's; nil when neither is stored.
         var digest: String?
+        /// Both stored digests, to see whether they disagree (QA F6(b)).
+        var copyDigest: String?
+        var keeperDigest: String?
     }
 
     struct Prepared: Sendable {
@@ -181,8 +198,9 @@ enum StewardEvidenceBuilder {
             let sameRun = Set(c.runRows.filter { $0.driveRoot == row.driveRoot && $0.id != row.id }.map(\.id))
             let candidates = model.deletionTierCandidates(
                 record: record, keeper: keeper, run: DuplicateRunScope(volumePath: row.driveRoot, pending: sameRun))
+            let mine = usableDigest(record), theirs = usableDigest(keeper)
             questions.append(Question(copyID: row.id, copyPath: record.fullPath, candidates: candidates,
-                                      digest: usableDigest(record) ?? usableDigest(keeper)))
+                                      digest: mine ?? theirs, copyDigest: mine, keeperDigest: theirs))
         }
         return Prepared(evidence: StewardGroupEvidence(caseID: c.id, keeperReason: reason, proofs: nil,
                                                        unprovedCopies: max(0, checkable.count - maxProvedCopies)),
@@ -239,6 +257,14 @@ enum StewardEvidenceBuilder {
             return (hoped, reads)
         }
 
+        // QA F6(b): stored evidence on both sides that disagrees — the run
+        // would refuse this pair after reading the copy; nothing is counted.
+        if let mine = q.copyDigest, let theirs = q.keeperDigest, mine.lowercased() != theirs.lowercased() {
+            return StewardCopyProof(copyID: q.copyID, remaining: 0, counted: [],
+                                    notCounted: candidates.archiveCopies.count + candidates.otherCopies.count
+                                        + candidates.alsoInThisRun.count + candidates.leftAloneByRun.count,
+                                    tier: nil, hadStoredDigest: true, digestsDiffer: true)
+        }
         guard let digest = q.digest else {
             // Nothing stored to ask with: the planner would count the
             // keeper alone until it has read this copy. The other copies

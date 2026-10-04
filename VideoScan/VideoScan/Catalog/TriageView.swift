@@ -133,6 +133,8 @@ struct TriageView: View {
     // stored. Empty = the table as it always was.
     @State private var stewardReviewIDs: Set<UUID> = []
     @State private var stewardReviewLabel: String = ""
+    /// QA F8: what has been decided here about the reviewed card's clips.
+    @State private var stewardReview = StewardReview()
 
     // Delete-Junk sheet state — mirror of the catalog-toolbar pattern in
     // CatalogHelpers.swift. Users naturally expect to tag-then-delete in
@@ -365,7 +367,7 @@ struct TriageView: View {
             // Collapsible; everything below it is the Triage tab as before.
             StewardPaneView(snapshot: model.stewardSnapshot,
                             coverage: model.analyzeCoverageSnapshot,
-                            onReviewBelow: { ids, label in reviewFromSteward(ids, label: label) })
+                            onReviewBelow: { ids, label, caseID in reviewFromSteward(ids, label: label, caseID: caseID) })
 
             toolbar
 
@@ -1011,6 +1013,23 @@ struct TriageView: View {
         }
         model.saveCatalogDebounced()
         catalogEdited()
+        noteStewardReviewDecision(disposition, on: ids)
+    }
+
+    /// QA F8: a decision pressed while a steward card's clips are shown.
+    /// When every one of them has a person's decision, the card is
+    /// finished: its rebuilt facts (the clips marked Junk here) are stored
+    /// so it stays gone until they move. O(selection) + O(clips marked Junk).
+    private func noteStewardReviewDecision(_ disposition: MediaDisposition, on ids: Set<UUID>) {
+        guard stewardReview.isActive, stewardReview.note(disposition, on: ids) else { return }
+        let junked = model.triageRecords(withIDs: stewardReview.markedJunk)
+        let facts = StewardFacts(bytes: junked.reduce(Int64(0)) { $0 + max(0, $1.sizeBytes) }, count: junked.count)
+        StewardSkipStore(defaults: model.stewardDefaults).markReviewed(caseID: stewardReview.caseID, facts: facts)
+        let line = "Tidy suggestions: reviewed — \(StewardCaseKind.junk.chip) · \(stewardReview.ids.count.formatted()) files decided"
+        model.log(line)
+        appLog.write(line)
+        stewardReview = StewardReview()
+        model.scheduleStewardRefresh()
     }
 
     /// "Compare Footage…": the selection, through the
@@ -1121,11 +1140,12 @@ struct TriageView: View {
     /// (QA 2026-10-03, F3: one click on Junk must never mark a whole
     /// cluster by accident; the person selects what they mean). Nothing is
     /// changed.
-    private func reviewFromSteward(_ ids: Set<UUID>, label: String) {
+    private func reviewFromSteward(_ ids: Set<UUID>, label: String, caseID: String) {
         selectedFilter = .all
         searchText = ""
         stewardReviewIDs = ids
         stewardReviewLabel = label
+        stewardReview = StewardReview(caseID: caseID, ids: ids)
         selectedIDs = []
     }
 
@@ -1145,6 +1165,7 @@ struct TriageView: View {
             Button("Show everything") {
                 stewardReviewIDs = []
                 stewardReviewLabel = ""
+                stewardReview = StewardReview()
                 selectedIDs = []
             }
             .accessibilityIdentifier("steward.review.showEverything")

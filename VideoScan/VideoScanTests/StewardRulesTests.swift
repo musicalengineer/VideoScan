@@ -318,6 +318,32 @@ struct StewardProofRuleTests {
         #expect(proof.counted.count == 1 && proof.counted[0].hasPrefix("keeper on "))
     }
 
+    /// Steward QA F6(b): the copy's stored evidence and the keeper's say
+    /// DIFFERENT bytes. The run reads the copy against the keeper and
+    /// refuses the pair — the card must not count the keeper for it, nor
+    /// promise any outcome but the refusal.
+    @Test func storedDigestsThatDisagreeAreARefusedPairNotACountedKeeper() throws {
+        let rig = try rig()
+        defer { try? FileManager.default.removeItem(at: rig.dir) }
+        let keeper = try file(rig, "here/keeper.mov", .keep, evidence: digest)
+        let copy = try file(rig, "here/copy.mov", .extraCopy, evidence: otherDigest)
+        let sibling = try file(rig, "elsewhere/sibling.mov", .extraCopy, evidence: otherDigest)
+        rig.model.records = [keeper, copy, sibling]
+        let proof = try stewardProof(rig, copy: copy)
+        #expect(proof.remaining == 0 && proof.tier == nil && proof.tierIfTheyMatch == nil, "said: \(proof.remainLine)")
+        #expect(!proof.counted.contains { $0.hasPrefix("keeper") }, "the keeper was counted for a copy it does not match")
+        #expect(proof.outcomeLine == "These differ; the run would refuse this pair.")
+        #expect(proof.caveatLine == nil)
+        let set = try #require(queue(rig.model).cases.first { $0.kind == .reclaimGroup })
+        let row = try #require(set.copies.first { $0.id == copy.id })
+        let words = try #require(StewardStandingWords.words(for: row, proof: proof))
+        #expect(words.contains("These differ; the run would refuse this pair.") && !words.contains("would remain"), "said: \(words)")
+        // Agreeing digests are the ordinary case, unchanged.
+        let same = try file(rig, "here/same.mov", .extraCopy, evidence: digest)
+        rig.model.records = [keeper, same]
+        #expect(try stewardProof(rig, copy: same).outcomeLine != "These differ; the run would refuse this pair.")
+    }
+
     @Test func theKeepersDigestStandsInWhenTheCopyHasNone() throws {
         let rig = try rig()
         defer { try? FileManager.default.removeItem(at: rig.dir) }
@@ -555,6 +581,44 @@ struct StewardExclusionRuleTests {
         #expect(q.placedClips == 3 && q.placeableClips == 3)
     }
 
+    /// Steward QA F6(a): with "Also clean up working copies" on, a copy is
+    /// checked only when the Delete planner's own cross-drive rule says so
+    /// (the keeper's drive known, connected, not retired, ranked higher).
+    /// The card must not show a proof for a copy the run would skip.
+    @Test func workingCopyModeChecksOnlyTheCopiesThePlannerWouldTake() async throws {
+        func run(keeperDrive: String) async throws -> (set: StewardCase, copy: VideoRecord, planner: [UUID], model: VideoScanModel) {
+            let model = isolatedModel()
+            let suite = "steward-tests-\(UUID().uuidString)"
+            model.stewardDefaults = try #require(UserDefaults(suiteName: suite))
+            defer { model.stewardDefaults.removePersistentDomain(forName: suite) }
+            model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = true
+            model.duplicateKeeperSettings.volumePrecedence = ["test_Listed"]
+            let g = UUID()
+            let keeper = record("/Volumes/\(keeperDrive)/keep.mov", size: 10, group: g, disposition: .keep)
+            let copy = record("/Volumes/test_Working/copy.mov", size: 10, group: g, disposition: .extraCopy)
+            model.records = [keeper, copy]
+            let planner = model.duplicateDeletionSelection(onVolume: "/Volumes/test_Working").targets.map(\.id)
+            model.stewardPaneAppeared()
+            defer { model.stewardPaneDisappeared() }
+            let q = try await shownQueue(model) { $0.isBuilt }
+            return (try #require(q.cases.first { $0.kind == .reclaimGroup }), copy, planner, model)
+        }
+        // The keeper's drive is in no list: the planner skips the copy.
+        let skipped = try await run(keeperDrive: "test_Unlisted")
+        #expect(skipped.planner.isEmpty, "fixture: the planner would not take it")
+        let row = try #require(skipped.set.copies.first { $0.id == skipped.copy.id })
+        #expect(row.standing != .wouldBeChecked, "the card would prove a copy the run skips")
+        #expect(skipped.set.actionableBytes == 0 && skipped.set.runRows.isEmpty)
+        #expect(try #require(StewardEvidenceBuilder.prepare(model: skipped.model, for: skipped.set)).questions.isEmpty)
+        let words = try #require(StewardStandingWords.words(for: row, proof: nil))
+        #expect(!words.contains("would check this copy"), "said: \(words)")
+        // The keeper's drive comes first in the list and is connected: taken.
+        let taken = try await run(keeperDrive: "test_Listed")
+        #expect(taken.planner == [taken.copy.id], "fixture: the planner would take it")
+        #expect(taken.set.copies.first { $0.id == taken.copy.id }?.standing == .wouldBeChecked)
+        #expect(taken.set.actionableBytes == 10)
+    }
+
     @Test func hiddenRecordsNeverReachTheBuilder() {
         let model = isolatedModel()
         let g = UUID()
@@ -594,5 +658,54 @@ struct StewardExclusionRuleTests {
         model.scheduleStewardRefresh()
         await model.stewardTask?.value
         #expect(model.stewardSnapshot.publishCount == 1, "an unchanged queue is not re-published")
+    }
+
+    /// The pane's queue, as the model builds it, once `until` holds (≤ 5 s).
+    private func shownQueue(_ model: VideoScanModel, until: (StewardQueue) -> Bool) async throws -> StewardQueue {
+        for _ in 0..<100 where !until(model.stewardSnapshot.queue) {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        await model.stewardTask?.value
+        return model.stewardSnapshot.queue
+    }
+
+    /// Steward QA F9: the Angel's picks change without a catalog change (a
+    /// sweep, a prepared batch). While the pane is on screen the queue is
+    /// rebuilt when they do; once it has left, nothing is.
+    @Test func anAngelChangeRebuildsTheQueueWhileThePaneIsShown() async throws {
+        let model = isolatedModel()
+        let suite = "steward-tests-\(UUID().uuidString)"
+        model.stewardDefaults = try #require(UserDefaults(suiteName: suite))
+        defer { model.stewardDefaults.removePersistentDomain(forName: suite) }
+        let g = UUID()
+        let copy = record("/Volumes/SanDisk/copy.mov", size: 10, group: g, disposition: .extraCopy)
+        model.records = [record("/Volumes/SanDisk/keep.mov", size: 10, group: g, disposition: .keep), copy]
+        model.stewardPaneAppeared()
+        #expect(try await shownQueue(model) { $0.isBuilt }.count(of: .reclaimGroup) == 1)
+        // Let the catalog-change pass (250 ms debounce) that setting the
+        // records started run out first: only the Angel's change may follow.
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        await model.stewardTask?.value
+        #expect(model.stewardSnapshot.queue.count(of: .reclaimGroup) == 1)
+
+        // Since GH #258 the planner's hold rule does not hold a copy the
+        // Angel merely recommends (`candidateIDs`) — only one in a prepared
+        // or promoted batch, on disk, or being prepared. So the Angel's
+        // change here is a PREPARED copy (main's test used a candidate,
+        // which no longer holds anything).
+        var summary = model.archiveAngel.recommendations
+        summary.preparedIDs = [copy.id]
+        summary.revision += 1
+        model.archiveAngel.publishRecommendations(summary)
+        let after = try await shownQueue(model) { $0.count(of: .reclaimGroup) == 0 }
+        #expect(after.count(of: .reclaimGroup) == 0, "the Angel now holds the only other copy: no card")
+
+        model.stewardPaneDisappeared()
+        let published = model.stewardSnapshot.publishCount
+        summary.preparedIDs = []
+        summary.revision += 1
+        model.archiveAngel.publishRecommendations(summary)
+        try await Task.sleep(nanoseconds: 1_000_000_000)
+        #expect(model.stewardSnapshot.publishCount == published, "off screen: the Angel's change builds nothing")
     }
 }

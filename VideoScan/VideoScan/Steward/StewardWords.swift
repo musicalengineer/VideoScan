@@ -140,14 +140,32 @@ enum StewardStandingWords {
             return "The one to keep."
         case .wouldBeChecked:
             guard let proof else { return "Delete duplicates on \(copy.drive) would check this copy." }
+            if proof.digestsDiffer {
+                return "This copy and the keeper are not the same file as far as the catalog knows. \(StewardCopyProof.differLine)"
+            }
             return (["If this copy goes, \(proof.remainLine).", proof.outcomeLine] + [proof.caveatLine].compactMap { $0 })
                 .joined(separator: " ")
         case .keeperOnAnotherDrive:
             return "Left alone for now — the copy to keep is on another drive."
+        case .workingCopyNotTaken(let verdict):
+            return "Left alone — the copy to keep is on another drive, and \(whyNotTaken(verdict))."
         case .protected(let why):
             return "\(why.words) — never offered."
         case .member:
             return nil
+        }
+    }
+}
+
+extension StewardStandingWords {
+    /// The Delete planner's cross-drive verdict, in family words.
+    nonisolated static func whyNotTaken(_ verdict: DuplicateKeeperPolicy.CrossVolumeVerdict) -> String {
+        switch verdict {
+        case .keeperOffline: return "that drive is not connected"
+        case .keeperRetired: return "that drive is retired"
+        case .keeperNotHigherRanked: return "that drive does not come before this one in your drive order"
+        case .keeperVolumeUnknown: return "that drive is not in your drive order"
+        case .sameVolume, .eligible: return "Delete duplicates would not take it"
         }
     }
 }

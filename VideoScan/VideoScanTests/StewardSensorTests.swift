@@ -92,6 +92,16 @@ struct StewardSensorTests {
         #expect(!body.contains("StewardEvidenceBuilder.prepare("))
         #expect(!body.contains("skipStore.partition("), "the skip memory is read in event handlers, not per render")
         #expect(!body.contains("StewardCaseBuilder.arrange("), "the list is narrowed and ordered in event handlers, not per render")
+        // Events F9: the "next up" rows and the focused card are worked out
+        // with the list, in event handlers — not by a filter over the
+        // (up to ~425) listed cases on every render.
+        // From the top of the view (its computed properties too) to the actions.
+        let viewStart = try #require(pane.range(of: "struct StewardPaneView: View {"))
+        let actions = try #require(pane.range(of: "private func actions(for c: StewardCase)"))
+        let viewBuilding = String(pane[viewStart.upperBound..<actions.lowerBound])
+        for scan in ["visible.filter", "visible.first", "visible.contains", "skipped.filter", "active.filter"] {
+            #expect(!viewBuilding.contains(scan), "a view-building property scans the list: `\(scan)`")
+        }
     }
 
     /// The filter and "By year" are pure view state: two stored settings,
@@ -228,7 +238,7 @@ struct StewardSensorTests {
         }
         // The pane hands junk cases to the Triage table and nowhere else.
         let pane = code(try source("StewardPaneView.swift"))
-        #expect(pane.contains("onReviewBelow(Set(c.recordIDs), c.title)"))
+        #expect(pane.contains("onReviewBelow(Set(c.recordIDs), c.title, c.id)"))
     }
 
     @Test func ruleTwoUsesTheCanonicalPredicates() throws {
@@ -318,6 +328,14 @@ struct StewardSensorTests {
         #expect(body.contains("stewardReviewIDs = ids"), "it narrows the table")
         #expect(!body.contains("selectedIDs = ids"), "it must not select the records")
         #expect(body.contains("selectedIDs = []"), "…and it clears whatever was selected before")
+        // QA F8: every decision pressed in the tab — buttons and context
+        // menu share applyDisposition — is noted against the reviewed card.
+        #expect(body.contains("stewardReview = StewardReview(caseID: caseID, ids: ids)"))
+        let apply = try #require(src.range(of: "private func applyDisposition("))
+        let applyEnd = try #require(src.range(of: "private func noteStewardReviewDecision(", range: apply.upperBound..<src.endIndex))
+        #expect(String(src[apply.upperBound..<applyEnd.lowerBound]).contains("noteStewardReviewDecision(disposition, on: ids)"))
+        #expect(src.contains("StewardSkipStore(defaults: model.stewardDefaults).markReviewed(caseID: stewardReview.caseID, facts: facts)"))
+        #expect(code(try source("VideoScanModel+Steward.swift")).contains("reviewed: reviewed"), "the builder hears what was finished")
         let card = code(try source("StewardCardView.swift"))
         #expect(!card.contains("in the table below, selected"), "the button's help no longer promises a selection")
     }

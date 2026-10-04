@@ -34,9 +34,12 @@
 // archived clip or one the Angel has chosen, and says so ("3 are in the
 // archive").
 //
-// The Angel's sets change without a catalog mutation (a sweep, a batch); the
-// queue picks that up at the next catalog change or when the pane appears.
-// The run itself asks again at every copy's turn.
+// The Angel's sets change without a catalog mutation (a sweep, a batch).
+// While a pane is on screen the model watches the Angel's published
+// recommendations (`archiveAngel.$recommendations`, its public surface) and
+// rebuilds the queue — debounced; the planner's hold rule is re-asked and an
+// unchanged queue publishes nothing (QA F9). Off screen, nothing is
+// watched. The run itself asks again at every copy's turn.
 //
 // (For Rick: `Task.detached` ≈ a worker thread that does NOT inherit the
 // caller's actor; only Sendable values cross.)
@@ -93,6 +96,10 @@ extension VideoScanModel {
         let inputs = StewardCaseBuilder.project(records, protection: stewardProtectionRule())
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let alsoCleanUp = duplicateKeeperSettings.alsoCleanUpWorkingCopies
+        // QA F6(a): the Delete planner's own policy (a Sendable value), so
+        // a working copy is "checked" only when the planner's cross-drive
+        // rule would take it.
+        let workingCopyPolicy = alsoCleanUp ? duplicateKeeperPolicy() : .unconfigured
         // What the event labeller is told, exactly as the Angel tells it:
         // the policy's birthday window and the People tab's birthdays (the
         // Angel's own reading of them, off the main actor when it starts
@@ -101,12 +108,16 @@ extension VideoScanModel {
         let events = archiveAngel.occasionReader
         let now = Date()
         // What was skipped, so the per-kind limit is spent on the rest.
-        let skipped = StewardSkipStore(defaults: stewardDefaults).snapshot()
+        let store = StewardSkipStore(defaults: stewardDefaults)
+        let skipped = store.snapshot()
+        // …and the junk cards a person has finished from the table (QA F8).
+        let reviewed = store.reviewedSnapshot()
         stewardTask = Task { [weak self] in
             let queue = await Task.detached(priority: .utility) {
                 StewardCaseBuilder.build(inputs: inputs, volumes: volumes,
                                          mountedRoots: VolumeReachability.currentMountedRoots(),
-                                         alsoCleanUpWorkingCopies: alsoCleanUp, events: events, skipped: skipped,
+                                         alsoCleanUpWorkingCopies: alsoCleanUp, workingCopyPolicy: workingCopyPolicy,
+                                         events: events, skipped: skipped, reviewed: reviewed,
                                          now: now)
             }.value
             guard !Task.isCancelled, let self else { return }
@@ -118,7 +129,34 @@ extension VideoScanModel {
     func stewardPaneAppeared() {
         stewardPaneCount += 1
         stewardWanted = true
+        watchTheAngelForSteward()
         scheduleStewardRefresh()
+    }
+
+    /// How long the Angel's changes are gathered before one rebuild.
+    static let stewardAngelDebounceMS = 300
+
+    /// QA F9: the Angel's picks are rule 2's input, and they change without
+    /// any catalog change. Watch its published recommendations (the
+    /// façade's public surface) while the pane is up. `@Published` sends
+    /// BEFORE the value is stored, so the debounce also lets it land.
+    /// (For Rick: a Combine pipeline ≈ an observer callback with a
+    /// coalescing timer in front; the AnyCancellable is its RAII handle.)
+    func watchTheAngelForSteward() {
+        guard stewardAngelWatch == nil else { return }
+        stewardAngelWatch = archiveAngel.$recommendations
+            .dropFirst()
+            // No set-by-set filter here (merge of main's QA F9 with GH
+            // #258): rule 2 is the planner's hold rule, which reads more
+            // than this summary (batches on disk, a running Prepare, a
+            // hand-over) and not the Angel's mere candidates — so the
+            // steward does not second-guess which sets matter. The
+            // debounce coalesces a burst; an unchanged queue publishes
+            // nothing (`StewardSnapshot.publish`).
+            .debounce(for: .milliseconds(Self.stewardAngelDebounceMS), scheduler: DispatchQueue.main)
+            .sink { [weak self] _ in
+                MainActor.assumeIsolated { self?.scheduleStewardRefresh() }
+            }
     }
 
     /// The pane left the screen (QA F9): stop rebuilding the queue on every
@@ -128,6 +166,8 @@ extension VideoScanModel {
         stewardPaneCount = max(0, stewardPaneCount - 1)
         guard stewardPaneCount == 0 else { return }
         stewardWanted = false
+        stewardAngelWatch?.cancel()
+        stewardAngelWatch = nil
         stewardTask?.cancel()
         stewardTask = nil
     }

@@ -306,6 +306,9 @@ final class VideoScanModel: ObservableObject {
     var stewardPaneCount = 0
     /// Where the pane's Skip memory lives (tests hand in their own suite).
     var stewardDefaults: UserDefaults = .standard
+    /// While a pane is on screen: the Angel's picks changing (a sweep, a
+    /// batch) rebuilds the queue, debounced (QA F9).
+    var stewardAngelWatch: AnyCancellable?
 
     /// Everything the Triage tab draws (2026-10-03): sidebar counts, the
     /// status bar's numbers and the table's rows for the current filter /
