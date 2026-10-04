@@ -496,6 +496,8 @@ struct TriageView: View {
         .overlay(Divider(), alignment: .top)
     }
 
+    // Glass toolbar controls (Liquid Glass refresh, 2026-10-04); tints keep
+    // the per-action colour cues.
     private var toolbar: some View {
         HStack(spacing: 10) {
             Image(systemName: selectedFilter.icon)
@@ -528,7 +530,7 @@ struct TriageView: View {
                     Label("Delete Junk (\(snapshot.value.count(.confirmedJunk)))",
                           systemImage: "trash.fill")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .tint(.red)
                 .help("Move to Trash or delete permanently — sheet shows the split between reachable and offline volumes")
             }
@@ -541,7 +543,7 @@ struct TriageView: View {
             } label: {
                 Label("Compare Footage…", systemImage: "waveform.path.ecg.rectangle")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .tint(.purple)
             .disabled(!FootageSpectrumPlanner.selectionAllowed(selectedIDs.count))
             .help(FootageSpectrumPlanner.selectionHelp(selectedIDs.count))
@@ -552,7 +554,7 @@ struct TriageView: View {
             } label: {
                 Label("Archive", systemImage: "archivebox.fill")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .tint(.green)
             .disabled(selectedIDs.isEmpty)
             .help("Promote selected to Archive vault")
@@ -567,7 +569,7 @@ struct TriageView: View {
                 Label(isImporting ? "Importing…" : "Import…",
                       systemImage: "square.and.arrow.down.on.square")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .tint(.mint)
             .disabled(isImporting)
             .help("Import a media file from disk into the catalog as workspace-active")
@@ -585,7 +587,8 @@ struct TriageView: View {
             } label: {
                 Label(isAnalyzing ? "Analyzing..." : "Analyze", systemImage: "wand.and.stars")
             }
-            .menuStyle(.borderedButton)
+            .menuStyle(.button)
+            .buttonStyle(.glass)
             .controlSize(.large)
             .disabled(snapshot.value.triageTotal == 0 || isAnalyzing)
             .help("Score and classify files using heuristics")
@@ -617,7 +620,7 @@ struct TriageView: View {
             } label: {
                 Label("Keep", systemImage: "star.fill")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .tint(.blue)
             .disabled(selectedIDs.isEmpty)
             .help("Mark selected as Important")
@@ -627,7 +630,7 @@ struct TriageView: View {
             } label: {
                 Label("Repair", systemImage: "wrench.and.screwdriver.fill")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .tint(.teal)
             .disabled(selectedIDs.isEmpty)
             .help("Mark selected as Recoverable")
@@ -637,7 +640,7 @@ struct TriageView: View {
             } label: {
                 Label("Junk", systemImage: "exclamationmark.triangle")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .tint(.orange)
             .disabled(selectedIDs.isEmpty)
             .help("Mark selected as Suspected Junk")
@@ -647,7 +650,7 @@ struct TriageView: View {
             } label: {
                 Label("Undo", systemImage: "arrow.counterclockwise")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .disabled(selectedIDs.isEmpty)
             .help("Reset to Unreviewed")
         }
@@ -665,7 +668,7 @@ struct TriageView: View {
             } label: {
                 Label("Promote", systemImage: "archivebox.fill")
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.glassProminent)
             .disabled(selectedIDs.isEmpty)
             .help("Promote selected files to the Archive tab")
 
@@ -677,7 +680,7 @@ struct TriageView: View {
             } label: {
                 Label("Drop to Catalog", systemImage: "tray.and.arrow.down.fill")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .disabled(selectedIDs.isEmpty)
             .help("Treat as ordinary media — moves off Under Construction but keeps the file")
 
@@ -686,7 +689,7 @@ struct TriageView: View {
             } label: {
                 Label("Discard", systemImage: "trash")
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .disabled(selectedIDs.isEmpty)
             .help("Move the file to Trash and remove the record (recoverable from Finder until emptied)")
         }
