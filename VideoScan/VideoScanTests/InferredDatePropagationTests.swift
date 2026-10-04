@@ -1444,6 +1444,130 @@ private func realCatalogURL() -> URL {
         .appendingPathComponent("catalog.json")
 }
 
+/// What the NV12 invariant finds in `model.records` after a catch-up pass.
+struct NV12InvariantCount: Equatable {
+    /// Undated, un-user-dated rows that rule 2 SHOULD have dated: a
+    /// verified-same-bytes donor exists and the row may receive.
+    var leftBehind = 0
+    /// Undated rows in a bucket with a donor, but whose bytes conflict.
+    var unverifiedInBucket = 0
+    /// Undated Master Archive files beside a verified donor. Rick
+    /// 2026-09-27: archived records donate but never receive — rule 2
+    /// skips them by design, so they are counted here, not as a gap.
+    var archivedNeverReceive = 0
+}
+
+/// The NV12 invariant, using the SAME recipient predicates rule 2 uses
+/// (`isEligibleForDateInference`, `canDonateInferredDate`,
+/// `haveVerifiedSameContent`, and `isArchiveElement` on the model that ran
+/// the pass). Nightly red 2026-10-04: the inline version had no archive
+/// exclusion, so an undated archive copy whose source had just been dated
+/// read as a propagation gap.
+@MainActor
+func nv12InvariantCount(_ model: VideoScanModel) -> NV12InvariantCount {
+    var byKey: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
+    for rec in model.records where VideoScanModel.isEligibleForDateInference(rec) {
+        if let k = VideoScanModel.contentGroupKey(rec) { byKey[k, default: []].append(rec) }
+    }
+    var count = NV12InvariantCount()
+    for (_, members) in byKey where members.count >= 2 {
+        let donors = members.filter { VideoScanModel.canDonateInferredDate($0) }
+        guard !donors.isEmpty else { continue }
+        for rec in members where rec.inferredRecordDate == nil && rec.userDate == nil {
+            if donors.contains(where: { VideoScanModel.haveVerifiedSameContent($0, rec) }) {
+                if model.isArchiveElement(rec) {
+                    count.archivedNeverReceive += 1
+                } else {
+                    count.leftBehind += 1
+                }
+            } else {
+                count.unverifiedInBucket += 1
+            }
+        }
+    }
+    return count
+}
+
+// MARK: - The report's invariant on synthetic data (nightly red 2026-10-04)
+
+@MainActor
+@Suite("InferredDatePropagation — NV12 invariant matches rule 2")
+struct InferredDatePropagationInvariantTests {
+
+    private func record(_ path: String, md5: String, size: Int64, contentHash: String = "",
+                        inferred: Date? = nil, confidence: Float? = nil) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path
+        r.filename = (path as NSString).lastPathComponent
+        r.directory = (path as NSString).deletingLastPathComponent
+        r.partialMD5 = md5
+        r.sizeBytes = size
+        r.contentHash = contentHash
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        r.inferredRecordDate = inferred
+        r.inferredDateConfidence = confidence
+        return r
+    }
+
+    private func scratchModel() throws -> (VideoScanModel, URL) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("NV12Invariant-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let model = VideoScanModel(logDirectory: dir)
+        model.catalogStore = CatalogStore(directory: dir)
+        return (model, dir)
+    }
+
+    /// The 2026-10-04 shape: a source dated by its own dossier pass (0.55,
+    /// no source tag) and its undated promoted archive copy — same partial
+    /// hash and size, the copy carries a content hash, the source does not.
+    @Test func undatedArchiveCopyBesideADatedSourceIsNotAGap() throws {
+        let (model, dir) = try scratchModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = record("/Volumes/Src/tape.mkv", md5: "37f1", size: 36_000,
+                            inferred: InferredDatePropagationTests.june21_1991, confidence: 0.55)
+        let copy = record("/Volumes/Archive/1991/tape.mkv", md5: "37f1", size: 36_000, contentHash: "v1:e962")
+        copy.derivationKind = ArchivePromotion.derivationKind
+        copy.derivedFrom = source.id
+        model.records = [source, copy]
+
+        let r = model.catchUpInferredDates(trigger: "test")
+        #expect(r.propagated == 0, "rule 2 never writes an archived recipient")
+        #expect(copy.inferredRecordDate == nil)
+        #expect(nv12InvariantCount(model) == NV12InvariantCount(leftBehind: 0, unverifiedInBucket: 0,
+                                                                archivedNeverReceive: 1))
+    }
+
+    /// Positive control: the same pair WITHOUT the archive marking is dated
+    /// by rule 2, and the invariant sees nothing left.
+    @Test func ordinaryCopyIsDatedAndLeavesNothingBehind() throws {
+        let (model, dir) = try scratchModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = record("/Volumes/Src/tape.mkv", md5: "37f1", size: 36_000,
+                            inferred: InferredDatePropagationTests.june21_1991, confidence: 0.55)
+        let twin = record("/Volumes/Other/tape.mkv", md5: "37f1", size: 36_000, contentHash: "v1:e962")
+        model.records = [source, twin]
+
+        let r = model.catchUpInferredDates(trigger: "test")
+        #expect(r.propagated == 1)
+        #expect(twin.inferredRecordDate == InferredDatePropagationTests.june21_1991)
+        #expect(nv12InvariantCount(model) == NV12InvariantCount())
+    }
+
+    /// Sensor: the invariant still catches a real gap — an undated,
+    /// non-archived verified twin that no pass has dated.
+    @Test func invariantStillCountsAGenuineGap() throws {
+        let (model, dir) = try scratchModel()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let source = record("/Volumes/Src/tape.mkv", md5: "37f1", size: 36_000,
+                            inferred: InferredDatePropagationTests.june21_1991, confidence: 0.55)
+        let twin = record("/Volumes/Other/tape.mkv", md5: "37f1", size: 36_000)
+        model.records = [source, twin]
+        // No catch-up pass: the twin is exactly what the invariant exists to catch.
+        #expect(nv12InvariantCount(model).leftBehind == 1)
+    }
+}
+
 @MainActor
 @Suite("InferredDatePropagation — real catalog report", .enabled(if: FileManager.default.fileExists(atPath: realCatalogURL().path)))
 struct InferredDatePropagationRealCatalogReport {
@@ -1486,24 +1610,13 @@ struct InferredDatePropagationRealCatalogReport {
         """)
 
         // The NV12 invariant on the real data: every content group with a
-        // content-backed date has no undated, un-user-dated eligible member left.
-        var byKey: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
-        for rec in active { if let k = VideoScanModel.contentGroupKey(rec) { byKey[k, default: []].append(rec) } }
-        var leftBehind = 0
-        var unverifiedInBucket = 0
-        for (_, members) in byKey where members.count >= 2 {
-            let donors = members.filter { VideoScanModel.canDonateInferredDate($0) }
-            guard !donors.isEmpty else { continue }
-            for rec in members where rec.inferredRecordDate == nil && rec.userDate == nil {
-                if donors.contains(where: { VideoScanModel.haveVerifiedSameContent($0, rec) }) {
-                    leftBehind += 1
-                } else {
-                    unverifiedInBucket += 1
-                }
-            }
-        }
-        print("  undated rows sharing a bucket with a dated row but NOT verified same bytes (conflicting content hash): \(unverifiedInBucket)")
-        #expect(leftBehind == 0, "\(leftBehind) undated verified copies remain in groups that have a content-backed date")
+        // content-backed date has no undated, un-user-dated eligible member
+        // left — except Master Archive files, which never receive (Rick
+        // 2026-09-27). See `nv12InvariantCount`.
+        let nv12 = nv12InvariantCount(model)
+        print("  undated rows sharing a bucket with a dated row but NOT verified same bytes (conflicting content hash): \(nv12.unverifiedInBucket)")
+        print("  undated Master Archive files beside a verified donor (archived never receives — not a gap): \(nv12.archivedNeverReceive)")
+        #expect(nv12.leftBehind == 0, "\(nv12.leftBehind) undated verified copies remain in groups that have a content-backed date")
 
         // codex #1413 repair preview (scratch store — nothing real is written):
         // how many persisted propagated dates rest on unverified identity,
