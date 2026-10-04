@@ -532,4 +532,99 @@ struct DeleteDuplicatesCodex258Round4Tests {
         #expect(checked.distinctDriveCount == 1, "an unidentified volume added a drive at the final verdict: \(checked.countedDrives)")
         #expect(!checked.droppedAtBoundary.isEmpty && DeletionTierDecision.decide(facts: checked, preferTrash: false).tier == .trash)
     }
+
+    // MARK: R4-3 — the comment stripper fails closed
+
+    /// A code-only sensor's reader REFUSES `text`: it records the stripper's
+    /// own failure (so the sensor fails) AND throws (so it never goes on to
+    /// match against a text it cannot read).
+    private func refuses(_ text: String) -> Bool {
+        var threw = false
+        withKnownIssue("a code-only sensor refuses a text the stripper cannot read") {
+            do { _ = try SourceTree.code(of: text, named: "a test input") } catch { threw = true }
+        } matching: { issue in
+            String(describing: issue).contains("holds syntax the comment stripper does not understand")
+        }
+        return threw
+    }
+
+    /// Codex's three inputs (and the `//` variant): valid Swift whose REAL
+    /// comment carries the text a sensor looks for, after a construct the
+    /// stripper does not read. Each is REPORTED, and a code-only sensor
+    /// refuses the text.
+    @Test func theStripperReportsWhatItCannotRead() {
+        let inputs = [
+            "let _ = #\"a\"b\"# /* boundaryHold(ticket.quarantinedPath) */",
+            "let _ = \"\\(/* boundaryHold(ticket.quarantinedPath) */ 0)\"",
+            "let _ = #/\"/# /* boundaryHold(ticket.quarantinedPath) */",
+            "let _ = #\"a\"b\"# // boundaryHold(ticket.quarantinedPath)",
+            "let _ = ##\"a\"#b\"## /* boundaryHold(ticket.quarantinedPath) */",
+            "let r = /\"/ /* boundaryHold(ticket.quarantinedPath) */",
+            "let r = try! Regex(x).firstMatch(in: /\"/) /* boundaryHold(ticket.quarantinedPath) */",
+        ]
+        for input in inputs {
+            let scanned = SourceTree.scan(input)
+            #expect(!scanned.unsupported.isEmpty || !scanned.code.contains("boundaryHold("),
+                    "a comment survived as code, unreported: \(input) → \(scanned.code)")
+            #expect(!scanned.unsupported.isEmpty, "not reported: \(input)")
+            #expect(refuses(input), "a code-only sensor read it: \(input)")
+        }
+        #expect(SourceTree.scan("a()\nlet _ = #\"x\"#\nb()").unsupported == [.init(line: 2, what: "a raw string or an extended regex literal (#\" or #/)")])
+    }
+
+    /// What the stripper DOES read — none of it reported, every comment gone.
+    @Test func theStripperReadsNestedStringsAndDivision() throws {
+        let cases: [(source: String, code: String)] = [
+            ("let s = \"only \\(n) cop\\(n == 1 ? \"y\" : \"ies\") // not a comment\" /* gone */ + x",
+             "let s = \"only \\(n) cop\\(n == 1 ? \"y\" : \"ies\") // not a comment\"  + x"),
+            ("let s = \"\\(f(a, (b)))\" // gone", "let s = \"\\(f(a, (b)))\" "),
+            ("let s = \"\\(d[\"k\"] ?? \"/*\")\" /* gone */", "let s = \"\\(d[\"k\"] ?? \"/*\")\" "),
+            ("let q = a / b /* gone */", "let q = a / b "),
+            ("let q = a/b // gone", "let q = a/b "),
+            ("x /= 2 // gone", "x /= 2 "),
+            ("let t = \"\"\"\n  a \\\"\"\" // kept: still inside the block\n  \\(n == 1 ? \"y\" : \"ies\")\n  \"\"\" // gone",
+             "let t = \"\"\"\n  a \\\"\"\" // kept: still inside the block\n  \\(n == 1 ? \"y\" : \"ies\")\n  \"\"\" "),
+            ("let p = \"a\\\\\" /* gone */", "let p = \"a\\\\\" "),
+        ]
+        for (source, code) in cases {
+            let scanned = SourceTree.scan(source)
+            #expect(scanned.unsupported.isEmpty, "\(source): \(scanned.unsupported)")
+            #expect(scanned.code == code, "\(source) → \(scanned.code)")
+            #expect(try SourceTree.code(of: source, named: "a test input") == code)
+        }
+    }
+
+    /// Codex's SURVIVING MUTANT: the fresh reader's body opens with a raw
+    /// string whose trailing comment carries the call the principle sensor
+    /// looks for, and returns the CACHED reading. The stripper keeps that
+    /// comment as "code" — and now says it cannot read the file, so the
+    /// sensor (which reads through `appCode`) fails instead of passing.
+    @Test func theMutantThatHidACachedReadBehindARawStringIsRefused() throws {
+        let store = try SourceTree.appSource(named: "ArchiveAngelPlan.swift")
+        let head = "nonisolated static func inFlightRecordIDsFresh(bufferRoot: URL, now: Date = Date()) -> FreshHoldReading {\n"
+        let at = try #require(store.range(of: head), "the fresh reader's signature moved")
+        let mutant = store.replacingCharacters(in: at.upperBound..<at.upperBound, with: """
+                    let _ = #"a"b"# /* plan = try load(batchDir: dir) */
+                    return .ids(inFlightRecordIDsCached(bufferRoot: bufferRoot, now: now))
+
+            """)
+        #expect(SourceTree.scan(store).unsupported.isEmpty, "fixture: the real file is readable")
+        let scanned = SourceTree.scan(mutant)
+        #expect(scanned.code.contains("/* plan = try load(batchDir: dir) */"), "fixture: the comment survives stripping — that is the hole")
+        #expect(scanned.unsupported.count == 1, "the mutant is not reported: \(scanned.unsupported)")
+        #expect(refuses(mutant), "the sensor's reader accepted the mutant")
+    }
+
+    /// Every production file a code-only sensor of this bundle reads is
+    /// readable by the stripper today — none holds a raw string, a regex
+    /// literal or a comment inside an interpolation.
+    @Test func everyFileTheCodeOnlySensorsReadIsReadable() throws {
+        for name in ["DeleteDuplicatesJob.swift", "DeleteDuplicatesPlan.swift", "DeleteDuplicatesDrives.swift",
+                     "VideoScanModel+Duplicates.swift", "ArchiveAngel.swift", "ArchiveAngelPlan.swift",
+                     "VideoScanModel+MasterArchive.swift", "ArchiveVolumeProtection.swift", "VideoScanModel+ArchiveVolumeSnapshot.swift",
+                     "VideoScanModel+Workbench.swift", "JunkDeleteAction.swift", "VideoScanModel+PruneApply.swift",
+                     "VideoScanModel+JunkDelete.swift", "TranscodeJob.swift", "DerivativeOutputPublish.swift"] {
+            #expect(SourceTree.scan(try SourceTree.appSource(named: name)).unsupported.isEmpty, "\(name)")
+        }
+    }
 }

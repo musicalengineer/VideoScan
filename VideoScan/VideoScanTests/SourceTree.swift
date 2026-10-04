@@ -104,6 +104,16 @@ enum SourceTree {
         return hits[0].url
     }
 
+    /// Something in a source text that `scan` does not understand — after
+    /// it, what is a comment and what is code can no longer be told, so a
+    /// code-only sensor must not trust the text (codex #258 r4-3).
+    struct UnsupportedSyntax: Error, Equatable, CustomStringConvertible {
+        /// 1-based.
+        let line: Int
+        let what: String
+        var description: String { "line \(line): \(what)" }
+    }
+
     /// `text` with its comments removed, so a sensor that matches CODE is
     /// never satisfied by the expected text surviving in a comment after
     /// the code itself was removed (codex #258 r2, r3):
@@ -111,65 +121,137 @@ enum SourceTree {
     ///   • `/* … */`, NESTED as Swift allows, across lines;
     ///   • a line that held nothing but a comment disappears altogether, so
     ///     the code on either side of it stays adjacent.
-    /// Text inside a string literal ("…", with `\"` escapes, and `"""`
-    /// blocks) is not a comment and is kept.
-    /// NOT handled: raw strings (`#"…"#`) containing an unescaped quote, a
-    /// comment inside a string interpolation, regex literals — a `//` or
-    /// `/*` there may be cut (it can only make a sensor stricter).
-    static func strippingComments(_ text: String) -> String {
+    /// Text inside a string literal — "…" with its escapes, `"""` blocks,
+    /// and a string nested in an interpolation (`"\(n == 1 ? "y" : "ies")"`)
+    /// — is not a comment and is kept.
+    ///
+    /// This is NOT a Swift lexer, and it FAILS CLOSED (codex #258 r4-3):
+    /// whatever it does not understand is REPORTED in `unsupported`, never
+    /// guessed at — because after such a construct a real comment could be
+    /// kept as "code" and satisfy a sensor:
+    ///   • a raw string or an extended regex literal (`#"…"#`, `#/…/#`);
+    ///   • a comment inside a string interpolation (`"\(/* … */ 0)"`);
+    ///   • what may be a bare regex literal (`/…/` where an expression can
+    ///     begin — a conservative textual test; `a / b` and `a/b` are division).
+    static func scan(_ text: String) -> (code: String, unsupported: [UnsupportedSyntax]) {
+        enum Frame: Equatable {
+            case string
+            case textBlock
+            /// The code of an interpolation, with its open-paren depth.
+            case interpolation(Int)
+        }
         let chars = Array(text)
         var out: [String] = []
+        var unsupported: [UnsupportedSyntax] = []
         var line = ""
+        var lineNumber = 1
         var lineHadComment = false
         var depth = 0
-        var inLineComment = false, inString = false, inTextBlock = false
+        var inLineComment = false
+        var stack: [Frame] = []
+        let regexMayFollow: Set<Character> = ["(", ",", "=", ":", "[", "{", "!", "&", "|", "?", ";", "<", ">", "+", "-", "*", "~", "^", "%"]
         func isTripleQuote(at i: Int) -> Bool {
             i + 2 < chars.count && chars[i] == "\"" && chars[i + 1] == "\"" && chars[i + 2] == "\""
         }
+        func flag(_ what: String) { unsupported.append(UnsupportedSyntax(line: lineNumber, what: what)) }
         func endLine() {
             if !(lineHadComment && line.trimmingCharacters(in: .whitespaces).isEmpty) { out.append(line) }
             line = ""
             lineHadComment = depth > 0
             inLineComment = false
-            inString = false
+            // A "…" string (and an interpolation inside it) ends with its line.
+            if let i = stack.firstIndex(of: .string) { stack.removeSubrange(i...) }
         }
         var i = 0
         while i < chars.count {
             let c = chars[i]
             let next: Character? = i + 1 < chars.count ? chars[i + 1] : nil
-            if c == "\n" { endLine(); i += 1; continue }
+            if c == "\n" { endLine(); lineNumber += 1; i += 1; continue }
             if depth > 0 {
                 lineHadComment = true
                 if c == "/", next == "*" { depth += 1; i += 2 } else if c == "*", next == "/" { depth -= 1; i += 2 } else { i += 1 }
                 continue
             }
             if inLineComment { i += 1; continue }
-            if inTextBlock {
-                if isTripleQuote(at: i) { inTextBlock = false; line += "\"\"\""; i += 3 } else { line.append(c); i += 1 }
-                continue
-            }
-            if inString {
+            switch stack.last {
+            case .textBlock?, .string?:
+                let inBlock = stack.last == .textBlock
+                if c == "\\", next == "(" { stack.append(.interpolation(0)); line += "\\("; i += 2; continue }
+                if c == "\\", let next, next != "\n" { line.append(c); line.append(next); i += 2; continue }
+                if inBlock, isTripleQuote(at: i) { stack.removeLast(); line += "\"\"\""; i += 3; continue }
+                if !inBlock, c == "\"" { stack.removeLast() }
                 line.append(c)
-                if c == "\\", let next, next != "\n" { line.append(next); i += 2; continue }
-                if c == "\"" { inString = false }
                 i += 1
                 continue
+            case .interpolation?, nil:
+                break
             }
-            if isTripleQuote(at: i) { inTextBlock = true; line += "\"\"\""; i += 3; continue }
-            if c == "\"" { inString = true; line.append(c); i += 1; continue }
-            if c == "/", next == "/" { inLineComment = true; lineHadComment = true; i += 2; continue }
-            if c == "/", next == "*" { depth = 1; lineHadComment = true; i += 2; continue }
+            // Code — the file's, or an interpolation's.
+            var inInterpolation = false
+            if case .interpolation? = stack.last { inInterpolation = true }
+            if c == "#", next == "\"" || next == "/" || next == "#" {
+                flag("a raw string or an extended regex literal (#\" or #/)")
+                line.append(c); i += 1; continue
+            }
+            if isTripleQuote(at: i) { stack.append(.textBlock); line += "\"\"\""; i += 3; continue }
+            if c == "\"" { stack.append(.string); line.append(c); i += 1; continue }
+            if c == "/", next == "/" || next == "*" {
+                if inInterpolation {
+                    flag("a comment inside a string interpolation")
+                    line.append(c); line.append(next ?? " "); i += 2; continue
+                }
+                lineHadComment = true
+                if next == "/" { inLineComment = true } else { depth = 1 }
+                i += 2
+                continue
+            }
+            if c == "/", let next, next != " ", next != "\t", next != "\n", next != "=" {
+                let previous: Character = i > 0 ? chars[i - 1] : "\n"
+                if previous == " " || previous == "\t" || previous == "\n" || regexMayFollow.contains(previous) {
+                    flag("what may be a regex literal (/…/)")
+                }
+            }
+            if case .interpolation(let open)? = stack.last {
+                if c == "(" {
+                    stack[stack.count - 1] = .interpolation(open + 1)
+                } else if c == ")" {
+                    if open == 0 { stack.removeLast() } else { stack[stack.count - 1] = .interpolation(open - 1) }
+                }
+            }
             line.append(c)
             i += 1
         }
         endLine()
-        return out.joined(separator: "\n")
+        return (out.joined(separator: "\n"), unsupported)
     }
 
-    /// The CODE of the ONE app source file called `name` — comments removed.
+    /// `scan(text).code` — for a text known to be plain (a test's own
+    /// fixture). A sensor reading production source goes through `code(of:)`
+    /// / `appCode(named:)`, which refuse what the stripper cannot read.
+    static func strippingComments(_ text: String) -> String { scan(text).code }
+
+    /// The CODE of `text`, comments removed — or a recorded Issue and a
+    /// throw when the text holds a construct `scan` does not understand: a
+    /// code-only sensor FAILS rather than trust such a text (r4-3).
+    static func code(of text: String, named name: String,
+                     sourceLocation: SourceLocation = #_sourceLocation) throws -> String {
+        let scanned = scan(text)
+        if let first = scanned.unsupported.first {
+            Issue.record("""
+                SourceTree: \(name) holds syntax the comment stripper does not understand \
+                (\(scanned.unsupported.map(\.description).joined(separator: "; "))). A code-only sensor cannot tell \
+                its comments from its code — write that construct another way, or teach SourceTree.scan to read it.
+                """, sourceLocation: sourceLocation)
+            throw first
+        }
+        return scanned.code
+    }
+
+    /// The CODE of the ONE app source file called `name` — comments removed;
+    /// refuses (fails the test) a file the stripper cannot read.
     static func appCode(named name: String,
                         sourceLocation: SourceLocation = #_sourceLocation) throws -> String {
-        strippingComments(try appSource(named: name, sourceLocation: sourceLocation))
+        try code(of: try appSource(named: name, sourceLocation: sourceLocation), named: name, sourceLocation: sourceLocation)
     }
 
     /// The text of the ONE app source file called `name` (see
