@@ -164,6 +164,20 @@ struct StewardEventsLogicTests {
         #expect(e.detail == "2 clips · 1 drive · 2 m · Dec 31, 1994 – Jan 1, 1995")
     }
 
+    /// F12: a Feb 29 birthday — kept on Feb 28 in a common year, on the
+    /// 29th in a leap year (the labeller's rule, seen through the steward).
+    @Test func aLeapDayBirthdayIsAnEventInCommonAndLeapYears() throws {
+        let leap = [FamilyBirthday(name: "Jo", born: EventDay(year: 1984, month: 2, day: 29))]
+        let common = try #require(events(build([clip("/Volumes/LaCie/t/a.mov", on: "1995-02-28"),
+                                                clip("/Volumes/LaCie/t/b.mov", on: "1995-03-01")], birthdays: leap)).first)
+        #expect(common.id == "event:birthday:jo:1995" && common.title == "Jo's 11th birthday")
+        #expect(common.copies.map(\.reason) == ["on Jo's 11th birthday", "1 day after Jo's 11th birthday"])
+        let leapYear = try #require(events(build([clip("/Volumes/LaCie/t/c.mov", on: "1996-02-29"),
+                                                  clip("/Volumes/LaCie/t/d.mov", on: "1996-02-28")], birthdays: leap)).first)
+        #expect(leapYear.id == "event:birthday:jo:1996" && leapYear.title == "Jo's 12th birthday")
+        #expect(leapYear.copies.map(\.reason) == ["1 day before Jo's 12th birthday", "on Jo's 12th birthday"])
+    }
+
     // The Angel's trusted day, and the one filter on it
 
     /// QA F3: the expected side is the Angel's OWN projection of a real
