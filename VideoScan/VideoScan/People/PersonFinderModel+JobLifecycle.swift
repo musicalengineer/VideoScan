@@ -440,6 +440,15 @@ extension PersonFinderModel {
         }
     }
 
+    /// True for iCloud Drive (…/Library/Mobile Documents/…) and File
+    /// Provider cloud mounts (…/Library/CloudStorage/…), where reading a
+    /// file means downloading it.
+    nonisolated static func isCloudBackedPath(_ path: String) -> Bool {
+        let p = (path as NSString).standardizingPath
+        return p.contains("/Library/Mobile Documents/") || p.hasSuffix("/Library/Mobile Documents")
+            || p.contains("/Library/CloudStorage/") || p.hasSuffix("/Library/CloudStorage")
+    }
+
     func startJob(_ job: ScanJob) {
         guard !job.status.isActive else { return }
 
@@ -452,6 +461,20 @@ extension PersonFinderModel {
             job.appendLog(msg)
             osLog.error("startJob refused: shared short name \(profile.name, privacy: .public)")
             job.status = .failed("Two people are called \(profile.name)")
+            return
+        }
+
+        // Cloud-backed folders (Rick 2026-10-04): iCloud Drive and the File
+        // Provider mounts (Dropbox, Google Drive, OneDrive…) download every
+        // file on demand — a face scan there crawls and pulls the whole
+        // folder down. Refused for every entry point (Search for Family,
+        // Search for <person>, a job's own path picker).
+        if Self.isCloudBackedPath(job.searchPath) {
+            let msg = "⚠ \(job.searchPath) is an iCloud / cloud-storage folder — scan a local or external drive instead."
+            job.appendLog(msg)
+            osLog.error("startJob refused: cloud-backed path (\(job.searchPath, privacy: .public))")
+            appLog.write("Search refused: cloud-backed folder \(job.searchPath)")
+            job.status = .failed("iCloud / cloud folder — not scanned")
             return
         }
 

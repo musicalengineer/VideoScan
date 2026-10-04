@@ -34,6 +34,10 @@ extension PersonFinderView {
         panel.allowsMultipleSelection = false
         panel.message = "Pick a folder or volume — every saved person will be scanned in parallel"
         panel.prompt = "Search for Family"
+        // Start at the drives, not wherever the last panel was (it was
+        // iCloud ▸ ArchivedMedia — Rick 2026-10-04). Cloud folders are
+        // refused in startJob regardless.
+        panel.directoryURL = URL(fileURLWithPath: "/Volumes", isDirectory: true)
         panel.begin { response in
             if response == .OK, let url = panel.url {
                 Self.recordRecentPath(url.path)
@@ -71,12 +75,15 @@ extension PersonFinderView {
             if let seam = GauntletSeams.recentSearchPath { return [seam] }
             return []
         }
-        return UserDefaults.standard.stringArray(forKey: recentPathsKey) ?? []
+        // Cloud folders never appear as a one-click choice (2026-10-04).
+        return (UserDefaults.standard.stringArray(forKey: recentPathsKey) ?? [])
+            .filter { !PersonFinderModel.isCloudBackedPath($0) }
     }
     static func recordRecentPath(_ path: String) {
         // Never WRITE the real prefs plist from a test host
         // (settings-pollution class).
         if TestEnvironment.isTestHost { return }
+        if PersonFinderModel.isCloudBackedPath(path) { return }
         var paths = recentPaths.filter { $0 != path }
         paths.insert(path, at: 0)
         if paths.count > 10 { paths = Array(paths.prefix(10)) }
