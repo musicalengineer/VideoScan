@@ -526,8 +526,15 @@ enum ArchiveAngelPlanStore {
     nonisolated static func inFlightRecordIDs(bufferRoot: URL, now: Date = Date(),
                                               staleAfter: TimeInterval = 3600,
                                               fileManager fm: FileManager = .default) -> Set<UUID> {
+        inFlightRecordIDs(in: listBatches(bufferRoot: bufferRoot), now: now, staleAfter: staleAfter, fileManager: fm)
+    }
+
+    /// The same rule over plans already in hand.
+    nonisolated static func inFlightRecordIDs(in plans: [ArchiveAngelPlan], now: Date = Date(),
+                                              staleAfter: TimeInterval = 3600,
+                                              fileManager fm: FileManager = .default) -> Set<UUID> {
         var ids: Set<UUID> = []
-        for plan in listBatches(bufferRoot: bufferRoot) {
+        for plan in plans {
             switch plan.status {
             case .ready, .promoting:
                 for e in plan.entries where e.status == .ready { ids.insert(e.id) }
@@ -540,6 +547,197 @@ enum ArchiveAngelPlanStore {
             }
         }
         return ids
+    }
+
+    // MARK: The buffer, read for Delete Duplicates' holds
+    //
+    // Delete Duplicates asks "is this record in a batch on disk?" before
+    // every copy's turn and again at every removal (codex #258 F6/F7).
+    // Decoding every plan.json each time costs O(rows × buffered entries)
+    // (codex #258 r2). So the DECODED plans are kept per buffer root and
+    // reused while the buffer's FINGERPRINT is unchanged: the batch folder
+    // names and, for each plan.json, its inode, modification time (ns),
+    // CHANGE time (ns — kernel-set; an in-place rewrite with its mtime put
+    // back still moves it) and size — one directory listing and one stat
+    // per batch, no file opened. The rule itself (which rows hold, which
+    // batch is interrupted, which is live) is applied afresh on every call.
+    // Strictly read-only.
+    //
+    // THE CACHE IS FOR THE PER-TURN PRE-CHECK ONLY (codex #258 r3-2;
+    // MOPS-2): a fingerprint is not the content. The FINAL VERDICT before a
+    // removal reads the buffer's plan files themselves —
+    // `inFlightRecordIDsFresh`.
+
+    /// What the buffer looks like without opening a file.
+    nonisolated static func bufferFingerprint(bufferRoot: URL) -> String {
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: bufferRoot.path) else { return "" }
+        var parts: [String] = []
+        for name in names.sorted() where name.hasPrefix("batch-") {
+            let dir = bufferRoot.appendingPathComponent(name).path
+            var link = stat(), info = stat()
+            let isLink = lstat(dir, &link) == 0 && (link.st_mode & S_IFMT) == S_IFLNK
+            let plan = dir + "/" + ArchiveAngelPlan.planFilename
+            if stat(plan, &info) == 0 {
+                parts.append("\(name)|\(isLink ? "L" : "D")|\(info.st_ino)|\(info.st_mtimespec.tv_sec).\(info.st_mtimespec.tv_nsec)"
+                             + "|\(info.st_ctimespec.tv_sec).\(info.st_ctimespec.tv_nsec)|\(info.st_size)")
+            } else {
+                parts.append("\(name)|\(isLink ? "L" : "D")|-")
+            }
+        }
+        return parts.joined(separator: "\n")
+    }
+
+    private final class HoldReadings: @unchecked Sendable {
+        let lock = NSLock()
+        var byRoot: [String: (fingerprint: String, plans: [ArchiveAngelPlan])] = [:]
+        var decodes = 0
+    }
+    private static let holdReadings = HoldReadings()
+
+    /// How many times the buffer's plans were actually decoded for the
+    /// holds (tests read it).
+    nonisolated static var holdReadingDecodes: Int { holdReadings.lock.withLock { holdReadings.decodes } }
+
+    /// What a FRESH reading of the buffer can say (codex #258 r4-2). There
+    /// is no "probably nothing": either every batch folder was read — then
+    /// these are the records the buffer holds — or something could not be
+    /// read, and then NOTHING is known about what that something holds.
+    enum FreshHoldReading: Sendable, Equatable {
+        case ids(Set<UUID>)
+        /// The reason, for the row ("batch-… has no plan.json yet").
+        case uncertain(String)
+    }
+
+    /// One record, asked of a fresh reading.
+    enum FreshHold: Sendable, Equatable {
+        case free
+        case held
+        case uncertain(String)
+    }
+
+    /// FRESH — for the final verdict before a removal: every plan.json in
+    /// the buffer is read and decoded NOW. No cache is read or written.
+    /// DISK I/O — never on the main thread.
+    ///
+    /// FAILS CLOSED (codex #258 r4-2): this reading authorizes a removal, so
+    /// anything it could not read is `.uncertain`, never "holds nothing" —
+    /// the buffer folder that cannot be listed, a `batch-` folder with no
+    /// plan.json yet (a batch being written), a plan.json that cannot be
+    /// read or decoded, a batch being prepared whose plan.json cannot be
+    /// examined (its age decides whether it is live). (The listing readers
+    /// above — `listBatches`, `scanBatches` — skip what they cannot read:
+    /// right for a list on screen, wrong for this.) A buffer folder that is
+    /// simply NOT THERE holds nothing — unless its drive is not connected.
+    nonisolated static func inFlightRecordIDsFresh(bufferRoot: URL, now: Date = Date()) -> FreshHoldReading {
+        let fm = FileManager.default
+        let names: [String]
+        do {
+            names = try fm.contentsOfDirectory(atPath: bufferRoot.path)
+        } catch {
+            if bufferIsAbsent(bufferRoot) { return .ids([]) }
+            return .uncertain("its buffer folder could not be listed: \(error.localizedDescription)")
+        }
+        var plans: [ArchiveAngelPlan] = []
+        for name in names.sorted() where name.hasPrefix("batch-") {
+            let dir = bufferRoot.appendingPathComponent(name).path
+            // An alias is never read through (see `scanBatches`) — and what
+            // it points at is unknown, so it is not "free" (codex #258 r5-5).
+            if isSymlink(dir, fm: fm) { return .uncertain("\(name) is a symlink — not read through") }
+            let plan: ArchiveAngelPlan
+            do {
+                plan = try load(batchDir: dir)
+            } catch {
+                let planPath = URL(fileURLWithPath: dir).appendingPathComponent(ArchiveAngelPlan.planFilename).path
+                return .uncertain(fm.fileExists(atPath: planPath)
+                                  ? "\(name)'s plan.json can't be read (\(describe(error)))"
+                                  : "\(name) has no plan.json yet")
+            }
+            // A batch being prepared holds its rows while it is live — in
+            // this app now, or by the age of its plan.json. An age that
+            // cannot be read is not "old".
+            if plan.status == .preparing, !ArchiveAngelLiveBatches.isLive(plan.batchDir),
+               (try? fm.attributesOfItem(atPath: plan.planURL.path))?[.modificationDate] == nil {
+                return .uncertain("\(name)'s plan.json could not be examined")
+            }
+            plans.append(plan)
+        }
+        return .ids(inFlightRecordIDs(in: plans, now: now))
+    }
+
+    /// The buffer folder is NOT THERE — a definite answer (no batch was
+    /// ever prepared), so it holds nothing. Only when the drive it lives on
+    /// is MOUNTED (codex #258 r5-5): the configured path, and the nearest
+    /// part of it that exists (symlinks resolved), must not lead under a
+    /// drive root (`/Volumes/<name>`) that is not a mount point right now —
+    /// a leftover mount directory after a disconnection, a symlink into one.
+    /// A dangling symlink on the way, or any failure other than "no such
+    /// file", is not definite either.
+    nonisolated static func bufferIsAbsent(_ bufferRoot: URL) -> Bool {
+        var info = stat()
+        guard lstat(bufferRoot.path, &info) != 0, errno == ENOENT else { return false }
+        let volumes = canonicalVolumesRoot()
+        func driveIsMounted(under path: String) -> Bool {
+            guard path.hasPrefix(volumes), let name = path.dropFirst(volumes.count).split(separator: "/").first else { return true }
+            return isMountPoint(volumes + name)
+        }
+        guard driveIsMounted(under: bufferRoot.standardizedFileURL.path) else { return false }
+        var ancestor = bufferRoot.standardizedFileURL.deletingLastPathComponent()
+        while ancestor.path != "/" {
+            if lstat(ancestor.path, &info) == 0 {
+                guard let real = realpath(ancestor.path, nil) else { return false }   // a dangling symlink
+                defer { free(real) }
+                return driveIsMounted(under: String(cString: real) + "/")
+            }
+            ancestor = ancestor.deletingLastPathComponent()
+        }
+        return true
+    }
+
+    /// `volumesRoot` with a trailing "/", symlinks resolved when it exists.
+    private nonisolated static func canonicalVolumesRoot() -> String {
+        var root = volumesRoot
+        if let real = realpath(root, nil) { root = String(cString: real); free(real) }
+        return root.hasSuffix("/") ? root : root + "/"
+    }
+
+    /// Something is mounted exactly here (statfs says this is its mount point).
+    private nonisolated static func isMountPoint(_ path: String) -> Bool {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0, let real = realpath(path, nil) else { return false }
+        defer { free(real) }
+        let mountedOn = withUnsafePointer(to: &fs.f_mntonname) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+        return mountedOn == String(cString: real)
+    }
+
+    /// TEST SEAM — task-local: where external drives are mounted ("/Volumes"
+    /// in production), so a test can make a leftover mount directory without
+    /// writing into /Volumes.
+    @TaskLocal static var volumesRoot = "/Volumes"
+
+    /// CACHED — advisory (the per-turn pre-check, the façade's published
+    /// set): the same answer, decoding the buffer only when its fingerprint
+    /// changed. NEVER the final verdict's source. DISK I/O (a listing + one
+    /// stat per batch) — never on the main thread.
+    nonisolated static func inFlightRecordIDsCached(bufferRoot: URL, now: Date = Date()) -> Set<UUID> {
+        let fingerprint = bufferFingerprint(bufferRoot: bufferRoot)
+        let key = bufferRoot.path
+        let cached: [ArchiveAngelPlan]? = holdReadings.lock.withLock {
+            guard let hit = holdReadings.byRoot[key], hit.fingerprint == fingerprint else { return nil }
+            return hit.plans
+        }
+        let plans: [ArchiveAngelPlan]
+        if let cached {
+            plans = cached
+        } else {
+            plans = listBatches(bufferRoot: bufferRoot)
+            holdReadings.lock.withLock {
+                holdReadings.byRoot[key] = (fingerprint, plans)
+                holdReadings.decodes += 1
+            }
+        }
+        return inFlightRecordIDs(in: plans, now: now)
     }
 
     /// Every readable batch under the buffer root, newest first.

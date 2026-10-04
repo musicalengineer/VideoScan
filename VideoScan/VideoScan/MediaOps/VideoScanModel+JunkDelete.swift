@@ -287,6 +287,16 @@ extension VideoScanModel {
         // inherit task-locals.
         let archiveVolume = archiveVolumeProtection()
         let uuidProbe = MasterArchiveDesignation.volumeUUIDProbe
+        // …and the volumes the person marked Read only (2026-10-03) — asked
+        // AGAIN FOR EVERY FILE, from the model as it is at that file's turn
+        // (codex #258 F5): a drive marked Read only while the batch is
+        // running protects every file not yet removed. One hop to the main
+        // actor per file (the gate's snapshot is O(targets) and disk-free),
+        // BEFORE the synchronous check-and-remove stretch below.
+        let readOnlyAtStart = readOnlyVolumeProtection()
+        let readOnlyNow: @Sendable () async -> ReadOnlyVolumeProtection = { [weak self] in
+            await self?.readOnlyVolumeProtection() ?? readOnlyAtStart
+        }
         let detachedResults: [(Int, JunkDeletionOutcome)] =
             await Task.detached(priority: .userInitiated) {
                 let fm = FileManager.default
@@ -295,6 +305,7 @@ extension VideoScanModel {
 
                 for item in workItems {
                     let path = item.path
+                    let readOnlyVolumes = await readOnlyNow()
 
                     // The caller's proof, re-checked immediately before
                     // THIS file's own disk operation — no await, no other
@@ -320,6 +331,12 @@ extension VideoScanModel {
                                 .archiveVolumeUnprovable, volume: archiveVolume.label) + " — nothing moved")))
                             continue
                         }
+                    }
+
+                    // A volume marked Read only: the same last word.
+                    if let verdict = readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe) {
+                        results.append((item.index, .refused(Self.readOnlyRefusalNote(verdict) + " — nothing moved")))
+                        continue
                     }
 
                     // Missing-file branch. We do NOT pre-flight every

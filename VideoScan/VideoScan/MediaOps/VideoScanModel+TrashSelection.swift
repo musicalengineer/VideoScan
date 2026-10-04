@@ -161,12 +161,17 @@ extension VideoScanModel {
         let label = archiveVolume?.label ?? "the archive volume"
         let byID = Dictionary(requested.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         var tree = 0, onVolume = 0, unprovable = 0
+        var readOnly: [String: Int] = [:]
         for r in plan.refused where r.reason == .masterArchive {
             switch byID[r.id].flatMap({ bulkDeleteRefusal($0, volume: archiveVolume) }) {
             case .archiveVolume?: onVolume += 1
             case .archiveVolumeUnprovable?: unprovable += 1
+            case .readOnlyVolume(let name)?, .readOnlyVolumeDifferentDrive(let name)?: readOnly[name, default: 0] += 1
             default: tree += 1
             }
+        }
+        for (name, count) in readOnly.sorted(by: { $0.key < $1.key }) {
+            log(Self.readOnlyVolumeRefusalLine(verb: "Move to Trash", count: count, volume: name))
         }
         if tree > 0 { log(Self.masterArchiveRefusalLine(verb: "Move to Trash", count: tree)) }
         if onVolume > 0 { log(Self.masterArchiveVolumeRefusalLine(verb: "Move to Trash", count: onVolume, volume: label)) }

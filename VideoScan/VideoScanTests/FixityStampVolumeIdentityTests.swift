@@ -532,7 +532,12 @@ struct FixityStampVolumeIdentityTests {
             "VideoScan/Archive/ArchiveRefile.swift": 3,
             // partial-file registry: lstat now vs the stat of the same op.
             "VideoScan/MediaOps/PartialFileNaming.swift": 1,
-            // hard-link de-dup keys from stats of ONE gather pass.
+            // hard-link de-dup keys from stats of ONE gather pass. (The DRIVE
+            // key of a copy stat'ed in that same pass — one key per mounted
+            // volume, its st_dev — is built in DeleteDuplicatesDrives.swift,
+            // `DuplicateDrives.key(device:)`: a same-pass identity carried as
+            // a string on the counted copy, never re-derived from a stored
+            // stamp of another session. Codex #258 F8.)
             "VideoScan/MediaOps/DeleteDuplicatesPlan.swift": 1,
             "VideoScan/MediaOps/DeleteDuplicatesSiblingProof.swift": 1,
             // names which identity field moved, for the log line only.

@@ -502,6 +502,9 @@ enum WorkingCopyCleanupText {
         case .archiveTree: return reasonMasterArchiveFile
         case .archiveVolume: return reasonMasterArchiveVolume
         case .archiveVolumeUnprovable: return reasonMasterArchiveVolumeUnprovable
+        case .readOnlyVolume(let name): return "on \(name), which you marked Read only"
+        case .readOnlyVolumeDifferentDrive(let name):
+            return "under \(name), which you marked Read only (a different drive is mounted there now)"
         }
     }
     static let reasonNoMaster = "no master to verify against"

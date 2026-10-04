@@ -136,6 +136,30 @@ struct DeleteDuplicatesWorkItem: Sendable {
     /// path text says "boot disk", is still refused (as Junk does).
     /// nil = no Master Archive designated.
     var archiveCheck: ArchiveRemovalCheck? = nil
+    /// THE REMOVAL BOUNDARY (codex #258 F6, r3, r4): asked ONCE by the final
+    /// verdict, immediately before the unlink / the move to the Trash —
+    /// everything it reads is read there and then, and the model's part
+    /// comes over in ONE synchronous hop to the main actor
+    /// (`DeleteDuplicatesJob.removalBoundary`). Built per row at dispatch;
+    /// it is handed the path the file is at when it is asked (its
+    /// quarantine path). nil only for hand-built items in tests.
+    var boundary: (@Sendable (_ currentPath: String) -> RemovalBoundaryAnswer)? = nil
+}
+
+/// What the final verdict learns at the removal boundary, all of it read
+/// immediately before the removal (MOPS-2).
+struct RemovalBoundaryAnswer: Sendable {
+    /// The copy is HELD now (in use by the Archive Angel, the Angel's
+    /// buffer unreadable, on a drive marked Read only, the catalog gone):
+    /// the row's note. The file is put back; the row is a skip.
+    var holdNote: String?
+    /// The Master Archive rule, from the designation as it is NOW, refuses
+    /// the file (asked only when nothing holds it): its note, and whether
+    /// the refusal is only transient (the drive list is being rebuilt).
+    var archive: (note: String, transient: Bool)?
+    /// "Prefer the Trash for every duplicate", as it is set NOW. It can
+    /// only make the removal more conservative (permanent → the Trash).
+    var preferTrash: Bool
 }
 
 enum DeleteDuplicatesDiskOutcome: Sendable {
@@ -173,6 +197,11 @@ struct DeleteDuplicatesPhaseOne: Sendable {
     /// sibling's record so no later row or run reads it again while its
     /// stamp holds.
     var siblingReads: [SiblingRead] = []
+    /// Set when the worker left the copy alone for a PROTECTION it found
+    /// itself (a drive marked Read only, seen only by the file's own
+    /// identity): the why. The row is then never counted as a surviving
+    /// copy for another copy of this run (`DeleteDuplicatesPlan.Entry.notCountedWhy`).
+    var notCountedWhy: String? = nil
 
     struct RetainedInQuarantine: Sendable, Equatable {
         let directory: String
@@ -191,6 +220,17 @@ struct DeleteDuplicatesPhaseTwo: Sendable {
     let decision: DeletionTierDecision
     let facts: DeletionTierFacts
     let evidenceChanged: Bool
+    /// Set when the removal boundary found the copy HELD (in use by the
+    /// Archive Angel, on a drive marked Read only since its turn): the note.
+    /// The file was put back; the row is a skip, never a refusal.
+    var heldNote: String? = nil
+    /// Set when the copy was RETAINED for a protection found at the removal
+    /// boundary — a hold (the why of `heldNote`), or the Master Archive rule
+    /// refusing it from TODAY's designation where the check captured at its
+    /// turn had let it go (codex #258 r4-1). Main would have removed this
+    /// file; so it is never counted as a surviving copy for another copy of
+    /// this run (`DeleteDuplicatesPlan.Entry.notCountedWhy`).
+    var notCountedWhy: String? = nil
 }
 
 /// A locked slot for the fixity the gate reports from the disk thread.
@@ -215,10 +255,17 @@ enum DeleteDuplicatesDiskWorker {
         if let check = item.archiveCheck, let refusal = check.refusal(forPath: item.path) {
             // A provisional snapshot's "unprovable" is transient: left
             // alone, never a refusal that re-marks the record Review.
-            let outcome: DeleteDuplicatesDiskOutcome = refusal.transient
-                ? .leftAlone(reason: Self.driveListRefreshing, facts: DeletionTierFacts())
-                : .refused(reason: refusal.note + " — nothing moved", cancelled: false)
-            return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: nil)
+            // A HOLD (a drive marked Read only, found here by the file's own
+            // identity although its path said nothing): left alone under the
+            // hold's own words — never a refusal, never a Review mark, never
+            // a survivor for another copy (codex #258 r2-1).
+            let outcome: DeleteDuplicatesDiskOutcome = refusal.leavesAlone
+                ? .leftAlone(reason: DuplicateDeletionHold.leftAlonePrefix + refusal.note, facts: DeletionTierFacts())
+                : refusal.transient
+                    ? .leftAlone(reason: Self.driveListRefreshing, facts: DeletionTierFacts())
+                    : .refused(reason: refusal.note + " — nothing moved", cancelled: false)
+            return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: nil,
+                                            notCountedWhy: refusal.leavesAlone ? refusal.note : nil)
         }
         let box = FixityBox()
         var observing = hooks
@@ -335,7 +382,9 @@ enum DeleteDuplicatesDiskWorker {
                                   facts: DeletionTierFacts, preferTrash: Bool,
                                   keeperFilename: String,
                                   hooks: SignatureVerification.Hooks,
-                                  archiveCheck: ArchiveRemovalCheck? = nil) -> DeleteDuplicatesPhaseTwo {
+                                  archiveCheck: ArchiveRemovalCheck? = nil,
+                                  boundary ask: (@Sendable (_ currentPath: String) -> RemovalBoundaryAnswer)? = nil)
+        -> DeleteDuplicatesPhaseTwo {
         guard let decidedTier = decided.tier else {
             // Never reached — the caller releases a nil tier itself — but
             // a nil tier must never default to an unlink.
@@ -352,18 +401,69 @@ enum DeleteDuplicatesDiskWorker {
         // Set by the final verdict when the file's own volume turns out to
         // be the Master Archive's (the same last word Junk has).
         var archiveRefusal: (note: String, transient: Bool)?
+        // Set by the final verdict when the copy is HELD at this instant.
+        var heldNote: String?
+        // Set by the final verdict when the copy is retained for a
+        // protection that main would not have found: never counted as a
+        // surviving copy for another copy of this run (codex #258 r4-1).
+        var notCountedWhy: String?
         let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {
-            if let archiveCheck, let refusal = archiveCheck.refusal(forPath: ticket.quarantinedPath) {
-                archiveRefusal = refusal
+            // The check captured at the copy's turn: an extra, earlier look
+            // that can only refuse — it is never what lets a file go.
+            let captured = archiveCheck?.refusal(forPath: ticket.quarantinedPath)
+            if let captured, captured.leavesAlone {
+                // A Read-only mark, by the check captured at the turn: a hold.
+                heldNote = DuplicateDeletionHold.leftAlonePrefix + captured.note
+                notCountedWhy = captured.note
+                return .putBack(reason: captured.note)
+            }
+            // THE REMOVAL BOUNDARY, asked NOW — after every byte of the
+            // re-read, with nothing but the copy-evidence re-stat between
+            // this and the removal (codex #258 F6). ONE answer: the holds,
+            // the Master Archive rule from today's designation, and "Prefer
+            // the Trash" as it is set now. EVERY path that removes goes
+            // through this closure. The holds are asked even when the
+            // archive rule already refuses the file (r4-1): a copy that is
+            // BOTH is a hold — the classification that is never counted wins.
+            let word = ask?(ticket.quarantinedPath)
+            if let note = word?.holdNote {
+                heldNote = note
+                notCountedWhy = DuplicateDeletionHold.leftAloneWhy(note: note) ?? note
+                return .putBack(reason: note)
+            }
+            if let captured {
+                // Main's own refusal (it captured this check too): the row is
+                // refused and, as on main, counts by its evidence.
+                archiveRefusal = (captured.note, captured.transient)
+                return .putBack(reason: captured.note)
+            }
+            // The Master Archive, from TODAY's designation. Main, with only
+            // the captured check, would have REMOVED this file: retained
+            // here, it is never a survivor for another copy of this run.
+            if let refusal = word?.archive {
+                archiveRefusal = (refusal.note, refusal.transient)
+                notCountedWhy = DuplicateDeletionHold.archiveRuleAtRemovalWhy
                 return .putBack(reason: refusal.note)
             }
+            // "Prefer the Trash", read NOW (r4 H): turned on since the tier
+            // was recorded, it takes effect for this very removal. It only
+            // ever makes the outcome more conservative — turned OFF, the
+            // value sampled before phase two still stands.
+            let trashEveryDuplicate = preferTrash || word?.preferTrash == true
             let now = facts.recheck()
             guard !now.droppedAtBoundary.isEmpty else {
                 // Every counted copy still reproduces its stamp: the
-                // recorded tier stands.
-                return .proceed(recorded)
+                // recorded tier stands — or goes to the Trash if the setting
+                // was turned on meanwhile.
+                guard trashEveryDuplicate, recorded == .permanent else { return .proceed(recorded) }
+                var because = now
+                because.droppedAtBoundary = [DeletionTierText.preferTrashTurnedOn]
+                let trash = DeletionTierDecision.decide(facts: because, preferTrash: true)
+                boundary = (DeletionTierDecision(tier: .trash, remainingVerifiedCopies: trash.remainingVerifiedCopies,
+                                                 reason: "downgraded before removal — " + trash.reason), because)
+                return .proceed(.trash)
             }
-            let redecided = DeletionTierDecision.decide(facts: now, preferTrash: preferTrash)
+            let redecided = DeletionTierDecision.decide(facts: now, preferTrash: trashEveryDuplicate)
             guard let tier = redecided.tier else {
                 // Below two: back to its original path, untouched. Not a
                 // refusal of the PAIR — the duplicate is still identical to
@@ -389,7 +489,15 @@ enum DeleteDuplicatesDiskWorker {
                     ? .leftAlone(reason: Self.driveListRefreshing, facts: facts)
                     : .refused(reason: archiveRefusal.note + " — put back, nothing removed", cancelled: false)
             }
-            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
+            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false,
+                                            notCountedWhy: notCountedWhy)
+        }
+        if let heldNote {
+            // Put back at its path: left alone (a skip), not a refusal. A
+            // failed put-back stays `.retained`, named.
+            if case .refused(_, true) = outcome { outcome = .leftAlone(reason: heldNote, facts: facts) }
+            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false,
+                                            heldNote: heldNote, notCountedWhy: notCountedWhy)
         }
         guard let boundary else {
             return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
@@ -740,11 +848,17 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     }
 
     /// Catalog only, no disk: the siblings a read might have to prove for
-    /// this row — none when the copies with stored evidence (usable
-    /// fixity, this digest) already reach `goal`; otherwise every sibling
-    /// without usable stored evidence. Siblings whose stored stamp turns
-    /// out stale are found by the worker's stat and may be read only if
-    /// their drive fits the weight reserved from this list.
+    /// this row — every sibling without usable stored evidence, unless no
+    /// read could earn anything: the copies with stored evidence (usable
+    /// fixity, this digest) already reach `goal` AND either the goal is the
+    /// Trash's two ("Prefer the Trash") or the archive copy is among them
+    /// (an outright delete already). With three stored on what may be ONE
+    /// drive, a sibling on a second drive is the read that earns the
+    /// outright delete (codex #258 F11) — where the copies sit is the
+    /// worker's stat to say, so the sibling's drive is reserved for it.
+    /// Siblings whose stored stamp turns out stale are found by the
+    /// worker's stat and may be read only if their drive fits the weight
+    /// reserved from this list.
     nonisolated static func siblingsThatMayNeedReading(_ candidates: DeletionTierCandidates,
                                                        keeperDigest keeperFixity: ContentFixity?,
                                                        goal: Int) -> [String] {
@@ -754,9 +868,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             return wanted == nil || f.digest == wanted
         }
         var stored = 1
-        stored += candidates.archiveCopies.filter { holds($0.fixity) }.count
+        let archiveStored = candidates.archiveCopies.filter { holds($0.fixity) }.count
+        stored += archiveStored
         stored += candidates.otherCopies.filter { holds($0.fixity) }.count
-        guard stored < goal else { return [] }
+        if stored >= goal {
+            let archiveCounted = candidates.keeperIsVerifiedArchive || archiveStored > 0
+            if goal < DeletionTierDecision.minimumForPermanent || archiveCounted { return [] }
+        }
         return candidates.otherCopies.filter { !($0.fixity?.isUsableForVerification ?? false) }.map(\.path)
     }
 
@@ -786,6 +904,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         }
         model.isDeletingDuplicates = true
         defer { model.isDeletingDuplicates = false }
+        // Which physical device each volume is on is asked once per run.
+        DuplicateDrives.resetVolumeCache()
 
         var prepared: DeleteDuplicatesPlan
         if let resumed = resumingPlan {
@@ -821,7 +941,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // The old "(0, 0, skipped, 0)" — nothing to run, nothing to save.
             result = (0, 0, prepared.skippedBeforePlan, 0)
             finish(success: "No duplicates to delete on \(volumeName)"
-                   + (prepared.skippedBeforePlan > 0 ? " — \(prepared.skippedBeforePlan) skipped" : ""))
+                   + (prepared.skippedBeforePlan > 0 ? " — \(prepared.skippedBeforePlan) skipped" : "")
+                   + (prepared.leftAlone.line.map { " · \($0)" } ?? ""))
             return
         }
         await savePlan(context: "plan made")
@@ -880,6 +1001,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             if model.masterArchive != nil, !model.isArchiveVolumeSnapshotFresh {
                 await model.refreshArchiveVolumeSnapshot()
             }
+            // The Angel's buffer, read from DISK for this copy's turn (off
+            // the main actor, read-only): a batch saved by any route since
+            // the last reading — a Prepare that just finished with the
+            // Archive tab closed — holds its records (codex #258 F7). Cost:
+            // one listing of the buffer + one decode per batch, per copy.
+            await model.archiveAngel.refreshRecordIDsInBatchesOnDisk()
             // LIVE authorization, this instant — never the plan's or the
             // preflight's answer (#3).
             let record: VideoRecord
@@ -889,8 +1016,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                                                     stage: "before deletion") {
             case .authorized(let r, let k):
                 record = r; keeper = k
-            case .skip(let note, let line):
-                mutatePlan { $0.set(entry.id, .skipped, note: note) }
+            case .skip(let note, let line, let notCountedWhy):
+                mutatePlan {
+                    $0.set(entry.id, .skipped, note: note)
+                    if let notCountedWhy { $0.setNotCounted(entry.id, why: notCountedWhy) }
+                }
                 model.log("  " + line)
                 tally.skipped += 1
                 tally.bytesSkipped += entry.sizeBytes
@@ -912,8 +1042,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // COPY-COUNT TIER: the family's other copies, from the fresh
             // catalog; the disk is asked about them once the digest is in
             // hand. The archive is not required (Rick, late 2026-09-20).
-            let alsoPending = Set(current.entries.filter { !$0.status.isSettled && $0.id != entry.id }.map(\.id))
-            let candidates = model.deletionTierCandidates(record: record, keeper: keeper, excluding: alsoPending)
+            // THE survivor-counting rule decides who may count: never a row
+            // still to be decided, never a copy this run leaves alone (a
+            // hold, a Read-only mark) — codex #258 F1.
+            let candidates = model.deletionTierCandidates(record: record, keeper: keeper,
+                                                          run: current.runScope(deciding: entry.id))
 
             // ONE READ PER SIBLING PER RUN: a sibling another pair in flight
             // may be reading right now is not read twice beside it — this
@@ -980,8 +1113,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 keeperFixity: keeper.contentFixity,
                 quarantineDirectoryName: Self.quarantineDirectoryName(planID: current.id, entryID: entry.id),
                 tierCandidates: candidates, siblingAllowance: allowance,
-                // The volume re-check travels with the pair (off-main).
-                archiveCheck: model.archiveRemovalCheck())
+                // The volume re-check travels with the pair (off-main)…
+                archiveCheck: model.archiveRemovalCheck(),
+                // …and so does the question it asks at the removal itself.
+                boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path))
             inFlight.insert(entry.id)
             peakInFlight = max(peakInFlight, inFlight.count)
             // The pair runs as its own main-actor task so a second SSD pair
@@ -1100,6 +1235,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         if refused > 0 { summaryParts.append("\(refused) refused") }
         if failed > 0 { summaryParts.append("\(failed) not done") }
         if leftAlone > 0 { summaryParts.append("\(leftAlone) left alone") }
+        // GH #258: copies never taken (or left at their turn) because the
+        // Archive Angel is using them — the row's
+        // one-line summary only; the log lines above are unchanged.
+        if let heldLine = finalPlan.leftAlone.line { summaryParts.append(heldLine) }
         let summary = summaryParts.joined(separator: " · ")
         logSummary(planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "done"))
         if planSaveFailed {
@@ -1126,6 +1265,15 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let preAwait = record.snapshotClone()
         let pairStarted = Date()
         var decision: DeletionTierDecision?
+        // Set when the copy became one the run leaves alone during its read
+        // (the note): asked before phase two starts AND, by the disk worker,
+        // at the removal itself.
+        var heldAfterRead: String?
+        // Set when the copy was retained for a PROTECTION (a hold, a
+        // Read-only mark, the Master Archive rule found only at the
+        // removal): recorded on the row, which is then never counted as a
+        // surviving copy for another copy of this run (codex #258 r4-1).
+        var notCountedWhy: String?
         let trashVolume = VolumeReachability.volumeName(forPath: entry.path)
 
         // Phase 1: hold + hash once (or verify twice on the first pair of
@@ -1134,6 +1282,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             DeleteDuplicatesDiskWorker.verifyAndQuarantine(item, hooks: hooks)
         }
         var outcome = phaseOne.outcome
+        notCountedWhy = phaseOne.notCountedWhy
         if let retained = phaseOne.retainedInQuarantine {
             // Phase one moved the file and could not put it back: the
             // folder goes ON THE ROW, exactly as a ticket's would, so the
@@ -1161,8 +1310,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         if case .quarantined(let ticket, let facts) = outcome {
             finalFacts = facts
             // COPY-COUNT TIER, part 2 — with the digest in hand.
-            let decided = DeletionTierDecision.decide(
-                facts: facts, preferTrash: model.duplicateKeeperSettings.preferTrashForEveryDuplicate)
+            // The preference this decision is made under travels with it to
+            // the removal (codex #258 r5-1): a later sample never undoes it.
+            let recordedPreferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
+            let decided = DeletionTierDecision.decide(facts: facts, preferTrash: recordedPreferTrash)
             decision = decided
             // Record WHERE the file is and how it will go before it can be
             // removed (#2).
@@ -1191,19 +1342,36 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                     DeleteDuplicatesDiskWorker.release(ticket, reason: "stopped after quarantine",
                                                        keeperFilename: keeperName)
                 }
+            } else if let hold = model.duplicateDeletionHoldRule()(model.record(forID: entry.id) ?? record) {
+                // GH #258: the Archive Angel chose this copy (or it was
+                // put in a batch) WHILE its pair was being read — after
+                // the turn's authorization, before anything is removed. The
+                // file goes back to its path, untouched; phase 2 never runs.
+                heldAfterRead = hold.note
+                notCountedWhy = hold.why
+                outcome = await runDetached(entryID: entry.id) {
+                    DeleteDuplicatesDiskWorker.release(ticket, reason: hold.note, keeperFilename: keeperName, leftAlone: facts)
+                }
             } else if let tier = decided.tier {
                 // Phase 2: re-stat the counted copies and re-decide (codex
                 // 1611), re-check the file and the keeper, unlink or move
                 // to the Trash.
-                let preferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
+                // Recorded OR now (and the final verdict adds the value read
+                // at the removal): only ever more conservative.
+                let preferTrash = recordedPreferTrash || model.duplicateKeeperSettings.preferTrashForEveryDuplicate
                 let archiveCheck = item.archiveCheck
+                let boundary = item.boundary
                 let phaseTwo = await runDetached(entryID: entry.id) { [hooks] in
                     DeleteDuplicatesDiskWorker.deleteQuarantined(ticket, decided: decided, facts: facts,
                                                                  preferTrash: preferTrash,
                                                                  keeperFilename: keeperName, hooks: hooks,
-                                                                 archiveCheck: archiveCheck)
+                                                                 archiveCheck: archiveCheck, boundary: boundary)
                 }
                 outcome = phaseTwo.outcome
+                // Held at the removal itself (the Angel chose it, or its
+                // drive was marked Read only, during phase two's re-read).
+                if let note = phaseTwo.heldNote { heldAfterRead = note }
+                notCountedWhy = phaseTwo.notCountedWhy
                 if phaseTwo.evidenceChanged {
                     finalFacts = phaseTwo.facts
                     // The count the file goes by is the boundary's, not the
@@ -1244,8 +1412,19 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let seconds = Date().timeIntervalSince(pairStarted)
         let concurrency = inFlight.count
 
-        settle(outcome, entry: entry, keeper: keeper, preAwait: preAwait, decision: decision,
-               facts: finalFacts, trashVolume: trashVolume, model: model)
+        if let note = heldAfterRead, case .leftAlone(_, let facts) = outcome {
+            // Put back for the Archive Angel / the archive: the same answer
+            // as at the copy's turn — a skip, not the tier's "too few
+            // copies would remain" and not a refusal. (A put-back that
+            // failed is `.retained` and settles below, named.)
+            settleHeld(note, entry: entry, facts: facts, model: model)
+        } else {
+            settle(outcome, entry: entry, keeper: keeper, preAwait: preAwait, decision: decision,
+                   facts: finalFacts, trashVolume: trashVolume, model: model)
+        }
+        // EXPLICIT on the row, whatever became of the put-back: this copy was
+        // kept for a protection, not on its merits.
+        if let notCountedWhy { mutatePlan { $0.setNotCounted(entry.id, why: notCountedWhy) } }
 
         rate.add(bytes: entry.sizeBytes, seconds: seconds, concurrency: concurrency)
         publishProgress()
@@ -1358,6 +1537,104 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                        keeperMatchedByStoredFixity: !proof.keeperReadInFull)
             }
         }
+    }
+
+    /// GH #258: the copy was put back because it became one the run leaves
+    /// alone while its pair was being read. Counted and worded as the same
+    /// answer at the copy's turn is (`.skip`); the row is not re-marked.
+    private func settleHeld(_ note: String, entry: DeleteDuplicatesPlan.Entry,
+                            facts: DeletionTierFacts, model: VideoScanModel) {
+        tally.skipped += 1
+        tally.bytesSkipped += entry.sizeBytes
+        rowLog("skipped", entry, note + " — put back, nothing removed")
+        mutatePlan {
+            $0.set(entry.id, .skipped, note: note)
+            $0.setTier(entry.id, DeletionTierDecision(tier: nil, remainingVerifiedCopies: facts.remainingVerifiedCopies,
+                                                      reason: note),
+                       hasVerifiedArchive: facts.hasVerifiedArchive)
+        }
+        model.log("  Skipped \(entry.filename): \(note) — put back, nothing removed")
+    }
+
+    /// THE REMOVAL BOUNDARY — the question the disk worker's final verdict
+    /// asks once, immediately before the removal (codex #258 F6/F7, r3, r4),
+    /// built on the main actor at the copy's turn. NOTHING HERE COMES FROM A
+    /// CACHE (MOPS-2), and NOTHING IT CANNOT READ LETS A FILE GO (r4-2):
+    ///   1. the Angel's buffer ON DISK, every plan file read and decoded on
+    ///      the disk thread at that instant — a batch that landed, or
+    ///      changed, during the re-read. A buffer that cannot be read in
+    ///      full (a failed listing, a batch folder with no plan.json yet, a
+    ///      plan that does not decode) HOLDS the copy;
+    ///   2. the model's live word through ONE synchronous hop to the main
+    ///      actor (`duplicateRemovalBoundaryNow`): the hold rule (prepared /
+    ///      promoting / a running Prepare / the hand-over / a promoted
+    ///      archive copy — by id when the record has left the catalog),
+    ///      TODAY's Read-only marks, the CURRENT Master Archive designation
+    ///      and "Prefer the Trash". A catalog that went away holds
+    ///      everything. The main actor never waits on the disk worker (it
+    ///      awaits it), so the hop cannot deadlock; it costs one main-queue
+    ///      turn per removal, after a whole-file read;
+    ///   3. the marks and the designation turned into protections HERE, on
+    ///      the disk thread (`ReadOnlyVolumeProtection.make`,
+    ///      `ArchiveVolumeProtection.make` — where each drive is mounted is
+    ///      read afresh) and checked the way every removal-time check is:
+    ///      the catalogued path, then the path the file is at, its real
+    ///      path and its own volume's identity (r2-2). The UUID / mount
+    ///      probes are captured at the turn, where the pair's own removal
+    ///      check captures its probes.
+    /// The archive rule is asked only when nothing holds the copy (a hold
+    /// wins: it is the classification that is never counted, r4-1).
+    static func removalBoundary(model: VideoScanModel, recordID: UUID, path: String)
+        -> @Sendable (_ currentPath: String) -> RemovalBoundaryAnswer {
+        let inBatchOnDisk = model.archiveAngel.recordInBatchOnDiskFreshProbe()
+        let uuidProbe = MasterArchiveDesignation.volumeUUIDProbe
+        let identityProbe = ArchiveVolumeProtection.mountIdentityProbe
+        return { [weak model] currentPath in
+            let buffer = inBatchOnDisk(recordID)
+            // THE one hop.
+            let now: DuplicateRemovalBoundaryNow = onMainActor {
+                guard let model else { return .catalogGone }
+                return model.duplicateRemovalBoundaryNow(recordID: recordID)
+            }
+            var answer = RemovalBoundaryAnswer(holdNote: nil, archive: nil, preferTrash: now.preferTrash)
+            switch buffer {
+            case .free: answer.holdNote = now.holdNote
+            case .held: answer.holdNote = DuplicateDeletionHold.inUseByAngel.note
+            case .uncertain(let why):
+                // FAIL CLOSED (codex #258 r4-2): what could not be read may
+                // hold this very record. A hold for this removal.
+                answer.holdNote = DuplicateDeletionHold.leftAlonePrefix + DuplicateDeletionHold.angelBufferUnreadableWhy + " (\(why))"
+            }
+            if answer.holdNote == nil, !now.readOnlyMarks.isEmpty {
+                let readOnly = ReadOnlyVolumeProtection.make(marks: now.readOnlyMarks, probe: uuidProbe, identity: identityProbe)
+                let verdict = readOnly.verdict(forPath: path)
+                    ?? readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)
+                answer.holdNote = verdict.map { DuplicateDeletionHold.leftAlonePrefix + VideoScanModel.readOnlyRefusalNote($0) }
+            }
+            guard answer.holdNote == nil, let designation = now.designation else { return answer }
+            if now.isArchiveCopy {
+                answer.archive = (VideoScanModel.bulkDeleteRefusalNote(.archiveTree, volume: ""), false)
+                return answer
+            }
+            guard let protection = ArchiveVolumeProtection.make(designation: designation, aliasCandidates: now.aliasCandidates,
+                                                                probe: uuidProbe, identity: identityProbe) else { return answer }
+            let check = ArchiveRemovalCheck(protection: protection, probe: uuidProbe, identity: identityProbe)
+            answer.archive = (check.refusal(forPath: path) ?? check.refusal(forPath: currentPath)).map { ($0.note, $0.transient) }
+            return answer
+        }
+    }
+
+    /// The holds half of `removalBoundary` (tests ask it directly).
+    static func removalBoundaryHold(model: VideoScanModel, recordID: UUID, path: String) -> @Sendable (_ currentPath: String) -> String? {
+        let ask = removalBoundary(model: model, recordID: recordID, path: path)
+        return { ask($0).holdNote }
+    }
+
+    /// Run `body` on the main actor and wait for it — from the main thread
+    /// directly, from any other thread through the main queue.
+    nonisolated static func onMainActor<T: Sendable>(_ body: @MainActor () -> T) -> T {
+        if Thread.isMainThread { return MainActor.assumeIsolated(body) }
+        return DispatchQueue.main.sync { MainActor.assumeIsolated(body) }
     }
 
     private func settleRefused(reason: String, cancelled: Bool, entry: DeleteDuplicatesPlan.Entry, model: VideoScanModel) {
@@ -1569,6 +1846,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             model.log("\nNot resuming Delete Duplicates on \(input.volumeName): \(away). Nothing was changed; the run stays offered.")
             return .failure(ResumeRefused(line: away))
         }
+        // The Archive Angel's batches on disk, read now (off-main,
+        // read-only) so the re-check below does not depend on the Archive
+        // tab having been opened this launch (GH #258).
+        await model.archiveAngel.refreshRecordIDsInBatchesOnDisk()
         var plan = input
         plan.resumeCount += 1
         model.log("\nResuming Delete Duplicates on \(plan.volumeName): \(plan.remainingCount) of \(plan.entries.count) remaining — re-checking every one against the catalog first…")
@@ -1593,9 +1874,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         }
         for i in plan.entries.indices where !plan.entries[i].status.isSettled {
             let e = plan.entries[i]
-            func skip(_ why: String, log line: String) {
+            func skip(_ why: String, log line: String, notCountedWhy: String? = nil) {
                 plan.entries[i].status = .skipped
                 plan.entries[i].note = why
+                if let notCountedWhy { plan.entries[i].notCountedWhy = notCountedWhy }
                 plan.entries[i].settledAt = now
                 skippedNow += 1
                 model.log("  " + line)
@@ -1644,8 +1926,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             }
             switch model.authorizeDuplicateDeletion(entry: e, volumePath: plan.volumePath,
                                                     crossVolumeMode: plan.crossVolumeMode, stage: "at resume") {
-            case .skip(let note, let line):
-                skip(note, log: line); continue
+            case .skip(let note, let line, let notCountedWhy):
+                skip(note, log: line, notCountedWhy: notCountedWhy); continue
             case .refuse(let note):
                 refuse(note); continue
             case .authorized:

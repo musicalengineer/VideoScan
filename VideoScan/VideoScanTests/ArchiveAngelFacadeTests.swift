@@ -80,6 +80,7 @@ struct ArchiveAngelFacadeTests {
     final class FakeRunner: AngelJobRunner {
         var isBusy = false
         var hasActiveJobs = false
+        var recordIDsInRunningPrepare: Set<UUID> = []
         var calls: [(count: Int, recordIDs: [UUID]?, lossless: Bool, root: URL, policy: AngelRecommendationPolicy)] = []
         var verifyStarts: [UUID] = []
         var footageStarts = 0

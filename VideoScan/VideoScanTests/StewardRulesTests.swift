@@ -109,8 +109,9 @@ struct StewardProofRuleTests {
 
     /// The planner's answer for the same copy, asked directly.
     private func plannerAnswer(_ rig: Rig, copy: VideoRecord, keeper: VideoRecord, excluding: Set<UUID>,
+                               run: DuplicateRunScope? = nil,
                                digest: String) -> (facts: DeletionTierFacts, decision: DeletionTierDecision) {
-        let candidates = rig.model.deletionTierCandidates(record: copy, keeper: keeper, excluding: excluding)
+        let candidates = rig.model.deletionTierCandidates(record: copy, keeper: keeper, excluding: excluding, run: run)
         let facts = DeletionTierFacts.gather(candidates, digest: digest)
         return (facts, DeletionTierDecision.decide(facts: facts,
                                                    preferTrash: rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate))
@@ -138,7 +139,10 @@ struct StewardProofRuleTests {
         #expect(proof.remainLine.hasPrefix("2 verified copies would remain: keeper on "))
     }
 
-    @Test func aThirdVerifiedCopyMakesItPermanentExactlyAsThePlannerDecides() throws {
+    /// Three verified copies would remain — all on ONE drive (the rig is
+    /// one temp folder), so since 2026-10-03 the planner says the Trash, and
+    /// the card says exactly that.
+    @Test func aThirdVerifiedCopyOnTheSameDriveMeansTheTrashExactlyAsThePlannerDecides() throws {
         let rig = try rig()
         defer { try? FileManager.default.removeItem(at: rig.dir) }
         try FileManager.default.createDirectory(at: rig.dir.appendingPathComponent("third"), withIntermediateDirectories: true)
@@ -152,7 +156,8 @@ struct StewardProofRuleTests {
         let planner = plannerAnswer(rig, copy: copy, keeper: keeper, excluding: [], digest: digest)
         #expect(planner.facts.remainingVerifiedCopies == DeletionTierDecision.minimumForPermanent)
         #expect(proof.remaining == planner.facts.remainingVerifiedCopies && proof.tier == planner.decision.tier)
-        #expect(proof.tier == .permanent)
+        #expect(planner.facts.distinctDriveCount == 1 && proof.tier == .trash)
+        #expect(proof.outcomeLine == "It would go to the Trash, not be deleted.")
     }
 
     /// The other copies on the SAME drive are rows of the same run, still
@@ -193,11 +198,15 @@ struct StewardProofRuleTests {
         #expect(proof.outcomeLine.contains("Trash"), "keeper + the sibling once read = two → the Trash")
     }
 
-    /// QA F1 (2026-10-03): the Delete planner has no Archive Angel guard and
-    /// no filed-as-Archived guard, so a drive's cleanup checks those copies
-    /// too. The card must count them as the run does — rows of the same
-    /// run, never survivors — and must not call them "never offered".
-    @Test func copiesTheAngelChoseOrYouFiledAreCountedAsTheRunCountsThem() throws {
+    /// GH #258 (was QA F1, 2026-10-03): the Delete planner leaves alone a
+    /// copy the Archive Angel is USING (here: in a prepared batch), so it is
+    /// NOT a row of the run: the card says "never offered" and counts it as
+    /// the run does — NOT AT ALL (codex #258 F1: a copy the run leaves alone
+    /// is never a surviving copy for another copy of that run, whatever its
+    /// stored evidence says; this test used to pin the opposite). A copy
+    /// merely labelled Archived in Triage is an ordinary copy (ruling
+    /// 2026-10-03): a row of the run, like any other.
+    @Test func copiesTheAngelIsUsingAreCountedAsTheRunCountsThem() throws {
         let rig = try rig()
         defer { try? FileManager.default.removeItem(at: rig.dir) }
         let keeper = try file(rig, "here/keeper.mov", .keep, evidence: digest)
@@ -207,48 +216,48 @@ struct StewardProofRuleTests {
         filed.lifecycleStage = .archived
         rig.model.records = [keeper, free, angel, filed]
         var summary = rig.model.archiveAngel.recommendations
-        summary.candidateIDs = [angel.id]
+        summary.preparedIDs = [angel.id]
         summary.revision += 1
         rig.model.archiveAngel.publishRecommendations(summary)
 
-        // What the run would select on this drive: all three copies.
-        let selected = rig.model.duplicateDeletionSelection(onVolume: rig.dir.appendingPathComponent("here").path).targets
-        #expect(Set(selected.map(\.id)) == [free.id, angel.id, filed.id], "fixture: the planner guards neither")
+        // What the run would select on this drive: the free copy and the
+        // one that only carries the Archived label — not the batch's.
+        let selection = rig.model.duplicateDeletionSelection(onVolume: rig.dir.appendingPathComponent("here").path)
+        #expect(Set(selection.targets.map(\.id)) == [free.id, filed.id],
+                "the run behind the card took a copy the card calls never offered")
+        #expect(selection.held.map(\.record.id) == [angel.id])
 
+        // The run's other rows still to decide (the filed copy) are not
+        // counted; neither is the batch's copy, although its stored
+        // evidence reproduces — the run's own survivor rule.
+        let sameRun = Set(selection.targets.map(\.id)).subtracting([free.id])
         let proof = try stewardProof(rig, copy: free)
-        let run = plannerAnswer(rig, copy: free, keeper: keeper, excluding: [angel.id, filed.id], digest: digest)
-        #expect(run.facts.remainingVerifiedCopies == 1)
-        #expect(proof.remaining == run.facts.remainingVerifiedCopies, "the card counted copies the run would also decide")
+        let run = plannerAnswer(rig, copy: free, keeper: keeper, excluding: [],
+                                run: DuplicateRunScope(volumePath: rig.dir.appendingPathComponent("here").path, pending: sameRun),
+                                digest: digest)
+        #expect(run.facts.remainingVerifiedCopies == 1, "the keeper alone — the copy the run leaves alone is not a survivor")
+        #expect(run.facts.notCounted.contains { $0.contains("angel.mov") && $0.contains("not counted (in use by the Archive Angel)") })
+        #expect(proof.remaining == run.facts.remainingVerifiedCopies, "the card and the run count differently")
+        #expect(proof.tier == run.decision.tier && proof.notCounted == run.facts.unverifiedCopies)
 
-        // (1) The words on the Angel's and the filed rows.
+        // (1) The words on the batch's row and on the labelled one.
         let set = try #require(queue(rig.model).cases.first { $0.kind == .reclaimGroup })
         let rows = Dictionary(uniqueKeysWithValues: set.copies.map { ($0.id, $0) })
         let angelRow = try #require(rows[angel.id]), filedRow = try #require(rows[filed.id])
-        #expect(angelRow.standing == .stillChecked(.angel) && filedRow.standing == .stillChecked(.filedArchived))
-        let angelWords = try #require(StewardStandingWords.words(for: angelRow, proof: nil))
-        let filedWords = try #require(StewardStandingWords.words(for: filedRow, proof: nil))
-        #expect(angelWords == "Archive Angel has chosen this copy — but “Delete duplicates on here” would still check it.")
-        #expect(filedWords == "You filed this copy as Archived — but “Delete duplicates on here” would still check it.")
-        for words in [angelWords, filedWords] {
-            #expect(words.contains("would still check") && !words.contains("never offered"))
-        }
-        // …they are not reclaimable, not proposed, and not asked about.
-        #expect(set.payoffBytes == free.sizeBytes && set.protectedCopies == 0)
+        #expect(angelRow.standing == .protected(.angel) && filedRow.standing == .wouldBeChecked)
+        #expect(StewardStandingWords.words(for: angelRow, proof: nil) == "In use by the Archive Angel — never offered.")
+        #expect(StewardStandingWords.words(for: filedRow, proof: nil) == "Delete duplicates on here would check this copy.",
+                "an Archived label is not ‘never offered’")
+        // …the batch's copy is not reclaimable, not proposed, not a row of the run, and not asked about.
+        #expect(set.payoffBytes == free.sizeBytes + filed.sizeBytes && set.protectedCopies == 1)
+        #expect(Set(set.runRows.map(\.id)) == [free.id, filed.id])
         let prepared = try #require(StewardEvidenceBuilder.prepare(model: rig.model, for: set))
-        #expect(prepared.questions.map(\.copyID) == [free.id])
+        #expect(Set(prepared.questions.map(\.copyID)) == [free.id, filed.id])
 
-        // (3) The caution above the button counts exactly the rows the
-        // run would select that no card proposes.
-        let rule = rig.model.stewardProtectionRule()
-        let stillChecked = selected.filter { rule($0).isProtected && !rule($0).plannerRefuses }.count
-        #expect(stillChecked == 2)
-        #expect(set.stillCheckedOnDrive == stillChecked)
-        #expect(StewardActionGate.stillCheckedCaution(set.stillCheckedOnDrive)
-                == "This drive's cleanup would also check 2 copies the Archive Angel has chosen or you filed as Archived.")
+        // (2) The drive card counts the two copies the run would take.
         let drive = try #require(queue(rig.model).cases.first { $0.kind == .reclaimDrive })
-        #expect(drive.stillCheckedOnDrive == stillChecked && drive.estimate?.copies == 1)
-        #expect(StewardActionGate.stillCheckedCaution(0) == nil)
-        #expect(StewardActionGate.stillCheckedCaution(1)?.contains("1 copy the Archive Angel") == true)
+        #expect(drive.estimate?.copies == 2 && Set(drive.recordIDs) == [free.id, filed.id])
+        #expect(rig.model.volumesWithDeletableDuplicates().map(\.count) == [2], "the Delete flow's own count agrees")
     }
 
     /// QA F6: a hard link of the copy itself is the same bytes on the same
@@ -364,7 +373,8 @@ struct StewardProofRuleTests {
     /// The rule printed on the card is the planner's constants, quoted.
     @Test func theSurvivalRuleOnTheCardQuotesThePlannersConstants() {
         #expect(ReclaimableEstimate.survivalRule.contains("at least \(DeletionTierDecision.minimumForPermanent) verified copies"))
-        #expect(ReclaimableEstimate.survivalRule.contains("exactly \(DeletionTierDecision.minimumForTrash)"))
+        #expect(ReclaimableEstimate.survivalRule.contains("at least \(DeletionTierDecision.minimumDrivesForPermanent) different drives"))
+        #expect(ReclaimableEstimate.survivalRule.contains("with \(DeletionTierDecision.minimumForTrash) or more remaining otherwise it goes to the Trash"))
     }
 }
 
@@ -379,7 +389,7 @@ struct StewardExclusionRuleTests {
             targetPath: "/Volumes/FamilyArchive", rootPath: "/Volumes/FamilyArchive/Test_Family_Archive", volumeUUID: nil)
     }
 
-    @Test func thePredicateProtectsArchiveCopiesTheArchiveDriveAndFiledRecords() {
+    @Test func thePredicateProtectsArchiveCopiesAndTheArchiveDriveButNotALabel() {
         let model = isolatedModel()
         designateFamilyArchive(model)
         let rule = model.stewardProtectionRule()
@@ -394,33 +404,53 @@ struct StewardExclusionRuleTests {
 
         let filed = record("/Volumes/SanDisk/filed.mov")
         filed.lifecycleStage = .archived
-        #expect(rule(filed) == .filedArchived, "filed as Archived in Triage — the steward's own restraint")
-        #expect(!rule(filed).plannerRefuses && rule(promoted).plannerRefuses)
+        #expect(rule(filed) == .none, "the Archived label in Triage is not a protection (ruling 2026-10-03)")
 
-        // With NO Master Archive designated the planner refuses nothing,
-        // so a promoted copy is the steward's restraint only.
+        // With NO Master Archive designated the archive rule says nothing;
+        // the planner's hold rule still leaves a promoted copy alone.
         let bare = isolatedModel()
-        #expect(bare.stewardProtectionRule()(promoted) == .filedArchived)
+        #expect(bare.stewardProtectionRule()(promoted) == .archiveCopy)
+        #expect(bare.duplicateDeletionHoldRule()(promoted) == .promotedArchiveCopy)
     }
 
-    @Test func thePredicateAgreesWithTheDeletePlannersOwnRefusal() {
+    /// GH #258: "protected" on a card and "left alone" by the Delete
+    /// planner are ONE answer, for every class — asked of the planner's two
+    /// rules directly, and of its selection.
+    @Test func thePredicateAgreesWithTheDeletePlannersOwnRules() {
         let model = isolatedModel()
         designateFamilyArchive(model)
-        let rule = model.stewardProtectionRule()
-        let snapshot = model.archiveVolumeProtection()
-        for path in ["/Volumes/FamilyArchive/Test_Family_Archive/x.mov", "/Volumes/FamilyArchive/y.mov",
-                     "/Volumes/SanDisk/z.mov", "/Users/someone/Movies/w.mov"] {
-            let r = record(path)
-            #expect((model.bulkDeleteRefusal(r, volume: snapshot) != nil) == rule(r).plannerRefuses,
-                    "\(path): the steward and the Delete planner disagree")
-        }
-        // …and for what only the steward holds back, the planner does NOT refuse.
-        let filed = record("/Volumes/SanDisk/filed.mov")
+        let g = UUID()
+        func extra(_ path: String) -> VideoRecord { record(path, group: g, disposition: .extraCopy) }
+        let filed = extra("/Volumes/SanDisk/filed.mov")
         filed.lifecycleStage = .archived
-        #expect(model.bulkDeleteRefusal(filed, volume: snapshot) == nil && rule(filed).isProtected && !rule(filed).plannerRefuses)
+        let chosen = extra("/Volumes/SanDisk/chosen.mov")
+        let listed = extra("/Volumes/SanDisk/listed.mov")
+        let promoted = extra("/Volumes/SanDisk/promoted.mov")
+        promoted.derivationKind = ArchivePromotion.derivationKind
+        let free = extra("/Volumes/SanDisk/z.mov")
+        let all = [extra("/Volumes/FamilyArchive/Test_Family_Archive/x.mov"), extra("/Volumes/FamilyArchive/y.mov"),
+                   free, extra("/Users/someone/Movies/w.mov"), filed, chosen, listed, promoted]
+        model.records = [record("/Volumes/SanDisk/keeper.mov", group: g, disposition: .keep)] + all
+        var summary = model.archiveAngel.recommendations
+        summary.candidateIDs = [listed.id]
+        summary.promotedIDs = [chosen.id]
+        summary.revision += 1
+        model.archiveAngel.publishRecommendations(summary)
+
+        let rule = model.stewardProtectionRule()
+        let hold = model.duplicateDeletionHoldRule()
+        let snapshot = model.archiveVolumeProtection()
+        for r in all {
+            let plannerLeavesAlone = model.bulkDeleteRefusal(r, volume: snapshot) != nil || hold(r) != nil
+            #expect(plannerLeavesAlone == rule(r).isProtected, "\(r.fullPath): the steward and the Delete planner disagree")
+        }
+        #expect(rule(filed) == .none && rule(listed) == .none && rule(chosen) == .angel
+                && rule(promoted) == .archived && rule(free) == .none)
+        // …and the selection on the drive takes exactly what no rule protects.
+        #expect(Set(model.duplicateDeletionSelection(onVolume: "/Volumes/SanDisk").targets.map(\.id)) == [free.id, filed.id, listed.id])
     }
 
-    @Test func archiveAngelsPicksAndPreparedBatchesAreProtected() {
+    @Test func copiesInTheArchiveAngelsBatchesAreProtectedAndMerelyListedOnesAreNot() {
         let model = isolatedModel()
         let chosen = record("/Volumes/SanDisk/chosen.mov")
         let preparing = record("/Volumes/SanDisk/preparing.mov")
@@ -433,7 +463,8 @@ struct StewardExclusionRuleTests {
         summary.revision += 1
         model.archiveAngel.publishRecommendations(summary)
         let rule = model.stewardProtectionRule()
-        #expect(rule(chosen) == .angel && rule(preparing) == .angel && rule(promoted) == .angel)
+        #expect(rule(chosen) == .none, "merely listed by the Angel: an ordinary copy")
+        #expect(rule(preparing) == .angel && rule(promoted) == .angel)
         #expect(rule(plain) == .none)
     }
 
@@ -461,18 +492,17 @@ struct StewardExclusionRuleTests {
         let onArchiveDrive = record("/Volumes/FamilyArchive/loose/copy.mov", size: 100, group: g, disposition: .extraCopy)
         model.records = [keeper, free, angel, archived, onArchiveDrive]
         var summary = model.archiveAngel.recommendations
-        summary.candidateIDs = [angel.id]
+        summary.preparedIDs = [angel.id]
         summary.revision += 1
         model.archiveAngel.publishRecommendations(summary)
 
         let q = queue(model, crossMode: true)
         let set = try #require(q.cases.first { $0.kind == .reclaimGroup })
         #expect(set.payoffBytes == 100 && set.actionableBytes == 100, "only the free copy could come back")
-        #expect(set.protectedCopies == 2, "the two the planner itself refuses")
-        #expect(set.stillCheckedOnDrive == 1, "the Angel's pick on SanDisk: not proposed, but the cleanup would check it")
+        #expect(set.protectedCopies == 3, "the archive copy, the one on the archive drive, and the one in the Angel's batch")
         let standing = Dictionary(uniqueKeysWithValues: set.copies.map { ($0.id, $0.standing) })
         #expect(standing[free.id] == .wouldBeChecked)
-        #expect(standing[angel.id] == .stillChecked(.angel))
+        #expect(standing[angel.id] == .protected(.angel))
         #expect(standing[archived.id] == .protected(.archived))
         #expect(standing[onArchiveDrive.id] == .protected(.archiveDrive))
 
@@ -485,13 +515,13 @@ struct StewardExclusionRuleTests {
         #expect(prepared.questions.map(\.copyID) == [free.id])
     }
 
-    @Test func aSetWhoseOnlyOtherCopiesAreAngelsOrArchivedProducesNoCard() {
+    @Test func aSetWhoseOnlyOtherCopiesAreInBatchesOrPromotedProducesNoCard() {
         let model = isolatedModel()
         let g = UUID()
         let keeper = record("/Volumes/SanDisk/keep.mov", group: g, disposition: .keep)
         let angel = record("/Volumes/SanDisk/angel.mov", group: g, disposition: .extraCopy)
-        let filed = record("/Volumes/SanDisk/filed.mov", group: g, disposition: .extraCopy)
-        filed.lifecycleStage = .archived
+        let filed = record("/Volumes/SanDisk/promoted.mov", group: g, disposition: .extraCopy)
+        filed.derivationKind = ArchivePromotion.derivationKind
         model.records = [keeper, angel, filed]
         var summary = model.archiveAngel.recommendations
         summary.preparedIDs = [angel.id]
@@ -658,8 +688,13 @@ struct StewardExclusionRuleTests {
         await model.stewardTask?.value
         #expect(model.stewardSnapshot.queue.count(of: .reclaimGroup) == 1)
 
+        // Since GH #258 the planner's hold rule does not hold a copy the
+        // Angel merely recommends (`candidateIDs`) — only one in a prepared
+        // or promoted batch, on disk, or being prepared. So the Angel's
+        // change here is a PREPARED copy (main's test used a candidate,
+        // which no longer holds anything).
         var summary = model.archiveAngel.recommendations
-        summary.candidateIDs = [copy.id]
+        summary.preparedIDs = [copy.id]
         summary.revision += 1
         model.archiveAngel.publishRecommendations(summary)
         let after = try await shownQueue(model) { $0.count(of: .reclaimGroup) == 0 }
@@ -667,7 +702,7 @@ struct StewardExclusionRuleTests {
 
         model.stewardPaneDisappeared()
         let published = model.stewardSnapshot.publishCount
-        summary.candidateIDs = []
+        summary.preparedIDs = []
         summary.revision += 1
         model.archiveAngel.publishRecommendations(summary)
         try await Task.sleep(nanoseconds: 1_000_000_000)

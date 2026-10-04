@@ -142,8 +142,11 @@ struct AnalyzeReclaimableLogicTests {
     @Test func survivalRuleQuotesDeletionTierDecision() {
         #expect(DeletionTierDecision.minimumForPermanent == 3)
         #expect(DeletionTierDecision.minimumForTrash == 2)
+        #expect(DeletionTierDecision.minimumDrivesForPermanent == 2)
+        // Since 2026-10-03 the rule also says WHERE the copies must sit.
+        #expect(ReclaimableEstimate.survivalRule == DeletionTierDecision.ruleSentence)
         #expect(ReclaimableEstimate.survivalRule ==
-                "Only copies with at least 3 verified copies remaining are ever deleted outright; with exactly 2 they go to the Trash, with fewer they are left alone.")
+                "Only a copy with at least 3 verified copies remaining on at least 2 different drives (or with a verified archive copy among them) is ever deleted outright; with 2 or more remaining otherwise it goes to the Trash; with fewer it is left alone.")
     }
 
     @Test func internalFolderTargetIsItsOwnDrive() {

@@ -455,7 +455,7 @@ struct StewardEventsLogicTests {
         reencode.footageLikelyOriginalID = original.id
         var archived = xmas("archived"), filed = xmas("filed"), onArchiveDrive = xmas("drive"), chosen = xmas("chosen")
         archived.protection = .archived
-        filed.protection = .filedArchived
+        filed.protection = .archiveCopy
         onArchiveDrive.protection = .archiveDrive
         chosen.protection = .angel
         let all = [k1, c1, k2, c2, lone, original, reencode, archived, filed, onArchiveDrive, chosen]

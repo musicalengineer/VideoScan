@@ -49,6 +49,18 @@ extension VideoScanModel {
         /// Number of catalog records on this volume — the denominator of
         /// the ">20% of the volume" snapshot tripwire.
         let volumeRecordCount: Int
+        /// GH #258: extras on this volume the run leaves alone because the
+        /// Archive Angel is using them (a batch, a running Prepare) or
+        /// they are promoted archive copies — NEVER in `targets`, each
+        /// with its reason. Counted in `skippedCount` / `skippedReasons`.
+        var held: [(record: VideoRecord, hold: DuplicateDeletionHold)] = []
+
+        /// How many were left alone, by kind.
+        var leftAlone: DeleteDuplicatesPlan.LeftAloneCounts {
+            var counts = DeleteDuplicatesPlan.LeftAloneCounts()
+            for item in held { counts.add(item.hold) }
+            return counts
+        }
 
         /// The split line: "N same-drive extras" or
         /// "N same-drive extras + M working copies whose master is on X, Y".
@@ -257,6 +269,172 @@ extension VideoScanModel {
         return job.result
     }
 
+    /// THE ONE RULE for "does Delete Duplicates leave this extra copy
+    /// alone, although the bulk-verb gate (`bulkDeleteRefusal`: the Master
+    /// Archive, its volume, a drive marked Read only) has nothing to say
+    /// about it?" (GH #258, Rick 2026-10-03). Asked by the selection, by
+    /// the menu count and — live, at every copy's turn, at resume and once
+    /// more between a pair's read and its removal — by the job; the content
+    /// steward asks it too, so its cards and the run can never disagree.
+    ///
+    /// A FILE IN USE, or an archive copy — nothing else (Rick's ruling
+    /// 2026-10-03):
+    ///
+    ///   a promoted archive copy (reached here only while NO Master Archive
+    ///   is designated, when `bulkDeleteRefusal` answers nil) . isArchiveCopy
+    ///   in a prepared batch, or in a batch being / just promoted (Promote
+    ///   re-reads the source to re-prove its bytes)
+    ///        ..... archiveAngel.recommendations.preparedIDs / .promotedIDs
+    ///              + archiveAngel.recordIDsInBatchesOnDisk (the buffer's
+    ///              own plan files, read without the Archive tab)
+    ///   picked for a Prepare that is still running — or that has JUST
+    ///   ended and whose records no reading of the buffer has accounted for
+    ///   yet (the hand-over, codex #258 F7)
+    ///        ..... archiveAngel.recordIDsInRunningPrepare
+    ///              + archiveAngel.recordIDsHandedOver
+    ///
+    /// NOT held: a copy the Angel merely lists as a candidate (the Angel
+    /// never recommends an Extra copy — its own `extraCopy` rule, pinned in
+    /// ArchiveAngelExtraCopyGuardTests), and a copy labelled Archived in
+    /// Triage (the label follows the keeper when the copy goes —
+    /// DuplicateKeeperCarryOverTests).
+    ///
+    /// Build ONCE per pass and call per record: the Angel's sets are
+    /// captured here (copy-on-write — no copying), so each call is a few
+    /// O(1) set lookups. The sets change without a catalog mutation (a
+    /// batch), which is why the authorization builds a fresh rule for every
+    /// row instead of trusting the plan.
+    ///
+    /// A copy left alone is NEVER a surviving copy for another copy of the
+    /// same run (`duplicateSurvivorStandingRule` — codex #258 F1): main
+    /// planned it as a row "still to be decided", which never counted.
+    func duplicateDeletionHoldRule() -> (VideoRecord) -> DuplicateDeletionHold? {
+        let inUseByAngel = duplicateAngelUseRule()
+        // Used and dropped within one pass, so a strong `self` is fine.
+        return { r in
+            if self.isArchiveCopy(r) { return .promotedArchiveCopy }
+            return inUseByAngel(r.id) ? .inUseByAngel : nil
+        }
+    }
+
+    /// The Angel's half of the hold rule, BY ID — the Angel's sets are sets
+    /// of record ids, so the question can still be asked of a record that
+    /// has left the catalog (the removal boundary does, r4-2).
+    func duplicateAngelUseRule() -> (UUID) -> Bool {
+        let angel = archiveAngel.recommendations
+        let onDisk = archiveAngel.recordIDsInBatchesOnDisk
+        let preparing = archiveAngel.recordIDsInRunningPrepare
+        let handedOver = archiveAngel.recordIDsHandedOver
+        return { id in
+            angel.preparedIDs.contains(id) || angel.promotedIDs.contains(id)
+                || onDisk.contains(id) || preparing.contains(id) || handedOver.contains(id)
+        }
+    }
+
+    /// THE LAST WORD at the removal boundary, on the main actor (codex #258
+    /// F6): asked by the disk worker's final verdict, in the same
+    /// synchronous stretch as the unlink / the move to the Trash — after
+    /// phase two's re-read, which can take minutes. The hold rule, live,
+    /// and the Read-only half of the bulk-verb gate, live (a drive marked
+    /// while the pair was being read). nil = nothing holds it; else the
+    /// row's note ("left alone — in use by the Archive Angel"). The Master
+    /// Archive half of the gate is the worker's own `ArchiveRemovalCheck`.
+    ///
+    /// Returns the hold's note (nil = no hold) AND today's Read-only MARKS
+    /// — the marks themselves, as the scan targets carry them now, not the
+    /// model's cached snapshot of where they are mounted (codex #258 r3:
+    /// nothing at the final verdict comes from a cache). The disk worker
+    /// builds the protection from them there and then
+    /// (`ReadOnlyVolumeProtection.make`) and runs its removal-time check —
+    /// the path, the real path, the file's own volume identity (r2-2: a
+    /// mark made during phase two that matches only by identity).
+    func duplicateRemovalBoundaryWord(recordID: UUID) -> (holdNote: String?, readOnlyMarks: [ReadOnlyVolumeProtection.Mark]) {
+        let hold: DuplicateDeletionHold?
+        if let rec = record(forID: recordID) {
+            hold = duplicateDeletionHoldRule()(rec)
+        } else {
+            // The record left the catalog while its pair was being read:
+            // no record is not "no hold" — the Angel's sets are asked by id.
+            hold = duplicateAngelUseRule()(recordID) ? .inUseByAngel : nil
+        }
+        return (hold?.note, readOnlyVolumeMarks)
+    }
+
+    /// The Master Archive half of the last word (codex #258, after round 3
+    /// — "at the final verdict nothing comes from a cache"): the CURRENT
+    /// designation and the scan targets' paths (the spellings a row can
+    /// carry), and whether the record is itself a promoted archive copy.
+    /// The disk worker builds the archive protection from these there and
+    /// then (`ArchiveVolumeProtection.make`) — not from the snapshot that
+    /// was captured at the copy's turn.
+    func duplicateRemovalBoundaryArchive(recordID: UUID)
+        -> (designation: MasterArchiveDesignation?, aliasCandidates: [String], isArchiveCopy: Bool) {
+        (masterArchive, archiveAliasCandidates, record(forID: recordID).map { isArchiveCopy($0) } ?? false)
+    }
+
+    /// EVERYTHING the removal boundary needs from the model, read in ONE
+    /// synchronous hop (codex #258 r4): the hold and today's Read-only marks
+    /// (`duplicateRemovalBoundaryWord`), the current Master Archive
+    /// designation (`duplicateRemovalBoundaryArchive`) and "Prefer the Trash
+    /// for every duplicate" as it is set now.
+    func duplicateRemovalBoundaryNow(recordID: UUID) -> DuplicateRemovalBoundaryNow {
+        let word = duplicateRemovalBoundaryWord(recordID: recordID)
+        let archive = duplicateRemovalBoundaryArchive(recordID: recordID)
+        return DuplicateRemovalBoundaryNow(holdNote: word.holdNote, readOnlyMarks: word.readOnlyMarks,
+                                           designation: archive.designation, aliasCandidates: archive.aliasCandidates,
+                                           isArchiveCopy: archive.isArchiveCopy,
+                                           preferTrash: duplicateKeeperSettings.preferTrashForEveryDuplicate)
+    }
+
+    /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1; SIMPLIFIED in
+    /// round 5, S1): while the run cleaning `run.volumePath` decides one
+    /// copy, may this OTHER member of the family be counted as a copy that
+    /// remains?
+    ///
+    ///   ANY ROW OF THIS RUN — pending, removed, left alone by the tier,
+    ///   refused, held, failed, put back; a new plan or an old one ........ no
+    ///   an extra copy on the drive being cleaned that is NOT a row of this
+    ///   run — held by the Angel, on a folder marked Read only, or never
+    ///   planned .......................................................... no
+    ///   …except one the Master Archive rule protects (main never planned
+    ///   those either, and counted them) .................. by the sibling rules
+    ///   anything else (the keeper's drive, another drive, a Review row, a
+    ///   Read-only drive that is not the one being cleaned) by the sibling rules
+    ///
+    /// The same holds at the archive door: a row of this run is never one of
+    /// the family's archive copies either (`deletionTierCandidates`).
+    /// "By the sibling rules" = `DeletionTierFacts.gather`: counted only when
+    /// its stored evidence reproduces. Survivors are therefore the keeper and
+    /// copies that are NOT rows of this run — strictly fewer than main counted
+    /// (main also counted rows it had decided and kept), so this rule can only
+    /// make a removal more conservative. The row's `notCountedWhy` and the
+    /// note fallback are WORDS for the row's reason only; counting does not
+    /// depend on them.
+    ///
+    /// Build ONCE per row decided (it captures the Angel's sets and the
+    /// archive-volume snapshot); each call is O(1).
+    func duplicateSurvivorStandingRule(in run: DuplicateRunScope) -> (VideoRecord) -> DuplicateSurvivorStanding {
+        let archiveVolume = archiveVolumeProtection()
+        let hold = duplicateDeletionHoldRule()
+        // Used and dropped within one pass, so a strong `self` is fine.
+        return { m in
+            // S1 (codex #258 r5): a row of THIS run is never a survivor,
+            // whatever became of it. The why is words only.
+            if run.pending.contains(m.id) { return .pendingRow }
+            if let why = run.leftAlone[m.id] { return .leftAlone(why) }
+            if run.decided.contains(m.id) { return .leftAlone(DuplicateDeletionHold.rowOfThisRunWhy) }
+            guard m.duplicateDisposition == .extraCopy,
+                  PathScope.contains(m.fullPath, within: run.volumePath) else { return .bySiblingRules }
+            switch self.bulkDeleteRefusal(m, volume: archiveVolume) {
+            case .archiveTree?, .archiveVolume?, .archiveVolumeUnprovable?: return .bySiblingRules
+            case .readOnlyVolume?, .readOnlyVolumeDifferentDrive?: return .leftAlone("on a drive marked Read only")
+            case nil: break
+            }
+            if let held = hold(m) { return .leftAlone(held.why) }
+            return .leftAlone("not a row of this run")
+        }
+    }
+
     /// Everything that happens before the first byte is read, in the
     /// order the old loop did it: selection, Master Archive exclusion, the
     /// cross-volume safety-snapshot tripwire, the console summary. Returns
@@ -264,6 +442,9 @@ extension VideoScanModel {
     /// reason is already logged). Same log lines as before, so the
     /// existing sensors keep matching.
     func prepareDuplicateDeletion(onVolume volumePath: String) async -> DeleteDuplicatesPlan? {
+        // The buffer's own plan files, read now (off-main, read-only): the
+        // hold never depends on the Archive tab having been opened (GH #258).
+        await archiveAngel.refreshRecordIDsInBatchesOnDisk()
         let selection = duplicateDeletionSelection(onVolume: volumePath)
         // Master Archive files are never bulk-deleted, even as "extras".
         var targets = excludingMasterArchiveFiles(selection.targets, verb: "Delete Duplicates")
@@ -357,9 +538,23 @@ extension VideoScanModel {
                 keeperStamp: keeper.flatMap { keeperStamps[$0.fullPath] },
                 isWorkingCopy: isWorkingCopy(rec)))
         }
-        return DeleteDuplicatesPlan(volumePath: volumePath, catalogLocation: catalogStore.fileLocation,
-                                    crossVolumeMode: selection.crossVolumeMode, skippedBeforePlan: skippedCount,
-                                    summaryLine: summaryLine, snapshotPath: snapshotPath, entries: entries)
+        var plan = DeleteDuplicatesPlan(volumePath: volumePath, catalogLocation: catalogStore.fileLocation,
+                                        crossVolumeMode: selection.crossVolumeMode, skippedBeforePlan: skippedCount,
+                                        summaryLine: summaryLine, snapshotPath: snapshotPath, entries: entries)
+        Self.noteLeftAlone(selection, in: &plan)
+        return plan
+    }
+
+    /// GH #258: the copies the selection left alone go on the plan — never
+    /// as rows of the run, only as a list with reasons for the detail view
+    /// and the counts for the summary.
+    private static func noteLeftAlone(_ selection: DuplicateDeletionSelection, in plan: inout DeleteDuplicatesPlan) {
+        guard !selection.held.isEmpty else { return }
+        plan.leftAloneAtPlan = selection.leftAlone
+        plan.leftAloneCopies = selection.held.prefix(DeleteDuplicatesPlan.leftAloneListCap).map {
+            DeleteDuplicatesPlan.LeftAloneCopy(id: $0.record.id, path: $0.record.fullPath, filename: $0.record.filename,
+                                               sizeBytes: $0.record.sizeBytes, reason: $0.hold.note)
+        }
     }
 
     /// One stat per path, off the main actor. Unreachable paths are absent
@@ -379,9 +574,11 @@ extension VideoScanModel {
     /// "(0, 0, skipped, 0)" result and nothing is written to disk.
     private func emptyDeletionPlan(volumePath: String, selection: DuplicateDeletionSelection,
                                    skippedCount: Int, summaryLine: String) -> DeleteDuplicatesPlan {
-        DeleteDuplicatesPlan(volumePath: volumePath, catalogLocation: catalogStore.fileLocation,
-                             crossVolumeMode: selection.crossVolumeMode, skippedBeforePlan: skippedCount,
-                             summaryLine: summaryLine, entries: [])
+        var plan = DeleteDuplicatesPlan(volumePath: volumePath, catalogLocation: catalogStore.fileLocation,
+                                        crossVolumeMode: selection.crossVolumeMode, skippedBeforePlan: skippedCount,
+                                        summaryLine: summaryLine, entries: [])
+        Self.noteLeftAlone(selection, in: &plan)
+        return plan
     }
 
     /// What the catalog says about one plan row RIGHT NOW. Asked
@@ -396,8 +593,10 @@ extension VideoScanModel {
         case authorized(record: VideoRecord, keeper: VideoRecord)
         /// The catalog decided differently (record gone / moved / no
         /// longer an extra copy): left alone, not a refusal — the row is
-        /// NOT re-marked Review.
-        case skip(note: String, log: String)
+        /// NOT re-marked Review. `notCountedWhy` is set when the reason is
+        /// a PROTECTION (a hold, a Read-only mark): the row is then never
+        /// counted as a surviving copy for another copy of the run.
+        case skip(note: String, log: String, notCountedWhy: String? = nil)
         /// The pair no longer lines up (keeper / group / archive /
         /// eligibility): refused, and the extra copy is marked Review.
         case refuse(note: String)
@@ -439,12 +638,29 @@ extension VideoScanModel {
             // Review (QA 2026-09-22). The row says to try again.
             return .skip(note: "skipped — the drive list was refreshing; try again",
                          log: "Skipped \(e.filename): the drive list was refreshing (a drive was just mounted or unmounted) — try again")
+        case .readOnlyVolume(let name)?, .readOnlyVolumeDifferentDrive(let name)?:
+            // Marked Read only since the plan was made (2026-10-03): left
+            // alone — nothing is wrong with the pair, so the row is NOT
+            // re-marked Review.
+            log(Self.readOnlyVolumeRefusalLine(verb: "Delete Duplicates", count: 1, volume: name))
+            let why = Self.bulkDeleteRefusalNote(.readOnlyVolume(name), volume: name)
+            let note = DuplicateDeletionHold.leftAlonePrefix + why
+            return .skip(note: note, log: "Skipped \(e.filename): \(note)", notCountedWhy: why)
         case let refusal?:
             let label = archiveVolume?.label ?? "the archive volume"
             log(refusal == .archiveVolume
                 ? Self.masterArchiveVolumeRefusalLine(verb: "Delete Duplicates", count: 1, volume: label)
                 : Self.masterArchiveUnprovableRefusalLine(verb: "Delete Duplicates", count: 1, volume: label))
             return .refuse(note: Self.bulkDeleteRefusalNote(refusal, volume: label) + " — refused \(stage)")
+        }
+        // GH #258: the Archive Angel's batches and the promoted-copy mark,
+        // asked LIVE — the copy may have gone into a batch since the plan
+        // was made (or since the run began). Left
+        // alone, not refused: nothing is wrong with the pair, so the row is
+        // NOT re-marked Review and a later run may take it once the Angel
+        // lets go.
+        if let hold = duplicateDeletionHoldRule()(rec) {
+            return .skip(note: hold.note, log: "Skipped \(e.filename): \(hold.note)", notCountedWhy: hold.why)
         }
         if !PathScope.contains(keeper.fullPath, within: volumePath) {
             // A working copy: the keeper is on another drive. The policy
@@ -594,8 +810,16 @@ extension VideoScanModel {
     /// worker as "verified this pair". Sendable value: paths + fixities.
     /// `excluding` are the ids of THIS run's rows still to be decided —
     /// they may go too, so they are named but never counted (QA #3).
+    /// `run` is the whole run (the job, the forecast and the steward pass
+    /// it): every member is then put through THE survivor-counting rule,
+    /// `duplicateSurvivorStandingRule` (codex #258 F1).
     func deletionTierCandidates(record: VideoRecord, keeper: VideoRecord,
-                                excluding: Set<UUID> = []) -> DeletionTierCandidates {
+                                excluding: Set<UUID> = [], run: DuplicateRunScope? = nil) -> DeletionTierCandidates {
+        let standing = run.map { duplicateSurvivorStandingRule(in: $0) }
+        // S1: a row of this run never counts — not as a sibling, and not as
+        // an archive copy either (codex #258 r5-2: a row given promoted-copy
+        // provenance mid-run went in through the archive door).
+        func isRowOfThisRun(_ id: UUID) -> Bool { excluding.contains(id) || run?.isRow(id) == true }
         var out = DeletionTierCandidates()
         out.keeperPath = keeper.fullPath
         var seenArchive = Set<UUID>()
@@ -608,7 +832,8 @@ extension VideoScanModel {
         func volume(_ r: VideoRecord) -> String { VolumeReachability.volumeName(forPath: r.fullPath) }
         out.keeperLabel = "keeper on \(volume(keeper))"
         func noteArchive(_ copy: VideoRecord) {
-            guard !copy.isPurged, !seenArchive.contains(copy.id), let fixity = copy.archiveFixity else { return }
+            guard !copy.isPurged, !seenArchive.contains(copy.id), !isRowOfThisRun(copy.id),
+                  let fixity = copy.archiveFixity else { return }
             seenArchive.insert(copy.id)
             // The promote-time digest is the record; the stamp-bound
             // `contentFixity` (Verify Archive Copies) is the only thing
@@ -632,9 +857,14 @@ extension VideoScanModel {
         }
         for member in members where member.id != keeper.id && !seenArchive.contains(member.id) {
             let label = "sibling \(member.filename) on \(volume(member))"
-            if excluding.contains(member.id) {
+            let how: DuplicateSurvivorStanding = excluding.contains(member.id)
+                ? .pendingRow : (standing?(member) ?? .bySiblingRules)
+            switch how {
+            case .pendingRow:
                 out.alsoInThisRun.append(label)
-            } else {
+            case .leftAlone(let why):
+                out.leftAloneByRun.append("\(label) not counted (\(why))")
+            case .bySiblingRules:
                 out.otherCopies.append(.init(path: member.fullPath, fixity: member.contentFixity, label: label,
                                              recordID: member.id))
             }
@@ -892,6 +1122,9 @@ extension VideoScanModel {
         let hereRoot = volumeRoot(for: volumePath)
         // One archive-volume snapshot for the whole pass (2026-09-22).
         let archiveVolume = archiveVolumeProtection()
+        // …and one reading of the Archive Angel's sets (GH #258).
+        let holdRule = duplicateDeletionHoldRule()
+        var held: [(record: VideoRecord, hold: DuplicateDeletionHold)] = []
 
         var targets: [VideoRecord] = []
         var sameCount = 0
@@ -912,6 +1145,14 @@ extension VideoScanModel {
             // picker, this selection and the menu count agree.
             if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {
                 skipped[WorkingCopyCleanupText.reason(for: refusal), default: 0] += 1
+                continue
+            }
+            // Never offered either (GH #258): the Archive Angel is using
+            // it (a batch, a running Prepare) or it is a promoted archive
+            // copy — in EITHER mode, whatever drive its keeper is on.
+            if let hold = holdRule(rec) {
+                skipped[hold.note, default: 0] += 1
+                held.append((rec, hold))
                 continue
             }
             guard let groupID = rec.duplicateGroupID, let keeper = keepers[groupID] else {
@@ -956,7 +1197,8 @@ extension VideoScanModel {
             crossVolumeKeeperVolumes: crossKeeperVolumes.sorted(),
             skippedReasons: skipped.sorted { $0.value > $1.value }.map { (reason: $0.key, count: $0.value) },
             crossVolumeMode: crossMode,
-            volumeRecordCount: volumeRecordCount)
+            volumeRecordCount: volumeRecordCount,
+            held: held)
     }
 
     /// Returns the distinct volume root paths that have high-confidence
@@ -971,6 +1213,8 @@ extension VideoScanModel {
         let policy = crossMode ? duplicateKeeperPolicy() : nil
         // One archive-volume snapshot for the whole pass (2026-09-22).
         let archiveVolume = archiveVolumeProtection()
+        // …and one reading of the Archive Angel's sets (GH #258).
+        let holdRule = duplicateDeletionHoldRule()
         var verdictByPair: [String: Bool] = [:]
         var volumeCounts: [String: Int] = [:]
         for rec in records {
@@ -982,6 +1226,9 @@ extension VideoScanModel {
             // are never counted, in either mode (same rule as the
             // selection, so menu count == alert count).
             if bulkDeleteRefusal(rec, volume: archiveVolume) != nil { continue }
+            // …nor is a copy the run would leave alone for the Archive
+            // Angel or the archive (GH #258) — the selection's own rule.
+            if holdRule(rec) != nil { continue }
             let volume = volumeRoot(for: rec.fullPath)
             let keeperVolume = volumeRoot(for: keeper.fullPath)
             var deletable = volume == keeperVolume
@@ -1026,6 +1273,108 @@ extension VideoScanModel {
         }
         return (path as NSString).deletingLastPathComponent
     }
+}
+
+/// Why "Delete duplicates on <drive>" leaves one extra copy where it is,
+/// although the archive rule has nothing to say about it (GH #258). The
+/// rule that decides it is `VideoScanModel.duplicateDeletionHoldRule()`.
+enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
+    /// In a prepared batch, in a batch being or just promoted, or picked
+    /// for a Prepare that is still running: the Angel is using the file.
+    case inUseByAngel
+    /// A promoted archive copy (reached here only while no Master Archive
+    /// is designated — otherwise `bulkDeleteRefusal` has already said so).
+    case promotedArchiveCopy
+
+    /// Every "left alone for a hold or a Read-only mark" note starts so —
+    /// the run's survivor count tells such a row from one it decided on its
+    /// merits by it (`DeleteDuplicatesPlan.runScope`).
+    static let leftAlonePrefix = "left alone — "
+
+    /// "in use by the Archive Angel".
+    var why: String {
+        switch self {
+        case .inUseByAngel: return "in use by the Archive Angel"
+        case .promotedArchiveCopy: return "it is a promoted archive copy"
+        }
+    }
+
+    /// The reason, as the run's detail row, the plan and the console say it.
+    var note: String { Self.leftAlonePrefix + why }
+
+    /// Why a copy the Master Archive rule refused ONLY AT ITS REMOVAL (from
+    /// the designation as it was then; the check captured at its turn had
+    /// let it go) is not counted for another copy of the run: main would
+    /// have removed it (codex #258 r4-1).
+    static let rowOfThisRunWhy = "a row of this run"
+
+    static let archiveRuleAtRemovalWhy = "the Master Archive rule stopped its removal in this run"
+
+    /// Why a copy is left alone when the Angel's buffer could not be read
+    /// in full at its removal (codex #258 r4-2): what could not be read may
+    /// hold it. The row adds what exactly could not be read.
+    static let angelBufferUnreadableWhy = "the Archive Angel's batches could not be read just now"
+
+    /// What every Read-only refusal note says, whichever code path worded it.
+    static let readOnlyMarker = "which you marked Read only"
+
+    /// The "why" of a row the run left alone for a hold or a Read-only
+    /// mark; nil for any other note. Also recognises a row an EARLIER build
+    /// settled as an ordinary refusal for a Read-only mark found on the
+    /// disk thread ("lives on X, which you marked Read only — nothing
+    /// moved"): a resumed plan classifies it the same way (codex #258 r2-1).
+    static func leftAloneWhy(note: String) -> String? {
+        if note.hasPrefix(leftAlonePrefix) { return String(note.dropFirst(leftAlonePrefix.count)) }
+        return note.contains(readOnlyMarker) ? note : nil
+    }
+}
+
+/// The model's part of the removal boundary, as one value that crosses to
+/// the disk thread (`VideoScanModel.duplicateRemovalBoundaryNow`).
+struct DuplicateRemovalBoundaryNow: Sendable {
+    var holdNote: String?
+    var readOnlyMarks: [ReadOnlyVolumeProtection.Mark]
+    var designation: MasterArchiveDesignation?
+    var aliasCandidates: [String]
+    var isArchiveCopy: Bool
+    var preferTrash: Bool
+
+    /// The catalog went away mid-pair: everything is held, and the most
+    /// conservative setting stands.
+    static let catalogGone = DuplicateRemovalBoundaryNow(
+        holdNote: DuplicateDeletionHold.leftAlonePrefix + "the catalog is no longer open", readOnlyMarks: [],
+        designation: nil, aliasCandidates: [], isArchiveCopy: false, preferTrash: true)
+}
+
+/// One Delete Duplicates run, as the survivor count needs to know it
+/// (`VideoScanModel.duplicateSurvivorStandingRule`).
+struct DuplicateRunScope: Sendable, Equatable {
+    /// The drive (or folder) the run is cleaning.
+    var volumePath: String
+    /// Rows still to be decided — they may go too.
+    var pending: Set<UUID> = []
+    /// Rows the run retained for a PROTECTION (a hold, a Read-only mark,
+    /// unreadable Angel evidence, the Master Archive rule found only at the
+    /// removal): id → why. Never counted.
+    var leftAlone: [UUID: String] = [:]
+    /// The run's other settled rows (left alone by the tier, refused,
+    /// failed, …). Since codex #258 r5 (S1) they are NOT counted either.
+    var decided: Set<UUID> = []
+
+    /// Is `id` a row of this run (any status)? Such a copy is never a
+    /// surviving copy for another row (S1).
+    func isRow(_ id: UUID) -> Bool { pending.contains(id) || leftAlone[id] != nil || decided.contains(id) }
+}
+
+/// What the survivor-counting rule says about one family member.
+enum DuplicateSurvivorStanding: Equatable, Sendable {
+    /// Asked about on disk like any sibling: counted only when its stored
+    /// evidence reproduces.
+    case bySiblingRules
+    /// A row of the run still to be decided: never counted.
+    case pendingRow
+    /// Left alone by the run (the reason): never counted.
+    case leftAlone(String)
 }
 
 /// Human-readable reason a verified deletion was refused (shared by the

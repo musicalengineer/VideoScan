@@ -48,18 +48,48 @@ extension VideoScanModel {
     /// volume (Rick 2026-09-22) — are left alone, row and file, through
     /// the one bulk-verb rule (before 2026-09-22 this path had no archive
     /// check at all).
+    ///
+    /// The gate is asked TWICE: for the whole request up front (by path),
+    /// and again for EACH file immediately before it is trashed — the
+    /// removal-time check every other bulk verb makes: the file's real
+    /// path and its OWN volume's identity, from the model as it is at that
+    /// moment. A file on a Read-only drive mounted under a name the
+    /// snapshot never saw, or reached through a link, stays (the F5 class
+    /// of codex #258). `trash` is the file operation, for tests.
     @discardableResult
-    func discardWorkbench(_ requested: [VideoRecord]) -> Int {
+    func discardWorkbench(_ requested: [VideoRecord],
+                          trash: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }) -> Int {
         let recs = excludingMasterArchiveFiles(requested, verb: "Discard")
         var count = 0
         let now = Date()
         var trashed: [VideoRecord] = []
+        var readOnlyAtRemoval: [String: Int] = [:]
+        var archiveAtRemoval = 0, unprovableAtRemoval = 0
+        var archiveLabel = "the archive volume"
         for rec in recs {
             let url = URL(fileURLWithPath: rec.fullPath)
-            if (try? FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil { trashed.append(rec) }
+            // The last word for THIS file, now — row and file are left alone.
+            if let held = archiveRemovalCheck()?.bulkRefusal(forPath: rec.fullPath) {
+                switch held.refusal {
+                case .readOnlyVolume(let name), .readOnlyVolumeDifferentDrive(let name): readOnlyAtRemoval[name, default: 0] += 1
+                case .archiveVolumeUnprovable: unprovableAtRemoval += 1; archiveLabel = held.volume
+                case .archiveVolume, .archiveTree: archiveAtRemoval += 1; archiveLabel = held.volume
+                }
+                continue
+            }
+            if (try? trash(url)) != nil { trashed.append(rec) }
             rec.purgedAt = now
             rec.lifecycleStage = .trashed
             count += 1
+        }
+        for (name, n) in readOnlyAtRemoval.sorted(by: { $0.key < $1.key }) {
+            log(Self.readOnlyVolumeRefusalLine(verb: "Discard", count: n, volume: name))
+        }
+        if archiveAtRemoval > 0 {
+            log(Self.masterArchiveVolumeRefusalLine(verb: "Discard", count: archiveAtRemoval, volume: archiveLabel))
+        }
+        if unprovableAtRemoval > 0 {
+            log(Self.masterArchiveUnprovableRefusalLine(verb: "Discard", count: unprovableAtRemoval, volume: archiveLabel))
         }
         if count > 0 {
             saveCatalogNow()

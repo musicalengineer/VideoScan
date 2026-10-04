@@ -984,6 +984,10 @@ final class VideoScanModel: ObservableObject {
     static let savedRetiredAtKey = "VideoScan.scanTargetRetiredAt"
     static let savedRetiredReasonKey = "VideoScan.scanTargetRetiredReason"
     static let savedRetiredWitnessesKey = "VideoScan.scanTargetRetiredWitnesses"
+    // "Read only" (Rick 2026-10-03) — one dictionary keyed by searchPath;
+    // an entry (when it was marked, and the volume's UUID then) is the
+    // marked-or-not signal. Additive: absent = every volume allows changes.
+    static let savedReadOnlyKey = "VideoScan.scanTargetReadOnly"
 
     // `internal var` (not `private let`) so tests can swap in a per-test
     // CatalogStore(directory:) instance — necessary because the shared
@@ -1544,6 +1548,10 @@ final class VideoScanModel: ObservableObject {
     var archiveVolumeSnapshotCache = ArchiveVolumeSnapshotCache()
     /// The in-flight off-main rebuild, if any.
     var archiveVolumeSnapshotTask: Task<Void, Never>?
+    /// The cached snapshot of the volumes the person marked Read only
+    /// (2026-10-03) — see Archive/ReadOnlyVolumeProtection.swift; never read
+    /// it directly, call `readOnlyVolumeProtection()`.
+    var readOnlyVolumeSnapshotCache = ReadOnlyVolumeSnapshotCache()
 
     /// Reverse index source-id → promoted-copy record (and copy-id →
     /// source-id), memoized on `RecordsVersion` like the CatalogHelpers

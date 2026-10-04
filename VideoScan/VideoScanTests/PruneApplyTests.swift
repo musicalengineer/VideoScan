@@ -525,6 +525,20 @@ struct PruneApplyTests {
         #expect(FileManager.default.fileExists(atPath: f.dup.fullPath))
     }
 
+    @Test("A drive marked Read only between the verdict and the move keeps its copy (the gate is asked when the file goes)")
+    func aReadOnlyMarkMadeAfterTheVerdictHoldsTheCopy() async throws {
+        let f = try await fixture("prune_readonly_midrun"); defer { f.sb.cleanup() }
+        var hooks = VideoScanModel.PruneVerifyHooks.live
+        hooks.beforeMutation = { _ in
+            let target = CatalogScanTarget(searchPath: f.sb.sources.path)
+            target.readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil)
+            f.model.scanTargets.append(target)
+        }
+        let out = await apply(f, selected: [f.dup.id], hooks: hooks)
+        #expect(out.trashed == 0, "a copy left a drive that was marked Read only before the move: \(out)")
+        #expect(FileManager.default.fileExists(atPath: f.dup.fullPath) && f.model.record(forID: f.dup.id)?.purgedAt == nil)
+    }
+
     @Test("CODEX #6: three duplicates of one archive copy with no stamp yet — the archive copy is OPENED once, each duplicate once")
     func threeDuplicatesReadTheArchiveCopyOnce() async throws {
         let f = try await fixture("prune_codex6", extraCopies: 2); defer { f.sb.cleanup() }

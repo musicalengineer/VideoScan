@@ -243,10 +243,23 @@ struct StewardSensorTests {
 
     @Test func ruleTwoUsesTheCanonicalPredicates() throws {
         let src = code(try source("VideoScanModel+Steward.swift"))
-        for predicate in ["archiveVolumeProtection()", "self.bulkDeleteRefusal(r, volume: archiveDrive)", "isArchiveElement(r)",
-                          "r.lifecycleStage == .archived", "archiveAngel.recommendations", "angel.preparedIDs.contains(r.id)",
-                          "angel.candidateIDs.contains(r.id)", "angel.promotedIDs.contains(r.id)"] {
+        // GH #258: the Delete planner's OWN two rules, nothing of the
+        // steward's own — a card and the run behind it cannot disagree.
+        for predicate in ["archiveVolumeProtection()", "self.bulkDeleteRefusal(r, volume: archiveDrive)",
+                          "let hold = duplicateDeletionHoldRule()", "switch hold(r) {"] {
             #expect(src.contains(predicate), "rule 2 no longer asks `\(predicate)`")
+        }
+        for own in ["candidateIDs", "preparedIDs", "promotedIDs", "lifecycleStage", "isArchiveElement", "isArchiveCopy"] {
+            #expect(!src.contains(own), "the steward reads `\(own)` itself — it must ask the planner's rule")
+        }
+        // …and that rule still reads what rule 2 promises.
+        let planner = code(try source("VideoScanModel+Duplicates.swift"))
+        // (The Angel's half is asked BY ID since codex #258 r4-2 —
+        // `duplicateAngelUseRule`, which the hold rule calls with `r.id`.)
+        for predicate in ["self.isArchiveCopy(r)", "archiveAngel.recommendations", "angel.preparedIDs.contains(id)",
+                          "angel.promotedIDs.contains(id)", "onDisk.contains(id)", "preparing.contains(id)",
+                          "return inUseByAngel(r.id) ? .inUseByAngel : nil"] {
+            #expect(planner.contains(predicate), "the planner's hold rule no longer asks `\(predicate)`")
         }
         // The Angel's front door carries them (ArchiveAngel+Occasions:
         // `OccasionReader(coverage: policy.coverage, birthdays: familyBirthdays)`,
@@ -254,10 +267,11 @@ struct StewardSensorTests {
         #expect(src.contains("archiveAngel.occasionReader"), "the People tab's birthdays come through the Angel's reading of them")
         #expect(src.contains("guard stewardWanted else { return }"), "no work until the pane has been shown")
         let builder = code(try source("StewardCaseBuilder.swift"))
-        #expect(builder.contains("} else if r.protection.plannerRefuses {"),
-                "“never offered” is said only of what the Delete planner itself refuses")
-        #expect(code(try source("StewardCardView.swift")).contains("StewardActionGate.stillCheckedCaution(item.stillCheckedOnDrive)"),
-                "the caution about still-checked copies is on the card, above the buttons")
+        #expect(builder.contains("} else if r.protection.isProtected {"),
+                "every protected copy is one the Delete planner leaves alone — “never offered”")
+        let folder = try stewardFolder().map(\.code).joined(separator: "\n")
+        #expect(!folder.contains("stillChecked") && !folder.contains("would still check"),
+                "since GH #258 no class of protected copy is still checked by the drive's cleanup")
         #expect(builder.contains("isExtraCopy: r.isExtraCopy && !r.protection.isProtected"),
                 "a protected row is never counted as reclaimable on a drive card")
         #expect(builder.contains("ReclaimableCalculator.compute("), "per-drive numbers are the Storage tab's arithmetic")
@@ -266,8 +280,10 @@ struct StewardSensorTests {
 
     @Test func ruleOneCallsThePlannersOwnFunctions() throws {
         let src = code(try source("StewardEvidence.swift"))
-        for call in ["model.deletionTierCandidates(record: record, keeper: keeper, excluding: sameRun)",
-                     "DeletionTierFacts.gather(candidates, digest: digest)",
+        for call in ["model.deletionTierCandidates(",
+                     "record: record, keeper: keeper, run: DuplicateRunScope(volumePath: row.driveRoot, pending: sameRun))",
+                     "DeletionTierFacts.gather(candidates, digest: digest, driveOf: seam)",
+                     "seam?(path, stamp) ?? resolver.drive(path: path, stamp: stamp)",
                      "SiblingProver.readableSiblings(",
                      "candidates.duplicateIdentity = FileIdentityStamp.capture(path: q.copyPath)",
                      "c.runRows.filter { $0.driveRoot == row.driveRoot && $0.id != row.id }",

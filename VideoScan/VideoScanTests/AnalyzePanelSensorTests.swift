@@ -106,7 +106,9 @@ struct AnalyzePanelSensorTests {
 
     @Test func detailPaneComputesTheEstimateOffMain() throws {
         let src = code(try source("VolumeDetailPane.swift"))
-        #expect(src.contains("ReclaimableCalculator.project(model.records)"), "projection on the main actor, once")
+        #expect(src.contains("ReclaimableCalculator.project(model.records, leftAlone: { hold($0) != nil })"),
+                "projection on the main actor, once — minus the copies the Delete run leaves alone (GH #258)")
+        #expect(src.contains("let hold = model.duplicateDeletionHoldRule()"), "…by the Delete planner's own rule, built once")
         #expect(src.contains("ReclaimableCalculator.compute("), "aggregation in the detached task")
         #expect(src.contains("StorageReclaimableCard(volumePath: target.searchPath"))
         // The projection must be inside recompute(), not in `body`.

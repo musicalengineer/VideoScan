@@ -14,26 +14,20 @@
 // `stewardSnapshot.queue` and nothing else.
 //
 // RULE 2 of §5.6 — "one steward's cases are never another's loss" — is
-// decided HERE, per record, by the predicates the rest of the app already
-// uses. None is new:
+// decided HERE, per record, by the Delete planner's OWN two rules — the
+// steward has no list of its own, so a card and the run behind its button
+// can never disagree (GH #258, 2026-10-03):
 //
-//   REFUSED BY THE DELETE PLANNER TOO (`plannerRefuses`):
 //   a file of the Master Archive, the
 //   archive's whole drive, or a drive that
-//   cannot be told apart from it ............. bulkDeleteRefusal(_:volume:)
+//   cannot be told apart from it; a drive
+//   the person marked Read only .............. bulkDeleteRefusal(_:volume:)
 //                                              with archiveVolumeProtection()
-//                                              (the Delete planner's own rule)
-//   THE STEWARD'S OWN RESTRAINT (the planner has no such guard — QA F1;
-//   the card says a drive's cleanup would still check these):
 //   an archive copy while no Master Archive
-//   is designated ............................ isArchiveElement(_:)
-//   filed as Archived in Triage .............. lifecycleStage == .archived
-//                                              (Triage's own table rule)
-//   Archive Angel recommends it, holds it in
-//   a prepared batch, or just promoted it .... archiveAngel.recommendations
-//                                              .candidateIDs / .preparedIDs /
-//                                              .promotedIDs (the Angel's ONE
-//                                              set of numbers)
+//   is designated; in use by the Archive
+//   Angel (a prepared batch, a batch being
+//   or just promoted, a running Prepare) ..... duplicateDeletionHoldRule()
+//                                              (VideoScanModel+Duplicates)
 //
 // Rule 2 is about what a card proposes to LET GO. An event card proposes
 // nothing of the kind — it lists what belongs together — so it may list an
@@ -43,8 +37,9 @@
 // The Angel's sets change without a catalog mutation (a sweep, a batch).
 // While a pane is on screen the model watches the Angel's published
 // recommendations (`archiveAngel.$recommendations`, its public surface) and
-// rebuilds the queue — debounced, and only when the three sets rule 2 reads
-// actually changed (QA F9). Off screen, nothing is watched.
+// rebuilds the queue — debounced; the planner's hold rule is re-asked and an
+// unchanged queue publishes nothing (QA F9). Off screen, nothing is
+// watched. The run itself asks again at every copy's turn.
 //
 // (For Rick: `Task.detached` ≈ a worker thread that does NOT inherit the
 // caller's actor; only Sendable values cross.)
@@ -70,24 +65,26 @@ final class StewardSnapshot: ObservableObject {
 
 extension VideoScanModel {
 
-    /// The rule-2 answer for one record, from the canonical predicates (see
-    /// the file header). Build ONCE per pass and call per record: the
-    /// archive-drive snapshot and the Angel's sets are captured here.
+    /// The rule-2 answer for one record, from the Delete planner's own two
+    /// rules (see the file header), in the planner's own order. Build ONCE
+    /// per pass and call per record: the archive-drive snapshot and the
+    /// Angel's sets are captured here.
     func stewardProtectionRule() -> (VideoRecord) -> StewardProtection {
         let archiveDrive = archiveVolumeProtection()
-        let angel = archiveAngel.recommendations
+        let hold = duplicateDeletionHoldRule()
         // Used and dropped within one pass, so a strong `self` is fine.
         return { r in
             switch self.bulkDeleteRefusal(r, volume: archiveDrive) {
             case .archiveTree?: return .archived
             case .archiveVolume?, .archiveVolumeUnprovable?: return .archiveDrive
+            case .readOnlyVolume?, .readOnlyVolumeDifferentDrive?: return .readOnlyDrive
             case nil: break
             }
-            if self.isArchiveElement(r) || r.lifecycleStage == .archived { return .filedArchived }
-            if angel.preparedIDs.contains(r.id) || angel.candidateIDs.contains(r.id) || angel.promotedIDs.contains(r.id) {
-                return .angel
+            switch hold(r) {
+            case .promotedArchiveCopy?: return .archiveCopy
+            case .inUseByAngel?: return .angel
+            case nil: return .none
             }
-            return .none
         }
     }
 
@@ -149,9 +146,13 @@ extension VideoScanModel {
         guard stewardAngelWatch == nil else { return }
         stewardAngelWatch = archiveAngel.$recommendations
             .dropFirst()
-            .removeDuplicates {
-                $0.candidateIDs == $1.candidateIDs && $0.preparedIDs == $1.preparedIDs && $0.promotedIDs == $1.promotedIDs
-            }
+            // No set-by-set filter here (merge of main's QA F9 with GH
+            // #258): rule 2 is the planner's hold rule, which reads more
+            // than this summary (batches on disk, a running Prepare, a
+            // hand-over) and not the Angel's mere candidates — so the
+            // steward does not second-guess which sets matter. The
+            // debounce coalesces a burst; an unchanged queue publishes
+            // nothing (`StewardSnapshot.publish`).
             .debounce(for: .milliseconds(Self.stewardAngelDebounceMS), scheduler: DispatchQueue.main)
             .sink { [weak self] _ in
                 MainActor.assumeIsolated { self?.scheduleStewardRefresh() }

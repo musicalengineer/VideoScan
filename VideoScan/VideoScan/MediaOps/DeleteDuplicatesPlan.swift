@@ -22,10 +22,18 @@
 // not current evidence: a same-size rewrite of the archive leaves size
 // and digest-on-record intact (codex 1606 #1), so only Verify Archive
 // Copies' stamp-bound fixity lets it count:
-//     ≥ 3 remaining → PERMANENT   (space back now)
-//     = 2 remaining → TRASH       (to the volume's Trash, not gone)
-//     < 2 remaining → LEFT ALONE  (put back untouched)
-// Purely the count — the archive is NOT required (Rick, late 2026-09-20:
+//     ≥ 3 remaining, on ≥ 2 different drives (or one of them the
+//       verified archive copy)   → PERMANENT   (space back now)
+//       — a "drive" is a PHYSICAL DEVICE: two volumes of one device are
+//       one drive; a disk image or a volume whose device cannot be
+//       established never adds one (DeleteDuplicatesDrives.swift)
+//     ≥ 2 remaining otherwise     → TRASH       (to the volume's Trash, not gone)
+//     < 2 remaining               → LEFT ALONE  (put back untouched)
+// COPIES AND DRIVES (Rick 2026-10-03, after a ledger row that read
+// "permanent — 3 verified remain: keeper on A, sibling on A, sibling on
+// A"): three copies on ONE drive are one drive failure away from none, so
+// they earn the Trash, not an outright delete.
+// The archive is NOT required (Rick, late 2026-09-20:
 // "the low-hanging fruit is a file with ten copies regardless of
 // promotion"); an archive copy counts like any verified copy, and the
 // row says "not yet archived" for information only. "Prefer the Trash
@@ -127,6 +135,14 @@ struct DeletionTierCandidates: Sendable, Equatable {
     /// decided — they may go too, so they never count (QA #3); named
     /// for the reason.
     var alsoInThisRun: [String] = []
+    /// Family members THIS run leaves alone on the drive it is cleaning —
+    /// in use by the Archive Angel, on a folder marked Read only, or simply
+    /// not a row of the run — each already worded ("sibling h.mov on X not
+    /// counted (in use by the Archive Angel)"). They are never counted:
+    /// main planned such a copy as a row of the run, "still to be decided",
+    /// and leaving it alone must not turn it into a new surviving copy for
+    /// the others (codex #258 F1). `VideoScanModel.duplicateSurvivorStandingRule`.
+    var leftAloneByRun: [String] = []
     /// Fixity-verified Master Archive copies of any family member.
     var archiveCopies: [ArchiveCopy] = []
     /// Every other active family member except the keeper and the
@@ -159,6 +175,10 @@ struct DeletionTierFacts: Sendable, Equatable {
         let label: String
         let stamp: FileIdentityStamp
         let digest: String
+        /// The drive it was counted on (`DeletionTierFacts.Drive.key`).
+        /// Additive: rows written before 2026-10-03 decode nil, and the
+        /// stamp's own volume identity stands in.
+        var driveKey: String? = nil
     }
 
     /// Verified copies that remain after this deletion: keeper + archive
@@ -191,10 +211,114 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// Who did not, and why ("sibling b.mov on M4drive not verified yet").
     var notCounted: [String] = []
 
+    /// One drive a counted copy sits on. `key` names the PHYSICAL DEVICE
+    /// (`DuplicateDrives.key(for:)`): every volume of one device — two APFS
+    /// volumes of one container, two partitions of one RAID — is the same
+    /// drive, and one volume spelled, linked or mounted two ways is too
+    /// (codex #258 F8; "a drive is a physical device", 2026-10-03).
+    struct Drive: Sendable, Equatable {
+        let key: String
+        /// "LaCieWorkspace" — for the reason.
+        let label: String
+        /// What kind of volume it is: a disk image, or one whose kind cannot
+        /// be established, is never a drive of its own (codex #258 F9).
+        var kind: DuplicateDrives.VolumeKind = .physical
+        /// The physical device's model ("Pegasus32 R4"), when known.
+        var model: String? = nil
+        /// The volumes of this drive the counted copies sit on (filled as
+        /// copies are counted; empty = just `label`).
+        var volumes: [String] = []
+
+        /// "LaCie" — or, with copies on several volumes of the one device,
+        /// "Pegasus32 R4 [FamilyArchive, Projects]".
+        var name: String {
+            let on = volumes.isEmpty ? [label] : volumes
+            return on.count == 1 ? on[0] : "\(model ?? "one device") [\(on.joined(separator: ", "))]"
+        }
+    }
+    /// The keeper's drive (nil when it could not be stat'ed — then it adds
+    /// no drive to the count).
+    var keeperDrive: Drive?
+    /// The DISTINCT drives the counted copies sit on, the keeper's first —
+    /// only volumes that count as a drive (`DuplicateDrives.VolumeKind
+    /// .addsADrive`: never a disk image, never an unidentified volume).
+    /// Empty when unknown (facts built without a stat) — counts as one.
+    var countedDrives: [Drive] = []
+    /// Why a counted copy's volume did not add a drive ("a disk image is
+    /// not a second drive") — for the row's reason. Empty when all did.
+    var notADriveNotes: [String] = []
+    /// A verified archive copy is among the COUNTED copies (or the keeper
+    /// is it) — unlike `hasVerifiedArchive`, this is the count's evidence.
+    var countsArchiveCopy: Bool = false
+    /// Paths of the counted archive copies, so `recheck` can tell whether
+    /// one still holds.
+    var countedArchivePaths: Set<String> = []
+    /// The keeper is itself the verified archive copy (for `recheck`).
+    var keeperIsArchiveCopy: Bool = false
+    /// The keeper's path — so `recheck` can ask again which drive it is on.
+    var keeperPath: String = ""
+    /// THE GENERATION the drive evidence was gathered under
+    /// (`DuplicateDrives.generation`, read BEFORE the first lookup): every
+    /// mount / unmount / rename and every run start moves it. `recheck`
+    /// compares; when it has moved, which drive each copy is on is asked
+    /// again from scratch (codex #258 r2-3 — evidence gathered before a
+    /// mount change must not survive it). nil = the drives were given by a
+    /// test seam or the facts were built by hand: never re-derived.
+    var driveGeneration: UInt64?
+
+    /// How many different drives hold the copies that would remain (≥ 1).
+    var distinctDriveCount: Int { max(1, countedDrives.count) }
+
+    /// The drive a stamp was read on — the one key per volume.
+    nonisolated static func driveKey(_ stamp: FileIdentityStamp) -> String {
+        DuplicateDrives.key(device: stamp.device)
+    }
+
+    /// "/Volumes/LaCie/a.mov" → "LaCie"; anything else → "this Mac".
+    nonisolated static func driveLabel(forPath path: String) -> String {
+        let comps = (path as NSString).pathComponents
+        return comps.count >= 3 && comps[1] == "Volumes" ? comps[2] : "this Mac"
+    }
+
+    private mutating func noteDrive(_ drive: Drive) {
+        guard drive.kind.addsADrive else {
+            // A copy there is a copy; its volume is never the second drive.
+            if let note = drive.kind.notADriveNote, !notADriveNotes.contains(note) { notADriveNotes.append(note) }
+            return
+        }
+        if let i = countedDrives.firstIndex(where: { $0.key == drive.key }) {
+            // Another volume of a device already counted: named, not added.
+            if !countedDrives[i].volumes.contains(drive.label) { countedDrives[i].volumes.append(drive.label) }
+            if countedDrives[i].model == nil { countedDrives[i].model = drive.model }
+        } else {
+            var first = drive
+            if first.volumes.isEmpty { first.volumes = [first.label] }
+            countedDrives.append(first)
+        }
+    }
+
+    /// One more verified copy, on `drive` — used by `gather`, and by the
+    /// previews (the steward's proof) that ask "what if this copy matched?".
+    mutating func addCounted(drive: Drive, isArchive: Bool = false) {
+        remainingVerifiedCopies += 1
+        noteDrive(drive)
+        if isArchive { countsArchiveCopy = true }
+    }
+
     /// "2 verified remain: keeper on LaCieWorkspace, archive copy on
-    /// FamilyArchive; sibling b.mov on M4drive not verified yet".
+    /// FamilyArchive — on 2 drives (LaCie · Pegasus32 R4 [FamilyArchive,
+    /// Projects]); sibling b.mov on M4drive not verified yet". The drives
+    /// are NAMED whenever there are two or more, or one device holds the
+    /// copies on several of its volumes — so the ledger shows which
+    /// physical devices the count rests on.
     var summary: String {
         var text = "\(remainingVerifiedCopies) verified remain: " + counted.joined(separator: ", ")
+        if remainingVerifiedCopies >= 2, !countedDrives.isEmpty {
+            text += " — on \(distinctDriveCount) drive\(distinctDriveCount == 1 ? "" : "s")"
+            if countedDrives.count >= 2 || countedDrives.contains(where: { $0.volumes.count > 1 }) {
+                text += " (" + countedDrives.map(\.name).joined(separator: " · ") + ")"
+            }
+        }
         if !notCounted.isEmpty { text += "; " + notCounted.joined(separator: ", ") }
         return text
     }
@@ -203,10 +327,26 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// disk worker); one `stat` per candidate, no reads. `digest` is the
     /// duplicate's whole-file digest — a copy only counts when it holds
     /// THESE bytes.
-    nonisolated static func gather(_ candidates: DeletionTierCandidates, digest: String) -> DeletionTierFacts {
+    /// `driveOf` names the drive a stat'ed copy sits on (test seam: two
+    /// drives cannot be had inside one temp folder); production (nil) asks
+    /// ONE resolver for every copy of the pass — `DuplicateDrives.Resolver`:
+    /// one key per volume, and whether that volume counts as a drive.
+    nonisolated static func gather(_ candidates: DeletionTierCandidates, digest: String,
+                                   driveOf seam: ((_ path: String, _ stamp: FileIdentityStamp) -> Drive)? = nil) -> DeletionTierFacts {
+        // Read BEFORE any lookup: a mount change during this pass leaves the
+        // facts on the OLD generation, and `recheck` asks again.
+        let generation = DuplicateDrives.generation
+        var resolver = DuplicateDrives.Resolver()
+        func driveOf(_ path: String, _ stamp: FileIdentityStamp) -> Drive {
+            seam?(path, stamp) ?? resolver.drive(path: path, stamp: stamp)
+        }
         var facts = DeletionTierFacts()
+        facts.driveGeneration = seam == nil ? generation : nil
+        facts.keeperPath = candidates.keeperPath
         let wanted = digest.lowercased()
         facts.hasVerifiedArchive = candidates.keeperIsVerifiedArchive
+        facts.keeperIsArchiveCopy = candidates.keeperIsVerifiedArchive
+        facts.countsArchiveCopy = candidates.keeperIsVerifiedArchive
         facts.keeperCounted = candidates.keeperLabel + (candidates.keeperIsVerifiedArchive ? " (the archive copy)" : "")
         facts.counted.append(facts.keeperCounted)
         // One inode counts once: a hard link (or a second spelling of one
@@ -216,6 +356,9 @@ struct DeletionTierFacts: Sendable, Equatable {
         func key(_ s: FileIdentityStamp) -> String { "\(s.device):\(s.inode)" }
         if !candidates.keeperPath.isEmpty, let k = FileIdentityStamp.capture(path: candidates.keeperPath) {
             seenInodes.insert(key(k))
+            let drive = driveOf(candidates.keeperPath, k)
+            facts.keeperDrive = drive
+            facts.noteDrive(drive)
         }
         func alreadyCounted(_ stamp: FileIdentityStamp, _ label: String) -> Bool {
             if let dup = candidates.duplicateIdentity, stamp.isSameFile(as: dup) {
@@ -257,10 +400,12 @@ struct DeletionTierFacts: Sendable, Equatable {
                 continue
             }
             if alreadyCounted(stamp, archive.label) { continue }
-            facts.remainingVerifiedCopies += 1
+            let drive = driveOf(archive.path, stamp)
+            facts.addCounted(drive: drive, isArchive: true)
+            facts.countedArchivePaths.insert(archive.path)
             facts.counted.append(archive.label)
             facts.countedCopies.append(CountedCopy(recordID: archive.recordID, path: archive.path, label: archive.label,
-                                                   stamp: stamp, digest: wanted))
+                                                   stamp: stamp, digest: wanted, driveKey: drive.key))
         }
         for copy in candidates.otherCopies {
             guard let fixity = copy.fixity, fixity.isUsableForVerification else {
@@ -280,14 +425,19 @@ struct DeletionTierFacts: Sendable, Equatable {
                 continue
             }
             if alreadyCounted(stamp, copy.label) { continue }
-            facts.remainingVerifiedCopies += 1
+            let drive = driveOf(copy.path, stamp)
+            facts.addCounted(drive: drive)
             facts.counted.append(copy.label)
             facts.countedCopies.append(CountedCopy(recordID: copy.recordID, path: copy.path, label: copy.label,
-                                                   stamp: stamp, digest: wanted))
+                                                   stamp: stamp, digest: wanted, driveKey: drive.key))
         }
         for label in candidates.alsoInThisRun {
             facts.unverifiedCopies += 1
             facts.notCounted.append("\(label) still to be decided in this run")
+        }
+        for words in candidates.leftAloneByRun {
+            facts.unverifiedCopies += 1
+            facts.notCounted.append(words)
         }
         return facts
     }
@@ -301,6 +451,21 @@ struct DeletionTierFacts: Sendable, Equatable {
     /// keeper is not touched (phase two checks its identity itself).
     /// Returns `self` unchanged when every stamp reproduces, so an
     /// unchanged row is never rewritten.
+    ///
+    /// THE DRIVES are evidence too, and AT THE FINAL VERDICT NOTHING COMES
+    /// FROM A CACHE (codex #258 r3-1; MOPS-2). Whatever the gather learned
+    /// — it may have been served by the drive cache — the keeper and every
+    /// copy that still holds are asked AGAIN, here, which physical device
+    /// they are on: `DuplicateDrives.Resolver(fresh: true)`, statfs +
+    /// DiskArbitration now, the cache untouched. ALWAYS, whatever the
+    /// generation says (a re-enumerated disk moves no generation until its
+    /// notification arrives). If the drives come out differently, that is
+    /// said in `droppedAtBoundary`, and the final verdict re-decides the
+    /// tier from the fresh evidence alone — in either direction. Facts
+    /// whose drives were given by a test seam (or built by hand) carry no
+    /// generation and are left as given. (A DIFFERENT volume now at a
+    /// copy's path fails the copy's stamp — the stamp carries the volume's
+    /// UUID — and the copy is dropped above.)
     nonisolated func recheck() -> DeletionTierFacts {
         var still: [CountedCopy] = []
         var dropped: [String] = []
@@ -315,21 +480,74 @@ struct DeletionTierFacts: Sendable, Equatable {
             }
             still.append(copy)
         }
-        guard !dropped.isEmpty else { return self }
+        let generationNow = DuplicateDrives.generation
+        let askDrivesAfresh = driveGeneration != nil
+        guard !dropped.isEmpty || askDrivesAfresh else { return self }
         var out = self
+        var drivesChanged: [String] = []
+        if askDrivesAfresh {
+            // Ask again, uncached: nothing learned earlier is trusted.
+            var resolver = DuplicateDrives.Resolver(fresh: true)
+            var fresh = DeletionTierFacts()
+            if !keeperPath.isEmpty, let k = FileIdentityStamp.capture(path: keeperPath) {
+                let drive = resolver.drive(path: keeperPath, stamp: k)
+                fresh.keeperDrive = drive
+                fresh.noteDrive(drive)
+            }
+            var rekeyed: [CountedCopy] = []
+            for copy in still {
+                let drive = resolver.drive(path: copy.path, stamp: copy.stamp)
+                fresh.noteDrive(drive)
+                rekeyed.append(CountedCopy(recordID: copy.recordID, path: copy.path, label: copy.label, stamp: copy.stamp,
+                                           digest: copy.digest, driveKey: drive.key))
+            }
+            let stillKeys = Set(still.map { $0.driveKey ?? Self.driveKey($0.stamp) })
+            let before = Set(countedDrives.filter { $0.key == keeperDrive?.key || stillKeys.contains($0.key) }.map(\.key))
+            if before != Set(fresh.countedDrives.map(\.key)) {
+                drivesChanged = ["the drives were asked again before removal and are not what was counted"]
+            }
+            still = rekeyed
+            out.keeperDrive = fresh.keeperDrive
+            out.countedDrives = fresh.countedDrives
+            out.notADriveNotes = fresh.notADriveNotes
+            out.driveGeneration = generationNow
+            out.countedCopies = still
+            // Same copies, same drives: nothing for the verdict to re-decide.
+            if dropped.isEmpty && drivesChanged.isEmpty { return out }
+        } else {
+            // The drives follow what still holds: a dropped copy takes its
+            // drive with it unless another copy is there.
+            let stillKeys = Set(still.map { $0.driveKey ?? Self.driveKey($0.stamp) })
+            out.countedDrives = countedDrives.filter { $0.key == keeperDrive?.key || stillKeys.contains($0.key) }.map { drive in
+                // …and each drive names only the volumes that still hold a copy.
+                var drive = drive
+                var on: [String] = []
+                if let keeperDrive, keeperDrive.key == drive.key { on.append(keeperDrive.label) }
+                for copy in still where (copy.driveKey ?? Self.driveKey(copy.stamp)) == drive.key {
+                    let volume = Self.driveLabel(forPath: copy.path)
+                    if !on.contains(volume) { on.append(volume) }
+                }
+                if !on.isEmpty, drive.volumes.count > 1 { drive.volumes = drive.volumes.filter { on.contains($0) } }
+                return drive
+            }
+        }
         out.countedCopies = still
         out.remainingVerifiedCopies = 1 + still.count
+        // The archive exception follows what still holds.
+        out.countsArchiveCopy = keeperIsArchiveCopy || still.contains { countedArchivePaths.contains($0.path) }
         out.counted = [keeperCounted] + still.map(\.label)
         out.unverifiedCopies += dropped.count
         out.notCounted = dropped + notCounted
-        out.droppedAtBoundary = dropped
+        out.droppedAtBoundary = dropped + drivesChanged
         return out
     }
 }
 
-/// The tier rule, pure and table-testable. Purely the COUNT (Rick
-/// 2026-09-20, late): the archive is not required — "the low-hanging
-/// fruit is a file with ten copies regardless of promotion".
+/// The tier rule, pure and table-testable. The COUNT (Rick 2026-09-20,
+/// late: the archive is not required — "the low-hanging fruit is a file
+/// with ten copies regardless of promotion") AND, for an outright delete,
+/// WHERE the copies sit (Rick 2026-10-03): three copies on one drive are
+/// one failure from none.
 struct DeletionTierDecision: Equatable, Sendable {
     /// nil → left alone (not deleted, not refused as "not identical").
     let tier: DeletionTier?
@@ -338,6 +556,29 @@ struct DeletionTierDecision: Equatable, Sendable {
 
     static let minimumForTrash = 2
     static let minimumForPermanent = 3
+    /// An outright delete needs the remaining copies on at least this many
+    /// DIFFERENT drives — unless one of them is the verified archive copy.
+    /// A "drive" is a PHYSICAL DEVICE (`DuplicateDrives`): every volume of
+    /// one device is one drive; a network share is one; a disk image or a
+    /// volume whose device cannot be established never adds one. What
+    /// cannot be seen stays a known limit: a hardware RAID is ONE drive
+    /// (its redundancy is not a second one); two disks in one enclosure
+    /// that present as two devices are two
+    /// (docs/practices/invariants/MediaOps.md, MOPS-2).
+    static let minimumDrivesForPermanent = 2
+
+    /// The survival rule in one sentence, from the constants — every place
+    /// that prints the rule quotes this.
+    static var ruleSentence: String {
+        "Only a copy with at least \(minimumForPermanent) verified copies remaining on at least "
+        + "\(minimumDrivesForPermanent) different drives (or with a verified archive copy among them) is ever deleted outright; "
+        + "with \(minimumForTrash) or more remaining otherwise it goes to the Trash; with fewer it is left alone."
+    }
+
+    /// Would `n` verified copies on these drives earn an outright delete?
+    static func earnsPermanent(count n: Int, distinctDrives: Int, countsArchiveCopy: Bool) -> Bool {
+        n >= minimumForPermanent && (distinctDrives >= minimumDrivesForPermanent || countsArchiveCopy)
+    }
 
     static func decide(facts: DeletionTierFacts, preferTrash: Bool) -> DeletionTierDecision {
         let n = facts.remainingVerifiedCopies
@@ -350,9 +591,17 @@ struct DeletionTierDecision: Equatable, Sendable {
             return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
                                         reason: "to the Trash by your setting (\(who))")
         }
-        if n >= minimumForPermanent {
+        if earnsPermanent(count: n, distinctDrives: facts.distinctDriveCount, countsArchiveCopy: facts.countsArchiveCopy) {
             return DeletionTierDecision(tier: .permanent, remainingVerifiedCopies: n,
                                         reason: "space back now (\(who))")
+        }
+        if n >= minimumForPermanent {
+            // Enough copies, but all on ONE drive and none of them the
+            // archive's: the Trash, never an outright delete.
+            let drive = facts.countedDrives.first?.name ?? "one drive"
+            let notADrive = facts.notADriveNotes.isEmpty ? "" : " — " + facts.notADriveNotes.joined(separator: "; ")
+            return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
+                                        reason: "to the Trash, not gone — the \(n) copies that remain are all on \(drive)\(notADrive) (\(who))")
         }
         return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
                                     reason: "only two verified copies would remain — to the Trash, not gone (\(who))")
@@ -363,7 +612,10 @@ struct DeletionTierDecision: Equatable, Sendable {
 enum DeletionTierText {
     static let notYetArchived = "not yet archived"
     static let preferTrashToggleLabel = "Prefer the Trash for every duplicate"
-    static let preferTrashCaption = "Off: a duplicate with three or more verified copies left behind (the keeper, an archive copy, siblings whose stored fixity still reproduces) is deleted outright; with exactly two left, it goes to the drive's Trash instead; with fewer, it is left alone. On: every duplicate goes to the Trash, whatever the count. An archive copy counts but is not required."
+    /// Why a pair recorded for an outright delete went to the Trash: the
+    /// setting was turned on while it was being read (codex #258 r4 H).
+    static let preferTrashTurnedOn = "\"\(preferTrashToggleLabel)\" was turned on before the removal"
+    static let preferTrashCaption = "Off: a duplicate with three or more verified copies left behind (the keeper, an archive copy, siblings whose stored fixity still reproduces) on at least two different drives — or with the archive copy among them — is deleted outright; with two or more left otherwise, it goes to the drive's Trash instead; with fewer, it is left alone. On: every duplicate goes to the Trash, whatever the count. An archive copy counts but is not required."
     static func inTheTrashOf(_ volume: String) -> String { "in the Trash of \(volume)" }
     /// "1 file on SanDisk is waiting to be put back from quarantine".
     static func waitingToBePutBack(_ n: Int, volume: String) -> String {
@@ -461,6 +713,21 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// of these bytes (nil until decided). The detail row says
         /// "not yet archived" when false; the tier does not care.
         var hasVerifiedArchive: Bool?
+        /// NOT COUNTABLE (codex #258 r4-1). Set — with the why — when this
+        /// run planned the row as a target and then RETAINED the file
+        /// because of a protection found at its turn or at its removal
+        /// boundary: in use by the Archive Angel, on a drive marked Read
+        /// only, the Angel's buffer unreadable, or the Master Archive rule
+        /// refusing it from the designation as it was AT THE REMOVAL where
+        /// the check captured at its turn had let it go. Main (8aa4acde)
+        /// would have removed such a file, so it is NEVER counted as a
+        /// surviving copy for another copy of this run
+        /// (`runScope` → `VideoScanModel.duplicateSurvivorStandingRule`).
+        /// nil for a row decided on its merits — left alone by the tier,
+        /// refused as not a duplicate, refused by the archive rule main
+        /// itself asked — which keeps main's treatment. Additive: rows
+        /// written before it decode nil and are classified by their note.
+        var notCountedWhy: String?
 
         var keeperVolumeName: String { VolumeReachability.volumeName(forPath: keeperPath) }
 
@@ -523,6 +790,87 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     var log: [String] = []
     /// How many times this plan has been resumed.
     var resumeCount: Int = 0
+    /// GH #258: extra copies on the volume that were NEVER rows of this run
+    /// because the Archive Angel is using them (a batch, a running
+    /// Prepare) or they are promoted archive copies — each with its
+    /// reason, for the detail view (at most `leftAloneListCap`; the counts
+    /// below are the whole truth). Additive and optional: plans written
+    /// before it decode nil, and nothing here is ever a deletion target.
+    var leftAloneCopies: [LeftAloneCopy]?
+    /// How many were left alone when the plan was made, by kind.
+    var leftAloneAtPlan: LeftAloneCounts?
+
+    /// One copy the run never considered (GH #258).
+    struct LeftAloneCopy: Codable, Sendable, Identifiable, Equatable {
+        var id: UUID
+        var path: String
+        var filename: String
+        var sizeBytes: Int64
+        /// "left alone — in use by the Archive Angel"
+        var reason: String
+    }
+
+    /// Copies left alone, by kind: in use by the Angel, and promoted
+    /// archive copies (only while no Master Archive is designated).
+    struct LeftAloneCounts: Codable, Sendable, Equatable {
+        var forAngel = 0
+        var archived = 0
+        var total: Int { forAngel + archived }
+
+        mutating func add(_ hold: DuplicateDeletionHold) {
+            switch hold {
+            case .inUseByAngel: forAngel += 1
+            case .promotedArchiveCopy: archived += 1
+            }
+        }
+
+        /// "2 copies left alone — in use by the Archive Angel" (and, for
+        /// promoted copies with no Master Archive designated, "· 1 promoted
+        /// archive copy left alone") — nil when there are none.
+        var line: String? {
+            var parts: [String] = []
+            if forAngel > 0 { parts.append("\(forAngel) cop\(forAngel == 1 ? "y" : "ies") left alone — in use by the Archive Angel") }
+            if archived > 0 { parts.append("\(archived) promoted archive cop\(archived == 1 ? "y" : "ies") left alone") }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+    }
+
+    static let leftAloneListCap = 2_000
+
+    /// This run's rows, as the survivor count needs them (codex #258 F1,
+    /// r4-1): which are still to be decided, which the run RETAINED FOR A
+    /// PROTECTION found at their turn or at their removal boundary (a hold,
+    /// a Read-only mark, unreadable Angel evidence, the Master Archive rule
+    /// found only at the removal — `Entry.notCountedWhy`), and which it
+    /// decided on their merits. `deciding` is the row being decided now (never listed); nil
+    /// for the forecast. O(entries).
+    func runScope(deciding id: UUID?) -> DuplicateRunScope {
+        var scope = DuplicateRunScope(volumePath: volumePath)
+        for e in entries where e.id != id {
+            if !e.status.isSettled {
+                scope.pending.insert(e.id)
+            } else if let why = e.notCountedWhy {
+                // The row says so itself: retained for a protection (r4-1).
+                scope.leftAlone[e.id] = why
+            } else if e.status == .skipped || e.status == .refused, let why = DuplicateDeletionHold.leftAloneWhy(note: e.note) {
+                // A row written before `notCountedWhy` existed: by its note.
+                scope.leftAlone[e.id] = why
+            } else {
+                scope.decided.insert(e.id)
+            }
+        }
+        return scope
+    }
+
+    /// Left alone when the plan was made PLUS rows the run left alone at
+    /// their turn for the same reasons (the Angel's sets change mid-run).
+    var leftAlone: LeftAloneCounts {
+        var counts = leftAloneAtPlan ?? LeftAloneCounts()
+        for entry in entries where entry.status == .skipped {
+            if let hold = DuplicateDeletionHold.allCases.first(where: { $0.note == entry.note }) { counts.add(hold) }
+        }
+        return counts
+    }
 
     init(id: UUID = UUID(), createdAt: Date = Date(), volumePath: String, catalogLocation: String,
          crossVolumeMode: Bool, skippedBeforePlan: Int, summaryLine: String,
@@ -665,6 +1013,14 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         entries[i].trashedOnVolume = decision.tier == .trash ? trashVolume : nil
         if let hasVerifiedArchive { entries[i].hasVerifiedArchive = hasVerifiedArchive }
         if let evidence { entries[i].countedCopies = evidence }
+    }
+
+    /// The row was retained for a protection, not on its merits: it is
+    /// never counted as a surviving copy for another copy of this run
+    /// (`Entry.notCountedWhy`, codex #258 r4-1).
+    mutating func setNotCounted(_ id: UUID, why: String) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].notCountedWhy = why
     }
 
     /// The row left quarantine (deleted, or put back): forget the folder.

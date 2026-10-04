@@ -81,13 +81,6 @@ struct StewardActionGate: Sendable, Equatable {
     /// The tooltip, and — when off — the line under the button.
     var reason: String
 
-    /// The line above the Delete button when the drive's cleanup would
-    /// also check copies no card proposes (QA 2026-10-03, F1) — nil for 0.
-    nonisolated static func stillCheckedCaution(_ n: Int) -> String? {
-        guard n > 0 else { return nil }
-        return "This drive's cleanup would also check \(n.formatted()) cop\(n == 1 ? "y" : "ies") the Archive Angel has chosen or you filed as Archived."
-    }
-
     static let perGroupDeleteGap = "Deleting just this set arrives later; for now this cleans the whole drive's duplicates."
     static let namingGap = "Naming a set of footage arrives later. For now the title is a description, or a guess from the date."
     static let eventNamingGap = "Naming or confirming an event arrives later. For now the name comes from the date, a family birthday or a folder name."
@@ -132,10 +125,15 @@ struct StewardActionGate: Sendable, Equatable {
 
 enum StewardStandingWords {
 
+    /// "2 copies on SanDisk are never offered — it is Read only."
+    nonisolated static func readOnlyFooter(count n: Int, drive: String) -> String {
+        "\(n.formatted()) cop\(n == 1 ? "y" : "ies") on \(drive) \(n == 1 ? "is" : "are") never offered — it is Read only."
+    }
+
     /// The line under one copy on a Reclaim set card. "Never offered" is
-    /// said ONLY of what the Delete planner itself refuses; a copy that is
-    /// merely the steward's own restraint is said to be still checked by
-    /// the drive's cleanup, because it is (QA 2026-10-03, F1).
+    /// said of what the Delete planner itself leaves alone — which, since
+    /// GH #258, is every protected copy: the archive, its drive, and a
+    /// copy the Archive Angel is using.
     nonisolated static func words(for copy: StewardCopy, proof: StewardCopyProof?) -> String? {
         switch copy.standing {
         case .keeper:
@@ -151,12 +149,8 @@ enum StewardStandingWords {
             return "Left alone for now — the copy to keep is on another drive."
         case .workingCopyNotTaken(let verdict):
             return "Left alone — the copy to keep is on another drive, and \(whyNotTaken(verdict))."
-        case .stillChecked(let why):
-            return "\(why.words) — but “Delete duplicates on \(copy.drive)” would still check it."
         case .protected(let why):
-            return why.plannerRefuses
-                ? "\(why.words) — never offered."
-                : "\(why.words). This drive's cleanup leaves it alone — the copy to keep is on another drive."
+            return "\(why.words) — never offered."
         case .member:
             return nil
         }

@@ -105,6 +105,16 @@ extension MediaFileOperationsCenter: AngelJobRunner {
         jobs.contains { $0.state.isActive && ($0 is ArchiveAngelJob || $0 is PromoteToArchiveJob) }
     }
 
+    /// AngelJobRunner (GH #258): what the running Prepare job(s) hold,
+    /// read from each job's own plan — a handful of jobs, a batch of rows.
+    var recordIDsInRunningPrepare: Set<UUID> {
+        var ids = Set<UUID>()
+        for job in jobs {
+            if let prepare = job as? ArchiveAngelJob { ids.formUnion(prepare.heldRecordIDs) }
+        }
+        return ids
+    }
+
     /// A batch the user asked for — claims user origin so the MFO window
     /// comes forward (MediaFileOperationsWindowForwardSensorTests pins
     /// this file's two scopes).

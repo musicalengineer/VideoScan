@@ -453,8 +453,21 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
             // the boot disk, and only its FOLDER is protected (answered above).
             return .clear
         case .externalVolume:
-            if let uuid = expectedUUID, probe(path) == uuid { return .onArchiveVolume }
-            return .clear
+            guard let uuid = expectedUUID else { return .clear }
+            guard let own = probe(path) else {
+                // The file's own volume identity cannot be read (codex #258
+                // r5-4): clear only what is PROVABLY another volume — the
+                // boot disk, a network share, or (the archive found mounted
+                // by its UUID) a mount that is not the archive's.
+                let parent = (path as NSString).deletingLastPathComponent
+                if let mount = (identity(path) ?? identity(parent))?.mountPoint {
+                    if Self.isBootMountPoint(mount) { return .clear }
+                    if archiveRoots.contains(Self.canonical(mount).lowercased()) { return .onArchiveVolume }
+                    if isResolved { return .clear }
+                }
+                return Self.isNetworkMount(path) ? .clear : .unprovable
+            }
+            return own == uuid ? .onArchiveVolume : .clear
         case .unknown:
             // Could be a boot folder (every boot file shares its UUID):
             // cannot tell yet — transient, never a recorded refusal.
@@ -511,6 +524,14 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
 
     /// Mount points that belong to the boot disk: "/" and the APFS
     /// system/data group under "/System/Volumes/" (Data, Preboot, VM, …).
+    /// The path is on a network share (statfs says not MNT_LOCAL) — never a
+    /// local drive's volume. False when it cannot be asked.
+    static func isNetworkMount(_ path: String) -> Bool {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0 else { return false }
+        return fs.f_flags & UInt32(MNT_LOCAL) == 0
+    }
+
     static func isBootMountPoint(_ mountPoint: String) -> Bool {
         mountPoint == "/" || mountPoint.hasPrefix("/System/Volumes/")
     }
@@ -553,7 +574,8 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
 /// (`VideoScanModel.bulkDeleteRefusalNote`), so a Delete Duplicates row,
 /// a Junk row and a Transcode "kept beside" line read the same.
 struct ArchiveRemovalCheck: Sendable {
-    let protection: ArchiveVolumeProtection
+    /// nil = no Master Archive is designated (then only `readOnly` speaks).
+    let protection: ArchiveVolumeProtection?
     let probe: @Sendable (String) -> String?
     /// Captured while the model's snapshot was being rebuilt (the
     /// provisional one). Its "unprovable" is then TRANSIENT — the caller
@@ -561,20 +583,36 @@ struct ArchiveRemovalCheck: Sendable {
     var isProvisional: Bool = false
     /// realpath + statfs, captured with the UUID probe (codex #1642).
     var identity: @Sendable (String) -> MountIdentity? = ArchiveVolumeProtection.mountIdentityProbe
+    /// The volumes the person marked Read only (2026-10-03).
+    var readOnly: ReadOnlyVolumeProtection = .none
 
-    /// nil = may be removed; else the note, and whether the refusal is
-    /// only transient (provisional snapshot + unprovable).
-    func refusal(forPath path: String) -> (note: String, transient: Bool)? {
-        let verdict = protection.verdictAtRemoval(path: path, probe: probe, identity: identity)
-        guard let note = Self.note(verdict, label: protection.label) else { return nil }
-        return (note, (isProvisional || protection.isProvisional) && verdict == .unprovable)
+    /// nil = may be removed; else the note, whether the refusal is only
+    /// transient (provisional snapshot + unprovable), and whether it is a
+    /// HOLD (`BulkDeleteRefusal.leavesAlone` — a Read-only mark): the file
+    /// is left alone, the record is not marked, the copy is not counted.
+    /// A read-only mark is never transient: the marked path is refused by
+    /// string alone.
+    func refusal(forPath path: String) -> (note: String, transient: Bool, leavesAlone: Bool)? {
+        guard let found = bulkRefusal(forPath: path) else { return nil }
+        let transient = found.refusal == .archiveVolumeUnprovable && (isProvisional || protection?.isProvisional == true)
+        return (VideoScanModel.bulkDeleteRefusalNote(found.refusal, volume: found.volume), transient, found.refusal.leavesAlone)
     }
 
-    private static func note(_ verdict: ArchiveVolumeProtection.Verdict, label: String) -> String? {
-        switch verdict {
-        case .clear: return nil
-        case .onArchiveVolume: return VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: label)
-        case .unprovable: return VideoScanModel.bulkDeleteRefusalNote(.archiveVolumeUnprovable, volume: label)
+    /// The same answer as the gate's own value, for a verb that words its
+    /// own log line (Workbench Discard): the refusal and the volume it
+    /// names. DISK I/O, like `refusal(forPath:)`.
+    func bulkRefusal(forPath path: String) -> (refusal: VideoScanModel.BulkDeleteRefusal, volume: String)? {
+        if let protection {
+            switch protection.verdictAtRemoval(path: path, probe: probe, identity: identity) {
+            case .clear: break
+            case .onArchiveVolume: return (.archiveVolume, protection.label)
+            case .unprovable: return (.archiveVolumeUnprovable, protection.label)
+            }
+        }
+        switch readOnly.verdictAtRemoval(path: path, probe: probe, identity: identity) {
+        case .readOnly(let name)?: return (.readOnlyVolume(name), name)
+        case .readOnlyDifferentDrive(let name)?: return (.readOnlyVolumeDifferentDrive(name), name)
+        case nil: return nil
         }
     }
 

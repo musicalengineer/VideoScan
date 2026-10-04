@@ -27,6 +27,12 @@ struct DeleteDuplicatesDetailView: View {
                     .font(.system(size: 14))
                     .foregroundStyle(.secondary)
             }
+            // GH #258: copies the run never considered, each with its reason.
+            if let held = job.plan?.leftAloneCopies, !held.isEmpty {
+                DeleteDuplicatesLeftAloneList(copies: held,
+                                              total: job.plan?.leftAloneAtPlan?.total ?? held.count,
+                                              summary: job.plan?.leftAloneAtPlan?.line ?? "")
+            }
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 10)
@@ -109,6 +115,61 @@ struct DeleteDuplicatesDetailView: View {
         case .failed: return ("Failed: \(entry.note)", .red)
         case .skipped: return ("Skipped: \(entry.note)", .secondary)
         }
+    }
+}
+
+/// The copies a run left alone for the Archive Angel or the archive (GH
+/// #258): never rows of the run, listed under its table with the reason.
+/// Read-only; at most `visibleCap` rows are drawn.
+struct DeleteDuplicatesLeftAloneList: View {
+    let copies: [DeleteDuplicatesPlan.LeftAloneCopy]
+    /// Every copy left alone when the plan was made (the list is capped).
+    let total: Int
+    /// "2 copies left alone for the Archive Angel · 1 archived copy left alone"
+    let summary: String
+
+    static let visibleCap = 200
+
+    static func headerText(summary: String) -> String {
+        summary.isEmpty ? "Left alone" : "Never part of this run: \(summary)"
+    }
+
+    static func rowText(_ copy: DeleteDuplicatesPlan.LeftAloneCopy) -> String {
+        let size: String = ByteCountFormatter.string(fromByteCount: copy.sizeBytes, countStyle: .file)
+        return "\(copy.filename) (\(size)) — \(copy.reason)"
+    }
+
+    static func moreText(total: Int, shown: Int) -> String? {
+        total > shown ? "… and \(total - shown) more" : nil
+    }
+
+    var body: some View {
+        let visible: ArraySlice<DeleteDuplicatesPlan.LeftAloneCopy> = copies.prefix(Self.visibleCap)
+        let more: String? = Self.moreText(total: total, shown: visible.count)
+        return VStack(alignment: .leading, spacing: 3) {
+            Text(Self.headerText(summary: summary))
+                .font(.system(size: 13, weight: .semibold))
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(visible) { copy in
+                        Text(Self.rowText(copy))
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(copy.path)
+                    }
+                    if let more {
+                        Text(more)
+                            .font(.system(size: 12))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 120)
+        }
+        .accessibilityIdentifier("mfo.deleteDuplicates.leftAlone")
     }
 }
 

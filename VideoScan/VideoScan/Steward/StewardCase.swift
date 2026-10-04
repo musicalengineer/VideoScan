@@ -76,31 +76,30 @@ enum StewardCaseKind: String, Sendable, Equatable, CaseIterable {
 /// Why the steward will never propose letting a file go (rule 2 of §5.6:
 /// one steward's cases are never another's loss).
 ///
-/// TWO STRENGTHS (QA 2026-10-03, F1). `.archived` and `.archiveDrive` are
-/// refused by the Delete planner itself (`bulkDeleteRefusal`), so "never
-/// offered" is true of them whatever button is pressed. `.angel` and
-/// `.filedArchived` are the steward's OWN restraint: no card proposes them
-/// — but the Delete planner has no such guard, so a whole-drive cleanup
-/// would still check them. The card says exactly that, and counts them as
-/// rows of the run, never as copies that remain.
+/// ONE STRENGTH (GH #258, 2026-10-03). Every case here is something the
+/// Delete planner itself leaves alone — `.archived` / `.archiveDrive` by
+/// `bulkDeleteRefusal`, `.archiveCopy` / `.angel` by
+/// `duplicateDeletionHoldRule` — so "never offered" is true of all of them
+/// whatever button is pressed. A copy the Angel merely lists, or one
+/// labelled Archived in Triage, is an ORDINARY copy: the run may take it
+/// (Rick's ruling 2026-10-03), so it is not a case here.
 enum StewardProtection: String, Sendable, Equatable {
     case none
-    /// A file of the Master Archive (the planner refuses it).
+    /// A file of the Master Archive.
     case archived
     /// Anywhere else on the Master Archive's drive, or a drive that cannot
-    /// be told apart from it right now (the planner refuses it).
+    /// be told apart from it right now.
     case archiveDrive
-    /// Filed as Archived in Triage, or an archive copy while no Master
-    /// Archive is designated — the steward's restraint only.
-    case filedArchived
-    /// Archive Angel recommends it, or holds it in a prepared batch — the
-    /// steward's restraint only.
+    /// A promoted archive copy while no Master Archive is designated.
+    case archiveCopy
+    /// In use by the Archive Angel: in a prepared batch, in a batch being
+    /// or just promoted, or picked for a Prepare that is still running.
     case angel
+    /// On a drive the person marked Read only (2026-10-03).
+    case readOnlyDrive
 
+    /// The Delete planner leaves this file alone, and no card proposes it.
     var isProtected: Bool { self != .none }
-
-    /// The Delete planner itself refuses this file.
-    var plannerRefuses: Bool { self == .archived || self == .archiveDrive }
 
     /// What it is, as the start of a sentence on the copy's row.
     var words: String {
@@ -108,8 +107,9 @@ enum StewardProtection: String, Sendable, Equatable {
         case .none: return ""
         case .archived: return "In the archive"
         case .archiveDrive: return "On the archive drive"
-        case .filedArchived: return "You filed this copy as Archived"
-        case .angel: return "Archive Angel has chosen this copy"
+        case .archiveCopy: return "A promoted archive copy"
+        case .angel: return "In use by the Archive Angel"
+        case .readOnlyDrive: return "On a drive you marked Read only"
         }
     }
 }
@@ -128,12 +128,9 @@ enum StewardCopyStanding: Sendable, Equatable {
     /// take this copy (QA F6(a)): the keeper's drive is not connected,
     /// retired, unknown, or not ranked above this one.
     case workingCopyNotTaken(DuplicateKeeperPolicy.CrossVolumeVerdict)
-    /// Not proposed, and the Delete duplicates flow would not check it
-    /// either (the planner refuses it, or the keeper is on another drive).
+    /// Not proposed, and the Delete duplicates flow leaves it alone too
+    /// (the archive, its drive, a copy the Archive Angel is using).
     case protected(StewardProtection)
-    /// Not proposed by any card — but the Delete duplicates flow on its
-    /// drive WOULD still check it (the Angel's pick, or filed as Archived).
-    case stillChecked(StewardProtection)
     /// Not a duplicate copy at all (a footage or junk row).
     case member
 }
@@ -214,11 +211,12 @@ struct StewardCase: Sendable, Equatable, Identifiable {
     var keeperID: UUID?
     /// Copies the flow would leave alone because the keeper is elsewhere.
     var copiesNeedingWorkingCopyMode: Int = 0
-    /// Copies the Delete planner itself refuses (the archive, its drive).
+    /// Copies the Delete planner leaves alone (the archive, its drive, the
+    /// copies the Archive Angel is using).
     var protectedCopies: Int = 0
-    /// Copies on `driveRoot` that no card proposes but that drive's cleanup
-    /// would still check (the Angel's picks, filed as Archived).
-    var stillCheckedOnDrive: Int = 0
+    /// One line per Read-only drive holding copies of the set: "2 copies
+    /// on SanDisk are never offered — it is Read only".
+    var readOnlyNotes: [String] = []
     /// Every copy of the set a Delete duplicates run would decide, with its
     /// drive — the WHOLE set, not the capped evidence rows (the proof's
     /// "rows of the same run").
