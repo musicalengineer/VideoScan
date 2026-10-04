@@ -423,18 +423,7 @@ enum StewardCaseBuilder {
                                   workingCopyPolicy: DuplicateKeeperPolicy = .unconfigured,
                                   skipped: [String: StewardFacts] = [:]) -> [StewardCase] {
         var out: [StewardCase] = []
-        // The planner's cross-drive verdict, memoised per (copy's drive,
-        // keeper's drive) — the same memo `volumesWithDeletableDuplicates`
-        // keeps; a handful of drives, so O(set) overall.
-        var verdicts: [String: DuplicateKeeperPolicy.CrossVolumeVerdict] = [:]
-        func verdict(copyRoot: String, keeperRoot: String, keeperPath: String) -> DuplicateKeeperPolicy.CrossVolumeVerdict {
-            let key = copyRoot + "\u{0}" + keeperRoot
-            if let hit = verdicts[key] { return hit }
-            let v = workingCopyPolicy.crossVolumeVerdict(extraPath: copyRoot, volumeRoot: copyRoot,
-                                                         keeperPath: keeperPath, keeperRoot: keeperRoot)
-            verdicts[key] = v
-            return v
-        }
+        var rule = WorkingCopyRule(policy: workingCopyPolicy)
         for (groupID, members) in groups {
             guard members.count > 1, let keeperIndex = members.first(where: { inputs[$0].isKeeper }) else { continue }
             let keeperRoot = roots[keeperIndex]
@@ -453,8 +442,7 @@ enum StewardCaseBuilder {
                 total += max(0, r.sizeBytes)
                 // QA F6(a): in working-copy mode, only what the planner's
                 // own rule would take — not every copy on another drive.
-                let crossVerdict = root == keeperRoot || !alsoCleanUpWorkingCopies ? nil
-                    : verdict(copyRoot: root, keeperRoot: keeperRoot, keeperPath: inputs[keeperIndex].fullPath)
+                let crossVerdict = rule.verdict(copyRoot: root, keeperRoot: keeperRoot, keeperPath: inputs[keeperIndex].fullPath, modeOn: alsoCleanUpWorkingCopies)
                 let flowWouldCheck = root == keeperRoot || crossVerdict?.isEligible == true
                 let standing: StewardCopyStanding
                 if r.isKeeper {
@@ -486,11 +474,10 @@ enum StewardCaseBuilder {
                         actionableByDrive[root, default: 0] += max(0, r.sizeBytes)
                         if runRows.count < maxIDsPerCase { runRows.append(StewardRunRow(id: r.id, driveRoot: root)) }
                         standing = .wouldBeChecked
-                    } else if let crossVerdict {
-                        standing = .workingCopyNotTaken(crossVerdict)
                     } else {
-                        needMode += 1
-                        standing = .keeperOnAnotherDrive
+                        // Mode off: it needs the mode. Mode on: the planner's rule refused it.
+                        standing = crossVerdict.map { .workingCopyNotTaken($0) } ?? .keeperOnAnotherDrive
+                        if crossVerdict == nil { needMode += 1 }
                     }
                 }
                 copies.append(copy(r, root: root, online: online(root), standing: standing))
@@ -530,6 +517,30 @@ enum StewardCaseBuilder {
         }
         out.sort(by: reclaimOrder)
         return limit(out, skipped: skipped)
+    }
+
+    /// QA F6(a): the Delete planner's cross-drive verdict, memoised per
+    /// (copy's drive, keeper's drive) — the same memo
+    /// `volumesWithDeletableDuplicates` keeps; a handful of drives, so
+    /// O(set) overall. (≈ a small C++ functor with a std::unordered_map cache.)
+    struct WorkingCopyRule {
+        let policy: DuplicateKeeperPolicy
+        private var memo: [String: DuplicateKeeperPolicy.CrossVolumeVerdict] = [:]
+
+        init(policy: DuplicateKeeperPolicy) { self.policy = policy }
+
+        /// nil when the question does not arise: the same drive as the
+        /// keeper, or "Also clean up working copies" is off.
+        mutating func verdict(copyRoot: String, keeperRoot: String, keeperPath: String,
+                              modeOn: Bool) -> DuplicateKeeperPolicy.CrossVolumeVerdict? {
+            guard modeOn, copyRoot != keeperRoot else { return nil }
+            let key = copyRoot + "\u{0}" + keeperRoot
+            if let hit = memo[key] { return hit }
+            let v = policy.crossVolumeVerdict(extraPath: copyRoot, volumeRoot: copyRoot,
+                                              keeperPath: keeperPath, keeperRoot: keeperRoot)
+            memo[key] = v
+            return v
+        }
     }
 
     /// What the flow would reclaim today first, then what could be, then id.
