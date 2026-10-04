@@ -139,3 +139,7 @@ Output contract (required):
 - A line: Verdict: <merge | fix | block> — <one-line reason>
 
 Wanted: "closed"/re-opened per R4-1..R4-3 and H; findings for L–M ranked by data-loss risk, each marked P1/P2/P3; "read, no findings" per clean file. Privacy: public repo — no real family names, addresses or dates in any suggested fixture.
+
+## Closed
+
+Closed by `rick-ruling-2026-10-04` at 2026-10-04T15:48:57Z. Merged per Rick's ruling (best effort, not perfection); residual edge cases tracked in GH #268.

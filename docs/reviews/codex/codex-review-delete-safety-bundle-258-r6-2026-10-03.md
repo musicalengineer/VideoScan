@@ -126,3 +126,7 @@ Output contract (required):
 - A line: Verdict: <merge | fix | block> — <one-line reason>
 
 Privacy: public repo — no real family names, addresses or dates in any suggested fixture.
+
+## Closed
+
+Closed by `rick-ruling-2026-10-04` at 2026-10-04T15:48:57Z. Merged per Rick's ruling (best effort, not perfection); residual edge cases tracked in GH #268.
