@@ -106,6 +106,8 @@ enum TriageFilter: String, CaseIterable, Sendable {
 // SwiftUI does not subscribe this view to its change signal.
 // `@ObservedObject` IS the subscription, and it is to the snapshot alone.)
 struct TriageView: View {
+    /// Sliding selected-filter highlight in the sidebar.
+    @Namespace private var filterHighlightNS
     let model: VideoScanModel
     @ObservedObject private var snapshot: TriageSnapshot
     // Pass C (Rick 2026-06-14): MFO verbs are available from triage too.
@@ -331,12 +333,21 @@ struct TriageView: View {
             .padding(.horizontal, 8)
             .padding(.vertical, 5)
             .contentShape(Rectangle())
-            .background(
-                selectedFilter == filter
-                    ? Color.accentColor.opacity(0.12)
-                    : Color.clear
-            )
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            // The selected-filter highlight SLIDES between rows (Liquid
+            // Glass refresh, 2026-10-04), matching the main tab lens. Only
+            // the highlight animates — the table swap stays instant.
+            .background {
+                ZStack {
+                    if selectedFilter == filter {
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(Color.accentColor.opacity(0.16))
+                            .overlay(RoundedRectangle(cornerRadius: 7)
+                                .strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5))
+                            .matchedGeometryEffect(id: "triageFilterHighlight", in: filterHighlightNS)
+                    }
+                }
+                .animation(.bouncy(duration: 0.4, extraBounce: 0.08), value: selectedFilter)
+            }
         }
         .buttonStyle(.plain)
     }
