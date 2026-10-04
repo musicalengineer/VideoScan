@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Footage Spectrum — prototype</title>
+<style>
+:root{--bg:#f5f5f2;--surface:#ffffff;--fg:#1c1c1e;--muted:#5d6166;--line:#d4d4d0;--lane:#e9e8e3;--accent:#1a62d6;--accent-rgb:26,98,214;
+  --same:#1f8a43;--close:#b88a00;--diff:#c93a32;--none:#7d8186;--sel:#eaf1fd;--barh:60px}
+@media (prefers-color-scheme:dark){:root{--bg:#151618;--surface:#1f2124;--fg:#ececec;--muted:#a4a8ae;--line:#3a3d42;--lane:#2a2c30;--accent:#73abff;--accent-rgb:115,171,255;
+  --same:#2fa85a;--close:#d2a514;--diff:#e0554c;--none:#8a8d91;--sel:#232b38}}
+*{box-sizing:border-box}
+html{font-size:17px}
+body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.45 -apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif}
+header{padding:18px 24px 10px}
+h1{margin:0 0 4px;font-size:26px;font-weight:650}
+header p{margin:0;color:var(--muted);max-width:80ch}
+button,select,input{font:inherit;color:inherit}
+#picker{display:flex;flex-wrap:wrap;gap:8px;padding:4px 24px 14px}
+#picker button{font-size:17px;padding:9px 16px;border-radius:10px;border:1px solid var(--line);background:var(--surface);cursor:pointer}
+#picker button.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+#bar{position:sticky;top:0;z-index:30;background:var(--surface);border-top:1px solid var(--line);border-bottom:1px solid var(--line);padding:9px 24px}
+#bar .main{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+#bar label{font-size:16px;display:flex;align-items:center;gap:7px;white-space:nowrap}
+#bar select{padding:4px 6px;border-radius:6px;border:1px solid var(--line);background:var(--bg)}
+#bar input[type=range]{width:110px;accent-color:var(--accent)}
+#bar output{font-variant-numeric:tabular-nums;min-width:2.6em;color:var(--muted)}
+#play{font-size:18px;font-weight:650;padding:8px 20px;min-width:118px;border-radius:10px;border:none;background:var(--same);color:#fff;cursor:pointer}
+#scrub{flex:1 1 260px;min-width:200px;width:auto!important}
+#clock{font-variant-numeric:tabular-nums;font-size:17px;min-width:9.5em}
+details.drawer{margin-top:8px}
+details.drawer summary{cursor:pointer;font-size:16px;color:var(--muted)}
+details.drawer .grid{display:flex;flex-wrap:wrap;gap:10px 22px;padding:10px 0 2px}
+main{padding:0 24px 30px}
+#sethead h2{margin:16px 0 0;font-size:22px;font-weight:650}
+#sethead .note{color:var(--muted);margin:2px 0 6px;max-width:95ch}
+#summary{font-size:18px;margin:6px 0 4px}
+#summary small{display:block;color:var(--muted);font-size:15px}
+#viewer{position:sticky;top:var(--barh);z-index:20;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:10px 0 14px;
+  display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;box-shadow:0 6px 18px rgba(0,0,0,.12)}
+#viewer figure{margin:0}
+#viewer .box{position:relative;width:320px;height:240px;background:#000;border-radius:6px;overflow:hidden;border:3px solid transparent}
+#viewer .box img{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;display:block}
+#viewer.fill .box img{object-fit:fill}
+#viewer .box .tag{position:absolute;left:8px;top:8px;background:rgba(0,0,0,.72);color:#fff;font-size:15px;font-weight:600;padding:2px 9px;border-radius:6px}
+#viewer .box .gone{position:absolute;inset:0;display:none;align-items:center;justify-content:center;color:#bbb;font-size:16px;text-align:center;padding:20px;background:#222}
+#viewer figcaption{font-size:16px;margin-top:4px;font-variant-numeric:tabular-nums}
+#viewer figcaption .dt{color:var(--close);font-size:14px;margin-left:8px}
+#fRef .box{border-color:var(--accent)}
+#fBlink{display:none}
+#viewer.blink #fRef,#viewer.blink #fCand{display:none}
+#viewer.blink #fBlink{display:block}
+#side{flex:1 1 260px;min-width:240px}
+#big{display:inline-block;font-size:34px;font-weight:750;letter-spacing:.02em;padding:8px 22px;border-radius:12px;color:#fff;background:var(--none);margin-bottom:8px}
+#big.same,.badge.same,.chip.same{background:var(--same)}
+#big.close,.badge.close,.chip.close{background:var(--close)}
+#big.diff,.badge.diff,.chip.diff{background:var(--diff)}
+#big.none,.badge.none,.chip.part{background:var(--none)}
+#side .who{font-size:18px;font-weight:600}
+#side .sim{color:var(--muted);font-variant-numeric:tabular-nums}
+#side .hint{color:var(--muted);font-size:14px;margin-top:8px}
+.scroller{overflow-x:auto;overflow-y:hidden;padding-bottom:4px}
+.inner{position:relative}
+canvas.axis{display:block;height:26px}
+.row{padding:6px 8px 8px;border-radius:8px;border:2px solid transparent;margin:4px 0}
+.row.ref{border-color:var(--accent)}
+.row.cand{cursor:pointer}
+.row.sel{background:var(--sel);border-color:var(--line)}
+.rowhead{position:sticky;left:0;display:inline-flex;flex-wrap:wrap;align-items:center;gap:6px 10px;max-width:calc(100vw - 80px);margin-bottom:4px}
+.rowhead b{font-size:17px;font-weight:650}
+.rowhead .reftag{font-size:14px;font-weight:650;color:#fff;background:var(--accent);padding:1px 9px;border-radius:6px}
+.chip{font-size:15px;font-weight:600;color:#fff;padding:2px 10px;border-radius:999px}
+.badge{font-size:15px;font-weight:750;color:#fff;padding:2px 10px;border-radius:6px;min-width:6.2em;text-align:center;letter-spacing:.02em}
+.facts{flex-basis:100%;font-size:14px;color:var(--muted)}
+.facts .cap{color:var(--accent);margin-left:6px}
+.track{position:relative;background:var(--lane);border-radius:3px;cursor:crosshair}
+.track canvas{position:absolute;top:0;display:block}
+.hair{position:absolute;top:0;bottom:0;width:0;pointer-events:none;display:none}
+.hair.play{border-left:2px solid #fff;outline:1px solid rgba(0,0,0,.75)}
+.hair.hov{border-left:1px dashed #fff;outline:1px solid rgba(0,0,0,.35)}
+.legend{font-size:14px;color:var(--muted);margin:8px 0 0}
+.legend i{display:inline-block;width:14px;height:10px;border-radius:2px;margin:0 4px 0 12px}
+details.numbers{margin-top:14px}
+details.numbers summary{cursor:pointer;color:var(--muted)}
+table.pairs{border-collapse:collapse;margin-top:10px;font-size:15px}
+table.pairs th,table.pairs td{padding:4px 12px 4px 0;text-align:left;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+table.pairs th{font-weight:600;color:var(--muted);font-size:14px}
+table.pairs td.hi{font-weight:650}
+table.pairs td.lo{color:var(--muted)}
+footer{padding:0 24px 40px;color:var(--muted);font-size:14px}
+footer li{margin:2px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>Footage Spectrum — prototype</h1>
+  <p>Each strip is a video: left to right is time; each thin column is the colours of one moment, top of the frame at the top. Bands that line up are the same pictures. The coloured ribbon under a strip says how well it matches the reference at each moment.</p>
+</header>
+<div id="picker"></div>
+<div id="bar">
+  <div class="main">
+    <button id="play">▶ Play</button>
+    <label>Speed <select data-k="speed" data-t="n"><option value="1">1×</option><option value="4">4×</option><option value="16" selected>16×</option><option value="60">60×</option></select></label>
+    <input type="range" id="scrub" min="0" max="100" step="1" value="0" aria-label="Position">
+    <span id="clock"></span>
+    <label><input type="checkbox" data-k="align" checked> Align</label>
+    <label><input type="checkbox" data-k="blink"> Blink</label>
+    <label>rate <input type="range" data-k="blinkRate" data-t="n" min="1" max="8" step="1" value="3"><output></output></label>
+  </div>
+  <details class="drawer"><summary>Tuning</summary>
+    <div class="grid">
+      <label>Same (green) at or above <input type="range" data-k="green" data-t="n" min="0.5" max="1" step="0.01" value="0.85"><output></output></label>
+      <label>Close (yellow) at or above <input type="range" data-k="yellow" data-t="n" min="0.2" max="0.95" step="0.01" value="0.6"><output></output></label>
+      <label>Seconds per column <select data-k="spc" data-t="n"><option>1</option><option>2</option><option>4</option><option>8</option></select></label>
+      <label>Colour bands <select data-k="rows" data-t="n"><option>1</option><option>3</option><option>6</option><option>12</option><option>24</option><option selected>48</option></select></label>
+      <label>Colour boost <input type="range" data-k="sat" data-t="n" min="1" max="3" step="0.1" value="1"><output></output></label>
+      <label><input type="checkbox" data-k="stretch"> Contrast stretch</label>
+      <label>Strip height <input type="range" data-k="h" data-t="n" min="16" max="200" step="4" value="56"><output></output></label>
+      <label><input type="checkbox" data-k="cutOn" checked> Scene lines</label>
+      <label>threshold <input type="range" data-k="thr" data-t="n" min="2" max="80" step="1" value="25"><output></output></label>
+      <label>Sound band <select data-k="sound"><option value="off" selected>off</option><option value="loud">loudness</option><option value="bands">8-band</option></select></label>
+      <label>Time scale <select data-k="scale"><option value="fit" selected>longest fills the width</option><option value="each">stretch every strip to the width</option><option value="native">1 pixel per column (scroll)</option></select></label>
+      <label>Viewer frames <select data-k="fit"><option value="contain" selected>keep each file's shape</option><option value="fill">stretch to the same box</option></select></label>
+    </div>
+  </details>
+</div>
+<main>
+  <div id="sethead"><h2></h2><div class="note"></div><div id="summary"></div></div>
+  <div id="viewer">
+    <figure id="fRef"><div class="box"><img alt=""><div class="gone"></div><span class="tag">Reference</span></div><figcaption></figcaption></figure>
+    <figure id="fCand"><div class="box"><img alt=""><div class="gone"></div><span class="tag"></span></div><figcaption></figcaption></figure>
+    <figure id="fBlink"><div class="box"><img alt=""><img alt=""><div class="gone"></div><span class="tag"></span></div><figcaption></figcaption></figure>
+    <div id="side">
+      <div id="big" class="none">—</div>
+      <div class="who"></div>
+      <div class="sim"></div>
+      <div class="hint">Click a candidate to compare it with the reference · Space plays · ← → move 5 s (Shift: 60 s) · ↑ ↓ change candidate · B blinks</div>
+    </div>
+  </div>
+  <div class="scroller"><div class="inner" id="inner"></div></div>
+  <div class="legend">Match ribbon:<i style="background:var(--same)"></i>same<i style="background:var(--close)"></i>close<i style="background:var(--diff)"></i>different<i style="background:var(--none)"></i>the reference has nothing at that moment</div>
+  <details class="numbers"><summary>Numbers</summary><div id="numbers"></div></details>
+</main>
+<footer id="foot"></footer>
+<script id="data" type="application/json">/*__DATA__*/</script>
+<script>
+"use strict";
+const D = JSON.parse(document.getElementById('data').textContent);
+const S = {spc:1, rows:48, sat:1, stretch:false, h:56, cutOn:true, thr:25, sound:'off', align:true, scale:'fit',
+           green:0.85, yellow:0.6, blink:false, blinkRate:3, speed:16, fit:'contain'};
+const LANE = 12, ROWS = 48, RIB_H = 12, RIB_GAP = 3;
+const $ = id => document.getElementById(id);
+
+function u8(s){const b=atob(s), a=new Uint8Array(b.length); for(let i=0;i<b.length;i++) a[i]=b.charCodeAt(i); return a;}
+for(const k in D.files){const f=D.files[k];
+  f.colsA=u8(f.cols); f.cutA=new Float32Array(u8(f.cut).buffer); f.loudA=u8(f.loud); f.bandsA=u8(f.bands);
+  delete f.cols; delete f.cut; delete f.loud; delete f.bands;}
+D.sets.forEach(s=>s.files.forEach(sf=>{ sf.rib = sf.ribbon ? u8(sf.ribbon) : null; delete sf.ribbon; }));
+
+function fmt(t){const neg=t<0; t=Math.abs(Math.round(t)); const h=Math.floor(t/3600), m=Math.floor(t%3600/60), s=t%60, p=n=>String(n).padStart(2,'0');
+  return (neg?'−':'')+(h? h+':'+p(m) : m)+':'+p(s);}
+function css(v){return getComputedStyle(document.documentElement).getPropertyValue(v).trim();}
+function el(tag, cls, txt){const e=document.createElement(tag); if(cls) e.className=cls; if(txt!=null) e.textContent=txt; return e;}
+function short(label){return label.split(' ')[0];}
+function pct(x){return Math.round(x*100)+'%';}
+function sz(f){return f.mb<1000? f.mb+' MB' : f.gb.toFixed(f.gb<10?2:1)+' GB';}
+function szSum(mb){return mb<1000? Math.round(mb)+' MB' : (mb/1000).toFixed(1)+' GB';}
+
+// ---------------------------------------------------------------- images for one file
+function stripCanvas(f){
+  const key=[S.spc,S.rows,S.sat,S.stretch].join('|');
+  if(f._key===key) return f._strip;
+  const T=f.T, spc=S.spc, R=S.rows, C=Math.ceil(T/spc), rp=ROWS/R, a=f.colsA;
+  const cv=document.createElement('canvas'); cv.width=C; cv.height=R;
+  const ctx=cv.getContext('2d'), im=ctx.createImageData(C,R), d=im.data;
+  const lo=S.stretch? f.lo : 0, sc=S.stretch? 255/Math.max(8,f.hi-f.lo) : 1, sat=S.sat;
+  for(let c=0;c<C;c++){
+    const t0=c*spc, t1=Math.min(T,t0+spc);
+    for(let r=0;r<R;r++){
+      let sr=0, sg=0, sb=0; const r0=r*rp;
+      for(let t=t0;t<t1;t++){ let p=(t*ROWS+r0)*3; for(let k=0;k<rp;k++){ sr+=a[p]; sg+=a[p+1]; sb+=a[p+2]; p+=3; } }
+      const n=(t1-t0)*rp; let rr=(sr/n-lo)*sc, gg=(sg/n-lo)*sc, bb=(sb/n-lo)*sc;
+      if(sat!==1){ const y=.299*rr+.587*gg+.114*bb; rr=y+(rr-y)*sat; gg=y+(gg-y)*sat; bb=y+(bb-y)*sat; }
+      const q=(r*C+c)*4; d[q]=rr; d[q+1]=gg; d[q+2]=bb; d[q+3]=255;
+    }
+  }
+  ctx.putImageData(im,0,0); f._key=key; f._strip=cv; return cv;
+}
+function bandsCanvas(f){
+  const rgb=css('--accent-rgb').split(',').map(Number);
+  if(f._bands && f._bandsKey===rgb.join()) return f._bands;
+  f._bandsKey=rgb.join();
+  const T=f.T, cv=document.createElement('canvas'); cv.width=T; cv.height=8;
+  const ctx=cv.getContext('2d'), im=ctx.createImageData(T,8), d=im.data, a=f.bandsA;
+  for(let t=0;t<T;t++) for(let b=0;b<8;b++){ const q=((7-b)*T+t)*4; d[q]=rgb[0]; d[q+1]=rgb[1]; d[q+2]=rgb[2]; d[q+3]=a[t*8+b]; }
+  ctx.putImageData(im,0,0); f._bands=cv; return cv;
+}
+function hex(c){ c=c.replace('#',''); return [parseInt(c.slice(0,2),16),parseInt(c.slice(2,4),16),parseInt(c.slice(4,6),16)]; }
+function ribbonCanvas(sf){
+  const cols=['--same','--close','--diff','--none'].map(v=>hex(css(v)));
+  const key=[S.green,S.yellow,cols.join()].join('|');
+  if(sf._ribKey===key) return sf._ribCv;
+  const rib=sf.rib, T=rib.length, cv=document.createElement('canvas'); cv.width=T; cv.height=1;
+  const ctx=cv.getContext('2d'), im=ctx.createImageData(T,1), d=im.data, g=S.green*250, y=S.yellow*250;
+  for(let t=0;t<T;t++){ const v=rib[t], c = v===255? cols[3] : (v>=g? cols[0] : (v>=y? cols[1] : cols[2]));
+    d[t*4]=c[0]; d[t*4+1]=c[1]; d[t*4+2]=c[2]; d[t*4+3]=255; }
+  ctx.putImageData(im,0,0); sf._ribKey=key; sf._ribCv=cv; return cv;
+}
+
+// ---------------------------------------------------------------- match status + verdict
+// status of a candidate at reference time g: 'same' | 'close' | 'diff' | 'noref' | 'out'
+function statusAt(row, g){
+  const t=Math.floor(g-row.off);
+  if(t<0 || t>=row.f.T) return {k:'out', v:null};
+  const v=row.sf.rib[t];
+  if(v===255) return {k:'noref', v:null};
+  return {k: v>=S.green*250? 'same' : (v>=S.yellow*250? 'close' : 'diff'), v:v/250};
+}
+const STATUS = {same:['SAME','same'], close:['CLOSE','close'], diff:['DIFFERENT','diff'], noref:['no reference here','none'], out:['not in this file here','none']};
+function verdict(row, refT){
+  const rib=row.sf.rib, T=rib.length, g=S.green*250, y=S.yellow*250;
+  let ng=0, ny=0, first=-1, last=-1;
+  for(let t=0;t<T;t++){ const v=rib[t]; if(v===255) continue; if(v>=g){ ng++; if(first<0) first=t; last=t; } else if(v>=y) ny++; }
+  const share=ng/T, refCov=ng/refT, start=row.off+Math.max(0,first);
+  let cls, text;
+  if(share>=0.9){
+    cls='same';
+    if(refCov>=0.95) text='Same footage — whole thing';
+    else if(start<=5) text='Same footage — shorter (covers '+fmt(ng)+' of '+fmt(refT)+', from 0:00)';
+    else text='Same footage — a piece ('+fmt(T)+', starting '+fmt(start)+' into the reference)';
+  } else if(refCov>=0.95){ cls='same'; text='Contains the whole reference, plus more ('+pct(share)+' of this file is the reference)'; }
+  else if((ng+ny)/T>=0.75){ cls='close'; text='Close — looks like the same footage from a different transfer ('+pct(share)+' same, '+pct(ny/T)+' close), starting '+fmt(start)+' into the reference'; }
+  else if(share>=0.15){ cls='part'; text='Partly the same ('+pct(share)+')'; }
+  else { cls='diff'; text='Different'; }
+  return {cls, text, share, refCov, close:ny/T};
+}
+
+// ---------------------------------------------------------------- the current set
+let CUR = null;   // {s, rows, ref, gmin, gmax}
+const P = {g:0, playing:false, last:0, sel:1, hoverG:null, hoverRow:null, blinkOn:false};
+
+function buildSet(si){
+  stop();
+  const s=D.sets[si], inner=$('inner'); inner.textContent='';
+  document.querySelectorAll('#picker button').forEach((b,i)=>b.classList.toggle('on', i===si));
+  $('sethead').querySelector('h2').textContent=s.title;
+  $('sethead').querySelector('.note').textContent=s.note + (s.grid!==s.gridBase? ' (Viewer frames for this set are every '+s.grid+' s instead of '+s.gridBase+' s, to keep the page small.)' : '');
+  const axis=el('canvas','axis'); inner.appendChild(axis);
+  const set={s, si, axis, rows:[]};
+  s.files.forEach((sf,i)=>{
+    const f=D.files[sf.key], isRef=i===0;
+    const wrap=el('div','row '+(isRef?'ref':'cand')); inner.appendChild(wrap);
+    const head=el('div','rowhead'); wrap.appendChild(head);
+    if(isRef) head.appendChild(el('span','reftag','Reference'));
+    head.appendChild(el('b',null,sf.label));
+    let chip=null, badge=null;
+    if(!isRef){ chip=el('span','chip'); head.appendChild(chip); badge=el('span','badge none','—'); head.appendChild(badge); }
+    const facts=el('div','facts'); head.appendChild(facts);
+    facts.appendChild(document.createTextNode(f.name+' · on '+f.drive+' · '+f.codec+' '+f.w+'×'+f.h+' · '+fmt(f.dur)+' · '+sz(f)+' · '+f.role+(f.hasAudio?'':' · no sound track')));
+    const cap=el('span','cap'); facts.appendChild(cap);
+    const track=el('div','track'); wrap.appendChild(track);
+    const cv=el('canvas'); track.appendChild(cv);
+    const hov=el('div','hair hov'); track.appendChild(hov);
+    const play=el('div','hair play'); track.appendChild(play);
+    const row={sf, f, i, isRef, wrap, track, cv, hov, play, chip, badge, cap, off:sf.offset, x0:0, w:1, pps:1, th:D.thumbs[sf.thumbs]};
+    set.rows.push(row);
+    track.addEventListener('mousemove', e=>{ P.hoverG=gAt(row,e.clientX); P.hoverRow=row; update(); });
+    track.addEventListener('mouseleave', ()=>{ P.hoverG=null; P.hoverRow=null; update(); });
+    track.addEventListener('click', e=>{ e.stopPropagation(); if(!isRef) P.sel=i; setG(gAt(row,e.clientX)); });
+    if(!isRef) wrap.addEventListener('click', ()=>{ P.sel=i; update(); });
+  });
+  set.ref=set.rows[0];
+  set.gmin=Math.min(...set.rows.map(r=>r.off)); set.gmax=Math.max(...set.rows.map(r=>r.off+r.f.T));
+  CUR=set; P.sel=Math.min(1,set.rows.length-1); P.hoverG=null; P.hoverRow=null;
+  const sc=$('scrub'); sc.min=set.gmin; sc.max=set.gmax-1;
+  // numbers drawer
+  const nb=$('numbers'); nb.textContent='';
+  const tb=el('table','pairs'); nb.appendChild(tb);
+  const hr=el('tr'); ['Pair','Picture (search)','at','overlap','next best','over the overlap','Sound','at','next best'].forEach(h=>hr.appendChild(el('th',null,h))); tb.appendChild(hr);
+  s.pairs.forEach(p=>{
+    const tr=el('tr'), A=short(s.files[p.a].label), B=short(s.files[p.b].label);
+    const cls=v=>v>=0.8?'hi':(v<0.5?'lo':'');
+    const off=o=>(o>=0?'+':'−')+fmt(Math.abs(o))+' ('+(o>=0?'+':'')+o+' s)';
+    tr.appendChild(el('td',null,A+' ↔ '+B));
+    tr.appendChild(el('td',cls(p.pic.score),p.pic.score.toFixed(2)));
+    tr.appendChild(el('td',null,off(p.pic.offset)));
+    tr.appendChild(el('td',null,fmt(p.pic.overlap)));
+    tr.appendChild(el('td','lo',p.pic.next==null?'—':p.pic.next.toFixed(2)));
+    tr.appendChild(el('td',p.pic.whole==null?'lo':cls(p.pic.whole),p.pic.whole==null?'—':p.pic.whole.toFixed(3)));
+    if(p.snd){ tr.appendChild(el('td',cls(p.snd.score),p.snd.score.toFixed(2))); tr.appendChild(el('td',null,off(p.snd.offset))); tr.appendChild(el('td','lo',p.snd.next==null?'—':p.snd.next.toFixed(2))); }
+    else { const td=el('td','lo','no sound to compare'); td.colSpan=3; tr.appendChild(td); }
+    tb.appendChild(tr);
+  });
+  const key=el('div',null,'Pair: the second (shorter) file slid along the first; “at” = where its 0:00 sits in the first. Search score = mean cosine similarity (mean removed per file); “next best” = the best score anywhere else, so a tall gap means a distinctive match. “Over the overlap” = the correlation at that position with the mean removed over the overlap only (reference pairs).');
+  key.style.cssText='margin-top:8px;font-size:14px;color:var(--muted);max-width:110ch'; nb.appendChild(key);
+  P.g=0; layout();
+}
+
+function layout(){
+  const set=CUR; if(!set) return;
+  const scroller=$('inner').parentElement, W=Math.max(200, scroller.clientWidth-24), rows=set.rows;
+  const d0=r=>S.align? r.off : 0;
+  const dmin=Math.min(...rows.map(d0)), dmax=Math.max(...rows.map(r=>d0(r)+r.f.T)), span=dmax-dmin;
+  let innerW=W;
+  if(S.scale==='each'){ rows.forEach(r=>{ r.pps=W/r.f.T; r.x0=0; r.w=W; }); }
+  else { const pps = S.scale==='native' ? 1/S.spc : W/span; innerW = S.scale==='native' ? Math.max(W, Math.ceil(span*pps)) : W;
+    rows.forEach(r=>{ r.pps=pps; r.x0=(d0(r)-dmin)*pps; r.w=r.f.T*pps; }); }
+  $('inner').style.width=(innerW+24)+'px'; set.dmin=dmin; set.span=span; set.axisW=innerW; set.axisPps=rows[0].pps;
+  rows.forEach(r=>{
+    if(!r.isRef){
+      const o=r.off, R=short(set.ref.sf.label);
+      r.cap.textContent = S.align ? (o>=0? 'starts at '+fmt(o)+' of '+R : 'starts '+fmt(-o)+' before '+R) : '';
+    }
+    drawRow(r);
+  });
+  drawAxis(set); verdicts(); update();
+}
+function rowHeights(r){
+  const rib = r.isRef? 0 : RIB_GAP+RIB_H, sh = S.sound==='off'? 0 : (S.sound==='loud'? 30 : 36), gap = sh? 4 : 0;
+  return {rib, sh, gap, total: LANE+S.h+rib+gap+sh};
+}
+function drawRow(r){
+  const f=r.f, cv=r.cv, dpr=window.devicePixelRatio||1, w=Math.max(2,r.w), H=S.h, hh=rowHeights(r);
+  r.track.style.height=hh.total+'px';
+  cv.style.left=r.x0+'px'; cv.style.width=w+'px'; cv.style.height=hh.total+'px';
+  cv.width=Math.max(2,Math.min(16000,Math.round(w*dpr))); cv.height=Math.round(hh.total*dpr);
+  const ctx=cv.getContext('2d'); ctx.setTransform(cv.width/w,0,0,dpr,0,0);
+  const st=stripCanvas(f); ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(st,0,0,st.width,st.height,0,LANE,w*(st.width*S.spc/f.T),H);
+  const px=Math.max(1, w/cv.width);
+  if(S.cutOn){
+    const cut=f.cutA, fg=css('--fg');
+    for(let t=1;t<f.T;t++) if(cut[t]>S.thr){ const x=t/f.T*w;
+      ctx.fillStyle=fg; ctx.fillRect(x,LANE-6,px,6);
+      ctx.fillStyle='rgba(0,0,0,.72)'; ctx.fillRect(x,LANE,px,H); }
+  }
+  if(!r.isRef){ const rc=ribbonCanvas(r.sf); ctx.drawImage(rc,0,0,rc.width,1,0,LANE+H+RIB_GAP,w,RIB_H); }
+  if(hh.sh){
+    const y0=LANE+H+hh.rib+hh.gap, sh=hh.sh;
+    if(!f.hasAudio){ ctx.fillStyle=css('--muted'); ctx.font='13px -apple-system,sans-serif'; ctx.fillText('no sound track',4,y0+sh/2+4); }
+    else if(S.sound==='loud'){ ctx.fillStyle=css('--muted'); const a=f.loudA, bw=Math.max(px,w/f.T);
+      for(let t=0;t<f.T;t++){ const h=a[t]/255*sh; ctx.fillRect(t/f.T*w, y0+sh-h, bw, h); } }
+    else { const b=bandsCanvas(f); ctx.drawImage(b,0,0,b.width,8,0,y0,w,sh); }
+  }
+}
+function drawAxis(set){
+  const cv=set.axis, dpr=window.devicePixelRatio||1, W=set.axisW;
+  cv.style.width=W+'px'; cv.style.marginLeft='10px'; cv.width=Math.min(16000,Math.round(W*dpr)); cv.height=Math.round(26*dpr);
+  const ctx=cv.getContext('2d'); ctx.setTransform(cv.width/W,0,0,dpr,0,0); ctx.clearRect(0,0,W,26);
+  ctx.fillStyle=css('--muted'); ctx.font='13px -apple-system,sans-serif';
+  if(S.scale==='each'){ ctx.fillText('every strip stretched to the full width — no shared axis',0,17); return; }
+  const pps=set.axisPps, steps=[1,2,5,10,15,30,60,120,300,600,900,1800,3600]; let step=steps[steps.length-1];
+  for(const s of steps){ if(s*pps>=80){ step=s; break; } }
+  const g0=Math.ceil(set.dmin/step)*step;
+  for(let g=g0; g<=set.dmin+set.span; g+=step){ const x=(g-set.dmin)*pps; ctx.fillRect(x,18,1,8); ctx.fillText(fmt(g), Math.min(x+3,W-44), 14); }
+  ctx.fillRect(0,25,W,1);
+  if(!S.align) ctx.fillText('time in each file (not aligned)', Math.max(0,W-210), 14);
+}
+function verdicts(){
+  const set=CUR, refT=set.ref.f.T; let same=0, close=0, gb=0; const cands=set.rows.filter(r=>!r.isRef);
+  cands.forEach(r=>{ const v=verdict(r,refT); r.v=v;
+    r.chip.className='chip '+v.cls; r.chip.textContent=v.text;
+    r.chip.title='Green for '+pct(v.share)+' of this file; covers '+pct(v.refCov)+' of the reference';
+    if(v.cls==='same'){ same++; gb+=r.f.mb; } else if(v.cls==='close') close++; });
+  const sm=$('summary'); sm.textContent='';
+  sm.appendChild(document.createTextNode(same+' of '+cands.length+' candidates '+(same===1?'is':'are')+' the same footage as the reference'
+    + (close? ' ('+close+' more '+(close===1?'is':'are')+' close)' : '') + '. '
+    + (same? 'Together '+(same===1?'that copy takes ':'these copies take ')+szSum(gb)+'; ' : '') + (same?'the':'The')+' reference is '+sz(set.ref.f)+'.'));
+  sm.appendChild(el('div',null,coverage(set)));
+  sm.appendChild(el('small',null,'Facts only — this page never deletes, moves or changes anything. A verdict here is a suggestion to look, not a proof.'));
+}
+
+// which stretches of the reference the candidates' green seconds cover between them (merged ranges)
+function coverage(set){
+  const refT=set.ref.f.T, hit=new Uint8Array(refT), g=S.yellow*250;   // same OR close
+  set.rows.forEach(r=>{ if(r.isRef) return; const rib=r.sf.rib; for(let t=0;t<rib.length;t++){ const v=rib[t], q=t+r.off; if(v!==255 && v>=g && q>=0 && q<refT) hit[q]=1; } });
+  const ranges=[]; let a=-1, n=0;
+  for(let t=0;t<=refT;t++){ const on=t<refT && hit[t]; if(on){ n++; if(a<0) a=t; } else if(a>=0){ ranges.push([a,t]); a=-1; } }
+  const merged=[]; ranges.forEach(x=>{ const l=merged[merged.length-1]; if(l && x[0]-l[1]<=30) l[1]=x[1]; else merged.push(x.slice()); });
+  const keep=merged.filter(x=>x[1]-x[0]>=30); n=keep.reduce((s,x)=>s+x[1]-x[0],0);
+  if(!keep.length) return 'Between them, the candidates match none of the reference.';
+  const txt=keep.map(x=>fmt(x[0])+'\u2013'+fmt(x[1]));
+  return 'Between them, the candidates match (same or close) '+pct(n/refT)+' of the reference: '+(txt.length>1? txt.slice(0,-1).join(', ')+' and '+txt[txt.length-1] : txt[0])+'.';
+}
+
+// ---------------------------------------------------------------- playhead, viewer, blink
+function gAt(row, clientX){ const tr=row.track.getBoundingClientRect(); return (clientX-tr.left-row.x0)/row.pps + row.off; }
+function setG(g){ const set=CUR; P.g=Math.max(set.gmin, Math.min(set.gmax-1, g)); update(); }
+function frameAt(row, g){
+  const t=g-row.off; if(t<0 || t>=row.f.T || !row.th.jpg.length) return null;
+  const th=row.th, k=Math.max(0, Math.min(th.jpg.length-1, Math.round((t-th.phase)/th.step)));
+  return {k, src:'data:image/jpeg;base64,'+th.jpg[k], at:th.phase+k*th.step, t};
+}
+function setImg(img, gone, fr, msg){
+  if(fr){ if(img._k!==fr.src){ img.src=fr.src; img._k=fr.src; } img.style.visibility='visible'; if(gone) gone.style.display='none'; }
+  else { img.style.visibility='hidden'; if(gone){ gone.style.display='flex'; gone.textContent=msg; } }
+}
+function update(){
+  const set=CUR; if(!set) return;
+  const hovering = P.hoverG!=null && !P.playing;
+  const g = hovering ? P.hoverG : P.g;
+  const cand = (hovering && P.hoverRow && !P.hoverRow.isRef) ? P.hoverRow : set.rows[P.sel];
+  set.rows.forEach(r=>{
+    const place=(hair,gg,show)=>{ const t=gg-r.off, ok=show && t>=0 && t<r.f.T; hair.style.display=ok?'block':'none'; if(ok) hair.style.left=(r.x0+t*r.pps)+'px'; };
+    place(r.play, P.g, true); place(r.hov, P.hoverG, P.hoverG!=null);
+    r.wrap.classList.toggle('sel', !r.isRef && r===set.rows[P.sel]);
+    if(!r.isRef){ const st=statusAt(r,g), lab=STATUS[st.k], key=st.k;
+      if(r._st!==key){ r._st=key; r.badge.className='badge '+lab[1]; r.badge.textContent=lab[0]; } }
+  });
+  // viewer
+  const ref=set.ref, fr=frameAt(ref,g), fc=cand && cand!==ref ? frameAt(cand, fr? fr.at : g) : null;   // candidate frame nearest the reference frame's instant
+  const R=$('fRef'), C=$('fCand'), B=$('fBlink');
+  setImg(R.querySelector('img'), R.querySelector('.gone'), fr, 'the reference has nothing at this moment');
+  R.querySelector('figcaption').textContent=short(ref.sf.label)+' · '+(fr? fmt(fr.at) : '—');
+  setImg(C.querySelector('img'), C.querySelector('.gone'), fc, 'not in this file at this moment');
+  C.querySelector('.tag').textContent=cand? cand.sf.label : '';
+  const cc=C.querySelector('figcaption'); cc.textContent=(cand? short(cand.sf.label) : '')+' · '+(fc? fmt(fc.at) : '—');
+  let dt=null; const half=cand? Math.max(ref.th.step,cand.th.step)/2 : 0; if(fr && fc){ dt=(fc.at+cand.off)-fr.at; if(Math.abs(dt)>half) cc.appendChild(el('span','dt','frames are '+Math.abs(dt)+' s apart')); }
+  const bi=B.querySelectorAll('img'), showRef = P.blinkOn || !fc;
+  setImg(bi[0], null, fr); setImg(bi[1], null, fc);
+  bi[0].style.visibility = (fr && showRef)? 'visible':'hidden'; bi[1].style.visibility = (fc && !showRef)? 'visible':'hidden';
+  const bg=B.querySelector('.gone'); bg.style.display=(!fr && !fc)? 'flex':'none'; bg.textContent='nothing at this moment';
+  B.querySelector('.tag').textContent = showRef? 'Reference' : (cand? cand.sf.label : '');
+  B.querySelector('.box').style.borderColor = showRef? css('--accent') : 'transparent';
+  B.querySelector('figcaption').textContent='Blink: '+short(ref.sf.label)+' '+(fr?fmt(fr.at):'—')+'  ⇄  '+(cand? short(cand.sf.label)+' '+(fc?fmt(fc.at):'—') : '')+(dt!=null && Math.abs(dt)>half? '  (frames are '+Math.abs(dt)+' s apart)':'');
+  // big status
+  const big=$('big'), side=$('side');
+  if(cand && cand!==ref){ const st=statusAt(cand,g), lab=STATUS[st.k];
+    big.className=lab[1]; big.textContent=lab[0].toUpperCase();
+    side.querySelector('.who').textContent=cand.sf.label+'  vs  the reference';
+    side.querySelector('.sim').textContent=(st.v!=null? 'match '+st.v.toFixed(2)+' at this moment · ' : '')+(cand.v? cand.v.text : '');
+  }
+  $('clock').textContent=fmt(g)+' / '+fmt(set.ref.f.T)+(hovering?'  (pointing)':'');
+  if(!hovering) $('scrub').value=Math.round(P.g);
+}
+function tick(ts){
+  if(!P.playing) return;
+  const dt=Math.min(0.25,(ts-P.last)/1000); P.last=ts;
+  const g=P.g+dt*S.speed;
+  if(g>=CUR.gmax-1){ setG(CUR.gmax-1); stop(); return; }
+  P.g=g; update(); requestAnimationFrame(tick);
+}
+function playBtn(){ const b=$('play'); b.textContent=P.playing? '❚❚ Pause' : '▶ Play'; b.style.background=P.playing? css('--none') : ''; }
+function start(){ if(!CUR || P.playing) return; if(P.g>=CUR.gmax-2) P.g=CUR.gmin; P.playing=true; P.last=performance.now(); playBtn(); requestAnimationFrame(tick); }
+function stop(){ P.playing=false; playBtn(); }
+function toggle(){ P.playing? stop() : start(); }
+let blinkTimer=null;
+function blinkSetup(){
+  if(blinkTimer){ clearInterval(blinkTimer); blinkTimer=null; }
+  $('viewer').classList.toggle('blink', S.blink); $('viewer').classList.toggle('fill', S.fit==='fill');
+  if(S.blink) blinkTimer=setInterval(()=>{ P.blinkOn=!P.blinkOn; update(); }, 1000/S.blinkRate);
+}
+
+// ---------------------------------------------------------------- controls
+$('play').addEventListener('click', toggle);
+$('scrub').addEventListener('input', e=>{ P.hoverG=null; setG(parseFloat(e.target.value)); });
+const REDRAW = new Set(['spc','rows','sat','stretch','h','cutOn','thr','sound','align','scale','green','yellow']);
+document.querySelectorAll('#bar [data-k]').forEach(c=>{
+  const k=c.dataset.k, out=c.parentElement.querySelector('output');
+  const read=()=>{ S[k] = c.type==='checkbox'? c.checked : (c.dataset.t==='n'? parseFloat(c.value) : c.value);
+    if(out) out.textContent = k==='sat'? '×'+S[k].toFixed(1) : (k==='green'||k==='yellow'? S[k].toFixed(2) : (k==='blinkRate'? S[k]+'/s' : S[k])); };
+  read(); c.addEventListener('input', ()=>{ read(); if(k==='blink'||k==='blinkRate'||k==='fit') blinkSetup(); if(REDRAW.has(k)) layout(); else update(); barH(); });
+});
+document.addEventListener('keydown', e=>{
+  const tag=(e.target.tagName||'').toUpperCase(); if(tag==='SELECT'||tag==='TEXTAREA'||(tag==='INPUT'&&e.target.type!=='checkbox'&&e.target.type!=='range')) return;
+  if(e.key===' '){ e.preventDefault(); toggle(); }
+  else if(e.key==='ArrowLeft'||e.key==='ArrowRight'){ e.preventDefault(); P.hoverG=null; setG(P.g+(e.key==='ArrowLeft'?-1:1)*(e.shiftKey?60:5)); }
+  else if(e.key==='ArrowUp'||e.key==='ArrowDown'){ e.preventDefault(); const n=CUR.rows.length-1; if(n>0){ P.sel=1+((P.sel-1+(e.key==='ArrowUp'?n-1:1))%n); update(); CUR.rows[P.sel].wrap.scrollIntoView({block:'nearest'}); } }
+  else if(e.key==='b'||e.key==='B'){ const c=document.querySelector('[data-k=blink]'); c.checked=!c.checked; S.blink=c.checked; blinkSetup(); update(); }
+  else if(e.key==='Escape'){ P.hoverG=null; P.hoverRow=null; update(); }
+});
+function barH(){ document.documentElement.style.setProperty('--barh', $('bar').offsetHeight+'px'); }
+document.querySelector('details.drawer').addEventListener('toggle', barH);
+let rz; window.addEventListener('resize', ()=>{ clearTimeout(rz); rz=setTimeout(()=>{ barH(); layout(); },120); });
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', layout);
+
+// ---------------------------------------------------------------- picker, footer, go
+D.sets.forEach((s,i)=>{ const b=el('button',null,s.title); b.addEventListener('click',()=>buildSet(i)); $('picker').appendChild(b); });
+(function(){ const p=D.params, f=$('foot'), ul=el('ul');
+  [['Picture',p.picture],['Viewer frames',p.frames],['Sound',p.sound],['Alignment',p.align],['Match ribbon',p.ribbon],['Script',p.script],['Built',p.built]].forEach(([a,b])=>ul.appendChild(el('li',null,a+': '+b)));
+  Object.values(D.files).forEach(x=>ul.appendChild(el('li',null,x.name+': '+x.T+' columns, '+x.method+', extracted in '+x.sec+' s')));
+  f.appendChild(el('div',null,'Local file — not shared. This page only shows; it never deletes, moves or changes any file.')); f.appendChild(ul); })();
+barH(); blinkSetup(); buildSet(0);
+</script>
+</body>
+</html>
