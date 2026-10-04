@@ -2,12 +2,19 @@
 //  GlassTabStrip.swift
 //  VideoScan
 //
-//  The app's one tab-strip look (Rick 2026-10-04, macOS 27 refresh): tabs
-//  in a floating Liquid Glass capsule, the selected one riding a tinted
-//  capsule that slides between tabs. Used by the main window's tab bar and
-//  by sub-tab bars (People ▸ Find Person / Identify Family) so every level
-//  of navigation reads the same. Glass is for navigation only — content
-//  keeps solid backing for senior-readable contrast.
+//  The app's one tab-strip look (Rick 2026-10-04, macOS 27 refresh). Used by
+//  the main window's tab bar and by sub-tab bars (People ▸ Find Person /
+//  Identify Family) so every level of navigation reads the same. Glass is
+//  for navigation only — content keeps solid backing for senior-readable
+//  contrast.
+//
+//  Phase 2 ("wiggly liquid", Rick 2026-10-04): the selected tab sits under a
+//  real Liquid Glass lens that FLOWS to the next tab with a little bounce,
+//  and hovering another tab raises a faint glass bubble there. Both live in
+//  one GlassEffectContainer, so when the bubble is next to the lens the two
+//  blend like droplets. The track behind them is frosted material, not
+//  glass — Apple's guidance is no glass-on-glass (glass can't sample glass).
+//  Reduce Motion drops the bounce.
 //
 
 import SwiftUI
@@ -21,22 +28,34 @@ struct GlassTabStrip<Badge: View>: View {
     /// Per-tab overlay at the label's top-trailing corner (status dots).
     @ViewBuilder var badge: (Int) -> Badge
 
-    @Namespace private var selectionNS
+    @Namespace private var glassNS
+    @State private var hoveredTag: Int?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var isLarge: Bool { fontSize >= 16 }
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(items, id: \.tag) { item in
-                tabButton(item)
+        GlassEffectContainer(spacing: isLarge ? 14 : 10) {
+            HStack(spacing: 4) {
+                ForEach(items, id: \.tag) { item in
+                    tabButton(item)
+                }
             }
         }
-        .padding(fontSize >= 16 ? 5 : 3)
-        .glassEffect(.regular, in: .capsule)
+        .padding(isLarge ? 5 : 3)
+        .background(.ultraThinMaterial, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.white.opacity(0.18), lineWidth: 0.5))
+        .shadow(color: .black.opacity(0.10), radius: 8, y: 2)
     }
 
     private func tabButton(_ item: Item) -> some View {
         let isSelected = selection == item.tag
+        let isHovered = hoveredTag == item.tag && !isSelected
         return Button {
-            withAnimation(.smooth(duration: 0.3)) { selection = item.tag }
+            withAnimation(reduceMotion ? .smooth(duration: 0.25)
+                                       : .bouncy(duration: 0.45, extraBounce: 0.12)) {
+                selection = item.tag
+            }
         } label: {
             Label(item.label, systemImage: item.icon)
                 .font(.system(size: fontSize, weight: isSelected ? .semibold : .regular))
@@ -44,18 +63,32 @@ struct GlassTabStrip<Badge: View>: View {
                 .overlay(alignment: .topTrailing) {
                     badge(item.tag).offset(x: 6, y: -4)
                 }
-                .padding(.horizontal, fontSize >= 16 ? 14 : 10)
-                .padding(.vertical, fontSize >= 16 ? 7 : 4)
+                .padding(.horizontal, isLarge ? 14 : 10)
+                .padding(.vertical, isLarge ? 7 : 4)
                 .background {
                     if isSelected {
-                        Capsule()
-                            .fill(Color.accentColor.opacity(0.18))
-                            .matchedGeometryEffect(id: "selectedTab", in: selectionNS)
+                        Color.clear
+                            .glassEffect(.regular.tint(Color.accentColor.opacity(0.30)).interactive(),
+                                         in: .capsule)
+                            .glassEffectID("selection", in: glassNS)
+                    } else if isHovered {
+                        Color.clear
+                            .glassEffect(.regular.interactive(), in: .capsule)
+                            .glassEffectID("hover", in: glassNS)
                     }
                 }
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.smooth(duration: 0.2)) {
+                if hovering {
+                    hoveredTag = item.tag
+                } else if hoveredTag == item.tag {
+                    hoveredTag = nil
+                }
+            }
+        }
         // XCUITest hook: e.g. "tab.Catalog".
         .accessibilityIdentifier("tab.\(item.label)")
     }

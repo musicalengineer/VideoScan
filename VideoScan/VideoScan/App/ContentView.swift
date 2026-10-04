@@ -44,33 +44,33 @@ struct ContentView: View {
                 CatalogSyncBanner(sync: catalogSync)
             }
             // Custom tab bar — a floating Liquid Glass capsule, centered with
-            // traffic-light inset (Rick 2026-10-04, macOS 27 refresh). The
-            // selected tab rides a tinted capsule that slides between tabs;
-            // Hallie's door is its own glass button beside the bar. Glass is
+            // traffic-light inset (Rick 2026-10-04, macOS 27 refresh). A glass
+            // lens flows to the selected tab and a glass bubble follows the
+            // pointer (GlassTabStrip); Hallie's door is its own glass button
+            // beside the bar. Glass is
             // for this navigation layer only — content keeps solid backing.
             HStack(spacing: 0) {
                 // Reserve space for window traffic-light buttons
                 Color.clear.frame(width: 76, height: 1)
 
                 Spacer()
-                GlassEffectContainer(spacing: 16) {
-                    HStack(spacing: 16) {
-                        GlassTabStrip(selection: $selectedTab, items: tabs, fontSize: tabFontSize) { tag in
-                            if tag == 5 {
-                                FamilySearchPullStatusDot(status: pullCenter.status)
-                            }
+                HStack(spacing: 16) {
+                    // Owns its own GlassEffectContainer (lens + hover bubble).
+                    GlassTabStrip(selection: $selectedTab, items: tabs, fontSize: tabFontSize) { tag in
+                        if tag == 5 {
+                            FamilySearchPullStatusDot(status: pullCenter.status)
                         }
-
-                        // Family Archivist — the door to Hallie Mae's window,
-                        // after Family Tree, twinkling (Rick 2026-08-16). Not
-                        // a content tab: the conversation stays in its own
-                        // always-on-top window so the catalog remains the
-                        // display surface.
-                        ArchivistTabButton(fontSize: tabFontSize) {
-                            openWindow(id: "archivist")
-                        }
-                        .glassEffect(.regular.tint(Color.pink.opacity(0.12)).interactive(), in: .capsule)
                     }
+
+                    // Family Archivist — the door to Hallie Mae's window,
+                    // after Family Tree, twinkling (Rick 2026-08-16). Not
+                    // a content tab: the conversation stays in its own
+                    // always-on-top window so the catalog remains the
+                    // display surface.
+                    ArchivistTabButton(fontSize: tabFontSize) {
+                        openWindow(id: "archivist")
+                    }
+                    .glassEffect(.regular.tint(Color.pink.opacity(0.12)).interactive(), in: .capsule)
                 }
                 Spacer()
             }
