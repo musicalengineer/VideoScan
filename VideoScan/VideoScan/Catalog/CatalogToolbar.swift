@@ -296,8 +296,10 @@ struct CatalogToolbar<Dashboard: View>: View {
             } label: {
                 Label("Clear", systemImage: "trash")
             }
-            .menuStyle(.borderlessButton)
-            .frame(width: 80)
+            // Glass toolbar controls (Liquid Glass refresh, 2026-10-04).
+            .menuStyle(.button)
+            .buttonStyle(.glass)
+            .fixedSize()
             .disabled(isScanning)
             .help("Clear catalog results or cached probe data")
 
@@ -354,7 +356,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 Button(action: onStopCombine) {
                     Label("Stop Combine", systemImage: "stop.fill")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glassProminent)
                 .tint(.red)
             }
 
@@ -476,7 +478,8 @@ struct CatalogToolbar<Dashboard: View>: View {
                 .foregroundColor(model.kindFacetSetting.facet == .videoBearing
                                  ? .primary : .teal)
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.glass)
             .fixedSize()
             .help("Choose which files are shown — media kind, filters, and hidden records")
 
@@ -508,7 +511,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 }) {
                     Label("Show CSV", systemImage: "doc.text")
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
             }
 
             // FIXED inset, not a flexible Spacer (Rick 2026-08-14). This is
@@ -659,7 +662,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                     .font(.system(size: 14))
                     .foregroundColor(showInspector ? .accentColor : .secondary)
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(.glass)
             .help(showInspector ? "Hide Inspector" : "Show Inspector")
             // Gauntlet flow 5 toggles the inspector here. Test-only.
             .accessibilityIdentifier("catalog.inspectorToggle")
