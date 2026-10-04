@@ -396,9 +396,9 @@ struct StewardPaneView: View {
                 note(.acted, c, action: "Compare these")
                 // The run's title names the kind and the count — never an
                 // event's title (log lines carry kinds and counts only).
-                model.startFootageSpectrum(ids: c.recordIDs, title: "\(c.kind.chip) — \(c.recordIDs.count) clips",
-                                           preferredFirst: c.likelyOriginalID, center: center,
-                                           source: "Triage suggestions")
+                guard model.startFootageSpectrum(ids: c.recordIDs, title: "\(c.kind.chip) — \(c.recordIDs.count) clips",
+                                                 preferredFirst: c.likelyOriginalID, center: center,
+                                                 source: "Triage suggestions") != nil else { return }
                 FootageSpectrumWindowOpener.open(using: openWindow, source: "triage-suggestions")
             },
             skip: {

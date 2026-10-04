@@ -133,10 +133,7 @@ enum FootageSpectrumPlanner {
                 : "Compare Footage needs at least \(minFiles) videos — none were chosen."))
         }
 
-        func rank(_ c: FootageSpectrumCandidate) -> (Int, Int, Int64, String) {
-            (c.isArchiveCopy ? 0 : 1, c.id == preferredFirst ? 0 : 1, -c.sizeBytes, c.filename.lowercased())
-        }
-        let ordered = unique.sorted { rank($0) < rank($1) }
+        let ordered = Self.ordered(unique, preferredFirst: preferredFirst)
 
         var leftOut: [FootageSpectrumLeftOut] = []
         var readable: [FootageSpectrumCandidate] = []
@@ -186,6 +183,19 @@ enum FootageSpectrumPlanner {
         }
         return .success(FootageSpectrumPlan(title: title, members: members,
                                             referenceIndex: referenceIndex, leftOut: leftOut))
+    }
+
+    /// The reading order — I/O-free, so the model can rank a big group
+    /// BEFORE it looks at any file and stat only the first few (QA P2-3).
+    /// Archive copies, then `preferredFirst`, then the biggest; ties by name,
+    /// then id, so the order is total and the planner and the model agree.
+    static func ordered(_ candidates: [FootageSpectrumCandidate],
+                        preferredFirst: UUID?) -> [FootageSpectrumCandidate] {
+        func rank(_ c: FootageSpectrumCandidate) -> (Int, Int, Int64, String, String) {
+            (c.isArchiveCopy ? 0 : 1, c.id == preferredFirst ? 0 : 1, -c.sizeBytes, c.filename.lowercased(),
+             c.id.uuidString)
+        }
+        return candidates.sorted { rank($0) < rank($1) }
     }
 
     private static func longer(_ a: FootageSpectrumCandidate, than b: FootageSpectrumCandidate) -> Bool {

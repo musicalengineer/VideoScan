@@ -104,7 +104,9 @@ final class FootageSpectrumJob: @MainActor MediaFileOperationJob {
     @Published private(set) var detailLines: [DetailLine] = []
 
     struct DetailLine: Identifiable, Equatable {
-        var id: String { label + "|" + text }
+        /// The member's or left-out file's record id — two offline copies
+        /// with one name and one reason are still two rows (QA P3-2).
+        let id: UUID
         var label: String
         var text: String
         var isLeftOut: Bool
@@ -122,6 +124,23 @@ final class FootageSpectrumJob: @MainActor MediaFileOperationJob {
 
     private var refused = false
     var wasRefused: Bool { refused }
+    /// The Center would not take the job at all (a remote viewer) — no row,
+    /// no window; the caller says why (QA P3-5).
+    private(set) var refusedOnViewer = false
+
+    /// Refuse a job the Center did not register: it never starts, and the
+    /// reason goes to videoscan.log and the console here because no Center
+    /// OUTCOME watcher will see it.
+    func refuseToStart(reason: String) {
+        guard state == .running, task == nil else { return }
+        refused = true
+        refusedOnViewer = true
+        subtitleText = reason
+        state = .failed(message: reason)
+        let line = "\(kind.logVerb) refused: \(title) — \(reason)"
+        appLog.write(line)
+        console?(line)
+    }
 
     // MARK: Run bookkeeping
 
@@ -158,9 +177,9 @@ final class FootageSpectrumJob: @MainActor MediaFileOperationJob {
         self.gates = gates
         self.launcher = launcher
         self.detailLines = plan.members.enumerated().map { i, m in
-            DetailLine(label: m.label, text: i == plan.referenceIndex ? "the reference — waiting" : "waiting",
+            DetailLine(id: m.id, label: m.label, text: i == plan.referenceIndex ? "the reference — waiting" : "waiting",
                        isLeftOut: false)
-        } + plan.leftOut.map { DetailLine(label: $0.filename, text: $0.reason, isLeftOut: true) }
+        } + plan.leftOut.map { DetailLine(id: $0.id, label: $0.filename, text: $0.reason, isLeftOut: true) }
     }
 
     /// A run refused before anything started (fewer than two readable
@@ -441,7 +460,10 @@ extension MediaFileOperationsCenter {
             let job = FootageSpectrumJob(plan: plan, requestedIDs: ids, preferredFirst: preferredFirst, tools: tools,
                                          store: store, gates: gatePlan(forPaths: plan.paths), launcher: launcher)
             job.console = console
-            guard add(job) else { return job }
+            guard add(job) else {
+                job.refuseToStart(reason: "Compare Footage runs on the Mac that holds the catalog — this one is a viewer.")
+                return job
+            }
             let left = plan.leftOut.isEmpty ? "" : " · \(plan.leftOut.count) left out"
             let line = Self.startSummaryLine(verb: job.kind.logVerb, title: job.title,
                                              plan: "read \(plan.members.count) videos (reference: \(plan.reference.filename))\(left) → the spectrum page")

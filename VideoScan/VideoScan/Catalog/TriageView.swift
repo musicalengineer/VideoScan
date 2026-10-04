@@ -1020,8 +1020,9 @@ struct TriageView: View {
         guard let center = fileOpsCenterReference,
               FootageSpectrumPlanner.selectionAllowed(ids.count) else { return }
         // The planner orders them (archive copy, then the biggest).
-        model.startFootageSpectrum(ids: Array(ids), title: "\(ids.count) videos from Triage",
-                                   center: center, source: "Triage")
+        // nil = refused outright (a viewer): the console says why, no window.
+        guard model.startFootageSpectrum(ids: Array(ids), title: "\(ids.count) videos from Triage",
+                                         center: center, source: "Triage") != nil else { return }
         FootageSpectrumWindowOpener.open(using: openWindow, source: "triage")
     }
 
