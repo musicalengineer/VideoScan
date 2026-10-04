@@ -52,9 +52,17 @@ private func day(_ y: Int, _ m: Int, _ d: Int) -> Date {
 /// A fixed "now" (2026): it only bounds the resolver's search for a year in a name.
 private let fixedNow = Date(timeIntervalSince1970: 1_790_000_000)
 
-private func build(_ inputs: [StewardInput], crossMode: Bool = false, skipped: [String: StewardFacts] = [:]) -> StewardQueue {
+private func build(_ inputs: [StewardInput], crossMode: Bool = false, policy: DuplicateKeeperPolicy = .unconfigured,
+                   skipped: [String: StewardFacts] = [:]) -> StewardQueue {
     StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted,
-                             alsoCleanUpWorkingCopies: crossMode, skipped: skipped, calendar: utc, now: fixedNow)
+                             alsoCleanUpWorkingCopies: crossMode, workingCopyPolicy: policy,
+                             skipped: skipped, calendar: utc, now: fixedNow)
+}
+
+/// The queue with the junk cards a person has finished (QA F8).
+private func buildReviewed(_ inputs: [StewardInput], reviewed: [String: StewardFacts]) -> StewardQueue {
+    StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted, alsoCleanUpWorkingCopies: false,
+                             reviewed: reviewed, calendar: utc, now: fixedNow)
 }
 
 private func keeper(_ path: String, _ g: UUID, bytes: Int64 = GB) -> StewardInput {
@@ -140,10 +148,26 @@ struct StewardCaseBuilderLogicTests {
         #expect(set.copies.filter { $0.standing == .keeperOnAnotherDrive }.count == 2)
         #expect(set.driveRoot == "/Volumes/X9", "the action names the drive where most could come back")
 
-        let on = build(inputs, crossMode: true)
+        // Working copies on, and the planner's own rule takes them: LaCie
+        // comes first in the drive order and is connected (QA F6(a)).
+        let listed = DuplicateKeeperPolicy(precedence: ["LaCie"], facts: [:])
+        let on = build(inputs, crossMode: true, policy: listed)
         let onSet = try #require(on.cases.first { $0.kind == .reclaimGroup })
         #expect(onSet.actionableBytes == 3 * GB && onSet.copiesNeedingWorkingCopyMode == 0)
+        #expect(onSet.copies.filter { $0.standing == .wouldBeChecked }.count == 2)
         #expect(on.cases.filter { $0.kind == .reclaimDrive }.map(\.driveLabel).sorted() == ["SanDisk", "X9"])
+
+        // …and where the rule would not take them, nothing is "checked".
+        let retired = DuplicateKeeperPolicy(precedence: ["LaCie"],
+                                            facts: ["/Volumes/LaCie": .init(role: .unassigned, isReachable: true, isRetired: true)])
+        let refused = try #require(build(inputs, crossMode: true, policy: retired).cases.first { $0.kind == .reclaimGroup })
+        #expect(refused.actionableBytes == 0 && refused.runRows.isEmpty && refused.copiesNeedingWorkingCopyMode == 0)
+        #expect(refused.copies.filter { $0.standing == .workingCopyNotTaken(.keeperRetired) }.count == 2)
+        let row = try #require(refused.copies.first { $0.standing == .workingCopyNotTaken(.keeperRetired) })
+        #expect(StewardStandingWords.words(for: row, proof: nil)
+                == "Left alone — the copy to keep is on another drive, and that drive is retired.")
+        let unknown = try #require(build(inputs, crossMode: true).cases.first { $0.kind == .reclaimGroup })
+        #expect(unknown.actionableBytes == 0, "with no policy handed in, nothing on another drive counts as checked")
     }
 
     @Test func aSetWithNoKeeperOrOnlyReviewRowsProposesNothing() {
@@ -615,6 +639,45 @@ struct StewardSkipStoreTests {
         }
     }
 
+    /// Steward QA F8: Junk pressed from "Review these below" writes the same
+    /// Suspected Junk the analyzer writes, so the cluster never empties by
+    /// itself. When a person has decided every clip of the card, its card
+    /// is finished — gone until its facts move, and not offered as skipped.
+    @Test func aJunkCardIsFinishedWhenEveryClipHasAPersonsDecision() throws {
+        try withStoreThrowing { store, defaults in
+            let a = junk("/Volumes/SanDisk/a.mov"), b = junk("/Volumes/SanDisk/b.mov"), c = junk("/Volumes/SanDisk/c.mov")
+            let card = try #require(build([a, b, c]).cases.first { $0.kind == .junk })
+            // The Triage tab: Junk on two, Keep on the third (one at a time).
+            var review = StewardReview(caseID: card.id, ids: Set(card.recordIDs))
+            let step1 = review.note(.suspectedJunk, on: [a.id, b.id])
+            #expect(!step1, "one still undecided")
+            let step2 = review.note(.unreviewed, on: [b.id])
+            #expect(!step2, "Undo takes a decision back")
+            let step3 = review.note(.important, on: [c.id, UUID()])
+            #expect(!step3, "a row outside the card counts for nothing")
+            let step4 = review.note(.suspectedJunk, on: [b.id])
+            #expect(step4, "every clip decided")
+            #expect(review.markedJunk == [a.id, b.id])
+            var idle = StewardReview()
+            let idleDone = idle.note(.suspectedJunk, on: [a.id])
+            #expect(!idleDone, "no card under review: nothing to finish")
+            // What the tab stores: the card as it will be rebuilt — the two
+            // marked Junk (Keep took the third out of the cluster).
+            store.markReviewed(caseID: card.id, facts: StewardFacts(bytes: a.sizeBytes + b.sizeBytes, count: 2))
+            #expect(defaults.string(forKey: "steward.reviewed.\(card.id)") != nil, "key = steward.reviewed.<caseID>")
+            #expect(store.snapshot().isEmpty, "finished is not skipped")
+            var kept = c
+            kept.isUndecided = false
+            let rebuilt = buildReviewed([a, b, kept], reviewed: store.reviewedSnapshot())
+            #expect(!rebuilt.cases.contains { $0.kind == .junk }, "the finished card came back")
+            // New junk of the same kind on the drive: a material change — it is back.
+            let more = [a, b, kept, junk("/Volumes/SanDisk/d.mov")]
+            #expect(buildReviewed(more, reviewed: store.reviewedSnapshot()).cases.contains { $0.id == card.id })
+            // Without the memory (the base behaviour) the card would stay.
+            #expect(build([a, b, kept]).cases.contains { $0.id == card.id })
+        }
+    }
+
     @Test func factsRoundTripThroughTheStoredValue() {
         let facts = StewardFacts(bytes: 412_000_000_000, count: 1_208)
         #expect(StewardSkipStore.decode(StewardSkipStore.encode(facts)) == facts)
@@ -634,6 +697,23 @@ struct StewardSkipStoreTests {
             defaults.set(7, forKey: StewardCatalogDoor.viewFiltersKey)
             StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
             #expect(CatalogShowingSummary.decode(defaults.string(forKey: StewardCatalogDoor.viewFiltersKey) ?? "") == [.onePerFootage])
+        }
+    }
+
+    /// F11: a filter this build does not know (a later build's, renamed) is
+    /// KEPT when the door re-writes the setting — it is not ours to drop.
+    @Test func theCatalogDoorKeepsFiltersThisBuildDoesNotKnow() {
+        withStore { _, defaults in
+            let key = StewardCatalogDoor.viewFiltersKey
+            let unknown = "A Filter From Another Build"
+            defaults.set(CatalogShowingSummary.encode([.notYetArchived]) + CatalogShowingSummary.separator + unknown, forKey: key)
+            StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
+            let raw = defaults.string(forKey: key) ?? ""
+            #expect(raw.split(separator: Character(CatalogShowingSummary.separator)).map(String.init).contains(unknown),
+                    "the unknown filter was dropped: \(raw)")
+            #expect(CatalogShowingSummary.decode(raw) == [.notYetArchived, .onePerFootage])
+            StewardCatalogDoor.turnOnOnePerFootage(in: defaults)
+            #expect(defaults.string(forKey: key) == raw, "idempotent, unknown filter included")
         }
     }
 }

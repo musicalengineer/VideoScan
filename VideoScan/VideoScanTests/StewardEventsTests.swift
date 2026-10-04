@@ -144,7 +144,8 @@ struct StewardEventsLogicTests {
         let q = build([clip("/Volumes/LaCie/Cape/a.mov", on: "1996-07-14"),
                        clip("/Volumes/LaCie/Cape/b.mov", on: "1996"),
                        clip("/Volumes/LaCie/Cape/undated.mov"),
-                       clip("/Volumes/SanDisk/bday party/c.mov", on: "1996")])
+                       clip("/Volumes/SanDisk/bday party/c.mov", on: "1996"),
+                       clip("/Volumes/SanDisk/bday party/d.mov", on: "1996")])
         let cape = try #require(events(q).first { $0.eventKind == "cape" })
         #expect(cape.id == "event:cape:-:1996" && cape.title == "Cape 1996", "the labeller's own display wording")
         #expect(cape.memberCount == 2, "a word with no year is not an event")
@@ -152,7 +153,7 @@ struct StewardEventsLogicTests {
         #expect(cape.detail == "2 clips · 1 drive · 2 m · Jul 14, 1996")
         let party = try #require(events(q).first { $0.eventKind == "birthday" })
         #expect(party.id == "event:birthday:-:1996" && party.title == "Birthday 1996", "a name knows no person")
-        #expect(party.detail == "1 clip · 1 drive · 1 m · 1996", "no trusted day: the year alone")
+        #expect(party.detail == "2 clips · 1 drive · 2 m · 1996", "no trusted day: the year alone")
     }
 
     @Test func newYearsEveBelongsToTheNewYear() throws {
@@ -161,6 +162,20 @@ struct StewardEventsLogicTests {
         #expect(events(q).count == 1)
         #expect(e.id == "event:newyear:-:1995" && e.title == "New Year 1995")
         #expect(e.detail == "2 clips · 1 drive · 2 m · Dec 31, 1994 – Jan 1, 1995")
+    }
+
+    /// F12: a Feb 29 birthday — kept on Feb 28 in a common year, on the
+    /// 29th in a leap year (the labeller's rule, seen through the steward).
+    @Test func aLeapDayBirthdayIsAnEventInCommonAndLeapYears() throws {
+        let leap = [FamilyBirthday(name: "Jo", born: EventDay(year: 1984, month: 2, day: 29))]
+        let common = try #require(events(build([clip("/Volumes/LaCie/t/a.mov", on: "1995-02-28"),
+                                                clip("/Volumes/LaCie/t/b.mov", on: "1995-03-01")], birthdays: leap)).first)
+        #expect(common.id == "event:birthday:jo:1995" && common.title == "Jo's 11th birthday")
+        #expect(common.copies.map(\.reason) == ["on Jo's 11th birthday", "1 day after Jo's 11th birthday"])
+        let leapYear = try #require(events(build([clip("/Volumes/LaCie/t/c.mov", on: "1996-02-29"),
+                                                  clip("/Volumes/LaCie/t/d.mov", on: "1996-02-28")], birthdays: leap)).first)
+        #expect(leapYear.id == "event:birthday:jo:1996" && leapYear.title == "Jo's 12th birthday")
+        #expect(leapYear.copies.map(\.reason) == ["1 day before Jo's 12th birthday", "on Jo's 12th birthday"])
     }
 
     // The Angel's trusted day, and the one filter on it
@@ -245,6 +260,37 @@ struct StewardEventsLogicTests {
         #expect(off.labels.map(\.key) == ["e:christmas:1994"])
     }
 
+    /// Events QA F2 (2026-10-03): the date resolver reads a phone's stamp
+    /// as UTC, so New Year's Eve evening in the US resolves to 1 January.
+    /// A PHONE's 1 January stamp between 00:00 and 07:59 UTC is that real
+    /// evening, not a reset clock. Exactly 00:00:00 still is a reset, and so
+    /// is any camcorder's 1 January, and any hour after 07:59.
+    @Test func newYearsEvePhoneFootageIsNotAResetClock() throws {
+        func at(_ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
+            utc.date(from: DateComponents(year: 2015, month: 1, day: 1, hour: hour, minute: minute, second: second))
+                ?? Date(timeIntervalSince1970: 0)
+        }
+        func phone(_ name: String, _ when: Date, make: String = "Apple", model: String = "iPhone 6") -> StewardInput {
+            StewardInput(fullPath: "/Volumes/LaCie/phone/\(name).mov", embeddedDate: when, originMake: make, originModel: model)
+        }
+        var folders = EventLabeler.FolderWordCache()
+        func placed(_ r: StewardInput) -> StewardPlacement {
+            StewardEvents.place(r, now: fixedNow, reader: reader(), folders: &folders)
+        }
+        let newYear = EventDay(year: 2015, month: 1, day: 1)
+        // 22:12 and 23:40 on Dec 31 in New York.
+        let eve = phone("IMG_0001", at(3, 12)), later = phone("IMG_0002", at(4, 40))
+        #expect(placed(eve).day == newYear && placed(eve).year == 2015, "a phone at 03:12 UTC on 1 January is New Year's Eve")
+        #expect(events(build([eve, later])).map(\.id) == ["event:newyear:-:2015"])
+        #expect(placed(phone("android", at(7, 59, 59), make: "samsung", model: "SM-G960U")).day == newYear,
+                "another phone maker, the last second of the window")
+        // Still reset clocks.
+        #expect(placed(phone("midnight", at(0, 0))).day == nil, "exactly midnight is what a reset clock stamps")
+        #expect(placed(phone("morning", at(8, 0))).day == nil, "outside the window")
+        let camcorder = StewardInput(fullPath: "/Volumes/LaCie/t/cam.mov", embeddedDate: at(3, 12), originModel: "Camcorder")
+        #expect(placed(camcorder).day == nil, "a camcorder's 1 January is a reset clock at any hour")
+    }
+
     /// QA F7 of the first trial, kept: no reset-clock 1 January, no
     /// copy-era stamp, no year range, no file-system date.
     @Test func datesThatAreNotGoodEnoughPlaceNothing() {
@@ -265,7 +311,8 @@ struct StewardEventsLogicTests {
         #expect(stamp.day == nil && stamp.year == nil, "a stamp with no camera behind it dates the copy")
         #expect(stamp.labels.map(\.key) == [nil], "the folder word explains, and keys nothing")
         // …but 1 January a PERSON typed is New Year's Day.
-        #expect(events(build([clip("/Volumes/LaCie/t/typed.mov", on: "2000-01-01")])).first?.id == "event:newyear:-:2000")
+        #expect(events(build([clip("/Volumes/LaCie/t/typed.mov", on: "2000-01-01"),
+                              clip("/Volumes/LaCie/t/typed2.mov", on: "2000-01-01")])).first?.id == "event:newyear:-:2000")
     }
 
     /// QA F1 (2026-10-03): a reset clock's YEAR is as wrong as its day. A
@@ -296,11 +343,12 @@ struct StewardEventsLogicTests {
 
     @Test func livePhotoHalvesAreLeftOutAndTheCoverageCountsTheRest() {
         let q = build([clip("/Volumes/LaCie/t/a.mov", on: "1994-12-25"),
+                       clip("/Volumes/LaCie/t/a2.mov", on: "1994-12-25"),
                        clip("/Volumes/LaCie/t/b.mov", on: "1996-07-14"),
                        clip("/Volumes/LaCie/t/undated.mov"),
                        clip("/Volumes/LaCie/t/jpegvideocomplement_1.mov", on: "1994-12-25")])
-        #expect(q.placeableClips == 3 && q.placedClips == 2)
-        #expect(events(q).first?.memberCount == 1, "the motion half of a photo is not a clip of the event")
+        #expect(q.placeableClips == 4 && q.placedClips == 3)
+        #expect(events(q).first?.memberCount == 2, "the motion half of a photo is not a clip of the event")
     }
 
     // Several labels
@@ -308,10 +356,11 @@ struct StewardEventsLogicTests {
     @Test func aClipWithSeveralLabelsIsInEachEventAndSaysSo() throws {
         let both = clip("/Volumes/LaCie/Cape/fireworks.mov", on: "1996-07-04")
         let capeOnly = clip("/Volumes/LaCie/Cape/dunes.mov", on: "1996-07-14")
-        let q = build([both, capeOnly])
+        let parade = clip("/Volumes/LaCie/t/parade.mov", on: "1996-07-04")
+        let q = build([both, capeOnly, parade])
         let fourth = try #require(events(q).first { $0.eventKind == "july4" })
         let cape = try #require(events(q).first { $0.eventKind == "cape" })
-        #expect(fourth.title == "Fourth of July 1996" && fourth.recordIDs == [both.id])
+        #expect(fourth.title == "Fourth of July 1996" && fourth.recordIDs == [both.id, parade.id])
         #expect(Set(cape.recordIDs) == [both.id, capeOnly.id])
         #expect(fourth.copies.first?.alsoIn == "Cape 1996")
         #expect(fourth.alsoInLine == "1 of these is also in: Cape 1996")
@@ -319,10 +368,27 @@ struct StewardEventsLogicTests {
         #expect(cape.copies.first { $0.id == capeOnly.id }?.alsoIn.isEmpty == true)
         // A date AND a name for the same occasion is one membership, both reasons.
         let twice = clip("/Volumes/LaCie/xmas/morning.mov", on: "1994-12-25")
-        let e = try #require(events(build([twice])).first)
-        #expect(e.memberCount == 1 && e.whyLine == "1 by date")
-        #expect(e.copies.first?.reason == "Dec 25 — Christmas; folder name says 'xmas'")
+        let e = try #require(events(build([twice, clip("/Volumes/LaCie/xmas/noon.mov", on: "1994-12-25")])).first)
+        #expect(e.memberCount == 2 && e.whyLine == "2 by date")
+        #expect(e.copies.first { $0.id == twice.id }?.reason == "Dec 25 — Christmas; folder name says 'xmas'")
         #expect(e.alsoInLine.isEmpty)
+    }
+
+    /// Events F8: one short clip is not an event — a card needs two clips,
+    /// unless the one clip is a whole tape (20 minutes or more).
+    @Test func aSingleClipIsAnEventOnlyWhenItIsAWholeTape() {
+        #expect(events(build([clip("/Volumes/LaCie/t/a.mov", on: "1994-12-25")])).isEmpty, "one short clip")
+        #expect(events(build([clip("/Volumes/LaCie/t/a.mov", on: "1994-12-25", seconds: 1_199)])).isEmpty, "19:59")
+        #expect(events(build([clip("/Volumes/LaCie/t/tape.mov", on: "1994-12-25", seconds: 1_200)])).map(\.id)
+                == ["event:christmas:-:1994"], "a whole tape")
+        #expect(events(build([clip("/Volumes/LaCie/t/a.mov", on: "1994-12-25"),
+                              clip("/Volumes/LaCie/t/b.mov", on: "1994-12-24")])).map(\.memberCount) == [2])
+        // A clip pulled in by matching footage counts towards the two.
+        let g = UUID()
+        var dated = clip("/Volumes/LaCie/t/tape.mov", on: "1994-12-25"), twin = clip("/Volumes/SanDisk/t/tape copy.mov")
+        dated.footageGroupID = g; dated.footageStrength = 1
+        twin.footageGroupID = g; twin.footageStrength = 1
+        #expect(events(build([dated, twin])).map(\.memberCount) == [2])
     }
 
     // Footage siblings
@@ -350,7 +416,7 @@ struct StewardEventsLogicTests {
 
         // A group that is only Possible shares nothing.
         let weak = [dated, undated].map { r -> StewardInput in var w = r; w.footageStrength = 0; return w }
-        #expect(events(build(weak)).first?.memberCount == 1)
+        #expect(events(build(weak)).isEmpty, "the dated clip alone is one short clip — no event (F8)")
     }
 
     @Test func theConflictRuleIsAboutTheSiblingsOwnDate() {
@@ -418,7 +484,7 @@ struct StewardEventsLogicTests {
         #expect(two.insideLines == ["4 are the same footage (2 groups)", "Best copy of each: original.mov, second a.mov"])
         #expect(two.footageGroupID == nil)
         // Nothing known → nothing said, and nothing to review.
-        let plain = try #require(events(build([xmas("plain")])).first)
+        let plain = try #require(events(build([xmas("plain"), xmas("plain too")])).first)
         #expect(plain.insideLines.isEmpty && plain.copyReviewIDs.isEmpty)
     }
 
@@ -455,6 +521,22 @@ struct StewardEventsLogicTests {
         #expect(StewardEvents.dayNumber(EventDay(year: 1970, month: 1, day: 1)) == 0)
         let monthEnd = days(build(pair("1997-07-31") + pair("1997-08-01")))
         #expect(monthEnd.first?.detail == "4 clips · 1 drive · 4 m · Jul 31 – Aug 1, 1997")
+    }
+
+    /// Events QA F7: a day card is keyed by its busiest day (the earliest of
+    /// a tie), not its first — so a clip arriving on the day before does not
+    /// change the id (and lose a Skip) of a run it merely extends.
+    @Test func aDayCardKeepsItsIdWhenAClipArrivesOnAnAdjacentDay() {
+        let base = (0..<4).map { clip("/Volumes/LaCie/t/july\($0).mov", on: "1996-07-14") }
+        #expect(days(build(base)).map(\.id) == ["day:1996-07-14"])
+        let before = base + [clip("/Volumes/LaCie/t/early.mov", on: "1996-07-13")]
+        #expect(days(build(before)).map(\.id) == ["day:1996-07-14"], "a clip the day before keeps the id")
+        #expect(days(build(before)).first?.memberCount == 5, "…and joins the run")
+        let after = base + [clip("/Volumes/LaCie/t/late.mov", on: "1996-07-15")]
+        #expect(days(build(after)).map(\.id) == ["day:1996-07-14"], "a clip the day after keeps the id")
+        // A tie between two days: the earlier one.
+        func pair(_ date: String) -> [StewardInput] { (0..<2).map { clip("/Volumes/LaCie/t/\(date)-\($0).mov", on: date) } }
+        #expect(days(build(pair("1996-08-10") + pair("1996-08-11"))).map(\.id) == ["day:1996-08-10"])
     }
 
     @Test func aLabelledClipIsNeverCountedTowardsAnUnnamedDay() {
@@ -561,9 +643,11 @@ struct StewardEventsOrderTests {
         // The lane keeps `maxEventCases` that are NOT skipped.
         var many: [StewardInput] = []
         for year in 1950..<2020 {
-            many.append(clip("/Volumes/LaCie/t/x\(year).mov", on: "\(year)-12-25"))
-            many.append(clip("/Volumes/LaCie/t/j\(year).mov", on: "\(year)-07-04"))
-            many.append(clip("/Volumes/LaCie/t/h\(year).mov", on: "\(year)-10-31"))
+            for n in 0..<2 {     // two clips: one short clip is no event (Events F8)
+                many.append(clip("/Volumes/LaCie/t/x\(year)-\(n).mov", on: "\(year)-12-25"))
+                many.append(clip("/Volumes/LaCie/t/j\(year)-\(n).mov", on: "\(year)-07-04"))
+                many.append(clip("/Volumes/LaCie/t/h\(year)-\(n).mov", on: "\(year)-10-31"))
+            }
         }
         let all = events(build(many))
         #expect(all.count == StewardEvents.maxEventCases, "210 events, 200 kept")
@@ -702,6 +786,25 @@ struct StewardEventsScaleTests {
         let arrangeStart = ContinuousClock.now
         for _ in 0..<100 { _ = StewardCaseBuilder.arrange(q.cases, filter: .all, eventsByYear: true) }
         #expect(ContinuousClock.now - arrangeStart < PerformanceLane.debugCeiling(.milliseconds(1_000)))
+    }
+
+    /// Events QA F9: the pane's focused card and "next up" rows are one
+    /// pass over the listed cases, worked out when the list or the focus
+    /// changes. Pinned: what it returns, and that the whole lane (~425
+    /// rows) costs nothing beside a render.
+    @Test func theNextUpRowsAreOnePassOverTheListedCases() {
+        let listed = (0..<425).map { StewardCase(id: "event:x:-:\($0)", kind: .event, title: "\($0)", facts: StewardFacts(bytes: 1, count: 2)) }
+        let first = StewardPaneLayout.nextUp(listed, focusedID: nil, limit: 30)
+        #expect(first.focused?.id == listed[0].id && first.rows.first?.id == listed[1].id)
+        #expect(first.rows.count == 30 && first.more == 424 - 30)
+        let middle = StewardPaneLayout.nextUp(listed, focusedID: listed[10].id, limit: 30)
+        #expect(middle.focused?.id == listed[10].id && !middle.rows.contains { $0.id == listed[10].id })
+        #expect(StewardPaneLayout.nextUp(listed, focusedID: "gone", limit: 30).focused?.id == listed[0].id, "a focus that left falls back")
+        #expect(StewardPaneLayout.nextUp([], focusedID: nil, limit: 30) == StewardPaneLayout.NextUp())
+        let start = ContinuousClock.now
+        for i in 0..<2_000 { _ = StewardPaneLayout.nextUp(listed, focusedID: listed[i % 425].id, limit: 30) }
+        #expect(ContinuousClock.now - start < PerformanceLane.debugCeiling(.milliseconds(1_000)),
+                "2,000 relayouts of a 425-row lane over budget")
     }
 
     /// QA F6: ONE event of 50,000 clips (a decade of phone clips in a folder

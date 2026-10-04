@@ -123,6 +123,11 @@ enum StewardCopyStanding: Sendable, Equatable {
     /// The keeper is on another drive and "Also clean up working copies"
     /// is off — the flow leaves it alone.
     case keeperOnAnotherDrive
+    /// The keeper is on another drive, "Also clean up working copies" is
+    /// on — and the Delete planner's own cross-drive rule still would not
+    /// take this copy (QA F6(a)): the keeper's drive is not connected,
+    /// retired, unknown, or not ranked above this one.
+    case workingCopyNotTaken(DuplicateKeeperPolicy.CrossVolumeVerdict)
     /// Not proposed, and the Delete duplicates flow would not check it
     /// either (the planner refuses it, or the keeper is on another drive).
     case protected(StewardProtection)
@@ -173,7 +178,7 @@ struct StewardCase: Sendable, Equatable, Identifiable {
     /// Stable across launches and re-checks:
     /// "event:<kind>:<subject>:<year>" (the labeller's own key parts:
     /// "event:christmas:-:1994", "event:birthday:alex:2006"),
-    /// "day:<yyyy-mm-dd>" (an unnamed day's first day), "drive:<root>",
+    /// "day:<yyyy-mm-dd>" (an unnamed run's busiest day), "drive:<root>",
     /// "dup:<the keeper's record id>" (a duplicate check gives the set a
     /// new group id every time; its keeper is what stays),
     /// "footage:<group id>" (the smallest member's record id by design —

@@ -20,7 +20,8 @@
 // the COPY. The steward names nothing of the Angel's inside. This file
 // only GROUPS what those two say:
 //
-//   Event          every clip that carries the same labelled occasion in
+//   Event          (two clips at least, or one whole tape of 20 minutes —
+//                  QA F8) every clip that carries the same labelled occasion in
 //                  the same year (the labeller's own key: "e:christmas:1994",
 //                  "e:birthday:alex:2006"). A clip with several labels is in
 //                  each of its events, and its card row says "also in: …".
@@ -30,6 +31,8 @@
 //                  date still belongs where its twin belongs.
 //   A day to name  `minDayCluster` or more clips that share one trusted day
 //                  (or up to `maxDayRun` days running) and carry no label.
+//                  Keyed by the run's busiest day (QA F7), so a clip on an
+//                  adjacent day does not change it.
 //   Same footage   the title guess: the occasion most of the group's dated
 //                  members carry; a tie is no guess.
 //
@@ -39,7 +42,10 @@
 // ITS YEAR (a reset clock's year is as wrong as its day): the clip keeps no
 // date at all, a word in its name explains but keys no event (exactly as
 // for a copy-era stamp), and it is free to join its footage twin's event.
-// It is a filter on the Angel's answer, not a second resolver. Live Photo
+// It is a filter on the Angel's answer, not a second resolver. One
+// exception (Events QA F2): a PHONE's stamp of 1 January between 00:00:01
+// and 07:59:59 UTC is New Year's Eve in the US read as UTC, and is kept
+// (`isNewYearsEveOnAPhone`). Live Photo
 // motion halves (the Angel's `isLivePhotoMotion`) are parts of photos and
 // are left out.
 //
@@ -125,6 +131,10 @@ enum StewardEvents {
     /// Events kept that are NOT skipped (the headline lane: far more than
     /// the housekeeping lanes' `maxCasesPerKind`).
     static let maxEventCases = 200
+    /// Events F8: an event card needs this many clips…
+    static let minEventClips = 2
+    /// …unless its one clip is a whole tape (20 minutes or more).
+    static let wholeTapeSeconds: Double = 20 * 60
     static let maxSkippedEvents = 100
     /// Other occasions named on the "also in" line before "and N more".
     static let maxAlsoInNames = 3
@@ -156,12 +166,51 @@ enum StewardEvents {
         // QA F7 / F1: 1 January that nobody typed is a reset clock — its
         // year is no better than its day. The name words stay as
         // explanation, with no year, so they key nothing.
-        if let day = placement.day, day.month == 1, day.day == 1, !occasions.isPersonDated {
+        // Events QA F2: …except a PHONE's evening of New Year's Eve, which
+        // the resolver reads as UTC and so places on 1 January.
+        if let day = placement.day, day.month == 1, day.day == 1, !occasions.isPersonDated,
+           !isNewYearsEveOnAPhone(r, day: day) {
             placement.day = nil
             placement.year = nil
             placement.labels = placement.labels.filter { $0.source == .name }.map { var l = $0; l.year = nil; return l }
         }
         return placement
+    }
+
+    /// Events QA F2 (2026-10-03). The date resolver reads an embedded
+    /// stamp as UTC, so a phone clip shot on the evening of 31 December in
+    /// the US resolves to 1 January — and the reset-clock rule above would
+    /// drop it. A clip whose 1 January is its OWN stamp's UTC day, with a
+    /// time of day after 00:00:00 and before 08:00:00 UTC, from a PHONE, is
+    /// that evening (or the small hours of New Year's Day) — not a reset
+    /// clock. A reset clock stamps exactly midnight, so 00:00:00 stays a
+    /// reset; a camcorder's 1 January stays a reset at any hour. The
+    /// resolver itself is not changed (it is the Angel's too).
+    static let newYearsEveWindowSeconds = 8 * 3_600
+    /// Phone makers, lower-cased. A make alone is not enough: the resolver
+    /// must also say the stamp names a DEVICE (`namesDevice` — "Apple" with
+    /// no model is an export's stamp, not a phone's).
+    static let phoneMakers: Set<String> = ["apple", "samsung", "google"]
+    private static let utcCalendar: Calendar = {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = TimeZone(identifier: "UTC") ?? .gmt
+        return c
+    }()
+
+    nonisolated static func isPhone(make: String?, model: String?) -> Bool {
+        guard RecordDateResolver.namesDevice(originMake: make, originModel: model) else { return false }
+        let maker = make?.trimmingCharacters(in: .whitespaces).lowercased() ?? ""
+        let device = model?.lowercased() ?? ""
+        return phoneMakers.contains(maker) || device.contains("iphone") || device.contains("ipad") || device.contains("pixel")
+    }
+
+    nonisolated static func isNewYearsEveOnAPhone(_ r: StewardInput, day: EventDay) -> Bool {
+        guard let stamp = r.embeddedDate, isPhone(make: r.originMake, model: r.originModel) else { return false }
+        let c = utcCalendar.dateComponents([.year, .month, .day, .hour, .minute, .second], from: stamp)
+        guard c.year == day.year, c.month == day.month, c.day == day.day,
+              let h = c.hour, let m = c.minute, let sec = c.second else { return false }
+        let secondOfDay = h * 3_600 + m * 60 + sec
+        return secondOfDay > 0 && secondOfDay < newYearsEveWindowSeconds
     }
 
     // MARK: Words
@@ -300,7 +349,7 @@ enum StewardEvents {
         var events: [StewardCase] = []
         var active = 0, hidden = 0
         for (key, bucket) in ordered {
-            guard let id = caseID(bucket.label) else { continue }
+            guard let id = caseID(bucket.label), isEventSized(bucket.count, seconds: bucket.seconds) else { continue }
             let facts = StewardFacts(bytes: bucket.bytes, count: bucket.count)
             if let remembered = catalog.skipped[id], !StewardSkipStore.isMaterialChange(from: remembered, to: facts) {
                 guard hidden < maxSkippedEvents else { continue }
@@ -314,6 +363,12 @@ enum StewardEvents {
             if active >= maxEventCases, hidden >= maxSkippedEvents { break }
         }
         return (events, dayCases(unlabelled, catalog: catalog, online: online))
+    }
+
+    /// Events F8: one short clip is not an event — two clips (placed
+    /// directly or by matching footage), or one whole tape.
+    nonisolated static func isEventSized(_ clips: Int, seconds: Double) -> Bool {
+        clips >= minEventClips || seconds >= wholeTapeSeconds
     }
 
     /// Step 1 — each clip joins each of its labelled occasions once; a
@@ -549,7 +604,11 @@ enum StewardEvents {
             }
             let span = end - at + 1
             let month = (1...12).contains(first.month) ? monthNames[first.month - 1] : ""
-            var c = StewardCase(id: String(format: "day:%04d-%02d-%02d", first.year, first.month, first.day),
+            // Events F7: keyed by the run's BUSIEST day (the earliest of a
+            // tie), not its first — a clip arriving on the day before must
+            // not change the id (and lose a Skip) of a run it extends.
+            let anchor = anchorDay(days[at...end], unlabelled: unlabelled, placements: catalog.placements) ?? first
+            var c = StewardCase(id: String(format: "day:%04d-%02d-%02d", anchor.year, anchor.month, anchor.day),
                                 kind: .unlabelledDay,
                                 title: (span == 1 ? "A day" : "\(span) days") + " in \(month) \(first.year)",
                                 facts: StewardFacts(bytes: bytes, count: members.count))
@@ -575,6 +634,16 @@ enum StewardEvents {
             return $0.id < $1.id
         }
         return StewardCaseBuilder.limit(out, skipped: catalog.skipped)
+    }
+
+    /// The day of a run with the most clips; the earliest of a tie.
+    nonisolated static func anchorDay(_ run: ArraySlice<Int>, unlabelled: [Int: [Int]],
+                                      placements: [StewardPlacement]) -> EventDay? {
+        let busiest = run.max { a, b in
+            let ca = unlabelled[a]?.count ?? 0, cb = unlabelled[b]?.count ?? 0
+            return ca != cb ? ca < cb : a > b
+        }
+        return busiest.flatMap { unlabelled[$0]?.first }.flatMap { placements[$0].day }
     }
 
     // MARK: The Same-footage title guess
