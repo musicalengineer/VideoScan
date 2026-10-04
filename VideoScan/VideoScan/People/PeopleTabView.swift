@@ -24,30 +24,12 @@ struct PeopleTabView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 18) {
-                ForEach(tabs, id: \.tag) { tab in
-                    Button {
-                        subTab = tab.tag
-                    } label: {
-                        Label(tab.label, systemImage: tab.icon)
-                            .font(.system(size: 14,
-                                          weight: subTab == tab.tag ? .semibold : .regular))
-                            .foregroundStyle(subTab == tab.tag ? .primary : .secondary)
-                            .padding(.horizontal, 10).padding(.vertical, 5)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .background(
-                        subTab == tab.tag
-                            ? Color.accentColor.opacity(0.10)
-                            : Color.clear
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 5))
-                }
+            // Same glass strip as the main tab bar, smaller (2026-10-04).
+            HStack {
+                GlassTabStrip(selection: $subTab, items: tabs, fontSize: 14)
                 Spacer()
             }
-            .padding(.horizontal, 12).padding(.vertical, 4)
-            Divider()
+            .padding(.horizontal, 12).padding(.bottom, 6)
 
             Group {
                 switch subTab {

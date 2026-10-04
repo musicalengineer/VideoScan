@@ -35,39 +35,6 @@ struct ContentView: View {
         ("Family Tree", "person.3.fill", 5)
     ]
     @Environment(\.openWindow) private var openWindow
-    /// Shared geometry id for the sliding selected-tab capsule.
-    @Namespace private var tabSelection
-
-    private func tabButton(_ tab: (label: String, icon: String, tag: Int)) -> some View {
-        let isSelected = selectedTab == tab.tag
-        return Button {
-            withAnimation(.smooth(duration: 0.3)) { selectedTab = tab.tag }
-        } label: {
-            Label(tab.label, systemImage: tab.icon)
-                .font(.system(size: tabFontSize, weight: isSelected ? .semibold : .regular))
-                .foregroundStyle(isSelected ? .primary : .secondary)
-                .overlay(alignment: .topTrailing) {
-                    if tab.tag == 5 {
-                        FamilySearchPullStatusDot(status: pullCenter.status)
-                            .offset(x: 6, y: -4)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 7)
-                .background {
-                    if isSelected {
-                        Capsule()
-                            .fill(Color.accentColor.opacity(0.18))
-                            .matchedGeometryEffect(id: "selectedTab", in: tabSelection)
-                    }
-                }
-                .contentShape(Capsule())
-        }
-        .buttonStyle(.plain)
-        // XCUITest hook: e.g. "tab.Catalog" — added for the
-        // first UI test. Only used by tests; UI is unchanged.
-        .accessibilityIdentifier("tab.\(tab.label)")
-    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -88,13 +55,11 @@ struct ContentView: View {
                 Spacer()
                 GlassEffectContainer(spacing: 16) {
                     HStack(spacing: 16) {
-                        HStack(spacing: 4) {
-                            ForEach(tabs, id: \.tag) { tab in
-                                tabButton(tab)
+                        GlassTabStrip(selection: $selectedTab, items: tabs, fontSize: tabFontSize) { tag in
+                            if tag == 5 {
+                                FamilySearchPullStatusDot(status: pullCenter.status)
                             }
                         }
-                        .padding(5)
-                        .glassEffect(.regular, in: .capsule)
 
                         // Family Archivist — the door to Hallie Mae's window,
                         // after Family Tree, twinkling (Rick 2026-08-16). Not
