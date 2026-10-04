@@ -497,7 +497,10 @@ of the same event; (8) the puzzle is the UI/UX.
     - One rule is the steward's own: a 1 January day nobody typed is a
       reset camera clock, so neither its day **nor its year** places
       anything (a name word then explains but keys no event, and the clip
-      is free to join its footage twin's event). The Angel's resolver has
+      is free to join its footage twin's event). Exception (QA F2): a
+      PHONE's stamp on 1 January after 00:00:00 and before 08:00 UTC is New
+      Year's Eve in the US read as UTC, and is kept; exactly midnight stays
+      a reset. The Angel's resolver has
       no such rule — **open question for Rick:** move it into the Angel's
       day rule, or keep it here only.
 

@@ -245,6 +245,37 @@ struct StewardEventsLogicTests {
         #expect(off.labels.map(\.key) == ["e:christmas:1994"])
     }
 
+    /// Events QA F2 (2026-10-03): the date resolver reads a phone's stamp
+    /// as UTC, so New Year's Eve evening in the US resolves to 1 January.
+    /// A PHONE's 1 January stamp between 00:00 and 07:59 UTC is that real
+    /// evening, not a reset clock. Exactly 00:00:00 still is a reset, and so
+    /// is any camcorder's 1 January, and any hour after 07:59.
+    @Test func newYearsEvePhoneFootageIsNotAResetClock() throws {
+        func at(_ hour: Int, _ minute: Int, _ second: Int = 0) -> Date {
+            utc.date(from: DateComponents(year: 2015, month: 1, day: 1, hour: hour, minute: minute, second: second))
+                ?? Date(timeIntervalSince1970: 0)
+        }
+        func phone(_ name: String, _ when: Date, make: String = "Apple", model: String = "iPhone 6") -> StewardInput {
+            StewardInput(fullPath: "/Volumes/LaCie/phone/\(name).mov", embeddedDate: when, originMake: make, originModel: model)
+        }
+        var folders = EventLabeler.FolderWordCache()
+        func placed(_ r: StewardInput) -> StewardPlacement {
+            StewardEvents.place(r, now: fixedNow, reader: reader(), folders: &folders)
+        }
+        let newYear = EventDay(year: 2015, month: 1, day: 1)
+        // 22:12 and 23:40 on Dec 31 in New York.
+        let eve = phone("IMG_0001", at(3, 12)), later = phone("IMG_0002", at(4, 40))
+        #expect(placed(eve).day == newYear && placed(eve).year == 2015, "a phone at 03:12 UTC on 1 January is New Year's Eve")
+        #expect(events(build([eve, later])).map(\.id) == ["event:newyear:-:2015"])
+        #expect(placed(phone("android", at(7, 59, 59), make: "samsung", model: "SM-G960U")).day == newYear,
+                "another phone maker, the last second of the window")
+        // Still reset clocks.
+        #expect(placed(phone("midnight", at(0, 0))).day == nil, "exactly midnight is what a reset clock stamps")
+        #expect(placed(phone("morning", at(8, 0))).day == nil, "outside the window")
+        let camcorder = StewardInput(fullPath: "/Volumes/LaCie/t/cam.mov", embeddedDate: at(3, 12), originModel: "Camcorder")
+        #expect(placed(camcorder).day == nil, "a camcorder's 1 January is a reset clock at any hour")
+    }
+
     /// QA F7 of the first trial, kept: no reset-clock 1 January, no
     /// copy-era stamp, no year range, no file-system date.
     @Test func datesThatAreNotGoodEnoughPlaceNothing() {
