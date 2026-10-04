@@ -52,9 +52,17 @@ private func day(_ y: Int, _ m: Int, _ d: Int) -> Date {
 /// A fixed "now" (2026): it only bounds the resolver's search for a year in a name.
 private let fixedNow = Date(timeIntervalSince1970: 1_790_000_000)
 
-private func build(_ inputs: [StewardInput], crossMode: Bool = false, skipped: [String: StewardFacts] = [:]) -> StewardQueue {
+private func build(_ inputs: [StewardInput], crossMode: Bool = false, policy: DuplicateKeeperPolicy = .unconfigured,
+                   skipped: [String: StewardFacts] = [:]) -> StewardQueue {
     StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted,
-                             alsoCleanUpWorkingCopies: crossMode, skipped: skipped, calendar: utc, now: fixedNow)
+                             alsoCleanUpWorkingCopies: crossMode, workingCopyPolicy: policy,
+                             skipped: skipped, calendar: utc, now: fixedNow)
+}
+
+/// The queue with the junk cards a person has finished (QA F8).
+private func buildReviewed(_ inputs: [StewardInput], reviewed: [String: StewardFacts]) -> StewardQueue {
+    StewardCaseBuilder.build(inputs: inputs, volumes: volumes, mountedRoots: mounted, alsoCleanUpWorkingCopies: false,
+                             reviewed: reviewed, calendar: utc, now: fixedNow)
 }
 
 private func keeper(_ path: String, _ g: UUID, bytes: Int64 = GB) -> StewardInput {
@@ -140,10 +148,26 @@ struct StewardCaseBuilderLogicTests {
         #expect(set.copies.filter { $0.standing == .keeperOnAnotherDrive }.count == 2)
         #expect(set.driveRoot == "/Volumes/X9", "the action names the drive where most could come back")
 
-        let on = build(inputs, crossMode: true)
+        // Working copies on, and the planner's own rule takes them: LaCie
+        // comes first in the drive order and is connected (QA F6(a)).
+        let listed = DuplicateKeeperPolicy(precedence: ["LaCie"], facts: [:])
+        let on = build(inputs, crossMode: true, policy: listed)
         let onSet = try #require(on.cases.first { $0.kind == .reclaimGroup })
         #expect(onSet.actionableBytes == 3 * GB && onSet.copiesNeedingWorkingCopyMode == 0)
+        #expect(onSet.copies.filter { $0.standing == .wouldBeChecked }.count == 2)
         #expect(on.cases.filter { $0.kind == .reclaimDrive }.map(\.driveLabel).sorted() == ["SanDisk", "X9"])
+
+        // …and where the rule would not take them, nothing is "checked".
+        let retired = DuplicateKeeperPolicy(precedence: ["LaCie"],
+                                            facts: ["/Volumes/LaCie": .init(role: .unassigned, isReachable: true, isRetired: true)])
+        let refused = try #require(build(inputs, crossMode: true, policy: retired).cases.first { $0.kind == .reclaimGroup })
+        #expect(refused.actionableBytes == 0 && refused.runRows.isEmpty && refused.copiesNeedingWorkingCopyMode == 0)
+        #expect(refused.copies.filter { $0.standing == .workingCopyNotTaken(.keeperRetired) }.count == 2)
+        let row = try #require(refused.copies.first { $0.standing == .workingCopyNotTaken(.keeperRetired) })
+        #expect(StewardStandingWords.words(for: row, proof: nil)
+                == "Left alone — the copy to keep is on another drive, and that drive is retired.")
+        let unknown = try #require(build(inputs, crossMode: true).cases.first { $0.kind == .reclaimGroup })
+        #expect(unknown.actionableBytes == 0, "with no policy handed in, nothing on another drive counts as checked")
     }
 
     @Test func aSetWithNoKeeperOrOnlyReviewRowsProposesNothing() {

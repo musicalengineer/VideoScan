@@ -551,6 +551,44 @@ struct StewardExclusionRuleTests {
         #expect(q.placedClips == 3 && q.placeableClips == 3)
     }
 
+    /// Steward QA F6(a): with "Also clean up working copies" on, a copy is
+    /// checked only when the Delete planner's own cross-drive rule says so
+    /// (the keeper's drive known, connected, not retired, ranked higher).
+    /// The card must not show a proof for a copy the run would skip.
+    @Test func workingCopyModeChecksOnlyTheCopiesThePlannerWouldTake() async throws {
+        func run(keeperDrive: String) async throws -> (set: StewardCase, copy: VideoRecord, planner: [UUID], model: VideoScanModel) {
+            let model = isolatedModel()
+            let suite = "steward-tests-\(UUID().uuidString)"
+            model.stewardDefaults = try #require(UserDefaults(suiteName: suite))
+            defer { model.stewardDefaults.removePersistentDomain(forName: suite) }
+            model.duplicateKeeperSettings.alsoCleanUpWorkingCopies = true
+            model.duplicateKeeperSettings.volumePrecedence = ["test_Listed"]
+            let g = UUID()
+            let keeper = record("/Volumes/\(keeperDrive)/keep.mov", size: 10, group: g, disposition: .keep)
+            let copy = record("/Volumes/test_Working/copy.mov", size: 10, group: g, disposition: .extraCopy)
+            model.records = [keeper, copy]
+            let planner = model.duplicateDeletionSelection(onVolume: "/Volumes/test_Working").targets.map(\.id)
+            model.stewardPaneAppeared()
+            defer { model.stewardPaneDisappeared() }
+            let q = try await shownQueue(model) { $0.isBuilt }
+            return (try #require(q.cases.first { $0.kind == .reclaimGroup }), copy, planner, model)
+        }
+        // The keeper's drive is in no list: the planner skips the copy.
+        let skipped = try await run(keeperDrive: "test_Unlisted")
+        #expect(skipped.planner.isEmpty, "fixture: the planner would not take it")
+        let row = try #require(skipped.set.copies.first { $0.id == skipped.copy.id })
+        #expect(row.standing != .wouldBeChecked, "the card would prove a copy the run skips")
+        #expect(skipped.set.actionableBytes == 0 && skipped.set.runRows.isEmpty)
+        #expect(try #require(StewardEvidenceBuilder.prepare(model: skipped.model, for: skipped.set)).questions.isEmpty)
+        let words = try #require(StewardStandingWords.words(for: row, proof: nil))
+        #expect(!words.contains("would check this copy"), "said: \(words)")
+        // The keeper's drive comes first in the list and is connected: taken.
+        let taken = try await run(keeperDrive: "test_Listed")
+        #expect(taken.planner == [taken.copy.id], "fixture: the planner would take it")
+        #expect(taken.set.copies.first { $0.id == taken.copy.id }?.standing == .wouldBeChecked)
+        #expect(taken.set.actionableBytes == 10)
+    }
+
     @Test func hiddenRecordsNeverReachTheBuilder() {
         let model = isolatedModel()
         let g = UUID()

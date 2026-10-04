@@ -99,6 +99,10 @@ extension VideoScanModel {
         let inputs = StewardCaseBuilder.project(records, protection: stewardProtectionRule())
         let volumes = AnalyzeCoverageCalculator.volumeFacts(scanTargets)
         let alsoCleanUp = duplicateKeeperSettings.alsoCleanUpWorkingCopies
+        // QA F6(a): the Delete planner's own policy (a Sendable value), so
+        // a working copy is "checked" only when the planner's cross-drive
+        // rule would take it.
+        let workingCopyPolicy = alsoCleanUp ? duplicateKeeperPolicy() : .unconfigured
         // What the event labeller is told, exactly as the Angel tells it:
         // the policy's birthday window and the People tab's birthdays (the
         // Angel's own reading of them, off the main actor when it starts
@@ -112,7 +116,8 @@ extension VideoScanModel {
             let queue = await Task.detached(priority: .utility) {
                 StewardCaseBuilder.build(inputs: inputs, volumes: volumes,
                                          mountedRoots: VolumeReachability.currentMountedRoots(),
-                                         alsoCleanUpWorkingCopies: alsoCleanUp, events: events, skipped: skipped,
+                                         alsoCleanUpWorkingCopies: alsoCleanUp, workingCopyPolicy: workingCopyPolicy,
+                                         events: events, skipped: skipped,
                                          now: now)
             }.value
             guard !Task.isCancelled, let self else { return }
