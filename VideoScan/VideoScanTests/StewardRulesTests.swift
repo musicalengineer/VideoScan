@@ -309,6 +309,32 @@ struct StewardProofRuleTests {
         #expect(proof.counted.count == 1 && proof.counted[0].hasPrefix("keeper on "))
     }
 
+    /// Steward QA F6(b): the copy's stored evidence and the keeper's say
+    /// DIFFERENT bytes. The run reads the copy against the keeper and
+    /// refuses the pair — the card must not count the keeper for it, nor
+    /// promise any outcome but the refusal.
+    @Test func storedDigestsThatDisagreeAreARefusedPairNotACountedKeeper() throws {
+        let rig = try rig()
+        defer { try? FileManager.default.removeItem(at: rig.dir) }
+        let keeper = try file(rig, "here/keeper.mov", .keep, evidence: digest)
+        let copy = try file(rig, "here/copy.mov", .extraCopy, evidence: otherDigest)
+        let sibling = try file(rig, "elsewhere/sibling.mov", .extraCopy, evidence: otherDigest)
+        rig.model.records = [keeper, copy, sibling]
+        let proof = try stewardProof(rig, copy: copy)
+        #expect(proof.remaining == 0 && proof.tier == nil && proof.tierIfTheyMatch == nil, "said: \(proof.remainLine)")
+        #expect(!proof.counted.contains { $0.hasPrefix("keeper") }, "the keeper was counted for a copy it does not match")
+        #expect(proof.outcomeLine == "These differ; the run would refuse this pair.")
+        #expect(proof.caveatLine == nil)
+        let set = try #require(queue(rig.model).cases.first { $0.kind == .reclaimGroup })
+        let row = try #require(set.copies.first { $0.id == copy.id })
+        let words = try #require(StewardStandingWords.words(for: row, proof: proof))
+        #expect(words.contains("These differ; the run would refuse this pair.") && !words.contains("would remain"), "said: \(words)")
+        // Agreeing digests are the ordinary case, unchanged.
+        let same = try file(rig, "here/same.mov", .extraCopy, evidence: digest)
+        rig.model.records = [keeper, same]
+        #expect(try stewardProof(rig, copy: same).outcomeLine != "These differ; the run would refuse this pair.")
+    }
+
     @Test func theKeepersDigestStandsInWhenTheCopyHasNone() throws {
         let rig = try rig()
         defer { try? FileManager.default.removeItem(at: rig.dir) }

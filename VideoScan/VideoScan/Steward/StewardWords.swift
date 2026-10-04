@@ -142,6 +142,9 @@ enum StewardStandingWords {
             return "The one to keep."
         case .wouldBeChecked:
             guard let proof else { return "Delete duplicates on \(copy.drive) would check this copy." }
+            if proof.digestsDiffer {
+                return "This copy and the keeper are not the same file as far as the catalog knows. \(StewardCopyProof.differLine)"
+            }
             return (["If this copy goes, \(proof.remainLine).", proof.outcomeLine] + [proof.caveatLine].compactMap { $0 })
                 .joined(separator: " ")
         case .keeperOnAnotherDrive:
