@@ -244,8 +244,11 @@ struct StewardSensorTests {
         }
         // …and that rule still reads what rule 2 promises.
         let planner = code(try source("VideoScanModel+Duplicates.swift"))
-        for predicate in ["self.isArchiveCopy(r)", "archiveAngel.recommendations", "angel.preparedIDs.contains(r.id)",
-                          "angel.promotedIDs.contains(r.id)", "onDisk.contains(r.id)", "preparing.contains(r.id)"] {
+        // (The Angel's half is asked BY ID since codex #258 r4-2 —
+        // `duplicateAngelUseRule`, which the hold rule calls with `r.id`.)
+        for predicate in ["self.isArchiveCopy(r)", "archiveAngel.recommendations", "angel.preparedIDs.contains(id)",
+                          "angel.promotedIDs.contains(id)", "onDisk.contains(id)", "preparing.contains(id)",
+                          "return inUseByAngel(r.id) ? .inUseByAngel : nil"] {
             #expect(planner.contains(predicate), "the planner's hold rule no longer asks `\(predicate)`")
         }
         // The Angel's front door carries them (ArchiveAngel+Occasions:

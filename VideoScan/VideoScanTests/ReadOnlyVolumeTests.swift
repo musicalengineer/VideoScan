@@ -614,7 +614,7 @@ struct ReadOnlyVolumeSensorTests {
             ("VideoScanModel+Duplicates.swift", ["bulkDeleteRefusal(rec, volume: archiveVolume)",
                                                  "excludingMasterArchiveFiles(selection.targets, verb: \"Delete Duplicates\")"]),
             ("DeleteDuplicatesJob.swift", ["archiveCheck: model.archiveRemovalCheck()", "check.refusal(forPath: item.path)",
-                                           "archiveCheck.refusal(forPath: ticket.quarantinedPath)"]),
+                                           "archiveCheck?.refusal(forPath: ticket.quarantinedPath)"]),
             ("DeleteDuplicatesForecast.swift", ["bulkDeleteRefusal(r, volume: archiveVolume)"]),
             ("VideoScanModel+JunkDelete.swift", ["excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")",
                                                  "readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe)"]),
