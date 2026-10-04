@@ -50,6 +50,16 @@ struct GlassTabStrip<Badge: View>: View {
                 }
             }
             .allowsHitTesting(false)
+            // Animate the GLASS only (Rick 2026-10-04: clicks felt stodgy).
+            // withAnimation around the selection write animated the whole
+            // tab swap — the outgoing tab's teardown and the new tab's
+            // build (a 100k-row Table) all ran inside the animated
+            // transaction. Scoped here, content switches instantly and only
+            // the lens and hover bubble move.
+            .animation(reduceMotion ? .smooth(duration: 0.25)
+                                    : .bouncy(duration: 0.45, extraBounce: 0.12),
+                       value: selection)
+            .animation(.smooth(duration: 0.2), value: hoveredTag)
 
             HStack(spacing: 4) {
                 ForEach(items, id: \.tag) { item in
@@ -98,22 +108,17 @@ struct GlassTabStrip<Badge: View>: View {
 
     private func tabButton(_ item: Item) -> some View {
         Button {
-            withAnimation(reduceMotion ? .smooth(duration: 0.25)
-                                       : .bouncy(duration: 0.45, extraBounce: 0.12)) {
-                selection = item.tag
-            }
+            selection = item.tag
         } label: {
             tabLabel(item)
                 .contentShape(Capsule())
         }
         .buttonStyle(.plain)
         .onHover { hovering in
-            withAnimation(.smooth(duration: 0.2)) {
-                if hovering {
-                    hoveredTag = item.tag
-                } else if hoveredTag == item.tag {
-                    hoveredTag = nil
-                }
+            if hovering {
+                hoveredTag = item.tag
+            } else if hoveredTag == item.tag {
+                hoveredTag = nil
             }
         }
         // XCUITest hook: e.g. "tab.Catalog".
