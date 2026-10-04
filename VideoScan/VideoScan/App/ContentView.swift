@@ -76,6 +76,18 @@ struct ContentView: View {
             }
             .padding(.top, 8)
             .padding(.bottom, 10)
+            // Soft colour wash behind the bar so the glass has something to
+            // refract — accent from the leading side, a hint of Hallie's pink
+            // toward the trailing side, fading to clear before the content.
+            .background {
+                ZStack {
+                    LinearGradient(colors: [Color.accentColor.opacity(0.16), Color.pink.opacity(0.07)],
+                                   startPoint: .leading, endPoint: .trailing)
+                    LinearGradient(colors: [.clear, Color(NSColor.windowBackgroundColor)],
+                                   startPoint: .top, endPoint: .bottom)
+                }
+                .ignoresSafeArea(edges: .top)
+            }
 
             // Tab content — fill all available space to prevent layout jumps
             Group {
