@@ -117,6 +117,11 @@ struct CatalogSizeTotals: Equatable, Sendable {
         var contentHash: String
         var partialMD5: String
         var isArchived: Bool
+        /// When non-nil, the record is ALSO archived if this path lies
+        /// inside the Master Archive root `compute` is handed — the path
+        /// half of `isArchived`, asked off the main actor (2026-10-04
+        /// perf). nil = nothing more to ask.
+        var archivePathToCheck: String? = nil
     }
 
     /// The content-group identity of one entry, in precedence order.
@@ -171,10 +176,34 @@ struct CatalogSizeTotals: Equatable, Sendable {
         return out
     }
 
+    /// The production projection (2026-10-04 perf): the record half of the
+    /// archived predicate here (`model.isArchivedExceptPath` — two O(1)
+    /// index lookups), the path half deferred to `compute(_:archiveRoot:)`
+    /// off the main actor. Only a record the record half did not already
+    /// call archived carries its path (a copy-on-write share).
+    nonisolated static func projectDeferringArchivePath(
+        _ records: [VideoRecord],
+        isArchivedExceptPath: (VideoRecord) -> Bool
+    ) -> [Entry] {
+        var out: [Entry] = []
+        out.reserveCapacity(records.count)
+        for rec in records where isActive(rec) {
+            let byRecord = isArchivedExceptPath(rec)
+            out.append(Entry(id: rec.id,
+                             sizeBytes: max(0, rec.sizeBytes),
+                             duplicateGroupID: rec.duplicateGroupID,
+                             contentHash: rec.contentHash,
+                             partialMD5: rec.partialMD5,
+                             isArchived: byRecord,
+                             archivePathToCheck: byRecord ? nil : rec.fullPath))
+        }
+        return out
+    }
+
     /// The off-main half: one pass over the projection plus a group-by.
     /// Solo entries never enter the dictionary — they are their own
     /// group, so their bytes go straight to UNIQUE.
-    nonisolated static func compute(_ entries: [Entry]) -> CatalogSizeTotals {
+    nonisolated static func compute(_ entries: [Entry], archiveRoot: String? = nil) -> CatalogSizeTotals {
         var t = CatalogSizeTotals()
         guard !entries.isEmpty else { return t }
 
@@ -186,7 +215,9 @@ struct CatalogSizeTotals: Equatable, Sendable {
         for e in entries {
             t.totalBytes += e.sizeBytes
             t.recordCount += 1
-            if e.isArchived {
+            let archived = e.isArchived
+                || e.archivePathToCheck.map { VideoScanModel.isInsideMasterArchive(path: $0, root: archiveRoot) } == true
+            if archived {
                 t.archivedBytes += e.sizeBytes
                 t.archivedCount += 1
             }

@@ -69,10 +69,10 @@ enum MusicTriage {
     /// and noStreams — a damaged Avid video file must still protect its
     /// same-stem audio sibling. Keys are lowercased so the veto is
     /// case-insensitive like the rest of the filename heuristics.
-    static func videoStemKeys(in records: [VideoRecord]) -> Set<String> {
+    static func videoStemKeys<R: CatalogStorageFacts>(in records: [R]) -> Set<String> {
         var keys = Set<String>()
         keys.reserveCapacity(records.count / 4)
-        for rec in records where rec.streamType != .audioOnly && !rec.isPurged {
+        for rec in records where !rec.storageIsAudioOnly && !rec.isPurged {
             keys.insert(CorrelationScorer.filenameCorrelationKey(rec.filename).lowercased())
         }
         return keys
@@ -81,7 +81,7 @@ enum MusicTriage {
     /// The chip's candidate set: IDs of active records that look like
     /// music-library audio AND survive every precision veto. Order
     /// follows the input records array (stable for the review sheet).
-    static func candidateIDs(in records: [VideoRecord]) -> [UUID] {
+    static func candidateIDs<R: CatalogStorageFacts>(in records: [R]) -> [UUID] {
         let videoKeys = videoStemKeys(in: records)
         var out: [UUID] = []
         for rec in records {
@@ -94,18 +94,18 @@ enum MusicTriage {
     /// Single-record verdict, exposed for the truth-table tests.
     /// `videoStemKeys` is precomputed by the caller (one pass, not per
     /// record — the O(n²) trap this signature exists to avoid).
-    static func candidateVerdict(_ rec: VideoRecord, videoStemKeys: Set<String>) -> Bool {
+    static func candidateVerdict<R: CatalogStorageFacts>(_ rec: R, videoStemKeys: Set<String>) -> Bool {
         // Active records only — purged rows are already gone from the
         // default view, set-aside rows are already handled by Tidy.
         guard !rec.isPurged, !rec.isSetAside else { return false }
         // Stream shape: audio-only, decided by ffprobe/MXF-header
         // evidence, not by extension.
-        guard rec.streamType == .audioOnly else { return false }
+        guard rec.storageIsAudioOnly else { return false }
         // PRECISION VETO 1 — MXF is the Avid essence container; an
         // audio-only MXF is a pair half (found or future), never music.
         guard rec.ext.lowercased() != "mxf" else { return false }
         // PRECISION VETO 2 — correlated audio is settled A/V history.
-        guard rec.pairedWith == nil, rec.pairGroupID == nil else { return false }
+        guard !rec.storageHasPairPartner, rec.pairGroupID == nil else { return false }
         // PRECISION VETO 3 — same-stem-as-video (correlate's own key).
         let key = CorrelationScorer.filenameCorrelationKey(rec.filename).lowercased()
         guard !videoStemKeys.contains(key) else { return false }

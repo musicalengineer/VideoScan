@@ -532,6 +532,10 @@ struct CatalogView: View {
     /// triggers: the calculation is O(records), so it must never run
     /// from a view body.
     @State var storageTotals = CatalogStorageTotals()
+    /// In-flight footer pass (2026-10-04 perf: the arithmetic moved OFF the
+    /// main actor — 0.8 s per recompute in Rick's trace). A newer
+    /// recompute cancels a stale one before it can publish.
+    @State var storageTotalsTask: Task<Void, Never>? = nil
     /// In-flight existence probe for the footer's "marked deleted, still
     /// on disk" caption (Rick 2026-08-18). Held so a newer recompute can
     /// cancel a stale sweep before it publishes into `storageTotals`.

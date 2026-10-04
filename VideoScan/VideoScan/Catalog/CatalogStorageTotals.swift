@@ -145,6 +145,111 @@ struct CatalogStorageTotals: Equatable, Sendable {
     }
 }
 
+// MARK: - What the arithmetic reads (2026-10-04 perf)
+
+/// The fields the storage arithmetic and MusicTriage's rule read of one
+/// record. `VideoRecord` conforms (every main-actor caller and every
+/// existing test); `CatalogStorageRow` is the Sendable copy an off-main
+/// pass reads. ONE implementation — the generic functions below and in
+/// MusicTriage — runs over both, so the off-main footer cannot drift from
+/// the rules the tests pin. (For Rick: a protocol ≈ a C++ concept; the
+/// generic functions are templates the optimizer specialises per type.)
+protocol CatalogStorageFacts {
+    var id: UUID { get }
+    var fullPath: String { get }
+    var filename: String { get }
+    var ext: String { get }
+    var sizeBytes: Int64 { get }
+    var partialMD5: String { get }
+    var dupAnalyzedAt: Date? { get }
+    var duplicateGroupID: UUID? { get }
+    var pairGroupID: UUID? { get }
+    var duplicateDisposition: DuplicateDisposition { get }
+    var mediaDisposition: MediaDisposition { get }
+    var archiveStage: ArchiveStage { get }
+    var isPurged: Bool { get }
+    var isSetAside: Bool { get }
+    var isSuperseded: Bool { get }
+    /// `streamType == .audioOnly`.
+    var storageIsAudioOnly: Bool { get }
+    /// `streamType == .noStreams`.
+    var storageHasNoStreams: Bool { get }
+    /// `pairedWith != nil`.
+    var storageHasPairPartner: Bool { get }
+}
+
+extension VideoRecord: CatalogStorageFacts {
+    var storageIsAudioOnly: Bool { streamType == .audioOnly }
+    var storageHasNoStreams: Bool { streamType == .noStreams }
+    var storageHasPairPartner: Bool { pairedWith != nil }
+}
+
+/// The Sendable copy of one record's `CatalogStorageFacts`, made on the
+/// main actor (plain field reads; the strings are copy-on-write shares of
+/// the record's own) and read off it. ~200 bytes a row, ~20 MB at 100k,
+/// freed when the pass ends.
+struct CatalogStorageRow: CatalogStorageFacts, Sendable, Equatable {
+    let id: UUID
+    let fullPath: String
+    let filename: String
+    let ext: String
+    let sizeBytes: Int64
+    let partialMD5: String
+    let dupAnalyzedAt: Date?
+    let duplicateGroupID: UUID?
+    let pairGroupID: UUID?
+    let duplicateDisposition: DuplicateDisposition
+    let mediaDisposition: MediaDisposition
+    let archiveStage: ArchiveStage
+    let isPurged: Bool
+    let isSetAside: Bool
+    let isSuperseded: Bool
+    let storageIsAudioOnly: Bool
+    let storageHasNoStreams: Bool
+    let storageHasPairPartner: Bool
+
+    init(_ r: VideoRecord) {
+        id = r.id
+        fullPath = r.fullPath
+        filename = r.filename
+        ext = r.ext
+        sizeBytes = r.sizeBytes
+        partialMD5 = r.partialMD5
+        dupAnalyzedAt = r.dupAnalyzedAt
+        duplicateGroupID = r.duplicateGroupID
+        pairGroupID = r.pairGroupID
+        duplicateDisposition = r.duplicateDisposition
+        mediaDisposition = r.mediaDisposition
+        archiveStage = r.archiveStage
+        isPurged = r.isPurged
+        isSetAside = r.isSetAside
+        isSuperseded = r.isSuperseded
+        storageIsAudioOnly = r.storageIsAudioOnly
+        storageHasNoStreams = r.storageHasNoStreams
+        storageHasPairPartner = r.storageHasPairPartner
+    }
+
+    /// Every record, in order — what `MusicTriage.candidateIDs` reads
+    /// (its stem keys see set-aside and superseded rows too).
+    @MainActor
+    static func project(_ records: [VideoRecord]) -> [CatalogStorageRow] {
+        records.map(CatalogStorageRow.init)
+    }
+
+    /// Only the rows `CatalogStorageTotalsCalculator.compute` can see —
+    /// its own `partition` drops purged / set-aside / superseded first,
+    /// so leaving them out here changes nothing and saves the copies.
+    @MainActor
+    static func projectForStorageTotals(_ records: [VideoRecord]) -> [CatalogStorageRow] {
+        var out: [CatalogStorageRow] = []
+        out.reserveCapacity(records.count)
+        for r in records where !r.isPurged && !r.isSetAside && !r.isSuperseded {
+            out.append(CatalogStorageRow(r))
+        }
+        return out
+    }
+}
+
 // MARK: - Classification
 
 /// Which bucket a single record falls into. Exhaustive and mutually
@@ -188,19 +293,19 @@ enum CatalogStorageTotalsCalculator {
 
     /// Positive test for "this record is not audio/video material".
     /// Two independent signals; either is sufficient.
-    static func isNonVideoMedia(_ rec: VideoRecord) -> Bool {
+    static func isNonVideoMedia<R: CatalogStorageFacts>(_ rec: R) -> Bool {
         // ffprobe looked and found nothing playable at all.
-        if rec.streamType == .noStreams { return true }
+        if rec.storageHasNoStreams { return true }
         // Or the extension says still/document regardless of what
         // ffprobe made of it (the one-frame-mjpeg trap above).
-        return stillImageExtensions.contains(NonVideoMediaPurge.normalizedExtension(rec))
+        return stillImageExtensions.contains(NonVideoMediaPurge.normalizedExtension(ext: rec.ext))
     }
 
     /// Junk per the triage workflow. Both suspected AND confirmed are
     /// subtracted: Rick's question is "what will I still be keeping",
     /// and suspected junk is material he has already eyeballed once and
     /// flagged. Counting it as unique would overstate the drive he needs.
-    static func isJunk(_ rec: VideoRecord) -> Bool {
+    static func isJunk<R: CatalogStorageFacts>(_ rec: R) -> Bool {
         rec.mediaDisposition == .suspectedJunk
             || rec.mediaDisposition == .confirmedJunk
     }
@@ -210,8 +315,8 @@ enum CatalogStorageTotalsCalculator {
     /// veto, `duplicateIDs` for the collapsed copies). Both are
     /// parameters rather than recomputed here — that signature is what
     /// keeps this O(n) instead of O(n²).
-    static func bucket(
-        for rec: VideoRecord,
+    static func bucket<R: CatalogStorageFacts>(
+        for rec: R,
         videoStemKeys: Set<String>,
         duplicateIDs: Set<UUID>
     ) -> CatalogStorageBucket {
@@ -235,7 +340,7 @@ enum CatalogStorageTotalsCalculator {
     /// — a shared empty hash would collapse unrelated files into one
     /// enormous bogus group and silently delete most of the catalog from
     /// the unique number.
-    static func duplicateCopyIDs(in records: [VideoRecord]) -> Set<UUID> {
+    static func duplicateCopyIDs<R: CatalogStorageFacts>(in records: [R]) -> Set<UUID> {
         var out = Set<UUID>()
 
         // Signal 1 — explicit analysis. `.review` is deliberately NOT
@@ -246,7 +351,7 @@ enum CatalogStorageTotalsCalculator {
         }
 
         // Signal 2 — exact byte twins, keyed on hash AND length.
-        var groups: [String: [VideoRecord]] = [:]
+        var groups: [String: [R]] = [:]
         groups.reserveCapacity(records.count / 2)
         for rec in records where !rec.partialMD5.isEmpty && rec.sizeBytes > 0 {
             groups["\(rec.partialMD5):\(rec.sizeBytes)", default: []].append(rec)
@@ -265,7 +370,7 @@ enum CatalogStorageTotalsCalculator {
 
     /// True when a record carries any duplicate evidence at all. Its
     /// negation drives `unanalyzedFiles` — the honesty field.
-    static func hasDuplicateEvidence(_ rec: VideoRecord) -> Bool {
+    static func hasDuplicateEvidence<R: CatalogStorageFacts>(_ rec: R) -> Bool {
         if !rec.partialMD5.isEmpty && rec.sizeBytes > 0 { return true }
         if rec.dupAnalyzedAt != nil { return true }
         return rec.duplicateGroupID != nil
@@ -275,7 +380,7 @@ enum CatalogStorageTotalsCalculator {
 
     /// The catalog view's own exclusion, mirrored here so the footer and
     /// the table can never disagree about what "in the catalog" means.
-    static func isManuallyDeleted(_ rec: VideoRecord) -> Bool {
+    static func isManuallyDeleted<R: CatalogStorageFacts>(_ rec: R) -> Bool {
         rec.archiveStage == .manuallyDeleted
     }
 
@@ -352,10 +457,10 @@ enum CatalogStorageTotalsCalculator {
     /// used `pfActiveRecords` alone while file count and bytes used this,
     /// so two answers in one sentence described two catalogs). The
     /// deleted rows come back separately for the honesty caption.
-    nonisolated static func partition(_ records: [VideoRecord])
-        -> (counted: [VideoRecord], manuallyDeleted: [VideoRecord]) {
-        var counted: [VideoRecord] = []
-        var deleted: [VideoRecord] = []
+    nonisolated static func partition<R: CatalogStorageFacts>(_ records: [R])
+        -> (counted: [R], manuallyDeleted: [R]) {
+        var counted: [R] = []
+        var deleted: [R] = []
         counted.reserveCapacity(records.count)
         for rec in records where !rec.isPurged && !rec.isSetAside && !rec.isSuperseded {
             if isManuallyDeleted(rec) { deleted.append(rec) } else { counted.append(rec) }
@@ -365,6 +470,15 @@ enum CatalogStorageTotalsCalculator {
 
     static func compute(
         records: [VideoRecord],
+        onlineVolumes: Set<String>? = nil
+    ) -> CatalogStorageTotals {
+        compute(facts: records, onlineVolumes: onlineVolumes)
+    }
+
+    /// The same arithmetic over any `CatalogStorageFacts` — the live
+    /// records on the main actor, or `CatalogStorageRow`s off it.
+    static func compute<R: CatalogStorageFacts>(
+        facts records: [R],
         onlineVolumes: Set<String>? = nil
     ) -> CatalogStorageTotals {
         // Manually-deleted records leave the storage arithmetic here —

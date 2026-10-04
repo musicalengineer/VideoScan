@@ -69,7 +69,12 @@ enum NonVideoMediaPurge {
     /// Normalized extension for a record: lowercased, any leading dot stripped.
     /// Empty means the extensionless bucket (excluded from the checklist).
     static func normalizedExtension(_ record: VideoRecord) -> String {
-        var e = record.ext.lowercased()
+        normalizedExtension(ext: record.ext)
+    }
+
+    /// The same, from the extension string alone (an off-main projection).
+    static func normalizedExtension(ext: String) -> String {
+        var e = ext.lowercased()
         if e.hasPrefix(".") { e.removeFirst() }
         return e
     }
