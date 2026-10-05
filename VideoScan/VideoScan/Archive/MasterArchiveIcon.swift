@@ -57,6 +57,11 @@ enum MasterArchiveIcon {
     @discardableResult
     static func apply(volumeOrFolderPath: String, archiveRootPath: String) -> [String] {
         _ = volumeOrFolderPath   // deliberately not badged
+        // Cosmetic only. Skipped under a sanitizer test run (2026-10-05): the
+        // Thread Sanitizer runtime segfaulted freeing IconServices' icon data
+        // here (VideoScan-2026-10-05-050113.ips), killing the test host.
+        // Ordinary tests and the app still set it.
+        if ProcessInfo.processInfo.environment["VIDEOSCAN_SANITIZER"] != nil { return [] }
         guard FileManager.default.fileExists(atPath: archiveRootPath) else { return [] }
         return NSWorkspace.shared.setIcon(image(), forFile: archiveRootPath, options: []) ? [archiveRootPath] : []
     }
