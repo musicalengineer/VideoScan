@@ -62,3 +62,55 @@ bills to this credit? If yes, the orchestrator can run the program without
 Rick clicking. If not, Rick starts each one by pasting one line, e.g.
 "Run docs/briefs/cloud/<brief>.md". Suggested test: note the balance in the
 credits dialog, start one session, and check the balance afterwards.
+
+---
+
+## Orchestrator evaluation and adjustments (CLI Manager, 2026-10-05)
+
+The proposal is sound and I'm running it. What I changed and why:
+
+1. **Waves, not one a day.** The limit is not the credit; it is verifying findings on
+   the Mac. I run sessions in waves of about four, verify the wave with a fresh-context
+   local `qa` agent, then adjust the next wave's briefs to what the last one
+   taught (NOISE rate, cost per session). At ~$8–12 a session, ~$220 buys about
+   20 sessions: five waves by ~10/31, $20 floor kept.
+2. **Rick is not the verifier.** Each finding is checked against the source by a
+   local `qa` agent (same rule as local-model triage). Rick sees one summary per
+   wave: what's REAL, the pinning tests, and which items need his say.
+3. **Data risk first.** Order follows the data-risk list in
+   `docs/guides/source_layout.md`: Archive, MediaOps delete lanes,
+   resume/recovery, FamilyTree writes, Volumes retire. Hallie and People
+   come last; they are covered by `qa` + spot tests under the codex policy anyway.
+4. **Use what Linux can run.** One session per wave may execute code: the
+   Python suite (pytest, ruff) runs fine on Linux. VideoScanCore cannot: ~30 of
+   its files import Darwin / CryptoKit / CoreGraphics / ImageIO.
+5. **Skip what the Mac does cheaper.** The CodeQL alerts Stage 0 couldn't read
+   are one `gh api …/code-scanning/alerts` call locally. Not a cloud job.
+6. **Hard-to-refute bar.** Briefs make the session look for the guard that kills
+   each finding before writing it, and require a concrete failing scenario and
+   a pinning test. Delete Duplicates had five codex rounds; the useful findings are
+   in the paths around it (the steward's route to it, the sensors that pin it).
+7. **Shared rules** live once in `docs/briefs/cloud/README.md`; each brief is short.
+   Reports go to `docs/reviews/cloud/`, on a `cloud/<id>` branch, never `main`.
+8. **Ledger:** `docs/reviews/cloud/LEDGER.md` records, per session: cost
+   (balance before/after), findings by class, how many survived Mac
+   verification. That's the findings-per-dollar number for the October codex review.
+
+### Wave 1 (launched 2026-10-05)
+| ID | Kind | Target |
+|---|---|---|
+| C01 | adversarial SHAs | Steward's route to deletion + `DeviceID.from` sweep |
+| C02 | deep area | Archive promote / 00_Index / journal / ledger under a crash |
+| C03 | executable | Python suite + scripts that write or delete |
+| C04 | tests | data-risk sensors that cannot fail |
+
+### Candidate later waves
+MediaOps prune / relocate / purges / soft delete · Volumes retire + delete scan target ·
+FamilyTree pull/refresh + CyberBrain writes · resume/checkpoint (scan, MFO) ·
+fixity + verify copies + rebind · combine/derivative publish never-clobber ·
+the week's merged SHAs each Monday · People storage · Hallie (last).
+
+### Billing question
+Tested by launching C01 from the CLI as a remote agent: Rick checks the
+credit balance before/after. If it doesn't draw on the credit, Rick starts each
+session by pasting `Run docs/briefs/cloud/<id>.md` into a cloud session.
