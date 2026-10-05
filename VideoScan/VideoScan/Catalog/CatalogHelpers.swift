@@ -13,7 +13,7 @@ import os.log
 
 struct CatalogContent: View {
     @EnvironmentObject var model: VideoScanModel
-    // Used in CatalogContent+Table.swift's "Reformat and Analyze…"
+    // Used in CatalogRowContextMenu+Actions.swift's "Reformat and Analyze…"
     // context-menu button (Rick 2026-06-14). The lint hook is per-file
     // so the use is invisible to it.
     // vs-lint:disable-next vs-env-object-unused
@@ -184,7 +184,7 @@ struct CatalogContent: View {
     /// Non-nil drives the sheet; the job itself lives in the Media
     /// File Operations center once the user confirms.
     /// Internal (not private): set by the row context menu in
-    /// CatalogContent+Table.swift.
+    /// CatalogRowContextMenu.swift.
     @State var ripAllFramesTarget: VideoRecord?
     /// Non-nil presents format + destination choices before a transcode.
     @State var transcodeRequest: TranscodeRequest?
@@ -223,7 +223,7 @@ struct CatalogContent: View {
     /// "Find Missing Audio…" target (GH #111). Non-nil presents the
     /// three-tier search sheet for that video-only record. Internal (not
     /// private) because the context-menu entry lives in
-    /// CatalogContent+Table.swift.
+    /// CatalogRowContextMenu.swift.
     @State var missingAudioTarget: VideoRecord?
     /// The candidate count the user last dismissed the banner at.
     /// @SceneStorage so the dismissal survives tab switches (CatalogView
@@ -920,7 +920,7 @@ struct CatalogContent: View {
     /// offline → alert naming their volumes; no copies → alert saying
     /// this is the only cataloged one.
     /// Internal (not private): invoked by the row context menu in
-    /// CatalogContent+Table.swift.
+    /// CatalogRowContextMenu.swift.
     func findOnlineVersion(for rec: VideoRecord) {
         let copies = OnlineCopyFinder(records: records).sameContentCopies(of: rec)
         let online = copies.filter { VolumeReachability.isReachable(path: $0.fullPath) }
@@ -950,7 +950,7 @@ struct CatalogContent: View {
     /// RipAllFramesSheet instead — it needs sampling options and a
     /// disk-usage estimate before start.)
     /// Internal (not private): invoked by the row context menu in
-    /// CatalogContent+Table.swift.
+    /// CatalogRowContextMenu.swift.
     func startFrameRip(for rec: VideoRecord) {
         let panel = NSOpenPanel()
         panel.title = "Save extracted facial frames into…"

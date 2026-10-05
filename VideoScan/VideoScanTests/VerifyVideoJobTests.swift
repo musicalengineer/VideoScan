@@ -318,8 +318,18 @@ struct VerifyVideoScaleTests {
 @Suite("VerifyVideo — catalog menu sensor")
 struct VerifyVideoMenuSensorTests {
 
+    /// The Verify items live in CatalogRowContextMenu+Audio.swift since the
+    /// R1 split (GH #281; they were in CatalogContent+Table.swift).
     private func tableSource() throws -> String {
-        try SourceTree.appSource(named: "CatalogContent+Table.swift")
+        try SourceTree.appSource(named: "CatalogRowContextMenu+Audio.swift")
+    }
+
+    /// Every file the row menu spans — the retired-item check must see all.
+    private func rowMenuSources() throws -> String {
+        try ["CatalogContent+Table.swift", "CatalogRowContextMenu.swift",
+             "CatalogRowContextMenu+Audio.swift", "CatalogRowContextMenu+Actions.swift"]
+            .map { try SourceTree.appSource(named: $0) }
+            .joined(separator: "\n")
     }
 
     @Test func verifyVideoSitsRightAfterVerifyAudio() throws {
@@ -350,7 +360,7 @@ struct VerifyVideoMenuSensorTests {
     }
 
     @Test func trimMasterMenuItemStaysRetired() throws {
-        let s = try tableSource()
+        let s = try rowMenuSources()
         #expect(!s.contains("Button(\"Trim Master…\")"))
         #expect(!s.contains("catalog.row.trimMaster"))
     }
