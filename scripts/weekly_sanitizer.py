@@ -152,7 +152,11 @@ def main(argv: list[str] | None = None) -> int:
     with open(row["log"], "w") as log:
         log.write("$ " + " ".join(cmd) + "\n")
         log.flush()
-        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        # Tell the tests which sanitizer is on: TimingBudget widens wall-clock
+        # budgets by the instrumentation's known slowdown (xcodebuild strips
+        # the TEST_RUNNER_ prefix when it forwards the variable).
+        env = dict(os.environ, TEST_RUNNER_VIDEOSCAN_SANITIZER=kind)
+        proc = subprocess.Popen(cmd, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, env=env)
         try:
             proc.wait(timeout=args.timeout_hours * 3600)
         except subprocess.TimeoutExpired:

@@ -200,3 +200,40 @@ struct TimingBudgetTests {
         #expect(cpu < .milliseconds(50), "another thread's 200 ms spin was charged to this one: \(cpu)")
     }
 }
+
+// MARK: - Sanitizer runs (2026-10-04)
+
+@Suite("TimingBudget — sanitizer runs")
+struct TimingBudgetSanitizerTests {
+    private let quiet = TimingBudget.LoadSample(load: 0.5, logicalCores: 16)
+
+    @Test func factorsFollowTheSanitizer() {
+        #expect(TimingBudget.sanitizerFactor(environment: [:]) == 1)
+        #expect(TimingBudget.sanitizerFactor(environment: ["VIDEOSCAN_SANITIZER": "address"]) == 4)
+        #expect(TimingBudget.sanitizerFactor(environment: ["VIDEOSCAN_SANITIZER": "thread"]) == 15)
+        #expect(TimingBudget.sanitizerFactor(environment: ["VIDEOSCAN_SANITIZER": "bogus"]) == 1)
+    }
+
+    @Test func debugCeilingWidensOnlyUnderASanitizer() {
+        #expect(TimingBudget.debugCeiling(.milliseconds(100), environment: [:]) == .milliseconds(100))
+        #expect(TimingBudget.debugCeiling(.milliseconds(100), environment: ["VIDEOSCAN_SANITIZER": "address"])
+                == .milliseconds(400))
+    }
+
+    @Test func aSanitizerRunPassesInstrumentedSlownessButStillFailsAHang() {
+        let env = ["VIDEOSCAN_SANITIZER": "thread"]
+        func verdict(_ ms: Int) -> TimingBudget.Verdict {
+            TimingBudget.judge("x", budget: .milliseconds(100), measured: .milliseconds(ms),
+                               before: quiet, after: quiet, environment: env).verdict
+        }
+        #expect(verdict(1_000) == .pass, "10× under TSan is normal")
+        #expect(verdict(3_000) == .knownIssue, "beyond 15× but within the busy band")
+        #expect(verdict(5_000) == .fail, "beyond 45× is a hang")
+    }
+
+    @Test func withoutASanitizerAQuietMissStillFails() {
+        let j = TimingBudget.judge("x", budget: .milliseconds(100), measured: .milliseconds(150),
+                                   before: quiet, after: quiet, environment: [:])
+        #expect(j.verdict == .fail)
+    }
+}

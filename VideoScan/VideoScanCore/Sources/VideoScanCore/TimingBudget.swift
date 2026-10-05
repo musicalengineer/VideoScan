@@ -35,12 +35,29 @@ public enum TimingBudget {
         environment["GITHUB_ACTIONS"] == "true" ? 3 : 1
     }
 
-    /// The budget, ×3 on a GitHub-hosted runner only.
+    /// Set by scripts/weekly_sanitizer.py (as TEST_RUNNER_VIDEOSCAN_SANITIZER,
+    /// which xcodebuild forwards) to "address" or "thread" (2026-10-04).
+    public static let sanitizerEnvironmentKey = "VIDEOSCAN_SANITIZER"
+
+    /// How much slower instrumented code runs: Address Sanitizer ~2–3×
+    /// (×4 here), Thread Sanitizer ~5–15× (×15). 1 when no sanitizer.
+    /// A sanitizer run is about memory and races, not speed — but a hang
+    /// beyond this headroom still fails.
+    public static func sanitizerFactor(environment: [String: String]) -> Int {
+        switch environment[sanitizerEnvironmentKey] {
+        case "address": return 4
+        case "thread": return 15
+        default: return 1
+        }
+    }
+
+    /// The budget, ×3 on a GitHub-hosted runner, ×the sanitizer factor
+    /// under a sanitizer run; exactly the budget otherwise.
     public static func debugCeiling(
         _ budget: Duration,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Duration {
-        budget * hostedRunnerFactor(environment: environment)
+        budget * (hostedRunnerFactor(environment: environment) * sanitizerFactor(environment: environment))
     }
 
     /// `debugCeiling`, further ×`loadedHeadroom` when this is a Debug build
@@ -171,6 +188,19 @@ public enum TimingBudget {
     ) -> Judgement {
         let strict: Bool
         let reason: String
+        let sanitizer = sanitizerFactor(environment: environment)
+        if sanitizer > 1 {
+            // Instrumented code: judge against the budget × the sanitizer's
+            // known slowdown; a miss within the busy band of THAT is a known
+            // issue, beyond it a failure (a hang no instrumentation explains).
+            let scaled = budget * sanitizer
+            let verdict: Verdict = measured < scaled ? .pass
+                : (measured <= scaled * busyMissLimit ? .knownIssue : .fail)
+            return Judgement(label: label, budget: budget, measured: measured,
+                             before: before, after: after, strict: false,
+                             modeReason: "\(sanitizerEnvironmentKey)=\(environment[sanitizerEnvironmentKey] ?? "")",
+                             verdict: verdict)
+        }
         if environment[strictEnvironmentKey] == "1" {
             strict = true; reason = "\(strictEnvironmentKey)=1"
         } else if before.isBusy || after.isBusy {
