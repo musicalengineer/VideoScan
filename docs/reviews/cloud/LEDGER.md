@@ -1,6 +1,6 @@
 # Cloud-credit review ledger
 
-Credit: ~$242 on 2026-10-05; expires 2026-11-05 02:59 EST; stop at ~$20.
+Credit: $242 on 2026-10-05, confirmed after C01 (so the local run drew none of it); expires 2026-11-05 02:59 EST; stop at ~$20.
 
 | ID | Date | Cost | Findings (R/NM/N) | Survived Mac verify | Pinned / declined | Report |
 |---|---|---|---|---|---|---|
