@@ -356,6 +356,20 @@ extension CatalogContent {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
+                // Rick 2026-10-05: "sometimes it's not clear which file I am
+                // right clicking on" — the system selection turns grey when
+                // the window isn't key (Hallie's window, the MFO window
+                // brought forward). A light-blue marker behind the selected
+                // file's name that does NOT depend on focus. O(1) per cell.
+                .background {
+                    if selectedIDs.contains(rec.id) {
+                        RoundedRectangle(cornerRadius: 5)
+                            .fill(Color.accentColor.opacity(0.30))
+                            .overlay(RoundedRectangle(cornerRadius: 5)
+                                .strokeBorder(Color.accentColor.opacity(0.75), lineWidth: 1))
+                            .padding(.horizontal, -4)
+                    }
+                }
                 .help(filenameTooltip(for: rec, offline: offline, purged: purged))
             }
             .width(min: 180, ideal: 260)
