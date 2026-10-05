@@ -56,8 +56,9 @@ half-written; force-unwraps and `try!` on input or disk data; logs leaking media
 
 | Night | ID | Theme | Scope |
 |---|---|---|---|
-| 10-06 | N1006-D-Catalog | D | `Catalog/` view layer + `Volumes/VolumesWindow*.swift` — **see the Catalog note below** |
-| 10-07 | N1007-R-MediaOps-prune | R | MediaOps prune / relocate / purges / soft delete / junk + trash selection (the data-risk list in docs/guides/source_layout.md) |
+| 10-06 | N1006-D-next-refactors | D | Plan the NEXT local refactors (GH #281): `Archive/CopyFamilyAssessor.swift` (`assess` CCN 57) and `Catalog/CatalogAudit.swift` (`run` CCN 66). Both data-adjacent: list every guard and the pinning test that must exist before the split. (Catalog table is being refactored locally tonight, R1; don't plan it.) |
+| 10-07 | N1007-D-Hallie-parsers | D | Plan the split of `Hallie/HallieLineageQuestion.swift` (`get` 93, `detectShape` 88), `HalliePersonaQuestion.init` (72), `HallieTurnExecutor+Relationship.executeRelationship` (50), using the golden-answer corpora in `tests/` as the parity net |
+| 10-07b | N1007-R-MediaOps-prune | R | MediaOps prune / relocate / purges / soft delete / junk + trash selection (the data-risk list in docs/guides/source_layout.md) |
 | 10-08 | N1008-T-Archive | T | `Archive/` and its tests |
 | 10-09 | N1009-D-Core | D | `VideoScan/VideoScanCore/Sources/` (highest Swift churn) |
 | 10-10 | N1010-H-Volumes | H | `Volumes/` (scan engine, checkpoints, reachability, retire/delete scan target) |
@@ -87,7 +88,13 @@ half-written; force-unwraps and `try!` on input or disk data; logs leaking media
 | 11-03 | N1103-T-whole | T | the 15 most important guards in the app; is each pinned? |
 | 11-04 | N1104-R-final | R | merged 11-01..11-03 + anything still open from earlier nights |
 
-### Catalog note (N1006; Rick 2026-10-05)
+### Pipeline (Rick 2026-10-05)
+Cloud D nights plan the next refactor; the M4 executes it the following night
+(local brief in `docs/briefs/local/`, refactor → testing → qa, branch only); Rick
+spot-tests the module in the morning, then it merges. Goal: the worst #281 offenders
+refactored before the M5 Ultra arrives.
+
+### Catalog note (R1, refactored locally 10-05; Rick 2026-10-05)
 The Catalog window grew fast and was never refactored; arrow-key focus took
 four commits to fix today. Spot measurements (lizard 1.22, 10-05):
 `CatalogContent+Table.swift` `rowContextMenu` CCN 81 / 489 lines;
