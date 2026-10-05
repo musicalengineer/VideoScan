@@ -152,7 +152,7 @@ def plan_of(entries, problems=(), changed=True, disables=None):
 def test_nightly_commits_a_pure_shrink_and_pushes_without_force(tmp_path):
     wt, old = worktree(tmp_path, OLD)
     git = FakeGit(old)
-    status = nightly.run(str(tmp_path / "repo"), wt, git, plan_of({"a::f": {"ccn": 19, "nloc": 50}}), NOW)
+    status = nightly.run(str(tmp_path / "repo"), wt, git, plan_of({"a::f": {"ccn": 19, "nloc": 50}}), NOW, gate_check=lambda wt: 0)
     assert status["outcome"] == "committed" and status["commit"] == "def5678"
     push = git.ran("push")[0]
     assert "HEAD:refs/heads/main" in push and "--force" not in push and "-f" not in push
@@ -163,7 +163,7 @@ def test_nightly_commits_a_pure_shrink_and_pushes_without_force(tmp_path):
 def test_nightly_refuses_when_the_plan_is_not_removals_only(tmp_path):
     wt, old = worktree(tmp_path, OLD)
     git = FakeGit(old)
-    status = nightly.run("repo", wt, git, plan_of({}, problems=["adds a::new"]), NOW)
+    status = nightly.run("repo", wt, git, plan_of({}, problems=["adds a::new"]), NOW, gate_check=lambda wt: 0)
     assert status["outcome"] == "refused" and "adds a::new" in status["detail"]
     assert not git.ran("commit") and not git.ran("push")
     assert nightly.alert_lines(status)[0].startswith("🔴")
@@ -173,7 +173,7 @@ def test_nightly_double_checks_the_written_file_against_origin_main(tmp_path):
     # A plan that claims to be clean but raises a value is caught on disk.
     wt, old = worktree(tmp_path, OLD)
     git = FakeGit(old)
-    status = nightly.run("repo", wt, git, plan_of({"a::f": {"ccn": 25, "nloc": 50}}), NOW)
+    status = nightly.run("repo", wt, git, plan_of({"a::f": {"ccn": 25, "nloc": 50}}), NOW, gate_check=lambda wt: 0)
     assert status["outcome"] == "refused" and "raises ccn of a::f" in status["detail"]
     assert not git.ran("commit") and not git.ran("push")
 
@@ -181,7 +181,7 @@ def test_nightly_double_checks_the_written_file_against_origin_main(tmp_path):
 def test_nightly_never_touches_a_dirty_worktree(tmp_path):
     wt, old = worktree(tmp_path, OLD)
     git = FakeGit(old, dirty=" M ci/baselines/complexity_debt.json\n")
-    status = nightly.run("repo", wt, git, plan_of({"a::f": {"ccn": 19, "nloc": 50}}), NOW)
+    status = nightly.run("repo", wt, git, plan_of({"a::f": {"ccn": 19, "nloc": 50}}), NOW, gate_check=lambda wt: 0)
     assert status["outcome"] == "failed" and "dirty" in status["detail"]
     assert not git.ran("reset") and not git.ran("checkout") and not git.ran("commit")
 
@@ -189,15 +189,34 @@ def test_nightly_never_touches_a_dirty_worktree(tmp_path):
 def test_nightly_unchanged_is_silent(tmp_path):
     wt, old = worktree(tmp_path, OLD)
     git = FakeGit(old)
-    status = nightly.run("repo", wt, git, plan_of(OLD, changed=False), NOW)
+    status = nightly.run("repo", wt, git, plan_of(OLD, changed=False), NOW, gate_check=lambda wt: 0)
     assert status["outcome"] == "unchanged" and nightly.alert_lines(status) == []
     assert not git.ran("commit")
+
+
+def test_nightly_refuses_a_shrink_that_would_turn_ci_gate_red(tmp_path):
+    # QA round 2: removals-only is not enough; the whole-tree gate must pass
+    # against the NEW baseline before anything is committed.
+    wt, old = worktree(tmp_path, OLD)
+    git = FakeGit(old)
+    seen = []
+
+    def red_gate(w):
+        seen.append(json.loads((Path(w) / nightly.BASELINE_REL).read_text())["entries"])
+        return 1
+
+    status = nightly.run("repo", wt, git, plan_of({"a::f": {"ccn": 19, "nloc": 50}}), NOW, gate_check=red_gate)
+    assert seen == [{"a::f": {"ccn": 19, "nloc": 50}}]                  # it checked the NEW file
+    assert status["outcome"] == "refused" and "gate red" in status["detail"]
+    assert not git.ran("commit") and not git.ran("push")
+    assert any(BASE in c for c in git.ran("checkout") for BASE in [nightly.BASELINE_REL])  # file restored
+    assert nightly.alert_lines(status)[0].startswith("🔴")
 
 
 def test_nightly_retries_once_after_a_rejected_push_then_reports_red(tmp_path):
     wt, old = worktree(tmp_path, OLD)
     git = FakeGit(old, push_ok=(False, False))
-    status = nightly.run("repo", wt, git, plan_of({"a::f": {"ccn": 19, "nloc": 50}}), NOW)
+    status = nightly.run("repo", wt, git, plan_of({"a::f": {"ccn": 19, "nloc": 50}}), NOW, gate_check=lambda wt: 0)
     assert status["outcome"] == "failed" and "rejected" in status["detail"]
     assert len(git.ran("push")) == 2
     assert nightly.alert_lines(status)[0].startswith("🔴")

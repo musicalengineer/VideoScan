@@ -55,6 +55,19 @@ def _ok(git: Git, *args: str) -> bool:
     return git(*args, check=False).returncode == 0
 
 
+def run_gate_all(wt: str) -> int:
+    """`complexity_gate.py --all` on the worktree, against the baseline file
+    as it now stands there (the NEW one). Quiet unless it fails."""
+    import complexity_gate as gate
+    lines: List[str] = []
+    code = gate.run_gate(cm.read_tree(wt), os.path.join(wt, BASELINE_REL),
+                         os.path.join(wt, cm.DEFAULT_OVERRIDES), record_override=False,
+                         out=lines.append, min_files=gate.ALL_MODE_MIN_FILES)
+    if code:
+        print("\n".join(lines))
+    return code
+
+
 def prepare_worktree(git: Git, repo: str, wt: str) -> Optional[str]:
     """Fresh worktree detached at origin/main. Returns a problem, or None."""
     if not _ok(git, "-C", repo, "fetch", "origin", "main", "--quiet"):
@@ -76,9 +89,11 @@ def prepare_worktree(git: Git, repo: str, wt: str) -> Optional[str]:
 
 def run(repo: str, wt: str, git: Git = real_git,
         plan: Callable[[str, str], dict] = cm.shrink_plan,
-        now: Optional[_dt.datetime] = None) -> dict:
+        now: Optional[_dt.datetime] = None,
+        gate_check: Optional[Callable[[str], int]] = None) -> dict:
     """One attempt-with-one-retry. Returns the status record."""
     now = now or _dt.datetime.now(_dt.timezone.utc)
+    gate_check = gate_check or run_gate_all
     status = {"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "outcome": "", "detail": "",
               "before": None, "after": None, "fixed": 0, "commit": ""}
     for attempt in (1, 2):
@@ -109,6 +124,12 @@ def run(repo: str, wt: str, git: Git = real_git,
         if problems:
             _ok(git, "-C", wt, "checkout", "--", BASELINE_REL)
             return {**status, "outcome": "refused", "detail": "not removals-only: " + "; ".join(problems[:10])}
+        # Last line of defence (QA round 2): the shrunk baseline must keep
+        # CI's whole-tree gate green on this very tree, or it is not committed.
+        if gate_check(wt) != 0:
+            _ok(git, "-C", wt, "checkout", "--", BASELINE_REL)
+            return {**status, "outcome": "refused",
+                    "detail": "the shrunk baseline would turn CI's complexity gate red (complexity_gate.py --all)"}
         msg = (f"chore(complexity): nightly baseline shrink {p['before']} -> {p['after']} "
                f"({len(p['fixed'])} fixed)\n\nRemovals only, verified before commit by "
                "scripts/complexity_baseline_nightly.py (2 AM nightly on the M4).")

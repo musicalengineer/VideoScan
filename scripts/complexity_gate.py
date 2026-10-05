@@ -73,17 +73,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import complexity_metrics as cm  # noqa: E402
 
-GATE_CCN = 30          # same as .swiftlint.yml cyclomatic_complexity: error
-GATE_NLOC = 300        # same as .swiftlint.yml function_body_length: error
-NLOC_SLACK = 5         # a known big function may grow this much in total, no more
+GATE_CCN = cm.GATE_CCN      # defined once, in complexity_metrics
+GATE_NLOC = cm.GATE_NLOC
+NLOC_SLACK = cm.MOVE_NLOC_SLACK   # a known big function may grow this much in total, no more
 ALL_MODE_MIN_FILES = 500   # --all on this repo sees ~1,080; fewer = broken listing
 
 HOW_TO_FIX = ("Split it: pull branches or steps out into named helpers. If it truly has to go in "
               "as is: COMPLEXITY_OVERRIDE=\"<reason>\" git commit ... (recorded and reported nightly).")
 
 
-def over_gate(f: cm.Func) -> bool:
-    return f.ccn > GATE_CCN or f.nloc > GATE_NLOC
+over_gate = cm.over_gate
 
 
 def function_violations(funcs: Sequence[cm.Func], baseline: Dict[str, dict],
@@ -119,7 +118,7 @@ def function_violations(funcs: Sequence[cm.Func], baseline: Dict[str, dict],
     vanished = {k: v for src in (baseline, allowed) for k, v in src.items()
                 if k not in present and cm.key_bare_name(k) in names
                 and (cm.key_file(k) in touched or not (still_present and still_present(k)))}
-    moved = cm.match_moves(unknown, vanished, NLOC_SLACK)
+    moved = cm.match_unknown(unknown, vanished, NLOC_SLACK)
     out += [{"kind": "new", "func": f, "ref": None} for f in unknown if f.key not in moved]
     return sorted(out, key=lambda v: (-v["func"].ccn, -v["func"].nloc, v["func"].key))
 

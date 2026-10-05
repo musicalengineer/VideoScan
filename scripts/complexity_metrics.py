@@ -104,7 +104,11 @@ CCN_LIMIT = 15
 NLOC_LIMIT = 80
 FILE_LINES_LIMIT = 800
 TOP_N = 15
-GATE_CCN_LINE = 30     # the blocking gate's CCN line, counted for the trend
+# The blocking gate's lines (scripts/complexity_gate.py imports these: one
+# definition, so the nightly ratchet and the gate can never disagree).
+GATE_CCN = 30          # same as .swiftlint.yml cyclomatic_complexity: error
+GATE_NLOC = 300        # same as .swiftlint.yml function_body_length: error
+GATE_CCN_LINE = GATE_CCN
 
 SWIFT_ROOTS = ("VideoScan/VideoScan", "VideoScan/VideoScanCore/Sources", "swift_cli")
 PYTHON_ROOTS = ("scripts", "tools")
@@ -224,6 +228,26 @@ def key_bare_name(key: str) -> str:
     """`file::Type.prop.get` -> `get`; `file::Type.init x : Int#2` -> `init`."""
     rest = key.split("::", 1)[-1].split("#", 1)[0].split(" ", 1)[0]
     return rest.rsplit(".", 1)[-1]
+
+
+def over_gate(f: Func) -> bool:
+    return f.ccn > GATE_CCN or f.nloc > GATE_NLOC
+
+
+def match_unknown(unknown: Sequence[Func], vanished: Dict[str, dict],
+                  slack: int = MOVE_NLOC_SLACK) -> Dict[str, str]:
+    """THE move matching, shared by the gate and the nightly ratchet (QA
+    round 2: they used to differ, so a nightly shrink could hand a moved
+    320-line function's old key to an unrelated mid-size `body`, and the next
+    CI run read the big one as NEW). Functions over the GATE are matched
+    first, exactly as the gate does it; report-level offenders only get what
+    is left. Returns {new key: vanished baseline key}."""
+    gate_level = [f for f in unknown if over_gate(f)]
+    moves = match_moves(gate_level, vanished, slack)
+    left = {k: v for k, v in vanished.items() if k not in set(moves.values())}
+    rest = [f for f in unknown if not over_gate(f)]
+    moves.update(match_moves(rest, left, slack))
+    return moves
 
 
 def match_moves(new: Sequence[Func], vanished: Dict[str, dict], slack: int) -> Dict[str, str]:
@@ -476,7 +500,7 @@ def ratchet(funcs: Sequence[Func], baseline: Dict[str, dict]) -> dict:
     vanished = {k: v for k, v in baseline.items() if k not in current}
     # A moved / rekeyed offender that did not grow is neither NEW nor FIXED:
     # its baseline entry follows it to the new key.
-    moves = match_moves(unmatched_new, vanished, MOVE_NLOC_SLACK)
+    moves = match_unknown(unmatched_new, vanished, MOVE_NLOC_SLACK)
     new = sorted((f for f in unmatched_new if f.key not in moves),
                  key=lambda f: (-f.ccn, -f.nloc, f.key))
     worse = sorted((f for k, f in current.items() if k in baseline and got_worse(f, baseline[k])),
