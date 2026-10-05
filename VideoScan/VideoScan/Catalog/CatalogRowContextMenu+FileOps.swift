@@ -152,9 +152,7 @@ extension CatalogContent {
         // wait their turn behind a running batch, so
         // the old currentStatus.isActive disable is
         // gone — intent is never blocked, just queued.
-        Button(activeRecs.count > 1
-               ? "Analyze \(activeRecs.count) Files"
-               : "Analyze") {
+        Button(CatalogRowMenuText.analyze(count: activeRecs.count)) {
             requestAnalyze(forAll: activeRecs, stages: AnalyzeStage.all)
         }
         .disabled(!activeRecs.contains {
@@ -178,8 +176,9 @@ extension CatalogContent {
         // transcode is already running for this same record
         // (the per-file disable prevents the user from
         // queueing two competing encodes against one input).
-        let transcodeBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
-            || transcodeRunning
+        let transcodeBlocked = CatalogRowMenuRules.transcodeBlocked(
+            reachable: VolumeReachability.isReachable(path: rec.fullPath),
+            running: transcodeRunning)
         Menu("Transcode") {
             Button("For Editing…") {
                 configureTranscode(for: rec, preset: .editingLT)
@@ -220,9 +219,10 @@ extension CatalogContent {
             guard job.state.isActive, let c = job as? CleanupJob else { return false }
             return c.record.id == rec.id
         }
-        let cleanupBlocked = !VolumeReachability.isReachable(path: rec.fullPath)
-            || cleanupRunning
-            || !(rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
+        let cleanupBlocked = CatalogRowMenuRules.cleanupBlocked(
+            reachable: VolumeReachability.isReachable(path: rec.fullPath),
+            running: cleanupRunning,
+            streamType: rec.streamType)
         Menu("Clean Up Video") {
             ForEach(CleanupRecipeRegistry.builtIn) { recipe in
                 Button("\(recipe.displayName)…") {
@@ -272,7 +272,7 @@ extension CatalogContent {
         // discoverable than absent — the user learns
         // "Transcribe Audio exists but this file has
         // no audio" instead of wondering where it went.
-        let hasAudio = (rec.streamType == .videoAndAudio || rec.streamType == .audioOnly)
+        let hasAudio = CatalogRowMenuRules.hasAudio(rec.streamType)
         // NOT raw streamType (QA F9): an mp3's cover art
         // probes as a video stream — classify first so
         // audio/photo files can't launch a captions job

@@ -22,9 +22,7 @@ extension CatalogContent {
                 _ = model.restoreRecord(id: r.id)
             }
         } label: {
-            Label(purgedSelection.count > 1
-                  ? "Restore \(purgedSelection.count) to Catalog"
-                  : "Restore to Catalog",
+            Label(CatalogRowMenuText.restoreToCatalog(count: purgedSelection.count),
                   systemImage: "arrow.uturn.backward.circle")
         }
         if VolumeReachability.isReachable(path: rec.fullPath) {
@@ -44,9 +42,7 @@ extension CatalogContent {
         Button {
             _ = model.restoreSetAsideRecords(ids: Set(setAsideSelection.map(\.id)))
         } label: {
-            Label(setAsideSelection.count > 1
-                  ? "Put \(setAsideSelection.count) Back in Catalog"
-                  : "Put Back in Catalog",
+            Label(CatalogRowMenuText.putBackInCatalog(count: setAsideSelection.count),
                   systemImage: "arrow.uturn.backward.circle")
         }
         if VolumeReachability.isReachable(path: rec.fullPath) {
@@ -77,9 +73,7 @@ extension CatalogContent {
         Button {
             for r in supersededSelection { _ = model.unsupersede(id: r.id) }
         } label: {
-            Label(supersededSelection.count > 1
-                  ? "Restore \(supersededSelection.count) Originals (Un-supersede)"
-                  : "Restore Original (Un-supersede)",
+            Label(CatalogRowMenuText.restoreOriginals(count: supersededSelection.count),
                   systemImage: "arrow.uturn.backward.circle")
         }
         .help("Bring this original back into the catalog's default view. The repaired copy stays too — nothing on disk changes.")
@@ -237,9 +231,7 @@ extension CatalogContent {
                 let targetIDs = Set(activeRecs.map { $0.id })
                 _ = model.purgeRecords(ids: targetIDs)
             } label: {
-                Label(activeRecs.count > 1
-                      ? "Remove \(activeRecs.count) from Catalog"
-                      : "Remove from Catalog",
+                Label(CatalogRowMenuText.removeFromCatalog(count: activeRecs.count),
                       systemImage: "trash.slash")
             }
             .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
@@ -269,10 +261,9 @@ extension CatalogContent {
                     let targets = deletableRecs
                     let count = targets.count
                     let alert = NSAlert()
-                    alert.messageText = count == 1
-                        ? "Delete \u{201C}\(targets[0].filename)\u{201D} permanently?"
-                        : "Delete \(count) files permanently?"
-                    alert.informativeText = "This cannot be undone \u{2014} the file\(count == 1 ? " is" : "s are") removed from disk immediately, not moved to Trash."
+                    alert.messageText = CatalogRowMenuText.permanentDeleteQuestion(
+                        count: count, firstFilename: targets.first?.filename ?? "")
+                    alert.informativeText = CatalogRowMenuText.permanentDeleteWarning(count: count)
                     alert.alertStyle = .critical
                     alert.addButton(withTitle: "Delete Permanently")
                     alert.addButton(withTitle: "Cancel")
@@ -287,9 +278,7 @@ extension CatalogContent {
                 }
                 .accessibilityIdentifier("catalog.row.deletePermanently")
             } label: {
-                Label(deletableRecs.count > 1
-                      ? "Delete \(deletableRecs.count) Files"
-                      : "Delete File",
+                Label(CatalogRowMenuText.deleteFiles(count: deletableRecs.count),
                       systemImage: "xmark.bin")
             }
             .help("Move the file(s) to Trash or remove them from disk permanently. Distinct from \u{201C}Remove from Catalog\u{201D} which only hides the row.")
@@ -310,9 +299,7 @@ extension CatalogContent {
             Button {
                 for r in purgedRecs { _ = model.restoreRecord(id: r.id) }
             } label: {
-                Label(purgedRecs.count > 1
-                      ? "Restore \(purgedRecs.count) to Catalog"
-                      : "Restore to Catalog",
+                Label(CatalogRowMenuText.restoreToCatalog(count: purgedRecs.count),
                       systemImage: "arrow.uturn.backward.circle")
             }
             .help("Clear the removed marker on the selected rows.")
@@ -325,9 +312,7 @@ extension CatalogContent {
             Button {
                 _ = model.restoreSetAsideRecords(ids: Set(setAsideRecs.map(\.id)))
             } label: {
-                Label(setAsideRecs.count > 1
-                      ? "Put \(setAsideRecs.count) Back in Catalog"
-                      : "Put Back in Catalog",
+                Label(CatalogRowMenuText.putBackInCatalog(count: setAsideRecs.count),
                       systemImage: "arrow.uturn.backward.circle")
             }
             .help("Clear the set-aside marker on the selected rows so they show up in lists and searches again.")
@@ -340,9 +325,7 @@ extension CatalogContent {
             Button {
                 for r in supersededRecs { _ = model.unsupersede(id: r.id) }
             } label: {
-                Label(supersededRecs.count > 1
-                      ? "Restore \(supersededRecs.count) Originals (Un-supersede)"
-                      : "Restore Original (Un-supersede)",
+                Label(CatalogRowMenuText.restoreOriginals(count: supersededRecs.count),
                       systemImage: "arrow.uturn.backward.circle")
             }
             .help("Bring these originals back into the catalog's default view. Their repaired copies stay too — nothing on disk changes.")

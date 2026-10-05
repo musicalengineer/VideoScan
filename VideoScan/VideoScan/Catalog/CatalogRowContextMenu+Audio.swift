@@ -101,13 +101,9 @@ extension CatalogContent {
             .accessibilityIdentifier("catalog.row.verifyResults")
         }
 
-        let damagedRecs = verifiableRecs.filter {
-            $0.audioVerifyStatus == "damaged"
-        }
+        let damagedRecs = CatalogRowMenuRules.damagedAudio(verifiableRecs)
         if !damagedRecs.isEmpty {
-            Button(damagedRecs.count > 1
-                   ? "Repair Damaged Audio (\(damagedRecs.count) Files)"
-                   : "Repair Damaged Audio") {
+            Button(CatalogRowMenuText.repairDamagedAudio(count: damagedRecs.count)) {
                 _ = fileOpsCenter.startedByUser { center in
                     for r in damagedRecs {
                         center.startVerifyAudio(record: r, model: model, autoRepair: true)
@@ -139,9 +135,7 @@ extension CatalogContent {
             }
             : []
         if !awaitingRecs.isEmpty {
-            Button(awaitingRecs.count > 1
-                   ? "Sounds Good — Confirm \(awaitingRecs.count) Repairs"
-                   : "Sounds Good — Confirm Repair") {
+            Button(CatalogRowMenuText.confirmRepairs(count: awaitingRecs.count)) {
                 _ = model.confirmRepairs(
                     repairIDs: Set(awaitingRecs.map(\.id)))
             }

@@ -64,3 +64,82 @@ struct CatalogRowMenuSelection {
         return .full
     }
 }
+
+/// The row menu's count-bearing labels and its alert wording, as pure
+/// functions of the counts the items act on. One function per item, so
+/// a label cannot count a different set than its action. (A Swift
+/// caseless `enum` ≈ a C++ namespace of free functions.)
+enum CatalogRowMenuText {
+    static func analyze(count: Int) -> String {
+        count > 1 ? "Analyze \(count) Files" : "Analyze"
+    }
+    static func removeFromCatalog(count: Int) -> String {
+        count > 1 ? "Remove \(count) from Catalog" : "Remove from Catalog"
+    }
+    static func deleteFiles(count: Int) -> String {
+        count > 1 ? "Delete \(count) Files" : "Delete File"
+    }
+    /// Shared by the removed-rows menu and a mixed selection's item.
+    static func restoreToCatalog(count: Int) -> String {
+        count > 1 ? "Restore \(count) to Catalog" : "Restore to Catalog"
+    }
+    /// Shared by the set-aside menu and a mixed selection's item.
+    static func putBackInCatalog(count: Int) -> String {
+        count > 1 ? "Put \(count) Back in Catalog" : "Put Back in Catalog"
+    }
+    /// Shared by the superseded menu and a mixed selection's item.
+    static func restoreOriginals(count: Int) -> String {
+        count > 1 ? "Restore \(count) Originals (Un-supersede)" : "Restore Original (Un-supersede)"
+    }
+    static func repairDamagedAudio(count: Int) -> String {
+        count > 1 ? "Repair Damaged Audio (\(count) Files)" : "Repair Damaged Audio"
+    }
+    static func confirmRepairs(count: Int) -> String {
+        count > 1 ? "Sounds Good — Confirm \(count) Repairs" : "Sounds Good — Confirm Repair"
+    }
+    /// Delete Permanently… confirmation title. `firstFilename` is used
+    /// only when exactly one file is going.
+    static func permanentDeleteQuestion(count: Int, firstFilename: String) -> String {
+        count == 1
+            ? "Delete \u{201C}\(firstFilename)\u{201D} permanently?"
+            : "Delete \(count) files permanently?"
+    }
+    static func permanentDeleteWarning(count: Int) -> String {
+        "This cannot be undone \u{2014} the file\(count == 1 ? " is" : "s are") removed from disk immediately, not moved to Trash."
+    }
+}
+
+/// The row menu's enable / show rules that need no SwiftUI. Each takes
+/// the facts it decides on (reachability, a running job) as plain values,
+/// so the tests need no volume and no job center. O(1) or O(selection).
+enum CatalogRowMenuRules {
+    /// Transcode ▸ items grey out offline or while this record transcodes.
+    static func transcodeBlocked(reachable: Bool, running: Bool) -> Bool {
+        !reachable || running
+    }
+    /// Clean Up Video ▸ items need a picture, an online volume and no
+    /// cleanup already running for this record (CleanupScaleTests pins
+    /// that the inputs stay O(1) per record).
+    static func cleanupBlocked(reachable: Bool, running: Bool, streamType: StreamType) -> Bool {
+        !reachable
+            || running
+            || !(streamType == .videoAndAudio || streamType == .videoOnly)
+    }
+    /// Transcribe Audio is greyed (not hidden) without an audio stream.
+    static func hasAudio(_ streamType: StreamType) -> Bool {
+        streamType == .videoAndAudio || streamType == .audioOnly
+    }
+    /// Rows Mark as Family Music… may mark: anything with a stream.
+    static func familyMusicMarkable(_ active: [VideoRecord]) -> [VideoRecord] {
+        active.filter { $0.streamType != .noStreams && $0.streamType != .ffprobeFailed }
+    }
+    /// Rows Unmark acts on (the item shows only when this is non-empty).
+    static func familyMusicMarked(_ active: [VideoRecord]) -> [VideoRecord] {
+        active.filter { $0.familyMusic != nil }
+    }
+    /// Rows Repair Damaged Audio acts on: the verifiable rows Verify
+    /// Audio called damaged.
+    static func damagedAudio(_ verifiable: [VideoRecord]) -> [VideoRecord] {
+        verifiable.filter { $0.audioVerifyStatus == "damaged" }
+    }
+}

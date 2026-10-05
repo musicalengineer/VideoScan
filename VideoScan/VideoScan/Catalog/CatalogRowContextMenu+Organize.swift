@@ -203,8 +203,8 @@ extension CatalogContent {
         // mark, never a rule, so bought music never shows.
         // Mark opens a sheet (ellipsis); Unmark acts at once.
         // Active rows only; multi-select: one sheet for all.
-        let markable = activeRecs.filter { $0.streamType != .noStreams && $0.streamType != .ffprobeFailed }
-        let markedRecs = activeRecs.filter { $0.familyMusic != nil }
+        let markable = CatalogRowMenuRules.familyMusicMarkable(activeRecs)
+        let markedRecs = CatalogRowMenuRules.familyMusicMarked(activeRecs)
         Button {
             familyMusicSheetRequest = FamilyMusicSheetRequest.make(for: markable)
         } label: {

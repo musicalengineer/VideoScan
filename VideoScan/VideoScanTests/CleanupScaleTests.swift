@@ -8,7 +8,8 @@
 //      model.records + append/replace. Linear by design; these tests pin
 //      that a full job stays inside budget at 100k and that the
 //      replace-vs-append branch is correct.
-//   2. The "Clean Up Video" submenu gate in CatalogContent+Table — must
+//   2. The "Clean Up Video" submenu gate (CatalogRowContextMenu+FileOps,
+//      rule in CatalogRowMenuRules.cleanupBlocked) — must
 //      consult ONLY the recipe registry, the operations center's job
 //      list, per-record flags, and the reachability cache. Never
 //      model.records. Pinned by evaluating the exact gate expression
@@ -156,17 +157,21 @@ struct CleanupScaleTests {
         model.records = syntheticRecords(100_000)
         let center = MediaFileOperationsCenter()
 
-        // The EXACT gate expression from CatalogContent+Table (kept in
-        // sync by review; the point of the sensor is its complexity
-        // class, which only depends on the inputs it consults).
+        // The gate as the menu builds it (CatalogRowContextMenu+FileOps
+        // transcodeAndCleanupMenus): the running-job scan stays a copy
+        // (it reads the center), the decision is the PRODUCTION rule
+        // CatalogRowMenuRules.cleanupBlocked (R1, GH #281 — it used to be
+        // a hand-kept copy of the expression). The point of the sensor is
+        // its complexity class, which only depends on the inputs consulted.
         func gate(for rec: VideoRecord) -> Bool {
             let cleanupRunning = center.jobs.contains { job in
                 guard job.state.isActive, let c = job as? CleanupJob else { return false }
                 return c.record.id == rec.id
             }
-            return !VolumeReachability.isReachable(path: rec.fullPath)
-                || cleanupRunning
-                || !(rec.streamType == .videoAndAudio || rec.streamType == .videoOnly)
+            return CatalogRowMenuRules.cleanupBlocked(
+                reachable: VolumeReachability.isReachable(path: rec.fullPath),
+                running: cleanupRunning,
+                streamType: rec.streamType)
         }
 
         // Warm the reachability cache once (first touch schedules a
