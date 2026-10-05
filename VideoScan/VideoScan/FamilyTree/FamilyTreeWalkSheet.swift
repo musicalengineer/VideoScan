@@ -80,6 +80,10 @@ struct FamilyTreeWalkSheet: View {
     @State private var rollCall: RollCallPlayback?
     @State private var rollCallCache: [RollCall.Order: RollCallPlayback] = [:]
     @State private var rollCallTask: Task<Void, Never>?
+    /// The Roll Call plays by itself once per tree-walk session (this sheet),
+    /// not on every switch of people in the map (Rick 2026-10-05); the map's
+    /// Roll Call button plays it again on request.
+    @State private var rollCallAutoPlayed = false
     /// Credits or Drifting names — chosen in the map's Roll Call menu.
     @AppStorage(RollCallStyle.storageKey) private var rollCallStyleRaw = RollCallStyle.credits.rawValue
 
@@ -194,7 +198,7 @@ struct FamilyTreeWalkSheet: View {
         case .map(let animator, let highlighter, let map):
             FamilyTreeMapView(model: map, highlighter: highlighter,
                               onBack: { stage = .watching(animator, highlighter) },
-                              onRollCall: { order in playRollCall(highlighter, order: order) },
+                              onRollCall: { order, mix in playRollCall(highlighter, order: order, mix: mix) },
                               rollCallBusy: rollCallTask != nil)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let why):
@@ -368,7 +372,10 @@ struct FamilyTreeWalkSheet: View {
         // The family's own knowledge fills the tree's gaps (Rick 2026-09-29):
         // the CyberBrain the tree already loaded, read-only; nil = tree only.
         let familyKnowledge = model.walkFamilyKnowledge
-        playRollCall(highlighter, order: Self.defaultRollCallOrder)
+        if !rollCallAutoPlayed {
+            rollCallAutoPlayed = true
+            playRollCall(highlighter, order: Self.defaultRollCallOrder)
+        }
         mapTask = Task { @MainActor in
             defer { mapTask = nil }
             do {
@@ -396,10 +403,11 @@ struct FamilyTreeWalkSheet: View {
     /// prepared it, else prepared off-main first (a fraction of a second;
     /// the overlay appears when it is ready). A request while one is being
     /// prepared is ignored.
-    private func playRollCall(_ highlighter: TreeWalkHighlighter, order: RollCall.Order) {
-        // Every 3rd play is a shuffled mix (Rick 2026-10-04) — prepared
-        // fresh, never from or into the cache, so the usual picks stay put.
-        let mixSeed: UInt64? = RollCallMix.advance() ? UInt64.random(in: .min ... .max) : nil
+    private func playRollCall(_ highlighter: TreeWalkHighlighter, order: RollCall.Order, mix: Bool = false) {
+        // Every 3rd play is a shuffled mix (Rick 2026-10-04), or any play
+        // asked for as one — prepared fresh, never from or into the cache,
+        // so the usual picks stay put.
+        let mixSeed: UInt64? = (RollCallMix.advance() || mix) ? UInt64.random(in: .min ... .max) : nil
         if mixSeed == nil, let cached = rollCallCache[order] {
             rollCall = cached.replay()
             appLog.write("Roll Call: replay (\(cached.entries.count) names, \(order.rawValue))")
