@@ -100,3 +100,13 @@ def test_a_link_failure_reads_as_build_failed_not_no_tests():
     log = ("ld: symbol(s) not found for architecture arm64\nclang: error: linker command failed with exit code 1\n"
            "Testing failed:\n\tTesting cancelled because the build failed.\n** TEST FAILED **\n")
     assert ws.status_for(ws.parse_log(log), timed_out=False) == "build-failed"
+
+
+def test_a_relaunched_test_host_is_a_crash_not_a_pass():
+    log = ("Test Suite 'VideoScanTests.xctest' started at 2026-10-05 04:51:05.147.\n"
+           "Test Suite 'VideoScanTests.xctest' started at 2026-10-05 05:01:15.667.\n" + GREEN_LOG)
+    p = ws.parse_log(log)
+    assert p["host_restarts"] == 1
+    assert ws.status_for(p, timed_out=False) == "host-crashed"
+    line = alert.lines_for(_row("host-crashed", host_restarts=1), NOW, 8)[0]
+    assert line.startswith("🔴") and "crashed 1×" in line

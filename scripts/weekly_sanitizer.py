@@ -66,7 +66,12 @@ def parse_log(text: str) -> dict:
     run = RUN_LINE.findall(text)
     tests, suites, outcome = (int(run[-1][0]), int(run[-1][1]), run[-1][2]) if run else (0, 0, None)
     failed_tests = sorted(set(FAILED_TEST.findall(text)))
+    # xcodebuild silently relaunches a test host that died mid-run; the only
+    # trace is a second "Test Suite 'VideoScanTests.xctest' started" line
+    # (2026-10-05: a TSan-runtime SIGSEGV lost ~800 cases unnoticed).
+    host_starts = text.count("Test Suite 'VideoScanTests.xctest' started")
     return {
+        "host_restarts": max(0, host_starts - 1),
         "reports": len(REPORT_START.findall(text)),
         "unique_findings": summaries,
         "tests": tests,
@@ -84,6 +89,8 @@ def status_for(parsed: dict, timed_out: bool) -> str:
     """One word for the morning: findings beat everything else."""
     if parsed["unique_findings"] or parsed["reports"]:
         return "findings"
+    if parsed.get("host_restarts"):
+        return "host-crashed"
     if timed_out:
         return "timeout"
     if parsed["build_failed"]:

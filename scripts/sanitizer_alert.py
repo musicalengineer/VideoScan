@@ -44,7 +44,9 @@ def lines_for(row: dict, now: dt.datetime, max_age_days: float) -> list[str]:
     if status == "skipped-busy":
         return [f"🟡 {name} ({when}) skipped — {row.get('reason', 'M4 busy')}"]
     detail = {"build-failed": "build failed", "tests-failed": "tests failed",
-              "timeout": "timed out", "no-tests-ran": "no tests ran"}.get(status, status or "unknown")
+              "timeout": "timed out", "no-tests-ran": "no tests ran",
+              "host-crashed": f"the test host crashed {row.get('host_restarts', 1)}× and was relaunched "
+                              "(some tests never ran — see the .ips in DiagnosticReports)"}.get(status, status or "unknown")
     failed = row.get("failed_tests") or []
     tail = f": {', '.join(failed[:MAX_LISTED])}" if failed else ""
     return [f"🔴 {name} ({when}, {row.get('sha', '?')}): {detail}{tail} — log {row.get('log', '?')}"]
