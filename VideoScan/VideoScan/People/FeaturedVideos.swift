@@ -33,6 +33,26 @@ struct FeaturedVideo: Codable, Equatable, Hashable, Sendable {
 
 enum FeaturedVideos {
 
+    /// Decode a stored pick list ROW BY ROW (codex 2026-10-04 P1): a row this
+    /// build can't read — or a value that isn't a list at all — is kept
+    /// verbatim in `quarantined` and written back, never dropped, so one bad
+    /// row can't make the next save erase every pick.
+    static func decodeRows(_ raw: JSONValue?) -> (readable: [FeaturedVideo], quarantined: [JSONValue]) {
+        guard let raw else { return ([], []) }
+        guard case .array(let rows) = raw else { return ([], [raw]) }
+        var readable: [FeaturedVideo] = []
+        var quarantined: [JSONValue] = []
+        for row in rows {
+            if let data = try? JSONEncoder().encode(row),
+               let pick = try? JSONDecoder().decode(FeaturedVideo.self, from: data) {
+                readable.append(pick)
+            } else {
+                quarantined.append(row)
+            }
+        }
+        return (readable, quarantined)
+    }
+
     /// Posted after a pick is added or removed (object: the profile uuid).
     static let changed = Notification.Name("VideoScan.featuredVideosChanged")
 

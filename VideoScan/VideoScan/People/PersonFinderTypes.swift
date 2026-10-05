@@ -511,6 +511,9 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// ("Show in People tab ▸ Donna", 2026-10-04) — about ten that are
     /// DEFINITELY them. Order = the order they were added.
     var featuredVideos: [FeaturedVideo] = []
+    /// Pick rows this build could not read, kept verbatim and written back
+    /// (same rule as `kinshipsQuarantined`).
+    var featuredVideosQuarantined: [JSONValue] = []
     /// The folder this profile lived in before the uuid migration
     /// (2026-09-12) — audit only, so "what happened to X and when" can be
     /// answered from the JSON alone. nil for profiles created after.
@@ -703,7 +706,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         case treeIdentityAttestation, notInFamilyTree
         case photoChosenAt
         case legacyFolderName
-        case featuredVideos
+        case featuredVideos, featuredVideosQuarantined
     }
 
     init(name: String, referencePath: String, rejectedFiles: [String] = [],
@@ -769,7 +772,10 @@ struct POIProfile: Codable, Identifiable, Equatable {
         aliases           = try c.decodeIfPresent([String].self, forKey: .aliases) ?? []
         // Hand-picked People-tab videos (2026-10-04). Tolerant: an unreadable
         // list degrades to empty rather than bricking the profile load.
-        featuredVideos    = Self.decodeIdentityField([FeaturedVideo].self, forKey: .featuredVideos, from: c) ?? []
+        let picks = FeaturedVideos.decodeRows(Self.decodeIdentityField(JSONValue.self, forKey: .featuredVideos, from: c))
+        featuredVideos    = picks.readable
+        featuredVideosQuarantined = (Self.decodeIdentityField([JSONValue].self, forKey: .featuredVideosQuarantined, from: c) ?? [])
+            + picks.quarantined
         // Family-name fields (2026-09-04). decodeIfPresent so older files
         // load unchanged, and cleaned on the way in so a blank written by any
         // path — an older build, a hand-edited json — is absent, not "".
@@ -929,6 +935,7 @@ struct POIProfile: Codable, Identifiable, Equatable {
         if !writingFeaturedVideos, let data = try? Data(contentsOf: url),
            let onDisk = try? JSONDecoder().decode(POIProfile.self, from: data) {
             copy.featuredVideos = onDisk.featuredVideos
+            copy.featuredVideosQuarantined = onDisk.featuredVideosQuarantined
         }
         // The single writer is also the single place blank collapses to
         // absent on disk (2026-09-04): "" and "   " never reach profile.json.

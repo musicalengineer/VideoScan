@@ -285,3 +285,83 @@ struct FeaturedVideosSurviveSavesTests {
         #expect(POIProfile.listAll().first { $0.uuid == p.uuid }?.featuredVideos.isEmpty == true)
     }
 }
+
+// MARK: - Codex overnight review 2026-10-04 (3 × P1), each pinned
+
+@Suite("People — codex 10/4 P1s")
+@MainActor
+struct PeopleCodexOvernightTests {
+
+    /// P1-1: one unreadable pick row must not make an ordinary save erase
+    /// every pick. The bad row is quarantined verbatim and written back.
+    @Test func aDamagedPickRowSurvivesAnOrdinarySave() throws {
+        let p = POIProfile(name: "Damaged\(UUID().uuidString.prefix(6))", referencePath: "")
+        try p.save()
+        let folder = POIStorage.folder(for: p)
+        let url = folder.appendingPathComponent("profile.json")
+        var obj = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any])
+        obj["featuredVideos"] = [
+            ["recordID": UUID().uuidString, "path": "/Volumes/X/good.mov", "filename": "good.mov", "addedAt": 0],
+            ["recordID": "not-a-uuid", "path": "/Volumes/X/bad.mov"],
+        ]
+        try JSONSerialization.data(withJSONObject: obj).write(to: url)
+
+        var loaded = try #require(POIProfile.listAll().first { $0.uuid == p.uuid })
+        #expect(loaded.featuredVideos.map(\.path) == ["/Volumes/X/good.mov"])
+        #expect(loaded.featuredVideosQuarantined.count == 1)
+        loaded.notes = "ordinary edit"
+        try loaded.save()
+
+        let back = try #require(POIProfile.listAll().first { $0.uuid == p.uuid })
+        #expect(back.featuredVideos.map(\.path) == ["/Volumes/X/good.mov"], "the good pick survived")
+        #expect(back.featuredVideosQuarantined.count == 1, "and the unreadable one was kept, not dropped")
+
+        // The dangerous case: a copy taken BEFORE the bad row existed (it
+        // has neither list) is saved afterwards — both must survive.
+        var stale = p
+        stale.notes = "stale edit"
+        try stale.save()
+        let after = try #require(POIProfile.listAll().first { $0.uuid == p.uuid })
+        #expect(after.notes == "stale edit")
+        #expect(after.featuredVideos.map(\.path) == ["/Volumes/X/good.mov"])
+        #expect(after.featuredVideosQuarantined.count == 1, "a stale save must not drop the quarantined row")
+    }
+
+    @Test func aDamagedFamilyPickRowSurvivesARename() throws {
+        let json = #"{"uuid":"\#(UUID().uuidString)","name":"Breen Family","featuredVideos":[{"recordID":"bad"}]}"#
+        var family = try JSONDecoder().decode(FamilyGroup.self, from: Data(json.utf8))
+        #expect(family.featuredVideosQuarantined.count == 1)
+        family.name = "Renamed Family"
+        let back = try JSONDecoder().decode(FamilyGroup.self, from: JSONEncoder().encode(family))
+        #expect(back.featuredVideosQuarantined.count == 1, "kept through a save")
+    }
+
+    /// P1-2: a crafted photo name can never point outside the family's own file.
+    @Test func aCraftedPhotoNameIsNeverTheFamilysPhoto() {
+        var family = FamilyGroup(name: "Crafted")
+        for bad in ["../\(UUID().uuidString)/profile.json", "/etc/hosts", "other-photo.jpg",
+                    "\(UUID().uuidString)-photo.jpg"] {
+            family.photoFilename = bad
+            #expect(FamilyGroupStore.photoURL(for: family) == nil, "\(bad)")
+        }
+        family.photoFilename = family.expectedPhotoFilename
+        #expect(FamilyGroupStore.photoURL(for: family)?.lastPathComponent == family.expectedPhotoFilename)
+    }
+
+    /// P1-2 + P1-3 sensors: trash only through the validated URL; the
+    /// permission check comes before any photo file is written.
+    @Test func trashAndPhotoWritesGoThroughTheGuards() throws {
+        let source = try SourceTree.appSource(named: "FamilyGroup.swift")
+        let trash = try #require(source.range(of: "static func moveToTrash"))
+        let trashBody = String(source[trash.upperBound...].prefix(600))
+        #expect(trashBody.contains("photoURL(for:"), "moveToTrash uses the validated photo URL")
+        let setPhoto = try #require(source.range(of: "static func setPhoto"))
+        let body = String(source[setPhoto.upperBound...].prefix(2500))
+        let guardAt = try #require(body.range(of: "ViewerWriteGuard.check"))
+        let firstWrite = try #require(body.range(of: "CGImageDestinationCreateWithURL"))
+        #expect(guardAt.lowerBound < firstWrite.lowerBound, "permission before any photo write")
+        let saveAt = try #require(body.range(of: "try save(group)"))
+        let replaceAt = try #require(body.range(of: "replaceItemAt"))
+        #expect(saveAt.lowerBound < replaceAt.lowerBound, "JSON committed before the old photo is replaced")
+    }
+}

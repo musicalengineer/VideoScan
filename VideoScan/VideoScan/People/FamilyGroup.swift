@@ -27,7 +27,13 @@ struct FamilyGroup: Codable, Identifiable, Equatable, Hashable, Sendable {
     var featuredVideos: [FeaturedVideo]
     var createdAt: Date
     /// The card's photo, a file beside the family's JSON (nil = group icon).
+    /// Only ever `<UUID>-photo.jpg` — see FamilyGroupStore.photoURL.
     var photoFilename: String?
+    /// Pick rows this build could not read, kept verbatim (codex 2026-10-04).
+    var featuredVideosQuarantined: [JSONValue] = []
+
+    /// The one photo filename a family may own.
+    var expectedPhotoFilename: String { "\(uuid.uuidString)-photo.jpg" }
 
     var id: UUID { uuid }
 
@@ -44,7 +50,10 @@ struct FamilyGroup: Codable, Identifiable, Equatable, Hashable, Sendable {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         uuid = try c.decode(UUID.self, forKey: .uuid)
         name = try c.decode(String.self, forKey: .name)
-        featuredVideos = (try? c.decodeIfPresent([FeaturedVideo].self, forKey: .featuredVideos)) ?? []
+        let picks = FeaturedVideos.decodeRows(try? c.decodeIfPresent(JSONValue.self, forKey: .featuredVideos))
+        featuredVideos = picks.readable
+        featuredVideosQuarantined = ((try? c.decodeIfPresent([JSONValue].self, forKey: .featuredVideosQuarantined)) ?? [])
+            + picks.quarantined
         createdAt = (try? c.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date(timeIntervalSince1970: 0)
         photoFilename = try? c.decodeIfPresent(String.self, forKey: .photoFilename)
     }
@@ -94,15 +103,25 @@ enum FamilyGroupStore {
         try enc.encode(group).write(to: url(for: group.uuid), options: .atomic)
     }
 
-    /// Where a family's card photo lives (nil when it has none).
+    /// Where a family's card photo lives — nil when it has none, or when
+    /// the stored name is anything but the family's own `<UUID>-photo.jpg`
+    /// (codex 2026-10-04 P1: a crafted `../<person>/profile.json` must never
+    /// be shown, replaced or trashed as the family's photo), or when that
+    /// path is a symlink.
     static func photoURL(for group: FamilyGroup) -> URL? {
-        group.photoFilename.map { directory.appendingPathComponent($0) }
+        guard let name = group.photoFilename, name == group.expectedPhotoFilename else { return nil }
+        let url = directory.appendingPathComponent(name)
+        if (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true { return nil }
+        return url
     }
 
     /// Copy `source` in as the family's card photo: decoded, downsized to
     /// 1024 px on the long side, written as JPEG beside the family's JSON
     /// (`<UUID>-photo.jpg`). The original file is never modified.
     static func setPhoto(from source: URL, for uuid: UUID) throws -> FamilyGroup {
+        // Permission FIRST (codex 2026-10-04 P1): a refused change must not
+        // have touched the old photo.
+        try ViewerWriteGuard.check("FamilyGroupStore.setPhoto")
         guard var group = load(uuid) else { throw CocoaError(.fileNoSuchFile) }
         let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
                                      kCGImageSourceCreateThumbnailWithTransform: true,
@@ -111,17 +130,28 @@ enum FamilyGroupStore {
               let image = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        let name = "\(uuid.uuidString)-photo.jpg"
+        let name = group.expectedPhotoFilename
         let dest = directory.appendingPathComponent(name)
         let tmp = directory.appendingPathComponent(".\(name).tmp")
+        defer { try? FileManager.default.removeItem(at: tmp) }   // our own temp only
         guard let out = CGImageDestinationCreateWithURL(tmp as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
             throw CocoaError(.fileWriteUnknown)
         }
         CGImageDestinationAddImage(out, image, [kCGImageDestinationLossyCompressionQuality: 0.88] as CFDictionary)
         guard CGImageDestinationFinalize(out) else { throw CocoaError(.fileWriteUnknown) }
-        _ = try FileManager.default.replaceItemAt(dest, withItemAt: tmp)
+        // Commit the JSON first; the old photo stays until it succeeds. The
+        // name never changes, so a replace that fails afterwards leaves the
+        // family pointing at its previous photo — never at nothing.
         group.photoFilename = name
         try save(group)
+        if (try? dest.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
+            throw CocoaError(.fileWriteNoPermission)   // never write through a planted link
+        }
+        if FileManager.default.fileExists(atPath: dest.path) {
+            _ = try FileManager.default.replaceItemAt(dest, withItemAt: tmp)
+        } else {
+            try FileManager.default.moveItem(at: tmp, to: dest)
+        }
         return group
     }
 
