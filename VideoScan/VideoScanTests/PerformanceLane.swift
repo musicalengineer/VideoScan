@@ -91,14 +91,17 @@ enum PerformanceLane {
     /// Pure form, for tests of the rule itself: off a GitHub-hosted runner
     /// the ceiling IS the budget, to the attosecond.
     static func debugCeiling(_ budget: Duration, environment: [String: String]) -> Duration {
-        budget * hostedRunnerFactor(environment: environment)
+        // Forward to the ONE rule (2026-10-04): it also widens for a
+        // sanitizer run (VIDEOSCAN_SANITIZER), which a local copy missed.
+        TimingBudget.debugCeiling(budget, environment: environment)
     }
 
     /// The same ceiling for suites that time with CFAbsoluteTime / Date and
     /// compare plain `Double` seconds or milliseconds. Same multiplier; the
     /// label only says which unit the caller is in.
     static func debugCeiling(seconds budget: Double) -> Double {
-        budget * Double(hostedRunnerFactor(environment: ProcessInfo.processInfo.environment))
+        let env = ProcessInfo.processInfo.environment
+        return budget * Double(hostedRunnerFactor(environment: env) * TimingBudget.sanitizerFactor(environment: env))
     }
 
     static func debugCeiling(milliseconds budget: Double) -> Double {
