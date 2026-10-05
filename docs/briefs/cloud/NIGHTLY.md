@@ -56,7 +56,7 @@ half-written; force-unwraps and `try!` on input or disk data; logs leaking media
 
 | Night | ID | Theme | Scope |
 |---|---|---|---|
-| 10-06 | N1006-D-ArchiveAngel | D | `VideoScan/VideoScan/ArchiveAngel/` (high churn) |
+| 10-06 | N1006-D-Catalog | D | `Catalog/` view layer + `Volumes/VolumesWindow*.swift` — **see the Catalog note below** |
 | 10-07 | N1007-R-MediaOps-prune | R | MediaOps prune / relocate / purges / soft delete / junk + trash selection (the data-risk list in docs/guides/source_layout.md) |
 | 10-08 | N1008-T-Archive | T | `Archive/` and its tests |
 | 10-09 | N1009-D-Core | D | `VideoScan/VideoScanCore/Sources/` (highest Swift churn) |
@@ -66,7 +66,7 @@ half-written; force-unwraps and `try!` on input or disk data; logs leaking media
 | 10-13 | N1013-D-FamilyTree | D | `FamilyTree/` |
 | 10-14 | N1014-H-MediaOps-jobs | H | MediaOps jobs that are not deletion: combine, transcode, trim, reformat, rebuild audio, rescue copy, publishers |
 | 10-15 | N1015-T-MediaOps-delete | T | Delete Duplicates / Steward / prune tests |
-| 10-16 | N1016-D-Catalog | D | `Catalog/` |
+| 10-16 | N1016-D-ArchiveAngel | D | `VideoScan/VideoScan/ArchiveAngel/` (high churn) |
 | 10-17 | N1017-H-Archive | H | `Archive/` |
 | 10-18 | N1018-D-MediaOps | D | `MediaOps/` |
 | 10-19 | N1019-R-week | R | everything merged on main 10-12..10-18 under the data-risk folders (`git log`) |
@@ -86,6 +86,27 @@ half-written; force-unwraps and `try!` on input or disk data; logs leaking media
 | 11-02 | N1102-D-whole | D | whole app: cross-folder duplication and the debt trend vs the first D nights |
 | 11-03 | N1103-T-whole | T | the 15 most important guards in the app; is each pinned? |
 | 11-04 | N1104-R-final | R | merged 11-01..11-03 + anything still open from earlier nights |
+
+### Catalog note (N1006; Rick 2026-10-05)
+The Catalog window grew fast and was never refactored; arrow-key focus took
+four commits to fix today. Spot measurements (lizard 1.22, 10-05):
+`CatalogContent+Table.swift` `rowContextMenu` CCN 81 / 489 lines;
+`CatalogView+VolumeTable.swift` `volumeContextCatalogSection` CCN 36 / 182 lines;
+`CatalogHelpers.swift` holds 34 `@State` and the files table's `@FocusState`; the
+volume table has no focus handling at all; Stage 0 measured `tableWithCatalogTriggers` at
+21.7 s type-check. Note lizard undercounts SwiftUI computed `body`/`some View`
+properties, so read those by eye.
+
+**The behaviour the refactor must make easy (acceptance spec):** two panes,
+volumes and files. A single click in a pane gives that pane the keyboard
+and highlights its row; ↑/↓ then move within THAT pane only; double-click opens.
+Today ↑/↓ always moves the files even after a click in the volume pane. The plan
+should end with one focus owner (e.g. an `enum Pane` `@FocusState` that both tables
+bind to), the selection/focus state collected out of `CatalogHelpers`, the giant
+context menus split by section, and the modifier chain broken up. Also: the Analyze
+tab (`AnalyzeCoverage.swift:291`, `AnalyzeReclaimable.swift:173`) still uses
+longest-root-first drive matching while Delete uses first-in-list
+(`VideoScanModel.duplicateVolumeRoot`): two answers to one question; include it.
 
 The Manager may rewrite rows that haven't run yet, based on what earlier nights
 found. If the cost per night or the share of findings that survive verification
