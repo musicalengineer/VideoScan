@@ -1,5 +1,9 @@
 # VideoScan — Install & Setup
 
+> **New Mac?** Use [`install_videoscan_dev_dependencies/`](install_videoscan_dev_dependencies/README.md):
+> one script installs the full dev environment (macOS 27 / Xcode 27), a second copies the data
+> from your old Mac. This page remains the manual walk-through.
+
 Fresh-machine setup for running and developing VideoScan on macOS. Target audience: Rick, family, or anyone cloning the repo for the first time. There is no installer — VideoScan is built and run from Xcode.
 
 **Tested on:** macOS 14+ (Sonoma) and later, Apple Silicon (M1–M5). Intel Macs are not a supported runtime target.

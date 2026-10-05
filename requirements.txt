@@ -1,4 +1,5 @@
-# VideoScan — Python top-level dependencies.
+# VideoScan — Python top-level dependencies (venv/, Python 3.14 — see
+# install_videoscan_dev_dependencies/lib.sh for the pinned interpreters).
 # uv resolves transitive deps to a consistent set on install; no need to pin
 # every transitive package the way a `pip freeze` snapshot would.
 #
@@ -47,6 +48,8 @@ pandas
 # ---- Utilities ----
 tqdm
 lizard
+pyshp       # `import shapefile` — scripts/build_family_map_units.py (Family Map county borders)
+pyyaml      # `import yaml` — tests/test_nightly_findings_to_issues.py
 
 # Python test runner (Rick 2026-08-27: pytest for all Python-side tests — qwen-bench harness, hallie_eval, personfinder runner)
 pytest>=9.1
