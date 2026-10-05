@@ -27,6 +27,11 @@ if [ -n "$NF" ]; then
     printf '%s' "$NF" | python3 "$REPO_ROOT/scripts/nightly_findings_alert.py" || true
 fi
 
+# Weekly Address/Thread Sanitizer runs (2026-10-04): 🔴 on findings or a
+# failed run, 🟡 if skipped, silent when green. Local files on the M4, so
+# quiet on other hosts. Never fails the digest.
+python3 "$REPO_ROOT/scripts/sanitizer_alert.py" || true
+
 TD="$(git show origin/metrics:metrics/testdriver.jsonl 2>/dev/null || true)"
 SA="$(git show origin/metrics:metrics/static_analysis.jsonl 2>/dev/null || true)"
 
