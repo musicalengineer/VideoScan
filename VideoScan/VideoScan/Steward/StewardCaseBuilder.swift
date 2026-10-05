@@ -278,7 +278,11 @@ enum StewardCaseBuilder {
                       reviewed: [String: StewardFacts] = [:],
                       calendar: Calendar = .current,
                       now: Date = Date()) -> StewardQueue {
-        let scanRoots = volumes.map(\.root).sorted { $0.count > $1.count }
+        // In the scan targets' LIST order — the Delete flow's own drive
+        // rule takes the first target that holds a path (C01-F1: a
+        // longest-first order here put a copy on another drive than the
+        // run its card offers).
+        let scanRoots = volumes.map(\.root)
         var rootCache: [String: String] = [:]
         // The drive a path lives on, memoised per FOLDER (files in one
         // folder share a drive) so 100k paths cost a few thousand lookups.
@@ -388,7 +392,8 @@ enum StewardCaseBuilder {
         for members in groups.values {
             guard let keeper = members.first(where: { inputs[$0].isKeeper }) else { continue }
             for i in members where inputs[i].isExtraCopy && !inputs[i].protection.isProtected
-                && (roots[i] == roots[keeper] || alsoCleanUpWorkingCopies) {
+                && (VideoScanModel.duplicateKeeperIsOnVolume(keeperPath: inputs[keeper].fullPath, volumePath: roots[i])
+                    || alsoCleanUpWorkingCopies) {
                 if idsByDrive[roots[i], default: []].count < maxIDsPerCase {
                     idsByDrive[roots[i], default: []].append(inputs[i].id)
                 }
@@ -452,10 +457,17 @@ enum StewardCaseBuilder {
                 let root = roots[i]
                 drives.insert(root)
                 total += max(0, r.sizeBytes)
-                // QA F6(a): in working-copy mode, only what the planner's
-                // own rule would take — not every copy on another drive.
-                let crossVerdict = rule.verdict(copyRoot: root, keeperRoot: keeperRoot, keeperPath: inputs[keeperIndex].fullPath, modeOn: alsoCleanUpWorkingCopies)
-                let flowWouldCheck = root == keeperRoot || crossVerdict?.isEligible == true
+                // The run on this copy's drive takes it when its keeper is
+                // inside that drive — the selection's own test (C01-F1: not
+                // "the two drive roots are equal", which nested scan
+                // targets break). QA F6(a): otherwise, in working-copy
+                // mode, only what the planner's own rule would take.
+                let keeperOnThisDrive = VideoScanModel.duplicateKeeperIsOnVolume(
+                    keeperPath: inputs[keeperIndex].fullPath, volumePath: root)
+                let crossVerdict = keeperOnThisDrive ? nil
+                    : rule.verdict(copyRoot: root, keeperRoot: keeperRoot, keeperPath: inputs[keeperIndex].fullPath,
+                                   modeOn: alsoCleanUpWorkingCopies)
+                let flowWouldCheck = keeperOnThisDrive || crossVerdict?.isEligible == true
                 let standing: StewardCopyStanding
                 if r.isKeeper {
                     standing = .keeper
@@ -536,13 +548,16 @@ enum StewardCaseBuilder {
 
         init(policy: DuplicateKeeperPolicy) { self.policy = policy }
 
-        /// nil when the question does not arise: the same drive as the
-        /// keeper, or "Also clean up working copies" is off.
+        /// nil when the question does not arise: "Also clean up working
+        /// copies" is off. (The caller asks only for a copy whose keeper is
+        /// NOT inside its drive — `duplicateKeeperIsOnVolume`.)
         mutating func verdict(copyRoot: String, keeperRoot: String, keeperPath: String,
                               modeOn: Bool) -> DuplicateKeeperPolicy.CrossVolumeVerdict? {
-            guard modeOn, copyRoot != keeperRoot else { return nil }
+            guard modeOn else { return nil }
             let key = copyRoot + "\u{0}" + keeperRoot
             if let hit = memo[key] { return hit }
+            // As `duplicateDeletionSelection(onVolume: copyRoot)` asks it:
+            // the chosen drive, its own drive root, the keeper's drive.
             let v = policy.crossVolumeVerdict(extraPath: copyRoot, volumeRoot: copyRoot,
                                               keeperPath: keeperPath, keeperRoot: keeperRoot)
             memo[key] = v
@@ -781,16 +796,12 @@ enum StewardCaseBuilder {
 
     // MARK: Small pure helpers
 
-    /// `/Volumes/X/…` → `/Volumes/X`; otherwise the longest scan root the
-    /// path is under; otherwise its folder. Same answer as
-    /// `VideoScanModel.volumeRoot(for:)` and the Delete flow's volume list.
+    /// The drive the Delete flow puts `path` on — `VideoScanModel.volumeRoot(for:)`'s
+    /// own rule, asked, not restated (C01-F1): `/Volumes/X/…` → `/Volumes/X`;
+    /// otherwise the FIRST scan root in list order that holds it; otherwise
+    /// its folder. `scanRoots` must be in the scan targets' list order.
     nonisolated static func driveRoot(of path: String, scanRoots: [String]) -> String {
-        if path.hasPrefix("/Volumes/") {
-            let name = path.dropFirst(9).prefix { $0 != "/" }
-            return "/Volumes/" + name
-        }
-        for root in scanRoots where VolumeDashboardCalculator.isUnder(path, root: root) { return root }
-        return (path as NSString).deletingLastPathComponent
+        VideoScanModel.duplicateVolumeRoot(for: path, scanTargetPaths: scanRoots)
     }
 
     nonisolated static func isConnected(_ root: String, mountedRoots: Set<String>) -> Bool {
