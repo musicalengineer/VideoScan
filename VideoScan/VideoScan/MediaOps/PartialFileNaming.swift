@@ -38,6 +38,7 @@
 
 import Darwin
 import Foundation
+import VideoScanCore
 import os
 
 private let partialLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "fileOps")
@@ -123,7 +124,7 @@ enum PartialFileNaming {
     static func fileID(_ url: URL) -> FileID? {
         var st = stat()
         guard lstat(url.path, &st) == 0 else { return nil }
-        return FileID(dev: UInt64(bitPattern: Int64(st.st_dev)), ino: UInt64(st.st_ino))
+        return FileID(dev: DeviceID.from(st.st_dev), ino: UInt64(st.st_ino))
     }
 
     struct LiveSet: Sendable {

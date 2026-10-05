@@ -989,7 +989,7 @@ enum SignatureVerification {
     static func wholeFileFixity(path: String, label: String, hooks: Hooks, before: FileIdentityStamp) -> WholeFileFixity {
         var swapped = false
         let digest = cancellableFullHash(path: path, label: label, hooks: hooks) { opened in
-            let same = UInt64(opened.st_dev) == before.device && UInt64(opened.st_ino) == before.inode
+            let same = DeviceID.from(opened.st_dev) == before.device && UInt64(opened.st_ino) == before.inode
             if !same { swapped = true }
             return same
         }

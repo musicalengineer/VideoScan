@@ -237,7 +237,7 @@ public struct FileIdentityStamp: Codable, Equatable, Hashable, Sendable {
 
     private static func stamp(from info: stat, volumeUUID: String?) -> FileIdentityStamp {
         FileIdentityStamp(
-            device: UInt64(info.st_dev),
+            device: DeviceID.from(info.st_dev),
             inode: UInt64(info.st_ino),
             size: Int64(info.st_size),
             mtimeNs: Int64(info.st_mtimespec.tv_sec) &* 1_000_000_000 &+ Int64(info.st_mtimespec.tv_nsec),

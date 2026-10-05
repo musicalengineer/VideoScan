@@ -360,3 +360,21 @@ struct DeleteDuplicatesCodex258Round3Tests {
         #expect(SourceTree.strippingComments("first()\n    // why\n    /* and why */\nsecond()") == "first()\nsecond()")
     }
 }
+
+// MARK: - st_dev conversion sensor (2026-10-05)
+
+@Suite("SENSOR — st_dev goes through DeviceID.from")
+struct DeviceIDSourceSensorTests {
+    /// `UInt64(x.st_dev)` traps on a negative device number (CI crash,
+    /// 2026-10-05). Production code converts through DeviceID.from only.
+    @Test func noRawStDevConversionInProductionCode() throws {
+        let names = ["DeleteDuplicatesDrives.swift", "SignatureVerification.swift",
+                     "ArchivePromoteEngine.swift", "PartialFileNaming.swift"]
+        for name in names {
+            let code = try SourceTree.appCode(named: name)
+            #expect(code.range(of: #"UInt(64|32)?\([A-Za-z_.]*st_dev\)"#, options: .regularExpression) == nil,
+                    "\(name) converts st_dev without DeviceID.from")
+            #expect(code.contains("DeviceID.from("), "\(name) no longer uses DeviceID.from")
+        }
+    }
+}

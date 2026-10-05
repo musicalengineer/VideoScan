@@ -47,6 +47,7 @@
 import CryptoKit
 import Darwin
 import Foundation
+import VideoScanCore
 
 enum ArchivePromoteEngine {
 
@@ -135,7 +136,7 @@ enum ArchivePromoteEngine {
         let mtimeNsec: Int64
 
         fileprivate init(_ sb: stat) {
-            device = UInt64(sb.st_dev); inode = UInt64(sb.st_ino); size = Int64(sb.st_size)
+            device = DeviceID.from(sb.st_dev); inode = UInt64(sb.st_ino); size = Int64(sb.st_size)
             mtimeSec = Int64(sb.st_mtimespec.tv_sec); mtimeNsec = Int64(sb.st_mtimespec.tv_nsec)
         }
 

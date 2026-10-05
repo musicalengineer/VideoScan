@@ -206,7 +206,7 @@ enum DuplicateDrives {
             if let given = DuplicateDrives.overridden(path) { return DuplicateDrives.drive(given, path: path) }
             var info = stat()
             guard stat(path, &info) == 0 else { return nil }
-            let device = UInt64(info.st_dev)
+            let device = DeviceID.from(info.st_dev)
             let uuid: String?
             if let known = uuids[device] { uuid = known } else {
                 uuid = VolumeIdentity.uuid(forPath: path)
@@ -326,7 +326,7 @@ enum DuplicateDrives {
     nonisolated static func liveKind(forPath path: String) -> VolumeKind {
         var info = stat()
         guard stat(path, &info) == 0 else { return .unknown }
-        return liveIdentityCached(forPath: path, device: UInt64(info.st_dev), volumeUUID: VolumeIdentity.uuid(forPath: path)).kind
+        return liveIdentityCached(forPath: path, device: DeviceID.from(info.st_dev), volumeUUID: VolumeIdentity.uuid(forPath: path)).kind
     }
 
     private nonisolated static func describe(node: String, device: UInt64) -> Identity {
