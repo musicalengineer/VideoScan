@@ -113,7 +113,7 @@ def test_override_passes_and_is_logged_then_honored_by_ci(tmp_path):
     code, out, overrides = run(tmp_path, text, base, reason="hotfix for Rick, split in #282")
     assert code == 0
     assert "BLOCKED  CCN  35" in out                       # still shown, never silent
-    assert 'OVERRIDDEN — "hotfix for Rick, split in #282"' in out
+    assert 'OVERRIDDEN by unknown author — "hotfix for Rick, split in #282"' in out and '🔴' in out
     rec = json.loads(Path(overrides).read_text().strip())
     assert rec["reason"] == "hotfix for Rick, split in #282" and rec["ts"] == "2026-10-05T18:00:00Z"
     assert list(rec["functions"]) == [f"{PATH}::Synthetic.big"] and rec["functions"][f"{PATH}::Synthetic.big"]["ccn"] == 35

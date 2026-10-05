@@ -27,9 +27,14 @@ if [ -n "$NF" ]; then
     printf '%s' "$NF" | python3 "$REPO_ROOT/scripts/nightly_findings_alert.py" || true
 fi
 
-# Complexity debt (GitHub nightly, report only): 🟡 + the list when a new
-# function crossed CCN 15 / 80 lines or a known one got worse; ✅ when
-# baseline offenders were fixed; silent otherwise. Never fails the digest.
+# Complexity debt (Rick 2026-10-05: nothing gets quietly baselined): 🔴 for
+# every NEW / WORSE offender and every gate override (function, CCN, lines,
+# reason, commit, author); 🔴 if the 2 AM nightly refused or failed to commit
+# the shrunk baseline (local status file, M4 only). Never fails the digest.
+CXS="$HOME/Library/Logs/VideoScan/complexity_baseline_commit.json"
+if [ -f "$CXS" ]; then
+    python3 "$REPO_ROOT/scripts/complexity_baseline_nightly.py" --alert "$CXS" || true
+fi
 CX="$(git show origin/metrics:metrics/complexity_debt_latest.json 2>/dev/null || true)"
 if [ -n "$CX" ]; then
     printf '%s' "$CX" | python3 "$REPO_ROOT/scripts/complexity_metrics.py" --alert - || true

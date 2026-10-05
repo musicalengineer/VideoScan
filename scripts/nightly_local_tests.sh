@@ -944,6 +944,14 @@ fi
 # coverage only when the normal, non-timeout extraction produced it.
 publish_current_test_result
 
+# ── Complexity baseline: commit the shrink (Rick 2026-10-05) ────────
+# Removals only, verified before commit; works in its own worktree at
+# origin/main and never touches this (possibly dirty) checkout. Refused or
+# failed = 🔴 in the morning digest. Never changes this run's exit code.
+CX_PY="$REPO/venv/bin/python3"
+[ -x "$CX_PY" ] || CX_PY=python3
+log "Complexity baseline: $("$CX_PY" "$REPO/scripts/complexity_baseline_nightly.py" --repo "$REPO" 2>&1 | tail -1)"
+
 # ── Cleanup ─────────────────────────────────────────────────────────
 rm -rf /tmp/nightly-results.xcresult /tmp/nightly-test-output.log
 log "=== Nightly test run complete (publish rc=$PUBLISH_RC, status=$STATUS) ==="

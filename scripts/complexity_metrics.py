@@ -527,13 +527,26 @@ def debt_report(result: dict, baseline: Dict[str, dict], offender_count: int,
 
 
 def alert_lines(debt: dict, limit: int = 10) -> List[str]:
-    """Morning-digest lines. Empty when there is nothing new or worse."""
+    """Morning-digest lines (Rick 2026-10-05: nothing gets quietly baselined).
+    🔴 for every NEW or WORSE offender, listed for Rick's decision, and 🔴 for
+    every gate override with its function, CCN, lines, reason, commit and
+    author. Empty when there is nothing to decide."""
     new, worse = debt.get("new") or [], debt.get("worse") or []
     lines: List[str] = []
+    for rec in debt.get("overrides_recent") or []:
+        lines.append(f"🔴 Complexity gate OVERRIDDEN {str(rec.get('ts', ''))[:16]} by "
+                     f"{rec.get('author') or 'unknown author'} in commit {rec.get('commit') or 'unknown'}: "
+                     f"\"{rec.get('reason', '')}\"")
+        for f in rec.get("function_details") or []:
+            lines.append(f"   CCN {f.get('ccn')!s:>3} NLOC {f.get('nloc')!s:>4}  "
+                         f"{os.path.basename(f.get('file', ''))} :: {f.get('function')}")
+        for d in rec.get("disables") or []:
+            lines.append(f"   swiftlint:disable {d.split('|', 1)[-1]} in {os.path.basename(d.split('|', 1)[0])}")
     if new or worse:
-        lines.append(f"🟡 Complexity debt ({str(debt.get('ts', ''))[:10]}): "
+        lines.append(f"🔴 Complexity debt ({str(debt.get('ts', ''))[:10]}): "
                      f"{len(new)} NEW offender(s), {len(worse)} got worse "
-                     f"(CCN > {CCN_LIMIT} or NLOC > {NLOC_LIMIT}; report only)")
+                     f"(CCN > {CCN_LIMIT} or NLOC > {NLOC_LIMIT}) — Rick's decision: split it, "
+                     "or accept it with `--update-baseline` and say why in the commit")
         for f in (new + worse)[:limit]:
             tag = "new  " if f in new else "worse"
             was = f" (was {f['base_ccn']}/{f['base_nloc']})" if "base_ccn" in f else ""
@@ -542,12 +555,9 @@ def alert_lines(debt: dict, limit: int = 10) -> List[str]:
         extra = len(new) + len(worse) - limit
         if extra > 0:
             lines.append(f"   … and {extra} more in metrics/complexity_debt_latest.json")
-    for rec in debt.get("overrides_recent") or []:
-        lines.append(f"🟠 Complexity gate OVERRIDDEN {str(rec.get('ts', ''))[:16]}: \"{rec.get('reason', '')}\" "
-                     f"({len(rec.get('functions') or [])} function(s), {len(rec.get('disables') or [])} disable(s))")
     if debt.get("fixed"):
-        lines.append(f"✅ Complexity debt: {len(debt['fixed'])} baseline offender(s) fixed. Lock it in: "
-                     "python3 scripts/complexity_metrics.py --shrink-baseline (commit the result).")
+        lines.append(f"✅ Complexity debt: {len(debt['fixed'])} baseline offender(s) fixed "
+                     "(the 2 AM nightly commits the shrunk baseline).")
     if debt.get("shrink_skipped"):
         lines.append(f"⚠️  Complexity baseline not shrunk: {debt['shrink_skipped']}")
     return lines
@@ -749,10 +759,32 @@ def recent_overrides(records: Sequence[dict], now: _dt.datetime, hours: float = 
         except ValueError:
             continue
         if (now - ts).total_seconds() <= hours * 3600:
+            funcs = rec.get("functions") or {}
             out.append({"ts": rec.get("ts"), "reason": rec.get("reason", ""),
-                        "functions": sorted((rec.get("functions") or {}).keys()),
+                        "author": rec.get("author", ""), "commit": rec.get("commit", ""),
+                        "functions": sorted(funcs.keys()),
+                        "function_details": [{"key": k, "file": key_file(k),
+                                              "function": k.split("::", 1)[-1],
+                                              "ccn": v.get("ccn"), "nloc": v.get("nloc")}
+                                             for k, v in sorted(funcs.items())],
                         "disables": sorted((rec.get("disables") or {}).keys())})
     return out
+
+
+def resolve_override_commits(records: List[dict], root: str, overrides_rel: str) -> None:
+    """Fill `commit` on each override record: the commit that added its line
+    to the override log (the hook cannot know its own commit's SHA). Needs
+    history (the nightly job checks out with fetch-depth 0). Best effort."""
+    for rec in records:
+        if rec.get("commit") or not rec.get("ts"):
+            continue
+        try:
+            out = subprocess.run(["git", "-C", root, "log", "--format=%h", "-S", f'"ts":"{rec["ts"]}"',
+                                  "--", overrides_rel], capture_output=True, text=True, check=True).stdout
+            shas = out.split()
+            rec["commit"] = shas[-1] if shas else "not committed yet"
+        except (OSError, subprocess.CalledProcessError):
+            rec["commit"] = "unknown"
 
 
 def build_row(funcs: Sequence[Func], file_lines: Dict[str, int], debt: dict,
@@ -778,8 +810,77 @@ def build_row(funcs: Sequence[Func], file_lines: Dict[str, int], debt: dict,
 
 
 def shrink_disables(baseline: Dict[str, int], current: Dict[str, int]) -> Dict[str, int]:
-    """Grandfathered disables only shrink: gone keys drop, counts go down."""
-    return {k: min(v, current[k]) for k, v in baseline.items() if current.get(k, 0) > 0}
+    """Grandfathered disables only shrink, per RULE: a rule's entries are
+    lowered only when the whole tree now has fewer of that rule than the
+    baseline allows, and never below what the tree really has. (A disable
+    that moved with its function keeps its old file's allowance; the gate
+    counts per rule across the touched files.)"""
+    def total(counts: Dict[str, int], rule: str) -> int:
+        return sum(n for k, n in counts.items() if k.split("|", 1)[1] == rule)
+    out = dict(baseline)
+    for rule in {k.split("|", 1)[1] for k in baseline}:
+        have, allowed = total(current, rule), total(baseline, rule)
+        if have >= allowed:
+            continue
+        excess = allowed - have
+        # Drop allowances from files that no longer use them first.
+        for k in sorted((k for k in baseline if k.split("|", 1)[1] == rule),
+                        key=lambda k: (current.get(k, 0) - baseline[k], k)):
+            if excess <= 0:
+                break
+            cut = min(excess, max(0, out[k] - current.get(k, 0)))
+            out[k] -= cut
+            excess -= cut
+            if out[k] <= 0:
+                out.pop(k)
+    return out
+
+
+def strict_shrink(baseline: Dict[str, dict], result: dict) -> Dict[str, dict]:
+    """The baseline the nightly may COMMIT: removals and lowerings only. A
+    moved offender keeps its OLD key (the gate matches moves), so nothing is
+    ever added."""
+    if result.get("shrink_skipped"):
+        return dict(baseline)
+    out = {k: v for k, v in result["next_baseline"].items() if k in baseline}
+    for new_key, old_key in (result.get("moved") or {}).items():
+        cur = result["next_baseline"].get(new_key, baseline[old_key])
+        out[old_key] = {"ccn": min(baseline[old_key]["ccn"], cur["ccn"]),
+                        "nloc": min(baseline[old_key]["nloc"], cur["nloc"])}
+    return out
+
+
+def verify_removals_only(old: Dict[str, dict], new: Dict[str, dict],
+                         old_dis: Dict[str, int], new_dis: Dict[str, int]) -> List[str]:
+    """Why a baseline change is NOT a pure shrink. Empty = safe to commit."""
+    problems = [f"adds {k}" for k in sorted(set(new) - set(old))]
+    for k in sorted(set(new) & set(old)):
+        for field in ("ccn", "nloc"):
+            if new[k][field] > old[k][field]:
+                problems.append(f"raises {field} of {k}: {old[k][field]} -> {new[k][field]}")
+    problems += [f"adds disable {k}" for k in sorted(set(new_dis) - set(old_dis))]
+    problems += [f"raises disable {k}: {old_dis[k]} -> {new_dis[k]}"
+                 for k in sorted(set(new_dis) & set(old_dis)) if new_dis[k] > old_dis[k]]
+    return problems
+
+
+def shrink_plan(root: str, baseline_path: str) -> dict:
+    """Scan `root`, compute the removals-only baseline and verify it.
+    {"changed", "problems", "entries", "disables", "fixed", "before", "after"}."""
+    funcs, _, extras = scan(root)
+    baseline = load_baseline(baseline_path)
+    base_dis = load_disables(baseline_path)
+    result = ratchet(funcs, baseline)
+    if result["shrink_skipped"]:
+        return {"changed": False, "problems": [f"shrink guard: {result['shrink_skipped']}"],
+                "entries": baseline, "disables": base_dis, "fixed": [], "before": len(baseline),
+                "after": len(baseline)}
+    shrunk = strict_shrink(baseline, result)
+    dis = shrink_disables(base_dis, extras["disables"])
+    return {"changed": shrunk != baseline or dis != base_dis,
+            "problems": verify_removals_only(baseline, shrunk, base_dis, dis),
+            "entries": shrunk, "disables": dis, "fixed": result["fixed"],
+            "before": len(baseline), "after": len(shrunk)}
 
 
 def _set_output(name: str, value) -> None:
@@ -853,12 +954,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if result["shrink_skipped"]:
             print(f"Not shrinking: {result['shrink_skipped']}")
             return 1
-        write_baseline(args.baseline, result["next_baseline"], next_disables)
-        print(f"Baseline shrunk: {len(baseline)} -> {len(result['next_baseline'])} offenders "
-              f"({len(result['fixed'])} fixed); nothing was added. Commit {args.baseline}.")
+        shrunk = strict_shrink(baseline, result)
+        problems = verify_removals_only(baseline, shrunk, base_disables, next_disables)
+        if problems:
+            print("🔴 Refusing to shrink: the result is not removals-only: " + "; ".join(problems[:10]))
+            return 1
+        write_baseline(args.baseline, shrunk, next_disables)
+        print(f"Baseline shrunk: {len(baseline)} -> {len(shrunk)} offenders "
+              f"({len(result['fixed'])} fixed); nothing was added or raised.")
         return 0
 
     records = load_overrides(os.path.join(args.root, args.overrides))
+    resolve_override_commits(records, args.root, args.overrides)
     debt = debt_report(result, baseline, len(offenders(funcs)), ts, sha,
                        recent_overrides(records, _dt.datetime.now(_dt.timezone.utc)), len(records))
     row = build_row(funcs, file_lines, debt, ts, sha, version, extras["duplication"])

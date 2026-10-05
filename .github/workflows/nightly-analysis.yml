@@ -1223,8 +1223,12 @@ jobs:
       overrides_recent: ${{ steps.measure.outputs.overrides_recent }}
 
     steps:
+      # Full history: the override log's commit SHAs are resolved from it
+      # (the pre-commit hook cannot know its own commit).
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       # Pinned: a lizard upgrade can change how CCN is counted, which would
       # read as a debt jump that nobody wrote. Bump it deliberately, and

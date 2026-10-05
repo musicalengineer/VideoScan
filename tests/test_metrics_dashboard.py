@@ -137,7 +137,10 @@ def full_fixtures(now):
         "complexity.jsonl": jsonl([complexity_row(old, 520, 10), complexity_row(fresh, 514, 2)]),
         "complexity_debt_latest.json": {"ts": iso(fresh), "new": [{"key": "k", "file": "VideoScan/VideoScan/Catalog/New.swift",
                                                                  "function": "NewView.body", "ccn": 22, "nloc": 90, "lang": "swift"}],
-                                        "worse": [], "fixed": ["a::b"]},
+                                        "worse": [], "fixed": ["a::b"],
+                                        "overrides_recent": [{"ts": iso(fresh), "reason": "SECRET-REASON", "author": "Rick Breen",
+                                                              "commit": "abc1234", "function_details": [
+                                                                  {"function": "Big.run", "ccn": 35, "nloc": 120}]}]},
     }
 
 
@@ -179,6 +182,8 @@ def test_every_section_renders_with_honest_missing_and_stale_states(tmp_path):
     assert "Offenders" in cx and "514" in cx and "-6 from previous" in cx and "6.54" in cx
     assert "1.96%" in cx and "Gate overrides (48 h)" in cx
     assert "plan_ticket" in out["sections"]["cx-top"] and "nightly_findings_to_issues.py" in out["sections"]["cx-top"]
+    ovr = out["sections"]["cx-ovr"]
+    assert "Big.run" in ovr and "35" in ovr and "abc1234" in ovr and "Rick Breen" in ovr
     assert "NewView.body" in out["sections"]["cx-new"] and "1 new, 0 worse, 1 fixed" in out["sections"]["cx-new-title"]
     # TSan has only a null value: "no data", never a zero line.
     assert "c-sa-san" not in out["charts"]

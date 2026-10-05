@@ -32,8 +32,13 @@ refactor does, passes; moving it AND growing it does not. Guarded disables
 are counted per rule across the touched files, so a grandfathered
 `swiftlint:disable:next` can move with its function.
 
-Escape hatch (leaves a trace, never silent)
--------------------------------------------
+Escape hatch (Rick's alone; leaves a trace, never silent)
+---------------------------------------------------------
+Rick 2026-10-05: only Rick may sweep debt under the rug. Agents are denied
+COMPLEXITY_OVERRIDE and `git commit --no-verify` in .claude/settings.json.
+Every override is a 🔴 item in the next morning digest (function, CCN,
+lines, reason, commit, author) and is listed on the metrics page.
+
     COMPLEXITY_OVERRIDE="why this has to go in now" git commit ...
 
 The gate prints what it let through and appends a record (time, reason, the
@@ -159,10 +164,15 @@ def format_violations(funcs: List[dict], disables: List[dict]) -> List[str]:
     return lines
 
 
-def override_record(reason: str, funcs: List[dict], disables: List[dict], now: _dt.datetime) -> dict:
+def override_record(reason: str, funcs: List[dict], disables: List[dict], now: _dt.datetime,
+                    author: str = "") -> dict:
+    """The trace an override leaves. The commit SHA does not exist yet at
+    pre-commit time; the nightly resolves it from the log's history. Author
+    NAME only, never an email (public repo)."""
     return {
         "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "reason": reason,
+        "author": author,
         "functions": {v["func"].key: {"ccn": v["func"].ccn, "nloc": v["func"].nloc} for v in funcs},
         "disables": {k: n for d in disables for k, n in d["counts"].items()},
     }
@@ -172,7 +182,8 @@ def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
              override_reason: str = "", record_override: bool = True,
              out: Callable[[str], None] = print,
              now: Optional[_dt.datetime] = None, min_files: int = 0,
-             read_untouched: Optional[Callable[[str], Optional[str]]] = None) -> int:
+             read_untouched: Optional[Callable[[str], Optional[str]]] = None,
+             author: str = "") -> int:
     """Check `sources` ({repo-relative path: text}; a deleted file is ""). The
     set of paths is what was touched. 0 = pass (or overridden), 1 = blocked."""
     scoped = {p: t for p, t in sources.items() if cm.in_scope(p)}
@@ -213,14 +224,14 @@ def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
 
     reason = (override_reason or "").strip()
     if reason:
-        rec = override_record(reason, fv, dv, now or _dt.datetime.now(_dt.timezone.utc))
+        rec = override_record(reason, fv, dv, now or _dt.datetime.now(_dt.timezone.utc), author)
         if record_override:
             os.makedirs(os.path.dirname(overrides_path) or ".", exist_ok=True)
             with open(overrides_path, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(rec, separators=(",", ":")) + "\n")
-        out(f"complexity gate: OVERRIDDEN — \"{reason}\". Recorded in "
+        out(f"complexity gate: OVERRIDDEN by {author or 'unknown author'} — \"{reason}\". Recorded in "
             f"{os.path.relpath(overrides_path) if os.path.isabs(overrides_path) else overrides_path}; "
-            "the nightly will report it.")
+            "the morning digest will show it to Rick as a 🔴 item.")
         return 0
 
     out("  " + HOW_TO_FIX)
@@ -232,6 +243,17 @@ def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
 
 def _git(root: str, *args: str) -> bytes:
     return subprocess.run(["git", "-C", root, *args], capture_output=True, check=True).stdout
+
+
+def author_name(root: str) -> str:
+    """The commit's author NAME (GIT_AUTHOR_NAME or user.name); no email."""
+    if os.environ.get("GIT_AUTHOR_NAME"):
+        return os.environ["GIT_AUTHOR_NAME"]
+    try:
+        ident = _git(root, "var", "GIT_AUTHOR_IDENT").decode("utf-8", "replace")
+        return ident.split("<", 1)[0].strip()
+    except (OSError, subprocess.CalledProcessError):
+        return ""
 
 
 def staged_sources(root: str) -> Dict[str, str]:
@@ -286,7 +308,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return None
         code = run_gate(sources, baseline, overrides,
                         override_reason=os.environ.get("COMPLEXITY_OVERRIDE", ""),
-                        read_untouched=read_index)
+                        read_untouched=read_index, author=author_name(root))
         if code == 0 and os.environ.get("COMPLEXITY_OVERRIDE", "").strip() and os.path.exists(overrides):
             try:
                 _git(root, "add", "--", args.overrides)

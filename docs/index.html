@@ -190,6 +190,7 @@
 </div>
 <div class="chart-box" style="margin-top:12px"><h2 id="cx-top-title">Top 15 most complex functions</h2><div class="table-wrap" id="cx-top"></div></div>
 <div class="chart-box" style="margin-top:12px"><h2 id="cx-new-title">New and worse offenders, latest night</h2><div class="table-wrap" id="cx-new"></div></div>
+<div class="chart-box" style="margin-top:12px"><h2 id="cx-ovr-title">Gate overrides, last 48 hours</h2><div class="table-wrap" id="cx-ovr"></div></div>
 <div class="section-error hidden" id="cx-error"></div>
 
 <!-- 9 ============ BENCHMARKS (occasional runs) ============ -->
@@ -863,6 +864,24 @@ function renderComplexity(d) {
   top.innerHTML = list.length ? fnTable(list, false) : NO_DATA;
 
   const debt = d.cxDebt;
+  // Overrides of the blocking gate (Rick's alone). Function, size, commit and
+  // author only: the free-text reason stays in the morning digest.
+  const ovrBox = document.getElementById("cx-ovr");
+  const ovr = debt && Array.isArray(debt.overrides_recent) ? debt.overrides_recent : null;
+  if (!ovr) ovrBox.textContent = NO_DATA;
+  else if (!ovr.length) ovrBox.textContent = "None: nothing was let past the gate.";
+  else {
+    let html = "<table><thead><tr><th>When</th><th>Function</th><th>CCN</th><th>Lines</th><th>Commit</th><th>Author</th></tr></thead><tbody>";
+    for (const o of ovr) {
+      const fns = Array.isArray(o.function_details) && o.function_details.length ? o.function_details : [{ function: "(swiftlint disable)" }];
+      for (const f of fns) {
+        html += `<tr><td>${esc(String(o.ts || "").slice(0, 16))}</td><td>${esc(f.function)}</td>` +
+          `<td>${isNum(f.ccn) ? f.ccn : "—"}</td><td>${isNum(f.nloc) ? f.nloc : "—"}</td>` +
+          `<td>${esc(o.commit || "—")}</td><td>${esc(o.author || "—")}</td></tr>`;
+      }
+    }
+    ovrBox.innerHTML = html + "</tbody></table>";
+  }
   if (!debt || !Array.isArray(debt.new)) { fresh.textContent = NO_DATA; return; }
   const items = [...debt.new, ...(Array.isArray(debt.worse) ? debt.worse : [])];
   document.getElementById("cx-new-title").textContent =
