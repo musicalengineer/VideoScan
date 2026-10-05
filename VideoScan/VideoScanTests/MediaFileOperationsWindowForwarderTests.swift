@@ -375,7 +375,9 @@ struct MediaFileOperationsWindowForwardSensorTests {
         // The row menu left CatalogContent+Table.swift (R1, GH #281): the
         // table file must now hold NONE, and the 9 sites live here.
         "CatalogContent+Table.swift": 0,
-        "CatalogRowContextMenu.swift": 2,         // compare, find
+        "CatalogRowContextMenu.swift": 0,         // dispatcher + open/remove/restore: none
+        "CatalogRowContextMenu+FileOps.swift": 1, // compare
+        "CatalogRowContextMenu+Organize.swift": 1, // Find and Tag
         "CatalogRowContextMenu+Audio.swift": 3,   // verify audio×2, verify video
         "CatalogRowContextMenu+Actions.swift": 4, // analyze×2, reformat×2
         "CatalogHelpers.swift": 1,                // Extract Facial Frames
