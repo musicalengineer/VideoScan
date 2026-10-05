@@ -110,7 +110,10 @@ FamilyTree pull/refresh + CyberBrain writes · resume/checkpoint (scan, MFO) ·
 fixity + verify copies + rebind · combine/derivative publish never-clobber ·
 the week's merged SHAs each Monday · People storage · Hallie (last).
 
-### Billing question
-Tested by launching C01 from the CLI as a remote agent: Rick checks the
-credit balance before/after. If it doesn't draw on the credit, Rick starts each
-session by pasting `Run docs/briefs/cloud/<id>.md` into a cloud session.
+### Billing question: answered 2026-10-05, NO
+C01 was launched from the CLI with `isolation: "remote"`, but it ran **locally**, in a
+`.claude/worktrees/agent-…` worktree on the M4. Remote launch is gated on this
+account. So it billed the normal plan, not the cloud credit. **Every cloud
+session must be started by Rick** in claude.ai/code (repo musicalengineer/VideoScan) with one line:
+`Run docs/briefs/cloud/<id>.md`. The C01 report itself is still valid; it just cost
+plan usage rather than credit. C02–C04 are ready to paste.
