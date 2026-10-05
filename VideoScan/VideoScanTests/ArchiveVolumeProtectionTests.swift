@@ -572,13 +572,12 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/MediaOps/FootageSpectrumHelper.swift": 1,
         // Family groups (2026-10-04, People tab). App-owned files only, never a
         // catalog record's file:
-        //  - FamilyGroup.swift 3: moveToTrash Trashes the family's own
+        //  - FamilyGroup.swift 2: moveToTrash Trashes the family's own
         //    POI/Families/<UUID>.json and its photo (photoURL is pinned to
-        //    '<UUID>-photo.jpg', never a symlink — codex 10/4 P1-2); setPhoto
-        //    removes its own '.<name>.tmp' staging file.
+        //    '<UUID>-photo.jpg', never a symlink — codex 10/4 P1-2).
         //  - FamilyEditSheet.swift 1: removes the temp copy it wrote from
         //    Apple Photos data (NSTemporaryDirectory, UUID-named).
-        "VideoScan/People/FamilyGroup.swift": 3, "VideoScan/People/FamilyEditSheet.swift": 1,
+        "VideoScan/People/FamilyGroup.swift": 2, "VideoScan/People/FamilyEditSheet.swift": 1,
         "VideoScan/MediaOps/RelocateEngine.swift": 1, "VideoScan/MediaOps/RescueFileCopier.swift": 3,
         "VideoScan/Media/ReviewThumbnailRenderer.swift": 1, "VideoScan/Volumes/ScanCheckpoint.swift": 1,
         "VideoScan/Volumes/ScanJobsStorage.swift": 2, "VideoScan/MediaOps/SignatureVerification.swift": 2,

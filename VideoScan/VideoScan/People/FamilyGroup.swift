@@ -132,26 +132,25 @@ enum FamilyGroupStore {
         }
         let name = group.expectedPhotoFilename
         let dest = directory.appendingPathComponent(name)
-        let tmp = directory.appendingPathComponent(".\(name).tmp")
-        defer { try? FileManager.default.removeItem(at: tmp) }   // our own temp only
-        guard let out = CGImageDestinationCreateWithURL(tmp as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
+        // Encode in memory, publish with AtomicFilePublish — never the
+        // FileManager replace-item API (RENAME_SWAP can wedge Sandbox.kext when
+        // two saves race onto one file: the 2026-09-14 P0;
+        // AtomicFilePublishSensorTests). No staging file to clean up.
+        let jpeg = NSMutableData()
+        guard let out = CGImageDestinationCreateWithData(jpeg as CFMutableData, UTType.jpeg.identifier as CFString, 1, nil) else {
             throw CocoaError(.fileWriteUnknown)
         }
         CGImageDestinationAddImage(out, image, [kCGImageDestinationLossyCompressionQuality: 0.88] as CFDictionary)
         guard CGImageDestinationFinalize(out) else { throw CocoaError(.fileWriteUnknown) }
         // Commit the JSON first; the old photo stays until it succeeds. The
-        // name never changes, so a replace that fails afterwards leaves the
+        // name never changes, so a publish that fails afterwards leaves the
         // family pointing at its previous photo — never at nothing.
         group.photoFilename = name
         try save(group)
         if (try? dest.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
             throw CocoaError(.fileWriteNoPermission)   // never write through a planted link
         }
-        if FileManager.default.fileExists(atPath: dest.path) {
-            _ = try FileManager.default.replaceItemAt(dest, withItemAt: tmp)
-        } else {
-            try FileManager.default.moveItem(at: tmp, to: dest)
-        }
+        try AtomicFilePublish.write(jpeg as Data, to: dest)
         return group
     }
 

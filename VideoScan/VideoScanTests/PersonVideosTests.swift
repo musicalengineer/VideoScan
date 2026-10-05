@@ -358,10 +358,11 @@ struct PeopleCodexOvernightTests {
         let setPhoto = try #require(source.range(of: "static func setPhoto"))
         let body = String(source[setPhoto.upperBound...].prefix(2500))
         let guardAt = try #require(body.range(of: "ViewerWriteGuard.check"))
-        let firstWrite = try #require(body.range(of: "CGImageDestinationCreateWithURL"))
-        #expect(guardAt.lowerBound < firstWrite.lowerBound, "permission before any photo write")
+        let firstWrite = try #require(body.range(of: "AtomicFilePublish.write"))
+        #expect(guardAt.lowerBound < firstWrite.lowerBound, "permission before the photo is published")
+        #expect(!body.contains("replaceItemAt"), "never RENAME_SWAP (the 9/14 P0)")
         let saveAt = try #require(body.range(of: "try save(group)"))
-        let replaceAt = try #require(body.range(of: "replaceItemAt"))
+        let replaceAt = try #require(body.range(of: "AtomicFilePublish.write"))
         #expect(saveAt.lowerBound < replaceAt.lowerBound, "JSON committed before the old photo is replaced")
     }
 }
