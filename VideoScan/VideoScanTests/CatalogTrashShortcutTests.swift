@@ -191,12 +191,13 @@ struct CatalogTrashShortcutTests {
         // reported. What must stay true is the INTENT: ⌘⌫ is handled on
         // the table (so it is focus-scoped), and the other modifiers are
         // still refused.
-        #expect(table.contains("press.key == .delete"), "⌘⌫ on the table, focus-scoped")
-        #expect(table.contains("press.modifiers.contains(.command)"), "Command required")
-        for other in ["shift", "option", "control"] {
-            #expect(table.contains("!press.modifiers.contains(.\(other))"),
-                    "\(other) must still be refused — it is a different gesture")
-        }
+        // 2026-10-05: the table's own .onKeyPress(⌘⌫) is GONE — it broke ↑/↓
+        // row navigation (Rick: "still can't arrow up and down in cat view")
+        // and was never reached (the menu claims ⌘⌫ first, 2026-09-20). The
+        // INTENT — ⌘⌫ only while the table has focus — is kept by the
+        // focus-scoped menu route pinned below. Nothing may put a key
+        // handler back on the Table.
+        #expect(!table.contains(".onKeyPress("), "no key handler on the Catalog table — it breaks arrow-key navigation")
         #expect(table.contains("await model.deleteConfirmedJunk(targets, mode: .toTrash)"), "the row menu's Move to Trash still exists")
 
         // 2026-09-20 (Rick's second "why can't I hit cmd-delete"): a Command

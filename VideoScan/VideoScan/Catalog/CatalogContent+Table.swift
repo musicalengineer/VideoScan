@@ -250,10 +250,10 @@ extension CatalogContent {
     }
 
     /// ⌘⌫ — the Finder gesture — moves the highlighted rows to the Trash
-    /// (Rick 2026-09-13). On the Table itself, so it only fires while the
-    /// table owns keyboard focus: the search box, rename fields and the
-    /// editor sheets keep their own ⌘⌫. Its own stage, same reason as
-    /// the others (GH #132). `.delete` is the Backspace key.
+    /// (Rick 2026-09-13), through the Catalog ▸ Move to Trash menu item,
+    /// which reads the selection this table publishes ONLY while it owns
+    /// keyboard focus: the search box, rename fields and the editor sheets
+    /// keep their own ⌘⌫. Its own stage, same reason as the others (GH #132).
     private var tableWithTrashShortcut: some View {
         catalogTableBase
             // The menu route (2026-09-20): Catalog ▸ Move to Trash ⌘⌫ reads
@@ -267,23 +267,13 @@ extension CatalogContent {
             // claims first. See CatalogOpenCommand.swift.
             .focusedValue(\.catalogOpenSelection,
                           CatalogOpenSelection(count: selectedIDs.count, perform: openSelectedRows))
-            .onKeyPress(phases: .down) { press in
-                // CONTAINS, not ==. Exact equality meant any stray flag
-                // macOS happened to report alongside Command made this
-                // `.ignored` with no trace at all, which is
-                // indistinguishable from the feature being gone (Rick,
-                // 2026-09-16: "what happened to cmd-delete"). Shift /
-                // Option / Control are still refused — those are other
-                // gestures, not this one.
-                guard press.key == .delete,
-                      press.modifiers.contains(.command),
-                      !press.modifiers.contains(.shift),
-                      !press.modifiers.contains(.option),
-                      !press.modifiers.contains(.control)
-                else { return .ignored }
-                trashSelectedRows()
-                return .handled
-            }
+            // NO .onKeyPress here (Rick 2026-10-05: "still can't arrow up and
+            // down in cat view"). A key handler on the Table wrapped it in
+            // SwiftUI's own focus handling, so ↑/↓ never reached the table's
+            // native row navigation. It was dead weight anyway: ⌘⌫ is a key
+            // equivalent the menu bar claims first (2026-09-20), so it lives
+            // in Catalog ▸ Move to Trash (CatalogTrashCommand.swift), scoped
+            // to this table's focus by the focusedValue above.
     }
 
     private var catalogTableBase: some View {
