@@ -38,6 +38,10 @@ reentrancy across `await` where state is read before and used after; files left
 half-written; force-unwraps and `try!` on input or disk data; logs leaking media paths.
 
 **D: Debt / refactor plan.** Measure, then plan. Don't edit code.
+0. Start from the M4's nightly numbers if they exist:
+   `git fetch origin metrics` then `git show origin/metrics:metrics/complexity.jsonl | tail -1`
+   (the per-folder debt, the top 15) and the debt ratchet's NEW-offender list. New
+   offenders in tonight's scope come first: they're the cheapest debt to pay.
 1. `pip install lizard` and run it on the scope: list functions with CCN > 15 or
    length > 80 lines, and files > 800 lines.
 2. Find duplicated logic (two functions that answer the same question differently
