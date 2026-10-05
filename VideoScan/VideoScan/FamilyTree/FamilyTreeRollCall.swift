@@ -113,8 +113,14 @@ struct RollCallPlayback: Identifiable, @unchecked Sendable {
             let entries = RollCall.build(people, options: .init(order: order, shuffleSeed: shuffleSeed)) { p in
                 let documented = !(p.deathDate?.trimmingCharacters(in: .whitespaces).isEmpty ?? true)
                     || (GedcomFamilyGraph.year(in: p.birthDate).map { $0 <= thisYear - 100 } ?? false)
-                return context.life(id: p.id, quick: documented ? .deceased
-                                    : (p.isInnerCircle ? .livingInnerCircle : .livingPrivate))
+                // No documented death → LIVING, full stop (adversarial review
+                // 2026-10-05, P2). Asking `context.life` here let
+                // LifeStatus.of's inference ("a child has a recorded death")
+                // presume an undated living parent deceased and name her in
+                // the credits. Roll Call fails closed: only a recorded death
+                // or a birth 100+ years ago counts.
+                guard documented else { return p.isInnerCircle ? .livingInnerCircle : .livingPrivate }
+                return context.life(id: p.id, quick: .deceased)
             }
             var portraits: [String: NSImage] = [:]
             var flags: [String: FamilyTreeBirthFlag] = [:]
