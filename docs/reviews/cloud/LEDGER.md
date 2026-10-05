@@ -9,3 +9,9 @@ Credit: $242 on 2026-10-05, confirmed after C01 (so the local run drew none of i
 | C02 | | | | | | |
 | C03 | | | | | | |
 | C04 | | | | | | |
+
+## Nightly program (docs/briefs/cloud/NIGHTLY.md)
+Mark a row done by adding it here when its branch is pushed.
+
+| ID | Date | Balance before → after | Findings (R/NM/N) | Survived verify | Applied / declined | Branch |
+|---|---|---|---|---|---|---|
