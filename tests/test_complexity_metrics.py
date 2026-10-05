@@ -142,7 +142,7 @@ def test_aggregate_per_folder_and_totals():
              "VideoScan/VideoScan/Shared/Empty.swift": 801, "scripts/x.py": 50}
     agg = cm.aggregate(funcs, lines)
     hallie = agg["swift_by_folder"]["Hallie"]
-    assert hallie == {"files": 2, "functions": 3, "ccn_over_15": 1, "nloc_over_80": 1,
+    assert hallie == {"files": 2, "functions": 3, "ccn_over_15": 1, "ccn_over_30": 0, "nloc_over_80": 1,
                       "offenders": 2, "files_over_800": 1, "mean_ccn": 8.0}
     assert agg["swift_by_folder"]["Shared"]["mean_ccn"] is None       # no functions: no fake zero
     assert agg["swift_by_folder"]["Shared"]["files_over_800"] == 1

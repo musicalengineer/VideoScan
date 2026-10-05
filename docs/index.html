@@ -186,7 +186,7 @@
 <div class="cards" id="cx-cards"></div>
 <div class="charts">
   <div class="chart-box"><h2>Offenders per night</h2><canvas id="c-cx-debt"></canvas><div class="chart-note hidden" id="c-cx-debt-note"></div></div>
-  <div class="chart-box"><h2>Mean CCN by folder (largest folders)</h2><canvas id="c-cx-folders"></canvas><div class="chart-note hidden" id="c-cx-folders-note"></div></div>
+  <div class="chart-box"><h2>Mean CCN, all code and by folder (largest folders)</h2><canvas id="c-cx-folders"></canvas><div class="chart-note hidden" id="c-cx-folders-note"></div></div>
 </div>
 <div class="chart-box" style="margin-top:12px"><h2 id="cx-top-title">Top 15 most complex functions</h2><div class="table-wrap" id="cx-top"></div></div>
 <div class="chart-box" style="margin-top:12px"><h2 id="cx-new-title">New and worse offenders, latest night</h2><div class="table-wrap" id="cx-new"></div></div>
@@ -803,6 +803,10 @@ function renderComplexity(d) {
   }
   const last = rows[rows.length - 1];
   const prev = rows.length > 1 ? rows[rows.length - 2] : null;
+  // Backfilled history rows (scripts/complexity_backfill.py) carry totals and
+  // folders only; the top 15 and the ratchet come from the newest nightly row.
+  const nightlyRows = rows.filter(r => !r.backfill);
+  const lastNightly = nightlyRows.length ? nightlyRows[nightlyRows.length - 1] : {};
   const t = r => (r && r.totals) || {};
   const all = t(last).all || {}, pAll = t(prev).all || {};
   const sw = t(last).swift || {}, pSw = t(prev).swift || {};
@@ -810,16 +814,17 @@ function renderComplexity(d) {
   const num = v => isNum(v) ? v : null;
   cards.appendChild(card("Offenders", num(all.offenders), pAll.offenders, all.offenders, true, "var(--bad)"));
   cards.appendChild(card("CCN > 15", num(all.ccn_over_15), pAll.ccn_over_15, all.ccn_over_15, true, "var(--bad)"));
+  cards.appendChild(card("CCN > 30 (gate line)", num(all.ccn_over_30), pAll.ccn_over_30, all.ccn_over_30, true, "var(--bad)"));
   cards.appendChild(card("Over 80 lines", num(all.nloc_over_80), pAll.nloc_over_80, all.nloc_over_80, true, "var(--warn)"));
   cards.appendChild(card("Files over 800 lines", num(all.files_over_800), pAll.files_over_800, all.files_over_800, true, "var(--warn)"));
   cards.appendChild(card("Mean CCN, Swift", num(sw.mean_ccn), pSw.mean_ccn, sw.mean_ccn, true, "var(--accent)"));
   cards.appendChild(card("Mean CCN, Python", num(py.mean_ccn), pPy.mean_ccn, py.mean_ccn, true, "var(--purple)"));
-  cards.appendChild(card("New offenders (last night)", num(last.debt_new), null, null, true, "var(--bad)"));
-  cards.appendChild(card("Got worse (last night)", num(last.debt_worse), null, null, true, "var(--warn)"));
-  cards.appendChild(card("Fixed (last night)", num(last.debt_fixed), null, null, false, "var(--good)"));
-  cards.appendChild(card("Duplicate code", isNum(last.duplicate_rate_pct) ? `${last.duplicate_rate_pct}%` : null,
-    prev && prev.duplicate_rate_pct, last.duplicate_rate_pct, true, "var(--muted)"));
-  cards.appendChild(card("Gate overrides (48 h)", num(last.gate_overrides_recent), null, null, true, "var(--warn)"));
+  cards.appendChild(card("New offenders (last night)", num(lastNightly.debt_new), null, null, true, "var(--bad)"));
+  cards.appendChild(card("Got worse (last night)", num(lastNightly.debt_worse), null, null, true, "var(--warn)"));
+  cards.appendChild(card("Fixed (last night)", num(lastNightly.debt_fixed), null, null, false, "var(--good)"));
+  cards.appendChild(card("Duplicate code", isNum(lastNightly.duplicate_rate_pct) ? `${lastNightly.duplicate_rate_pct}%` : null,
+    null, null, true, "var(--muted)"));
+  cards.appendChild(card("Gate overrides (48 h)", num(lastNightly.gate_overrides_recent), null, null, true, "var(--warn)"));
   cards.appendChild(card("Measured", fmtWhen(last.ts), null, null, false, "var(--muted)"));
 
   const daily = lastPerDay(rows);
@@ -828,6 +833,7 @@ function renderComplexity(d) {
   chartOrNote("c-cx-debt", "line", labels, [
     { label: "offenders", data: daily.map(r => tot(r, "offenders")), yAxisID: "y", ...lineStyle("#f85149") },
     { label: "CCN > 15", data: daily.map(r => tot(r, "ccn_over_15")), yAxisID: "y", ...lineStyle("#db6d28") },
+    { label: "CCN > 30", data: daily.map(r => tot(r, "ccn_over_30")), yAxisID: "y", ...lineStyle("#a40e26") },
     { label: "over 80 lines", data: daily.map(r => tot(r, "nloc_over_80")), yAxisID: "y", ...lineStyle("#d29922") },
     { label: "new + worse", data: daily.map(r => isNum(r.debt_new) || isNum(r.debt_worse) ? (r.debt_new || 0) + (r.debt_worse || 0) : null),
       yAxisID: "y1", ...lineStyle("#bc8cff") },
@@ -844,13 +850,15 @@ function renderComplexity(d) {
   const latestFolders = folderMap(last);
   const names = Object.keys(latestFolders)
     .sort((a, b) => (latestFolders[b].functions || 0) - (latestFolders[a].functions || 0)).slice(0, CX_COLORS.length);
-  chartOrNote("c-cx-folders", "line", labels, names.map((n, i) => ({
-    label: n, data: daily.map(r => { const f = folderMap(r)[n]; return f && isNum(f.mean_ccn) ? f.mean_ccn : null; }),
-    ...lineStyle(CX_COLORS[i]),
-  })), withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false } }));
+  chartOrNote("c-cx-folders", "line", labels, [
+    { label: "all code", data: daily.map(r => tot(r, "mean_ccn")), borderWidth: 4, ...lineStyle("#8b949e") },
+    ...names.map((n, i) => ({
+      label: n, data: daily.map(r => { const f = folderMap(r)[n]; return f && isNum(f.mean_ccn) ? f.mean_ccn : null; }),
+      ...lineStyle(CX_COLORS[i]),
+    }))], withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false } }));
 
-  const list = Array.isArray(last.top15) ? last.top15 : [];
-  document.getElementById("cx-top-title").textContent = `Top ${list.length || 15} most complex functions · ${fmtWhen(last.ts).split(" · ")[0]}`;
+  const list = Array.isArray(lastNightly.top15) ? lastNightly.top15 : [];
+  document.getElementById("cx-top-title").textContent = `Top ${list.length || 15} most complex functions${lastNightly.ts ? " · " + fmtWhen(lastNightly.ts).split(" · ")[0] : ""}`;
   const base = p => String(p || "").split("/").pop();
   const fnTable = (items, withBase) => {
     let html = `<table><thead><tr><th>Function</th><th>File</th><th>CCN</th><th>Lines</th>${withBase ? "<th>Was (CCN / lines)</th>" : ""}</tr></thead><tbody>`;

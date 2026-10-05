@@ -98,12 +98,13 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 CCN_LIMIT = 15
 NLOC_LIMIT = 80
 FILE_LINES_LIMIT = 800
 TOP_N = 15
+GATE_CCN_LINE = 30     # the blocking gate's CCN line, counted for the trend
 
 SWIFT_ROOTS = ("VideoScan/VideoScan", "VideoScan/VideoScanCore/Sources", "swift_cli")
 PYTHON_ROOTS = ("scripts", "tools")
@@ -337,7 +338,7 @@ def funcs_from_lizard(file_infos: Iterable, root: str,
 # aggregation
 
 def _empty_bucket() -> dict:
-    return {"files": 0, "functions": 0, "ccn_sum": 0, "ccn_over_15": 0,
+    return {"files": 0, "functions": 0, "ccn_sum": 0, "ccn_over_15": 0, "ccn_over_30": 0,
             "nloc_over_80": 0, "offenders": 0, "files_over_800": 0}
 
 
@@ -348,16 +349,19 @@ def _finish(bucket: dict) -> dict:
     return out
 
 
-def aggregate(funcs: Sequence[Func], file_lines: Dict[str, int]) -> dict:
+def aggregate(funcs: Sequence[Func], file_lines: Dict[str, int],
+              folder_fn: Callable[[str], str] = None) -> dict:
     """Per-folder and total numbers. `file_lines` maps every measured file
-    (even ones with no functions) to its line count."""
+    (even ones with no functions) to its line count. `folder_fn` overrides
+    the folder of a path (the backfill maps old flat layouts by file name)."""
+    folder_fn = folder_fn or folder_of
     folders: Dict[str, Dict[str, dict]] = {"swift": {}, "python": {}}
     totals: Dict[str, dict] = {"swift": _empty_bucket(), "python": _empty_bucket(),
                                "all": _empty_bucket()}
 
     def buckets(path: str) -> List[dict]:
         lang = lang_of(path)
-        folder = folders[lang].setdefault(folder_of(path), _empty_bucket())
+        folder = folders[lang].setdefault(folder_fn(path), _empty_bucket())
         return [folder, totals[lang], totals["all"]]
 
     for path, lines in file_lines.items():
@@ -372,6 +376,7 @@ def aggregate(funcs: Sequence[Func], file_lines: Dict[str, int]) -> dict:
             b["functions"] += 1
             b["ccn_sum"] += f.ccn
             b["ccn_over_15"] += f.ccn > CCN_LIMIT
+            b["ccn_over_30"] += f.ccn > GATE_CCN_LINE
             b["nloc_over_80"] += f.nloc > NLOC_LIMIT
             b["offenders"] += f.is_offender
     return {

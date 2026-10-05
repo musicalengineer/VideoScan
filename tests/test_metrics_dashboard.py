@@ -134,7 +134,7 @@ def full_fixtures(now):
             {"head_branch": "main", "status": "completed", "conclusion": "success", "updated_at": iso(fresh), "head_sha": "2db6ac51aa"}]},
         "/actions/workflows/nightly-analysis.yml/": None,
         "search_benchmarks.jsonl": None,
-        "complexity.jsonl": jsonl([complexity_row(old, 520, 10), complexity_row(fresh, 514, 2)]),
+        "complexity.jsonl": jsonl([backfill_row(old - timedelta(days=30)), complexity_row(old, 520, 10), complexity_row(fresh, 514, 2)]),
         "complexity_debt_latest.json": {"ts": iso(fresh), "new": [{"key": "k", "file": "VideoScan/VideoScan/Catalog/New.swift",
                                                                  "function": "NewView.body", "ccn": 22, "nloc": 90, "lang": "swift"}],
                                         "worse": [], "fixed": ["a::b"],
@@ -142,6 +142,14 @@ def full_fixtures(now):
                                                               "commit": "abc1234", "function_details": [
                                                                   {"function": "Big.run", "ccn": 35, "nloc": 120}]}]},
     }
+
+
+def backfill_row(ts):
+    folder = {"files": 5, "functions": 50, "mean_ccn": 4.4, "ccn_over_15": 2, "ccn_over_30": 1, "nloc_over_80": 1,
+              "offenders": 3, "files_over_800": 0}
+    return {"schemaVersion": 1, "ts": iso(ts), "sha": "0badf00d", "run_kind": "backfill", "backfill": True,
+            "totals": {"swift": folder, "python": folder, "all": folder}, "swift_by_folder": None,
+            "python_by_folder": None, "folders_mapped_pct": 40.0}
 
 
 def complexity_row(ts, offenders, new):

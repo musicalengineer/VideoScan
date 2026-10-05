@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 519,
+ "entry_count": 518,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 28,
@@ -2029,10 +2029,6 @@
   "tools/poi-c02/make_refset.py::main": {
    "ccn": 23,
    "nloc": 71
-  },
-  "tools/publish_metrics.py::_check": {
-   "ccn": 35,
-   "nloc": 54
   },
   "tools/publish_metrics.py::adversarial_rows": {
    "ccn": 51,
