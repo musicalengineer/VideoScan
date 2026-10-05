@@ -7,7 +7,7 @@ musicalengineer/VideoScan) with the same line every night:
 
 **Session: what to do.** Read `docs/briefs/cloud/README.md` (standing rules:
 read-only, one report, branch `cloud/<id>`, header shape, hard-to-refute bar, 45-min box).
-Then pick **tonight's row** below: the row dated today (US Eastern). If that row is
+If the paste names a row ID (e.g. `… row N1007-D-Hallie-rewrite-eval`), run that row. Otherwise pick **tonight's row** below: the row dated today (US Eastern). If that row is
 already marked done in `docs/reviews/cloud/LEDGER.md`, or tonight has no row, take the
 earliest row that isn't done. Follow that row's theme checklist (below) over that row's scope.
 Report path: `docs/reviews/cloud/<id>.md`. Ignore the rows' order otherwise.
@@ -57,7 +57,7 @@ half-written; force-unwraps and `try!` on input or disk data; logs leaking media
 | Night | ID | Theme | Scope |
 |---|---|---|---|
 | 10-06 | N1006-D-next-refactors | D | Plan the NEXT local refactors (GH #281): `Archive/CopyFamilyAssessor.swift` (`assess` CCN 57) and `Catalog/CatalogAudit.swift` (`run` CCN 66). Both data-adjacent: list every guard and the pinning test that must exist before the split. (Catalog table is being refactored locally tonight, R1; don't plan it.) |
-| 10-07 | N1007-D-Hallie-parsers | D | Plan the split of `Hallie/HallieLineageQuestion.swift` (`get` 93, `detectShape` 88), `HalliePersonaQuestion.init` (72), `HallieTurnExecutor+Relationship.executeRelationship` (50), using the golden-answer corpora in `tests/` as the parity net |
+| 10-07 | N1007-D-Hallie-rewrite-eval | D | **Evaluate rewrite vs. refactor** of the Hallie question parsers: `HallieLineageQuestion.swift` (`get` CCN 93, `detectShape` 88), `HalliePersonaQuestion.init` (72), `HallieTurnExecutor+Relationship.executeRelationship` (50). Deliver: (1) what the corpora pin (`tests/hallie_eval_corpus.json`, `archivist_golden_answers.json`, `hallie_interaction_corpus.json`, `hallie_live_misses_corpus.json`): which parser branches no corpus entry reaches; (2) a sketch of a table-driven design (pattern → intent as data) with the same interface; (3) a back-to-back plan: old and new run side by side on every corpus entry, disagreements logged, switch when there are none; (4) a recommendation, rewrite or refactor, with a size estimate. **Python-runnable:** you may run scripts that read the corpora. |
 | 10-07b | N1007-R-MediaOps-prune | R | MediaOps prune / relocate / purges / soft delete / junk + trash selection (the data-risk list in docs/guides/source_layout.md) |
 | 10-08 | N1008-T-Archive | T | `Archive/` and its tests |
 | 10-09 | N1009-D-Core | D | `VideoScan/VideoScanCore/Sources/` (highest Swift churn) |
