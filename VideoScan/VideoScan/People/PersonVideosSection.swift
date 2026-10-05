@@ -320,7 +320,7 @@ struct PersonVideosSection: View {
 
 // MARK: - One row
 
-private struct PersonVideoRowView: View {
+struct PersonVideoRowView: View {
     let row: PersonVideoRow
     let catalogModel: VideoScanModel
     let onShowInCatalog: (String) -> Void
@@ -404,5 +404,83 @@ private struct PersonVideoRowView: View {
             return disk.lookup(path: path, mtime: sig.mtime, size: sig.size)
         }.value
         if let image, !Task.isCancelled { thumbnail = NSImage(cgImage: image, size: .zero) }
+    }
+}
+
+// MARK: - A family's page
+
+/// "Videos of Rick & Donna Breen Family" — the videos picked for a family
+/// group (FamilyGroup.swift), grouped by decade. Same rows, same
+/// right-click menu as a person's page.
+struct FamilyVideosSection: View {
+    let familyUUID: UUID
+    let catalogModel: VideoScanModel
+    let onShowInCatalog: (String) -> Void
+
+    @State private var family: FamilyGroup?
+    @State private var rows: [PersonVideoRow] = []
+    @State private var missing = 0
+    @State private var refreshTick = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: "person.3.fill").foregroundStyle(.tint)
+                Text("Videos of \(family?.name ?? "this family")")
+                    .font(.system(size: 17, weight: .semibold))
+                if !rows.isEmpty {
+                    Text("\(rows.count)").font(.system(size: 13, weight: .medium)).foregroundStyle(.secondary)
+                    let archived = rows.filter(\.isArchived).count
+                    if archived > 0 {
+                        Label("\(archived) in the Archive", systemImage: "archivebox.fill")
+                            .font(.system(size: 13)).foregroundStyle(.green)
+                    }
+                }
+                Spacer()
+                Button { refreshTick += 1 } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.glass)
+                    .help("Look again")
+            }
+            .padding(.horizontal, 14).padding(.vertical, 8)
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 4) {
+                    if rows.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("No videos picked for \(family?.name ?? "this family") yet.")
+                                .font(.system(size: 15))
+                            Text("Right-click a video in the Catalog or the Archive ▸ Show in People tab ▸ \(family?.name ?? "the family").")
+                                .font(.system(size: 13)).foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 14).padding(.vertical, 10)
+                    } else {
+                        ForEach(PersonVideos.byDecade(rows), id: \.decade) { group in
+                            Text(group.decade)
+                                .font(.system(size: 15, weight: .semibold))
+                                .padding(.horizontal, 14).padding(.top, 6)
+                            ForEach(group.rows) { row in
+                                PersonVideoRowView(row: row, catalogModel: catalogModel,
+                                                   onShowInCatalog: onShowInCatalog)
+                            }
+                        }
+                    }
+                    if missing > 0 {
+                        Text("\(missing) picked video\(missing == 1 ? "" : "s") can't be found in the catalog right now.")
+                            .font(.system(size: 12)).foregroundStyle(.secondary)
+                            .padding(.horizontal, 14)
+                    }
+                }
+                .padding(.bottom, 8)
+            }
+        }
+        .task(id: "\(familyUUID)-\(refreshTick)") {
+            family = FamilyGroupStore.load(familyUUID)
+            let picks = FeaturedVideos.resolve(family?.featuredVideos ?? [], in: catalogModel)
+            rows = PersonVideos.sorted(picks.videos.map { PersonVideos.row($0, tier: .tagged, in: catalogModel) })
+            missing = picks.missing
+            appLog.write("People: \(family?.name ?? "family")'s page — \(rows.count) picked")
+        }
+        .onReceive(NotificationCenter.default.publisher(for: FeaturedVideos.changed)) { note in
+            if (note.object as? UUID) == familyUUID { refreshTick += 1 }
+        }
     }
 }

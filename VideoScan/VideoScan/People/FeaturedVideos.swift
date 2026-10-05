@@ -44,7 +44,50 @@ enum FeaturedVideos {
     }
 
     static func isFeatured(_ rec: VideoRecord, in profile: POIProfile) -> Bool {
-        profile.featuredVideos.contains { matches($0, rec) }
+        isFeatured(rec, in: profile.featuredVideos)
+    }
+
+    static func isFeatured(_ rec: VideoRecord, in picks: [FeaturedVideo]) -> Bool {
+        picks.contains { matches($0, rec) }
+    }
+
+    /// Add or remove `recs` in a pick list; returns how many changed.
+    static func apply(_ recs: [VideoRecord], on: Bool, to picks: inout [FeaturedVideo]) -> Int {
+        var count = 0
+        for rec in recs {
+            let present = isFeatured(rec, in: picks)
+            if on, !present {
+                picks.append(FeaturedVideo(
+                    recordID: rec.id, path: rec.fullPath, filename: rec.filename,
+                    contentHash: rec.contentHash.isEmpty ? nil : rec.contentHash, addedAt: Date()))
+                count += 1
+            } else if !on, present {
+                picks.removeAll { matches($0, rec) }
+                count += 1
+            }
+        }
+        return count
+    }
+
+    /// The same for a FAMILY's page (FamilyGroup.swift).
+    @MainActor @discardableResult
+    static func set(_ recs: [VideoRecord], on: Bool, forFamily familyUUID: UUID) -> Bool {
+        guard var family = FamilyGroupStore.load(familyUUID) else {
+            appLog.write("People tab: could not find that family — nothing changed")
+            return false
+        }
+        let count = apply(recs, on: on, to: &family.featuredVideos)
+        guard count > 0 else { return true }
+        do {
+            try FamilyGroupStore.save(family)
+        } catch {
+            appLog.write("People tab: could not save \(family.name)'s page — \(error.localizedDescription)")
+            return false
+        }
+        appLog.write("People tab: \(on ? "added" : "removed") \(count) video(s) "
+            + "\(on ? "to" : "from") \(family.name)'s page (\(family.featuredVideos.count) now)")
+        NotificationCenter.default.post(name: Self.changed, object: familyUUID)
+        return true
     }
 
     /// Add (`on`) or remove the records from the person's page. Reloads
@@ -56,19 +99,7 @@ enum FeaturedVideos {
             appLog.write("People tab: could not find that person's profile — nothing changed")
             return false
         }
-        var count = 0
-        for rec in recs {
-            let present = isFeatured(rec, in: profile)
-            if on, !present {
-                profile.featuredVideos.append(FeaturedVideo(
-                    recordID: rec.id, path: rec.fullPath, filename: rec.filename,
-                    contentHash: rec.contentHash.isEmpty ? nil : rec.contentHash, addedAt: Date()))
-                count += 1
-            } else if !on, present {
-                profile.featuredVideos.removeAll { matches($0, rec) }
-                count += 1
-            }
-        }
+        let count = apply(recs, on: on, to: &profile.featuredVideos)
         guard count > 0 else { return true }
         do {
             try profile.save()
@@ -87,10 +118,15 @@ enum FeaturedVideos {
     /// can no longer be found are skipped (and counted).
     @MainActor
     static func resolve(_ profile: POIProfile, in model: VideoScanModel) -> (videos: [VideoRecord], missing: Int) {
+        resolve(profile.featuredVideos, in: model)
+    }
+
+    @MainActor
+    static func resolve(_ picks: [FeaturedVideo], in model: VideoScanModel) -> (videos: [VideoRecord], missing: Int) {
         var out: [VideoRecord] = []
         var seen: Set<UUID> = []
         var missing = 0
-        for pick in profile.featuredVideos {
+        for pick in picks {
             var rec = model.record(forID: pick.recordID) ?? model.record(forPath: pick.path)
             if rec == nil, let hash = pick.contentHash, !hash.isEmpty {
                 // Rare fallback (renamed AND re-scanned): ≤ ~10 picks a person.
@@ -111,6 +147,19 @@ struct ShowInPeopleTabMenu: View {
 
     var body: some View {
         Menu("Show in People tab") {
+            let families = FamilyGroupStore.listAll()
+            if !families.isEmpty {
+                Section("Families") {
+                    ForEach(families) { family in
+                        let allIn = !records.isEmpty && records.allSatisfy {
+                            FeaturedVideos.isFeatured($0, in: family.featuredVideos)
+                        }
+                        Toggle(family.name, isOn: Binding(
+                            get: { allIn },
+                            set: { FeaturedVideos.set(records, on: $0, forFamily: family.uuid) }))
+                    }
+                }
+            }
             let profiles = POIProfile.listAll().sorted {
                 $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
             }

@@ -284,10 +284,18 @@ extension PersonFinderView {
                                                height: min(max(personImageSize * 1.5, 160), 300))
                                 .padding(.trailing, 4)
 
-                            // Add Person — always left-aligned
-                            Button {
-                                editingOriginalName = nil
-                                editingProfile = POIProfile(name: "", referencePath: "")
+                            // Add Person or Family — always left-aligned
+                            // (Rick 2026-10-04: "+ Add Person" with "or
+                            // Family" underneath; the click offers both).
+                            Menu {
+                                Button("Person…") {
+                                    editingOriginalName = nil
+                                    editingProfile = POIProfile(name: "", referencePath: "")
+                                }
+                                Button("Family…") {
+                                    newFamilyName = families.isEmpty ? FamilyGroupStore.defaultName : ""
+                                    showNewFamilyPrompt = true
+                                }
                             } label: {
                                 VStack(spacing: 6) {
                                     ZStack {
@@ -299,14 +307,28 @@ extension PersonFinderView {
                                             .font(.system(size: personImageSize * 0.34, weight: .medium))
                                             .foregroundColor(.secondary)
                                     }
-                                    Text("Add Person")
-                                        .font(.system(size: personNameFontSize, weight: .medium))
-                                        .foregroundColor(.secondary)
+                                    VStack(spacing: 0) {
+                                        Text("Add Person")
+                                            .font(.system(size: personNameFontSize, weight: .medium))
+                                        Text("or Family")
+                                            .font(.system(size: max(10, personNameFontSize - 2)))
+                                    }
+                                    .foregroundColor(.secondary)
                                 }
                                 .frame(width: personCardWidth)
                                 .padding(.vertical, 4)
                             }
+                            .menuStyle(.button)
                             .buttonStyle(.plain)
+                            .menuIndicator(.hidden)
+                            .fixedSize()
+                            .accessibilityIdentifier("people.addPersonOrFamily")
+
+                            // Family groups — a group icon instead of a
+                            // portrait; click shows the family's videos.
+                            ForEach(families) { family in
+                                familyCard(family)
+                            }
 
                             // Build set of all people currently being scanned across all active jobs
                             let scanningIDs = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.uuid })
@@ -687,6 +709,44 @@ extension PersonFinderView {
     }
 }
 
+// MARK: - Family cards (2026-10-04)
+
+extension PersonFinderView {
+
+    func familyCard(_ family: FamilyGroup) -> some View {
+        let isSelected = selectedFamilyUUID == family.uuid.uuidString
+        return Button {
+            selectedFamilyUUID = family.uuid.uuidString
+            appLog.write("People: opened family \(family.name)")
+        } label: {
+            VStack(spacing: 6) {
+                ZStack {
+                    Circle()
+                        .fill(Color.accentColor.opacity(isSelected ? 0.28 : 0.14))
+                        .frame(width: personImageSize, height: personImageSize)
+                    Image(systemName: "person.3.fill")
+                        .font(.system(size: personImageSize * 0.3, weight: .medium))
+                        .foregroundStyle(.tint)
+                }
+                .overlay(Circle().stroke(Color.accentColor, lineWidth: isSelected ? 2.5 : 0))
+                Text(family.name)
+                    .font(.system(size: personNameFontSize, weight: isSelected ? .semibold : .medium))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+            }
+            .frame(width: personCardWidth)
+            .padding(.vertical, 4)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help("\(family.name) — the videos picked for this family")
+        .contextMenu {
+            Button("Remove \(family.name)…") { confirmTrashFamily = family }
+        }
+        .accessibilityIdentifier("people.family.\(family.name)")
+    }
+}
+
 // MARK: - Card gestures (single click selects, double click edits)
 
 extension PersonFinderView {
@@ -708,6 +768,7 @@ extension PersonFinderView {
     /// and load their reference faces into the strip for inspection.
     func selectGalleryCard(_ profile: POIProfile) {
         peopleGalleryFocused = true
+        selectedFamilyUUID = ""   // a person's page replaces a family's
         model.settings.applyProfile(profile)
         model.settings.save()
         model.referenceFaces.removeAll()

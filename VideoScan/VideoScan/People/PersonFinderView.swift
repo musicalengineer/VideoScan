@@ -56,6 +56,14 @@ struct PersonFinderView: View {
     // it's driven by the Results extension (PersonFinderView+Results.swift).
     // (2026-06-24)
     @State var selectedResultIDs = Set<UUID>()
+    /// Family groups (FamilyGroup.swift, 2026-10-04): the cards after the
+    /// "+" tile, the selected one (its page replaces a person's), and the
+    /// new-family name prompt.
+    @State var families: [FamilyGroup] = []
+    @AppStorage("people.selectedFamilyUUID") var selectedFamilyUUID: String = ""
+    @State var showNewFamilyPrompt = false
+    @State var newFamilyName = ""
+    @State var confirmTrashFamily: FamilyGroup?
     @State var inspectorShown = false
     @State var inspectorStreamInfo: StreamInspectInfo?
     @State var inspectorLoading = false
@@ -185,7 +193,15 @@ struct PersonFinderView: View {
             // Videos of <person> — the PRIMARY view (Rick 2026-10-04, GH
             // #272 trial): what we already know this person is in, catalog
             // and archive together. Searches below are demoted.
-            if let profile = activeVideosProfile {
+            if let familyID = UUID(uuidString: selectedFamilyUUID),
+               families.contains(where: { $0.uuid == familyID }) {
+                FamilyVideosSection(familyUUID: familyID, catalogModel: catalogModel) { title in
+                    catalogModel.archivistSearchRequest = title
+                    selectedTab = 1
+                }
+                .frame(minHeight: 200, maxHeight: .infinity)
+                Divider()
+            } else if let profile = activeVideosProfile {
                 PersonVideosSection(profile: profile, catalogModel: catalogModel) { title in
                     catalogModel.archivistSearchRequest = title
                     selectedTab = 1
@@ -216,6 +232,48 @@ struct PersonFinderView: View {
             }
         }
         .frame(minWidth: 960, maxHeight: .infinity, alignment: .top)
+        .task { families = FamilyGroupStore.listAll() }
+        .alert("Add a Family", isPresented: $showNewFamilyPrompt) {
+            TextField("Family name", text: $newFamilyName)
+            Button("Add") { addFamily() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("A family groups the videos that belong to the whole family — e.g. \(FamilyGroupStore.defaultName).")
+        }
+        .confirmationDialog("Remove \(confirmTrashFamily?.name ?? "this family")?",
+                            isPresented: Binding(get: { confirmTrashFamily != nil },
+                                                 set: { if !$0 { confirmTrashFamily = nil } })) {
+            Button("Move to Trash", role: .destructive) { trashFamily() }
+        } message: {
+            Text("Only the family card and its list of picked videos go to the Trash. The videos themselves are not touched.")
+        }
+    }
+
+    func addFamily() {
+        let name = newFamilyName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        let group = FamilyGroup(name: name)
+        do {
+            try FamilyGroupStore.save(group)
+            families = FamilyGroupStore.listAll()
+            selectedFamilyUUID = group.uuid.uuidString
+            appLog.write("People: added family \(name)")
+        } catch {
+            appLog.write("People: could not add family \(name) — \(error.localizedDescription)")
+        }
+    }
+
+    func trashFamily() {
+        guard let family = confirmTrashFamily else { return }
+        confirmTrashFamily = nil
+        do {
+            try FamilyGroupStore.moveToTrash(family.uuid)
+            if selectedFamilyUUID == family.uuid.uuidString { selectedFamilyUUID = "" }
+            families = FamilyGroupStore.listAll()
+            appLog.write("People: moved family \(family.name) to the Trash")
+        } catch {
+            appLog.write("People: could not remove family \(family.name) — \(error.localizedDescription)")
+        }
     }
 
     /// The selected person, when exactly one card is active.

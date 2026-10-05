@@ -173,3 +173,47 @@ struct FeaturedVideosTests {
         #expect(PersonVideos.plausible(row(1947), bornYear: nil), "no birthdate, no guard")
     }
 }
+
+// MARK: - Family groups (2026-10-04)
+
+@Suite("People — family groups")
+@MainActor
+struct FamilyGroupTests {
+
+    @Test func aFamilySavesAndLoadsInTheTestSandbox() throws {
+        // POIStorage.storeDir is a per-process temp dir under a test host,
+        // so this never touches the real People store.
+        #expect(FamilyGroupStore.directory.path.contains("VideoScanTestPOI-"))
+        let family = FamilyGroup(name: FamilyGroupStore.defaultName)
+        try FamilyGroupStore.save(family)
+        #expect(FamilyGroupStore.load(family.uuid) == family)
+        #expect(FamilyGroupStore.listAll().contains(family))
+    }
+
+    @Test func aDamagedFamilyFileStillLoadsItsName() throws {
+        let json = #"{"uuid":"\#(UUID().uuidString)","name":"Breen Family","featuredVideos":"garbage"}"#
+        let family = try JSONDecoder().decode(FamilyGroup.self, from: Data(json.utf8))
+        #expect(family.name == "Breen Family")
+        #expect(family.featuredVideos.isEmpty)
+    }
+
+    @Test func picksAddOnceAndRemoveCleanly() {
+        let rec = VideoRecord()
+        rec.fullPath = "/Volumes/X/cape.mov"
+        rec.filename = "cape.mov"
+        var picks: [FeaturedVideo] = []
+        #expect(FeaturedVideos.apply([rec], on: true, to: &picks) == 1)
+        #expect(FeaturedVideos.apply([rec], on: true, to: &picks) == 0, "no duplicate pick")
+        #expect(picks.count == 1)
+        #expect(FeaturedVideos.apply([rec], on: false, to: &picks) == 1)
+        #expect(picks.isEmpty)
+    }
+
+    /// A family must never be a POIProfile (face matching, Hallie's alias
+    /// joins and tree identity all read POIProfile.listAll()).
+    @Test func familiesAreNotPeople() throws {
+        let source = try SourceTree.appSource(named: "FamilyGroup.swift")
+        #expect(!source.contains("POIProfile("), "a family is never written as a person profile")
+        #expect(source.contains("appendingPathComponent(\"Families\""))
+    }
+}
