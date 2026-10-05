@@ -7,9 +7,9 @@ rather than from memory.
 
 ## Decisions for Rick (before the Ultra arrives)
 
-1. **Hostname.** Recommend **`RicksUltra`**. Don't use anything containing
-   `M5`: `scripts/install_nightly.sh` matches `*M5*` and would give the Ultra
-   the M5 laptop's 03:15 failover slot.
+1. **Hostname — DECIDED 2026-10-05: `RicksUltra`** (`RicksUltra.local`).
+   Avoids `*M5*`, which `scripts/install_nightly.sh` would match to the M5
+   laptop's 03:15 failover slot.
 2. **Roles that move to the Ultra.** Recommend all of them: primary dev,
    2 AM nightly + weekly sanitizers + adversarial review, catalog sync
    master, Ollama host for Hallie. The M4 then becomes the failover nightly
