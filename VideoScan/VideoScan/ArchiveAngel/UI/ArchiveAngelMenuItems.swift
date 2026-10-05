@@ -20,6 +20,9 @@ struct ArchiveAngelMenuItems: View {
     let center: MediaFileOperationsCenter
     let activeRecs: [VideoRecord]
     let pureActive: Bool
+    /// Opens the catalog's Transcode sheet (the one Transcode path) — for
+    /// the already-archived follow-ups below. nil = those items hidden.
+    var onTranscode: ((VideoRecord, TranscodePreset) -> Void)? = nil
 
     /// "Prepare with Archive Angel" (Rick 2026-09-11): hand exactly this
     /// selection to the Angel — companions prepared in the buffer, then
@@ -31,6 +34,7 @@ struct ArchiveAngelMenuItems: View {
         Menu("Archive Angel") {
             prepareItem
             showCopiesItem
+            alreadyArchivedItems
         }
         .accessibilityIdentifier("catalog.row.archiveAngelMenu")
     }
@@ -53,6 +57,34 @@ struct ArchiveAngelMenuItems: View {
                  ? "Nothing here needs preparing (already archived, or the volume is offline)."
                  : "Archive Angel prepares the selected file(s) — verifies, makes companions in the buffer — and opens them for review under the Archive tab. Nothing is promoted until you approve."))
         .accessibilityIdentifier("catalog.row.prepareWithArchiveAngel")
+    }
+
+    /// One file that is ALREADY in the Master Archive (Rick 2026-10-05:
+    /// "AA should look at it and say 'Already in archive, do you want to
+    /// create an access copy … other copies for editing, and mark it to be
+    /// present in the People tab under XXX'"). Says so plainly instead of a
+    /// greyed-out Prepare with a tooltip, and offers the follow-ups through
+    /// the existing paths: the catalog's Transcode sheet (which files the
+    /// output beside the original in the archive's year folder — Rick
+    /// 8/25) and Show in People tab. Nothing new writes data.
+    @ViewBuilder
+    private var alreadyArchivedItems: some View {
+        if activeRecs.count == 1, let rec = activeRecs.first, !model.pfNotYetArchived(rec) {
+            let reachable = VolumeReachability.isReachable(path: rec.fullPath)
+            Divider()
+            Text("Already in the Master Archive")
+            if let onTranscode {
+                Button("Make an Access Copy (HEVC, for everyday viewing)…") { onTranscode(rec, .archival) }
+                    .disabled(!reachable)
+                    .help(reachable ? "A compact copy that plays anywhere, filed beside the original in the archive's year folder. The original is untouched."
+                                    : "The drive holding it is not connected.")
+                    .accessibilityIdentifier("catalog.row.angel.accessCopy")
+                Button("Make an Editing Copy (ProRes)…") { onTranscode(rec, .editingLT) }
+                    .disabled(!reachable)
+                    .accessibilityIdentifier("catalog.row.angel.editingCopy")
+            }
+            ShowInPeopleTabMenu(records: [rec])
+        }
     }
 
     /// "Show Copies…" — one recording at a time: its whole copy family

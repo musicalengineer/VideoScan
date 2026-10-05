@@ -786,7 +786,8 @@ extension CatalogContent {
                     // "Which copy is the original?" is Archive Angel ▸
                     // Show Copies… since S4 (the Promote Helper is retired).
                     promoteToArchiveMenuItem(activeRecs: activeRecs, pureActive: pureActive)
-                    ArchiveAngelMenuItems(model: model, center: fileOpsCenter, activeRecs: activeRecs, pureActive: pureActive)
+                    ArchiveAngelMenuItems(model: model, center: fileOpsCenter, activeRecs: activeRecs, pureActive: pureActive,
+                                          onTranscode: transcodeRunning ? nil : { rec, preset in configureTranscode(for: rec, preset: preset) })
                     removeFromCatalogMenuItem(activeRecs: activeRecs, pureActive: pureActive)
 
                     // Verify Audio / Verification Results / Repair
