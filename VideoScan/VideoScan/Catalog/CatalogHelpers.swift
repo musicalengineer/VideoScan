@@ -373,9 +373,15 @@ struct CatalogContent: View {
             // focus when ↑/↓ arrive. Remove once the cause is fixed.
             if event.keyCode == 125 || event.keyCode == 126 {
                 let responder = event.window?.firstResponder
+                let table = responder as? NSTableView
+                let before = table?.selectedRow ?? -2
                 appLog.write("[keys] \(event.keyCode == 126 ? "↑" : "↓") — first responder: "
                     + "\(responder.map { String(describing: type(of: $0)) } ?? "none")"
+                    + " rows=\(table?.numberOfRows ?? -1) selectedRow=\(before)"
                     + ", window: \(event.window?.title ?? "?")")
+                DispatchQueue.main.async {
+                    appLog.write("[keys]   after: selectedRow=\(table?.selectedRow ?? -2)")
+                }
             }
             // 49 = kVK_Space. Bare Space only — let ⌘/⌥/⌃-Space through to
             // their owners (menu shortcuts, input sources, etc.).
