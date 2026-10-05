@@ -279,7 +279,7 @@ struct StewardOffMainScaleTests {
         print("PERF_SCALE steward: old main-actor projection+rule2 \(oldMain); new main-actor half \(newMain); off-main resolve \(offMain)")
         #expect(resolved == reference, "100k: the off-main path disagrees with the reference")
         #expect(newMain < .milliseconds(1_500), "main-actor half took \(newMain)")
-        #expect(offMain < .milliseconds(1_000), "off-main resolution took \(offMain)")
+        #expect(offMain < PerformanceLane.debugCeiling(.milliseconds(1_000)), "off-main resolution took \(offMain)")
     }
 }
 

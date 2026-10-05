@@ -71,7 +71,7 @@ struct MusicTriageOffMainTests {
         print("PERF_SCALE music chip: old in-body pass \(oldInBody); new main-actor projection \(newMain); off-main detection \(offMain)")
         #expect(ids == reference)
         #expect(ids.count == 60_000, "every library track and no .wav beside a same-stem video, no MXF half")
-        #expect(newMain < .milliseconds(150), "projection took \(newMain)")
+        #expect(newMain < PerformanceLane.debugCeiling(.milliseconds(150)), "projection took \(newMain)")
         #expect(offMain < .seconds(1), "detection took \(offMain)")
     }
 

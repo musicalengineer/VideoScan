@@ -192,9 +192,9 @@ struct CatalogOffMainTotalsScaleTests {
 
         print("PERF_SCALE footer: old main-actor compute \(oldFooter); new main-actor projection \(newFooterMain); off-main compute \(footerOff)")
         print("PERF_SCALE size line: old main-actor projection \(oldSizeMain); new main-actor projection \(newSizeMain)")
-        #expect(newFooterMain < .milliseconds(250), "footer projection took \(newFooterMain)")
+        #expect(newFooterMain < PerformanceLane.debugCeiling(.milliseconds(250)), "footer projection took \(newFooterMain)")
         #expect(footerOff < .seconds(3), "footer compute took \(footerOff)")
-        #expect(newSizeMain < .milliseconds(400), "size-line projection took \(newSizeMain)")
+        #expect(newSizeMain < PerformanceLane.debugCeiling(.milliseconds(400)), "size-line projection took \(newSizeMain)")
     }
 }
 

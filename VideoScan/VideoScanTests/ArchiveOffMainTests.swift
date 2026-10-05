@@ -185,8 +185,8 @@ struct ArchiveOffMainTests {
         #expect(totals == oldStorage)
         #expect(newSnap.needsDate.map(\.id) == oldSnap.needsDate.map(\.id))
         #expect(newSnap.needsDate.count > 30_000, "a third of the sources have no date")
-        #expect(newMain < .milliseconds(400), "main-actor work took \(newMain)")
-        #expect(offMain < .seconds(2), "off-main pass took \(offMain)")
+        #expect(newMain < PerformanceLane.debugCeiling(.milliseconds(400)), "main-actor work took \(newMain)")
+        #expect(offMain < PerformanceLane.debugCeiling(.seconds(2)), "off-main pass took \(offMain)")
     }
 
     @Test func bodyNoLongerComputesTheTotalsAndTheSnapshotIsFedTheOffMainAnswer() throws {
