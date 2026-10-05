@@ -303,10 +303,6 @@ extension ArchiveView {
         // gates on "is there anything promotable at all".
         let promotable = recs.filter { model.pfNotYetArchived($0) }
 
-        // Hand-pick for a person's People-tab page (2026-10-04, GH #272).
-        ShowInPeopleTabMenu(records: recs)
-        Divider()
-
         Button {
             model.requestPromote(recordIDs: promotable.map(\.id))
         } label: {
