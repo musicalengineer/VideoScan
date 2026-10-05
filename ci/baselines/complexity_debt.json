@@ -1,0 +1,2074 @@
+{
+ "note": "Complexity debt baseline: functions with CCN > 15 or NLOC > 80, keyed file::function (no line numbers), plus grandfathered swiftlint:disable counts for the size/complexity rules. The nightly REPORTS offenders not on this list; the pre-commit hook and CI preflight BLOCK new or worse functions over the gate limits (scripts/complexity_gate.py). It only shrinks (`--shrink-baseline`); regrow it deliberately with `scripts/complexity_metrics.py --update-baseline` and say why in the commit.",
+ "thresholds": {
+  "ccn": 15,
+  "nloc": 80
+ },
+ "entry_count": 514,
+ "entries": {
+  "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::compute": {
+   "ccn": 28,
+   "nloc": 61
+  },
+  "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift::state": {
+   "ccn": 18,
+   "nloc": 45
+  },
+  "VideoScan/VideoScan/Analyze/AnalyzePanelView.swift::liveRule": {
+   "ccn": 20,
+   "nloc": 36
+  },
+  "VideoScan/VideoScan/Analyze/AnalyzeReclaimable.swift::compute": {
+   "ccn": 18,
+   "nloc": 43
+  },
+  "VideoScan/VideoScan/Analyze/AnalyzeRunner.swift::runNow": {
+   "ccn": 16,
+   "nloc": 51
+  },
+  "VideoScan/VideoScan/App/BundleImporter.swift::installPOIs": {
+   "ccn": 12,
+   "nloc": 83
+  },
+  "VideoScan/VideoScan/App/CompactDashboard.swift::body": {
+   "ccn": 11,
+   "nloc": 110
+  },
+  "VideoScan/VideoScan/App/ContentView.swift::ContentView.body": {
+   "ccn": 12,
+   "nloc": 108
+  },
+  "VideoScan/VideoScan/App/ContentView.swift::catalogContent": {
+   "ccn": 3,
+   "nloc": 81
+  },
+  "VideoScan/VideoScan/App/ContentView.swift::catalogInfoSummaryLines": {
+   "ccn": 20,
+   "nloc": 100
+  },
+  "VideoScan/VideoScan/App/ContentView.swift::withMaintenanceAlerts": {
+   "ccn": 6,
+   "nloc": 87
+  },
+  "VideoScan/VideoScan/App/SettingsView.swift::body": {
+   "ccn": 1,
+   "nloc": 133
+  },
+  "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body": {
+   "ccn": 15,
+   "nloc": 245
+  },
+  "VideoScan/VideoScan/App/VideoScanApp.swift::applicationShouldTerminate": {
+   "ccn": 24,
+   "nloc": 86
+  },
+  "VideoScan/VideoScan/App/VideoScanModel+BundleImportExport.swift::applyBundlePayload": {
+   "ccn": 15,
+   "nloc": 83
+  },
+  "VideoScan/VideoScan/App/VideoScanModel+BundleImportExport.swift::exportBundleViaPanel": {
+   "ccn": 12,
+   "nloc": 92
+  },
+  "VideoScan/VideoScan/Archive/ArchiveIndexRename.swift::jsonStringValues": {
+   "ccn": 18,
+   "nloc": 62
+  },
+  "VideoScan/VideoScan/Archive/ArchiveIndexRename.swift::rewriteJSONL": {
+   "ccn": 16,
+   "nloc": 34
+  },
+  "VideoScan/VideoScan/Archive/ArchiveLockJob.swift::run": {
+   "ccn": 16,
+   "nloc": 57
+  },
+  "VideoScan/VideoScan/Archive/ArchivePromoteEngine.swift::description": {
+   "ccn": 16,
+   "nloc": 19
+  },
+  "VideoScan/VideoScan/Archive/ArchiveReadiness.swift::composeWarnings": {
+   "ccn": 17,
+   "nloc": 38
+  },
+  "VideoScan/VideoScan/Archive/ArchiveRefile.swift::preflight": {
+   "ccn": 17,
+   "nloc": 54
+  },
+  "VideoScan/VideoScan/Archive/ArchiveUpdateSheet.swift::body": {
+   "ccn": 16,
+   "nloc": 79
+  },
+  "VideoScan/VideoScan/Archive/ArchiveView+DetailSheet.swift::body": {
+   "ccn": 16,
+   "nloc": 96
+  },
+  "VideoScan/VideoScan/Archive/ArchiveView+Table.swift::recordContextMenu": {
+   "ccn": 13,
+   "nloc": 82
+  },
+  "VideoScan/VideoScan/Archive/ArchiveView.swift::masterArchivePanel": {
+   "ccn": 7,
+   "nloc": 81
+  },
+  "VideoScan/VideoScan/Archive/ArchiveVolumeProtection.swift::make": {
+   "ccn": 31,
+   "nloc": 88
+  },
+  "VideoScan/VideoScan/Archive/ArchiveVolumeProtection.swift::verdictAtRemoval": {
+   "ccn": 17,
+   "nloc": 29
+  },
+  "VideoScan/VideoScan/Archive/BindFixityToVolumeJob.swift::run": {
+   "ccn": 16,
+   "nloc": 52
+  },
+  "VideoScan/VideoScan/Archive/CopyFamilyAssessor.swift::assess": {
+   "ccn": 57,
+   "nloc": 193
+  },
+  "VideoScan/VideoScan/Archive/CopyFamilyAssessor.swift::codecClass": {
+   "ccn": 16,
+   "nloc": 15
+  },
+  "VideoScan/VideoScan/Archive/PromoteDateChoice.swift::gather": {
+   "ccn": 17,
+   "nloc": 29
+  },
+  "VideoScan/VideoScan/Archive/PromoteToArchiveJob+Steps.swift::copyOrAdopt": {
+   "ccn": 17,
+   "nloc": 84
+  },
+  "VideoScan/VideoScan/Archive/PromoteToArchiveJob+Steps.swift::finishPublished": {
+   "ccn": 17,
+   "nloc": 123
+  },
+  "VideoScan/VideoScan/Archive/ReadOnlyVolumeProtection.swift::make": {
+   "ccn": 17,
+   "nloc": 44
+  },
+  "VideoScan/VideoScan/Archive/ReadOnlyVolumeProtection.swift::verdictAtRemoval": {
+   "ccn": 18,
+   "nloc": 40
+  },
+  "VideoScan/VideoScan/Archive/VerifyArchiveCopiesJob.swift::verifyOne": {
+   "ccn": 20,
+   "nloc": 99
+  },
+  "VideoScan/VideoScan/Archive/VideoScanModel+ArchiveUpdate.swift::plan": {
+   "ccn": 18,
+   "nloc": 30
+  },
+  "VideoScan/VideoScan/Archive/VideoScanModel+ArchiveUpdate.swift::updateArchivedFile": {
+   "ccn": 19,
+   "nloc": 77
+  },
+  "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift::excludingMasterArchiveFiles": {
+   "ccn": 20,
+   "nloc": 36
+  },
+  "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift::refusal": {
+   "ccn": 17,
+   "nloc": 20
+  },
+  "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift::registerPromotedCopy": {
+   "ccn": 10,
+   "nloc": 86
+  },
+  "VideoScan/VideoScan/Archive/VideoScanModel+MediaLedger.swift::archiveCopySnapshots": {
+   "ccn": 24,
+   "nloc": 56
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob+Evidence.swift::selectFromEvidence": {
+   "ccn": 44,
+   "nloc": 180
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift::prepare": {
+   "ccn": 37,
+   "nloc": 127
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift::prepareEntries": {
+   "ccn": 17,
+   "nloc": 62
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift::run": {
+   "ccn": 26,
+   "nloc": 148
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift::VideoScanModel.forgetArchiveAngelCompanions scopes : [ ArchiveAngelCompanionScope ] , reason : String , at now : Date = Date , presence : String -> ArchiveAngelFilePresence = { ArchiveAngelFilePresence . of $ 0 }": {
+   "ccn": 19,
+   "nloc": 69
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift::reconcileArchiveAngelBufferAtLaunch": {
+   "ccn": 18,
+   "nloc": 64
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::promote": {
+   "ccn": 35,
+   "nloc": 141
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Promote/ArchiveAngelPromoter.swift::settle": {
+   "ccn": 23,
+   "nloc": 66
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRecommendationPolicy.swift::AngelRecommendationPolicy.decodeValidated from url : URL , read : URL throws -> Data , notes : [ String ] -> Void": {
+   "ccn": 17,
+   "nloc": 66
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift::AngelRule.problems": {
+   "ccn": 18,
+   "nloc": 42
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift::ArchiveAngelRejection.name": {
+   "ccn": 27,
+   "nloc": 30
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift::candidateFlag": {
+   "ccn": 17,
+   "nloc": 22
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelStemMatcher.swift::matchesNames": {
+   "ccn": 16,
+   "nloc": 34
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelRecommendations.swift::classify": {
+   "ccn": 18,
+   "nloc": 60
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelRecommendations.swift::verdict": {
+   "ccn": 24,
+   "nloc": 65
+  },
+  "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::floorFires": {
+   "ccn": 39,
+   "nloc": 52
+  },
+  "VideoScan/VideoScan/ArchiveAngel/UI/ArchiveAngelAssessmentPanel.swift::body": {
+   "ccn": 6,
+   "nloc": 98
+  },
+  "VideoScan/VideoScan/ArchiveAngel/UI/ArchiveAngelReadinessExplanation.swift::ArchiveAngelReadinessExplanation.sentence forReason raw : String": {
+   "ccn": 16,
+   "nloc": 35
+  },
+  "VideoScan/VideoScan/ArchiveAngel/UI/ArchiveAngelReviewSheet.swift::footer": {
+   "ccn": 20,
+   "nloc": 78
+  },
+  "VideoScan/VideoScan/Catalog/CatalogAudit.swift::run": {
+   "ccn": 66,
+   "nloc": 165
+  },
+  "VideoScan/VideoScan/Catalog/CatalogAuditFixer.swift::apply": {
+   "ccn": 24,
+   "nloc": 73
+  },
+  "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift::catalogTableBase": {
+   "ccn": 34,
+   "nloc": 143
+  },
+  "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift::rowContextMenu": {
+   "ccn": 81,
+   "nloc": 489
+  },
+  "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body": {
+   "ccn": 13,
+   "nloc": 158
+  },
+  "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::computeFiltered": {
+   "ccn": 26,
+   "nloc": 89
+  },
+  "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::previewPlayer": {
+   "ccn": 31,
+   "nloc": 233
+  },
+  "VideoScan/VideoScan/Catalog/CatalogQueries.swift::pfCatalogTokenMatches": {
+   "ccn": 20,
+   "nloc": 30
+  },
+  "VideoScan/VideoScan/Catalog/CatalogQueries.swift::pfFieldTokenMatches": {
+   "ccn": 21,
+   "nloc": 36
+  },
+  "VideoScan/VideoScan/Catalog/CatalogQueries.swift::pfTokenMatches": {
+   "ccn": 20,
+   "nloc": 27
+  },
+  "VideoScan/VideoScan/Catalog/CatalogSearchIndex.swift::loadFromDisk": {
+   "ccn": 18,
+   "nloc": 49
+  },
+  "VideoScan/VideoScan/Catalog/CatalogToolbar.swift::CatalogToolbar.body": {
+   "ccn": 30,
+   "nloc": 260
+  },
+  "VideoScan/VideoScan/Catalog/CatalogView+ScanTargetsPane.swift::scanTargetsPane": {
+   "ccn": 21,
+   "nloc": 244
+  },
+  "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift::volumeContextCatalogSection": {
+   "ccn": 36,
+   "nloc": 182
+  },
+  "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift::volumeTable": {
+   "ccn": 25,
+   "nloc": 156
+  },
+  "VideoScan/VideoScan/Catalog/InspectorDossierView.swift::InspectorDossierView.body": {
+   "ccn": 11,
+   "nloc": 164
+  },
+  "VideoScan/VideoScan/Catalog/InspectorFamilyTagsView.swift::editModeControls": {
+   "ccn": 5,
+   "nloc": 97
+  },
+  "VideoScan/VideoScan/Catalog/InspectorPanel.swift::InspectorPanel.body": {
+   "ccn": 57,
+   "nloc": 424
+  },
+  "VideoScan/VideoScan/Catalog/InspectorPanel.swift::formatAllMetadata": {
+   "ccn": 32,
+   "nloc": 137
+  },
+  "VideoScan/VideoScan/Catalog/InspectorWorkflowTagsView.swift::body": {
+   "ccn": 4,
+   "nloc": 83
+  },
+  "VideoScan/VideoScan/Catalog/TidyCatalogSheet.swift::body": {
+   "ccn": 8,
+   "nloc": 108
+  },
+  "VideoScan/VideoScan/Catalog/TriageSnapshot.swift::build": {
+   "ccn": 17,
+   "nloc": 44
+  },
+  "VideoScan/VideoScan/Catalog/TriageView.swift::fileTable": {
+   "ccn": 11,
+   "nloc": 87
+  },
+  "VideoScan/VideoScan/Catalog/TriageView.swift::toolbar": {
+   "ccn": 7,
+   "nloc": 85
+  },
+  "VideoScan/VideoScan/Catalog/TriageView.swift::triageContextMenu": {
+   "ccn": 14,
+   "nloc": 122
+  },
+  "VideoScan/VideoScan/Catalog/UpdateCatalogSheet.swift::statusView": {
+   "ccn": 19,
+   "nloc": 58
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogScope.swift::applyCatalogScopeGate": {
+   "ccn": 21,
+   "nloc": 75
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogVerification.swift::backfillAllProvenance": {
+   "ccn": 12,
+   "nloc": 96
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogVerification.swift::verifyCatalog": {
+   "ccn": 20,
+   "nloc": 120
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift::catchUpInferredDates": {
+   "ccn": 51,
+   "nloc": 134
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift::shareDateAcrossFootageGroup": {
+   "ccn": 18,
+   "nloc": 25
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift::unwindUnverifiedPropagatedDates": {
+   "ccn": 17,
+   "nloc": 75
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+Provenance.swift::buildFileJourney": {
+   "ccn": 20,
+   "nloc": 112
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+Provenance.swift::buildMigrationOverview": {
+   "ccn": 10,
+   "nloc": 87
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+Provenance.swift::buildVolumeProvenance": {
+   "ccn": 20,
+   "nloc": 85
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+Rename.swift::renameRecord": {
+   "ccn": 26,
+   "nloc": 94
+  },
+  "VideoScan/VideoScan/Catalog/VideoScanModel+RescanPreservation.swift::isWorthRestoring": {
+   "ccn": 36,
+   "nloc": 38
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift::isStructurallyComplete": {
+   "ccn": 17,
+   "nloc": 34
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift::readFolderNames": {
+   "ccn": 16,
+   "nloc": 35
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyAssetStore.swift::resolvedPersonFolder": {
+   "ccn": 17,
+   "nloc": 39
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyKinshipInference.swift::isAncestor": {
+   "ccn": 16,
+   "nloc": 33
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyKinshipOverlay.swift::FamilyKinshipOverlay.init": {
+   "ccn": 1,
+   "nloc": 103
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyKinshipOverlay.swift::FamilyKinshipOverlay.init.init": {
+   "ccn": 20,
+   "nloc": 68
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyKinshipOverlay.swift::resolvePins": {
+   "ccn": 16,
+   "nloc": 59
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilySearchPullCoordinator.swift::performMerge": {
+   "ccn": 18,
+   "nloc": 98
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilySearchPullSheet.swift::footer": {
+   "ccn": 16,
+   "nloc": 77
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilySearchPullSheet.swift::optionsForm": {
+   "ccn": 4,
+   "nloc": 105
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreeCards.swift::FamilyTreePersonCard.body": {
+   "ccn": 18,
+   "nloc": 170
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift::refilterNow": {
+   "ccn": 20,
+   "nloc": 48
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreeNotes.swift::corrections": {
+   "ccn": 20,
+   "nloc": 50
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreePersonMetadata.swift::text": {
+   "ccn": 16,
+   "nloc": 47
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift::inspector": {
+   "ccn": 17,
+   "nloc": 127
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift::sidebar": {
+   "ccn": 12,
+   "nloc": 97
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift::treeCanvas": {
+   "ccn": 8,
+   "nloc": 133
+  },
+  "VideoScan/VideoScan/FamilyTree/FamilyTreeView.swift::withSheets": {
+   "ccn": 5,
+   "nloc": 81
+  },
+  "VideoScan/VideoScan/FamilyTree/RecordFinderFoundSheet.swift::body": {
+   "ccn": 8,
+   "nloc": 81
+  },
+  "VideoScan/VideoScan/FamilyTree/TreeIdentityCenter.swift::pin": {
+   "ccn": 18,
+   "nloc": 61
+  },
+  "VideoScan/VideoScan/FootageGroups/FootageGrouping.swift::text": {
+   "ccn": 20,
+   "nloc": 24
+  },
+  "VideoScan/VideoScan/FootageGroups/FootageStem.swift::analyze": {
+   "ccn": 16,
+   "nloc": 42
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistAskField.swift::body": {
+   "ccn": 11,
+   "nloc": 97
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistCapabilityQuestion.swift::ArchivistCapabilityQuestion.init#1": {
+   "ccn": 22,
+   "nloc": 34
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift::ArchivistChatWindow.body": {
+   "ccn": 8,
+   "nloc": 98
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift::handle": {
+   "ccn": 20,
+   "nloc": 57
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistChatWindow.swift::identityHeader": {
+   "ccn": 16,
+   "nloc": 106
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistConversationCommand.swift::detectSocialLine": {
+   "ccn": 18,
+   "nloc": 34
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistConversationCommand.swift::helpTopic": {
+   "ccn": 21,
+   "nloc": 16
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistConversationCommand.swift::smalltalkReply": {
+   "ccn": 17,
+   "nloc": 50
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistFollowUpResolver+Refinement.swift::ArchivistFollowUpResolver.init phrase : \"and what about\" , kind : . comparative , soft : false": {
+   "ccn": 1,
+   "nloc": 113
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistFollowUpResolver+Refinement.swift::applyCumulative": {
+   "ccn": 21,
+   "nloc": 72
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistFollowUpResolver+Refinement.swift::extractYears": {
+   "ccn": 17,
+   "nloc": 60
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistFollowUpResolver+Refinement.swift::refinementResolution": {
+   "ccn": 20,
+   "nloc": 61
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistFollowUpResolver.swift::ArchivistFollowUpResolver.init people : [ ] , operation : . familyTree , surname : surname": {
+   "ccn": 19,
+   "nloc": 49
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistGraphExecutor+KinshipOverlay.swift::overlayRelationshipResult": {
+   "ccn": 23,
+   "nloc": 45
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistGraphExecutor.swift::ArchivistGraphQuery.init _ payload : ArchivistQueryAST . Graph , voices : [ Int : Voice ] = [ : ] , question : String? = nil": {
+   "ccn": 21,
+   "nloc": 53
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistGraphExecutor.swift::resolveUnselected": {
+   "ccn": 21,
+   "nloc": 105
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistPresenceExecutor.swift::noEvidence": {
+   "ccn": 18,
+   "nloc": 33
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistQueryAST+TranslatorDecoding.swift::canonicalGraphPayload": {
+   "ccn": 24,
+   "nloc": 112
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistQuestionParser.swift::general": {
+   "ccn": 18,
+   "nloc": 36
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistQuestionParser.swift::kinship": {
+   "ccn": 22,
+   "nloc": 42
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistRecordQuestion.swift::detect": {
+   "ccn": 23,
+   "nloc": 48
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistSelectionDateQuestion.swift::answer": {
+   "ccn": 21,
+   "nloc": 92
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistTemporalExecutor.swift::bornYetProse": {
+   "ccn": 18,
+   "nloc": 54
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistTemporalExecutor.swift::execute": {
+   "ccn": 29,
+   "nloc": 137
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistTemporalExecutor.swift::executeGroup": {
+   "ccn": 56,
+   "nloc": 188
+  },
+  "VideoScan/VideoScan/Hallie/ArchivistTemporalExecutor.swift::executePresentAge": {
+   "ccn": 20,
+   "nloc": 97
+  },
+  "VideoScan/VideoScan/Hallie/HallieAncestorStatisticsAnswer.swift::ancestorSides": {
+   "ccn": 18,
+   "nloc": 43
+  },
+  "VideoScan/VideoScan/Hallie/HallieAncestorStatisticsQuestion.swift::HallieAncestorStatisticsQuestion.who in q : String , allowTree : Bool": {
+   "ccn": 22,
+   "nloc": 78
+  },
+  "VideoScan/VideoScan/Hallie/HallieAncestorStatisticsQuestion.swift::birthplaces": {
+   "ccn": 24,
+   "nloc": 28
+  },
+  "VideoScan/VideoScan/Hallie/HallieAncestorStatisticsQuestion.swift::deepestLine": {
+   "ccn": 22,
+   "nloc": 12
+  },
+  "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+PhotoCaption.swift::photoCaptionResponse": {
+   "ccn": 17,
+   "nloc": 103
+  },
+  "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator+Pronunciation.swift::pronunciationResponse": {
+   "ccn": 16,
+   "nloc": 66
+  },
+  "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift::Dependencies.init": {
+   "ccn": 5,
+   "nloc": 83
+  },
+  "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift::Dependencies.set.set#1": {
+   "ccn": 15,
+   "nloc": 142
+  },
+  "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift::captureContext": {
+   "ccn": 17,
+   "nloc": 96
+  },
+  "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift::execute": {
+   "ccn": 28,
+   "nloc": 229
+  },
+  "VideoScan/VideoScan/Hallie/HallieAppTurnCoordinator.swift::runOffMain": {
+   "ccn": 18,
+   "nloc": 125
+  },
+  "VideoScan/VideoScan/Hallie/HallieBirthplaceTrail.swift::birthplaceTrailQuestion": {
+   "ccn": 21,
+   "nloc": 36
+  },
+  "VideoScan/VideoScan/Hallie/HallieCatalogStats.swift::answer": {
+   "ccn": 16,
+   "nloc": 44
+  },
+  "VideoScan/VideoScan/Hallie/HallieCatalogSuperlative.swift::detect": {
+   "ccn": 22,
+   "nloc": 40
+  },
+  "VideoScan/VideoScan/Hallie/HallieClarificationReply.swift::HallieTurnExecutor.init": {
+   "ccn": 20,
+   "nloc": 50
+  },
+  "VideoScan/VideoScan/Hallie/HallieCompositionVerifier.swift::splitSentences": {
+   "ccn": 19,
+   "nloc": 72
+  },
+  "VideoScan/VideoScan/Hallie/HallieCompositionVerifier.swift::verify": {
+   "ccn": 16,
+   "nloc": 70
+  },
+  "VideoScan/VideoScan/Hallie/HallieEnglishWords.swift::set": {
+   "ccn": 19,
+   "nloc": 17
+  },
+  "VideoScan/VideoScan/Hallie/HallieGeneralAnswerBoundary.swift::isFamilyAdvice": {
+   "ccn": 23,
+   "nloc": 95
+  },
+  "VideoScan/VideoScan/Hallie/HallieKinshipApposition.swift::kinshipApposition": {
+   "ccn": 16,
+   "nloc": 77
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageAnswer+CommonAncestor.swift::HallieLineageAnswer.commonAncestor.commonAncestor": {
+   "ccn": 30,
+   "nloc": 88
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageAnswer+CommonAncestor.swift::commonAncestryProse": {
+   "ccn": 17,
+   "nloc": 59
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageAnswer+DeepAncestors.swift::deepAncestors": {
+   "ccn": 32,
+   "nloc": 124
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageAnswer+GedcomAwareness.swift::gedcomProvenance": {
+   "ccn": 27,
+   "nloc": 100
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageAnswer+Superlatives.swift::superlative": {
+   "ccn": 52,
+   "nloc": 237
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::HallieLineageQuestion.get": {
+   "ccn": 17,
+   "nloc": 7
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::HallieLineageQuestion.isFetchClause.get#2": {
+   "ccn": 93,
+   "nloc": 68
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::ancestorLine": {
+   "ccn": 16,
+   "nloc": 62
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::answer": {
+   "ccn": 35,
+   "nloc": 70
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::detectShape": {
+   "ccn": 88,
+   "nloc": 250
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::isOurCommonAncestorQuestion": {
+   "ccn": 30,
+   "nloc": 12
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::namedTarget": {
+   "ccn": 17,
+   "nloc": 21
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::personScope": {
+   "ccn": 39,
+   "nloc": 98
+  },
+  "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift::resolveDetailed": {
+   "ccn": 25,
+   "nloc": 76
+  },
+  "VideoScan/VideoScan/Hallie/HallieMediaActivityAsk.swift::init": {
+   "ccn": 17,
+   "nloc": 23
+  },
+  "VideoScan/VideoScan/Hallie/HallieModeCorrection.swift::init": {
+   "ccn": 17,
+   "nloc": 37
+  },
+  "VideoScan/VideoScan/Hallie/HallieNameQualifier.swift::parse": {
+   "ccn": 16,
+   "nloc": 16
+  },
+  "VideoScan/VideoScan/Hallie/HalliePersonaQuestion.swift::init": {
+   "ccn": 72,
+   "nloc": 77
+  },
+  "VideoScan/VideoScan/Hallie/HalliePlaceFacet.swift::apply": {
+   "ccn": 20,
+   "nloc": 63
+  },
+  "VideoScan/VideoScan/Hallie/HallieRelationshipsOverview.swift::detect": {
+   "ccn": 16,
+   "nloc": 31
+  },
+  "VideoScan/VideoScan/Hallie/HallieRepairTurn.swift::describe": {
+   "ccn": 27,
+   "nloc": 47
+  },
+  "VideoScan/VideoScan/Hallie/HallieResponseCommit.swift::apply": {
+   "ccn": 27,
+   "nloc": 120
+  },
+  "VideoScan/VideoScan/Hallie/HallieTreeStatisticsAnswer.swift::treeStatistics": {
+   "ccn": 20,
+   "nloc": 72
+  },
+  "VideoScan/VideoScan/Hallie/HallieTreeStatisticsQuestion.swift::detect": {
+   "ccn": 19,
+   "nloc": 31
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift::followUpTurn": {
+   "ccn": 19,
+   "nloc": 89
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift::joinedTwoQuestionAnswer": {
+   "ccn": 20,
+   "nloc": 70
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift::record": {
+   "ccn": 33,
+   "nloc": 97
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift::recordExchange": {
+   "ccn": 16,
+   "nloc": 41
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+DateOrdered.swift::executeOrdered": {
+   "ccn": 29,
+   "nloc": 146
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+GraphPreflight.swift::graphPreflight": {
+   "ccn": 13,
+   "nloc": 83
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+PeopleTab.swift::PeopleTab.rosterAnswer profiles : [ ProfileSnapshot ] ? , graph : GedcomFamilyGraph? , cyberBrain : CyberBrainIndex? , scope : RosterScope = . knowledge": {
+   "ccn": 19,
+   "nloc": 70
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+PeopleTab.swift::answer": {
+   "ccn": 19,
+   "nloc": 72
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+PhotoAsk.swift::photoAsk": {
+   "ccn": 19,
+   "nloc": 48
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Presence.swift::executePresenceLike": {
+   "ccn": 44,
+   "nloc": 218
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Relationship.swift::executeRelationship": {
+   "ccn": 50,
+   "nloc": 250
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+RelativeFacts.swift::executeRelativeFact": {
+   "ccn": 29,
+   "nloc": 93
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Service.swift::execute": {
+   "ccn": 21,
+   "nloc": 58
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor+SpeakerKinship.swift::SpeakerKinship.init#4": {
+   "ccn": 17,
+   "nloc": 66
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::HallieTurnExecutor.execute _ request : Request , context : Context , dependencies : Dependencies": {
+   "ccn": 38,
+   "nloc": 157
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::executeCyberBrainBiography": {
+   "ccn": 21,
+   "nloc": 125
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::executeCyberBrainBridgedGraph": {
+   "ccn": 14,
+   "nloc": 103
+  },
+  "VideoScan/VideoScan/Hallie/HallieTurnInterpretation.swift::isSecondPersonLifeExperience": {
+   "ccn": 18,
+   "nloc": 45
+  },
+  "VideoScan/VideoScan/Hallie/HallieTypoNormalizer.swift::rewrite": {
+   "ccn": 28,
+   "nloc": 63
+  },
+  "VideoScan/VideoScan/Hallie/HallieTypoNormalizer.swift::split": {
+   "ccn": 17,
+   "nloc": 32
+  },
+  "VideoScan/VideoScan/Hallie/LLM/ArchivistEndpointSettings.swift::body": {
+   "ccn": 20,
+   "nloc": 192
+  },
+  "VideoScan/VideoScan/Hallie/LLM/ArchivistEndpointSettings.swift::restartBrain": {
+   "ccn": 17,
+   "nloc": 61
+  },
+  "VideoScan/VideoScan/Hallie/LLM/OllamaFailoverTranslator.swift::walkHosts": {
+   "ccn": 25,
+   "nloc": 79
+  },
+  "VideoScan/VideoScan/Hallie/LLM/OllamaQueryTranslator.swift::OllamaQueryTranslator.init": {
+   "ccn": 4,
+   "nloc": 357
+  },
+  "VideoScan/VideoScan/Hallie/LLM/OllamaQueryTranslator.swift::sendChatRequest": {
+   "ccn": 20,
+   "nloc": 98
+  },
+  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI+Render.swift::render": {
+   "ccn": 29,
+   "nloc": 81
+  },
+  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::Dependencies.init": {
+   "ccn": 7,
+   "nloc": 96
+  },
+  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::Dependencies.set": {
+   "ccn": 10,
+   "nloc": 92
+  },
+  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::HallieShellCLI.init": {
+   "ccn": 33,
+   "nloc": 102
+  },
+  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::parse": {
+   "ccn": 18,
+   "nloc": 44
+  },
+  "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift::run": {
+   "ccn": 26,
+   "nloc": 97
+  },
+  "VideoScan/VideoScan/Hallie/Shell/HallieTerminalLineEditor.swift::handle": {
+   "ccn": 16,
+   "nloc": 40
+  },
+  "VideoScan/VideoScan/Hallie/Voice/HalliePronunciationDrillList.swift::PronunciationDrillList.build people : [ Person ] , rootIDs : [ String ] , profiles : ProfileGroup , lexicon : HalliePronunciationLexicon , store : PronunciationDrillStore": {
+   "ccn": 16,
+   "nloc": 58
+  },
+  "VideoScan/VideoScan/Hallie/Voice/HalliePronunciationDrillMode.swift::classify": {
+   "ccn": 24,
+   "nloc": 64
+  },
+  "VideoScan/VideoScan/Hallie/Voice/HalliePronunciationFreeform.swift::support": {
+   "ccn": 24,
+   "nloc": 33
+  },
+  "VideoScan/VideoScan/Hallie/Voice/HalliePronunciationLexicon.swift::HalliePronunciationLexicon.init.init": {
+   "ccn": 21,
+   "nloc": 44
+  },
+  "VideoScan/VideoScan/Hallie/Voice/HallieSpeaker.swift::speakNeural": {
+   "ccn": 27,
+   "nloc": 125
+  },
+  "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::PronunciationVariations.respelling fromPhonemes phonemes : String": {
+   "ccn": 16,
+   "nloc": 55
+  },
+  "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::cueCandidates": {
+   "ccn": 24,
+   "nloc": 57
+  },
+  "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::parseSyllable": {
+   "ccn": 16,
+   "nloc": 37
+  },
+  "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::stressedVowels": {
+   "ccn": 32,
+   "nloc": 31
+  },
+  "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::unstressedVowel": {
+   "ccn": 17,
+   "nloc": 22
+  },
+  "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::vowelName": {
+   "ccn": 16,
+   "nloc": 20
+  },
+  "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift::vowelSpelling": {
+   "ccn": 28,
+   "nloc": 32
+  },
+  "VideoScan/VideoScan/Hallie/Web/HallieWebBridge.swift::ask": {
+   "ccn": 17,
+   "nloc": 78
+  },
+  "VideoScan/VideoScan/Hallie/Web/HallieWebBridge.swift::handle": {
+   "ccn": 16,
+   "nloc": 31
+  },
+  "VideoScan/VideoScan/Hallie/Web/HallieWebBridge.swift::payload": {
+   "ccn": 20,
+   "nloc": 68
+  },
+  "VideoScan/VideoScan/Hallie/Web/HallieWebPage.swift::html": {
+   "ccn": 49,
+   "nloc": 232
+  },
+  "VideoScan/VideoScan/Media/AudioBalanceProbe.swift::analyze": {
+   "ccn": 16,
+   "nloc": 102
+  },
+  "VideoScan/VideoScan/Media/AudioTranscriber.swift::PythonSubprocessAudioTranscriber.transcribe": {
+   "ccn": 10,
+   "nloc": 108
+  },
+  "VideoScan/VideoScan/Media/CaptionOrchestrator+Dossier.swift::runDossierBatch": {
+   "ccn": 42,
+   "nloc": 274
+  },
+  "VideoScan/VideoScan/Media/CaptionOrchestrator+Dossier.swift::runDossierBatchSerial": {
+   "ccn": 34,
+   "nloc": 198
+  },
+  "VideoScan/VideoScan/Media/CaptionOrchestrator+Dossier.swift::startAnalyzing": {
+   "ccn": 12,
+   "nloc": 85
+  },
+  "VideoScan/VideoScan/Media/CaptionRunner.swift::MLXVLMCaptionRunner.dossier": {
+   "ccn": 21,
+   "nloc": 82
+  },
+  "VideoScan/VideoScan/Media/FFmpegFrameProvider.swift::frames": {
+   "ccn": 16,
+   "nloc": 75
+  },
+  "VideoScan/VideoScan/Media/FrameRipper.swift::runRip": {
+   "ccn": 14,
+   "nloc": 91
+  },
+  "VideoScan/VideoScan/Media/MediaAnalyzer.swift::homeVideoCodecScore": {
+   "ccn": 16,
+   "nloc": 25
+  },
+  "VideoScan/VideoScan/Media/MediaPairComparator.swift::run": {
+   "ccn": 15,
+   "nloc": 137
+  },
+  "VideoScan/VideoScan/Media/MxfHeaderParser.swift::identifyCodec": {
+   "ccn": 22,
+   "nloc": 40
+  },
+  "VideoScan/VideoScan/Media/MxfHeaderParser.swift::parse": {
+   "ccn": 16,
+   "nloc": 46
+  },
+  "VideoScan/VideoScan/Media/MxfHeaderParser.swift::walkKLV": {
+   "ccn": 23,
+   "nloc": 48
+  },
+  "VideoScan/VideoScan/Media/SeekingFrameProvider.swift::frames": {
+   "ccn": 8,
+   "nloc": 82
+  },
+  "VideoScan/VideoScan/Media/VideoScanModel+ContentHashBackfill.swift::runContentHashBackfill": {
+   "ccn": 17,
+   "nloc": 85
+  },
+  "VideoScan/VideoScan/Media/VideoScanModel+EmbeddedDateBackfill.swift::runEmbeddedDateBackfill": {
+   "ccn": 20,
+   "nloc": 86
+  },
+  "VideoScan/VideoScan/Media/VideoScanModel+ProbeEngine.swift::probeFileOutcome": {
+   "ccn": 11,
+   "nloc": 84
+  },
+  "VideoScan/VideoScan/Media/VideoScanModel+ProbeEngine.swift::runTargetProbeGroup": {
+   "ccn": 15,
+   "nloc": 129
+  },
+  "VideoScan/VideoScan/Media/VideoScanModel+Thumbnail.swift::generateThumbnail": {
+   "ccn": 15,
+   "nloc": 98
+  },
+  "VideoScan/VideoScan/MediaOps/BalanceAudioJob.swift::BalanceAudioJob.init#1": {
+   "ccn": 25,
+   "nloc": 141
+  },
+  "VideoScan/VideoScan/MediaOps/CleanupJob.swift::runCleanup": {
+   "ccn": 20,
+   "nloc": 123
+  },
+  "VideoScan/VideoScan/MediaOps/CombineSheet.swift::CombinePairSheet.body": {
+   "ccn": 15,
+   "nloc": 127
+  },
+  "VideoScan/VideoScan/MediaOps/CombineSheet.swift::pairSelectionSection": {
+   "ccn": 7,
+   "nloc": 98
+  },
+  "VideoScan/VideoScan/MediaOps/CombineVerifier.swift::verifyCombineOutput": {
+   "ccn": 15,
+   "nloc": 83
+  },
+  "VideoScan/VideoScan/MediaOps/CorrelationScorer+Snaps.swift::assignPairs": {
+   "ccn": 18,
+   "nloc": 81
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteConfirmedJunkSheet.swift::DeleteConfirmedJunkConfirmSheet.body": {
+   "ccn": 2,
+   "nloc": 83
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesForecast.swift::compute": {
+   "ccn": 30,
+   "nloc": 95
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.set.init": {
+   "ccn": 20,
+   "nloc": 57
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::deleteQuarantined": {
+   "ccn": 26,
+   "nloc": 86
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::finishRun": {
+   "ccn": 39,
+   "nloc": 96
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::revalidateForResume": {
+   "ccn": 25,
+   "nloc": 95
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::runPair": {
+   "ccn": 25,
+   "nloc": 123
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesPlan.swift::gather": {
+   "ccn": 18,
+   "nloc": 88
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesPlan.swift::recheck": {
+   "ccn": 19,
+   "nloc": 69
+  },
+  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesSiblingProof.swift::prove": {
+   "ccn": 19,
+   "nloc": 57
+  },
+  "VideoScan/VideoScan/MediaOps/MediaFileOperations.swift::badgeText": {
+   "ccn": 24,
+   "nloc": 27
+  },
+  "VideoScan/VideoScan/MediaOps/MediaFileOperations.swift::logVerb": {
+   "ccn": 24,
+   "nloc": 27
+  },
+  "VideoScan/VideoScan/MediaOps/MediaFileOperationsWindow.swift::MediaFileOperationRow.body": {
+   "ccn": 19,
+   "nloc": 106
+  },
+  "VideoScan/VideoScan/MediaOps/MediaFileOperationsWindow.swift::badgeColor": {
+   "ccn": 24,
+   "nloc": 27
+  },
+  "VideoScan/VideoScan/MediaOps/MediaFileOperationsWindow.swift::trailingStatus": {
+   "ccn": 24,
+   "nloc": 110
+  },
+  "VideoScan/VideoScan/MediaOps/MissingAudioFinder.swift::evaluate": {
+   "ccn": 26,
+   "nloc": 51
+  },
+  "VideoScan/VideoScan/MediaOps/MissingAudioFinder.swift::scanRootCandidates": {
+   "ccn": 20,
+   "nloc": 74
+  },
+  "VideoScan/VideoScan/MediaOps/MusicTriageSheet.swift::MusicTriageSheet.body": {
+   "ccn": 8,
+   "nloc": 96
+  },
+  "VideoScan/VideoScan/MediaOps/PruneApplyJob.swift::run": {
+   "ccn": 23,
+   "nloc": 80
+  },
+  "VideoScan/VideoScan/MediaOps/RebuildAudioJob.swift::runRebuild": {
+   "ccn": 27,
+   "nloc": 138
+  },
+  "VideoScan/VideoScan/MediaOps/ReformatJob.swift::runReformat": {
+   "ccn": 17,
+   "nloc": 115
+  },
+  "VideoScan/VideoScan/MediaOps/RelocateReconcile.swift::reconcilePlan": {
+   "ccn": 25,
+   "nloc": 112
+  },
+  "VideoScan/VideoScan/MediaOps/RescueFileCopier.swift::copy": {
+   "ccn": 24,
+   "nloc": 95
+  },
+  "VideoScan/VideoScan/MediaOps/SignatureVerification.swift::deleteQuarantined": {
+   "ccn": 20,
+   "nloc": 95
+  },
+  "VideoScan/VideoScan/MediaOps/SignatureVerification.swift::verify": {
+   "ccn": 20,
+   "nloc": 54
+  },
+  "VideoScan/VideoScan/MediaOps/TranscodeJob.swift::runTranscode": {
+   "ccn": 23,
+   "nloc": 151
+  },
+  "VideoScan/VideoScan/MediaOps/TranscodeSheet.swift::body": {
+   "ccn": 4,
+   "nloc": 105
+  },
+  "VideoScan/VideoScan/MediaOps/TrimJob.swift::runTrim": {
+   "ccn": 26,
+   "nloc": 156
+  },
+  "VideoScan/VideoScan/MediaOps/VerifyAudioSheet.swift::findingRow": {
+   "ccn": 11,
+   "nloc": 116
+  },
+  "VideoScan/VideoScan/MediaOps/VerifyVideoRules.swift::noteFragment": {
+   "ccn": 24,
+   "nloc": 42
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+Combine.swift::combineAllPairsInternal": {
+   "ccn": 19,
+   "nloc": 116
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+Combine.swift::runMuxAndVerify": {
+   "ccn": 16,
+   "nloc": 88
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+DuplicateEnrichment.swift::applyEnrichmentInheritance": {
+   "ccn": 17,
+   "nloc": 50
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.init#2": {
+   "ccn": 16,
+   "nloc": 56
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::authorizeDuplicateDeletion": {
+   "ccn": 17,
+   "nloc": 55
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift::deleteConfirmedJunk": {
+   "ccn": 30,
+   "nloc": 156
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::preparePrune": {
+   "ccn": 18,
+   "nloc": 85
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::pruneOneCopy": {
+   "ccn": 31,
+   "nloc": 114
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::pruneOverlap": {
+   "ccn": 16,
+   "nloc": 35
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::pruneTargets": {
+   "ccn": 16,
+   "nloc": 57
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+Relocate.swift::VideoScanModel.runRelocate scope : [ VideoRecord ] , options : RelocateOptions , jobID : UUID": {
+   "ccn": 32,
+   "nloc": 235
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+RepairLifecycle.swift::applyHumanMetadataInheritance": {
+   "ccn": 16,
+   "nloc": 54
+  },
+  "VideoScan/VideoScan/Model/VideoScanModel.swift::init": {
+   "ccn": 16,
+   "nloc": 92
+  },
+  "VideoScan/VideoScan/Model/VideoScanModel.swift::recordBackupSuccess": {
+   "ccn": 19,
+   "nloc": 157
+  },
+  "VideoScan/VideoScan/People/ArcFaceEngine.swift::pfProcessVideoWithArcFace": {
+   "ccn": 24,
+   "nloc": 168
+  },
+  "VideoScan/VideoScan/People/DonnaAvatar.swift::body": {
+   "ccn": 12,
+   "nloc": 91
+  },
+  "VideoScan/VideoScan/People/DossierDashboardView+Coverage.swift::CatalogCoverage.init records : [ VideoRecord ] , scope : AnalysisScope = AnalysisScope": {
+   "ccn": 21,
+   "nloc": 39
+  },
+  "VideoScan/VideoScan/People/DossierDashboardView.swift::body": {
+   "ccn": 9,
+   "nloc": 185
+  },
+  "VideoScan/VideoScan/People/FindPersonJob.swift::handle": {
+   "ccn": 17,
+   "nloc": 59
+  },
+  "VideoScan/VideoScan/People/FindPersonJob.swift::run": {
+   "ccn": 16,
+   "nloc": 81
+  },
+  "VideoScan/VideoScan/People/FindTagCLI.swift::run": {
+   "ccn": 31,
+   "nloc": 206
+  },
+  "VideoScan/VideoScan/People/IdentityNarrowing.swift::pfExtractAgeBuckets lowered : NSString , tokens : Set < String >": {
+   "ccn": 24,
+   "nloc": 40
+  },
+  "VideoScan/VideoScan/People/POIStorage.swift::migrateToUUIDFoldersIfNeeded": {
+   "ccn": 42,
+   "nloc": 231
+  },
+  "VideoScan/VideoScan/People/PersonEditSheet.swift::PersonEditSheet.body": {
+   "ccn": 14,
+   "nloc": 176
+  },
+  "VideoScan/VideoScan/People/PersonEditSheet.swift::relationshipsSection": {
+   "ccn": 13,
+   "nloc": 91
+  },
+  "VideoScan/VideoScan/People/PersonEvaluationCLI.swift::evaluate": {
+   "ccn": 22,
+   "nloc": 83
+  },
+  "VideoScan/VideoScan/People/PersonEvaluationCLI.swift::parse": {
+   "ccn": 37,
+   "nloc": 72
+  },
+  "VideoScan/VideoScan/People/PersonFinderCatalogFilter.swift::pfFindVideoFiles": {
+   "ccn": 20,
+   "nloc": 66
+  },
+  "VideoScan/VideoScan/People/PersonFinderCompilation.swift::runCompilation": {
+   "ccn": 9,
+   "nloc": 96
+  },
+  "VideoScan/VideoScan/People/PersonFinderCompilation.swift::shortLabel": {
+   "ccn": 28,
+   "nloc": 48
+  },
+  "VideoScan/VideoScan/People/PersonFinderDetection.swift::pfLoadReferencePhotos": {
+   "ccn": 17,
+   "nloc": 75
+  },
+  "VideoScan/VideoScan/People/PersonFinderDetection.swift::pfProcessVideo": {
+   "ccn": 21,
+   "nloc": 149
+  },
+  "VideoScan/VideoScan/People/PersonFinderInspectorTypes.swift::probe": {
+   "ccn": 22,
+   "nloc": 91
+  },
+  "VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift::processOneVideo": {
+   "ccn": 16,
+   "nloc": 81
+  },
+  "VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift::restoreFromCache": {
+   "ccn": 15,
+   "nloc": 88
+  },
+  "VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift::runScan": {
+   "ccn": 15,
+   "nloc": 126
+  },
+  "VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift::scanAllVideos": {
+   "ccn": 24,
+   "nloc": 158
+  },
+  "VideoScan/VideoScan/People/PersonFinderModel+JobLifecycle.swift::startJobAfterLoad": {
+   "ccn": 20,
+   "nloc": 117
+  },
+  "VideoScan/VideoScan/People/PersonFinderSubviews.swift::PersonCard.body": {
+   "ccn": 18,
+   "nloc": 75
+  },
+  "VideoScan/VideoScan/People/PersonFinderTrainCandidates.swift::pfCandidatesForPerson": {
+   "ccn": 16,
+   "nloc": 69
+  },
+  "VideoScan/VideoScan/People/PersonFinderTrainCandidates.swift::pfConfirmRound": {
+   "ccn": 26,
+   "nloc": 127
+  },
+  "VideoScan/VideoScan/People/PersonFinderView+Faces.swift::loadedFacesStrip": {
+   "ccn": 20,
+   "nloc": 152
+  },
+  "VideoScan/VideoScan/People/PersonFinderView+People.swift::peopleGallery": {
+   "ccn": 22,
+   "nloc": 290
+  },
+  "VideoScan/VideoScan/People/PersonFinderView+People.swift::personCardEntry": {
+   "ccn": 12,
+   "nloc": 122
+  },
+  "VideoScan/VideoScan/People/PersonFinderView+Results.swift::inspectorPopover": {
+   "ccn": 13,
+   "nloc": 82
+  },
+  "VideoScan/VideoScan/People/RealtimeFaceDetectionWindow.swift::ActiveJobFaceDetectView.body": {
+   "ccn": 30,
+   "nloc": 186
+  },
+  "VideoScan/VideoScan/People/RecipeCalibrationCLI.swift::parse": {
+   "ccn": 21,
+   "nloc": 50
+  },
+  "VideoScan/VideoScan/People/RecipeCalibrationCLI.swift::summarize": {
+   "ccn": 16,
+   "nloc": 54
+  },
+  "VideoScan/VideoScan/People/VideoScanModel+FamilyTagging.swift::VideoScanModel.applyDetectedPeople confirmed : [ pfVideoResult ] , suspected : [ pfVideoResult ] , person : String": {
+   "ccn": 19,
+   "nloc": 64
+  },
+  "VideoScan/VideoScan/Steward/StewardCaseBuilder.swift::StewardInput.init id : r . id , fullPath : r . fullPath , filename : r . filename , sizeBytes : r . sizeBytes , durationSeconds : r . durationSeconds , isExtraCopy : r . duplicateDisposition == . extraCopy , isKeeper : r . duplicateDisposition == . keep , duplicateGroupID : r . duplicateGroupID , hasUsableDigest : r . contentFixity? . isUsableForVerification ?? false , dupAnalyzedAt : r . dupAnalyzedAt , protection : protection , footageGroupID : r . footage? . groupID , footageStrength : r . footage? . confidence . strength ?? 0 , footageRank : r . footage? . rank ?? 0 , footageRoleLabel : r . footage? . role . label ?? \"\" , footageLikelyOriginalID : r . footage? . likelyOriginalID , footageOriginalInCatalog : r . footage? . originalInCatalog ?? true , footageEvidence : r . footage? . evidence ?? [ ] , bestDate : best , userDate : r . userDate , userDateConfidence : r . userDateConfidence , embeddedDate : r . embeddedCreationDate , originMake : r . originMake , originModel : r . originModel , originEncoder : r . originEncoder , inferredDate : r . inferredRecordDate , inferredConfidence : r . inferredDateConfidence , inferredRange : r . inferredDateRange , junkScore : r . junkScore , junkReasonKey : StewardCaseBuilder . junkReasonKey r . junkReasons , isUndecided : r . mediaDisposition == . unreviewed || r . mediaDisposition == . suspectedJunk , inTriageTable : r . lifecycleStage != . archived": {
+   "ccn": 3,
+   "nloc": 100
+  },
+  "VideoScan/VideoScan/Steward/StewardCaseBuilder.swift::reclaimGroupCases": {
+   "ccn": 16,
+   "nloc": 79
+  },
+  "VideoScan/VideoScan/Volumes/DriveHealth.swift::parseSmartctlJSON": {
+   "ccn": 42,
+   "nloc": 128
+  },
+  "VideoScan/VideoScan/Volumes/ScanEngine.swift::ScanEngine.extractMetadata probe : FFProbeOutput": {
+   "ccn": 20,
+   "nloc": 58
+  },
+  "VideoScan/VideoScan/Volumes/ScanJobRow+Expanded.swift::compilationPanel": {
+   "ccn": 9,
+   "nloc": 132
+  },
+  "VideoScan/VideoScan/Volumes/ScanJobRow+Expanded.swift::expandedDetail": {
+   "ccn": 18,
+   "nloc": 83
+  },
+  "VideoScan/VideoScan/Volumes/ScanJobRow.swift::collapsedRow": {
+   "ccn": 23,
+   "nloc": 113
+  },
+  "VideoScan/VideoScan/Volumes/ScanTargetRecordFacts.swift::init": {
+   "ccn": 19,
+   "nloc": 34
+  },
+  "VideoScan/VideoScan/Volumes/VideoScanModel+ScanExecution.swift::finalizeSingleTargetScan": {
+   "ccn": 17,
+   "nloc": 96
+  },
+  "VideoScan/VideoScan/Volumes/VideoScanModel+ScanExecution.swift::resumeTarget": {
+   "ccn": 13,
+   "nloc": 82
+  },
+  "VideoScan/VideoScan/Volumes/VideoScanModel+ScanMergeMoveIdentity.swift::pairWithinTier": {
+   "ccn": 18,
+   "nloc": 55
+  },
+  "VideoScan/VideoScan/Volumes/VideoScanModel+VolumeRenameMigration.swift::buildManualVolumeRenameCandidate": {
+   "ccn": 16,
+   "nloc": 55
+  },
+  "VideoScan/VideoScan/Volumes/VideoScanModel+VolumeRenameMigration.swift::computeVolumeRenameCandidates": {
+   "ccn": 21,
+   "nloc": 68
+  },
+  "VideoScan/VideoScan/Volumes/VideoScanModel+VolumeRenameMigration.swift::migrateRenamedVolume": {
+   "ccn": 13,
+   "nloc": 81
+  },
+  "VideoScan/VideoScan/Volumes/VideoScanModel+VolumeStatusCache.swift::computeVolumeStatuses": {
+   "ccn": 20,
+   "nloc": 75
+  },
+  "VideoScan/VideoScan/Volumes/VolumesWindow.swift::contextMenuItems": {
+   "ccn": 16,
+   "nloc": 104
+  },
+  "VideoScan/VideoScan/Volumes/VolumesWindow.swift::volumeList": {
+   "ccn": 4,
+   "nloc": 82
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/ArchivistBiographyPolicy.swift::ArchivistBiographyPolicy.biography for person : GedcomFamilyGraph . Person , in graph : GedcomFamilyGraph": {
+   "ccn": 19,
+   "nloc": 59
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/ArchivistFamilyTreePolicy.swift::ArchivistFamilyTreePolicy.answer for summary : PersonSummary": {
+   "ccn": 17,
+   "nloc": 49
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/BirthplaceClassifier+Region.swift::regionOfToken": {
+   "ccn": 16,
+   "nloc": 23
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainCorrections.swift::correcting": {
+   "ccn": 17,
+   "nloc": 108
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainIndex.swift::sentences": {
+   "ccn": 16,
+   "nloc": 30
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainLoader.swift::validateCorrection": {
+   "ccn": 16,
+   "nloc": 45
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainWriter.swift::CyberBrainWriter.appending _ testimony : Testimony , to existing : CyberBrainArchive?": {
+   "ccn": 29,
+   "nloc": 163
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainWriter.swift::CyberBrainWriter.appending caption : PhotoCaption , to existing : CyberBrainArchive?": {
+   "ccn": 10,
+   "nloc": 101
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/EmbeddedCreationDate.swift::parseSingle": {
+   "ccn": 26,
+   "nloc": 57
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/EventLabeler.swift::EventLabeler.birthdayLabels _ d : EventDay , birthdays : [ FamilyBirthday ] , windowDays : Int , only : [ Int ] ?": {
+   "ccn": 18,
+   "nloc": 39
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/EventLabeler.swift::scanWords": {
+   "ccn": 23,
+   "nloc": 33
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::apply": {
+   "ccn": 32,
+   "nloc": 238
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::asciiKey": {
+   "ccn": 21,
+   "nloc": 31
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::classify": {
+   "ccn": 17,
+   "nloc": 24
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/BirthplaceUnitResolver.swift::consume": {
+   "ccn": 16,
+   "nloc": 44
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/FamilyMapFlag.swift::FamilyMapFlag.emoji for country : FamilyMap . Country": {
+   "ccn": 22,
+   "nloc": 31
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyMap/FamilyMapKey.swift::label": {
+   "ccn": 21,
+   "nloc": 24
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FamilyTreeNameSearch.swift::FamilyTreeNameSearch.init": {
+   "ccn": 24,
+   "nloc": 106
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/FindTagIngestEngine.swift::pass": {
+   "ccn": 22,
+   "nloc": 100
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomCompiledTree.swift::verify": {
+   "ccn": 23,
+   "nloc": 73
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph+CommonAncestry.swift::commonAncestry": {
+   "ccn": 20,
+   "nloc": 60
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph+DirectRelation.swift::directRelation": {
+   "ccn": 19,
+   "nloc": 62
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph+IdentityRulings.swift::ruledRelatives": {
+   "ccn": 16,
+   "nloc": 54
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph+Index.swift::GedcomFamilyGraph.indexedPeople matching typed : String": {
+   "ccn": 16,
+   "nloc": 38
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph+Index.swift::TreeIndex.init graph : GedcomFamilyGraph": {
+   "ccn": 34,
+   "nloc": 179
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph+Merge.swift::merge": {
+   "ccn": 26,
+   "nloc": 132
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph+Writer.swift::gedcomText": {
+   "ccn": 26,
+   "nloc": 53
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph.swift::GedcomFamilyGraph.init gedcomText : String": {
+   "ccn": 43,
+   "nloc": 114
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph.swift::relatives": {
+   "ccn": 17,
+   "nloc": 44
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomKinshipPath.swift::chain": {
+   "ccn": 17,
+   "nloc": 31
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomKinshipPath.swift::relatives": {
+   "ccn": 36,
+   "nloc": 85
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomSyntheticPedigree.swift::gedcom": {
+   "ccn": 18,
+   "nloc": 64
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/LifeAndTimes.swift::LifeAndTimes.serviceScan subjects : [ Subject ] , warID : String? = nil , options : Options": {
+   "ccn": 16,
+   "nloc": 34
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/LifeAndTimesRegion.swift::europeanRegion": {
+   "ccn": 17,
+   "nloc": 19
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/LifeAndTimesRegion.swift::label": {
+   "ccn": 17,
+   "nloc": 20
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/LivedThrough.swift::LivedThroughLine.init": {
+   "ccn": 16,
+   "nloc": 21
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/LivedThrough.swift::at": {
+   "ccn": 16,
+   "nloc": 28
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/LivedThrough.swift::placeRelevance": {
+   "ccn": 16,
+   "nloc": 38
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/LivedThrough.swift::ranked": {
+   "ccn": 21,
+   "nloc": 34
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/OccupationClassifier.swift::classify": {
+   "ccn": 16,
+   "nloc": 29
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/OccupationClassifier.swift::label": {
+   "ccn": 17,
+   "nloc": 20
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/LineageTrail.swift::walkAllAncestors": {
+   "ccn": 16,
+   "nloc": 52
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/PersonFactOverlay.swift::applyingFactOverlay": {
+   "ccn": 33,
+   "nloc": 73
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/PreviewSweepEngine.swift::run": {
+   "ccn": 20,
+   "nloc": 106
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::runProcess": {
+   "ccn": 8,
+   "nloc": 90
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift::Family.selection": {
+   "ccn": 16,
+   "nloc": 38
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift::group": {
+   "ccn": 16,
+   "nloc": 41
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift::logLine": {
+   "ccn": 26,
+   "nloc": 44
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/RecordDateResolver.swift::resolve": {
+   "ccn": 17,
+   "nloc": 61
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/RollCall.swift::build": {
+   "ccn": 16,
+   "nloc": 43
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/TreeWalker.swift::walk": {
+   "ccn": 11,
+   "nloc": 86
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord+Clone.swift::snapshotClone": {
+   "ccn": 1,
+   "nloc": 126
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift::VideoRecord.init from decoder : Decoder": {
+   "ccn": 1,
+   "nloc": 126
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecordDTO.swift::encode": {
+   "ccn": 27,
+   "nloc": 176
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecordDTO.swift::init": {
+   "ccn": 1,
+   "nloc": 125
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecordUserDate.swift::canonicalize": {
+   "ccn": 16,
+   "nloc": 40
+  },
+  "scripts/VideoScan.py::extract_metadata": {
+   "ccn": 39,
+   "nloc": 101
+  },
+  "scripts/VideoScan.py::write_xlsx": {
+   "ccn": 27,
+   "nloc": 96
+  },
+  "scripts/build_family_map_units.py::build": {
+   "ccn": 16,
+   "nloc": 50
+  },
+  "scripts/build_family_map_units.py::dissolve": {
+   "ccn": 34,
+   "nloc": 63
+  },
+  "scripts/build_family_map_units.py::report": {
+   "ccn": 20,
+   "nloc": 38
+  },
+  "scripts/catalog_dedup_exact_paths.py::main": {
+   "ccn": 30,
+   "nloc": 87
+  },
+  "scripts/catalog_purge_dangling.py::main": {
+   "ccn": 30,
+   "nloc": 49
+  },
+  "scripts/catalog_purge_mxf_fragments.py::main": {
+   "ccn": 24,
+   "nloc": 66
+  },
+  "scripts/catalog_purge_nostream_junk.py::main": {
+   "ccn": 27,
+   "nloc": 68
+  },
+  "scripts/catalog_reduce.py::main": {
+   "ccn": 38,
+   "nloc": 117
+  },
+  "scripts/catalog_triage.py::main": {
+   "ccn": 63,
+   "nloc": 80
+  },
+  "scripts/check_subprocess_injection.py::check_concat_escaping": {
+   "ccn": 18,
+   "nloc": 50
+  },
+  "scripts/check_volume_check_then_act.py::scan_text": {
+   "ccn": 23,
+   "nloc": 61
+  },
+  "scripts/ci_test_verdict.py::problems": {
+   "ccn": 28,
+   "nloc": 38
+  },
+  "scripts/cluster_faces.py::cluster_phase": {
+   "ccn": 29,
+   "nloc": 83
+  },
+  "scripts/cluster_faces.py::collect_faces": {
+   "ccn": 18,
+   "nloc": 84
+  },
+  "scripts/dossier_batch.py::dossier_one": {
+   "ccn": 27,
+   "nloc": 87
+  },
+  "scripts/dossier_batch.py::main": {
+   "ccn": 27,
+   "nloc": 121
+  },
+  "scripts/drive_temps.py::main": {
+   "ccn": 19,
+   "nloc": 45
+  },
+  "scripts/dup_safety.py::main": {
+   "ccn": 33,
+   "nloc": 49
+  },
+  "scripts/extract_bundle_metadata.py::main": {
+   "ccn": 22,
+   "nloc": 81
+  },
+  "scripts/face_recognize.py::analyze_video": {
+   "ccn": 25,
+   "nloc": 84
+  },
+  "scripts/fd_scan_volume.py::main": {
+   "ccn": 16,
+   "nloc": 86
+  },
+  "scripts/find_person.py::main": {
+   "ccn": 27,
+   "nloc": 68
+  },
+  "scripts/footage_spectrum.py::run": {
+   "ccn": 49,
+   "nloc": 180
+  },
+  "scripts/footage_spectrum.py::single_pass": {
+   "ccn": 19,
+   "nloc": 54
+  },
+  "scripts/generate_icon.py::draw_icon": {
+   "ccn": 11,
+   "nloc": 118
+  },
+  "scripts/hallie_eval.py::grade": {
+   "ccn": 41,
+   "nloc": 84
+  },
+  "scripts/hallie_eval.py::grade_record": {
+   "ccn": 76,
+   "nloc": 122
+  },
+  "scripts/hallie_eval.py::load_corpus": {
+   "ccn": 16,
+   "nloc": 41
+  },
+  "scripts/hallie_eval.py::run": {
+   "ccn": 30,
+   "nloc": 89
+  },
+  "scripts/hallie_harvest_queries.py::harvest": {
+   "ccn": 20,
+   "nloc": 37
+  },
+  "scripts/hallie_question_testbed.py::grade": {
+   "ccn": 16,
+   "nloc": 55
+  },
+  "scripts/is_person_in_video.py::main": {
+   "ccn": 25,
+   "nloc": 89
+  },
+  "scripts/migrate_people_folders.py::main": {
+   "ccn": 48,
+   "nloc": 119
+  },
+  "scripts/migrate_people_folders.py::resolve": {
+   "ccn": 16,
+   "nloc": 38
+  },
+  "scripts/migrate_people_folders.py::undo": {
+   "ccn": 26,
+   "nloc": 65
+  },
+  "scripts/nightly_findings_alert.py::alert_lines": {
+   "ccn": 29,
+   "nloc": 53
+  },
+  "scripts/overnight_people_scan.py::main": {
+   "ccn": 54,
+   "nloc": 188
+  },
+  "scripts/publish_poi_cycle_metrics.py::validate_row": {
+   "ccn": 17,
+   "nloc": 29
+  },
+  "scripts/publish_search_benchmarks.py::build_run": {
+   "ccn": 19,
+   "nloc": 22
+  },
+  "scripts/publish_search_benchmarks.py::validate_measurement": {
+   "ccn": 31,
+   "nloc": 43
+  },
+  "scripts/publish_search_benchmarks.py::validate_run_row": {
+   "ccn": 25,
+   "nloc": 21
+  },
+  "scripts/ratchet_baseline.py::markdown_report": {
+   "ccn": 18,
+   "nloc": 59
+  },
+  "scripts/repair_salvage_stage.py::main": {
+   "ccn": 25,
+   "nloc": 75
+  },
+  "scripts/swift_source_scan.py::strip_comments": {
+   "ccn": 23,
+   "nloc": 66
+  },
+  "scripts/typecheck_timing_ratchet.py::main": {
+   "ccn": 19,
+   "nloc": 63
+  },
+  "scripts/watch_hallie_chat.py::main": {
+   "ccn": 16,
+   "nloc": 44
+  },
+  "scripts/watch_hallie_chat.py::render": {
+   "ccn": 17,
+   "nloc": 31
+  },
+  "scripts/working_set_candidates.py::main": {
+   "ccn": 21,
+   "nloc": 61
+  },
+  "swift_cli/PersonFinder.swift::applyFlag": {
+   "ccn": 17,
+   "nloc": 28
+  },
+  "swift_cli/PersonFinder.swift::concatenateWithDecadeChapters": {
+   "ccn": 13,
+   "nloc": 90
+  },
+  "swift_cli/PersonFinder.swift::main": {
+   "ccn": 30,
+   "nloc": 166
+  },
+  "swift_cli/PersonFinder.swift::processVideo": {
+   "ccn": 25,
+   "nloc": 166
+  },
+  "tools/adversarial_confirm.py::confirm": {
+   "ccn": 27,
+   "nloc": 68
+  },
+  "tools/adversarial_confirm.py::record": {
+   "ccn": 27,
+   "nloc": 50
+  },
+  "tools/adversarial_nightly.py::build_brief": {
+   "ccn": 22,
+   "nloc": 58
+  },
+  "tools/adversarial_nightly.py::main": {
+   "ccn": 19,
+   "nloc": 74
+  },
+  "tools/adversarial_nightly.py::parse_claude_json": {
+   "ccn": 16,
+   "nloc": 21
+  },
+  "tools/adversarial_nightly.py::run": {
+   "ccn": 39,
+   "nloc": 113
+  },
+  "tools/adversarial_nightly.py::status": {
+   "ccn": 24,
+   "nloc": 34
+  },
+  "tools/donna-recipe/gallery_report.py::main": {
+   "ccn": 69,
+   "nloc": 165
+  },
+  "tools/donna-recipe/recipe_smoke.py::main": {
+   "ccn": 21,
+   "nloc": 48
+  },
+  "tools/invariants.py::parse_front_matter": {
+   "ccn": 16,
+   "nloc": 29
+  },
+  "tools/model-fitness/review_real_commits.py::main": {
+   "ccn": 20,
+   "nloc": 110
+  },
+  "tools/model-fitness/run_fitness.py::compare": {
+   "ccn": 19,
+   "nloc": 28
+  },
+  "tools/nightly_findings_to_issues.py::_change_note": {
+   "ccn": 18,
+   "nloc": 27
+  },
+  "tools/nightly_findings_to_issues.py::build_summary": {
+   "ccn": 42,
+   "nloc": 74
+  },
+  "tools/nightly_findings_to_issues.py::codeql_scope": {
+   "ccn": 19,
+   "nloc": 24
+  },
+  "tools/nightly_findings_to_issues.py::fit_state": {
+   "ccn": 25,
+   "nloc": 55
+  },
+  "tools/nightly_findings_to_issues.py::parse_sarif": {
+   "ccn": 34,
+   "nloc": 33
+  },
+  "tools/nightly_findings_to_issues.py::plan_markdown": {
+   "ccn": 17,
+   "nloc": 24
+  },
+  "tools/nightly_findings_to_issues.py::plan_ticket": {
+   "ccn": 111,
+   "nloc": 162
+  },
+  "tools/nightly_findings_to_issues.py::plan_tracking": {
+   "ccn": 72,
+   "nloc": 160
+  },
+  "tools/nightly_findings_to_issues.py::render_ticket": {
+   "ccn": 54,
+   "nloc": 130
+  },
+  "tools/person-eval/apply_label_csv.py::apply_rows": {
+   "ccn": 19,
+   "nloc": 34
+  },
+  "tools/person-eval/build_holdout_queue_skeleton.py::build": {
+   "ccn": 65,
+   "nloc": 133
+  },
+  "tools/person-eval/build_label_queue.py::make_queue": {
+   "ccn": 37,
+   "nloc": 106
+  },
+  "tools/person-eval/build_synthetic_identity_corpus.py::main": {
+   "ccn": 11,
+   "nloc": 89
+  },
+  "tools/person-eval/grade_paired_presence_report.py::grade_report": {
+   "ccn": 52,
+   "nloc": 93
+  },
+  "tools/person-eval/label_queue_to_manifest.py::make_manifest": {
+   "ccn": 19,
+   "nloc": 73
+  },
+  "tools/person-eval/person_eval.py::evaluate": {
+   "ccn": 41,
+   "nloc": 110
+  },
+  "tools/person-eval/summarize_synthetic_identity_benchmark.py::summarize": {
+   "ccn": 20,
+   "nloc": 46
+  },
+  "tools/poi-c02/audit_references.py::main": {
+   "ccn": 50,
+   "nloc": 175
+  },
+  "tools/poi-c02/make_refset.py::main": {
+   "ccn": 23,
+   "nloc": 71
+  },
+  "tools/publish_metrics.py::_check": {
+   "ccn": 35,
+   "nloc": 54
+  },
+  "tools/publish_metrics.py::adversarial_rows": {
+   "ccn": 51,
+   "nloc": 63
+  },
+  "tools/qwen-bench/qwen_bench.py::_validate_value": {
+   "ccn": 23,
+   "nloc": 39
+  },
+  "tools/qwen-bench/qwen_bench.py::parse_ollama_response": {
+   "ccn": 36,
+   "nloc": 117
+  },
+  "tools/qwen-bench/qwen_bench.py::rescore_saved_run": {
+   "ccn": 12,
+   "nloc": 89
+  },
+  "tools/qwen-bench/qwen_bench.py::summarize_case_records": {
+   "ccn": 28,
+   "nloc": 90
+  },
+  "tools/qwen-bench/qwen_two_turn.py::_supported_claim_evidence": {
+   "ccn": 19,
+   "nloc": 45
+  },
+  "tools/qwen-bench/qwen_two_turn.py::_validate_final_value": {
+   "ccn": 48,
+   "nloc": 64
+  },
+  "tools/qwen-bench/qwen_two_turn.py::execute": {
+   "ccn": 13,
+   "nloc": 83
+  },
+  "tools/qwen-bench/qwen_two_turn.py::parse_tool_response": {
+   "ccn": 19,
+   "nloc": 48
+  },
+  "tools/qwen-bench/qwen_two_turn.py::run_case": {
+   "ccn": 39,
+   "nloc": 178
+  },
+  "tools/qwen-bench/qwen_two_turn.py::score_case": {
+   "ccn": 46,
+   "nloc": 104
+  },
+  "tools/review_status_line.py::main": {
+   "ccn": 22,
+   "nloc": 36
+  }
+ },
+ "swiftlint_disables": {
+  "VideoScan/VideoScan/Archive/CopyFamilyAssessor.swift|cyclomatic_complexity": 1,
+  "VideoScan/VideoScan/Archive/CopyFamilyAssessor.swift|function_body_length": 1,
+  "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift|cyclomatic_complexity": 1,
+  "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift|function_body_length": 1,
+  "VideoScan/VideoScan/Hallie/Web/HallieWebPage.swift|function_body_length": 1,
+  "VideoScan/VideoScan/People/FindTagCLI.swift|function_body_length": 1
+ }
+}

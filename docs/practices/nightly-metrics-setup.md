@@ -22,6 +22,36 @@ a metric with no data says "no data yet", never zero.
 | `metrics/adversarial.jsonl` | `tools/publish_metrics.py`, called by `tools/adversarial_nightly.py confirm` | after the 05:30 confirm |
 | `metrics/codex_reviews.jsonl` | `tools/publish_metrics.py` (parses `docs/reviews/codex/*.md` headers) | with either of the two above |
 | `metrics/search_benchmarks.jsonl` | `scripts/publish_search_benchmarks.py` | when the benchmark is run |
+| `metrics/complexity.jsonl`, `metrics/complexity_debt_latest.json`, `metrics/complexity_baseline_proposed.json` | `nightly-analysis.yml` `complexity` job → `aggregate` (`scripts/complexity_metrics.py`) | GitHub nightly |
+
+## Complexity and tech debt (2026-10-05, GH #281)
+
+- **Nightly (report only).** `scripts/complexity_metrics.py` runs lizard 1.22.1 over
+  Swift (`VideoScan/VideoScan`, `VideoScanCore/Sources`, `swift_cli`) and Python
+  (`scripts`, `tools`). Per folder (same keys as `swift_by_folder`): functions, mean
+  CCN, CCN > 15, NLOC > 80, files > 800 lines; totals; top 15; duplication (lizard
+  `-Eduplicate`, pure Python). The ratchet lists NEW offenders (CCN > 15 or NLOC > 80,
+  not on the baseline) and WORSE ones; the morning digest prints them plus any gate
+  override from the last 48 h. Stock lizard ignores Swift computed properties; the
+  script teaches it `var body: some View {` so SwiftUI bodies are measured.
+- **Gate (blocking).** `scripts/complexity_gate.py --staged` in the pre-commit hook and
+  `--all` in CI preflight: a function over CCN 30 / 300 lines that is new or worse than
+  the baseline, or a new `swiftlint:disable` of cyclomatic_complexity /
+  function_body_length / file_length / type_body_length, fails. Escape hatch:
+  `COMPLEXITY_OVERRIDE="reason" git commit …`, appended to
+  `ci/baselines/complexity_overrides.jsonl` (staged into the commit; CI honors it).
+- **Baseline.** One committed file, `ci/baselines/complexity_debt.json`. It only shrinks:
+  the nightly publishes the shrunk proposal; `python3 scripts/complexity_metrics.py
+  --shrink-baseline` applies it locally for a commit. Re-grow only deliberately with
+  `--update-baseline`.
+- After pulling this change, run `scripts/install-git-hooks.sh` once per clone: the
+  hook in `.git/hooks` is a copy.
+
+Why `coverage_logic_pct` / `swiftlint_*` in `history.jsonl` looked broken: coverage is
+deliberately off in ci.yml (`-enableCodeCoverage NO`, 2026-09-26), and
+`collect_metrics.sh` turned "no data" into `0` (fixed: now null). SwiftLint left ci.yml
+on 2026-06-02 (5d2e9c23); its nightly count is `swiftlint_strict` in
+`static_analysis.jsonl`, so the per-push fields are null by design.
 
 ## The local publisher (`tools/publish_metrics.py`)
 

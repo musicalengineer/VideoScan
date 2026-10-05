@@ -27,6 +27,14 @@ if [ -n "$NF" ]; then
     printf '%s' "$NF" | python3 "$REPO_ROOT/scripts/nightly_findings_alert.py" || true
 fi
 
+# Complexity debt (GitHub nightly, report only): 🟡 + the list when a new
+# function crossed CCN 15 / 80 lines or a known one got worse; ✅ when
+# baseline offenders were fixed; silent otherwise. Never fails the digest.
+CX="$(git show origin/metrics:metrics/complexity_debt_latest.json 2>/dev/null || true)"
+if [ -n "$CX" ]; then
+    printf '%s' "$CX" | python3 "$REPO_ROOT/scripts/complexity_metrics.py" --alert - || true
+fi
+
 # Weekly Address/Thread Sanitizer runs (2026-10-04): 🔴 on findings or a
 # failed run, 🟡 if skipped, silent when green. Local files on the M4, so
 # quiet on other hosts. Never fails the digest.
