@@ -154,6 +154,18 @@ struct FamilyTreeWalkSheet: View {
                     ShowOnMapButton(animator: animator, busy: mapTask != nil) { showMap(animator, highlighter) }
                     Button("Done") { close() }.keyboardShortcut(.defaultAction)
                 case .map(let animator, let highlighter, _):
+                    // Switch whose family the map shows without going back
+                    // to the setup dialog (Rick 2026-10-05).
+                    Menu("Map for: \(startChoiceLabel)") {
+                        ForEach(startChoices, id: \.tag) { choice in
+                            Button(choice.label) { rewalkToMap(choice.tag) }
+                                .disabled(choice.tag == startChoice)
+                        }
+                    }
+                    .fixedSize()
+                    .disabled(mapTask != nil)   // walkTask is never cleared; the stage covers a walk
+                    .help("Show the map for someone else — walks the tree from them and comes straight back here")
+                    .accessibilityIdentifier("ft.map.mapFor")
                     Button("Back to the fan") { stage = .watching(animator, highlighter) }
                     Button("Done") { close() }.keyboardShortcut(.defaultAction)
                 case .walking, .failed:
@@ -215,8 +227,30 @@ struct FamilyTreeWalkSheet: View {
         case "default": return defaultStarts
         case "selected": return model.selectedID.map { [$0] } ?? []
         default:
+            if startChoice.hasPrefix("one:") { return [String(startChoice.dropFirst(4))] }
             return startChoice.hasPrefix("bm:") ? [String(startChoice.dropFirst(3))] : []
         }
+    }
+
+    /// Who a walk (and its map) can start from: the home people together,
+    /// each of them alone (Rick 2026-10-05: "change from Donna to Richard"),
+    /// the tree's selected person, and up to 12 bookmarks. (tag, label).
+    private var startChoices: [(tag: String, label: String)] {
+        let home = defaultStarts
+        var out: [(tag: String, label: String)] = []
+        if !home.isEmpty { out.append(("default", home.map(name).joined(separator: " + "))) }
+        if home.count > 1 { out += home.map { ("one:" + $0, name($0)) } }
+        if let selected = model.selectedPerson, !home.contains(selected.id) {
+            out.append(("selected", "Selected: \(selected.name)"))
+        }
+        for p in model.walkBookmarkedPeople.prefix(12) where !home.contains(p.id) {
+            out.append(("bm:" + p.id, "Bookmark: \(p.name)"))
+        }
+        return out
+    }
+
+    private var startChoiceLabel: String {
+        startChoices.first { $0.tag == startChoice }?.label ?? starts.map(name).joined(separator: " + ")
     }
 
     private func name(_ id: String) -> String { graph?.people[id]?.name ?? id }
@@ -227,6 +261,9 @@ struct FamilyTreeWalkSheet: View {
             Picker("Start from", selection: $startChoice) {
                 Text(home.isEmpty ? "Home people (none in this tree)" : home.map(name).joined(separator: " + "))
                     .tag("default")
+                if home.count > 1 {
+                    ForEach(home, id: \.self) { id in Text(name(id)).tag("one:" + id) }
+                }
                 if let selected = model.selectedPerson, !home.contains(selected.id) {
                     Text("Selected: \(selected.name)").tag("selected")
                 }
@@ -271,7 +308,17 @@ struct FamilyTreeWalkSheet: View {
 
     // MARK: Running
 
-    private func walkInForeground() {
+    private func walkInForeground() { runWalk(thenMap: false) }
+
+    /// From the map: walk from `tag`'s people and go straight to their map.
+    private func rewalkToMap(_ tag: String) {
+        guard tag != startChoice else { return }
+        startChoice = tag
+        appLog.write("Family map: switching to \(startChoiceLabel)")
+        runWalk(thenMap: true)
+    }
+
+    private func runWalk(thenMap: Bool) {
         guard let graph else { return }
         let options = options, names = displayNames
         stage = .walking("Analysing \(graph.people.count.formatted()) people…")
@@ -296,8 +343,10 @@ struct FamilyTreeWalkSheet: View {
             let inputs = await TreeWalkHighlighter.prepare(result: result, graph: graph, layout: layout)
             let animator = TreeWalkAnimator(layout: layout, summary: result.summary, displayNames: names)
             walkResult = result
-            stage = .watching(animator, TreeWalkHighlighter(inputs: inputs))
+            let highlighter = TreeWalkHighlighter(inputs: inputs)
+            stage = .watching(animator, highlighter)
             animator.start()
+            if thenMap { showMap(animator, highlighter) }
         }
     }
 
