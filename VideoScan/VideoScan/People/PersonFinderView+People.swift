@@ -748,37 +748,15 @@ extension PersonFinderView {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("\(family.name) — the videos picked for this family")
+        // Double-click edits (name + photo), like a person's card.
+        .simultaneousGesture(TapGesture(count: 2).onEnded { editingFamilyUUID = family.uuid })
+        .help("\(family.name) — click for the family's videos, double-click to edit")
         .contextMenu {
-            Button(family.photoFilename == nil ? "Choose Photo…" : "Change Photo…") { chooseFamilyPhoto(family) }
+            Button("Edit Family…") { editingFamilyUUID = family.uuid }
             Divider()
             Button("Remove \(family.name)…") { confirmTrashFamily = family }
         }
         .accessibilityIdentifier("people.family.\(family.name)")
-    }
-}
-
-extension PersonFinderView {
-    /// Pick an image for a family's card (2026-10-04). A downsized copy is
-    /// stored with the family; the original is never touched.
-    func chooseFamilyPhoto(_ family: FamilyGroup) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = true
-        panel.canChooseDirectories = false
-        panel.allowsMultipleSelection = false
-        panel.allowedContentTypes = [.image]
-        panel.message = "Choose a photo for \(family.name)"
-        panel.prompt = "Use Photo"
-        panel.begin { response in
-            guard response == .OK, let url = panel.url else { return }
-            do {
-                _ = try FamilyGroupStore.setPhoto(from: url, for: family.uuid)
-                families = FamilyGroupStore.listAll()
-                appLog.write("People: set photo for \(family.name) from \(url.lastPathComponent)")
-            } catch {
-                appLog.write("People: could not use \(url.lastPathComponent) as \(family.name)'s photo — \(error.localizedDescription)")
-            }
-        }
     }
 }
 

@@ -64,6 +64,8 @@ struct PersonFinderView: View {
     @State var showNewFamilyPrompt = false
     @State var newFamilyName = ""
     @State var confirmTrashFamily: FamilyGroup?
+    /// The family whose edit sheet (name + photo) is open.
+    @State var editingFamilyUUID: UUID?
     @State var inspectorShown = false
     @State var inspectorStreamInfo: StreamInspectInfo?
     @State var inspectorLoading = false
@@ -233,6 +235,10 @@ struct PersonFinderView: View {
         }
         .frame(minWidth: 960, maxHeight: .infinity, alignment: .top)
         .task { families = FamilyGroupStore.listAll() }
+        .sheet(item: Binding(get: { editingFamilyUUID.map(FamilyEditTarget.init) },
+                             set: { editingFamilyUUID = $0?.id })) { target in
+            FamilyEditSheet(familyUUID: target.id) { families = FamilyGroupStore.listAll() }
+        }
         .alert("Add a Family", isPresented: $showNewFamilyPrompt) {
             TextField("Family name", text: $newFamilyName)
             Button("Add") { addFamily() }
@@ -318,3 +324,6 @@ struct PersonFinderView: View {
         .background(Color(NSColor.controlBackgroundColor).opacity(0.7))
     }
 }
+
+/// Identifiable wrapper so the family editor is a `.sheet(item:)`.
+struct FamilyEditTarget: Identifiable { let id: UUID }
