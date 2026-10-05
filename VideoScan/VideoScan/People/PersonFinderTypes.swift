@@ -865,7 +865,11 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// this: the folder is named by `uuid`, so changing `name` changes
     /// nothing on disk but the JSON (Rick's ruling 2026-09-12). The file
     /// store still refuses a destination folder owned by another uuid.
-    func save() throws {
+    /// `writingFeaturedVideos` — ONLY FeaturedVideos.set passes true. Every
+    /// other save keeps the hand-picked People-tab videos already on disk
+    /// (2026-10-04): callers save in-memory copies that predate a pick, and
+    /// must never wipe one.
+    func save(writingFeaturedVideos: Bool = false) throws {
         // Remote viewer (Phase 1): POI/ is synced FROM the master; never
         // written here (the kinship attestations ride in profile.json).
         try ViewerWriteGuard.check("POIProfile.save")
@@ -879,7 +883,8 @@ struct POIProfile: Codable, Identifiable, Equatable {
         let folder = POIStorage.folder(for: self)
         _ = try POIProfileFileStore.save(id: uuid, destination: folder, previous: nil,
             retire: { _ in }, write: { url, finalFolder in
-                try self.write(profileJSONAt: url, folder: finalFolder)
+                try self.write(profileJSONAt: url, folder: finalFolder,
+                               writingFeaturedVideos: writingFeaturedVideos)
             })
     }
 
@@ -914,10 +919,17 @@ struct POIProfile: Codable, Identifiable, Equatable {
     /// healed referencePath — the folder the JSON actually lives in, which
     /// for a not-yet-migrated legacy folder can differ from
     /// `POIStorage.folder(for:)`.
-    private func write(profileJSONAt url: URL, folder: URL) throws {
+    private func write(profileJSONAt url: URL, folder: URL, writingFeaturedVideos: Bool = false) throws {
         // Keep referencePath in sync with actual location.
         var copy = self
         copy.referencePath = folder.path
+        // Picks have ONE writer (FeaturedVideos.set). Anyone else carries the
+        // on-disk list forward, so a stale copy can't erase a pick. An
+        // unreadable file leaves this save's own list (no worse than before).
+        if !writingFeaturedVideos, let data = try? Data(contentsOf: url),
+           let onDisk = try? JSONDecoder().decode(POIProfile.self, from: data) {
+            copy.featuredVideos = onDisk.featuredVideos
+        }
         // The single writer is also the single place blank collapses to
         // absent on disk (2026-09-04): "" and "   " never reach profile.json.
         copy.normalizeNameFields()

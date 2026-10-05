@@ -247,3 +247,41 @@ struct FamilyPhotoTests {
         #expect(FileManager.default.fileExists(atPath: src.path), "the original is untouched")
     }
 }
+
+// MARK: - Picks survive a stale profile save (overnight 2026-10-04)
+
+@Suite("People — picks survive other profile saves")
+@MainActor
+struct FeaturedVideosSurviveSavesTests {
+    /// The People tab keeps in-memory profile copies that predate a pick;
+    /// editing a person (or rejecting a reference photo) saves that copy.
+    /// It must never erase the pick. Sandbox POI store (test host).
+    @Test func aStaleCopySavedLaterKeepsThePicks() throws {
+        let stale = POIProfile(name: "Survivor\(UUID().uuidString.prefix(6))", referencePath: "")
+        try stale.save()
+
+        var picked = stale
+        picked.featuredVideos = [FeaturedVideo(recordID: UUID(), path: "/Volumes/X/cape.mov", filename: "cape.mov",
+                                               contentHash: nil, addedAt: Date())]
+        try picked.save(writingFeaturedVideos: true)
+
+        var edited = stale              // copy from BEFORE the pick
+        edited.notes = "edited after the pick"
+        try edited.save()
+
+        let back = try #require(POIProfile.listAll().first { $0.uuid == stale.uuid })
+        #expect(back.notes == "edited after the pick", "the edit landed")
+        #expect(back.featuredVideos.map(\.path) == ["/Volumes/X/cape.mov"], "and the pick survived it")
+    }
+
+    @Test func onlyThePicksWriterCanRemoveAPick() throws {
+        var p = POIProfile(name: "Remover\(UUID().uuidString.prefix(6))", referencePath: "")
+        p.featuredVideos = [FeaturedVideo(recordID: UUID(), path: "/a.mov", filename: "a.mov", contentHash: nil, addedAt: Date())]
+        try p.save(writingFeaturedVideos: true)
+        p.featuredVideos = []
+        try p.save()                                   // ordinary save: ignored for picks
+        #expect(POIProfile.listAll().first { $0.uuid == p.uuid }?.featuredVideos.count == 1)
+        try p.save(writingFeaturedVideos: true)        // the picks writer: honoured
+        #expect(POIProfile.listAll().first { $0.uuid == p.uuid }?.featuredVideos.isEmpty == true)
+    }
+}

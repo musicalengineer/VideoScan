@@ -102,7 +102,7 @@ enum FeaturedVideos {
         let count = apply(recs, on: on, to: &profile.featuredVideos)
         guard count > 0 else { return true }
         do {
-            try profile.save()
+            try profile.save(writingFeaturedVideos: true)
         } catch {
             appLog.write("People tab: could not save \(profile.displayName)'s page — \(error.localizedDescription)")
             return false
