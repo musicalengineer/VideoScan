@@ -107,14 +107,15 @@ extension CatalogContent {
     // swiftlint:disable:next cyclomatic_complexity function_body_length
     func rowContextMenu(ids: Set<UUID>) -> some View {
         let selectedRecs = ids.compactMap { id in records.first { $0.id == id } }
-        // Mixed-selection split. Each predicate is computed once so the
-        // Restore / Remove menu items use the same record set their
-        // actions operate on (label counts == operated-on counts).
-        // Swift's `.filter` ≈ C++ std::copy_if into a new vector.
-        let activeRecs = selectedRecs.filter { !$0.isPurged && !$0.isSetAside && !$0.isSuperseded }
-        let purgedRecs = selectedRecs.filter { $0.isPurged }
-        let setAsideRecs = selectedRecs.filter { $0.isSetAside && !$0.isPurged }
-        let supersededRecs = selectedRecs.filter { $0.isSuperseded && !$0.isPurged && !$0.isSetAside }
+        // Mixed-selection split (CatalogRowMenuPlan.swift). Each subset is
+        // computed once so the Restore / Remove menu items use the same
+        // record set their actions operate on (label counts ==
+        // operated-on counts).
+        let selection = CatalogRowMenuSelection(selected: selectedRecs)
+        let activeRecs = selection.active
+        let purgedRecs = selection.purged
+        let setAsideRecs = selection.setAside
+        let supersededRecs = selection.superseded
         // Delete File is never OFFERED for Master Archive files — the tree
         // or anywhere else on the archive's volume (Rick 2026-09-22). One
         // snapshot per menu open (right-click time, O(selection)); the
@@ -131,12 +132,12 @@ extension CatalogContent {
             // purged row doesn't silently apply destructive ops to it.
             // Spec: "active-only row actions must be gated on
             // purgedRecs.isEmpty".
-            if !activeRecs.isEmpty || rec.isPurged || rec.isSetAside || rec.isSuperseded {
-                if rec.isPurged && activeRecs.isEmpty {
+            if let shape = selection.shape(anchor: rec) {
+                if shape == .purged {
                     purgedRowContextMenu(rec: rec, selectedRecs: selectedRecs)
-                } else if rec.isSetAside && activeRecs.isEmpty {
+                } else if shape == .setAside {
                     setAsideRowContextMenu(rec: rec, selectedRecs: selectedRecs)
-                } else if rec.isSuperseded && activeRecs.isEmpty {
+                } else if shape == .superseded {
                     // Pure-superseded selection: minimal menu (Show
                     // Repaired Copy + Restore + Reveal) — GH #132.
                     supersededRowContextMenu(rec: rec, selectedRecs: selectedRecs)
@@ -145,8 +146,7 @@ extension CatalogContent {
                     // gating active-row actions on the selection being
                     // free of ALL inert states (purged / set-aside /
                     // superseded rows must never receive destructive ops).
-                    let pureActive = purgedRecs.isEmpty && setAsideRecs.isEmpty
-                        && supersededRecs.isEmpty
+                    let pureActive = selection.pureActive
                     Button(VolumeReachability.isReachable(path: rec.fullPath)
                            ? "Reveal in Finder"
                            : "Reveal in Finder (offline)") {
