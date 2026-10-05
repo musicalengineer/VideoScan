@@ -32,6 +32,11 @@ def source(*funcs: str, extra: str = "") -> str:
     return "struct Synthetic {\n" + extra + "".join(funcs) + "}\n"
 
 
+KNOWN35 = {f"{PATH}::Synthetic.big": {"ccn": 35, "nloc": 40}}
+# The key format before 2026-10-05 QA fix; a baseline written then must still match.
+LEGACY35 = {f"{PATH}::big": {"ccn": 35, "nloc": 40}}
+
+
 def write_baseline(tmp_path, entries=None, disables=None) -> str:
     path = tmp_path / "complexity_debt.json"
     cm.write_baseline(str(path), entries or {}, disables or {})
@@ -48,7 +53,7 @@ def run(tmp_path, text, baseline, reason="", path=PATH):
 
 def test_synthetic_function_has_the_ccn_we_think():
     funcs, _ = cm.analyze_sources({PATH: source(swift_func("big", 35))})
-    assert [(f.key, f.display, f.ccn) for f in funcs] == [(f"{PATH}::big", "Synthetic.big", 35)]
+    assert [(f.key, f.display, f.ccn) for f in funcs] == [(f"{PATH}::Synthetic.big", "Synthetic.big", 35)]
 
 
 def test_new_offender_over_the_gate_is_blocked(tmp_path):
@@ -60,14 +65,14 @@ def test_new_offender_over_the_gate_is_blocked(tmp_path):
 
 
 def test_unchanged_known_offender_passes_so_its_file_can_be_edited(tmp_path):
-    base = write_baseline(tmp_path, {f"{PATH}::big": {"ccn": 35, "nloc": 40}})
+    base = write_baseline(tmp_path, KNOWN35)
     code, out, _ = run(tmp_path, source(swift_func("big", 35), swift_func("small", 2)), base)
     assert code == 0, out
     assert "OK" in out
 
 
 def test_known_offender_that_got_worse_is_blocked(tmp_path):
-    base = write_baseline(tmp_path, {f"{PATH}::big": {"ccn": 35, "nloc": 40}})
+    base = write_baseline(tmp_path, KNOWN35)
     code, out, _ = run(tmp_path, source(swift_func("big", 36)), base)
     assert code == 1 and "got WORSE (baseline CCN 35" in out
 
@@ -75,9 +80,9 @@ def test_known_offender_that_got_worse_is_blocked(tmp_path):
 def test_known_offender_may_not_grow_past_the_line_slack(tmp_path):
     funcs, _ = cm.analyze_sources({PATH: source(swift_func("big", 35))})
     nloc = funcs[0].nloc
-    base = write_baseline(tmp_path, {f"{PATH}::big": {"ccn": 40, "nloc": nloc - gate.NLOC_SLACK}})
+    base = write_baseline(tmp_path, {f"{PATH}::Synthetic.big": {"ccn": 40, "nloc": nloc - gate.NLOC_SLACK}})
     assert run(tmp_path, source(swift_func("big", 35)), base)[0] == 0          # within slack
-    base = write_baseline(tmp_path, {f"{PATH}::big": {"ccn": 40, "nloc": nloc - gate.NLOC_SLACK - 1}})
+    base = write_baseline(tmp_path, {f"{PATH}::Synthetic.big": {"ccn": 40, "nloc": nloc - gate.NLOC_SLACK - 1}})
     assert run(tmp_path, source(swift_func("big", 35)), base)[0] == 1          # one line too many
 
 
@@ -111,7 +116,7 @@ def test_override_passes_and_is_logged_then_honored_by_ci(tmp_path):
     assert 'OVERRIDDEN — "hotfix for Rick, split in #282"' in out
     rec = json.loads(Path(overrides).read_text().strip())
     assert rec["reason"] == "hotfix for Rick, split in #282" and rec["ts"] == "2026-10-05T18:00:00Z"
-    assert rec["functions"] == {f"{PATH}::big": {"ccn": 35, "nloc": rec["functions"][f"{PATH}::big"]["nloc"]}}
+    assert list(rec["functions"]) == [f"{PATH}::Synthetic.big"] and rec["functions"][f"{PATH}::Synthetic.big"]["ccn"] == 35
     # CI (no override env) honors the recorded override at its recorded size ...
     lines = []
     assert gate.run_gate({PATH: text}, base, overrides, out=lines.append, record_override=False) == 0
@@ -133,3 +138,74 @@ def test_blank_override_reason_does_not_override(tmp_path):
 def test_out_of_scope_files_are_ignored(tmp_path):
     for path in ["VideoScan/VideoScanTests/BigTests.swift", "other/x.swift", "scripts/venv/lib/x.py"]:
         assert run(tmp_path, source(swift_func("big", 35)), write_baseline(tmp_path), path=path)[0] == 0, path
+
+
+# ---------------------------------------------------------------- refactors that add no debt
+# QA review 2026-10-05: moving or keeping an offender without growing it must pass.
+
+MOVED_TO = "VideoScan/VideoScan/Catalog/CatalogRowContextMenu.swift"
+
+
+def _gate(tmp_path, sources, base):
+    lines = []
+    code = gate.run_gate(sources, base, str(tmp_path / "ov.jsonl"), out=lines.append, record_override=False)
+    return code, "\n".join(lines)
+
+
+def test_offender_moved_unchanged_to_a_new_file_passes(tmp_path):
+    # complexity_gate.py:85 keys by file::name -> moved function reads as NEW.
+    base = write_baseline(tmp_path, LEGACY35)
+    code, out = _gate(tmp_path, {PATH: source(swift_func("small", 2)),
+                                 MOVED_TO: source(swift_func("big", 35))}, base)
+    assert code == 0, out
+
+
+def test_offender_moved_and_made_smaller_passes(tmp_path):
+    base = write_baseline(tmp_path, LEGACY35)
+    code, out = _gate(tmp_path, {MOVED_TO: source(swift_func("big", 32))}, base)
+    assert code == 0, out
+
+
+def test_adding_a_small_namesake_does_not_rekey_the_untouched_offender(tmp_path):
+    # complexity_metrics.py:204-207: a second `body`/`big` anywhere in the file
+    # flips the offender's key from file::big to file::Synthetic.big -> NEW.
+    base = write_baseline(tmp_path, LEGACY35)
+    text = source(swift_func("big", 35)) + "struct Other {\n" + swift_func("big", 2) + "}\n"
+    code, out = _gate(tmp_path, {PATH: text}, base)
+    assert code == 0, out
+
+
+def test_swiftlint_disable_moved_with_its_function_passes(tmp_path):
+    # complexity_gate.py:96: disable allowance is per file, so carrying the
+    # grandfathered disable:next to the new file blocks.
+    d = "    // swiftlint:disable:next cyclomatic_complexity\n"
+    base = write_baseline(tmp_path, LEGACY35,
+                          {f"{PATH}|cyclomatic_complexity": 1})
+    code, out = _gate(tmp_path, {PATH: source(swift_func("small", 2)),
+                                 MOVED_TO: source(swift_func("big", 35), extra=d)}, base)
+    assert code == 0, out
+
+
+def test_copying_an_offender_is_not_a_move(tmp_path):
+    # The original is still in its (untouched) file: the copy is NEW debt.
+    base = write_baseline(tmp_path, KNOWN35)
+    lines = []
+    code = gate.run_gate({MOVED_TO: source(swift_func("big", 35))}, base, str(tmp_path / "ov.jsonl"),
+                         out=lines.append, record_override=False,
+                         read_untouched=lambda p: source(swift_func("big", 35)) if p == PATH else None)
+    assert code == 1 and "NEW function over the gate" in "\n".join(lines)
+
+
+def test_moved_and_grown_is_still_blocked(tmp_path):
+    base = write_baseline(tmp_path, LEGACY35)
+    lines = []
+    code = gate.run_gate({PATH: source(swift_func("small", 2)), MOVED_TO: source(swift_func("big", 36))},
+                         base, str(tmp_path / "ov.jsonl"), out=lines.append, record_override=False)
+    assert code == 1
+
+
+def test_whole_tree_mode_refuses_an_empty_listing(tmp_path):
+    lines = []
+    assert gate.run_gate({}, write_baseline(tmp_path), str(tmp_path / "ov.jsonl"), out=lines.append,
+                         record_override=False, min_files=500) == 1
+    assert "Refusing" in lines[0]

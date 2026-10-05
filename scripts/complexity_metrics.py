@@ -115,6 +115,9 @@ DEFAULT_SEED = os.path.join("ci", "baselines", "complexity_debt.json")
 # Shrink guard: refuse to rewrite the baseline when this much vanished at once.
 SHRINK_GUARD_FRACTION = 0.5
 SHRINK_GUARD_MIN = 20
+# A moved offender may be this many lines longer than its baseline entry and
+# still count as the same function (re-indent, an extracted helper's call).
+MOVE_NLOC_SLACK = 5
 
 
 # ---------------------------------------------------------------------------
@@ -137,8 +140,14 @@ class Func:
 
     @property
     def display(self) -> str:
-        """Type.parent.name: what a human reads in the top-15 and digests."""
-        return ".".join(x for x in (self.container, self.parent, self.name) if x)
+        """Type.parent.name: what a human reads, and the base of the key.
+        (lizard already names nested Python functions `outer.inner`.)"""
+        parent = "" if self.name.startswith(self.parent + ".") else self.parent
+        return ".".join(x for x in (self.container, parent, self.name) if x)
+
+    @property
+    def bare_name(self) -> str:
+        return self.name.rsplit(".", 1)[-1]
 
     @property
     def is_offender(self) -> bool:
@@ -174,42 +183,64 @@ def _norm(text: str) -> str:
 def assign_keys(funcs: Sequence[Func]) -> None:
     """Give every function a stable identity within its file, no line numbers.
 
-    file::name                 when the name is unique in the file
-    file::Type.name            when it repeats but the enclosing type tells
-                               them apart (several SwiftUI `body`s per file);
-                               a nested function also carries its parent
-                               function (Type.prop.get)
-    file::Type.long_name       ... else with lizard's parameter list (overloads)
-    file::Type.long_name#n     ... else an ordinal in source order (last resort)
+    file::Type.parent.name         always (the qualified name, `display`)
+    file::Type.parent.long_name    only when that repeats in the file (overloads)
+    file::...long_name#n           ordinal in source order, last resort
+
+    A function's key never depends on whether some OTHER function with the
+    same bare name exists elsewhere in the file (QA 2026-10-05: adding a small
+    `body` to another type used to rename an untouched offender).
     """
     by_file: Dict[str, List[Func]] = {}
     for f in funcs:
         by_file.setdefault(f.file, []).append(f)
     for path, items in by_file.items():
         items = sorted(items, key=lambda f: f.start_line)
-
-        def counts(labels: List[str]) -> Dict[str, int]:
-            out: Dict[str, int] = {}
-            for label in labels:
-                out[label] = out.get(label, 0) + 1
-            return out
-
-        names = counts([f.name for f in items])
-        qual = lambda f: f.display
-        quals = counts([qual(f) for f in items if names[f.name] > 1])
-        longq = lambda f: ".".join(x for x in (f.container, f.parent, _norm(f.long_name) or f.name) if x)
-        longs = counts([longq(f) for f in items if names[f.name] > 1 and quals[qual(f)] > 1])
+        quals: Dict[str, int] = {}
+        for f in items:
+            quals[f.display] = quals.get(f.display, 0) + 1
+        longq = lambda f: f.display[: -len(f.name)] + (_norm(f.long_name) or f.name)
+        longs: Dict[str, int] = {}
+        for f in items:
+            if quals[f.display] > 1:
+                longs[longq(f)] = longs.get(longq(f), 0) + 1
         seen: Dict[str, int] = {}
         for f in items:
-            if names[f.name] == 1:
-                f.key = f"{path}::{f.name}"
-            elif quals[qual(f)] == 1:
-                f.key = f"{path}::{qual(f)}"
+            if quals[f.display] == 1:
+                f.key = f"{path}::{f.display}"
             elif longs[longq(f)] == 1:
                 f.key = f"{path}::{longq(f)}"
             else:
                 seen[longq(f)] = seen.get(longq(f), 0) + 1
                 f.key = f"{path}::{longq(f)}#{seen[longq(f)]}"
+
+
+def key_file(key: str) -> str:
+    return key.split("::", 1)[0]
+
+
+def key_bare_name(key: str) -> str:
+    """`file::Type.prop.get` -> `get`; `file::Type.init x : Int#2` -> `init`."""
+    rest = key.split("::", 1)[-1].split("#", 1)[0].split(" ", 1)[0]
+    return rest.rsplit(".", 1)[-1]
+
+
+def match_moves(new: Sequence[Func], vanished: Dict[str, dict], slack: int) -> Dict[str, str]:
+    """Pair NEW offenders with baseline offenders that disappeared, so a moved
+    or rekeyed function that did not grow is recognised. Same bare name, CCN no
+    higher, NLOC at most `slack` more. Biggest first, each baseline key once.
+    Returns {new key: vanished baseline key}."""
+    pool = dict(vanished)
+    out: Dict[str, str] = {}
+    for f in sorted(new, key=lambda f: (-f.ccn, -f.nloc, f.key)):
+        fits = [k for k, v in pool.items()
+                if key_bare_name(k) == f.bare_name and f.ccn <= v["ccn"] and f.nloc <= v["nloc"] + slack]
+        if fits:
+            # Prefer the same file, then the closest size.
+            best = min(fits, key=lambda k: (key_file(k) != f.file, pool[k]["ccn"] - f.ccn, k))
+            out[f.key] = best
+            del pool[best]
+    return out
 
 
 _SWIFT_TYPE = re.compile(r"^\s*(?:@\w+(?:\([^)]*\))?\s+)*(?:(?:public|private|fileprivate|internal|"
@@ -436,11 +467,17 @@ def ratchet(funcs: Sequence[Func], baseline: Dict[str, dict]) -> dict:
     `next_baseline` is the baseline with fixed keys dropped and improved
     values lowered — never with anything added or raised."""
     current = offenders(funcs)
-    new = sorted((f for k, f in current.items() if k not in baseline),
+    unmatched_new = [f for k, f in current.items() if k not in baseline]
+    vanished = {k: v for k, v in baseline.items() if k not in current}
+    # A moved / rekeyed offender that did not grow is neither NEW nor FIXED:
+    # its baseline entry follows it to the new key.
+    moves = match_moves(unmatched_new, vanished, MOVE_NLOC_SLACK)
+    new = sorted((f for f in unmatched_new if f.key not in moves),
                  key=lambda f: (-f.ccn, -f.nloc, f.key))
     worse = sorted((f for k, f in current.items() if k in baseline and got_worse(f, baseline[k])),
                    key=lambda f: (-f.ccn, -f.nloc, f.key))
-    fixed = sorted(k for k in baseline if k not in current)
+    moved_from = set(moves.values())
+    fixed = sorted(k for k in vanished if k not in moved_from)
 
     nxt: Dict[str, dict] = {}
     for key, base in baseline.items():
@@ -448,6 +485,9 @@ def ratchet(funcs: Sequence[Func], baseline: Dict[str, dict]) -> dict:
         if cur is None:
             continue
         nxt[key] = {"ccn": min(base["ccn"], cur.ccn), "nloc": min(base["nloc"], cur.nloc)}
+    for new_key, old_key in moves.items():
+        cur, base = current[new_key], baseline[old_key]
+        nxt[new_key] = {"ccn": min(base["ccn"], cur.ccn), "nloc": min(base["nloc"], cur.nloc)}
 
     shrink_skipped = None
     if not funcs:
@@ -458,7 +498,7 @@ def ratchet(funcs: Sequence[Func], baseline: Dict[str, dict]) -> dict:
     if shrink_skipped:
         nxt = dict(baseline)
     return {"new": new, "worse": worse, "fixed": fixed, "next_baseline": nxt,
-            "shrink_skipped": shrink_skipped}
+            "shrink_skipped": shrink_skipped, "moved": moves}
 
 
 def _fdict(f: Func, base: Optional[dict] = None) -> dict:

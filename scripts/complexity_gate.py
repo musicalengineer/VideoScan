@@ -24,9 +24,13 @@ Existing offenders that do not get worse pass, so their files can still be
 edited. Functions between the report limits (CCN 15 / 80 lines) and the gate
 are reported by the nightly only.
 
-Function identity is the same `file::Type.function` key the nightly uses, so
-a moved or renamed big function reads as NEW. That is deliberate: it is the
-moment to split it, or to override with a reason.
+Function identity is the same `file::Type.function` key the nightly uses.
+A function that is not on the baseline under its key is first matched against
+baseline entries that vanished from the touched files (same bare name, CCN no
+higher, at most 5 more lines): moving a known offender into a new file, as a
+refactor does, passes; moving it AND growing it does not. Guarded disables
+are counted per rule across the touched files, so a grandfathered
+`swiftlint:disable:next` can move with its function.
 
 Escape hatch (leaves a trace, never silent)
 -------------------------------------------
@@ -67,6 +71,7 @@ import complexity_metrics as cm  # noqa: E402
 GATE_CCN = 30          # same as .swiftlint.yml cyclomatic_complexity: error
 GATE_NLOC = 300        # same as .swiftlint.yml function_body_length: error
 NLOC_SLACK = 5         # a known big function may grow this much in total, no more
+ALL_MODE_MIN_FILES = 500   # --all on this repo sees ~1,080; fewer = broken listing
 
 HOW_TO_FIX = ("Split it: pull branches or steps out into named helpers. If it truly has to go in "
               "as is: COMPLEXITY_OVERRIDE=\"<reason>\" git commit ... (recorded and reported nightly).")
@@ -77,28 +82,67 @@ def over_gate(f: cm.Func) -> bool:
 
 
 def function_violations(funcs: Sequence[cm.Func], baseline: Dict[str, dict],
-                        allowed: Dict[str, dict]) -> List[dict]:
-    out = []
+                        allowed: Dict[str, dict], touched: Optional[set] = None,
+                        still_present: Optional[Callable[[str], bool]] = None) -> List[dict]:
+    """NEW / WORSE functions over the gate.
+
+    Before anything is called NEW it is matched against baseline entries that
+    VANISHED from the files being checked (`touched`: the staged files,
+    deletions included, or the whole tree): same bare name, CCN no higher,
+    at most NLOC_SLACK more lines. So moving a known offender to another
+    file, or a key change, passes as long as the function did not grow.
+
+    A baseline entry in a file that was NOT touched is asked about through
+    `still_present(key)` (pre-commit reads the staged copy of that file); if it
+    is still there, the new function is a copy, not a move, and stays NEW.
+    Without the callback it is assumed gone; CI's whole-tree run, where every
+    file is touched, is the backstop for copies."""
+    touched = touched if touched is not None else {f.file for f in funcs}
+    present = {f.key for f in funcs}
+    out, unknown = [], []
     for f in funcs:
         if not over_gate(f):
             continue
         refs = [r for r in (baseline.get(f.key), allowed.get(f.key)) if r]
         if not refs:
-            out.append({"kind": "new", "func": f, "ref": None})
+            unknown.append(f)
             continue
         ref = {"ccn": max(r["ccn"] for r in refs), "nloc": max(r["nloc"] for r in refs)}
         if f.ccn > ref["ccn"] or f.nloc > ref["nloc"] + NLOC_SLACK:
             out.append({"kind": "worse", "func": f, "ref": ref})
+    names = {f.bare_name for f in unknown}
+    vanished = {k: v for src in (baseline, allowed) for k, v in src.items()
+                if k not in present and cm.key_bare_name(k) in names
+                and (cm.key_file(k) in touched or not (still_present and still_present(k)))}
+    moved = cm.match_moves(unknown, vanished, NLOC_SLACK)
+    out += [{"kind": "new", "func": f, "ref": None} for f in unknown if f.key not in moved]
     return sorted(out, key=lambda v: (-v["func"].ccn, -v["func"].nloc, v["func"].key))
 
 
 def disable_violations(current: Dict[str, int], baseline: Dict[str, int],
-                       allowed: Dict[str, int]) -> List[dict]:
+                       allowed: Dict[str, int], touched: Optional[set] = None) -> List[dict]:
+    """Per RULE, across the files being checked: more guarded
+    `swiftlint:disable`s than the grandfathered (+ overridden) ones in those
+    same files. Counting per rule rather than per file lets a disable move
+    with its function."""
+    touched = touched if touched is not None else {k.split("|", 1)[0] for k in current}
+
+    def per_rule(counts: Dict[str, int]) -> Dict[str, int]:
+        out: Dict[str, int] = {}
+        for key, n in counts.items():
+            path, rule = key.split("|", 1)
+            if path in touched:
+                out[rule] = out.get(rule, 0) + n
+        return out
+
+    cur, base, extra = per_rule(current), per_rule(baseline), per_rule(allowed)
     out = []
-    for key, n in sorted(current.items()):
-        limit = max(baseline.get(key, 0), allowed.get(key, 0))
+    for rule, n in sorted(cur.items()):
+        limit = base.get(rule, 0) + extra.get(rule, 0)
         if n > limit:
-            out.append({"key": key, "count": n, "allowed": limit})
+            files = sorted(k.split("|", 1)[0] for k in current if k.endswith("|" + rule))
+            out.append({"rule": rule, "count": n, "allowed": limit,
+                        "files": files, "counts": {f"{p}|{rule}": current[f"{p}|{rule}"] for p in files}})
     return out
 
 
@@ -110,9 +154,8 @@ def format_violations(funcs: List[dict], disables: List[dict]) -> List[str]:
                 else f"got WORSE (baseline CCN {v['ref']['ccn']}, {v['ref']['nloc']} lines)")
         lines.append(f"  BLOCKED  CCN {f.ccn:>3}  {f.nloc:>4} lines  {f.file} :: {f.display}  — {what}")
     for d in disables:
-        path, rule = d["key"].split("|", 1)
-        lines.append(f"  BLOCKED  new `swiftlint:disable {rule}` in {path} "
-                     f"({d['count']} now, {d['allowed']} grandfathered)")
+        lines.append(f"  BLOCKED  new `swiftlint:disable {d['rule']}` in {', '.join(d['files'])} "
+                     f"({d['count']} now, {d['allowed']} grandfathered in these files)")
     return lines
 
 
@@ -121,24 +164,42 @@ def override_record(reason: str, funcs: List[dict], disables: List[dict], now: _
         "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "reason": reason,
         "functions": {v["func"].key: {"ccn": v["func"].ccn, "nloc": v["func"].nloc} for v in funcs},
-        "disables": {d["key"]: d["count"] for d in disables},
+        "disables": {k: n for d in disables for k, n in d["counts"].items()},
     }
 
 
 def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
              override_reason: str = "", record_override: bool = True,
              out: Callable[[str], None] = print,
-             now: Optional[_dt.datetime] = None) -> int:
-    """Check `sources` ({repo-relative path: text}). 0 = pass (or overridden), 1 = blocked."""
+             now: Optional[_dt.datetime] = None, min_files: int = 0,
+             read_untouched: Optional[Callable[[str], Optional[str]]] = None) -> int:
+    """Check `sources` ({repo-relative path: text}; a deleted file is ""). The
+    set of paths is what was touched. 0 = pass (or overridden), 1 = blocked."""
     scoped = {p: t for p, t in sources.items() if cm.in_scope(p)}
+    if len(scoped) < min_files:
+        out(f"complexity gate: only {len(scoped)} in-scope file(s) found, expected at least "
+            f"{min_files}. Refusing to pass an empty or broken listing.")
+        return 1
+    touched = set(scoped)
     funcs, _ = cm.analyze_sources(scoped)
     current_disables: Dict[str, int] = {}
     for path, text in scoped.items():
         current_disables.update(cm.count_disables(path, text))
 
     allowed_funcs, allowed_disables = cm.override_allowances(cm.load_overrides(overrides_path))
-    fv = function_violations(funcs, cm.load_baseline(baseline_path), allowed_funcs)
-    dv = disable_violations(current_disables, cm.load_disables(baseline_path), allowed_disables)
+    cache: Dict[str, set] = {}
+
+    def still_present(key: str) -> bool:
+        path = cm.key_file(key)
+        if read_untouched is None:
+            return False
+        if path not in cache:
+            text = read_untouched(path)
+            cache[path] = set() if text is None else {f.key for f in cm.analyze_sources({path: text})[0]}
+        return key in cache[path]
+
+    fv = function_violations(funcs, cm.load_baseline(baseline_path), allowed_funcs, touched, still_present)
+    dv = disable_violations(current_disables, cm.load_disables(baseline_path), allowed_disables, touched)
 
     if not fv and not dv:
         out(f"complexity gate: OK ({len(scoped)} file(s), {len(funcs)} function(s); "
@@ -174,10 +235,17 @@ def _git(root: str, *args: str) -> bytes:
 
 
 def staged_sources(root: str) -> Dict[str, str]:
-    names = _git(root, "diff", "--cached", "--name-only", "--diff-filter=ACMR", "-z").decode("utf-8", "replace")
+    """Staged blobs of added/changed files, and "" for deleted ones (a
+    deletion is a touched file: an offender may have moved out of it).
+    --no-renames so a rename shows as delete + add, both touched."""
+    raw = _git(root, "diff", "--cached", "--name-status", "--no-renames",
+               "--diff-filter=ACMD", "-z").decode("utf-8", "replace")
+    parts = [p for p in raw.split("\0") if p]
     out: Dict[str, str] = {}
-    for path in (p for p in names.split("\0") if p and cm.in_scope(p)):
-        out[path] = _git(root, "show", f":{path}").decode("utf-8", "replace")
+    for status, path in zip(parts[0::2], parts[1::2]):
+        if not cm.in_scope(path):
+            continue
+        out[path] = "" if status == "D" else _git(root, "show", f":{path}").decode("utf-8", "replace")
     return out
 
 
@@ -211,8 +279,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         sources = staged_sources(root)
         if not sources:
             return 0
+        def read_index(path: str) -> Optional[str]:
+            try:
+                return _git(root, "show", f":{path}").decode("utf-8", "replace")
+            except (OSError, subprocess.CalledProcessError):
+                return None
         code = run_gate(sources, baseline, overrides,
-                        override_reason=os.environ.get("COMPLEXITY_OVERRIDE", ""))
+                        override_reason=os.environ.get("COMPLEXITY_OVERRIDE", ""),
+                        read_untouched=read_index)
         if code == 0 and os.environ.get("COMPLEXITY_OVERRIDE", "").strip() and os.path.exists(overrides):
             try:
                 _git(root, "add", "--", args.overrides)
@@ -221,7 +295,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return code
 
     # --all: CI honors recorded overrides only; an override env var here is ignored.
-    return run_gate(cm.read_tree(root), baseline, overrides, override_reason="", record_override=False)
+    return run_gate(cm.read_tree(root), baseline, overrides, override_reason="", record_override=False,
+                    min_files=ALL_MODE_MIN_FILES)
 
 
 if __name__ == "__main__":

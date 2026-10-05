@@ -93,7 +93,7 @@ def test_nested_accessor_carries_its_property_name():
     path = "VideoScan/VideoScan/X/S.swift"
     funcs = cm.funcs_from_lizard([info(path, fn("a", start=2, end=4), fn("get", start=3, end=3),
                                        fn("b", start=5, end=7), fn("get", start=6, end=6))], ".", {path: src})
-    assert sorted(f.key.split("::")[1] for f in funcs) == ["S.a.get", "S.b.get", "a", "b"]
+    assert sorted(f.key.split("::")[1] for f in funcs) == ["S.a", "S.a.get", "S.b", "S.b.get"]
     assert {f.display for f in funcs if f.name == "get"} == {"S.a.get", "S.b.get"}
 
 
@@ -187,6 +187,17 @@ def test_ratchet_new_worse_fixed_and_shrink_only():
     assert nxt["a.swift::improved"] == {"ccn": 25, "nloc": 150}  # ratchets down
     assert nxt["a.swift::worse_ccn"] == {"ccn": 20, "nloc": 50}  # never raised: keeps nagging
     assert r["shrink_skipped"] is None
+
+
+def test_ratchet_follows_a_moved_offender_instead_of_new_plus_fixed():
+    baseline = {"old.swift::T.big": {"ccn": 30, "nloc": 100}}
+    f = func("new.swift", "big", 28, 104, key="new.swift::U.big")
+    r = cm.ratchet([f], baseline)
+    assert r["new"] == [] and r["fixed"] == [] and r["moved"] == {"new.swift::U.big": "old.swift::T.big"}
+    assert r["next_baseline"] == {"new.swift::U.big": {"ccn": 28, "nloc": 100}}
+    grown = func("new.swift", "big", 31, 100, key="new.swift::U.big")
+    r = cm.ratchet([grown], baseline)
+    assert [x.key for x in r["new"]] == ["new.swift::U.big"] and r["fixed"] == ["old.swift::T.big"]
 
 
 def test_shrink_guard_keeps_baseline_when_most_of_it_vanishes():
