@@ -368,6 +368,15 @@ struct CatalogContent: View {
     private func installSpaceKeyMonitor() {
         guard spaceKeyMonitor == nil else { return }
         spaceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // TEMPORARY DIAGNOSTIC (2026-10-05, Rick: arrows work on the
+            // volumes table but not the files table). Logs who has keyboard
+            // focus when ↑/↓ arrive. Remove once the cause is fixed.
+            if event.keyCode == 125 || event.keyCode == 126 {
+                let responder = event.window?.firstResponder
+                appLog.write("[keys] \(event.keyCode == 126 ? "↑" : "↓") — first responder: "
+                    + "\(responder.map { String(describing: type(of: $0)) } ?? "none")"
+                    + ", window: \(event.window?.title ?? "?")")
+            }
             // 49 = kVK_Space. Bare Space only — let ⌘/⌥/⌃-Space through to
             // their owners (menu shortcuts, input sources, etc.).
             let bareSpace = event.keyCode == 49
@@ -735,6 +744,12 @@ struct CatalogContent: View {
             }
         }
         .onChange(of: selectedIDs) {
+            // TEMPORARY DIAGNOSTIC (2026-10-05) — see the key monitor.
+            DispatchQueue.main.async {
+                let r = NSApp.keyWindow?.firstResponder
+                appLog.write("[keys] selection → \(selectedIDs.count) row(s); first responder after: "
+                    + "\(r.map { String(describing: type(of: $0)) } ?? "none")")
+            }
             if isPlaying {
                 player?.pause()
                 player = nil
