@@ -57,7 +57,10 @@ public enum TimingBudget {
         _ budget: Duration,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) -> Duration {
-        budget * (hostedRunnerFactor(environment: environment) * sanitizerFactor(environment: environment))
+        // Two steps: Swift 6.2 (CI's Xcode 26.3) can't type-check
+        // `Duration * (Int * Int)` in one expression.
+        let factor: Int = hostedRunnerFactor(environment: environment) * sanitizerFactor(environment: environment)
+        return budget * factor
     }
 
     /// `debugCeiling`, further ×`loadedHeadroom` when this is a Debug build
@@ -193,7 +196,7 @@ public enum TimingBudget {
             // Instrumented code: judge against the budget × the sanitizer's
             // known slowdown; a miss within the busy band of THAT is a known
             // issue, beyond it a failure (a hang no instrumentation explains).
-            let scaled = budget * sanitizer
+            let scaled: Duration = budget * sanitizer
             let verdict: Verdict = measured < scaled ? .pass
                 : (measured <= scaled * busyMissLimit ? .knownIssue : .fail)
             return Judgement(label: label, budget: budget, measured: measured,
