@@ -73,6 +73,11 @@ struct ArchiveAngelWorkingCopyFloorTests {
         let model = MasterArchiveTestSupport.makeModel(sb)
         let root = model.archiveAngel.environment.bufferRoot
         let inside = root.appendingPathComponent("batch-2026-09-24T20-01-51/Tape.vs.archive.mov").path
+        // The buffer root is SHARED by every test in the process (overnight
+        // 2026-10-04): a planless batch left here makes the Delete Duplicates
+        // suites running in parallel (correctly) refuse to delete — 30+
+        // order-dependent failures in the full ASan battery. Remove it.
+        defer { try? FileManager.default.removeItem(at: root.appendingPathComponent("batch-2026-09-24T20-01-51")) }
         let outside = sb.sources.appendingPathComponent("Tape.mov").path
         for (path, star) in [(inside, 3), (outside, 3)] {
             try FileManager.default.createDirectory(at: URL(fileURLWithPath: path).deletingLastPathComponent(), withIntermediateDirectories: true)
