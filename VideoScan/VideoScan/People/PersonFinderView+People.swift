@@ -23,6 +23,7 @@
 
 import SwiftUI
 import AppKit
+import UniformTypeIdentifiers
 
 extension PersonFinderView {
 
@@ -724,9 +725,17 @@ extension PersonFinderView {
                     Circle()
                         .fill(Color.accentColor.opacity(isSelected ? 0.28 : 0.14))
                         .frame(width: personImageSize, height: personImageSize)
-                    Image(systemName: "person.3.fill")
-                        .font(.system(size: personImageSize * 0.3, weight: .medium))
-                        .foregroundStyle(.tint)
+                    if let url = FamilyGroupStore.photoURL(for: family),
+                       let photo = PortraitThumbnailCache.thumbnail(at: url, maxPixels: 512) {
+                        Image(nsImage: photo)
+                            .resizable().scaledToFill()
+                            .frame(width: personImageSize, height: personImageSize)
+                            .clipShape(Circle())
+                    } else {
+                        Image(systemName: "person.3.fill")
+                            .font(.system(size: personImageSize * 0.3, weight: .medium))
+                            .foregroundStyle(.tint)
+                    }
                 }
                 .overlay(Circle().stroke(Color.accentColor, lineWidth: isSelected ? 2.5 : 0))
                 Text(family.name)
@@ -741,9 +750,35 @@ extension PersonFinderView {
         .buttonStyle(.plain)
         .help("\(family.name) — the videos picked for this family")
         .contextMenu {
+            Button(family.photoFilename == nil ? "Choose Photo…" : "Change Photo…") { chooseFamilyPhoto(family) }
+            Divider()
             Button("Remove \(family.name)…") { confirmTrashFamily = family }
         }
         .accessibilityIdentifier("people.family.\(family.name)")
+    }
+}
+
+extension PersonFinderView {
+    /// Pick an image for a family's card (2026-10-04). A downsized copy is
+    /// stored with the family; the original is never touched.
+    func chooseFamilyPhoto(_ family: FamilyGroup) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.allowedContentTypes = [.image]
+        panel.message = "Choose a photo for \(family.name)"
+        panel.prompt = "Use Photo"
+        panel.begin { response in
+            guard response == .OK, let url = panel.url else { return }
+            do {
+                _ = try FamilyGroupStore.setPhoto(from: url, for: family.uuid)
+                families = FamilyGroupStore.listAll()
+                appLog.write("People: set photo for \(family.name) from \(url.lastPathComponent)")
+            } catch {
+                appLog.write("People: could not use \(url.lastPathComponent) as \(family.name)'s photo — \(error.localizedDescription)")
+            }
+        }
     }
 }
 

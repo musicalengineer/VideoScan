@@ -15,7 +15,10 @@
 //  Test hosts get the same temp redirect as POIStorage.
 //
 
+import AppKit
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 import VideoScanCore
 
 struct FamilyGroup: Codable, Identifiable, Equatable, Hashable, Sendable {
@@ -23,6 +26,8 @@ struct FamilyGroup: Codable, Identifiable, Equatable, Hashable, Sendable {
     var name: String
     var featuredVideos: [FeaturedVideo]
     var createdAt: Date
+    /// The card's photo, a file beside the family's JSON (nil = group icon).
+    var photoFilename: String?
 
     var id: UUID { uuid }
 
@@ -41,6 +46,7 @@ struct FamilyGroup: Codable, Identifiable, Equatable, Hashable, Sendable {
         name = try c.decode(String.self, forKey: .name)
         featuredVideos = (try? c.decodeIfPresent([FeaturedVideo].self, forKey: .featuredVideos)) ?? []
         createdAt = (try? c.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date(timeIntervalSince1970: 0)
+        photoFilename = try? c.decodeIfPresent(String.self, forKey: .photoFilename)
     }
 }
 
@@ -88,10 +94,45 @@ enum FamilyGroupStore {
         try enc.encode(group).write(to: url(for: group.uuid), options: .atomic)
     }
 
+    /// Where a family's card photo lives (nil when it has none).
+    static func photoURL(for group: FamilyGroup) -> URL? {
+        group.photoFilename.map { directory.appendingPathComponent($0) }
+    }
+
+    /// Copy `source` in as the family's card photo: decoded, downsized to
+    /// 1024 px on the long side, written as JPEG beside the family's JSON
+    /// (`<UUID>-photo.jpg`). The original file is never modified.
+    static func setPhoto(from source: URL, for uuid: UUID) throws -> FamilyGroup {
+        guard var group = load(uuid) else { throw CocoaError(.fileNoSuchFile) }
+        let opts: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true,
+                                     kCGImageSourceCreateThumbnailWithTransform: true,
+                                     kCGImageSourceThumbnailMaxPixelSize: 1024]
+        guard let src = CGImageSourceCreateWithURL(source as CFURL, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(src, 0, opts as CFDictionary) else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        let name = "\(uuid.uuidString)-photo.jpg"
+        let dest = directory.appendingPathComponent(name)
+        let tmp = directory.appendingPathComponent(".\(name).tmp")
+        guard let out = CGImageDestinationCreateWithURL(tmp as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else {
+            throw CocoaError(.fileWriteUnknown)
+        }
+        CGImageDestinationAddImage(out, image, [kCGImageDestinationLossyCompressionQuality: 0.88] as CFDictionary)
+        guard CGImageDestinationFinalize(out) else { throw CocoaError(.fileWriteUnknown) }
+        _ = try FileManager.default.replaceItemAt(dest, withItemAt: tmp)
+        group.photoFilename = name
+        try save(group)
+        return group
+    }
+
     /// Moves the family's file to the Trash (recoverable) — never a hard
     /// delete. The videos themselves are untouched; only the grouping goes.
     static func moveToTrash(_ uuid: UUID) throws {
         try ViewerWriteGuard.check("FamilyGroupStore.moveToTrash")
+        let photo = load(uuid).flatMap { photoURL(for: $0) }
         try FileManager.default.trashItem(at: url(for: uuid), resultingItemURL: nil)
+        if let photo, FileManager.default.fileExists(atPath: photo.path) {
+            try? FileManager.default.trashItem(at: photo, resultingItemURL: nil)
+        }
     }
 }

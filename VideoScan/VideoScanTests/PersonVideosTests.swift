@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import ImageIO
 import VideoScanCore
 @testable import VideoScan
 
@@ -215,5 +216,34 @@ struct FamilyGroupTests {
         let source = try SourceTree.appSource(named: "FamilyGroup.swift")
         #expect(!source.contains("POIProfile("), "a family is never written as a person profile")
         #expect(source.contains("appendingPathComponent(\"Families\""))
+    }
+}
+
+@Suite("People — family photo")
+@MainActor
+struct FamilyPhotoTests {
+    @Test func aPhotoIsCopiedInDownsizedAndRemembered() throws {
+        // A 2000×1500 synthetic PNG in the sandbox temp dir.
+        let ctx = try #require(CGContext(data: nil, width: 2000, height: 1500, bitsPerComponent: 8, bytesPerRow: 0,
+                                         space: CGColorSpaceCreateDeviceRGB(),
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.setFillColor(CGColor(red: 0.2, green: 0.5, blue: 0.8, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 2000, height: 1500))
+        let image = try #require(ctx.makeImage())
+        let src = FileManager.default.temporaryDirectory.appendingPathComponent("family-\(UUID().uuidString).png")
+        let dest = try #require(CGImageDestinationCreateWithURL(src as CFURL, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(dest, image, nil)
+        #expect(CGImageDestinationFinalize(dest))
+
+        let family = FamilyGroup(name: "Photo Family")
+        try FamilyGroupStore.save(family)
+        let updated = try FamilyGroupStore.setPhoto(from: src, for: family.uuid)
+        let url = try #require(FamilyGroupStore.photoURL(for: updated))
+        #expect(FileManager.default.fileExists(atPath: url.path))
+        #expect(FamilyGroupStore.load(family.uuid)?.photoFilename == updated.photoFilename, "remembered on disk")
+        let props = CGImageSourceCopyPropertiesAtIndex(try #require(CGImageSourceCreateWithURL(url as CFURL, nil)), 0, nil)
+            as? [CFString: Any]
+        #expect((props?[kCGImagePropertyPixelWidth] as? Int) == 1024, "downsized to 1024 on the long side")
+        #expect(FileManager.default.fileExists(atPath: src.path), "the original is untouched")
     }
 }
