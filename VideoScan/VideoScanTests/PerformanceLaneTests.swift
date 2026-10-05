@@ -12,6 +12,7 @@
 import Foundation
 import MachO
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 @Suite("PerformanceLane — coverage detection")
@@ -124,12 +125,15 @@ struct PerformanceLaneHostedRunnerTests {
     /// GITHUB_ACTIONS=true) must be held to the unscaled budget.
     @Test("sensor: this process's ceiling matches its environment")
     func liveCeilingMatchesEnvironment() {
-        let onGitHub = ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
+        let env = ProcessInfo.processInfo.environment
+        let onGitHub = env["GITHUB_ACTIONS"] == "true"
+        // × the sanitizer factor under a sanitizer run (2026-10-05), else 1.
+        let k = (onGitHub ? 3 : 1) * TimingBudget.sanitizerFactor(environment: env)
         let ceiling = PerformanceLane.debugCeiling(.seconds(2))
-        #expect(ceiling == (onGitHub ? .seconds(6) : .seconds(2)), "GITHUB_ACTIONS=\(onGitHub) ceiling \(ceiling)")
+        #expect(ceiling == .seconds(2) * k, "GITHUB_ACTIONS=\(onGitHub) ceiling \(ceiling)")
         // The Double forms use the same multiplier.
-        #expect(PerformanceLane.debugCeiling(seconds: 2.0) == (onGitHub ? 6.0 : 2.0))
-        #expect(PerformanceLane.debugCeiling(milliseconds: 1_500) == (onGitHub ? 4_500 : 1_500))
+        #expect(PerformanceLane.debugCeiling(seconds: 2.0) == 2.0 * Double(k))
+        #expect(PerformanceLane.debugCeiling(milliseconds: 1_500) == 1_500 * Double(k))
     }
 }
 

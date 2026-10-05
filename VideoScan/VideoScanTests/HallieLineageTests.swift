@@ -606,7 +606,7 @@ struct HallieLineageAnswerTests {
         let trail = g.originTrail(of: g.people["@I1@"]!, country: "Ireland")
         #expect(gens.count == 12)
         #expect(trail.isEmpty)
-        #expect(Date().timeIntervalSince(t0) < 0.5)
+        #expect(Date().timeIntervalSince(t0) < PerformanceLane.debugCeiling(seconds: 0.5))
     }
 
     // MARK: Get Family Tree (2026-08-25)

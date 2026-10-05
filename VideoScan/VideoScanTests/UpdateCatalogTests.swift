@@ -612,7 +612,7 @@ struct UpdateCatalogScaleTests {
         let commitSecs = Date().timeIntervalSince(t2)
         #expect(outcome.moved == n && outcome.pruned == 0 && !outcome.tripwireFired)
         #expect(model.records.count == n)
-        #expect(previewSecs < 30 && commitSecs < 30,
+        #expect(previewSecs < PerformanceLane.debugCeiling(seconds: 30) && commitSecs < PerformanceLane.debugCeiling(seconds: 30),
                 "100k relink: preview \(previewSecs)s, commit \(commitSecs)s (budget 30 s each)")
     }
 

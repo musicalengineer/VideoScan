@@ -105,7 +105,7 @@ struct CatalogDistributionOffMainTests {
         #expect(kept == reference)
         #expect(kept.count == 66_666)
         #expect(newMain < .milliseconds(5), "prefix read took \(newMain)")
-        #expect(offMain < .milliseconds(150), "off-main filter took \(offMain)")
+        #expect(offMain < PerformanceLane.debugCeiling(.milliseconds(150)), "off-main filter took \(offMain)")
     }
 
     @Test func recomputeNoLongerFiltersPerRecordAgainstTheTargets() throws {
