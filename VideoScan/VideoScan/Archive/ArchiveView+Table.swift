@@ -303,6 +303,25 @@ extension ArchiveView {
         // gates on "is there anything promotable at all".
         let promotable = recs.filter { model.pfNotYetArchived($0) }
 
+        // Rick 2026-10-05: for an archived file, the follow-ups belong here
+        // too (not only under the Catalog's Archive Angel menu). ONE submenu,
+        // so the card menu gains a single top-level element.
+        if count == 1, let rec = recs.first, !model.pfNotYetArchived(rec) {
+            Menu("Make a Copy / People tab") {
+                Button("Make an Access Copy (HEVC, for everyday viewing)…") {
+                    transcodeRequest = TranscodeRequest(record: rec, initialPreset: .archival)
+                }
+                .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                Button("Make an Editing Copy (ProRes)…") {
+                    transcodeRequest = TranscodeRequest(record: rec, initialPreset: .editingLT)
+                }
+                .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
+                Divider()
+                ShowInPeopleTabMenu(records: [rec])
+            }
+            Divider()
+        }
+
         Button {
             model.requestPromote(recordIDs: promotable.map(\.id))
         } label: {

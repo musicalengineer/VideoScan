@@ -28,6 +28,8 @@ struct ArchiveView: View {
     /// "Show this file's journey" from the Archive tab (Rick 2026-08-19)
     /// — same FileJourneySheet the catalog uses.
     @State var fileJourneyPayload: FileJourney?
+    /// Make an Access / Editing Copy of an archived file from here (2026-10-05).
+    @State var transcodeRequest: TranscodeRequest?
     /// Retired volumes are noise in the archive sidebar by default — same
     /// convention as the Volumes window's "show retired" (Rick 2026-08-16).
     @AppStorage("archive.sidebar.showRetired") private var showRetiredVolumes = false
@@ -113,6 +115,9 @@ struct ArchiveView: View {
         // first resolution (with its search) is what stays on screen.
         .onChange(of: model.pendingArchiveSelection) { _, newValue in
             applyEntry(.pendingSelectionChanged(newValue))
+        }
+        .sheet(item: $transcodeRequest) { request in
+            TranscodeSheet(request: request)
         }
         .sheet(item: $fileJourneyPayload) { payload in
             FileJourneySheet(journey: payload)
