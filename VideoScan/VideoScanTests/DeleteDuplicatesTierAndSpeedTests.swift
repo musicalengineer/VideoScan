@@ -216,7 +216,10 @@ struct DeletionTierRuleTests {
                                  "archive copy on Pegasus not verified now (no stamp-bound fixity — run Verify Archive Copies)",
                                  "sibling stale.mov on SanDisk changed since it was verified", "sibling nofixity.mov on M4drive not verified yet"])
         #expect(f.countsArchiveCopy && f.distinctDriveCount == 1, "one temp folder is one drive; the archive copy is among the counted")
-        #expect(f.summary == "3 verified remain: keeper on LaCieWorkspace, archive copy on FamilyArchive, sibling copy.mov on SanDisk — on 1 drive; archive copy on Projects holds different bytes, archive copy on MyBook offline, archive copy on Pegasus not verified now (no stamp-bound fixity — run Verify Archive Copies), sibling stale.mov on SanDisk changed since it was verified, sibling nofixity.mov on M4drive not verified yet")
+        // " — on 1 drive" only where drive identity is readable (not on
+        // GitHub's macOS VM, CI 2026-10-05); the decision below is the same.
+        let onDrives = f.countedDrives.isEmpty ? "" : " — on 1 drive"
+        #expect(f.summary == "3 verified remain: keeper on LaCieWorkspace, archive copy on FamilyArchive, sibling copy.mov on SanDisk\(onDrives); archive copy on Projects holds different bytes, archive copy on MyBook offline, archive copy on Pegasus not verified now (no stamp-bound fixity — run Verify Archive Copies), sibling stale.mov on SanDisk changed since it was verified, sibling nofixity.mov on M4drive not verified yet")
         let d = DeletionTierDecision.decide(facts: f, preferTrash: false)
         #expect(d.tier == .permanent && d.reason == "space back now (\(f.summary))")
 

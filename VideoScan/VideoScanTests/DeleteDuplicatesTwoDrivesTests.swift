@@ -200,9 +200,16 @@ struct DeleteDuplicatesTwoDrivesTests {
         ]
         let real = DeletionTierFacts.gather(candidates, digest: rig.digest)
         #expect(real.remainingVerifiedCopies == 3, "keeper + sibling 0 + sibling 1; the hard link and the offline one are not counted: \(real.summary)")
-        #expect(real.distinctDriveCount == 1 && real.countedDrives.count == 1,
-                "one volume, however it is spelled, is one drive: \(real.countedDrives)")
-        #expect(real.summary.contains(" — on 1 drive"))
+        #expect(real.distinctDriveCount == 1, "one volume, however it is spelled, is one drive")
+        if real.countedDrives.isEmpty {
+            // Drive identity unreadable on this host (GitHub's macOS VM, CI
+            // 2026-10-05): no drive is claimed and none named in the summary —
+            // and the decision below must still be the conservative one.
+            #expect(!real.summary.contains(" — on "), "no drive claimed when identity is unreadable: \(real.summary)")
+        } else {
+            #expect(real.countedDrives.count == 1, "one volume is one drive: \(real.countedDrives)")
+            #expect(real.summary.contains(" — on 1 drive"))
+        }
         #expect(DeletionTierDecision.decide(facts: real, preferTrash: false).tier == .trash)
 
         // Two drives, through the seam: sibling 0 "is on" another drive.
