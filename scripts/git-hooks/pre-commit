@@ -3,6 +3,14 @@
 #   1. Reject files larger than 75 MB (under GitHub's 100 MB hard limit).
 #   2. Run SwiftLint on staged .swift files — warn only, does NOT block commit.
 #      To escalate to blocking on violations, set SWIFTLINT_STRICT=1 in env.
+#      (Its complexity/length ERROR thresholds never blocked anything because
+#      of the `|| true` below — GH #281. Step 4 is what blocks them now.)
+#   3. @EnvironmentObject usage linter (blocking).
+#   4. Complexity gate on staged .swift/.py (blocking): a function over
+#      CCN 30 / 300 lines that is new or worse than the committed baseline,
+#      or a new swiftlint:disable of a size/complexity rule.
+#      Escape hatch, recorded and reported nightly:
+#        COMPLEXITY_OVERRIDE="reason" git commit ...
 #
 # To commit without running any of this: git commit --no-verify
 
@@ -67,6 +75,23 @@ if command -v python3 >/dev/null 2>&1 \
         echo "@EnvironmentObject usage check failed. See project_bug_prevention_strategy memory."
         echo "Either drop the unused declaration or annotate it intentional."
         echo "To commit anyway: git commit --no-verify"
+        exit 1
+    }
+fi
+
+# --- Complexity gate on staged files (blocking, GH #281) ---
+# Needs lizard: prefer the repo's venv (shared by every worktree of this
+# clone), then whatever python3 is on PATH. Fails closed with an install hint
+# if neither has lizard — a gate that silently skips is how #281 happened.
+if [ -f "$PWD/scripts/complexity_gate.py" ]; then
+    common_dir=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)
+    gate_py=python3
+    if [ -n "$common_dir" ] && [ -x "$(dirname "$common_dir")/venv/bin/python3" ]; then
+        gate_py="$(dirname "$common_dir")/venv/bin/python3"
+    fi
+    "$gate_py" scripts/complexity_gate.py --staged || {
+        echo ""
+        echo "Commit blocked by the complexity gate (scripts/complexity_gate.py)."
         exit 1
     }
 fi

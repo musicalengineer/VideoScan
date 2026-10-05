@@ -63,14 +63,27 @@ if [ -d "TestResults.xcresult" ]; then
                     }
                 }
             }
+            # No measured lines means NO coverage data, not 0 %. ci.yml runs
+            # tests with -enableCodeCoverage NO (deliberately, 2026-09-26), so
+            # xccov reports no files and this used to publish
+            # coverage_logic_pct 0 / logic_lines 0 on every push.
             END {
                 if (tot > 0) printf "%d %d %.2f", cov, tot, (cov/tot)*100
-                else         printf "0 0 0"
+                else         printf "null null null"
             }')
     LOGIC_COVERED=$(echo "$LOGIC_NUMS" | awk '{print $1}')
     LOGIC_LINES=$(echo "$LOGIC_NUMS"   | awk '{print $2}')
     COV_LOGIC=$(echo "$LOGIC_NUMS"     | awk '{print $3}')
+    LOGIC_COVERED="${LOGIC_COVERED:-null}"
+    LOGIC_LINES="${LOGIC_LINES:-null}"
+    COV_LOGIC="${COV_LOGIC:-null}"
 fi
+
+# ---------- SwiftLint / Periphery: null on every push, by design ----------
+# ci.yml stopped running them on 2026-06-02 (5d2e9c23, "relocate lint/analysis
+# to nightly") and no longer sets SWIFTLINT_OUTPUT / PERIPHERY_OUTPUT. The
+# nightly counts live in metrics/static_analysis.jsonl (swiftlint_strict,
+# periphery_aggressive). The fields stay here, null, for trend continuity.
 
 # ---------- SwiftLint ----------
 SWIFTLINT_WARN="null"

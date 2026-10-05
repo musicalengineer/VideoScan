@@ -86,6 +86,11 @@ SEVERITIES = ("P0", "P1", "P2", "P3")
 TEST_STATUS = ("ok", "failed", "skipped", "unknown")
 RUN_STATUS = ("findings", "failed", "disabled", "nothing", "none", "other")
 
+_CX_BUCKET = {"files": "int", "functions": "int", "ccn_over_15": "int", "ccn_over_30": "int",
+              "nloc_over_80": "int", "offenders": "int", "files_over_800": "int", "mean_ccn": "num?"}
+TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
+SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+
 _COV_NUMS = {"lines": "int", "covered": "int", "pct": "num?",
              "logic_lines": "int", "logic_covered": "int", "logic_pct": "num?", "files": "int"}
 
@@ -127,7 +132,30 @@ SCHEMAS: Dict[str, dict] = {
         "findings": "int",
         "closed_passes": "int",
     },
+    # Complexity trend BACKFILL rows (scripts/complexity_backfill.py). Counts
+    # and folder names only: no top-15, no file paths, no function names.
+    # The nightly's own rows on this stream come from GitHub CI, are kept
+    # verbatim and never re-validated here (APPEND_ONLY below).
+    "complexity.jsonl": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "sha": "sha",
+        "run_kind": ("enum", ("backfill",)),
+        "backfill": "true",
+        "lizard_version": ("opt", ("enum", ("1.22.1",))),
+        "thresholds": ("obj", {"ccn": "int", "nloc": "int", "file_lines": "int"}),
+        "totals": ("obj", {"swift": ("obj", _CX_BUCKET), "python": ("obj", _CX_BUCKET),
+                           "all": ("obj", _CX_BUCKET)}),
+        "swift_by_folder": ("opt", ("map", ("either", "folder", ("enum", ("swift_cli",))), ("obj", _CX_BUCKET))),
+        "python_by_folder": ("opt", ("map", ("enum", ("scripts", "tools")), ("obj", _CX_BUCKET))),
+        "folders_mapped_pct": "num?",
+    },
 }
+
+# Streams whose existing rows were published by someone else (GitHub CI):
+# fresh rows are validated and appended (deduplicated by ts + sha); rows
+# already on the branch are kept exactly as they are.
+APPEND_ONLY = {"complexity.jsonl"}
 
 
 def source_folders() -> set:
@@ -139,60 +167,108 @@ def source_folders() -> set:
     return names
 
 
-def _check(spec, value, where: str, folders: Optional[set]) -> None:
-    def bad(why: str) -> PrivacyError:
-        return PrivacyError(f"{where}: {why} (value type {type(value).__name__})")
+def _is_int(v) -> bool:
+    return not isinstance(v, bool) and isinstance(v, int) and v >= 0
 
-    if isinstance(spec, str) and spec.endswith("?"):
-        if value is None:
+
+def _is_num(v) -> bool:
+    return not isinstance(v, bool) and isinstance(v, (int, float)) and math.isfinite(v)
+
+
+def _matches(regex):
+    return lambda v: isinstance(v, str) and bool(regex.match(v))
+
+
+# Scalar specs: name -> (test, what the value should have been).
+_SCALARS = {
+    "int": (_is_int, "expected a non-negative integer"),
+    "num": (_is_num, "expected a finite number"),
+    "true": (lambda v: v is True, "expected true"),
+    "ts": (_matches(TS_RE), "expected a YYYY-MM-DDTHH:MM:SSZ timestamp"),
+    "sha": (_matches(SHA_RE), "expected a hex commit SHA"),
+    "date": (_matches(DATE_RE), "expected a YYYY-MM-DD date"),
+}
+
+
+def _bad(where: str, value, why: str) -> PrivacyError:
+    return PrivacyError(f"{where}: {why} (value type {type(value).__name__})")
+
+
+def _check_folder(value, where: str, folders: Optional[set]) -> None:
+    if not isinstance(value, str) or not FOLDER_RE.match(value):
+        raise _bad(where, value, "expected a plain source-folder name")
+    if folders is not None and value not in folders:
+        raise _bad(where, value, "not a source folder of this repo")
+
+
+def _check_obj(spec, value, where, folders) -> None:
+    if not isinstance(value, dict):
+        raise _bad(where, value, "expected an object")
+    if set(value) != set(spec[1]):
+        raise PrivacyError(f"{where}: keys {sorted(value)} != allowlist {sorted(spec[1])}")
+    for key, sub in spec[1].items():
+        _check(sub, value[key], f"{where}.{key}", folders)
+
+
+def _check_either(spec, value, where, folders) -> None:
+    try:
+        _check(spec[1], value, where, folders)
+    except PrivacyError:
+        _check(spec[2], value, where, folders)
+
+
+def _check_map(spec, value, where, folders) -> None:
+    if not isinstance(value, dict):
+        raise _bad(where, value, "expected an object")
+    for key, item in value.items():
+        _check(spec[1], key, f"{where}<key>", folders)
+        _check(spec[2], item, f"{where}.{key}", folders)
+
+
+def _check_list(spec, value, where, folders) -> None:
+    if not isinstance(value, list):
+        raise _bad(where, value, "expected a list")
+    for i, item in enumerate(value):
+        _check(spec[1], item, f"{where}[{i}]", folders)
+
+
+def _check_sev(spec, value, where, folders) -> None:
+    if not isinstance(value, dict) or set(value) != set(SEVERITIES):
+        raise _bad(where, value, "expected exactly the P0..P3 severity keys")
+    for key in SEVERITIES:
+        _check(spec[1], value[key], f"{where}.{key}", folders)
+
+
+def _check_enum(spec, value, where, folders) -> None:
+    if value not in spec[1]:
+        raise _bad(where, value, "not an allowed enum value")
+
+
+def _check_opt(spec, value, where, folders) -> None:
+    if value is not None:
+        _check(spec[1], value, where, folders)
+
+
+_COMPOSITES = {"enum": _check_enum, "opt": _check_opt, "obj": _check_obj, "either": _check_either,
+               "map": _check_map, "list": _check_list, "sev": _check_sev}
+
+
+def _check(spec, value, where: str, folders: Optional[set]) -> None:
+    if isinstance(spec, str):
+        if spec.endswith("?"):
+            if value is None:
+                return
+            spec = spec[:-1]
+        if spec == "folder":
+            _check_folder(value, where, folders)
             return
-        spec = spec[:-1]
-    if spec == "int":
-        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-            raise bad("expected a non-negative integer")
-        return
-    if spec == "num":
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
-            raise bad("expected a finite number")
-        return
-    if spec == "date":
-        if not isinstance(value, str) or not DATE_RE.match(value):
-            raise bad("expected a YYYY-MM-DD date")
-        return
-    if spec == "folder":
-        if not isinstance(value, str) or not FOLDER_RE.match(value):
-            raise bad("expected a plain source-folder name")
-        if folders is not None and value not in folders:
-            raise bad("not a source folder of this repo")
-        return
-    kind = spec[0]
-    if kind == "enum":
-        if value not in spec[1]:
-            raise bad("not an allowed enum value")
-        return
-    if kind == "opt":
-        if value is not None:
-            _check(spec[1], value, where, folders)
-        return
-    if kind == "obj":
-        if not isinstance(value, dict):
-            raise bad("expected an object")
-        if set(value) != set(spec[1]):
-            raise PrivacyError(f"{where}: keys {sorted(value)} != allowlist {sorted(spec[1])}")
-        for key, sub in spec[1].items():
-            _check(sub, value[key], f"{where}.{key}", folders)
-        return
-    if kind == "list":
-        if not isinstance(value, list):
-            raise bad("expected a list")
-        for i, item in enumerate(value):
-            _check(spec[1], item, f"{where}[{i}]", folders)
-        return
-    if kind == "sev":
-        if not isinstance(value, dict) or set(value) != set(SEVERITIES):
-            raise bad("expected exactly the P0..P3 severity keys")
-        for key in SEVERITIES:
-            _check(spec[1], value[key], f"{where}.{key}", folders)
+        if spec in _SCALARS:
+            test, why = _SCALARS[spec]
+            if not test(value):
+                raise _bad(where, value, why)
+            return
+    elif isinstance(spec, tuple) and spec and spec[0] in _COMPOSITES:
+        _COMPOSITES[spec[0]](spec, value, where, folders)
         return
     raise PrivacyError(f"{where}: unknown schema spec {spec!r}")
 
@@ -447,6 +523,14 @@ def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Option
         if rows is None:
             continue
         existing = _read_jsonl(existing_dir / name) if existing_dir is not None else []
+        if name in APPEND_ONLY:
+            for row in rows:
+                validate(name, row, folders)
+            seen = {(r.get("ts"), r.get("sha")) for r in existing}
+            merged = existing + [r for r in rows if (r["ts"], r["sha"]) not in seen]
+            merged.sort(key=lambda r: str(r.get("ts", "")))
+            out[name] = render(merged)
+            continue
         merged = merge_rows(existing, rows)
         for row in merged:
             validate(name, row, folders)

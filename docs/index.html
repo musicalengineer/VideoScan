@@ -180,6 +180,19 @@
 </div>
 <div class="section-error hidden" id="size-error"></div>
 
+<!-- 8b ============ COMPLEXITY & TECH DEBT ============ -->
+<h3 class="section">Complexity &amp; tech debt &mdash; GitHub nightly</h3>
+<p class="section-note">lizard over Swift and Python production code. An offender is a function with cyclomatic complexity (CCN) over 15 or more than 80 lines of code. The nightly ratchet reports new offenders and known ones that got worse; the pre-commit hook and CI block anything new or worse over CCN 30 or 300 lines.</p>
+<div class="cards" id="cx-cards"></div>
+<div class="charts">
+  <div class="chart-box"><h2>Offenders per night</h2><canvas id="c-cx-debt"></canvas><div class="chart-note hidden" id="c-cx-debt-note"></div></div>
+  <div class="chart-box"><h2>Mean CCN, all code and by folder (largest folders)</h2><canvas id="c-cx-folders"></canvas><div class="chart-note hidden" id="c-cx-folders-note"></div></div>
+</div>
+<div class="chart-box" style="margin-top:12px"><h2 id="cx-top-title">Top 15 most complex functions</h2><div class="table-wrap" id="cx-top"></div></div>
+<div class="chart-box" style="margin-top:12px"><h2 id="cx-new-title">New and worse offenders, latest night</h2><div class="table-wrap" id="cx-new"></div></div>
+<div class="chart-box" style="margin-top:12px"><h2 id="cx-ovr-title">Gate overrides, last 48 hours</h2><div class="table-wrap" id="cx-ovr"></div></div>
+<div class="section-error hidden" id="cx-error"></div>
+
 <!-- 9 ============ BENCHMARKS (occasional runs) ============ -->
 <h3 class="section">Benchmarks &mdash; occasional runs</h3>
 <p class="section-note">Not nightly: these publish only when someone runs them, so their dates matter.</p>
@@ -774,6 +787,116 @@ function renderSize(d) {
   ], withAxes({ y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false } } }));
 }
 
+// ---------------------------------------------------------------- 8b. complexity
+const CX_COLORS = ["#58a6ff", "#bc8cff", "#3fb950", "#d29922", "#db6d28", "#f85149", "#8b949e", "#a40e26"];
+function renderComplexity(d) {
+  const rows = d.cxRows;
+  const cards = document.getElementById("cx-cards");
+  const top = document.getElementById("cx-top");
+  const fresh = document.getElementById("cx-new");
+  if (!rows.length) {
+    noDataCard(cards, "No complexity rows published yet",
+      "Published by the GitHub nightly analysis (complexity job) to metrics/complexity.jsonl.");
+    note("c-cx-debt", NO_DATA); note("c-cx-folders", NO_DATA);
+    top.textContent = NO_DATA; fresh.textContent = NO_DATA;
+    return;
+  }
+  const last = rows[rows.length - 1];
+  const prev = rows.length > 1 ? rows[rows.length - 2] : null;
+  // Backfilled history rows (scripts/complexity_backfill.py) carry totals and
+  // folders only; the top 15 and the ratchet come from the newest nightly row.
+  const nightlyRows = rows.filter(r => !r.backfill);
+  const lastNightly = nightlyRows.length ? nightlyRows[nightlyRows.length - 1] : {};
+  const t = r => (r && r.totals) || {};
+  const all = t(last).all || {}, pAll = t(prev).all || {};
+  const sw = t(last).swift || {}, pSw = t(prev).swift || {};
+  const py = t(last).python || {}, pPy = t(prev).python || {};
+  const num = v => isNum(v) ? v : null;
+  cards.appendChild(card("Offenders", num(all.offenders), pAll.offenders, all.offenders, true, "var(--bad)"));
+  cards.appendChild(card("CCN > 15", num(all.ccn_over_15), pAll.ccn_over_15, all.ccn_over_15, true, "var(--bad)"));
+  cards.appendChild(card("CCN > 30 (gate line)", num(all.ccn_over_30), pAll.ccn_over_30, all.ccn_over_30, true, "var(--bad)"));
+  cards.appendChild(card("Over 80 lines", num(all.nloc_over_80), pAll.nloc_over_80, all.nloc_over_80, true, "var(--warn)"));
+  cards.appendChild(card("Files over 800 lines", num(all.files_over_800), pAll.files_over_800, all.files_over_800, true, "var(--warn)"));
+  cards.appendChild(card("Mean CCN, Swift", num(sw.mean_ccn), pSw.mean_ccn, sw.mean_ccn, true, "var(--accent)"));
+  cards.appendChild(card("Mean CCN, Python", num(py.mean_ccn), pPy.mean_ccn, py.mean_ccn, true, "var(--purple)"));
+  cards.appendChild(card("New offenders (last night)", num(lastNightly.debt_new), null, null, true, "var(--bad)"));
+  cards.appendChild(card("Got worse (last night)", num(lastNightly.debt_worse), null, null, true, "var(--warn)"));
+  cards.appendChild(card("Fixed (last night)", num(lastNightly.debt_fixed), null, null, false, "var(--good)"));
+  cards.appendChild(card("Duplicate code", isNum(lastNightly.duplicate_rate_pct) ? `${lastNightly.duplicate_rate_pct}%` : null,
+    null, null, true, "var(--muted)"));
+  cards.appendChild(card("Gate overrides (48 h)", num(lastNightly.gate_overrides_recent), null, null, true, "var(--warn)"));
+  cards.appendChild(card("Measured", fmtWhen(last.ts), null, null, false, "var(--muted)"));
+
+  const daily = lastPerDay(rows);
+  const labels = dateLabels(daily);
+  const tot = (r, k) => r.totals && r.totals.all && isNum(r.totals.all[k]) ? r.totals.all[k] : null;
+  chartOrNote("c-cx-debt", "line", labels, [
+    { label: "offenders", data: daily.map(r => tot(r, "offenders")), yAxisID: "y", ...lineStyle("#f85149") },
+    { label: "CCN > 15", data: daily.map(r => tot(r, "ccn_over_15")), yAxisID: "y", ...lineStyle("#db6d28") },
+    { label: "CCN > 30", data: daily.map(r => tot(r, "ccn_over_30")), yAxisID: "y", ...lineStyle("#a40e26") },
+    { label: "over 80 lines", data: daily.map(r => tot(r, "nloc_over_80")), yAxisID: "y", ...lineStyle("#d29922") },
+    { label: "new + worse", data: daily.map(r => isNum(r.debt_new) || isNum(r.debt_worse) ? (r.debt_new || 0) + (r.debt_worse || 0) : null),
+      yAxisID: "y1", ...lineStyle("#bc8cff") },
+  ], withAxes({ y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: "new + worse" } } }));
+
+  // Folder keys are the same as swift_by_folder in history.jsonl; Python
+  // folders (scripts, tools) are prefixed so they read as Python.
+  const folderMap = r => {
+    const out = {};
+    for (const [k, v] of Object.entries(r.swift_by_folder || {})) out[k] = v;
+    for (const [k, v] of Object.entries(r.python_by_folder || {})) out[`${k} (py)`] = v;
+    return out;
+  };
+  const latestFolders = folderMap(last);
+  const names = Object.keys(latestFolders)
+    .sort((a, b) => (latestFolders[b].functions || 0) - (latestFolders[a].functions || 0)).slice(0, CX_COLORS.length);
+  chartOrNote("c-cx-folders", "line", labels, [
+    { label: "all code", data: daily.map(r => tot(r, "mean_ccn")), borderWidth: 4, ...lineStyle("#8b949e") },
+    ...names.map((n, i) => ({
+      label: n, data: daily.map(r => { const f = folderMap(r)[n]; return f && isNum(f.mean_ccn) ? f.mean_ccn : null; }),
+      ...lineStyle(CX_COLORS[i]),
+    }))], withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false } }));
+
+  const list = Array.isArray(lastNightly.top15) ? lastNightly.top15 : [];
+  document.getElementById("cx-top-title").textContent = `Top ${list.length || 15} most complex functions${lastNightly.ts ? " · " + fmtWhen(lastNightly.ts).split(" · ")[0] : ""}`;
+  const base = p => String(p || "").split("/").pop();
+  const fnTable = (items, withBase) => {
+    let html = `<table><thead><tr><th>Function</th><th>File</th><th>CCN</th><th>Lines</th>${withBase ? "<th>Was (CCN / lines)</th>" : ""}</tr></thead><tbody>`;
+    for (const f of items) {
+      html += `<tr><td>${esc(f.function)}</td><td title="${esc(f.file)}">${esc(base(f.file))}</td>` +
+        `<td>${isNum(f.ccn) ? f.ccn : "—"}</td><td>${isNum(f.nloc) ? f.nloc : "—"}</td>` +
+        (withBase ? `<td>${isNum(f.base_ccn) ? `${f.base_ccn} / ${f.base_nloc}` : "new"}</td>` : "") + "</tr>";
+    }
+    return html + "</tbody></table>";
+  };
+  top.innerHTML = list.length ? fnTable(list, false) : NO_DATA;
+
+  const debt = d.cxDebt;
+  // Overrides of the blocking gate (Rick's alone). Function, size, commit and
+  // author only: the free-text reason stays in the morning digest.
+  const ovrBox = document.getElementById("cx-ovr");
+  const ovr = debt && Array.isArray(debt.overrides_recent) ? debt.overrides_recent : null;
+  if (!ovr) ovrBox.textContent = NO_DATA;
+  else if (!ovr.length) ovrBox.textContent = "None: nothing was let past the gate.";
+  else {
+    let html = "<table><thead><tr><th>When</th><th>Function</th><th>CCN</th><th>Lines</th><th>Commit</th><th>Author</th></tr></thead><tbody>";
+    for (const o of ovr) {
+      const fns = Array.isArray(o.function_details) && o.function_details.length ? o.function_details : [{ function: "(swiftlint disable)" }];
+      for (const f of fns) {
+        html += `<tr><td>${esc(String(o.ts || "").slice(0, 16))}</td><td>${esc(f.function)}</td>` +
+          `<td>${isNum(f.ccn) ? f.ccn : "—"}</td><td>${isNum(f.nloc) ? f.nloc : "—"}</td>` +
+          `<td>${esc(o.commit || "—")}</td><td>${esc(o.author || "—")}</td></tr>`;
+      }
+    }
+    ovrBox.innerHTML = html + "</tbody></table>";
+  }
+  if (!debt || !Array.isArray(debt.new)) { fresh.textContent = NO_DATA; return; }
+  const items = [...debt.new, ...(Array.isArray(debt.worse) ? debt.worse : [])];
+  document.getElementById("cx-new-title").textContent =
+    `New and worse offenders · ${fmtWhen(debt.ts).split(" · ")[0]} · ${debt.new.length} new, ${(debt.worse || []).length} worse, ${(debt.fixed || []).length} fixed`;
+  fresh.innerHTML = items.length ? fnTable(items.slice(0, 50), true) : "None: no new offender, and none of the known ones got worse.";
+}
+
 // ---------------------------------------------------------------- 9. benchmarks
 async function renderBenchmarks(allTdRows) {
   // Gauntlet rows share transport, never nightly averages or freshness.
@@ -905,7 +1028,7 @@ async function loadData() {
   } catch {}
 
   METRICS_SHA = await resolveMetricsSha();
-  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, ciRun, naRun] = await Promise.all([
+  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, ciRun, naRun] = await Promise.all([
     fetchText(rawUrl("history.jsonl"), local("history.jsonl")),
     fetchText(rawUrl("static_analysis.jsonl"), local("static_analysis.jsonl")),
     fetchText(rawUrl("testdriver.jsonl"), local("testdriver.jsonl")),
@@ -913,6 +1036,8 @@ async function loadData() {
     fetchText(rawUrl("coverage.jsonl"), local("coverage.jsonl")),
     fetchText(rawUrl("adversarial.jsonl"), local("adversarial.jsonl")),
     fetchText(rawUrl("codex_reviews.jsonl"), local("codex_reviews.jsonl")),
+    fetchText(rawUrl("complexity.jsonl"), local("complexity.jsonl")),
+    fetchText(rawUrl("complexity_debt_latest.json"), local("complexity_debt_latest.json")),
     latestMainRun("ci.yml"),
     latestMainRun("nightly-analysis.yml"),
   ]);
@@ -921,6 +1046,8 @@ async function loadData() {
   const tdRows = allTdRows.filter(isTestRunRow);
   let findings = null;
   try { findings = findingsText ? JSON.parse(findingsText) : null; } catch { findings = null; }
+  let cxDebt = null;
+  try { cxDebt = cxDebtText ? JSON.parse(cxDebtText) : null; } catch { cxDebt = null; }
   const d = {
     history: sortByTs(parseJsonl(historyText)),
     staticRows: sortByTs(parseJsonl(staticText)),
@@ -929,6 +1056,8 @@ async function loadData() {
     covRows: sortByTs(parseJsonl(covText).filter(r => r.schemaVersion === 1 && r.total && Array.isArray(r.folders))),
     advRows: sortByTs(parseJsonl(advText).filter(r => r.schemaVersion === 1 && r.date)),
     codexRows: sortByTs(parseJsonl(codexText).filter(r => r.schemaVersion === 1 && r.date)),
+    cxRows: sortByTs(parseJsonl(cxText).filter(r => r.ts && r.totals && r.totals.all)),
+    cxDebt,
     ciRun, naRun,
   };
 
@@ -941,6 +1070,7 @@ async function loadData() {
     ["codex", () => renderCodex(d)],
     ["hallie", () => renderHallie(d)],
     ["size", () => renderSize(d)],
+    ["cx", () => renderComplexity(d)],
     ["bench", () => renderBenchmarks(allTdRows)],
   ];
   for (const [id, render] of sections) {
