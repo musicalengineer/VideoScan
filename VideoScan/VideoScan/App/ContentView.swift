@@ -70,7 +70,7 @@ struct ContentView: View {
                     ArchivistTabButton(fontSize: tabFontSize) {
                         openWindow(id: "archivist")
                     }
-                    .glassEffect(.regular.tint(Color.pink.opacity(0.12)).interactive(), in: .capsule)
+                    .vsGlassCapsule(tint: Color.pink.opacity(0.12), interactive: true)
                 }
                 Spacer()
             }

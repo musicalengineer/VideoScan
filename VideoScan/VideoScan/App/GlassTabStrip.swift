@@ -45,7 +45,7 @@ struct GlassTabStrip<Badge: View>: View {
         // invisible copies of the labels (for size) and the real, clickable
         // labels sit on top, outside the container.
         ZStack {
-            GlassEffectContainer(spacing: isLarge ? 14 : 10) {
+            VSGlassContainer(spacing: isLarge ? 14 : 10) {
                 HStack(spacing: 4) {
                     ForEach(items, id: \.tag) { item in
                         glassSlot(item)
@@ -109,12 +109,12 @@ struct GlassTabStrip<Badge: View>: View {
             .background {
                 if isSelected {
                     Color.clear
-                        .glassEffect(.regular.tint(Color.accentColor.opacity(0.22)), in: .capsule)
-                        .glassEffectID("selection", in: glassNS)
+                        .vsGlassCapsule(tint: Color.accentColor.opacity(0.22))
+                        .vsGlassID("selection", in: glassNS)
                 } else if isHovered {
                     Color.clear
-                        .glassEffect(.regular, in: .capsule)
-                        .glassEffectID("hover", in: glassNS)
+                        .vsGlassCapsule()
+                        .vsGlassID("hover", in: glassNS)
                 }
             }
     }

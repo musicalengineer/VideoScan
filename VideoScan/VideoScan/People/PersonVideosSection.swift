@@ -264,7 +264,7 @@ struct PersonVideosSection: View {
             }
             Spacer()
             Button { refreshTick += 1 } label: { Image(systemName: "arrow.clockwise") }
-                .buttonStyle(.glass)
+                .vsGlassButtonStyle()
                 .help("Look again")
         }
         .padding(.horizontal, 14).padding(.vertical, 8)
@@ -438,7 +438,7 @@ struct FamilyVideosSection: View {
                 }
                 Spacer()
                 Button { refreshTick += 1 } label: { Image(systemName: "arrow.clockwise") }
-                    .buttonStyle(.glass)
+                    .vsGlassButtonStyle()
                     .help("Look again")
             }
             .padding(.horizontal, 14).padding(.vertical, 8)

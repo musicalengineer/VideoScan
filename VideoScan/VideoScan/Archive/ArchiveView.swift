@@ -423,7 +423,7 @@ struct ArchiveView: View {
                         Button("Re-adopt \(VolumeReachability.displayLabel(forPath: candidate.targetPath)) as Master Archive…") {
                             model.offerReadoptMasterArchive(candidate)
                         }
-                        .buttonStyle(.glass)
+                        .vsGlassButtonStyle()
                         .controlSize(.small)
                         .disabled(model.isReadOnly)
                         .accessibilityIdentifier("archive.readopt")
@@ -435,7 +435,7 @@ struct ArchiveView: View {
                     model.chooseAndOfferInitializeMasterArchive()
                 }
                 // Liquid Glass refresh (2026-10-04).
-                .buttonStyle(.glassProminent)
+                .vsGlassProminentButtonStyle()
                 .controlSize(.small)
                 .disabled(model.isReadOnly)
                 .padding(.leading, 8)
@@ -483,7 +483,7 @@ struct ArchiveView: View {
                 .font(.system(size: 17))
         }
         .menuStyle(.button)
-        .buttonStyle(.glass)
+        .vsGlassButtonStyle()
         .menuIndicator(.hidden)
         .fixedSize()
         .disabled(!reachable)

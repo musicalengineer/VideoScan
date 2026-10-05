@@ -376,7 +376,7 @@ struct VolumesWindow: View {
             .labelStyle(.titleAndIcon)
             .controlSize(.regular)
             // Glass header actions (Liquid Glass refresh, 2026-10-04).
-            .buttonStyle(.glass)
+            .vsGlassButtonStyle()
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
