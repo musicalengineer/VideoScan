@@ -73,7 +73,9 @@ def parse_log(text: str) -> dict:
         "suites": suites,
         "tests_outcome": outcome,
         "failed_tests": failed_tests[:20],
-        "build_failed": "** BUILD FAILED **" in text or "** TEST BUILD FAILED **" in text,
+        "build_failed": any(s in text for s in ("** BUILD FAILED **", "** TEST BUILD FAILED **",
+                                                 "Testing cancelled because the build failed",
+                                                 "linker command failed")),
         "test_succeeded": "** TEST SUCCEEDED **" in text,
     }
 

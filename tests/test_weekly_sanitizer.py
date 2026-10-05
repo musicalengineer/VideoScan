@@ -94,3 +94,9 @@ def test_alert_main_reads_latest_files(tmp_path, capsys):
     alert.main(["--dir", str(tmp_path), "--now", NOW.isoformat()])
     out = capsys.readouterr().out
     assert "Thread Sanitizer" in out and "raceTest" in out
+
+
+def test_a_link_failure_reads_as_build_failed_not_no_tests():
+    log = ("ld: symbol(s) not found for architecture arm64\nclang: error: linker command failed with exit code 1\n"
+           "Testing failed:\n\tTesting cancelled because the build failed.\n** TEST FAILED **\n")
+    assert ws.status_for(ws.parse_log(log), timed_out=False) == "build-failed"
