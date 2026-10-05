@@ -31,6 +31,11 @@ struct FamilyGroup: Codable, Identifiable, Equatable, Hashable, Sendable {
     var photoFilename: String?
     /// Pick rows this build could not read, kept verbatim (codex 2026-10-04).
     var featuredVideosQuarantined: [JSONValue] = []
+    /// Card-photo crop (2026-10-05), the same three numbers a person's cover
+    /// uses (CoverCropEditor / CroppedCircleImage): zoom ≥ 1, pan in points.
+    var cropScale: Double = 1.0
+    var cropOffsetX: Double = 0
+    var cropOffsetY: Double = 0
 
     /// The one photo filename a family may own.
     var expectedPhotoFilename: String { "\(uuid.uuidString)-photo.jpg" }
@@ -56,6 +61,9 @@ struct FamilyGroup: Codable, Identifiable, Equatable, Hashable, Sendable {
             + picks.quarantined
         createdAt = (try? c.decodeIfPresent(Date.self, forKey: .createdAt)) ?? Date(timeIntervalSince1970: 0)
         photoFilename = try? c.decodeIfPresent(String.self, forKey: .photoFilename)
+        cropScale = ((try? c.decodeIfPresent(Double.self, forKey: .cropScale)) ?? 1.0) ?? 1.0
+        cropOffsetX = ((try? c.decodeIfPresent(Double.self, forKey: .cropOffsetX)) ?? 0) ?? 0
+        cropOffsetY = ((try? c.decodeIfPresent(Double.self, forKey: .cropOffsetY)) ?? 0) ?? 0
     }
 }
 
@@ -146,6 +154,7 @@ enum FamilyGroupStore {
         // name never changes, so a publish that fails afterwards leaves the
         // family pointing at its previous photo — never at nothing.
         group.photoFilename = name
+        group.cropScale = 1.0; group.cropOffsetX = 0; group.cropOffsetY = 0   // a new photo starts uncropped
         try save(group)
         if (try? dest.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true {
             throw CocoaError(.fileWriteNoPermission)   // never write through a planted link

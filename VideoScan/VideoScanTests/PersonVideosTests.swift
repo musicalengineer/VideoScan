@@ -366,3 +366,16 @@ struct PeopleCodexOvernightTests {
         #expect(saveAt.lowerBound < replaceAt.lowerBound, "JSON committed before the old photo is replaced")
     }
 }
+
+@Suite("People — family photo crop")
+struct FamilyPhotoCropTests {
+    @Test func cropRoundTripsAndOldFilesDefaultToUncropped() throws {
+        var family = FamilyGroup(name: "Crop Family")
+        family.cropScale = 1.8; family.cropOffsetX = -12; family.cropOffsetY = 7.5
+        let back = try JSONDecoder().decode(FamilyGroup.self, from: JSONEncoder().encode(family))
+        #expect(back.cropScale == 1.8 && back.cropOffsetX == -12 && back.cropOffsetY == 7.5)
+        let old = try JSONDecoder().decode(FamilyGroup.self,
+            from: Data(#"{"uuid":"\#(UUID().uuidString)","name":"Old Family"}"#.utf8))
+        #expect(old.cropScale == 1.0 && old.cropOffsetX == 0 && old.cropOffsetY == 0)
+    }
+}

@@ -25,6 +25,9 @@ struct FamilyEditSheet: View {
     @State private var pickerItem: PhotosPickerItem?
     @State private var isImporting = false
     @State private var problem: String?
+    @State private var cropScale: Double = 1.0
+    @State private var cropOffset: CGSize = .zero
+    @State private var showCrop = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -34,7 +37,7 @@ struct FamilyEditSheet: View {
                 ZStack {
                     Circle().fill(Color.accentColor.opacity(0.14))
                     if let photo {
-                        Image(nsImage: photo).resizable().scaledToFill().clipShape(Circle())
+                        CroppedCircleImage(image: photo, scale: cropScale, offset: cropOffset)
                     } else {
                         Image(systemName: "person.3.fill").font(.system(size: 40)).foregroundStyle(.tint)
                     }
@@ -53,6 +56,13 @@ struct FamilyEditSheet: View {
                         }
                         .disabled(isImporting)
                         if isImporting { ProgressView().controlSize(.small) }
+                    }
+                    if photo != nil {
+                        // The same pan/zoom editor a person's cover uses.
+                        Button("Adjust Photo…") { showCrop = true }
+                            .popover(isPresented: $showCrop, arrowEdge: .bottom) {
+                                if let photo { CoverCropEditor(image: photo, scale: $cropScale, offset: $cropOffset) }
+                            }
                     }
                     if let problem {
                         Label(problem, systemImage: "exclamationmark.triangle.fill")
@@ -83,6 +93,8 @@ struct FamilyEditSheet: View {
         guard let family = FamilyGroupStore.load(familyUUID) else { return }
         name = family.name
         photo = FamilyGroupStore.photoURL(for: family).flatMap { PortraitThumbnailCache.thumbnail(at: $0, maxPixels: 512) }
+        cropScale = family.cropScale
+        cropOffset = CGSize(width: family.cropOffsetX, height: family.cropOffsetY)
     }
 
     private func browse() {
@@ -124,6 +136,7 @@ struct FamilyEditSheet: View {
         do {
             let updated = try FamilyGroupStore.setPhoto(from: url, for: familyUUID)
             photo = FamilyGroupStore.photoURL(for: updated).flatMap { PortraitThumbnailCache.thumbnail(at: $0, maxPixels: 512) }
+            cropScale = 1.0; cropOffset = .zero
             problem = nil
             appLog.write("People: set photo for \(updated.name) from \(label)")
         } catch {
@@ -134,12 +147,18 @@ struct FamilyEditSheet: View {
     private func save() {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard var family = FamilyGroupStore.load(familyUUID), !trimmed.isEmpty else { dismiss(); return }
-        if family.name != trimmed {
-            let old = family.name
+        let old = family.name
+        let cropChanged = family.cropScale != cropScale || family.cropOffsetX != cropOffset.width
+            || family.cropOffsetY != cropOffset.height
+        if family.name != trimmed || cropChanged {
             family.name = trimmed
+            family.cropScale = cropScale
+            family.cropOffsetX = cropOffset.width
+            family.cropOffsetY = cropOffset.height
             do {
                 try FamilyGroupStore.save(family)
-                appLog.write("People: renamed family \(old) → \(trimmed)")
+                if old != trimmed { appLog.write("People: renamed family \(old) → \(trimmed)") }
+                if cropChanged { appLog.write("People: adjusted \(trimmed)'s photo crop") }
             } catch {
                 problem = "Couldn't save: \(error.localizedDescription)"
                 return

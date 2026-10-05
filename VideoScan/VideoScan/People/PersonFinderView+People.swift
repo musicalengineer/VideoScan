@@ -727,10 +727,9 @@ extension PersonFinderView {
                         .frame(width: personImageSize, height: personImageSize)
                     if let url = FamilyGroupStore.photoURL(for: family),
                        let photo = PortraitThumbnailCache.thumbnail(at: url, maxPixels: 512) {
-                        Image(nsImage: photo)
-                            .resizable().scaledToFill()
+                        CroppedCircleImage(image: photo, scale: family.cropScale,
+                                           offset: CGSize(width: family.cropOffsetX, height: family.cropOffsetY))
                             .frame(width: personImageSize, height: personImageSize)
-                            .clipShape(Circle())
                     } else {
                         Image(systemName: "person.3.fill")
                             .font(.system(size: personImageSize * 0.3, weight: .medium))
