@@ -416,6 +416,7 @@ struct ReadOnlyVolumeGateTests {
         // Each pass against the selection's own existing budget
         // (DeleteDuplicatesSafetyTests.planningScale100k: one pass, 2 s).
         let clock = ContinuousClock()
+        let load = TimingBudget.sampleLoad()
         var t0 = clock.now
         let rw = model.duplicateDeletionSelection(onVolume: "/Volumes/ScaleRW")
         let rwTime = t0.duration(to: clock.now)
@@ -430,7 +431,11 @@ struct ReadOnlyVolumeGateTests {
         #expect(menu.map(\.path) == ["/Volumes/ScaleRW"])
         for (name, time) in [("the selection on the drive that allows changes", rwTime),
                              ("the selection on the Read-only drive", roTime), ("the menu count", menuTime)] {
-            #expect(time < PerformanceLane.debugCeiling(.seconds(2)), "\(name) took \(time)")
+            // GH #208 judge (2026-10-05): CI's hosted runner measured 6.8 s
+            // against 2 s × 3; strict on a quiet M4, a known issue within 3×
+            // when busy or hosted, a failure beyond.
+            expectWithinTimingBudget("100k Read-only scale — \(name)", measured: time,
+                                     budget: PerformanceLane.debugCeiling(.seconds(2)), loadBefore: load)
         }
     }
 }
