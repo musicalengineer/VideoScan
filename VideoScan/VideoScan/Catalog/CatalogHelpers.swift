@@ -25,6 +25,10 @@ struct CatalogContent: View {
     @Environment(\.openWindow) var openWindow
     let records: [VideoRecord]
     @Binding var selectedIDs: Set<UUID>
+    /// The files table claims keyboard focus when a file is picked
+    /// (Rick 2026-10-05: ↑/↓ moved the VOLUMES table — the window's first
+    /// key view kept focus because clicking a file row never moved it).
+    @FocusState var filesTableFocused: Bool
     @Binding var sortOrder: [KeyPathComparator<VideoRecord>]
     let searchText: String
     /// Search-hit badge count, published UP to the parent as a
@@ -368,21 +372,6 @@ struct CatalogContent: View {
     private func installSpaceKeyMonitor() {
         guard spaceKeyMonitor == nil else { return }
         spaceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // TEMPORARY DIAGNOSTIC (2026-10-05, Rick: arrows work on the
-            // volumes table but not the files table). Logs who has keyboard
-            // focus when ↑/↓ arrive. Remove once the cause is fixed.
-            if event.keyCode == 125 || event.keyCode == 126 {
-                let responder = event.window?.firstResponder
-                let table = responder as? NSTableView
-                let before = table?.selectedRow ?? -2
-                appLog.write("[keys] \(event.keyCode == 126 ? "↑" : "↓") — first responder: "
-                    + "\(responder.map { String(describing: type(of: $0)) } ?? "none")"
-                    + " rows=\(table?.numberOfRows ?? -1) selectedRow=\(before)"
-                    + ", window: \(event.window?.title ?? "?")")
-                DispatchQueue.main.async {
-                    appLog.write("[keys]   after: selectedRow=\(table?.selectedRow ?? -2)")
-                }
-            }
             // 49 = kVK_Space. Bare Space only — let ⌘/⌥/⌃-Space through to
             // their owners (menu shortcuts, input sources, etc.).
             let bareSpace = event.keyCode == 49
@@ -750,11 +739,11 @@ struct CatalogContent: View {
             }
         }
         .onChange(of: selectedIDs) {
-            // TEMPORARY DIAGNOSTIC (2026-10-05) — see the key monitor.
-            DispatchQueue.main.async {
-                let r = NSApp.keyWindow?.firstResponder
-                appLog.write("[keys] selection → \(selectedIDs.count) row(s); first responder after: "
-                    + "\(r.map { String(describing: type(of: $0)) } ?? "none")")
+            // Keyboard focus follows a file pick (2026-10-05), so ↑/↓ walk
+            // the files — but never out of a text field (typing in Search
+            // must keep the cursor while results change the selection).
+            if !selectedIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSText) {
+                filesTableFocused = true
             }
             if isPlaying {
                 player?.pause()
@@ -778,7 +767,15 @@ struct CatalogContent: View {
         // Space-toggle monitor lives for the catalog pane's on-screen
         // lifetime — installed here, torn down (and the mode reset) on
         // disappear so it can't fire from another tab.
-        .onAppear { installSpaceKeyMonitor() }
+        .onAppear {
+            installSpaceKeyMonitor()
+            // The files table, not the volumes table above it, starts with
+            // keyboard focus when the Catalog opens (Apple's focus cookbook:
+            // say where focus goes instead of inheriting the window's first
+            // key view).
+            filesTableFocused = true
+        }
+        .defaultFocus($filesTableFocused, true)
         .onDisappear { removeSpaceKeyMonitor() }
         .sheet(isPresented: $showRenameSheet) {
             RenameSheet(

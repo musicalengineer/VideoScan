@@ -256,6 +256,8 @@ extension CatalogContent {
     /// keep their own ⌘⌫. Its own stage, same reason as the others (GH #132).
     private var tableWithTrashShortcut: some View {
         catalogTableBase
+            // Takes keyboard focus when a file is picked (see filesTableFocused).
+            .focused($filesTableFocused)
             // The menu route (2026-09-20): Catalog ▸ Move to Trash ⌘⌫ reads
             // this while the table has keyboard focus — see
             // CatalogTrashCommand.swift for why the key handler below was
