@@ -131,5 +131,5 @@ def test_blank_override_reason_does_not_override(tmp_path):
 
 
 def test_out_of_scope_files_are_ignored(tmp_path):
-    for path in ["VideoScan/VideoScanTests/BigTests.swift", "docs/x.swift", "scripts/venv/lib/x.py"]:
+    for path in ["VideoScan/VideoScanTests/BigTests.swift", "other/x.swift", "scripts/venv/lib/x.py"]:
         assert run(tmp_path, source(swift_func("big", 35)), write_baseline(tmp_path), path=path)[0] == 0, path

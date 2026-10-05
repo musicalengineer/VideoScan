@@ -47,7 +47,7 @@ def test_records_are_repo_relative_and_skip_other_languages(tmp_path):
     funcs = cm.funcs_from_lizard([
         info(f"{root}/VideoScan/VideoScan/Catalog/A.swift", fn("load", ccn=3, nloc=10)),
         info("./scripts/b.py", fn("main", ccn=20, nloc=90)),
-        info("docs/c.js", fn("ignored")),
+        info("other/c.js", fn("ignored")),
         None,
     ], root)
     assert [(f.file, f.name, f.lang) for f in funcs] == [
@@ -258,7 +258,7 @@ def test_scope_excludes_tests_build_dirs_and_venvs():
     assert cm.in_scope("VideoScan/VideoScanCore/Sources/X/A.swift")
     assert cm.in_scope("tools/person-eval/a.py")
     for p in ["VideoScan/VideoScanTests/A.swift", "VideoScan/VideoScanCore/.build/checkouts/x/A.swift",
-              "tools/venv-mlx/lib/a.py", "scripts/a.sh", "docs/a.py"]:
+              "tools/venv-mlx/lib/a.py", "scripts/a.sh", "other/a.py"]:
         assert not cm.in_scope(p), p
 
 
