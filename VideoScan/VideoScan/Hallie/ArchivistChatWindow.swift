@@ -2542,14 +2542,21 @@ struct ArchivistAskStopButton: View {
     }
 
     var body: some View {
+        // Liquid Glass spots 2026-10-06: Ask (Stop while she speaks) is
+        // the window's one primary action — tinted glass, sized to match
+        // the large composer field beside it.
         if speaker.isSpeaking {
             Button("Stop") { speaker.stop() }
                 .keyboardShortcut(".", modifiers: .command)
                 .tint(.red)
+                .vsGlassProminentButtonStyle()
+                .controlSize(.large)
                 .accessibilityIdentifier("archivist.stopSpeaking")
         } else {
             Button("Ask", action: ask)
                 .keyboardShortcut(.defaultAction)
+                .vsGlassProminentButtonStyle()
+                .controlSize(.large)
                 .disabled(!canAsk)
         }
     }
