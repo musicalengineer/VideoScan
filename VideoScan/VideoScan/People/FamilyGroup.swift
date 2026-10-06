@@ -71,8 +71,13 @@ enum FamilyGroupStore {
 
     static let defaultName = "Rick & Donna Breen Family"
 
+    /// The family-groups folder lives INSIDE the POI store but is not a
+    /// person. Readers that walk POI/ (Hallie's read-only profile loader)
+    /// skip it by this one spelling.
+    static let folderName = "Families"
+
     static var directory: URL {
-        let dir = POIStorage.storeDir.appendingPathComponent("Families", isDirectory: true)
+        let dir = POIStorage.storeDir.appendingPathComponent(folderName, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
