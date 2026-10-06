@@ -126,6 +126,48 @@ struct RelocateWitnessLivenessTests {
         #expect(RelocateReconcile.witnessIsNotTheSourceFile(fx.witnessFile.path, fx.srcFile.path, fx.src.path))
     }
 
+    /// QA round 2: every production default is the FULL rule (device +
+    /// inode). Fixture witness = a distinct file on the source's device.
+    @Test func qaR2ProductionDefaults() throws {
+        let fx = try Fixture(); defer { fx.cleanup() }
+        let w = fx.witnessFile.path, s = fx.srcFile.path, root = fx.src.path
+        #expect(!VideoScanModel().relocateWitnessIndependence(w, s, root), "model default")
+        #expect(!RelocateReconcile.WitnessProof(sourceRoot: root).vouches(w, sourcePath: s, bytes: fx.size),
+                "WitnessProof default")
+        let source = fx.record(at: fx.srcFile)
+        #expect(fx.reconcileWithAlias(source: source, aliasPath: w).safelyRedundant.isEmpty, "reconcile default")
+        let witness = fx.record(at: fx.witnessFile)
+        let plan = RelocateReconcile.reconcilePlan(
+            records: [source.asReconcileInput], witnesses: [source.asReconcileInput, witness.asReconcileInput],
+            sourceVolumeRootPath: root, destinationRoot: fx.dest,
+            sourceFiles: [.init(path: s, size: fx.size)], destFiles: [],
+            skipDupsOnOtherVolumes: true, hash: { _ in fx.md5 })
+        #expect(plan.safelyRedundant.isEmpty, "reconcilePlan default")
+    }
+
+    /// QA round 2: the weaker inode-only rule is a TEST seam. App code may
+    /// never assign the model's probe, nor name the weak rule outside the
+    /// file that defines it.
+    @Test func appCodeNeverWeakensTheWitnessIndependenceRule() throws {
+        let app = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan", isDirectory: true).resolvingSymlinksInPath()
+        var offenders: [String] = []
+        let it = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)
+        while let url = it?.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let name = url.lastPathComponent
+            for (i, line) in try String(contentsOf: url, encoding: .utf8).split(separator: "\n",
+                                                                               omittingEmptySubsequences: false).enumerated() {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                if t.hasPrefix("//") { continue }
+                let assigns = t.contains("relocateWitnessIndependence =") && !t.hasPrefix("var relocateWitnessIndependence:")
+                let weak = t.contains("witnessIsNotTheSourceFile") && name != "RelocateReconcile.swift"
+                if assigns || weak { offenders.append("\(name):\(i + 1): \(t)") }
+            }
+        }
+        #expect(offenders.isEmpty, "app code must not weaken the relocate witness rule: \(offenders)")
+    }
+
     @Test func applyTimeReproofRefusesAWitnessThatIsTheSourceFile() throws {
         let fx = try Fixture(); defer { fx.cleanup() }
         let source = fx.record(at: fx.srcFile)

@@ -515,9 +515,12 @@ struct RemoteViewerReadOnlySensorTests {
         "Catalog/VideoScanModel+Workbench.swift": (1, nil, "workbenchDiscardRefusedOnViewer("),
         "People/FamilyGroup.swift": (2, nil, "ViewerWriteGuard.check(\"FamilyGroupStore.moveToTrash\")"),
         "People/PersonEditSheet.swift": (1, nil, "ViewerWriteGuard.refuse(\"PersonEditSheet.deleteReferencePhoto\")"),
-        // Reached only from MFO jobs (Delete Duplicates, Transcode, Reformat);
+        // Delete Duplicates' removal step (trash + quarantine removal, and
+        // rmdir of its own quarantine folders); reached only from
+        // DeleteDuplicatesJob.run, which refuses on a read-only model.
+        "MediaOps/SignatureVerification.swift": (4, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
+        // Reached only from MFO jobs (Transcode, Reformat);
         // MediaFileOperationsCenter.add refuses every job on a viewer.
-        "MediaOps/SignatureVerification.swift": (2, "MediaOps/MediaFileOperations.swift", "ViewerWriteGuard.refuse(\"MediaFileOperationsCenter.add("),
         "MediaOps/DerivativeOutputPublish.swift": (1, "MediaOps/MediaFileOperations.swift", "ViewerWriteGuard.refuse(\"MediaFileOperationsCenter.add("),
         // The app's own temp / partial / staging / cache / output files.
         "App/BundleExporter.swift": (1, nil, nil), "App/BundleImporter.swift": (2, nil, nil),
@@ -537,7 +540,9 @@ struct RemoteViewerReadOnlySensorTests {
         "MediaOps/BalanceAudioJob.swift": (1, nil, nil), "MediaOps/CleanupJob.swift": (4, nil, nil),
         "MediaOps/FootageSpectrumHelper.swift": (1, nil, nil), "MediaOps/RebuildAudioJob.swift": (1, nil, nil),
         "MediaOps/ReformatJob.swift": (5, nil, nil), "MediaOps/RelocateEngine.swift": (1, nil, nil),
-        "MediaOps/TrimJob.swift": (1, nil, nil), "MediaOps/VideoScanModel+Combine.swift": (1, nil, nil),
+        "MediaOps/TrimJob.swift": (1, nil, nil),
+        // unlink of our own partials / published-by-link old names only.
+        "MediaOps/RescueFileCopier.swift": (3, nil, nil), "MediaOps/PartialFileNaming.swift": (3, nil, nil), "MediaOps/VideoScanModel+Combine.swift": (1, nil, nil),
         "People/AdaFaceEngine.swift": (1, nil, nil), "People/ArcFaceEngine.swift": (1, nil, nil),
         "People/FamilyEditSheet.swift": (1, nil, nil), "People/FindPersonJob.swift": (1, nil, nil),
         "People/IdentifyFamilyModel.swift": (1, nil, nil), "People/POIProfileFileStore.swift": (2, nil, nil),
@@ -546,23 +551,70 @@ struct RemoteViewerReadOnlySensorTests {
         "Volumes/ScanCheckpoint.swift": (1, nil, nil), "Volumes/ScanJobsStorage.swift": (2, nil, nil),
     ]
 
-    @Test func everyFileRemovalInAppCodeIsClassifiedAndMediaRemovalsAreViewerGuarded() throws {
-        let app = URL(fileURLWithPath: #filePath)
+    private static var appSourceRoot: URL {
+        URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent().deletingLastPathComponent()
             .appendingPathComponent("VideoScan", isDirectory: true)
+    }
+
+    /// Removal calls per app source file, keyed by path relative to `root`:
+    /// FileManager `trashItem(` / `removeItem(`, and the POSIX `unlink(` /
+    /// `rmdir(` free functions. Both the root and each file are resolved
+    /// through symlinks BEFORE slicing, so a checkout reached as /tmp/… while
+    /// the enumerator reports /private/tmp/… (the nightly) still lines up.
+    static func removalCounts(under root: URL) throws -> [String: Int] {
+        let base = root.resolvingSymlinksInPath().standardizedFileURL
         var found: [String: Int] = [:]
-        let it = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)
-        func occurrences(_ needle: String, in line: Substring) -> Int {
-            line.components(separatedBy: needle).count - 1
-        }
+        let it = FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil)
         while let url = it?.nextObject() as? URL {
             guard url.pathExtension == "swift" else { continue }
-            let rel = String(url.path.dropFirst(app.path.count + 1))
+            let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard path.hasPrefix(base.path + "/") else { continue }
+            let rel = String(path.dropFirst(base.path.count + 1))
             let n = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-                .reduce(0) { $0 + occurrences("trashItem(", in: $1) + occurrences("removeItem(", in: $1) }
+                .reduce(0) { $0 + removalCalls(in: String($1)) }
             if n > 0 { found[rel] = n }
         }
+        return found
+    }
+
+    private static func removalCalls(in line: String) -> Int {
+        func occurrences(_ needle: String) -> Int { line.components(separatedBy: needle).count - 1 }
+        return occurrences("trashItem(") + occurrences("removeItem(")
+            + freeCalls("unlink(", in: line) + freeCalls("rmdir(", in: line)
+    }
+
+    /// Calls of a C free function: not `x.unlink(`, not `fooUnlink(`, not
+    /// `func unlink(` (MediaPersonLinks has a method of that name).
+    private static func freeCalls(_ needle: String, in line: String) -> Int {
+        var n = 0
+        var search = line.startIndex..<line.endIndex
+        while let r = line.range(of: needle, range: search) {
+            let prev = r.lowerBound > line.startIndex ? line[line.index(before: r.lowerBound)] : " "
+            let isMember = prev.isLetter || prev.isNumber || prev == "_" || prev == "."
+            if !isMember && !line[..<r.lowerBound].trimmingCharacters(in: .whitespaces).hasSuffix("func") { n += 1 }
+            search = r.upperBound..<line.endIndex
+        }
+        return n
+    }
+
+    /// The nightly runs from /private/tmp/nightly-metrics-wt, reached as
+    /// /tmp/…: the sensor must give the same answer from a symlinked root.
+    @Test func removalSensorGivesTheSameAnswerFromASymlinkedCheckout() throws {
+        let dir = tmp("symlinked-checkout")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let link = dir.appendingPathComponent("test_app_link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: Self.appSourceRoot)
+        let direct = try Self.removalCounts(under: Self.appSourceRoot)
+        #expect(!direct.isEmpty)
+        #expect(try Self.removalCounts(under: link) == direct)
+    }
+
+    @Test func everyFileRemovalInAppCodeIsClassifiedAndMediaRemovalsAreViewerGuarded() throws {
+        let app = Self.appSourceRoot
+        let found = try Self.removalCounts(under: app)
         #expect(found == Self.removalSites.mapValues(\.count),
                 "a removal call was added or removed: classify it here (media ⇒ behind the viewer guard)")
         for (file, site) in Self.removalSites {
