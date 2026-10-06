@@ -324,6 +324,14 @@ extension ArchiveReadiness {
     @MainActor
     static func assess(record r: VideoRecord,
                        familyUserDate: (date: String, confidence: String)? = nil) -> ArchiveReadiness {
+        assess(inputs(record: r, familyUserDate: familyUserDate))
+    }
+
+    /// The Sendable snapshot `assess(record:)` reads — for a caller that
+    /// assesses OFF the main actor (the Catalog's "Ready for archive" hints).
+    @MainActor
+    static func inputs(record r: VideoRecord,
+                       familyUserDate: (date: String, confidence: String)? = nil) -> Inputs {
         var i = Inputs()
         i.isPlayable = r.isPlayable
         i.streamTypeRaw = r.streamTypeRaw
@@ -348,6 +356,6 @@ extension ArchiveReadiness {
         i.originModel = r.originModel
         i.originEncoder = r.originEncoder
         i.filename = r.filename
-        return assess(i)
+        return i
     }
 }

@@ -143,6 +143,13 @@ final class ArchiveAngel: ObservableObject {
     @Published private(set) var recommendations = ArchiveAngelRecommendationSummary()
     /// The pending live recount after a catalog change.
     var recountTask: Task<Void, Never>?
+    /// The Catalog's "Ready for archive" / "Angel pick" hints, one per
+    /// recommended record — rebuilt off the main actor after every recount
+    /// (ArchiveAngel+CatalogHints.swift).
+    @Published private(set) var catalogHints = ArchiveAngelCatalogHints()
+    /// The hint build in flight; a newer recount cancels and supersedes it.
+    var catalogHintTask: Task<Void, Never>?
+    var catalogHintGeneration = 0
     /// The catalog's Show Copies… sheet (S4) — its own small observable so
     /// the sheet host does not re-render on every recount.
     let showCopiesPresenter = ArchiveAngelShowCopiesPresenter()
@@ -243,6 +250,8 @@ final class ArchiveAngel: ObservableObject {
     /// extension file; `private(set)` stays in this one).
     func publishRecommendations(_ summary: ArchiveAngelRecommendationSummary) {
         recommendations = summary
+        // The Catalog's "Ready for archive" hints follow every recount.
+        scheduleCatalogHints()
         // Angel Checks look again at the new top of the list.
         checks.noteRecommendationsChanged()
         logStalledIfChanged()
@@ -606,10 +615,20 @@ final class ArchiveAngel: ObservableObject {
         return ArchiveAngelCatalogBadge.make(kind: kind, record: store.record(for: id))
     }
 
-    /// Bumps on EVERY recount — every sweep result and every batch change
-    /// (rows re-render their badge on it).
+    /// Bumps on EVERY recount — every sweep result and every batch change —
+    /// and when the Catalog hints land (rows re-render their badge on it).
+    /// Both counters only grow, so their sum grows whenever either does.
     var evidenceRevisionPublisher: AnyPublisher<Int, Never> {
-        $recommendations.map(\.revision).removeDuplicates().dropFirst().eraseToAnyPublisher()
+        $recommendations.map(\.revision)
+            .combineLatest($catalogHints.map(\.revision))
+            .map { $0 &+ $1 }
+            .removeDuplicates().dropFirst().eraseToAnyPublisher()
+    }
+
+    /// The one writer of `catalogHints` (the build lives in
+    /// ArchiveAngel+CatalogHints; `private(set)` stays in this file).
+    func publishCatalogHints(_ byID: [UUID: ArchiveAngelCatalogHint]) {
+        catalogHints = ArchiveAngelCatalogHints(byID: byID, revision: catalogHints.revision &+ 1)
     }
 
     /// Changes only when the candidate set does (the filter recomputes on it).
