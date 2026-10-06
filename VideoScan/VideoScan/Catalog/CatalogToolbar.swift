@@ -81,9 +81,6 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// GH #132) render alongside active rows (italic + brown). Session-
     /// scoped @State in the parent — deliberately NOT persisted.
     @Binding var showSuperseded: Bool
-    /// How many volumes are picked in the volume table (0 = all) — for
-    /// the Showing box's "All volumes" pill. A count, not the set.
-    let selectedVolumeCount: Int
 
     /// True when the View menu holds any non-default state — an active
     /// filter, or one of the hidden-record reveals that moved into the
@@ -103,8 +100,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             showRemoved: showRemoved,
             showSetAside: showSetAside,
             showSuperseded: showSuperseded,
-            hasMasterArchive: model.masterArchive != nil,
-            volumeCount: selectedVolumeCount)
+            hasMasterArchive: model.masterArchive != nil)
     }
     @ViewBuilder let dashboardContent: () -> Dashboard
 

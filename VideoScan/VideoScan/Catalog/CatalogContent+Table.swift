@@ -95,7 +95,7 @@ extension CatalogContent {
         // onChange. Its own stage: the onChange chain below is already at
         // the type-checker's budget (GH #132).
         tableWithCatalogTriggers
-            .onReceive(angelGradesPublisher) { _ in refreshRows() }
+            .onReceive(angelGradesPublisher) { _ in tableData = computeFiltered() }
     }
 
     /// Grade-set changes only — identical sweeps do not churn the table.
@@ -114,16 +114,16 @@ extension CatalogContent {
     // intermediate typedefs so overload resolution stays local.)
     private var tableWithCatalogTriggers: some View {
         tableWithFilterTriggers
-            .onChange(of: model.lastTidyBatch) { refreshRows() }
+            .onChange(of: model.lastTidyBatch) { tableData = computeFiltered() }
             // Re-compute when purge state flips on any record (purge, undo, restore).
             // We key off lastPurgedBatch so mutations from the model are observed.
-            .onChange(of: model.lastPurgedBatch) { refreshRows() }
+            .onChange(of: model.lastPurgedBatch) { tableData = computeFiltered() }
             // In-place purge/lifecycle mutations that arm no banner (Delete
             // Confirmed Junk, workbench discard, dossier auto-purge) — #160.
-            .onChange(of: model.volumeAggregatesRevision) { refreshRows() }
+            .onChange(of: model.volumeAggregatesRevision) { tableData = computeFiltered() }
             // Confirm Repair supersedes originals (and undo restores them) —
             // same observation pattern as the purge batch (GH #132).
-            .onChange(of: model.lastConfirmBatch) { refreshRows() }
+            .onChange(of: model.lastConfirmBatch) { tableData = computeFiltered() }
     }
 
     /// Reveal toggles: disconnected media, kind facet, removed / set-aside /
@@ -131,25 +131,25 @@ extension CatalogContent {
     private var tableWithFilterTriggers: some View {
         tableWithSearchTriggers
             // Reachable-only baseline opt-out (2026-07-20).
-            .onChange(of: showDisconnectedMedia) { refreshRows() }
+            .onChange(of: showDisconnectedMedia) { tableData = computeFiltered() }
             // Media-kind facet chip flip (GH #124).
-            .onChange(of: kindFacet) { refreshRows() }
-            .onChange(of: showRemoved) { refreshRows() }
-            .onChange(of: showSetAside) { refreshRows() }
+            .onChange(of: kindFacet) { tableData = computeFiltered() }
+            .onChange(of: showRemoved) { tableData = computeFiltered() }
+            .onChange(of: showSetAside) { tableData = computeFiltered() }
             // Superseded reveal toggle (GH #132).
-            .onChange(of: showSuperseded) { refreshRows() }
+            .onChange(of: showSuperseded) { tableData = computeFiltered() }
     }
 
     /// First appearance, record count, and the search / scope inputs.
     private var tableWithSearchTriggers: some View {
         tableWithMenus
-            .onAppear { tableData = computeFiltered() }   // appear: no filter changed — selection untouched
-            .onChange(of: records.count) { refreshRows() }
-            .onChange(of: searchText) { refreshRows() }
-            .onChange(of: filterTargetPaths) { refreshRows() }
-            .onChange(of: showPairsOnly) { refreshRows() }
-            .onChange(of: filterByIDs) { refreshRows() }
-            .onChange(of: viewFilters) { refreshRows() }
+            .onAppear { tableData = computeFiltered() }
+            .onChange(of: records.count) { tableData = computeFiltered() }
+            .onChange(of: searchText) { tableData = computeFiltered() }
+            .onChange(of: filterTargetPaths) { tableData = computeFiltered() }
+            .onChange(of: showPairsOnly) { tableData = computeFiltered() }
+            .onChange(of: filterByIDs) { tableData = computeFiltered() }
+            .onChange(of: viewFilters) { tableData = computeFiltered() }
     }
 
     /// Sort + menus stage of the split — see `catalogTable`'s note.
@@ -176,11 +176,8 @@ extension CatalogContent {
     /// keep their own ⌘⌫. Its own stage, same reason as the others (GH #132).
     private var tableWithTrashShortcut: some View {
         catalogTableBase
-            // One of the two Catalog focus targets (CatalogPane). Focus
-            // arrives only natively — a click in this table, or the
-            // window's default focus — never from a selection change.
-            .focused($focusedPane, equals: .files)
-            .onChange(of: focusedPane, initial: true) { tableState.paneFocusMirror.pane = focusedPane }
+            // Takes keyboard focus when a file is picked (see filesTableFocused).
+            .focused(tableState.$filesTableFocused)
             // The menu route (2026-09-20): Catalog ▸ Move to Trash ⌘⌫ reads
             // this while the table has keyboard focus — see
             // CatalogTrashCommand.swift for why the key handler below was

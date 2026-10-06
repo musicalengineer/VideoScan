@@ -478,17 +478,8 @@ struct CatalogView: View {
     /// plan per selected volume, made at the gesture. nil = no alert. See
     /// `presentDeleteVolumesCatalog(for:)` in CatalogView+ScanTargetsPane.
     @State var deleteVolumesCatalogPrompt: DeleteVolumesCatalogPrompt?
-    /// Selected volume IDs in the scan volumes table — a FILTER on the
-    /// files table. EMPTY = every volume (the default; Rick 2026-10-06).
+    /// Selected volume IDs in the scan volumes table.
     @State var selectedVolumeIDs: Set<UUID> = []
-    /// Which Catalog pane has the keyboard — the ONE focus state for both
-    /// tables. Lives here because CatalogView is the common ancestor of the
-    /// volumes table (top split pane) and the files table (CatalogContent,
-    /// bottom pane). Nothing assigns it: clicks focus a table natively and
-    /// CatalogContent declares `.defaultFocus(.files)`. Internal (not
-    /// private) so CatalogView+VolumeTable.swift can bind it. Map:
-    /// CatalogTableState.swift.
-    @FocusState var focusedPane: CatalogPane?
     /// Per-volume aggregate cache (file count, error count, byte sum,
     /// pre-built Cmd+I popover text). Recomputed once per records or
     /// scan-target change via the `.onChange` modifiers below. Without
@@ -684,7 +675,6 @@ struct CatalogView: View {
             showRemoved: $showRemoved,
             showSetAside: $showSetAside,
             showSuperseded: $showSuperseded,
-            selectedVolumeCount: selectedVolumeIDs.count,
             dashboardContent: {
                 if model.isScanning || model.isCombining {
                     CompactDashboard(
@@ -709,7 +699,6 @@ struct CatalogView: View {
         CatalogContent(
             records: model.records,
             selectedIDs: $selectedIDs,
-            focusedPane: $focusedPane,
             sortOrder: $sortOrder,
             searchText: debouncedSearchText,
             searchHitCount: $searchHitCount,

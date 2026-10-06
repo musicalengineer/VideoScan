@@ -131,7 +131,6 @@ struct ReachableOnlyFilterDefaultTests {
         let view = CatalogContent(
             records: records,
             selectedIDs: .constant([]),
-            focusedPane: FocusState<CatalogPane?>().projectedValue,
             sortOrder: .constant([]),
             searchText: "",
             searchHitCount: .constant(0),
@@ -299,7 +298,6 @@ struct ReachableOnlyBadgeTests {
         let view = CatalogContent(
             records: records,
             selectedIDs: .constant([]),
-            focusedPane: FocusState<CatalogPane?>().projectedValue,
             sortOrder: .constant([]),
             searchText: searchText,
             searchHitCount: Binding(get: { box.value }, set: { box.value = $0 }),
