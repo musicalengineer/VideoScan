@@ -329,6 +329,8 @@ struct CatalogContent: View {
     /// Space pressed while the catalog table owns focus — toggle the mode.
     private func toggleLivePreview() {
         let action = livePreviewMode.toggle(candidatePath: livePreviewCandidatePath())
+        // Test-host trace only (no-op unless the Gauntlet harness started it).
+        GauntletKeyTrace.note("space toggled live preview")
         applyLivePreview(action)
     }
 

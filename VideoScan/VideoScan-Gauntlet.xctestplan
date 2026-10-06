@@ -26,6 +26,7 @@
     {
       "parallelizable": false,
       "selectedTests": [
+        "CatalogKeyboardUITests",
         "Gauntlet01PersonSearchUITests",
         "Gauntlet02CatalogSearchUITests",
         "Gauntlet03SetDateUITests",

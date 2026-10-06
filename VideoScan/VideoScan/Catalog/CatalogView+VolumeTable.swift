@@ -350,6 +350,8 @@ extension CatalogView {
             if let id = ids.first { openVolumesEditor(for: id) }
         }
         .font(.system(size: 14))
+        // Keyboard harness hook (CatalogKeyboardUITests).
+        .accessibilityIdentifier("catalog.volumesTable")
     }
 
     /// Build the migration report for one offline/retired volume and

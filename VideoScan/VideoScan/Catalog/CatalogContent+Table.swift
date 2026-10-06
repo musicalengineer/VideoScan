@@ -176,6 +176,8 @@ extension CatalogContent {
     /// keep their own ⌘⌫. Its own stage, same reason as the others (GH #132).
     private var tableWithTrashShortcut: some View {
         catalogTableBase
+            // Keyboard harness hook (CatalogKeyboardUITests).
+            .accessibilityIdentifier("catalog.filesTable")
             // Takes keyboard focus when a file is picked (see filesTableFocused).
             .focused(tableState.$filesTableFocused)
             // The menu route (2026-09-20): Catalog ▸ Move to Trash ⌘⌫ reads
