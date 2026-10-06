@@ -12,7 +12,7 @@ do not try to build the app.
    explore elsewhere. If the scope looks wrong, say so in the report; do not widen it.
 2. **Never change source, tests or project files.** Your only output is ONE
    report file at the path your brief gives.
-3. Commit the report on a branch named `cloud/<brief-id>` and push that branch.
+3. Commit the report on a branch named EXACTLY `cloud/<brief-id>` (not the session's default `claude/…` name) and push that branch.
    Never push to `main`. Never open a PR.
 4. **Report header (first lines, exact shape):**
    ```

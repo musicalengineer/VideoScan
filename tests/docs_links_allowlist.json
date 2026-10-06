@@ -205,9 +205,6 @@
   "VideoScan/VideoScanTests/VolumeRoleTests.swift": {
     "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
-  "docs/briefs/cloud/C02-archive-promote-recovery.md": {
-    "docs/reviews/cloud/C02-archive-promote-recovery.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
-  },
   "docs/briefs/cloud/C03-python-run-and-review.md": {
     "docs/reviews/cloud/C03-python-run-and-review.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
   },
