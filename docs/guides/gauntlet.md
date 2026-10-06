@@ -51,7 +51,12 @@ Inspect the inventory without an app build:
 ```
 
 New tests require a reviewed manifest assignment; the runner never guesses a
-stage for an unfamiliar test. An `assignments[].blocked_reason` and matching
+stage for an unfamiliar test. `scripts/gauntlet/manifest_drift.py` catches the
+commonest drift early: the pre-commit hook (`--staged`) refuses a commit that
+adds a test file without a stage in the staged manifest, and CI preflight
+(`--all`) does the same over the whole tree. It only checks that each test
+file is assigned; declaration lists, suites, selectors and floors are still
+`inventory.swift --validate`'s job. An `assignments[].blocked_reason` and matching
 `stages[].blocked` entry explain each unadapted test. Normal hosted suites
 without direct filesystem/global-state dependencies are selected; tests with
 unadapted positive gates, real data, persistence, or shared process state are
