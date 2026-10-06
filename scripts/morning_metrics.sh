@@ -45,6 +45,13 @@ fi
 # quiet on other hosts. Never fails the digest.
 python3 "$REPO_ROOT/scripts/sanitizer_alert.py" || true
 
+# Nightly Hallie replay (Rick 2026-10-06: the 10/5 eval caught "People
+# profiles are unavailable" and nothing surfaced it): 🔴 when the decline
+# rate jumps > 5 pts night over night or a NEW decline reason covers ≥ 5
+# questions; one plain numbers line every morning. Local files on the M4,
+# so quiet on other hosts. Never fails the digest.
+python3 "$REPO_ROOT/scripts/hallie_eval_alert.py" || true
+
 TD="$(git show origin/metrics:metrics/testdriver.jsonl 2>/dev/null || true)"
 SA="$(git show origin/metrics:metrics/static_analysis.jsonl 2>/dev/null || true)"
 
