@@ -264,7 +264,7 @@ struct ArchiveDecadeTick: Identifiable, Equatable {
     let yearsWithMedia: Set<Int>
 
     var isUndated: Bool { id == Self.undatedID }
-    var isGap: Bool { count == 0 }
+    var isGap: Bool { count < 1 }
     /// The ten years of the decade, in order; none for Undated.
     var years: [Int] { isUndated ? [] : Array(id...(id + 9)) }
 

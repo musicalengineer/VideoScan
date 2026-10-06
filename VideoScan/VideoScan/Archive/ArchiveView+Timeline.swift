@@ -128,6 +128,9 @@ struct ArchiveTimelinePane: View {
     /// nothing moved — only Undated, which is not in that ForEach, jumped
     /// (Rick 2026-09-23). A String "stream-1990" can't collide with it.
     static func anchorID(_ decade: Int) -> String { "stream-\(decade)" }
+    /// A year's anchor — its own prefix, so 1990-the-year never collides
+    /// with 1990-the-decade.
+    static func yearAnchorID(_ year: Int) -> String { "year-\(year)" }
 
     var body: some View {
         if timeline.isEmpty {
@@ -137,7 +140,8 @@ struct ArchiveTimelinePane: View {
                 VStack(spacing: 0) {
                     ArchiveDecadeRibbon(ticks: snapshot.ticks,
                                         selectedID: selectedDecade,
-                                        onSelect: { pickDecade($0, proxy: proxy) })
+                                        onSelect: { pickDecade($0, proxy: proxy) },
+                                        onPickYear: { pickYear($0, proxy: proxy) })
                     Divider()
                     stream
                 }
@@ -180,6 +184,13 @@ struct ArchiveTimelinePane: View {
     private func pickDecade(_ anchor: Int, proxy: ScrollViewProxy) {
         selectedDecade = anchor
         withAnimation { proxy.scrollTo(Self.anchorID(anchor), anchor: .top) }
+    }
+
+    /// A year clicked in the ribbon's dwell-zoom row: its decade under
+    /// the lens, the stream scrolled to that year.
+    private func pickYear(_ year: Int, proxy: ScrollViewProxy) {
+        selectedDecade = (year / 10) * 10
+        withAnimation { proxy.scrollTo(Self.yearAnchorID(year), anchor: .top) }
     }
 
     // MARK: The stream
@@ -281,6 +292,7 @@ struct ArchiveTimelinePane: View {
         }
         .padding(.horizontal, 18)
         .padding(.bottom, 6)
+        .id(Self.yearAnchorID(year.year))
     }
 
     /// A year's cards as a grid that fills the pane's width — one column
