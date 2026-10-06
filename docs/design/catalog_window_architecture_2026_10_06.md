@@ -381,3 +381,16 @@ SwiftUI cookbook for focus" ("Focused values enable data flow between these
 different elements"). WWDC21 "SwiftUI on the Mac: Build the fundamentals" and "SwiftUI
 on the Mac: The finishing touches". Cocoa Event Handling Guide, "Handling Key
 Events" (key window, then menu bar, for key equivalents).
+
+---
+
+## Independent review (Fable, 2026-10-06): PROCEED-WITH-CHANGES
+
+The architecture conclusion holds: two hosting roots is the boundary, and VSplitView (one graph) is the right target. Corrections the plan adopts:
+
+1. **Mechanism.** Drop the "volume click → re-filter → selection change → edge 4 grabs focus" narrative as the proven cause. Edge 4 (`CatalogHelpers.swift:734`) only fires on a non-empty selection, and SwiftUI `Table` is not known to prune a selection when rows vanish. The simpler explanation fits both days, mirrored: **a click in one host's table does not take first responder from the other host's table** (10/5: volumes kept it after a file click; 10/6: files kept it after a volume click). Other suspects checked and cleared: no `.focusable`/`focusSection`/`onKeyPress`/window key handler; the Space monitor (`:363`) passes arrows through; `CatalogTableState` holding `@FocusState` is equivalent to a direct declaration; `notifyTargetsChanged()` cannot move focus.
+2. **Harness case 1 must reproduce the real sequence:** click file row 3 → click volume row 0 → ↓. A fresh launch with no file selected would stay green on main and the ladder would lose its baseline. Step 0 logs the first responder on **mouseDown** as well as on arrows. Keep case 6 (the control branch). Look tables up by index if `.accessibilityIdentifier` doesn't reach the AX table.
+3. **VSplitView step:** don't add `.frame(maxHeight: 400)`. Today's `topMaxHeight` is declared but never applied (`VerticalSplitView.swift:45, 54-75`), so capping it would be a behaviour change. Divider position isn't persisted today either (CatalogView is rebuilt per tab switch).
+4. **Step 8:** `notifyTargetsChanged()` also calls `noteVolumeStatusesStale()`; don't remove call sites on the "hosting hack" rationale alone.
+5. **Data risk:** **Archive ▸ Promote Selected** reads the `catalogSelectedIDs` mirror (`VideoScanApp.swift:753`, written `ContentView.swift:801`) and can act on rows a volume filter hides. Fix it in step 4 (scope it to visible, focused selection) with a pinning test, under /safety-critical.
+6. **Step 4 is a behaviour change, not a pure refactor:** every row refresh (search keystroke, scan count change, purge) clears a hidden selection and stops the preview. Needs Rick's explicit OK.
