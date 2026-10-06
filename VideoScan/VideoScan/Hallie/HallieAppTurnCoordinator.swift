@@ -364,9 +364,8 @@ enum HallieAppTurnCoordinator {
                         ? (responder.value ?? "unknown") : localResponder)
             },
             loadProfiles: {
-                switch HallieShellCLI.loadProfilesReadOnly() {
-                case .loaded(let profiles):
-                    return profiles.map {
+                HallieShellCLI.profilesLoggingCause(
+                    HallieShellCLI.loadProfilesReadOnly())?.map {
                         HallieTurnExecutor.ProfileSnapshot(
                             stableID: $0.id,
                             canonicalName: $0.name,
@@ -379,9 +378,6 @@ enum HallieAppTurnCoordinator {
                             notInFamilyTree: $0.notInFamilyTree,
                             treeIdentityUnreadable: $0.treeIdentityQuarantined != nil)
                     }
-                case .unavailable:
-                    return nil
-                }
             },
             loadGraph: {
                 // Promoted artifact only, one decode per process (codex #792).
