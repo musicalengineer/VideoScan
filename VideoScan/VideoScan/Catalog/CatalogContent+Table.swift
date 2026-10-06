@@ -177,7 +177,7 @@ extension CatalogContent {
     private var tableWithTrashShortcut: some View {
         catalogTableBase
             // Takes keyboard focus when a file is picked (see filesTableFocused).
-            .focused($filesTableFocused)
+            .focused(tableState.$filesTableFocused)
             // The menu route (2026-09-20): Catalog ▸ Move to Trash ⌘⌫ reads
             // this while the table has keyboard focus — see
             // CatalogTrashCommand.swift for why the key handler below was

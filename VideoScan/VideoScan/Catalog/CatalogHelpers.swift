@@ -25,10 +25,11 @@ struct CatalogContent: View {
     @Environment(\.openWindow) var openWindow
     let records: [VideoRecord]
     @Binding var selectedIDs: Set<UUID>
-    /// The files table claims keyboard focus when a file is picked
-    /// (Rick 2026-10-05: ↑/↓ moved the VOLUMES table — the window's first
-    /// key view kept focus because clicking a file row never moved it).
-    @FocusState var filesTableFocused: Bool
+    /// The files table's rows snapshot, badge revision and keyboard-focus
+    /// flag — gathered in CatalogTableState.swift (R1, GH #281). Read and
+    /// written through the `tableData` / `angelBadgeRevision` /
+    /// `filesTableFocused` forwarders there.
+    var tableState = CatalogTableState()
     @Binding var sortOrder: [KeyPathComparator<VideoRecord>]
     let searchText: String
     /// Search-hit badge count, published UP to the parent as a
@@ -161,19 +162,7 @@ struct CatalogContent: View {
     /// "Mark as Family Music…" sheet (2026-09-23) — .sheet(item:).
     @State var familyMusicSheetRequest: FamilyMusicSheetRequest?
 
-    /// Stable snapshot the Table reads from. Decoupled from `records` so the
-    /// Table never sees the data array mutate mid-gesture (which races with
-    /// AppKit's canDragRows / mouseDown handling and crashes inside
-    /// ForEach.IDGenerator with an out-of-bounds subscript).
-    @State var tableData: [VideoRecord] = []
-
-    /// Archive Angel evidence revision the rows last drew against (codex
-    /// #1345). Bumped from the store's `revision` publisher so a sweep
-    /// that changes a grade/summary WITHOUT changing the A+B set still
-    /// re-renders the "Promote me" badge and its tooltip. Read by the Tag
-    /// column cell; never recomputes `tableData` (≈ a dirty counter the
-    /// cell painter compares, not a data reload).
-    @State var angelBadgeRevision: Int = 0
+    // (`tableData` and `angelBadgeRevision` live in CatalogTableState.swift.)
 
     // "Extract Facial Frames…" (Rick 2026-06-09, Donna's birthday-
     // print project) runs as an ExtractFramesJob in the Media File
@@ -775,7 +764,7 @@ struct CatalogContent: View {
             // key view).
             filesTableFocused = true
         }
-        .defaultFocus($filesTableFocused, true)
+        .defaultFocus(tableState.$filesTableFocused, true)
         .onDisappear { removeSpaceKeyMonitor() }
         .sheet(isPresented: $showRenameSheet) {
             RenameSheet(
