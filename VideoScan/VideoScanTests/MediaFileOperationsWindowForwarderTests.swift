@@ -372,7 +372,14 @@ struct MediaFileOperationsWindowForwardSensorTests {
         // Archive Angel Start (start sheet) + Prepare with Archive Angel
         // (catalog menu) — both through ArchiveAngel.prepare since S2.
         "ArchiveAngel/Seams/AppConformances.swift": 2,
-        "CatalogContent+Table.swift": 9,          // compare, find, verify audio×2, verify video, analyze×2, reformat×2
+        // The row menu left CatalogContent+Table.swift (R1, GH #281): the
+        // table file must now hold NONE, and the 9 sites live here.
+        "CatalogContent+Table.swift": 0,
+        "CatalogRowContextMenu.swift": 0,         // dispatcher + open/remove/restore: none
+        "CatalogRowContextMenu+FileOps.swift": 1, // compare
+        "CatalogRowContextMenu+Organize.swift": 1, // Find and Tag
+        "CatalogRowContextMenu+Audio.swift": 3,   // verify audio×2, verify video
+        "CatalogRowContextMenu+Actions.swift": 4, // analyze×2, reformat×2
         "CatalogHelpers.swift": 1,                // Extract Facial Frames
         "CleanupSheet.swift": 1,
         "ContentView.swift": 2,                   // Delete Duplicates + accepted Resume

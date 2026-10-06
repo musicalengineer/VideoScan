@@ -198,7 +198,10 @@ struct CatalogTrashShortcutTests {
         // focus-scoped menu route pinned below. Nothing may put a key
         // handler back on the Table.
         #expect(!table.contains(".onKeyPress("), "no key handler on the Catalog table — it breaks arrow-key navigation")
-        #expect(table.contains("await model.deleteConfirmedJunk(targets, mode: .toTrash)"), "the row menu's Move to Trash still exists")
+        // The row menu moved to CatalogRowContextMenu.swift (R1, GH #281).
+        let rowMenu = try productionSource("CatalogRowContextMenu.swift")
+        #expect(rowMenu.contains("await model.deleteConfirmedJunk(targets, mode: .toTrash)"), "the row menu's Move to Trash still exists")
+        #expect(!rowMenu.contains(".onKeyPress("), "no key handler in the row menu either")
 
         // 2026-09-20 (Rick's second "why can't I hit cmd-delete"): a Command
         // key is a KEY EQUIVALENT the menu bar sees first, so the table's

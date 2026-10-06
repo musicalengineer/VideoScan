@@ -318,8 +318,44 @@ struct VerifyVideoScaleTests {
 @Suite("VerifyVideo — catalog menu sensor")
 struct VerifyVideoMenuSensorTests {
 
+    /// The Verify items live in CatalogRowContextMenu+Audio.swift since the
+    /// R1 split (GH #281; they were in CatalogContent+Table.swift).
     private func tableSource() throws -> String {
-        try SourceTree.appSource(named: "CatalogContent+Table.swift")
+        try SourceTree.appSource(named: "CatalogRowContextMenu+Audio.swift")
+    }
+
+    /// Every file the row menu spans: the table file plus EVERY
+    /// CatalogRowContextMenu*.swift, found by glob so a new section file
+    /// is covered without editing this list (QA on R1: a hand-kept list
+    /// missed +FileOps and +Organize).
+    private static func rowMenuFileNames() -> [String] {
+        let menu = SourceTree.appSources.map { ($0.relative as NSString).lastPathComponent }
+            .filter { $0.hasPrefix("CatalogRowContextMenu") && $0.hasSuffix(".swift") }
+            .sorted()
+        return ["CatalogContent+Table.swift"] + menu
+    }
+
+    private func rowMenuSources() throws -> String {
+        try Self.rowMenuFileNames()
+            .map { try SourceTree.appSource(named: $0) }
+            .joined(separator: "\n")
+    }
+
+    /// QA guard (R1): the retired-item sensor must read every row-menu
+    /// file. The list is a glob now, so the guard pins the glob's floor and
+    /// the two section files a hand-kept list once missed; an empty or
+    /// broken glob would otherwise let the Trim Master check pass vacuously.
+    @Test func trimMasterSensorCoversEveryRowMenuFile() throws {
+        let covered = Set(Self.rowMenuFileNames())
+        let menuFiles = SourceTree.appSources.map { ($0.relative as NSString).lastPathComponent }
+            .filter { $0.hasPrefix("CatalogRowContextMenu") && $0.hasSuffix(".swift") }
+        #expect(menuFiles.count >= 5)
+        for f in menuFiles + ["CatalogContent+Table.swift", "CatalogRowContextMenu+FileOps.swift",
+                              "CatalogRowContextMenu+Organize.swift"] {
+            #expect(covered.contains(f), "rowMenuSources() misses \(f)")
+        }
+        #expect(try rowMenuSources().contains("Let's remove Trim Master"),
+                "the retirement note's file (+FileOps) is read")
     }
 
     @Test func verifyVideoSitsRightAfterVerifyAudio() throws {
@@ -350,7 +386,7 @@ struct VerifyVideoMenuSensorTests {
     }
 
     @Test func trimMasterMenuItemStaysRetired() throws {
-        let s = try tableSource()
+        let s = try rowMenuSources()
         #expect(!s.contains("Button(\"Trim Master…\")"))
         #expect(!s.contains("catalog.row.trimMaster"))
     }

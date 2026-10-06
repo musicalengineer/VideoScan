@@ -2,7 +2,7 @@
 // Catalog-table pieces of Master Archive / Promote to Archive
 // (docs/archive_promotion_workflow.md §4): the row context-menu item, the
 // inspector's promotion links, and the two Show-menu filters' predicates.
-// Split out so CatalogContent+Table.swift's already-huge menu builder
+// Split out so the row menu builder (now CatalogRowContextMenu.swift)
 // stays inside Xcode's type-check budget.
 
 import SwiftUI
