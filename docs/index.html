@@ -106,7 +106,7 @@
 <div class="subtitle">
   Tests, coverage, static analysis and reviews for
   <a href="https://github.com/musicalengineer/VideoScan">musicalengineer/VideoScan</a>.
-  Anything older than 36 hours is marked <span class="stale">STALE</span>. Missing data says so; it is never shown as zero.
+  Anything older than 36 hours gets a red STALE tag. Missing data says so; it is never shown as zero.
 </div>
 <div id="status">Loading metrics&hellip;</div>
 
@@ -182,7 +182,7 @@
 
 <!-- 8b ============ COMPLEXITY & TECH DEBT ============ -->
 <h3 class="section">Complexity &amp; tech debt &mdash; GitHub nightly</h3>
-<p class="section-note">lizard over Swift and Python production code. An offender is a function with cyclomatic complexity (CCN) over 15 or more than 80 lines of code. The nightly ratchet reports new offenders and known ones that got worse; the pre-commit hook and CI block anything new or worse over CCN 30 or 300 lines.</p>
+<p class="section-note">lizard over the app's Swift code (app, VideoScanCore, swift_cli); test beds and support scripts are not measured. An offender is a function with cyclomatic complexity (CCN) over 15 or more than 80 lines of code. The nightly ratchet reports new offenders and known ones that got worse; the pre-commit hook and CI block anything new or worse over CCN 30 or 300 lines.</p>
 <div class="cards" id="cx-cards"></div>
 <div class="charts">
   <div class="chart-box"><h2>Offenders per night</h2><canvas id="c-cx-debt"></canvas><div class="chart-note hidden" id="c-cx-debt-note"></div></div>
@@ -808,9 +808,8 @@ function renderComplexity(d) {
   const nightlyRows = rows.filter(r => !r.backfill);
   const lastNightly = nightlyRows.length ? nightlyRows[nightlyRows.length - 1] : {};
   const t = r => (r && r.totals) || {};
-  const all = t(last).all || {}, pAll = t(prev).all || {};
+  const all = t(last).swift || {}, pAll = t(prev).swift || {};
   const sw = t(last).swift || {}, pSw = t(prev).swift || {};
-  const py = t(last).python || {}, pPy = t(prev).python || {};
   const num = v => isNum(v) ? v : null;
   cards.appendChild(card("Offenders", num(all.offenders), pAll.offenders, all.offenders, true, "var(--bad)"));
   cards.appendChild(card("CCN > 15", num(all.ccn_over_15), pAll.ccn_over_15, all.ccn_over_15, true, "var(--bad)"));
@@ -818,7 +817,6 @@ function renderComplexity(d) {
   cards.appendChild(card("Over 80 lines", num(all.nloc_over_80), pAll.nloc_over_80, all.nloc_over_80, true, "var(--warn)"));
   cards.appendChild(card("Files over 800 lines", num(all.files_over_800), pAll.files_over_800, all.files_over_800, true, "var(--warn)"));
   cards.appendChild(card("Mean CCN, Swift", num(sw.mean_ccn), pSw.mean_ccn, sw.mean_ccn, true, "var(--accent)"));
-  cards.appendChild(card("Mean CCN, Python", num(py.mean_ccn), pPy.mean_ccn, py.mean_ccn, true, "var(--purple)"));
   cards.appendChild(card("New offenders (last night)", num(lastNightly.debt_new), null, null, true, "var(--bad)"));
   cards.appendChild(card("Got worse (last night)", num(lastNightly.debt_worse), null, null, true, "var(--warn)"));
   cards.appendChild(card("Fixed (last night)", num(lastNightly.debt_fixed), null, null, false, "var(--good)"));
@@ -829,7 +827,7 @@ function renderComplexity(d) {
 
   const daily = lastPerDay(rows);
   const labels = dateLabels(daily);
-  const tot = (r, k) => r.totals && r.totals.all && isNum(r.totals.all[k]) ? r.totals.all[k] : null;
+  const tot = (r, k) => r.totals && r.totals.swift && isNum(r.totals.swift[k]) ? r.totals.swift[k] : null;
   chartOrNote("c-cx-debt", "line", labels, [
     { label: "offenders", data: daily.map(r => tot(r, "offenders")), yAxisID: "y", ...lineStyle("#f85149") },
     { label: "CCN > 15", data: daily.map(r => tot(r, "ccn_over_15")), yAxisID: "y", ...lineStyle("#db6d28") },
@@ -844,20 +842,20 @@ function renderComplexity(d) {
   const folderMap = r => {
     const out = {};
     for (const [k, v] of Object.entries(r.swift_by_folder || {})) out[k] = v;
-    for (const [k, v] of Object.entries(r.python_by_folder || {})) out[`${k} (py)`] = v;
     return out;
   };
   const latestFolders = folderMap(last);
   const names = Object.keys(latestFolders)
     .sort((a, b) => (latestFolders[b].functions || 0) - (latestFolders[a].functions || 0)).slice(0, CX_COLORS.length);
   chartOrNote("c-cx-folders", "line", labels, [
-    { label: "all code", data: daily.map(r => tot(r, "mean_ccn")), borderWidth: 4, ...lineStyle("#8b949e") },
+    { label: "all app code", data: daily.map(r => tot(r, "mean_ccn")), borderWidth: 4, ...lineStyle("#8b949e") },
     ...names.map((n, i) => ({
       label: n, data: daily.map(r => { const f = folderMap(r)[n]; return f && isNum(f.mean_ccn) ? f.mean_ccn : null; }),
       ...lineStyle(CX_COLORS[i]),
     }))], withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false } }));
 
-  const list = Array.isArray(lastNightly.top15) ? lastNightly.top15 : [];
+  // App code only: rows published before 2026-10-06 also listed Python.
+  const list = (Array.isArray(lastNightly.top15) ? lastNightly.top15 : []).filter(f => (f.lang || "swift") === "swift");
   document.getElementById("cx-top-title").textContent = `Top ${list.length || 15} most complex functions${lastNightly.ts ? " · " + fmtWhen(lastNightly.ts).split(" · ")[0] : ""}`;
   const base = p => String(p || "").split("/").pop();
   const fnTable = (items, withBase) => {

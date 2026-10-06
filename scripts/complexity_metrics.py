@@ -111,7 +111,8 @@ GATE_NLOC = 300        # same as .swiftlint.yml function_body_length: error
 GATE_CCN_LINE = GATE_CCN
 
 SWIFT_ROOTS = ("VideoScan/VideoScan", "VideoScan/VideoScanCore/Sources", "swift_cli")
-PYTHON_ROOTS = ("scripts", "tools")
+# App code only (Rick 2026-10-06): test beds and support scripts are not measured.
+PYTHON_ROOTS: tuple = ()
 SKIP_DIRS = {".build", "build", "DerivedData", "checkouts", "node_modules",
              "__pycache__", ".venv", "venv", ".git", ".trash"}
 

@@ -158,10 +158,14 @@ def complexity_row(ts, offenders, new):
     return {"ts": iso(ts), "sha": "abcd1234", "run_kind": "nightly",
             "swift_by_folder": {"Hallie": folder, "Core": {**folder, "mean_ccn": 3.5}},
             "python_by_folder": {"tools": {**folder, "mean_ccn": 6.3}},
-            "totals": {"swift": {**folder, "mean_ccn": 3.85}, "python": {**folder, "mean_ccn": 6.54},
-                       "all": {**folder, "offenders": offenders, "ccn_over_15": 435, "nloc_over_80": 241}},
+            "totals": {"swift": {**folder, "mean_ccn": 3.85, "offenders": offenders, "ccn_over_15": 435,
+                                 "nloc_over_80": 241},
+                       "python": {**folder, "mean_ccn": 6.54},
+                       "all": {**folder, "offenders": offenders + 99}},
             "top15": [{"file": "tools/nightly_findings_to_issues.py", "function": "plan_ticket", "ccn": 111,
-                       "nloc": 162, "lang": "python"}],
+                       "nloc": 162, "lang": "python"},
+                      {"file": "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift",
+                       "function": "HallieLineageQuestion.detectShape", "ccn": 88, "nloc": 250, "lang": "swift"}],
             "debt_offenders": offenders, "debt_new": new, "debt_worse": 0, "debt_fixed": 1,
             "duplicate_rate_pct": 1.96, "duplicate_blocks": 178, "gate_overrides_recent": 1}
 
@@ -187,9 +191,11 @@ def test_every_section_renders_with_honest_missing_and_stale_states(tmp_path):
         assert chart in out["charts"], chart
     # Complexity: cards, the top-15 table and the latest new-offender list.
     cx = out["sections"]["cx-cards"]
-    assert "Offenders" in cx and "514" in cx and "-6 from previous" in cx and "6.54" in cx
+    # App code only (Rick 2026-10-06): the cards read the Swift totals, never Python.
+    assert "Offenders" in cx and "514" in cx and "-6 from previous" in cx and "3.85" in cx
+    assert "6.54" not in cx and "613" not in cx
     assert "1.96%" in cx and "Gate overrides (48 h)" in cx
-    assert "plan_ticket" in out["sections"]["cx-top"] and "nightly_findings_to_issues.py" in out["sections"]["cx-top"]
+    assert "detectShape" in out["sections"]["cx-top"] and "plan_ticket" not in out["sections"]["cx-top"]
     ovr = out["sections"]["cx-ovr"]
     assert "Big.run" in ovr and "35" in ovr and "abc1234" in ovr and "Rick Breen" in ovr
     assert "NewView.body" in out["sections"]["cx-new"] and "1 new, 0 worse, 1 fixed" in out["sections"]["cx-new-title"]

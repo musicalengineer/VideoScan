@@ -267,7 +267,9 @@ def test_disable_baseline_only_shrinks(tmp_path):
 def test_scope_excludes_tests_build_dirs_and_venvs():
     assert cm.in_scope("VideoScan/VideoScan/Catalog/A.swift")
     assert cm.in_scope("VideoScan/VideoScanCore/Sources/X/A.swift")
-    assert cm.in_scope("tools/person-eval/a.py")
+    # App code only (Rick 2026-10-06): support scripts and test beds are out of scope.
+    assert not cm.in_scope("tools/person-eval/a.py")
+    assert not cm.in_scope("scripts/hallie_eval.py")
     for p in ["VideoScan/VideoScanTests/A.swift", "VideoScan/VideoScanCore/.build/checkouts/x/A.swift",
               "tools/venv-mlx/lib/a.py", "scripts/a.sh", "other/a.py"]:
         assert not cm.in_scope(p), p
