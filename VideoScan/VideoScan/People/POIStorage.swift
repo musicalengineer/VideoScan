@@ -170,6 +170,14 @@ enum POIStorage {
         return UUID(uuidString: String(name[range.upperBound...])) != nil
     }
 
+    /// True for a POI/ entry that is never a person: the family-groups
+    /// folder (`FamilyGroupStore.folderName`) and import/rename staging
+    /// dirs. One definition for People's migration logging and Hallie's
+    /// read-only profile reader.
+    static func isKnownNonPersonFolderName(_ name: String) -> Bool {
+        name == FamilyGroupStore.folderName || isStagingFolderName(name)
+    }
+
     // MARK: - Safe trash (NEVER rm -rf, per project policy)
 
     /// Root for "soft-deleted" POI folders. Lives inside the working tree so
@@ -676,6 +684,14 @@ enum POIStorage {
         }
         func skip(_ folder: URL, _ reason: String, _ detail: String) {
             report.skipped.append(.init(folder: folder.lastPathComponent, reason: reason, detail: detail))
+            // A folder that is never a person (Families/, staging dirs) is
+            // skipped by design on every launch: debug level only, so the
+            // app/catalog logs keep "skipped" for folders that need a look.
+            // Log level only — the audit report above still records it.
+            if isKnownNonPersonFolderName(folder.lastPathComponent) {
+                storageLog.debug("migration: skipped non-person folder '\(folder.lastPathComponent, privacy: .public)' (\(reason, privacy: .public))")
+                return
+            }
             let key = root.path + "/" + folder.lastPathComponent + "#" + reason
             if !reportedSkips.contains(key) {
                 reportedSkips.insert(key)

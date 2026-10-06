@@ -174,6 +174,23 @@ struct POIUUIDFoldersSensorTests {
         #expect(!POIStorage.isStagingFolderName(UUID().uuidString))
     }
 
+    /// Known non-person POI/ entries (2026-10-06): Families/ and staging
+    /// dirs. The migration logs their skip at debug level only, and Hallie's
+    /// read-only reader never treats them as people. A person folder —
+    /// uuid-named or legacy, even one called "Family" — is never matched.
+    @Test func knownNonPersonFolderNames() {
+        #expect(POIStorage.isKnownNonPersonFolderName(FamilyGroupStore.folderName))
+        #expect(POIStorage.isKnownNonPersonFolderName("Families"))
+        #expect(POIStorage.isKnownNonPersonFolderName("Donna.import-\(UUID().uuidString)"))
+        #expect(POIStorage.isKnownNonPersonFolderName(".poi-rename-x"))
+        #expect(!POIStorage.isKnownNonPersonFolderName(UUID().uuidString))
+        #expect(!POIStorage.isKnownNonPersonFolderName("Donna"))
+        #expect(!POIStorage.isKnownNonPersonFolderName("Family"))
+        #expect(!POIStorage.isKnownNonPersonFolderName("families"))
+        #expect(HallieShellCLI.isNonPersonPOIFolder("Families"))
+        #expect(!HallieShellCLI.isNonPersonPOIFolder("Donna"))
+    }
+
     /// SENSOR `renameNeverMovesPhotos`: the folder, its inode and every
     /// photo byte are exactly where they were after a rename.
     @Test func renameNeverMovesPhotos() throws {

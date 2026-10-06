@@ -1835,7 +1835,7 @@ enum HallieShellCLI {
     /// True for a POI/ entry that is never a person: the family-groups
     /// folder (FamilyGroupStore) and import/rename staging dirs (POIStorage).
     static func isNonPersonPOIFolder(_ name: String) -> Bool {
-        name == FamilyGroupStore.folderName || POIStorage.isStagingFolderName(name)
+        POIStorage.isKnownNonPersonFolderName(name)
     }
 
     /// Callers' one way to turn a load into `Context.profiles`: on
