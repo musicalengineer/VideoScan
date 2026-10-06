@@ -623,17 +623,226 @@ def markdown_report(row: dict, debt: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Swift regex literals (pure; runs before lizard sees a Swift file)
+#
+# lizard's Swift reader predates Swift 5.7 regex literals. Inside
+# `/\b(?:get|fetch)\b/` it sees `get` as a property accessor and splits or
+# merges functions around it (cloud review N1007: `isFetchClause.get` CCN 93
+# was three functions of 7, 11 and 10; `detectShape` lost 74 lines). So every
+# regex literal becomes `""` plus the newlines it spanned: same line count,
+# so line numbers stay true. A small tokenizer (strings, raw strings,
+# interpolation, nested block comments) decides what is code, then Swift's own
+# rule decides what is a bare regex: `/` where an expression starts, not
+# followed by `/` or `*`, not starting or ending with a space or tab, closed
+# on the same line. Anything else is the division operator and is untouched.
+#
+# The same tokenizer fixes lizard's other `#` blind spot: its tokenizer reads
+# every `#` as a C preprocessor line and drops the REST OF THE LINE, so
+# `.range(of: #"\b"#) != nil }` lost its closing brace and
+# `if #available(macOS 26, *) {` its opening one, and the functions around
+# them ended in the wrong place. Raw strings (`#"…"#`, `#"""…"""#`) become
+# `""` plus their newlines, and a `#` that is not a line-leading compiler
+# directive (`#available`, `#selector`, `#Preview`, `#file`) becomes a space.
+# `#if` / `#else` / `#endif` lines are left for lizard to skip as before.
+
+_SWIFT_DIRECTIVES = frozenset({"if", "elseif", "else", "endif", "warning", "error",
+                               "sourceLocation"})
+_SWIFT_EXPR_KEYWORDS = frozenset({
+    "return", "case", "in", "where", "if", "guard", "while", "try", "await",
+    "throw", "throws", "else", "switch", "repeat", "is", "as", "yield", "then",
+    "some", "any", "do", "catch", "default",
+})
+_SWIFT_WORD = re.compile(r"[A-Za-z0-9_$@`\u0080-\U0010ffff]+")
+
+
+def swift_lizard_spans(src: str) -> List[Tuple[int, int, str]]:
+    """(start, end, kind) of everything lizard misreads in Swift source:
+    "regex" (a regex literal), "raw" (a raw string literal) or "hash" (one
+    `#` that is not part of a line-leading compiler directive)."""
+    n = len(src)
+    spans: List[Tuple[int, int, str]] = []
+
+    def skip_block_comment(i: int) -> int:          # src[i:i+2] == "/*"
+        depth, i = 1, i + 2
+        while i < n and depth:
+            if src.startswith("/*", i):
+                depth, i = depth + 1, i + 2
+            elif src.startswith("*/", i):
+                depth, i = depth - 1, i + 2
+            else:
+                i += 1
+        return i
+
+    def skip_string(i: int, hashes: int) -> int:     # src[i] == '"' after `hashes` #s
+        quotes = 3 if src.startswith('"""', i) else 1
+        close = '"' * quotes + "#" * hashes
+        escape = "\\" + "#" * hashes
+        i += quotes
+        while i < n:
+            if src.startswith(escape, i):
+                j = i + len(escape)
+                if j < n and src[j] == "(":
+                    i = scan(j + 1, nested=True)
+                else:
+                    i = j + 1
+            elif src.startswith(close, i):
+                return i + len(close)
+            elif src[i] == "\n" and quotes == 1:
+                return i                              # unterminated: stop at the line
+            else:
+                i += 1
+        return n
+
+    def bare_regex_end(i: int) -> int:               # src[i] == "/"; -1 if not a regex
+        if i + 1 >= n or src[i + 1] in " \t\n\r/*":
+            return -1
+        j, klass = i + 1, 0
+        while j < n and src[j] != "\n":
+            ch = src[j]
+            if ch == "\\":
+                j += 2
+                continue
+            if ch == "[":
+                klass += 1
+            elif ch == "]" and klass:
+                klass -= 1
+            elif ch == "/" and not klass:
+                return -1 if src[j - 1] in " \t" else j + 1
+            j += 1
+        return -1
+
+    def extended_regex_end(i: int, hashes: int) -> int:   # src[i] == "/" after the #s
+        close = "/" + "#" * hashes
+        j = i + 1
+        multi = src[j:].split("\n", 1)[0].strip() == ""
+        while j < n:
+            if src[j] == "\\":
+                j += 2
+                continue
+            if src.startswith(close, j):
+                return j + len(close)
+            if src[j] == "\n" and not multi:
+                return -1
+            j += 1
+        return -1
+
+    def scan(i: int, nested: bool = False) -> int:
+        prev = "start"          # start | op (an expression may start) | value
+        parens = 0
+        while i < n:
+            c = src[i]
+            if c in " \t\r\n":
+                i += 1
+                continue
+            if src.startswith("//", i):
+                nl = src.find("\n", i)
+                i = n if nl < 0 else nl
+                continue
+            if src.startswith("/*", i):
+                i = skip_block_comment(i)
+                continue
+            if c == '"':
+                i, prev = skip_string(i, 0), "value"
+                continue
+            if c == "#":
+                j = i
+                while j < n and src[j] == "#":
+                    j += 1
+                if j < n and src[j] == '"':
+                    end = skip_string(j, j - i)
+                    spans.append((i, end, "raw"))
+                    i, prev = end, "value"
+                    continue
+                if j < n and src[j] == "/":
+                    end = extended_regex_end(j, j - i)
+                    if end > 0:
+                        spans.append((i, end, "regex"))
+                        i, prev = end, "value"
+                        continue
+                m = _SWIFT_WORD.match(src, j)
+                line_start = src.rfind("\n", 0, i) + 1
+                directive = (j == i + 1 and m is not None and m.group(0) in _SWIFT_DIRECTIVES
+                             and not src[line_start:i].strip())
+                if not directive:
+                    spans.extend((k, k + 1, "hash") for k in range(i, j))
+                i, prev = (m.end() if m else j), "value"     # #available(...), #selector(...)
+                continue
+            if c == "/":
+                end = bare_regex_end(i) if prev != "value" else -1
+                if end > 0:
+                    spans.append((i, end, "regex"))
+                    i, prev = end, "value"
+                else:
+                    i, prev = i + 1, "op"
+                continue
+            m = _SWIFT_WORD.match(src, i)
+            if m:
+                prev = "op" if m.group(0) in _SWIFT_EXPR_KEYWORDS else "value"
+                i = m.end()
+                continue
+            if c == "(":
+                parens += 1
+                prev = "op"
+            elif c == ")":
+                if nested and parens == 0:
+                    return i + 1                    # end of a string interpolation
+                parens -= 1
+                prev = "value"
+            elif c in "]}":
+                prev = "value"
+            elif c in "!?" and prev == "value" and i and src[i - 1] not in " \t\r\n":
+                pass                                # postfix: x! / y, opt? / y
+            else:
+                prev = "op"
+            i += 1
+        return n
+
+    scan(0)
+    return spans
+
+
+def swift_regex_literal_spans(src: str) -> List[Tuple[int, int]]:
+    """[start, end) offsets of every regex literal in Swift source."""
+    return [(a, b) for a, b, kind in swift_lizard_spans(src) if kind == "regex"]
+
+
+def neutralize_swift_for_lizard(src: str) -> str:
+    """Swift source as lizard can read it: every regex and raw string literal
+    replaced by `""` plus the newlines it spanned, every non-directive `#` by
+    a space. Same line count, so every line number stays where it was."""
+    spans = swift_lizard_spans(src)
+    if not spans:
+        return src
+    out, last = [], 0
+    for start, end, kind in spans:
+        out.append(src[last:start])
+        out.append(" " if kind == "hash" else '""' + "\n" * src.count("\n", start, end))
+        last = end
+    out.append(src[last:])
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
 # scanning (needs lizard; everything above is pure)
+
+_SWIFT_DECL_WORDS = frozenset({"init", "subscript", "get", "set", "willSet", "didSet", "deinit"})
+
 
 def install_swift_property_support() -> None:
     """Teach lizard's Swift reader that `var NAME ... {` on one line is a
-    function named NAME (computed property / SwiftUI body). Idempotent."""
+    function named NAME (computed property / SwiftUI body), and that
+    `.init` / `.get` after a dot (`map(String.init)`) is a member reference,
+    not the start of an initializer or accessor (stock lizard opened a
+    function there and swallowed the rest of the body: cloud review N1007,
+    `HalliePersonaQuestion.init` was really `detect`). Idempotent."""
     from lizard_languages.swift import SwiftStates
     if getattr(SwiftStates, "_videoscan_props", False):
         return
     original = SwiftStates._state_global
 
     def _state_global(self, token):
+        if token in _SWIFT_DECL_WORDS and self.last_token == ".":
+            return      # `String.init`, `cache.get(k)`: a member reference, not a declaration
         if token == "var":
             self._vs_line = self.context.current_line
             self._state = self._vs_var_name
@@ -700,6 +909,8 @@ def analyze_sources(sources: Dict[str, str], root: str = ".",
     tree, files on disk) and the pre-commit gate (STAGED blobs)."""
     import lizard
     install_swift_property_support()
+    sources = {rel: (neutralize_swift_for_lizard(text) if lang_of(rel) == "swift" else text)
+               for rel, text in sources.items()}
     dup = None
     if duplication:
         from lizard_ext.lizardduplicate import LizardExtension as Duplicates
