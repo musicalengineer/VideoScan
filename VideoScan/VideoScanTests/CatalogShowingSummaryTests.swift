@@ -17,17 +17,25 @@ struct CatalogShowingSummaryTests {
 
     @Test func defaultWithoutMasterArchiveSaysVideosOnConnectedDrives() {
         let s = CatalogShowingSummary.State()
-        #expect(texts(s) == ["Videos", "Connected drives"])
-        #expect(CatalogShowingSummary.sentence(for: s) == "Showing Videos, Connected drives")
+        #expect(texts(s) == ["Videos", "All volumes", "Connected drives"])
+        #expect(CatalogShowingSummary.sentence(for: s) == "Showing Videos, All volumes, Connected drives")
     }
 
     @Test func masterArchiveAddsTheArchivePillInTheSecondSlot() {
         var s = CatalogShowingSummary.State(hasMasterArchive: true)
-        #expect(texts(s) == ["Videos", "Including archived", "Connected drives"])
+        #expect(texts(s) == ["Videos", "Including archived", "All volumes", "Connected drives"])
         s.viewFilters = [.notYetArchived]
-        #expect(texts(s) == ["Videos", "Not yet archived", "Connected drives"])
+        #expect(texts(s) == ["Videos", "Not yet archived", "All volumes", "Connected drives"])
         s.viewFilters = [.hasMasterCopy]
-        #expect(texts(s) == ["Videos", "Already archived", "Connected drives"])
+        #expect(texts(s) == ["Videos", "Already archived", "All volumes", "Connected drives"])
+    }
+
+    /// Empty volume pick = every volume, and the row says so (2026-10-06).
+    @Test func volumePillSaysAllVolumesWhenNothingIsPicked() {
+        #expect(CatalogShowingSummary.volumeWords(count: 0) == "All volumes")
+        #expect(CatalogShowingSummary.volumeWords(count: 1) == "1 volume")
+        #expect(CatalogShowingSummary.volumeWords(count: 3) == "3 volumes")
+        #expect(texts(CatalogShowingSummary.State(volumeCount: 1)) == ["Videos", "1 volume", "Connected drives"])
     }
 
     @Test func archivePillIsTheOnlyGreenOneAndIsClickable() {
@@ -60,10 +68,10 @@ struct CatalogShowingSummaryTests {
             viewFilters: [.notYetArchived, .hasFamily, .ratedOnly],
             showPairsOnly: true, showDisconnectedMedia: true,
             showRemoved: true, showSetAside: true, showSuperseded: true,
-            hasMasterArchive: true)
+            hasMasterArchive: true, volumeCount: 2)
         #expect(texts(s) == [
             "All kinds", "Not yet archived", "Starred", "With family", "Pairs only",
-            "All drives", "Plus removed files", "Plus set-aside files", "Plus replaced originals",
+            "2 volumes", "All drives", "Plus removed files", "Plus set-aside files", "Plus replaced originals",
         ])
     }
 
