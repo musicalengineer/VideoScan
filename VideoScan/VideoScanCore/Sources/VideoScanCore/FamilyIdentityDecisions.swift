@@ -27,6 +27,7 @@
 // FamilySearch at all. They are keyed by a stable local key instead.
 
 import CryptoKit
+import Darwin
 import Foundation
 
 /// One person's identity ruling. Every field is optional evidence: a
@@ -252,13 +253,96 @@ public struct FamilyIdentityDecisions: Equatable, Sendable {
         }
     }
 
-    public func save(to directory: URL) throws {
+    /// What is on disk at the rulings path right now. Distinguishes a file
+    /// that holds rulings (or none: `[]`) from one whose bytes cannot be
+    /// read back — the case `load` reports as "nothing ruled" so the tree
+    /// still opens, and the case `save` must never overwrite (N1009-D F1).
+    public enum FileState: Equatable, Sendable {
+        case missing
+        /// Decodes, with zero rulings.
+        case empty
+        /// Decodes, with this many rulings.
+        case rulings(Int)
+        /// Exists but cannot be read or does not decode (hand-edit typo,
+        /// torn write, permissions). Its bytes are irreplaceable.
+        case unreadable
+    }
+
+    public static func fileState(in directory: URL) -> FileState {
+        let url = fileURL(in: directory)
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            return isMissingFileError(error) ? .missing : .unreadable
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let list = try? decoder.decode([FamilyIdentityDecision].self, from: data) else {
+            return .unreadable
+        }
+        return list.isEmpty ? .empty : .rulings(list.count)
+    }
+
+    private static func isMissingFileError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return (ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError)
+            || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT))
+    }
+
+    /// Thrown when an unreadable rulings file could not be moved aside, so
+    /// the save was refused rather than overwrite it.
+    public struct DamagedFileNotPreserved: LocalizedError {
+        public let path: String
+        public let errnoValue: Int32
+        public var errorDescription: String? {
+            "The identity rulings file at \(path) could not be read, and it could not be "
+                + "set aside safely (\(String(cString: strerror(errnoValue)))), so nothing was saved."
+        }
+    }
+
+    /// Write the rulings. Durable (`F_FULLFSYNC`) and atomic through
+    /// `AtomicFilePublish` (never `replaceItemAt` — the rename wedge).
+    ///
+    /// If the file on disk exists but cannot be read back, its bytes are
+    /// first MOVED (no-clobber rename, never copied, never deleted) to
+    /// `<name>.damaged-<ISO8601>` beside it and a 🔴 line is logged naming
+    /// where. If that move fails, the save is refused and the damaged file
+    /// is left exactly as it was. Refuse before mutating.
+    public func save(to directory: URL, log: (String) -> Void = { _ in }) throws {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
         // Stable order so the file diffs cleanly — Rick edits this by hand.
         let ordered = decisions.values.sorted { $0.key.description < $1.key.description }
-        try encoder.encode(ordered).write(to: Self.fileURL(in: directory), options: .atomic)
+        let data = try encoder.encode(ordered)
+        let url = Self.fileURL(in: directory)
+        if Self.fileState(in: directory) == .unreadable {
+            let aside = try Self.moveDamagedFileAside(url)
+            log("🔴 [family-tree] identity rulings at \(url.lastPathComponent) could not be read — "
+                + "moved aside to \(aside.path) before saving. Earlier rulings are in that file; "
+                + "to restore, fix it by hand and rename it back to \(url.lastPathComponent).")
+        }
+        try AtomicFilePublish.write(data, to: url, durability: .fullFsync)
+    }
+
+    /// `<name>.damaged-<yyyyMMdd'T'HHmmss'Z'>`, then `-2` … `-99` if that
+    /// second is taken. `renamex_np(RENAME_EXCL)` never replaces an
+    /// existing file. Throws (and moves nothing) on any other failure.
+    static func moveDamagedFileAside(_ url: URL, now: Date = Date()) throws -> URL {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
+        let base = url.path + ".damaged-" + fmt.string(from: now)
+        var lastErr: Int32 = EEXIST
+        for n in 1...99 {
+            let candidate = n == 1 ? base : "\(base)-\(n)"
+            if renamex_np(url.path, candidate, UInt32(RENAME_EXCL)) == 0 {
+                return URL(fileURLWithPath: candidate)
+            }
+            lastErr = errno
+            if lastErr != EEXIST { break }
+        }
+        throw DamagedFileNotPreserved(path: url.path, errnoValue: lastErr)
     }
 }
