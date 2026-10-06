@@ -94,8 +94,8 @@ extension CatalogContent {
     /// R1 (GH #281): the full menu's body is now one builder per section
     /// (activeRowContextMenu below, CatalogRowContextMenu+FileOps.swift,
     /// +Organize.swift, +Audio.swift); the selection split and menu
-    /// choice are plain data (CatalogRowMenuPlan.swift). The old
-    /// `swiftlint:disable:next cyclomatic_complexity function_body_length`
+    /// choice are plain data (CatalogRowMenuPlan.swift). The old SwiftLint
+    /// disable-next directive (cyclomatic complexity, function body length)
     /// is gone with it.
     @ViewBuilder
     func rowContextMenu(ids: Set<UUID>) -> some View {
@@ -281,6 +281,8 @@ extension CatalogContent {
                 Label(CatalogRowMenuText.deleteFiles(count: deletableRecs.count),
                       systemImage: "xmark.bin")
             }
+            // A viewer never deletes; the model refuses too (C04-F5).
+            .disabled(model.isReadOnly)
             .help("Move the file(s) to Trash or remove them from disk permanently. Distinct from \u{201C}Remove from Catalog\u{201D} which only hides the row.")
         }
     }

@@ -543,6 +543,8 @@ struct TriageView: View {
                 }
                 .vsGlassButtonStyle()
                 .tint(.red)
+                // A viewer never deletes; the model refuses too (C04-F5).
+                .disabled(model.isReadOnly)
                 .help("Move to Trash or delete permanently — sheet shows the split between reachable and offline volumes")
             }
 

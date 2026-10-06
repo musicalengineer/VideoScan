@@ -661,7 +661,8 @@ struct VolumesWindow: View {
         } label: {
             Text("Delete from list…")
         }
-        .disabled(isBootRoot)
+        // A viewer never rewrites the master's list; the model refuses too (C04-F5).
+        .disabled(isBootRoot || model.isReadOnly)
         .help(isBootRoot
               ? "The boot volume can't be deleted from this list."
               : "Remove this volume entry from the scan-targets list. Catalog records are kept as orphans.")

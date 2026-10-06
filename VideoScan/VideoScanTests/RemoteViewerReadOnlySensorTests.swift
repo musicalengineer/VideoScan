@@ -111,6 +111,15 @@ struct RemoteViewerReadOnlySensorTests {
             #expect(sink.has("\(ViewerWriteGuard.logPrefix) \(path) — \(hint)"), Comment(rawValue: path))
         }
 
+        // 9. Delete Confirmed Junk (C04-F5): the center alone refuses, even
+        // with the model flag still false. The file stays on disk.
+        let (junkModel, junkRec, junkFile) = try Self.junkFixture(in: root)
+        let junkResult = await junkModel.deleteConfirmedJunk([junkRec], mode: .permanent)
+        #expect(FileManager.default.fileExists(atPath: junkFile.path))
+        #expect(junkRec.purgedAt == nil)
+        #expect(junkResult.refused.map(\.record.id) == [junkRec.id])
+        #expect(sink.has("\(ViewerWriteGuard.logPrefix) VideoScanModel.deleteConfirmedJunk — \(hint)"))
+
         // The center captured the same lines the log sink saw.
         #expect(ViewerModeCenter.shared.refusals.count >= 18)
         #expect(ViewerModeCenter.shared.refusals.allSatisfy { $0.hasPrefix(ViewerWriteGuard.logPrefix) })
@@ -436,43 +445,43 @@ struct RemoteViewerReadOnlySensorTests {
 
     // MARK: - C04-F5 (P1, 2026-10-06): a viewer Mac must never delete family media
 
-    /// Both viewer signals (the model flag VideoScanApp sets from CatalogSync,
-    /// and the process-wide ViewerModeCenter) each refuse on their own, for
-    /// both modes. The file stays on disk and the record is untouched.
+    /// The model flag VideoScanApp sets from CatalogSync (`isReadOnly`)
+    /// refuses on its own, for both modes: the file stays on disk and the
+    /// record is untouched. (The ViewerModeCenter signal is exercised inside
+    /// `everyWritePathRefusesInViewerModeWithALogLine`, which already holds
+    /// the process-wide viewer window; a second window here could make
+    /// delete tests in parallel suites refuse.)
     @Test func viewerModeRefusesDeleteConfirmedJunkAndLeavesTheFileOnDisk() async throws {
-        let sink = Sink()
         let root = tmp("junk")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        defer {
-            ViewerModeCenter.shared.reset()
-            try? FileManager.default.removeItem(at: root)
-        }
-        for viaCenter in [false, true] {
-            for mode in [VideoScanModel.JunkDeletionMode.toTrash, .permanent] {
-                ViewerModeCenter.shared.reset(sink: { sink.append($0) })
-                if viaCenter { ViewerModeCenter.shared.install(.viewer(masterHostname: "RicksM4.local")) }
-                let file = root.appendingPathComponent("test_family_\(UUID().uuidString).mov")
-                try Data("family".utf8).write(to: file)
-                let rec = VideoRecord()
-                rec.fullPath = file.path
-                rec.filename = file.lastPathComponent
-                rec.directory = root.path
-                rec.mediaDisposition = .confirmedJunk
-                let model = VideoScanModel()
-                model.records = [rec]
-                model.isReadOnly = !viaCenter
+        defer { try? FileManager.default.removeItem(at: root) }
+        for mode in [VideoScanModel.JunkDeletionMode.toTrash, .permanent] {
+            let (model, rec, file) = try Self.junkFixture(in: root)
+            model.isReadOnly = true
 
-                let result = await model.deleteConfirmedJunk([rec], mode: mode)
+            let result = await model.deleteConfirmedJunk([rec], mode: mode)
 
-                let label = Comment(rawValue: "viaCenter=\(viaCenter) mode=\(mode)")
-                #expect(FileManager.default.fileExists(atPath: file.path), label)
-                #expect(rec.purgedAt == nil, label)
-                #expect(rec.lifecycleStage == .cataloged, label)
-                #expect(result.succeeded == 0, label)
-                #expect(result.refused.map(\.record.id) == [rec.id], label)
-            }
+            let label = Comment(rawValue: "mode=\(mode)")
+            #expect(FileManager.default.fileExists(atPath: file.path), label)
+            #expect(rec.purgedAt == nil, label)
+            #expect(rec.lifecycleStage == .cataloged, label)
+            #expect(result.succeeded == 0, label)
+            #expect(result.refused.map(\.record.id) == [rec.id], label)
         }
-        #expect(sink.has("\(ViewerWriteGuard.logPrefix) VideoScanModel.deleteConfirmedJunk"))
+    }
+
+    /// One synthetic confirmed-junk file, its record, and a model holding it.
+    private static func junkFixture(in root: URL) throws -> (VideoScanModel, VideoRecord, URL) {
+        let file = root.appendingPathComponent("test_family_\(UUID().uuidString).mov")
+        try Data("family".utf8).write(to: file)
+        let rec = VideoRecord()
+        rec.fullPath = file.path
+        rec.filename = file.lastPathComponent
+        rec.directory = root.path
+        rec.mediaDisposition = .confirmedJunk
+        let model = VideoScanModel()
+        model.records = [rec]
+        return (model, rec, file)
     }
 
     /// A viewer must not rewrite the master's scan-target list either
@@ -498,14 +507,22 @@ struct RemoteViewerReadOnlySensorTests {
             .appendingPathComponent("VideoScan", isDirectory: true)
         let defFile = app.appendingPathComponent("MediaOps/VideoScanModel+JunkDelete.swift")
         let def = try String(contentsOf: defFile, encoding: .utf8)
-        let sig = try #require(def.range(of: "func deleteConfirmedJunk("))
-        let body = try #require(def.range(of: ") async -> JunkDeletionResult {", range: sig.upperBound..<def.endIndex))
-        let firstLines = def[body.upperBound...].split(separator: "\n", omittingEmptySubsequences: true)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.hasPrefix("//") }
-            .prefix(1)
-        #expect(firstLines.first?.hasPrefix("if let refused = junkDeletionRefusedOnViewer(") == true,
-                "the viewer refusal must be the first statement; found \(Array(firstLines))")
+        /// First non-comment statement after `opener`, searched from `sig`.
+        func firstStatement(after sig: String, opener: String) throws -> String? {
+            let s = try #require(def.range(of: sig))
+            let body = try #require(def.range(of: opener, range: s.upperBound..<def.endIndex))
+            return def[body.upperBound...].split(separator: "\n", omittingEmptySubsequences: true)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty && !$0.hasPrefix("//") }
+        }
+        let entry = try firstStatement(after: "func deleteConfirmedJunk(",
+                                       opener: ") async -> JunkDeletionResult {")
+        #expect(entry?.hasPrefix("let (records, finished) = junkDeletionPreflight(") == true,
+                "deleteConfirmedJunk must start with the preflight; found \(entry ?? "nil")")
+        let preflight = try firstStatement(after: "func junkDeletionPreflight(",
+                                           opener: "finished: JunkDeletionResult?) {")
+        #expect(preflight?.hasPrefix("if let refused = junkDeletionRefusedOnViewer(") == true,
+                "the viewer refusal must be the preflight's first statement; found \(preflight ?? "nil")")
 
         var callers: Set<String> = []
         let it = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)
