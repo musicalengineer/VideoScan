@@ -1,111 +1,206 @@
-import AppKit
+import Foundation
 import SwiftUI
 import Testing
 @testable import VideoScan
 
-// R1 refactor (GH #281): the files table's rows snapshot, badge revision
-// and keyboard-focus flag moved out of CatalogContent's declaration list
-// into CatalogTableState (a DynamicProperty). Two kinds of pin:
-//   1. Source sensor — the focus flag has ONE home and the table still
-//      binds it (`.focused`) and defaults to it (`.defaultFocus`).
-//   2. Mechanism probe — a @FocusState nested in a DynamicProperty drives
-//      real AppKit first-responder the same way a direct one does.
+// Catalog two-pane focus + volume filter (Rick 2026-10-06; supersedes the
+// R1 `filesTableFocused` pins). Design under test — Apple's focus model:
+//   • ONE `@FocusState var focusedPane: CatalogPane?`, in CatalogView (the
+//     common ancestor of the volumes table and the files table);
+//   • each Table bound with `.focused($focusedPane, equals:)`;
+//   • `.defaultFocus($focusedPane, .files)` once; NOTHING assigns focus;
+//   • ⌘⌫ / ⌘O targets published only by the files table;
+//   • the Space monitor fires only for the files pane;
+//   • a filter change keeps the visible part of the file selection and
+//     never touches focus; an empty volume pick = every volume.
+// Kinds of pin: source sensors (this suite), logic + scale for the
+// selection rule, and the AppKit mechanism probe in
+// CatalogPaneFocusProbeTests.swift.
 
-@Suite("CatalogTableState — one home for the files table's focus + rows")
-struct CatalogTableStateSensorTests {
+@Suite("Catalog panes — one focus state, no programmatic focus")
+struct CatalogPaneFocusSensorTests {
 
     private func code(_ name: String) throws -> String {
         try SourceTree.strippingComments(SourceTree.appSource(named: name))
     }
 
-    @Test func focusFlagHasOneHome() throws {
-        let state = try code("CatalogTableState.swift")
-        #expect(state.components(separatedBy: "@FocusState").count - 1 == 1)
-        #expect(state.contains("@FocusState var filesTableFocused: Bool"))
-        #expect(state.contains("@State var tableData: [VideoRecord] = []"))
-        for name in ["CatalogHelpers.swift", "CatalogContent+Table.swift"] {
-            let src = try code(name)
-            #expect(!src.contains("@FocusState"), "\(name) declares its own focus state again")
-            #expect(!src.contains("@State var tableData"), "\(name) declares its own rows snapshot again")
+    /// Every app source, comments stripped, by relative path.
+    private func allAppCode() throws -> [(name: String, code: String)] {
+        try SourceTree.appSources.map { entry in
+            (entry.relative, SourceTree.strippingComments(try String(contentsOf: entry.url, encoding: .utf8)))
         }
     }
 
-    @Test func theTableStillBindsAndDefaultsToTheFlag() throws {
-        let table = try code("CatalogContent+Table.swift")
-        #expect(table.contains(".focused(tableState.$filesTableFocused)"), "the Table takes keyboard focus from the flag")
-        #expect(!table.contains(".onKeyPress("), "no key handler on the Table — it breaks ↑/↓")
+    private func occurrences(of needle: String, in text: String) -> Int {
+        text.components(separatedBy: needle).count - 1
+    }
+
+    @Test func exactlyOneFocusStateOwnsBothPanes() throws {
+        let all = try allAppCode()
+        let owners = all.filter { $0.code.contains("@FocusState var focusedPane: CatalogPane?") }
+        #expect(owners.map(\.name) == ["App/ContentView.swift"], "the ONE pane focus state lives in CatalogView")
+        #expect(owners.map { occurrences(of: "@FocusState var focusedPane", in: $0.code) } == [1])
+        let anyOtherPaneState = all.filter {
+            $0.code.range(of: #"@FocusState\s+(private\s+)?var\s+\w+\s*:\s*CatalogPane"#, options: .regularExpression) != nil
+        }
+        #expect(anyOtherPaneState.count == 1, "a second CatalogPane focus state: \(anyOtherPaneState.map(\.name))")
+        #expect(all.allSatisfy { !$0.code.contains("filesTableFocused") }, "the old per-table flag is back")
+        let content = try code("CatalogHelpers.swift")
+        #expect(content.contains("@FocusState.Binding var focusedPane: CatalogPane?"), "CatalogContent takes the parent's binding")
+        #expect(!content.contains("@FocusState var"), "CatalogContent declares its own focus state again")
+        #expect(!(try code("CatalogTableState.swift")).contains("@FocusState"))
+        #expect(try code("ContentView.swift").contains("focusedPane: $focusedPane"), "CatalogView hands the binding down")
+    }
+
+    @Test func bothTablesAreBoundWithEquals() throws {
+        #expect(try code("CatalogView+VolumeTable.swift").contains(".focused($focusedPane, equals: .volumes)"))
+        #expect(try code("CatalogContent+Table.swift").contains(".focused($focusedPane, equals: .files)"))
+    }
+
+    /// The bug: `.onChange(of: selectedIDs) { filesTableFocused = true }`
+    /// (and the same on appear). Nothing in the app may assign the pane
+    /// focus — clicks move it natively.
+    @Test func nothingAssignsPaneFocus() throws {
+        for file in try allAppCode() {
+            let hit = file.code.range(of: #"focusedPane\s*=(?!=)"#, options: .regularExpression)
+            #expect(hit == nil, "\(file.name) assigns focusedPane")
+        }
         let helpers = try code("CatalogHelpers.swift")
-        #expect(helpers.contains(".defaultFocus(tableState.$filesTableFocused, true)"), "files table is the default focus")
-        #expect(helpers.components(separatedBy: "filesTableFocused = true").count - 1 == 2,
-                "focus follows a file pick + is claimed on appear")
-        #expect(helpers.contains("var tableState = CatalogTableState()"))
+        let block = try #require(helpers.range(of: ".onChange(of: selectedIDs) {"))
+        let rest = helpers[block.upperBound...]
+        let end = try #require(rest.range(of: "applyLivePreview(action)"), "selection onChange block end moved")
+        let tail = rest[..<end.lowerBound]
+        #expect(!tail.contains("= true"), "a focus grab came back inside the selection onChange")
+        #expect(!tail.lowercased().contains("focus"), "focus handling inside the selection onChange")
+    }
+
+    @Test func defaultFocusIsDeclaredOnceForTheFiles() throws {
+        let total = try allAppCode().map { occurrences(of: ".defaultFocus($focusedPane", in: $0.code) }.reduce(0, +)
+        #expect(total == 1)
+        #expect(try code("CatalogHelpers.swift").contains(".defaultFocus($focusedPane, .files)"))
+    }
+
+    @Test func onlyTheFilesTablePublishesTrashAndOpen() throws {
+        let table = try code("CatalogContent+Table.swift")
+        #expect(table.contains("focusedValue(\\.catalogTrashSelection"))
+        #expect(table.contains("focusedValue(\\.catalogOpenSelection"))
+        let volumes = try code("CatalogView+VolumeTable.swift")
+        #expect(!volumes.contains("focusedValue("), "volumes are never trashed or opened — no menu target there")
+        #expect(!volumes.contains(".onKeyPress("), "no key handler on the volumes Table")
+        #expect(!table.contains(".onKeyPress("), "no key handler on the files Table — it breaks ↑/↓")
+    }
+
+    @Test func spaceToggleRequiresTheFilesPane() throws {
+        let helpers = try code("CatalogHelpers.swift")
+        let fn = try #require(helpers.range(of: "func spaceShouldToggleLivePreview() -> Bool {"))
+        #expect(helpers[fn.upperBound...].prefix(200).contains("paneFocusMirror.pane == .files"),
+                "Space must not toggle live preview while the volumes table has the keyboard")
+        #expect(try code("CatalogContent+Table.swift").contains("tableState.paneFocusMirror.pane = focusedPane"))
+    }
+
+    /// Every filter trigger goes through refreshRows (rows + selection
+    /// prune); only onAppear and rename recompute rows alone.
+    @Test func filterTriggersPruneTheSelection() throws {
+        let table = try code("CatalogContent+Table.swift")
+        #expect(occurrences(of: "refreshRows()", in: table) == 16)
+        #expect(occurrences(of: "tableData = computeFiltered()", in: table) == 1, "only onAppear")
+        #expect(try code("CatalogTableState.swift").contains("CatalogSelectionPrune.visibleSelection(selectedIDs, rows: tableData)"))
     }
 }
 
-// MARK: - Mechanism probe
+// MARK: - Selection prune: logic + scale
 
-/// Same shape as CatalogTableState: a FocusState inside a DynamicProperty.
-private struct NestedFocus: DynamicProperty {
-    @FocusState var focused: Bool
-}
+@Suite("Catalog filter change keeps the visible file selection")
+struct CatalogSelectionPruneTests {
 
-private struct NestedFocusProbe: View {
-    var holder = NestedFocus()
-    @State private var text = ""
-    var body: some View {
-        VStack {
-            TextField("other", text: .constant(""))
-            TextField("target", text: $text).focused(holder.$focused)        }
-        .onAppear { holder.focused = true }
-    }
-}
-
-private struct DirectFocusProbe: View {
-    @FocusState private var focused: Bool
-    @State private var text = ""
-    var body: some View {
-        VStack {
-            TextField("other", text: .constant(""))
-            TextField("target", text: $text).focused($focused)
+    private func rows(_ n: Int) -> [VideoRecord] {
+        (0..<n).map { i in
+            let r = VideoRecord()
+            r.filename = "v\(i).mov"
+            r.fullPath = "/Volumes/V\(i % 4)/v\(i).mov"
+            r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            return r
         }
-        .onAppear { focused = true }
+    }
+
+    @Test func keepsVisibleDropsHidden() {
+        let all = rows(10)
+        let picked: Set<UUID> = [all[1].id, all[5].id, all[8].id]
+        let visible = [all[0], all[1], all[2], all[8]]
+        #expect(CatalogSelectionPrune.visibleSelection(picked, rows: visible) == [all[1].id, all[8].id])
+    }
+
+    @Test func emptySelectionAndFullyVisibleSelectionAreUnchanged() {
+        let all = rows(5)
+        #expect(CatalogSelectionPrune.visibleSelection([], rows: all).isEmpty)
+        let picked: Set<UUID> = [all[0].id, all[4].id]
+        #expect(CatalogSelectionPrune.visibleSelection(picked, rows: all) == picked)
+        #expect(CatalogSelectionPrune.visibleSelection(picked, rows: []).isEmpty, "a filter that hides everything drops the selection")
+    }
+
+    /// Scale (checklist dimension 2): runs on every filter trigger.
+    @Test func prune100kRowsStaysUnderBudget() {
+        let all = rows(100_000)
+        let picked = Set(all.prefix(1_000).map(\.id)).union([UUID()])
+        let t0 = Date()
+        let kept = CatalogSelectionPrune.visibleSelection(picked, rows: all)
+        let elapsed = Date().timeIntervalSince(t0)
+        #expect(kept.count == 1_000)
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.25), "prune took \(elapsed)s for 100k rows")
     }
 }
 
-/// Not on GitHub runners: no session there can make a window key, and a
-/// probe whose control cannot take focus proves nothing. (Keyed on
-/// GITHUB_ACTIONS like CatalogSearchProfileBench — the CI test plan sets
-/// CI=1 on every local run too. `.enabled(if:)` ≈ a gtest filter
-/// evaluated at registration time.)
+// MARK: - Empty volume pick = all files (scale)
+
 @MainActor
-@Suite("CatalogTableState — nested @FocusState drives AppKit focus like a direct one",
-       .enabled(if: ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true",
-                "needs a window server that can make a window key"))
-struct CatalogTableStateFocusProbeTests {
+@Suite("Catalog empty volume pick shows every file without an extra pass")
+struct CatalogAllVolumesDefaultTests {
 
-    /// Hosts `view` in an off-screen key window and reports whether the
-    /// focus request reached AppKit: the field editor is editing the
-    /// "target" field — NOT the "other" field above it, which is what a
-    /// window's initial first responder would pick on its own.
-    private func focusLands<V: View>(_ view: V) async -> Bool? {
-        let window = NSWindow(contentRect: NSRect(x: -10_000, y: -10_000, width: 300, height: 200),
-                              styleMask: [.titled], backing: .buffered, defer: false)
-        window.contentView = NSHostingView(rootView: view)
-        window.makeKeyAndOrderFront(nil)
-        defer { window.orderOut(nil) }
-        for _ in 0..<40 {
-            try? await Task.sleep(for: .milliseconds(25))
-            let editing = ((window.firstResponder as? NSTextView)?.delegate as? NSTextField)?.placeholderString
-            if editing == "target" { return true }
+    private func rows(_ n: Int) -> [VideoRecord] {
+        (0..<n).map { i in
+            let r = VideoRecord()
+            r.filename = "v\(i).mov"
+            r.fullPath = "/Volumes/V\(i % 4)/v\(i).mov"
+            r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            return r
         }
-        // A test host that cannot make windows key proves nothing either way.
-        return window.isKeyWindow ? false : nil
     }
 
-    @Test func nestedFocusStateBehavesLikeDirect() async throws {
-        let direct = await focusLands(DirectFocusProbe())
-        try #require(direct == true, "control probe could not take focus in this host (\(String(describing: direct))) — mechanism untestable here")
-        let nested = await focusLands(NestedFocusProbe())
-        #expect(nested == true, "a @FocusState inside a DynamicProperty did not reach AppKit")
+    private func filtered(_ records: [VideoRecord], volumes: Set<String>) -> [VideoRecord] {
+        CatalogContent(
+            records: records,
+            selectedIDs: .constant([]),
+            focusedPane: FocusState<CatalogPane?>().projectedValue,
+            sortOrder: .constant([]),
+            searchText: "",
+            searchHitCount: .constant(0),
+            filterTargetPaths: volumes,
+            showPairsOnly: false,
+            viewFilters: [],
+            showDisconnectedMedia: true,   // no reachability probes in a unit test
+            showRemoved: false,
+            previewImage: nil,
+            previewFilename: "",
+            previewOfflineVolumeName: nil,
+            showInspector: .constant(false),
+            onSort: { _ in },
+            onSelect: { _ in },
+            onClearPreview: {}
+        ).computeFiltered()
+    }
+
+    @Test func emptyPickIsEveryVolumeAndAPickNarrows() {
+        let all = rows(8)
+        #expect(filtered(all, volumes: []).count == 8)
+        #expect(filtered(all, volumes: ["/Volumes/V1"]).map(\.filename) == ["v1.mov", "v5.mov"])
+    }
+
+    @Test func allVolumes100kStaysUnderBudget() {
+        let all = rows(100_000)
+        let t0 = Date()
+        let out = filtered(all, volumes: [])
+        let elapsed = Date().timeIntervalSince(t0)
+        #expect(out.count == 100_000)
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0), "all-volumes filter took \(elapsed)s for 100k records")
     }
 }

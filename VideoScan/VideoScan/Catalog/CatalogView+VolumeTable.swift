@@ -350,6 +350,13 @@ extension CatalogView {
             if let id = ids.first { openVolumesEditor(for: id) }
         }
         .font(.system(size: 14))
+        // The other Catalog focus target (CatalogPane). A click here makes
+        // ↑/↓ walk the VOLUMES; nothing in code moves focus in or out.
+        // Deliberately NO focusedValue: volumes are never trashed or
+        // opened, so ⌘⌫ / ⌘O are disabled while this pane has focus.
+        // Empty selection = every volume's files (click empty space, or
+        // ⌘-click the last highlighted volume, to go back to all).
+        .focused($focusedPane, equals: .volumes)
     }
 
     /// Build the migration report for one offline/retired volume and

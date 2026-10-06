@@ -63,6 +63,19 @@ enum CatalogShowingSummary {
         /// filter; the row says so instead of listing filters that are
         /// not in force.
         var focusLabel: String? = nil
+        /// Volumes picked in the volume table above. 0 = no pick = every
+        /// volume's files (the default, Rick 2026-10-06).
+        var volumeCount: Int = 0
+    }
+
+    /// The "where" pill for the volume filter. Says "All volumes" when
+    /// nothing is picked, so the empty selection reads as everything.
+    static func volumeWords(count: Int) -> String {
+        switch count {
+        case 0:  return "All volumes"
+        case 1:  return "1 volume"
+        default: return "\(count) volumes"
+        }
     }
 
     /// Plain-words label for one additive filter. Every case is handled
@@ -120,6 +133,8 @@ enum CatalogShowingSummary {
             out.append(Pill(words(for: f)))
         }
         if s.showPairsOnly { out.append(Pill("Pairs only")) }
+
+        out.append(Pill(volumeWords(count: s.volumeCount)))
 
         out.append(Pill(s.showDisconnectedMedia ? "All drives" : "Connected drives",
                         action: .toggleDrives))
