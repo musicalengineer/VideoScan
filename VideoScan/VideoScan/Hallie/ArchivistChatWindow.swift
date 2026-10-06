@@ -635,10 +635,13 @@ struct ArchivistChatWindow: View {
                 Button {
                     showSpeakerSettings = true
                 } label: {
+                    // Liquid Glass spots 2026-10-06: a round glass button
+                    // (a 44×44 capsule is a circle) that reacts to the press.
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 26, weight: .regular))
                         .frame(width: 44, height: 44)
-                        .background(Circle().fill(Color.secondary.opacity(0.12)))
+                        .vsGlassCapsule(interactive: true)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
