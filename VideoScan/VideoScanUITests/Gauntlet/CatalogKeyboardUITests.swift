@@ -195,6 +195,37 @@ final class CatalogKeyboardUITests: GauntletTestCase {
         XCTAssertFalse(afterFile, "Catalog Info (⌘I) must be disabled while the files table has the keyboard.")
     }
 
+    /// Case 9 (QA 10/6): the files table has the keyboard when the Catalog
+    /// opens — ↓ with NO click first moves the FILE selection.
+    @MainActor
+    func test9_filesHaveKeyboardOnOpen() throws {
+        // KNOWN GAP, pinned (2026-10-06): AppKit's key-view loop gives the
+        // volumes table the keyboard before `.defaultFocus($focusedPane,
+        // .files)` applies; `.focusScope` + `.prefersDefaultFocus` did not
+        // change it either. A programmatic focus write would fix it but
+        // breaks the rule "only a click, Tab or defaultFocus moves focus" —
+        // Rick's call. Non-strict = the run stays green, and an unexpected
+        // pass is reported once the gap closes.
+        XCTExpectFailure("Default focus at Catalog open lands on the volumes table — pending Rick's ruling",
+                         strict: false)
+        let app = try launchWithFixture()
+        let (volumes, files) = try catalogTables(app)
+        Thread.sleep(forTimeInterval: 1.0)
+
+        app.typeKey(.downArrow, modifierFlags: [])
+
+        let deadline = Date().addingTimeInterval(3)
+        var fileSel = selectedFileNames(files)
+        while fileSel.isEmpty && Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.25)
+            fileSel = selectedFileNames(files)
+        }
+        let volumeSel = selectedRows(volumes)
+        dumpKeysLog("case9")
+        XCTAssertFalse(fileSel.isEmpty, "↓ right after opening the Catalog must move the FILE selection. keys.log is attached.")
+        XCTAssertEqual(volumeSel, [], "↓ right after opening the Catalog must not select a volume.")
+    }
+
     // MARK: - Fixture + launch
 
     @MainActor

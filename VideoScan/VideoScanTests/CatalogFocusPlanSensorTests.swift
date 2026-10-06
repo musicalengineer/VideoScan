@@ -268,3 +268,33 @@ struct CatalogPromoteScopeTests {
         #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.25), "scope took \(elapsed)s for 100k rows")
     }
 }
+
+// MARK: - QA 10/6: click hook scoped to the Catalog window; default focus
+
+@MainActor
+@Suite("Catalog click hook acts only in the Catalog's own window")
+struct CatalogClickFocusWindowScopeTests {
+
+    private func window() -> NSWindow {
+        NSWindow(contentRect: .zero, styleMask: [.titled], backing: .buffered, defer: true)
+    }
+
+    @Test func onlyTheCatalogWindowCounts() {
+        let catalog = window()
+        let other = window()
+        #expect(CatalogTableClickFocus.isCatalogClick(eventWindow: catalog, catalogWindow: catalog))
+        #expect(!CatalogTableClickFocus.isCatalogClick(eventWindow: other, catalogWindow: catalog),
+                "a table click in another window or a sheet must not take the keyboard")
+        #expect(!CatalogTableClickFocus.isCatalogClick(eventWindow: catalog, catalogWindow: nil),
+                "window not known yet = act on nothing")
+        #expect(!CatalogTableClickFocus.isCatalogClick(eventWindow: nil, catalogWindow: catalog))
+    }
+
+    @Test func hookGuardsOnTheWindowAndCleansUp() throws {
+        let src = try code("CatalogTableClickFocus.swift")
+        let fn = try #require(src.range(of: "private func focusClickedTable("))
+        #expect(src[fn.upperBound...].prefix(200).contains("Self.isCatalogClick(eventWindow: event.window, catalogWindow: catalogWindow)"))
+        #expect(src.contains("isolated deinit { remove() }"))
+        #expect(try code("ContentView.swift").contains("CatalogWindowReader { tableClickFocus.catalogWindow = $0 }"))
+    }
+}

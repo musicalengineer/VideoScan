@@ -600,6 +600,9 @@ struct CatalogView: View {
         // first key view (the volumes table). The ONE place a pane is named
         // as a focus target in code.
         .defaultFocus($focusedPane, .files)
+        // The click hook acts only in THIS window (never another window or
+        // a sheet) — the reader hands it the window once it is known.
+        .background(CatalogWindowReader { tableClickFocus.catalogWindow = $0 })
         .onAppear { tableClickFocus.install() }
         .onDisappear { tableClickFocus.remove() }
     }

@@ -77,10 +77,28 @@ Manager/Rick: please review.
 
 ## Open
 
-- **Default focus at open:** the volumes table has the keyboard when the
-  Catalog opens. `.defaultFocus(.files)` on the common ancestor doesn't
-  beat the window's first key view. No code grab was added (rule 1). One
-  click fixes it.
+- **Default focus at open (QA item 2, for Rick):** the volumes table has
+  the keyboard when the Catalog opens. Harness case 9 (↓ with no click
+  must move the files) was red. Two declarative attempts did not move it:
+  - `.defaultFocus($focusedPane, .files)` on the common ancestor;
+  - `.focusScope(ns)` on the root split plus `.prefersDefaultFocus(true,
+    in: ns)` on the files table (tried and backed out).
+
+  The `[keys]` trace shows the volumes NSTableView holds first responder
+  before any key. The fix that would work is a programmatic focus write,
+  which breaks the rule. Case 9 is pinned with a non-strict
+  `XCTExpectFailure`, so it reports an unexpected pass once this is fixed.
+
+## QA round 1 (FIX-FIRST)
+
+1. Scope leak: fixed. `CatalogTableClickFocus` now acts only when
+   `event.window === catalogWindow`. The window is captured by
+   `CatalogWindowReader`, and while it's unknown the hook does nothing. An
+   `isolated deinit { remove() }` backstop was added. Pinned by
+   `CatalogClickFocusWindowScopeTests` (the predicate plus a guard sensor),
+   red by new seam.
+2. Default focus: stopped without a programmatic write, as instructed.
+   See the item above.
 - Step 6 (Tab): it already cycles correctly, so no `.focusSection` was
   needed.
 - Step 7 ("All volumes" pill) was not done. It's wording, not focus.
