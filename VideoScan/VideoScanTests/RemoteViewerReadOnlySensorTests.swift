@@ -433,4 +433,94 @@ struct RemoteViewerReadOnlySensorTests {
         #expect(ViewerModeCenter.shared.masterDisplayName == "RicksM4")
         #expect(ViewerModeCenter.shortName("ricksm4.LOCAL") == "ricksm4")
     }
+
+    // MARK: - C04-F5 (P1, 2026-10-06): a viewer Mac must never delete family media
+
+    /// Both viewer signals (the model flag VideoScanApp sets from CatalogSync,
+    /// and the process-wide ViewerModeCenter) each refuse on their own, for
+    /// both modes. The file stays on disk and the record is untouched.
+    @Test func viewerModeRefusesDeleteConfirmedJunkAndLeavesTheFileOnDisk() async throws {
+        let sink = Sink()
+        let root = tmp("junk")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer {
+            ViewerModeCenter.shared.reset()
+            try? FileManager.default.removeItem(at: root)
+        }
+        for viaCenter in [false, true] {
+            for mode in [VideoScanModel.JunkDeletionMode.toTrash, .permanent] {
+                ViewerModeCenter.shared.reset(sink: { sink.append($0) })
+                if viaCenter { ViewerModeCenter.shared.install(.viewer(masterHostname: "RicksM4.local")) }
+                let file = root.appendingPathComponent("test_family_\(UUID().uuidString).mov")
+                try Data("family".utf8).write(to: file)
+                let rec = VideoRecord()
+                rec.fullPath = file.path
+                rec.filename = file.lastPathComponent
+                rec.directory = root.path
+                rec.mediaDisposition = .confirmedJunk
+                let model = VideoScanModel()
+                model.records = [rec]
+                model.isReadOnly = !viaCenter
+
+                let result = await model.deleteConfirmedJunk([rec], mode: mode)
+
+                let label = Comment(rawValue: "viaCenter=\(viaCenter) mode=\(mode)")
+                #expect(FileManager.default.fileExists(atPath: file.path), label)
+                #expect(rec.purgedAt == nil, label)
+                #expect(rec.lifecycleStage == .cataloged, label)
+                #expect(result.succeeded == 0, label)
+                #expect(result.refused.map(\.record.id) == [rec.id], label)
+            }
+        }
+        #expect(sink.has("\(ViewerWriteGuard.logPrefix) VideoScanModel.deleteConfirmedJunk"))
+    }
+
+    /// A viewer must not rewrite the master's scan-target list either
+    /// (Volumes → Delete from list…).
+    @Test func viewerModeRefusesDeleteFromVolumesList() {
+        ViewerModeCenter.shared.reset()
+        defer { ViewerModeCenter.shared.reset() }
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/test_viewer_volume_\(UUID().uuidString)")
+        model.scanTargets = [target]
+        model.isReadOnly = true
+        #expect(model.deleteScanTarget(target) == false)
+        #expect(model.scanTargets.contains { $0 === target }, "the list is unchanged on a viewer")
+    }
+
+    /// Source sensor: the read-only refusal is the FIRST thing
+    /// `deleteConfirmedJunk` does, so every caller (row menu, toolbar and
+    /// Triage sheets, Cmd-Delete, prune) sits behind it, and a new caller
+    /// is named here so it gets reviewed.
+    @Test func everyCallerOfDeleteConfirmedJunkSitsBehindTheViewerGuard() throws {
+        let app = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan", isDirectory: true)
+        let defFile = app.appendingPathComponent("MediaOps/VideoScanModel+JunkDelete.swift")
+        let def = try String(contentsOf: defFile, encoding: .utf8)
+        let sig = try #require(def.range(of: "func deleteConfirmedJunk("))
+        let body = try #require(def.range(of: ") async -> JunkDeletionResult {", range: sig.upperBound..<def.endIndex))
+        let firstLines = def[body.upperBound...].split(separator: "\n", omittingEmptySubsequences: true)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.hasPrefix("//") }
+            .prefix(1)
+        #expect(firstLines.first?.hasPrefix("if let refused = junkDeletionRefusedOnViewer(") == true,
+                "the viewer refusal must be the first statement; found \(Array(firstLines))")
+
+        var callers: Set<String> = []
+        let it = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)
+        while let url = it?.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            for line in text.split(separator: "\n") {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                guard !t.hasPrefix("//"), !t.hasPrefix("func "),
+                      t.contains("deleteConfirmedJunk(") else { continue }
+                callers.insert(url.lastPathComponent)
+            }
+        }
+        #expect(callers == ["CatalogRowContextMenu.swift", "VideoScanModel+TrashSelection.swift",
+                            "VideoScanModel+PruneApply.swift", "JunkDeleteAction.swift"],
+                "a new deleteConfirmedJunk caller: confirm it relies on the model's viewer guard, then add it here")
+    }
 }
