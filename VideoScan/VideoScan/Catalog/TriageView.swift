@@ -703,7 +703,8 @@ struct TriageView: View {
                 Label("Discard", systemImage: "trash")
             }
             .vsGlassButtonStyle()
-            .disabled(selectedIDs.isEmpty)
+            // A viewer never trashes; the model refuses too.
+            .disabled(selectedIDs.isEmpty || model.isReadOnly)
             .help("Move the file to Trash and remove the record (recoverable from Finder until emptied)")
         }
     }

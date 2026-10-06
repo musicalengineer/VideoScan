@@ -552,13 +552,15 @@ struct RemoteViewerReadOnlySensorTests {
             .appendingPathComponent("VideoScan", isDirectory: true)
         var found: [String: Int] = [:]
         let it = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)
-        let call = try Regex(#"\b(trashItem|removeItem)\("#)
+        func occurrences(_ needle: String, in line: Substring) -> Int {
+            line.components(separatedBy: needle).count - 1
+        }
         while let url = it?.nextObject() as? URL {
             guard url.pathExtension == "swift" else { continue }
             let rel = String(url.path.dropFirst(app.path.count + 1))
             let n = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
                 .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-                .reduce(0) { $0 + $1.matches(of: call).count }
+                .reduce(0) { $0 + occurrences("trashItem(", in: $1) + occurrences("removeItem(", in: $1) }
             if n > 0 { found[rel] = n }
         }
         #expect(found == Self.removalSites.mapValues(\.count),
