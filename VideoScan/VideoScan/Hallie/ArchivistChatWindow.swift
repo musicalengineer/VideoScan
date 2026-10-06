@@ -635,10 +635,13 @@ struct ArchivistChatWindow: View {
                 Button {
                     showSpeakerSettings = true
                 } label: {
+                    // Liquid Glass spots 2026-10-06: a round glass button
+                    // (a 44×44 capsule is a circle) that reacts to the press.
                     Image(systemName: "gearshape.fill")
                         .font(.system(size: 26, weight: .regular))
                         .frame(width: 44, height: 44)
-                        .background(Circle().fill(Color.secondary.opacity(0.12)))
+                        .vsGlassCapsule(interactive: true)
+                        .contentShape(Circle())
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
@@ -2542,14 +2545,21 @@ struct ArchivistAskStopButton: View {
     }
 
     var body: some View {
+        // Liquid Glass spots 2026-10-06: Ask (Stop while she speaks) is
+        // the window's one primary action — tinted glass, sized to match
+        // the large composer field beside it.
         if speaker.isSpeaking {
             Button("Stop") { speaker.stop() }
                 .keyboardShortcut(".", modifiers: .command)
                 .tint(.red)
+                .vsGlassProminentButtonStyle()
+                .controlSize(.large)
                 .accessibilityIdentifier("archivist.stopSpeaking")
         } else {
             Button("Ask", action: ask)
                 .keyboardShortcut(.defaultAction)
+                .vsGlassProminentButtonStyle()
+                .controlSize(.large)
                 .disabled(!canAsk)
         }
     }
