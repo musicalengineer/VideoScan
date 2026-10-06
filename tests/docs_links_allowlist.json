@@ -75,7 +75,7 @@
   "VideoScan/VideoScan/Catalog/CatalogContent+Promote.swift": {
     "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
-  "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift": {
+  "VideoScan/VideoScan/Catalog/CatalogRowContextMenu+Organize.swift": {
     "docs/find-and-tag-design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
   "VideoScan/VideoScan/Catalog/CatalogStore.swift": {
@@ -210,9 +210,6 @@
   },
   "docs/briefs/cloud/C04-sensors-that-cannot-fail.md": {
     "docs/reviews/cloud/C04-sensors-that-cannot-fail.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
-  },
-  "docs/briefs/local/R1-catalog-row-context-menu.md": {
-    "docs/reviews/local/R1-catalog-row-context-menu.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
   },
   "docs/design/analysis_ledger_design.md": {
     "docs/immich_ideas.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
