@@ -25,7 +25,14 @@ struct ArchiveTimelineMenuLayoutTests {
             model.records.append(rec)
             ids.append(rec.id)
         }
-        _ = await MasterArchiveTestSupport.promote(model, ids: ids)
+        // N1008-T-Archive-F9: the promote result is REQUIRED. If it failed
+        // there would be no archived cards, the card menu (and its
+        // archived-only "Make a Copy" branch) would never be built, and the
+        // layout below would test nothing.
+        let job = try #require(await MasterArchiveTestSupport.promote(model, ids: ids))
+        guard case .finished = job.state else { Issue.record("promote did not finish: \(job.state)"); return }
+        #expect(model.records.filter { model.isArchiveCopy($0) }.count == 3,
+                "the Timeline needs 3 archived cards to lay out their menus")
         let host = NSHostingView(rootView: ArchiveView()
             .environmentObject(model)
             .environmentObject(MediaFileOperationsCenter()))
@@ -34,6 +41,8 @@ struct ArchiveTimelineMenuLayoutTests {
             host.layoutSubtreeIfNeeded()
             try await Task.sleep(for: .milliseconds(150))
         }
-        #expect(host.fittingSize.width >= 0)
+        // A crash sensor by design (#273): reaching here is the pass. The
+        // cards must still be there after layout (the view did not drop them).
+        #expect(model.records.filter { model.isArchiveCopy($0) }.count == 3)
     }
 }

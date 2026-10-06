@@ -150,6 +150,19 @@ struct ReadOnlyVolumeSnapshotTests {
         #expect(make([.init(searchPath: "/", volumeUUID: nil)], mounted: [:]).isEmpty)
     }
 
+    /// N1008-T-Archive-F6: a marked FOLDER, the file on the marked drive
+    /// (its UUID reads U) under a mount name the snapshot never saw, and the
+    /// file's place on that drive cannot be read (identity nil) — where on
+    /// the drive it sits is unknown, so it is refused, never guessed clear.
+    @Test func aMarkedFolderOnTheMarkedDriveWithAnUnknownPlaceIsRefused() {
+        let p = make([.init(searchPath: "/Volumes/LaCie/Tapes", volumeUUID: "UUU")], mounted: [:])
+        let none: (String) -> MountIdentity? = { _ in nil }
+        #expect(p.verdict(forPath: "/Volumes/LaCie 1/Tapes/a.mov") == nil, "fixture: the string verdict alone must not decide")
+        #expect(p.verdictAtRemoval(path: "/Volumes/LaCie 1/Tapes/a.mov", probe: { _ in "UUU" }, identity: none) != nil)
+        // Another drive (UUID proven different) is still cleared.
+        #expect(p.verdictAtRemoval(path: "/Volumes/LaCie 1/Tapes/a.mov", probe: { _ in "VVV" }, identity: none) == nil)
+    }
+
     /// The last word at removal: the file's OWN volume identity — the marked
     /// drive mounted since the snapshot, under a name it never saw.
     @Test func atRemovalTheFilesOwnVolumeIdentityIsAsked() {

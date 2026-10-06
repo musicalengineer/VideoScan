@@ -224,6 +224,55 @@ struct ArchiveUpdateLogicTests {
         #expect(UpdateFixture.data(a.sb.manifestURL) == manifest)
     }
 
+    /// N1008-T-Archive-F3 (a): a STALE manifest row at the target (its file
+    /// gone) — nothing on disk, so only the manifest check can refuse.
+    @Test("N1008-F3: the manifest already lists a file at the target (no file on disk) → refused; file still at from, manifest byte-identical")
+    func manifestAlreadyListsTheTarget() async throws {
+        let a = try UpdateFixture.make("listed")
+        defer { a.sb.cleanup() }
+        let p = try await UpdateFixture.preview(a)
+        let h = try UpdateFixture.hint(1984)
+        let to = p.plan(name: p.currentName, hint: h, known: true).toRelPath
+        try ArchiveManifestCSV.append(.init(promotedAt: Date(), archiveRelPath: to, sha256: String(repeating: "e", count: 64),
+                                            sizeBytes: 1, originalPath: "/test/gone.mov", originalVolume: "test",
+                                            recordID: UUID(), sourceRecordID: UUID(), recordDate: "1984-xx-xx",
+                                            dateConfidence: "user-known", people: [], starRating: 3), rootPath: a.root)
+        #expect(!FileManager.default.fileExists(atPath: a.url(to).path), "fixture: nothing on disk at the target")
+        let manifest = UpdateFixture.data(a.sb.manifestURL)
+        let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: h, known: true)
+        #expect(r.kind == .refused, "\(r.kind): \(r.message)")
+        #expect(r.message.contains("already lists a file at"), "\(r.message)")
+        #expect(FileManager.default.fileExists(atPath: a.absPath), "the file must stay at from")
+        #expect(!FileManager.default.fileExists(atPath: a.url(to).path))
+        #expect(UpdateFixture.data(a.sb.manifestURL) == manifest)
+    }
+
+    /// N1008-T-Archive-F3 (b): `from` has two rows with different digests.
+    /// The conflicting row is placed BEFORE the true one, so the "last row
+    /// wins" digest still matches the file — only the conflict check refuses.
+    @Test("N1008-F3: a second manifest row at from with a different sha → refused; file still at from, manifest byte-identical")
+    func conflictingDigestsAtFromAreRefused() async throws {
+        let a = try UpdateFixture.make("twosha")
+        defer { a.sb.cleanup() }
+        let p = try await UpdateFixture.preview(a)
+        let h = try UpdateFixture.hint(1984)
+        let to = p.plan(name: p.currentName, hint: h, known: true).toRelPath
+        var lines = String(decoding: UpdateFixture.data(a.sb.manifestURL), as: UTF8.self)
+            .split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let realIndex = try #require(lines.firstIndex { $0.contains(a.sha) })
+        let bogus = lines[realIndex].replacingOccurrences(of: a.sha, with: String(repeating: "0", count: 64))
+        #expect(bogus != lines[realIndex], "fixture: the row carries the sha")
+        lines.insert(bogus, at: realIndex)
+        try Data(lines.joined(separator: "\n").utf8).write(to: a.sb.manifestURL)
+        let manifest = UpdateFixture.data(a.sb.manifestURL)
+        let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: h, known: true)
+        #expect(r.kind == .refused, "\(r.kind): \(r.message)")
+        #expect(r.message.contains("different fingerprints"), "\(r.message)")
+        #expect(FileManager.default.fileExists(atPath: a.absPath), "the file must stay at from")
+        #expect(!FileManager.default.fileExists(atPath: a.url(to).path))
+        #expect(UpdateFixture.data(a.sb.manifestURL) == manifest)
+    }
+
     @Test("the filing-year guard refuses 1884 (and after next year) as a TARGET")
     func guardAsTarget() async throws {
         let a = try UpdateFixture.make("guard", relPath: "30_Video/1980-1989/1984/1984-xx-xx_Clip.mov", recordDate: "1984-xx-xx")

@@ -98,16 +98,33 @@ struct ArchiveUpdateSafetyTests {
         defer { a.sb.cleanup() }
         let p = try await UpdateFixture.preview(a)
         let root = a.root, old = a.absPath, copyID = a.copy.id, filename = a.copy.filename
+        let h = try UpdateFixture.hint(1984)
+        let new = a.url(p.plan(name: p.currentName, hint: h, known: true).toRelPath).path
+        // N1008-T-Archive-F8: the injected append's error is CAPTURED, not
+        // `try?`-swallowed — if the late line never lands (e.g. the index
+        // lock held across afterPreflight → Busy) the test has nothing to test.
+        // (`@unchecked Sendable` ≈ "I vouch for the locking myself" — the NSLock guards `error`.)
+        final class ErrorBox: @unchecked Sendable { var error: Error?; var ran = false; let lock = NSLock() }
+        let box = ErrorBox()
         var seams = ArchiveRefileEngine.Seams.live
         seams.afterPreflight = {
             let entry = ArchiveAttestationJournal.Entry(at: Date(), record: (copyID, filename, old),
                                                         attestation: BackupAttestation(kind: .cloud, answer: .yes, attestedAt: Date()))
-            try? ArchiveAttestationJournal.append([entry], rootPath: root)
+            do {
+                try ArchiveAttestationJournal.append([entry], rootPath: root)
+                box.lock.withLock { box.ran = true }
+            } catch {
+                box.lock.withLock { box.ran = true; box.error = error }
+            }
         }
-        let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: try UpdateFixture.hint(1984), known: true, seams: seams)
+        let r = await a.model.updateArchivedFile(p, name: p.currentName, hint: h, known: true, seams: seams)
+        let (ran, injectError) = box.lock.withLock { (box.ran, box.error) }
+        #expect(ran, "fixture: afterPreflight never ran — the late line was not injected")
+        #expect(injectError == nil, "fixture: the late attestation line could not be written: \(String(describing: injectError))")
         let journal = String(decoding: UpdateFixture.data(ArchiveAttestationJournal.url(rootPath: root)), as: UTF8.self)
         if r.kind == .updated {
             #expect(!journal.contains(old), "the late attestation line still names the old path")
+            #expect(journal.contains(new), "the late attestation line was dropped instead of carried to the new path")
         } else {
             #expect(r.kind == .refused, "\(r.kind): \(r.message)")
             #expect(FileManager.default.fileExists(atPath: old), "refused → nothing moved")

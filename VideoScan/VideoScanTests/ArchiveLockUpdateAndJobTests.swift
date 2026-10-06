@@ -526,6 +526,27 @@ struct ArchiveFileLockSensorTests {
         #expect(ArchiveFileLock.Reason.allCases.filter(\.mayUnlock) == [.updateUnlock])
     }
 
+    /// N1008-T-Archive-F7: the unlock refusal lives only in `set`. The live
+    /// primitive (`liveApply`) and the live seams (`Seams.live`) are static
+    /// and callable from anywhere — a call from another app file would clear
+    /// UF_IMMUTABLE with no refusal and no audit line. Test files (which
+    /// inject failing seams around liveApply) are not app sources and are
+    /// not scanned.
+    @Test("liveApply( and Seams.live appear in app code ONLY in ArchiveFileLock.swift (no bypass of the unlock refusal)")
+    func livePrimitiveOnlyInThePrimitive() throws {
+        let sources = try Self.sources()
+        #expect(sources.count > 600, "the scan must see the whole app tree (\(sources.count))")
+        var seenInPrimitive = false
+        for (name, text) in sources {
+            let c = SourceTree.strippingComments(text)
+            for needle in ["liveApply(", "Seams.live"] where c.contains(needle) {
+                if name == "ArchiveFileLock.swift" { seenInPrimitive = true; continue }
+                Issue.record("\(name) uses \(needle) — every flag change goes through ArchiveFileLock.set")
+            }
+        }
+        #expect(seenInPrimitive, "the sensor no longer finds liveApply / Seams.live in ArchiveFileLock.swift — update it")
+    }
+
     @Test(".unlock is requested only by ArchiveRefile.swift (Update)")
     func unlockCallSites() throws {
         for (name, text) in try Self.sources() {
