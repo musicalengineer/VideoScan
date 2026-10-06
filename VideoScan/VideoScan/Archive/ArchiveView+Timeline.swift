@@ -237,6 +237,7 @@ struct ArchiveTimelinePane: View {
                 .frame(height: 0)
                 .id(Self.anchorID(decade.id))
             decadeTitle(decade)
+            decadeRule
             ForEach(decade.years) { year in
                 Color.clear
                     .frame(height: 0)
@@ -244,10 +245,31 @@ struct ArchiveTimelinePane: View {
                 Section {
                     yearBlock(year)
                 } header: {
-                    yearHeader(year)
+                    yearHeader(year, isFirst: year.id == decade.years.first?.id)
                 }
             }
+            decadeRule
         }
+    }
+
+    // MARK: Dividers (Rick 2026-10-06: subtle between years, a little
+    // stronger at the decade boundary — both quiet enough not to compete
+    // with the cards)
+
+    /// The decade boundary: top and bottom of the page.
+    private var decadeRule: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.22))
+            .frame(height: 2)
+            .padding(.horizontal, 18)
+    }
+
+    /// Between one year and the next.
+    private var yearRule: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.09))
+            .frame(height: 1)
+            .padding(.horizontal, 48)
     }
 
     @ViewBuilder
@@ -264,66 +286,73 @@ struct ArchiveTimelinePane: View {
         }
     }
 
-    /// The page's title — scrolls away; the year headers pin.
+    /// The page's title — scrolls away; the year headers pin. Dates are
+    /// centred in the list (Rick 2026-10-06).
     private func decadeTitle(_ decade: ArchiveTimelineDecade) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        VStack(spacing: 2) {
             Text(decade.label)
                 .font(.system(size: 28, weight: .bold))
             Text("\(decade.count) archived · \(decade.rangeLabel)")
                 .font(.system(size: 15))
                 .foregroundStyle(.secondary)
-            Spacer()
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 18)
         .padding(.top, 12)
-        .padding(.bottom, 6)
+        .padding(.bottom, 8)
     }
 
-    /// Pinned while its year's cards scroll under it. Solid backing.
-    private func yearHeader(_ year: ArchiveTimelineYear) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(String(year.year))
-                .font(.system(size: 20, weight: .semibold))
-            Text(year.items.count == 1 ? "1 archived" : "\(year.items.count) archived")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-            Spacer()
+    /// Pinned while its year's cards scroll under it; the year centred,
+    /// a faint rule above every year but the first. Solid backing.
+    private func yearHeader(_ year: ArchiveTimelineYear, isFirst: Bool) -> some View {
+        VStack(spacing: 0) {
+            if !isFirst { yearRule }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(String(year.year))
+                    .font(.system(size: 20, weight: .semibold))
+                Text(year.items.count == 1 ? "· 1 archived" : "· \(year.items.count) archived")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 7)
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 6)
         .background(Color(NSColor.windowBackgroundColor))
         .accessibilityIdentifier("archive.timeline.yearHeader.\(year.year)")
     }
 
     /// An empty decade is drawn, not skipped — the gap is the coaxing
     /// surface (docs/archive-view.md).
+    /// Now a whole page of its own, so it is centred and readable
+    /// (secondary, not tertiary, for senior eyes).
     private func gapBand(_ decade: ArchiveTimelineDecade) -> some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 6) {
             Text(decade.label)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.tertiary)
-            Text("nothing archived yet — tapes in the attic?")
-                .font(.system(size: 13))
-                .foregroundStyle(.tertiary)
-            Spacer()
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(.secondary)
+            Text("Nothing archived yet from \(decade.rangeLabel) — tapes in the attic?")
+                .font(.system(size: 16))
+                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 18)
-        .padding(.vertical, 10)
+        .padding(.vertical, 40)
     }
 
     private var undatedHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        VStack(spacing: 2) {
             Text("Undated")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(.orange)
-            Text("set a date in the Inspector to file these in their year")
-                .font(.system(size: 13))
+            Text("Set a date in the Inspector to file these in their year")
+                .font(.system(size: 14))
                 .foregroundStyle(.secondary)
-            Spacer()
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 18)
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(Color(NSColor.windowBackgroundColor))
     }
 
     private func yearBlock(_ year: ArchiveTimelineYear) -> some View {
@@ -396,7 +425,7 @@ struct ArchiveTimelinePane: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .font(.system(size: 13))
+                    .font(.system(size: 14))
                 }
                 Spacer(minLength: 0)
             }
@@ -444,7 +473,7 @@ struct ArchiveTimelinePane: View {
                     openItems([v.id])
                 } label: {
                     Text(v.label)
-                        .font(.system(size: 12, weight: v.id == item.id ? .semibold : .regular))
+                        .font(.system(size: 13, weight: v.id == item.id ? .semibold : .regular))
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
                         .background(Capsule().fill(v.id == item.id
