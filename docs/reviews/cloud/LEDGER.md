@@ -21,3 +21,5 @@ Mark a row done by adding it here when its branch is pushed.
 | N1008-T-Archive | 10-06 | (batch) | 10: 9 REAL / 1 NOISE | 8 confirmed + 1 partly + 1 nit | tests in progress | report on main |
 | N1009-D-Core | 10-06 | (batch) | 3 | 2 confirmed + 1 partly; F1 **P1** | #287 | report on main |
 | N1010-H-Volumes | 10-06 | (batch) | 7: 6 REAL / 1 NOISE | 6 confirmed | #287 | report on main |
+
+**Balance check 10-06 (Rick):** $214 of $250 left. $242 → $214 = **$28 for 8 sessions** (C02, N1006, N1007-Hallie, N1007-prune, N1008, N1009, N1010, C04): about **$3.50/session**. About 50 findings, 3 P1s confirmed and fixed, 0 refuted by local qa; roughly 1.7 verified findings per dollar.
