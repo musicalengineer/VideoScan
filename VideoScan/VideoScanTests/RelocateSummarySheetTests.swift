@@ -127,6 +127,10 @@ struct RelocateSummarySheetTests {
                                  size: eSize, md5: eHash)
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [bRec, dRec, eRec, witness]
         model.catalogStore.saveNow(records: model.records)
@@ -188,6 +192,10 @@ struct RelocateSummarySheetTests {
                                     size: sx, md5: hx)
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
         // Mark MyBook as a safe (backup + reliable) host so Bucket E
@@ -311,6 +319,10 @@ struct RelocateSummarySheetTests {
                                     size: sx, md5: hx)
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
         model.catalogStore.saveNow(records: model.records)
@@ -362,6 +374,10 @@ struct RelocateSummarySheetTests {
                                     size: sx, md5: hx)
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
         model.catalogStore.saveNow(records: model.records)
@@ -627,6 +643,10 @@ struct RelocateSummarySheetTests {
                                     size: sx, md5: hx)
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
         let safeWitness = CatalogScanTarget(searchPath: Self.myBook(ws.root).path)
@@ -680,6 +700,10 @@ struct RelocateSummarySheetTests {
                                     size: rSize, md5: rHash)
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [copyRec, redundantRec, witnessRec]
         let safeWitness = CatalogScanTarget(searchPath: Self.myBook(ws.root).path)
@@ -774,6 +798,10 @@ struct RelocateSummarySheetTests {
             }
 
             let model = VideoScanModel()
+
+            // Sibling temp "volumes" share one disk; simulate separate drives.
+
+            model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
             model.catalogStore = CatalogStore(directory: inner.catalog)
             model.records = records
             let safeTarget = CatalogScanTarget(searchPath: Self.myBook(inner.root).path)

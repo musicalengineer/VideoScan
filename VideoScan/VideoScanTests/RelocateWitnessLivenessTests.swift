@@ -67,6 +67,9 @@ struct RelocateWitnessLivenessTests {
                 sourceFiles: [.init(path: srcFile.path, size: size)],
                 destFiles: [],
                 skipDupsOnOtherVolumes: true,
+                // Sibling temp "volumes" share one disk: simulate separate
+                // drives (the device rule has its own test below).
+                witnessIndependent: RelocateReconcile.witnessIsNotTheSourceFile,
                 hash: { [md5, srcFile, witnessFile] path in
                     (path == srcFile.path || path == witnessFile.path) ? md5 : ""
                 }
@@ -93,6 +96,11 @@ struct RelocateWitnessLivenessTests {
             )
         }
 
+        /// Apply-time proof with the inode rule only (separate drives simulated).
+        var separateDrivesProof: RelocateReconcile.WitnessProof {
+            .init(independent: RelocateReconcile.witnessIsNotTheSourceFile, sourceRoot: src.path)
+        }
+
         func cleanup() { try? FileManager.default.removeItem(at: root) }
     }
 
@@ -105,6 +113,33 @@ struct RelocateWitnessLivenessTests {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fx.srcFile)
         expectMustCopy(fx.reconcileWithAlias(source: source, aliasPath: link.path), source,
                        "a symlink to the source file is the source file, not a second copy")
+    }
+
+    /// Production rule: a distinct file that lives on the SAME device as
+    /// the source root is on the drive being emptied — never a witness.
+    @Test func aWitnessOnTheSourceDriveIsNotIndependentEvenIfItIsAnotherFile() throws {
+        let fx = try Fixture(); defer { fx.cleanup() }
+        let source = fx.record(at: fx.srcFile)
+        expectMustCopy(fx.reconcileWithAlias(source: source, aliasPath: fx.witnessFile.path), source,
+                       "fixture witness shares the source root's device")
+        #expect(!RelocateReconcile.witnessIsOffTheSourceDrive(fx.witnessFile.path, fx.srcFile.path, fx.src.path))
+        #expect(RelocateReconcile.witnessIsNotTheSourceFile(fx.witnessFile.path, fx.srcFile.path, fx.src.path))
+    }
+
+    @Test func applyTimeReproofRefusesAWitnessThatIsTheSourceFile() throws {
+        let fx = try Fixture(); defer { fx.cleanup() }
+        let source = fx.record(at: fx.srcFile)
+        let link = fx.witnessVol.appendingPathComponent("test_alias.mov")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fx.srcFile)
+        let w = SafeWitnessInfo(path: link.path, role: .unassigned, trust: .unknown)
+        var result = ReconcileResult(ready: [], manuallyDeleted: [], sourceSideMoves: [], adopted: [],
+                                     safelyRedundant: [SafelyRedundantEntry(
+                                        rec: source, witnesses: [link.path], totalWitnessCount: 1,
+                                        safeWitnesses: [w], degradedWitnesses: [])],
+                                     previouslyRelocated: [])
+        VideoScanModel().reproveSafelyRedundantBeforeApply(&result, proof: fx.separateDrivesProof)
+        #expect(result.safelyRedundant.isEmpty, "even the inode rule alone refuses a link to the source")
+        #expect(result.ready.map(\.id) == [source.id])
     }
 
     @Test func qaRedSourceFileSpelledWithDifferentCaseIsNotItsOwnWitness() throws {
@@ -216,6 +251,7 @@ struct RelocateWitnessLivenessTests {
             sourceFiles: [],
             destFiles: [],
             skipDupsOnOtherVolumes: true,
+            witnessIndependent: RelocateReconcile.witnessIsNotTheSourceFile,
             hash: { _ in fx.md5 }
         )
         #expect(result.safelyRedundant.map(\.rec.id) == [source.id])
@@ -235,7 +271,7 @@ struct RelocateWitnessLivenessTests {
         // The witness drive is unplugged / the file emptied from Trash
         // between the classify pass and the apply.
         try FileManager.default.removeItem(at: fx.witnessFile)
-        VideoScanModel().reproveSafelyRedundantBeforeApply(&result)
+        VideoScanModel().reproveSafelyRedundantBeforeApply(&result, proof: fx.separateDrivesProof)
 
         #expect(result.safelyRedundant.isEmpty, "nothing may be marked deleted without a copy on disk now")
         #expect(result.ready.map(\.id) == [source.id], "the record goes down the copy path instead")
@@ -246,7 +282,7 @@ struct RelocateWitnessLivenessTests {
         let source = fx.record(at: fx.srcFile)
         let witness = fx.record(at: fx.witnessFile)
         var result = fx.reconcile(source: source, witness: witness)
-        VideoScanModel().reproveSafelyRedundantBeforeApply(&result)
+        VideoScanModel().reproveSafelyRedundantBeforeApply(&result, proof: fx.separateDrivesProof)
         #expect(result.safelyRedundant.map(\.rec.id) == [source.id])
         #expect(result.ready.isEmpty)
     }
@@ -263,7 +299,8 @@ struct RelocateWitnessLivenessTests {
                                         safeWitnesses: [w], degradedWitnesses: [])
         }
         let entries = [entry("a", size: 10), entry("b", size: 10), entry("c", size: 10), entry("a", size: 11)]
-        let split = RelocateReconcile.reproveSafelyRedundant(entries, witnessOnDisk: probe)
+        let split = RelocateReconcile.reproveSafelyRedundant(
+            entries, proof: .init(onDisk: probe, independent: { _, _, _ in true }, sourceRoot: "/src"))
         #expect(split.proven.map(\.rec.fullPath) == ["/src/a", "/src/c"])
         #expect(split.refused.map(\.rec.fullPath) == ["/src/b", "/src/a"])
         #expect(split.refused.last?.rec.sizeBytes == 11, "a witness at another size is not this file")

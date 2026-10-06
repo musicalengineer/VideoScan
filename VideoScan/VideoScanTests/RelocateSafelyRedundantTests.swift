@@ -85,6 +85,10 @@ struct RelocateSafelyRedundantTests {
         let witnessRec = makeRecord(fullPath: witnessPath, size: sx, md5: hx)
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [sourceRec, witnessRec]
         model.catalogStore.saveNow(records: model.records)
@@ -133,6 +137,10 @@ struct RelocateSafelyRedundantTests {
         )
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [sourceRec, witnessRec]
         model.catalogStore.saveNow(records: model.records)
@@ -172,6 +180,10 @@ struct RelocateSafelyRedundantTests {
         )
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [sourceRec, witnessRec]
         // Persist BEFORE running so the pre-relocate snapshot captures
@@ -235,6 +247,10 @@ struct RelocateSafelyRedundantTests {
         )
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
         model.catalogStore.saveNow(records: model.records)
@@ -266,6 +282,10 @@ struct RelocateSafelyRedundantTests {
         )
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
         model.catalogStore.saveNow(records: model.records)

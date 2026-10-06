@@ -282,6 +282,7 @@ extension VideoScanModel {
         let scopeInputs = scope.map(\.asReconcileInput)
         let witnessInputs = records.map(\.asReconcileInput)
         let resolver = makeVolumeSafetyResolver()
+        let independence = relocateWitnessIndependence
         // Honest progress (2026-07-06): the classify loop reports
         // (done, total) — the UI gets a determinate bar ≤4 Hz and
         // relocate.log gets a heartbeat every 5 s, so neither the modal
@@ -305,6 +306,7 @@ extension VideoScanModel {
                                               witnessInputs: witnessInputs,
                                               options: options,
                                               resolveVolumeSafety: resolver,
+                                              witnessIndependent: independence,
                                               progress: progressSink)
         }.value
         reconcileProgress = nil
@@ -328,7 +330,8 @@ extension VideoScanModel {
         // Prove the surviving copy at decision time (N1007-R F1): every
         // Bucket E record needs a safe witness still on disk NOW, or it
         // goes down the copy path instead of being marked deleted.
-        reproveSafelyRedundantBeforeApply(&reconcile)
+        reproveSafelyRedundantBeforeApply(&reconcile, proof: RelocateReconcile.WitnessProof(
+            independent: relocateWitnessIndependence, sourceRoot: options.sourceVolumeRootPath))
 
         // Track salvageFailed for the final summary block.
         var salvageFailedPaths: [String] = []
@@ -652,11 +655,10 @@ extension VideoScanModel {
     /// salvage-failed rather than guessing. Logged per record.
     func reproveSafelyRedundantBeforeApply(
         _ reconcile: inout ReconcileResult,
-        witnessOnDisk: WitnessPresenceProbe = RelocateReconcile.witnessIsOnDisk
+        proof: RelocateReconcile.WitnessProof
     ) {
         guard !reconcile.safelyRedundant.isEmpty else { return }
-        let split = RelocateReconcile.reproveSafelyRedundant(reconcile.safelyRedundant,
-                                                             witnessOnDisk: witnessOnDisk)
+        let split = RelocateReconcile.reproveSafelyRedundant(reconcile.safelyRedundant, proof: proof)
         for entry in split.refused {
             let line = "Reconcile: \(entry.rec.fullPath) — no safe copy is on disk now "
                 + "(\(entry.witnesses.first ?? "no witness")); will copy instead of marking deleted"
@@ -816,6 +818,7 @@ extension VideoScanModel {
         witnessInputs: [ReconcileRecordInput],
         options: RelocateOptions,
         resolveVolumeSafety: @escaping VolumeSafetyResolver,
+        witnessIndependent: @escaping WitnessIndependenceProbe,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) -> ReconcilePlan {
         let sourceFiles = enumerateFiles(at: options.sourceVolumeRootPath)
@@ -830,6 +833,7 @@ extension VideoScanModel {
             skipDupsOnOtherVolumes: options.skipDupsOnOtherVolumes,
             skipAlreadyRelocated: options.skipAlreadyRelocated,
             resolveVolumeSafety: resolveVolumeSafety,
+            witnessIndependent: witnessIndependent,
             hash: { FileHasher.partialMD5(path: $0) },
             progress: progress
         )

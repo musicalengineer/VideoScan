@@ -287,6 +287,16 @@ struct ReconcileRecordInput: Sendable, Equatable, Identifiable {
 /// `RelocateReconcile.witnessIsOnDisk` (one `stat`).
 typealias WitnessPresenceProbe = @Sendable (_ path: String, _ expectedBytes: Int64) -> Bool
 
+/// "Is this witness a DIFFERENT copy, off the drive being emptied?" Path
+/// prefixes cannot answer that: a symlink, or the same path in another case
+/// on case-insensitive APFS, reaches the source file from outside the
+/// source prefix (QA round 1, 2026-10-06). Production compares devices and
+/// inodes (`RelocateReconcile.witnessIsOffTheSourceDrive`); tests whose
+/// "volumes" are sibling temp folders on one disk inject
+/// `witnessIsNotTheSourceFile`.
+typealias WitnessIndependenceProbe = @Sendable (_ witnessPath: String, _ sourcePath: String,
+                                               _ sourceRoot: String) -> Bool
+
 /// Sendable, id-keyed classification produced by `reconcilePlan`. Mirrors
 /// `ReconcileResult` one-for-one but references records by `UUID` instead
 /// of by the non-Sendable `VideoRecord`. `materialize(_:scope:)` turns this
@@ -373,6 +383,28 @@ enum RelocateReconcile {
     /// and its size equals the size the catalog recorded. A drive that is
     /// unplugged, a file moved or deleted since the last scan, or a file
     /// that changed size all answer false — refuse over guess.
+    /// Production independence probe. The witness (symlinks followed —
+    /// that is the point) must not live on the source root's device, and
+    /// must not BE the source file (device + inode). Device ids always via
+    /// `DeviceID.from`, never `UInt64(st_dev)` (2026-10-05 trap). When the
+    /// source root cannot be stat'd the drive is not mounted, so a witness
+    /// that can be stat'd is not on it. A witness that cannot be stat'd is
+    /// left to the presence probe, which refuses it.
+    static let witnessIsOffTheSourceDrive: WitnessIndependenceProbe = { witness, source, root in
+        var ws = stat()
+        guard stat(witness, &ws) == 0 else { return true }
+        var rs = stat()
+        if stat(root, &rs) == 0, DeviceID.from(rs.st_dev) == DeviceID.from(ws.st_dev) { return false }
+        return witnessIsNotTheSourceFile(witness, source, root)
+    }
+
+    /// The inode half alone: the witness is not the source file itself.
+    static let witnessIsNotTheSourceFile: WitnessIndependenceProbe = { witness, source, _ in
+        var ws = stat(), ss = stat()
+        guard stat(witness, &ws) == 0, stat(source, &ss) == 0 else { return true }
+        return !(DeviceID.from(ws.st_dev) == DeviceID.from(ss.st_dev) && ws.st_ino == ss.st_ino)
+    }
+
     static let witnessIsOnDisk: WitnessPresenceProbe = { path, expectedBytes in
         var sb = stat()
         guard stat(path, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG else { return false }
@@ -429,7 +461,8 @@ enum RelocateReconcile {
         skipDupsOnOtherVolumes: Bool,
         skipAlreadyRelocated: Bool = true,
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
-        witnessOnDisk: WitnessPresenceProbe = witnessIsOnDisk,
+        witnessOnDisk: @escaping WitnessPresenceProbe = witnessIsOnDisk,
+        witnessIndependent: @escaping WitnessIndependenceProbe = witnessIsOffTheSourceDrive,
         hash: (String) -> String
     ) -> ReconcileResult {
         let plan = reconcilePlan(
@@ -443,6 +476,7 @@ enum RelocateReconcile {
             skipAlreadyRelocated: skipAlreadyRelocated,
             resolveVolumeSafety: resolveVolumeSafety,
             witnessOnDisk: witnessOnDisk,
+            witnessIndependent: witnessIndependent,
             hash: hash
         )
         return materialize(plan, scope: records)
@@ -516,7 +550,8 @@ enum RelocateReconcile {
         skipDupsOnOtherVolumes: Bool,
         skipAlreadyRelocated: Bool = true,
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
-        witnessOnDisk: WitnessPresenceProbe = witnessIsOnDisk,
+        witnessOnDisk: @escaping WitnessPresenceProbe = witnessIsOnDisk,
+        witnessIndependent: @escaping WitnessIndependenceProbe = witnessIsOffTheSourceDrive,
         hash: (String) -> String,
         progress: ((_ done: Int, _ total: Int) -> Void)? = nil
     ) -> ReconcilePlan {
@@ -645,7 +680,9 @@ enum RelocateReconcile {
             // but cannot by themselves justify Bucket E.
             if let entry = safelyRedundantEntry(for: rec, witnessIndex: witnessIndex,
                                                 resolveVolumeSafety: resolveVolumeSafety,
-                                                witnessOnDisk: witnessOnDisk) {
+                                                proof: WitnessProof(onDisk: witnessOnDisk,
+                                                                    independent: witnessIndependent,
+                                                                    sourceRoot: sourceVolumeRootPath)) {
                 plan.safelyRedundant.append(entry)
                 continue
             }
@@ -693,7 +730,7 @@ enum RelocateReconcile {
         for rec: ReconcileRecordInput,
         witnessIndex: [WitnessKey: [String]],
         resolveVolumeSafety: VolumeSafetyResolver,
-        witnessOnDisk: WitnessPresenceProbe
+        proof: WitnessProof
     ) -> SafelyRedundantPlanEntry? {
         guard !rec.partialMD5.isEmpty, rec.sizeBytes > 0 else { return nil }
         let key = WitnessKey(size: rec.sizeBytes, md5: rec.partialMD5)
@@ -706,7 +743,7 @@ enum RelocateReconcile {
         var safe: [SafeWitnessInfo] = []
         var degraded: [SafeWitnessInfo] = []
         for w in ranked {
-            if w.isSafe && witnessOnDisk(w.path, rec.sizeBytes) {
+            if w.isSafe && proof.vouches(w.path, sourcePath: rec.fullPath, bytes: rec.sizeBytes) {
                 safe.append(w)
             } else {
                 degraded.append(w)
@@ -732,19 +769,34 @@ enum RelocateReconcile {
     /// (Bucket A) instead — refuse over guess. Order is preserved.
     static func reproveSafelyRedundant(
         _ entries: [SafelyRedundantEntry],
-        witnessOnDisk: WitnessPresenceProbe = witnessIsOnDisk
+        proof: WitnessProof
     ) -> (proven: [SafelyRedundantEntry], refused: [SafelyRedundantEntry]) {
         var proven: [SafelyRedundantEntry] = []
         var refused: [SafelyRedundantEntry] = []
         for entry in entries {
-            let size = entry.rec.sizeBytes
-            if entry.safeWitnesses.contains(where: { witnessOnDisk($0.path, size) }) {
+            let rec = entry.rec
+            if entry.safeWitnesses.contains(where: {
+                proof.vouches($0.path, sourcePath: rec.fullPath, bytes: rec.sizeBytes)
+            }) {
                 proven.append(entry)
             } else {
                 refused.append(entry)
             }
         }
         return (proven, refused)
+    }
+
+    /// Both witness checks, bound to the drive being emptied. A witness
+    /// vouches only if it is on disk now at the recorded size AND it is an
+    /// independent copy (not the source file, not on the source drive).
+    struct WitnessProof: Sendable {
+        var onDisk: WitnessPresenceProbe = RelocateReconcile.witnessIsOnDisk
+        var independent: WitnessIndependenceProbe = RelocateReconcile.witnessIsOffTheSourceDrive
+        let sourceRoot: String
+
+        func vouches(_ witness: String, sourcePath: String, bytes: Int64) -> Bool {
+            onDisk(witness, bytes) && independent(witness, sourcePath, sourceRoot)
+        }
     }
 
     /// Composite key for the witness index. Swift `struct` with `Hashable`

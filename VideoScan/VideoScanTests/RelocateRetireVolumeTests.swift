@@ -105,6 +105,10 @@ struct RelocateRetireVolumeTests {
         defer { try? FileManager.default.removeItem(at: ws.root) }
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         let target = CatalogScanTarget(searchPath: ws.source.path)
         model.scanTargets = [target]
@@ -129,6 +133,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func retire_returnsFalseWhenNoMatchingTarget() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         // No scan targets configured.
         model.scanTargets = []
         let ok = model.retireVolume(at: "/Volumes/Nope",
@@ -198,6 +204,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func retire_skipDoesNothing() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let target = CatalogScanTarget(searchPath: "/Volumes/Test")
         model.scanTargets = [target]
 
@@ -224,6 +232,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func reinstate_clearsAllRetirementFields() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let target = CatalogScanTarget(searchPath: "/Volumes/Test")
         model.scanTargets = [target]
 
@@ -249,6 +259,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func legacyRetiredRoleString_stampsRetiredAt_gatesScan_andReinstateClears() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let target = CatalogScanTarget(searchPath: "/Volumes/RicksBackups")
         target.retiredAt = nil
         let decode = ScanTargetPersistence.applyPersistedRole("Retired", to: target)
@@ -274,6 +286,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func reinstate_returnsFalseWhenNoMatchingTarget() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.scanTargets = []
         let ok = model.reinstateVolume(at: "/Volumes/Nope")
         #expect(ok == false)
@@ -287,6 +301,8 @@ struct RelocateRetireVolumeTests {
         // predicate clauses the loop uses. Avoids actually kicking off a
         // scan (which would touch real filesystem state).
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let active = CatalogScanTarget(searchPath: "/Volumes/Active")
         let retired = CatalogScanTarget(searchPath: "/Volumes/Retired")
         model.scanTargets = [active, retired]
@@ -348,6 +364,10 @@ struct RelocateRetireVolumeTests {
         )
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [sourceRec, witnessRec]
         model.scanTargets = [CatalogScanTarget(searchPath: ws.source.path)]
