@@ -268,7 +268,7 @@ enum CatalogAuditor {
         let purgedIDs = Set(inputs.records.filter(\.isPurged).map(\.id))
 
         for r in inputs.records {
-            if r.isPurged, !["Trashed", "Deleted"].contains(r.lifecycleRaw) {
+            if r.isPurged, ![LifecycleStage.trashed.rawValue, LifecycleStage.deletedPermanently.rawValue].contains(r.lifecycleRaw) {
                 t.purgedButStaged.append(r)
             }
             if let p = r.pairedWithID, !r.isPurged, (!ids.contains(p) || purgedIDs.contains(p)) {

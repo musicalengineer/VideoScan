@@ -233,6 +233,24 @@ enum CopyFamilyAssessor {
         return abs(a - b) <= tol
     }
 
+    /// Rule 3: a copy nothing can read — not playable, ffprobe failed, or no streams.
+    static func isUnreadable(_ r: CopyFamilyInput) -> Bool {
+        !r.isPlayable || r.streamType == .ffprobeFailed || r.streamType == .noStreams
+    }
+
+    /// Rule 1: the copy's duration is outside tolerance of the family's reference.
+    static func isDurationOff(_ r: CopyFamilyInput, reference: Double) -> Bool {
+        !durationsMatch(r.durationSeconds, reference)
+    }
+
+    /// Every copy has a content hash and all the hashes are the same. The
+    /// ONE answer to "proven byte-identical" for both the instance election
+    /// and the original's unproven-equivalence caution.
+    static func provenByteIdentical(_ members: [CopyFamilyInput]) -> Bool {
+        let hashes = Set(members.compactMap { $0.contentHash.isEmpty ? nil : $0.contentHash })
+        return hashes.count == 1 && members.allSatisfy { !$0.contentHash.isEmpty }
+    }
+
     // MARK: Codec classes (rule 2 evidence when lineage is absent)
 
     /// Native acquisition encodings — what a camera or deck wrote.
@@ -372,14 +390,6 @@ enum CopyFamilyAssessor {
         return best.value.sum / Double(best.value.count)
     }
 
-    /// Encoding signature: codec/audio/container/geometry/fps/scan/channels/rate/depth.
-    static func signatureKey(_ r: CopyFamilyInput) -> String {
-        [r.videoCodec, r.audioCodec, r.container, r.resolution, r.frameRate, r.scanType,
-         r.audioChannels, r.audioSampleRate, r.bitDepth]
-            .map { $0.lowercased().trimmingCharacters(in: .whitespaces) }
-            .joined(separator: "|")
-    }
-
     static func signature(_ r: CopyFamilyInput) -> String {
         let v = r.videoCodec.isEmpty ? "no video" : r.videoCodec.uppercased()
         let geo = [r.resolution, r.frameRate.isEmpty ? "" : "\(r.frameRate) fps", scanWord(r.scanType)]
@@ -429,8 +439,7 @@ enum CopyFamilyAssessor {
     /// (left-channel-only twin, 2026-08-19), so EVIDENCE outranks the
     /// drive: human metadata › audio state › volume.
     static func recommendedInstance(_ members: [CopyFamilyInput], anchors: Set<UUID> = []) -> CopyFamilyInput? {
-        let hashes = Set(members.compactMap { $0.contentHash.isEmpty ? nil : $0.contentHash })
-        let provenIdentical = hashes.count == 1 && members.allSatisfy { !$0.contentHash.isEmpty }
+        let provenIdentical = provenByteIdentical(members)
         return members.max { a, b in
             if a.isReachable != b.isReachable { return !a.isReachable }
             if a.isRetired != b.isRetired { return a.isRetired }
@@ -515,9 +524,9 @@ extension CopyFamilyAssessor {
     // not hide among the complete DVs.
     fileprivate static func groupSignature(_ r: CopyFamilyInput, referenceDuration: Double) -> String {
         var sig = signature(r)
-        if !r.isPlayable || r.streamType == .ffprobeFailed || r.streamType == .noStreams {
+        if isUnreadable(r) {
             sig += " — unreadable"
-        } else if !durationsMatch(r.durationSeconds, referenceDuration) {
+        } else if isDurationOff(r, reference: referenceDuration) {
             sig += " — duration differs"
         }
         return sig
@@ -543,8 +552,8 @@ extension CopyFamilyAssessor {
             let rep = members[0]
             let cls = codecClass(videoCodec: rep.videoCodec, audioCodec: rep.audioCodec,
                                  container: rep.container, originMake: rep.originMake)
-            let damaged = members.allSatisfy { !$0.isPlayable || $0.streamType == .ffprobeFailed || $0.streamType == .noStreams }
-            let durationOff = members.allSatisfy { !durationsMatch($0.durationSeconds, referenceDuration) }
+            let damaged = members.allSatisfy(isUnreadable)
+            let durationOff = members.allSatisfy { isDurationOff($0, reference: referenceDuration) }
             let lineage = lineage(of: members, sig: sig, idToSig: idToSig)
             let everyMemberDerived = members.allSatisfy { $0.derivedFrom != nil }
             return Draft(sig: sig, members: members, cls: cls, damaged: damaged,
@@ -670,11 +679,10 @@ extension CopyFamilyAssessor {
         // that are NOT all proven byte-identical is a leap of faith —
         // Pair Compare is the proof (and would have caught the
         // left-channel-only twin).
-        if m.count > 1 {
-            let hashes = Set(m.compactMap { $0.contentHash.isEmpty ? nil : $0.contentHash })
-            if hashes.count > 1 || m.contains(where: { $0.contentHash.isEmpty }) {
-                cautions.append("The original's copies are NOT all proven byte-identical (missing or differing content signatures) — they can differ in audio even when the picture matches. Run Compare These Two Files… on the copy you intend to promote before trusting a twin.")
-            }
+        // For two or more copies, "not proven" is exactly the old inline
+        // test (a hash missing, or two hashes differ), written the other way round.
+        if m.count > 1, !provenByteIdentical(m) {
+            cautions.append("The original's copies are NOT all proven byte-identical (missing or differing content signatures) — they can differ in audio even when the picture matches. Run Compare These Two Files… on the copy you intend to promote before trusting a twin.")
         }
 
         // Audio caution (rule 1 includes audio). A repair derivative in the
