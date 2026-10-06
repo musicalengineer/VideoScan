@@ -73,7 +73,50 @@ struct RelocateWitnessLivenessTests {
             )
         }
 
+        /// The witness row's path is an ALIAS of the source file (symlink,
+        /// other case). Production probes: nothing injected.
+        func reconcileWithAlias(source: VideoRecord, aliasPath: String) -> ReconcileResult {
+            let witness = VideoRecord()
+            witness.filename = (aliasPath as NSString).lastPathComponent
+            witness.fullPath = aliasPath
+            witness.sizeBytes = size
+            witness.partialMD5 = md5
+            return RelocateReconcile.reconcile(
+                records: [source],
+                allCatalogRecords: [source, witness],
+                sourceVolumeRootPath: src.path,
+                destinationRoot: dest,
+                sourceFiles: [.init(path: srcFile.path, size: size)],
+                destFiles: [],
+                skipDupsOnOtherVolumes: true,
+                hash: { [md5] _ in md5 }
+            )
+        }
+
         func cleanup() { try? FileManager.default.removeItem(at: root) }
+    }
+
+    // MARK: - QA round 1 (A): the drive being retired cannot vouch for itself
+
+    @Test func qaRedSourceFileReachedThroughASymlinkIsNotItsOwnWitness() throws {
+        let fx = try Fixture(); defer { fx.cleanup() }
+        let source = fx.record(at: fx.srcFile)
+        let link = fx.witnessVol.appendingPathComponent("test_alias.mov")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: fx.srcFile)
+        expectMustCopy(fx.reconcileWithAlias(source: source, aliasPath: link.path), source,
+                       "a symlink to the source file is the source file, not a second copy")
+    }
+
+    @Test func qaRedSourceFileSpelledWithDifferentCaseIsNotItsOwnWitness() throws {
+        let fx = try Fixture(); defer { fx.cleanup() }
+        let source = fx.record(at: fx.srcFile)
+        // <root>/SRC/test_family.mov — outside the "<root>/src/" prefix, the
+        // same file on a case-insensitive volume (the APFS default).
+        let upper = fx.root.appendingPathComponent("SRC").appendingPathComponent(fx.srcFile.lastPathComponent)
+        try #require(FileManager.default.fileExists(atPath: upper.path),
+                     "needs a case-insensitive temp volume")
+        expectMustCopy(fx.reconcileWithAlias(source: source, aliasPath: upper.path), source,
+                       "the source file under another case is the source file, not a second copy")
     }
 
     /// Expect the source record NOT to be retired as redundant; it must

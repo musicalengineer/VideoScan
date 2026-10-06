@@ -484,6 +484,92 @@ struct RemoteViewerReadOnlySensorTests {
         return (model, rec, file)
     }
 
+    /// QA round 1 (C): Triage › Under Construction › Discard trashed files
+    /// on a viewer.
+    @Test func qaRedViewerModeRefusesDiscardWorkbenchAndLeavesTheFileOnDisk() throws {
+        let root = tmp("discard")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (model, rec, file) = try Self.junkFixture(in: root)
+        rec.lifecycleStage = .workbench
+        model.isReadOnly = true
+        var trashed: [URL] = []
+
+        let n = model.discardWorkbench([rec], trash: { trashed.append($0) })
+
+        #expect(trashed.isEmpty, "nothing may be trashed on a viewer")
+        #expect(n == 0)
+        #expect(rec.purgedAt == nil)
+        #expect(rec.lifecycleStage == .workbench)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// Every file in app code that calls trashItem / removeItem, with how
+    /// many calls it makes. Media removals name their viewer guard (a token
+    /// that must appear in `guardFile`); the rest remove the app's OWN
+    /// temp, partial, staging, cache or output files. A new removal call —
+    /// anywhere — changes a count and fails here until it is classified.
+    private static let removalSites: [String: (count: Int, guardFile: String?, token: String?)] = [
+        // Media / family files — behind the viewer guard.
+        "MediaOps/VideoScanModel+JunkDelete.swift": (2, nil, "junkDeletionRefusedOnViewer("),
+        "Catalog/VideoScanModel+Workbench.swift": (1, nil, "workbenchDiscardRefusedOnViewer("),
+        "People/FamilyGroup.swift": (2, nil, "ViewerWriteGuard.check(\"FamilyGroupStore.moveToTrash\")"),
+        "People/PersonEditSheet.swift": (1, nil, "ViewerWriteGuard.refuse(\"PersonEditSheet.deleteReferencePhoto\")"),
+        // Reached only from MFO jobs (Delete Duplicates, Transcode, Reformat);
+        // MediaFileOperationsCenter.add refuses every job on a viewer.
+        "MediaOps/SignatureVerification.swift": (2, "MediaOps/MediaFileOperations.swift", "ViewerWriteGuard.refuse(\"MediaFileOperationsCenter.add("),
+        "MediaOps/DerivativeOutputPublish.swift": (1, "MediaOps/MediaFileOperations.swift", "ViewerWriteGuard.refuse(\"MediaFileOperationsCenter.add("),
+        // The app's own temp / partial / staging / cache / output files.
+        "App/BundleExporter.swift": (1, nil, nil), "App/BundleImporter.swift": (2, nil, nil),
+        "Archive/ArchiveIndexRename.swift": (3, nil, nil),
+        "ArchiveAngel/Prepare/ArchiveAngelJob.swift": (1, nil, nil),
+        "ArchiveAngel/Prepare/ArchiveAngelPlan.swift": (2, nil, nil),
+        "Catalog/CatalogStore.swift": (1, nil, nil), "Catalog/CatalogSync.swift": (3, nil, nil),
+        "Catalog/CatalogWriteError.swift": (1, nil, nil),
+        "FamilyTree/CouplePortrait.swift": (2, nil, nil), "FamilyTree/FamilyAssetStore.swift": (1, nil, nil),
+        "FamilyTree/FamilySearchPullCoordinator.swift": (6, nil, nil),
+        "Hallie/HalliePhotoImport.swift": (1, nil, nil), "Hallie/Voice/HallieNeuralSpeech.swift": (7, nil, nil),
+        "Hallie/Voice/HalliePronunciationLexicon.swift": (1, nil, nil),
+        "Hallie/Web/HallieWebPoster.swift": (3, nil, nil), "Hallie/Web/HallieWebProxy.swift": (3, nil, nil),
+        "Media/AudioTranscriber.swift": (1, nil, nil), "Media/CaptionRunner.swift": (2, nil, nil),
+        "Media/PerceptualFingerprinter.swift": (1, nil, nil), "Media/ReviewThumbnailRenderer.swift": (1, nil, nil),
+        "Media/VideoScanModel+ProbeEngine.swift": (1, nil, nil),
+        "MediaOps/BalanceAudioJob.swift": (1, nil, nil), "MediaOps/CleanupJob.swift": (4, nil, nil),
+        "MediaOps/FootageSpectrumHelper.swift": (1, nil, nil), "MediaOps/RebuildAudioJob.swift": (1, nil, nil),
+        "MediaOps/ReformatJob.swift": (5, nil, nil), "MediaOps/RelocateEngine.swift": (1, nil, nil),
+        "MediaOps/TrimJob.swift": (1, nil, nil), "MediaOps/VideoScanModel+Combine.swift": (1, nil, nil),
+        "People/AdaFaceEngine.swift": (1, nil, nil), "People/ArcFaceEngine.swift": (1, nil, nil),
+        "People/FamilyEditSheet.swift": (1, nil, nil), "People/FindPersonJob.swift": (1, nil, nil),
+        "People/IdentifyFamilyModel.swift": (1, nil, nil), "People/POIProfileFileStore.swift": (2, nil, nil),
+        "People/POIStorage.swift": (1, nil, nil), "People/PersonFinderCompilation.swift": (7, nil, nil),
+        "People/RecipeGenderAgeGate.swift": (1, nil, nil),
+        "Volumes/ScanCheckpoint.swift": (1, nil, nil), "Volumes/ScanJobsStorage.swift": (2, nil, nil),
+    ]
+
+    @Test func everyFileRemovalInAppCodeIsClassifiedAndMediaRemovalsAreViewerGuarded() throws {
+        let app = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan", isDirectory: true)
+        var found: [String: Int] = [:]
+        let it = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)
+        let call = try Regex(#"\b(trashItem|removeItem)\("#)
+        while let url = it?.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let rel = String(url.path.dropFirst(app.path.count + 1))
+            let n = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .reduce(0) { $0 + $1.matches(of: call).count }
+            if n > 0 { found[rel] = n }
+        }
+        #expect(found == Self.removalSites.mapValues(\.count),
+                "a removal call was added or removed: classify it here (media ⇒ behind the viewer guard)")
+        for (file, site) in Self.removalSites {
+            guard let token = site.token else { continue }
+            let text = try String(contentsOf: app.appendingPathComponent(site.guardFile ?? file), encoding: .utf8)
+            #expect(text.contains(token), Comment(rawValue: "\(file): viewer guard `\(token)` missing"))
+        }
+    }
+
     /// A viewer must not rewrite the master's scan-target list either
     /// (Volumes → Delete from list…).
     @Test func viewerModeRefusesDeleteFromVolumesList() {

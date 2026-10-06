@@ -87,6 +87,52 @@ struct FamilyIdentityDecisionsDamagedFileTests {
         #expect(FamilyIdentityDecisions.load(from: dir).isSuppressed(mary))
     }
 
+    /// QA round 1 (B): damaged at tree open (loads as empty), fixed by hand
+    /// while the tree is open, then Hide — the stale empty snapshot must not
+    /// overwrite the hand-fixed rulings.
+    @Test func qaRedAFileFixedByHandAfterLoadIsNotOverwrittenByTheStaleSnapshot() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = FamilyIdentityDecisions.fileURL(in: dir)
+        try damagedBytes.write(to: url)
+        var stale = FamilyIdentityDecisions.load(from: dir)
+        #expect(stale.isEmpty)
+
+        // Rick repairs the file by hand: two hard-won rulings.
+        let other = FamilyIdentityDecision.Key.familySearch("TEST-0002")
+        let third = FamilyIdentityDecision.Key.familySearch("TEST-0003")
+        var fixed = FamilyIdentityDecisions()
+        fixed.record(.init(key: other, verified: true, note: "hand-fixed"))
+        fixed.record(.init(key: third, duplicateOf: other))
+        try fixed.save(to: dir)
+
+        // The open tree then hides one record from its stale snapshot.
+        stale.record(.init(key: mary, hidden: true))
+        try stale.save(to: dir)
+
+        let back = FamilyIdentityDecisions.load(from: dir)
+        #expect(back.decision(for: other)?.note == "hand-fixed", "the hand-fixed rulings survive")
+        #expect(back.preferred(third) == other)
+        #expect(back.isSuppressed(mary), "and the new ruling is applied on top of them")
+        #expect(back.count == 3)
+    }
+
+    @Test func aStaleSnapshotOverAFileThatIsNowUnreadableIsRefused() throws {
+        let dir = try scratch()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = FamilyIdentityDecisions.fileURL(in: dir)
+        var fixed = FamilyIdentityDecisions()
+        fixed.record(.init(key: mary, verified: true))
+        try fixed.save(to: dir)
+        var stale = FamilyIdentityDecisions.load(from: dir)
+        let other = Data("{ broken after load".utf8)
+        try other.write(to: url)
+
+        stale.record(.init(key: mary, verified: true, hidden: true))
+        #expect(throws: (any Error).self) { try stale.save(to: dir) }
+        #expect(try Data(contentsOf: url) == other, "refused: the damaged file is left as it is")
+    }
+
     @Test func twoDamagedSavesInARowKeepBothDamagedCopies() throws {
         // Rick hand-edits, breaks it, Hide; hand-edits again, breaks it
         // again, Hide — inside the same second. Neither copy may clobber
