@@ -408,7 +408,7 @@ struct CatalogView: View {
     /// Internal (not private): set by showMigrationReport(for:) in
     /// CatalogView+VolumeTable.swift (the volume context menu's file).
     @State var migrationReportItem: VolumeMigrationItem?
-    // Volume pane height is now managed by NSSplitView (VerticalSplitView)
+    // Volume pane height: the VSplitView divider (rootSplit).
     @State private var showPairsOnly = false
     @State private var catalogViewFilters: Set<CatalogViewFilter> = []
     /// The filter set, persisted (2026-08-22). Until now the Show ▸ filters
@@ -569,18 +569,20 @@ struct CatalogView: View {
         withAlerts(withSheets(rootSplit))
     }
 
+    /// Volumes on top, files below, in ONE SwiftUI hierarchy (2026-10-06,
+    /// docs/design/catalog_window_architecture_2026_10_06.md). The old
+    /// VerticalSplitView hosted each pane in its own NSHostingController —
+    /// two SwiftUI graphs, so a click in the volumes table never took the
+    /// keyboard from the files table. `VSplitView` is NSSplitView-backed
+    /// like Finder's panes; the divider starts at `idealHeight` and then
+    /// stays where Rick drags it (no auto-grow, no max cap — his ruling).
     private var rootSplit: some View {
-        VerticalSplitView(
-            topMinHeight: 60,
-            topIdealHeight: scanTargetsPaneAutoHeight,
-            topMaxHeight: 400,
-            top: {
-                scanTargetsPane
-            },
-            bottom: {
-                bottomPane
-            }
-        )
+        VSplitView {
+            scanTargetsPane
+                .frame(minHeight: 60, idealHeight: scanTargetsPaneAutoHeight)
+            bottomPane
+                .frame(minHeight: 100)
+        }
     }
 
     private var bottomPane: some View {
