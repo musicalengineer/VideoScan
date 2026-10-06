@@ -15,3 +15,5 @@ Mark a row done by adding it here when its branch is pushed.
 
 | ID | Date | Balance before → after | Findings (R/NM/N) | Survived verify | Applied / declined | Branch |
 |---|---|---|---|---|---|---|
+| N1006-D-next-refactors | 10-05 | (balance pending) | plan | executed as R2 (local) | in progress | cloud/N1006-D-next-refactors |
+| N1007-D-Hallie-rewrite-eval | 10-05 | (balance pending) | evaluation | not yet reviewed | — | cloud/N1007-D-Hallie-rewrite-eval |
