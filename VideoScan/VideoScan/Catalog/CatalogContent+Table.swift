@@ -178,8 +178,10 @@ extension CatalogContent {
         catalogTableBase
             // Keyboard harness hook (CatalogKeyboardUITests).
             .accessibilityIdentifier("catalog.filesTable")
-            // Takes keyboard focus when a file is picked (see filesTableFocused).
-            .focused(tableState.$filesTableFocused)
+            // One of the two Catalog focus targets (CatalogPane). Focus
+            // arrives only natively — a click in this table, Tab, or the
+            // window's default focus — never from a selection change.
+            .focused($focusedPane, equals: .files)
             // The menu route (2026-09-20): Catalog ▸ Move to Trash ⌘⌫ reads
             // this while the table has keyboard focus — see
             // CatalogTrashCommand.swift for why the key handler below was

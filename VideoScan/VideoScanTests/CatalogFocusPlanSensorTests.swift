@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import VideoScan
@@ -86,8 +87,11 @@ struct CatalogPaneFocusSensorTests {
         for file in try allAppCode() {
             let hit = file.code.range(of: #"focusedPane\s*=(?!=)"#, options: .regularExpression)
             #expect(hit == nil, "\(file.name) assigns focusedPane")
-            #expect(!file.code.contains("makeFirstResponder") || !file.name.hasPrefix("Catalog/"),
-                    "\(file.name) moves the first responder in code")
+            // The ONE exception: a click moves the keyboard to the clicked
+            // table (CatalogTableClickFocus — SwiftUI's Table won't).
+            if file.name.hasPrefix("Catalog/") && file.name != "Catalog/CatalogTableClickFocus.swift" {
+                #expect(!file.code.contains("makeFirstResponder"), "\(file.name) moves the first responder in code")
+            }
         }
         let helpers = try code("CatalogHelpers.swift")
         let block = try #require(helpers.range(of: ".onChange(of: selectedIDs) {"))
@@ -101,7 +105,8 @@ struct CatalogPaneFocusSensorTests {
     @Test func defaultFocusIsDeclaredOnceForTheFiles() throws {
         let total = try allAppCode().map { occurrences(of: ".defaultFocus($focusedPane", in: $0.code) }.reduce(0, +)
         #expect(total == 1)
-        #expect(try code("CatalogHelpers.swift").contains(".defaultFocus($focusedPane, .files)"))
+        #expect(try code("ContentView.swift").contains(".defaultFocus($focusedPane, .files)"),
+                "declared on the common ancestor of both panes")
     }
 
     @Test func onlyTheFilesTablePublishesFileVerbs() throws {
@@ -181,5 +186,43 @@ struct CatalogInfoShortcutSensorTests {
         #expect(all.filter { $0.code.contains("@FocusedValue(\\.catalogVolumeInfo)") }.count == 1)
         let publishers = all.filter { $0.code.contains("focusedValue(\\.catalogVolumeInfo") }
         #expect(publishers.map(\.name) == ["Catalog/CatalogView+VolumeTable.swift"])
+    }
+}
+
+// MARK: - Click → keyboard (CatalogTableClickFocus)
+
+@MainActor
+@Suite("A click gives the clicked Catalog table the keyboard — and nothing else does")
+struct CatalogTableClickFocusTests {
+
+    @Test func focusesAnUnfocusedTable() {
+        let table = NSTableView()
+        #expect(CatalogTableClickFocus.shouldFocus(table, firstResponder: nil))
+        #expect(CatalogTableClickFocus.shouldFocus(table, firstResponder: NSTableView()),
+                "a click in one table takes the keyboard from the other")
+    }
+
+    @Test func leavesItAloneWhenItOrAChildAlreadyHasIt() {
+        let table = NSTableView()
+        let editor = NSTextView()
+        table.addSubview(editor)
+        #expect(!CatalogTableClickFocus.shouldFocus(table, firstResponder: table))
+        #expect(!CatalogTableClickFocus.shouldFocus(table, firstResponder: editor), "inline edit keeps its field")
+    }
+
+    @Test func respectsARefusingTable() {
+        let table = NSTableView()
+        table.refusesFirstResponder = true
+        #expect(!CatalogTableClickFocus.shouldFocus(table, firstResponder: nil))
+    }
+
+    /// The hook reacts to the CLICK only — installed by CatalogView for the
+    /// tab's lifetime, never from a selection or filter change.
+    @Test func installedOnlyByCatalogViewLifetime() throws {
+        let content = try code("ContentView.swift")
+        #expect(content.contains(".onAppear { tableClickFocus.install() }"))
+        #expect(content.contains(".onDisappear { tableClickFocus.remove() }"))
+        let users = try allAppCode().filter { $0.code.contains("CatalogTableClickFocus") }.map(\.name)
+        #expect(Set(users) == ["App/ContentView.swift", "Catalog/CatalogTableClickFocus.swift"])
     }
 }

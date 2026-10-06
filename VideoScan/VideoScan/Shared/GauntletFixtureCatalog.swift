@@ -138,6 +138,7 @@ enum GauntletKeyTrace {
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .keyDown]) { event in
             if let label = label(for: event) {
                 write("\(label) before: \(describeFirstResponder())")
+                if event.type == .leftMouseDown { write("  hit: \(describeHit(event))") }
                 // After AppKit has dispatched the event (next main-queue turn).
                 DispatchQueue.main.async { write("\(label) after: \(describeFirstResponder())") }
             }
@@ -180,6 +181,27 @@ enum GauntletKeyTrace {
             }
             // Generic SwiftUI host names run to kilobytes; the outer name is enough.
             chain.append(String(String(describing: type(of: current)).prefix(60)))
+            node = current.superview
+        }
+        return chain.joined(separator: " < ")
+    }
+
+    /// What the click lands on: the hit view's class chain up to the
+    /// nearest table, and whether that table will take first responder.
+    private static func describeHit(_ event: NSEvent) -> String {
+        // hitTest takes a point in the RECEIVER'S SUPERVIEW coordinates; the
+        // frame view (contentView's superview) uses window coordinates.
+        guard let frameView = event.window?.contentView?.superview,
+              let hit = frameView.hitTest(event.locationInWindow) else { return "nothing" }
+        var chain: [String] = []
+        var node: NSView? = hit
+        while let current = node, chain.count < 14 {
+            if let table = current as? NSTableView {
+                chain.append("NSTableView(rows=\(table.numberOfRows) class=\(type(of: table)) "
+                    + "accepts=\(table.acceptsFirstResponder) refuses=\(table.refusesFirstResponder))")
+                break
+            }
+            chain.append(String(String(describing: type(of: current)).prefix(50)))
             node = current.superview
         }
         return chain.joined(separator: " < ")

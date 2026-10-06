@@ -350,6 +350,9 @@ extension CatalogView {
             if let id = ids.first { openVolumesEditor(for: id) }
         }
         .font(.system(size: 14))
+        // The other Catalog focus target (CatalogPane): a click here makes
+        // ↑/↓ walk the VOLUMES. No file verbs (⌘⌫ / ⌘O / Promote) here.
+        .focused($focusedPane, equals: .volumes)
         // Keyboard harness hook (CatalogKeyboardUITests).
         .accessibilityIdentifier("catalog.volumesTable")
     }

@@ -25,10 +25,13 @@ struct CatalogContent: View {
     @Environment(\.openWindow) var openWindow
     let records: [VideoRecord]
     @Binding var selectedIDs: Set<UUID>
-    /// The files table's rows snapshot, badge revision and keyboard-focus
-    /// flag — gathered in CatalogTableState.swift (R1, GH #281). Read and
-    /// written through the `tableData` / `angelBadgeRevision` /
-    /// `filesTableFocused` forwarders there.
+    /// Which Catalog pane has the keyboard. The ONE `@FocusState` lives in
+    /// CatalogView (the ancestor of both tables); this is its binding
+    /// (≈ a C++ reference to the parent's member).
+    @FocusState.Binding var focusedPane: CatalogPane?
+    /// The files table's rows snapshot and badge revision — gathered in
+    /// CatalogTableState.swift (R1, GH #281). Read and written through the
+    /// `tableData` / `angelBadgeRevision` forwarders there.
     var tableState = CatalogTableState()
     @Binding var sortOrder: [KeyPathComparator<VideoRecord>]
     let searchText: String
@@ -730,12 +733,10 @@ struct CatalogContent: View {
             }
         }
         .onChange(of: selectedIDs) {
-            // Keyboard focus follows a file pick (2026-10-05), so ↑/↓ walk
-            // the files — but never out of a text field (typing in Search
-            // must keep the cursor while results change the selection).
-            if !selectedIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSText) {
-                filesTableFocused = true
-            }
+            // NO focus change here (2026-10-06). A volume click re-filters
+            // the files, which can change this selection; grabbing focus
+            // here pulled the keyboard out of the volumes table. A click on
+            // a row focuses its own table natively.
             if isPlaying {
                 player?.pause()
                 player = nil
@@ -758,15 +759,9 @@ struct CatalogContent: View {
         // Space-toggle monitor lives for the catalog pane's on-screen
         // lifetime — installed here, torn down (and the mode reset) on
         // disappear so it can't fire from another tab.
-        .onAppear {
-            installSpaceKeyMonitor()
-            // The files table, not the volumes table above it, starts with
-            // keyboard focus when the Catalog opens (Apple's focus cookbook:
-            // say where focus goes instead of inheriting the window's first
-            // key view).
-            filesTableFocused = true
-        }
-        .defaultFocus(tableState.$filesTableFocused, true)
+        .onAppear { installSpaceKeyMonitor() }
+        // (The files table's default focus is declared on CatalogView's
+        // rootSplit, the common ancestor of both panes.)
         .onDisappear { removeSpaceKeyMonitor() }
         .sheet(isPresented: $showRenameSheet) {
             RenameSheet(
