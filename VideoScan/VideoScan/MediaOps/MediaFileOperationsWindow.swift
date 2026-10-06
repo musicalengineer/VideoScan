@@ -220,36 +220,48 @@ struct MediaFileOperationsWindow: View {
             // Pause All flips to Resume All once nothing unpaused
             // remains; Cancel All also stops a running Combine batch,
             // which runs through its own pipeline.
-            if center.hasPausableRunning {
-                Button("Pause All") {
-                    center.pauseAll()
+            // Liquid Glass spots 2026-10-06: the bulk controls are one
+            // glass group, so neighbouring buttons blend as they come and go.
+            VSGlassContainer(spacing: 8) {
+                HStack(spacing: 8) {
+                    bulkControls
                 }
-                .controlSize(.small)
-            } else if center.hasPausedJobs {
-                Button("Resume All") {
-                    center.resumeAll()
-                }
-                .controlSize(.small)
             }
-
-            if center.activeCount > 0 || model.isCombining {
-                Button("Cancel All", role: .destructive) {
-                    center.cancelAll()
-                    if model.isCombining { model.stopCombine() }
-                }
-                .controlSize(.small)
-            }
-
-            if center.jobs.contains(where: { !$0.state.isActive }) {
-                Button("Clear Finished") {
-                    center.clearFinished()
-                }
-                .controlSize(.small)
-            }
+            .controlSize(.small)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.ultraThinMaterial)
+    }
+
+    @ViewBuilder
+    private var bulkControls: some View {
+        if center.hasPausableRunning {
+            Button("Pause All") {
+                center.pauseAll()
+            }
+            .vsGlassButtonStyle()
+        } else if center.hasPausedJobs {
+            Button("Resume All") {
+                center.resumeAll()
+            }
+            .vsGlassButtonStyle()
+        }
+
+        if center.activeCount > 0 || model.isCombining {
+            Button("Cancel All", role: .destructive) {
+                center.cancelAll()
+                if model.isCombining { model.stopCombine() }
+            }
+            .vsGlassButtonStyle()
+        }
+
+        if center.jobs.contains(where: { !$0.state.isActive }) {
+            Button("Clear Finished") {
+                center.clearFinished()
+            }
+            .vsGlassButtonStyle()
+        }
     }
 
     // MARK: - Empty State
@@ -362,15 +374,21 @@ struct MediaFileOperationsWindow: View {
             Spacer()
 
             if model.isCombining {
-                Button(model.isCombinePaused ? "Resume All" : "Pause All") {
-                    if model.isCombinePaused {
-                        model.resumeCombine()
-                    } else {
-                        model.pauseCombine()
+                VSGlassContainer(spacing: 8) {
+                    HStack(spacing: 8) {
+                        Button(model.isCombinePaused ? "Resume All" : "Pause All") {
+                            if model.isCombinePaused {
+                                model.resumeCombine()
+                            } else {
+                                model.pauseCombine()
+                            }
+                        }
+                        .vsGlassButtonStyle()
+                        Button("Stop All") { model.stopCombine() }
+                            .foregroundColor(.red)
+                            .vsGlassButtonStyle()
                     }
                 }
-                Button("Stop All") { model.stopCombine() }
-                    .foregroundColor(.red)
             }
         }
         .padding(.horizontal, 16)
