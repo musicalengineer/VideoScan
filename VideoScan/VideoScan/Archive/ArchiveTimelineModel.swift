@@ -240,3 +240,99 @@ struct ArchiveTimeline: Equatable {
         })
     }
 }
+
+// MARK: - Decade ribbon (horizontal timeline navigation, Rick 2026-10-06)
+//
+// The Archive tab walks the family archive by decade: a horizontal ribbon
+// of decades across the top (ArchiveDecadeRibbon.swift) and, below it, one
+// decade's years. Everything the ribbon needs is derived HERE, once per
+// data change (memoised by ArchiveView), so hovering the ribbon costs
+// O(decades) per frame — never O(items).
+
+/// One decade (or the Undated shelf) on the ribbon.
+struct ArchiveDecadeTick: Identifiable, Equatable {
+    /// Page id of the Undated shelf. Decade ids are their first year.
+    static let undatedID = -1
+
+    /// Decade start (1990) or `undatedID`.
+    let id: Int
+    let label: String
+    /// Cards on this page (after search narrowing).
+    let count: Int
+    /// Years in this decade that hold at least one card — the dwell-zoom
+    /// row dims the other years.
+    let yearsWithMedia: Set<Int>
+
+    var isUndated: Bool { id == Self.undatedID }
+    var isGap: Bool { count == 0 }
+    /// The ten years of the decade, in order; none for Undated.
+    var years: [Int] { isUndated ? [] : Array(id...(id + 9)) }
+
+    /// O(decades × 10). Undated, when present, is the last tick.
+    static func ticks(for timeline: ArchiveTimeline) -> [ArchiveDecadeTick] {
+        var out = timeline.decades.map { d in
+            ArchiveDecadeTick(id: d.start, label: d.label, count: d.count,
+                              yearsWithMedia: Set(d.years.map(\.year)))
+        }
+        if !timeline.undated.isEmpty {
+            out.append(ArchiveDecadeTick(id: undatedID, label: "Undated",
+                                         count: timeline.undated.count, yearsWithMedia: []))
+        }
+        return out
+    }
+}
+
+/// The timeline plus its ribbon ticks, built together once per data
+/// change (records version + search text) and memoised by ArchiveView.
+struct ArchiveTimelineSnapshot: Equatable {
+    var timeline = ArchiveTimeline()
+    var ticks: [ArchiveDecadeTick] = []
+
+    var isEmpty: Bool { timeline.isEmpty }
+
+    /// O(n log n) in archived items — the grouping. Never call from a
+    /// view body except through the memo.
+    static func build(items: [ArchiveTimelineItem], matching query: String) -> ArchiveTimelineSnapshot {
+        let tl = ArchiveTimeline.build(items: items, matching: query)
+        return ArchiveTimelineSnapshot(timeline: tl, ticks: ArchiveDecadeTick.ticks(for: tl))
+    }
+
+    /// The page to show: the user's pick while it is still on the ribbon,
+    /// else the oldest decade that holds media (a chronicle starts at the
+    /// beginning), else whatever exists. Nil only when empty.
+    func page(selected: Int?) -> Int? {
+        if let s = selected, ticks.contains(where: { $0.id == s }) { return s }
+        return ticks.first(where: { !$0.isGap })?.id ?? ticks.first?.id
+    }
+
+    /// Which page shows the card for `id` (an item or one of its folded
+    /// versions) — a hand-off lands on the right decade. O(archived).
+    func page(containing id: UUID) -> Int? {
+        func hit(_ item: ArchiveTimelineItem) -> Bool {
+            item.id == id || item.versions.contains { $0.id == id }
+        }
+        if timeline.undated.contains(where: hit) { return ArchiveDecadeTick.undatedID }
+        for d in timeline.decades where d.years.contains(where: { $0.items.contains(where: hit) }) {
+            return d.start
+        }
+        return nil
+    }
+}
+
+/// Dock-style magnification for the ribbon: each decade's scale follows
+/// its distance from the pointer, a smooth raised-cosine falloff from
+/// `maxScale` under the pointer to 1 at `radius`.
+enum ArchiveRibbonMagnifier {
+    static let maxScale = 1.6
+    /// Reach of the bulge, in ribbon slots (the Dock's is ~2–3 icons).
+    static let radiusInSlots = 2.5
+
+    /// `distance` and `radius` in the same units (points or slots).
+    static func scale(distance: Double, radius: Double) -> Double {
+        guard radius > 0, distance.isFinite else { return 1 }
+        let d = abs(distance)
+        guard d < radius else { return 1 }
+        let falloff = (cos(Double.pi * d / radius) + 1) / 2   // 1 at the pointer, 0 at the edge
+        return 1 + (maxScale - 1) * falloff
+    }
+}

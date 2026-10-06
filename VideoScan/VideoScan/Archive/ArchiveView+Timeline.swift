@@ -2,9 +2,10 @@
 // Archive tab — Timeline view (docs/archive-view.md, first cut
 // 2026-08-20). The archive is the app's vetted shelf: known dates, human
 // names, verified copies — so its natural view is the story over time,
-// not a file table. Layout: a vertical decade rail on the left (oldest at
-// the top, reading down — Rick), the year-by-year stream on the right.
-// Files view (ArchiveView+Table) stays available via the toolbar switch.
+// not a file table. Layout (Rick 2026-10-06): a horizontal decade ribbon
+// across the top (ArchiveDecadeRibbon.swift, Dock-style magnification),
+// the year-by-year stream below it. Files view (ArchiveView+Table) stays
+// available via the toolbar switch.
 
 import SwiftUI
 
@@ -66,13 +67,25 @@ extension ArchiveView {
         }
     }
 
-    /// The Timeline pane, fed from memoized items narrowed by the search
-    /// field. Search runs over archived items only — cheap per keystroke.
+    /// Timeline grouping + ribbon ticks, memoized per records version
+    /// and search text: built once per data change, O(1) on every other
+    /// render (CLAUDE.md: no O(records) work in view bodies).
+    @MainActor
+    func cachedTimeline() -> ArchiveTimelineSnapshot {
+        let key = ArchiveTimelineKey(
+            version: RecordsVersion(count: model.records.count,
+                                    revision: model.volumeAggregatesRevision),
+            query: searchText)
+        return timelineMemo.value(for: key) {
+            ArchiveTimelineSnapshot.build(items: cachedTimelineItems(), matching: searchText)
+        }
+    }
+
+    /// The Timeline pane, fed from the memoized snapshot.
     @MainActor
     var timelinePane: some View {
         ArchiveTimelinePane(
-            timeline: ArchiveTimeline.build(items: cachedTimelineItems(),
-                                            matching: searchText),
+            snapshot: cachedTimeline(),
             selectedIDs: selectedIDs,
             scrollTarget: timelineScrollTarget,
             contextMenu: { ids in AnyView(self.recordContextMenu(for: ids)) },
@@ -82,14 +95,21 @@ extension ArchiveView {
     }
 }
 
+/// Memo key for the timeline grouping: the catalog's version plus the
+/// search text that narrows it.
+struct ArchiveTimelineKey: Equatable {
+    let version: RecordsVersion
+    let query: String
+}
+
 // MARK: - The pane
 
 struct ArchiveTimelinePane: View {
-    /// Built by ArchiveView per render from memoized parts; cheap
-    /// (archived count, not catalog count).
-    let timeline: ArchiveTimeline
-    /// Rail selection → scroll anchor. Nil until the user clicks.
-    @State private var focusedDecade: Int?
+    /// Memoized by ArchiveView (cachedTimeline) — never built here.
+    let snapshot: ArchiveTimelineSnapshot
+    private var timeline: ArchiveTimeline { snapshot.timeline }
+    /// The decade under the ribbon's lens. Nil until the user picks one.
+    @State private var selectedDecade: Int?
     /// Items to highlight — a hand-off from the Catalog/Hallie selects
     /// the target here instead of dropping into the Files table
     /// (ArchiveHomeState rule 2).
@@ -100,7 +120,7 @@ struct ArchiveTimelinePane: View {
     let contextMenu: (Set<UUID>) -> AnyView
     let openItems: ([UUID]) -> Void
 
-    private static let undatedAnchor = -1
+    private static let undatedAnchor = ArchiveDecadeTick.undatedID
 
     /// Scroll targets in the stream live in their OWN id space. The rail's
     /// `ForEach(timeline.decades)` gives each rail row the decade's Int id,
@@ -114,9 +134,10 @@ struct ArchiveTimelinePane: View {
             emptyState
         } else {
             ScrollViewReader { proxy in
-                HStack(spacing: 0) {
-                    decadeRail(proxy: proxy)
-                        .frame(width: 128)
+                VStack(spacing: 0) {
+                    ArchiveDecadeRibbon(ticks: snapshot.ticks,
+                                        selectedID: selectedDecade,
+                                        onSelect: { pickDecade($0, proxy: proxy) })
                     Divider()
                     stream
                 }
@@ -153,79 +174,12 @@ struct ArchiveTimelinePane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: Decade rail (vertical, oldest at top)
+    // MARK: Decade ribbon → stream
 
-    private func decadeRail(proxy: ScrollViewProxy) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("DECADES")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
-                .padding(.bottom, 4)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(timeline.decades) { decade in
-                        railRow(decade, proxy: proxy)
-                    }
-                    if !timeline.undated.isEmpty {
-                        Divider().padding(.vertical, 4)
-                        railButton(label: "Undated",
-                                   count: timeline.undated.count,
-                                   anchor: Self.undatedAnchor,
-                                   dimmed: false,
-                                   help: "Archived without a resolvable year. The date is part of the path and there is no refile yet, so these stay here until Refile ships.",
-                                   proxy: proxy)
-                    }
-                }
-                .padding(.horizontal, 6)
-            }
-            Spacer(minLength: 0)
-        }
-        .background(Color(NSColor.controlBackgroundColor))
-    }
-
-    private func railRow(_ decade: ArchiveTimelineDecade, proxy: ScrollViewProxy) -> some View {
-        railButton(label: decade.label,
-                   count: decade.count,
-                   anchor: decade.id,
-                   dimmed: decade.isGap,
-                   help: decade.isGap
-                       ? "No media yet from the \(decade.label) — tapes in the attic?"
-                       : "\(decade.count) archived from \(decade.rangeLabel)",
-                   proxy: proxy)
-    }
-
-    private func railButton(label: String, count: Int, anchor: Int,
-                            dimmed: Bool, help: String,
-                            proxy: ScrollViewProxy) -> some View {
-        Button {
-            focusedDecade = anchor
-            withAnimation { proxy.scrollTo(Self.anchorID(anchor), anchor: .top) }
-        } label: {
-            HStack {
-                Text(label)
-                    .font(.system(size: 15, weight: dimmed ? .regular : .semibold))
-                    .foregroundStyle(dimmed ? Color.secondary : Color.primary)
-                Spacer()
-                Text(dimmed ? "—" : "\(count)")
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
-            // Liquid Glass spots 2026-10-06: the focused decade sits under
-            // the same tinted glass lens as the selected tab in the tab
-            // strip — the rail is navigation, so it reads as one.
-            .background {
-                if focusedDecade == anchor {
-                    Color.clear.vsGlassCapsule(tint: Color.accentColor.opacity(0.22))
-                }
-            }
-        }
-        .buttonStyle(.plain)
-        .help(help)
+    /// A ribbon pick: lens on that decade, stream scrolled to it.
+    private func pickDecade(_ anchor: Int, proxy: ScrollViewProxy) {
+        selectedDecade = anchor
+        withAnimation { proxy.scrollTo(Self.anchorID(anchor), anchor: .top) }
     }
 
     // MARK: The stream
