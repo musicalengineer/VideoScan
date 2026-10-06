@@ -208,9 +208,6 @@
   "docs/briefs/cloud/C03-python-run-and-review.md": {
     "docs/reviews/cloud/C03-python-run-and-review.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
   },
-  "docs/briefs/cloud/C04-sensors-that-cannot-fail.md": {
-    "docs/reviews/cloud/C04-sensors-that-cannot-fail.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
-  },
   "docs/design/analysis_ledger_design.md": {
     "docs/immich_ideas.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
