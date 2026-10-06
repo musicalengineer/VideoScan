@@ -274,7 +274,18 @@ struct ReconcileRecordInput: Sendable, Equatable, Identifiable {
     let sizeBytes: Int64
     /// Non-nil ⇒ already relocated once (drives the previouslyRelocated bucket).
     let originalFullPath: String?
+    /// The catalog still believes this file exists: not purged (trashed,
+    /// deleted or removed from the catalog), not marked deleted by an
+    /// earlier relocate. Only live rows may vouch for another copy in
+    /// Bucket E (N1007-R F1, 2026-10-06). No default on purpose: every
+    /// construction site has to decide.
+    let isLive: Bool
 }
+
+/// "Is this witness file on disk NOW, at this byte count?" Injected so the
+/// classify logic tests can run without real volumes; production uses
+/// `RelocateReconcile.witnessIsOnDisk` (one `stat`).
+typealias WitnessPresenceProbe = @Sendable (_ path: String, _ expectedBytes: Int64) -> Bool
 
 /// Sendable, id-keyed classification produced by `reconcilePlan`. Mirrors
 /// `ReconcileResult` one-for-one but references records by `UUID` instead
@@ -323,8 +334,21 @@ extension VideoRecord {
             fullPath: fullPath,
             partialMD5: partialMD5,
             sizeBytes: sizeBytes,
-            originalFullPath: originalFullPath
+            originalFullPath: originalFullPath,
+            isLive: isLiveRelocateWitness
         )
+    }
+
+    /// May this row vouch for another copy of the same content? False once
+    /// the catalog itself says the file is gone or going: purged (Trash,
+    /// Delete Permanently, Remove from Catalog), a trashed/deleted
+    /// lifecycle, or `.manuallyDeleted` (an earlier relocate's Bucket B/E —
+    /// two drives must never vouch for each other).
+    var isLiveRelocateWitness: Bool {
+        purgedAt == nil
+            && lifecycleStage != .trashed
+            && lifecycleStage != .deletedPermanently
+            && archiveStage != .manuallyDeleted
     }
 }
 
@@ -343,6 +367,16 @@ enum RelocateReconcile {
     /// witness as safe-by-default (Bucket E permissive).
     static let permissiveResolver: VolumeSafetyResolver = { _ in
         VolumeSafety.unknown
+    }
+
+    /// Production witness probe: a regular file exists at `path` right now
+    /// and its size equals the size the catalog recorded. A drive that is
+    /// unplugged, a file moved or deleted since the last scan, or a file
+    /// that changed size all answer false — refuse over guess.
+    static let witnessIsOnDisk: WitnessPresenceProbe = { path, expectedBytes in
+        var sb = stat()
+        guard stat(path, &sb) == 0, (sb.st_mode & S_IFMT) == S_IFREG else { return false }
+        return Int64(sb.st_size) == expectedBytes
     }
 
     // MARK: - Main-actor adapter (preserves the historical signature)
@@ -395,6 +429,7 @@ enum RelocateReconcile {
         skipDupsOnOtherVolumes: Bool,
         skipAlreadyRelocated: Bool = true,
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
+        witnessOnDisk: WitnessPresenceProbe = witnessIsOnDisk,
         hash: (String) -> String
     ) -> ReconcileResult {
         let plan = reconcilePlan(
@@ -407,6 +442,7 @@ enum RelocateReconcile {
             skipDupsOnOtherVolumes: skipDupsOnOtherVolumes,
             skipAlreadyRelocated: skipAlreadyRelocated,
             resolveVolumeSafety: resolveVolumeSafety,
+            witnessOnDisk: witnessOnDisk,
             hash: hash
         )
         return materialize(plan, scope: records)
@@ -480,6 +516,7 @@ enum RelocateReconcile {
         skipDupsOnOtherVolumes: Bool,
         skipAlreadyRelocated: Bool = true,
         resolveVolumeSafety: VolumeSafetyResolver = permissiveResolver,
+        witnessOnDisk: WitnessPresenceProbe = witnessIsOnDisk,
         hash: (String) -> String,
         progress: ((_ done: Int, _ total: Int) -> Void)? = nil
     ) -> ReconcilePlan {
@@ -515,6 +552,10 @@ enum RelocateReconcile {
                 // strictly preferred over E for those.
                 if other.fullPath.hasPrefix(srcPrefix) { continue }
                 if other.fullPath.hasPrefix(dstPrefix) { continue }
+                // A trashed, removed or already-marked-deleted row is not a
+                // copy (N1007-R F1). It may still sit in `records` (purges
+                // stamp in place), but it can never vouch.
+                if !other.isLive { continue }
                 // Skip records that lack the data we'd match on — no
                 // hash or zero bytes is too weak a signal to declare safe.
                 if other.partialMD5.isEmpty { continue }
@@ -598,47 +639,18 @@ enum RelocateReconcile {
             // this branch is a no-op when disabled.
             //
             // **Safety filter:** classification only fires when at least
-            // one witness lives on a safe host volume. Degraded witnesses
-            // (retired or unreliable host) are retained on the entry for
-            // the disclosure but cannot by themselves justify Bucket E.
-            if !rec.partialMD5.isEmpty, rec.sizeBytes > 0 {
-                let key = WitnessKey(size: rec.sizeBytes, md5: rec.partialMD5)
-                if let allWitnesses = witnessIndex[key], !allWitnesses.isEmpty {
-                    // Resolve every witness once. The resolver result is
-                    // bound to its path here so the sort below has the
-                    // host attestation in hand.
-                    let attested = allWitnesses.map { p -> SafeWitnessInfo in
-                        let s = resolveVolumeSafety(p)
-                        return SafeWitnessInfo(path: p, role: s.role, trust: s.trust, isRetired: s.isRetired)
-                    }
-                    // Sorted highest-safety-first. Stable on equal scores
-                    // (Swift's sorted is stable in practice on small N).
-                    let ranked = attested.sorted { $0.safetyScore > $1.safetyScore }
-                    let safe = ranked.filter { $0.isSafe }
-                    let degraded = ranked.filter { !$0.isSafe }
-
-                    // Hard gate — at least one safe witness required.
-                    // If safe.isEmpty we DON'T `continue` (that'd skip
-                    // the A/C/B fallthrough below); we just refuse to
-                    // classify as Bucket E and let the rest of the
-                    // cascade decide.
-                    if !safe.isEmpty {
-                        let safeCapped = Array(safe.prefix(maxWitnessSample))
-                        let degradedCapped = Array(degraded.prefix(maxWitnessSample))
-                        let auditPaths = safeCapped.map(\.path)
-                        plan.safelyRedundant.append(SafelyRedundantPlanEntry(
-                            id: rec.id,
-                            witnesses: auditPaths,
-                            totalWitnessCount: allWitnesses.count,
-                            safeWitnesses: safeCapped,
-                            degradedWitnesses: degradedCapped
-                        ))
-                        continue
-                    }
-                    // Otherwise: fall through to A/C/B. The conservative
-                    // call — must copy.
-                }
+            // one witness is a live catalog row on a safe host volume AND
+            // its file is on disk now at the recorded size (N1007-R F1/F5).
+            // Other witnesses are retained on the entry for the disclosure
+            // but cannot by themselves justify Bucket E.
+            if let entry = safelyRedundantEntry(for: rec, witnessIndex: witnessIndex,
+                                                resolveVolumeSafety: resolveVolumeSafety,
+                                                witnessOnDisk: witnessOnDisk) {
+                plan.safelyRedundant.append(entry)
+                continue
             }
+            // Otherwise: fall through to A/C/B. The conservative call —
+            // must copy.
 
             // Bucket A: file still at its recorded path. Verify by hash
             // when the catalog has one stored; size-only otherwise.
@@ -669,6 +681,71 @@ enum RelocateReconcile {
     }
 
     // MARK: - Internals
+
+    /// Bucket E decision for one record, or nil to fall through to A/C/B.
+    /// Requires a real hash and a positive size, and at least one witness
+    /// that is BOTH on a safe host (not retired, not unreliable) AND on
+    /// disk now at the recorded size (N1007-R F1/F5: the catalog's word
+    /// alone is not proof). Witnesses that fail either test are kept as
+    /// `degradedWitnesses` for the "see all matches" disclosure but never
+    /// justify the bucket.
+    private static func safelyRedundantEntry(
+        for rec: ReconcileRecordInput,
+        witnessIndex: [WitnessKey: [String]],
+        resolveVolumeSafety: VolumeSafetyResolver,
+        witnessOnDisk: WitnessPresenceProbe
+    ) -> SafelyRedundantPlanEntry? {
+        guard !rec.partialMD5.isEmpty, rec.sizeBytes > 0 else { return nil }
+        let key = WitnessKey(size: rec.sizeBytes, md5: rec.partialMD5)
+        guard let allWitnesses = witnessIndex[key], !allWitnesses.isEmpty else { return nil }
+        let ranked = allWitnesses.map { p -> SafeWitnessInfo in
+            let s = resolveVolumeSafety(p)
+            return SafeWitnessInfo(path: p, role: s.role, trust: s.trust, isRetired: s.isRetired)
+        }.sorted { $0.safetyScore > $1.safetyScore }
+        // Host safety first (cheap), then one stat per safe witness.
+        var safe: [SafeWitnessInfo] = []
+        var degraded: [SafeWitnessInfo] = []
+        for w in ranked {
+            if w.isSafe && witnessOnDisk(w.path, rec.sizeBytes) {
+                safe.append(w)
+            } else {
+                degraded.append(w)
+            }
+        }
+        guard !safe.isEmpty else { return nil }
+        let safeCapped = Array(safe.prefix(maxWitnessSample))
+        return SafelyRedundantPlanEntry(
+            id: rec.id,
+            witnesses: safeCapped.map(\.path),
+            totalWitnessCount: allWitnesses.count,
+            safeWitnesses: safeCapped,
+            degradedWitnesses: Array(degraded.prefix(maxWitnessSample))
+        )
+    }
+
+    /// Apply-time re-proof (N1007-R F1 fix, 2026-10-06). Classification can
+    /// run minutes before the apply on a slow drive, and a file can move or
+    /// a drive can be unplugged in between. Immediately before a record is
+    /// marked deleted, at least one of its safe witnesses must still be on
+    /// disk at the recorded size. Entries that cannot be re-proven are
+    /// returned as `refused` so the caller sends them down the copy path
+    /// (Bucket A) instead — refuse over guess. Order is preserved.
+    static func reproveSafelyRedundant(
+        _ entries: [SafelyRedundantEntry],
+        witnessOnDisk: WitnessPresenceProbe = witnessIsOnDisk
+    ) -> (proven: [SafelyRedundantEntry], refused: [SafelyRedundantEntry]) {
+        var proven: [SafelyRedundantEntry] = []
+        var refused: [SafelyRedundantEntry] = []
+        for entry in entries {
+            let size = entry.rec.sizeBytes
+            if entry.safeWitnesses.contains(where: { witnessOnDisk($0.path, size) }) {
+                proven.append(entry)
+            } else {
+                refused.append(entry)
+            }
+        }
+        return (proven, refused)
+    }
 
     /// Composite key for the witness index. Swift `struct` with `Hashable`
     /// auto-synthesis ≈ a C++ struct that you'd need to hand-write

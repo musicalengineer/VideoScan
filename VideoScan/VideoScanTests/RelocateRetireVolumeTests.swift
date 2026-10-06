@@ -336,8 +336,14 @@ struct RelocateRetireVolumeTests {
         let src = ws.source.appendingPathComponent("clip.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 2048)
         let sourceRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
+        // A real third-volume copy: since N1007-R F1 (2026-10-06) a witness
+        // must be on disk at its recorded size to vouch.
+        let witnessVol = ws.root.appendingPathComponent("MyBook", isDirectory: true)
+        try FileManager.default.createDirectory(at: witnessVol, withIntermediateDirectories: true)
+        let witnessFile = witnessVol.appendingPathComponent("clip.bin")
+        try FileManager.default.copyItem(at: src, to: witnessFile)
         let witnessRec = makeRecord(
-            fullPath: "/Volumes/MyBook/clip.bin",
+            fullPath: witnessFile.path,
             size: sx, md5: hx
         )
 
@@ -379,7 +385,7 @@ struct RelocateRetireVolumeTests {
         let offer = try #require(model.pendingRetireOffer)
         #expect(offer.volumeRootPath == ws.source.path)
         #expect(offer.recordCount == 1)
-        #expect(offer.witnesses == ["/Volumes/MyBook/clip.bin"])
+        #expect(offer.witnesses == [witnessFile.path])
 
         // The pre-relocate snapshot the engine writes captures the
         // pristine catalog. Decoding it should NOT contain the

@@ -59,6 +59,26 @@ struct RelocateSummarySheetTests {
         return r
     }
 
+    /// A real "third volume" (`<root>/MyBook`) holding a byte-identical copy
+    /// of `src`. Since N1007-R F1 (2026-10-06) a Bucket E witness must be on
+    /// disk at its recorded size to vouch, so a made-up /Volumes path no
+    /// longer stands in for one.
+    private func witnessCopy(of src: URL, root: URL) throws -> URL {
+        let vol = Self.myBook(root)
+        try FileManager.default.createDirectory(at: vol, withIntermediateDirectories: true)
+        let dst = vol.appendingPathComponent(src.lastPathComponent)
+        try FileManager.default.copyItem(at: src, to: dst)
+        return dst
+    }
+
+    private static func myBook(_ root: URL) -> URL {
+        root.appendingPathComponent("MyBook", isDirectory: true)
+    }
+
+    /// Classify-logic tests use made-up /Volumes paths: presence is pinned
+    /// separately in RelocateWitnessLivenessTests.
+    private static let assumeWitnessOnDisk: WitnessPresenceProbe = { _, _ in true }
+
     /// Poll until the summary sheet binding is populated (the run has
     /// completed AND the min-visible pad has elapsed). Single timeout
     /// covers the worst case of an E-only run (~0.8 s) plus margin.
@@ -103,7 +123,7 @@ struct RelocateSummarySheetTests {
         let eSrc = ws.source.appendingPathComponent("e-dup.bin")
         let (eSize, eHash) = try writeFile(at: eSrc, bytes: 256)
         let eRec = makeRecord(fullPath: eSrc.path, size: eSize, md5: eHash)
-        let witness = makeRecord(fullPath: "/Volumes/MyBook/e-dup.bin",
+        let witness = makeRecord(fullPath: try witnessCopy(of: eSrc, root: ws.root).path,
                                  size: eSize, md5: eHash)
 
         let model = VideoScanModel()
@@ -164,7 +184,7 @@ struct RelocateSummarySheetTests {
         let srcRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
         // Witness on a SAFE host volume — required for Bucket E
         // classification under the post-2026-05-30 safety filter.
-        let witnessRec = makeRecord(fullPath: "/Volumes/MyBook/safe.bin",
+        let witnessRec = makeRecord(fullPath: try witnessCopy(of: src, root: ws.root).path,
                                     size: sx, md5: hx)
 
         let model = VideoScanModel()
@@ -172,7 +192,7 @@ struct RelocateSummarySheetTests {
         model.records = [srcRec, witnessRec]
         // Mark MyBook as a safe (backup + reliable) host so Bucket E
         // classification fires. Plain scan target for the source.
-        let safeWitness = CatalogScanTarget(searchPath: "/Volumes/MyBook")
+        let safeWitness = CatalogScanTarget(searchPath: Self.myBook(ws.root).path)
         safeWitness.role = .backup
         safeWitness.trust = .reliable
         model.scanTargets = [
@@ -287,7 +307,7 @@ struct RelocateSummarySheetTests {
         let src = ws.source.appendingPathComponent("blip.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 64)
         let srcRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
-        let witnessRec = makeRecord(fullPath: "/Volumes/MyBook/blip.bin",
+        let witnessRec = makeRecord(fullPath: try witnessCopy(of: src, root: ws.root).path,
                                     size: sx, md5: hx)
 
         let model = VideoScanModel()
@@ -338,7 +358,7 @@ struct RelocateSummarySheetTests {
         let src = ws.source.appendingPathComponent("logged.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 32)
         let srcRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
-        let witnessRec = makeRecord(fullPath: "/Volumes/MyBook/logged.bin",
+        let witnessRec = makeRecord(fullPath: try witnessCopy(of: src, root: ws.root).path,
                                     size: sx, md5: hx)
 
         let model = VideoScanModel()
@@ -429,6 +449,7 @@ struct RelocateSummarySheetTests {
             destFiles: [],
             skipDupsOnOtherVolumes: true,
             resolveVolumeSafety: resolver,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: { _ in "" }
         )
 
@@ -459,6 +480,7 @@ struct RelocateSummarySheetTests {
             destFiles: [],
             skipDupsOnOtherVolumes: true,
             resolveVolumeSafety: resolverWithSafe,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: { _ in "" }
         )
         #expect(result2.safelyRedundant.count == 1)
@@ -511,6 +533,7 @@ struct RelocateSummarySheetTests {
             destFiles: [],
             skipDupsOnOtherVolumes: true,
             resolveVolumeSafety: resolver,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: { _ in "" }
         )
         let entry = try? #require(result.safelyRedundant.first)
@@ -571,6 +594,7 @@ struct RelocateSummarySheetTests {
             destFiles: [],
             skipDupsOnOtherVolumes: true,
             resolveVolumeSafety: resolver,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: { _ in "" }
         )
         let entry = try? #require(result.safelyRedundant.first)
@@ -599,13 +623,13 @@ struct RelocateSummarySheetTests {
         let src = ws.source.appendingPathComponent("safe.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 512)
         let srcRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
-        let witnessRec = makeRecord(fullPath: "/Volumes/MyBook/safe.bin",
+        let witnessRec = makeRecord(fullPath: try witnessCopy(of: src, root: ws.root).path,
                                     size: sx, md5: hx)
 
         let model = VideoScanModel()
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [srcRec, witnessRec]
-        let safeWitness = CatalogScanTarget(searchPath: "/Volumes/MyBook")
+        let safeWitness = CatalogScanTarget(searchPath: Self.myBook(ws.root).path)
         safeWitness.role = .cloud
         safeWitness.trust = .reliable
         model.scanTargets = [
@@ -652,13 +676,13 @@ struct RelocateSummarySheetTests {
         let redundant = ws.source.appendingPathComponent("redundant.bin")
         let (rSize, rHash) = try writeFile(at: redundant, bytes: 128)
         let redundantRec = makeRecord(fullPath: redundant.path, size: rSize, md5: rHash)
-        let witnessRec = makeRecord(fullPath: "/Volumes/MyBook/redundant.bin",
+        let witnessRec = makeRecord(fullPath: try witnessCopy(of: redundant, root: ws.root).path,
                                     size: rSize, md5: rHash)
 
         let model = VideoScanModel()
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [copyRec, redundantRec, witnessRec]
-        let safeWitness = CatalogScanTarget(searchPath: "/Volumes/MyBook")
+        let safeWitness = CatalogScanTarget(searchPath: Self.myBook(ws.root).path)
         safeWitness.role = .backup
         safeWitness.trust = .reliable
         model.scanTargets = [
@@ -743,7 +767,7 @@ struct RelocateSummarySheetTests {
                 let (sSize, sHash) = try writeFile(at: safe, bytes: 128)
                 records.append(makeRecord(fullPath: safe.path, size: sSize, md5: sHash))
                 let witness = makeRecord(
-                    fullPath: "/Volumes/MyBook/safe.bin",
+                    fullPath: try witnessCopy(of: safe, root: inner.root).path,
                     size: sSize, md5: sHash
                 )
                 records.append(witness)
@@ -752,7 +776,7 @@ struct RelocateSummarySheetTests {
             let model = VideoScanModel()
             model.catalogStore = CatalogStore(directory: inner.catalog)
             model.records = records
-            let safeTarget = CatalogScanTarget(searchPath: "/Volumes/MyBook")
+            let safeTarget = CatalogScanTarget(searchPath: Self.myBook(inner.root).path)
             safeTarget.role = .backup
             safeTarget.trust = .reliable
             model.scanTargets = [

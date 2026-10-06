@@ -45,6 +45,17 @@ struct RelocateSafelyRedundantTests {
         return r
     }
 
+    /// A real "third volume" (`<root>/MyBook3Terabytes`) holding a
+    /// byte-identical copy of `src`. Since N1007-R F1 (2026-10-06) a
+    /// witness must be on disk at its recorded size to vouch.
+    private func witnessCopy(of src: URL, root: URL) throws -> URL {
+        let vol = root.appendingPathComponent("MyBook3Terabytes", isDirectory: true)
+        try FileManager.default.createDirectory(at: vol, withIntermediateDirectories: true)
+        let dst = vol.appendingPathComponent(src.lastPathComponent)
+        try FileManager.default.copyItem(at: src, to: dst)
+        return dst
+    }
+
     /// Poll until the post-flight summary lands. Under the §3 queue
     /// (2026-05-31) `isRelocating` stays true through `.awaitingDone`
     /// so we use the summary as the "work done" signal.
@@ -68,9 +79,9 @@ struct RelocateSafelyRedundantTests {
         let src = ws.source.appendingPathComponent("kids.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 2048)
         let sourceRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
-        // Witness path doesn't need to exist on disk — the rule operates
-        // on catalog metadata, not file presence.
-        let witnessPath = "/Volumes/MyBook3Terabytes/kids.bin"
+        // The witness must be on disk now at its recorded size — the
+        // catalog's word alone is not proof (N1007-R F1, 2026-10-06).
+        let witnessPath = try witnessCopy(of: src, root: ws.root).path
         let witnessRec = makeRecord(fullPath: witnessPath, size: sx, md5: hx)
 
         let model = VideoScanModel()
@@ -156,7 +167,7 @@ struct RelocateSafelyRedundantTests {
         let (sx, hx) = try writeFile(at: src, bytes: 4096)
         let sourceRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
         let witnessRec = makeRecord(
-            fullPath: "/Volumes/MyBook3Terabytes/clip.bin",
+            fullPath: try witnessCopy(of: src, root: ws.root).path,
             size: sx, md5: hx
         )
 

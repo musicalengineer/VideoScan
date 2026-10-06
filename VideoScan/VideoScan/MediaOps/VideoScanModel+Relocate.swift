@@ -308,7 +308,7 @@ extension VideoScanModel {
                                               progress: progressSink)
         }.value
         reconcileProgress = nil
-        let reconcile = RelocateReconcile.materialize(plan, scope: scope)
+        var reconcile = RelocateReconcile.materialize(plan, scope: scope)
         logReconcileSummary(reconcile)
         // Shared string builder with the sheet's preview (GH #162) — same
         // wording, the preview just adds a [PREVIEW] prefix + source/dest.
@@ -324,6 +324,11 @@ extension VideoScanModel {
             startNextQueuedJobIfIdle()
             return
         }
+
+        // Prove the surviving copy at decision time (N1007-R F1): every
+        // Bucket E record needs a safe witness still on disk NOW, or it
+        // goes down the copy path instead of being marked deleted.
+        reproveSafelyRedundantBeforeApply(&reconcile)
 
         // Track salvageFailed for the final summary block.
         var salvageFailedPaths: [String] = []
@@ -637,6 +642,29 @@ extension VideoScanModel {
             snapshotPath: snapshotPath,
             elapsed: Date().timeIntervalSince(runStart)
         )
+    }
+
+    /// Re-stat every Bucket E witness immediately before the apply phase.
+    /// An entry whose safe witnesses are no longer on disk at the recorded
+    /// size (drive unplugged, file moved, trashed or emptied since the
+    /// classify pass) is NOT marked deleted: it moves to `ready` so the
+    /// copy engine handles it, which itself refuses a missing source as
+    /// salvage-failed rather than guessing. Logged per record.
+    func reproveSafelyRedundantBeforeApply(
+        _ reconcile: inout ReconcileResult,
+        witnessOnDisk: WitnessPresenceProbe = RelocateReconcile.witnessIsOnDisk
+    ) {
+        guard !reconcile.safelyRedundant.isEmpty else { return }
+        let split = RelocateReconcile.reproveSafelyRedundant(reconcile.safelyRedundant,
+                                                             witnessOnDisk: witnessOnDisk)
+        for entry in split.refused {
+            let line = "Reconcile: \(entry.rec.fullPath) — no safe copy is on disk now "
+                + "(\(entry.witnesses.first ?? "no witness")); will copy instead of marking deleted"
+            relocateLog.write(line)
+            log(line)
+        }
+        reconcile.safelyRedundant = split.proven
+        reconcile.ready.append(contentsOf: split.refused.map(\.rec))
     }
 
     /// Pad to the min-visible window if the work finished early. Pure

@@ -179,4 +179,50 @@ struct RelocateWitnessLivenessTests {
         #expect(result.safelyRedundant.first?.witnesses == [fx.witnessFile.path],
                 "only the live, present witness may be recorded as the surviving copy")
     }
+
+    // MARK: - Apply-time re-proof (the witness can vanish after classify)
+
+    @Test func applyTimeReproofRefusesAnEntryWhoseWitnessVanishedSinceClassify() throws {
+        let fx = try Fixture(); defer { fx.cleanup() }
+        let source = fx.record(at: fx.srcFile)
+        let witness = fx.record(at: fx.witnessFile)
+        var result = fx.reconcile(source: source, witness: witness)
+        #expect(result.safelyRedundant.map(\.rec.id) == [source.id], "precondition: classified E")
+
+        // The witness drive is unplugged / the file emptied from Trash
+        // between the classify pass and the apply.
+        try FileManager.default.removeItem(at: fx.witnessFile)
+        VideoScanModel().reproveSafelyRedundantBeforeApply(&result)
+
+        #expect(result.safelyRedundant.isEmpty, "nothing may be marked deleted without a copy on disk now")
+        #expect(result.ready.map(\.id) == [source.id], "the record goes down the copy path instead")
+    }
+
+    @Test func applyTimeReproofKeepsAnEntryWhoseWitnessIsStillThere() throws {
+        let fx = try Fixture(); defer { fx.cleanup() }
+        let source = fx.record(at: fx.srcFile)
+        let witness = fx.record(at: fx.witnessFile)
+        var result = fx.reconcile(source: source, witness: witness)
+        VideoScanModel().reproveSafelyRedundantBeforeApply(&result)
+        #expect(result.safelyRedundant.map(\.rec.id) == [source.id])
+        #expect(result.ready.isEmpty)
+    }
+
+    @Test func reproofOrderIsStableAndUsesEachRecordsOwnSize() {
+        // Pure split, injected probe: only paths in `present` exist, and
+        // only at size 10.
+        let present: Set<String> = ["/w/a", "/w/c"]
+        let probe: WitnessPresenceProbe = { path, size in present.contains(path) && size == 10 }
+        func entry(_ name: String, size: Int64) -> SafelyRedundantEntry {
+            let r = VideoRecord(); r.fullPath = "/src/\(name)"; r.sizeBytes = size
+            let w = SafeWitnessInfo(path: "/w/\(name)", role: .unassigned, trust: .unknown)
+            return SafelyRedundantEntry(rec: r, witnesses: [w.path], totalWitnessCount: 1,
+                                        safeWitnesses: [w], degradedWitnesses: [])
+        }
+        let entries = [entry("a", size: 10), entry("b", size: 10), entry("c", size: 10), entry("a", size: 11)]
+        let split = RelocateReconcile.reproveSafelyRedundant(entries, witnessOnDisk: probe)
+        #expect(split.proven.map(\.rec.fullPath) == ["/src/a", "/src/c"])
+        #expect(split.refused.map(\.rec.fullPath) == ["/src/b", "/src/a"])
+        #expect(split.refused.last?.rec.sizeBytes == 11, "a witness at another size is not this file")
+    }
 }
