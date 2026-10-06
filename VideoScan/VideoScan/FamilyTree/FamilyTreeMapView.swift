@@ -132,7 +132,7 @@ struct FamilyTreeMapView: View {
     @ObservedObject var highlighter: TreeWalkHighlighter
     let onBack: () -> Void
     /// Replay the Roll Call (2026-10-01) in an order; nil hides the button.
-    var onRollCall: ((RollCall.Order) -> Void)? = nil
+    var onRollCall: ((RollCall.Order, _ mix: Bool) -> Void)? = nil
     /// The credits are being prepared (the button shows a spinner).
     var rollCallBusy = false
     /// Credits or Drifting names (2026-10-04); read by the walk sheet.
@@ -313,13 +313,14 @@ struct FamilyTreeMapView: View {
 
     /// "Roll Call": click plays the credits oldest → newest; the menu
     /// offers the other orders (Rick 2026-10-01: "make it a parameter").
-    private func rollCallButton(_ play: @escaping (RollCall.Order) -> Void) -> some View {
+    private func rollCallButton(_ play: @escaping (RollCall.Order, _ mix: Bool) -> Void) -> some View {
         HStack(spacing: 4) {
             Menu("Roll Call") {
-                Button("Oldest first") { play(.oldestFirst) }
-                Button("Newest first") { play(.newestFirst) }
-                Button("Generation by generation") { play(.generationOutward) }
-                Button("From the furthest back") { play(.generationInward) }
+                Button("Oldest first") { play(.oldestFirst, false) }
+                Button("Newest first") { play(.newestFirst, false) }
+                Button("Generation by generation") { play(.generationOutward, false) }
+                Button("From the furthest back") { play(.generationInward, false) }
+                Button("Shuffled mix") { play(FamilyTreeWalkSheet.defaultRollCallOrder, true) }
                 Divider()
                 Picker("Style", selection: $rollCallStyleRaw) {
                     ForEach(RollCallStyle.allCases, id: \.self) { style in
@@ -328,7 +329,7 @@ struct FamilyTreeMapView: View {
                 }
                 .pickerStyle(.inline)
             } primaryAction: {
-                play(FamilyTreeWalkSheet.defaultRollCallOrder)
+                play(FamilyTreeWalkSheet.defaultRollCallOrder, false)
             }
             .menuStyle(.button)
             .fixedSize()

@@ -370,11 +370,25 @@ struct DeviceIDSourceSensorTests {
     @Test func noRawStDevConversionInProductionCode() throws {
         let names = ["DeleteDuplicatesDrives.swift", "SignatureVerification.swift",
                      "ArchivePromoteEngine.swift", "PartialFileNaming.swift"]
-        for name in names {
-            let code = try SourceTree.appCode(named: name)
+        var sources: [(name: String, code: String)] = try names.map { ($0, try SourceTree.appCode(named: $0)) }
+        // C01-F2: the sixth site is in the Core package, outside the app
+        // tree `appCode` searches. It builds FileIdentityStamp.device — the
+        // value DeleteDuplicatesDrives compares with live DeviceID.from
+        // values — so it is read from disk here (as
+        // FixityStampVolumeIdentityTests' sensor reads it).
+        let core = "VideoScanCore/Sources/VideoScanCore/ContentFixity.swift"
+        let coreText = try String(contentsOf: Self.projectDir.appendingPathComponent(core), encoding: .utf8)
+        sources.append((core, try SourceTree.code(of: coreText, named: core)))
+        #expect(sources.count == 5)
+        for (name, code) in sources {
             #expect(code.range(of: #"UInt(64|32)?\([A-Za-z_.]*st_dev\)"#, options: .regularExpression) == nil,
                     "\(name) converts st_dev without DeviceID.from")
             #expect(code.contains("DeviceID.from("), "\(name) no longer uses DeviceID.from")
         }
+    }
+
+    /// `VideoScan/` — the Xcode project directory (holds VideoScanCore/).
+    private static var projectDir: URL {
+        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
     }
 }

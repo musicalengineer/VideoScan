@@ -1159,7 +1159,7 @@ extension VideoScanModel {
                 skipped[WorkingCopyCleanupText.reasonNoMaster, default: 0] += 1
                 continue
             }
-            if PathScope.contains(keeper.fullPath, within: volumePath) {
+            if Self.duplicateKeeperIsOnVolume(keeperPath: keeper.fullPath, volumePath: volumePath) {
                 targets.append(rec)
                 sameCount += 1
                 continue
@@ -1259,6 +1259,17 @@ extension VideoScanModel {
     }
 
     func volumeRoot(for path: String) -> String {
+        Self.duplicateVolumeRoot(for: path, scanTargetPaths: scanTargets.lazy.map(\.searchPath))
+    }
+
+    /// The drive Delete duplicates puts `path` on: `/Volumes/X/…` →
+    /// `/Volumes/X`; otherwise the FIRST scan target (in list order) that
+    /// contains it; otherwise its folder. The rule behind `volumeRoot(for:)`,
+    /// pure so the Steward's detached builder asks the same one (C01-F1).
+    /// (For Rick: a template over any sequence of strings — `lazy.map`
+    /// above is a view, no array is built per call.)
+    nonisolated static func duplicateVolumeRoot<Paths: Sequence>(for path: String, scanTargetPaths: Paths) -> String
+    where Paths.Element == String {
         if path.hasPrefix("/Volumes/") {
             let parts = path.split(separator: "/", maxSplits: 3)
             if parts.count >= 2 {
@@ -1266,12 +1277,19 @@ extension VideoScanModel {
             }
         }
         // For non-/Volumes paths, use the scan target root that contains it
-        for target in scanTargets {
-            if PathScope.contains(path, within: target.searchPath) { // regression: codex C2
-                return target.searchPath
+        for searchPath in scanTargetPaths {
+            if PathScope.contains(path, within: searchPath) { // regression: codex C2
+                return searchPath
             }
         }
         return (path as NSString).deletingLastPathComponent
+    }
+
+    /// The selection's same-drive test: an extra copy on `volumePath` is a
+    /// same-drive target iff its keeper sits inside `volumePath`. Shared
+    /// with the Steward's card so it states what the run does (C01-F1).
+    nonisolated static func duplicateKeeperIsOnVolume(keeperPath: String, volumePath: String) -> Bool {
+        PathScope.contains(keeperPath, within: volumePath)
     }
 }
 
