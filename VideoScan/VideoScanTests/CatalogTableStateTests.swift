@@ -65,3 +65,45 @@ struct CatalogAllVolumesDefaultTests {
         #expect(elapsed < PerformanceLane.debugCeiling(seconds: 1.0), "all-volumes filter took \(elapsed)s for 100k records")
     }
 }
+
+// MARK: - Selection prune: logic + scale (074bacb6)
+
+@Suite("Catalog filter change keeps the visible file selection")
+struct CatalogSelectionPruneTests {
+
+    private func rows(_ n: Int) -> [VideoRecord] {
+        (0..<n).map { i in
+            let r = VideoRecord()
+            r.filename = "v\(i).mov"
+            r.fullPath = "/Volumes/V\(i % 4)/v\(i).mov"
+            r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            return r
+        }
+    }
+
+    @Test func keepsVisibleDropsHidden() {
+        let all = rows(10)
+        let picked: Set<UUID> = [all[1].id, all[5].id, all[8].id]
+        let visible = [all[0], all[1], all[2], all[8]]
+        #expect(CatalogSelectionPrune.visibleSelection(picked, rows: visible) == [all[1].id, all[8].id])
+    }
+
+    @Test func emptySelectionAndFullyVisibleSelectionAreUnchanged() {
+        let all = rows(5)
+        #expect(CatalogSelectionPrune.visibleSelection([], rows: all).isEmpty)
+        let picked: Set<UUID> = [all[0].id, all[4].id]
+        #expect(CatalogSelectionPrune.visibleSelection(picked, rows: all) == picked)
+        #expect(CatalogSelectionPrune.visibleSelection(picked, rows: []).isEmpty, "a filter that hides everything drops the selection")
+    }
+
+    /// Scale (checklist dimension 2): runs on every filter trigger.
+    @Test func prune100kRowsStaysUnderBudget() {
+        let all = rows(100_000)
+        let picked = Set(all.prefix(1_000).map(\.id)).union([UUID()])
+        let t0 = Date()
+        let kept = CatalogSelectionPrune.visibleSelection(picked, rows: all)
+        let elapsed = Date().timeIntervalSince(t0)
+        #expect(kept.count == 1_000)
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.25), "prune took \(elapsed)s for 100k rows")
+    }
+}

@@ -176,6 +176,25 @@ final class CatalogKeyboardUITests: GauntletTestCase {
                        "Promote Selected must be DISABLED when the only selected file is hidden by the volume filter.")
     }
 
+    /// Case 8 (Rick 10/6: ⌘I = Catalog Info, as in Finder): File ▸ Catalog
+    /// Info is enabled with one volume focused, disabled with a file focused.
+    @MainActor
+    func test8_catalogInfoFollowsVolumePane() throws {
+        let app = try launchWithFixture()
+        let (volumes, files) = try catalogTables(app)
+
+        clickRow(volumes, 0)
+        _ = waitForSelectedRows(volumes, [0])
+        let afterVolume = fileMenuItemEnabled(app, "Catalog Info")
+        clickRow(files, 3)
+        _ = waitForSelectedFiles(files, ["test_volA_clip_003.mov"])
+        let afterFile = fileMenuItemEnabled(app, "Catalog Info")
+
+        dumpKeysLog("case8")
+        XCTAssertTrue(afterVolume, "Catalog Info (⌘I) must be enabled with one volume focused.")
+        XCTAssertFalse(afterFile, "Catalog Info (⌘I) must be disabled while the files table has the keyboard.")
+    }
+
     // MARK: - Fixture + launch
 
     @MainActor
@@ -311,6 +330,19 @@ final class CatalogKeyboardUITests: GauntletTestCase {
         XCTAssertTrue(item.waitForExistence(timeout: 5), "Promote Selected item missing")
         let enabled = item.isEnabled
         app.typeKey(.escape, modifierFlags: [])
+        app.typeKey(.escape, modifierFlags: [])
+        Thread.sleep(forTimeInterval: 0.3)
+        return enabled
+    }
+
+    /// Open File, read one item's enabled state, close.
+    private func fileMenuItemEnabled(_ app: XCUIApplication, _ title: String) -> Bool {
+        let fileMenu = app.menuBars.menuBarItems["File"]
+        XCTAssertTrue(fileMenu.waitForExistence(timeout: 5), "File menu missing")
+        fileMenu.click()
+        let item = app.menuBars.menuItems[title].firstMatch
+        XCTAssertTrue(item.waitForExistence(timeout: 5), "File ▸ \(title) missing")
+        let enabled = item.isEnabled
         app.typeKey(.escape, modifierFlags: [])
         Thread.sleep(forTimeInterval: 0.3)
         return enabled

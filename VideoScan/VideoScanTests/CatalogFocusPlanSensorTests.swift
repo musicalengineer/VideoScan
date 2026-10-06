@@ -226,3 +226,45 @@ struct CatalogTableClickFocusTests {
         #expect(Set(users) == ["App/ContentView.swift", "Catalog/CatalogTableClickFocus.swift"])
     }
 }
+
+// MARK: - Promote scope: logic + scale
+
+@Suite("Promote Selected scope = visible ∩ selected")
+struct CatalogPromoteScopeTests {
+
+    private func rows(_ n: Int) -> [VideoRecord] {
+        (0..<n).map { i in
+            let r = VideoRecord()
+            r.filename = "test_p\(i).mov"
+            r.fullPath = "/Volumes/V\(i % 3)/test_p\(i).mov"
+            return r
+        }
+    }
+
+    /// The case-7 shape: a file selected on volume A, then the table
+    /// narrowed to volume B — nothing visible is selected, nothing promotes.
+    @Test func hiddenSelectionPromotesNothing() {
+        let all = rows(9)
+        let onA = all.filter { $0.fullPath.hasPrefix("/Volumes/V0") }
+        let onB = all.filter { $0.fullPath.hasPrefix("/Volumes/V1") }
+        #expect(CatalogPromoteScope.recordIDs(selection: [onA[0].id], visibleRows: onB).isEmpty)
+    }
+
+    @Test func keepsOnlyVisibleInRowOrder() {
+        let all = rows(6)
+        let selection: Set<UUID> = [all[4].id, all[1].id, UUID()]
+        let visible = [all[0], all[1], all[2], all[4]]
+        #expect(CatalogPromoteScope.recordIDs(selection: selection, visibleRows: visible) == [all[1].id, all[4].id])
+        #expect(CatalogPromoteScope.recordIDs(selection: [], visibleRows: visible).isEmpty)
+    }
+
+    @Test func scope100kStaysUnderBudget() {
+        let all = rows(100_000)
+        let selection = Set(all.suffix(500).map(\.id))
+        let t0 = Date()
+        let ids = CatalogPromoteScope.recordIDs(selection: selection, visibleRows: all)
+        let elapsed = Date().timeIntervalSince(t0)
+        #expect(ids.count == 500)
+        #expect(elapsed < PerformanceLane.debugCeiling(seconds: 0.25), "scope took \(elapsed)s for 100k rows")
+    }
+}

@@ -343,6 +343,9 @@ struct CatalogContent: View {
     /// field editor is an NSText), and to buttons (which handle Space
     /// themselves). This is the text-field guard the feature promises.
     private func spaceShouldToggleLivePreview() -> Bool {
+        // The volumes table is an NSTableView too: Space there is not a
+        // live-preview gesture. Only the FILES pane counts (2026-10-06).
+        guard tableState.paneFocusMirror.pane == .files else { return false }
         guard let responder = NSApp.keyWindow?.firstResponder else { return false }
         // Field editors (search box, rename sheet, notes) are NSText —
         // never hijack Space from text entry.

@@ -818,9 +818,6 @@ struct CatalogView: View {
                 model.hallieCurrentSelectionID = selectedIDs.count == 1
                     ? selectedIDs.first
                     : nil
-                // Mirror for the File ▸ Archive ▸ Promote Selected menu
-                // command (plain var — no publish, no re-render).
-                model.catalogSelectedIDs = selectedIDs
                 // Update volume highlight when table selection changes.
                 // O(1) index lookup — runs per arrow-key step.
                 if let id = selectedIDs.first,

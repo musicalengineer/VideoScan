@@ -15,6 +15,15 @@ enum CatalogPane: Hashable {
     case volumes, files
 }
 
+/// Reference box the Space-key NSEvent monitor reads. The monitor closure
+/// outlives any one body evaluation, so it cannot read the FocusState
+/// itself; CatalogContent mirrors `focusedPane` into this on change.
+/// (≈ a C++ shared_ptr<State> a callback holds.)
+@MainActor
+final class CatalogPaneFocusMirror {
+    var pane: CatalogPane?
+}
+
 /// The files table's view-owned state. A custom `DynamicProperty` ≈ a C++
 /// member struct whose fields the framework re-binds before every body
 /// evaluation: SwiftUI finds the `@State` inside it exactly as if they
@@ -33,6 +42,10 @@ struct CatalogTableState: DynamicProperty {
     /// column cell; never recomputes `tableData` (≈ a dirty counter the
     /// cell painter compares, not a data reload).
     @State var angelBadgeRevision: Int = 0
+
+    /// Which pane has the keyboard, for the Space monitor (see
+    /// CatalogPaneFocusMirror). Written only by `.onChange(of: focusedPane)`.
+    @State var paneFocusMirror = CatalogPaneFocusMirror()
 }
 
 extension CatalogContent {
@@ -51,5 +64,32 @@ extension CatalogContent {
     var angelBadgeRevision: Int {
         get { tableState.angelBadgeRevision }
         nonmutating set { tableState.angelBadgeRevision = newValue }
+    }
+
+    /// Recompute the rows, then keep the file selection only for rows the
+    /// filter still shows (Rick 2026-10-06: "drop highlighted files that a
+    /// filter or search hides" — Finder's rule; a hidden selection was a
+    /// ⌘⌫ / Promote trap). Never touches keyboard focus.
+    func refreshRows() {
+        tableData = computeFiltered()
+        let kept = CatalogSelectionPrune.visibleSelection(selectedIDs, rows: tableData)
+        if kept != selectedIDs { selectedIDs = kept }
+    }
+}
+
+/// Pure rule behind refreshRows' selection step — headless-testable.
+enum CatalogSelectionPrune {
+    /// The subset of `selection` that is still a visible row. O(rows) only
+    /// when something is selected; an empty selection costs nothing.
+    /// Worst-case memory: one Set the size of the selection.
+    static func visibleSelection(_ selection: Set<UUID>, rows: [VideoRecord]) -> Set<UUID> {
+        guard !selection.isEmpty else { return selection }
+        var kept = Set<UUID>()
+        kept.reserveCapacity(selection.count)
+        for row in rows where selection.contains(row.id) {
+            kept.insert(row.id)
+            if kept.count == selection.count { break }
+        }
+        return kept
     }
 }

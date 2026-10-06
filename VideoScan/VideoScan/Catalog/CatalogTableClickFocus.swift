@@ -57,9 +57,10 @@ final class CatalogTableClickFocus {
     }
 
     /// Pure rule: move the keyboard to `table` unless it (or a view inside
-    /// it, e.g. an inline editor) already has it, or it refuses.
+    /// it, e.g. an inline editor) already has it, or it refuses. (Whether
+    /// it ACCEPTS is AppKit's own check inside makeFirstResponder.)
     static func shouldFocus(_ table: NSTableView, firstResponder: NSResponder?) -> Bool {
-        guard table.acceptsFirstResponder, !table.refusesFirstResponder else { return false }
+        guard !table.refusesFirstResponder else { return false }
         if let view = firstResponder as? NSView, view === table || view.isDescendant(of: table) {
             return false
         }
