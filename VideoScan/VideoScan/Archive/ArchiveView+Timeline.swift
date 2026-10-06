@@ -212,13 +212,17 @@ struct ArchiveTimelinePane: View {
                     .font(.system(size: 13, design: .monospaced))
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 10)
             .padding(.vertical, 5)
             .contentShape(Rectangle())
-            .background(focusedDecade == anchor
-                        ? Color.accentColor.opacity(0.12)
-                        : Color.clear)
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            // Liquid Glass spots 2026-10-06: the focused decade sits under
+            // the same tinted glass lens as the selected tab in the tab
+            // strip — the rail is navigation, so it reads as one.
+            .background {
+                if focusedDecade == anchor {
+                    Color.clear.vsGlassCapsule(tint: Color.accentColor.opacity(0.22))
+                }
+            }
         }
         .buttonStyle(.plain)
         .help(help)
