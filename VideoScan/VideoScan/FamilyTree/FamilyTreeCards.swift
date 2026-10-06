@@ -70,6 +70,11 @@ struct FamilyTreePersonCard: View {
     /// not a heart: in a family archive a favourites list ranks relatives.
     let isBookmarked: Bool
     let onToggleBookmark: () -> Void
+    /// "Walk Tree from X" / "Show X on Family Map" (Rick 2026-10-06): opens
+    /// the Walk Tree sheet walking from this person at once; `true` = go on
+    /// to the map. Absent from the menu when no tree is loaded to walk.
+    var canWalkTree: Bool = false
+    var onWalkTree: (_ toMap: Bool) -> Void = { _ in }
     /// Evaluated lazily when the context menu opens, so listing children
     /// costs nothing per card on a 39,250-person canvas.
     let childrenOf: () -> [(id: String, name: String)]
@@ -330,6 +335,16 @@ struct FamilyTreePersonCard: View {
             Button(isBookmarked ? "Remove bookmark" : "Bookmark \(person.name)",
                    systemImage: isBookmarked ? "bookmark.slash" : "bookmark") {
                 onToggleBookmark()
+            }
+            if canWalkTree {
+                Button("Walk Tree from \(person.name)", systemImage: "figure.walk.circle") {
+                    onWalkTree(false)
+                }
+                .accessibilityIdentifier("tree.person.walkFrom")
+                Button("Show \(person.name) on Family Map", systemImage: "map.circle") {
+                    onWalkTree(true)
+                }
+                .accessibilityIdentifier("tree.person.showOnMap")
             }
             Divider()
             Button("Center on \(person.name)") {

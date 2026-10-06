@@ -47,15 +47,29 @@
 // (For Rick: `hostSize` is measured by the presenting view with
 // `onGeometryChange` — think of it as a resize callback that stores the
 // window's content size — and passed in like a constructor argument.)
+//
+// FROM A CARD (Rick 2026-10-06): a person card's right-click "Walk Tree
+// from X" / "Show X on Family Map" opens this sheet with a `start` — the
+// walk runs at once from that one person (no setup step), and to the map
+// too when asked. Same sheet, same stages; the start is just pre-chosen.
 
 import SwiftUI
 import VideoScanCore
+
+/// A walk pre-pointed at one person, from the card's right-click.
+struct FamilyTreeWalkStart: Equatable {
+    let personID: String
+    /// Straight on to the Family Map once the walk is done.
+    let toMap: Bool
+}
 
 struct FamilyTreeWalkSheet: View {
     @ObservedObject var model: FamilyTreeLiveModel
     @ObservedObject var center: FamilyTreeWalkCenter = .shared
     /// The presenting window's content size (zero = unknown).
     var hostSize: CGSize = .zero
+    /// nil = the usual setup step; set = walk from that person at once.
+    var start: FamilyTreeWalkStart? = nil
     let onClose: () -> Void
 
     enum Stage {
@@ -84,6 +98,11 @@ struct FamilyTreeWalkSheet: View {
     /// not on every switch of people in the map (Rick 2026-10-05); the map's
     /// Roll Call button plays it again on request.
     @State private var rollCallAutoPlayed = false
+    /// The person this sheet was opened for from a card (nil = none). Kept
+    /// so the "Map for:" menu names them even when they are neither a home
+    /// person, the selection, nor a bookmark.
+    @State private var pinnedID: String?
+    @State private var startedFromCard = false
     /// Credits or Drifting names — chosen in the map's Roll Call menu.
     @AppStorage(RollCallStyle.storageKey) private var rollCallStyleRaw = RollCallStyle.credits.rawValue
 
@@ -165,6 +184,17 @@ struct FamilyTreeWalkSheet: View {
                             Button(choice.label) { rewalkToMap(choice.tag) }
                                 .disabled(choice.tag == startChoice)
                         }
+                        let bookmarks = bookmarkChoices
+                        if !bookmarks.isEmpty {
+                            // ALL bookmarks, by name (the old flat list
+                            // stopped at 12 and the rest silently vanished).
+                            Menu("Bookmarks (\(bookmarks.count))") {
+                                ForEach(bookmarks, id: \.tag) { choice in
+                                    Button(choice.label) { rewalkToMap(choice.tag) }
+                                        .disabled(choice.tag == startChoice)
+                                }
+                            }
+                        }
                     }
                     .fixedSize()
                     .disabled(mapTask != nil)   // walkTask is never cleared; the stage covers a walk
@@ -179,7 +209,30 @@ struct FamilyTreeWalkSheet: View {
         }
         .padding(20)
         .frame(width: isLarge ? size.width : 520, height: isLarge ? size.height : nil)
+        .onAppear { startFromCardIfAsked() }
         .onDisappear { walkTask?.cancel(); mapTask?.cancel(); rollCallTask?.cancel() }
+    }
+
+    /// Opened from a card: point at that person and walk at once. Once per
+    /// sheet session (onAppear can fire again on a re-layout). With no tree
+    /// loaded the setup step stays up and says so.
+    private func startFromCardIfAsked() {
+        guard let start, !startedFromCard, graph != nil else { return }
+        startedFromCard = true
+        pinnedID = start.personID
+        startChoice = tag(forPerson: start.personID)
+        appLog.write("Walk Tree: from a person card\(start.toMap ? ", to the map" : "")")
+        runWalk(thenMap: start.toMap)
+    }
+
+    /// The tag a person already has in the choices, so a card's person who
+    /// is also a home person or a bookmark shows once, as the current choice.
+    private func tag(forPerson id: String) -> String {
+        let home = defaultStarts
+        if home == [id] { return "default" }
+        if home.contains(id) { return "one:" + id }
+        if model.isBookmarked(id) { return "bm:" + id }
+        return "one:" + id
     }
 
     @ViewBuilder private var stageContent: some View {
@@ -238,23 +291,36 @@ struct FamilyTreeWalkSheet: View {
 
     /// Who a walk (and its map) can start from: the home people together,
     /// each of them alone (Rick 2026-10-05: "change from Donna to Richard"),
-    /// the tree's selected person, and up to 12 bookmarks. (tag, label).
+    /// the tree's selected person, and the person a card opened this sheet
+    /// for. Bookmarks are separate (`bookmarkChoices`). (tag, label).
+    /// Cost: the home people (a handful) — never O(people).
     private var startChoices: [(tag: String, label: String)] {
         let home = defaultStarts
         var out: [(tag: String, label: String)] = []
         if !home.isEmpty { out.append(("default", home.map(name).joined(separator: " + "))) }
         if home.count > 1 { out += home.map { ("one:" + $0, name($0)) } }
-        if let selected = model.selectedPerson, !home.contains(selected.id) {
-            out.append(("selected", "Selected: \(selected.name)"))
+        if let pinnedID, !home.contains(pinnedID), !model.isBookmarked(pinnedID) {
+            out.append(("one:" + pinnedID, name(pinnedID)))
         }
-        for p in model.walkBookmarkedPeople.prefix(12) where !home.contains(p.id) {
-            out.append(("bm:" + p.id, "Bookmark: \(p.name)"))
+        if let selected = model.selectedPerson, !home.contains(selected.id), selected.id != pinnedID {
+            out.append(("selected", "Selected: \(selected.name)"))
         }
         return out
     }
 
+    /// Every bookmark that is not a home person, sorted by name. Cost:
+    /// O(b log b) in the bookmark count — a short list, not the tree.
+    private var bookmarkChoices: [(tag: String, label: String)] {
+        let home = Set(defaultStarts)
+        return model.walkBookmarkedPeople
+            .filter { !home.contains($0.id) }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            .map { ("bm:" + $0.id, $0.name) }
+    }
+
     private var startChoiceLabel: String {
-        startChoices.first { $0.tag == startChoice }?.label ?? starts.map(name).joined(separator: " + ")
+        if startChoice.hasPrefix("bm:"), let id = starts.first { return name(id) }
+        return startChoices.first { $0.tag == startChoice }?.label ?? starts.map(name).joined(separator: " + ")
     }
 
     private func name(_ id: String) -> String { graph?.people[id]?.name ?? id }
@@ -271,11 +337,11 @@ struct FamilyTreeWalkSheet: View {
                 if let selected = model.selectedPerson, !home.contains(selected.id) {
                     Text("Selected: \(selected.name)").tag("selected")
                 }
-                let bookmarks = model.walkBookmarkedPeople.prefix(12)
+                let bookmarks = bookmarkChoices
                 if !bookmarks.isEmpty {
                     Divider()
-                    ForEach(Array(bookmarks), id: \.id) { p in
-                        Text("Bookmark: \(p.name)").tag("bm:" + p.id)
+                    ForEach(bookmarks, id: \.tag) { choice in
+                        Text("Bookmark: \(choice.label)").tag(choice.tag)
                     }
                 }
             }
