@@ -284,7 +284,9 @@ enum CopyFamilyAssessor {
 
     // MARK: Entry point
 
-    // swiftlint:disable:next cyclomatic_complexity function_body_length
+    /// The rule steps in order; each phase is a function below. The code
+    /// order IS the spec (lexicographic), including the order cautions are
+    /// appended in.
     static func assess(_ inputs: [CopyFamilyInput]) -> CopyFamilyAssessment {
         var out = CopyFamilyAssessment()
         out.locationCount = inputs.count
@@ -307,107 +309,11 @@ enum CopyFamilyAssessor {
             Self.isRepairDerivative(m) ? m.derivedFrom : nil
         })
 
-        // Collapse into representations by encoding signature. Damaged or
-        // duration-off INSTANCES are split out of their encoding's group
-        // (rules 1/3 are per copy, not per encoding) so a truncated DV does
-        // not hide among the complete DVs.
-        func groupSignature(_ r: CopyFamilyInput) -> String {
-            var sig = signature(r)
-            if !r.isPlayable || r.streamType == .ffprobeFailed || r.streamType == .noStreams {
-                sig += " — unreadable"
-            } else if !durationsMatch(r.durationSeconds, referenceDuration) {
-                sig += " — duration differs"
-            }
-            return sig
-        }
-        var groups: [String: [CopyFamilyInput]] = [:]
-        var order: [String] = []
-        for r in inputs {
-            let sig = groupSignature(r)
-            if groups[sig] == nil { order.append(sig) }
-            groups[sig, default: []].append(r)
-        }
-
-        // Lineage: a representation whose members are derived FROM a member
-        // of another representation is a derivative of it.
-        let idToSig: [UUID: String] = Dictionary(uniqueKeysWithValues: inputs.map { ($0.id, groupSignature($0)) })
-
-        struct Draft {
-            var sig: String
-            var members: [CopyFamilyInput]
-            var cls: CodecClass
-            var damaged: Bool
-            var durationOff: Bool
-            var derivedFromSig: String?       // provenance INSIDE the family
-            /// Every member says it was derived from something, and at least
-            /// one names a record that is NOT in this family (purged from the
-            /// catalog, or outside the walked family). Such a copy is not a
-            /// provable lineage root: its parent existed once and is gone.
-            /// A group that also holds a member with no derivedFrom at all
-            /// is not flagged — that member is itself an unlineaged copy.
-            var hasExternalLineage: Bool
-        }
-        let drafts: [Draft] = order.map { sig in
-            let members = groups[sig]!
-            let rep = members[0]
-            let cls = codecClass(videoCodec: rep.videoCodec, audioCodec: rep.audioCodec,
-                                 container: rep.container, originMake: rep.originMake)
-            let damaged = members.allSatisfy { !$0.isPlayable || $0.streamType == .ffprobeFailed || $0.streamType == .noStreams }
-            let durationOff = members.allSatisfy { !durationsMatch($0.durationSeconds, referenceDuration) }
-            var derivedSig: String? = nil
-            var external = false
-            for m in members {
-                if let d = m.derivedFrom {
-                    if let s = idToSig[d], s != sig { derivedSig = s }
-                    else if idToSig[d] == nil { external = true }
-                }
-            }
-            let everyMemberDerived = members.allSatisfy { $0.derivedFrom != nil }
-            return Draft(sig: sig, members: members, cls: cls, damaged: damaged,
-                         durationOff: durationOff, derivedFromSig: derivedSig,
-                         hasExternalLineage: external && everyMemberDerived)
-        }
+        let drafts = makeDrafts(inputs, referenceDuration: referenceDuration)
 
         // Rule 2/3 — choose the original representation.
-        let healthy = drafts.indices.filter { !drafts[$0].damaged && !drafts[$0].durationOff }
-        let lineageRoots = healthy.filter { drafts[$0].derivedFromSig == nil }
-        // A native copy derived from a record that is no longer in the
-        // catalog is NOT "not derived from any other copy" — it cannot be
-        // proven original (stage-0 triage R3, 2026-09-29), so it drops to
-        // the presumed-original election below.
-        let natives = lineageRoots.filter { drafts[$0].cls == .native && !drafts[$0].hasExternalLineage }
-        var originalIndex: Int? = nil
-        var originalRole: CopyRole = .originalSource
-        var originalReason = ""
-        if let n = natives.first {
-            originalIndex = n
-            originalReason = "Native acquisition encoding (\(drafts[n].members[0].videoCodec.uppercased()) + \(drafts[n].members[0].audioCodec.uppercased())) and not derived from any other copy."
-            if natives.count > 1 {
-                out.cautions.append("More than one native encoding is present (\(natives.map { drafts[$0].sig }.joined(separator: "; "))). The first is recommended; compare them before promoting.")
-            }
-        } else if !lineageRoots.isEmpty {
-            // No native codec: prefer a lineage root that others derive from,
-            // then lossless, then oldest embedded stamp. Never by size.
-            let derivedTargets = Set(drafts.compactMap(\.derivedFromSig))
-            let ranked = lineageRoots.sorted { a, b in
-                let da = derivedTargets.contains(drafts[a].sig), db = derivedTargets.contains(drafts[b].sig)
-                if da != db { return da }
-                let la = drafts[a].cls == .preservation, lb = drafts[b].cls == .preservation
-                if la != lb { return la }
-                let ta = drafts[a].members.compactMap(\.embeddedCreationDate).min() ?? .distantFuture
-                let tb = drafts[b].members.compactMap(\.embeddedCreationDate).min() ?? .distantFuture
-                if ta != tb { return ta < tb }
-                return drafts[a].sig < drafts[b].sig
-            }
-            originalIndex = ranked.first
-            originalRole = .presumedOriginal
-            if let r = ranked.first, drafts[r].hasExternalLineage {
-                originalReason = "Derived from a file no longer in the catalog, so it cannot be proven to be the original; it is the copy with the best remaining evidence. Confirm before treating it as the master."
-            } else {
-                originalReason = "No native acquisition encoding in this family; this is the lineage root with the best evidence (others derive from it, lossless, or earliest stamp). Confirm before treating it as the master."
-            }
-            out.cautions.append("The original generation cannot be confirmed from metadata alone — the recommended copy is presumed, not proven.")
-        }
+        let election = electOriginal(drafts)
+        out.cautions += election.cautions
 
         for d in drafts where d.hasExternalLineage {
             out.cautions.append("\(d.sig): derived from a file no longer in the catalog — its source cannot be checked.")
@@ -416,53 +322,10 @@ enum CopyFamilyAssessor {
         // Build representations with roles.
         var reps: [CopyRepresentation] = []
         for (i, d) in drafts.enumerated() {
-            let role: CopyRole
-            let reason: String
-            if i == originalIndex {
-                role = originalRole; reason = originalReason
-            } else if d.damaged {
-                role = .unconfirmedVariant
-                reason = "Not playable or no readable streams — cannot be verified as the same recording."
-            } else if d.durationOff {
-                role = .unconfirmedVariant
-                reason = String(format: "Duration %.1f s differs from the family's %.1f s — truncated, extended, or a different cut.",
-                                d.members[0].durationSeconds, referenceDuration)
-            } else if let oi = originalIndex,
-                      d.members.contains(where: Self.isRepairDerivative),
-                      d.derivedFromSig == drafts[oi].sig || d.derivedFromSig == nil {
-                // Repair derivative of the original (or of a member whose
-                // signature matched the original's) — the corrected master.
-                role = .repairedCopy
-                reason = "Repair of the original (corrected audio/picture) — the playable master. Promote it WITH the original; Confirm Repair retires the original from everyday views."
-                reps.append(makeRepresentation(d.sig, members: d.members, role: role, reason: reason,
-                                               anchors: repairAnchors))
-                continue
-            } else {
-                switch d.cls {
-                case .preservation:
-                    if d.derivedFromSig != nil, let oi = originalIndex, d.derivedFromSig == drafts[oi].sig {
-                        role = .preservationCompanion
-                        reason = "Lossless encoding generated directly from the original — a valid preservation companion."
-                    } else {
-                        role = .unconfirmedVariant
-                        reason = "Lossless encoding but its provenance is missing — it may have been generated from a lossy copy, so it cannot be assumed equivalent to the original."
-                        out.cautions.append("\(d.sig): lossless but provenance unknown — not promoted automatically.")
-                    }
-                case .editing:
-                    role = .editingDerivative
-                    reason = "Mezzanine/editing codec; contains no information beyond the original."
-                case .access:
-                    role = .accessCopy
-                    reason = "Compact lossy encoding for viewing; never a source master."
-                case .native:
-                    role = .unconfirmedVariant
-                    reason = "Native encoding that is not the recommended original (see cautions)."
-                case .unknown:
-                    role = d.derivedFromSig != nil ? .accessCopy : .unconfirmedVariant
-                    reason = d.derivedFromSig != nil ? "Derived from another copy in this family." : "Encoding could not be classified."
-                }
-            }
-            reps.append(makeRepresentation(d.sig, members: d.members, role: role, reason: reason,
+            let assigned = assignRole(d, index: i, election: election, drafts: drafts,
+                                      referenceDuration: referenceDuration)
+            if let caution = assigned.caution { out.cautions.append(caution) }
+            reps.append(makeRepresentation(d.sig, members: d.members, role: assigned.role, reason: assigned.reason,
                                            anchors: repairAnchors))
         }
         reps.sort { a, b in
@@ -472,68 +335,21 @@ enum CopyFamilyAssessor {
         out.representations = reps
 
         // Recommendation + headline.
-        if let oi = originalIndex {
+        if let oi = election.index {
             let sig = drafts[oi].sig
             out.recommendedRepresentationID = sig
             out.recommendedInstanceID = reps.first { $0.id == sig }?.recommendedInstanceID
         }
         out.headline = "\(inputs.count) location\(inputs.count == 1 ? "" : "s") → \(reps.count) distinct representation\(reps.count == 1 ? "" : "s")"
 
-        // Unproven equivalence caution: promoting one of several copies
-        // that are NOT all proven byte-identical is a leap of faith —
-        // Pair Compare is the proof (and would have caught the
-        // left-channel-only twin).
-        if let oi = originalIndex {
-            let m = drafts[oi].members
-            if m.count > 1 {
-                let hashes = Set(m.compactMap { $0.contentHash.isEmpty ? nil : $0.contentHash })
-                if hashes.count > 1 || m.contains(where: { $0.contentHash.isEmpty }) {
-                    out.cautions.append("The original's copies are NOT all proven byte-identical (missing or differing content signatures) — they can differ in audio even when the picture matches. Run Compare These Two Files… on the copy you intend to promote before trusting a twin.")
-                }
-            }
-        }
-
-        // Audio caution (rule 1 includes audio). A repair derivative in the
-        // family answers it: the audio problem was already handled — the
-        // repaired copy is the playable master (2026-08-19: the helper told
-        // Rick to fix audio he had ALREADY balanced).
         var audioNeedsWork = false
-        if let oi = originalIndex {
-            let m = drafts[oi].members
-            let hasAudio = m.contains { $0.streamType == .videoAndAudio || $0.streamType == .audioOnly }
-            let verified = m.contains { $0.audioVerifyStatus == "ok" }
-            let damagedAudio = m.contains { $0.audioVerifyStatus == "damaged" }
-            let repaired = reps.first { $0.role == .repairedCopy }
-            if let repaired {
-                out.cautions.append("Audio was already repaired into \(repaired.instances.first?.filename ?? "a repaired copy") — promote it together with the original (the original keeps its history; the repaired copy is the one to watch).")
-            } else if damagedAudio {
-                audioNeedsWork = true
-                out.cautions.append("Verify Audio reported a problem on the recommended original — fix or choose another equivalent copy before promoting.")
-            } else if hasAudio && !verified {
-                audioNeedsWork = true
-                out.cautions.append("Audio on the recommended original has not been verified — run Verify Audio before promoting (bad or missing audio is the one thing that ruins a keeper).")
-            }
+        if let oi = election.index {
+            let original = originalCautions(drafts[oi].members, reps: reps)
+            out.cautions += original.cautions
+            audioNeedsWork = original.audioNeedsWork
         }
 
-        // Actions.
-        var actions: [CopyFamilyAction] = []
-        if let rec = out.recommendedRepresentation {
-            let hasRepaired = reps.contains { $0.role == .repairedCopy }
-            if hasRepaired {
-                actions.append(.promoteOriginalAndRepaired)
-            } else {
-                actions.append(.promoteRecommendedOriginal)
-            }
-            if rec.instances.count > 1 { actions.append(.chooseAnotherEquivalent) }
-            if audioNeedsWork {
-                actions.insert(.verifyAudioFirst, at: 0)
-            }
-            let hasCompanion = reps.contains { $0.role == .preservationCompanion }
-            if hasCompanion { actions.append(.promoteOriginalAndCompanion) }
-            else if rec.role != .presumedOriginal { actions.append(.createAndPromoteCompanion) }
-            if !reps.contains(where: { $0.role == .accessCopy }) { actions.append(.createAccessCopy) }
-        }
-        out.actions = actions
+        out.actions = actions(recommended: out.recommendedRepresentation, reps: reps, audioNeedsWork: audioNeedsWork)
 
         // Summary paragraph.
         out.summary = composeSummary(reps: reps, recommended: out.recommendedRepresentation, locations: inputs.count)
@@ -660,5 +476,248 @@ enum CopyFamilyAssessor {
             s += " Derivatives contain no information beyond the original; re-encoding cannot recover what the original recording lost."
         }
         return s
+    }
+}
+
+// MARK: - Assessment phases (called by `assess`, in rule order)
+
+extension CopyFamilyAssessor {
+
+    /// One candidate representation: the copies that share an encoding
+    /// signature (plus the damaged / duration-off split).
+    fileprivate struct Draft {
+        var sig: String
+        var members: [CopyFamilyInput]
+        var cls: CodecClass
+        var damaged: Bool
+        var durationOff: Bool
+        var derivedFromSig: String?       // provenance INSIDE the family
+        /// Every member says it was derived from something, and at least
+        /// one names a record that is NOT in this family (purged from the
+        /// catalog, or outside the walked family). Such a copy is not a
+        /// provable lineage root: its parent existed once and is gone.
+        /// A group that also holds a member with no derivedFrom at all
+        /// is not flagged — that member is itself an unlineaged copy.
+        var hasExternalLineage: Bool
+    }
+
+    /// The outcome of rules 2/3: which draft is the original, and why.
+    fileprivate struct Election {
+        var index: Int?
+        var role: CopyRole = .originalSource
+        var reason = ""
+        var cautions: [String] = []
+    }
+
+    // Collapse into representations by encoding signature. Damaged or
+    // duration-off INSTANCES are split out of their encoding's group
+    // (rules 1/3 are per copy, not per encoding) so a truncated DV does
+    // not hide among the complete DVs.
+    fileprivate static func groupSignature(_ r: CopyFamilyInput, referenceDuration: Double) -> String {
+        var sig = signature(r)
+        if !r.isPlayable || r.streamType == .ffprobeFailed || r.streamType == .noStreams {
+            sig += " — unreadable"
+        } else if !durationsMatch(r.durationSeconds, referenceDuration) {
+            sig += " — duration differs"
+        }
+        return sig
+    }
+
+    fileprivate static func makeDrafts(_ inputs: [CopyFamilyInput], referenceDuration: Double) -> [Draft] {
+        var groups: [String: [CopyFamilyInput]] = [:]
+        var order: [String] = []
+        for r in inputs {
+            let sig = groupSignature(r, referenceDuration: referenceDuration)
+            if groups[sig] == nil { order.append(sig) }
+            groups[sig, default: []].append(r)
+        }
+
+        // Lineage: a representation whose members are derived FROM a member
+        // of another representation is a derivative of it.
+        let idToSig: [UUID: String] = Dictionary(uniqueKeysWithValues: inputs.map {
+            ($0.id, groupSignature($0, referenceDuration: referenceDuration))
+        })
+
+        return order.map { sig in
+            let members = groups[sig]!
+            let rep = members[0]
+            let cls = codecClass(videoCodec: rep.videoCodec, audioCodec: rep.audioCodec,
+                                 container: rep.container, originMake: rep.originMake)
+            let damaged = members.allSatisfy { !$0.isPlayable || $0.streamType == .ffprobeFailed || $0.streamType == .noStreams }
+            let durationOff = members.allSatisfy { !durationsMatch($0.durationSeconds, referenceDuration) }
+            let lineage = lineage(of: members, sig: sig, idToSig: idToSig)
+            let everyMemberDerived = members.allSatisfy { $0.derivedFrom != nil }
+            return Draft(sig: sig, members: members, cls: cls, damaged: damaged,
+                         durationOff: durationOff, derivedFromSig: lineage.derivedSig,
+                         hasExternalLineage: lineage.external && everyMemberDerived)
+        }
+    }
+
+    /// Where a group's members say they came from: the (last) other
+    /// signature inside the family, and whether any parent is outside it.
+    private static func lineage(of members: [CopyFamilyInput], sig: String,
+                                idToSig: [UUID: String]) -> (derivedSig: String?, external: Bool) {
+        var derivedSig: String? = nil
+        var external = false
+        for m in members {
+            if let d = m.derivedFrom {
+                if let s = idToSig[d], s != sig { derivedSig = s }
+                else if idToSig[d] == nil { external = true }
+            }
+        }
+        return (derivedSig, external)
+    }
+
+    // Rule 2/3 — choose the original representation.
+    fileprivate static func electOriginal(_ drafts: [Draft]) -> Election {
+        var e = Election()
+        let healthy = drafts.indices.filter { !drafts[$0].damaged && !drafts[$0].durationOff }
+        let lineageRoots = healthy.filter { drafts[$0].derivedFromSig == nil }
+        // A native copy derived from a record that is no longer in the
+        // catalog is NOT "not derived from any other copy" — it cannot be
+        // proven original (stage-0 triage R3, 2026-09-29), so it drops to
+        // the presumed-original election below.
+        let natives = lineageRoots.filter { drafts[$0].cls == .native && !drafts[$0].hasExternalLineage }
+        if let n = natives.first {
+            e.index = n
+            e.reason = "Native acquisition encoding (\(drafts[n].members[0].videoCodec.uppercased()) + \(drafts[n].members[0].audioCodec.uppercased())) and not derived from any other copy."
+            if natives.count > 1 {
+                e.cautions.append("More than one native encoding is present (\(natives.map { drafts[$0].sig }.joined(separator: "; "))). The first is recommended; compare them before promoting.")
+            }
+        } else if !lineageRoots.isEmpty {
+            let ranked = rankPresumedRoots(lineageRoots, drafts)
+            e.index = ranked.first
+            e.role = .presumedOriginal
+            if let r = ranked.first, drafts[r].hasExternalLineage {
+                e.reason = "Derived from a file no longer in the catalog, so it cannot be proven to be the original; it is the copy with the best remaining evidence. Confirm before treating it as the master."
+            } else {
+                e.reason = "No native acquisition encoding in this family; this is the lineage root with the best evidence (others derive from it, lossless, or earliest stamp). Confirm before treating it as the master."
+            }
+            e.cautions.append("The original generation cannot be confirmed from metadata alone — the recommended copy is presumed, not proven.")
+        }
+        return e
+    }
+
+    // No native codec: prefer a lineage root that others derive from,
+    // then lossless, then oldest embedded stamp. Never by size.
+    private static func rankPresumedRoots(_ lineageRoots: [Int], _ drafts: [Draft]) -> [Int] {
+        let derivedTargets = Set(drafts.compactMap(\.derivedFromSig))
+        return lineageRoots.sorted { a, b in
+            let da = derivedTargets.contains(drafts[a].sig), db = derivedTargets.contains(drafts[b].sig)
+            if da != db { return da }
+            let la = drafts[a].cls == .preservation, lb = drafts[b].cls == .preservation
+            if la != lb { return la }
+            let ta = drafts[a].members.compactMap(\.embeddedCreationDate).min() ?? .distantFuture
+            let tb = drafts[b].members.compactMap(\.embeddedCreationDate).min() ?? .distantFuture
+            if ta != tb { return ta < tb }
+            return drafts[a].sig < drafts[b].sig
+        }
+    }
+
+    /// The role of draft `i`, with its reason and (rarely) a caution to add.
+    fileprivate static func assignRole(_ d: Draft, index i: Int, election: Election, drafts: [Draft],
+                                       referenceDuration: Double) -> (role: CopyRole, reason: String, caution: String?) {
+        if i == election.index {
+            return (election.role, election.reason, nil)
+        } else if d.damaged {
+            return (.unconfirmedVariant, "Not playable or no readable streams — cannot be verified as the same recording.", nil)
+        } else if d.durationOff {
+            return (.unconfirmedVariant,
+                    String(format: "Duration %.1f s differs from the family's %.1f s — truncated, extended, or a different cut.",
+                           d.members[0].durationSeconds, referenceDuration),
+                    nil)
+        } else if let oi = election.index,
+                  d.members.contains(where: Self.isRepairDerivative),
+                  d.derivedFromSig == drafts[oi].sig || d.derivedFromSig == nil {
+            // Repair derivative of the original (or of a member whose
+            // signature matched the original's) — the corrected master.
+            return (.repairedCopy, "Repair of the original (corrected audio/picture) — the playable master. Promote it WITH the original; Confirm Repair retires the original from everyday views.", nil)
+        } else {
+            return roleByCodecClass(d, election: election, drafts: drafts)
+        }
+    }
+
+    private static func roleByCodecClass(_ d: Draft, election: Election,
+                                         drafts: [Draft]) -> (role: CopyRole, reason: String, caution: String?) {
+        switch d.cls {
+        case .preservation:
+            if d.derivedFromSig != nil, let oi = election.index, d.derivedFromSig == drafts[oi].sig {
+                return (.preservationCompanion, "Lossless encoding generated directly from the original — a valid preservation companion.", nil)
+            } else {
+                return (.unconfirmedVariant,
+                        "Lossless encoding but its provenance is missing — it may have been generated from a lossy copy, so it cannot be assumed equivalent to the original.",
+                        "\(d.sig): lossless but provenance unknown — not promoted automatically.")
+            }
+        case .editing:
+            return (.editingDerivative, "Mezzanine/editing codec; contains no information beyond the original.", nil)
+        case .access:
+            return (.accessCopy, "Compact lossy encoding for viewing; never a source master.", nil)
+        case .native:
+            return (.unconfirmedVariant, "Native encoding that is not the recommended original (see cautions).", nil)
+        case .unknown:
+            return (d.derivedFromSig != nil ? .accessCopy : .unconfirmedVariant,
+                    d.derivedFromSig != nil ? "Derived from another copy in this family." : "Encoding could not be classified.",
+                    nil)
+        }
+    }
+
+    /// Cautions about the elected original's own copies, in order: unproven
+    /// equivalence, then audio. `audioNeedsWork` puts Verify Audio first.
+    fileprivate static func originalCautions(_ m: [CopyFamilyInput],
+                                             reps: [CopyRepresentation]) -> (cautions: [String], audioNeedsWork: Bool) {
+        var cautions: [String] = []
+        // Unproven equivalence caution: promoting one of several copies
+        // that are NOT all proven byte-identical is a leap of faith —
+        // Pair Compare is the proof (and would have caught the
+        // left-channel-only twin).
+        if m.count > 1 {
+            let hashes = Set(m.compactMap { $0.contentHash.isEmpty ? nil : $0.contentHash })
+            if hashes.count > 1 || m.contains(where: { $0.contentHash.isEmpty }) {
+                cautions.append("The original's copies are NOT all proven byte-identical (missing or differing content signatures) — they can differ in audio even when the picture matches. Run Compare These Two Files… on the copy you intend to promote before trusting a twin.")
+            }
+        }
+
+        // Audio caution (rule 1 includes audio). A repair derivative in the
+        // family answers it: the audio problem was already handled — the
+        // repaired copy is the playable master (2026-08-19: the helper told
+        // Rick to fix audio he had ALREADY balanced).
+        var audioNeedsWork = false
+        let hasAudio = m.contains { $0.streamType == .videoAndAudio || $0.streamType == .audioOnly }
+        let verified = m.contains { $0.audioVerifyStatus == "ok" }
+        let damagedAudio = m.contains { $0.audioVerifyStatus == "damaged" }
+        let repaired = reps.first { $0.role == .repairedCopy }
+        if let repaired {
+            cautions.append("Audio was already repaired into \(repaired.instances.first?.filename ?? "a repaired copy") — promote it together with the original (the original keeps its history; the repaired copy is the one to watch).")
+        } else if damagedAudio {
+            audioNeedsWork = true
+            cautions.append("Verify Audio reported a problem on the recommended original — fix or choose another equivalent copy before promoting.")
+        } else if hasAudio && !verified {
+            audioNeedsWork = true
+            cautions.append("Audio on the recommended original has not been verified — run Verify Audio before promoting (bad or missing audio is the one thing that ruins a keeper).")
+        }
+        return (cautions, audioNeedsWork)
+    }
+
+    // Actions.
+    fileprivate static func actions(recommended: CopyRepresentation?, reps: [CopyRepresentation],
+                                    audioNeedsWork: Bool) -> [CopyFamilyAction] {
+        var actions: [CopyFamilyAction] = []
+        if let rec = recommended {
+            let hasRepaired = reps.contains { $0.role == .repairedCopy }
+            if hasRepaired {
+                actions.append(.promoteOriginalAndRepaired)
+            } else {
+                actions.append(.promoteRecommendedOriginal)
+            }
+            if rec.instances.count > 1 { actions.append(.chooseAnotherEquivalent) }
+            if audioNeedsWork {
+                actions.insert(.verifyAudioFirst, at: 0)
+            }
+            let hasCompanion = reps.contains { $0.role == .preservationCompanion }
+            if hasCompanion { actions.append(.promoteOriginalAndCompanion) }
+            else if rec.role != .presumedOriginal { actions.append(.createAndPromoteCompanion) }
+            if !reps.contains(where: { $0.role == .accessCopy }) { actions.append(.createAccessCopy) }
+        }
+        return actions
     }
 }
