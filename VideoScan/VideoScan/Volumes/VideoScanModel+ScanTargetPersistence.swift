@@ -27,6 +27,8 @@ extension VideoScanModel {
             // Gauntlet UI tests inject a fixture folder here instead
             // (transient launch-arg seam — see GauntletSeams.swift).
             installGauntletScanTargetIfRequested()
+            // Catalog keyboard harness: synthetic volumes + test_* files.
+            installGauntletFixtureCatalogIfRequested()
             return
         }
         let report = ScanTargetPersistence.restoreReporting(

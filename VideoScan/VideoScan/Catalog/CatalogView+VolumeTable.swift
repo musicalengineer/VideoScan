@@ -350,6 +350,15 @@ extension CatalogView {
             if let id = ids.first { openVolumesEditor(for: id) }
         }
         .font(.system(size: 14))
+        // The other Catalog focus target (CatalogPane): a click here makes
+        // ↑/↓ walk the VOLUMES. No file verbs (⌘⌫ / ⌘O / Promote) here.
+        .focused($focusedPane, equals: .volumes)
+        // File ▸ Catalog Info ⌘I reads this only while this table has focus.
+        .focusedValue(\.catalogVolumeInfo,
+                      CatalogVolumeInfo(isAvailable: selectedVolumeIDs.count == 1,
+                                        perform: showCatalogInfoForSelection))
+        // Keyboard harness hook (CatalogKeyboardUITests).
+        .accessibilityIdentifier("catalog.volumesTable")
     }
 
     /// Build the migration report for one offline/retired volume and

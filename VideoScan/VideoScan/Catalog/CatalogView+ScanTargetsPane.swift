@@ -915,16 +915,8 @@ extension CatalogView {
             }
         }
         .background(Color(NSColor.controlBackgroundColor))
-        .background(
-            // Hidden button gives Cmd-I a global binding on the scan-volumes
-            // pane — the context-menu Button's shortcut only fires when the
-            // menu is actually open, so this mirrors it for the selected row.
-            Button("") { showCatalogInfoForSelection() }
-                .keyboardShortcut("i", modifiers: .command)
-                .opacity(0)
-                .frame(width: 0, height: 0)
-                .accessibilityHidden(true)
-        )
+        // ⌘I is File ▸ Catalog Info now (CatalogInfoCommand.swift), fed by
+        // the volumes table's focused value — no hidden Button.
         // Per-volume aggregate cache refresh. Kept here on the pane that
         // consumes the caches so a hidden Catalog tab still refreshes on
         // tab switch via `.onAppear`. ONE trigger (codex #1393): the

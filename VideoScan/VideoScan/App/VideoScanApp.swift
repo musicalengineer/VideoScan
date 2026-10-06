@@ -703,6 +703,9 @@ struct VideoScanApp: App {
                 // double-click does — see CatalogOpenCommand.swift.
                 // (⇧⌘O stays the Analyze Dashboard.)
                 CatalogOpenMenuItem()
+                // ⌘I — Catalog Info for the highlighted volume, as Finder's
+                // Get Info (Rick 2026-10-06). See CatalogInfoCommand.swift.
+                CatalogInfoMenuItem()
                 Divider()
                 // Documents are added deliberately, never swept up by a
                 // volume scan — the scan is video-only on purpose. See
@@ -729,7 +732,8 @@ struct VideoScanApp: App {
                 Button("Import Catalog…") {
                     catalogModel.importBundleViaPanel()
                 }
-                .keyboardShortcut("i", modifiers: [.command])
+                // ⇧⌘I since 2026-10-06: ⌘I is Catalog Info (Finder's rule).
+                .keyboardShortcut("i", modifiers: [.command, .shift])
 
                 // Same prompt the backup-time nag shows, on demand — so the
                 // user never has to run a backup just to reach it
@@ -749,15 +753,9 @@ struct VideoScanApp: App {
                         catalogModel.chooseAndOfferInitializeMasterArchive()
                     }
                     .disabled(catalogModel.isReadOnly)
-                    Button("Promote Selected to Archive") {
-                        let ids = Array(catalogModel.catalogSelectedIDs)
-                        if ids.isEmpty {
-                            catalogModel.log("Promote: select one or more files in the Catalog first.")
-                        } else {
-                            catalogModel.requestPromote(recordIDs: ids)
-                        }
-                    }
-                    .disabled(catalogModel.isReadOnly)
+                    // Acts only on the files highlighted AND visible in the
+                    // focused files table — see CatalogPromoteCommand.swift.
+                    CatalogPromoteMenuItem(model: catalogModel)
                     Divider()
                     Button("Reveal Master Archive in Finder") {
                         catalogModel.revealMasterArchiveInFinder()
