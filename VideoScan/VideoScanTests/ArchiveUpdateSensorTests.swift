@@ -23,11 +23,11 @@ struct ArchiveUpdateSensorTests {
         try SourceTree.appSource(named: name)
     }
 
-    /// Non-comment lines only.
+    /// Code only: `//` comments (whole-line AND trailing) and `/* */` blocks
+    /// removed by the shared stripper (N1008-T-Archive-F10) — a call that
+    /// survives only in a comment no longer counts as a call site.
     private static func code(_ text: String) -> String {
-        text.split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-            .joined(separator: "\n")
+        SourceTree.strippingComments(text)
     }
 
     /// Per app source file (recursive), occurrences of `needle` in code lines.

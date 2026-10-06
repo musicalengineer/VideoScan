@@ -1566,12 +1566,6 @@ final class VideoScanModel: ObservableObject {
     /// see ArchiveDigestIndex.swift for the lifecycle.
     var promoteDigestClaims: [String: [String: String]] = [:]
 
-    /// Live catalog-table selection, mirrored from CatalogView so the
-    /// menu-bar command "Promote Selected to Archive" knows what is
-    /// selected. Plain `var` (not @Published) — the menu reads it at
-    /// click time; nothing renders from it.
-    var catalogSelectedIDs: Set<UUID> = []
-
     /// Sheet driver for "Initialize as Master Archive…" — set by the
     /// Volumes window right-click, the File ▸ Archive menu (after the
     /// open panel), and the no-master alert's fix-it button. Bound in
