@@ -106,6 +106,13 @@ struct CopyFamilyGuardTests {
         #expect(a.actions == [.promoteRecommendedOriginal, .createAccessCopy])
     }
 
+    /// QA (R2 review): the `hasAudio` arm counts an AUDIO-ONLY original, so
+    /// its unverified audio still puts Verify Audio first.
+    @Test func audioOnlyOriginalNeedsVerify() {
+        let a = CopyFamilyAssessor.assess([copy(1, "/V/a.wav", v: "", a: "pcm_s16le", c: "wav", stream: .audioOnly)])
+        #expect(a.actions.first == .verifyAudioFirst, "\(a.actions)")
+    }
+
     /// Whole-assessment snapshot over seven fixed families. Must stay green
     /// with ZERO edits across the split.
     @Test func wholeAssessmentSnapshot() {
