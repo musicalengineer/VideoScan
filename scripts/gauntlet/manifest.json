@@ -19120,7 +19120,8 @@
         "everyPromoteEntryPointGoesThroughTheDuplicatePreflight",
         "requestPromoteThenTheJobWritesNothingAndKeepsOneCopy",
         "theArchiveCopyItselfIsStillRefusedAsACopyNotAsItsOwnDuplicate",
-        "theDigestLegStaysAnIndexLookupOverALargeCatalog"
+        "theDigestLegStaysAnIndexLookupOverALargeCatalog",
+        "theToDoViewDoesNotOfferWhatThePlanRefuses"
       ]
     },
     {

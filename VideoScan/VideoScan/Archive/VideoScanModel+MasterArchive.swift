@@ -644,8 +644,17 @@ extension VideoScanModel {
     /// when there is one, else a hash-backed identical copy (see
     /// `ArchivePromotionIndex.copy(ofContentOf:)`). Worklists and badges
     /// use this; the promote/verify/delete engines keep `masterArchiveCopy`.
+    ///
+    /// GH #294 item 1 (QA on b4c8d393): the full-digest leg
+    /// (`identicalArchivedCopy`, index only — no stat, this runs over whole
+    /// lists) sits second, so the badge and the to-do view agree with
+    /// Promote's plan gate. A stale fingerprint can therefore hide a file
+    /// from the to-do view that the plan would still hand to the job — the
+    /// conservative direction. Consumers stay non-destructive (Tidy only
+    /// tallies); recovery keeps `landedInArchive` (#288).
     func archivedCopy(of record: VideoRecord) -> VideoRecord? {
         masterArchiveCopy(of: record)
+            ?? identicalArchivedCopy(of: record)
             ?? archivePromotionIndex.copy(ofContentOf: record, in: records,
                                           version: promotionIndexVersion)
     }

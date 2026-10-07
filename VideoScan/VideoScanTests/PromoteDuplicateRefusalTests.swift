@@ -138,6 +138,17 @@ struct PromoteDuplicateRefusalTests {
         #expect((try? Data(contentsOf: f.sb.journalURL)) == journalBefore, "the journal was written")
     }
 
+    /// QA on b4c8d393 (GH #294 item 1): the Catalog badge / to-do view
+    /// (`archivedCopy` → `isArchived` → `pfNotYetArchived`) must agree with
+    /// the plan — never offer as "Not Yet Archived" what Promote refuses.
+    @Test func theToDoViewDoesNotOfferWhatThePlanRefuses() async throws {
+        let f = try await makeFixture("dup-todo")
+        defer { f.sb.cleanup() }
+        #expect(f.model.promoteRefusal(f.sibling) == .alreadyPromoted)
+        #expect(!f.model.pfNotYetArchived(f.sibling), "to-do offers what Promote refuses")
+        #expect(f.model.archivedCopy(of: f.sibling)?.id == f.copy.id, "the badge names the archived copy")
+    }
+
     // MARK: - 1b. What the plan gate must NOT refuse (the job decides)
 
     @Test func aFingerprintWhoseFileHasSinceChangedIsNotRefusedAtPlanTime() async throws {
