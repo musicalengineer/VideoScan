@@ -133,6 +133,48 @@ final class ArchiveAngelPromoter: ObservableObject {
         }
     }
 
+    // MARK: Landed
+
+    /// Did THIS record's promote reach the archive? Its own promote link
+    /// (an archive copy promoted from it — Promote writes one for a copy
+    /// AND for an adoption) or the record itself lies inside the Master
+    /// Archive. Never `isArchived`: its content-hash fallback is for
+    /// display and worklists, and says yes when identical bytes reached the
+    /// archive from ANOTHER batch — recovery then kept facts it should undo
+    /// and deleted a buffer it should keep (GH #288, N1016-F2).
+    static func landedInArchive(_ id: UUID, model: VideoScanModel) -> Bool {
+        guard let rec = model.record(forID: id) else { return false }
+        return model.masterArchiveCopy(of: rec) != nil || model.isInsideMasterArchive(path: rec.fullPath)
+    }
+
+    /// What landed of one entry's companions. THE companion rule for both
+    /// the normal `settle` (landed = the job's outcomes) and the quit
+    /// recovery (landed = the catalog) — one function so the two cannot
+    /// drift again (GH #288, N1016-F1). Every companion the entry made
+    /// (done, with a catalog record) must land before its buffer may go.
+    struct CompanionLanding {
+        var access = 0, lossless = 0, balanced = 0
+        /// Companions that did not land, in step order.
+        var missing: [ArchiveAngelPlan.StepOutcome] = []
+        var allLanded: Bool { missing.isEmpty }
+        var landedCount: Int { access + lossless + balanced }
+    }
+
+    static func companionLanding(of entry: ArchiveAngelPlan.Entry, landed: (UUID) -> Bool) -> CompanionLanding {
+        var result = CompanionLanding()
+        for step in entry.steps where step.state == .done {
+            guard let companionID = step.recordID else { continue }
+            guard landed(companionID) else { result.missing.append(step); continue }
+            switch step.kind {
+            case .accessCopy: result.access += 1
+            case .losslessCopy: result.lossless += 1
+            case .balanceAudio: result.balanced += 1
+            case .verifyAudio: break
+            }
+        }
+        return result
+    }
+
     // MARK: Promote
 
     /// Re-check identities, build the promote plan, start the job. Mutates
@@ -192,9 +234,8 @@ final class ArchiveAngelPromoter: ObservableObject {
             }
         }
         if Self.hasPendingRestores(plan) {
-            for line in Self.settleStampedFacts(plan: &plan, landed: { id in
-                model.record(forID: id).map { model.isArchived($0) } ?? false
-            }, catalog: model, ledger: model) {
+            for line in Self.settleStampedFacts(plan: &plan, landed: { Self.landedInArchive($0, model: model) },
+                                                catalog: model, ledger: model) {
                 Self.note(line, plan: &plan, model: model)
             }
             if Self.hasAwaitingRestores(plan) {
@@ -343,27 +384,15 @@ final class ArchiveAngelPromoter: ObservableObject {
                 report.failed.append(entry.filename)
                 continue
             }
-            var allCompanions = true
-            var made = (access: 0, lossless: 0, balanced: 0)
-            for step in entry.steps where step.state == .done && step.recordID != nil {
-                guard let companionID = step.recordID else { continue }
-                if landed[companionID] != nil {
-                    switch step.kind {
-                    case .accessCopy: made.access += 1
-                    case .losslessCopy: made.lossless += 1
-                    case .balanceAudio: made.balanced += 1
-                    case .verifyAudio: break
-                    }
-                } else {
-                    allCompanions = false
-                    plan.entries[i].failure = "\(step.kind.label) not promoted: \(problems[companionID] ?? Self.terminalReason(job))"
-                }
+            let made = Self.companionLanding(of: entry, landed: { landed[$0] != nil })
+            if let missing = made.missing.last, let companionID = missing.recordID {
+                plan.entries[i].failure = "\(missing.kind.label) not promoted: \(problems[companionID] ?? Self.terminalReason(job))"
             }
             plan.entries[i].promotedRelPath = rel
             let landedLine = "Archive Angel: \(entry.filename) → \(rel)"
-                + (allCompanions ? " with \(made.access + made.lossless + made.balanced) companion(s)" : " — " + (plan.entries[i].failure ?? "companion missing"))
+                + (made.allLanded ? " with \(made.landedCount) companion(s)" : " — " + (plan.entries[i].failure ?? "companion missing"))
             Self.note(landedLine, plan: &plan, model: model)
-            if allCompanions {
+            if made.allLanded {
                 plan.entries[i].status = .promoted
                 plan.entries[i].failure = nil
                 report.promotedOriginals += 1
@@ -396,54 +425,71 @@ final class ArchiveAngelPromoter: ObservableObject {
 
     /// Batches left `.promoting` that nothing in this app is promoting — a
     /// quit or crash mid-promote (audit #3). The Promote job writes the
-    /// catalog itself, so the catalog is the truth: a row whose record is
-    /// now archived is promoted (its buffer folder removed); the rest go
-    /// back to ready, saying why, so Promote can be pressed again. Before
-    /// this they stayed `.promoting` forever: hidden from the Archive tab,
-    /// their rows reserved from every later batch, their gigabytes kept.
+    /// catalog itself, so the catalog is the truth: a row whose original
+    /// AND every companion landed (`landedInArchive`, `companionLanding` —
+    /// the same rules as the normal settle) is promoted and its buffer
+    /// folder removed; the rest go back to ready, saying why, buffer kept,
+    /// so Promote can be pressed again. Before this they stayed
+    /// `.promoting` forever: hidden from the Archive tab, their rows
+    /// reserved from every later batch, their gigabytes kept.
     @discardableResult
     static func settleStrandedPromotions(bufferRoot: URL, model: VideoScanModel) -> [String] {
         var lines: [String] = []
+        let landed: (UUID) -> Bool = { Self.landedInArchive($0, model: model) }
         for var plan in ArchiveAngelPlanStore.listBatches(bufferRoot: bufferRoot)
             where plan.status != .promoting && !ArchiveAngelLiveBatches.isLive(plan.batchDir) && Self.hasPendingRestores(plan) {
             // codex #1654 P1-4: rollback entries a crash or a failed
             // catalog save left behind are re-applied (compare-before-restore
             // makes this idempotent), then cleared once the catalog is saved.
-            let undone = Self.settleStampedFacts(plan: &plan, landed: { id in
-                model.record(forID: id).map { model.isArchived($0) } ?? false
-            }, catalog: model, ledger: model)
+            let undone = Self.settleStampedFacts(plan: &plan, landed: landed, catalog: model, ledger: model)
             for line in undone { Self.note(line, plan: &plan, model: model) }
             ArchiveAngelPlanStore.saveLogged(plan, context: "pending restore")
             lines.append(contentsOf: undone)
         }
         for var plan in ArchiveAngelPlanStore.listBatches(bufferRoot: bufferRoot)
             where plan.status == .promoting && !ArchiveAngelLiveBatches.isLive(plan.batchDir) {
-            var promoted = 0, back = 0
-            for i in plan.entries.indices where plan.entries[i].status == .ready {
-                let entry = plan.entries[i]
-                if let rec = model.record(forID: entry.id), model.isArchived(rec) {
-                    plan.entries[i].status = .promoted
-                    plan.entries[i].failure = nil
-                    ArchiveAngelPlanStore.removeEntryFolder(plan, entry: entry)
-                    promoted += 1
-                } else {
-                    plan.entries[i].failure = "Promote was interrupted before this file reached the archive — promote again."
-                    back += 1
-                }
-            }
-            let undone = Self.settleStampedFacts(plan: &plan, landed: { id in
-                model.record(forID: id).map { model.isArchived($0) } ?? false
-            }, catalog: model, ledger: model)
-            for line in undone { Self.note(line, plan: &plan, model: model) }
-            plan.status = plan.readyCount == 0 ? .promoted : .ready
-            plan.finishedAt = plan.finishedAt ?? Date()
-            let line = "Archive Angel: settled an interrupted promote in \((plan.batchDir as NSString).lastPathComponent) — "
-                + "\(promoted) archived, \(back) back to ready"
-            Self.note(line, plan: &plan, model: model)
-            ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
-            lines.append(line)
+            lines.append(Self.settleStranded(plan: &plan, landed: landed, model: model))
         }
         return lines
+    }
+
+    /// One stranded batch, settled against the catalog and saved. Returns
+    /// the summary line.
+    private static func settleStranded(plan: inout ArchiveAngelPlan, landed: (UUID) -> Bool,
+                                       model: VideoScanModel) -> String {
+        var promoted = 0, back = 0
+        for i in plan.entries.indices where plan.entries[i].status == .ready {
+            let entry = plan.entries[i]
+            if let why = Self.strandedShortfall(of: entry, landed: landed) {
+                plan.entries[i].failure = why
+                back += 1
+                continue
+            }
+            plan.entries[i].status = .promoted
+            plan.entries[i].failure = nil
+            ArchiveAngelPlanStore.removeEntryFolder(plan, entry: entry)
+            promoted += 1
+        }
+        let undone = Self.settleStampedFacts(plan: &plan, landed: landed, catalog: model, ledger: model)
+        for line in undone { Self.note(line, plan: &plan, model: model) }
+        plan.status = plan.readyCount == 0 ? .promoted : .ready
+        plan.finishedAt = plan.finishedAt ?? Date()
+        let line = "Archive Angel: settled an interrupted promote in \((plan.batchDir as NSString).lastPathComponent) — "
+            + "\(promoted) archived, \(back) back to ready"
+        Self.note(line, plan: &plan, model: model)
+        ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
+        return line
+    }
+
+    /// Why a stranded row is NOT promoted (nil = its original and every
+    /// companion landed, so its buffer may go).
+    static func strandedShortfall(of entry: ArchiveAngelPlan.Entry, landed: (UUID) -> Bool) -> String? {
+        guard landed(entry.id) else {
+            return "Promote was interrupted before this file reached the archive — promote again."
+        }
+        guard let missing = Self.companionLanding(of: entry, landed: landed).missing.first else { return nil }
+        return "\(missing.kind.label) not promoted: Promote was interrupted before it reached the archive — "
+            + "its buffer is kept; promote again."
     }
 
     /// The stat just before Promote stamps (codex #1659): the selected
