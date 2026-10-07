@@ -208,7 +208,8 @@ struct InspectorPanel: View {
                 let fmt = DateFormatter()
                 fmt.dateStyle = .medium
                 fmt.timeStyle = .none
-                var line = "  Inferred Record Date: \(fmt.string(from: inferred))"
+                // GH #293: a year-only inference is exported as its year.
+                var line = "  Inferred Record Date: \(rec.effectiveInferredDateRange?.displayString ?? fmt.string(from: inferred))"
                 if let conf = rec.inferredDateConfidence {
                     line += " (confidence \(String(format: "%.2f", conf)))"
                 }
