@@ -38,12 +38,13 @@ reentrancy across `await` where state is read before and used after; files left
 half-written; force-unwraps and `try!` on input or disk data; logs leaking media paths.
 
 **D: Debt / refactor plan.** Measure, then plan. Don't edit code.
-0. Start from the M4's nightly numbers if they exist:
-   `git fetch origin metrics` then `git show origin/metrics:metrics/complexity.jsonl | tail -1`
-   (the per-folder debt, the top 15) and the debt ratchet's NEW-offender list. New
-   offenders in tonight's scope come first: they're the cheapest debt to pay.
-1. `pip install lizard` and run it on the scope: list functions with CCN > 15 or
-   length > 80 lines, and files > 800 lines.
+0. **Don't `pip install lizard`:** the cloud network blocks PyPI, and stock lizard misreads Swift
+   regex literals and `#` strings anyway. Use the M4's numbers, measured nightly with those fixes:
+   `ci/baselines/complexity_debt.json` (EVERY offender, CCN > 15 or > 80 lines, with CCN and length;
+   refreshed by the 2 AM job) and `git fetch origin metrics` then
+   `git show origin/metrics:metrics/complexity.jsonl | tail -1` (per-folder debt, top 15, NEW
+   offenders). New offenders in tonight's scope come first: they're the cheapest debt to pay.
+1. From those, list the scope's functions with CCN > 15 or length > 80, and files > 800 lines.
 2. Find duplicated logic (two functions that answer the same question differently
    are the debt that bites: the C01-F1 class), dead code (no callers: grep),
    leftover `TEMPORARY`/diag code, stale TODOs, flags that are always on.

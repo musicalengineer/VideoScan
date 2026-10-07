@@ -32,4 +32,8 @@ do not try to build the app.
    or leave it out. Twenty plausible findings are worth less than one true one.
 7. **Time box: about 45 minutes.** If scope is bigger than that, go by the
    brief's priority order and list what you did not reach under "Not covered".
-8. Plain words: no media paths, family names or filenames from fixtures in the report.
+8. **End every report with a `## Blockers & environment` section**, even if it says "none": every
+   tool or command that failed (e.g. a blocked `pip install`, a host the network refused, a file
+   missing from the repo), what you did instead, and what would have helped. The Manager on the
+   Mac can't see your chat, only this report, so a blocker not written here is invisible.
+9. Plain words: no media paths, family names or filenames from fixtures in the report.

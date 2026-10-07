@@ -359,6 +359,24 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CyberBrainWriterCharacterizationTests"
+      ],
+      "tests": [
+        "allPersonFieldsSurviveLinkingCaptionAndPronunciation",
+        "appendAtOneHundredThousandItemsPreservesHistoryWithinBudget",
+        "captionCapsMentionsBeforeDeduplicationAndStoresOneSharedItem",
+        "pointerWinsOverNameAndConflictingPointersStaySeparate",
+        "repeatedResearchDoesNotLinkOrRenameAnUnlinkedPerson",
+        "testimony",
+        "validationErrorPriorityRemainsStable"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterConcurrencyTests.swift",
       "stage": "regression",
       "suites": [
@@ -1011,6 +1029,21 @@
         "testSeparateLinesCountOnlyTheLowestMeetingPoints",
         "testSymmetricAndEmptyCases",
         "testSynthetic100kIsInteractive"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomCompiledTreeCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GedcomCompiledTreeCharacterizationTests"
+      ],
+      "tests": [
+        "checksumErrorPrecedence",
+        "chunkBoundaryOrder",
+        "chunkFences",
+        "frozenEncoding"
       ]
     },
     {
@@ -4879,6 +4912,20 @@
         "reviewedConversationsResolveFollowUpsWithoutTranslation",
         "reviewedModelOutputsReturnExactGoldenAnswers",
         "reviewedSpecsReturnExactGoldenAnswers"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivistGraphCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchivistGraphCharacterizationTests"
+      ],
+      "tests": [
+        "lifeStatusReachesBothResultAndPlanWithoutDroppingOtherFields",
+        "missingStatusAndDeclinesDoNotChangeTheResult",
+        "operationProjectionKeepsGuardPriorityAndWireFields",
+        "taggingChangesOnlyTheSelectedSlot"
       ]
     },
     {
@@ -8867,6 +8914,22 @@
         "textLayerIsPreferred",
         "unparseableFormatsAreEmpty"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DossierBatchCharacterizationTests.swift",
+      "suites": [
+        "DossierBatchCharacterizationTests"
+      ],
+      "tests": [
+        "pipelined",
+        "serialCaptionsOnly",
+        "serialDirectBothStages",
+        "serialNoTranscriber",
+        "serialTranscriptOnly"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
     {
       "kind": "xcode",
@@ -17554,6 +17617,25 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PeopleEntryTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PeopleEntryTests"
+      ],
+      "tests": [
+        "aFamilyIsNeverResolvedToAProfile",
+        "aPersonAndAFamilyWithTheSameUUIDAreDifferentEntries",
+        "aTrashedOrGarbageFamilyKeyFallsBackToThePerson",
+        "arrowsWalkAcrossTheFamilyPersonBoundaryAndStopAtTheEnds",
+        "familiesComeFirstThenPeopleInGalleryOrder",
+        "orderingAndWalkingAHundredThousandPeopleStaysFast",
+        "selectingAFamilyRoundTripsAndLeavesThePersonAlone",
+        "selectingAPersonRoundTripsAndClearsTheFamily",
+        "theEntryModelNeverBuildsAProfile"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PeopleGalleryGesturesTests.swift",
       "stage": "unit",
       "suites": [
@@ -25124,6 +25206,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterCharacterizationTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterPronunciationGuardTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -25257,6 +25343,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomCommonAncestryTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomCompiledTreeCharacterizationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -26109,6 +26199,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DocumentTextExtractorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DossierBatchCharacterizationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -27360,7 +27454,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2125,
+      "expected_floor": 2138,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -27399,6 +27493,7 @@
         "VideoScanTests/ArchivistChatInputHistoryTests",
         "VideoScanTests/ArchivistConversationCommandTests",
         "VideoScanTests/ArchivistFollowUpResolverTests",
+        "VideoScanTests/ArchivistGraphCharacterizationTests",
         "VideoScanTests/ArchivistKeywordBoundaryTests",
         "VideoScanTests/ArchivistKeywordMatchingTests",
         "VideoScanTests/ArchivistPlayPolicyTests",
@@ -27553,6 +27648,7 @@
         "VideoScanTests/PathYearHintsTests",
         "VideoScanTests/PauseGateCancellationTests",
         "VideoScanTests/PauseGateToggleReasonTests",
+        "VideoScanTests/PeopleEntryTests",
         "VideoScanTests/PeopleGalleryGesturesTests",
         "VideoScanTests/PeopleGalleryKeyboardNavigationTests",
         "VideoScanTests/PeopleSortKeyTests",

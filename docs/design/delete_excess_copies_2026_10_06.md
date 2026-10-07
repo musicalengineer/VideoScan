@@ -624,3 +624,23 @@ C05: `docs/reviews/cloud/C05-delete-excess-design-review.md`. 7 findings confirm
 9. **Honest baseline (F9).** Leave archive-volume files out of the measured excess (about 4.1 GB).
 
 C05's test sketches become the "tests first" items of Phase 1 (amendments 1–6, 9) and Phase 2 (7–8). Still to open: whether PrunePlan leaves out A/V pair members, and whether the attestations copied at promote reach the archived record or only the manifest row.
+
+---
+
+## Rick's decisions (2026-10-07)
+
+1. **The archive copy may be the ONLY copy left**, provided the confirmation dialog says so plainly
+   *before* "OK to delete". For example: "After this, the Master Archive copy on <volume> will be the
+   only copy of these N videos. Its last fixity check: <date>, OK." The dialog lists, per item, what
+   stays and what goes.
+2. **Containment, in Rick's words:** "if the master archived version is 2 hours and the copies are 1
+   hour, then we won't lose anything; if the master is 1 hour and the copies are 2 hours, it's a
+   problem." Encoded as:
+   - Tier 1 (byte-identical): same bytes, so same length by construction.
+   - Tier 2 (contained): 100% of the copy's content must be found inside the archived master
+     (amendment 7), AND a hard belt-and-braces guard: **a copy whose duration exceeds the archived
+     master's (beyond a small container tolerance) is NEVER offered for deletion**, whatever any other
+     signal says. It's shown instead as "this copy is LONGER than the archive master; the archive
+     may be missing footage", a curation flag, never a delete.
+3. The CLEAN UP sidebar section in Triage (excess copies · duplicates · possible repeats, with counts
+   and GB) shows only with the Curator toggle on.
