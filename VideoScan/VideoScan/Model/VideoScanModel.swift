@@ -840,6 +840,15 @@ final class VideoScanModel: ObservableObject {
     /// the count without observing the store directly.
     @Published var ignoredContentRevision: Int = 0
 
+    /// Archive ▸ Audit <year>… (2026-10-07): "keep both" answers and
+    /// occasion tags — an app-data sidecar (ArchiveAuditStore.swift). `var`
+    /// so tests inject a directory. Loaded on the Archive tab's first
+    /// appearance; wiring in ArchiveView+AuditYear.swift.
+    var archiveAuditStore = ArchiveAuditStore()
+    /// Bumped on every audit decision / tag change: the decade page's
+    /// timeline memo keys on it, so a tag re-colours the cue and strip.
+    @Published var archiveAuditRevision: Int = 0
+
     /// Stage 2 (2026-07-29): manages the DETACHED out-of-process helper
     /// (videoscan-preview-sweep) so preview prewarming survives app quit.
     /// Built in configurePreviewSweep with the real posix_spawn launcher +

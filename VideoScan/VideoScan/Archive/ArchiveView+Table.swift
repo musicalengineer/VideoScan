@@ -475,6 +475,17 @@ extension ArchiveView {
         MainWindowHelper.shared.openMainWindow()
     }
 
+    /// Several cards at once (Audit <year>… ▸ Show in Catalog): the
+    /// Catalog focuses all of them and selects the first.
+    func showInCatalog(ids: [UUID]) {
+        guard let first = ids.first else { return }
+        model.focusedMediaIDs = ids.reduce(into: Set<UUID>()) { $0.formUnion(model.focusSet(for: $1)) }
+        model.pendingCatalogSelection = first
+        model.pendingCatalogPairMode = false
+        selectedTab = 1
+        MainWindowHelper.shared.openMainWindow()
+    }
+
     func showPairInCatalog(_ rec: VideoRecord) {
         model.focusedMediaIDs = model.focusSet(for: rec.id)
         model.pendingCatalogSelection = rec.id
