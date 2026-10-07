@@ -89,8 +89,8 @@ public struct EventLabel: Sendable, Equatable, Hashable {
 
     /// Canonical event id: "christmas", "newyear", "thanksgiving",
     /// "easter", "july4", "halloween", "mothersday", "fathersday",
-    /// "birthday", "wedding", "graduation", "vacation", "beach", "cape",
-    /// "disney", "camp", "recital", "game".
+    /// "birthday", "wedding", "graduation", "vacation", "beach", "lake",
+    /// "cape", "disney", "camp", "recital", "game".
     public var event: String
     /// The person whose birthday it is (calendar birthdays only; a
     /// "bday" in a name knows no person).
@@ -455,10 +455,16 @@ public enum EventLabeler {
         "wedding": "wedding", "weddings": "wedding",
         "graduation": "graduation",
         "vacation": "vacation", "vacations": "vacation", "trip": "vacation", "trips": "vacation",
-        "beach": "beach",
+        // Trips (Rick 2026-10-07: "trips stop landing in unlabeled").
+        // "road trip" is two words and already reads "trip"; the run-together
+        // spelling needs its own entry (whole-word matching).
+        "roadtrip": "vacation", "roadtrips": "vacation",
+        "beach": "beach", "beaches": "beach",
+        "lake": "lake", "lakes": "lake", "lakehouse": "lake",
         "cape": "cape",
         "disney": "disney", "disneyland": "disney", "disneyworld": "disney",
-        "camp": "camp",
+        "camp": "camp", "camps": "camp", "camping": "camp", "campout": "camp", "campouts": "camp",
+        "campground": "camp", "campsite": "camp", "campfire": "camp",
         "recital": "recital", "recitals": "recital",
         "game": "game", "games": "game",
     ]

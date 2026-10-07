@@ -377,6 +377,11 @@ final class MediaPairComparator: ObservableObject {
     /// can say so truthfully (and so tests can pin the reason).
     @Published var durationMismatch: PairCompareLogic.DurationMismatch?
 
+    /// GH #293: called (main actor) after this run kept a freshly computed
+    /// perceptual fingerprint on a record — the owner persists the catalog.
+    /// nil = keep in memory only (the next catalog save carries it).
+    var onFingerprintKept: (@MainActor () -> Void)?
+
     /// What the finished row's subtitle should say. For the perceptual
     /// verdict the stats line IS the story ("31/32 frames agree …");
     /// a duration short-circuit leads with the skip reason ("content
@@ -560,18 +565,12 @@ final class MediaPairComparator: ObservableObject {
                 fraction = 0
                 isIndeterminate = false
                 do {
-                    let fpA = try await PerceptualFingerprinter.fingerprint(
-                        ffmpegPath: ffmpeg,
-                        path: pathA,
-                        durationSeconds: durationA,
-                        onFraction: fractionSink(base: 0, span: 0.5)
-                    )
-                    let fpB = try await PerceptualFingerprinter.fingerprint(
-                        ffmpegPath: ffmpeg,
-                        path: pathB,
-                        durationSeconds: durationB,
-                        onFraction: fractionSink(base: 0.5, span: 0.5)
-                    )
+                    // GH #293: a kept, current fingerprint is read instead
+                    // of re-decoding the file; a fresh one is kept.
+                    let fpA = try await fingerprint(recordA, path: pathA, durationSeconds: durationA,
+                                                    ffmpeg: ffmpeg, onFraction: fractionSink(base: 0, span: 0.5))
+                    let fpB = try await fingerprint(recordB, path: pathB, durationSeconds: durationB,
+                                                    ffmpeg: ffmpeg, onFraction: fractionSink(base: 0.5, span: 0.5))
                     let stats = PerceptualHash.compare(fpA, fpB)
                     perceptualStats = stats
                     perceptualMatch = stats.isMatch
@@ -604,6 +603,26 @@ final class MediaPairComparator: ObservableObject {
             lastError = error.localizedDescription
             isRunning = false
         }
+    }
+
+    /// GH #293: the record's kept fingerprint when current, else one ffmpeg
+    /// pass — whose result is kept on the record (size captured BEFORE the
+    /// read, so a file that changed meanwhile is not mis-stamped).
+    private func fingerprint(_ record: VideoRecord, path: String, durationSeconds: Double, ffmpeg: String,
+                             onFraction: @escaping @Sendable (Double) -> Void) async throws -> [UInt64] {
+        if let kept = VideoScanModel.storedPerceptualFingerprint(of: record) {
+            pairCompareLog.info("tier 3: kept fingerprint reused for \(path, privacy: .public)")
+            onFraction(1)
+            return kept
+        }
+        let sizeAtRead = record.sizeBytes
+        let fresh = try await PerceptualFingerprinter.fingerprint(ffmpegPath: ffmpeg, path: path,
+                                                                  durationSeconds: durationSeconds,
+                                                                  onFraction: onFraction)
+        if keepPerceptualFingerprint(fresh, on: record, sizeBytes: sizeAtRead, durationSeconds: durationSeconds) {
+            onFingerprintKept?()
+        }
+        return fresh
     }
 
     private func finish(with verdict: PairCompareVerdict) {

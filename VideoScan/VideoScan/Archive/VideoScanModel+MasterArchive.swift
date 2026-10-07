@@ -171,6 +171,9 @@ final class ArchivePromotionIndex {
     private var copyBySource: [UUID: VideoRecord] = [:]
     private var copyByContentHash: [String: VideoRecord] = [:]
     private var copyByDupGroup: [UUID: VideoRecord] = [:]
+    /// Full-file sha256 (lowercase) → archive copy. The ONE content key
+    /// that proves identity (design #320); see `copy(withDigest:)`.
+    private var copyByDigest: [String: VideoRecord] = [:]
     private var sourceByCopy: [UUID: UUID] = [:]
     /// Archive totals for the sidebar panel: promoted copies whose full-file
     /// fixity was recorded (i.e. verified at promotion), and their bytes.
@@ -209,6 +212,28 @@ final class ArchivePromotionIndex {
         return hit
     }
 
+    /// The archive copy whose verified full-file sha256 is `digest`
+    /// (lowercase hex), or nil. GH #190 at PLAN time (Rick 2026-10-07):
+    /// a sibling of an archived file whose promote link was lost (its
+    /// source record pruned) still carries the digest, and this finds it
+    /// without reading a byte. O(1) after the per-version rebuild.
+    func copy(withDigest digest: String, in records: [VideoRecord], version: RecordsVersion) -> VideoRecord? {
+        rebuildIfNeeded(records, version: version)
+        return copyByDigest[digest]
+    }
+
+    /// The full-file digest an archive copy is known by: the read-back
+    /// digest Promote/Verify recorded, else its own fixity. sha256 only.
+    nonisolated static func verifiedDigest(of rec: VideoRecord) -> String? {
+        if let a = rec.archiveFixity, a.algorithm == ContentFixity.sha256, ArchiveDigestIndex.isSHA256(a.digest) {
+            return a.digest.lowercased()
+        }
+        if let c = rec.contentFixity, c.algorithm == ContentFixity.sha256, ArchiveDigestIndex.isSHA256(c.digest) {
+            return c.digest.lowercased()
+        }
+        return nil
+    }
+
     func sourceID(ofCopyID id: UUID, in records: [VideoRecord], version: RecordsVersion) -> UUID? {
         rebuildIfNeeded(records, version: version)
         return sourceByCopy[id]
@@ -233,6 +258,7 @@ final class ArchivePromotionIndex {
         sourceByCopy.removeAll(keepingCapacity: true)
         copyByContentHash.removeAll(keepingCapacity: true)
         copyByDupGroup.removeAll(keepingCapacity: true)
+        copyByDigest.removeAll(keepingCapacity: true)
         verifiedCount = 0; verifiedBytes = 0; unverifiedCount = 0
         for rec in records where rec.derivationKind == ArchivePromotion.derivationKind && !rec.isPurged {
             if rec.archiveFixity != nil {
@@ -243,6 +269,7 @@ final class ArchivePromotionIndex {
             }
             if !rec.contentHash.isEmpty { copyByContentHash[rec.contentHash] = rec }
             if let group = rec.duplicateGroupID { copyByDupGroup[group] = rec }
+            if let digest = Self.verifiedDigest(of: rec) { copyByDigest[digest] = rec }
             guard let src = rec.derivedFrom else { continue }
             copyBySource[src] = rec
             sourceByCopy[rec.id] = src
@@ -617,8 +644,17 @@ extension VideoScanModel {
     /// when there is one, else a hash-backed identical copy (see
     /// `ArchivePromotionIndex.copy(ofContentOf:)`). Worklists and badges
     /// use this; the promote/verify/delete engines keep `masterArchiveCopy`.
+    ///
+    /// GH #294 item 1 (QA on b4c8d393): the full-digest leg
+    /// (`identicalArchivedCopy`, index only — no stat, this runs over whole
+    /// lists) sits second, so the badge and the to-do view agree with
+    /// Promote's plan gate. A stale fingerprint can therefore hide a file
+    /// from the to-do view that the plan would still hand to the job — the
+    /// conservative direction. Consumers stay non-destructive (Tidy only
+    /// tallies); recovery keeps `landedInArchive` (#288).
     func archivedCopy(of record: VideoRecord) -> VideoRecord? {
         masterArchiveCopy(of: record)
+            ?? identicalArchivedCopy(of: record)
             ?? archivePromotionIndex.copy(ofContentOf: record, in: records,
                                           version: promotionIndexVersion)
     }
@@ -1004,16 +1040,80 @@ extension VideoScanModel {
         if isInsideMasterArchive(path: rec.fullPath) { return .insideArchiveRoot }
         if masterArchiveCopy(of: rec) != nil { return .alreadyPromoted }
         if !VolumeReachability.isReachable(path: rec.fullPath) { return .offline }
+        // GH #190 at plan time: the same bytes are already archived (full
+        // sha256) and the fingerprint still names this file. One stat per
+        // selected record — O(selection), like the reachability probe.
+        if identicalArchivedCopy(of: rec) != nil, let fixity = rec.contentFixity,
+           Self.fingerprintStillNamesFile(fixity, now: FileIdentityStamp.capture(path: rec.fullPath)) {
+            return .alreadyPromoted
+        }
         return nil
     }
 
     /// The recommendation-surface form: would Promote refuse this for a
     /// reason that will still be true in five minutes? Cheap — no disk.
+    /// The digest leg is asked without its stat: a recommender may hide a
+    /// file whose fingerprint has since gone stale (conservative), but it
+    /// must never offer one the plan then refuses.
     func promoteWouldRefusePermanently(_ rec: VideoRecord) -> Bool {
         if rec.isPurged { return true }
         if isArchiveCopy(rec) { return true }
         if isInsideMasterArchive(path: rec.fullPath) { return true }
-        return masterArchiveCopy(of: rec) != nil
+        return masterArchiveCopy(of: rec) != nil || identicalArchivedCopy(of: rec) != nil
+    }
+
+    /// GH #190 at PLAN time (Rick 2026-10-07, a 73 GB tape capture): the
+    /// archive copy holding exactly this record's bytes, proven by the
+    /// record's OWN full-file sha256 equal to the copy's verified digest —
+    /// never by the sampled `contentHash` or a dup group (design #320).
+    ///
+    /// Why it is needed: a copy promoted from a sibling whose record was
+    /// later pruned keeps a dangling promote link, so `masterArchiveCopy`
+    /// misses every surviving sibling and only the job's full read caught
+    /// the duplicate (73 GB, 6½ minutes, after the sheet had offered it).
+    ///
+    /// Index only — no disk — so recommenders can ask it per record. The
+    /// fingerprint may be older than the file; `promoteRefusal` adds the
+    /// stat check before refusing. Byte counts must agree on all three
+    /// sides (record, fingerprint, copy). An archive copy is never its own
+    /// duplicate (it is refused as `.isArchiveCopy`).
+    func identicalArchivedCopy(of rec: VideoRecord) -> VideoRecord? {
+        guard !isArchiveCopy(rec), let fixity = rec.contentFixity,
+              fixity.algorithm == ContentFixity.sha256,
+              ArchiveDigestIndex.isSHA256(fixity.digest),
+              fixity.byteCount == rec.sizeBytes,
+              let copy = archivePromotionIndex.copy(withDigest: fixity.digest.lowercased(),
+                                                    in: records, version: promotionIndexVersion),
+              copy.id != rec.id,
+              (copy.archiveFixity?.sizeBytes ?? copy.sizeBytes) == fixity.byteCount
+        else { return nil }
+        return copy
+    }
+
+    /// May a stored fingerprint still be taken as THIS file's bytes for a
+    /// refusal? Same inode, size and mtime as when it was computed; the
+    /// device number (renumbered on every remount) and ctime (moved by
+    /// xattrs, tags, Spotlight) are not asked; a recorded volume UUID must
+    /// still match. Weaker than the job's `describesFileNow` on purpose:
+    /// this only ever says NO to a copy — nothing is written on its word —
+    /// and the job still reads every byte of anything it does copy. Pure.
+    nonisolated static func fingerprintStillNamesFile(_ fixity: ContentFixity,
+                                                      now current: FileIdentityStamp?) -> Bool {
+        guard let current else { return false }
+        return fixity.stamp.describesSameFile(now: current, changeTime: .ignored, volume: .resumeAcrossRemount)
+            && current.size == fixity.byteCount
+    }
+
+    /// What the sheet and the decisions log say after "already in the
+    /// Master Archive": the archived file's path (and, for a digest match,
+    /// the digest prefix). nil for other reasons. O(1).
+    func promoteSkipDetail(recordID: UUID, reason: ArchivePromotePlan.Skip) -> String? {
+        guard reason == .alreadyPromoted, let rec = record(forID: recordID) else { return nil }
+        if let copy = masterArchiveCopy(of: rec) { return copy.fullPath }
+        if let copy = identicalArchivedCopy(of: rec), let digest = rec.contentFixity?.digest {
+            return "\(copy.fullPath) — identical bytes (sha256 \(digest.lowercased().prefix(12))…)"
+        }
+        return nil
     }
 
     /// per user gesture on the main actor — O(selection), not O(records).
@@ -1052,10 +1152,7 @@ extension VideoScanModel {
         var entries: [ArchivePromoteDecisions.Entry] = []
         for skip in plan.skipped {
             let rec = record(forID: skip.id)
-            var detail: String?
-            if skip.reason == .alreadyPromoted, let rec, let copy = masterArchiveCopy(of: rec) {
-                detail = copy.fullPath
-            }
+            let detail = promoteSkipDetail(recordID: skip.id, reason: skip.reason)
             let reason = Self.skipReasonLabel(skip.reason)
             entries.append(.init(at: now, recordID: skip.id, filename: skip.filename,
                                  sourcePath: rec?.fullPath ?? "", decision: "skipped",

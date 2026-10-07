@@ -193,6 +193,18 @@
 <div class="chart-box" style="margin-top:12px"><h2 id="cx-ovr-title">Gate overrides, last 48 hours</h2><div class="table-wrap" id="cx-ovr"></div></div>
 <div class="section-error hidden" id="cx-error"></div>
 
+<!-- 8c ============ OVER-EXPOSURE & PROBLEM FILES ============ -->
+<h3 class="section">Over-exposure &amp; problem files &mdash; GitHub nightly</h3>
+<p class="section-note">Internal declarations in the app's Swift code that need not be: <em>could be private</em> (used only in their own file) or <em>widened for a split</em> (used only from the type's own T+*.swift extension files). Report only; the nightly flags declarations new since the baseline, and the baseline only shrinks. The problem-files table joins every signal per file, worst first: complexity debt, length, exposure, and how often the file changed in the last 7 days.</p>
+<div class="cards" id="ex-cards"></div>
+<div class="charts">
+  <div class="chart-box"><h2>Over-exposed declarations per night</h2><canvas id="c-ex-trend"></canvas><div class="chart-note hidden" id="c-ex-trend-note"></div></div>
+  <div class="chart-box"><h2>Could be private, by folder (largest folders)</h2><canvas id="c-ex-folders"></canvas><div class="chart-note hidden" id="c-ex-folders-note"></div></div>
+</div>
+<div class="chart-box" style="margin-top:12px"><h2 id="ex-top-title">Top 20 files by could-be-private</h2><div class="table-wrap" id="ex-top"></div></div>
+<div class="chart-box" style="margin-top:12px"><h2 id="pf-title">Problem files, worst first</h2><div class="table-wrap" id="pf-table"></div></div>
+<div class="section-error hidden" id="ex-error"></div>
+
 <!-- 9 ============ BENCHMARKS (occasional runs) ============ -->
 <h3 class="section">Benchmarks &mdash; occasional runs</h3>
 <p class="section-note">Not nightly: these publish only when someone runs them, so their dates matter.</p>
@@ -895,6 +907,76 @@ function renderComplexity(d) {
   fresh.innerHTML = items.length ? fnTable(items.slice(0, 50), true) : "None: no new offender, and none of the known ones got worse.";
 }
 
+// ---------------------------------------------------------------- 8c. over-exposure
+function renderExposure(d) {
+  const rows = d.exRows;
+  const cards = document.getElementById("ex-cards");
+  const top = document.getElementById("ex-top");
+  const pfBox = document.getElementById("pf-table");
+  const base = p => String(p || "").split("/").pop();
+  const pf = d.problemFiles;
+  if (pf && Array.isArray(pf.rows) && pf.rows.length) {
+    document.getElementById("pf-title").textContent =
+      `Problem files, worst first · ${fmtWhen(pf.ts).split(" · ")[0]} · ${pf.files_scored} files with any debt`;
+    let html = "<table><thead><tr><th>#</th><th>File</th><th>Score</th><th>Offenders</th><th>Worst CCN</th>" +
+      "<th>New / worse</th><th>Lines</th><th>Could be private</th><th>Widened</th><th>Commits (7 d)</th></tr></thead><tbody>";
+    pf.rows.forEach((r, i) => {
+      const n = v => isNum(v) ? v : "—";
+      html += `<tr><td>${i + 1}</td><td title="${esc(r.file)}">${esc(base(r.file))}</td><td>${n(r.score)}</td>` +
+        `<td>${n(r.offenders)}</td><td>${n(r.worst_ccn)}</td><td>${n(r.new_or_worse)}</td><td>${n(r.lines)}</td>` +
+        `<td>${n(r.could_be_private)}</td><td>${n(r.widened_for_split)}</td><td>${n(r.churn_7d)}</td></tr>`;
+    });
+    pfBox.innerHTML = html + "</tbody></table>";
+  } else {
+    pfBox.textContent = NO_DATA;
+  }
+  if (!rows.length) {
+    noDataCard(cards, "No over-exposure rows published yet",
+      "Published by the GitHub nightly analysis (complexity job) to metrics/exposure.jsonl.");
+    note("c-ex-trend", NO_DATA); note("c-ex-folders", NO_DATA);
+    top.textContent = NO_DATA;
+    return;
+  }
+  const last = rows[rows.length - 1];
+  const prev = rows.length > 1 ? rows[rows.length - 2] : null;
+  const t = (last && last.totals) || {}, pt = (prev && prev.totals) || {};
+  const num = v => isNum(v) ? v : null;
+  cards.appendChild(card("Could be private", num(t.could_be_private), pt.could_be_private, t.could_be_private, true, "var(--warn)"));
+  cards.appendChild(card("Widened for a split", num(t.widened_for_split), pt.widened_for_split, t.widened_for_split, true, "var(--warn)"));
+  cards.appendChild(card("Internal declarations", num(t.decls), pt.decls, t.decls, false, "var(--muted)"));
+  cards.appendChild(card("New (last night)", num(last.new), null, null, true, "var(--bad)"));
+  cards.appendChild(card("Fixed (last night)", num(last.fixed), null, null, false, "var(--good)"));
+  cards.appendChild(card("Baseline", num(last.baseline_after), null, null, true, "var(--muted)"));
+  cards.appendChild(card("Measured", fmtWhen(last.ts), null, null, false, "var(--muted)"));
+
+  const daily = lastPerDay(rows);
+  const labels = dateLabels(daily);
+  const tot = (r, k) => r.totals && isNum(r.totals[k]) ? r.totals[k] : null;
+  chartOrNote("c-ex-trend", "line", labels, [
+    { label: "could be private", data: daily.map(r => tot(r, "could_be_private")), yAxisID: "y", ...lineStyle("#d29922") },
+    { label: "widened for a split", data: daily.map(r => tot(r, "widened_for_split")), yAxisID: "y", ...lineStyle("#bc8cff") },
+    { label: "new", data: daily.map(r => isNum(r.new) ? r.new : null), yAxisID: "y1", ...lineStyle("#f85149") },
+  ], withAxes({ y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: "new" } } }));
+
+  const folders = last.by_folder || {};
+  const names = Object.keys(folders)
+    .sort((a, b) => (folders[b].could_be_private || 0) - (folders[a].could_be_private || 0)).slice(0, CX_COLORS.length);
+  chartOrNote("c-ex-folders", "line", labels, names.map((n, i) => ({
+    label: n, data: daily.map(r => { const f = (r.by_folder || {})[n]; return f && isNum(f.could_be_private) ? f.could_be_private : null; }),
+    ...lineStyle(CX_COLORS[i]),
+  })));
+
+  const list = Array.isArray(last.top20) ? last.top20 : [];
+  document.getElementById("ex-top-title").textContent = `Top ${list.length || 20} files by could-be-private · ${fmtWhen(last.ts).split(" · ")[0]}`;
+  if (!list.length) { top.textContent = "None: every internal declaration is used outside its file."; return; }
+  let html = "<table><thead><tr><th>File</th><th>Could be private</th><th>Widened</th><th>Internal declarations</th></tr></thead><tbody>";
+  for (const f of list) {
+    html += `<tr><td title="${esc(f.file)}">${esc(base(f.file))}</td><td>${isNum(f.could_be_private) ? f.could_be_private : "—"}</td>` +
+      `<td>${isNum(f.widened_for_split) ? f.widened_for_split : "—"}</td><td>${isNum(f.decls) ? f.decls : "—"}</td></tr>`;
+  }
+  top.innerHTML = html + "</tbody></table>";
+}
+
 // ---------------------------------------------------------------- 9. benchmarks
 async function renderBenchmarks(allTdRows) {
   // Gauntlet rows share transport, never nightly averages or freshness.
@@ -1026,7 +1108,7 @@ async function loadData() {
   } catch {}
 
   METRICS_SHA = await resolveMetricsSha();
-  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, ciRun, naRun] = await Promise.all([
+  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, ciRun, naRun] = await Promise.all([
     fetchText(rawUrl("history.jsonl"), local("history.jsonl")),
     fetchText(rawUrl("static_analysis.jsonl"), local("static_analysis.jsonl")),
     fetchText(rawUrl("testdriver.jsonl"), local("testdriver.jsonl")),
@@ -1036,6 +1118,8 @@ async function loadData() {
     fetchText(rawUrl("codex_reviews.jsonl"), local("codex_reviews.jsonl")),
     fetchText(rawUrl("complexity.jsonl"), local("complexity.jsonl")),
     fetchText(rawUrl("complexity_debt_latest.json"), local("complexity_debt_latest.json")),
+    fetchText(rawUrl("exposure.jsonl"), local("exposure.jsonl")),
+    fetchText(rawUrl("problem_files_latest.json"), local("problem_files_latest.json")),
     latestMainRun("ci.yml"),
     latestMainRun("nightly-analysis.yml"),
   ]);
@@ -1046,6 +1130,8 @@ async function loadData() {
   try { findings = findingsText ? JSON.parse(findingsText) : null; } catch { findings = null; }
   let cxDebt = null;
   try { cxDebt = cxDebtText ? JSON.parse(cxDebtText) : null; } catch { cxDebt = null; }
+  let problemFiles = null;
+  try { problemFiles = pfText ? JSON.parse(pfText) : null; } catch { problemFiles = null; }
   const d = {
     history: sortByTs(parseJsonl(historyText)),
     staticRows: sortByTs(parseJsonl(staticText)),
@@ -1056,6 +1142,8 @@ async function loadData() {
     codexRows: sortByTs(parseJsonl(codexText).filter(r => r.schemaVersion === 1 && r.date)),
     cxRows: sortByTs(parseJsonl(cxText).filter(r => r.ts && r.totals && r.totals.all)),
     cxDebt,
+    exRows: sortByTs(parseJsonl(exText).filter(r => r.schemaVersion === 1 && r.ts && r.totals)),
+    problemFiles,
     ciRun, naRun,
   };
 
@@ -1069,6 +1157,7 @@ async function loadData() {
     ["hallie", () => renderHallie(d)],
     ["size", () => renderSize(d)],
     ["cx", () => renderComplexity(d)],
+    ["ex", () => renderExposure(d)],
     ["bench", () => renderBenchmarks(allTdRows)],
   ];
   for (const [id, render] of sections) {

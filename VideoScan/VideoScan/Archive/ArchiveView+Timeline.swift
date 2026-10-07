@@ -9,6 +9,7 @@
 // available via the toolbar switch.
 
 import SwiftUI
+import VideoScanCore
 
 // MARK: - Item projection (main actor → pure model)
 
@@ -20,7 +21,9 @@ extension ArchiveView {
 
     /// Project ONE archived asset into a timeline item. `rec` is the
     /// asset row from the archived snapshot; the master copy supplies the
-    /// on-disk name and placement.
+    /// on-disk name and placement. No occasion cue (the Archive tab adds
+    /// it — `timelineItem(for:model:occasions:now:folders:)`; Hallie's web
+    /// Browse does not need one).
     @MainActor
     static func timelineItem(for rec: VideoRecord, model: VideoScanModel) -> ArchiveTimelineItem {
         let copy = model.isArchiveCopy(rec) ? rec : (model.masterArchiveCopy(of: rec) ?? rec)
@@ -54,17 +57,43 @@ extension ArchiveView {
         return item
     }
 
+    /// The item WITH its occasion cue (videos only). `occasions` is the
+    /// Angel's reader, taken once per pass; `folders` the pass's
+    /// folder-word memo.
+    @MainActor
+    static func timelineItem(for rec: VideoRecord, model: VideoScanModel,
+                             occasions: ArchiveAngel.OccasionReader, now: Date,
+                             folders: inout EventLabeler.FolderWordCache) -> ArchiveTimelineItem {
+        var item = timelineItem(for: rec, model: model)
+        guard item.kind == .video else { return item }
+        let copy = model.isArchiveCopy(rec) ? rec : (model.masterArchiveCopy(of: rec) ?? rec)
+        item.occasion = ArchiveOccasionCue.cue(source: rec, copy: copy, reader: occasions,
+                                               now: now, folders: &folders)
+        return item
+    }
+
     /// All archived assets as timeline items — memoized per records
     /// version (same discipline as the category snapshot: one compute per
-    /// version, never O(records) in body).
+    /// version, never O(records) in body). The occasion cues are derived
+    /// here too, once per version: archived items only (thousands, not the
+    /// catalog), one or two O(name-length) Angel readings each; the folder
+    /// memo holds one short array per distinct folder and dies with the
+    /// pass (a few MB at 100k). Birthdays edited in the People tab show on
+    /// the next records change.
     @MainActor
     func cachedTimelineItems() -> [ArchiveTimelineItem] {
         let key = RecordsVersion(count: model.records.count,
                                  revision: model.volumeAggregatesRevision)
         return timelineItemMemo.value(for: key) {
+            let reader = model.archiveAngel.occasionReader
+            let now = Date()
+            var folders = EventLabeler.FolderWordCache()
+            let items = snapshot.archived.map {
+                Self.timelineItem(for: $0, model: model, occasions: reader, now: now, folders: &folders)
+            }
             // One card per item, its versions folded in as chips (Rick
             // 2026-09-22) — app-side only, nothing on disk moves.
-            ArchiveItemVersions.group(snapshot.archived.map { Self.timelineItem(for: $0, model: model) })
+            return ArchiveItemVersions.group(items)
         }
     }
 
@@ -316,7 +345,15 @@ struct ArchiveTimelinePane: View {
             }
             .frame(maxWidth: .infinity, alignment: .center)
             .padding(.horizontal, 18)
-            .padding(.vertical, 7)
+            .padding(.top, 7)
+            .padding(.bottom, year.occasionStrip.isEmpty ? 7 : 3)
+            // TODO(Rick 2026-10-07): right-click a year header ▸ "Check
+            // this year…" — not built yet; the strip is its natural anchor.
+            if !year.occasionStrip.isEmpty {
+                ArchiveOccasionStripView(strip: year.occasionStrip)
+                    .frame(maxWidth: 320)
+                    .padding(.bottom, 6)
+            }
         }
         .background(Color(NSColor.windowBackgroundColor))
         .accessibilityIdentifier("archive.timeline.yearHeader.\(year.year)")
@@ -414,6 +451,9 @@ struct ArchiveTimelinePane: View {
                     HStack(spacing: 6) {
                         Image(systemName: icon(for: item.kind))
                             .foregroundStyle(.secondary)
+                        if let cue = item.occasion {
+                            ArchiveOccasionCueView(cue: cue)
+                        }
                         if !item.peopleText.isEmpty {
                             Text(item.peopleText)
                                 .foregroundStyle(.blue)

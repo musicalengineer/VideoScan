@@ -33,7 +33,7 @@ struct InspectorDossierView: View {
                             .foregroundColor(.secondary)
                         // GH #201: a year-precise inference shows its span
                         // ("2004", "2003–2004"), never a fabricated Jan 1.
-                        Text(record.inferredDateRange?.displayString
+                        Text(record.effectiveInferredDateRange?.displayString
                              ?? InspectorDossierView.dateFormatter.string(from: date))
                             .font(.system(size: 13, weight: .semibold, design: .rounded))
                             .textSelection(.enabled)

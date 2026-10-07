@@ -311,7 +311,9 @@ struct PromoteToArchiveSheet: View {
             // Skips are named, not just counted (Rick 2026-08-16: "I
             // promoted five, four landed — which one and why?").
             ForEach(Array(plan.skipped.enumerated()), id: \.offset) { _, skip in
-                warnLine("Skipped \(skip.filename) — \(VideoScanModel.skipReasonLabel(skip.reason))",
+                // GH #190: name WHERE it is archived (O(skips), index reads).
+                let at = model.promoteSkipDetail(recordID: skip.id, reason: skip.reason)
+                warnLine("Skipped \(skip.filename) — \(VideoScanModel.skipReasonLabel(skip.reason))\(at.map { " as \($0)" } ?? "")",
                          color: .secondary)
             }
             let _ = (already, inside, offline)
