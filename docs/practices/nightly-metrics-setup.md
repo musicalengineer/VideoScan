@@ -41,10 +41,29 @@ a metric with no data says "no data yet", never zero.
   function_body_length / file_length / type_body_length, fails. Escape hatch:
   `COMPLEXITY_OVERRIDE="reason" git commit …`, appended to
   `ci/baselines/complexity_overrides.jsonl` (staged into the commit; CI honors it).
-- **Baseline.** One committed file, `ci/baselines/complexity_debt.json`. It only shrinks:
-  the nightly publishes the shrunk proposal; `python3 scripts/complexity_metrics.py
-  --shrink-baseline` applies it locally for a commit. Re-grow only deliberately with
-  `--update-baseline`.
+- **CCN 15 ratchet (blocking, 2026-10-07).** Functions over CCN 15 went 277 → 345 in ten
+  nights while the count over 30 stayed flat. Pre-commit: across the touched files, the
+  number of functions over CCN 15 may not rise from HEAD to the staged copy (moving a
+  function between touched files or splitting a file passes), and a function already in
+  the 15–30 band may not get more complex (`RATCHET` / `RATCHET-WORSE`). CI: the whole
+  tree may not have more functions over CCN 15 than `ci/baselines/complexity_ccn15_counts.json`
+  says. The same `COMPLEXITY_OVERRIDE` covers it and is recorded the same way.
+- **Baseline.** `ci/baselines/complexity_debt.json`, plus the CCN 15 count in
+  `ci/baselines/complexity_ccn15_counts.json`. Both only shrink: the 2 AM nightly
+  (`scripts/complexity_baseline_nightly.py`) commits the shrink; `python3
+  scripts/complexity_metrics.py --shrink-baseline` applies it locally. Re-grow only
+  deliberately with `--update-baseline` / `--update-ccn15-counts`, and say why in the commit.
+
+### Splitting a function
+
+When the gate asks for a function to be split, split it along a concept the code
+already has: a decision with a name (`shouldKeep`, `pickKeeper`), a phase that owns
+its own data (parse → validate → apply), or a responsibility that belongs on another
+type. A table of cases (pattern → action as data) often replaces a long `switch`/`if`
+ladder outright. Each piece should be testable on its own and named for WHAT it
+decides, not WHEN it runs. Do not cut a function into `step1` / `step2` / `part3`
+helpers that pass the same half-dozen locals around: CCN drops on paper and the code
+gets harder to read.
 - After pulling this change, run `scripts/install-git-hooks.sh` once per clone: the
   hook in `.git/hooks` is a copy.
 

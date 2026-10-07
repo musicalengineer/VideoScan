@@ -80,6 +80,12 @@ metrics/complexity_debt_latest.json, next to nightly_findings_latest.json,
 and scripts/morning_metrics.sh prints it (`--alert`), together with every
 gate override from the last 48 h (ci/baselines/complexity_overrides.jsonl).
 
+The CCN 15 count (Rick 2026-10-07): ci/baselines/complexity_ccn15_counts.json
+holds one checked number, the functions over CCN 15 in the whole tree (minus
+those a recorded override let in), for the gate's CI-side RATCHET. Same
+life cycle: `--shrink-baseline` and the 2 AM nightly lower it, never raise
+it; `--update-ccn15-counts` regenerates it deliberately.
+
 Shrink guard: if more than half of the baseline (and more than 20 keys)
 vanished in one run, that is far likelier a broken scan than a refactor, so
 nothing is shrunk and the report says why.
@@ -1124,6 +1130,89 @@ def shrink_plan(root: str, baseline_path: str) -> dict:
             "before": len(baseline), "after": len(shrunk)}
 
 
+# ---------------------------------------------------------------------------
+# CCN 15 count ratchet (Rick 2026-10-07): the whole-tree side of the gate's
+# RATCHET. One number is checked (`total`: functions over CCN 15, minus those
+# a recorded override let in at or below their recorded CCN); `files` is a
+# per-file snapshot written alongside it so a CI failure can say which files
+# grew. Only `total` is ratcheted, and only ever down.
+
+DEFAULT_CCN15_COUNTS = os.path.join("ci", "baselines", "complexity_ccn15_counts.json")
+
+
+def band_counts(funcs: Sequence[Func]) -> Dict[str, int]:
+    """{file: number of functions with CCN > CCN_LIMIT}, files with none left out."""
+    out: Dict[str, int] = {}
+    for f in funcs:
+        if f.ccn > CCN_LIMIT:
+            out[f.file] = out.get(f.file, 0) + 1
+    return dict(sorted(out.items()))
+
+
+def band_override_credit(funcs: Sequence[Func], allowed: Dict[str, dict]) -> int:
+    """Functions over CCN 15 that a recorded override let in, still at or
+    below the CCN it recorded (growing past it loses the credit)."""
+    return sum(1 for f in funcs if f.ccn > CCN_LIMIT and f.key in allowed and f.ccn <= allowed[f.key]["ccn"])
+
+
+def band_total(funcs: Sequence[Func], allowed: Dict[str, dict]) -> int:
+    return sum(band_counts(funcs).values()) - band_override_credit(funcs, allowed)
+
+
+def load_ccn15_counts(path: str) -> Optional[dict]:
+    """{"total": int, "files": {file: n}}, or None when there is no such file."""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    return {"total": int(data["total"]),
+            "files": {str(k): int(v) for k, v in (data.get("files") or {}).items()}}
+
+
+def write_ccn15_counts(path: str, total: int, files: Dict[str, int]) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    payload = {
+        "note": (f"CCN {CCN_LIMIT} ratchet (Rick 2026-10-07): CI preflight "
+                 "(scripts/complexity_gate.py --all) fails when the tree has more "
+                 f"functions over CCN {CCN_LIMIT} than `total` (functions a recorded "
+                 "override let in are not counted). `files` is a snapshot for the "
+                 "error message only. `total` only shrinks: the 2 AM nightly lowers "
+                 "it; regenerate deliberately with `scripts/complexity_metrics.py "
+                 "--update-ccn15-counts` and say why in the commit."),
+        "threshold_ccn": CCN_LIMIT,
+        "total": int(total),
+        "files": dict(sorted(files.items())),
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=1)
+        handle.write("\n")
+
+
+def ccn15_shrink_plan(root: str, counts_path: str, overrides_path: str,
+                      funcs: Optional[Sequence[Func]] = None) -> dict:
+    """The count the nightly may commit: today's, if lower; never higher.
+    {"changed", "problems", "before", "after", "files"}. Same broken-scan
+    guard as the debt baseline: nothing measured, or more than half gone at
+    once (and more than SHRINK_GUARD_MIN), is refused."""
+    old = load_ccn15_counts(counts_path)
+    if old is None:
+        return {"changed": False, "problems": [f"no {counts_path}"], "before": None, "after": None, "files": {}}
+    if funcs is None:
+        funcs = scan(root)[0]
+    keep = {"changed": False, "before": old["total"], "after": old["total"], "files": old["files"]}
+    if not funcs:
+        return {**keep, "problems": ["shrink guard: no functions measured: the scan found nothing"]}
+    allowed, _ = override_allowances(load_overrides(overrides_path))
+    now = band_total(funcs, allowed)
+    drop = old["total"] - now
+    if drop > SHRINK_GUARD_MIN and drop > SHRINK_GUARD_FRACTION * old["total"]:
+        return {**keep, "problems": [f"shrink guard: CCN {CCN_LIMIT} count {old['total']} -> {now} in one run: "
+                                     "more likely a broken scan than a refactor"]}
+    if now >= old["total"]:
+        return {**keep, "problems": []}
+    return {"changed": True, "problems": [], "before": old["total"], "after": now, "files": band_counts(funcs)}
+
+
 def _set_output(name: str, value) -> None:
     target = os.environ.get("GITHUB_OUTPUT")
     if target:
@@ -1146,6 +1235,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="drop fixed entries from --baseline and lower improved ones; never adds")
     parser.add_argument("--overrides", default=DEFAULT_OVERRIDES,
                         help="gate override log (repo-relative), reported by the nightly")
+    parser.add_argument("--ccn15-counts", default=DEFAULT_CCN15_COUNTS,
+                        help="the CCN 15 count baseline CI checks (default ci/baselines/complexity_ccn15_counts.json)")
+    parser.add_argument("--update-ccn15-counts", action="store_true",
+                        help="rewrite --ccn15-counts from today's tree (deliberate; may raise it)")
     parser.add_argument("--alert", metavar="DEBT_JSON",
                         help="print morning-digest lines for a debt report ('-' = stdin) and exit")
     parser.add_argument("--sha", default=os.environ.get("GITHUB_SHA", ""))
@@ -1177,7 +1270,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             sha = "unknown"
     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    funcs, file_lines, extras = scan(args.root, duplication=not (args.update_baseline or args.shrink_baseline))
+    funcs, file_lines, extras = scan(args.root, duplication=not (args.update_baseline or args.shrink_baseline
+                                                                 or args.update_ccn15_counts))
+
+    if args.update_ccn15_counts:
+        allowed, _ = override_allowances(load_overrides(os.path.join(args.root, args.overrides)))
+        files, total = band_counts(funcs), band_total(funcs, allowed)
+        write_ccn15_counts(args.ccn15_counts, total, files)
+        print(f"CCN {CCN_LIMIT} counts written: {args.ccn15_counts} ({total} function(s) over CCN "
+              f"{CCN_LIMIT} in {len(files)} file(s))")
+        return 0
 
     if args.update_baseline:
         entries = {k: {"ccn": f.ccn, "nloc": f.nloc} for k, f in offenders(funcs).items()}
@@ -1203,6 +1305,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         write_baseline(args.baseline, shrunk, next_disables)
         print(f"Baseline shrunk: {len(baseline)} -> {len(shrunk)} offenders "
               f"({len(result['fixed'])} fixed); nothing was added or raised.")
+        if load_ccn15_counts(args.ccn15_counts) is not None:
+            cp = ccn15_shrink_plan(args.root, args.ccn15_counts, os.path.join(args.root, args.overrides), funcs)
+            if cp["problems"]:
+                print(f"CCN {CCN_LIMIT} counts not shrunk: " + "; ".join(cp["problems"]))
+                return 1
+            if cp["changed"]:
+                write_ccn15_counts(args.ccn15_counts, cp["after"], cp["files"])
+            print(f"CCN {CCN_LIMIT} counts: {cp['before']} -> {cp['after']}.")
         return 0
 
     records = load_overrides(os.path.join(args.root, args.overrides))

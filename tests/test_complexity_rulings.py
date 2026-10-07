@@ -213,6 +213,48 @@ def test_nightly_refuses_a_shrink_that_would_turn_ci_gate_red(tmp_path):
     assert nightly.alert_lines(status)[0].startswith("🔴")
 
 
+class CountsFakeGit(FakeGit):
+    """FakeGit whose `show HEAD:<counts file>` answers with the old CCN 15 counts."""
+
+    def __init__(self, old: dict, old_counts: dict, **kw):
+        super().__init__(old, **kw)
+        self.old_counts = old_counts
+
+    def __call__(self, *args, check=True):
+        if "show" in args and any(str(a).endswith(nightly.COUNTS_REL) for a in args):
+            self.calls.append(args)
+            return subprocess.CompletedProcess(args, 0, json.dumps(self.old_counts), "")
+        return super().__call__(*args, check=check)
+
+
+def counts_in(wt, total, files):
+    cm.write_ccn15_counts(str(Path(wt) / nightly.COUNTS_REL), total, files)
+    return json.loads((Path(wt) / nightly.COUNTS_REL).read_text())
+
+
+def test_nightly_commits_a_shrunk_ccn15_count_even_when_the_debt_baseline_is_unchanged(tmp_path):
+    wt, old = worktree(tmp_path, OLD)
+    old_counts = counts_in(wt, 10, {"a.swift": 10})
+    git = CountsFakeGit(old, old_counts)
+    cplan = lambda w, p: {"changed": True, "problems": [], "before": 10, "after": 9, "files": {"a.swift": 9}}
+    status = nightly.run("repo", wt, git, plan_of(OLD, changed=False), NOW, gate_check=lambda w: 0,
+                         count_plan=cplan)
+    assert status["outcome"] == "committed", status
+    assert cm.load_ccn15_counts(str(Path(wt) / nightly.COUNTS_REL))["total"] == 9
+    assert any(nightly.COUNTS_REL in c for c in git.ran("add"))
+
+
+def test_nightly_refuses_a_ccn15_count_that_would_grow(tmp_path):
+    wt, old = worktree(tmp_path, OLD)
+    old_counts = counts_in(wt, 10, {"a.swift": 10})
+    git = CountsFakeGit(old, old_counts)
+    cplan = lambda w, p: {"changed": True, "problems": [], "before": 10, "after": 11, "files": {}}
+    status = nightly.run("repo", wt, git, plan_of(OLD, changed=False), NOW, gate_check=lambda w: 0,
+                         count_plan=cplan)
+    assert status["outcome"] == "refused" and "CCN 15" in status["detail"]
+    assert not git.ran("commit") and not git.ran("push")
+
+
 def test_nightly_retries_once_after_a_rejected_push_then_reports_red(tmp_path):
     wt, old = worktree(tmp_path, OLD)
     git = FakeGit(old, push_ok=(False, False))

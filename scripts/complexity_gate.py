@@ -19,10 +19,22 @@ What blocks
   * a `swiftlint:disable` of cyclomatic_complexity, function_body_length,
     file_length or type_body_length beyond the grandfathered count for
     that file (the four that existed on 2026-10-05 are baselined)     -> DISABLE
+  * the CCN 15 "no-worse" ratchet (Rick 2026-10-07; functions over CCN 15
+    went 277 -> 345 in ten nights while the count over 30 stayed flat):
+      - pre-commit: across the touched files, more functions over CCN 15
+        in the staged copy than at HEAD (a new file counts 0 at HEAD).
+        Every function that newly crossed 15 is listed               -> RATCHET
+      - pre-commit: a function that was in the 15-30 band at HEAD and
+        whose CCN rose (lowering it or leaving it alone passes)       -> RATCHET-WORSE
+      - CI (--all): more functions over CCN 15 in the whole tree than
+        the committed count, ci/baselines/complexity_ccn15_counts.json
+        (functions let in by a recorded override are not counted)    -> RATCHET
 
 Existing offenders that do not get worse pass, so their files can still be
-edited. Functions between the report limits (CCN 15 / 80 lines) and the gate
-are reported by the nightly only.
+edited. The fix for a RATCHET block is to split along a real concept (a
+decision, a phase with its own data, a type's responsibility), not to chunk
+the function into step1/step2 helpers: see "Splitting a function" in
+docs/practices/nightly-metrics-setup.md.
 
 Function identity is the same `file::Type.function` key the nightly uses.
 A function that is not on the baseline under its key is first matched against
@@ -30,7 +42,20 @@ baseline entries that vanished from the touched files (same bare name, CCN no
 higher, at most 5 more lines): moving a known offender into a new file, as a
 refactor does, passes; moving it AND growing it does not. Guarded disables
 are counted per rule across the touched files, so a grandfathered
-`swiftlint:disable:next` can move with its function.
+`swiftlint:disable:next` can move with its function. The CCN 15 ratchet
+counts across ALL the touched files together, with the same move matching
+(here without the line limit: it watches CCN only), so moving a function
+between touched files, or splitting a file, passes. A function that moved
+and also got more complex is paired with its old self by bare name and
+judged RATCHET-WORSE.
+
+The CI count is one number for the whole tree, so moves between files cannot
+trip it. It only shrinks: the 2 AM nightly (scripts/complexity_baseline_nightly.py)
+lowers it with the debt baseline; regenerate it deliberately with
+
+    python3 scripts/complexity_metrics.py --update-ccn15-counts
+
+and say why in the commit.
 
 Escape hatch (Rick's alone; leaves a trace, never silent)
 ---------------------------------------------------------
@@ -43,11 +68,12 @@ lines, reason, commit, author) and is listed on the metrics page.
 
 The gate prints what it let through and appends a record (time, reason, the
 functions and disables, their CCN/lines) to ci/baselines/complexity_overrides.jsonl
-and stages that file into the same commit. CI preflight honors recorded
-overrides (at the recorded size: growing further blocks again); the nightly
-lists every override from the last 48 h in the morning digest and on its
-summary. `git commit --no-verify` skips the hook entirely, but CI preflight
-then fails on the same function, because no override was recorded.
+and stages that file into the same commit. RATCHET and RATCHET-WORSE
+functions are recorded exactly like NEW / WORSE ones. CI preflight honors
+recorded overrides (at the recorded size: growing further blocks again); the
+nightly lists every override from the last 48 h in the morning digest and on
+its summary. `git commit --no-verify` skips the hook entirely, but CI
+preflight then fails on the same function, because no override was recorded.
 
 Caveat: `git commit <paths>` commits from a temporary index, so the override
 record staged by the hook is NOT part of that commit. Use `git add` + plain
@@ -67,7 +93,7 @@ import json
 import os
 import subprocess
 import sys
-from typing import Callable, Dict, List, Optional, Sequence
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -75,11 +101,16 @@ import complexity_metrics as cm  # noqa: E402
 
 GATE_CCN = cm.GATE_CCN      # defined once, in complexity_metrics
 GATE_NLOC = cm.GATE_NLOC
+RATCHET_CCN = cm.CCN_LIMIT  # 15: the no-worse ratchet's line, same as the nightly report's
 NLOC_SLACK = cm.MOVE_NLOC_SLACK   # a known big function may grow this much in total, no more
+ANY_LENGTH = 10 ** 9        # the CCN 15 ratchet watches CCN only; a moved function may be any length
 ALL_MODE_MIN_FILES = 500   # --all on this repo sees ~1,080; fewer = broken listing
 
 HOW_TO_FIX = ("Split it: pull branches or steps out into named helpers. If it truly has to go in "
               "as is: COMPLEXITY_OVERRIDE=\"<reason>\" git commit ... (recorded and reported nightly).")
+RATCHET_HINT = ("Bring it to CCN 15 or below by splitting along a real concept (a decision, a phase with "
+                "its own data, a type's responsibility; see \"Splitting a function\" in "
+                "docs/practices/nightly-metrics-setup.md). Don't chunk it into step1/step2 helpers.")
 
 
 over_gate = cm.over_gate
@@ -123,6 +154,64 @@ def function_violations(funcs: Sequence[cm.Func], baseline: Dict[str, dict],
     return sorted(out, key=lambda v: (-v["func"].ccn, -v["func"].nloc, v["func"].key))
 
 
+def _pair_with_before(band: Sequence[cm.Func], before: Dict[str, cm.Func],
+                      after_keys: set) -> Dict[str, cm.Func]:
+    """{after key: the same function at HEAD} for every after-side function
+    over CCN 15 that can be traced: by key, then by the shared move matching
+    (bare name, CCN no higher), then, for one that moved AND grew, by bare
+    name alone (same file first, then the closest CCN). Each HEAD function
+    is used once."""
+    pairs = {f.key: before[f.key] for f in band if f.key in before}
+    unknown = [f for f in band if f.key not in before]
+    vanished = {k: {"ccn": b.ccn, "nloc": b.nloc} for k, b in before.items() if k not in after_keys}
+    moves = cm.match_unknown(unknown, vanished, ANY_LENGTH)
+    pairs.update({new: before[old] for new, old in moves.items()})
+    pool = {k for k in vanished if k not in set(moves.values())}
+    for f in sorted((f for f in unknown if f.key not in moves), key=lambda f: (-f.ccn, f.key)):
+        same = [k for k in pool if cm.key_bare_name(k) == f.bare_name]
+        if same:
+            best = min(same, key=lambda k: (cm.key_file(k) != f.file, abs(before[k].ccn - f.ccn), k))
+            pairs[f.key] = before[best]
+            pool.discard(best)
+    return pairs
+
+
+def ratchet_violations(before_funcs: Sequence[cm.Func],
+                       after_funcs: Sequence[cm.Func]) -> Tuple[List[dict], Tuple[int, int]]:
+    """The pre-commit CCN 15 ratchet over the touched files.
+
+    Returns (violations, (count at HEAD, count staged)). RATCHET entries are
+    the functions that newly crossed CCN 15 (new, or rose from 15 or below),
+    reported only when the touched files' count went up: a commit that adds
+    one and fixes another nets zero and passes. RATCHET-WORSE entries are
+    functions that were in the 15-30 band at HEAD and whose CCN rose;
+    above 30 the debt baseline (WORSE) is the judge."""
+    before = {f.key: f for f in before_funcs}
+    band = [f for f in after_funcs if f.ccn > RATCHET_CCN]
+    counts = (sum(1 for f in before_funcs if f.ccn > RATCHET_CCN), len(band))
+    pairs = _pair_with_before(band, before, {f.key for f in after_funcs})
+    out, entrants = [], []
+    for f in band:
+        prev = pairs.get(f.key)
+        if prev is None or prev.ccn <= RATCHET_CCN:
+            entrants.append(f)
+        elif prev.ccn <= GATE_CCN and f.ccn > prev.ccn:
+            out.append({"kind": "ratchet-worse", "func": f, "ref": {"ccn": prev.ccn, "nloc": prev.nloc}})
+    if counts[1] > counts[0]:
+        out += [{"kind": "ratchet", "func": f, "ref": None} for f in entrants]
+    return sorted(out, key=lambda v: (-v["func"].ccn, -v["func"].nloc, v["func"].key)), counts
+
+
+def count_violation(funcs: Sequence[cm.Func], counts: dict, allowed: Dict[str, dict]) -> Optional[dict]:
+    """CI's CCN 15 ratchet: the whole tree against the committed count."""
+    total = cm.band_total(funcs, allowed)
+    if total <= counts["total"]:
+        return None
+    files = cm.band_counts(funcs)
+    grew = {p: n - counts["files"].get(p, 0) for p, n in files.items() if n > counts["files"].get(p, 0)}
+    return {"total": total, "allowed": counts["total"], "grew": grew}
+
+
 def disable_violations(current: Dict[str, int], baseline: Dict[str, int],
                        allowed: Dict[str, int], touched: Optional[set] = None) -> List[dict]:
     """Per RULE, across the files being checked: more guarded
@@ -150,16 +239,35 @@ def disable_violations(current: Dict[str, int], baseline: Dict[str, int],
     return out
 
 
-def format_violations(funcs: List[dict], disables: List[dict]) -> List[str]:
+def _what(v: dict) -> str:
+    kind = v["kind"]
+    if kind == "new":
+        return "NEW function over the gate"
+    if kind == "worse":
+        return f"got WORSE (baseline CCN {v['ref']['ccn']}, {v['ref']['nloc']} lines)"
+    if kind == "ratchet":
+        return f"RATCHET: new over CCN {RATCHET_CCN}"
+    return f"RATCHET-WORSE: CCN rose from {v['ref']['ccn']} (keep it at {v['ref']['ccn']} or lower)"
+
+
+def format_violations(funcs: List[dict], disables: List[dict],
+                      ratchet_counts: Optional[Tuple[int, int]] = None,
+                      tree_count: Optional[dict] = None) -> List[str]:
     lines = []
+    if ratchet_counts and ratchet_counts[1] > ratchet_counts[0]:
+        lines.append(f"  BLOCKED  RATCHET: functions over CCN {RATCHET_CCN} in the touched files went "
+                     f"{ratchet_counts[0]} -> {ratchet_counts[1]}")
     for v in funcs:
         f = v["func"]
-        what = ("NEW function over the gate" if v["kind"] == "new"
-                else f"got WORSE (baseline CCN {v['ref']['ccn']}, {v['ref']['nloc']} lines)")
-        lines.append(f"  BLOCKED  CCN {f.ccn:>3}  {f.nloc:>4} lines  {f.file} :: {f.display}  — {what}")
+        lines.append(f"  BLOCKED  CCN {f.ccn:>3}  {f.nloc:>4} lines  {f.file} :: {f.display}  — {_what(v)}")
     for d in disables:
         lines.append(f"  BLOCKED  new `swiftlint:disable {d['rule']}` in {', '.join(d['files'])} "
                      f"({d['count']} now, {d['allowed']} grandfathered in these files)")
+    if tree_count:
+        grew = ", ".join(f"{p} (+{n})" for p, n in sorted(tree_count["grew"].items())) or "none by file (moves)"
+        lines.append(f"  BLOCKED  RATCHET: {tree_count['total']} functions over CCN {RATCHET_CCN} in the tree, "
+                     f"{tree_count['allowed']} allowed by {cm.DEFAULT_CCN15_COUNTS}. "
+                     f"Files above their count there: {grew}")
     return lines
 
 
@@ -182,14 +290,27 @@ def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
              out: Callable[[str], None] = print,
              now: Optional[_dt.datetime] = None, min_files: int = 0,
              read_untouched: Optional[Callable[[str], Optional[str]]] = None,
-             author: str = "") -> int:
+             author: str = "", before: Optional[Dict[str, str]] = None,
+             counts_path: Optional[str] = None) -> int:
     """Check `sources` ({repo-relative path: text}; a deleted file is ""). The
-    set of paths is what was touched. 0 = pass (or overridden), 1 = blocked."""
+    set of paths is what was touched. 0 = pass (or overridden), 1 = blocked.
+
+    The CCN 15 ratchet runs when the caller gives it something to compare
+    with: `before` ({path: text at HEAD}, "" or absent = new file) for the
+    pre-commit check, or `counts_path` (the committed whole-tree count) for
+    CI. A `counts_path` that does not exist fails closed."""
     scoped = {p: t for p, t in sources.items() if cm.in_scope(p)}
     if len(scoped) < min_files:
         out(f"complexity gate: only {len(scoped)} in-scope file(s) found, expected at least "
             f"{min_files}. Refusing to pass an empty or broken listing.")
         return 1
+    counts = None
+    if counts_path is not None:
+        counts = cm.load_ccn15_counts(counts_path)
+        if counts is None:
+            out(f"complexity gate: no CCN {RATCHET_CCN} count baseline at {counts_path}. Regenerate it "
+                "from a known-good tree: python3 scripts/complexity_metrics.py --update-ccn15-counts")
+            return 1
     touched = set(scoped)
     funcs, _ = cm.analyze_sources(scoped)
     current_disables: Dict[str, int] = {}
@@ -211,19 +332,37 @@ def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
     fv = function_violations(funcs, cm.load_baseline(baseline_path), allowed_funcs, touched, still_present)
     dv = disable_violations(current_disables, cm.load_disables(baseline_path), allowed_disables, touched)
 
-    if not fv and not dv:
+    rv: List[dict] = []
+    ratchet_counts: Optional[Tuple[int, int]] = None
+    if before is not None:
+        before_funcs, _ = cm.analyze_sources({p: before.get(p) or "" for p in scoped})
+        rv, ratchet_counts = ratchet_violations(before_funcs, funcs)
+        shown = {v["func"].key for v in fv}
+        rv = [v for v in rv if v["func"].key not in shown]     # a NEW / WORSE line already names it
+    tree_count = count_violation(funcs, counts, allowed_funcs) if counts is not None else None
+
+    blocked_funcs = fv + rv
+    ratchet_note = ""
+    if ratchet_counts is not None:
+        ratchet_note = f"; over CCN {RATCHET_CCN}: {ratchet_counts[0]} -> {ratchet_counts[1]}"
+    elif counts is not None:
+        ratchet_note = f"; over CCN {RATCHET_CCN}: {cm.band_total(funcs, allowed_funcs)} of {counts['total']} allowed"
+    count_rose = bool(ratchet_counts and ratchet_counts[1] > ratchet_counts[0])
+    if not blocked_funcs and not dv and not tree_count and not count_rose:
         out(f"complexity gate: OK ({len(scoped)} file(s), {len(funcs)} function(s); "
-            f"limit CCN {GATE_CCN} / {GATE_NLOC} lines)")
+            f"limit CCN {GATE_CCN} / {GATE_NLOC} lines{ratchet_note})")
         return 0
 
-    out(f"complexity gate: {len(fv) + len(dv)} problem(s) "
-        f"(limit CCN {GATE_CCN} / {GATE_NLOC} lines; known offenders may not grow)")
-    for line in format_violations(fv, dv):
+    problems = len(blocked_funcs) + len(dv) + (1 if tree_count else 0)
+    out(f"complexity gate: {max(problems, 1)} problem(s) "
+        f"(limit CCN {GATE_CCN} / {GATE_NLOC} lines; known offenders may not grow; "
+        f"no more functions over CCN {RATCHET_CCN}{ratchet_note})")
+    for line in format_violations(blocked_funcs, dv, ratchet_counts, tree_count):
         out(line)
 
     reason = (override_reason or "").strip()
     if reason:
-        rec = override_record(reason, fv, dv, now or _dt.datetime.now(_dt.timezone.utc), author)
+        rec = override_record(reason, blocked_funcs, dv, now or _dt.datetime.now(_dt.timezone.utc), author)
         if record_override:
             os.makedirs(os.path.dirname(overrides_path) or ".", exist_ok=True)
             with open(overrides_path, "a", encoding="utf-8") as handle:
@@ -233,7 +372,13 @@ def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
             "the morning digest will show it to Rick as a 🔴 item.")
         return 0
 
-    out("  " + HOW_TO_FIX)
+    if rv or tree_count:
+        out("  " + RATCHET_HINT)
+    if fv or dv:
+        out("  " + HOW_TO_FIX)
+    else:
+        out("  If it truly has to go in as is: COMPLEXITY_OVERRIDE=\"<reason>\" git commit ... "
+            "(recorded and reported nightly).")
     return 1
 
 
@@ -270,6 +415,18 @@ def staged_sources(root: str) -> Dict[str, str]:
     return out
 
 
+def head_sources(root: str, paths: Sequence[str]) -> Dict[str, str]:
+    """HEAD's copy of each path; "" for a file HEAD does not have (new
+    file, or the first commit)."""
+    out: Dict[str, str] = {}
+    for path in paths:
+        try:
+            out[path] = _git(root, "show", f"HEAD:{path}").decode("utf-8", "replace")
+        except (OSError, subprocess.CalledProcessError):
+            out[path] = ""
+    return out
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     mode = parser.add_mutually_exclusive_group(required=True)
@@ -278,6 +435,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--root", default="")
     parser.add_argument("--baseline", default=cm.DEFAULT_SEED)
     parser.add_argument("--overrides", default=cm.DEFAULT_OVERRIDES)
+    parser.add_argument("--ccn15-counts", default=cm.DEFAULT_CCN15_COUNTS,
+                        help="CI's whole-tree CCN 15 count (--all only)")
     args = parser.parse_args(argv)
 
     try:
@@ -307,7 +466,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return None
         code = run_gate(sources, baseline, overrides,
                         override_reason=os.environ.get("COMPLEXITY_OVERRIDE", ""),
-                        read_untouched=read_index, author=author_name(root))
+                        read_untouched=read_index, author=author_name(root),
+                        before=head_sources(root, list(sources)))
         if code == 0 and os.environ.get("COMPLEXITY_OVERRIDE", "").strip() and os.path.exists(overrides):
             try:
                 _git(root, "add", "--", args.overrides)
@@ -317,7 +477,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # --all: CI honors recorded overrides only; an override env var here is ignored.
     return run_gate(cm.read_tree(root), baseline, overrides, override_reason="", record_override=False,
-                    min_files=ALL_MODE_MIN_FILES)
+                    min_files=ALL_MODE_MIN_FILES, counts_path=os.path.join(root, args.ccn15_counts))
 
 
 if __name__ == "__main__":

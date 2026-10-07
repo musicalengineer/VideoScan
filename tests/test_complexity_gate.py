@@ -209,3 +209,146 @@ def test_whole_tree_mode_refuses_an_empty_listing(tmp_path):
     assert gate.run_gate({}, write_baseline(tmp_path), str(tmp_path / "ov.jsonl"), out=lines.append,
                          record_override=False, min_files=500) == 1
     assert "Refusing" in lines[0]
+
+
+# ---------------------------------------------------------------- CCN 15 "no-worse" ratchet
+# Rick 2026-10-07: functions over CCN 15 went 277 -> 345 in ten nights while
+# the count over 30 stayed flat. Pre-commit compares HEAD with the staged copy
+# of the touched files; CI compares the whole tree with a committed count.
+
+SPLIT_TO = "VideoScan/VideoScan/Catalog/SyntheticParts.swift"
+
+
+def _ratchet(tmp_path, after, before, reason="", base=None):
+    lines = []
+    ov = str(tmp_path / "ov.jsonl")
+    code = gate.run_gate(after, base or write_baseline(tmp_path), ov, override_reason=reason,
+                         out=lines.append, now=NOW, before=before)
+    return code, "\n".join(lines), ov
+
+
+def test_ratchet_new_function_over_15_in_a_new_file_blocks(tmp_path):
+    code, out, ov = _ratchet(tmp_path, {PATH: source(swift_func("medium", 20))}, {PATH: ""})
+    assert code == 1, out
+    assert "RATCHET" in out and "Synthetic.medium" in out and "CCN  20" in out
+    assert "0 -> 1" in out                                   # the count that rose
+    assert "real concept" in out and "step1/step2" in out     # how to fix it, and how not to
+    assert not Path(ov).exists()
+
+
+def test_ratchet_new_function_over_15_in_an_existing_file_blocks(tmp_path):
+    before = {PATH: source(swift_func("small", 2))}
+    after = {PATH: source(swift_func("small", 2), swift_func("medium", 16))}
+    code, out, _ = _ratchet(tmp_path, after, before)
+    assert code == 1 and "RATCHET" in out and "Synthetic.medium" in out
+
+
+def test_ratchet_function_rising_into_the_band_blocks(tmp_path):
+    code, out, _ = _ratchet(tmp_path, {PATH: source(swift_func("f", 16))}, {PATH: source(swift_func("f", 15))})
+    assert code == 1 and "RATCHET" in out
+
+
+def test_ratchet_existing_band_function_rising_blocks(tmp_path):
+    code, out, _ = _ratchet(tmp_path, {PATH: source(swift_func("medium", 21))},
+                            {PATH: source(swift_func("medium", 20))})
+    assert code == 1, out
+    assert "RATCHET-WORSE" in out and "from 20" in out and "Synthetic.medium" in out
+
+
+def test_ratchet_lowering_or_leaving_a_band_function_passes(tmp_path):
+    before = {PATH: source(swift_func("medium", 20), swift_func("small", 2))}
+    lowered = {PATH: source(swift_func("medium", 18), swift_func("small", 2))}
+    untouched = {PATH: source(swift_func("medium", 20), swift_func("small", 5))}
+    for after in (lowered, untouched):
+        code, out, _ = _ratchet(tmp_path, after, before)
+        assert code == 0, out
+
+
+def test_ratchet_moving_a_band_function_between_touched_files_passes(tmp_path):
+    before = {PATH: source(swift_func("medium", 20), swift_func("small", 2)), MOVED_TO: source(swift_func("x", 2))}
+    after = {PATH: source(swift_func("small", 2)), MOVED_TO: source(swift_func("x", 2), swift_func("medium", 20))}
+    code, out, _ = _ratchet(tmp_path, after, before)
+    assert code == 0, out
+
+
+def test_ratchet_moved_and_grown_band_function_blocks(tmp_path):
+    before = {PATH: source(swift_func("medium", 20)), MOVED_TO: ""}
+    after = {PATH: "", MOVED_TO: source(swift_func("medium", 22))}
+    code, out, _ = _ratchet(tmp_path, after, before)
+    assert code == 1 and "RATCHET-WORSE" in out
+
+
+def test_ratchet_splitting_a_file_passes(tmp_path):
+    whole = source(swift_func("a", 20), swift_func("b", 18), swift_func("c", 17), swift_func("d", 2))
+    # Part of it moves out ...
+    code, out, _ = _ratchet(tmp_path, {PATH: source(swift_func("a", 20), swift_func("d", 2)),
+                                       SPLIT_TO: source(swift_func("b", 18), swift_func("c", 17))},
+                            {PATH: whole, SPLIT_TO: ""})
+    assert code == 0, out
+    # ... or the file is replaced by two new ones.
+    code, out, _ = _ratchet(tmp_path, {PATH: "", MOVED_TO: source(swift_func("a", 20), swift_func("b", 18)),
+                                       SPLIT_TO: source(swift_func("c", 17), swift_func("d", 2))},
+                            {PATH: whole, MOVED_TO: "", SPLIT_TO: ""})
+    assert code == 0, out
+
+
+def test_ratchet_override_passes_and_is_recorded(tmp_path):
+    code, out, ov = _ratchet(tmp_path, {PATH: source(swift_func("medium", 20))}, {PATH: ""},
+                             reason="demo tonight, split tomorrow")
+    assert code == 0
+    assert "RATCHET" in out and "OVERRIDDEN" in out                # still shown, never silent
+    rec = json.loads(Path(ov).read_text().strip())
+    assert rec["reason"] == "demo tonight, split tomorrow"
+    key = f"{PATH}::Synthetic.medium"
+    assert list(rec["functions"]) == [key] and rec["functions"][key]["ccn"] == 20
+    # The morning digest shows it like any other override.
+    recent = cm.recent_overrides(cm.load_overrides(ov), NOW)
+    assert any("OVERRIDDEN" in l and "split tomorrow" in l for l in cm.alert_lines(
+        {"new": [], "worse": [], "fixed": [], "overrides_recent": recent}))
+
+
+def test_ratchet_is_off_without_a_before_picture(tmp_path):
+    # Callers that give neither `before` nor a count baseline get the old gate only.
+    code, _, _ = run(tmp_path, source(swift_func("medium", 25)), write_baseline(tmp_path))
+    assert code == 0
+
+
+# --- CI side (--all): the committed whole-tree count
+
+def _counts(tmp_path, total, files=None):
+    path = str(tmp_path / "ccn15.json")
+    cm.write_ccn15_counts(path, total, files or {})
+    return path
+
+
+def _all(tmp_path, tree, counts_path, overrides=None):
+    lines = []
+    code = gate.run_gate(tree, write_baseline(tmp_path), overrides or str(tmp_path / "none.jsonl"),
+                         out=lines.append, record_override=False, counts_path=counts_path)
+    return code, "\n".join(lines)
+
+
+def test_ci_count_at_baseline_passes_and_one_more_blocks(tmp_path):
+    tree = {PATH: source(swift_func("a", 20), swift_func("b", 2))}
+    assert _all(tmp_path, tree, _counts(tmp_path, 1, {PATH: 1}))[0] == 0
+    tree[MOVED_TO] = source(swift_func("c", 16))
+    code, out = _all(tmp_path, tree, _counts(tmp_path, 1, {PATH: 1}))
+    assert code == 1
+    assert "RATCHET" in out and MOVED_TO in out                    # names the file that grew
+
+
+def test_ci_count_lets_a_function_move_between_files(tmp_path):
+    tree = {PATH: source(swift_func("b", 2)), MOVED_TO: source(swift_func("a", 20))}
+    assert _all(tmp_path, tree, _counts(tmp_path, 1, {PATH: 1}))[0] == 0
+
+
+def test_ci_count_honors_a_recorded_override_at_its_size(tmp_path):
+    code, _, ov = _ratchet(tmp_path, {PATH: source(swift_func("medium", 20))}, {PATH: ""}, reason="why")
+    assert code == 0
+    assert _all(tmp_path, {PATH: source(swift_func("medium", 20))}, _counts(tmp_path, 0), ov)[0] == 0
+    assert _all(tmp_path, {PATH: source(swift_func("medium", 21))}, _counts(tmp_path, 0), ov)[0] == 1
+
+
+def test_ci_count_missing_baseline_fails_closed(tmp_path):
+    code, out = _all(tmp_path, {PATH: source(swift_func("b", 2))}, str(tmp_path / "missing.json"))
+    assert code == 1 and "update-ccn15-counts" in out

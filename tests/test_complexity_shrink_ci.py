@@ -43,3 +43,45 @@ def test_nightly_shrink_after_a_move_keeps_the_whole_tree_gate_green(tmp_path):
     cm.write_baseline(base_path, shrunk, {})
     lines = []
     assert gate.run_gate(tree, base_path, ov, record_override=False, out=lines.append) == 0, "\n".join(lines)
+
+
+# ---------------------------------------------------------------- CCN 15 count baseline (2026-10-07)
+
+def test_ccn15_count_shrinks_when_a_band_function_is_fixed_and_ci_stays_green(tmp_path):
+    tree = {OTHER: mid_ccn("body", 20), MOVED: mid_ccn("fixed", 12)}
+    funcs, _ = cm.analyze_sources(tree)
+    counts = str(tmp_path / "c.json")
+    cm.write_ccn15_counts(counts, 2, {OTHER: 1, MOVED: 1})
+    plan = cm.ccn15_shrink_plan(str(tmp_path), counts, str(tmp_path / "ov.jsonl"), funcs=funcs)
+    assert plan["changed"] and not plan["problems"]
+    assert (plan["before"], plan["after"]) == (2, 1) and plan["files"] == {OTHER: 1}
+    cm.write_ccn15_counts(counts, plan["after"], plan["files"])
+    lines = []
+    assert gate.run_gate(tree, str(tmp_path / "b.json"), str(tmp_path / "ov.jsonl"), record_override=False,
+                         out=lines.append, counts_path=counts) == 0, "\n".join(lines)
+
+
+def test_ccn15_count_never_grows_by_shrinking(tmp_path):
+    tree = {OTHER: mid_ccn("body", 20), MOVED: mid_ccn("extra", 18)}
+    funcs, _ = cm.analyze_sources(tree)
+    counts = str(tmp_path / "c.json")
+    cm.write_ccn15_counts(counts, 1, {OTHER: 1})
+    plan = cm.ccn15_shrink_plan(str(tmp_path), counts, str(tmp_path / "ov.jsonl"), funcs=funcs)
+    assert not plan["changed"] and plan["after"] == 1
+
+
+def test_ccn15_count_regenerate_command_writes_todays_count(tmp_path):
+    src = tmp_path / "VideoScan" / "VideoScan" / "Catalog"
+    src.mkdir(parents=True)
+    (src / "Other.swift").write_text(mid_ccn("body", 20) + mid_ccn("small", 3).replace("struct O", "struct P"))
+    out = tmp_path / "c.json"
+    assert cm.main(["--root", str(tmp_path), "--update-ccn15-counts", "--ccn15-counts", str(out)]) == 0
+    data = cm.load_ccn15_counts(str(out))
+    assert data["total"] == 1 and data["files"] == {OTHER: 1}
+
+
+def test_ccn15_count_shrink_refuses_an_empty_scan(tmp_path):
+    counts = str(tmp_path / "c.json")
+    cm.write_ccn15_counts(counts, 300, {})
+    plan = cm.ccn15_shrink_plan(str(tmp_path), counts, str(tmp_path / "ov.jsonl"), funcs=[])
+    assert plan["problems"] and not plan["changed"]
