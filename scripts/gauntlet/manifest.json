@@ -1141,6 +1141,20 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomInitCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GedcomInitCharacterizationTests"
+      ],
+      "tests": [
+        "aBOMBeforeTheHeadLevelIsReadAsBefore",
+        "everyLineLoopBranchParsesAsBefore",
+        "firstIndividualIsTheRootWithoutHeadRoots"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomKinshipPathTests.swift",
       "stage": "unit",
       "suites": [
@@ -4928,6 +4942,18 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivistMediaResolutionCharacterizationTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "ArchivistMediaResolutionCharacterizationTests"
+      ],
+      "tests": [
+        "withNoPriorAnswer",
+        "withThreeShownItems"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchivistModelSettingTests.swift",
@@ -7220,6 +7246,19 @@
         "liveWriteFailureJournalsAndCarriesTheRealCause",
         "lockUnavailableThenWriteFailureReportsTheWriteFailure",
         "snapshotWriteFailureIsDistinctAndNotJournalled"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatchUpInferredDatesCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatchUpInferredDatesCharacterizationTests"
+      ],
+      "tests": [
+        "aBudgetOfTwoDefersTheRest",
+        "aScopedRefreshPassReachesItsGroups",
+        "wholeCatalogPassThenASecondPass"
       ]
     },
     {
@@ -15177,6 +15216,30 @@
         "promoteSourceGetsBoldGreenDateAndVolume",
         "theCopyItselfShowsItsOwnFixity",
         "unverifiedCopyIsOrangeAndHonest"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/InspectorPanelRulesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "InspectorPanelRulesTests",
+        "InspectorPanelSectionOrderTests"
+      ],
+      "tests": [
+        "angelAssessmentNeverShowsOnEitherSideOfAPromotion",
+        "avidIdentityNeedsAvidMetadataAndATapeOrClip",
+        "bodyCallsTheSectionsInTheOldOrder",
+        "conditionalSectionsAreHiddenOnAPlainRecord",
+        "confirmButtonNeedsAwaitingASourceAndALiveRecord",
+        "duplicateStatusCountsMatchesFromTwo",
+        "eachBuilderShowsItsOldTitle",
+        "eachConditionalSectionHasItsTrigger",
+        "goldenStrings",
+        "masterCopyLabelSaysMasterOnlyForItsOwnCopy",
+        "missingStreamBadgeOnlyOnUnpairedHalves",
+        "repairStatusFollowsTheOldIfChain",
+        "streamBadgeIsPlayabilityOnlyForProbeFailures"
       ]
     },
     {
@@ -25008,6 +25071,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomInitCharacterizationTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomKinshipPathTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -27056,7 +27123,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2109,
+      "expected_floor": 2125,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -27137,6 +27204,7 @@
         "VideoScanTests/CatalogTargetStatusResilienceTests",
         "VideoScanTests/CatalogVerifyMenuPlanTests",
         "VideoScanTests/CatalogWideMetadataCandidatesTests",
+        "VideoScanTests/CatchUpInferredDatesCharacterizationTests",
         "VideoScanTests/CombineBatchPlanTests",
         "VideoScanTests/CombineEngineArgsTests",
         "VideoScanTests/CombineTestCapTests",
@@ -27214,6 +27282,8 @@
         "VideoScanTests/IdentityNarrowingTests",
         "VideoScanTests/IdentityPriorScoringTests",
         "VideoScanTests/InspectorArchivedBannerTests",
+        "VideoScanTests/InspectorPanelRulesTests",
+        "VideoScanTests/InspectorPanelSectionOrderTests",
         "VideoScanTests/JobLifecycleUncoveredPathsTests",
         "VideoScanTests/KeepersByGroupIDTests",
         "VideoScanTests/LifeStatusBiographyCardTests",
@@ -28043,7 +28113,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1079,
+      "expected_floor": 1081,
       "modes": [
         {
           "name": "strict",
@@ -28058,6 +28128,7 @@
       ],
       "name": "hallie",
       "selectors": [
+        "VideoScanTests/ArchivistMediaResolutionCharacterizationTests",
         "VideoScanTests/GedcomLineageTests",
         "VideoScanTests/HallieAggregateFallbackTests",
         "VideoScanTests/HallieAliasTeachRegressionTests",
