@@ -80,6 +80,15 @@ metrics/complexity_debt_latest.json, next to nightly_findings_latest.json,
 and scripts/morning_metrics.sh prints it (`--alert`), together with every
 gate override from the last 48 h (ci/baselines/complexity_overrides.jsonl).
 
+The CCN 15 excess (Rick 2026-10-07): ci/baselines/complexity_ccn15_excess.json
+holds one checked number, the total excess over CCN 15 in the whole tree,
+sum of max(0, CCN - 15) (minus what recorded overrides let in), for the
+gate's CI-side RATCHET. CCN is a signal for flagging a module, not a target
+to obey: the excess falls when a big function is split honestly, so splits
+pass and growth does not. Same life cycle as the debt baseline:
+`--shrink-baseline` and the 2 AM nightly lower it, never raise it;
+`--update-ccn15-excess` regenerates it deliberately.
+
 Shrink guard: if more than half of the baseline (and more than 20 keys)
 vanished in one run, that is far likelier a broken scan than a refactor, so
 nothing is shrunk and the report says why.
@@ -1124,6 +1133,115 @@ def shrink_plan(root: str, baseline_path: str) -> dict:
             "before": len(baseline), "after": len(shrunk)}
 
 
+# ---------------------------------------------------------------------------
+# CCN 15 EXCESS ratchet (Rick 2026-10-07): the whole-tree side of the gate's
+# RATCHET. CCN is one signal for flagging a module, not a target to obey, so
+# what is ratcheted is the complexity ABOVE the line, not the number of
+# functions over it: excess(f) = max(0, CCN - 15), summed. Splitting a CCN-52
+# function into two honest 26s lowers it (37 -> 22) and passes; growing a
+# function above 15, or adding one, raises it.
+#
+# One number is checked (`total_excess`, minus the excess recorded overrides
+# let in); `files` is a per-file excess snapshot written alongside it so a CI
+# failure can say which files grew. Only `total_excess` is ratcheted, and
+# only ever down.
+
+DEFAULT_CCN15_EXCESS = os.path.join("ci", "baselines", "complexity_ccn15_excess.json")
+
+
+def excess(f: Func) -> int:
+    """How far a function is above the CCN 15 line (0 at or below it)."""
+    return max(0, f.ccn - CCN_LIMIT)
+
+
+def excess_by_file(funcs: Sequence[Func]) -> Dict[str, int]:
+    """{file: total excess over CCN 15}, files with none left out."""
+    out: Dict[str, int] = {}
+    for f in funcs:
+        if excess(f):
+            out[f.file] = out.get(f.file, 0) + excess(f)
+    return dict(sorted(out.items()))
+
+
+def excess_allowances(records: Sequence[dict]) -> Dict[str, dict]:
+    """What overrides let in, per function: the highest CCN recorded and the
+    total excess the overrides added (`ratchet_excess`; a record without
+    that field gives no excess credit)."""
+    out: Dict[str, dict] = {}
+    for rec in records:
+        for key, n in (rec.get("ratchet_excess") or {}).items():
+            cur = out.setdefault(key, {"ccn": 0, "excess": 0})
+            cur["excess"] += int(n)
+            cur["ccn"] = max(cur["ccn"], int(((rec.get("functions") or {}).get(key) or {}).get("ccn", 0)))
+    return out
+
+
+def excess_override_credit(funcs: Sequence[Func], allowed: Dict[str, dict]) -> int:
+    """Excess a recorded override let in, for functions still at or below
+    the CCN it recorded (growing past it loses the credit)."""
+    return sum(min(allowed[f.key]["excess"], excess(f)) for f in funcs
+               if excess(f) and f.key in allowed and f.ccn <= allowed[f.key]["ccn"])
+
+
+def excess_total(funcs: Sequence[Func], allowed: Dict[str, dict]) -> int:
+    return sum(excess(f) for f in funcs) - excess_override_credit(funcs, allowed)
+
+
+def load_ccn15_excess(path: str) -> Optional[dict]:
+    """{"total_excess": int, "files": {file: excess}}, or None when there is no such file."""
+    if not path or not os.path.exists(path):
+        return None
+    with open(path, "r", encoding="utf-8") as handle:
+        data = json.load(handle)
+    return {"total_excess": int(data["total_excess"]),
+            "files": {str(k): int(v) for k, v in (data.get("files") or {}).items()}}
+
+
+def write_ccn15_excess(path: str, total_excess: int, files: Dict[str, int]) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    payload = {
+        "note": (f"CCN {CCN_LIMIT} excess ratchet (Rick 2026-10-07): CI preflight "
+                 "(scripts/complexity_gate.py --all) fails when the tree's total excess, "
+                 f"the sum of max(0, CCN - {CCN_LIMIT}) over every function, is above "
+                 "`total_excess` (excess a recorded override let in is not counted). CCN "
+                 "is a signal, not the goal. `files` is a per-file snapshot for the error "
+                 "message only. `total_excess` only shrinks: the 2 AM nightly lowers it; "
+                 "regenerate deliberately with `scripts/complexity_metrics.py "
+                 "--update-ccn15-excess` and say why in the commit."),
+        "threshold_ccn": CCN_LIMIT,
+        "total_excess": int(total_excess),
+        "files": dict(sorted(files.items())),
+    }
+    with open(path, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, indent=1)
+        handle.write("\n")
+
+
+def ccn15_excess_shrink_plan(root: str, excess_path: str, overrides_path: str,
+                             funcs: Optional[Sequence[Func]] = None) -> dict:
+    """The total excess the nightly may commit: today's, if lower; never
+    higher. {"changed", "problems", "before", "after", "files"}. Same
+    broken-scan guard as the debt baseline: nothing measured, or more than
+    half gone at once (and more than SHRINK_GUARD_MIN), is refused."""
+    old = load_ccn15_excess(excess_path)
+    if old is None:
+        return {"changed": False, "problems": [f"no {excess_path}"], "before": None, "after": None, "files": {}}
+    if funcs is None:
+        funcs = scan(root)[0]
+    was = old["total_excess"]
+    keep = {"changed": False, "before": was, "after": was, "files": old["files"]}
+    if not funcs:
+        return {**keep, "problems": ["shrink guard: no functions measured: the scan found nothing"]}
+    now = excess_total(funcs, excess_allowances(load_overrides(overrides_path)))
+    drop = was - now
+    if drop > SHRINK_GUARD_MIN and drop > SHRINK_GUARD_FRACTION * was:
+        return {**keep, "problems": [f"shrink guard: CCN {CCN_LIMIT} excess {was} -> {now} in one run: "
+                                     "more likely a broken scan than a refactor"]}
+    if now >= was:
+        return {**keep, "problems": []}
+    return {"changed": True, "problems": [], "before": was, "after": now, "files": excess_by_file(funcs)}
+
+
 def _set_output(name: str, value) -> None:
     target = os.environ.get("GITHUB_OUTPUT")
     if target:
@@ -1146,6 +1264,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                         help="drop fixed entries from --baseline and lower improved ones; never adds")
     parser.add_argument("--overrides", default=DEFAULT_OVERRIDES,
                         help="gate override log (repo-relative), reported by the nightly")
+    parser.add_argument("--ccn15-excess", default=DEFAULT_CCN15_EXCESS,
+                        help="the CCN 15 excess baseline CI checks (default ci/baselines/complexity_ccn15_excess.json)")
+    parser.add_argument("--update-ccn15-excess", action="store_true",
+                        help="rewrite --ccn15-excess from today's tree (deliberate; may raise it)")
     parser.add_argument("--alert", metavar="DEBT_JSON",
                         help="print morning-digest lines for a debt report ('-' = stdin) and exit")
     parser.add_argument("--sha", default=os.environ.get("GITHUB_SHA", ""))
@@ -1177,7 +1299,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             sha = "unknown"
     ts = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    funcs, file_lines, extras = scan(args.root, duplication=not (args.update_baseline or args.shrink_baseline))
+    funcs, file_lines, extras = scan(args.root, duplication=not (args.update_baseline or args.shrink_baseline
+                                                                 or args.update_ccn15_excess))
+
+    if args.update_ccn15_excess:
+        allowed = excess_allowances(load_overrides(os.path.join(args.root, args.overrides)))
+        files, total = excess_by_file(funcs), excess_total(funcs, allowed)
+        write_ccn15_excess(args.ccn15_excess, total, files)
+        print(f"CCN {CCN_LIMIT} excess written: {args.ccn15_excess} (total excess {total} over "
+              f"{sum(1 for f in funcs if excess(f))} function(s) in {len(files)} file(s))")
+        return 0
 
     if args.update_baseline:
         entries = {k: {"ccn": f.ccn, "nloc": f.nloc} for k, f in offenders(funcs).items()}
@@ -1203,6 +1334,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         write_baseline(args.baseline, shrunk, next_disables)
         print(f"Baseline shrunk: {len(baseline)} -> {len(shrunk)} offenders "
               f"({len(result['fixed'])} fixed); nothing was added or raised.")
+        if load_ccn15_excess(args.ccn15_excess) is not None:
+            cp = ccn15_excess_shrink_plan(args.root, args.ccn15_excess, os.path.join(args.root, args.overrides), funcs)
+            if cp["problems"]:
+                print(f"CCN {CCN_LIMIT} excess not shrunk: " + "; ".join(cp["problems"]))
+                return 1
+            if cp["changed"]:
+                write_ccn15_excess(args.ccn15_excess, cp["after"], cp["files"])
+            print(f"CCN {CCN_LIMIT} total excess: {cp['before']} -> {cp['after']}.")
         return 0
 
     records = load_overrides(os.path.join(args.root, args.overrides))

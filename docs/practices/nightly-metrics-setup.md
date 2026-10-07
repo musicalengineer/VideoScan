@@ -41,12 +41,35 @@ a metric with no data says "no data yet", never zero.
   function_body_length / file_length / type_body_length, fails. Escape hatch:
   `COMPLEXITY_OVERRIDE="reason" git commit …`, appended to
   `ci/baselines/complexity_overrides.jsonl` (staged into the commit; CI honors it).
-- **Baseline.** One committed file, `ci/baselines/complexity_debt.json`. It only shrinks:
-  the nightly publishes the shrunk proposal; `python3 scripts/complexity_metrics.py
-  --shrink-baseline` applies it locally for a commit. Re-grow only deliberately with
-  `--update-baseline`.
+- **CCN 15 excess ratchet (blocking, 2026-10-07).** Functions over CCN 15 went 277 → 345
+  in ten nights while the count over 30 stayed flat. CCN is one signal for flagging a
+  module, not a target to obey, so the ratchet watches the EXCESS, the sum of
+  max(0, CCN − 15), not the number of functions over 15. Splitting `PrunePlan.plan`
+  (CCN 52, excess 37) into two honest 26s brings it to 22 and passes; a 40 plus a 20
+  (25 + 5 = 30) passes too. Pre-commit: the touched files' total excess may not rise from
+  HEAD to the staged copy (`RATCHET`; moving a function between touched files or
+  splitting a file passes), and no function above 15 may grow, even if another one in the
+  same commit shrank more (`RATCHET-WORSE`). CI: the whole tree's total excess may not
+  exceed `ci/baselines/complexity_ccn15_excess.json` (2,403 on 2026-10-07). The same
+  `COMPLEXITY_OVERRIDE` covers it and records the excess it let in, which CI credits back.
+- **Baseline.** `ci/baselines/complexity_debt.json`, plus the CCN 15 total excess in
+  `ci/baselines/complexity_ccn15_excess.json`. Both only shrink: the 2 AM nightly
+  (`scripts/complexity_baseline_nightly.py`) commits the shrink; `python3
+  scripts/complexity_metrics.py --shrink-baseline` applies it locally. Re-grow only
+  deliberately with `--update-baseline` / `--update-ccn15-excess`, and say why in the commit.
 - After pulling this change, run `scripts/install-git-hooks.sh` once per clone: the
   hook in `.git/hooks` is a copy.
+
+### Splitting a function
+
+CCN is a signal, not the goal. When the gate asks for a function to be split, split it
+along a real concept: an enum whose cases carry the branching, a value type that owns
+its own rules, a focused protocol, or a pure function that makes one named decision
+(`shouldKeep`, `pickKeeper`). A table of cases (pattern → action as data) often replaces
+a long `switch`/`if` ladder outright. Each piece should be testable on its own and named
+for WHAT it decides, not WHEN it runs. Never cut a function into `step1` / `step2` /
+`part3` helpers that pass the same half-dozen locals around: CCN drops on paper and the
+code gets harder to read.
 
 ## Over-exposure and problem files (2026-10-07)
 
