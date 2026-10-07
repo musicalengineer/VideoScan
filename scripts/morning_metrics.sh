@@ -40,6 +40,21 @@ if [ -n "$CX" ]; then
     printf '%s' "$CX" | python3 "$REPO_ROOT/scripts/complexity_metrics.py" --alert - || true
 fi
 
+# Over-exposure (Rick 2026-10-07: catch "it's easier this way for now"): 🔴
+# for every NEW internal declaration that could be private or was widened for
+# a T+*.swift split, vs the shrink-only ci/baselines/exposure_baseline.json.
+# Then ONE "problem files" table, worst first, across every signal (complexity
+# offenders, new/worse, length, exposure, 7-day churn); the nightly refactor
+# picks from it. Both from the GitHub nightly. Never fail the digest.
+EXN="$(git show origin/metrics:metrics/exposure_new_latest.json 2>/dev/null || true)"
+if [ -n "$EXN" ]; then
+    printf '%s' "$EXN" | python3 "$REPO_ROOT/scripts/exposure_metrics.py" --alert - || true
+fi
+PF="$(git show origin/metrics:metrics/problem_files_latest.json 2>/dev/null || true)"
+if [ -n "$PF" ]; then
+    printf '%s' "$PF" | python3 "$REPO_ROOT/scripts/problem_files.py" --table - || true
+fi
+
 # Weekly Address/Thread Sanitizer runs (2026-10-04): 🔴 on findings or a
 # failed run, 🟡 if skipped, silent when green. Local files on the M4, so
 # quiet on other hosts. Never fails the digest.

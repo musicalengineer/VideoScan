@@ -29,7 +29,9 @@ name: Nightly Static Analysis
 #   complexity          — lizard CCN/NLOC over Swift + Python production code
 #                         and a REPORT-ONLY debt ratchet (new / worse / fixed
 #                         offenders vs a shrinking baseline). Never fails on
-#                         debt. scripts/complexity_metrics.py.
+#                         debt. scripts/complexity_metrics.py. Same job: the
+#                         over-exposure ratchet (scripts/exposure_metrics.py)
+#                         and the problem-files table (scripts/problem_files.py).
 #   findings-to-issues  — (after the above) tools/nightly_findings_to_issues.py:
 #                         ONE "Nightly findings — YYYY-MM-DD" ticket per night
 #                         (NEW high / NEW medium / changed / fixed / still
@@ -1221,6 +1223,9 @@ jobs:
       worse_offenders: ${{ steps.measure.outputs.worse_offenders }}
       fixed_offenders: ${{ steps.measure.outputs.fixed_offenders }}
       overrides_recent: ${{ steps.measure.outputs.overrides_recent }}
+      exposure_new: ${{ steps.exposure.outputs.exposure_new }}
+      exposure_could_be_private: ${{ steps.exposure.outputs.exposure_could_be_private }}
+      exposure_widened: ${{ steps.exposure.outputs.exposure_widened }}
 
     steps:
       # Full history: the override log's commit SHAs are resolved from it
@@ -1248,6 +1253,31 @@ jobs:
             --row-out complexity-row.json \
             --debt-out complexity_debt_latest.json
 
+      # Over-exposure (Rick, 2026-10-07): internal declarations that could be
+      # private, or were widened to internal for a T+*.swift split. Report
+      # only, ratcheted against ci/baselines/exposure_baseline.json (shrinks
+      # only; no commit gate). Stdlib; design in scripts/exposure_metrics.py.
+      # Then the ONE "problem files" table the morning digest prints and the
+      # nightly refactor picks from (scripts/problem_files.py; churn needs the
+      # full history this job already checks out). Neither can turn the
+      # complexity job red.
+      - name: Over-exposure + problem files
+        id: exposure
+        continue-on-error: true
+        run: |
+          python3 scripts/exposure_metrics.py \
+            --root . \
+            --baseline ci/baselines/exposure_baseline.json \
+            --row-out exposure-row.json \
+            --files-out exposure_files_latest.json \
+            --new-out exposure_new_latest.json
+          python3 scripts/problem_files.py \
+            --root . \
+            --exposure-files exposure_files_latest.json \
+            --complexity-baseline ci/baselines/complexity_debt.json \
+            --complexity-debt complexity_debt_latest.json \
+            --out problem_files_latest.json
+
       - name: Upload complexity results
         if: always()
         uses: actions/upload-artifact@v4
@@ -1257,6 +1287,10 @@ jobs:
             complexity-row.json
             complexity_debt_latest.json
             complexity_baseline_proposed.json
+            exposure-row.json
+            exposure_files_latest.json
+            exposure_new_latest.json
+            problem_files_latest.json
           retention-days: 30
 
   # -------------------------------------------------------------------
@@ -1416,6 +1450,22 @@ jobs:
           name: complexity
           path: complexity
 
+      # Privacy gate for the exposure / problem-file outputs: the same
+      # allowlist the local publisher uses (tools/publish_metrics.py SCHEMAS).
+      # Only files that pass are copied for the push; a refusal publishes
+      # nothing of that file and says why in the log.
+      - name: Privacy-gate exposure + problem files
+        continue-on-error: true
+        run: |
+          mkdir -p "$RUNNER_TEMP/exposure-ok"
+          python3 tools/publish_metrics.py --validate exposure.jsonl complexity/exposure-row.json \
+            && cp complexity/exposure-row.json "$RUNNER_TEMP/exposure-ok/"
+          for f in exposure_new_latest.json exposure_files_latest.json problem_files_latest.json; do
+            python3 tools/publish_metrics.py --validate "$f" "complexity/$f" \
+              && cp "complexity/$f" "$RUNNER_TEMP/exposure-ok/"
+          done
+          ls "$RUNNER_TEMP/exposure-ok"
+
       - name: Build aggregate row
         env:
           CONCURRENCY_WARNINGS: ${{ needs.strict-concurrency.outputs.warning_count }}
@@ -1550,6 +1600,20 @@ jobs:
               fi
             done
           fi
+          # Over-exposure + problem files (scripts/exposure_metrics.py,
+          # scripts/problem_files.py): only what passed the privacy gate.
+          EX="$RUNNER_TEMP/exposure-ok"
+          if [ -f "$EX/exposure-row.json" ]; then
+            touch metrics/exposure.jsonl
+            cat "$EX/exposure-row.json" >> metrics/exposure.jsonl
+            git add metrics/exposure.jsonl
+          fi
+          for f in exposure_new_latest.json exposure_files_latest.json problem_files_latest.json; do
+            if [ -f "$EX/$f" ]; then
+              cp "$EX/$f" "metrics/$f"
+              git add "metrics/$f"
+            fi
+          done
           git commit -m "static analysis nightly $TS" || {
             echo "Nothing to commit"
             exit 0
@@ -1578,6 +1642,9 @@ jobs:
           COMPLEXITY_NEW: ${{ needs.complexity.outputs.new_offenders }}
           COMPLEXITY_WORSE: ${{ needs.complexity.outputs.worse_offenders }}
           COMPLEXITY_FIXED: ${{ needs.complexity.outputs.fixed_offenders }}
+          EXPOSURE_NEW: ${{ needs.complexity.outputs.exposure_new }}
+          EXPOSURE_PRIVATE: ${{ needs.complexity.outputs.exposure_could_be_private }}
+          EXPOSURE_WIDENED: ${{ needs.complexity.outputs.exposure_widened }}
           NEW_HIGH: ${{ needs.findings-to-issues.outputs.new_high }}
           NEW_MEDIUM: ${{ needs.findings-to-issues.outputs.new_medium }}
           TICKET_URL: ${{ needs.findings-to-issues.outputs.ticket_url }}
@@ -1615,6 +1682,10 @@ jobs:
             echo "**${COMPLEXITY_WORSE:-?} worse**, ${COMPLEXITY_FIXED:-?} fixed, ${COMPLEXITY_OFFENDERS:-?} offenders in all. "
             echo "Gate overrides in the last 48 h: **${COMPLEXITY_OVERRIDES:-?}**. "
             echo "Lists: the complexity job summary and \`metrics/complexity_debt_latest.json\`."
+            echo ""
+            echo "Over-exposure (report only): **${EXPOSURE_NEW:-?} new**; ${EXPOSURE_PRIVATE:-?} could be private, "
+            echo "${EXPOSURE_WIDENED:-?} widened for a file split. Lists: \`metrics/exposure_new_latest.json\`, "
+            echo "\`metrics/problem_files_latest.json\`."
             echo ""
             echo "Slow-to-type-check identities tracked: **${TYPECHECK_IDENTITIES:-?}** "
             echo "(saturated / \"unable to type-check\": **${TYPECHECK_SATURATED:-?}**). "

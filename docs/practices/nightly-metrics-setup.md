@@ -23,6 +23,7 @@ a metric with no data says "no data yet", never zero.
 | `metrics/codex_reviews.jsonl` | `tools/publish_metrics.py` (parses `docs/reviews/codex/*.md` headers) | with either of the two above |
 | `metrics/search_benchmarks.jsonl` | `scripts/publish_search_benchmarks.py` | when the benchmark is run |
 | `metrics/complexity.jsonl`, `metrics/complexity_debt_latest.json`, `metrics/complexity_baseline_proposed.json` | `nightly-analysis.yml` `complexity` job → `aggregate` (`scripts/complexity_metrics.py`) | GitHub nightly |
+| `metrics/exposure.jsonl`, `metrics/exposure_new_latest.json`, `metrics/exposure_files_latest.json`, `metrics/problem_files_latest.json` | same job (`scripts/exposure_metrics.py`, `scripts/problem_files.py`) → `aggregate`, privacy-gated by `tools/publish_metrics.py --validate` | GitHub nightly |
 
 ## Complexity and tech debt (2026-10-05, GH #281)
 
@@ -46,6 +47,23 @@ a metric with no data says "no data yet", never zero.
   `--update-baseline`.
 - After pulling this change, run `scripts/install-git-hooks.sh` once per clone: the
   hook in `.git/hooks` is a copy.
+
+## Over-exposure and problem files (2026-10-07)
+
+- **Over-exposure (report only, no gate).** `scripts/exposure_metrics.py` finds internal
+  declarations in app Swift that could be `private` (used only in their own file) or were
+  widened for a `T+*.swift` split (used only from files extending the same type). Tests
+  that `@testable import` count as users. Rules, skips and the collision policy are in
+  the script's docstring. Ratchet: `ci/baselines/exposure_baseline.json`, shrink-only
+  (`--shrink-baseline`; regrow deliberately with `--update-baseline`). NEW ones are 🔴 in
+  the morning digest.
+- **Problem files.** `scripts/problem_files.py` joins complexity offenders (baseline),
+  tonight's new/worse, file length, the exposure counts and 7-day churn into one score
+  (formula in its docstring); the digest prints the top 15 and the nightly refactor picks
+  from it.
+- Both run in the `complexity` job; `aggregate` publishes `metrics/exposure.jsonl`,
+  `exposure_new_latest.json`, `exposure_files_latest.json` and
+  `problem_files_latest.json` only after `tools/publish_metrics.py --validate` passes.
 
 Why `coverage_logic_pct` / `swiftlint_*` in `history.jsonl` looked broken: coverage is
 deliberately off in ci.yml (`-enableCodeCoverage NO`, 2026-09-26), and

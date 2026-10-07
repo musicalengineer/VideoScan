@@ -90,6 +90,20 @@ _CX_BUCKET = {"files": "int", "functions": "int", "ccn_over_15": "int", "ccn_ove
               "nloc_over_80": "int", "offenders": "int", "files_over_800": "int", "mean_ccn": "num?"}
 TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
+# Exposure / problem-file streams name app SOURCE files and Swift identifiers,
+# both already public in the repo. A source path is repo-relative under the
+# measured Swift roots, ends in .swift, and has no spaces, "..", or anything
+# else that could carry a sentence; an identifier is dotted Swift names only.
+_SWIFT_ROOTS = r"(?:VideoScan/VideoScan|VideoScan/VideoScanCore/Sources|swift_cli)"
+SRCPATH_RE = re.compile(r"^" + _SWIFT_ROOTS + r"/(?:[A-Za-z0-9_+-]+(?:\.[A-Za-z0-9_+-]+)*/)*"
+                        r"[A-Za-z0-9_+-]+(?:\.[A-Za-z0-9_+-]+)*\.swift$")
+IDENT_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*){0,7}$")
+_EX_BUCKET = {"files": "int", "decls": "int", "could_be_private": "int",
+              "widened_for_split": "int", "fine": "int"}
+_EX_CLASS = ("could-be-private", "widened-for-split")
+_EX_KIND = ("func", "var", "let", "init", "subscript", "struct", "class", "enum", "actor")
+_SWIFT_FOLDER = ("either", "folder", ("enum", ("swift_cli",)))
+_SHA = ("either", "sha", ("enum", ("unknown",)))
 
 _COV_NUMS = {"lines": "int", "covered": "int", "pct": "num?",
              "logic_lines": "int", "logic_covered": "int", "logic_pct": "num?", "files": "int"}
@@ -150,6 +164,55 @@ SCHEMAS: Dict[str, dict] = {
         "python_by_folder": ("opt", ("map", ("enum", ("scripts", "tools")), ("obj", _CX_BUCKET))),
         "folders_mapped_pct": "num?",
     },
+    # Over-exposure (scripts/exposure_metrics.py) and the problem-files table
+    # (scripts/problem_files.py), published by the GitHub nightly's aggregate
+    # job after `--validate` (Rick 2026-10-07). Counts, folder names, source
+    # paths and Swift identifiers only.
+    "exposure.jsonl": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "sha": _SHA,
+        "run_kind": ("enum", ("nightly", "manual")),
+        "totals": ("obj", _EX_BUCKET),
+        "by_folder": ("map", _SWIFT_FOLDER, ("obj", _EX_BUCKET)),
+        "top20": ("list", ("obj", {"file": "srcpath", "could_be_private": "int",
+                                   "widened_for_split": "int", "decls": "int"})),
+        "baseline_before": "int",
+        "baseline_after": "int",
+        "new": "int",
+        "fixed": "int",
+        "shrink_skipped": "bool",
+    },
+    "exposure_new_latest.json": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "sha": _SHA,
+        "new": ("list", ("obj", {"key": "declkey", "file": "srcpath", "name": "ident",
+                                 "kind": ("enum", _EX_KIND), "classification": ("enum", _EX_CLASS)})),
+        "fixed": "int",
+        "baseline_before": "int",
+        "baseline_after": "int",
+        "shrink_skipped": "bool",
+    },
+    "exposure_files_latest.json": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "sha": _SHA,
+        "files": ("map", "srcpath", ("obj", {"lines": "int", "decls": "int",
+                                             "could_be_private": ("list", "ident"),
+                                             "widened_for_split": ("list", "ident")})),
+    },
+    "problem_files_latest.json": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "sha": _SHA,
+        "formula_version": "int",
+        "files_scored": "int",
+        "rows": ("list", ("obj", {"file": "srcpath", "score": "num", "offenders": "int",
+                                  "worst_ccn": "int", "new_or_worse": "int", "lines": "int",
+                                  "could_be_private": "int", "widened_for_split": "int",
+                                  "churn_7d": "int"})),
+    },
 }
 
 # Streams whose existing rows were published by someone else (GitHub CI):
@@ -187,6 +250,14 @@ _SCALARS = {
     "ts": (_matches(TS_RE), "expected a YYYY-MM-DDTHH:MM:SSZ timestamp"),
     "sha": (_matches(SHA_RE), "expected a hex commit SHA"),
     "date": (_matches(DATE_RE), "expected a YYYY-MM-DD date"),
+    "bool": (lambda v: isinstance(v, bool), "expected true or false"),
+    "srcpath": (lambda v: isinstance(v, str) and len(v) <= 200 and bool(SRCPATH_RE.match(v)),
+                "expected a repo-relative app .swift path"),
+    "ident": (lambda v: isinstance(v, str) and len(v) <= 160 and bool(IDENT_RE.match(v)),
+              "expected a dotted Swift identifier"),
+    "declkey": (lambda v: isinstance(v, str) and v.count("::") == 1
+                and bool(SRCPATH_RE.match(v.split("::")[0])) and bool(IDENT_RE.match(v.split("::")[1]))
+                and len(v) <= 360, "expected file.swift::Type.name"),
 }
 
 
@@ -606,6 +677,27 @@ def publish(fresh: Dict[str, Optional[List[dict]]], *, repo: Path = REPO, wt: Pa
 
 # ---------------------------------------------------------------- CLI
 
+def validate_file(stream: str, path: str, folders: Optional[set] = None) -> int:
+    """The privacy gate for a file the GitHub nightly produced (exposure,
+    problem files): every row must be exactly its allowlisted shape. Prints
+    one OUTCOME line; 0 = publishable, 3 = refused, 1 = unreadable."""
+    try:
+        text = Path(path).read_text()
+        rows = ([json.loads(line) for line in text.splitlines() if line.strip()]
+                if stream.endswith(".jsonl") else [json.loads(text)])
+    except (OSError, ValueError) as exc:
+        print(f"OUTCOME failed: cannot read {stream}: {exc}")
+        return 1
+    try:
+        for row in rows:
+            validate(stream, row, folders if folders is not None else source_folders())
+    except PrivacyError as exc:
+        print(f"OUTCOME failed: privacy gate refused {stream}: {exc}")
+        return 3
+    print(f"OUTCOME ok: {stream} validated ({len(rows)} row(s))")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--dry-run", action="store_true", help="print sanitized rows; no git, no writes")
@@ -614,7 +706,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--coverage-dir", default=str(COVERAGE_DIR))
     ap.add_argument("--adversarial-dir", default=str(ADV_DIR))
     ap.add_argument("--codex-dir", default=str(CODEX_DIR))
+    ap.add_argument("--validate", nargs=2, metavar=("STREAM", "FILE"),
+                    help="privacy-gate one CI-produced file (JSON, or JSONL when STREAM ends in .jsonl) "
+                         "against SCHEMAS[STREAM]; exit 0 if it may be published, 3 if not")
     a = ap.parse_args(argv)
+
+    if a.validate:
+        return validate_file(*a.validate)
 
     if os.environ.get("VIDEOSCAN_PUBLISH_METRICS") == "0":
         print("OUTCOME skipped: VIDEOSCAN_PUBLISH_METRICS=0")
