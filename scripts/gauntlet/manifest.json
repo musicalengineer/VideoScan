@@ -4896,6 +4896,18 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivistMediaResolutionCharacterizationTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "ArchivistMediaResolutionCharacterizationTests"
+      ],
+      "tests": [
+        "withNoPriorAnswer",
+        "withThreeShownItems"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchivistModelSettingTests.swift",
@@ -7188,6 +7200,19 @@
         "liveWriteFailureJournalsAndCarriesTheRealCause",
         "lockUnavailableThenWriteFailureReportsTheWriteFailure",
         "snapshotWriteFailureIsDistinctAndNotJournalled"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatchUpInferredDatesCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatchUpInferredDatesCharacterizationTests"
+      ],
+      "tests": [
+        "aBudgetOfTwoDefersTheRest",
+        "aScopedRefreshPassReachesItsGroups",
+        "wholeCatalogPassThenASecondPass"
       ]
     },
     {
@@ -27044,7 +27069,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2122,
+      "expected_floor": 2125,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -27125,6 +27150,7 @@
         "VideoScanTests/CatalogTargetStatusResilienceTests",
         "VideoScanTests/CatalogVerifyMenuPlanTests",
         "VideoScanTests/CatalogWideMetadataCandidatesTests",
+        "VideoScanTests/CatchUpInferredDatesCharacterizationTests",
         "VideoScanTests/CombineBatchPlanTests",
         "VideoScanTests/CombineEngineArgsTests",
         "VideoScanTests/CombineTestCapTests",
@@ -28033,7 +28059,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1079,
+      "expected_floor": 1081,
       "modes": [
         {
           "name": "strict",
@@ -28048,6 +28074,7 @@
       ],
       "name": "hallie",
       "selectors": [
+        "VideoScanTests/ArchivistMediaResolutionCharacterizationTests",
         "VideoScanTests/GedcomLineageTests",
         "VideoScanTests/HallieAggregateFallbackTests",
         "VideoScanTests/HallieAliasTeachRegressionTests",
