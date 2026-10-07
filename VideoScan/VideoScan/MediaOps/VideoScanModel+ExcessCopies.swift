@@ -75,15 +75,22 @@ struct ExcessKeepStore {
 
     var keptIDs: Set<UUID> { keptIDsIfReadable ?? [] }
 
-    /// Add to the Keep list. Returns whether it was written.
+    /// Add to the Keep list. Returns whether it was written. A list that
+    /// cannot be read is NEVER written over (QA MINOR 4): that would erase
+    /// whatever it held. The value stays for a person to look at; the lane
+    /// keeps offering nothing until it can be read.
     @discardableResult
     func keep(_ ids: some Sequence<UUID>) -> Bool {
-        defaults.set(keptIDs.union(ids).map(\.uuidString).sorted(), forKey: Self.key)
+        guard let kept = keptIDsIfReadable else { return false }
+        defaults.set(kept.union(ids).map(\.uuidString).sorted(), forKey: Self.key)
         return true
     }
 
-    func bringBack(_ ids: some Sequence<UUID>) {
-        defaults.set(keptIDs.subtracting(ids).map(\.uuidString).sorted(), forKey: Self.key)
+    @discardableResult
+    func bringBack(_ ids: some Sequence<UUID>) -> Bool {
+        guard let kept = keptIDsIfReadable else { return false }
+        defaults.set(kept.subtracting(ids).map(\.uuidString).sorted(), forKey: Self.key)
+        return true
     }
 }
 
@@ -112,13 +119,16 @@ extension VideoScanModel {
         var digests = Set<String>(), sampled = Set<String>()
         let root = masterArchiveRootPath
         for r in records where !r.isPurged && isArchiveElement(r) {
+            // Every archived file goes in — an FFV1 master without a verified
+            // digest still sets its item's length and holds it (QA MINOR 3) —
+            // but only a verified one can be matched.
             let s = excessArchiveSnapshot(r, root: root)
+            out.append(s)
             guard let d = s.archiveDigest else { continue }
             digests.insert(d)
             if let k = Self.excessSampledKey(r) { sampled.insert(k) }
-            out.append(s)
         }
-        guard !out.isEmpty else { return [] }
+        guard !digests.isEmpty else { return [] }
         let context = ExcessHoldContext(model: self, env: env)
         for r in records where !r.isPurged && !isArchiveElement(r) {
             let digestHit = Self.excessWholeDigest(r).map(digests.contains) ?? false
@@ -179,6 +189,7 @@ extension VideoScanModel {
                                   contentHash: r.contentHash, wholeDigest: Self.excessWholeDigest(r),
                                   derivedFrom: r.derivedFrom, isOnline: Self.volumeIsOnline(r),
                                   gateRefusal: refusal.map { Self.bulkDeleteRefusalNote($0, volume: c.gateVolumeLabel) },
+                                  gateRefusesAsArchive: refusal.map { !$0.leavesAlone } ?? false,
                                   isOnArchiveBackupDrive: c.backup.verdict(forPath: r.fullPath) != nil,
                                   isPairMember: CatalogScopePolicy.isPairProtected(r),
                                   heldByAngel: c.angel(r.id), starRating: r.starRating, tags: r.tags,
@@ -255,20 +266,28 @@ extension VideoScanModel {
         -> (go: [(item: ExcessCopiesPlan.Item, copy: ExcessCopiesPlan.Copy)], held: [PruneHeldCopy]) {
         var go: [(item: ExcessCopiesPlan.Item, copy: ExcessCopiesPlan.Copy)] = []
         var held: [PruneHeldCopy] = []
-        for copy in shown.offered {
-            guard let now = fresh.offeredCopy(copy.id) else {
-                held.append(PruneHeldCopy(copyID: copy.id, filename: copy.filename, sizeBytes: copy.sizeBytes,
-                                          reason: "changed since the list was shown: " + excessFreshReason(copy.id, in: fresh)))
-                continue
+        for item in shown.items {
+            for copy in item.offered {
+                if let h = excessTarget(copy, in: fresh) { held.append(h) } else { go.append((item, copy)) }
             }
-            guard now.copy.archiveID == copy.archiveID, now.copy.fullPath == copy.fullPath else {
-                held.append(PruneHeldCopy(copyID: copy.id, filename: copy.filename, sizeBytes: copy.sizeBytes,
-                                          reason: "changed since the list was shown: it no longer matches the same archived file"))
-                continue
-            }
-            go.append((now.item, now.copy))
         }
         return (go, held)
+    }
+
+    /// nil = the fresh plan still offers `copy` against the same archived
+    /// file at the same path; else why it is held. The ITEM that travels on
+    /// is the SHOWN one (QA MAJOR 1): its survivors are what the sheet said
+    /// would stay, and each must still be there at the move.
+    nonisolated static func excessTarget(_ copy: ExcessCopiesPlan.Copy, in fresh: ExcessCopiesPlan) -> PruneHeldCopy? {
+        guard let now = fresh.offeredCopy(copy.id) else {
+            return PruneHeldCopy(copyID: copy.id, filename: copy.filename, sizeBytes: copy.sizeBytes,
+                                 reason: "changed since the list was shown: " + excessFreshReason(copy.id, in: fresh))
+        }
+        guard now.copy.archiveID == copy.archiveID, now.copy.fullPath == copy.fullPath else {
+            return PruneHeldCopy(copyID: copy.id, filename: copy.filename, sizeBytes: copy.sizeBytes,
+                                 reason: "changed since the list was shown: it no longer matches the same archived file")
+        }
+        return nil
     }
 
     /// Why the fresh plan no longer offers `id`, in words.
@@ -323,7 +342,7 @@ extension VideoScanModel {
         var survivors: [PruneSurvivor] = []
         for s in item.survivors(of: copy.archiveID) {
             guard let live = record(forID: s.id), !live.isPurged, let stamp = stamps[live.fullPath] else {
-                return .failure(ExcessHold(text: "\(s.filename), a copy the list said would stay, is no longer on disk — the list you confirmed has changed, so nothing moved"))
+                return .failure(ExcessHold(text: "\(s.filename), a copy the list said would stay, is no longer in the catalog or on disk — the list you confirmed has changed, so nothing moved"))
             }
             survivors.append(PruneSurvivor(recordID: s.id, filename: s.filename, path: live.fullPath, stamp: stamp))
         }

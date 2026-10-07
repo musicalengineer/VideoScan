@@ -157,7 +157,12 @@ struct ExcessCopiesPane: View {
     }
 
     private func keep(_ item: ExcessCopiesPlan.Item) {
-        ExcessKeepStore().keep(item.offered.map(\.id))
+        guard ExcessKeepStore().keep(item.offered.map(\.id)) else {
+            let line = "🔴 \(VideoScanModel.excessLogPrefix): Keep NOT saved — \(ExcessKeepStore.unreadableReason). The list was left as it is."
+            model.log(line)
+            appLog.write(line)
+            return
+        }
         model.log("\(VideoScanModel.excessLogPrefix): Keep — \(item.offered.count) cop\(item.offered.count == 1 ? "y" : "ies") of \(item.master.filename) are kept and will not be offered again.")
         store.refresh(model: model)
     }

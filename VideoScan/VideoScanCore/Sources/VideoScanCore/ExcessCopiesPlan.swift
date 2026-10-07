@@ -167,6 +167,11 @@ public struct ExcessCopiesPlan: Equatable, Sendable {
         /// Its drive is connected — it STAYS as a checkable copy outside
         /// the archive (an offline copy cannot be counted on).
         public let isConnected: Bool
+        /// It counts as a copy that STAYS outside the archive (QA MAJOR 2):
+        /// connected, matched by its own whole-file digest (a sampled hash
+        /// proves nothing), and not refused as the archive's own (its tree,
+        /// its volume, or a drive that cannot be told apart from it).
+        public let countsAsSurvivor: Bool
     }
 
     public struct ArchiveFile: Equatable, Sendable, Identifiable {
@@ -202,11 +207,11 @@ public struct ExcessCopiesPlan: Equatable, Sendable {
 
         public var offeredBytes: Int64 { offered.reduce(0) { $0 + $1.sizeBytes } }
 
-        /// Copies that STAY outside the archive (connected, so their file
-        /// can be checked at the move), per archived file.
+        /// Copies PROVEN to stay outside the archive (see `countsAsSurvivor`;
+        /// their files are re-checked at the move), per archived file.
         public func survivors(of archiveID: UUID) -> [Copy] {
-            leftAlone.filter { $0.copy.archiveID == archiveID && $0.isConnected }.map(\.copy)
-                + longer.filter { $0.archiveID == archiveID }
+            leftAlone.filter { $0.copy.archiveID == archiveID && $0.countsAsSurvivor }.map(\.copy)
+                + longer.filter { $0.archiveID == archiveID && $0.proof == .digest }
         }
 
         /// After the offered copies go, no connected copy of this item's
@@ -253,6 +258,7 @@ public struct ExcessCopiesPlan: Equatable, Sendable {
     public static let backupLikeReason = "this drive looks like a backup of the archive (its files sit in the archive's own folders) — mark it Archive backup; until you decide, nothing on it is offered"
     public static let pairReason = "part of a recovered A/V pair Combine still needs"
     public static let angelReason = "in use by the Archive Angel"
+    public static let masterUnverifiedReason = "the archive master has no verified fixity yet — left alone until Verify Archive Copies has read it"
     public static let unknownLengthReason = "its length could not be compared with the archive master — left alone"
     public static let longerFlag = "this copy is LONGER than the archive master: the archive may be missing footage"
 
@@ -353,13 +359,15 @@ struct ArchiveIndex {
             if let p = s.derivedFrom { parentOf[s.id] = p }
         }
         for s in snapshots where s.isArchiveSide && !s.isPurged {
-            guard let digest = s.archiveDigest, !digest.isEmpty else { continue }
-            if byDigest[digest] == nil { byDigest[digest] = s }
-            if let key = Self.sampledKey(s), bySampled[key] == nil { bySampled[key] = s }
+            // The master is found whatever its digest (QA MINOR 3): length is
+            // judged against it, and an unverified master holds its item.
             if s.isPreservationMaster {
                 let root = root(of: s.id)
                 if preservationByRoot[root] == nil { preservationByRoot[root] = s }
             }
+            guard let digest = s.archiveDigest, !digest.isEmpty else { continue }
+            if byDigest[digest] == nil { byDigest[digest] = s }
+            if let key = Self.sampledKey(s), bySampled[key] == nil { bySampled[key] = s }
         }
     }
 
@@ -411,17 +419,34 @@ struct ItemBuilder {
         let copy = ExcessCopiesPlan.Copy(id: s.id, filename: s.filename, fullPath: s.fullPath, volumeName: s.volumeName,
                                          sizeBytes: s.sizeBytes, durationSeconds: s.durationSeconds,
                                          archiveID: archive.id, proof: proof)
-        if let why = ExcessCopiesPlan.keepReason(s, backupLike: backupLike) {
-            item.leftAlone.append(.init(copy: copy, reason: why, isConnected: s.isOnline))
-        } else {
-            switch ExcessCopiesPlan.lengthVerdict(copy: s.durationSeconds, master: master.durationSeconds) {
-            case .fits:    item.offered.append(copy)
-            case .longer:  item.longer.append(copy)
-            case .unknown: item.leftAlone.append(.init(copy: copy, reason: ExcessCopiesPlan.unknownLengthReason,
-                                                       isConnected: s.isOnline))
-            }
+        switch Self.verdict(s, master: master, backupLike: backupLike) {
+        case .offer:            item.offered.append(copy)
+        case .flagLonger:       item.longer.append(copy)
+        case .leave(let why):   item.leftAlone.append(.init(copy: copy, reason: why, isConnected: s.isOnline,
+                                                            countsAsSurvivor: Self.counts(s, proof: proof)))
         }
         byRoot[root] = item
+    }
+
+    enum Verdict { case offer, flagLonger, leave(String) }
+
+    /// Keep rules, then the master's verification, then Rick's length rule.
+    static func verdict(_ s: ExcessCopySnapshot, master: ExcessCopySnapshot, backupLike: Set<String>) -> Verdict {
+        if let why = ExcessCopiesPlan.keepReason(s, backupLike: backupLike) { return .leave(why) }
+        if master.isPreservationMaster, (master.archiveDigest ?? "").isEmpty {
+            return .leave(ExcessCopiesPlan.masterUnverifiedReason)
+        }
+        switch ExcessCopiesPlan.lengthVerdict(copy: s.durationSeconds, master: master.durationSeconds) {
+        case .fits:    return .offer
+        case .longer:  return .flagLonger
+        case .unknown: return .leave(ExcessCopiesPlan.unknownLengthReason)
+        }
+    }
+
+    /// QA MAJOR 2: only a connected, digest-proven copy that is not the
+    /// archive's own counts as staying outside the archive.
+    static func counts(_ s: ExcessCopySnapshot, proof: ExcessCopiesPlan.Proof) -> Bool {
+        s.isOnline && proof == .digest && !s.gateRefusesAsArchive
     }
 
     func items() -> [ExcessCopiesPlan.Item] { order.compactMap { byRoot[$0] } }
