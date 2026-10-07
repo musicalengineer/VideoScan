@@ -14042,6 +14042,17 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieSuperlativeSnapshotTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieSuperlativeSnapshotTests"
+      ],
+      "tests": [
+        "everyKindAndScopeMatchesItsRecordedSnapshot"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieSuperlativeTests.swift",
@@ -28022,7 +28033,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1082,
+      "expected_floor": 1083,
       "modes": [
         {
           "name": "strict",
@@ -28163,6 +28174,7 @@
         "VideoScanTests/HallieStrictReplayFamilyIntentTests",
         "VideoScanTests/HallieSuggestionYesTests",
         "VideoScanTests/HallieSuperlativeScopeTests",
+        "VideoScanTests/HallieSuperlativeSnapshotTests",
         "VideoScanTests/HallieSurnameReferenceTests",
         "VideoScanTests/HallieSurnameRosterTests",
         "VideoScanTests/HallieTellingModeTests",
