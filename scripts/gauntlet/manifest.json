@@ -1141,6 +1141,20 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomInitCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "GedcomInitCharacterizationTests"
+      ],
+      "tests": [
+        "aBOMBeforeTheHeadLevelIsReadAsBefore",
+        "everyLineLoopBranchParsesAsBefore",
+        "firstIndividualIsTheRootWithoutHeadRoots"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomKinshipPathTests.swift",
       "stage": "unit",
       "suites": [
@@ -24959,6 +24973,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomIndexEquivalenceTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/GedcomInitCharacterizationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
