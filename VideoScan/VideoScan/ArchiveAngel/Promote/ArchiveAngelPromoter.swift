@@ -133,6 +133,20 @@ final class ArchiveAngelPromoter: ObservableObject {
         }
     }
 
+    // MARK: Landed
+
+    /// Did THIS record's promote reach the archive? Its own promote link
+    /// (an archive copy promoted from it — Promote writes one for a copy
+    /// AND for an adoption) or the record itself lies inside the Master
+    /// Archive. Never `isArchived`: its content-hash fallback is for
+    /// display and worklists, and says yes when identical bytes reached the
+    /// archive from ANOTHER batch — recovery then kept facts it should undo
+    /// and deleted a buffer it should keep (GH #288, N1016-F2).
+    static func landedInArchive(_ id: UUID, model: VideoScanModel) -> Bool {
+        guard let rec = model.record(forID: id) else { return false }
+        return model.masterArchiveCopy(of: rec) != nil || model.isInsideMasterArchive(path: rec.fullPath)
+    }
+
     // MARK: Promote
 
     /// Re-check identities, build the promote plan, start the job. Mutates
@@ -192,9 +206,7 @@ final class ArchiveAngelPromoter: ObservableObject {
             }
         }
         if Self.hasPendingRestores(plan) {
-            for line in Self.settleStampedFacts(plan: &plan, landed: { id in
-                model.record(forID: id).map { model.isArchived($0) } ?? false
-            }, catalog: model, ledger: model) {
+            for line in Self.settleStampedFacts(plan: &plan, landed: { Self.landedInArchive($0, model: model) }, catalog: model, ledger: model) {
                 Self.note(line, plan: &plan, model: model)
             }
             if Self.hasAwaitingRestores(plan) {
@@ -409,9 +421,7 @@ final class ArchiveAngelPromoter: ObservableObject {
             // codex #1654 P1-4: rollback entries a crash or a failed
             // catalog save left behind are re-applied (compare-before-restore
             // makes this idempotent), then cleared once the catalog is saved.
-            let undone = Self.settleStampedFacts(plan: &plan, landed: { id in
-                model.record(forID: id).map { model.isArchived($0) } ?? false
-            }, catalog: model, ledger: model)
+            let undone = Self.settleStampedFacts(plan: &plan, landed: { Self.landedInArchive($0, model: model) }, catalog: model, ledger: model)
             for line in undone { Self.note(line, plan: &plan, model: model) }
             ArchiveAngelPlanStore.saveLogged(plan, context: "pending restore")
             lines.append(contentsOf: undone)
@@ -421,7 +431,7 @@ final class ArchiveAngelPromoter: ObservableObject {
             var promoted = 0, back = 0
             for i in plan.entries.indices where plan.entries[i].status == .ready {
                 let entry = plan.entries[i]
-                if let rec = model.record(forID: entry.id), model.isArchived(rec) {
+                if Self.landedInArchive(entry.id, model: model) {
                     plan.entries[i].status = .promoted
                     plan.entries[i].failure = nil
                     ArchiveAngelPlanStore.removeEntryFolder(plan, entry: entry)
@@ -431,9 +441,7 @@ final class ArchiveAngelPromoter: ObservableObject {
                     back += 1
                 }
             }
-            let undone = Self.settleStampedFacts(plan: &plan, landed: { id in
-                model.record(forID: id).map { model.isArchived($0) } ?? false
-            }, catalog: model, ledger: model)
+            let undone = Self.settleStampedFacts(plan: &plan, landed: { Self.landedInArchive($0, model: model) }, catalog: model, ledger: model)
             for line in undone { Self.note(line, plan: &plan, model: model) }
             plan.status = plan.readyCount == 0 ? .promoted : .ready
             plan.finishedAt = plan.finishedAt ?? Date()

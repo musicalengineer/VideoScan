@@ -106,4 +106,74 @@ struct ArchiveAngelLivenessTests {
         // Idempotent: nothing left promoting.
         #expect(ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: bufferRoot, model: model).isEmpty)
     }
+
+    // MARK: GH #288 — recovery's "landed" rule (N1016-F1/F2)
+
+    /// An archive copy record promoted from `source` (the promote link
+    /// `masterArchiveCopy(of:)` follows), its file inside the archive.
+    @MainActor
+    private func archiveCopy(of source: VideoRecord?, at url: URL, contentHash: String = "",
+                             seed: UInt64) throws -> VideoRecord {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try MasterArchiveTestSupport.writeBlob(at: url, bytes: 2048, seed: seed)
+        let r = MasterArchiveTestSupport.makeRecord(path: url.path)
+        r.derivedFrom = source?.id
+        r.derivationKind = ArchivePromotion.derivationKind
+        r.contentHash = contentHash
+        return r
+    }
+
+    /// A row left `.promoting` by a quit, with its buffer folder on disk.
+    private func strandedPlan(_ entries: [ArchiveAngelPlan.Entry], bufferRoot: URL, name: String) throws -> ArchiveAngelPlan {
+        var p = ArchiveAngelPlan(batchDir: bufferRoot.appendingPathComponent(name).path, requestedCount: entries.count,
+                                 makeLossless: false, entries: entries)
+        p.status = .promoting
+        try ArchiveAngelPlanStore.save(p)
+        for e in entries {
+            try FileManager.default.createDirectory(
+                at: URL(fileURLWithPath: p.batchDir).appendingPathComponent(e.id.uuidString), withIntermediateDirectories: true)
+        }
+        return p
+    }
+
+    /// N1016-F2: recovery decided "landed" with the display-only
+    /// `isArchived`, whose content-hash fallback says yes when IDENTICAL
+    /// bytes reached the archive from ANOTHER batch. This row's own promote
+    /// never landed: it must go back to ready, keep its buffer, and have
+    /// the facts Promote stamped on it undone.
+    @Test @MainActor func identicalBytesFromAnotherBatchAreNotThisRowLanding() throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("angel_stranded_twin"); defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let archive = URL(fileURLWithPath: try #require(model.masterArchiveRootPath))
+        let bufferRoot = sb.root.appendingPathComponent("buffer", isDirectory: true)
+
+        let other = MasterArchiveTestSupport.makeRecord(
+            path: try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent("other.mov"), bytes: 2048, seed: 7).path)
+        other.contentHash = "h:twin"
+        let x2 = MasterArchiveTestSupport.makeRecord(
+            path: try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent("x2.mov"), bytes: 2048, seed: 7).path,
+            userDate: "1994")
+        x2.contentHash = "h:twin"
+        x2.userDateConfidence = UserDateConfidence.known.rawValue
+        let otherCopy = try archiveCopy(of: other, at: archive.appendingPathComponent("1994/1994_other.mov"),
+                                        contentHash: "h:twin", seed: 7)
+        model.records = [other, x2, otherCopy]
+        #expect(model.isArchived(x2), "fixture: the display rule calls x2 archived by content")
+        #expect(model.masterArchiveCopy(of: x2) == nil, "fixture: x2's own promote never landed")
+
+        var e = entry(.ready, id: x2.id)
+        e.stampedFacts = [.init(recordID: x2.id, field: .date, previousValue: nil, previousConfidence: nil,
+                                writtenValue: "1994", writtenConfidence: UserDateConfidence.known.rawValue)]
+        let p = try strandedPlan([e], bufferRoot: bufferRoot, name: "batch-t")
+
+        let lines = ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: bufferRoot, model: model)
+        #expect(lines.last?.contains("0 archived, 1 back to ready") == true, "\(lines)")
+        let after = try ArchiveAngelPlanStore.load(batchDir: p.batchDir)
+        #expect(after.entries.first?.status == .ready)
+        #expect(after.entries.first?.failure?.contains("interrupted") == true)
+        #expect(FileManager.default.fileExists(atPath: URL(fileURLWithPath: p.batchDir).appendingPathComponent(x2.id.uuidString).path),
+                "the buffer is kept for a retry")
+        #expect(x2.userDate == nil && x2.userDateConfidence == nil, "the inherited date is undone")
+    }
 }
