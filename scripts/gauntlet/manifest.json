@@ -7378,7 +7378,10 @@
         "CombineMuxStallTests"
       ],
       "tests": [
+        "faststartPassIsNotAStall",
         "healthyMuxIsNotAStall",
+        "heartbeatSignatureTracksWrites",
+        "silentButWritingIsNotAStall",
         "silentMuxFailsAsStalled",
         "wedgedDecodeFailsVerify",
         "wedgedProbeFailsVerify"
