@@ -32,6 +32,15 @@ enum CombineEngine {
     /// carries `stallReason`. Before this a wedged mux sat "muxing" forever
     /// and the rest of an overnight batch never ran. nil = no watchdog.
     ///
+    /// Progress is ANY of: an ffmpeg output line, or the output file's size
+    /// or mtime changing (OutputFileHeartbeat). The second is load-bearing
+    /// (QA, 2026-10-07): `-movflags +faststart` ends with a pass that
+    /// rewrites the whole output in place to move the index to the front,
+    /// printing nothing — ~22 GB at 75 MB/s is past the 5-minute threshold,
+    /// so a long healthy pair on a spinning or network drive would be killed
+    /// as "stalled" on every retry. That pass changes the file's mtime; a
+    /// truly wedged ffmpeg changes neither.
+    ///
     /// Subprocess plumbing consolidated onto ProcessRunner (codex finding #3):
     /// same arguments, same stderr→log routing, same exit-code semantics —
     /// only the pipe/termination machinery is shared now.
@@ -54,7 +63,7 @@ enum CombineEngine {
         )
         let watched = await runWatched(
             arguments: arguments,
-            label: (outputPath as NSString).lastPathComponent,
+            outputPath: outputPath,
             stallThresholdSeconds: stallThresholdSeconds,
             stdoutLine: progressParser(onProgress: onProgress, durationSeconds: durationSeconds),
             log: log
@@ -115,16 +124,17 @@ enum CombineEngine {
     /// reset handler sets a flag and signals the worker to abort.)
     private static func runWatched(
         arguments: [String],
-        label: String,
+        outputPath: String,
         stallThresholdSeconds: Double?,
         stdoutLine: (@Sendable (String) -> Void)?,
         log: @escaping @Sendable (String) -> Void
     ) async -> (result: ProcessRunner.Result, stalledAfterSeconds: Double?) {
+        let label = (outputPath as NSString).lastPathComponent
         let watch = OSAllocatedUnfairLock(initialState: MuxWatch())
         let monitor = stallThresholdSeconds.map { threshold in
             StallMonitor(label: "combine mux \(label)",
                          thresholdSeconds: threshold,
-                         pollIntervalSeconds: min(StallMonitor.defaultPollIntervalSeconds, max(threshold / 4, 0.25))) { silentFor in
+                         pollIntervalSeconds: watchIntervalSeconds(threshold: threshold)) { silentFor in
                 let task = watch.withLock { state -> Task<ProcessRunner.Result, Never>? in
                     state.stalledAfterSeconds = silentFor
                     return state.task
@@ -152,14 +162,28 @@ enum CombineEngine {
         // Stored BEFORE the watchdog starts, so a firing watchdog always
         // finds the Task to cancel.
         watch.withLock { $0.task = mux }
+        let heartbeat = monitor.map { monitor in
+            OutputFileHeartbeat(path: outputPath,
+                                intervalSeconds: watchIntervalSeconds(threshold: stallThresholdSeconds ?? 0),
+                                onChange: { monitor.tick() })
+        }
         monitor?.start()
+        heartbeat?.start()
         let result = await withTaskCancellationHandler {
             await mux.value
         } onCancel: {
             mux.cancel()
         }
+        heartbeat?.stop()
         monitor?.stop()
         return (result, watch.withLock { $0.stalledAfterSeconds })
+    }
+
+    /// Poll cadence for both the watchdog and the file heartbeat: a quarter
+    /// of the threshold, between 0.25 s and StallMonitor's 15 s default
+    /// (15 s for the 5-minute production threshold — 20 samples per window).
+    static func watchIntervalSeconds(threshold: Double) -> Double {
+        min(StallMonitor.defaultPollIntervalSeconds, max(threshold / 4, 0.25))
     }
 
     // MARK: - Argument Construction
@@ -290,5 +314,77 @@ enum CombineEngine {
                 try writer.write(contentsOf: chunk)
             }
         }.value
+    }
+}
+
+// MARK: - OutputFileHeartbeat
+
+/// Calls `onChange` whenever the file at `path` changes size or mtime,
+/// polled every `intervalSeconds` — the "still writing" signal for ffmpeg
+/// phases that print nothing (faststart's in-place rewrite, see
+/// CombineEngine.runFFMpeg).
+///
+/// Polls on its OWN serial GCD queue, never the Swift concurrency pool: a
+/// stat(2) on a drive that stopped answering can block in the kernel, and
+/// that must pin one private queue thread, not one of the pool's few
+/// threads. The watchdog fires independently of it either way.
+/// (For Rick: ≈ a POSIX timer thread doing stat() and comparing st_size /
+/// st_mtimespec against the last sample.)
+final class OutputFileHeartbeat: @unchecked Sendable {
+
+    struct Signature: Equatable, Sendable {
+        let size: Int64
+        let mtimeSeconds: Int
+        let mtimeNanoseconds: Int
+    }
+
+    /// Size + mtime of `path`, or nil when it can't be stat'ed (not there yet).
+    static func signature(_ path: String) -> Signature? {
+        var st = stat()
+        guard stat(path, &st) == 0 else { return nil }
+        return Signature(size: Int64(st.st_size),
+                         mtimeSeconds: Int(st.st_mtimespec.tv_sec),
+                         mtimeNanoseconds: Int(st.st_mtimespec.tv_nsec))
+    }
+
+    private let path: String
+    private let intervalSeconds: Double
+    private let onChange: @Sendable () -> Void
+    private let queue = DispatchQueue(label: "Rick-Breen.VideoScan.combine-output-heartbeat", qos: .utility)
+    /// `last` is touched only on `queue`; `timer` is guarded by `lock`
+    /// (start/stop run on the caller's thread).
+    private var last: Signature?
+    private let lock = NSLock()
+    private var timer: DispatchSourceTimer?
+
+    init(path: String, intervalSeconds: Double, onChange: @escaping @Sendable () -> Void) {
+        self.path = path
+        self.intervalSeconds = max(intervalSeconds, 0.05)
+        self.onChange = onChange
+    }
+
+    func start() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard timer == nil else { return }
+        let source = DispatchSource.makeTimerSource(queue: queue)
+        source.schedule(deadline: .now(), repeating: intervalSeconds)
+        source.setEventHandler { [weak self] in self?.sample() }
+        timer = source
+        source.resume()
+    }
+
+    func stop() {
+        lock.lock()
+        let source = timer
+        timer = nil
+        lock.unlock()
+        source?.cancel()
+    }
+
+    private func sample() {
+        let now = Self.signature(path)
+        defer { last = now }
+        if let last, now != last { onChange() }
     }
 }
