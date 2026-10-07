@@ -7255,6 +7255,20 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CleanupLengthCheckTests.swift",
+      "suites": [
+        "CleanupLengthCheckTests"
+      ],
+      "tests": [
+        "aFullLengthRenderPasses",
+        "aShortRenderIsRefused",
+        "engineUsesTheSharedLengthRule"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CleanupMediaMatrixTests.swift",
@@ -7373,6 +7387,24 @@
         "progressFlagOnlyAppearsWhenRequested",
         "streamCopyUsesCopyCodec"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CombineMuxStallTests.swift",
+      "suites": [
+        "CombineMuxStallTests"
+      ],
+      "tests": [
+        "faststartPassIsNotAStall",
+        "healthyMuxIsNotAStall",
+        "heartbeatSignatureTracksWrites",
+        "silentButWritingIsNotAStall",
+        "silentMuxFailsAsStalled",
+        "wedgedDecodeFailsVerify",
+        "wedgedProbeFailsVerify"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
     {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
@@ -19439,6 +19471,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ReformatPartialReservationTests.swift",
+      "suites": [
+        "ReformatPartialReservationTests"
+      ],
+      "tests": [
+        "reformatUsesSharedPartialPublishers",
+        "sameStemJobsNeverShareOrDeleteAPartial"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RelocateEngineTests.swift",
@@ -25751,8 +25796,16 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/CleanupLengthCheckTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/CleanupTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CombineMuxStallTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/CombineNeverOverwritesTests.swift",
@@ -26568,6 +26621,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ReferencePhotoImporterTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ReformatPartialReservationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
