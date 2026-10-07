@@ -331,7 +331,7 @@
     "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
   },
   "docs/reviews/briefs/codex-brief-p1-287-2026-10-06.md": {
-    "docs/reviews/codex/codex-review-p1-287-2026-10-06.md": "Verdict path the codex brief names before codex writes it; remove this entry when the review lands."
+    "docs/reviews/codex/codex-review-batch-2026-10-07.md": "Verdict path the codex brief names before codex writes it; remove when the review lands."
   },
   "docs/reviews/briefs/docs-reorg-brief.md": {
     "docs/analysis": "The reorganization brief names the pre-reorganization folders it moved.",
