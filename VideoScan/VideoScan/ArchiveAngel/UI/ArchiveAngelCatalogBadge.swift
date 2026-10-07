@@ -6,14 +6,30 @@
 // grade made visible on the row — a badge, not a workflow tag (workflow
 // tags are on their way out), and an O(1) sidecar read per row, never a
 // catalog-wide pass in a view body.
+//
+// 2026-10-06: "Ready for archive" / "Angel pick" capsules
+// (ArchiveAngelCatalogHint.swift) ride on the same type and view, so the
+// Catalog still names only the façade and this one public view.
 
+import AppKit
 import SwiftUI
 
 struct ArchiveAngelCatalogBadge: Equatable {
+    /// How the chip is drawn.
+    enum Style: Equatable {
+        /// The original rounded-rect chip ("Promote me", "Needs a date", "Prepared").
+        case chip
+        /// Light-green capsule: "Ready for archive".
+        case readyCapsule
+        /// Neutral grey capsule: "Angel pick" (picked, not ready yet).
+        case pickCapsule
+    }
+
     let text: String
     let color: Color
     /// Full verdict for the tooltip ("AAA grade A (112) — ★★★ · Donna …").
     let help: String
+    var style: Style = .chip
 
     /// The record's recommendation class (S3b — the same class the Archive
     /// tab counts): Ready = "Promote me", Needs a date, Worth a look, and
@@ -42,10 +58,19 @@ struct ArchiveAngelCatalogBadge: Equatable {
         case .notNow, .excluded, .anotherCopy, .promoted: return nil
         }
     }
+
+    /// The Catalog capsule for a computed hint: "Ready for archive" (light
+    /// green) or "Angel pick" (neutral), tooltip from the hint.
+    static func make(hint: ArchiveAngelCatalogHint) -> ArchiveAngelCatalogBadge {
+        hint.isReady
+            ? .init(text: hint.text, color: .green, help: hint.help, style: .readyCapsule)
+            : .init(text: hint.text, color: .secondary, help: hint.help, style: .pickCapsule)
+    }
 }
 
 /// The row chip — same rounded-rect language as the workflow-tag chips
-/// beside it, one size up so the eye lands on it.
+/// beside it, one size up so the eye lands on it. The capsule styles are
+/// SOLID fills (content rows keep solid backing — never glass/material).
 struct ArchiveAngelCatalogBadgeView: View {
     let badge: ArchiveAngelCatalogBadge
     /// The evidence store revision this chip was drawn against (codex
@@ -54,6 +79,16 @@ struct ArchiveAngelCatalogBadgeView: View {
     var revision: Int = 0
 
     var body: some View {
+        switch badge.style {
+        case .chip: chip
+        case .readyCapsule: capsule(icon: "checkmark.circle.fill",
+                                    ink: Self.readyInk, fill: Self.readyFill, stroke: Self.readyStroke)
+        case .pickCapsule: capsule(icon: "sparkles",
+                                   ink: .secondary, fill: Self.pickFill, stroke: Self.pickStroke)
+        }
+    }
+
+    private var chip: some View {
         HStack(spacing: 2) {
             Image(systemName: "sparkles")
                 .font(.system(size: 8, weight: .semibold))
@@ -68,4 +103,46 @@ struct ArchiveAngelCatalogBadgeView: View {
         .help(badge.help)
         .accessibilityLabel("Archive Angel: \(badge.text)")
     }
+
+    private func capsule(icon: String, ink: Color, fill: Color, stroke: Color) -> some View {
+        HStack(spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 9, weight: .semibold))
+            Text(badge.text)
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundColor(ink)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 1.5)
+        .background(Capsule().fill(fill))
+        .overlay(Capsule().strokeBorder(stroke, lineWidth: 0.5))
+        .fixedSize()
+        .lineLimit(1)
+        .help(badge.help)
+        .accessibilityLabel("Archive Angel: \(badge.text)")
+    }
+
+    // MARK: Light/dark-aware solid colours
+    //
+    // (For Rick: `NSColor(name:dynamicProvider:)` is a colour whose value is
+    // a callback asked again whenever the appearance changes — like a
+    // virtual getter keyed on the current theme, instead of a fixed RGB.)
+
+    private static func dynamic(light: NSColor, dark: NSColor) -> Color {
+        Color(nsColor: NSColor(name: nil) { appearance in
+            appearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light
+        })
+    }
+
+    /// Dark green text on pale green (light); pale green text on deep green (dark).
+    static let readyInk = dynamic(light: NSColor(srgbRed: 0.10, green: 0.42, blue: 0.18, alpha: 1),
+                                  dark: NSColor(srgbRed: 0.62, green: 0.90, blue: 0.67, alpha: 1))
+    static let readyFill = dynamic(light: NSColor(srgbRed: 0.86, green: 0.96, blue: 0.87, alpha: 1),
+                                   dark: NSColor(srgbRed: 0.12, green: 0.26, blue: 0.15, alpha: 1))
+    static let readyStroke = dynamic(light: NSColor(srgbRed: 0.55, green: 0.80, blue: 0.58, alpha: 1),
+                                     dark: NSColor(srgbRed: 0.25, green: 0.48, blue: 0.30, alpha: 1))
+    static let pickFill = dynamic(light: NSColor(white: 0.93, alpha: 1),
+                                  dark: NSColor(white: 0.22, alpha: 1))
+    static let pickStroke = dynamic(light: NSColor(white: 0.80, alpha: 1),
+                                    dark: NSColor(white: 0.36, alpha: 1))
 }

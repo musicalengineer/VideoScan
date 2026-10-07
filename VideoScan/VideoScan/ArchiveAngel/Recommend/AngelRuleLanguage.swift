@@ -666,6 +666,9 @@ enum AngelRuleKind: String, CaseIterable, Sendable {
     case volumeOffline, resting
     /// Rules v12: a file inside the Angel's own buffer (a safety floor).
     case angelWorkingCopy
+    /// Rules v15: no sound track, or silent / damaged sound
+    /// (ArchiveReadiness.lacksUsableSound). Switch it off to allow silent footage.
+    case noSound
     // Signals (built-in evidence lines; points come from `weights`).
     case confirmedPeople, machinePeople, playHistory, richness, date, duration, formatAtRisk, onlyCopy
     case unassignedVolume, audioProblem, downloadCap, fatigue
@@ -685,7 +688,7 @@ enum AngelRuleSection: String, Sendable {
         case .floors:
             return [.match, .notVideo, .onMasterArchive, .archivedCopy, .notPlayable, .pairedHalf, .livePhotoMotion,
                     .recentPhoneClip, .appCache, .derivativeOfOriginal, .tooShort, .proxyStream, .markedJunk,
-                    .suspectedJunk, .junkScore, .volumeOffline, .resting, .angelWorkingCopy]
+                    .suspectedJunk, .junkScore, .volumeOffline, .resting, .angelWorkingCopy, .noSound]
         case .signals:
             return [.match, .stars, .confirmedPeople, .machinePeople, .playHistory, .richness, .date, .duration,
                     .formatAtRisk, .onlyCopy, .unassignedVolume, .audioProblem, .backlogBonus, .downloadCap, .fatigue]
@@ -850,6 +853,7 @@ extension ArchiveAngelRejection {
         case .suspectedJunk: return "suspectedJunk"
         case .notPlayable: return "notPlayable"
         case .pairedHalf: return "pairedHalf"
+        case .noSound: return "noSound"
         case .inAnotherBatch: return "inAnotherBatch"
         case .duplicateOfPick: return "duplicateOfPick"
         case .derivativeOfOriginal: return "derivativeOfOriginal"

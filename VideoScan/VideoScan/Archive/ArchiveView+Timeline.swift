@@ -2,9 +2,11 @@
 // Archive tab — Timeline view (docs/archive-view.md, first cut
 // 2026-08-20). The archive is the app's vetted shelf: known dates, human
 // names, verified copies — so its natural view is the story over time,
-// not a file table. Layout: a vertical decade rail on the left (oldest at
-// the top, reading down — Rick), the year-by-year stream on the right.
-// Files view (ArchiveView+Table) stays available via the toolbar switch.
+// not a file table. Layout (Rick 2026-10-06): a horizontal decade ribbon
+// across the top (ArchiveDecadeRibbon.swift, Dock-style magnification),
+// and below it ONE decade's page, year by year under pinned year headers
+// (click a decade to turn the page). Files view (ArchiveView+Table) stays
+// available via the toolbar switch.
 
 import SwiftUI
 
@@ -66,13 +68,25 @@ extension ArchiveView {
         }
     }
 
-    /// The Timeline pane, fed from memoized items narrowed by the search
-    /// field. Search runs over archived items only — cheap per keystroke.
+    /// Timeline grouping + ribbon ticks, memoized per records version
+    /// and search text: built once per data change, O(1) on every other
+    /// render (CLAUDE.md: no O(records) work in view bodies).
+    @MainActor
+    func cachedTimeline() -> ArchiveTimelineSnapshot {
+        let key = ArchiveTimelineKey(
+            version: RecordsVersion(count: model.records.count,
+                                    revision: model.volumeAggregatesRevision),
+            query: searchText)
+        return timelineMemo.value(for: key) {
+            ArchiveTimelineSnapshot.build(items: cachedTimelineItems(), matching: searchText)
+        }
+    }
+
+    /// The Timeline pane, fed from the memoized snapshot.
     @MainActor
     var timelinePane: some View {
         ArchiveTimelinePane(
-            timeline: ArchiveTimeline.build(items: cachedTimelineItems(),
-                                            matching: searchText),
+            snapshot: cachedTimeline(),
             selectedIDs: selectedIDs,
             scrollTarget: timelineScrollTarget,
             contextMenu: { ids in AnyView(self.recordContextMenu(for: ids)) },
@@ -82,14 +96,21 @@ extension ArchiveView {
     }
 }
 
+/// Memo key for the timeline grouping: the catalog's version plus the
+/// search text that narrows it.
+struct ArchiveTimelineKey: Equatable {
+    let version: RecordsVersion
+    let query: String
+}
+
 // MARK: - The pane
 
 struct ArchiveTimelinePane: View {
-    /// Built by ArchiveView per render from memoized parts; cheap
-    /// (archived count, not catalog count).
-    let timeline: ArchiveTimeline
-    /// Rail selection → scroll anchor. Nil until the user clicks.
-    @State private var focusedDecade: Int?
+    /// Memoized by ArchiveView (cachedTimeline) — never built here.
+    let snapshot: ArchiveTimelineSnapshot
+    private var timeline: ArchiveTimeline { snapshot.timeline }
+    /// The decade under the ribbon's lens. Nil until the user picks one.
+    @State private var selectedDecade: Int?
     /// Items to highlight — a hand-off from the Catalog/Hallie selects
     /// the target here instead of dropping into the Files table
     /// (ArchiveHomeState rule 2).
@@ -100,7 +121,7 @@ struct ArchiveTimelinePane: View {
     let contextMenu: (Set<UUID>) -> AnyView
     let openItems: ([UUID]) -> Void
 
-    private static let undatedAnchor = -1
+    private static let undatedAnchor = ArchiveDecadeTick.undatedID
 
     /// Scroll targets in the stream live in their OWN id space. The rail's
     /// `ForEach(timeline.decades)` gives each rail row the decade's Int id,
@@ -108,15 +129,24 @@ struct ArchiveTimelinePane: View {
     /// nothing moved — only Undated, which is not in that ForEach, jumped
     /// (Rick 2026-09-23). A String "stream-1990" can't collide with it.
     static func anchorID(_ decade: Int) -> String { "stream-\(decade)" }
+    /// A year's anchor — its own prefix, so 1990-the-year never collides
+    /// with 1990-the-decade.
+    static func yearAnchorID(_ year: Int) -> String { "year-\(year)" }
+
+    /// The decade page on screen: the user's pick while it is still on the
+    /// ribbon, else the oldest decade with media. O(decades).
+    private var page: Int? { snapshot.page(selected: selectedDecade) }
 
     var body: some View {
         if timeline.isEmpty {
             emptyState
         } else {
             ScrollViewReader { proxy in
-                HStack(spacing: 0) {
-                    decadeRail(proxy: proxy)
-                        .frame(width: 128)
+                VStack(spacing: 0) {
+                    ArchiveDecadeRibbon(ticks: snapshot.ticks,
+                                        selectedID: page,
+                                        onSelect: { pickDecade($0, proxy: proxy) },
+                                        onPickYear: { pickYear($0, proxy: proxy) })
                     Divider()
                     stream
                 }
@@ -126,11 +156,15 @@ struct ArchiveTimelinePane: View {
         }
     }
 
-    /// Bring the hand-off target into view. The cards carry `.id(item.id)`
-    /// inside the LazyVStack; SwiftUI resolves the scroll from the
-    /// identifier even for cards not yet materialised.
+    /// Bring the hand-off target into view: turn to its decade's page,
+    /// then scroll to its card. The cards carry `.id(item.id)` inside the
+    /// LazyVStack; SwiftUI resolves the scroll from the identifier even
+    /// for cards not yet materialised.
     private func scrollToTarget(_ proxy: ScrollViewProxy) {
         guard let target = scrollTarget, let card = timeline.cardID(for: target) else { return }
+        if let targetPage = snapshot.page(containing: target) { selectedDecade = targetPage }
+        // (For Rick: `DispatchQueue.main.async` ≈ posting to the UI thread's
+        // queue — runs after this update, once the new page is built.)
         DispatchQueue.main.async {
             withAnimation { proxy.scrollTo(card, anchor: .center) }
         }
@@ -153,180 +187,179 @@ struct ArchiveTimelinePane: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: Decade rail (vertical, oldest at top)
+    // MARK: Decade ribbon → stream
 
-    private func decadeRail(proxy: ScrollViewProxy) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text("DECADES")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
-                .padding(.bottom, 4)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(timeline.decades) { decade in
-                        railRow(decade, proxy: proxy)
-                    }
-                    if !timeline.undated.isEmpty {
-                        Divider().padding(.vertical, 4)
-                        railButton(label: "Undated",
-                                   count: timeline.undated.count,
-                                   anchor: Self.undatedAnchor,
-                                   dimmed: false,
-                                   help: "Archived without a resolvable year. The date is part of the path and there is no refile yet, so these stay here until Refile ships.",
-                                   proxy: proxy)
-                    }
-                }
-                .padding(.horizontal, 6)
-            }
-            Spacer(minLength: 0)
+    /// A ribbon pick: that decade's page, scrolled to its top. The scroll
+    /// waits one turn of the run loop so it lands on the NEW page.
+    private func pickDecade(_ anchor: Int, proxy: ScrollViewProxy) {
+        selectedDecade = anchor
+        DispatchQueue.main.async {
+            proxy.scrollTo(Self.anchorID(anchor), anchor: .top)
         }
-        .background(Color(NSColor.controlBackgroundColor))
     }
 
-    private func railRow(_ decade: ArchiveTimelineDecade, proxy: ScrollViewProxy) -> some View {
-        railButton(label: decade.label,
-                   count: decade.count,
-                   anchor: decade.id,
-                   dimmed: decade.isGap,
-                   help: decade.isGap
-                       ? "No media yet from the \(decade.label) — tapes in the attic?"
-                       : "\(decade.count) archived from \(decade.rangeLabel)",
-                   proxy: proxy)
-    }
-
-    private func railButton(label: String, count: Int, anchor: Int,
-                            dimmed: Bool, help: String,
-                            proxy: ScrollViewProxy) -> some View {
-        Button {
-            focusedDecade = anchor
-            withAnimation { proxy.scrollTo(Self.anchorID(anchor), anchor: .top) }
-        } label: {
-            HStack {
-                Text(label)
-                    .font(.system(size: 15, weight: dimmed ? .regular : .semibold))
-                    .foregroundStyle(dimmed ? Color.secondary : Color.primary)
-                Spacer()
-                Text(dimmed ? "—" : "\(count)")
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .contentShape(Rectangle())
-            // Liquid Glass spots 2026-10-06: the focused decade sits under
-            // the same tinted glass lens as the selected tab in the tab
-            // strip — the rail is navigation, so it reads as one.
-            .background {
-                if focusedDecade == anchor {
-                    Color.clear.vsGlassCapsule(tint: Color.accentColor.opacity(0.22))
-                }
-            }
+    /// A year clicked in the ribbon's dwell-zoom row: its decade's page,
+    /// scrolled to that year.
+    private func pickYear(_ year: Int, proxy: ScrollViewProxy) {
+        selectedDecade = (year / 10) * 10
+        DispatchQueue.main.async {
+            withAnimation { proxy.scrollTo(Self.yearAnchorID(year), anchor: .top) }
         }
-        .buttonStyle(.plain)
-        .help(help)
     }
 
-    // MARK: The stream
+    // MARK: The stream — one decade's page
 
+    /// One decade at a time (Rick 2026-10-06), grouped by year under
+    /// pinned year headers. Builds only the page's cards, lazily.
     private var stream: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 0, pinnedViews: [.sectionHeaders]) {
-                ForEach(timeline.decades) { decade in
-                    if decade.isGap {
-                        gapBand(decade)
-                            .id(Self.anchorID(decade.id))
-                    } else {
-                        // The rail's scroll target is a zero-height ROW before
-                        // the section, not the pinned header: a lazy stack
-                        // does not reliably resolve scrollTo on a pinned
-                        // section header that has not been built yet, and the
-                        // rail clicks did nothing (Rick 2026-09-23).
-                        Color.clear
-                            .frame(height: 0)
-                            .id(Self.anchorID(decade.id))
-                        Section {
-                            ForEach(decade.years) { year in
-                                yearBlock(year)
-                            }
-                        } header: {
-                            decadeHeader(decade)
-                        }
-                    }
-                }
-                if !timeline.undated.isEmpty {
-                    Color.clear
-                        .frame(height: 0)
-                        .id(Self.anchorID(Self.undatedAnchor))
-                    Section {
-                        cardGrid(timeline.undated)
-                            .padding(.horizontal, 18)
-                            .padding(.top, 6)
-                    } header: {
-                        undatedHeader
-                    }
+                if page == Self.undatedAnchor {
+                    undatedPage
+                } else if let decade = timeline.decades.first(where: { $0.start == page }) {
+                    decadePage(decade)
                 }
             }
             .padding(.bottom, 24)
         }
     }
 
-    private func decadeHeader(_ decade: ArchiveTimelineDecade) -> some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Text(decade.label)
-                .font(.system(size: 26, weight: .bold))
-            Text("\(decade.count) archived")
-                .font(.system(size: 14))
-                .foregroundStyle(.secondary)
-            Spacer()
+    @ViewBuilder
+    private func decadePage(_ decade: ArchiveTimelineDecade) -> some View {
+        if decade.isGap {
+            gapBand(decade)
+                .id(Self.anchorID(decade.id))
+        } else {
+            // Scroll targets are zero-height ROWS, not the pinned headers:
+            // a lazy stack does not reliably resolve scrollTo on a pinned
+            // section header that has not been built yet (Rick 2026-09-23).
+            Color.clear
+                .frame(height: 0)
+                .id(Self.anchorID(decade.id))
+            decadeTitle(decade)
+            decadeRule
+            ForEach(decade.years) { year in
+                Color.clear
+                    .frame(height: 0)
+                    .id(Self.yearAnchorID(year.year))
+                Section {
+                    yearBlock(year)
+                } header: {
+                    yearHeader(year, isFirst: year.id == decade.years.first?.id)
+                }
+            }
+            decadeRule
         }
+    }
+
+    // MARK: Dividers (Rick 2026-10-06: subtle between years, a little
+    // stronger at the decade boundary — both quiet enough not to compete
+    // with the cards)
+
+    /// The decade boundary: top and bottom of the page.
+    private var decadeRule: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.22))
+            .frame(height: 2)
+            .padding(.horizontal, 18)
+    }
+
+    /// Between one year and the next.
+    private var yearRule: some View {
+        Rectangle()
+            .fill(Color.primary.opacity(0.09))
+            .frame(height: 1)
+            .padding(.horizontal, 48)
+    }
+
+    @ViewBuilder
+    private var undatedPage: some View {
+        Color.clear
+            .frame(height: 0)
+            .id(Self.anchorID(Self.undatedAnchor))
+        Section {
+            cardGrid(timeline.undated)
+                .padding(.horizontal, 18)
+                .padding(.top, 6)
+        } header: {
+            undatedHeader
+        }
+    }
+
+    /// The page's title — scrolls away; the year headers pin. Dates are
+    /// centred in the list (Rick 2026-10-06).
+    private func decadeTitle(_ decade: ArchiveTimelineDecade) -> some View {
+        VStack(spacing: 2) {
+            Text(decade.label)
+                .font(.system(size: 28, weight: .bold))
+            Text("\(decade.count) archived · \(decade.rangeLabel)")
+                .font(.system(size: 15))
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 18)
-        .padding(.vertical, 8)
-        .background(.bar)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+
+    /// Pinned while its year's cards scroll under it; the year centred,
+    /// a faint rule above every year but the first. Solid backing.
+    private func yearHeader(_ year: ArchiveTimelineYear, isFirst: Bool) -> some View {
+        VStack(spacing: 0) {
+            if !isFirst { yearRule }
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text(String(year.year))
+                    .font(.system(size: 20, weight: .semibold))
+                Text(year.items.count == 1 ? "· 1 archived" : "· \(year.items.count) archived")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.secondary)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .padding(.horizontal, 18)
+            .padding(.vertical, 7)
+        }
+        .background(Color(NSColor.windowBackgroundColor))
+        .accessibilityIdentifier("archive.timeline.yearHeader.\(year.year)")
     }
 
     /// An empty decade is drawn, not skipped — the gap is the coaxing
     /// surface (docs/archive-view.md).
+    /// Now a whole page of its own, so it is centred and readable
+    /// (secondary, not tertiary, for senior eyes).
     private func gapBand(_ decade: ArchiveTimelineDecade) -> some View {
-        HStack(spacing: 8) {
+        VStack(spacing: 6) {
             Text(decade.label)
-                .font(.system(size: 16, weight: .semibold))
-                .foregroundStyle(.tertiary)
-            Text("nothing archived yet — tapes in the attic?")
-                .font(.system(size: 13))
-                .foregroundStyle(.tertiary)
-            Spacer()
+                .font(.system(size: 28, weight: .bold))
+                .foregroundStyle(.secondary)
+            Text("Nothing archived yet from \(decade.rangeLabel) — tapes in the attic?")
+                .font(.system(size: 16))
+                .foregroundStyle(.secondary)
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 18)
-        .padding(.vertical, 10)
+        .padding(.vertical, 40)
     }
 
     private var undatedHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
+        VStack(spacing: 2) {
             Text("Undated")
                 .font(.system(size: 22, weight: .bold))
                 .foregroundStyle(.orange)
-            Text("set a date in the Inspector to file these in their year")
-                .font(.system(size: 13))
+            Text("Set a date in the Inspector to file these in their year")
+                .font(.system(size: 14))
                 .foregroundStyle(.secondary)
-            Spacer()
         }
+        .frame(maxWidth: .infinity, alignment: .center)
         .padding(.horizontal, 18)
         .padding(.vertical, 8)
-        .background(.bar)
+        .background(Color(NSColor.windowBackgroundColor))
     }
 
     private func yearBlock(_ year: ArchiveTimelineYear) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(String(year.year))
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(.secondary)
-                .padding(.top, 10)
-            cardGrid(year.items)
-        }
-        .padding(.horizontal, 18)
-        .padding(.bottom, 6)
+        cardGrid(year.items)
+            .padding(.horizontal, 18)
+            .padding(.top, 4)
+            .padding(.bottom, 12)
     }
 
     /// A year's cards as a grid that fills the pane's width — one column
@@ -392,7 +425,7 @@ struct ArchiveTimelinePane: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    .font(.system(size: 13))
+                    .font(.system(size: 14))
                 }
                 Spacer(minLength: 0)
             }
@@ -440,7 +473,7 @@ struct ArchiveTimelinePane: View {
                     openItems([v.id])
                 } label: {
                     Text(v.label)
-                        .font(.system(size: 12, weight: v.id == item.id ? .semibold : .regular))
+                        .font(.system(size: 13, weight: v.id == item.id ? .semibold : .regular))
                         .padding(.horizontal, 9)
                         .padding(.vertical, 3)
                         .background(Capsule().fill(v.id == item.id

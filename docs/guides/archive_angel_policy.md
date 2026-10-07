@@ -100,7 +100,7 @@ A rule is an object. Only `id` and `kind` are required.
 
 ### Floor kinds (`floors`)
 
-`match`, `notVideo`, `onMasterArchive`, `angelWorkingCopy`, `archivedCopy`, `notPlayable`, `pairedHalf`, `livePhotoMotion`, `recentPhoneClip` (`weights.recentPhoneClipYears`), `appCache` (`tables`), `derivativeOfOriginal`, `tooShort` (`weights.minimumDurationSeconds`; explicit picks use `explicitPickMinimumDurationSeconds`), `proxyStream` (`weights.minimumAverageKilobitsPerSecond`), `markedJunk`, `suspectedJunk`, `junkScore` (`weights.junkFloor`), `volumeOffline`, `resting` (the attention memory).
+`match`, `notVideo`, `onMasterArchive`, `angelWorkingCopy`, `archivedCopy`, `notPlayable`, `pairedHalf`, `noSound` (rules v15 — see below), `livePhotoMotion`, `recentPhoneClip` (`weights.recentPhoneClipYears`), `appCache` (`tables`), `derivativeOfOriginal`, `tooShort` (`weights.minimumDurationSeconds`; explicit picks use `explicitPickMinimumDurationSeconds`), `proxyStream` (`weights.minimumAverageKilobitsPerSecond`), `markedJunk`, `suspectedJunk`, `junkScore` (`weights.junkFloor`), `volumeOffline`, `resting` (the attention memory).
 
 ### Signal kinds (`signals`)
 
@@ -300,6 +300,7 @@ A phone clip with no camera date has no `captureYear`, so this rule doesn't fire
 ### More one-liners
 
 - Switch off the phone-clip rule: `"floors": [ { "id": "recentPhoneClip", "enabled": false } ]`
+- Allow silent footage (a silent Super 8 transfer, say): `"floors": [ { "id": "noSound", "enabled": false } ]`
 - Restore the old "stage ≥ Master means already archived" behaviour (rules v10):
   ```json
   "floors": [ { "id": "stageMeansArchived", "kind": "match", "rejection": "alreadyArchived",
@@ -326,3 +327,15 @@ docs/design/footage_groups_gap_plan_2026-09-26.md Stage 2, bounded by docs/revie
 ## Rules v14 (2026-09-29) — event labels
 
 Rick approved steps a–c that day. `coverage.eventLabels` (on) and `coverage.birthdayWindowDays` (3), and the *Event labels* section above: holidays, People-tab birthdays and a curated name lexicon widen `onePerEvent`'s event from a day to an occasion. Additive — a v13 `policy.json` loads with both defaults; an unknown key is still named in the log and ignored; a window outside 0…14 refuses the file. The Archive Readiness sheet gains an *Occasion* line. With `eventLabels` off, every key and every pick is rules v13's (`ArchiveAngelEventLabelParityTests`). Every v13 evidence file re-scores.
+
+## Rules v15 (2026-10-06) — no usable sound, no recommendation
+
+Rick found a video-only DV export with no sound track recommended as Ready (grade A, "Ready — no sound track"). Bad, missing or out-of-sync sound is the one thing that ruins a keeper, so the default floors now include `noSound`, placed right after `pairedHalf`. It refuses:
+
+- a file with no audio stream (video-only, in any container, with or without an extension);
+- a sound track Verify Audio found **silent** or **missing** (status `ok`, note `silent audio` / `no audio stream`);
+- **damaged** audio (Verify Audio status `damaged`).
+
+The reason reads "No usable sound — no sound track, or the sound is silent or damaged; find its audio and combine first". A correlated video-only half still hears `pairedHalf` ("Half of an A/V pair — combine first"), because that floor runs first. A sound track that has simply not been checked is **not** refused: it stays a candidate, Prepare checks it, and it is never "Ready" until it has been checked ("Needs audio checked"). Informational notes (surround, two live tracks, mono) pass.
+
+`noSound` is not a safety floor. Switching it off (`{ "id": "noSound", "enabled": false }`) is how a policy allows silent footage. It has `explicitPicks: false`, so "Prepare with Archive Angel" on files you selected may still take silent film. It is not star-exempt. Every v14 evidence file re-scores.

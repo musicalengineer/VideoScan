@@ -96,4 +96,18 @@ if [ -f "$PWD/scripts/complexity_gate.py" ]; then
     }
 fi
 
+# --- Gauntlet manifest drift (blocking) ---
+# A NEW test file must be assigned a gauntlet stage in the same commit.
+# 2026-10-06: 103 unassigned files blocked every gauntlet stage and nothing
+# said so at commit time. Pure Python, checks only files ADDED in the index
+# (milliseconds). The full validator remains scripts/gauntlet/inventory.swift.
+if command -v python3 >/dev/null 2>&1 \
+        && [ -f "$PWD/scripts/gauntlet/manifest_drift.py" ]; then
+    python3 scripts/gauntlet/manifest_drift.py --staged || {
+        echo ""
+        echo "Commit blocked: new test file(s) without a gauntlet stage (see above)."
+        exit 1
+    }
+fi
+
 exit 0

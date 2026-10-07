@@ -62,7 +62,7 @@ half-written; force-unwraps and `try!` on input or disk data; logs leaking media
 | 10-08 | N1008-T-Archive | T | `Archive/` and its tests |
 | 10-09 | N1009-D-Core | D | `VideoScan/VideoScanCore/Sources/` (highest Swift churn) |
 | 10-10 | N1010-H-Volumes | H | `Volumes/` (scan engine, checkpoints, reachability, retire/delete scan target) |
-| 10-11 | N1011-D-python | D | `scripts/`, `tools/` (highest churn overall; may RUN pytest/ruff) |
+| 10-11 | N1011-D-PrunePlan | D | Plan the refactor of `PrunePlan.plan` (CCN 52, data-risk: prune) and its file: every guard, its pinning test, behaviour-preserving steps. App Swift only (Rick 10/6: support scripts aren't measured) |
 | 10-12 | N1012-R-FamilyTree-writes | R | FamilyTree pull/refresh + CyberBrain writers (source_layout data-risk list) |
 | 10-13 | N1013-D-FamilyTree | D | `FamilyTree/` |
 | 10-14 | N1014-H-MediaOps-jobs | H | MediaOps jobs that are not deletion: combine, transcode, trim, reformat, rebuild audio, rescue copy, publishers |

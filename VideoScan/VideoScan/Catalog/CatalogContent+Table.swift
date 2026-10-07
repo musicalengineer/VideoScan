@@ -553,11 +553,14 @@ extension CatalogContent {
                     .font(.system(size: 9))
                     .foregroundColor(rec.archiveHealth.color)
             }
-            // "Promote me" / "Worth a look" — the Archive Angel grade made
-            // visible (Rick 2026-09-11). O(1) sidecar read per row. The
-            // revision is a real input of the chip so a grade change with
-            // the same A+B set re-renders it (codex #1345).
-            if let badge = model.archiveAngel.badge(for: rec.id) {
+            // The Archive Angel's word on this file (Rick 2026-09-11, and
+            // 2026-10-06): "Ready for archive" (light green) when it is
+            // picked and ready, "Angel pick" when picked but not ready,
+            // "Prepared" while in a batch. O(1) per row — the hints are
+            // built off-main once per recount. The revision is a real input
+            // of the chip so a regrade or a hint update re-renders it
+            // (codex #1345).
+            if let badge = model.archiveAngel.catalogBadge(for: rec.id) {
                 ArchiveAngelCatalogBadgeView(badge: badge, revision: angelBadgeRevision)
             }
             // Find Similar Footage (2026-09-23): "3 copies" — the group
@@ -573,8 +576,9 @@ extension CatalogContent {
     /// then your note (machine probe notes stay in the inspector).
     private func tagColumnHelp(for rec: VideoRecord) -> String {
         var lines = [rec.mediaDisposition.rawValue]
-        if let badge = model.archiveAngel.badge(for: rec.id) {
-            lines.append(badge.help + " — Assess in the Archive tab to prepare it.")
+        if let badge = model.archiveAngel.catalogBadge(for: rec.id) {
+            // The capsules' help is already the whole story in family words.
+            lines.append(badge.style == .chip ? badge.help + " — Assess in the Archive tab to prepare it." : badge.help)
         }
         if let f = rec.footage, f.groupSize > 1 {
             lines.append(FootageGroupBadge.help(f))

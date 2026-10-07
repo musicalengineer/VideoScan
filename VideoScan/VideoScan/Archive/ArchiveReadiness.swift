@@ -163,6 +163,26 @@ struct ArchiveReadiness: Equatable, Sendable {
                                 warnings: warnings, blocking: blocking)
     }
 
+    /// The ONE "no usable sound" rule (Rick 2026-10-06 — the Archive
+    /// Angel's `noSound` floor): true for anything but a picture WITH a
+    /// sound track (video-only, audio-only, un-probed), for damaged audio
+    /// (Verify Audio's "damaged"), and for a track Verify Audio found
+    /// silent or missing (status "ok" + that note fragment — honest states,
+    /// not damage, so the status alone cannot say it). A track never
+    /// checked is NOT refused here: Prepare checks it, and it is never
+    /// "Ready" until it has been (ArchiveAngelStatusWords.needs).
+    /// Informational notes (surround, two live tracks, mono) pass. Pure.
+    static func lacksUsableSound(streamTypeRaw: String, audioVerifyStatus: String,
+                                 audioVerifyNote: String) -> Bool {
+        guard streamTypeRaw == StreamType.videoAndAudio.rawValue else { return true }
+        if audioVerifyStatus == "damaged" { return true }
+        guard !audioVerifyNote.isEmpty else { return false }
+        let fragments = audioVerifyNote.split(separator: ";").map { $0.trimmingCharacters(in: .whitespaces) }
+        return fragments.contains(silentNoteFragment) || fragments.contains(noStreamNoteFragment)
+    }
+    private static let silentNoteFragment = VerifyAudioRules.noteFragment(for: .silentAudio)
+    private static let noStreamNoteFragment = VerifyAudioRules.noteFragment(for: .noAudioStream)
+
     /// Date state from a resolution:
     ///   • `.known` — Rick's own date (any precision: "1992" + I'm-sure means
     ///     the YEAR is certain, and nagging him about his own entry helps
@@ -324,6 +344,14 @@ extension ArchiveReadiness {
     @MainActor
     static func assess(record r: VideoRecord,
                        familyUserDate: (date: String, confidence: String)? = nil) -> ArchiveReadiness {
+        assess(inputs(record: r, familyUserDate: familyUserDate))
+    }
+
+    /// The Sendable snapshot `assess(record:)` reads — for a caller that
+    /// assesses OFF the main actor (the Catalog's "Ready for archive" hints).
+    @MainActor
+    static func inputs(record r: VideoRecord,
+                       familyUserDate: (date: String, confidence: String)? = nil) -> Inputs {
         var i = Inputs()
         i.isPlayable = r.isPlayable
         i.streamTypeRaw = r.streamTypeRaw
@@ -348,6 +376,6 @@ extension ArchiveReadiness {
         i.originModel = r.originModel
         i.originEncoder = r.originEncoder
         i.filename = r.filename
-        return assess(i)
+        return i
     }
 }
