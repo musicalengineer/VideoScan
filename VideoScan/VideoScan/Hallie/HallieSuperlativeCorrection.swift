@@ -16,9 +16,17 @@
 // Forms, first match wins:
 //   stated target — "I want mine", "not mine", "that's not my side",
 //                   "I meant rick", "no, I meant for rick", "for rick",
-//                   "what about donna's side", "donna's side", "mine"
+//                   "what about donna's side", "donna's side", "mine",
+//                   "that is my line" / "those are our ancestors"
 //   the other side — "that is donna's line", "those are donna's
-//                   ancestors", "that's my line" (→ the spouse's)
+//                   ancestors"
+//
+// 2026-10-07 (end-to-end replay): "that is my line" after "who was the
+// oldest person in the family tree?" used to mean "that one is mine, rank
+// the spouse's side" and answered from Donna's ancestors. Said by the
+// speaker, "my line" names the line they want ranked — the owner's own
+// ancestors, the same target as "I want mine". The named form ("that is
+// donna's line") keeps Rick's 2026-09-26 ruling: the other side.
 
 import Foundation
 
@@ -50,11 +58,6 @@ enum HallieSuperlativeCorrection {
             guard let n = named(raw) else { return nil }
             return .ancestorsOf(n)
         }
-        func other(owner: Substring?, name raw: Substring?) -> Scope? {
-            if owner != nil { return .otherSideOf(nil) }
-            guard let n = named(raw) else { return nil }
-            return .otherSideOf(n)
-        }
 
         // 1. A stated target.
         if let re = try? Regex(#"\b(?:i want|i wanted|i'd like|give me|show me|use|try)\s+"# + ownerWords + #"\b"#),
@@ -84,10 +87,13 @@ enum HallieSuperlativeCorrection {
            let m = lower.firstMatch(of: re) {
             if let scope = target(owner: m.output[1].substring, name: m.output[2].substring) { return scope }
         }
-        // 2. "that is donna's line" → the other side.
+        // 2. "that is donna's line" → the other side; "that is my line" →
+        //    the speaker's own line (replay 2026-10-07: it ranked the
+        //    spouse's side instead).
         if let re = try? Regex(#"\b(?:that|that's|that is|those are|these are|this is|he is|she is|he's|she's|it's|it is|is|are|was|were)\s+(?:(my|our)|"# + name + #"'s)\s+"# + sideNouns + #"\b"#),
            let m = lower.firstMatch(of: re) {
-            if let scope = other(owner: m.output[1].substring, name: m.output[2].substring) { return scope }
+            if m.output[1].substring != nil { return .ancestorsOf(nil) }
+            if let n = named(m.output[2].substring) { return .otherSideOf(n) }
         }
         return nil
     }
