@@ -76,7 +76,8 @@ extension ArchiveAngelCandidate {
             footageGroupID: r.footage?.groupID,
             footageRank: r.footage?.rank,
             footageConfidence: r.footage?.confidence,
-            inferredDateRange: r.inferredDateRange)
+            inferredDateRange: r.inferredDateRange,
+            audioVerifyStatus: r.audioVerifyStatus)
     }
 
     /// The slice of a record the recommendation classifier reads — no

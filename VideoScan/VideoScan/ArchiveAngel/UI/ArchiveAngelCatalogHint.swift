@@ -8,7 +8,9 @@
 // Angel's own list calls "Ready to archive" (ArchiveAngelStatusWords.isReady),
 // so the Catalog and the Archive tab can never disagree:
 //   1. the EFFECTIVE class is `.ready` (ArchiveAngelRecommendationSummary.
-//      effective): the rules picked it (passes the floors, someone vouched
+//      effective): the rules picked it (passes the floors — rules v15's
+//      `noSound` among them: no sound track, silent or damaged audio is
+//      never picked unless the policy allows silent footage — someone vouched
 //      or grade A, dated to the rule's precision), it is NOT in a prepared
 //      batch, NOT promoted by a batch, and live-recommendable right now —
 //      not purged / set aside / superseded, and Promote would not refuse it
