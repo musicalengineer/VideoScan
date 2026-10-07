@@ -565,11 +565,21 @@ private struct N1012FixedSource: ResearchSource {
 /// (C++: a shared_ptr the lambda captures by value.)
 private final class N1012SourceBox { var findings: [ResearchFinding] = [] }
 
+/// Collects the model's log lines (the log closure is @Sendable).
+/// (C++: a vector behind a mutex.)
+private final class N1012LogBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: [String] = []
+    func append(_ line: String) { lock.withLock { stored.append(line) } }
+    var lines: [String] { lock.withLock { stored } }
+}
+
 @Suite("Research Person — N1012 lore is never dropped", .serialized)
 @MainActor
 struct ResearchLoreNeverDroppedTests {
     private let fm = FileManager.default
     private let words = "Synthetic note: ask about the mill ledger"
+    private let logged = N1012LogBox()
 
     private func hit() -> ResearchFinding {
         ResearchFinding(source: .chroniclingAmerica, title: "Synthetic hit", date: nil,
@@ -587,7 +597,7 @@ struct ResearchLoreNeverDroppedTests {
                                         fetcher: FixtureResearchFetcher(fixtures: [], retrievedAt: n1012At),
                                         speakerName: "Tester", record: { _ in throw N1012Refused() },
                                         sources: { _ in [N1012FixedSource(findings: box.findings)] },
-                                        log: { _ in }, now: { n1012At })
+                                        log: { [logged] in logged.append($0) }, now: { n1012At })
         model.load()
         return (base, store, subject, box, model)
     }
@@ -647,5 +657,22 @@ struct ResearchLoreNeverDroppedTests {
         model.close()                                   // what .onDisappear calls
         #expect(try loreOnDisk(store, subject, f.id) == words)
         #expect(model.errorMessage == nil)
+    }
+
+    /// QA on F4: closing when the draft CAN'T be committed (its finding is
+    /// gone) must not take the words down with the model — they are logged.
+    @Test func closingWithItsFindingGoneStillKeepsTheWords() async throws {
+        let (base, store, subject, box, model) = try fixture()
+        defer { try? fm.removeItem(at: base) }
+        let f = hit()
+        box.findings = [f]
+        try await runAndWait(model)
+        model.editLore(words, for: f.id)
+        var gone = try #require(try store.loadDossier(key: subject.key))
+        gone.findings.removeAll()
+        try store.saveDossier(gone)
+        model.close()
+        #expect(logged.lines.contains { $0.contains(words) },
+                "an uncommittable draft's words must survive the sheet closing")
     }
 }

@@ -9437,6 +9437,7 @@
       "tests": [
         "aDamagedExclusionSidecarIsNeverSavedOver",
         "aDamagedExclusionSidecarThatCannotBeSetAsideRefusesTheWrite",
+        "aFailedExclusionWriteReportsTheRealErrno",
         "aPersonUnknownToTheDirectoryFallsBackToNameMatching",
         "anExcludedPhotoIsNeverShownForThatPersonAgain",
         "crestLookupIsCaseAndDiacriticInsensitiveAndContentVerified",
@@ -20000,6 +20001,7 @@
         "chroniclingAmericaClipsToCoverageAndSkipsOutOfRange",
         "chroniclingAmericaParsesItemsAndConstrainsTheQuery",
         "closingTheSheetSavesTypedLore",
+        "closingWithItsFindingGoneStillKeepsTheWords",
         "committingLoreForAFindingGoneFromDiskSaysSoAndKeepsTheDraft",
         "confirmedFindingBecomesAConfirmedCitedItemLinkedToTheTreeRecord",
         "deceasedTreePersonIsEligibleAndKeyedByFamilySearchID",

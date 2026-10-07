@@ -1140,8 +1140,23 @@ struct FamilyAssetStore {
             try AtomicFilePublish.write(try encoder.encode(record), to: sidecar,
                                         durability: .fullFsync, createIntermediates: false)
         } catch {
-            throw StoreError.createFailed(sidecar.lastPathComponent, errno: errno)
+            // The caught error's own code — the global `errno` is stale by
+            // now (temp-file cleanup ran after the failing syscall).
+            throw StoreError.createFailed(sidecar.lastPathComponent, errno: Self.posixCode(of: error))
         }
+    }
+
+    /// POSIX code carried by `error`: `AtomicFilePublish.Failure`'s captured
+    /// errno, a POSIX NSError, or a Foundation file error's underlying POSIX
+    /// error; EIO when there is none.
+    static func posixCode(of error: Error) -> Int32 {
+        if let failure = error as? AtomicFilePublish.Failure { return failure.errnoValue }
+        let ns = error as NSError
+        if ns.domain == NSPOSIXErrorDomain { return Int32(ns.code) }
+        if let under = ns.userInfo[NSUnderlyingErrorKey] as? NSError, under.domain == NSPOSIXErrorDomain {
+            return Int32(under.code)
+        }
+        return EIO
     }
 
     static let sidecarDecoder: JSONDecoder = {

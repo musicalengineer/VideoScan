@@ -157,6 +157,13 @@ final class ResearchPersonModel: ObservableObject {
     /// Return only, so closing dropped the words with the @StateObject.
     func close() {
         commitPendingLore()
+        // Anything still uncommitted (finding gone, conflict, save failed)
+        // dies with this model, so its words go to the log — Rick's own
+        // lore, no paths — where he can copy them back (QA on N1012-F4).
+        for id in editedLore.sorted() {
+            let why = loreConflicts[id] != nil ? "changed elsewhere" : "could not be saved"
+            log("🔴 Research: sheet closed with an unsaved note (\(why)) — the words were: “\(loreDrafts[id] ?? "")”")
+        }
         cancel()
     }
 

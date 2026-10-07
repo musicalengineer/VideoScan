@@ -689,6 +689,26 @@ struct FamilyAssetStoreTests {
         #expect(lines.contains { $0.hasPrefix("🔴") && $0.contains("nothing was saved") })
     }
 
+    /// A failed publish reports the errno of the CAUGHT error, not whatever
+    /// `errno` happened to hold afterwards.
+    @Test func aFailedExclusionWriteReportsTheRealErrno() throws {
+        let (base, store) = try temporaryStore()
+        let photo = store.peopleDirectory
+            .appendingPathComponent("test_Group", isDirectory: true)
+            .appendingPathComponent("test_photo.png")
+        try writePNG(to: photo)
+        let folder = photo.deletingLastPathComponent()
+        defer {
+            try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? fileManager.removeItem(at: base)
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        let name = FamilyAssetStore.exclusionSidecarURL(for: photo).lastPathComponent
+        #expect(throws: FamilyAssetStore.StoreError.createFailed(name, errno: EACCES)) {
+            try store.excludePhoto(photo, from: "@I3@", log: { _ in })
+        }
+    }
+
     @Test func thumbnailDecodeIsPixelBounded() throws {
         let (base, store) = try temporaryStore()
         defer { try? fileManager.removeItem(at: base) }
