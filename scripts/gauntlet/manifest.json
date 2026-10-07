@@ -1930,6 +1930,7 @@
         "testAFourHopProvenanceChainJoinsAFiveHopChainDoesNot",
         "testAVersionJoinsItsArchivedOriginalsFamilyAndIsCheckableUncheckedByDefault",
         "testAdviceForAnImportantFamilyWithNoAttestationAndTheOverride",
+        "testAnArchiveVolumeCopyHoldsNoDeviceForTheBar",
         "testDefaultsMatchTheDesignTable",
         "testFamiliesKeyByContentAndArchiveCopyJoinsItsSource",
         "testImportantFamilyNeedsDeviceAndAttestationBeforeAnythingGoes",
@@ -1945,6 +1946,7 @@
         "testRowsAreTheWorkingCopiesAndOnlyCandidatesWithAVerifiedArchiveAreCheckable",
         "testScale100kSnapshotsIn5kFamiliesUnderBudget",
         "testSelectionAcrossFamiliesDeduplicatesShortfallsAndNamesEveryArchiveOnlyFile",
+        "testSelectionDoesNotCountAnArchiveVolumeCopyAsAnExtraDevice",
         "testTheLogLineSaysWhyEachCopyCouldOrCouldNotBeSelected",
         "testUnverifiedArchiveRowsAreShownButNeverCheckable",
         "testVolumeChoicesAndTotalsAcrossFamilies"

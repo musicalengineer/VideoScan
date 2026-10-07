@@ -495,6 +495,54 @@ final class PrunePlanTests: XCTestCase {
         XCTAssertEqual(i.shortfall, "★★★ / Important — needs 1 more device")
     }
 
+    // MARK: A copy on the archive's own volume (GH #288, N1011-F1/F2)
+
+    /// One extra device, no cloud want — so the only thing that decides
+    /// "covered" is the device count.
+    private var oneDeviceBar: ImportanceBar {
+        let r = ImportanceBar.Requirement(extraDevices: 1, cloudOrOffsite: false)
+        return ImportanceBar(important: r, ordinary: r, low: r)
+    }
+
+    /// src on a working drive, its verified archive copy, and Y — a
+    /// working copy that sits on the archive's own volume (outside the
+    /// archive root).
+    private func familyWithArchiveVolumeTwin() -> (src: ArchiveCopySnapshot, y: ArchiveCopySnapshot,
+                                                    fam: [ArchiveCopySnapshot]) {
+        let src = copy("src.mov", vol: "CrucialX9")
+        var y = copy("y.mov", vol: "FamilyArchive", working: false)
+        y.isOnArchiveVolume = true
+        return (src, y, [src, archiveCopy(promotedFrom: src.id), y])
+    }
+
+    /// N1011-F1: the checklist judged the choice with Y's volume (the
+    /// archive drive) as the extra device, so trashing the only
+    /// off-archive copy read as "bar met". The plan rule does not count it.
+    func testSelectionDoesNotCountAnArchiveVolumeCopyAsAnExtraDevice() {
+        let (src, _, fam) = familyWithArchiveVolumeTwin()
+        let f = plan(fam, keepOne: false, bar: oneDeviceBar)
+        XCTAssertTrue(f.keeperRequired)
+        let s = f.selection([src.id])
+        XCTAssertEqual(s.count, 1)
+        XCTAssertEqual(s.overrideCount, 1, "trashing the only off-archive copy goes against the bar")
+        let shortfall = s.overrideShortfalls.first ?? "(none)"
+        XCTAssertEqual(s.overrideShortfalls.count, 1)
+        XCTAssertTrue(shortfall.hasSuffix("needs 1 more device"), shortfall)
+    }
+
+    /// N1011-F2: pins the plan rule (`locked != .onArchiveVolume` when
+    /// counting kept devices). Without it, Y would meet the bar and src
+    /// would be trashed by default.
+    func testAnArchiveVolumeCopyHoldsNoDeviceForTheBar() {
+        let (src, y, fam) = familyWithArchiveVolumeTwin()
+        let f = plan(fam, keepOne: false, bar: oneDeviceBar)
+        XCTAssertTrue(f.keeperRequired, "Y is not an extra device, so src must stay")
+        XCTAssertEqual(f.keeper?.id, src.id)
+        XCTAssertFalse(f.defaultSelection.contains(src.id))
+        XCTAssertTrue(f.trash.isEmpty)
+        XCTAssertEqual(f.rows.first { $0.id == y.id }?.role, .kept(.onArchiveVolume))
+    }
+
     func testKeeperElectionPrefersNewDeviceThenFreeSpaceThenUserOverride() {
         var bar = ImportanceBar.defaults
         bar.important = .init(extraDevices: 1, cloudOrOffsite: false)
