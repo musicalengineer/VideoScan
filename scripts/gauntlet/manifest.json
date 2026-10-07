@@ -9375,6 +9375,72 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ExcessCopiesApplyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ExcessCopiesApplyTests"
+      ],
+      "tests": [
+        "aHoldAddedMidJob",
+        "aSurvivorThatLeavesHoldsTheMove",
+        "bitRotInTheArchiveHoldsEverything",
+        "changesAfterTheForecast",
+        "forecastEqualsRun",
+        "keepInTheLane",
+        "lastCopyReadsTheArchiveInFull",
+        "networkMountRefused",
+        "neverExceedsTheForecast",
+        "poisonedKeepListHoldsEverything",
+        "readOnlyAndBackupDrives",
+        "sampledOnlyCandidateNeverMovedWithoutAMatchingRead",
+        "viewerModeRefused"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ExcessCopiesPlanScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "ExcessCopiesPlanScaleTests"
+      ],
+      "tests": [
+        "scale100k"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ExcessCopiesPlanTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ExcessCopiesPlanTests"
+      ],
+      "tests": [
+        "archiveOnlyFact",
+        "backupLikeDriveRefusedWhole",
+        "backupWordingFirst",
+        "keepRule",
+        "longerThanMasterIsFlagged",
+        "nomination",
+        "toleranceAndUnknown",
+        "unverifiedArchiveAndArchiveSide"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ExcessCopiesSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ExcessCopiesSensorTests"
+      ],
+      "tests": [
+        "everyCopyIsReadInFull",
+        "noFileOperationOfItsOwn",
+        "theOneDoorIsPruneOneCopyToTrash"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ExtensionlessScanTests.swift",
       "stage": "unit",
       "suites": [
@@ -26228,6 +26294,10 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
         {
+          "name": "VideoScan/VideoScanTests/ExcessCopiesApplyTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/ExtensionlessScanTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -27440,7 +27510,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2134,
+      "expected_floor": 2145,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -27561,6 +27631,8 @@
         "VideoScanTests/DuplicateLedgerTests",
         "VideoScanTests/EmbeddedDatePlacementTests",
         "VideoScanTests/EvalPresenceRuleTests",
+        "VideoScanTests/ExcessCopiesPlanTests",
+        "VideoScanTests/ExcessCopiesSensorTests",
         "VideoScanTests/FamilyAssetIdentityDirectoryTests",
         "VideoScanTests/FamilyScoringTests",
         "VideoScanTests/FamilyTaggingPredicateTests",
@@ -28169,7 +28241,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 58,
+      "expected_floor": 59,
       "name": "performance",
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -28183,6 +28255,7 @@
         "VideoScanTests/CatalogOpenScaleTests",
         "VideoScanTests/CatalogPerfMemoTests",
         "VideoScanTests/ElapsedTimerPauseTests",
+        "VideoScanTests/ExcessCopiesPlanScaleTests",
         "VideoScanTests/FamilyMapRenderSensorTests",
         "VideoScanTests/GeneratedMediaPerformanceTests",
         "VideoScanTests/HallieSuperlativeScopeRulingsTests",
