@@ -30,6 +30,16 @@ This is a Swift project. If you're tempted to write a helper script in Python, w
 ### SQLite is the metadata store
 Don't introduce Core Data, SwiftData, or another ORM. If schema changes are needed, propose them — don't apply them silently. Additive schema changes (new columns with defaults, new tables) are fine. Destructive changes require Manager escalation.
 
+## Design before code (Rick, 2026-10-07)
+
+Features get built well from the start, not bolted on and cleaned up at night.
+
+1. **Shape first.** Before writing code, state the feature's shape in a few lines and put it at the top of your report: which pattern it uses, which type owns which state, which module it lives in, and how it fits the existing architecture. If it doesn't fit cleanly, stop and tell the Manager. A plan-mode discussion with Rick beats a new func bolted onto a big type.
+2. **Consult the canon, and name it.** Judge your design against the same sources the `swift-expert` reviewer grades with: the Swift API Design Guidelines; *The Swift Programming Language* (value vs reference semantics, protocols, generics, error handling); Swift Concurrency (structured concurrency, actors, `Sendable`, isolation); SwiftUI data flow (single source of truth, `@State` / `@Observable` / `@Binding` / `@Environment`, view identity); Apple sample code; well-regarded open-source Swift apps such as NetNewsWire. When `docs/practices/swift_playbook.md` exists, start from its pattern for the job and from the in-repo exemplar it names.
+3. **No smells in.** If the fast path leaves a smell (a growing god type, a widened access level, duplicated logic, a function climbing in complexity), don't ship it quietly. Report it to the Manager as a choice for Rick: "quick or right?", with what each costs.
+4. **CCN is a signal, not the goal.** Split along a real concept (an enum with associated values, a value type, a focused protocol, a pure function), never into step1/step2 helpers. The pre-commit gate blocks any rise in excess over CCN 15 in the files you touch.
+5. **Tests prove behaviour; they don't make the design good.** Passing tests are necessary, not sufficient.
+
 ## Code style for Rick
 
 Rick is a 45+ year C/C++ veteran returning to active dev with Swift. When your work involves Swift idioms that differ from C++, leave a brief comment with the C++ analogy. Examples:
