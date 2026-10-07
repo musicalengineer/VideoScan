@@ -141,7 +141,23 @@ def full_fixtures(now):
                                         "overrides_recent": [{"ts": iso(fresh), "reason": "SECRET-REASON", "author": "Rick Breen",
                                                               "commit": "abc1234", "function_details": [
                                                                   {"function": "Big.run", "ccn": 35, "nloc": 120}]}]},
+        "exposure.jsonl": jsonl([exposure_row(old, 2600, 9), exposure_row(fresh, 2520, 3)]),
+        "problem_files_latest.json": {"schemaVersion": 1, "ts": iso(fresh), "sha": "abcd1234", "formula_version": 1,
+                                      "files_scored": 412, "rows": [
+                                          {"file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift", "score": 120.9,
+                                           "offenders": 6, "worst_ccn": 39, "new_or_worse": 0, "lines": 2599,
+                                           "could_be_private": 29, "widened_for_split": 0, "churn_7d": 12}]},
     }
+
+
+def exposure_row(ts, could_be_private, new):
+    bucket = {"files": 10, "decls": 100, "could_be_private": 12, "widened_for_split": 3, "fine": 85}
+    return {"schemaVersion": 1, "ts": iso(ts), "sha": "abcd1234", "run_kind": "nightly",
+            "totals": {**bucket, "decls": 16773, "could_be_private": could_be_private, "widened_for_split": 435},
+            "by_folder": {"Hallie": bucket, "Catalog": {**bucket, "could_be_private": 7}},
+            "top20": [{"file": "VideoScan/VideoScan/Catalog/DateTriangulator.swift", "could_be_private": 35,
+                       "widened_for_split": 0, "decls": 86}],
+            "baseline_before": 2520, "baseline_after": 2518, "new": new, "fixed": 2, "shrink_skipped": False}
 
 
 def backfill_row(ts):
@@ -187,8 +203,15 @@ def test_every_section_renders_with_honest_missing_and_stale_states(tmp_path):
     assert out["notes"]["c-adv-note"] == "no data yet"
     # Sections that have data drew charts.
     for chart in ["c-tests", "c-cov-folders", "c-cov-trend", "c-sa-compiler", "c-sa-codeql",
-                  "c-codex", "c-hallie", "c-size-folders", "c-size-trend", "c-cx-debt", "c-cx-folders"]:
+                  "c-codex", "c-hallie", "c-size-folders", "c-size-trend", "c-cx-debt", "c-cx-folders",
+                  "c-ex-trend", "c-ex-folders"]:
         assert chart in out["charts"], chart
+    # Over-exposure: cards with the night-over-night delta, top files, problem files.
+    ex = out["sections"]["ex-cards"]
+    assert "Could be private" in ex and "2520" in ex and "-80 from previous" in ex
+    assert "DateTriangulator.swift" in out["sections"]["ex-top"]
+    assert "DeleteDuplicatesJob.swift" in out["sections"]["pf-table"] and "120.9" in out["sections"]["pf-table"]
+    assert "412 files with any debt" in out["sections"]["pf-title"]
     # Complexity: cards, the top-15 table and the latest new-offender list.
     cx = out["sections"]["cx-cards"]
     # App code only (Rick 2026-10-06): the cards read the Swift totals, never Python.
@@ -223,7 +246,7 @@ def test_everything_missing_renders_no_data_not_zero(tmp_path):
     strip = out["sections"]["status-strip"]
     assert strip.count("no data yet") >= 5
     assert "Could not load the metrics branch" in out["sections"]["status"]
-    for box in ["tests-cards", "coverage-cards", "static-cards", "adv-cards", "codex-cards", "hallie-cards", "size-cards", "cx-cards"]:
+    for box in ["tests-cards", "coverage-cards", "static-cards", "adv-cards", "codex-cards", "hallie-cards", "size-cards", "cx-cards", "ex-cards"]:
         text = out["sections"][box]
         assert re.search(r"no data yet|No .* (rows|published yet)", text), box
         assert ">0<" not in text, box

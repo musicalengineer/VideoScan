@@ -23842,6 +23842,43 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_exposure_metrics.py",
+      "stage": "unit",
+      "suites": [
+        "test_exposure_metrics.py"
+      ],
+      "tests": [
+        "test_a_split_file_that_does_not_extend_the_type_makes_it_fine",
+        "test_alert_cli_reads_stdin",
+        "test_alert_lines_quiet_when_clean_and_red_when_new",
+        "test_baseline_round_trip_and_cli_update_then_shrink",
+        "test_braces_in_strings_comments_and_regex_do_not_confuse_scopes",
+        "test_common_name_in_more_than_50_files_cannot_be_widened_for_split",
+        "test_init_is_referenced_through_its_type_name",
+        "test_module_scoping_core_is_not_seen_from_the_app",
+        "test_nested_types_count_top_level_types_do_not",
+        "test_one_file_scripts_are_not_measured",
+        "test_outputs_pass_the_privacy_gate",
+        "test_privacy_gate_refuses_anything_but_app_source_paths",
+        "test_privacy_gate_refuses_free_text_names_and_extra_keys",
+        "test_problem_rows_join_every_signal_and_rank_worst_first",
+        "test_problem_table_caps_at_15_and_is_quiet_when_empty",
+        "test_ratchet_new_fixed_moved_and_shrink_only",
+        "test_referenced_only_in_its_own_file_could_be_private",
+        "test_same_name_on_another_type_elsewhere_reads_as_fine_conservatively",
+        "test_score_is_the_documented_formula",
+        "test_sensor_real_tree_scan_is_fast_and_sane",
+        "test_short_name_cannot_be_widened_for_split",
+        "test_shrink_guard_keeps_the_baseline_when_most_of_it_vanishes",
+        "test_skips_non_internal_overrides_witnesses_objc_and_locals",
+        "test_tests_reaching_a_declaration_keep_it_internal",
+        "test_used_only_from_the_types_own_split_files_is_widened_for_split",
+        "test_validate_cli_exit_codes"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_face_recognize_units.py",
       "stage": "unit",
       "suites": [
@@ -27320,6 +27357,10 @@
         },
         {
           "name": "tests/test_dossier_batch_helpers.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_exposure_metrics.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
