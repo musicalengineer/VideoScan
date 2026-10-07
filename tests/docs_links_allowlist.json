@@ -84,7 +84,7 @@
   "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift": {
     "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
-  "VideoScan/VideoScan/Catalog/InspectorPanel.swift": {
+  "VideoScan/VideoScan/Catalog/InspectorPanel+Sections.swift": {
     "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreePersonMetadata.swift": {

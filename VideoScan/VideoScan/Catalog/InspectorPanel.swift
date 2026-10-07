@@ -41,499 +41,37 @@ struct InspectorPanel: View {
     /// record (O(1) sidecar lookup by the CALLER). nil = not scored yet.
     var angelEvidence: ArchiveAngel.Evidence?
 
+    // The sections, top to bottom. Each builder lives in
+    // InspectorPanel+Sections.swift and decides its own visibility through
+    // InspectorPanelRules (refactor R4, GH #281); this list is the order.
     var body: some View {
         if let rec = record {
             ScrollView {
                 VStack(alignment: .leading, spacing: 0) {
-                    // Filename header
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(rec.filename)
-                            .font(.system(size: 13, weight: .semibold, design: .monospaced))
-                            .textSelection(.enabled)
-                            .lineLimit(2)
-                            .padding(.top, 12)
-                        HStack(spacing: 8) {
-                            Text(rec.streamType == .ffprobeFailed ? rec.isPlayable : rec.streamTypeRaw)
-                                .font(.system(size: 11, weight: .medium))
-                                .foregroundColor(streamTypeColor(rec.streamType))
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 4)
-                                        .fill(streamTypeColor(rec.streamType).opacity(0.12))
-                                )
-                            if rec.streamType == .videoOnly && rec.pairedWith == nil {
-                                Text("NO AUDIO")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(.orange)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .fill(Color.orange.opacity(0.12))
-                                    )
-                            }
-                            if rec.streamType == .audioOnly && rec.pairedWith == nil {
-                                Text("NO VIDEO")
-                                    .font(.system(size: 11, weight: .bold))
-                                    .foregroundColor(.orange)
-                                    .padding(.horizontal, 6)
-                                    .padding(.vertical, 2)
-                                    .background(
-                                        RoundedRectangle(cornerRadius: 4)
-                                            .fill(Color.orange.opacity(0.12))
-                                    )
-                            }
-                        }
-                        // Star rating
-                        HStack(spacing: 6) {
-                            Text("Rating")
-                                .font(.system(size: 11))
-                                .foregroundColor(.secondary)
-                            StarRatingView(rating: Binding(
-                                get: { rec.starRating },
-                                set: { rec.starRating = $0 }
-                            ), onCommit: onRecordEdited)
-                        }
-                        // Volume name — prominent.
-                        // Use `displayVolumeLabel` so folder scans show as
-                        // "Volume > Folder" (e.g. "M4drive > rickb"), matching
-                        // the catalog table's Volume column. The old
-                        // VolumeReachability.volumeName(forPath:) helper
-                        // collapses any "/Users/<X>/..." path to "<X>",
-                        // hiding the actual volume — see catalog with 125
-                        // records under /Users/rickb that all appeared as
-                        // just "rickb" in this inspector.
-                        HStack(spacing: 4) {
-                            Image(systemName: "externaldrive.fill")
-                                .font(.system(size: 11))
-                                .foregroundColor(.accentColor)
-                            Text(rec.displayVolumeLabel)
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundColor(.primary)
-                                .textSelection(.enabled)
-                        }
-                        .padding(.top, 2)
-                        // Avid identity — tape and clip name at a glance
-                        if rec.hasAvidMetadata && (!rec.avidTapeName.isEmpty || !rec.avidClipName.isEmpty) {
-                            VStack(alignment: .leading, spacing: 3) {
-                                if !rec.avidTapeName.isEmpty {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "recordingtape")
-                                            .font(.system(size: 10))
-                                        Text(rec.avidTapeName)
-                                            .font(.system(size: 12, weight: .semibold))
-                                    }
-                                }
-                                if !rec.avidClipName.isEmpty {
-                                    HStack(spacing: 4) {
-                                        Image(systemName: "film.stack")
-                                            .font(.system(size: 10))
-                                        Text(rec.avidClipName)
-                                            .font(.system(size: 11))
-                                    }
-                                }
-                            }
-                            .foregroundColor(.cyan)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 5)
-                            .background(
-                                RoundedRectangle(cornerRadius: 5)
-                                    .fill(Color.cyan.opacity(0.08))
-                            )
-                            .padding(.top, 4)
-                        }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
+                    headerSection(rec)
 
                     Divider().padding(.horizontal, 16)
 
-                    // Sections
-                    inspectorSection("General", systemImage: "doc") {
-                        inspectorRow("Size", rec.sizeDisplay)
-                        inspectorRow("Duration", rec.duration)
-                        inspectorRow("Container", rec.container)
-                        inspectorRow("Extension", rec.ext)
-                    }
-
-                    inspectorSection("Video", systemImage: "film") {
-                        inspectorRow("Resolution", rec.resolution)
-                        inspectorRow("Codec", rec.videoCodec)
-                        inspectorRow("Frame Rate", rec.frameRate)
-                        inspectorRow("Bitrate", rec.videoBitrate)
-                        inspectorRow("Total Bitrate", rec.totalBitrate)
-                        inspectorRow("Color Space", rec.colorSpace)
-                        inspectorRow("Bit Depth", rec.bitDepth)
-                        inspectorRow("Scan Type", rec.scanType)
-                    }
-
-                    inspectorSection("Audio", systemImage: "speaker.wave.2") {
-                        inspectorRow("Codec", rec.audioCodec)
-                        inspectorRow("Channels", rec.audioChannels)
-                        inspectorRow("Sample Rate", rec.audioSampleRate)
-                    }
-
-                    inspectorSection("Family Tags", systemImage: "person.crop.circle") {
-                        InspectorFamilyTagsView(record: rec)
-                    }
-
-                    // Workflow tags (2026-07-23) — chip row + ⊕ add menu.
-                    // Sits right under Family Tags: this whole
-                    // neighborhood is "what Rick has said about this
-                    // record" (people, tags, dates). `.id(rec.id)` resets
-                    // the view's custom-entry draft when selection moves.
-                    inspectorSection("Tags", systemImage: "tag") {
-                        InspectorWorkflowTagsView(record: rec)
-                            .id(rec.id)
-                    }
-
-                    // "When and who" area: the date entry sits right under
-                    // Family Tags (GH #117 — the future tag-person picker
-                    // and this share one neighborhood). `.id(rec.id)`
-                    // reseeds the draft text when the selection changes.
-                    inspectorSection("When Was This?", systemImage: "calendar.badge.clock") {
-                        InspectorDateView(record: rec)
-                            .id(rec.id)
-                    }
-
-                    // "Where" sits right under "When" (Rick 2026-09-12):
-                    // the hand-entered place, a near-clone of the date
-                    // entry with the same best-guess / I'm-sure control.
-                    inspectorSection("Where Was This?", systemImage: "mappin.and.ellipse") {
-                        InspectorPlaceView(record: rec)
-                            .id(rec.id)
-                    }
-
-                    // History (Media Ledger, stage 2 — Rick 2026-09-12):
-                    // dated sentences for this record, newest first, read
-                    // off-main and cached per record by the ledger. The
-                    // view does no file I/O and no O(records) work.
-                    inspectorSection("History", systemImage: "clock.arrow.circlepath") {
-                        InspectorHistoryView(record: rec)
-                            .id(rec.id)
-                    }
-
-                    // Dossier — captions, transcript, OCR text, OCR dates,
-                    // inferred date. Only shown when the record has been
-                    // processed by the dossier pipeline so empty rows don't
-                    // clutter the inspector for un-dossiered records.
-                    if rec.dossierProcessedAt != nil {
-                        inspectorSection("Dossier", systemImage: "doc.text.magnifyingglass") {
-                            InspectorDossierView(record: rec)
-                        }
-                    }
-
-                    inspectorSection("Timestamps", systemImage: "calendar") {
-                        // Filesystem dates stay (Finder parity) but are never
-                        // used for archive placement; the embedded stamp is.
-                        if let embedded = rec.embeddedCreationDate {
-                            inspectorRow("Embedded", InspectorDateView.embeddedFormatter.string(from: embedded) + " UTC")
-                        }
-                        if let origin = rec.originDescription {
-                            inspectorRow("Origin", origin)
-                        }
-                        inspectorRow("Created", rec.dateCreated)
-                        inspectorRow("Modified", rec.dateModified)
-                        inspectorRow("Timecode", rec.timecode)
-                        inspectorRow("Tape Name", rec.tapeName)
-                    }
-
-                    if rec.pairedWith != nil || rec.pairConfidence != nil {
-                        inspectorSection("Correlation", systemImage: "arrow.triangle.2.circlepath") {
-                            if let paired = rec.pairedWith {
-                                HStack(alignment: .top, spacing: 6) {
-                                    Text("Paired With")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 80, alignment: .trailing)
-                                    VStack(alignment: .leading, spacing: 3) {
-                                        Button {
-                                            onSelectRecord?(paired.id)
-                                        } label: {
-                                            HStack(spacing: 4) {
-                                                Image(systemName: paired.streamType == .audioOnly
-                                                      ? "waveform" : "film")
-                                                    .font(.system(size: 9))
-                                                Text(paired.filename)
-                                                    .font(.system(size: 11, weight: .medium))
-                                                    .lineLimit(1)
-                                                    .truncationMode(.middle)
-                                            }
-                                            .foregroundColor(.accentColor)
-                                        }
-                                        .buttonStyle(.plain)
-                                        .onHover { hovering in
-                                            if hovering {
-                                                NSCursor.pointingHand.push()
-                                            } else {
-                                                NSCursor.pop()
-                                            }
-                                        }
-                                        Text(paired.directory)
-                                            .font(.system(size: 9, design: .monospaced))
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                            .truncationMode(.head)
-                                    }
-                                    Spacer()
-                                }
-                            }
-                            if let conf = rec.pairConfidence {
-                                HStack(spacing: 6) {
-                                    Text("Confidence")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 80, alignment: .trailing)
-                                    Circle()
-                                        .fill(conf.textColor)
-                                        .frame(width: 8, height: 8)
-                                    Text(conf.rawValue)
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(conf.textColor)
-                                    Spacer()
-                                }
-                            }
-                        }
-                    }
-
-                    // Trim provenance — same minimal-indicator convention
-                    // as the Correlation section's "Paired With" row.
-                    if rec.trimInSeconds != nil || !trimDerivatives.isEmpty {
-                        inspectorSection("Trim", systemImage: "scissors") {
-                            if let inSec = rec.trimInSeconds, let outSec = rec.trimOutSeconds {
-                                if let source = trimSource {
-                                    trimLinkRow(label: "Trimmed from", target: source)
-                                }
-                                inspectorRow("Kept",
-                                             "\(TrimTimecode.format(inSec)) – \(TrimTimecode.format(outSec))")
-                            }
-                            ForEach(trimDerivatives, id: \.id) { derived in
-                                trimLinkRow(label: "Trimmed version", target: derived)
-                            }
-                        }
-                    }
-
-                    // Master Archive (docs/archive_promotion_workflow.md
-                    // §4): "Master copy ✓ · Reveal" on sources with a
-                    // promoted copy; "Promoted from … · Reveal source" on
-                    // archive copies. Both links jump to the other record;
-                    // Reveal opens Finder on the file.
-                    if masterCopy != nil || promotionSource != nil {
-                        inspectorSection("Master Archive", systemImage: "archivebox") {
-                            // Rick 2026-08-25: "Archived on [Date] to [Volume] in
-                            // nice bold green" — the one line that says this
-                            // content is safe, on originals AND on their copies.
-                            if let banner = Self.archivedBanner(record: rec, masterCopy: masterCopy,
-                                                                promotionSource: promotionSource) {
-                                Label(banner.text, systemImage: banner.verified ? "checkmark.seal.fill" : "clock.badge.exclamationmark")
-                                    .font(.system(size: 13, weight: .bold))
-                                    .foregroundStyle(banner.verified
-                                        ? Color(red: 0.10, green: 0.62, blue: 0.30) : .orange)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .padding(.bottom, 4)
-                                    .accessibilityIdentifier("inspector.archivedBanner")
-                            }
-                            if let copy = masterCopy {
-                                promotionLinkRow(label: copy.derivedFrom == rec.id ? "Master copy ✓" : "Identical copy in archive ✓",
-                                                 target: copy, revealTitle: "Reveal")
-                                if let fixity = copy.archiveFixity {
-                                    inspectorRow("Fixity", "\(fixity.algorithm) \(fixity.digest.prefix(16))…")
-                                }
-                            }
-                            if let source = promotionSource {
-                                promotionLinkRow(label: "Promoted from", target: source, revealTitle: "Reveal source")
-                            }
-                            if let fixity = rec.archiveFixity, promotionSource != nil {
-                                inspectorRow("Fixity", "\(fixity.algorithm) \(fixity.digest.prefix(16))… · verified \(fixity.verifiedAt.formatted(date: .abbreviated, time: .shortened))")
-                            }
-                        }
-                    }
-
-                    // Archive Angel phase 2: what the background sweep
-                    // thinks — a candidate with its why-lines, or the
-                    // floor reason. Machine tier; the Angel batch decides
-                    // nothing, Rick does.
-                    if let ev = angelEvidence, masterCopy == nil, promotionSource == nil {
-                        inspectorSection("Archive Angel Assessment", systemImage: "sparkles") {
-                            if let r = ev.rejection {
-                                Text("Excluded — " + r.rawValue)
-                                    .font(.system(size: 11))
-                                    .foregroundStyle(.secondary)
-                                    .accessibilityIdentifier("inspector.angelRejection")
-                            } else {
-                                Text("AAA grade \(ev.grade.rawValue) (\(ev.score)) — \(ev.grade.label)")
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(Color.orange)
-                                    .accessibilityIdentifier("inspector.angelScore")
-                                ForEach(Array(ev.lines.prefix(4).enumerated()), id: \.offset) { _, line in
-                                    Text("· " + line.line)
-                                        .font(.system(size: 11))
-                                        .foregroundStyle(.secondary)
-                                        .fixedSize(horizontal: false, vertical: true)
-                                }
-                            }
-                        }
-                    }
-
-                    // Repair lifecycle (GH #132) — shown on repair
-                    // copies (awaiting or confirmed) and on superseded
-                    // originals. The confirm button is the same
-                    // one-click verb the context menu offers.
-                    if rec.isAwaitingConfirmation || rec.repairConfirmedDate != nil || rec.isSuperseded {
-                        inspectorSection("Repair", systemImage: "checkmark.seal") {
-                            if let source = repairSource {
-                                repairLinkRow(label: "Repaired from", target: source)
-                            }
-                            if let copy = repairCopy {
-                                repairLinkRow(label: "Repaired copy", target: copy)
-                            }
-                            if rec.isAwaitingConfirmation {
-                                inspectorRow("Status", "Waiting for your OK — play it, then confirm")
-                                // Purged / set-aside repair copies are not
-                                // confirmable (QA M1) — the model refuses
-                                // too; this keeps the button honest.
-                                if repairSource != nil, !rec.isPurged, !rec.isSetAside {
-                                    Button("Sounds Good — Confirm Repair") {
-                                        onConfirmRepair?(rec.id)
-                                    }
-                                    .controlSize(.small)
-                                    .help("Keep this repaired copy as the one to use. The original is hidden from the everyday view — never deleted — and your tags, notes, people, and ratings carry over.")
-                                    .accessibilityIdentifier("inspector.confirmRepair")
-                                }
-                            } else if let confirmedAt = rec.repairConfirmedDate {
-                                inspectorRow("Status", "Confirmed \(confirmedAt.formatted(date: .abbreviated, time: .shortened))")
-                            } else if rec.isSuperseded {
-                                inspectorRow("Status", "Superseded — hidden from the everyday view, never deleted")
-                            }
-                        }
-                    }
-
-                    if rec.duplicateDisposition != .none || !rec.duplicateBestMatchFilename.isEmpty {
-                        inspectorSection("Duplicates", systemImage: "doc.on.doc") {
-                            if rec.duplicateDisposition != .none {
-                                HStack(spacing: 6) {
-                                    Text("Status")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 80, alignment: .trailing)
-                                    Circle()
-                                        .fill(rec.duplicateDisposition.textColor)
-                                        .frame(width: 8, height: 8)
-                                    Text(
-                                        rec.duplicateGroupCount >= 2
-                                        ? "\(rec.duplicateDisposition.rawValue) · \(rec.duplicateGroupCount) matches"
-                                        : rec.duplicateDisposition.rawValue
-                                    )
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(rec.duplicateDisposition.textColor)
-                                    Spacer()
-                                }
-                            }
-                            inspectorRow("Reasons", rec.duplicateReasons)
-                            if let conf = rec.duplicateConfidence {
-                                HStack(spacing: 6) {
-                                    Text("Confidence")
-                                        .font(.system(size: 11))
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 80, alignment: .trailing)
-                                    Circle()
-                                        .fill(conf.textColor)
-                                        .frame(width: 8, height: 8)
-                                    Text(conf.rawValue)
-                                        .font(.system(size: 11, weight: .medium))
-                                        .foregroundColor(conf.textColor)
-                                    Spacer()
-                                }
-                            }
-
-                            // Show all copies in this duplicate group
-                            if !duplicateGroupMembers.isEmpty {
-                                let thisVolume = VolumeReachability.volumeName(forPath: rec.fullPath)
-
-                                Divider().padding(.vertical, 4)
-
-                                Text("Duplicate Group (\(duplicateGroupMembers.count + 1) total)")
-                                    .font(.system(size: 11, weight: .semibold))
-                                    .foregroundColor(.primary)
-                                    .padding(.leading, 4)
-
-                                // This record (selected)
-                                duplicateCopyRow(
-                                    filename: rec.filename,
-                                    volumeName: thisVolume,
-                                    directory: (rec.fullPath as NSString).deletingLastPathComponent,
-                                    disposition: rec.duplicateDisposition,
-                                    isSameVolume: true,
-                                    isSelected: true
-                                )
-
-                                // Other group members
-                                ForEach(duplicateGroupMembers, id: \.id) { member in
-                                    let memberVolume = VolumeReachability.volumeName(forPath: member.fullPath)
-                                    let sameVolume = (memberVolume == thisVolume)
-                                    duplicateCopyRow(
-                                        filename: member.filename,
-                                        volumeName: memberVolume,
-                                        directory: (member.fullPath as NSString).deletingLastPathComponent,
-                                        disposition: member.duplicateDisposition,
-                                        isSameVolume: sameVolume,
-                                        isSelected: false
-                                    )
-                                }
-                            }
-                        }
-                    }
-
-                    if rec.hasAvidMetadata {
-                        inspectorSection("Avid Project", systemImage: "film.stack") {
-                            inspectorRow("Clip Name", rec.avidClipName)
-                            inspectorRow("Mob Type", rec.avidMobType)
-                            inspectorRow("Bin File", rec.avidBinFile)
-                            inspectorRow("Tape", rec.avidTapeName)
-                            inspectorRow("Tracks", rec.avidTracks)
-                            inspectorRow("Edit Rate", rec.avidEditRate > 0 ? String(format: "%.2f fps", rec.avidEditRate) : "")
-                            inspectorCopyableRow("Mob ID", rec.avidMobID)
-                            inspectorCopyableRow("Material UUID", rec.avidMaterialUUID)
-                            inspectorCopyableRow("Original Path", rec.avidMediaPath)
-                        }
-                    }
-
-                    // userNotes split (2026-07-23): YOUR note text gets
-                    // its own section; the machine/probe notes keep the
-                    // original "Notes" section below (unchanged styling,
-                    // including the red ffprobe-failure treatment).
-                    if !rec.userNotes.isEmpty {
-                        inspectorSection("Your Notes", systemImage: "note.text") {
-                            Text(rec.userNotes)
-                                .font(.system(size: 12))
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-
-                    if !rec.notes.isEmpty {
-                        inspectorSection("Notes", systemImage: "exclamationmark.bubble") {
-                            Text(rec.notes)
-                                .font(.system(size: 12))
-                                .foregroundColor(rec.streamType == .ffprobeFailed ? .red : .secondary)
-                                .textSelection(.enabled)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-
-                    inspectorSection("Location", systemImage: "folder") {
-                        inspectorCopyableRow("Path", rec.fullPath)
-                        inspectorRow("Directory", rec.directory)
-                        inspectorRow("MD5 (partial)", rec.partialMD5)
-                        // File signature — the identity duplicate
-                        // detection runs on. Says "not computed yet"
-                        // rather than showing blank: an empty row reads
-                        // as "no signature exists for this file", when
-                        // the truth is "nobody has looked" (Rick
-                        // 2026-08-12).
-                        inspectorCopyableRow("File Signature", rec.contentHashDisplay)
-                    }
+                    generalSection(rec)
+                    videoSection(rec)
+                    audioSection(rec)
+                    familyTagsSection(rec)
+                    workflowTagsSection(rec)
+                    whenSection(rec)
+                    whereSection(rec)
+                    historySection(rec)
+                    dossierSection(rec)          // only once dossier-processed
+                    timestampsSection(rec)
+                    correlationSection(rec)      // only when paired / scored
+                    trimSection(rec)             // only on trims and their sources
+                    masterArchiveSection(rec)    // only on either side of a promotion
+                    angelSection()               // only with evidence, never on archived
+                    repairSection(rec)           // only in the repair lifecycle
+                    duplicatesSection(rec)       // only when duplicate-flagged
+                    avidProjectSection(rec)      // only with Avid metadata
+                    userNotesSection(rec)        // only when non-empty
+                    notesSection(rec)            // only when non-empty
+                    locationSection(rec)
 
                     Spacer(minLength: 16)
                 }
@@ -546,19 +84,7 @@ struct InspectorPanel: View {
             }
             .background(Color(NSColor.controlBackgroundColor))
         } else {
-            VStack(spacing: 8) {
-                Image(systemName: "info.circle")
-                    .font(.system(size: 28))
-                    .foregroundColor(.secondary.opacity(0.4))
-                Text("No Selection")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundColor(.secondary)
-                Text("Select a file to view details")
-                    .font(.system(size: 11))
-                    .foregroundColor(.secondary.opacity(0.7))
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color(NSColor.controlBackgroundColor))
+            emptyState
         }
     }
 
@@ -748,10 +274,7 @@ struct InspectorPanel: View {
         guard rec.duplicateDisposition != .none || !rec.duplicateBestMatchFilename.isEmpty else { return }
         section("Duplicates")
         if rec.duplicateDisposition != .none {
-            let status = rec.duplicateGroupCount >= 2
-                ? "\(rec.duplicateDisposition.rawValue) · \(rec.duplicateGroupCount) matches"
-                : rec.duplicateDisposition.rawValue
-            add("Status", status)
+            add("Status", InspectorPanelRules.duplicateStatusText(rec))
         }
         add("Reasons", rec.duplicateReasons)
         if let conf = rec.duplicateConfidence { add("Confidence", conf.rawValue) }
@@ -827,7 +350,7 @@ struct InspectorPanel: View {
     // MARK: - Section Builder
 
     @ViewBuilder
-    private func inspectorSection(_ title: String, systemImage: String, @ViewBuilder content: () -> some View) -> some View {
+    func inspectorSection(_ title: String, systemImage: String, @ViewBuilder content: () -> some View) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 5) {
                 Image(systemName: systemImage)
@@ -850,7 +373,7 @@ struct InspectorPanel: View {
 
     /// Clickable record link for the Trim section — same visual language
     /// as the Correlation section's "Paired With" row.
-    private func trimLinkRow(label: String, target: VideoRecord) -> some View {
+    func trimLinkRow(label: String, target: VideoRecord) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Text(label)
                 .font(.system(size: 11))
@@ -885,7 +408,7 @@ struct InspectorPanel: View {
     /// visual language with the lifecycle's swap glyph (GH #132).
     /// Master Archive link row: filename link (selects the other record)
     /// plus a small Reveal button that opens Finder on that file.
-    private func promotionLinkRow(label: String, target: VideoRecord, revealTitle: String) -> some View {
+    func promotionLinkRow(label: String, target: VideoRecord, revealTitle: String) -> some View {
         // Green = "this file is safely in the Master Archive" (Rick
         // 2026-08-16); the filename stays accent-colored because it is a
         // link that jumps to the other record.
@@ -926,7 +449,7 @@ struct InspectorPanel: View {
         }
     }
 
-    private func repairLinkRow(label: String, target: VideoRecord) -> some View {
+    func repairLinkRow(label: String, target: VideoRecord) -> some View {
         HStack(alignment: .top, spacing: 6) {
             Text(label)
                 .font(.system(size: 11))
@@ -991,7 +514,7 @@ struct InspectorPanel: View {
     }
 
     @ViewBuilder
-    private func inspectorRow(_ label: String, _ value: String) -> some View {
+    func inspectorRow(_ label: String, _ value: String) -> some View {
         if !value.isEmpty {
             HStack(alignment: .top, spacing: 6) {
                 Text(label)
@@ -1007,7 +530,7 @@ struct InspectorPanel: View {
     }
 
     @ViewBuilder
-    private func inspectorCopyableRow(_ label: String, _ value: String) -> some View {
+    func inspectorCopyableRow(_ label: String, _ value: String) -> some View {
         if !value.isEmpty {
             HStack(alignment: .top, spacing: 6) {
                 Text(label)
@@ -1033,7 +556,7 @@ struct InspectorPanel: View {
         }
     }
 
-    private func streamTypeColor(_ st: StreamType) -> Color {
+    func streamTypeColor(_ st: StreamType) -> Color {
         switch st {
         case .videoOnly:     return .orange
         case .audioOnly:     return .yellow
@@ -1045,7 +568,7 @@ struct InspectorPanel: View {
     // MARK: - Duplicate Copy Row
 
     @ViewBuilder
-    private func duplicateCopyRow(
+    func duplicateCopyRow(
         filename: String,
         volumeName: String,
         directory: String,
