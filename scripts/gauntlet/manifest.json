@@ -4156,6 +4156,46 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAuditYearTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveAuditYearRulesTests",
+        "ArchiveAuditStoreTests",
+        "ArchiveOccasionTagTests"
+      ],
+      "tests": [
+        "defaultDirectoryIsScratchUnderATestHost",
+        "eventsAndUnlabeledAndVerdict",
+        "keepBothHidesTheGroupUntilANewMemberJoins",
+        "keepBothRoundTripsThroughTheSidecar",
+        "madeFromTheOtherIsSameFootage",
+        "occasionTagRoundTripsAndClears",
+        "poisonedSidecarStartsEmpty",
+        "sameContentFingerprintIsSameFootage",
+        "sameFootageGroupIsSameFootage",
+        "sameSourceRecordIsSameFootage",
+        "sharedLineageWithAnotherYearIsFiledFromAnotherYear",
+        "tagRecoloursTheCueAndTheYearStrip",
+        "threeVideosOfOneOccasionIsSameEvent",
+        "transcriptOverlapIsPossiblySame",
+        "transcriptOverlapThresholdAndShortSpeech",
+        "transcriptPairAlreadySameFootageIsNotRepeated",
+        "unknownOccasionInTheFileReadsAsOther"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAuditYearScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "ArchiveAuditYearScaleTests"
+      ],
+      "tests": [
+        "build100kCardAuditUnderBudget"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveHelperRetiredSensorTests.swift",
@@ -27471,7 +27511,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2138,
+      "expected_floor": 2155,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -27496,8 +27536,11 @@
         "VideoScanTests/ArchiveAngelReviewDatesTests",
         "VideoScanTests/ArchiveAngelSelectionTests",
         "VideoScanTests/ArchiveAngelTableCellTests",
+        "VideoScanTests/ArchiveAuditStoreTests",
+        "VideoScanTests/ArchiveAuditYearRulesTests",
         "VideoScanTests/ArchiveDateEntryTests",
         "VideoScanTests/ArchiveItemVersionsTests",
+        "VideoScanTests/ArchiveOccasionTagTests",
         "VideoScanTests/ArchiveProgressTests",
         "VideoScanTests/ArchiveSortPolicyTests",
         "VideoScanTests/ArchiveTimelineBuildTests",
@@ -28201,7 +28244,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 61,
+      "expected_floor": 62,
       "name": "performance",
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -28211,6 +28254,7 @@
         "VideoScanTests/AnnotateIdentityPlausibilityTests",
         "VideoScanTests/AppendLogBatchingBenchmarkTests",
         "VideoScanTests/ArchiveAngelPerfParityTests",
+        "VideoScanTests/ArchiveAuditYearScaleTests",
         "VideoScanTests/ArchiveDecadeRibbonScaleTests",
         "VideoScanTests/ArchiveOccasionScaleTests",
         "VideoScanTests/CatalogOpenScaleTests",

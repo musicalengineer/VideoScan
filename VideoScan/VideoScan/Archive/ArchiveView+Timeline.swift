@@ -105,9 +105,13 @@ extension ArchiveView {
         let key = ArchiveTimelineKey(
             version: RecordsVersion(count: model.records.count,
                                     revision: model.volumeAggregatesRevision),
-            query: searchText)
+            query: searchText,
+            auditRevision: model.archiveAuditRevision)
         return timelineMemo.value(for: key) {
-            ArchiveTimelineSnapshot.build(items: cachedTimelineItems(), matching: searchText)
+            // Rick's occasion tags (Audit <year>…) override the Angel's
+            // reading on the cards and in the strip — O(archived), here in
+            // the memo, never per render.
+            ArchiveTimelineSnapshot.build(items: taggedTimelineItems(), matching: searchText)
         }
     }
 
@@ -121,15 +125,17 @@ extension ArchiveView {
             contextMenu: { ids in AnyView(self.recordContextMenu(for: ids)) },
             openItems: { ids in
                 MediaOpener.open(ids.compactMap { self.model.record(forID: $0) })
-            })
+            },
+            auditYear: { year in auditYearRequest = ArchiveAuditRequest(year: year) })
     }
 }
 
-/// Memo key for the timeline grouping: the catalog's version plus the
-/// search text that narrows it.
+/// Memo key for the timeline grouping: the catalog's version, the search
+/// text that narrows it, and the audit store's revision (occasion tags).
 struct ArchiveTimelineKey: Equatable {
     let version: RecordsVersion
     let query: String
+    var auditRevision: Int = 0
 }
 
 // MARK: - The pane
@@ -149,6 +155,9 @@ struct ArchiveTimelinePane: View {
     /// The enclosing ArchiveView's context menu + open handling.
     let contextMenu: (Set<UUID>) -> AnyView
     let openItems: ([UUID]) -> Void
+    /// Year header ▸ "Audit <year>…" (ArchiveAuditYearSheet). Behind the
+    /// right-click only — Rick's visibility rule: no ribbon badges.
+    var auditYear: (Int) -> Void = { _ in }
 
     private static let undatedAnchor = ArchiveDecadeTick.undatedID
 
@@ -347,8 +356,6 @@ struct ArchiveTimelinePane: View {
             .padding(.horizontal, 18)
             .padding(.top, 7)
             .padding(.bottom, year.occasionStrip.isEmpty ? 7 : 3)
-            // TODO(Rick 2026-10-07): right-click a year header ▸ "Check
-            // this year…" — not built yet; the strip is its natural anchor.
             if !year.occasionStrip.isEmpty {
                 ArchiveOccasionStripView(strip: year.occasionStrip)
                     .frame(maxWidth: 320)
@@ -356,6 +363,13 @@ struct ArchiveTimelinePane: View {
             }
         }
         .background(Color(NSColor.windowBackgroundColor))
+        // Right-click ▸ Audit <year>… (Rick 2026-10-07): distinct events,
+        // or the same footage repeated? Opens a sheet; nothing here changes.
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Audit \(String(year.year))…") { auditYear(year.year) }
+                .accessibilityIdentifier("archive.timeline.yearHeader.audit")
+        }
         .accessibilityIdentifier("archive.timeline.yearHeader.\(year.year)")
     }
 
