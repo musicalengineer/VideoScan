@@ -27,6 +27,7 @@
 // FamilySearch at all. They are keyed by a stable local key instead.
 
 import CryptoKit
+import Darwin
 import Foundation
 
 /// One person's identity ruling. Every field is optional evidence: a
@@ -134,6 +135,18 @@ public struct FamilyIdentityDecision: Codable, Equatable, Sendable {
 public struct FamilyIdentityDecisions: Equatable, Sendable {
     public private(set) var decisions: [FamilyIdentityDecision.Key: FamilyIdentityDecision]
 
+    /// Where this value came from, set by `loadWithRevision`: the SHA-256 of
+    /// the bytes read ("none" = no file, "unreadable" = read error) and the
+    /// rulings decoded from them. `save` uses it as a compare-and-swap: if
+    /// the file changed since (fixed by hand, written by Hallie), only THIS
+    /// value's own changes are applied onto the current file — a stale
+    /// snapshot is never written (QA round 1, 2026-10-06). nil for a value
+    /// that was not loaded from disk.
+    var loadedFrom: (revision: String, decisions: [FamilyIdentityDecision.Key: FamilyIdentityDecision])?
+
+    /// Equality is the rulings only, never where they were read from.
+    public static func == (lhs: Self, rhs: Self) -> Bool { lhs.decisions == rhs.decisions }
+
     public init(decisions: [FamilyIdentityDecision] = []) {
         self.decisions = Dictionary(decisions.map { ($0.key, $0) },
                                     uniquingKeysWith: { $1 })
@@ -229,10 +242,18 @@ public struct FamilyIdentityDecisions: Equatable, Sendable {
                 log("[family-tree] identity rulings at \(url.lastPathComponent) could not be read, "
                     + "so NO ruling is in force: \(error.localizedDescription)")
             }
-            return (FamilyIdentityDecisions(), missing ? "none" : "unreadable")
+            var empty = FamilyIdentityDecisions()
+            empty.loadedFrom = (missing ? "none" : "unreadable", [:])
+            return (empty, missing ? "none" : "unreadable")
         }
-        let revision = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
-        return (decode(data, url: url, log: log), revision)
+        let revision = Self.revision(of: data)
+        var loaded = decode(data, url: url, log: log)
+        loaded.loadedFrom = (revision, loaded.decisions)
+        return (loaded, revision)
+    }
+
+    static func revision(of data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     private static func decode(_ data: Data, url: URL, log: (String) -> Void) -> FamilyIdentityDecisions {
@@ -252,13 +273,136 @@ public struct FamilyIdentityDecisions: Equatable, Sendable {
         }
     }
 
-    public func save(to directory: URL) throws {
+    /// What is on disk at the rulings path right now. Distinguishes a file
+    /// that holds rulings (or none: `[]`) from one whose bytes cannot be
+    /// read back — the case `load` reports as "nothing ruled" so the tree
+    /// still opens, and the case `save` must never overwrite (N1009-D F1).
+    public enum FileState: Equatable, Sendable {
+        case missing
+        /// Decodes, with zero rulings.
+        case empty
+        /// Decodes, with this many rulings.
+        case rulings(Int)
+        /// Exists but cannot be read or does not decode (hand-edit typo,
+        /// torn write, permissions). Its bytes are irreplaceable.
+        case unreadable
+    }
+
+    public static func fileState(in directory: URL) -> FileState {
+        let url = fileURL(in: directory)
+        let data: Data
+        do {
+            data = try Data(contentsOf: url)
+        } catch {
+            return isMissingFileError(error) ? .missing : .unreadable
+        }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        guard let list = try? decoder.decode([FamilyIdentityDecision].self, from: data) else {
+            return .unreadable
+        }
+        return list.isEmpty ? .empty : .rulings(list.count)
+    }
+
+    private static func isMissingFileError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return (ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError)
+            || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT))
+    }
+
+    /// Thrown when an unreadable rulings file could not be moved aside, so
+    /// the save was refused rather than overwrite it.
+    public struct DamagedFileNotPreserved: LocalizedError {
+        public let path: String
+        public let errnoValue: Int32
+        public var errorDescription: String? {
+            "The identity rulings file at \(path) could not be read, and it could not be "
+                + "set aside safely (\(String(cString: strerror(errnoValue)))), so nothing was saved."
+        }
+    }
+
+    /// Write the rulings. Durable (`F_FULLFSYNC`) and atomic through
+    /// `AtomicFilePublish` (never `replaceItemAt` — the rename wedge).
+    ///
+    /// If the file on disk exists but cannot be read back, its bytes are
+    /// first MOVED (no-clobber rename, never copied, never deleted) to
+    /// `<name>.damaged-<ISO8601>` beside it and a 🔴 line is logged naming
+    /// where. If that move fails, the save is refused and the damaged file
+    /// is left exactly as it was. Refuse before mutating.
+    @discardableResult
+    public func save(to directory: URL, log: (String) -> Void = { _ in }) throws -> FamilyIdentityDecisions {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = Self.fileURL(in: directory)
+        let toWrite = try rebasedOntoCurrentFile(at: url, log: log)
+        let data = try toWrite.encoded()
+        if Self.fileState(in: directory) == .unreadable {
+            let aside = try Self.moveDamagedFileAside(url)
+            log("🔴 [family-tree] identity rulings at \(url.lastPathComponent) could not be read — "
+                + "moved aside to \(aside.path) before saving. Earlier rulings are in that file; "
+                + "to restore, fix it by hand and rename it back to \(url.lastPathComponent).")
+        }
+        try AtomicFilePublish.write(data, to: url, durability: .fullFsync)
+        var written = toWrite
+        written.loadedFrom = (Self.revision(of: data), written.decisions)
+        return written
+    }
+
+    /// Stable order so the file diffs cleanly — Rick edits this by hand.
+    private func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.dateEncodingStrategy = .iso8601
-        // Stable order so the file diffs cleanly — Rick edits this by hand.
-        let ordered = decisions.values.sorted { $0.key.description < $1.key.description }
-        try encoder.encode(ordered).write(to: Self.fileURL(in: directory), options: .atomic)
+        return try encoder.encode(decisions.values.sorted { $0.key.description < $1.key.description })
+    }
+
+    /// Compare-and-swap. Unchanged since load (or never loaded): write self.
+    /// Changed and readable: apply only this value's own edits (relative to
+    /// what it loaded) onto the CURRENT file's rulings. Changed and
+    /// unreadable: refuse — the stale snapshot is not the user's intent,
+    /// and the damaged bytes stay where they are.
+    private func rebasedOntoCurrentFile(at url: URL, log: (String) -> Void) throws -> FamilyIdentityDecisions {
+        guard let base = loadedFrom else { return self }
+        let current = Self.loadWithRevision(from: url.deletingLastPathComponent())
+        guard current.revision != base.revision else { return self }
+        guard current.revision != "unreadable",
+              Self.fileState(in: url.deletingLastPathComponent()) != .unreadable else {
+            log("🔴 [family-tree] identity rulings at \(url.lastPathComponent) changed since the tree "
+                + "opened and cannot be read now — this ruling was NOT saved. Fix the file by hand, then try again.")
+            throw StaleRulingsSnapshot(path: url.path)
+        }
+        var merged = current.decisions
+        for key in Set(decisions.keys).union(base.decisions.keys) where decisions[key] != base.decisions[key] {
+            if let mine = decisions[key] { merged.record(mine) } else { merged.remove(key) }
+        }
+        log("[family-tree] identity rulings at \(url.lastPathComponent) changed since the tree opened — "
+            + "applied this change on top of the current file (\(merged.count) ruling(s)).")
+        return merged
+    }
+
+    /// The rulings file changed since load and cannot be read now.
+    public struct StaleRulingsSnapshot: LocalizedError {
+        public let path: String
+        public var errorDescription: String? {
+            "The identity rulings file at \(path) changed since it was opened and cannot be read now, so nothing was saved."
+        }
+    }
+
+    /// `<name>.damaged-<yyyyMMdd'T'HHmmss'Z'>`, then `-2` … `-99` if that
+    /// second is taken. `renamex_np(RENAME_EXCL)` never replaces an
+    /// existing file. Throws (and moves nothing) on any other failure.
+    static func moveDamagedFileAside(_ url: URL, now: Date = Date()) throws -> URL {
+        let fmt = ISO8601DateFormatter()
+        fmt.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
+        let base = url.path + ".damaged-" + fmt.string(from: now)
+        var lastErr: Int32 = EEXIST
+        for n in 1...99 {
+            let candidate = n == 1 ? base : "\(base)-\(n)"
+            if renamex_np(url.path, candidate, UInt32(RENAME_EXCL)) == 0 {
+                return URL(fileURLWithPath: candidate)
+            }
+            lastErr = errno
+            if lastErr != EEXIST { break }
+        }
+        throw DamagedFileNotPreserved(path: url.path, errnoValue: lastErr)
     }
 }

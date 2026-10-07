@@ -111,6 +111,15 @@ struct RemoteViewerReadOnlySensorTests {
             #expect(sink.has("\(ViewerWriteGuard.logPrefix) \(path) — \(hint)"), Comment(rawValue: path))
         }
 
+        // 9. Delete Confirmed Junk (C04-F5): the center alone refuses, even
+        // with the model flag still false. The file stays on disk.
+        let (junkModel, junkRec, junkFile) = try Self.junkFixture(in: root)
+        let junkResult = await junkModel.deleteConfirmedJunk([junkRec], mode: .permanent)
+        #expect(FileManager.default.fileExists(atPath: junkFile.path))
+        #expect(junkRec.purgedAt == nil)
+        #expect(junkResult.refused.map(\.record.id) == [junkRec.id])
+        #expect(sink.has("\(ViewerWriteGuard.logPrefix) VideoScanModel.deleteConfirmedJunk — \(hint)"))
+
         // The center captured the same lines the log sink saw.
         #expect(ViewerModeCenter.shared.refusals.count >= 18)
         #expect(ViewerModeCenter.shared.refusals.allSatisfy { $0.hasPrefix(ViewerWriteGuard.logPrefix) })
@@ -432,5 +441,243 @@ struct RemoteViewerReadOnlySensorTests {
         #expect(ViewerModeCenter.shared.masterOnlyHint == "on the master (RicksM4)")
         #expect(ViewerModeCenter.shared.masterDisplayName == "RicksM4")
         #expect(ViewerModeCenter.shortName("ricksm4.LOCAL") == "ricksm4")
+    }
+
+    // MARK: - C04-F5 (P1, 2026-10-06): a viewer Mac must never delete family media
+
+    /// The model flag VideoScanApp sets from CatalogSync (`isReadOnly`)
+    /// refuses on its own, for both modes: the file stays on disk and the
+    /// record is untouched. (The ViewerModeCenter signal is exercised inside
+    /// `everyWritePathRefusesInViewerModeWithALogLine`, which already holds
+    /// the process-wide viewer window; a second window here could make
+    /// delete tests in parallel suites refuse.)
+    @Test func viewerModeRefusesDeleteConfirmedJunkAndLeavesTheFileOnDisk() async throws {
+        let root = tmp("junk")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for mode in [VideoScanModel.JunkDeletionMode.toTrash, .permanent] {
+            let (model, rec, file) = try Self.junkFixture(in: root)
+            model.isReadOnly = true
+
+            let result = await model.deleteConfirmedJunk([rec], mode: mode)
+
+            let label = Comment(rawValue: "mode=\(mode)")
+            #expect(FileManager.default.fileExists(atPath: file.path), label)
+            #expect(rec.purgedAt == nil, label)
+            #expect(rec.lifecycleStage == .cataloged, label)
+            #expect(result.succeeded == 0, label)
+            #expect(result.refused.map(\.record.id) == [rec.id], label)
+        }
+    }
+
+    /// One synthetic confirmed-junk file, its record, and a model holding it.
+    private static func junkFixture(in root: URL) throws -> (VideoScanModel, VideoRecord, URL) {
+        let file = root.appendingPathComponent("test_family_\(UUID().uuidString).mov")
+        try Data("family".utf8).write(to: file)
+        let rec = VideoRecord()
+        rec.fullPath = file.path
+        rec.filename = file.lastPathComponent
+        rec.directory = root.path
+        rec.mediaDisposition = .confirmedJunk
+        let model = VideoScanModel()
+        model.records = [rec]
+        return (model, rec, file)
+    }
+
+    /// QA round 1 (C): Triage › Under Construction › Discard trashed files
+    /// on a viewer.
+    @Test func qaRedViewerModeRefusesDiscardWorkbenchAndLeavesTheFileOnDisk() throws {
+        let root = tmp("discard")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let (model, rec, file) = try Self.junkFixture(in: root)
+        rec.lifecycleStage = .workbench
+        model.isReadOnly = true
+        var trashed: [URL] = []
+
+        let n = model.discardWorkbench([rec], trash: { trashed.append($0) })
+
+        #expect(trashed.isEmpty, "nothing may be trashed on a viewer")
+        #expect(n == 0)
+        #expect(rec.purgedAt == nil)
+        #expect(rec.lifecycleStage == .workbench)
+        #expect(FileManager.default.fileExists(atPath: file.path))
+    }
+
+    /// Every file in app code that calls trashItem / removeItem, with how
+    /// many calls it makes. Media removals name their viewer guard (a token
+    /// that must appear in `guardFile`); the rest remove the app's OWN
+    /// temp, partial, staging, cache or output files. A new removal call —
+    /// anywhere — changes a count and fails here until it is classified.
+    private static let removalSites: [String: (count: Int, guardFile: String?, token: String?)] = [
+        // Media / family files — behind the viewer guard.
+        "MediaOps/VideoScanModel+JunkDelete.swift": (2, nil, "junkDeletionRefusedOnViewer("),
+        "Catalog/VideoScanModel+Workbench.swift": (1, nil, "workbenchDiscardRefusedOnViewer("),
+        "People/FamilyGroup.swift": (2, nil, "ViewerWriteGuard.check(\"FamilyGroupStore.moveToTrash\")"),
+        "People/PersonEditSheet.swift": (1, nil, "ViewerWriteGuard.refuse(\"PersonEditSheet.deleteReferencePhoto\")"),
+        // Delete Duplicates' removal step (trash + quarantine removal, and
+        // rmdir of its own quarantine folders); reached only from
+        // DeleteDuplicatesJob.run, which refuses on a read-only model.
+        "MediaOps/SignatureVerification.swift": (4, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
+        // Reached only from MFO jobs (Transcode, Reformat);
+        // MediaFileOperationsCenter.add refuses every job on a viewer.
+        "MediaOps/DerivativeOutputPublish.swift": (1, "MediaOps/MediaFileOperations.swift", "ViewerWriteGuard.refuse(\"MediaFileOperationsCenter.add("),
+        // The app's own temp / partial / staging / cache / output files.
+        "App/BundleExporter.swift": (1, nil, nil), "App/BundleImporter.swift": (2, nil, nil),
+        "Archive/ArchiveIndexRename.swift": (3, nil, nil),
+        "ArchiveAngel/Prepare/ArchiveAngelJob.swift": (1, nil, nil),
+        "ArchiveAngel/Prepare/ArchiveAngelPlan.swift": (2, nil, nil),
+        "Catalog/CatalogStore.swift": (1, nil, nil), "Catalog/CatalogSync.swift": (3, nil, nil),
+        "Catalog/CatalogWriteError.swift": (1, nil, nil),
+        "FamilyTree/CouplePortrait.swift": (2, nil, nil), "FamilyTree/FamilyAssetStore.swift": (1, nil, nil),
+        "FamilyTree/FamilySearchPullCoordinator.swift": (6, nil, nil),
+        "Hallie/HalliePhotoImport.swift": (1, nil, nil), "Hallie/Voice/HallieNeuralSpeech.swift": (7, nil, nil),
+        "Hallie/Voice/HalliePronunciationLexicon.swift": (1, nil, nil),
+        "Hallie/Web/HallieWebPoster.swift": (3, nil, nil), "Hallie/Web/HallieWebProxy.swift": (3, nil, nil),
+        "Media/AudioTranscriber.swift": (1, nil, nil), "Media/CaptionRunner.swift": (2, nil, nil),
+        "Media/PerceptualFingerprinter.swift": (1, nil, nil), "Media/ReviewThumbnailRenderer.swift": (1, nil, nil),
+        "Media/VideoScanModel+ProbeEngine.swift": (1, nil, nil),
+        "MediaOps/BalanceAudioJob.swift": (1, nil, nil), "MediaOps/CleanupJob.swift": (4, nil, nil),
+        "MediaOps/FootageSpectrumHelper.swift": (1, nil, nil), "MediaOps/RebuildAudioJob.swift": (1, nil, nil),
+        "MediaOps/ReformatJob.swift": (5, nil, nil), "MediaOps/RelocateEngine.swift": (1, nil, nil),
+        "MediaOps/TrimJob.swift": (1, nil, nil),
+        // unlink of our own partials / published-by-link old names only.
+        "MediaOps/RescueFileCopier.swift": (3, nil, nil), "MediaOps/PartialFileNaming.swift": (3, nil, nil), "MediaOps/VideoScanModel+Combine.swift": (1, nil, nil),
+        "People/AdaFaceEngine.swift": (1, nil, nil), "People/ArcFaceEngine.swift": (1, nil, nil),
+        "People/FamilyEditSheet.swift": (1, nil, nil), "People/FindPersonJob.swift": (1, nil, nil),
+        "People/IdentifyFamilyModel.swift": (1, nil, nil), "People/POIProfileFileStore.swift": (2, nil, nil),
+        "People/POIStorage.swift": (1, nil, nil), "People/PersonFinderCompilation.swift": (7, nil, nil),
+        "People/RecipeGenderAgeGate.swift": (1, nil, nil),
+        "Volumes/ScanCheckpoint.swift": (1, nil, nil), "Volumes/ScanJobsStorage.swift": (2, nil, nil),
+    ]
+
+    private static var appSourceRoot: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan", isDirectory: true)
+    }
+
+    /// Removal calls per app source file, keyed by path relative to `root`:
+    /// FileManager `trashItem(` / `removeItem(`, and the POSIX `unlink(` /
+    /// `rmdir(` free functions. Both the root and each file are resolved
+    /// through symlinks BEFORE slicing, so a checkout reached as /tmp/… while
+    /// the enumerator reports /private/tmp/… (the nightly) still lines up.
+    static func removalCounts(under root: URL) throws -> [String: Int] {
+        let base = root.resolvingSymlinksInPath().standardizedFileURL
+        var found: [String: Int] = [:]
+        let it = FileManager.default.enumerator(at: base, includingPropertiesForKeys: nil)
+        while let url = it?.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let path = url.resolvingSymlinksInPath().standardizedFileURL.path
+            guard path.hasPrefix(base.path + "/") else { continue }
+            let rel = String(path.dropFirst(base.path.count + 1))
+            let n = try String(contentsOf: url, encoding: .utf8).split(separator: "\n")
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .reduce(0) { $0 + removalCalls(in: String($1)) }
+            if n > 0 { found[rel] = n }
+        }
+        return found
+    }
+
+    private static func removalCalls(in line: String) -> Int {
+        func occurrences(_ needle: String) -> Int { line.components(separatedBy: needle).count - 1 }
+        return occurrences("trashItem(") + occurrences("removeItem(")
+            + freeCalls("unlink(", in: line) + freeCalls("rmdir(", in: line)
+    }
+
+    /// Calls of a C free function: not `x.unlink(`, not `fooUnlink(`, not
+    /// `func unlink(` (MediaPersonLinks has a method of that name).
+    private static func freeCalls(_ needle: String, in line: String) -> Int {
+        var n = 0
+        var search = line.startIndex..<line.endIndex
+        while let r = line.range(of: needle, range: search) {
+            let prev = r.lowerBound > line.startIndex ? line[line.index(before: r.lowerBound)] : " "
+            let isMember = prev.isLetter || prev.isNumber || prev == "_" || prev == "."
+            if !isMember && !line[..<r.lowerBound].trimmingCharacters(in: .whitespaces).hasSuffix("func") { n += 1 }
+            search = r.upperBound..<line.endIndex
+        }
+        return n
+    }
+
+    /// The nightly runs from /private/tmp/nightly-metrics-wt, reached as
+    /// /tmp/…: the sensor must give the same answer from a symlinked root.
+    @Test func removalSensorGivesTheSameAnswerFromASymlinkedCheckout() throws {
+        let dir = tmp("symlinked-checkout")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let link = dir.appendingPathComponent("test_app_link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: Self.appSourceRoot)
+        let direct = try Self.removalCounts(under: Self.appSourceRoot)
+        #expect(!direct.isEmpty)
+        #expect(try Self.removalCounts(under: link) == direct)
+    }
+
+    @Test func everyFileRemovalInAppCodeIsClassifiedAndMediaRemovalsAreViewerGuarded() throws {
+        let app = Self.appSourceRoot
+        let found = try Self.removalCounts(under: app)
+        #expect(found == Self.removalSites.mapValues(\.count),
+                "a removal call was added or removed: classify it here (media ⇒ behind the viewer guard)")
+        for (file, site) in Self.removalSites {
+            guard let token = site.token else { continue }
+            let text = try String(contentsOf: app.appendingPathComponent(site.guardFile ?? file), encoding: .utf8)
+            #expect(text.contains(token), Comment(rawValue: "\(file): viewer guard `\(token)` missing"))
+        }
+    }
+
+    /// A viewer must not rewrite the master's scan-target list either
+    /// (Volumes → Delete from list…).
+    @Test func viewerModeRefusesDeleteFromVolumesList() {
+        ViewerModeCenter.shared.reset()
+        defer { ViewerModeCenter.shared.reset() }
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: "/Volumes/test_viewer_volume_\(UUID().uuidString)")
+        model.scanTargets = [target]
+        model.isReadOnly = true
+        #expect(model.deleteScanTarget(target) == false)
+        #expect(model.scanTargets.contains { $0 === target }, "the list is unchanged on a viewer")
+    }
+
+    /// Source sensor: the read-only refusal is the FIRST thing
+    /// `deleteConfirmedJunk` does, so every caller (row menu, toolbar and
+    /// Triage sheets, Cmd-Delete, prune) sits behind it, and a new caller
+    /// is named here so it gets reviewed.
+    @Test func everyCallerOfDeleteConfirmedJunkSitsBehindTheViewerGuard() throws {
+        let app = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan", isDirectory: true)
+        let defFile = app.appendingPathComponent("MediaOps/VideoScanModel+JunkDelete.swift")
+        let def = try String(contentsOf: defFile, encoding: .utf8)
+        /// First non-comment statement after `opener`, searched from `sig`.
+        func firstStatement(after sig: String, opener: String) throws -> String? {
+            let s = try #require(def.range(of: sig))
+            let body = try #require(def.range(of: opener, range: s.upperBound..<def.endIndex))
+            return def[body.upperBound...].split(separator: "\n", omittingEmptySubsequences: true)
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first { !$0.isEmpty && !$0.hasPrefix("//") }
+        }
+        let entry = try firstStatement(after: "func deleteConfirmedJunk(",
+                                       opener: ") async -> JunkDeletionResult {")
+        #expect(entry?.hasPrefix("let (records, finished) = junkDeletionPreflight(") == true,
+                "deleteConfirmedJunk must start with the preflight; found \(entry ?? "nil")")
+        let preflight = try firstStatement(after: "func junkDeletionPreflight(",
+                                           opener: "finished: JunkDeletionResult?) {")
+        #expect(preflight?.hasPrefix("if let refused = junkDeletionRefusedOnViewer(") == true,
+                "the viewer refusal must be the preflight's first statement; found \(preflight ?? "nil")")
+
+        var callers: Set<String> = []
+        let it = FileManager.default.enumerator(at: app, includingPropertiesForKeys: nil)
+        while let url = it?.nextObject() as? URL {
+            guard url.pathExtension == "swift" else { continue }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            for line in text.split(separator: "\n") {
+                let t = line.trimmingCharacters(in: .whitespaces)
+                guard !t.hasPrefix("//"), !t.hasPrefix("func "),
+                      t.contains("deleteConfirmedJunk(") else { continue }
+                callers.insert(url.lastPathComponent)
+            }
+        }
+        #expect(callers == ["CatalogRowContextMenu.swift", "VideoScanModel+TrashSelection.swift",
+                            "VideoScanModel+PruneApply.swift", "JunkDeleteAction.swift"],
+                "a new deleteConfirmedJunk caller: confirm it relies on the model's viewer guard, then add it here")
     }
 }

@@ -927,6 +927,8 @@ struct PersonEditSheet: View {
     /// Issue #37 — edit sheet must match scan-time photos, so user needs
     /// to remove ones that shouldn't feed face recognition.
     private func deleteReferencePhoto(_ filename: String) {
+        // A viewer never trashes a family photo (logged by the guard).
+        if ViewerWriteGuard.refuse("PersonEditSheet.deleteReferencePhoto") { return }
         let url = URL(fileURLWithPath: referencePath).appendingPathComponent(filename)
         do {
             try FileManager.default.trashItem(at: url, resultingItemURL: nil)
