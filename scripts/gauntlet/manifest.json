@@ -13399,6 +13399,17 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieRelationshipSnapshotTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieRelationshipSnapshotTests"
+      ],
+      "tests": [
+        "everyRelationshipBranchMatchesItsRecordedSnapshot"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieRelationshipTests.swift",
       "stage": "hallie",
       "suites": [
@@ -28000,7 +28011,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1080,
+      "expected_floor": 1081,
       "modes": [
         {
           "name": "strict",
@@ -28114,6 +28125,7 @@
         "VideoScanTests/HallieProvenanceFollowUpTests",
         "VideoScanTests/HallieRecordScopeTurnTests",
         "VideoScanTests/HallieRelationGuardSubjectTests",
+        "VideoScanTests/HallieRelationshipSnapshotTests",
         "VideoScanTests/HallieRelationshipTests",
         "VideoScanTests/HallieRelationshipsOverviewTests",
         "VideoScanTests/HallieRelativeFactTests",
