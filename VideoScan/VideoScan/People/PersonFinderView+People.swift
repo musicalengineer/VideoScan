@@ -183,6 +183,9 @@ extension PersonFinderView {
         // once (memoised on tree generation + kinship signature) and each
         // card takes its own entry out of the map.
         let warnings = kinshipCenter.warnings(among: model.savedProfiles)
+        // The ONE selected entry, person or family (PeopleEntry.swift) —
+        // read once here (O(families)); each card compares against it.
+        let selected = selectedPeopleEntry
 
         return VStack(alignment: .leading, spacing: 6) {
             // Inline undo banner — armed by deletePOI, dismissed by undo /
@@ -325,10 +328,12 @@ extension PersonFinderView {
                             .fixedSize()
                             .accessibilityIdentifier("people.addPersonOrFamily")
 
-                            // Family groups — a group icon instead of a
-                            // portrait; click shows the family's videos.
+                            // Family groups — peers of the people (Rick
+                            // 2026-10-07): same card, same selection, same
+                            // arrows; a small family glyph by the name is the
+                            // only visible difference. Families come first.
                             ForEach(families) { family in
-                                familyCard(family)
+                                familyCardEntry(family, isSelected: selected == .family(family.uuid))
                             }
 
                             // Build set of all people currently being scanned across all active jobs
@@ -337,6 +342,7 @@ extension PersonFinderView {
                                 personCardEntry(
                                     profile,
                                     isBeingScanned: scanningIDs.contains(profile.uuid),
+                                    isSelected: selected == .person(profile.uuid),
                                     warnings: warnings[profile.id] ?? [],
                                     portrait: portraits[profile.id],
                                     treeLink: treeLinks[profile.id])
@@ -378,19 +384,24 @@ extension PersonFinderView {
                     }
                     .frame(height: peopleGalleryHeight)
                     // `.focusable()` lets the gallery itself take keyboard
-                    // focus (a card click grants it — selectGalleryCard);
-                    // ← / → then walk the cards in displayed order and stop
-                    // at the ends. Focus-scoped, so a text field elsewhere
-                    // keeps its own arrows. `.handled` ≈ "consumed, don't
-                    // pass to the next responder" (FamilyTreeView pattern).
+                    // focus — the ONE focus owner for every card, person or
+                    // family (a card click grants it — grantGalleryFocus);
+                    // ← / → then walk families then people in displayed
+                    // order and stop at the ends; Return opens the selected
+                    // card's editor, exactly like a double-click. A
+                    // selection change never moves focus. Focus-scoped, so a
+                    // text field elsewhere keeps its own keys. `.handled` ≈
+                    // "consumed, don't pass to the next responder". (A
+                    // horizontal card strip has no native List selection on
+                    // macOS, so the keys stay on the strip as before.)
                     .focusable()
                     .focusEffectDisabled()
                     .focused($peopleGalleryFocused)
                     .onKeyPress(.leftArrow) { moveGallerySelection(.previous, in: displayedProfiles) }
                     .onKeyPress(.rightArrow) { moveGallerySelection(.next, in: displayedProfiles) }
-                    .onChange(of: model.settings.activeProfileUUID) { _, uuid in
-                        guard let cardID = model.savedProfiles.first(where: { $0.uuid == uuid })?.id else { return }
-                        withAnimation(.easeInOut(duration: 0.15)) { galleryScroll.scrollTo(cardID) }
+                    .onKeyPress(.return) { openSelectedEntryEditor() }
+                    .onChange(of: selected) { _, entry in
+                        scrollGallery(to: entry, using: galleryScroll)
                     }
                 }
 
@@ -554,6 +565,7 @@ extension PersonFinderView {
     @ViewBuilder
     func personCardEntry(_ profile: POIProfile,
                          isBeingScanned: Bool,
+                         isSelected: Bool,
                          warnings: [KinshipWarning],
                          portrait: PersonPhotoResolution?,
                          treeLink: TreeLinkBadge?) -> some View {
@@ -621,7 +633,7 @@ extension PersonFinderView {
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(Color.accentColor.opacity(0.55), lineWidth: 1.5)
-                .opacity(model.settings.activeProfileUUID == profile.uuid ? 1 : 0)
+                .opacity(isSelected ? 1 : 0)
         )
         .draggable(profile.id) {
                 PersonCard(profile: profile,
@@ -710,52 +722,40 @@ extension PersonFinderView {
     }
 }
 
-// MARK: - Family cards (2026-10-04)
+// MARK: - Family cards (2026-10-04; peers of people 2026-10-07)
 
 extension PersonFinderView {
 
-    func familyCard(_ family: FamilyGroup) -> some View {
-        let isSelected = selectedFamilyUUID == family.uuid.uuidString
-        return Button {
-            selectedFamilyUUID = family.uuid.uuidString
-            appLog.write("People: opened family \(family.name)")
-        } label: {
-            VStack(spacing: 6) {
-                ZStack {
-                    Circle()
-                        .fill(Color.accentColor.opacity(isSelected ? 0.28 : 0.14))
-                        .frame(width: personImageSize, height: personImageSize)
-                    if let url = FamilyGroupStore.photoURL(for: family),
-                       let photo = PortraitThumbnailCache.thumbnail(at: url, maxPixels: 512) {
-                        CroppedCircleImage(image: photo, scale: family.cropScale,
-                                           offset: CGSize(width: family.cropOffsetX, height: family.cropOffsetY))
-                            .frame(width: personImageSize, height: personImageSize)
-                    } else {
-                        Image(systemName: "person.3.fill")
-                            .font(.system(size: personImageSize * 0.3, weight: .medium))
-                            .foregroundStyle(.tint)
-                    }
-                }
-                .overlay(Circle().stroke(Color.accentColor, lineWidth: isSelected ? 2.5 : 0))
-                Text(family.name)
-                    .font(.system(size: personNameFontSize, weight: isSelected ? .semibold : .medium))
-                    .multilineTextAlignment(.center)
-                    .lineLimit(2)
+    /// One family's card — the same gestures and selection frame as a
+    /// person's card (personCardEntry): single click selects (its videos
+    /// show below), double-click opens the family's editor (name + photo),
+    /// right-click offers the family's own actions only. Person-only
+    /// actions (Search, Review, Family Tree, reference photos) never
+    /// appear here.
+    func familyCardEntry(_ family: FamilyGroup, isSelected: Bool) -> some View {
+        FamilyCard(family: family,
+                   imageSize: personImageSize,
+                   cardWidth: personCardWidth,
+                   nameFontSize: personNameFontSize)
+            .accessibilityIdentifier("people.family.\(family.name)")
+            // Double before single, as on a person's card: the first click
+            // still selects, the second opens the editor.
+            .onTapGesture(count: 2) { editingFamilyUUID = family.uuid }
+            .onTapGesture {
+                grantGalleryFocus()
+                selectPeopleEntry(.family(family.uuid))
             }
-            .frame(width: personCardWidth)
-            .padding(.vertical, 4)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        // Double-click edits (name + photo), like a person's card.
-        .simultaneousGesture(TapGesture(count: 2).onEnded { editingFamilyUUID = family.uuid })
-        .help("\(family.name) — click for the family's videos, double-click to edit")
-        .contextMenu {
-            Button("Edit Family…") { editingFamilyUUID = family.uuid }
-            Divider()
-            Button("Remove \(family.name)…") { confirmTrashFamily = family }
-        }
-        .accessibilityIdentifier("people.family.\(family.name)")
+            .overlay(
+                RoundedRectangle(cornerRadius: 8)
+                    .stroke(Color.accentColor.opacity(0.55), lineWidth: 1.5)
+                    .opacity(isSelected ? 1 : 0)
+            )
+            .help("\(family.name) — click for the family's videos, double-click to edit")
+            .contextMenu {
+                Button("Edit \(family.name)\u{2026}") { editingFamilyUUID = family.uuid }
+                Divider()
+                Button("Remove \(family.name)\u{2026}", role: .destructive) { confirmTrashFamily = family }
+            }
     }
 }
 
@@ -770,17 +770,25 @@ extension PersonFinderView {
         case .refuseWhileScanning:
             scanLockMessage = "Cannot edit \(profile.displayName) while scanning for \(profile.displayName)."
         case .select:
+            grantGalleryFocus()
             selectGalleryCard(profile)
         case .edit(let request):
             openEditor(request)
         }
     }
 
+    /// A click on a card hands keyboard focus to the gallery (the one
+    /// focus owner) so the arrows work next. Only clicks call this — an
+    /// arrow-key selection never moves focus.
+    func grantGalleryFocus() {
+        peopleGalleryFocused = true
+    }
+
     /// The single-click behaviour: make this person the active profile
     /// and load their reference faces into the strip for inspection.
     func selectGalleryCard(_ profile: POIProfile) {
-        peopleGalleryFocused = true
-        selectedFamilyUUID = ""   // a person's page replaces a family's
+        // A person's page replaces a family's (clears the family key).
+        selectedFamilyUUID = PeopleEntryList.storage(for: .person(profile.uuid)).familyUUID
         model.settings.applyProfile(profile)
         model.settings.save()
         model.referenceFaces.removeAll()
@@ -788,18 +796,61 @@ extension PersonFinderView {
         Task { await model.loadReference() }
     }
 
-    /// ← / → in the gallery: select the neighbouring card in the displayed
-    /// order (PeopleGalleryNavigation decides; stops at the ends). A card
-    /// being scanned is skipped over rather than refused — the selection
-    /// simply doesn't land on it. Always consumed so the scroll view never
-    /// interprets the arrow as a scroll.
+    /// Select any entry, person or family. A family writes only the family
+    /// key; the person's settings and loaded faces stay as they were
+    /// (PeopleEntryList.storage).
+    func selectPeopleEntry(_ entry: PeopleEntry) {
+        if let family = PeopleEntryList.family(for: entry, in: families) {
+            selectedFamilyUUID = PeopleEntryList.storage(for: entry).familyUUID
+            appLog.write("People: opened family \(family.name)")
+        } else if let profile = PeopleEntryList.profile(for: entry, in: model.savedProfiles) {
+            selectGalleryCard(profile)
+        }
+    }
+
+    /// ← / → in the gallery: select the neighbouring card — families, then
+    /// people, in displayed order (PeopleEntryList decides; stops at the
+    /// ends). A person being scanned is skipped over rather than refused —
+    /// the selection simply doesn't land on it. Always consumed so the
+    /// scroll view never interprets the arrow as a scroll.
     func moveGallerySelection(_ step: PeopleGalleryNavigation.Step, in displayed: [POIProfile]) -> KeyPress.Result {
-        let scanning = Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.uuid })
+        let scanning = scanningProfileUUIDs
         let selectable = displayed.filter { !scanning.contains($0.uuid) }
-        if let next = PeopleGalleryNavigation.neighbor(of: model.settings.activeProfileUUID, in: selectable, step: step) {
-            selectGalleryCard(next)
+        let entries = PeopleEntryList.ordered(families: families, people: selectable)
+        if let next = PeopleEntryList.neighbor(of: selectedPeopleEntry, in: entries, step: step) {
+            selectPeopleEntry(next)
         }
         return .handled
+    }
+
+    /// Return in the gallery = a double-click on the selected card: the
+    /// family's editor, or the person's editor (refused while that person
+    /// is being scanned, exactly as the double-click is).
+    func openSelectedEntryEditor() -> KeyPress.Result {
+        let entry = selectedPeopleEntry
+        if let family = PeopleEntryList.family(for: entry, in: families) {
+            editingFamilyUUID = family.uuid
+            return .handled
+        }
+        guard let profile = PeopleEntryList.profile(for: entry, in: model.savedProfiles) else { return .ignored }
+        performCardClick(.double, on: profile,
+                         isBeingScanned: scanningProfileUUIDs.contains(profile.uuid))
+        return .handled
+    }
+
+    /// People with a scan running right now (their cards refuse edits).
+    var scanningProfileUUIDs: Set<UUID> {
+        Set(model.jobs.filter { $0.status.isActive }.compactMap { $0.assignedProfile?.uuid })
+    }
+
+    /// Keep the selected card in view. Runs on a selection change only,
+    /// never per render, so the person lookup is not body work.
+    func scrollGallery(to entry: PeopleEntry?, using proxy: ScrollViewProxy) {
+        if case .family(let id)? = entry {
+            withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(id) }
+        } else if let cardID = PeopleEntryList.profile(for: entry, in: model.savedProfiles)?.id {
+            withAnimation(.easeInOut(duration: 0.15)) { proxy.scrollTo(cardID) }
+        }
     }
 
     /// A warning popover's fix button. The route is decided by the pure
@@ -832,4 +883,49 @@ extension PersonFinderView {
 struct ProfileSaveProblem: Equatable {
     let profileID: String
     let message: String
+}
+
+/// A family's card in the People gallery — PersonCard's look and density
+/// (same circle, same name line, same sizes), with a small family glyph
+/// beside the name as the one visible difference. Pure decoration: the
+/// gestures, selection frame and menu are attached by familyCardEntry.
+struct FamilyCard: View {
+    let family: FamilyGroup
+    var imageSize: CGFloat = 64
+    var cardWidth: CGFloat = 80
+    var nameFontSize: CGFloat = 13
+
+    var body: some View {
+        VStack(spacing: 4) {
+            ZStack {
+                if let url = FamilyGroupStore.photoURL(for: family),
+                   let photo = PortraitThumbnailCache.thumbnail(at: url, maxPixels: 512) {
+                    CroppedCircleImage(image: photo, scale: family.cropScale,
+                                       offset: CGSize(width: family.cropOffsetX, height: family.cropOffsetY))
+                        .frame(width: imageSize, height: imageSize)
+                } else {
+                    Circle()
+                        .fill(Color.accentColor.opacity(0.15))
+                        .frame(width: imageSize, height: imageSize)
+                    Text(String(family.name.prefix(1)).uppercased())
+                        .font(.system(size: imageSize * 0.42, weight: .bold, design: .rounded))
+                        .foregroundColor(.accentColor)
+                }
+            }
+
+            HStack(spacing: 3) {
+                Image(systemName: "person.3.fill")
+                    .font(.system(size: max(9, nameFontSize * 0.7)))
+                    .foregroundColor(.secondary)
+                    .accessibilityLabel("Family")
+                Text(family.name)
+                    .font(.system(size: nameFontSize, weight: .medium))
+                    .lineLimit(1)
+                    .foregroundColor(.primary)
+            }
+        }
+        .frame(width: cardWidth)
+        .padding(.vertical, 4)
+        .contentShape(Rectangle())
+    }
 }
