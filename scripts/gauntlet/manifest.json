@@ -12851,6 +12851,17 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HalliePersonaParserOracleTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HalliePersonaParserOracleTests"
+      ],
+      "tests": [
+        "theRefactoredDetectAgreesWithTheLegacyCopyOnEveryInput"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HalliePersonaQuestionTests.swift",
       "stage": "hallie",
       "suites": [
@@ -27989,7 +28000,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1079,
+      "expected_floor": 1080,
       "modes": [
         {
           "name": "strict",
@@ -28088,6 +28099,7 @@
         "VideoScanTests/HalliePersonDescriptionTests",
         "VideoScanTests/HalliePersonFactRoutingTests",
         "VideoScanTests/HalliePersonGalleryDetectTests",
+        "VideoScanTests/HalliePersonaParserOracleTests",
         "VideoScanTests/HalliePersonaQuestionTests",
         "VideoScanTests/HalliePhotoAskWhichOneTests",
         "VideoScanTests/HalliePlaceQuestionTests",
