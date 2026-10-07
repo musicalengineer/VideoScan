@@ -142,7 +142,10 @@ final class ArchiveAngelPromoter: ObservableObject {
     /// display and worklists, and says yes when identical bytes reached the
     /// archive from ANOTHER batch — recovery then kept facts it should undo
     /// and deleted a buffer it should keep (GH #288, N1016-F2).
-    static func landedInArchive(_ id: UUID, model: VideoScanModel) -> Bool {
+    /// Asked through the Angel's seams (AngelCatalog + AngelArchive), not
+    /// the concrete model, so the COUPLING ratchet does not grow (10/7
+    /// codex batch).
+    static func landedInArchive(_ id: UUID, model: any AngelCatalog & AngelArchive) -> Bool {
         guard let rec = model.record(forID: id) else { return false }
         return model.masterArchiveCopy(of: rec) != nil || model.isInsideMasterArchive(path: rec.fullPath)
     }
@@ -448,7 +451,7 @@ final class ArchiveAngelPromoter: ObservableObject {
         }
         for var plan in ArchiveAngelPlanStore.listBatches(bufferRoot: bufferRoot)
             where plan.status == .promoting && !ArchiveAngelLiveBatches.isLive(plan.batchDir) {
-            lines.append(Self.settleStranded(plan: &plan, landed: landed, model: model))
+            lines.append(Self.settleStranded(plan: &plan, landed: landed, catalog: model, ledger: model))
         }
         return lines
     }
@@ -456,7 +459,7 @@ final class ArchiveAngelPromoter: ObservableObject {
     /// One stranded batch, settled against the catalog and saved. Returns
     /// the summary line.
     private static func settleStranded(plan: inout ArchiveAngelPlan, landed: (UUID) -> Bool,
-                                       model: VideoScanModel) -> String {
+                                       catalog: any AngelCatalog, ledger: any AngelLedger) -> String {
         var promoted = 0, back = 0
         for i in plan.entries.indices where plan.entries[i].status == .ready {
             let entry = plan.entries[i]
@@ -470,13 +473,13 @@ final class ArchiveAngelPromoter: ObservableObject {
             ArchiveAngelPlanStore.removeEntryFolder(plan, entry: entry)
             promoted += 1
         }
-        let undone = Self.settleStampedFacts(plan: &plan, landed: landed, catalog: model, ledger: model)
-        for line in undone { Self.note(line, plan: &plan, model: model) }
+        let undone = Self.settleStampedFacts(plan: &plan, landed: landed, catalog: catalog, ledger: ledger)
+        for line in undone { Self.note(line, plan: &plan, catalog: catalog) }
         plan.status = plan.readyCount == 0 ? .promoted : .ready
         plan.finishedAt = plan.finishedAt ?? Date()
         let line = "Archive Angel: settled an interrupted promote in \((plan.batchDir as NSString).lastPathComponent) — "
             + "\(promoted) archived, \(back) back to ready"
-        Self.note(line, plan: &plan, model: model)
+        Self.note(line, plan: &plan, catalog: catalog)
         ArchiveAngelPlanStore.saveLogged(plan, context: "review/promote")
         return line
     }
@@ -605,6 +608,13 @@ final class ArchiveAngelPromoter: ObservableObject {
     static func note(_ line: String, plan: inout ArchiveAngelPlan, model: VideoScanModel) {
         model.log(line)
         appLog.write(line)
+        plan.log.append(line)
+    }
+
+    /// The same verb through the seam: `angelLog` is console + videoscan.log
+    /// (AppConformances), then the plan log.
+    static func note(_ line: String, plan: inout ArchiveAngelPlan, catalog: any AngelCatalog) {
+        catalog.angelLog(line)
         plan.log.append(line)
     }
 

@@ -539,7 +539,9 @@ struct RemoteViewerReadOnlySensorTests {
         "Media/VideoScanModel+ProbeEngine.swift": (1, nil, nil),
         "MediaOps/BalanceAudioJob.swift": (1, nil, nil), "MediaOps/CleanupJob.swift": (4, nil, nil),
         "MediaOps/FootageSpectrumHelper.swift": (1, nil, nil), "MediaOps/RebuildAudioJob.swift": (1, nil, nil),
-        "MediaOps/ReformatJob.swift": (5, nil, nil), "MediaOps/RelocateEngine.swift": (1, nil, nil),
+        // ReformatJob 5 → 0 (fix/mfo-jobs-n1014): its own partial goes only
+        // through PartialFileNaming.remove now.
+        "MediaOps/RelocateEngine.swift": (1, nil, nil),
         "MediaOps/TrimJob.swift": (1, nil, nil),
         // unlink of our own partials / published-by-link old names only.
         "MediaOps/RescueFileCopier.swift": (3, nil, nil), "MediaOps/PartialFileNaming.swift": (3, nil, nil), "MediaOps/VideoScanModel+Combine.swift": (1, nil, nil),

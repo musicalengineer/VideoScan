@@ -387,22 +387,17 @@ public struct FamilyIdentityDecisions: Equatable, Sendable {
         }
     }
 
-    /// `<name>.damaged-<yyyyMMdd'T'HHmmss'Z'>`, then `-2` … `-99` if that
-    /// second is taken. `renamex_np(RENAME_EXCL)` never replaces an
-    /// existing file. Throws (and moves nothing) on any other failure.
+    /// `<name>.damaged-<yyyyMMdd'T'HHmmss'Z'>` (then `-2` … `-99`) through
+    /// the ONE shared no-clobber helper, `DamagedFileSetAside.move`
+    /// (renamex_np RENAME_EXCL, never replaces). This file carried a private
+    /// copy of that routine until the 10/7 codex batch merged N1012's
+    /// shared helper; one rename site, not two. Throws (and moves nothing)
+    /// on any other failure, with the rulings-specific error.
     static func moveDamagedFileAside(_ url: URL, now: Date = Date()) throws -> URL {
-        let fmt = ISO8601DateFormatter()
-        fmt.formatOptions = [.withYear, .withMonth, .withDay, .withTime, .withTimeZone]
-        let base = url.path + ".damaged-" + fmt.string(from: now)
-        var lastErr: Int32 = EEXIST
-        for n in 1...99 {
-            let candidate = n == 1 ? base : "\(base)-\(n)"
-            if renamex_np(url.path, candidate, UInt32(RENAME_EXCL)) == 0 {
-                return URL(fileURLWithPath: candidate)
-            }
-            lastErr = errno
-            if lastErr != EEXIST { break }
+        do {
+            return try DamagedFileSetAside.move(url, now: now)
+        } catch let e as DamagedFileSetAside.NotPreserved {
+            throw DamagedFileNotPreserved(path: e.path, errnoValue: e.errnoValue)
         }
-        throw DamagedFileNotPreserved(path: url.path, errnoValue: lastErr)
     }
 }
