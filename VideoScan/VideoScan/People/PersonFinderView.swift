@@ -195,22 +195,9 @@ struct PersonFinderView: View {
             // Videos of <person> — the PRIMARY view (Rick 2026-10-04, GH
             // #272 trial): what we already know this person is in, catalog
             // and archive together. Searches below are demoted.
-            if let familyID = UUID(uuidString: selectedFamilyUUID),
-               families.contains(where: { $0.uuid == familyID }) {
-                FamilyVideosSection(familyUUID: familyID, catalogModel: catalogModel) { title in
-                    catalogModel.archivistSearchRequest = title
-                    selectedTab = 1
-                }
-                .frame(minHeight: 200, maxHeight: .infinity)
-                Divider()
-            } else if let profile = activeVideosProfile {
-                PersonVideosSection(profile: profile, catalogModel: catalogModel) { title in
-                    catalogModel.archivistSearchRequest = title
-                    selectedTab = 1
-                }
-                .frame(minHeight: 200, maxHeight: .infinity)
-                Divider()
-            }
+            // The page follows the ONE gallery selection (PeopleEntry):
+            // a family's page or a person's page, never both.
+            selectedEntryPage
 
             // Section 2: Searches
             sectionHeader("Searches", icon: "magnifyingglass",
@@ -282,10 +269,35 @@ struct PersonFinderView: View {
         }
     }
 
-    /// The selected person, when exactly one card is active.
-    private var activeVideosProfile: POIProfile? {
-        guard let uuid = model.settings.activeProfileUUID else { return nil }
-        return model.savedProfiles.first { $0.uuid == uuid }
+    /// The People gallery's one selected entry — a person or a family
+    /// (PeopleEntry.swift). Read from the two stored keys; O(families).
+    var selectedPeopleEntry: PeopleEntry? {
+        PeopleEntryList.selection(familyUUID: selectedFamilyUUID,
+                                  familyIDs: families.map(\.uuid),
+                                  activeProfileUUID: model.settings.activeProfileUUID)
+    }
+
+    /// "Videos of <family>" or "Videos of <person>" for the selected entry.
+    /// (`if case .family(let id)? = x` ≈ C++ `if (x && x->tag == FAMILY)`
+    /// that also binds the payload.)
+    @ViewBuilder
+    private var selectedEntryPage: some View {
+        let entry = selectedPeopleEntry
+        if case .family(let familyID)? = entry {
+            FamilyVideosSection(familyUUID: familyID, catalogModel: catalogModel) { title in
+                catalogModel.archivistSearchRequest = title
+                selectedTab = 1
+            }
+            .frame(minHeight: 200, maxHeight: .infinity)
+            Divider()
+        } else if let profile = PeopleEntryList.profile(for: entry, in: model.savedProfiles) {
+            PersonVideosSection(profile: profile, catalogModel: catalogModel) { title in
+                catalogModel.archivistSearchRequest = title
+                selectedTab = 1
+            }
+            .frame(minHeight: 200, maxHeight: .infinity)
+            Divider()
+        }
     }
 
     private func sectionHeader(_ title: String, icon: String,

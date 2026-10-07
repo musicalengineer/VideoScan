@@ -17603,6 +17603,25 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PeopleEntryTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PeopleEntryTests"
+      ],
+      "tests": [
+        "aFamilyIsNeverResolvedToAProfile",
+        "aPersonAndAFamilyWithTheSameUUIDAreDifferentEntries",
+        "aTrashedOrGarbageFamilyKeyFallsBackToThePerson",
+        "arrowsWalkAcrossTheFamilyPersonBoundaryAndStopAtTheEnds",
+        "familiesComeFirstThenPeopleInGalleryOrder",
+        "orderingAndWalkingAHundredThousandPeopleStaysFast",
+        "selectingAFamilyRoundTripsAndLeavesThePersonAlone",
+        "selectingAPersonRoundTripsAndClearsTheFamily",
+        "theEntryModelNeverBuildsAProfile"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PeopleGalleryGesturesTests.swift",
       "stage": "unit",
       "suites": [
@@ -27421,7 +27440,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2125,
+      "expected_floor": 2134,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -27614,6 +27633,7 @@
         "VideoScanTests/PathYearHintsTests",
         "VideoScanTests/PauseGateCancellationTests",
         "VideoScanTests/PauseGateToggleReasonTests",
+        "VideoScanTests/PeopleEntryTests",
         "VideoScanTests/PeopleGalleryGesturesTests",
         "VideoScanTests/PeopleGalleryKeyboardNavigationTests",
         "VideoScanTests/PeopleSortKeyTests",
