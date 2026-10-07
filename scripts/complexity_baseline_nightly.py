@@ -11,10 +11,11 @@ Rules
   entries and lower CCN/NLOC values and grandfathered disable counts. If it
   would add an entry or raise any value, nothing is committed and the
   outcome is a 🔴 for the morning digest.
-* The CCN 15 count (ci/baselines/complexity_ccn15_counts.json, Rick
-  2026-10-07) rides in the same commit under the same rules: its `total`
-  may only go down, checked on disk against origin/main, and the whole-tree
-  gate must stay green with it.
+* The CCN 15 total excess (ci/baselines/complexity_ccn15_excess.json, Rick
+  2026-10-07: the sum of max(0, CCN - 15); CCN is a signal, not the goal)
+  rides in the same commit under the same rules: `total_excess` may only go
+  down, checked on disk against origin/main, and the whole-tree gate must
+  stay green with it.
 * Never touches Rick's checkout (the nightly's dirty-tree rule: a dirty
   tree is never pulled, reset or committed to). All work happens in a
   dedicated worktree, detached at origin/main:
@@ -45,9 +46,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import complexity_metrics as cm  # noqa: E402
 
 BASELINE_REL = os.path.join("ci", "baselines", "complexity_debt.json")
-# The CCN 15 count CI checks (Rick 2026-10-07). Shrunk in the same commit, by
-# the same rules: lower only, verified against origin/main, gate green.
-COUNTS_REL = cm.DEFAULT_CCN15_COUNTS
+# The CCN 15 total excess CI checks (Rick 2026-10-07). Shrunk in the same
+# commit, by the same rules: lower only, verified against origin/main, gate green.
+EXCESS_REL = cm.DEFAULT_CCN15_EXCESS
 DEFAULT_WT = os.path.expanduser("~/Library/Caches/VideoScan/complexity-baseline-wt")
 DEFAULT_STATUS = os.path.expanduser("~/Library/Logs/VideoScan/complexity_baseline_commit.json")
 
@@ -63,15 +64,15 @@ def _ok(git: Git, *args: str) -> bool:
 
 
 def run_gate_all(wt: str) -> int:
-    """`complexity_gate.py --all` on the worktree, against the baseline file
-    as it now stands there (the NEW one). Quiet unless it fails."""
+    """`complexity_gate.py --all` on the worktree, against the baseline files
+    as they now stand there (the NEW ones). Quiet unless it fails."""
     import complexity_gate as gate
     lines: List[str] = []
-    counts = os.path.join(wt, COUNTS_REL)
+    excess = os.path.join(wt, EXCESS_REL)
     code = gate.run_gate(cm.read_tree(wt), os.path.join(wt, BASELINE_REL),
                          os.path.join(wt, cm.DEFAULT_OVERRIDES), record_override=False,
                          out=lines.append, min_files=gate.ALL_MODE_MIN_FILES,
-                         counts_path=counts if os.path.exists(counts) else None)
+                         excess_path=excess if os.path.exists(excess) else None)
     if code:
         print("\n".join(lines))
     return code
@@ -96,8 +97,8 @@ def prepare_worktree(git: Git, repo: str, wt: str) -> Optional[str]:
     return None
 
 
-def default_count_plan(wt: str, counts_path: str) -> dict:
-    return cm.ccn15_shrink_plan(wt, counts_path, os.path.join(wt, cm.DEFAULT_OVERRIDES))
+def default_excess_plan(wt: str, excess_path: str) -> dict:
+    return cm.ccn15_excess_shrink_plan(wt, excess_path, os.path.join(wt, cm.DEFAULT_OVERRIDES))
 
 
 def write_and_verify_debt(git: Git, wt: str, p: dict) -> Optional[str]:
@@ -117,17 +118,18 @@ def write_and_verify_debt(git: Git, wt: str, p: dict) -> Optional[str]:
     return "not removals-only: " + "; ".join(problems[:10]) if problems else None
 
 
-def write_and_verify_counts(git: Git, wt: str, cp: dict) -> Optional[str]:
-    """Write the lowered CCN 15 count and check it, on disk, against HEAD:
-    it may only go down."""
-    counts_path = os.path.join(wt, COUNTS_REL)
-    cm.write_ccn15_counts(counts_path, cp["after"], cp["files"])
-    old = git("-C", wt, "show", f"HEAD:{COUNTS_REL}", check=False)
+def write_and_verify_excess(git: Git, wt: str, ep: dict) -> Optional[str]:
+    """Write the lowered CCN 15 total excess and check it, on disk, against
+    HEAD: it may only go down."""
+    excess_path = os.path.join(wt, EXCESS_REL)
+    cm.write_ccn15_excess(excess_path, ep["after"], ep["files"])
+    old = git("-C", wt, "show", f"HEAD:{EXCESS_REL}", check=False)
     if old.returncode != 0:
-        return "!cannot read the committed CCN 15 count"
-    old_total, new_total = int(json.loads(old.stdout)["total"]), cm.load_ccn15_counts(counts_path)["total"]
+        return "!cannot read the committed CCN 15 excess"
+    old_total = int(json.loads(old.stdout)["total_excess"])
+    new_total = cm.load_ccn15_excess(excess_path)["total_excess"]
     if new_total > old_total:
-        return f"CCN 15 count would rise {old_total} -> {new_total}"
+        return f"CCN 15 total excess would rise {old_total} -> {new_total}"
     return None
 
 
@@ -135,12 +137,12 @@ def run(repo: str, wt: str, git: Git = real_git,
         plan: Callable[[str, str], dict] = cm.shrink_plan,
         now: Optional[_dt.datetime] = None,
         gate_check: Optional[Callable[[str], int]] = None,
-        count_plan: Optional[Callable[[str, str], dict]] = None) -> dict:
+        excess_plan: Optional[Callable[[str, str], dict]] = None) -> dict:
     """One attempt-with-one-retry. Returns the status record. The CCN 15
-    count file is shrunk in the same commit when origin/main has one."""
+    excess file is shrunk in the same commit when origin/main has one."""
     now = now or _dt.datetime.now(_dt.timezone.utc)
     gate_check = gate_check or run_gate_all
-    count_plan = count_plan or default_count_plan
+    excess_plan = excess_plan or default_excess_plan
     status = {"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"), "outcome": "", "detail": "",
               "before": None, "after": None, "fixed": 0, "commit": ""}
     for attempt in (1, 2):
@@ -155,20 +157,20 @@ def run(repo: str, wt: str, git: Git = real_git,
         if p["problems"]:
             return {**status, "outcome": "refused",
                     "detail": "not removals-only: " + "; ".join(p["problems"][:10])}
-        counts_path = os.path.join(wt, COUNTS_REL)
-        cp = count_plan(wt, counts_path) if os.path.exists(counts_path) else None
-        if cp is not None:
-            status.update(ccn15_before=cp["before"], ccn15_after=cp["after"])
-            if cp["problems"]:
+        excess_path = os.path.join(wt, EXCESS_REL)
+        ep = excess_plan(wt, excess_path) if os.path.exists(excess_path) else None
+        if ep is not None:
+            status.update(ccn15_excess_before=ep["before"], ccn15_excess_after=ep["after"])
+            if ep["problems"]:
                 return {**status, "outcome": "refused",
-                        "detail": "CCN 15 count: " + "; ".join(cp["problems"][:10])}
-        count_changed = bool(cp and cp["changed"])
-        if not p["changed"] and not count_changed:
+                        "detail": "CCN 15 excess: " + "; ".join(ep["problems"][:10])}
+        excess_changed = bool(ep and ep["changed"])
+        if not p["changed"] and not excess_changed:
             return {**status, "outcome": "unchanged", "detail": "nothing fixed since the last baseline"}
-        touched = ([BASELINE_REL] if p["changed"] else []) + ([COUNTS_REL] if count_changed else [])
+        touched = ([BASELINE_REL] if p["changed"] else []) + ([EXCESS_REL] if excess_changed else [])
         # Verify what is actually on disk against what origin/main has.
         why = (write_and_verify_debt(git, wt, p) if p["changed"] else None) \
-            or (write_and_verify_counts(git, wt, cp) if count_changed else None)
+            or (write_and_verify_excess(git, wt, ep) if excess_changed else None)
         if why:
             _ok(git, "-C", wt, "checkout", "--", *touched)
             if why.startswith("!"):
@@ -180,9 +182,9 @@ def run(repo: str, wt: str, git: Git = real_git,
             _ok(git, "-C", wt, "checkout", "--", *touched)
             return {**status, "outcome": "refused",
                     "detail": "the shrunk baseline would turn CI's complexity gate red (complexity_gate.py --all)"}
-        counts_note = f"; CCN 15 count {cp['before']} -> {cp['after']}" if count_changed else ""
+        excess_note = f"; CCN 15 excess {ep['before']} -> {ep['after']}" if excess_changed else ""
         msg = (f"chore(complexity): nightly baseline shrink {p['before']} -> {p['after']} "
-               f"({len(p['fixed'])} fixed{counts_note})\n\nRemovals only, verified before commit by "
+               f"({len(p['fixed'])} fixed{excess_note})\n\nRemovals only, verified before commit by "
                "scripts/complexity_baseline_nightly.py (2 AM nightly on the M4).")
         if not (_ok(git, "-C", wt, "add", "--", *touched)
                 and _ok(git, "-C", wt, "-c", "user.name=VideoScan nightly",
@@ -192,7 +194,7 @@ def run(repo: str, wt: str, git: Git = real_git,
         if _ok(git, "-C", wt, "push", "origin", "HEAD:refs/heads/main"):
             sha = git("-C", wt, "rev-parse", "--short", "HEAD", check=False).stdout.strip()
             return {**status, "outcome": "committed", "commit": sha,
-                    "detail": f"baseline {p['before']} -> {p['after']}{counts_note}"}
+                    "detail": f"baseline {p['before']} -> {p['after']}{excess_note}"}
         # Rejected (main moved). Drop our commit (our own worktree, clean
         # before we started) and redo once on the new origin/main.
         _ok(git, "-C", wt, "reset", "--quiet", "--hard", "origin/main")

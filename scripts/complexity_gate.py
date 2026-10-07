@@ -19,21 +19,32 @@ What blocks
   * a `swiftlint:disable` of cyclomatic_complexity, function_body_length,
     file_length or type_body_length beyond the grandfathered count for
     that file (the four that existed on 2026-10-05 are baselined)     -> DISABLE
-  * the CCN 15 "no-worse" ratchet (Rick 2026-10-07; functions over CCN 15
-    went 277 -> 345 in ten nights while the count over 30 stayed flat):
-      - pre-commit: across the touched files, more functions over CCN 15
-        in the staged copy than at HEAD (a new file counts 0 at HEAD).
-        Every function that newly crossed 15 is listed               -> RATCHET
-      - pre-commit: a function that was in the 15-30 band at HEAD and
-        whose CCN rose (lowering it or leaving it alone passes)       -> RATCHET-WORSE
-      - CI (--all): more functions over CCN 15 in the whole tree than
-        the committed count, ci/baselines/complexity_ccn15_counts.json
-        (functions let in by a recorded override are not counted)    -> RATCHET
+  * the CCN 15 "no-worse" EXCESS ratchet (Rick 2026-10-07; functions over
+    CCN 15 went 277 -> 345 in ten nights while the count over 30 stayed
+    flat). A function's excess is max(0, CCN - 15):
+      - pre-commit: the total excess across the touched files is higher
+        in the staged copy than at HEAD (a new file is 0 at HEAD). The
+        functions whose excess rose are listed, with before/after CCN -> RATCHET
+      - pre-commit: any function above 15 whose CCN rose (or that rose
+        past 15), even when the total fell because another function
+        shrank more                                                   -> RATCHET-WORSE
+      - CI (--all): the whole tree's total excess is above the committed
+        ci/baselines/complexity_ccn15_excess.json (excess a recorded
+        override let in is not counted)                               -> RATCHET
+
+CCN is one signal for flagging a module, not a target to obey. That is why
+the ratchet sums the EXCESS instead of counting functions over 15: splitting
+PrunePlan.plan (CCN 52, excess 37) into two honest 26s lowers the total to
+22 and passes; a 40 plus a 20 (25 + 5 = 30) passes too; a split that leaves
+more excess than it started with, any growth of a function above 15, and a
+new function above 15 that raises the touched files' total all block.
+RATCHET-WORSE is kept beside the sum because the sum alone would let one
+function grow as long as another shrank more in the same commit.
 
 Existing offenders that do not get worse pass, so their files can still be
-edited. The fix for a RATCHET block is to split along a real concept (a
-decision, a phase with its own data, a type's responsibility), not to chunk
-the function into step1/step2 helpers: see "Splitting a function" in
+edited. The fix for a RATCHET block is to split along a real concept (an
+enum, a value type, a focused protocol, a pure function), never to chunk the
+function into step1/step2 helpers: see "Splitting a function" in
 docs/practices/nightly-metrics-setup.md.
 
 Function identity is the same `file::Type.function` key the nightly uses.
@@ -43,17 +54,17 @@ higher, at most 5 more lines): moving a known offender into a new file, as a
 refactor does, passes; moving it AND growing it does not. Guarded disables
 are counted per rule across the touched files, so a grandfathered
 `swiftlint:disable:next` can move with its function. The CCN 15 ratchet
-counts across ALL the touched files together, with the same move matching
+sums across ALL the touched files together, with the same move matching
 (here without the line limit: it watches CCN only), so moving a function
 between touched files, or splitting a file, passes. A function that moved
 and also got more complex is paired with its old self by bare name and
 judged RATCHET-WORSE.
 
-The CI count is one number for the whole tree, so moves between files cannot
+The CI total is one number for the whole tree, so moves between files cannot
 trip it. It only shrinks: the 2 AM nightly (scripts/complexity_baseline_nightly.py)
 lowers it with the debt baseline; regenerate it deliberately with
 
-    python3 scripts/complexity_metrics.py --update-ccn15-counts
+    python3 scripts/complexity_metrics.py --update-ccn15-excess
 
 and say why in the commit.
 
@@ -69,7 +80,8 @@ lines, reason, commit, author) and is listed on the metrics page.
 The gate prints what it let through and appends a record (time, reason, the
 functions and disables, their CCN/lines) to ci/baselines/complexity_overrides.jsonl
 and stages that file into the same commit. RATCHET and RATCHET-WORSE
-functions are recorded exactly like NEW / WORSE ones. CI preflight honors
+functions are recorded exactly like NEW / WORSE ones, plus the excess each
+let in (`ratchet_excess`), which CI credits back. CI preflight honors
 recorded overrides (at the recorded size: growing further blocks again); the
 nightly lists every override from the last 48 h in the morning digest and on
 its summary. `git commit --no-verify` skips the hook entirely, but CI
@@ -108,9 +120,9 @@ ALL_MODE_MIN_FILES = 500   # --all on this repo sees ~1,080; fewer = broken list
 
 HOW_TO_FIX = ("Split it: pull branches or steps out into named helpers. If it truly has to go in "
               "as is: COMPLEXITY_OVERRIDE=\"<reason>\" git commit ... (recorded and reported nightly).")
-RATCHET_HINT = ("Bring it to CCN 15 or below by splitting along a real concept (a decision, a phase with "
-                "its own data, a type's responsibility; see \"Splitting a function\" in "
-                "docs/practices/nightly-metrics-setup.md). Don't chunk it into step1/step2 helpers.")
+RATCHET_HINT = ("CCN is a signal, not the goal. Split along a real concept (an enum, value type, focused "
+                "protocol, pure function), never step1/step2 helpers. See \"Splitting a function\" in "
+                "docs/practices/nightly-metrics-setup.md.")
 
 
 over_gate = cm.over_gate
@@ -176,40 +188,46 @@ def _pair_with_before(band: Sequence[cm.Func], before: Dict[str, cm.Func],
     return pairs
 
 
-def ratchet_violations(before_funcs: Sequence[cm.Func],
-                       after_funcs: Sequence[cm.Func]) -> Tuple[List[dict], Tuple[int, int]]:
-    """The pre-commit CCN 15 ratchet over the touched files.
+def ratchet_violations(before_funcs: Sequence[cm.Func], after_funcs: Sequence[cm.Func]
+                       ) -> Tuple[List[dict], Tuple[int, int], Dict[str, int]]:
+    """The pre-commit CCN 15 excess ratchet over the touched files.
 
-    Returns (violations, (count at HEAD, count staged)). RATCHET entries are
-    the functions that newly crossed CCN 15 (new, or rose from 15 or below),
-    reported only when the touched files' count went up: a commit that adds
-    one and fixes another nets zero and passes. RATCHET-WORSE entries are
-    functions that were in the 15-30 band at HEAD and whose CCN rose;
-    above 30 the debt baseline (WORSE) is the judge."""
+    Returns (violations, (total excess at HEAD, staged), {key: excess the
+    function gained}). RATCHET entries are NEW functions above 15 (no HEAD
+    counterpart), reported only when the touched files' total excess went
+    up: an honest split, or a commit that adds one function and simplifies
+    another by more, passes. RATCHET-WORSE entries are functions that exist
+    at HEAD and gained excess (grew above 15, or crossed it), whatever the
+    total did: the sum alone would let one function grow while another
+    shrank."""
     before = {f.key: f for f in before_funcs}
-    band = [f for f in after_funcs if f.ccn > RATCHET_CCN]
-    counts = (sum(1 for f in before_funcs if f.ccn > RATCHET_CCN), len(band))
+    band = [f for f in after_funcs if cm.excess(f)]
+    totals = (sum(cm.excess(f) for f in before_funcs), sum(cm.excess(f) for f in after_funcs))
     pairs = _pair_with_before(band, before, {f.key for f in after_funcs})
-    out, entrants = [], []
+    out, fresh, gained = [], [], {}
     for f in band:
         prev = pairs.get(f.key)
-        if prev is None or prev.ccn <= RATCHET_CCN:
-            entrants.append(f)
-        elif prev.ccn <= GATE_CCN and f.ccn > prev.ccn:
+        gain = cm.excess(f) - (cm.excess(prev) if prev is not None else 0)
+        if gain <= 0:
+            continue
+        gained[f.key] = gain
+        if prev is None:
+            fresh.append(f)
+        else:
             out.append({"kind": "ratchet-worse", "func": f, "ref": {"ccn": prev.ccn, "nloc": prev.nloc}})
-    if counts[1] > counts[0]:
-        out += [{"kind": "ratchet", "func": f, "ref": None} for f in entrants]
-    return sorted(out, key=lambda v: (-v["func"].ccn, -v["func"].nloc, v["func"].key)), counts
+    if totals[1] > totals[0]:
+        out += [{"kind": "ratchet", "func": f, "ref": None} for f in fresh]
+    return sorted(out, key=lambda v: (-v["func"].ccn, -v["func"].nloc, v["func"].key)), totals, gained
 
 
-def count_violation(funcs: Sequence[cm.Func], counts: dict, allowed: Dict[str, dict]) -> Optional[dict]:
-    """CI's CCN 15 ratchet: the whole tree against the committed count."""
-    total = cm.band_total(funcs, allowed)
-    if total <= counts["total"]:
+def excess_violation(funcs: Sequence[cm.Func], baseline: dict, allowed: Dict[str, dict]) -> Optional[dict]:
+    """CI's CCN 15 ratchet: the whole tree's total excess against the committed one."""
+    total = cm.excess_total(funcs, allowed)
+    if total <= baseline["total_excess"]:
         return None
-    files = cm.band_counts(funcs)
-    grew = {p: n - counts["files"].get(p, 0) for p, n in files.items() if n > counts["files"].get(p, 0)}
-    return {"total": total, "allowed": counts["total"], "grew": grew}
+    files = cm.excess_by_file(funcs)
+    grew = {p: n - baseline["files"].get(p, 0) for p, n in files.items() if n > baseline["files"].get(p, 0)}
+    return {"total": total, "allowed": baseline["total_excess"], "grew": grew}
 
 
 def disable_violations(current: Dict[str, int], baseline: Dict[str, int],
@@ -246,42 +264,46 @@ def _what(v: dict) -> str:
     if kind == "worse":
         return f"got WORSE (baseline CCN {v['ref']['ccn']}, {v['ref']['nloc']} lines)"
     if kind == "ratchet":
-        return f"RATCHET: new over CCN {RATCHET_CCN}"
-    return f"RATCHET-WORSE: CCN rose from {v['ref']['ccn']} (keep it at {v['ref']['ccn']} or lower)"
+        return (f"RATCHET: new above CCN {RATCHET_CCN} (no HEAD version; CCN {v['func'].ccn}, "
+                f"excess +{v['func'].ccn - RATCHET_CCN})")
+    return (f"RATCHET-WORSE: CCN rose from {v['ref']['ccn']} to {v['func'].ccn} "
+            f"(keep it at {max(v['ref']['ccn'], RATCHET_CCN)} or lower)")
 
 
 def format_violations(funcs: List[dict], disables: List[dict],
-                      ratchet_counts: Optional[Tuple[int, int]] = None,
-                      tree_count: Optional[dict] = None) -> List[str]:
+                      ratchet_totals: Optional[Tuple[int, int]] = None,
+                      tree_excess: Optional[dict] = None) -> List[str]:
     lines = []
-    if ratchet_counts and ratchet_counts[1] > ratchet_counts[0]:
-        lines.append(f"  BLOCKED  RATCHET: functions over CCN {RATCHET_CCN} in the touched files went "
-                     f"{ratchet_counts[0]} -> {ratchet_counts[1]}")
+    if ratchet_totals and ratchet_totals[1] > ratchet_totals[0]:
+        lines.append(f"  BLOCKED  RATCHET: total excess over CCN {RATCHET_CCN} in the touched files went "
+                     f"{ratchet_totals[0]} -> {ratchet_totals[1]}")
     for v in funcs:
         f = v["func"]
         lines.append(f"  BLOCKED  CCN {f.ccn:>3}  {f.nloc:>4} lines  {f.file} :: {f.display}  — {_what(v)}")
     for d in disables:
         lines.append(f"  BLOCKED  new `swiftlint:disable {d['rule']}` in {', '.join(d['files'])} "
                      f"({d['count']} now, {d['allowed']} grandfathered in these files)")
-    if tree_count:
-        grew = ", ".join(f"{p} (+{n})" for p, n in sorted(tree_count["grew"].items())) or "none by file (moves)"
-        lines.append(f"  BLOCKED  RATCHET: {tree_count['total']} functions over CCN {RATCHET_CCN} in the tree, "
-                     f"{tree_count['allowed']} allowed by {cm.DEFAULT_CCN15_COUNTS}. "
-                     f"Files above their count there: {grew}")
+    if tree_excess:
+        grew = ", ".join(f"{p} (+{n})" for p, n in sorted(tree_excess["grew"].items())) or "none by file (moves)"
+        lines.append(f"  BLOCKED  RATCHET: total excess over CCN {RATCHET_CCN} in the tree is "
+                     f"{tree_excess['total']}, {tree_excess['allowed']} allowed by {cm.DEFAULT_CCN15_EXCESS}. "
+                     f"Files above their excess there: {grew}")
     return lines
 
 
 def override_record(reason: str, funcs: List[dict], disables: List[dict], now: _dt.datetime,
-                    author: str = "") -> dict:
+                    author: str = "", ratchet_excess: Optional[Dict[str, int]] = None) -> dict:
     """The trace an override leaves. The commit SHA does not exist yet at
     pre-commit time; the nightly resolves it from the log's history. Author
-    NAME only, never an email (public repo)."""
+    NAME only, never an email (public repo). `ratchet_excess` is the CCN 15
+    excess each function gained, which CI credits back."""
     return {
         "ts": now.strftime("%Y-%m-%dT%H:%M:%SZ"),
         "reason": reason,
         "author": author,
         "functions": {v["func"].key: {"ccn": v["func"].ccn, "nloc": v["func"].nloc} for v in funcs},
         "disables": {k: n for d in disables for k, n in d["counts"].items()},
+        "ratchet_excess": dict(sorted((ratchet_excess or {}).items())),
     }
 
 
@@ -291,25 +313,25 @@ def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
              now: Optional[_dt.datetime] = None, min_files: int = 0,
              read_untouched: Optional[Callable[[str], Optional[str]]] = None,
              author: str = "", before: Optional[Dict[str, str]] = None,
-             counts_path: Optional[str] = None) -> int:
+             excess_path: Optional[str] = None) -> int:
     """Check `sources` ({repo-relative path: text}; a deleted file is ""). The
     set of paths is what was touched. 0 = pass (or overridden), 1 = blocked.
 
-    The CCN 15 ratchet runs when the caller gives it something to compare
-    with: `before` ({path: text at HEAD}, "" or absent = new file) for the
-    pre-commit check, or `counts_path` (the committed whole-tree count) for
-    CI. A `counts_path` that does not exist fails closed."""
+    The CCN 15 excess ratchet runs when the caller gives it something to
+    compare with: `before` ({path: text at HEAD}, "" or absent = new file)
+    for the pre-commit check, or `excess_path` (the committed whole-tree
+    total) for CI. An `excess_path` that does not exist fails closed."""
     scoped = {p: t for p, t in sources.items() if cm.in_scope(p)}
     if len(scoped) < min_files:
         out(f"complexity gate: only {len(scoped)} in-scope file(s) found, expected at least "
             f"{min_files}. Refusing to pass an empty or broken listing.")
         return 1
-    counts = None
-    if counts_path is not None:
-        counts = cm.load_ccn15_counts(counts_path)
-        if counts is None:
-            out(f"complexity gate: no CCN {RATCHET_CCN} count baseline at {counts_path}. Regenerate it "
-                "from a known-good tree: python3 scripts/complexity_metrics.py --update-ccn15-counts")
+    excess_base = None
+    if excess_path is not None:
+        excess_base = cm.load_ccn15_excess(excess_path)
+        if excess_base is None:
+            out(f"complexity gate: no CCN {RATCHET_CCN} excess baseline at {excess_path}. Regenerate it "
+                "from a known-good tree: python3 scripts/complexity_metrics.py --update-ccn15-excess")
             return 1
     touched = set(scoped)
     funcs, _ = cm.analyze_sources(scoped)
@@ -333,36 +355,42 @@ def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
     dv = disable_violations(current_disables, cm.load_disables(baseline_path), allowed_disables, touched)
 
     rv: List[dict] = []
-    ratchet_counts: Optional[Tuple[int, int]] = None
+    totals: Optional[Tuple[int, int]] = None
+    gained: Dict[str, int] = {}
     if before is not None:
         before_funcs, _ = cm.analyze_sources({p: before.get(p) or "" for p in scoped})
-        rv, ratchet_counts = ratchet_violations(before_funcs, funcs)
+        rv, totals, gained = ratchet_violations(before_funcs, funcs)
         shown = {v["func"].key for v in fv}
         rv = [v for v in rv if v["func"].key not in shown]     # a NEW / WORSE line already names it
-    tree_count = count_violation(funcs, counts, allowed_funcs) if counts is not None else None
+    tree_excess = (excess_violation(funcs, excess_base, cm.excess_allowances(cm.load_overrides(overrides_path)))
+                   if excess_base is not None else None)
 
     blocked_funcs = fv + rv
     ratchet_note = ""
-    if ratchet_counts is not None:
-        ratchet_note = f"; over CCN {RATCHET_CCN}: {ratchet_counts[0]} -> {ratchet_counts[1]}"
-    elif counts is not None:
-        ratchet_note = f"; over CCN {RATCHET_CCN}: {cm.band_total(funcs, allowed_funcs)} of {counts['total']} allowed"
-    count_rose = bool(ratchet_counts and ratchet_counts[1] > ratchet_counts[0])
-    if not blocked_funcs and not dv and not tree_count and not count_rose:
+    if totals is not None:
+        ratchet_note = f"; excess over CCN {RATCHET_CCN}: {totals[0]} -> {totals[1]}"
+    elif excess_base is not None:
+        now_excess = cm.excess_total(funcs, cm.excess_allowances(cm.load_overrides(overrides_path)))
+        ratchet_note = (f"; excess over CCN {RATCHET_CCN}: {now_excess} of "
+                        f"{excess_base['total_excess']} allowed")
+    total_rose = bool(totals and totals[1] > totals[0])
+    if not blocked_funcs and not dv and not tree_excess and not total_rose:
         out(f"complexity gate: OK ({len(scoped)} file(s), {len(funcs)} function(s); "
             f"limit CCN {GATE_CCN} / {GATE_NLOC} lines{ratchet_note})")
         return 0
 
-    problems = len(blocked_funcs) + len(dv) + (1 if tree_count else 0)
+    problems = len(blocked_funcs) + len(dv) + (1 if tree_excess else 0)
     out(f"complexity gate: {max(problems, 1)} problem(s) "
         f"(limit CCN {GATE_CCN} / {GATE_NLOC} lines; known offenders may not grow; "
-        f"no more functions over CCN {RATCHET_CCN}{ratchet_note})")
-    for line in format_violations(blocked_funcs, dv, ratchet_counts, tree_count):
+        f"no more complexity above CCN {RATCHET_CCN}{ratchet_note})")
+    for line in format_violations(blocked_funcs, dv, totals, tree_excess):
         out(line)
 
     reason = (override_reason or "").strip()
     if reason:
-        rec = override_record(reason, blocked_funcs, dv, now or _dt.datetime.now(_dt.timezone.utc), author)
+        let_in = {v["func"].key: gained[v["func"].key] for v in blocked_funcs if v["func"].key in gained}
+        rec = override_record(reason, blocked_funcs, dv, now or _dt.datetime.now(_dt.timezone.utc), author,
+                              ratchet_excess=let_in)
         if record_override:
             os.makedirs(os.path.dirname(overrides_path) or ".", exist_ok=True)
             with open(overrides_path, "a", encoding="utf-8") as handle:
@@ -372,7 +400,7 @@ def run_gate(sources: Dict[str, str], baseline_path: str, overrides_path: str,
             "the morning digest will show it to Rick as a 🔴 item.")
         return 0
 
-    if rv or tree_count:
+    if rv or tree_excess or total_rose:
         out("  " + RATCHET_HINT)
     if fv or dv:
         out("  " + HOW_TO_FIX)
@@ -435,8 +463,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--root", default="")
     parser.add_argument("--baseline", default=cm.DEFAULT_SEED)
     parser.add_argument("--overrides", default=cm.DEFAULT_OVERRIDES)
-    parser.add_argument("--ccn15-counts", default=cm.DEFAULT_CCN15_COUNTS,
-                        help="CI's whole-tree CCN 15 count (--all only)")
+    parser.add_argument("--ccn15-excess", default=cm.DEFAULT_CCN15_EXCESS,
+                        help="CI's whole-tree CCN 15 total excess (--all only)")
     args = parser.parse_args(argv)
 
     try:
@@ -477,7 +505,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     # --all: CI honors recorded overrides only; an override env var here is ignored.
     return run_gate(cm.read_tree(root), baseline, overrides, override_reason="", record_override=False,
-                    min_files=ALL_MODE_MIN_FILES, counts_path=os.path.join(root, args.ccn15_counts))
+                    min_files=ALL_MODE_MIN_FILES, excess_path=os.path.join(root, args.ccn15_excess))
 
 
 if __name__ == "__main__":
