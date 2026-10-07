@@ -5263,6 +5263,17 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivistTemporalGroupSnapshotTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchivistTemporalGroupSnapshotTests"
+      ],
+      "tests": [
+        "everyGroupAskAndReferenceMatchesItsRecordedSnapshot"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AsyncSemaphoreTests.swift",
@@ -27046,7 +27057,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2109,
+      "expected_floor": 2110,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -27102,6 +27113,7 @@
         "VideoScanTests/ArchivistRecordReferenceResolverTests",
         "VideoScanTests/ArchivistSelectionDateQuestionTests",
         "VideoScanTests/ArchivistTemporalExecutorTests",
+        "VideoScanTests/ArchivistTemporalGroupSnapshotTests",
         "VideoScanTests/AwaitingConfirmationWorklistTests",
         "VideoScanTests/BalanceAudioClassifierTests",
         "VideoScanTests/BalanceFromDiagnosisTests",
