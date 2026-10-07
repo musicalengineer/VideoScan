@@ -536,6 +536,23 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsDamagedFileTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyIdentityDecisionsDamagedFileTests"
+      ],
+      "tests": [
+        "aDamagedFileIsMovedAsideNotOverwrittenByTheNextRuling",
+        "aDamagedFileThatCannotBeMovedAsideRefusesTheSave",
+        "aHealthyFileIsReplacedWithoutLeavingADamagedCopy",
+        "aStaleSnapshotOverAFileThatIsNowUnreadableIsRefused",
+        "qaRedAFileFixedByHandAfterLoadIsNotOverwrittenByTheStaleSnapshot",
+        "twoDamagedSavesInARowKeepBothDamagedCopies"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsTests.swift",
       "stage": "unit",
       "suites": [
@@ -3581,8 +3598,10 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelNoSoundMediaMatrixTests.swift",
+      "stage": "unit",
       "suites": [
         "ArchiveAngelNoSoundMediaMatrixTests"
       ],
@@ -3596,13 +3615,13 @@
         "mp4",
         "mxf",
         "silent"
-      ],
-      "stage": "unit",
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+      ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelNoSoundTests.swift",
+      "stage": "unit",
       "suites": [
         "ArchiveAngelNoSoundTests"
       ],
@@ -3622,9 +3641,7 @@
         "uncheckedIsCandidateNotReady",
         "verifiedNoStreamRejected",
         "videoOnlyRejected"
-      ],
-      "stage": "unit",
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+      ]
     },
     {
       "kind": "xcode",
@@ -19690,6 +19707,34 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RelocateWitnessLivenessTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RelocateWitnessLivenessTests"
+      ],
+      "tests": [
+        "aWitnessOnTheSourceDriveIsNotIndependentEvenIfItIsAnotherFile",
+        "appCodeNeverWeakensTheWitnessIndependenceRule",
+        "applyTimeReproofKeepsAnEntryWhoseWitnessIsStillThere",
+        "applyTimeReproofRefusesAWitnessThatIsTheSourceFile",
+        "applyTimeReproofRefusesAnEntryWhoseWitnessVanishedSinceClassify",
+        "liveWitnessPresentOnDiskStillMakesTheRecordSafelyRedundant",
+        "liveWitnessWhoseFileChangedSizeIsNotASurvivingCopy",
+        "liveWitnessWhoseFileIsGoneIsNotASurvivingCopy",
+        "manuallyDeletedWitnessRecordIsNotASurvivingCopy",
+        "oneDeadAndOneLiveWitnessStillVouchesWithOnlyTheLiveOne",
+        "permanentlyDeletedWitnessRecordIsNotASurvivingCopy",
+        "purgedButNotTrashedWitnessRecordIsNotASurvivingCopy",
+        "qaR2ProductionDefaults",
+        "qaRedSourceFileReachedThroughASymlinkIsNotItsOwnWitness",
+        "qaRedSourceFileSpelledWithDifferentCaseIsNotItsOwnWitness",
+        "reproofOrderIsStableAndUsesEachRecordsOwnSize",
+        "trashedWitnessRecordIsNotASurvivingCopy"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RemoteViewerIsolationTests.swift",
@@ -19711,10 +19756,16 @@
         "RemoteViewerReadOnlySensorTests"
       ],
       "tests": [
+        "everyCallerOfDeleteConfirmedJunkSitsBehindTheViewerGuard",
+        "everyFileRemovalInAppCodeIsClassifiedAndMediaRemovalsAreViewerGuarded",
         "everyWritePathRefusesInViewerModeWithALogLine",
         "masterModeExecutesGuardedWritersAndLogsNoRefusal",
+        "qaRedViewerModeRefusesDiscardWorkbenchAndLeavesTheFileOnDisk",
+        "removalSensorGivesTheSameAnswerFromASymlinkedCheckout",
         "statusChipWordingAndMasterOnlyHint",
         "viewerFamilyTreeRefreshKeepsPersonAndShippedLayersWithoutCreatingAFile",
+        "viewerModeRefusesDeleteConfirmedJunkAndLeavesTheFileOnDisk",
+        "viewerModeRefusesDeleteFromVolumesList",
         "viewerReturnCannotSubmitPronunciationButPreviewRemainsAvailable",
         "viewerSpeechResolutionKeepsPersonAndShippedLayersWithoutCreatingAFile"
       ]
@@ -24884,6 +24935,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsDamagedFileTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -26541,6 +26596,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/RelocateSummarySheetTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/RelocateWitnessLivenessTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
