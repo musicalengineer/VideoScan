@@ -7238,6 +7238,20 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CleanupLengthCheckTests.swift",
+      "suites": [
+        "CleanupLengthCheckTests"
+      ],
+      "tests": [
+        "aFullLengthRenderPasses",
+        "aShortRenderIsRefused",
+        "engineUsesTheSharedLengthRule"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CleanupMediaMatrixTests.swift",
@@ -25698,6 +25712,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CleanupIsolationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupLengthCheckTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

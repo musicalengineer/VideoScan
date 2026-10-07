@@ -41,6 +41,10 @@ import os
 //
 // Cancellation: Task.cancel propagates into ProcessRunner which
 // SIGTERM→SIGKILLs the ffmpeg child; the caller deletes the scratch dir.
+//
+// Verdict before a render is returned (and so before CleanupJob can
+// publish it): exit code, the 10 KB floor, then length against the source
+// (FFmpegEncodeCheck — N1014-F2).
 
 private let cleanupEngineLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                       category: "cleanup")
@@ -120,8 +124,27 @@ struct CleanupFFmpegEngine: CleanupRecipeEngine {
             throw CleanupEngineError.renderFailed(
                 "ffmpeg output too small (\(size) bytes) — likely a codec failure")
         }
+        // Length (N1014-F2, 2026-10-07): ffmpeg exits 0 when a source read
+        // error (bad sectors on an aging drive) ends its input early, so a
+        // 20-minute render of a 60-minute tape passed both gates above and
+        // was published as the cleaned copy. Same rule Transcode/Reformat use.
+        if let shortfall = await Self.lengthShortfall(sourcePath: source.path, renderPath: renderURL.path) {
+            cleanupEngineLog.error("cleanup render FAILED (length): \(source.path, privacy: .public) — \(shortfall, privacy: .public)")
+            throw CleanupEngineError.renderFailed(shortfall.prefix(1).uppercased() + shortfall.dropFirst())
+        }
 
         return renderURL
+    }
+
+    /// FFmpegEncodeCheck's length rule for a finished render: the render
+    /// against a FRESH probe of the source (never the catalog value), within
+    /// max(3 s, 3 %). nil when long enough — or when either length can't be
+    /// read (a check that cannot measure must not invent a verdict).
+    nonisolated static func lengthShortfall(sourcePath: String, renderPath: String) async -> String? {
+        async let sourceSeconds = FFmpegEncodeCheck.probeDurationSeconds(sourcePath)
+        async let renderSeconds = FFmpegEncodeCheck.probeDurationSeconds(renderPath)
+        return FFmpegEncodeCheck.durationShortfall(sourceSeconds: await sourceSeconds,
+                                                   outputSeconds: await renderSeconds)
     }
 
     // MARK: - Pure builders (unit-tested, no I/O)
