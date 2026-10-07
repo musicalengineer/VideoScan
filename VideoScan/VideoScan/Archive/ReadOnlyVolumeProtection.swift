@@ -65,6 +65,13 @@ struct VolumeReadOnlyMark: Sendable, Equatable {
     var resolvedPath: String? = nil
     /// The mount point of the volume it lived on then. Additive.
     var mountPoint: String? = nil
+    /// The person said this drive is a BACKUP OF THE MASTER ARCHIVE
+    /// (delete-excess lane, C05 amendment 3, 2026-10-07). An Archive backup
+    /// is a Read-only drive with a name for why: the one bulk-verb gate
+    /// refuses it exactly as it refuses any Read-only drive, its files still
+    /// count as surviving copies, and the excess-copies lane says "on a
+    /// drive marked Archive backup". Additive (absent = false).
+    var isArchiveBackup: Bool = false
 }
 
 struct ReadOnlyVolumeProtection: Sendable, Equatable {
@@ -487,6 +494,51 @@ extension VideoScanModel {
         let outcome = on
             ? "Read only: \(name) is marked Read only — VideoScan will never delete, move or rewrite files on it; its files still count as copies when other drives are cleaned up."
             : "Read only: \(name) allows changes again."
+        log(outcome)
+        appLog.write(outcome)
+    }
+
+    // MARK: Archive backup (2026-10-07, C05 amendment 3)
+
+    /// The scan targets marked Archive backup, as Read-only marks.
+    var archiveBackupVolumeMarks: [ReadOnlyVolumeProtection.Mark] {
+        scanTargets.compactMap { t in
+            guard let m = t.readOnlyMark, m.isArchiveBackup else { return nil }
+            return .init(searchPath: t.searchPath, volumeUUID: m.volumeUUID, resolvedPath: m.resolvedPath, mountPoint: m.mountPoint)
+        }
+    }
+
+    /// Paths on a drive marked Archive backup — string work only (the
+    /// marked spellings; the removal-time check is the Read-only gate's,
+    /// which already refuses these drives). For the lane's wording.
+    func archiveBackupProtection() -> ReadOnlyVolumeProtection {
+        let marks = archiveBackupVolumeMarks
+        return marks.isEmpty ? .none : .provisional(marks: marks)
+    }
+
+    /// Mark a drive as a backup of the Master Archive, or take that name
+    /// off. Marking makes it Read only too (one mark, one gate); taking the
+    /// name off leaves it Read only — "Allow Changes" is the one way back to
+    /// a writable drive. START and OUTCOME lines, the volume's name only.
+    func setVolumeArchiveBackup(_ on: Bool, for target: CatalogScanTarget, now: Date = Date()) {
+        let name = VolumeReachability.displayLabel(forPath: target.searchPath)
+        guard !isReadOnly else {
+            log("Archive backup: \(name) — not changed: this Mac is a read-only viewer of the catalog.")
+            return
+        }
+        guard on != (target.readOnlyMark?.isArchiveBackup ?? false) else { return }
+        log("Archive backup: \(on ? "marking" : "taking the name off") \(name) — START")
+        var mark = target.readOnlyMark
+            ?? Self.readOnlyMark(forPath: target.searchPath, isReachable: target.isReachable, now: now)
+        mark.isArchiveBackup = on
+        target.readOnlyMark = mark
+        noteReadOnlyVolumeSnapshotStale()
+        persistScanDates()
+        notifyTargetsChanged()
+        refreshDossierCountsNow()
+        let outcome = on
+            ? "Archive backup: \(name) is marked as a backup of the Master Archive — it is Read only, and nothing on it is ever offered as an excess copy."
+            : "Archive backup: \(name) is no longer marked as an archive backup — it stays Read only until you choose Allow Changes."
         log(outcome)
         appLog.write(outcome)
     }

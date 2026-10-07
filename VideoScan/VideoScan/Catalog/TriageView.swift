@@ -177,6 +177,15 @@ struct TriageView: View {
     // relaunches.
     @AppStorage("triageShowOnlineOnly") private var showOnlineOnly: Bool = false
 
+    // View ▸ Curator (2026-10-07): the CLEAN UP section and its panes show
+    // only when it is on — calm by default, depth on request.
+    @AppStorage(CuratorMode.key) private var curator: Bool = false
+    /// The excess-copies plan, built off-main on demand (≈ a cached value a
+    /// worker thread fills). A plain reference: only the CLEAN UP row and
+    /// the pane observe it, so TriageView's body never re-runs for it.
+    private let excessStore = ExcessCopiesStore.shared
+    @State private var showingExcess = false
+
     init(model: VideoScanModel) {
         self.model = model
         // Property-wrapper backing init (`_snapshot` ≈ the wrapper struct
@@ -218,8 +227,13 @@ struct TriageView: View {
         HSplitView {
             sidebar
                 .frame(minWidth: 180, idealWidth: 210, maxWidth: 260)
-            mainContent
-                .frame(minWidth: 500)
+            if curator && showingExcess {
+                ExcessCopiesPane(model: model, store: excessStore)
+                    .frame(minWidth: 500)
+            } else {
+                mainContent
+                    .frame(minWidth: 500)
+            }
         }
         .onChange(of: selectedIDs) {
             if let first = selectedIDs.first {
@@ -287,6 +301,14 @@ struct TriageView: View {
                         filterRow(.suspectedJunk)
                         filterRow(.confirmedJunk)
                     }
+
+                    if curator {
+                        Divider().padding(.vertical, 6)
+                        CleanUpSidebarSection(store: excessStore, showingExcess: $showingExcess) {
+                            showingExcess = true
+                            excessStore.refresh(model: model)
+                        }
+                    }
                 }
                 .padding(.horizontal, 8)
                 .padding(.top, 8)
@@ -318,6 +340,7 @@ struct TriageView: View {
         return Button {
             selectedFilter = filter
             selectedIDs = []
+            showingExcess = false
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: filter.icon)

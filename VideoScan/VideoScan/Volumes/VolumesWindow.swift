@@ -612,6 +612,15 @@ struct VolumesWindow: View {
             .disabled(model.isReadOnly)
             .help(VolumeReadOnlyText.caption)
             .accessibilityIdentifier("volumeRow.toggleReadOnly")
+            // C05 amendment 3 (2026-10-07): a backup of the archive is never
+            // cleaned up as "excess copies". Marking it makes it Read only.
+            let isBackup = target.readOnlyMark?.isArchiveBackup ?? false
+            Button(isBackup ? "Not an Archive Backup" : "Mark as Archive Backup") {
+                model.setVolumeArchiveBackup(!isBackup, for: target)
+            }
+            .disabled(model.isReadOnly)
+            .help("A drive that holds a backup of the Master Archive. It becomes Read only, and nothing on it is ever offered as an excess copy.")
+            .accessibilityIdentifier("volumeRow.toggleArchiveBackup")
         }
 
         Divider()
