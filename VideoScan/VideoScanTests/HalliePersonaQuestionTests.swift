@@ -142,6 +142,16 @@ struct HalliePersonaQuestionTests {
         #expect(detect(text, context: context()) == ask, Comment(rawValue: text))
     }
 
+    /// QA on R3 (2026-10-07): two reorderings INSIDE the birth branch (the
+    /// place cue before the date cue; birthday nouns last) passed every
+    /// oracle input. These pin that order.
+    @Test func birthBranchCueOrderIsPinned() {
+        let none: (String) -> Bool = { _ in false }
+        #expect(HalliePersonaQuestion.detect("where is your birthday", isInnerCircleName: none) == .birthdate)
+        #expect(HalliePersonaQuestion.detect("where were you born, what year", isInnerCircleName: none) == .birthdate)
+        #expect(HalliePersonaQuestion.detect("when were you born, what town", isInnerCircleName: none) == .birthdate)
+    }
+
     // MARK: - What stays out
 
     @Test(arguments: [
