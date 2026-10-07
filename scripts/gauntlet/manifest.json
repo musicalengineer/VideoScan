@@ -3582,6 +3582,52 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelNoSoundMediaMatrixTests.swift",
+      "suites": [
+        "ArchiveAngelNoSoundMediaMatrixTests"
+      ],
+      "tests": [
+        "avi",
+        "damaged",
+        "extensionless",
+        "healthyAndUnchecked",
+        "mkv",
+        "mov",
+        "mp4",
+        "mxf",
+        "silent"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveAngelNoSoundTests.swift",
+      "suites": [
+        "ArchiveAngelNoSoundTests"
+      ],
+      "tests": [
+        "audioOnlyIsNotVideo",
+        "classifierAndSurfaces",
+        "damagedRejected",
+        "explicitPicksMayTakeSilentFilm",
+        "extensionlessVideoOnlyRejected",
+        "healthyPasses",
+        "overrideFileByID",
+        "pairedHalfSaysCombineFirst",
+        "policyAllowsSilentFootage",
+        "reasonWords",
+        "scale100k",
+        "silentTrackRejected",
+        "uncheckedIsCandidateNotReady",
+        "verifiedNoStreamRejected",
+        "videoOnlyRejected"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelPerfParityTests.swift",
       "stage": "performance",
       "suites": [
@@ -25295,6 +25341,14 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ArchiveAngelLoggingAndOrderTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchiveAngelNoSoundMediaMatrixTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchiveAngelNoSoundTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
