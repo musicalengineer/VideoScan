@@ -136,6 +136,53 @@ struct ArchiveAngelLivenessTests {
         return p
     }
 
+    /// N1016-F1: recovery checked only the ORIGINAL, then deleted the row's
+    /// buffer folder — taking an access copy that never reached the archive
+    /// with it. Recovery now asks the same per-companion question as the
+    /// normal settle. Twin: when the companion DID land, the folder goes.
+    @Test @MainActor func aStrandedRowWhoseCompanionDidNotLandKeepsItsBuffer() throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("angel_stranded_companion"); defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+        let archive = URL(fileURLWithPath: try #require(model.masterArchiveRootPath))
+        let bufferRoot = sb.root.appendingPathComponent("buffer", isDirectory: true)
+
+        // Two originals, both landed (inside the archive). A's access copy
+        // did not land; B's did (it has its own archive copy).
+        let recA = try archiveCopy(of: nil, at: archive.appendingPathComponent("2009/2009_a.mov"), seed: 1)
+        let recB = try archiveCopy(of: nil, at: archive.appendingPathComponent("2009/2009_b.mov"), seed: 2)
+        recA.derivationKind = nil; recB.derivationKind = nil   // plain files of the archive
+        var a = entry(.ready, id: recA.id), b = entry(.ready, id: recB.id)
+        var p = try strandedPlan([a, b], bufferRoot: bufferRoot, name: "batch-c")
+        func companion(for e: ArchiveAngelPlan.Entry, seed: UInt64) throws -> (VideoRecord, ArchiveAngelPlan.StepOutcome) {
+            let rel = "\(e.id.uuidString)/x_access.mp4"
+            let url = try MasterArchiveTestSupport.writeBlob(at: URL(fileURLWithPath: p.batchDir).appendingPathComponent(rel),
+                                                             bytes: 1024, seed: seed)
+            let rec = MasterArchiveTestSupport.makeRecord(path: url.path)
+            return (rec, .init(kind: .accessCopy, state: .done, outputRelPath: rel, recordID: rec.id))
+        }
+        let (compA, stepA) = try companion(for: a, seed: 3)
+        let (compB, stepB) = try companion(for: b, seed: 4)
+        a.steps = [stepA]; b.steps = [stepB]
+        p.entries = [a, b]
+        try ArchiveAngelPlanStore.save(p)
+        let compBCopy = try archiveCopy(of: compB, at: archive.appendingPathComponent("2009/2009_b_access.mp4"), seed: 5)
+        model.records = [recA, recB, compA, compB, compBCopy]
+        #expect(model.masterArchiveCopy(of: compA) == nil && model.masterArchiveCopy(of: compB) != nil, "fixture")
+
+        let lines = ArchiveAngelPromoter.settleStrandedPromotions(bufferRoot: bufferRoot, model: model)
+        #expect(lines.last?.contains("1 archived, 1 back to ready") == true, "\(lines)")
+        let after = try ArchiveAngelPlanStore.load(batchDir: p.batchDir)
+        let byID = Dictionary(uniqueKeysWithValues: after.entries.map { ($0.id, $0) })
+        #expect(byID[a.id]?.status == .ready, "a row whose access copy never landed is not promoted")
+        #expect(byID[a.id]?.failure?.contains("Access copy") == true, "\(String(describing: byID[a.id]?.failure))")
+        #expect(FileManager.default.fileExists(atPath: URL(fileURLWithPath: p.batchDir).appendingPathComponent(stepA.outputRelPath ?? "").path),
+                "the un-landed access copy is kept in the buffer")
+        #expect(byID[b.id]?.status == .promoted, "every companion landed: promoted")
+        #expect(!FileManager.default.fileExists(atPath: URL(fileURLWithPath: p.batchDir).appendingPathComponent(b.id.uuidString).path),
+                "the fully landed row's buffer is reclaimed")
+    }
+
     /// N1016-F2: recovery decided "landed" with the display-only
     /// `isArchived`, whose content-hash fallback says yes when IDENTICAL
     /// bytes reached the archive from ANOTHER batch. This row's own promote
