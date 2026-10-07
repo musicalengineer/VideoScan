@@ -237,21 +237,17 @@ extension HallieTurnExecutor {
             ? uniqueSpellings([typed] + slot.context.speakers.archivistNameLadder)
             : [typed]
 
-        var resolution: SlotResolution?
-        var lastAnswer: Result?
-        if pinned[index] == nil {
-            switch ownerSlotResolution(index, typed: typed, slot) {
-            case .gedcom(let id, let note)?: resolution = .gedcom(id: id, note: note)
-            case .answer(let result)?: return .final(result)
-            case .clarify?, nil: break
-            }
+        // The owner chain settles the slot outright (a pinned owner, or its
+        // decline) before any name search.
+        if pinned[index] == nil, let owner = ownerSlotOutcome(index, typed: typed, slot) {
+            return owner
         }
-        if resolution == nil {
-            switch resolveBySpellings(index, typed: typed, spellings: spellings, slot,
-                                      pinned: &pinned, floating: &floating) {
-            case .final(let result): return .final(result)
-            case .resolved(let found, let answer): resolution = found; lastAnswer = answer
-            }
+        let resolution: SlotResolution?
+        let lastAnswer: Result?
+        switch resolveBySpellings(index, typed: typed, spellings: spellings, slot,
+                                  pinned: &pinned, floating: &floating) {
+        case .final(let result): return .final(result)
+        case .resolved(let found, let answer): resolution = found; lastAnswer = answer
         }
 
         switch resolution {
@@ -261,24 +257,31 @@ extension HallieTurnExecutor {
             return .final(relationshipClarification(
                 index, candidates: candidates, stage: stage, slot, pinned: pinned))
         case nil:
-            // Every spelling failed: report the first (the typed) name's
-            // not-found answer, tagged with what was tried.
-            let answer = lastAnswer ?? Result(
-                route: .graph, outcome: .declined,
-                prose: "I don't find “\(typed)” in the family tree.",
-                basisLine: ArchivistBiographyPolicy.gedcomCheck,
-                queryDescription: slot.queryDescription, citations: [],
-                catalogPersonName: nil)
-            let offered = FamilyKnowledgeSupplement.notFoundOffer(
-                answer, typed: typed, graph: slot.context.graph)
-            if spellings.count > 1 {
-                return .final(offered.prefixingBasis(
-                    "tried “" + spellings.joined(separator: "”, “") + "”"))
-            }
-            return .final(offered)
+            return .final(relationshipNotFound(
+                typed: typed, spellings: spellings, lastAnswer: lastAnswer, slot))
         case .answer(let result)?:
             return .final(result)
         }
+    }
+
+    /// Every spelling failed: report the first (the typed) name's
+    /// not-found answer, tagged with what was tried.
+    private static func relationshipNotFound(
+        typed: String, spellings: [String], lastAnswer: Result?, _ slot: RelationshipSlotInputs
+    ) -> Result {
+        let answer = lastAnswer ?? Result(
+            route: .graph, outcome: .declined,
+            prose: "I don't find “\(typed)” in the family tree.",
+            basisLine: ArchivistBiographyPolicy.gedcomCheck,
+            queryDescription: slot.queryDescription, citations: [],
+            catalogPersonName: nil)
+        let offered = FamilyKnowledgeSupplement.notFoundOffer(
+            answer, typed: typed, graph: slot.context.graph)
+        if spellings.count > 1 {
+            return offered.prefixingBasis(
+                "tried “" + spellings.joined(separator: "”, “") + "”")
+        }
+        return offered
     }
 
     /// The owner FIRST (live 2026-08-28: "me (Rick) and Donna" reached
@@ -289,10 +292,10 @@ extension HallieTurnExecutor {
     /// exactly one matching root > fail closed) before any name
     /// search, exactly as the single-subject graph route does.
     /// nil = not the owner's slot, or the chain did not settle it (the
-    /// name search runs); `.answer` = the owner chain's decline.
-    private static func ownerSlotResolution(
+    /// name search runs); `.final` = the owner chain's decline.
+    private static func ownerSlotOutcome(
         _ index: Int, typed: String, _ slot: RelationshipSlotInputs
-    ) -> SlotResolution? {
+    ) -> RelationshipSlotOutcome? {
         let speakers = slot.context.speakers
         guard slot.voices[index] != .archivist,
               slot.voices[index] == .owner
@@ -307,12 +310,12 @@ extension HallieTurnExecutor {
             // (HallieRelationshipTests, unknownOwnerNameDeclines…).
             let pinned = slot.graph.person(familySearchID: speakers.ownerFamilySearchID)?.id == owner.id
             if pinned || slot.graph.people(namedLike: typed).contains(where: { $0.id == owner.id }) {
-                return .gedcom(
+                return .subject(
                     id: owner.id, note: note.replacingOccurrences(of: "Basis: ", with: ""))
             }
             return nil
         case .none(let reason?):
-            return .answer(Result(
+            return .final(Result(
                 route: .graph, outcome: .declined, prose: reason,
                 basisLine: "Basis: “\(typed)” is the owner's own name and could not be pinned to one family-tree record; nothing was looked up.",
                 queryDescription: slot.queryDescription, citations: [], catalogPersonName: nil))
