@@ -152,6 +152,19 @@ final class ResearchPersonModel: ObservableObject {
         runTask = nil
     }
 
+    /// The sheet is closing (Close, Esc, window gone): save every typed
+    /// draft FIRST, then stop the run (N1012-F4). Lore used to commit on
+    /// Return only, so closing dropped the words with the @StateObject.
+    func close() {
+        commitPendingLore()
+        cancel()
+    }
+
+    /// Commit every draft the user typed into (and only those).
+    func commitPendingLore() {
+        for id in editedLore.sorted() { commitLore(for: id) }
+    }
+
     private func finishCancelled() {
         isRunning = false
         statusLine = "Cancelled"
@@ -281,7 +294,7 @@ final class ResearchPersonModel: ObservableObject {
     /// the same passage — QA 2026-10-01 P3-5).
     @discardableResult
     func tellHallie() -> Int {
-        for id in editedLore.sorted() { commitLore(for: id) }   // only what the user typed
+        commitPendingLore()                               // only what the user typed
         mutate { _ in }                                   // pick up other writers' changes
         var told = 0
         var failures: [String] = []
@@ -381,7 +394,7 @@ struct ResearchPersonSheet: View {
         }
         .frame(minWidth: 760, idealWidth: 860, minHeight: 560, idealHeight: 680)
         .onAppear { model.load() }
-        .onDisappear { model.cancel() }
+        .onDisappear { model.close() }
     }
 
     private var header: some View {

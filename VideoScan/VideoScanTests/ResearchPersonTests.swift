@@ -635,4 +635,17 @@ struct ResearchLoreNeverDroppedTests {
         #expect(model.errorMessage != nil, "a commit that wrote nothing must not look saved")
         #expect(model.loreDrafts[f.id] == words, "the typed words stay in the field")
     }
+
+    /// F4: typed, Return never pressed, sheet closed → the words are saved.
+    @Test func closingTheSheetSavesTypedLore() async throws {
+        let (base, store, subject, box, model) = try fixture()
+        defer { try? fm.removeItem(at: base) }
+        let f = hit()
+        box.findings = [f]
+        try await runAndWait(model)
+        model.editLore(words, for: f.id)
+        model.close()                                   // what .onDisappear calls
+        #expect(try loreOnDisk(store, subject, f.id) == words)
+        #expect(model.errorMessage == nil)
+    }
 }

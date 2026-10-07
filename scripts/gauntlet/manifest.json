@@ -19999,6 +19999,7 @@
         "cacheCapsOversizedBodies",
         "chroniclingAmericaClipsToCoverageAndSkipsOutOfRange",
         "chroniclingAmericaParsesItemsAndConstrainsTheQuery",
+        "closingTheSheetSavesTypedLore",
         "committingLoreForAFindingGoneFromDiskSaysSoAndKeepsTheDraft",
         "confirmedFindingBecomesAConfirmedCitedItemLinkedToTheTreeRecord",
         "deceasedTreePersonIsEligibleAndKeyedByFamilySearchID",
