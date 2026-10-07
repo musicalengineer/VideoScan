@@ -52,6 +52,8 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
     /// True when this record is one half of a correlated MXF pair — the
     /// Combine output is the candidate, never the half.
     var isPairedHalf: Bool
+    /// Verify Audio's status ("", "ok", "damaged") — the `noSound` floor's input.
+    var audioVerifyStatus: String = ""
     /// True when a duplicate of this file already sits in the archive.
     var hasArchivedDuplicate: Bool
     /// True when the file has no duplicate anywhere (single copy).
@@ -216,7 +218,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
          footageGroupID: UUID? = nil, footageRank: Int? = nil, footageConfidence: FootageConfidence? = nil,
          isAngelWorkingCopy: Bool = false, archivedFootageOriginal: Bool = false,
          eventKey: String? = nil, eventYear: Int? = nil, yearUnarchived: Int = 0, yearArchived: Int = 0,
-         inferredDateRange: InferredDateRange? = nil) {
+         inferredDateRange: InferredDateRange? = nil, audioVerifyStatus: String = "") {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds; self.streamTypeRaw = streamTypeRaw; self.isPlayable = isPlayable
         self.starRating = starRating; self.mediaDisposition = mediaDisposition; self.archiveStage = archiveStage
@@ -244,6 +246,7 @@ struct ArchiveAngelCandidate: Sendable, Equatable, Identifiable {
         self.eventKey = eventKey; self.eventYear = eventYear
         self.yearUnarchived = yearUnarchived; self.yearArchived = yearArchived
         self.inferredDateRange = inferredDateRange
+        self.audioVerifyStatus = audioVerifyStatus
     }
 }
 
@@ -333,6 +336,9 @@ enum ArchiveAngelRejection: String, Sendable, Codable, CaseIterable {
     /// archive. Held for a later batch, never excluded; only counted when
     /// the batch could be filled from other years.
     case yearCoverage = "Held for a later batch — this batch already has its share of that year"
+    /// Rules v15 (Rick 2026-10-06; appended): no sound track, silent or damaged
+    /// audio — never recommended unless the policy switches `noSound` off.
+    case noSound = "No usable sound — no sound track, or the sound is silent or damaged; find its audio and combine first"
 }
 
 extension ArchiveAngelRejection {
@@ -525,8 +531,9 @@ enum ArchiveAngelScorer {
     /// must rescore; 14 = event labels (2026-09-29, VideoScanCore
     /// EventLabeler): onePerEvent's event is a labelled OCCASION as well
     /// as a day — a holiday, a family birthday, a name word with the year
-    /// (`coverage.eventLabels`, `coverage.birthdayWindowDays`).
-    static let rulesVersion = 14
+    /// (`coverage.eventLabels`, `coverage.birthdayWindowDays`); 15 = the
+    /// `noSound` floor (2026-10-06) — every v14 sidecar must rescore.
+    static let rulesVersion = 15
 
     /// The verdict for one record under the built-in rules with these
     /// weights. Pure.

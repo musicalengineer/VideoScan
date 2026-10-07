@@ -384,6 +384,14 @@ enum AngelPolicyDefaults {
                   rejection: "extraCopy"),
         AngelRule(id: "notPlayable", kind: .notPlayable),
         AngelRule(id: "pairedHalf", kind: .pairedHalf, note: "Combine the A/V pair first; the combined file is the candidate"),
+        // Rules v15 (Rick 2026-10-06): a video-only export was "Ready".
+        // After pairedHalf, so a correlated half hears "combine first".
+        // NOT a safety floor: `"enabled": false` in policy.json is how a
+        // person allows silent footage. Never star-exempt; an explicit
+        // pick (Prepare on a selection) may still take silent film.
+        AngelRule(id: "noSound", kind: .noSound,
+                  note: "No sound track, or Verify Audio found it silent or damaged — switch off to allow silent footage",
+                  explicitPicks: false),
         AngelRule(id: "livePhotoMotion", kind: .livePhotoMotion,
                   note: "Rick 2026-09-21: a Live Photo's motion half is part of a photo", explicitPicks: false),
         AngelRule(id: "recentPhoneClip", kind: .recentPhoneClip,
