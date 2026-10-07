@@ -496,6 +496,7 @@
         "fixedWindows",
         "folders",
         "leapDay",
+        "lexiconShape",
         "noYear",
         "nothing",
         "order",
@@ -505,6 +506,9 @@
         "several",
         "tableEqualsScan",
         "thanksgivingEdges",
+        "tripFolder",
+        "tripWordFalsePositives",
+        "tripWords",
         "weakParty",
         "window",
         "xmas94",
@@ -4136,6 +4140,19 @@
       ],
       "tests": [
         "snapshot100kUnderBudget"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveOccasionScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "ArchiveOccasionScaleTests"
+      ],
+      "tests": [
+        "derive100kCuesThroughTheAngelsReaderUnderBudget",
+        "firstLabelWinsAndTripWordsFoldIntoTrip",
+        "group100kOccasionStripsUnderBudget"
       ]
     },
     {
@@ -28184,7 +28201,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 58,
+      "expected_floor": 61,
       "name": "performance",
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -28195,6 +28212,7 @@
         "VideoScanTests/AppendLogBatchingBenchmarkTests",
         "VideoScanTests/ArchiveAngelPerfParityTests",
         "VideoScanTests/ArchiveDecadeRibbonScaleTests",
+        "VideoScanTests/ArchiveOccasionScaleTests",
         "VideoScanTests/CatalogOpenScaleTests",
         "VideoScanTests/CatalogPerfMemoTests",
         "VideoScanTests/ElapsedTimerPauseTests",

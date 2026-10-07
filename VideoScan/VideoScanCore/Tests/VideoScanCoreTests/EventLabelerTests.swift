@@ -242,6 +242,55 @@ struct EventLabelerNameTests {
         #expect(deep.isEmpty, "a third-level folder is too far away to name the file")
     }
 
+    @Test("Trip words (2026-10-07): camping, road trip, vacation, beach, lake — trips no longer land in unlabeled")
+    func tripWords() {
+        #expect(words("Camping 1996") == ["camp"])
+        #expect(words("campout_tape1") == ["camp"])
+        #expect(words("Campground") == ["camp"])
+        #expect(words("Scout Camps") == ["camp"])
+        #expect(words("campsite campfire") == ["camp"], "each event once")
+        #expect(words("Road Trip 1995") == ["vacation"], "two words: 'trip' already reads it")
+        #expect(words("roadtrip_maine") == ["vacation"])
+        #expect(words("RoadTrip") == ["vacation"], "a camelCase hump splits Road | Trip")
+        #expect(words("Vacation 1995") == ["vacation"])
+        #expect(words("beaches") == ["beach"])
+        #expect(words("Lake George 1995") == ["lake"])
+        #expect(words("lakes_region") == ["lake"])
+        #expect(words("LakeHouse") == ["lake"], "Lake | House by the hump")
+        #expect(words("lakehouse") == ["lake"])
+        #expect(words("lake party") == ["lake"], "the weak 'party' yields to a trip word")
+        #expect(words("xmas at the lake") == ["christmas", "lake"], "order of appearance is kept")
+    }
+
+    @Test("Trip words stay whole words: blake, flakes, campbell, campus, roadster, beachy are not trips")
+    func tripWordFalsePositives() {
+        #expect(words("blake_1995").isEmpty)
+        #expect(words("snow flakes").isEmpty)
+        #expect(words("campbell reunion").isEmpty)
+        #expect(words("campus tour").isEmpty)
+        #expect(words("roadster").isEmpty)
+        #expect(words("beachy").isEmpty)
+        #expect(words("tripod test").isEmpty)
+    }
+
+    @Test("A trip folder names the file with the year: Camping/clip.mov in 1996 keys e:camp:1996")
+    func tripFolder() {
+        let l = EventLabeler.labels(day: nil, year: 1996, filename: "clip.mov",
+                                    fullPath: "/Volumes/LaCie/Family/Camping Trip/clip.mov")
+        #expect(l.map(\.key) == ["e:camp:1996", "e:vacation:1996"])
+        #expect(l.first?.reason == "folder name says 'camping'")
+        #expect(EventLabeler.displayName("lake") == "Lake")
+    }
+
+    @Test("Every lexicon word is at least 4 letters and lower-case (the scanner's length and first-letter gates)")
+    func lexiconShape() {
+        for (word, event) in EventLabeler.lexicon {
+            #expect(word.count >= 4, "\(word)")
+            #expect(word == word.lowercased(), "\(word)")
+            #expect(!event.isEmpty)
+        }
+    }
+
     @Test("A name word without a year explains but keys nothing")
     func noYear() {
         let l = EventLabeler.labels(day: nil, year: nil, filename: "xmas.mov", fullPath: "/Volumes/X/xmas.mov")
