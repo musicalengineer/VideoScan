@@ -359,6 +359,24 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CyberBrainWriterCharacterizationTests"
+      ],
+      "tests": [
+        "allPersonFieldsSurviveLinkingCaptionAndPronunciation",
+        "appendAtOneHundredThousandItemsPreservesHistoryWithinBudget",
+        "captionCapsMentionsBeforeDeduplicationAndStoresOneSharedItem",
+        "pointerWinsOverNameAndConflictingPointersStaySeparate",
+        "repeatedResearchDoesNotLinkOrRenameAnUnlinkedPerson",
+        "testimony",
+        "validationErrorPriorityRemainsStable"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterConcurrencyTests.swift",
       "stage": "regression",
       "suites": [
@@ -25136,6 +25154,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CyberBrainWriterCharacterizationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
