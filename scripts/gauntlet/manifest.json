@@ -3665,6 +3665,7 @@
         "ArchiveAngelPromoterSameNameTests"
       ],
       "tests": [
+        "aLandedOriginalWhoseCompanionFailedKeepsItsBuffer",
         "dateHints",
         "hashMismatch",
         "noHint",
