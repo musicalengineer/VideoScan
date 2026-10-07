@@ -73,8 +73,91 @@ extension HallieTurnExecutor {
         // ladder below still requires a real tree (see the guard after it).
         let graphIsInstalled = context.graph != nil
         let graph = context.graph ?? GedcomFamilyGraph(gedcomText: "0 HEAD\n0 TRLR")
+        let inputs = relationshipGraphInputs(graph: graph, context: context)
+        var voices: [Int: ArchivistGraphQuery.Voice] = [:]
+        for binding in request.intent.speakerBindings {
+            voices[binding.index] = binding.role == .owner ? .owner : .archivist
+        }
+        let query = ArchivistGraphQuery(payload, voices: voices,
+                                        question: request.intent.originalQuestion)
 
-        let inputs = ArchivistGraphInputs(
+        var pinned = request.intent.pinnedGraphSubjects
+
+        // People-tab relationships first (2026-08-27): "how is Timothy
+        // related to Rick?" is answered from the typed overlay when it links
+        // the two — the sons are not in the FamilySearch tree, so the GEDCOM
+        // ladder below would only decline by name.
+        // ORDER MATTERS (N1007-F5c): the overlay runs BEFORE the no-tree
+        // guard, so a People-tab link answers with no GEDCOM loaded.
+        if let overlay = overlayRelationshipAnswer(
+            query: query, inputs: inputs, pinned: pinned,
+            context: context, queryDescription: queryDescription) {
+            return overlay
+        }
+        guard graphIsInstalled else {
+            return Result(
+                route: .graph,
+                outcome: .declined,
+                prose: "I don't have an imported family tree, so I can't work out how two people are related.",
+                basisLine: "Basis: no readable GEDCOM was available; the People-tab relationships don't link them.",
+                queryDescription: queryDescription,
+                citations: [],
+                catalogPersonName: nil)
+        }
+        let slot = RelationshipSlotInputs(
+            payload: payload, request: request, context: context, inputs: inputs,
+            query: query, graph: graph, voices: voices, queryDescription: queryDescription)
+        var floating = request.selectedIdentity
+        var subjects: [ArchivistGraphSubjectSelection] = [.unresolved, .unresolved]
+        var notes: [String] = []
+
+        for index in 0..<2 {
+            // `pinned` and `floating` carry across the two slots: a chip
+            // choice consumed by slot 0 is gone for slot 1 (inout ≈ C++ T&).
+            switch relationshipSlot(index, slot, pinned: &pinned, floating: &floating) {
+            case .subject(let id, let note):
+                subjects[index] = .gedcomPersonID(id)
+                if let note { notes.append(note) }
+            case .final(let result):
+                return result
+            }
+        }
+
+        // A chip choice nobody needed means the continuation is stale.
+        if floating != nil {
+            return invalidContinuationResult(for: request.intent.ast)
+        }
+
+        let execute = dependencies.executeRelationship
+        let result = try await detached {
+            execute(query, inputs, subjects, .unresolved)
+        }
+        return relationshipAnswer(result, notes: notes, queryDescription: queryDescription)
+    }
+
+    // MARK: - executeRelationship's steps (GH #281 R3: extracted unchanged)
+
+    /// Everything one slot's resolution reads; built once per turn.
+    private struct RelationshipSlotInputs {
+        let payload: ArchivistQueryAST.Graph
+        let request: Request
+        let context: Context
+        let inputs: ArchivistGraphInputs
+        let query: ArchivistGraphQuery
+        let graph: GedcomFamilyGraph
+        let voices: [Int: ArchivistGraphQuery.Voice]
+        let queryDescription: String
+    }
+
+    /// One slot's outcome in the turn: a GEDCOM subject (with the bridge
+    /// note for the basis line), or the turn's final answer.
+    private enum RelationshipSlotOutcome {
+        case subject(id: String, note: String?)
+        case final(Result)
+    }
+
+    private static func relationshipGraphInputs(graph: GedcomFamilyGraph, context: Context) -> ArchivistGraphInputs {
+        ArchivistGraphInputs(
             graph: graph,
             profiles: (context.profiles ?? []).map {
                 ArchivistGraphProfileSnapshot(
@@ -89,19 +172,16 @@ extension HallieTurnExecutor {
                     treeIdentity: $0.treeIdentity)
             },
             ownerName: context.speakers.ownerName)
-        var voices: [Int: ArchivistGraphQuery.Voice] = [:]
-        for binding in request.intent.speakerBindings {
-            voices[binding.index] = binding.role == .owner ? .owner : .archivist
-        }
-        let query = ArchivistGraphQuery(payload, voices: voices,
-                                        question: request.intent.originalQuestion)
+    }
 
-        var pinned = request.intent.pinnedGraphSubjects
-
-        // People-tab relationships first (2026-08-27): "how is Timothy
-        // related to Rick?" is answered from the typed overlay when it links
-        // the two — the sons are not in the FamilySearch tree, so the GEDCOM
-        // ladder below would only decline by name.
+    /// The People-tab overlay's answer when it links the two, else nil.
+    private static func overlayRelationshipAnswer(
+        query: ArchivistGraphQuery,
+        inputs: ArchivistGraphInputs,
+        pinned: [Int: CandidateID],
+        context: Context,
+        queryDescription: String
+    ) -> Result? {
         var pinnedSelections: [ArchivistGraphSubjectSelection] = [.unresolved, .unresolved]
         for index in 0..<2 {
             switch pinned[index] {
@@ -110,212 +190,254 @@ extension HallieTurnExecutor {
             default: break
             }
         }
-        if let overlay = ArchivistGraphExecutor.overlayRelationshipResult(
-            query, inputs: inputs, subjects: pinnedSelections) {
-            var offers: [OfferedAction] = []
-            if let other = overlay.evidence?.counterpart {
-                offers.append(.ask(
-                    question: "who is \(other.name)?",
-                    label: "tell me about \(other.name)"))
+        guard let overlay = ArchivistGraphExecutor.overlayRelationshipResult(
+            query, inputs: inputs, subjects: pinnedSelections) else { return nil }
+        var offers: [OfferedAction] = []
+        if let other = overlay.evidence?.counterpart {
+            offers.append(.ask(
+                question: "who is \(other.name)?",
+                label: "tell me about \(other.name)"))
+        }
+        // A bridge this turn only ASSUMED (derivable, not yet pinned)
+        // is said out loud: "(taking Rick as Richard Harding Breen Jr)".
+        // Carried as provenance, the same way the single-subject graph
+        // route carries it, so appending it never turns the aside into
+        // a claim the verifier has to prove.
+        let taken = [overlay.evidence?.subjectID, overlay.evidence?.counterpart?.id]
+            .compactMap { $0 }
+            .compactMap { context.assumedTreeBridges[$0] }
+        let aside = taken.isEmpty ? "" : " (taking \(taken.joined(separator: "; ")))"
+        return Result(
+            route: .graph,
+            outcome: .answered,
+            prose: overlay.prose,
+            basisLine: overlay.basisLine,
+            queryDescription: queryDescription,
+            citations: [],
+            catalogPersonName: nil,
+            offeredActions: offers,
+            answerPlan: overlay.answerPlan)
+            .carryingProvenance(aside)
+    }
+
+    /// One slot, in the old loop's order: the owner chain, then each
+    /// spelling (consuming the chip choice at the first ambiguous slot),
+    /// then what the resolution means for the turn.
+    private static func relationshipSlot(
+        _ index: Int,
+        _ slot: RelationshipSlotInputs,
+        pinned: inout [Int: CandidateID],
+        floating: inout CandidateID?
+    ) -> RelationshipSlotOutcome {
+        let typed = slot.payload.people[index]
+        // The archivist's display name may not be her tree spelling
+        // ("Hallie Mae" vs. "Hallie May McGill"); walk her name ladder
+        // and say which rung matched.
+        let spellings: [String] = slot.voices[index] == .archivist
+            ? uniqueSpellings([typed] + slot.context.speakers.archivistNameLadder)
+            : [typed]
+
+        var resolution: SlotResolution?
+        var lastAnswer: Result?
+        if pinned[index] == nil {
+            switch ownerSlotResolution(index, typed: typed, slot) {
+            case .gedcom(let id, let note)?: resolution = .gedcom(id: id, note: note)
+            case .answer(let result)?: return .final(result)
+            case .clarify?, nil: break
             }
-            // A bridge this turn only ASSUMED (derivable, not yet pinned)
-            // is said out loud: "(taking Rick as Richard Harding Breen Jr)".
-            // Carried as provenance, the same way the single-subject graph
-            // route carries it, so appending it never turns the aside into
-            // a claim the verifier has to prove.
-            let taken = [overlay.evidence?.subjectID, overlay.evidence?.counterpart?.id]
-                .compactMap { $0 }
-                .compactMap { context.assumedTreeBridges[$0] }
-            let aside = taken.isEmpty ? "" : " (taking \(taken.joined(separator: "; ")))"
+        }
+        if resolution == nil {
+            switch resolveBySpellings(index, typed: typed, spellings: spellings, slot,
+                                      pinned: &pinned, floating: &floating) {
+            case .final(let result): return .final(result)
+            case .resolved(let found, let answer): resolution = found; lastAnswer = answer
+            }
+        }
+
+        switch resolution {
+        case .gedcom(let id, let note)?:
+            return .subject(id: id, note: note)
+        case .clarify(let candidates, let stage)?:
+            return .final(relationshipClarification(
+                index, candidates: candidates, stage: stage, slot, pinned: pinned))
+        case nil:
+            // Every spelling failed: report the first (the typed) name's
+            // not-found answer, tagged with what was tried.
+            let answer = lastAnswer ?? Result(
+                route: .graph, outcome: .declined,
+                prose: "I don't find “\(typed)” in the family tree.",
+                basisLine: ArchivistBiographyPolicy.gedcomCheck,
+                queryDescription: slot.queryDescription, citations: [],
+                catalogPersonName: nil)
+            let offered = FamilyKnowledgeSupplement.notFoundOffer(
+                answer, typed: typed, graph: slot.context.graph)
+            if spellings.count > 1 {
+                return .final(offered.prefixingBasis(
+                    "tried “" + spellings.joined(separator: "”, “") + "”"))
+            }
+            return .final(offered)
+        case .answer(let result)?:
+            return .final(result)
+        }
+    }
+
+    /// The owner FIRST (live 2026-08-28: "me (Rick) and Donna" reached
+    /// this route as "rick" and searched a 16k tree for Richards).
+    /// A slot that is the speaker — bound from "me"/"I", or the
+    /// owner's own first name or nickname typed by the owner — is
+    /// pinned through the shared owner chain (FamilySearch ID pin >
+    /// exactly one matching root > fail closed) before any name
+    /// search, exactly as the single-subject graph route does.
+    /// nil = not the owner's slot, or the chain did not settle it (the
+    /// name search runs); `.answer` = the owner chain's decline.
+    private static func ownerSlotResolution(
+        _ index: Int, typed: String, _ slot: RelationshipSlotInputs
+    ) -> SlotResolution? {
+        let speakers = slot.context.speakers
+        guard slot.voices[index] != .archivist,
+              slot.voices[index] == .owner
+                || HallieOwnerResolver.isOwnerSpelling(typed, owner: speakers.ownerName) else { return nil }
+        switch HallieOwnerResolver.resolve(
+            typed, graph: slot.graph, familySearchID: speakers.ownerFamilySearchID) {
+        case .one(let owner, let note):
+            // Pin, or a root/namesake that MATCHES the name. The
+            // single-root chain's last rung ("tree root; X has no
+            // tree record") is a guess this route never takes: an
+            // owner the tree does not know declines by name
+            // (HallieRelationshipTests, unknownOwnerNameDeclines…).
+            let pinned = slot.graph.person(familySearchID: speakers.ownerFamilySearchID)?.id == owner.id
+            if pinned || slot.graph.people(namedLike: typed).contains(where: { $0.id == owner.id }) {
+                return .gedcom(
+                    id: owner.id, note: note.replacingOccurrences(of: "Basis: ", with: ""))
+            }
+            return nil
+        case .none(let reason?):
+            return .answer(Result(
+                route: .graph, outcome: .declined, prose: reason,
+                basisLine: "Basis: “\(typed)” is the owner's own name and could not be pinned to one family-tree record; nothing was looked up.",
+                queryDescription: slot.queryDescription, citations: [], catalogPersonName: nil))
+        case .many, .none:
+            return nil
+        }
+    }
+
+    private enum SpellingsOutcome {
+        /// The first spelling that did not end in an answer, or nil when
+        /// every one did (`lastAnswer` = the last of those answers).
+        case resolved(SlotResolution?, lastAnswer: Result?)
+        case final(Result)
+    }
+
+    /// Each spelling in turn until one resolves or asks; an `.answer`
+    /// (not found) moves on to the next rung of the name ladder.
+    private static func resolveBySpellings(
+        _ index: Int,
+        typed: String,
+        spellings: [String],
+        _ slot: RelationshipSlotInputs,
+        pinned: inout [Int: CandidateID],
+        floating: inout CandidateID?
+    ) -> SpellingsOutcome {
+        var lastAnswer: Result?
+        for spelling in spellings {
+            let attempt = resolveSlot(
+                spelling, selection: pinned[index], context: slot.context,
+                inputs: slot.inputs, query: slot.query, graph: slot.graph)
+            switch attempt {
+            case .gedcom(let id, let note):
+                var noteText = note
+                if spelling != typed {
+                    let rung = "“\(typed)” matched the family tree as “\(spelling)”"
+                    noteText = [rung, note].compactMap { $0 }.joined(separator: "; ")
+                }
+                return .resolved(.gedcom(id: id, note: noteText), lastAnswer: lastAnswer)
+            case .clarify(let candidates, let stage):
+                // The one chip choice we were handed belongs to the first
+                // slot that turns out ambiguous; consume it here.
+                guard let choice = floating,
+                      stage.accepts(choice.source),
+                      candidates.contains(where: { $0.id == choice }) else {
+                    return .resolved(.clarify(candidates, stage), lastAnswer: lastAnswer)
+                }
+                pinned[index] = choice
+                floating = nil
+                let retry = resolveSlot(
+                    spelling, selection: choice, context: slot.context,
+                    inputs: slot.inputs, query: slot.query, graph: slot.graph)
+                if case .gedcom(let id, let note) = retry {
+                    return .resolved(.gedcom(id: id, note: note), lastAnswer: lastAnswer)
+                }
+                return .final(invalidContinuationResult(for: slot.request.intent.ast))
+            case .answer(let result):
+                lastAnswer = result
+            }
+        }
+        return .resolved(nil, lastAnswer: lastAnswer)
+    }
+
+    /// "Which Rick do you mean?" for one slot, keeping the other pinned.
+    private static func relationshipClarification(
+        _ index: Int,
+        candidates: [Candidate],
+        stage: ClarificationStage,
+        _ slot: RelationshipSlotInputs,
+        pinned: [Int: CandidateID]
+    ) -> Result {
+        let who = slot.payload.people[index]
+        // Family-tree namesakes: anchors first, capped, or the ask
+        // for a surname/year (HallieWhichOne, 2026-08-29).
+        if stage == .gedcomPerson {
+            let graph = slot.graph
+            let people = candidates.compactMap { candidate -> GedcomFamilyGraph.Person? in
+                if case .gedcomPersonID(let id) = candidate.id { return graph.people[id] }
+                return nil
+            }
+            let arrangement = HallieWhichOne.arrange(
+                people, graph: graph,
+                ownerFamilySearchID: slot.context.speakers.ownerFamilySearchID)
+            let shown = arrangement.shown.map { person in
+                Candidate(
+                    id: .gedcomPersonID(person.id),
+                    canonicalName: person.name,
+                    label: ArchivistBiographyPolicy.disambiguationCandidate(for: person).label)
+            }
             return Result(
                 route: .graph,
-                outcome: .answered,
-                prose: overlay.prose,
-                basisLine: overlay.basisLine,
-                queryDescription: queryDescription,
+                outcome: .needsClarification,
+                prose: HallieWhichOne.prose(
+                    typed: who, arrangement: arrangement, labels: shown.map(\.label)),
+                basisLine: HallieWhichOne.basis(typed: who, arrangement: arrangement),
+                queryDescription: slot.queryDescription,
                 citations: [],
                 catalogPersonName: nil,
-                offeredActions: offers,
-                answerPlan: overlay.answerPlan)
-                .carryingProvenance(aside)
-        }
-        guard graphIsInstalled else {
-            return Result(
-                route: .graph,
-                outcome: .declined,
-                prose: "I don't have an imported family tree, so I can't work out how two people are related.",
-                basisLine: "Basis: no readable GEDCOM was available; the People-tab relationships don't link them.",
-                queryDescription: queryDescription,
-                citations: [],
-                catalogPersonName: nil)
-        }
-        var floating = request.selectedIdentity
-        var subjects: [ArchivistGraphSubjectSelection] = [.unresolved, .unresolved]
-        var notes: [String] = []
-
-        for index in 0..<2 {
-            let typed = payload.people[index]
-            // The archivist's display name may not be her tree spelling
-            // ("Hallie Mae" vs. "Hallie May McGill"); walk her name ladder
-            // and say which rung matched.
-            let spellings: [String] = voices[index] == .archivist
-                ? uniqueSpellings([typed] + context.speakers.archivistNameLadder)
-                : [typed]
-
-            var resolution: SlotResolution?
-            var lastAnswer: Result?
-            // The owner FIRST (live 2026-08-28: "me (Rick) and Donna" reached
-            // this route as "rick" and searched a 16k tree for Richards).
-            // A slot that is the speaker — bound from "me"/"I", or the
-            // owner's own first name or nickname typed by the owner — is
-            // pinned through the shared owner chain (FamilySearch ID pin >
-            // exactly one matching root > fail closed) before any name
-            // search, exactly as the single-subject graph route does.
-            if pinned[index] == nil, voices[index] != .archivist,
-               voices[index] == .owner
-                || HallieOwnerResolver.isOwnerSpelling(typed, owner: context.speakers.ownerName) {
-                switch HallieOwnerResolver.resolve(
-                    typed, graph: graph, familySearchID: context.speakers.ownerFamilySearchID) {
-                case .one(let owner, let note):
-                    // Pin, or a root/namesake that MATCHES the name. The
-                    // single-root chain's last rung ("tree root; X has no
-                    // tree record") is a guess this route never takes: an
-                    // owner the tree does not know declines by name
-                    // (HallieRelationshipTests, unknownOwnerNameDeclines…).
-                    let pinned = graph.person(familySearchID: context.speakers.ownerFamilySearchID)?.id == owner.id
-                    if pinned || graph.people(namedLike: typed).contains(where: { $0.id == owner.id }) {
-                        resolution = .gedcom(
-                            id: owner.id, note: note.replacingOccurrences(of: "Basis: ", with: ""))
-                    }
-                case .none(let reason?):
-                    return Result(
-                        route: .graph, outcome: .declined, prose: reason,
-                        basisLine: "Basis: “\(typed)” is the owner's own name and could not be pinned to one family-tree record; nothing was looked up.",
-                        queryDescription: queryDescription, citations: [], catalogPersonName: nil)
-                case .many, .none:
-                    break
-                }
-            }
-            for spelling in spellings where resolution == nil {
-                let attempt = resolveSlot(
-                    spelling, selection: pinned[index], context: context,
-                    inputs: inputs, query: query, graph: graph)
-                switch attempt {
-                case .gedcom(let id, let note):
-                    var noteText = note
-                    if spelling != typed {
-                        let rung = "“\(typed)” matched the family tree as “\(spelling)”"
-                        noteText = [rung, note].compactMap { $0 }.joined(separator: "; ")
-                    }
-                    resolution = .gedcom(id: id, note: noteText)
-                case .clarify(let candidates, let stage):
-                    // The one chip choice we were handed belongs to the first
-                    // slot that turns out ambiguous; consume it here.
-                    if let choice = floating,
-                       stage.accepts(choice.source),
-                       candidates.contains(where: { $0.id == choice }) {
-                        pinned[index] = choice
-                        floating = nil
-                        let retry = resolveSlot(
-                            spelling, selection: choice, context: context,
-                            inputs: inputs, query: query, graph: graph)
-                        if case .gedcom(let id, let note) = retry {
-                            resolution = .gedcom(id: id, note: note)
-                        } else {
-                            return invalidContinuationResult(for: request.intent.ast)
-                        }
-                    } else {
-                        resolution = .clarify(candidates, stage)
-                    }
-                case .answer(let result):
-                    lastAnswer = result
-                    continue
-                }
-                break
-            }
-
-            switch resolution {
-            case .gedcom(let id, let note)?:
-                subjects[index] = .gedcomPersonID(id)
-                if let note { notes.append(note) }
-            case .clarify(let candidates, let stage)?:
-                let who = payload.people[index]
-                // Family-tree namesakes: anchors first, capped, or the ask
-                // for a surname/year (HallieWhichOne, 2026-08-29).
-                if stage == .gedcomPerson {
-                    let people = candidates.compactMap { candidate -> GedcomFamilyGraph.Person? in
-                        if case .gedcomPersonID(let id) = candidate.id { return graph.people[id] }
-                        return nil
-                    }
-                    let arrangement = HallieWhichOne.arrange(
-                        people, graph: graph,
-                        ownerFamilySearchID: context.speakers.ownerFamilySearchID)
-                    let shown = arrangement.shown.map { person in
-                        Candidate(
-                            id: .gedcomPersonID(person.id),
-                            canonicalName: person.name,
-                            label: ArchivistBiographyPolicy.disambiguationCandidate(for: person).label)
-                    }
-                    return Result(
-                        route: .graph,
-                        outcome: .needsClarification,
-                        prose: HallieWhichOne.prose(
-                            typed: who, arrangement: arrangement, labels: shown.map(\.label)),
-                        basisLine: HallieWhichOne.basis(typed: who, arrangement: arrangement),
-                        queryDescription: queryDescription,
-                        citations: [],
-                        catalogPersonName: nil,
-                        clarification: arrangement.offersChips
-                            ? makeClarification(
-                                intent: request.intent.replacing(pinnedGraphSubjects: pinned),
-                                stage: stage,
-                                candidates: shown,
-                                context: context)
-                            : nil)
-                }
-                return Result(
-                    route: .graph,
-                    outcome: .needsClarification,
-                    prose: "Which \(HallieWhichOne.display(who)) do you mean?",
-                    basisLine: "Basis: “\(who)” matches more than one stable identity; no family fact was selected.",
-                    queryDescription: queryDescription,
-                    citations: [],
-                    catalogPersonName: nil,
-                    clarification: makeClarification(
-                        intent: request.intent.replacing(pinnedGraphSubjects: pinned),
+                clarification: arrangement.offersChips
+                    ? makeClarification(
+                        intent: slot.request.intent.replacing(pinnedGraphSubjects: pinned),
                         stage: stage,
-                        candidates: candidates,
-                        context: context))
-            case nil:
-                // Every spelling failed: report the first (the typed) name's
-                // not-found answer, tagged with what was tried.
-                let answer = lastAnswer ?? Result(
-                    route: .graph, outcome: .declined,
-                    prose: "I don't find “\(typed)” in the family tree.",
-                    basisLine: ArchivistBiographyPolicy.gedcomCheck,
-                    queryDescription: queryDescription, citations: [],
-                    catalogPersonName: nil)
-                let offered = FamilyKnowledgeSupplement.notFoundOffer(
-                    answer, typed: typed, graph: context.graph)
-                if spellings.count > 1 {
-                    return offered.prefixingBasis(
-                        "tried “" + spellings.joined(separator: "”, “") + "”")
-                }
-                return offered
-            case .answer(let result)?:
-                return result
-            }
+                        candidates: shown,
+                        context: slot.context)
+                    : nil)
         }
+        return Result(
+            route: .graph,
+            outcome: .needsClarification,
+            prose: "Which \(HallieWhichOne.display(who)) do you mean?",
+            basisLine: "Basis: “\(who)” matches more than one stable identity; no family fact was selected.",
+            queryDescription: slot.queryDescription,
+            citations: [],
+            catalogPersonName: nil,
+            clarification: makeClarification(
+                intent: slot.request.intent.replacing(pinnedGraphSubjects: pinned),
+                stage: stage,
+                candidates: candidates,
+                context: slot.context))
+    }
 
-        // A chip choice nobody needed means the continuation is stale.
-        if floating != nil {
-            return invalidContinuationResult(for: request.intent.ast)
-        }
-
-        let execute = dependencies.executeRelationship
-        let result = try await detached {
-            execute(query, inputs, subjects, .unresolved)
-        }
+    /// The graph executor's answer with the identity bridges spliced into
+    /// its basis line and the "tell me about" chip for the other person.
+    private static func relationshipAnswer(
+        _ result: ArchivistGraphResult, notes: [String], queryDescription: String
+    ) -> Result {
         var basis = result.basisLine
         if !notes.isEmpty {
             let bridge = notes.joined(separator: "; ") + "; "
