@@ -535,3 +535,104 @@ struct ResearchAttestationTests {
         #expect(source.locator == ResearchStore.relativeCachePath(key: "KWCJ-7B2", pageURL: CyberBrainWriter.researchURL(of: source) ?? ""))
     }
 }
+
+// MARK: - N1012 F3/F4: typed lore is never silently dropped
+
+private let n1012Gedcom = """
+0 HEAD
+1 SOUR VideoScanTests
+0 @I1@ INDI
+1 NAME Testa /Synthetica/
+1 SEX F
+1 BIRT
+2 DATE 1870
+1 _FSFTID ZZZZ-912
+0 TRLR
+"""
+
+private let n1012At = Date(timeIntervalSince1970: 1_790_000_000)
+
+private struct N1012Refused: Error {}
+
+/// A source that returns whatever the test last gave it.
+private struct N1012FixedSource: ResearchSource {
+    let kind: ResearchSourceKind = .chroniclingAmerica
+    let findings: [ResearchFinding]
+    func search(plan: ResearchQueryPlan) async throws -> [ResearchFinding] { findings }
+}
+
+/// Reference box so the `sources:` closure sees the test's current pick.
+/// (C++: a shared_ptr the lambda captures by value.)
+private final class N1012SourceBox { var findings: [ResearchFinding] = [] }
+
+@Suite("Research Person — N1012 lore is never dropped", .serialized)
+@MainActor
+struct ResearchLoreNeverDroppedTests {
+    private let fm = FileManager.default
+    private let words = "Synthetic note: ask about the mill ledger"
+
+    private func hit() -> ResearchFinding {
+        ResearchFinding(source: .chroniclingAmerica, title: "Synthetic hit", date: nil,
+                        excerpt: "Synthetic excerpt", url: "https://example.invalid/n1012/1",
+                        retrievedAt: n1012At)
+    }
+
+    private func fixture() throws -> (URL, ResearchStore, ResearchSubject, N1012SourceBox, ResearchPersonModel) {
+        let base = fm.temporaryDirectory.appendingPathComponent("test_N1012Lore-\(UUID().uuidString)", isDirectory: true)
+        let store = ResearchStore(peopleRoot: base.appendingPathComponent("People", isDirectory: true))
+        let record = try #require(GedcomFamilyGraph(gedcomText: n1012Gedcom).people["@I1@"])
+        let subject = ResearchSubject(person: record)
+        let box = N1012SourceBox()
+        let model = ResearchPersonModel(subject: subject, store: store,
+                                        fetcher: FixtureResearchFetcher(fixtures: [], retrievedAt: n1012At),
+                                        speakerName: "Tester", record: { _ in throw N1012Refused() },
+                                        sources: { _ in [N1012FixedSource(findings: box.findings)] },
+                                        log: { _ in }, now: { n1012At })
+        model.load()
+        return (base, store, subject, box, model)
+    }
+
+    private func runAndWait(_ model: ResearchPersonModel) async throws {
+        model.run()
+        for _ in 0..<300 where model.isRunning { try await Task.sleep(nanoseconds: 10_000_000) }
+        try #require(!model.isRunning)
+    }
+
+    private func loreOnDisk(_ store: ResearchStore, _ subject: ResearchSubject, _ id: String) throws -> String? {
+        try store.loadDossier(key: subject.key)?.findings.first { $0.id == id }?.lore
+    }
+
+    /// QA's drafted red: F found, lore typed (no Return), re-run drops F,
+    /// Tell Hallie. The words must be on disk, or an error must say so.
+    @Test func aRerunThatNoLongerReturnsAFindingKeepsItsTypedLore() async throws {
+        let (base, store, subject, box, model) = try fixture()
+        defer { try? fm.removeItem(at: base) }
+        let f = hit()
+        box.findings = [f]
+        try await runAndWait(model)
+        model.editLore(words, for: f.id)               // typed, Return never pressed
+        box.findings = []
+        try await runAndWait(model)
+        model.tellHallie()
+        let kept = try loreOnDisk(store, subject, f.id) == words
+        #expect(kept || model.errorMessage != nil, "typed lore vanished with no error")
+        #expect(kept, "a finding with a typed draft survives the re-run and its words are saved")
+    }
+
+    /// A commit whose finding is gone from disk is refused out loud and the
+    /// draft is kept — never reported as saved.
+    @Test func committingLoreForAFindingGoneFromDiskSaysSoAndKeepsTheDraft() async throws {
+        let (base, store, subject, box, model) = try fixture()
+        defer { try? fm.removeItem(at: base) }
+        let f = hit()
+        box.findings = [f]
+        try await runAndWait(model)
+        model.editLore(words, for: f.id)
+        var gone = try #require(try store.loadDossier(key: subject.key))
+        gone.findings.removeAll()                       // another pane / the filer removed it
+        try store.saveDossier(gone)
+        model.commitLore(for: f.id)
+        #expect(model.errorMessage != nil, "a commit that wrote nothing must not look saved")
+        #expect(model.loreDrafts[f.id] == words, "the typed words stay in the field")
+    }
+}

@@ -19990,13 +19990,16 @@
         "ResearchQueryPlanTests",
         "ResearchSourceAdapterTests",
         "ResearchStoreTests",
-        "ResearchAttestationTests"
+        "ResearchAttestationTests",
+        "ResearchLoreNeverDroppedTests"
       ],
       "tests": [
+        "aRerunThatNoLongerReturnsAFindingKeepsItsTypedLore",
         "birthOnlyWindowAssumesALifespanAndNeverPassesToday",
         "cacheCapsOversizedBodies",
         "chroniclingAmericaClipsToCoverageAndSkipsOutOfRange",
         "chroniclingAmericaParsesItemsAndConstrainsTheQuery",
+        "committingLoreForAFindingGoneFromDiskSaysSoAndKeepsTheDraft",
         "confirmedFindingBecomesAConfirmedCitedItemLinkedToTheTreeRecord",
         "deceasedTreePersonIsEligibleAndKeyedByFamilySearchID",
         "dossierRoundTripsAndVerdictsSurviveARerun",
