@@ -61,4 +61,49 @@ struct ExcessCopiesPlanScaleTests {
         let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
         #expect(seconds < Self.budgetSeconds, "plan took \(seconds) s over 100k records (budget \(Self.budgetSeconds) s)")
     }
+
+    /// The whole forecast as the pane runs it: the main-actor snapshot pass
+    /// over 100k VideoRecords (no disk) plus the off-main plan. Synthetic
+    /// /Volumes paths that do not exist — the network probe is injected, the
+    /// Keep list is a throwaway suite; no real volume or pref is touched.
+    @MainActor
+    @Test("the model's forecast over 100k catalog records stays under the 2 s budget")
+    func modelForecast100k() async throws {
+        let model = VideoScanModel()
+        var recs: [VideoRecord] = []
+        recs.reserveCapacity(100_000)
+        for i in 0..<100_000 {
+            let r = VideoRecord()
+            r.filename = "test_\(i).mov"
+            r.fullPath = "/Volumes/TestExcessWork\(i % 5)/x/test_\(i).mov"
+            r.durationSeconds = 60
+            if i < 1_000 {
+                // An archived file: a promoted copy with its read-back digest.
+                r.derivationKind = ArchivePromotion.derivationKind
+                r.sizeBytes = Int64(5_000 + i)
+                r.contentHash = "v1:a\(i)"
+                r.archiveFixity = ArchiveFixity(digest: "d\(i)", verifiedAt: Date(), sizeBytes: r.sizeBytes)
+            } else if i < 6_000 {
+                // A copy of one (same v1 key) on a drive that is not connected.
+                r.sizeBytes = Int64(5_000 + i % 1_000)
+                r.contentHash = "v1:a\(i % 1_000)"
+            } else {
+                r.sizeBytes = Int64(1_000 + i)
+                r.contentHash = "v1:x\(i)"
+            }
+            recs.append(r)
+        }
+        model.records = recs
+        let suite = "test_excess_scale_\(UUID().uuidString.prefix(8))"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let env = VideoScanModel.ExcessLaneEnvironment(isNetworkMount: { _ in false }, keepDefaults: defaults)
+        let clock = ContinuousClock()
+        var plan = ExcessCopiesPlan.empty
+        let elapsed = await clock.measure { plan = await model.excessCopiesPlan(env: env) }
+        #expect(plan.items.count == 1_000)
+        #expect(plan.offeredCount == 0 && plan.leftAloneCount == 5_000, "every copy's drive is away → unknown means keep")
+        let seconds = Double(elapsed.components.seconds) + Double(elapsed.components.attoseconds) / 1e18
+        #expect(seconds < Self.budgetSeconds, "forecast took \(seconds) s over 100k records (budget \(Self.budgetSeconds) s)")
+    }
 }

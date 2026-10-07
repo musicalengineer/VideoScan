@@ -111,10 +111,19 @@ struct ExcessCopiesPlanTests {
         .init(name: "offline drive", reason: ExcessCopiesPlan.offlineReason) { $0.isOnline = false },
         .init(name: "A/V pair half", reason: ExcessCopiesPlan.pairReason) { $0.isPairMember = true },
         .init(name: "Archive Angel hold", reason: ExcessCopiesPlan.angelReason) { $0.heldByAngel = true },
-        .init(name: "Rick's ★★★", reason: "you rated it ★★★") { $0.starRating = 3 },
+        .init(name: "Rick's stars ≥ 4", reason: "you rated it 4 stars") { $0.starRating = 4 },
         .init(name: "Rick's Keep tag", reason: "you tagged it Keep") { $0.tags = ["Gold", "keep"] },
         .init(name: "Rick's Keep in the lane", reason: "you chose Keep for it") { $0.keptInLane = true },
     ]
+
+    @Test("★★★ alone is not a hold — Promote sets it on every promotion source")
+    func threeStarsSetByPromoteIsNotAHold() {
+        #expect(ExcessCopiesPlan.personHold(starRating: 3, tags: [], keptInLane: false) == nil)
+        let a = Self.archive()
+        var s = Self.copy("test_promoted_source.mov")
+        s.starRating = 3
+        #expect(ExcessCopiesPlan.compute(a.all + [s]).offeredIDs == [s.id])
+    }
 
     @Test("an Archive backup drive outranks the gate's own wording")
     func backupWordingFirst() {

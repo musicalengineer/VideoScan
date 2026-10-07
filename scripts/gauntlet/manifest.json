@@ -9404,6 +9404,7 @@
         "ExcessCopiesPlanScaleTests"
       ],
       "tests": [
+        "modelForecast100k",
         "scale100k"
       ]
     },
@@ -9421,6 +9422,7 @@
         "keepRule",
         "longerThanMasterIsFlagged",
         "nomination",
+        "threeStarsSetByPromoteIsNotAHold",
         "toleranceAndUnknown",
         "unverifiedArchiveAndArchiveSide"
       ]
@@ -27510,7 +27512,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2145,
+      "expected_floor": 2146,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -28241,7 +28243,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 59,
+      "expected_floor": 60,
       "name": "performance",
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

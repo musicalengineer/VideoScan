@@ -83,6 +83,7 @@ struct ExcessCopiesApplyTests {
         let recA2 = MasterArchiveTestSupport.makeRecord(path: a2.path, userDate: "1995")
         model.records.append(recA2)
         for r in [recA, recA2, archive] { r.contentHash = Self.hash; r.durationSeconds = Self.seconds }
+        try #require(recA.starRating == 3, "fixture: Promote raised the source to ★★★ — and that is not a hold")
         let trash = sb.root.appendingPathComponent("FakeTrash", isDirectory: true)
         try FileManager.default.createDirectory(at: trash, withIntermediateDirectories: true)
         let suite = "test_excess_\(label)_\(UUID().uuidString.prefix(8))"
@@ -129,6 +130,15 @@ struct ExcessCopiesApplyTests {
     }
 
     private func exists(_ r: VideoRecord) -> Bool { FileManager.default.fileExists(atPath: r.fullPath) }
+
+    /// A scan-target change makes the drive snapshots provisional (and the
+    /// gate refuses "cannot prove this drive is not the archive" meanwhile —
+    /// safe, and transient). Let the rebuilds land, as they do in the app.
+    private func addTarget(_ t: CatalogScanTarget, to model: VideoScanModel) async {
+        model.scanTargets.append(t)
+        _ = await model.refreshArchiveVolumeSnapshot(force: true)
+        await model.refreshReadOnlyVolumeSnapshot()
+    }
 
     /// Same byte count, different bytes — a stat-size check cannot see it.
     private func rewriteSameSize(_ path: String, seed: UInt64) throws {
@@ -216,7 +226,7 @@ struct ExcessCopiesApplyTests {
         let f = try await fixture("survivor"); defer { f.cleanup() }
         let ro = CatalogScanTarget(searchPath: f.copiesDir.path)
         ro.readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil)
-        f.model.scanTargets = [ro]
+        await addTarget(ro, to: f.model)
         let plan = await f.model.excessCopiesPlan(env: f.env)
         #expect(plan.offeredIDs == [f.source.id], "the Read-only copy is never offered")
         #expect(!plan.items[0].leavesArchiveOnly, "the Read-only copy stays outside the archive")
@@ -247,16 +257,16 @@ struct ExcessCopiesApplyTests {
         #expect(exists(g.source) && exists(g.copy))
     }
 
-    @Test("a hold added mid-job (★★★ after the read) → held at the move, nothing moved")
+    @Test("a hold added mid-job (a Keep tag after the read) → held at the move, nothing moved")
     func aHoldAddedMidJob() async throws {
         let f = try await fixture("midhold"); defer { f.cleanup() }
         let plan = await f.model.excessCopiesPlan(env: f.env)
         let copy = f.copy
         let mover = Mover(trash: f.trashDir)
         let out = await f.model.applyExcess(shown: plan, env: f.env, hooks: hooks(mover, beforeMutation: { path in
-            if path == copy.fullPath { copy.starRating = 3 }
+            if path == copy.fullPath { copy.tags = ["Keep"] }
         }))
-        #expect(out.held.contains { $0.contains("you rated it ★★★") }, "\(out.held)")
+        #expect(out.held.contains { $0.contains("you tagged it Keep") }, "\(out.held)")
         #expect(exists(f.copy) && !mover.paths.contains(f.copy.fullPath))
     }
 
@@ -279,7 +289,7 @@ struct ExcessCopiesApplyTests {
         let plan = await f.model.excessCopiesPlan(env: f.env)
         let ro = CatalogScanTarget(searchPath: f.copiesDir.path)
         ro.readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil)
-        f.model.scanTargets = [ro]
+        await addTarget(ro, to: f.model)
         let mover = Mover(trash: f.trashDir)
         let out = await f.model.applyExcess(shown: plan, env: f.env, hooks: hooks(mover))
         #expect(!mover.paths.contains(f.copy.fullPath) && exists(f.copy), "\(out)")
@@ -288,7 +298,7 @@ struct ExcessCopiesApplyTests {
         let g = try await fixture("backup"); defer { g.cleanup() }
         let bk = CatalogScanTarget(searchPath: g.copiesDir.path)
         bk.readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil, isArchiveBackup: true)
-        g.model.scanTargets = [bk]
+        await addTarget(bk, to: g.model)
         let plan2 = await g.model.excessCopiesPlan(env: g.env)
         #expect(!plan2.offeredIDs.contains(g.copy.id))
         #expect(plan2.items.first?.leftAlone.first { $0.id == g.copy.id }?.reason == ExcessCopiesPlan.backupDriveReason)
