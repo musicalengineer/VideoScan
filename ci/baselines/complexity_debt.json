@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 545,
+ "entry_count": 447,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 28,
@@ -63,8 +63,8 @@
    "nloc": 86
   },
   "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body": {
-   "ccn": 15,
-   "nloc": 245
+   "ccn": 14,
+   "nloc": 238
   },
   "VideoScan/VideoScan/App/VideoScanModel+BundleImportExport.swift::VideoScanModel.applyBundlePayload": {
    "ccn": 15,
@@ -247,8 +247,8 @@
    "nloc": 65
   },
   "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.floorFires": {
-   "ccn": 39,
-   "nloc": 52
+   "ccn": 33,
+   "nloc": 44
   },
   "VideoScan/VideoScan/ArchiveAngel/Recommend/ArchiveAngelScorer+Rules.swift::ArchiveAngelScorer.signal": {
    "ccn": 28,
@@ -283,8 +283,8 @@
    "nloc": 143
   },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body": {
-   "ccn": 13,
-   "nloc": 158
+   "ccn": 12,
+   "nloc": 151
   },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.computeFiltered": {
    "ccn": 26,
@@ -316,7 +316,7 @@
   },
   "VideoScan/VideoScan/Catalog/CatalogView+ScanTargetsPane.swift::CatalogView.scanTargetsPane": {
    "ccn": 21,
-   "nloc": 244
+   "nloc": 237
   },
   "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift::CatalogView.volumeContextCatalogSection": {
    "ccn": 36,
@@ -1778,226 +1778,6 @@
    "ccn": 16,
    "nloc": 40
   },
-  "scripts/VideoScan.py::extract_metadata": {
-   "ccn": 39,
-   "nloc": 101
-  },
-  "scripts/VideoScan.py::write_xlsx": {
-   "ccn": 27,
-   "nloc": 96
-  },
-  "scripts/build_family_map_units.py::build": {
-   "ccn": 16,
-   "nloc": 50
-  },
-  "scripts/build_family_map_units.py::dissolve": {
-   "ccn": 34,
-   "nloc": 63
-  },
-  "scripts/build_family_map_units.py::report": {
-   "ccn": 20,
-   "nloc": 38
-  },
-  "scripts/catalog_dedup_exact_paths.py::main": {
-   "ccn": 30,
-   "nloc": 87
-  },
-  "scripts/catalog_purge_dangling.py::main": {
-   "ccn": 30,
-   "nloc": 49
-  },
-  "scripts/catalog_purge_mxf_fragments.py::main": {
-   "ccn": 24,
-   "nloc": 66
-  },
-  "scripts/catalog_purge_nostream_junk.py::main": {
-   "ccn": 27,
-   "nloc": 68
-  },
-  "scripts/catalog_reduce.py::main": {
-   "ccn": 38,
-   "nloc": 117
-  },
-  "scripts/catalog_triage.py::main": {
-   "ccn": 63,
-   "nloc": 80
-  },
-  "scripts/check_subprocess_injection.py::check_concat_escaping": {
-   "ccn": 18,
-   "nloc": 50
-  },
-  "scripts/check_volume_check_then_act.py::scan_text": {
-   "ccn": 23,
-   "nloc": 61
-  },
-  "scripts/ci_test_verdict.py::problems": {
-   "ccn": 28,
-   "nloc": 38
-  },
-  "scripts/cluster_faces.py::cluster_phase": {
-   "ccn": 29,
-   "nloc": 83
-  },
-  "scripts/cluster_faces.py::collect_faces": {
-   "ccn": 18,
-   "nloc": 84
-  },
-  "scripts/complexity_gate.py::function_violations": {
-   "ccn": 23,
-   "nloc": 23
-  },
-  "scripts/complexity_metrics.py::containers_for": {
-   "ccn": 18,
-   "nloc": 35
-  },
-  "scripts/complexity_metrics.py::funcs_from_lizard": {
-   "ccn": 18,
-   "nloc": 34
-  },
-  "scripts/complexity_metrics.py::main": {
-   "ccn": 20,
-   "nloc": 89
-  },
-  "scripts/complexity_metrics.py::ratchet": {
-   "ccn": 19,
-   "nloc": 30
-  },
-  "scripts/dossier_batch.py::dossier_one": {
-   "ccn": 27,
-   "nloc": 87
-  },
-  "scripts/dossier_batch.py::main": {
-   "ccn": 27,
-   "nloc": 121
-  },
-  "scripts/drive_temps.py::main": {
-   "ccn": 19,
-   "nloc": 45
-  },
-  "scripts/dup_safety.py::main": {
-   "ccn": 33,
-   "nloc": 49
-  },
-  "scripts/extract_bundle_metadata.py::main": {
-   "ccn": 22,
-   "nloc": 81
-  },
-  "scripts/face_recognize.py::analyze_video": {
-   "ccn": 25,
-   "nloc": 84
-  },
-  "scripts/fd_scan_volume.py::main": {
-   "ccn": 16,
-   "nloc": 86
-  },
-  "scripts/find_person.py::main": {
-   "ccn": 27,
-   "nloc": 68
-  },
-  "scripts/footage_spectrum.py::run": {
-   "ccn": 49,
-   "nloc": 180
-  },
-  "scripts/footage_spectrum.py::single_pass": {
-   "ccn": 19,
-   "nloc": 54
-  },
-  "scripts/generate_icon.py::draw_icon": {
-   "ccn": 11,
-   "nloc": 118
-  },
-  "scripts/hallie_eval.py::grade": {
-   "ccn": 41,
-   "nloc": 84
-  },
-  "scripts/hallie_eval.py::grade_record": {
-   "ccn": 76,
-   "nloc": 122
-  },
-  "scripts/hallie_eval.py::load_corpus": {
-   "ccn": 16,
-   "nloc": 41
-  },
-  "scripts/hallie_eval.py::run": {
-   "ccn": 30,
-   "nloc": 89
-  },
-  "scripts/hallie_harvest_queries.py::harvest": {
-   "ccn": 20,
-   "nloc": 37
-  },
-  "scripts/hallie_question_testbed.py::grade": {
-   "ccn": 16,
-   "nloc": 55
-  },
-  "scripts/is_person_in_video.py::main": {
-   "ccn": 25,
-   "nloc": 89
-  },
-  "scripts/migrate_people_folders.py::main": {
-   "ccn": 48,
-   "nloc": 119
-  },
-  "scripts/migrate_people_folders.py::resolve": {
-   "ccn": 16,
-   "nloc": 38
-  },
-  "scripts/migrate_people_folders.py::undo": {
-   "ccn": 26,
-   "nloc": 65
-  },
-  "scripts/nightly_findings_alert.py::alert_lines": {
-   "ccn": 29,
-   "nloc": 53
-  },
-  "scripts/overnight_people_scan.py::main": {
-   "ccn": 54,
-   "nloc": 188
-  },
-  "scripts/publish_poi_cycle_metrics.py::validate_row": {
-   "ccn": 17,
-   "nloc": 29
-  },
-  "scripts/publish_search_benchmarks.py::build_run": {
-   "ccn": 19,
-   "nloc": 22
-  },
-  "scripts/publish_search_benchmarks.py::validate_measurement": {
-   "ccn": 31,
-   "nloc": 43
-  },
-  "scripts/publish_search_benchmarks.py::validate_run_row": {
-   "ccn": 25,
-   "nloc": 21
-  },
-  "scripts/ratchet_baseline.py::markdown_report": {
-   "ccn": 18,
-   "nloc": 59
-  },
-  "scripts/repair_salvage_stage.py::main": {
-   "ccn": 25,
-   "nloc": 75
-  },
-  "scripts/swift_source_scan.py::strip_comments": {
-   "ccn": 23,
-   "nloc": 66
-  },
-  "scripts/typecheck_timing_ratchet.py::main": {
-   "ccn": 19,
-   "nloc": 63
-  },
-  "scripts/watch_hallie_chat.py::main": {
-   "ccn": 16,
-   "nloc": 44
-  },
-  "scripts/watch_hallie_chat.py::render": {
-   "ccn": 17,
-   "nloc": 31
-  },
-  "scripts/working_set_candidates.py::main": {
-   "ccn": 21,
-   "nloc": 61
-  },
   "swift_cli/PersonFinder.swift::applyFlag": {
    "ccn": 17,
    "nloc": 28
@@ -2013,178 +1793,6 @@
   "swift_cli/PersonFinder.swift::processVideo": {
    "ccn": 25,
    "nloc": 166
-  },
-  "tools/adversarial_confirm.py::confirm": {
-   "ccn": 27,
-   "nloc": 68
-  },
-  "tools/adversarial_confirm.py::record": {
-   "ccn": 27,
-   "nloc": 50
-  },
-  "tools/adversarial_nightly.py::build_brief": {
-   "ccn": 22,
-   "nloc": 58
-  },
-  "tools/adversarial_nightly.py::main": {
-   "ccn": 19,
-   "nloc": 74
-  },
-  "tools/adversarial_nightly.py::parse_claude_json": {
-   "ccn": 16,
-   "nloc": 21
-  },
-  "tools/adversarial_nightly.py::run": {
-   "ccn": 39,
-   "nloc": 113
-  },
-  "tools/adversarial_nightly.py::status": {
-   "ccn": 24,
-   "nloc": 34
-  },
-  "tools/donna-recipe/gallery_report.py::main": {
-   "ccn": 69,
-   "nloc": 165
-  },
-  "tools/donna-recipe/recipe_smoke.py::main": {
-   "ccn": 21,
-   "nloc": 48
-  },
-  "tools/invariants.py::parse_front_matter": {
-   "ccn": 16,
-   "nloc": 29
-  },
-  "tools/model-fitness/review_real_commits.py::main": {
-   "ccn": 20,
-   "nloc": 110
-  },
-  "tools/model-fitness/run_fitness.py::compare": {
-   "ccn": 19,
-   "nloc": 28
-  },
-  "tools/nightly_findings_to_issues.py::_change_note": {
-   "ccn": 18,
-   "nloc": 27
-  },
-  "tools/nightly_findings_to_issues.py::build_summary": {
-   "ccn": 42,
-   "nloc": 74
-  },
-  "tools/nightly_findings_to_issues.py::codeql_scope": {
-   "ccn": 19,
-   "nloc": 24
-  },
-  "tools/nightly_findings_to_issues.py::fit_state": {
-   "ccn": 25,
-   "nloc": 55
-  },
-  "tools/nightly_findings_to_issues.py::parse_sarif": {
-   "ccn": 34,
-   "nloc": 33
-  },
-  "tools/nightly_findings_to_issues.py::plan_markdown": {
-   "ccn": 17,
-   "nloc": 24
-  },
-  "tools/nightly_findings_to_issues.py::plan_ticket": {
-   "ccn": 111,
-   "nloc": 162
-  },
-  "tools/nightly_findings_to_issues.py::plan_tracking": {
-   "ccn": 72,
-   "nloc": 160
-  },
-  "tools/nightly_findings_to_issues.py::render_ticket": {
-   "ccn": 54,
-   "nloc": 130
-  },
-  "tools/person-eval/apply_label_csv.py::apply_rows": {
-   "ccn": 19,
-   "nloc": 34
-  },
-  "tools/person-eval/build_holdout_queue_skeleton.py::build": {
-   "ccn": 65,
-   "nloc": 133
-  },
-  "tools/person-eval/build_label_queue.py::make_queue": {
-   "ccn": 37,
-   "nloc": 106
-  },
-  "tools/person-eval/build_synthetic_identity_corpus.py::main": {
-   "ccn": 11,
-   "nloc": 89
-  },
-  "tools/person-eval/grade_paired_presence_report.py::grade_report": {
-   "ccn": 52,
-   "nloc": 93
-  },
-  "tools/person-eval/label_queue_to_manifest.py::make_manifest": {
-   "ccn": 19,
-   "nloc": 73
-  },
-  "tools/person-eval/person_eval.py::evaluate": {
-   "ccn": 41,
-   "nloc": 110
-  },
-  "tools/person-eval/summarize_synthetic_identity_benchmark.py::summarize": {
-   "ccn": 20,
-   "nloc": 46
-  },
-  "tools/poi-c02/audit_references.py::main": {
-   "ccn": 50,
-   "nloc": 175
-  },
-  "tools/poi-c02/make_refset.py::main": {
-   "ccn": 23,
-   "nloc": 71
-  },
-  "tools/publish_metrics.py::adversarial_rows": {
-   "ccn": 51,
-   "nloc": 63
-  },
-  "tools/qwen-bench/qwen_bench.py::_validate_value": {
-   "ccn": 23,
-   "nloc": 39
-  },
-  "tools/qwen-bench/qwen_bench.py::parse_ollama_response": {
-   "ccn": 36,
-   "nloc": 117
-  },
-  "tools/qwen-bench/qwen_bench.py::rescore_saved_run": {
-   "ccn": 12,
-   "nloc": 89
-  },
-  "tools/qwen-bench/qwen_bench.py::summarize_case_records": {
-   "ccn": 28,
-   "nloc": 90
-  },
-  "tools/qwen-bench/qwen_two_turn.py::FixtureToolExecutor.execute": {
-   "ccn": 13,
-   "nloc": 83
-  },
-  "tools/qwen-bench/qwen_two_turn.py::_supported_claim_evidence": {
-   "ccn": 19,
-   "nloc": 45
-  },
-  "tools/qwen-bench/qwen_two_turn.py::_validate_final_value": {
-   "ccn": 48,
-   "nloc": 64
-  },
-  "tools/qwen-bench/qwen_two_turn.py::parse_tool_response": {
-   "ccn": 19,
-   "nloc": 48
-  },
-  "tools/qwen-bench/qwen_two_turn.py::run_case": {
-   "ccn": 39,
-   "nloc": 178
-  },
-  "tools/qwen-bench/qwen_two_turn.py::score_case": {
-   "ccn": 46,
-   "nloc": 104
-  },
-  "tools/review_status_line.py::main": {
-   "ccn": 22,
-   "nloc": 36
   }
  },
  "swiftlint_disables": {

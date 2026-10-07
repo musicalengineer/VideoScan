@@ -1040,12 +1040,22 @@ struct FamilyAssetStore {
     }
 
     /// Record that `photo` does not show `gedcomID`. The photo must be a
-    /// verified image under `People/`; the sidecar is written atomically and
-    /// merged with any earlier exclusions. Requires write access.
+    /// verified image under `People/`; the sidecar is merged with any
+    /// earlier exclusions and published through `AtomicFilePublish`
+    /// (fullFsync). Requires write access.
+    ///
+    /// A sidecar that exists but cannot be read is never treated as empty
+    /// (N1012-F2): its bytes are first MOVED aside to
+    /// `<name>.damaged-<ISO8601>` with a 🔴 log line, and if that move
+    /// fails the write is refused. The read-modify-write runs under one
+    /// process-wide lock so two windows cannot lose each other's ruling;
+    /// it always re-reads the disk, so no stale in-memory copy is ever
+    /// written (no compare-and-swap needed).
     @discardableResult
     func excludePhoto(_ photo: URL, from gedcomID: String,
                       notedBy: String? = nil, caption: String? = nil,
-                      at date: Date = Date()) throws -> URL {
+                      at date: Date = Date(),
+                      log: (String) -> Void = { appLog.write($0) }) throws -> URL {
         try requireWriteAccess()
         let id = gedcomID.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !id.isEmpty, !Self.safeGEDCOMIDComponent(id).isEmpty else {
@@ -1063,24 +1073,90 @@ struct FamilyAssetStore {
            values.isSymbolicLink == true || values.isDirectory == true {
             throw StoreError.unsafeDirectory(sidecar)
         }
-        var record = (try? Data(contentsOf: sidecar))
-            .flatMap { try? Self.sidecarDecoder.decode(PhotoExclusion.self, from: $0) }
-            ?? PhotoExclusion(notOf: [])
-        if !record.notOf.contains(where: { Self.gedcomIDKey($0) == Self.gedcomIDKey(id) }) {
-            record.notOf.append(id)
+        try Self.exclusionLock.withLock {
+            var record = try Self.loadExclusionForUpdate(sidecar, log: log)
+            if !record.notOf.contains(where: { Self.gedcomIDKey($0) == Self.gedcomIDKey(id) }) {
+                record.notOf.append(id)
+            }
+            record.notedBy = notedBy ?? record.notedBy
+            record.notedAt = date
+            record.caption = caption ?? record.caption
+            try Self.publishExclusion(record, to: sidecar)
         }
-        record.notedBy = notedBy ?? record.notedBy
-        record.notedAt = date
-        record.caption = caption ?? record.caption
+        return sidecar
+    }
+
+    /// One lock around every read-modify-write of a `.notof.json`.
+    /// (C++: a static std::mutex guarding the file's read-change-write.)
+    private static let exclusionLock = NSLock()
+
+    /// Missing → empty. Readable → its record. Present but unreadable →
+    /// moved aside (🔴 logged), then empty. Throws — refusing the write,
+    /// damaged bytes untouched — when the move fails.
+    private static func loadExclusionForUpdate(_ sidecar: URL, log: (String) -> Void) throws -> PhotoExclusion {
+        let data: Data
+        do {
+            data = try Data(contentsOf: sidecar)
+        } catch {
+            if isMissingFileError(error) { return PhotoExclusion(notOf: []) }
+            return try setAsideDamagedExclusion(sidecar, reason: error.localizedDescription, log: log)
+        }
+        do {
+            return try sidecarDecoder.decode(PhotoExclusion.self, from: data)
+        } catch {
+            return try setAsideDamagedExclusion(sidecar, reason: "not readable as a not-of list", log: log)
+        }
+    }
+
+    private static func setAsideDamagedExclusion(_ sidecar: URL, reason: String,
+                                                 log: (String) -> Void) throws -> PhotoExclusion {
+        let name = sidecar.lastPathComponent
+        do {
+            let aside = try DamagedFileSetAside.move(sidecar)
+            log("🔴 [family-tree] photo not-of notes \(name) could not be read (\(reason)) — moved aside to "
+                + "\(aside.path) before saving. The earlier notes are in that file; to restore, fix it by "
+                + "hand and rename it back to \(name).")
+            return PhotoExclusion(notOf: [])
+        } catch {
+            log("🔴 [family-tree] photo not-of notes \(name) could not be read (\(reason)) and could not be "
+                + "set aside (\(error.localizedDescription)) — nothing was saved; the file is unchanged.")
+            throw error
+        }
+    }
+
+    private static func isMissingFileError(_ error: Error) -> Bool {
+        let ns = error as NSError
+        return (ns.domain == NSCocoaErrorDomain && ns.code == NSFileReadNoSuchFileError)
+            || (ns.domain == NSPOSIXErrorDomain && ns.code == Int(ENOENT))
+    }
+
+    private static func publishExclusion(_ record: PhotoExclusion, to sidecar: URL) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         do {
-            try encoder.encode(record).write(to: sidecar, options: .atomic)
+            // createIntermediates false: the photo's folder was just
+            // verified; a folder that vanished is an error, not recreated.
+            try AtomicFilePublish.write(try encoder.encode(record), to: sidecar,
+                                        durability: .fullFsync, createIntermediates: false)
         } catch {
-            throw StoreError.createFailed(sidecar.lastPathComponent, errno: errno)
+            // The caught error's own code — the global `errno` is stale by
+            // now (temp-file cleanup ran after the failing syscall).
+            throw StoreError.createFailed(sidecar.lastPathComponent, errno: Self.posixCode(of: error))
         }
-        return sidecar
+    }
+
+    /// POSIX code carried by `error`: `AtomicFilePublish.Failure`'s captured
+    /// errno, a POSIX NSError, or a Foundation file error's underlying POSIX
+    /// error; EIO when there is none.
+    static func posixCode(of error: Error) -> Int32 {
+        if let failure = error as? AtomicFilePublish.Failure { return failure.errnoValue }
+        let ns = error as NSError
+        if ns.domain == NSPOSIXErrorDomain { return Int32(ns.code) }
+        if let under = ns.userInfo[NSUnderlyingErrorKey] as? NSError, under.domain == NSPOSIXErrorDomain {
+            return Int32(under.code)
+        }
+        return EIO
     }
 
     static let sidecarDecoder: JSONDecoder = {

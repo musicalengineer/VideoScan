@@ -122,3 +122,6 @@ assets/hallie/
 .trash/
 codex-worktrees/
 default.profraw
+
+# R3 golden snapshots: a mismatch writes <name>.actual.json beside the golden (never commit)
+tests/fixtures/hallie_snapshots/*.actual.json

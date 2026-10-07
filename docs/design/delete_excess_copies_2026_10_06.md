@@ -606,3 +606,21 @@ bodies" rule.
   read-only mark?
 - Is the Tier 2 "earned bulk" threshold (10 approvals) right?
 - Should the weekly empty-the-Trash reminder exist at all?
+
+---
+
+## Amendments after the adversarial review (cloud C05, verified by local qa 2026-10-07)
+
+C05: `docs/reviews/cloud/C05-delete-excess-design-review.md`. 7 findings confirmed, 2 partly. These amendments override the body above.
+
+1. **No override path (F2).** The bulk lane never uses PruneApply's "override" route (`PruneApply.swift:10-16`). A machine-built selection is REFUSED if it fails the bar, keep rule 5 or 6, or the survivor floor of decision 1. The floor is a step of its own at selection time AND again immediately before each move. "Nobody left unchecked" (`PruneApply.swift:396`) is never a pass for a machine selection.
+2. **Read the archive bytes (F1).** When the copy being moved is the last copy outside the archive, read the archive file in full in this job (digest compare). A stamp that reproduces (`PruneVerification.swift:137-138`) is not enough at that moment.
+3. **Backup drives first (F5).** The *Archive backup* volume mark ships BEFORE the bulk action. Until Rick classifies a drive, any drive where most files match the archive by digest and archive path is refused as a whole.
+4. **One plan (F7).** The forecast and the run use ONE plan object (shared with `pruneOneCopy`). A copy that wasn't in the forecast is never moved.
+5. **Backup proof (F8).** Decision 1(b) counts only an attestation made on the ARCHIVED record after promote, not attestations carried over from the source (`PromoteToArchiveJob+Steps.swift:613-617`).
+6. **No network mounts (F6).** The lane refuses files on network mounts. Confirm on a real Mac whether the archive volume can appear as a share.
+7. **Tier 2 coverage = 100% (F3).** Coverage means 100% of the candidate's content, less named black, bars or silence at the very ends. The uncovered spans are stored and shown.
+8. **Tier 2 proof density (F4).** Prove over dense windows covering the whole candidate, leave blank and low-detail frames out of the evidence, require continuous audio alignment, and add the review's three false-positive fixtures (similar scenes, re-shoot, the same tape captured twice with different trims).
+9. **Honest baseline (F9).** Leave archive-volume files out of the measured excess (about 4.1 GB).
+
+C05's test sketches become the "tests first" items of Phase 1 (amendments 1–6, 9) and Phase 2 (7–8). Still to open: whether PrunePlan leaves out A/V pair members, and whether the attestations copied at promote reach the archived record or only the manifest row.

@@ -84,7 +84,7 @@
   "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift": {
     "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
-  "VideoScan/VideoScan/Catalog/InspectorPanel.swift": {
+  "VideoScan/VideoScan/Catalog/InspectorPanel+Sections.swift": {
     "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
   "VideoScan/VideoScan/FamilyTree/FamilyTreePersonMetadata.swift": {
@@ -207,9 +207,6 @@
   },
   "docs/briefs/cloud/C03-python-run-and-review.md": {
     "docs/reviews/cloud/C03-python-run-and-review.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
-  },
-  "docs/briefs/cloud/C05-delete-excess-design-review.md": {
-    "docs/reviews/cloud/C05-delete-excess-design-review.md": "Report path a brief names before its session writes it; remove when the report is merged."
   },
   "docs/design/analysis_ledger_design.md": {
     "docs/immich_ideas.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
@@ -334,7 +331,7 @@
     "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
   },
   "docs/reviews/briefs/codex-brief-p1-287-2026-10-06.md": {
-    "docs/reviews/codex/codex-review-p1-287-2026-10-06.md": "Verdict path the codex brief names before codex writes it; remove this entry when the review lands."
+    "docs/reviews/codex/codex-review-batch-2026-10-07.md": "Verdict path the codex brief names before codex writes it; remove when the review lands."
   },
   "docs/reviews/briefs/docs-reorg-brief.md": {
     "docs/analysis": "The reorganization brief names the pre-reorganization folders it moved.",

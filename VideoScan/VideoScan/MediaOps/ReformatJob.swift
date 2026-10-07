@@ -6,7 +6,7 @@ import os
 //
 // "Reformat and Analyze" — Rick 2026-06-14. One ffmpeg subprocess that
 // transcodes a legacy-codec source (svq3 / qdm2 / cinepak / indeo / rpza /
-// etc.) into a modern H.264/AAC .mp4 with conventional ffmpeg quality
+// etc.) into a modern HEVC/AAC .mp4 with conventional ffmpeg quality
 // filters in line, then auto-catalogs the output and queues it for the
 // in-app analyzer.
 //
@@ -14,8 +14,8 @@ import os
 // stopped decoding several proprietary QuickTime codecs in macOS 10.15.
 // ffmpeg still decodes them fine — so a one-pass transcode bridges old
 // archival captures into the analyzable pool. The output file lands
-// beside the original (same directory, `<stem>_reformatted.mp4`); the
-// original is left untouched.
+// beside the original (same directory, `<stem>.vs.hevc.<timestamp>.mp4`);
+// the original is left untouched.
 //
 // ffmpeg pipeline (chosen for typical 1990s-2000s home-video captures):
 //   - bwdif=mode=send_field:parity=auto   Bob Weaver deinterlace,
@@ -24,17 +24,14 @@ import os
 //   - hqdn3d=4:3:6:4.5                    Moderate 3D denoise — luma
 //                                         spatial 4, chroma spatial 3,
 //                                         luma temporal 6, chroma 4.5.
-//   - h264_videotoolbox                   Hardware H.264 on Apple Silicon
-//                                         (matches CombineEngine /
-//                                         PersonFinderCompilation choice).
-//                                         CRF-equivalent quality knob via
-//                                         -q:v 65 (≈ CRF 18-20).
-//   - aac 192k                            Modern audio. Avoids the qdm2
+//   - hevc_videotoolbox                   Hardware HEVC on Apple Silicon.
+//                                         -q:v 65 constant-quality knob.
+//   - aac_at 192k                         Modern audio. Avoids the qdm2
 //                                         double-lossy reuse trap.
 //
 // Cancellation: the job owns its run Task. Task.cancel() propagates into
-// ProcessRunner, which terminates the ffmpeg subprocess. Partial output
-// is deleted in the cleanup path so a cancelled job doesn't leave a
+// ProcessRunner, which terminates the ffmpeg subprocess. This run's own
+// partial is removed in the cleanup path so a cancelled job doesn't leave a
 // truncated file masquerading as a successful reformat.
 //
 // Progress: parsed from ffmpeg's stderr `out_time` / `time=` lines
@@ -47,10 +44,23 @@ import os
 // ffmpeg child via ProcessRunner's SIGTERM→SIGKILL escalation — and the job
 // fails CLEANLY with a specific reason instead of hanging for hours.
 //
-// Atomic output (#6.3): ffmpeg writes to a `.vs-partial` sibling; we
-// atomic-rename to the final name ONLY after the encode completes and the
-// size check passes. A killed/stalled op leaves only the partial (which we
-// delete) — never a truncated file at the real output path.
+// Atomic output (#6.3): ffmpeg writes to a partial beside the output and
+// the partial is published to the final name ONLY after the encode passes
+// the exit-code, length and size checks. A killed/stalled op leaves only
+// the partial (which we remove) — never a truncated file at the real name.
+//
+// The partial is RESERVED per run (N1014-F1, 2026-10-07):
+// `<output stem>.<8 hex>.vs-partial.mp4`, created O_EXCL and registered live
+// through DerivativeOutputPublish.reservePartial — the publisher Transcode
+// and Combine use — and removed only through PartialFileNaming.remove.
+// It used to be the fixed `<output stem>.vs-partial.mp4`, cleared with an
+// unconditional removeItem before every encode. The output stem is the
+// SOURCE stem plus a one-second timestamp, so a batch Reformat of `a.avi`
+// and `a.mov` gave both jobs the same partial: job B's start unlinked the
+// file job A's ffmpeg was writing, A could then publish B's half-written
+// encode, and either job's cleanup could delete the other's work.
+// (For Rick: O_EXCL reservation ≈ mkstemp — the name is ours alone before
+// ffmpeg opens it with `-y`.)
 
 private let reformatLog = Logger(subsystem: "Rick-Breen.VideoScan",
                                  category: "fileOps")
@@ -115,12 +125,11 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
     /// fraction calculation.
     private var totalDurationSeconds: Double = 0
 
-    /// Set by the stall watchdog when the encode flatlines. Distinguishes a
-    /// watchdog kill (→ `.failed` with a specific reason) from a user cancel
-    /// (→ `.cancelled`). Checked before the generic cancel branch because
-    /// the watchdog cancels the Task, which also sets `Task.isCancelled`.
     /// Set-once ledger of the first terminal cause (watchdog stall vs the
     /// user's Stop) — see MFOTerminalCause. `stallReason` reads through it.
+    /// A watchdog kill ends `.failed` with a specific reason; a user cancel
+    /// ends `.cancelled`. Checked before the generic cancel branch because
+    /// the watchdog cancels the Task, which also sets `Task.isCancelled`.
     private var terminalCause = MFOTerminalCause()
     private var stallReason: String? { terminalCause.stallReason }
 
@@ -140,15 +149,11 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         self.record = record
         self.model = model
         self.orchestrator = orchestrator
-        // Output beside original: <stem>_reformatted.mp4. Same dir,
-        // simpler to find. If a previous reformat exists we overwrite
-        // it — the older one was either better or worse, but keeping
-        // multiple variants around without UX confuses the catalog.
-        let srcURL = URL(fileURLWithPath: record.fullPath)
         // Standardized derived-URL convention (Rick 2026-06-14):
         //   <stem>.vs.hevc.<YYYYMMDD-HHMMSS>.mp4
-        // beside the source. See DerivedFileNaming.swift. Every
-        // future recipe gets the format for free.
+        // beside the source. See DerivedFileNaming.swift. A file already
+        // at that name is never replaced: the publish lands beside it.
+        let srcURL = URL(fileURLWithPath: record.fullPath)
         self.outputURL = derivedFileURL(
             source: srcURL,
             codec: "hevc",
@@ -184,27 +189,11 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
     // MARK: Reformat run
 
     private func runReformat() async {
-        // Probe the duration for the fraction calculation. The record
-        // already carries durationSeconds from the catalog scan, so we
-        // trust it. Falls back to 0 (indeterminate progress) if it's
-        // missing.
+        // The record already carries durationSeconds from the catalog scan;
+        // 0 (missing) just means indeterminate progress.
         totalDurationSeconds = max(0, record.durationSeconds)
-        if totalDurationSeconds == 0 {
-            // Fine — UI stays indeterminate, ffmpeg will run, just no
-            // % progress.
-        }
 
         let inputPath = record.fullPath
-        // ffmpeg writes here; we publish to outputURL only on success
-        // (#6.3). A killed/stalled op leaves only this partial, which we
-        // delete — never a truncated file at the real output path.
-        let partialPath = Self.partialURL(for: outputURL).path
-
-        // A stale partial of THIS run's timestamped name is our own litter
-        // (resumed from a cancel). The output name itself is never cleared
-        // first (2026-09-22): the publish below refuses to clobber.
-        try? FileManager.default.removeItem(atPath: partialPath)
-
         let volumeLabel = VolumeReachability.displayLabel(forPath: inputPath)
         reformatLog.info("reformat START: \(self.record.filename, privacy: .public) on \(volumeLabel, privacy: .public) → \(self.outputURL.lastPathComponent, privacy: .public)")
 
@@ -219,23 +208,108 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             return
         }
 
-        // Apple Silicon optimization (Rick 2026-06-14):
-        //   - hevc_videotoolbox encodes ~30-40% smaller than h264 for
-        //     equivalent quality, using the same M-series media engine
-        //     (no extra CPU/GPU cost on M4).
-        //   - "-tag:v hvc1" so QuickTime Player decodes natively on
-        //     macOS / iOS / AppleTV. Without this, the default "hev1"
-        //     tag forces software fallback on some Apple players even
-        //     though the bitstream is identical.
-        //   - aac_at uses Apple AudioToolbox's AAC encoder — slightly
-        //     better quality than libavcodec's aac at the same bitrate
-        //     and offloads to the audio coprocessor.
-        let args: [String] = [
+        // Reserve THIS run's partial (O_EXCL + registered live — see the
+        // file header, N1014-F1). Every exit of this run releases it;
+        // removals go through PartialFileNaming.remove.
+        let partialURL: URL
+        do {
+            partialURL = try DerivativeOutputPublish.reservePartial(for: outputURL)
+        } catch {
+            reformatLog.error("reformat FAILED (reserve partial): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public)")
+            await finish(failed: "Could not create the output file: \(error.localizedDescription)")
+            return
+        }
+        defer { PartialFileNaming.unregisterLive(partialURL) }
+        let partialPath = partialURL.path
+
+        let args = Self.reformatArgs(input: inputPath, output: partialPath)
+        subtitleText = "Transcoding to H.264/AAC…"
+        isIndeterminateValue = (totalDurationSeconds == 0)
+
+        reformatLog.info("reformat: ffmpeg \(args.joined(separator: " "), privacy: .public)")
+
+        let encodeStart = Date()
+        let encodeResult = await runEncode(ffmpeg: ffmpeg, args: args, inputPath: inputPath)
+        let elapsed = Date().timeIntervalSince(encodeStart)
+
+        // Watchdog stall wins over a generic cancel: the watchdog cancels
+        // the Task (setting Task.isCancelled), so check stallReason FIRST so
+        // the user sees the specific cause, not "Cancelled".
+        if let stallReason {
+            discardPartial(partialURL)
+            reformatLog.error("reformat FAILED (stall): \(self.record.filename, privacy: .public) after \(elapsed, format: .fixed(precision: 1), privacy: .public)s — \(stallReason, privacy: .public)")
+            await finish(failed: stallReason)
+            return
+        }
+
+        // Was it cancelled mid-run?
+        if Task.isCancelled || state == .cancelling {
+            discardPartial(partialURL)
+            reformatLog.info("reformat cancelled: \(self.record.filename, privacy: .public) after \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
+            await finish(cancelled: true)
+            return
+        }
+
+        // Exit code, then length, then "something was written" and the
+        // 10 KB floor — before anything is published. A partial that fails
+        // any of them is removed.
+        let size: Int64
+        switch await Self.checkEncode(encodeResult, inputPath: inputPath, partialPath: partialPath) {
+        case .failed(let failure):
+            discardPartial(partialURL)
+            reformatLog.error("reformat FAILED (encode): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
+            await finish(failed: failure)
+            return
+        case .passed(let bytes):
+            size = bytes
+        }
+
+        // Atomic publish: the encode is complete and non-trivial — promote
+        // the partial to the real output name in one rename (#6.3).
+        // A taken name keeps BOTH files: the new one lands beside it.
+        do {
+            let outcome = try await Self.publishOffMain(partial: partialPath, final: outputURL)
+            publishedURL = outcome.url
+            if case .publishedBeside(let url, let kept, _) = outcome {
+                reformatLog.notice("reformat: \(kept.lastPathComponent, privacy: .public) already existed — kept; new file published as \(url.lastPathComponent, privacy: .public)")
+            }
+        } catch {
+            // The finished encode is kept — moved OFF the partial pattern
+            // (`.vs-kept.`, no-clobber) so no stale sweep can remove it once
+            // this run releases its reservation — and its path is named.
+            let kept = await Self.keepUnpublishedOffMain(partialURL)
+            reformatLog.error("reformat FAILED (publish): \(self.record.filename, privacy: .public) — \(error.localizedDescription, privacy: .public) — encode kept at \(kept.path, privacy: .public)")
+            appLog.write("reformat: \(record.filename) finished but not published (\(error.localizedDescription)) — encode kept at \(kept.path)")
+            await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is kept at \(kept.path)")
+            return
+        }
+
+        // Catalog + queue for analyze.
+        await catalogAndQueueAnalyze()
+
+        reformatLog.info("reformat DONE: \(self.record.filename, privacy: .public) → \(self.publishedURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
+        await finish(success: "Reformatted → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))). Queued for analysis.")
+    }
+
+    /// Apple Silicon optimization (Rick 2026-06-14):
+    ///   - hevc_videotoolbox encodes ~30-40% smaller than h264 for
+    ///     equivalent quality, using the same M-series media engine
+    ///     (no extra CPU/GPU cost on M4).
+    ///   - "-tag:v hvc1" so QuickTime Player decodes natively on
+    ///     macOS / iOS / AppleTV. Without this, the default "hev1"
+    ///     tag forces software fallback on some Apple players even
+    ///     though the bitstream is identical.
+    ///   - aac_at uses Apple AudioToolbox's AAC encoder — slightly
+    ///     better quality than libavcodec's aac at the same bitrate
+    ///     and offloads to the audio coprocessor.
+    /// `-y` only lets ffmpeg open this run's 0-byte reservation. Pure.
+    nonisolated static func reformatArgs(input: String, output: String) -> [String] {
+        [
             "-hide_banner",
             "-nostdin",
             "-y",
             "-hwaccel", "videotoolbox",
-            "-i", inputPath,
+            "-i", input,
             "-vf", "bwdif=mode=send_field:parity=auto,hqdn3d=4:3:6:4.5",
             "-c:v", "hevc_videotoolbox",
             "-q:v", "65",
@@ -244,23 +318,19 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             "-b:a", "192k",
             "-movflags", "+faststart",
             "-progress", "pipe:2",
-            partialPath
+            output
         ]
+    }
 
-        subtitleText = "Transcoding to H.264/AAC…"
-        isIndeterminateValue = (totalDurationSeconds == 0)
-
-        reformatLog.info("reformat: ffmpeg \(args.joined(separator: " "), privacy: .public)")
-
-        // Stderr parsing for progress. Both `time=HH:MM:SS.xx` and
-        // `out_time=HH:MM:SS.xxxxx` appear in ffmpeg output — the
-        // -progress pipe:2 flag emits the structured lines. We accept
-        // either to be robust.
+    /// Run the encode under the stall watchdog. Every stderr line (ffmpeg
+    /// emits progress blocks continuously while it makes forward progress)
+    /// kicks the monitor; silence past the threshold ⇒ the volume stalled ⇒
+    /// kill + fail. Both `time=HH:MM:SS.xx` and `out_time=HH:MM:SS.xxxxx`
+    /// count as progress (`-progress pipe:2` emits the structured lines).
+    /// The exit status is returned — it is the verdict's first half
+    /// (2026-09-19: it used to be thrown away).
+    private func runEncode(ffmpeg: String, args: [String], inputPath: String) async -> ProcessRunner.Result {
         let totalDur = totalDurationSeconds  // capture for the closure
-
-        // Stall watchdog: every stderr line (ffmpeg emits progress blocks
-        // continuously while it makes forward progress) kicks the monitor.
-        // Silence past the threshold ⇒ the volume stalled ⇒ kill + fail.
         let monitor = StallMonitor(label: "reformat \(record.filename)") { [weak self] silentFor in
             Task { @MainActor [weak self] in
                 self?.handleStall(inputPath: inputPath, silentFor: silentFor)
@@ -276,13 +346,9 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
                 self.isIndeterminateValue = false
             }
         }
-
-        let encodeStart = Date()
         monitor.start()
         pauser.register(monitor)
-        // The exit status is the verdict's first half (2026-09-19): it
-        // used to be thrown away, so a failed encode could be published.
-        let encodeResult = await ProcessRunner.runProcess(
+        let result = await ProcessRunner.runProcess(
             executable: ffmpeg,
             arguments: args,
             environment: nil,
@@ -290,77 +356,46 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
             control: pauser.control
         )
         monitor.stop()
-        let elapsed = Date().timeIntervalSince(encodeStart)
+        return result
+    }
 
-        // Watchdog stall wins over a generic cancel: the watchdog cancels
-        // the Task (setting Task.isCancelled), so check stallReason FIRST so
-        // the user sees the specific cause, not "Cancelled".
-        if let stallReason {
-            try? FileManager.default.removeItem(atPath: partialPath)
-            reformatLog.error("reformat FAILED (stall): \(self.record.filename, privacy: .public) after \(elapsed, format: .fixed(precision: 1), privacy: .public)s — \(stallReason, privacy: .public)")
-            await finish(failed: stallReason)
-            return
-        }
+    enum EncodeCheck: Equatable, Sendable {
+        case failed(String)
+        case passed(sizeBytes: Int64)
+    }
 
-        // Was it cancelled mid-run?
-        if Task.isCancelled || state == .cancelling {
-            try? FileManager.default.removeItem(atPath: partialPath)
-            reformatLog.info("reformat cancelled: \(self.record.filename, privacy: .public) after \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
-            await finish(cancelled: true)
-            return
-        }
-
-        // Verify output exists + is non-trivial. ffmpeg sometimes
-        // returns 0 but writes a 1KB header-only file on early failure
-        // (codec library unavailable, etc.); reject those.
-        // Exit code, then length, before anything is published
-        // (FFmpegEncodeCheck). A partial that failed either is deleted.
-        if FileManager.default.fileExists(atPath: partialPath),
-           let failure = await FFmpegEncodeCheck.verdict(for: encodeResult, sourcePath: inputPath,
-                                                        outputPath: partialPath) {
-            try? FileManager.default.removeItem(atPath: partialPath)
-            reformatLog.error("reformat FAILED (encode): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
-            await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
-            return
-        }
-        if let failure = FFmpegEncodeCheck.exitFailure(exitCode: encodeResult.exitCode, stderr: encodeResult.stderr) {
-            // No partial at all: the exit reason beats "no output file".
-            reformatLog.error("reformat FAILED (encode, no output): \(self.record.filename, privacy: .public) — \(failure, privacy: .public)")
-            await finish(failed: failure.prefix(1).uppercased() + failure.dropFirst())
-            return
-        }
-        guard FileManager.default.fileExists(atPath: partialPath) else {
-            await finish(failed: "ffmpeg finished but no output file was produced")
-            return
+    /// The post-encode verdict: FFmpegEncodeCheck (exit code, then length
+    /// against a fresh probe of the source), then the reservation must have
+    /// been written to (an empty partial = ffmpeg wrote nothing), then the
+    /// 10 KB floor (ffmpeg sometimes exits 0 with a header-only file when a
+    /// codec library is unavailable). Disk + probes run off the main actor.
+    @concurrent
+    nonisolated static func checkEncode(_ result: ProcessRunner.Result, inputPath: String,
+                                        partialPath: String) async -> EncodeCheck {
+        if let failure = await FFmpegEncodeCheck.verdict(for: result, sourcePath: inputPath,
+                                                          outputPath: partialPath) {
+            return .failed(failure.prefix(1).uppercased() + failure.dropFirst())
         }
         let attrs = try? FileManager.default.attributesOfItem(atPath: partialPath)
         let size = (attrs?[.size] as? NSNumber)?.int64Value ?? 0
-        if size < 10_000 {
-            try? FileManager.default.removeItem(atPath: partialPath)
-            await finish(failed: "ffmpeg output too small (\(size) bytes) — likely a codec failure")
-            return
+        guard attrs != nil, size > 0 else {
+            return .failed("ffmpeg finished but no output file was produced")
         }
+        guard size >= 10_000 else {
+            return .failed("ffmpeg output too small (\(size) bytes) — likely a codec failure")
+        }
+        return .passed(sizeBytes: size)
+    }
 
-        // Atomic publish: the encode is complete and non-trivial — promote
-        // the partial to the real output name in one rename (#6.3).
-        // A taken name keeps BOTH files: the new one lands beside it.
+    /// Remove this run's own partial after a stall / cancel / failed
+    /// encode (name-guarded, releases the reservation). A failure is
+    /// logged, never swallowed; a leftover is a later sweep's to remove.
+    private func discardPartial(_ partial: URL) {
         do {
-            let outcome = try await Self.publishOffMain(partial: partialPath, final: outputURL)
-            publishedURL = outcome.url
-            if case .publishedBeside(let url, let kept, _) = outcome {
-                reformatLog.notice("reformat: \(kept.lastPathComponent, privacy: .public) already existed — kept; new file published as \(url.lastPathComponent, privacy: .public)")
-            }
+            try PartialFileNaming.remove(partial)
         } catch {
-            // The finished encode is kept at its partial name, named.
-            await finish(failed: "Could not finalize output file: \(error.localizedDescription) — the encode is at \(partialPath)")
-            return
+            reformatLog.error("reformat: could not remove partial \(partial.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
         }
-
-        // Catalog + queue for analyze.
-        await catalogAndQueueAnalyze()
-
-        reformatLog.info("reformat DONE: \(self.record.filename, privacy: .public) → \(self.publishedURL.lastPathComponent, privacy: .public) (\(Self.humanBytes(size), privacy: .public)) in \(elapsed, format: .fixed(precision: 1), privacy: .public)s")
-        await finish(success: "Reformatted → \(publishedURL.lastPathComponent) (\(Self.humanBytes(size))). Queued for analysis.")
     }
 
     /// The disk half of the publish, off the main thread. Never replaces.
@@ -370,6 +405,11 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
         try DerivativeOutputPublish.publish(partial: partial, as: final,
                                             policy: .keep(reason: "a file already has that name"),
                                             archiveCheck: nil, trash: { _ in nil })
+    }
+
+    @concurrent
+    nonisolated private static func keepUnpublishedOffMain(_ partial: URL) async -> URL {
+        DerivativeOutputPublish.keepUnpublished(partial)
     }
 
     // MARK: Stall handling
@@ -524,11 +564,12 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
 
     // MARK: - Atomic output helpers (#6.3)
 
-    /// Sibling `.vs-partial` URL ffmpeg writes to. Keeps the FINAL extension
-    /// (`stem.vs.hevc.<ts>.vs-partial.mp4`) so ffmpeg still infers the muxer
-    /// from `.mp4`, and lands in the same directory so the promote is a
-    /// metadata-only rename (atomic on the same filesystem). Pure —
-    /// unit-testable. Rick 2026-06-30.
+    /// The FIXED sibling `.vs-partial` name (`stem.vs-partial.<ext>`) that
+    /// Trim, Cleanup and Rebuild still use, each behind its own `taken()`
+    /// / per-record guard. Reformat itself no longer uses it: its partial
+    /// is reserved per run (N1014-F1). Keeps the FINAL extension so ffmpeg
+    /// still infers the muxer, and lands in the same directory so the
+    /// promote is a metadata-only rename. Pure — unit-testable.
     nonisolated static func partialURL(for output: URL) -> URL {
         let ext = output.pathExtension
         return output

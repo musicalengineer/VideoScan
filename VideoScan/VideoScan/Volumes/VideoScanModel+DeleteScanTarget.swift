@@ -35,6 +35,11 @@ extension VideoScanModel {
     /// the model-level belt-and-suspenders.
     @discardableResult
     func deleteScanTarget(_ target: CatalogScanTarget) -> Bool {
+        // A viewer never rewrites the master's scan-target list (C04-F5).
+        if ViewerWriteGuard.refuse("VideoScanModel.deleteScanTarget") || isReadOnly {
+            log("Delete from list refused: \(target.searchPath) — this Mac is a read-only viewer of the catalog.")
+            return false
+        }
         // Guard: never delete the system volume. The role check covers
         // the explicit case; the "/" path check is a defensive fallback
         // for installs where the role wasn't set yet.

@@ -496,28 +496,21 @@ public struct GedcomFamilyGraph: Sendable {
 
             if level == 0 {
                 flush()
-                let opener = parts[1].trimmingCharacters(in: bom)
-                inHead = parts.count == 2 && opener == "HEAD"
-                inUnmodelledRecord = false
+                let record = Self.levelZeroRecord(parts, bom: bom)
+                inHead = record == .head
+                inUnmodelledRecord = record == .unmodelled
                 headOpenTag = ""
-                // "0 @I…@ INDI" / "0 @F…@ FAM"
-                if parts.count == 3, parts[1].hasPrefix("@") {
-                    let id = String(parts[1])
-                    switch parts[2] {
-                    case "INDI":
-                        currentIndi = Person(id: id, name: "", sex: "",
-                                             childOfFamily: nil)
-                        if firstIndi == nil { firstIndi = id }
-                    case "FAM":
-                        currentFam = (id, Family())
-                    default:
-                        // "0 @S1@ SOUR", "0 @O1@ OBJE", "0 @N1@ NOTE"…
-                        inUnmodelledRecord = true
-                        droppedLineCount += 1
-                    }
-                } else if !inHead, opener != "TRLR" {
-                    inUnmodelledRecord = true
+                switch record {
+                case .person(let id):
+                    currentIndi = Person(id: id, name: "", sex: "",
+                                         childOfFamily: nil)
+                    if firstIndi == nil { firstIndi = id }
+                case .family(let id):
+                    currentFam = (id, Family())
+                case .unmodelled:
                     droppedLineCount += 1
+                case .head, .trailer:
+                    break
                 }
                 continue
             }
@@ -535,41 +528,10 @@ public struct GedcomFamilyGraph: Sendable {
                 ? Self.verbatimValue(rawLine) : trimmedValue
 
             if inHead {
-                // VideoScan provenance (written by the merge, ignored by
-                // every other reader as a custom `_` tag), and the NOTE
-                // with its GEDCOM continuation lines (CONT = newline,
-                // CONC = same line). Envelope boilerplate is neither kept
-                // nor counted (see `droppedLineCount`).
-                var kept = true
-                if level == 1 {
-                    headOpenTag = tag
-                    switch tag {
-                    case "_VS_ROOT" where value.hasPrefix("@"): headRoots.append(value)
-                    case "_VS_SOURCE" where !value.isEmpty:
-                        sourceFileNames.append(value)
-                        sourceProvenance.append(SourceProvenance(name: value, sha256: nil, droppedLineCount: 0))
-                    case "_VS_MERGED": isMergedArtifact = value.uppercased().hasPrefix("Y")
-                    case "NOTE": headNote = value
-                    default:
-                        kept = Self.headEnvelopeTags.contains(tag)
-                        if !kept { headOpenTag = "" }
-                    }
-                } else if level == 2, headOpenTag == "NOTE" {
-                    if tag == "CONT" { headNote = (headNote ?? "") + "\n" + value }
-                    else if tag == "CONC" { headNote = (headNote ?? "") + value }
-                    else { kept = false }
-                } else if level == 2, headOpenTag == "_VS_SOURCE", !sourceProvenance.isEmpty {
-                    let last = sourceProvenance.count - 1
-                    switch tag {
-                    case "_VS_SHA256" where !value.isEmpty: sourceProvenance[last].sha256 = value
-                    case "_VS_DROPPED":
-                        if let n = Int(value), n >= 0 { sourceProvenance[last].droppedLineCount = n } else { kept = false }
-                    default: kept = false
-                    }
-                } else {
-                    kept = Self.headEnvelopeTags.contains(headOpenTag)
+                if !readHeadLine(level: level, tag: tag, value: value,
+                                 openTag: &headOpenTag, roots: &headRoots) {
+                    droppedLineCount += 1
                 }
-                if !kept { droppedLineCount += 1 }
                 continue
             }
             if inUnmodelledRecord {
@@ -1013,6 +975,82 @@ public struct GedcomFamilyGraph: Sendable {
 
     static func allNames(of person: Person) -> [String] {
         [person.name] + person.alternateNames
+    }
+
+    // MARK: - Parse helpers (moved out of `init(gedcomText:)`, refactor R4, GH #281)
+
+    /// What a level-0 line opens. (A Swift enum with payloads ≈ a C++
+    /// tagged union / std::variant.)
+    enum LevelZeroRecord: Equatable {
+        case head
+        case person(String)
+        case family(String)
+        /// A record the graph has no model for (SOUR, OBJE, NOTE, REPO,
+        /// SUBM, …): it and every line under it count as dropped.
+        case unmodelled
+        /// TRLR — nothing to read, nothing lost.
+        case trailer
+    }
+
+    /// `parts` = the line split as `init(gedcomText:)` splits it (level,
+    /// then up to two more fields); `bom` is trimmed off the opener.
+    static func levelZeroRecord(_ parts: [Substring], bom: CharacterSet) -> LevelZeroRecord {
+        let opener = parts[1].trimmingCharacters(in: bom)
+        let isHead = parts.count == 2 && opener == "HEAD"
+        // "0 @I…@ INDI" / "0 @F…@ FAM"
+        if parts.count == 3, parts[1].hasPrefix("@") {
+            let id = String(parts[1])
+            switch parts[2] {
+            case "INDI": return .person(id)
+            case "FAM": return .family(id)
+            // "0 @S1@ SOUR", "0 @O1@ OBJE", "0 @N1@ NOTE"…
+            default: return .unmodelled
+            }
+        } else if !isHead, opener != "TRLR" {
+            return .unmodelled
+        }
+        return isHead ? .head : .trailer
+    }
+
+    /// One line inside `0 HEAD`. VideoScan provenance (written by the
+    /// merge, ignored by every other reader as a custom `_` tag), and the
+    /// NOTE with its GEDCOM continuation lines (CONT = newline, CONC = same
+    /// line). Envelope boilerplate is neither kept nor counted (see
+    /// `droppedLineCount`). `openTag` = the level-1 HEAD tag currently
+    /// open; `roots` collects `_VS_ROOT` pointers. Returns false when the
+    /// line was NOT kept (the caller counts it as dropped).
+    private mutating func readHeadLine(level: Int, tag: String, value: String,
+                                       openTag headOpenTag: inout String, roots headRoots: inout [String]) -> Bool {
+        var kept = true
+        if level == 1 {
+            headOpenTag = tag
+            switch tag {
+            case "_VS_ROOT" where value.hasPrefix("@"): headRoots.append(value)
+            case "_VS_SOURCE" where !value.isEmpty:
+                sourceFileNames.append(value)
+                sourceProvenance.append(SourceProvenance(name: value, sha256: nil, droppedLineCount: 0))
+            case "_VS_MERGED": isMergedArtifact = value.uppercased().hasPrefix("Y")
+            case "NOTE": headNote = value
+            default:
+                kept = Self.headEnvelopeTags.contains(tag)
+                if !kept { headOpenTag = "" }
+            }
+        } else if level == 2, headOpenTag == "NOTE" {
+            if tag == "CONT" { headNote = (headNote ?? "") + "\n" + value }
+            else if tag == "CONC" { headNote = (headNote ?? "") + value }
+            else { kept = false }
+        } else if level == 2, headOpenTag == "_VS_SOURCE", !sourceProvenance.isEmpty {
+            let last = sourceProvenance.count - 1
+            switch tag {
+            case "_VS_SHA256" where !value.isEmpty: sourceProvenance[last].sha256 = value
+            case "_VS_DROPPED":
+                if let n = Int(value), n >= 0 { sourceProvenance[last].droppedLineCount = n } else { kept = false }
+            default: kept = false
+            }
+        } else {
+            kept = Self.headEnvelopeTags.contains(headOpenTag)
+        }
+        return kept
     }
 
     /// Level-1 tags the graph keeps (and the writer emits). Everything

@@ -561,10 +561,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/Media/PerceptualFingerprinter.swift": 1, "VideoScan/People/PersonEditSheet.swift": 1,
         "VideoScan/People/PersonFinderCompilation.swift": 7, "VideoScan/MediaOps/RebuildAudioJob.swift": 1,
         "VideoScan/People/RecipeGenderAgeGate.swift": 1,
-        // 8 → 5 (2026-09-22): the output-name pre-delete, the replacing
-        // publish and the delete-on-collision are gone; what remains
-        // removes this run's own partial after a stall / cancel / failure.
-        "VideoScan/MediaOps/ReformatJob.swift": 5,
+        // ReformatJob.swift: 8 → 5 (2026-09-22): the output-name pre-delete,
+        // the replacing publish and the delete-on-collision are gone.
+        // 5 → 0 (fix/mfo-jobs-n1014, 10/7 codex batch): Reformat now
+        // reserves an O_EXCL `.vs-partial` and removes it ONLY through
+        // PartialFileNaming.remove (name-guarded, logged) — no direct call.
         // FootageSpectrumHelper 1 (2026-10-03, Compare Footage trial): the
         // 14-day prune of its own run folders under
         // ~/Library/Caches/VideoScan/spectrum/runs (UUID-named, canonical
@@ -652,6 +653,11 @@ struct ArchiveVolumeProtectionSourceSensor {
             "POI folder moves under App Support (never media)"),
         "VideoScan/MediaOps/RescueFileCopier.swift": Reviewed(count: 1, reason:
             "a verified rescue partial → a FRESH destination name (the known-incomplete repair case is the clobbering one above)"),
+        // NEW (10/7 codex batch: fix/family-writes-n1012 added the helper;
+        // fix/p1-relocate-witness-and-rulings had a private copy in
+        // FamilyIdentityDecisions, now delegating here — one site, not two).
+        "VideoScanCore/DamagedFileSetAside.swift": Reviewed(count: 1, reason:
+            "moves an UNREADABLE hand-curated app file (photo not-of sidecar, identity rulings) aside to `<name>.damaged-<stamp>` beside itself before a rewrite — RENAME_EXCL, never replaces; family app data under App Support, never catalogued media or the archive"),
     ]
 
     /// `"-y"` — ffmpeg's "overwrite the output without asking".

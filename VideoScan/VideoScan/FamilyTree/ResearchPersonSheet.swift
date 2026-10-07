@@ -55,6 +55,12 @@ final class ResearchPersonModel: ObservableObject {
     /// told to Hallie.
     @Published private(set) var loreConflicts: [String: String] = [:]
     static let loreConflictMessage = "A note was changed elsewhere while you were typing — keep yours or theirs?"
+    /// The finding a draft was typed on has left the saved list (another
+    /// window, the filer). Its row is gone, so the words are quoted here
+    /// for Rick to copy — never dropped as if saved (N1012-F3).
+    static func loreFindingGoneMessage(_ draft: String) -> String {
+        "A note couldn't be saved because its search result is no longer in this list. Your words: “\(draft)”"
+    }
 
     private let store: ResearchStore
     private let fetcher: any ResearchFetcher
@@ -146,6 +152,26 @@ final class ResearchPersonModel: ObservableObject {
         runTask = nil
     }
 
+    /// The sheet is closing (Close, Esc, window gone): save every typed
+    /// draft FIRST, then stop the run (N1012-F4). Lore used to commit on
+    /// Return only, so closing dropped the words with the @StateObject.
+    func close() {
+        commitPendingLore()
+        // Anything still uncommitted (finding gone, conflict, save failed)
+        // dies with this model, so its words go to the log — Rick's own
+        // lore, no paths — where he can copy them back (QA on N1012-F4).
+        for id in editedLore.sorted() {
+            let why = loreConflicts[id] != nil ? "changed elsewhere" : "could not be saved"
+            log("🔴 Research: sheet closed with an unsaved note (\(why)) — the words were: “\(loreDrafts[id] ?? "")”")
+        }
+        cancel()
+    }
+
+    /// Commit every draft the user typed into (and only those).
+    func commitPendingLore() {
+        for id in editedLore.sorted() { commitLore(for: id) }
+    }
+
     private func finishCancelled() {
         isRunning = false
         statusLine = "Cancelled"
@@ -156,9 +182,10 @@ final class ResearchPersonModel: ObservableObject {
         let plan = self.plan
         let fresh = outcomes.flatMap(\.findings)
         let at = now()
+        let typedInto = editedLore                       // unsaved drafts keep their finding (N1012-F3)
         mutate { dossier in
             dossier.plan = plan
-            dossier.merge(fresh: fresh, at: at)
+            dossier.merge(fresh: fresh, at: at, keeping: typedInto)
             for outcome in outcomes { dossier.sourceStatus[outcome.kind.rawValue] = outcome.status }
         }
         isRunning = false
@@ -211,8 +238,12 @@ final class ResearchPersonModel: ObservableObject {
             return
         }
         var theirs: String?
+        var gone = false
         let saved = mutate { dossier in
-            guard let onDisk = dossier.findings.first(where: { $0.id == id })?.lore else { return }
+            guard let onDisk = dossier.findings.first(where: { $0.id == id })?.lore else {
+                gone = true                              // nothing to write onto: say so (N1012-F3)
+                return
+            }
             if onDisk != start && onDisk != draft {
                 theirs = onDisk                          // both changed: refuse
                 return
@@ -220,6 +251,11 @@ final class ResearchPersonModel: ObservableObject {
             dossier.setLore(draft, for: id)
         }
         guard saved else { return }
+        if gone {
+            errorMessage = Self.loreFindingGoneMessage(draft)
+            log("Research: lore not saved, its finding is no longer in the dossier (draft kept)")
+            return
+        }
         if let theirs {
             loreConflicts[id] = theirs
             errorMessage = Self.loreConflictMessage
@@ -265,7 +301,7 @@ final class ResearchPersonModel: ObservableObject {
     /// the same passage — QA 2026-10-01 P3-5).
     @discardableResult
     func tellHallie() -> Int {
-        for id in editedLore.sorted() { commitLore(for: id) }   // only what the user typed
+        commitPendingLore()                               // only what the user typed
         mutate { _ in }                                   // pick up other writers' changes
         var told = 0
         var failures: [String] = []
@@ -365,7 +401,7 @@ struct ResearchPersonSheet: View {
         }
         .frame(minWidth: 760, idealWidth: 860, minHeight: 560, idealHeight: 680)
         .onAppear { model.load() }
-        .onDisappear { model.cancel() }
+        .onDisappear { model.close() }
     }
 
     private var header: some View {

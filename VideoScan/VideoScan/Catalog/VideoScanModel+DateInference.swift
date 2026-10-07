@@ -716,6 +716,34 @@ extension VideoScanModel {
 
     // MARK: - The pass
 
+    /// The working state of one `catchUpInferredDates` pass: the buckets it
+    /// built, the rows it may write, and what it has written so far. The
+    /// rule functions below take it `inout` (≈ a C++ struct of the pass's
+    /// locals passed by non-const reference), so splitting the pass into
+    /// one function per rule moved no state and changed no order
+    /// (refactor R4, GH #281).
+    struct InferredDateCatchUpPass {
+        let started: Date
+        let limit: Int
+        let people: [DateTriangulationPerson]
+        var result = InferredDateCatchUpResult()
+        var groups: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
+        var footageGroups: [UUID: [VideoRecord]] = [:]
+        var byID: [UUID: VideoRecord] = [:]
+        // Rick 2026-09-27: Master Archive files are read-only to this pass —
+        // bucketed (they donate) but never written by any rule below.
+        var archived = Set<UUID>()
+        // The rows this pass may write to, and the groups it may share within.
+        var candidates: [VideoRecord] = []
+        var groupKeys: [CatalogSizeTotals.GroupKey] = []
+        var footageKeys: [UUID] = []
+        var refreshIDs: Set<UUID> = []
+        var touched: [VideoRecord] = []
+        var retainedDisagreements: [UUID: (year: Int, tail: String)] = [:]
+        // codex #1415 (a): evidence-bearing rows the budget left unread.
+        var deferred = Set<UUID>()
+    }
+
     /// Run rules 1–3. `scope == nil` walks the whole catalog; otherwise
     /// only the given records AND every member of their content groups
     /// (a sibling with its own evidence should get its own date rather
@@ -730,9 +758,7 @@ extension VideoScanModel {
                               limit: Int = 50_000,
                               trigger: String = "manual",
                               refreshScope: Bool = false) -> InferredDateCatchUpResult {
-        let started = Date()
-        var result = InferredDateCatchUpResult()
-        let people = dateInferencePeopleResolved
+        var pass = InferredDateCatchUpPass(started: Date(), limit: limit, people: dateInferencePeopleResolved)
         // Codex re-review R1: a DONOR-scoped pass must also reach the donor's
         // former dependents — rows whose "footage-shared from <id>" names a
         // scoped record, even after the donor left their group (regrouped,
@@ -740,134 +766,163 @@ extension VideoScanModel {
         // content groupmate, which this pass may also rewrite. Two
         // O(records) scans, only for scoped passes.
         let scope = scope.map { Self.withFootageShareDependents(of: $0, in: records) }
+        bucketForDateInference(scope, into: &pass)
 
-        // One pass: bucket every eligible row by VERIFIED content group,
-        // and (GH #201) by footage group. References only; the arrays
-        // hold pointers to records the model already owns. A scoped pass
-        // still computes every key (cheap: two string tests) but only
-        // buckets the scope's own groups, so no per-group array is
-        // allocated for the rest of the catalog.
+        // The rows this pass may write to, and the groups it may share within.
+        (pass.candidates, pass.groupKeys, pass.footageKeys) = Self.dateInferenceScope(
+            scope, allRecords: records, groups: pass.groups, footageGroups: pass.footageGroups)
+        pass.refreshIDs = refreshScope ? Set((scope ?? []).map(\.id)) : []
+
+        Self.clearStaleInferredDates(&pass)          // rule 0
+        inferDatesFromOwnEvidence(&pass)             // rule 1
+        Self.propagateWithinContentGroups(&pass)     // rule 2
+        Self.shareWithinFootageGroups(&pass)         // rule 2b
+        Self.applyFolderYearPriors(&pass)            // rule 3
+
+        finishCatchUp(&pass, trigger: trigger)
+        return pass.result
+    }
+
+    /// One pass: bucket every eligible row by VERIFIED content group,
+    /// and (GH #201) by footage group. References only; the arrays
+    /// hold pointers to records the model already owns. A scoped pass
+    /// still computes every key (cheap: two string tests) but only
+    /// buckets the scope's own groups, so no per-group array is
+    /// allocated for the rest of the catalog.
+    @MainActor
+    private func bucketForDateInference(_ scope: [VideoRecord]?, into pass: inout InferredDateCatchUpPass) {
         let scopeKeys: Set<CatalogSizeTotals.GroupKey>? = scope.map { rows in
             Set(rows.compactMap { Self.contentGroupKey($0) })
         }
         let scopeFootage: Set<UUID>? = scope.map { rows in Set(rows.compactMap { $0.footage?.groupID }) }
-        var groups: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
-        var footageGroups: [UUID: [VideoRecord]] = [:]
-        var byID: [UUID: VideoRecord] = [:]
-        byID.reserveCapacity(records.count)
-        // Rick 2026-09-27: Master Archive files are read-only to this pass —
-        // bucketed (they donate) but never written by any rule below.
-        var archived = Set<UUID>()
+        pass.byID.reserveCapacity(records.count)
         for rec in records where Self.isEligibleForDateInference(rec) {
-            byID[rec.id] = rec
-            if isArchiveElement(rec) { archived.insert(rec.id) }
+            pass.byID[rec.id] = rec
+            if isArchiveElement(rec) { pass.archived.insert(rec.id) }
             if let key = Self.contentGroupKey(rec), scopeKeys?.contains(key) ?? true {
-                groups[key, default: []].append(rec)
+                pass.groups[key, default: []].append(rec)
             }
             if let f = rec.footage, f.confidence >= Self.footageShareMinimumConfidence,
                scopeFootage?.contains(f.groupID) ?? true {
-                footageGroups[f.groupID, default: []].append(rec)
+                pass.footageGroups[f.groupID, default: []].append(rec)
             }
         }
+    }
 
-        // The rows this pass may write to, and the groups it may share within.
-        let (candidates, groupKeys, footageKeys) = Self.dateInferenceScope(
-            scope, allRecords: records, groups: groups, footageGroups: footageGroups)
-        let refreshIDs: Set<UUID> = refreshScope ? Set((scope ?? []).map(\.id)) : []
+    /// Rules 0 and 1 write only to a live, readable row with no date of
+    /// Rick's that is not a Master Archive file.
+    @MainActor
+    private static func catchUpMayWrite(_ rec: VideoRecord, archived: Set<UUID>) -> Bool {
+        isEligibleForDateInference(rec) && rec.userDate == nil && !archived.contains(rec.id)
+    }
 
-        var touched: [VideoRecord] = []
-        var retainedDisagreements: [UUID: (year: Int, tail: String)] = [:]
-        // codex #1415 (a): evidence-bearing rows the budget left unread.
-        var deferred = Set<UUID>()
-
-        // Rule 0 (GH #201) — housekeeping before anything is derived: a
-        // legacy filesystem-tier "inference" is cleared (a copy date is
-        // never an inferred date); a footage-shared date whose donor left
-        // the group is cleared so rules 1 / 2b re-derive it honestly.
-        for rec in candidates where Self.isEligibleForDateInference(rec) && rec.userDate == nil
-            && !archived.contains(rec.id) {
-            if Self.isLegacyFilesystemInference(rec) {
-                Self.clearInferredDate(rec, reason: Self.clearedFilesystemReason)
-                result.cleared += 1
-                touched.append(rec)
-            } else if Self.isStaleFootageShare(rec, byID: byID, now: started, archived: archived) {
+    /// Rule 0 (GH #201) — housekeeping before anything is derived: a
+    /// legacy filesystem-tier "inference" is cleared (a copy date is
+    /// never an inferred date); a footage-shared date whose donor left
+    /// the group is cleared so rules 1 / 2b re-derive it honestly.
+    @MainActor
+    private static func clearStaleInferredDates(_ pass: inout InferredDateCatchUpPass) {
+        for rec in pass.candidates where catchUpMayWrite(rec, archived: pass.archived) {
+            if isLegacyFilesystemInference(rec) {
+                clearInferredDate(rec, reason: clearedFilesystemReason)
+                pass.result.cleared += 1
+                pass.touched.append(rec)
+            } else if isStaleFootageShare(rec, byID: pass.byID, now: pass.started, archived: pass.archived) {
                 // Codex re-review R2: keep the recorded disagreement so a
                 // same-year re-share (e.g. the donor's confidence changed)
                 // carries it forward instead of losing it.
-                if let kept = Self.retainedDisagreement(rec) { retainedDisagreements[rec.id] = kept }
-                Self.clearInferredDate(rec, reason: nil)
-                result.cleared += 1
-                touched.append(rec)
+                if let kept = retainedDisagreement(rec) { pass.retainedDisagreements[rec.id] = kept }
+                clearInferredDate(rec, reason: nil)
+                pass.result.cleared += 1
+                pass.touched.append(rec)
             }
         }
+    }
 
-        // Rule 1 — own evidence: rows with no settled date, legacy rows the
-        // old triangulator dated (re-derived once, so they gain a written
-        // reason — GH #201), and rows a new channel just landed on
-        // (`refreshScope`, from the transcript / caption writebacks).
-        for rec in candidates where Self.isEligibleForDateInference(rec)
-            && rec.userDate == nil
-            && !archived.contains(rec.id)
-            && Self.hasDateEvidence(rec) {
-            let legacy = Self.needsRetriangulation(rec)
-            let refresh = refreshIDs.contains(rec.id)
-                && !Self.isPropagatedInferredDate(rec) && !Self.isFootageSharedInferredDate(rec)
-            guard !Self.hasSettledInferredDate(rec) || legacy || refresh else { continue }
-            let fingerprint = Self.dateEvidenceFingerprint(rec)
-            // (d) Classified "no date" by an earlier pass, evidence
-            // unchanged: costs nothing and is NOT deferred — its
-            // evidence was read; it can still receive a sibling's date.
-            if !legacy, !refresh, inferredDateNoDateEvidence[rec.id] == fingerprint {
-                result.alreadyClassified += 1
-                continue
-            }
-            // (b) Over budget: defer, keep walking so every unread row is
-            // recorded (no `break` — rule 2 needs the whole set).
-            if result.examined >= limit {
-                result.truncated = true
-                result.deferred += 1
-                deferred.insert(rec.id)
-                continue
-            }
-            result.examined += 1
-            let hadDate = rec.inferredRecordDate != nil
-            let r = Self.triangulateStoredEvidence(rec, people: people, now: started)
-            if r.date != nil {
-                // A legacy row re-derived from its OWN dossier pass keeps
-                // that provenance (nil); everything else — a new date, a
-                // catch-up, or a folder-year placeholder that just gained
-                // evidence (QA M1: it must SETTLE, not be re-examined every
-                // launch) — becomes a catch-up.
-                let keepOwnPass = hadDate && rec.inferredDateSource == nil
-                Self.applyTriangulation(r, to: rec, source: keepOwnPass ? nil : InferredDateSource.catchUp)
-                inferredDateNoDateEvidence[rec.id] = nil
-                if hadDate { result.retriangulated += 1 } else { result.inferredFromEvidence += 1 }
-                touched.append(rec)
-            } else {
-                inferredDateNoDateEvidence[rec.id] = fingerprint
-                if hadDate {
-                    // The old date rested on nothing the new rules accept
-                    // (Clip 19's "1955" as a reference with no folder hint):
-                    // clear it with the reason.
-                    Self.applyTriangulation(r, to: rec, source: nil)
-                    result.cleared += 1
-                    touched.append(rec)
-                } else if rec.inferredDateReason != r.reason {
-                    rec.inferredDateReason = r.reason
-                    touched.append(rec)
-                }
+    /// Rule 1 — own evidence: rows with no settled date, legacy rows the
+    /// old triangulator dated (re-derived once, so they gain a written
+    /// reason — GH #201), and rows a new channel just landed on
+    /// (`refreshScope`, from the transcript / caption writebacks).
+    @MainActor
+    private func inferDatesFromOwnEvidence(_ pass: inout InferredDateCatchUpPass) {
+        for rec in pass.candidates where Self.catchUpMayWrite(rec, archived: pass.archived) && Self.hasDateEvidence(rec) {
+            inferDateFromOwnEvidence(rec, &pass)
+        }
+    }
+
+    /// Rule 1 for one row (the old loop body; `return` was `continue`).
+    @MainActor
+    private func inferDateFromOwnEvidence(_ rec: VideoRecord, _ pass: inout InferredDateCatchUpPass) {
+        let legacy = Self.needsRetriangulation(rec)
+        let refresh = pass.refreshIDs.contains(rec.id)
+            && !Self.isPropagatedInferredDate(rec) && !Self.isFootageSharedInferredDate(rec)
+        guard !Self.hasSettledInferredDate(rec) || legacy || refresh else { return }
+        let fingerprint = Self.dateEvidenceFingerprint(rec)
+        // (d) Classified "no date" by an earlier pass, evidence
+        // unchanged: costs nothing and is NOT deferred — its
+        // evidence was read; it can still receive a sibling's date.
+        if !legacy, !refresh, inferredDateNoDateEvidence[rec.id] == fingerprint {
+            pass.result.alreadyClassified += 1
+            return
+        }
+        // (b) Over budget: defer, keep walking so every unread row is
+        // recorded (no `break` — rule 2 needs the whole set).
+        if pass.result.examined >= pass.limit {
+            pass.result.truncated = true
+            pass.result.deferred += 1
+            pass.deferred.insert(rec.id)
+            return
+        }
+        pass.result.examined += 1
+        let r = Self.triangulateStoredEvidence(rec, people: pass.people, now: pass.started)
+        recordOwnEvidence(r, on: rec, fingerprint: fingerprint, &pass)
+    }
+
+    /// Rule 1's write-back: what one triangulation of a row's own evidence
+    /// leaves on the row, in the "no date" memo and in the counts.
+    @MainActor
+    private func recordOwnEvidence(_ r: DateTriangulationResult, on rec: VideoRecord, fingerprint: Int,
+                                   _ pass: inout InferredDateCatchUpPass) {
+        let hadDate = rec.inferredRecordDate != nil
+        if r.date != nil {
+            // A legacy row re-derived from its OWN dossier pass keeps
+            // that provenance (nil); everything else — a new date, a
+            // catch-up, or a folder-year placeholder that just gained
+            // evidence (QA M1: it must SETTLE, not be re-examined every
+            // launch) — becomes a catch-up.
+            let keepOwnPass = hadDate && rec.inferredDateSource == nil
+            Self.applyTriangulation(r, to: rec, source: keepOwnPass ? nil : InferredDateSource.catchUp)
+            inferredDateNoDateEvidence[rec.id] = nil
+            if hadDate { pass.result.retriangulated += 1 } else { pass.result.inferredFromEvidence += 1 }
+            pass.touched.append(rec)
+        } else {
+            inferredDateNoDateEvidence[rec.id] = fingerprint
+            if hadDate {
+                // The old date rested on nothing the new rules accept
+                // (Clip 19's "1955" as a reference with no folder hint):
+                // clear it with the reason.
+                Self.applyTriangulation(r, to: rec, source: nil)
+                pass.result.cleared += 1
+                pass.touched.append(rec)
+            } else if rec.inferredDateReason != r.reason {
+                rec.inferredDateReason = r.reason
+                pass.touched.append(rec)
             }
         }
+    }
 
-        // Rule 2 — share within each group. Donors best-first; each
-        // recipient takes the best donor whose bytes are VERIFIED its
-        // own (a bucket can hold rows whose content hashes conflict —
-        // same head, tail and length, different middle; they never
-        // exchange dates). Deferred rows neither give nor take.
-        for key in groupKeys {
-            guard let members = groups[key], members.count >= 2 else { continue }
+    /// Rule 2 — share within each group. Donors best-first; each
+    /// recipient takes the best donor whose bytes are VERIFIED its
+    /// own (a bucket can hold rows whose content hashes conflict —
+    /// same head, tail and length, different middle; they never
+    /// exchange dates). Deferred rows neither give nor take.
+    @MainActor
+    private static func propagateWithinContentGroups(_ pass: inout InferredDateCatchUpPass) {
+        for key in pass.groupKeys {
+            guard let members = pass.groups[key], members.count >= 2 else { continue }
+            let deferred = pass.deferred, archived = pass.archived
             let donors = members
-                .filter { Self.canDonateInferredDate($0) && !deferred.contains($0.id) }
+                .filter { canDonateInferredDate($0) && !deferred.contains($0.id) }
                 .sorted { ($0.inferredDateConfidence ?? 0) > ($1.inferredDateConfidence ?? 0) }
             guard !donors.isEmpty else { continue }
             // codex #1434: settle the cheap per-recipient tests ONCE, before
@@ -878,49 +933,60 @@ extension VideoScanModel {
                 !deferred.contains($0.id)
                     && !archived.contains($0.id)
                     && $0.userDate == nil
-                    && !Self.hasSettledInferredDate($0)
-                    && Self.isEligibleForDateInference($0)
+                    && !hasSettledInferredDate($0)
+                    && isEligibleForDateInference($0)
             }
             for rec in recipients {
-                for donor in donors where Self.propagateInferredDate(from: donor, to: rec) {
-                    result.propagated += 1
-                    touched.append(rec)
+                for donor in donors where propagateInferredDate(from: donor, to: rec) {
+                    pass.result.propagated += 1
+                    pass.touched.append(rec)
                     break
                 }
             }
         }
+    }
 
-        // Rule 2b (GH #201) — one footage group, one date: the strongest
-        // member claim; the others inherit with the reason. Deferred rows
-        // are left alone (their own evidence is still unread).
-        for key in footageKeys {
-            guard let members = footageGroups[key], members.count >= 2 else { continue }
+    /// Rule 2b (GH #201) — one footage group, one date: the strongest
+    /// member claim; the others inherit with the reason. Deferred rows
+    /// are left alone (their own evidence is still unread).
+    @MainActor
+    private static func shareWithinFootageGroups(_ pass: inout InferredDateCatchUpPass) {
+        for key in pass.footageKeys {
+            guard let members = pass.footageGroups[key], members.count >= 2 else { continue }
+            let deferred = pass.deferred
             let live = members.filter { !deferred.contains($0.id) }
-            let written = Self.shareDateAcrossFootageGroup(live, now: started, retained: retainedDisagreements,
-                                                           archived: archived)
-            result.footageShared += written.count
-            touched.append(contentsOf: written)
+            let written = shareDateAcrossFootageGroup(live, now: pass.started, retained: pass.retainedDisagreements,
+                                                      archived: pass.archived)
+            pass.result.footageShared += written.count
+            pass.touched.append(contentsOf: written)
         }
+    }
 
-        // Rule 3 — the weak folder prior, only where nothing else spoke.
-        for rec in candidates where !archived.contains(rec.id) && Self.qualifiesForFolderYearPrior(rec) {
+    /// Rule 3 — the weak folder prior, only where nothing else spoke.
+    @MainActor
+    private static func applyFolderYearPriors(_ pass: inout InferredDateCatchUpPass) {
+        for rec in pass.candidates where !pass.archived.contains(rec.id) && qualifiesForFolderYearPrior(rec) {
             guard let year = pfBareYearFolderPrior(in: rec.fullPath),
-                  Self.applyFolderYear(rec, year: year) else { continue }
-            result.folderYear += 1
-            touched.append(rec)
+                  applyFolderYear(rec, year: year) else { continue }
+            pass.result.folderYear += 1
+            pass.touched.append(rec)
         }
+    }
 
-        result.elapsed = Date().timeIntervalSince(started)
-        if !touched.isEmpty {
-            announceInferredDateChanges(touched)
+    /// Timing, the one save / notice for everything written, and the two
+    /// log lines (formats unchanged — log formats are a Rick decision).
+    @MainActor
+    private func finishCatchUp(_ pass: inout InferredDateCatchUpPass, trigger: String) {
+        pass.result.elapsed = Date().timeIntervalSince(pass.started)
+        if !pass.touched.isEmpty {
+            announceInferredDateChanges(pass.touched)
         }
-        if result.total > 0 || result.truncated {
-            log(Self.dateInferenceLogLine(result, limit: limit, trigger: trigger))
+        if pass.result.total > 0 || pass.result.truncated {
+            log(Self.dateInferenceLogLine(pass.result, limit: pass.limit, trigger: trigger))
         }
-        if result.footageShared + result.retriangulated + result.cleared > 0 {
-            log(Self.dateTriangulationLogLine(result, trigger: trigger))
+        if pass.result.footageShared + pass.result.retriangulated + pass.result.cleared > 0 {
+            log(Self.dateTriangulationLogLine(pass.result, trigger: trigger))
         }
-        return result
     }
 
     /// GH #201's own line (the 2026-09-12 line above is unchanged):

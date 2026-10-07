@@ -282,6 +282,7 @@ extension VideoScanModel {
         let scopeInputs = scope.map(\.asReconcileInput)
         let witnessInputs = records.map(\.asReconcileInput)
         let resolver = makeVolumeSafetyResolver()
+        let independence = relocateWitnessIndependence
         // Honest progress (2026-07-06): the classify loop reports
         // (done, total) — the UI gets a determinate bar ≤4 Hz and
         // relocate.log gets a heartbeat every 5 s, so neither the modal
@@ -305,10 +306,11 @@ extension VideoScanModel {
                                               witnessInputs: witnessInputs,
                                               options: options,
                                               resolveVolumeSafety: resolver,
+                                              witnessIndependent: independence,
                                               progress: progressSink)
         }.value
         reconcileProgress = nil
-        let reconcile = RelocateReconcile.materialize(plan, scope: scope)
+        var reconcile = RelocateReconcile.materialize(plan, scope: scope)
         logReconcileSummary(reconcile)
         // Shared string builder with the sheet's preview (GH #162) — same
         // wording, the preview just adds a [PREVIEW] prefix + source/dest.
@@ -324,6 +326,12 @@ extension VideoScanModel {
             startNextQueuedJobIfIdle()
             return
         }
+
+        // Prove the surviving copy at decision time (N1007-R F1): every
+        // Bucket E record needs a safe witness still on disk NOW, or it
+        // goes down the copy path instead of being marked deleted.
+        reproveSafelyRedundantBeforeApply(&reconcile, proof: RelocateReconcile.WitnessProof(
+            independent: relocateWitnessIndependence, sourceRoot: options.sourceVolumeRootPath))
 
         // Track salvageFailed for the final summary block.
         var salvageFailedPaths: [String] = []
@@ -639,6 +647,28 @@ extension VideoScanModel {
         )
     }
 
+    /// Re-stat every Bucket E witness immediately before the apply phase.
+    /// An entry whose safe witnesses are no longer on disk at the recorded
+    /// size (drive unplugged, file moved, trashed or emptied since the
+    /// classify pass) is NOT marked deleted: it moves to `ready` so the
+    /// copy engine handles it, which itself refuses a missing source as
+    /// salvage-failed rather than guessing. Logged per record.
+    func reproveSafelyRedundantBeforeApply(
+        _ reconcile: inout ReconcileResult,
+        proof: RelocateReconcile.WitnessProof
+    ) {
+        guard !reconcile.safelyRedundant.isEmpty else { return }
+        let split = RelocateReconcile.reproveSafelyRedundant(reconcile.safelyRedundant, proof: proof)
+        for entry in split.refused {
+            let line = "Reconcile: \(entry.rec.fullPath) — no safe copy is on disk now "
+                + "(\(entry.witnesses.first ?? "no witness")); will copy instead of marking deleted"
+            relocateLog.write(line)
+            log(line)
+        }
+        reconcile.safelyRedundant = split.proven
+        reconcile.ready.append(contentsOf: split.refused.map(\.rec))
+    }
+
     /// Pad to the min-visible window if the work finished early. Pure
     /// `Task.sleep` — no fake busy-loop, no UI tick. If the work already
     /// took longer than the budget this is a zero-cost no-op.
@@ -788,6 +818,7 @@ extension VideoScanModel {
         witnessInputs: [ReconcileRecordInput],
         options: RelocateOptions,
         resolveVolumeSafety: @escaping VolumeSafetyResolver,
+        witnessIndependent: @escaping WitnessIndependenceProbe,
         progress: (@Sendable (Int, Int) -> Void)? = nil
     ) -> ReconcilePlan {
         let sourceFiles = enumerateFiles(at: options.sourceVolumeRootPath)
@@ -802,6 +833,7 @@ extension VideoScanModel {
             skipDupsOnOtherVolumes: options.skipDupsOnOtherVolumes,
             skipAlreadyRelocated: options.skipAlreadyRelocated,
             resolveVolumeSafety: resolveVolumeSafety,
+            witnessIndependent: witnessIndependent,
             hash: { FileHasher.partialMD5(path: $0) },
             progress: progress
         )

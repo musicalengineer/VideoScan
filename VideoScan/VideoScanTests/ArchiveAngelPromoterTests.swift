@@ -226,4 +226,46 @@ struct ArchiveAngelPromoterSameNameTests {
         #expect(FileManager.default.fileExists(atPath: bDir.path), "the failed row keeps its buffer for a retry")
         #expect(plan.report?.promotedOriginals == 1 && plan.report?.failed == ["00000.MTS"])
     }
+
+    /// GH #288 N1016-F3: the companion branch of the normal settle. Both
+    /// originals land; A's access copy fails, B's lands. A stays ready with
+    /// its buffer (a retry can finish it); B is promoted, counted, reclaimed.
+    @Test @MainActor func aLandedOriginalWhoseCompanionFailedKeepsItsBuffer() throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("angel_companion"); defer { sb.cleanup() }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        func row(_ name: String) -> ArchiveAngelPlan.Entry {
+            .init(id: UUID(), sourcePath: "/v/\(name)", filename: name, sizeBytes: 4096, sourceModifiedAt: nil,
+                  durationSeconds: 600, score: 100, evidence: [], proposedName: name,
+                  proposedDate: "2009", status: .ready)
+        }
+        var a = row("a.mov"), b = row("b.mov")
+        let compA = UUID(), compB = UUID()
+        a.steps = [.init(kind: .accessCopy, state: .done, outputRelPath: "\(a.id.uuidString)/a_access.mp4", recordID: compA)]
+        b.steps = [.init(kind: .accessCopy, state: .done, outputRelPath: "\(b.id.uuidString)/b_access.mp4", recordID: compB)]
+        var plan = ArchiveAngelPlan(batchDir: sb.root.appendingPathComponent("batch-c").path,
+                                    requestedCount: 2, makeLossless: false, entries: [a, b])
+        let aDir = URL(fileURLWithPath: plan.batchDir).appendingPathComponent(a.id.uuidString)
+        let bDir = URL(fileURLWithPath: plan.batchDir).appendingPathComponent(b.id.uuidString)
+        try FileManager.default.createDirectory(at: aDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: bDir, withIntermediateDirectories: true)
+        let job = PromoteToArchiveJob(plan: ArchivePromotePlan(rootPath: sb.root.path, entries: [], skipped: [],
+                                                               totalBytes: 0, freeBytesAtRoot: nil), model: model)
+        job.record(.promoted, "a.mov", "2009/2009_a.mov", recordID: a.id)
+        job.record(.failed, "a_access.mp4", "disk full", recordID: compA)
+        job.record(.promoted, "b.mov", "2009/2009_b.mov", recordID: b.id)
+        job.record(.promoted, "b_access.mp4", "2009/2009_b_access.mp4", recordID: compB)
+
+        ArchiveAngelPromoter.settle(plan: &plan, job: job, intended: [a.id: [compA], b.id: [compB]], model: model)
+
+        let byID = Dictionary(uniqueKeysWithValues: plan.entries.map { ($0.id, $0) })
+        #expect(byID[a.id]?.status == .ready, "a companion did not land: the row stays reviewable")
+        #expect(byID[a.id]?.promotedRelPath == "2009/2009_a.mov", "the original's landing is still recorded")
+        #expect(byID[a.id]?.failure == "Access copy not promoted: disk full", "\(String(describing: byID[a.id]?.failure))")
+        #expect(FileManager.default.fileExists(atPath: aDir.path), "the un-landed companion's buffer is kept")
+        #expect(byID[b.id]?.status == .promoted && byID[b.id]?.failure == nil)
+        #expect(!FileManager.default.fileExists(atPath: bDir.path), "the fully landed row's buffer is reclaimed")
+        #expect(plan.report?.promotedOriginals == 1 && plan.report?.accessCopies == 1)
+        #expect(plan.report?.failed == ["a.mov"])
+        #expect(plan.status == .ready, "one row still ready: the batch stays in the Archive tab")
+    }
 }

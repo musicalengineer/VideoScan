@@ -183,4 +183,10 @@ enum CombineTestSeams {
     /// Overrides "is this a network path?" for stageCombineInputs, so a
     /// test can force the buffering (staging-dir) path on a local file.
     @TaskLocal static var isNetworkPath: (@Sendable (String) -> Bool)? = nil
+    /// The mux's no-progress window before the watchdog kills ffmpeg
+    /// (N1014-F3). Production = StallMonitor's default (5 min).
+    @TaskLocal static var muxStallThresholdSeconds: Double = StallMonitor.defaultStallThresholdSeconds
+    /// The deadline on each verify subprocess (ffprobe, decode test,
+    /// volumedetect). Production = CombineVerifier.toolTimeoutSeconds.
+    @TaskLocal static var verifyToolTimeoutSeconds: Double = CombineVerifier.toolTimeoutSeconds
 }

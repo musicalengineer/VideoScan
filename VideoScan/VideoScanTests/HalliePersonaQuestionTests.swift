@@ -125,6 +125,14 @@ struct HalliePersonaQuestionTests {
         ("did you have any kids", .relatives("kids")),
         ("who was your husband", .relatives("husband")),
         ("were you married", .relatives("husband")),
+        // N1007-F3 (R3, 2026-10-06): seven phrase alternatives no test pinned.
+        ("did you have a brother", .relatives("brother")),
+        ("did you ever have children", .relatives("children")),
+        ("did you ever have any kids", .relatives("kids")),
+        ("did you ever have a husband", .relatives("husband")),
+        ("were you ever married", .relatives("husband")),
+        ("did you ever marry", .relatives("husband")),
+        ("did you marry", .relatives("husband")),
         ("what was your mother's job", .relatives("mother")),
         ("tell me about your family", .relatives("family")),
         ("tell me where you were born", .birthplace),
@@ -132,6 +140,16 @@ struct HalliePersonaQuestionTests {
     ])
     func lifeFactsAskedOfHallieAreDetected(text: String, ask: HalliePersonaQuestion.Ask) {
         #expect(detect(text, context: context()) == ask, Comment(rawValue: text))
+    }
+
+    /// QA on R3 (2026-10-07): two reorderings INSIDE the birth branch (the
+    /// place cue before the date cue; birthday nouns last) passed every
+    /// oracle input. These pin that order.
+    @Test func birthBranchCueOrderIsPinned() {
+        let none: (String) -> Bool = { _ in false }
+        #expect(HalliePersonaQuestion.detect("where is your birthday", isInnerCircleName: none) == .birthdate)
+        #expect(HalliePersonaQuestion.detect("where were you born, what year", isInnerCircleName: none) == .birthdate)
+        #expect(HalliePersonaQuestion.detect("when were you born, what town", isInnerCircleName: none) == .birthdate)
     }
 
     // MARK: - What stays out

@@ -569,21 +569,54 @@ enum ArchivistFollowUpResolver {
         "seven": 7, "eight": 8, "nine": 9, "ten": 10,
     ]
 
-    private static func mediaResolution(
-        _ rawWords: [String], original: String, snapshot: Snapshot?
-    ) -> Resolution? {
-        var words = dropLead(rawWords)
-        guard let verbWord = words.first else { return nil }
+    /// A media follow-up, parsed once: the verb that applies and what the
+    /// rest of the sentence points at (refactor R4, GH #281 — these were
+    /// locals of one 85-line function).
+    private struct MediaRequest {
+        /// The verb that applies: "show it in finder" reveals, whatever was said.
         let verb: MediaVerb
-        if playVerbs.contains(verbWord) {
-            verb = .play
-        } else if revealVerbs.contains(verbWord) {
-            verb = .reveal
-        } else if showVerbs.contains(verbWord) {
-            verb = .show
-        } else {
-            return nil
+        /// The words after the verb.
+        let words: [String]
+        let hasReferentNoun: Bool
+        /// "play them" / "reveal those" = every cited item; "one of them" is
+        /// still one item.
+        let hasAll: Bool
+        let numbered: Int?
+        let wantsLast: Bool
+        /// Words that name something (a filename token), not a referent.
+        let content: [String]
+        let years: [Int]
+    }
+
+    /// Words of a media follow-up that are not a filename token: the
+    /// referent filler, all / both / every, ordinals and counts, numbers
+    /// (years are read separately), and the linking words below.
+    /// ("latest" is not here, as before: "play the latest one" is answered
+    /// earlier, by dateOrderResolution.)
+    private static let mediaLinkWords: Set<String> = [
+        "number", "last", "from", "with", "about", "called", "named", "titled", "which", "where",
+    ]
+
+    private static func isMediaContentWord(_ word: String) -> Bool {
+        !referentFiller.contains(word) && !allWords.contains(word)
+            && ordinals[word] == nil && cardinalWords[word] == nil
+            && !mediaLinkWords.contains(word) && Int(word) == nil
+    }
+
+    private static func mediaVerb(_ word: String) -> MediaVerb? {
+        if playVerbs.contains(word) {
+            return .play
+        } else if revealVerbs.contains(word) {
+            return .reveal
+        } else if showVerbs.contains(word) {
+            return .show
         }
+        return nil
+    }
+
+    private static func mediaRequest(_ rawWords: [String]) -> MediaRequest? {
+        var words = dropLead(rawWords)
+        guard let verbWord = words.first, let verb = mediaVerb(verbWord) else { return nil }
         words.removeFirst()
         // "show in finder" / "reveal in finder" / "show in the catalog"
         var effectiveVerb = verb
@@ -595,76 +628,93 @@ enum ArchivistFollowUpResolver {
         let hasAll = words.contains { allWords.contains($0) }
             || (words.contains { ["them", "those", "these"].contains($0) }
                 && !words.contains("of"))
-        let numbered = numberedIndex(words)
-        let wantsLast = words.contains("last") || words.contains("latest")
-        let content = words.filter {
-            !referentFiller.contains($0) && !allWords.contains($0)
-                && ordinals[$0] == nil && cardinalWords[$0] == nil
-                && $0 != "number" && $0 != "last" && Int($0) == nil
-                && $0 != "from" && $0 != "with" && $0 != "about" && $0 != "called"
-                && $0 != "named" && $0 != "titled" && $0 != "which" && $0 != "where"
-        }
-        let years = words.compactMap { Int($0) }.filter { (1900...2099).contains($0) }
+        return MediaRequest(
+            verb: effectiveVerb, words: words, hasReferentNoun: hasReferentNoun, hasAll: hasAll,
+            numbered: numberedIndex(words),
+            wantsLast: words.contains("last") || words.contains("latest"),
+            content: words.filter(isMediaContentWord),
+            years: words.compactMap { Int($0) }.filter { (1900...2099).contains($0) })
+    }
+
+    private static func mediaResolution(
+        _ rawWords: [String], original: String, snapshot: Snapshot?
+    ) -> Resolution? {
+        guard let request = mediaRequest(rawWords) else { return nil }
         let items = snapshot?.items ?? []
 
         // A bare referent ("play it", "play the first one", "show me number 3").
-        let bareReferent = content.isEmpty && years.isEmpty
-        if bareReferent {
-            guard !items.isEmpty else {
-                // "play" alone with no prior answer.
-                if words.isEmpty || hasReferentNoun || numbered != nil
-                    || wantsLast || hasAll {
-                    return .declineNoPriorResult(effectiveVerb)
-                }
-                return effectiveVerb == .play ? .searchThenPlay(remainder(of: original)) : nil
-            }
-            if hasAll {
-                return .mediaAction(verb: effectiveVerb, indices: Array(items.indices))
-            }
-            if wantsLast {
-                return .mediaAction(verb: effectiveVerb, indices: [items.count - 1])
-            }
-            if let numbered {
-                guard items.indices.contains(numbered - 1) else {
-                    return .declineOutOfRange(requested: numbered, available: items.count)
-                }
-                return .mediaAction(verb: effectiveVerb, indices: [numbered - 1])
-            }
-            return .mediaAction(verb: effectiveVerb, indices: [0])
+        if request.content.isEmpty && request.years.isEmpty {
+            return bareReferentResolution(request, items: items, original: original)
         }
 
         // "the one from 1994" / "the cape one" — pick by year or filename
         // token, but only when the sentence points at a shown item.
-        if !items.isEmpty, hasReferentNoun || words.contains("from") {
-            var candidates = Array(items.indices)
-            if !years.isEmpty {
-                candidates = candidates.filter { index in
-                    years.allSatisfy { items[index].years.contains($0) }
-                }
-            }
-            if !content.isEmpty {
-                candidates = candidates.filter { index in
-                    let haystack = Set(ArchivistKeywordText.tokens(items[index].filename))
-                    return content.allSatisfy { haystack.contains($0) }
-                }
-            }
-            if !candidates.isEmpty {
-                if let numbered, candidates.indices.contains(numbered - 1) {
-                    return .mediaAction(verb: effectiveVerb, indices: [candidates[numbered - 1]])
-                }
-                if wantsLast, let last = candidates.last {
-                    return .mediaAction(verb: effectiveVerb, indices: [last])
-                }
-                return .mediaAction(verb: effectiveVerb, indices: hasAll ? candidates : [candidates[0]])
-            }
-            if hasReferentNoun && content.isEmpty {
-                // "the one from 1994" with nothing from 1994 shown.
-                return .declineNoMatchingItem(
-                    years.map(String.init).joined(separator: " "))
-            }
+        if !items.isEmpty, request.hasReferentNoun || request.words.contains("from"),
+           let picked = shownItemResolution(request, items: items) {
+            return picked
         }
         // Content the last answer cannot satisfy: a fresh question.
-        return effectiveVerb == .play ? .searchThenPlay(remainder(of: original)) : nil
+        return request.verb == .play ? .searchThenPlay(remainder(of: original)) : nil
+    }
+
+    private static func bareReferentResolution(
+        _ request: MediaRequest, items: [Snapshot.Item], original: String
+    ) -> Resolution? {
+        let verb = request.verb
+        guard !items.isEmpty else {
+            // "play" alone with no prior answer.
+            if request.words.isEmpty || request.hasReferentNoun || request.numbered != nil
+                || request.wantsLast || request.hasAll {
+                return .declineNoPriorResult(verb)
+            }
+            return verb == .play ? .searchThenPlay(remainder(of: original)) : nil
+        }
+        if request.hasAll {
+            return .mediaAction(verb: verb, indices: Array(items.indices))
+        }
+        if request.wantsLast {
+            return .mediaAction(verb: verb, indices: [items.count - 1])
+        }
+        if let numbered = request.numbered {
+            guard items.indices.contains(numbered - 1) else {
+                return .declineOutOfRange(requested: numbered, available: items.count)
+            }
+            return .mediaAction(verb: verb, indices: [numbered - 1])
+        }
+        return .mediaAction(verb: verb, indices: [0])
+    }
+
+    /// The shown items the request's years and filename words select, then
+    /// its ordinal / last / all among those. nil = nothing shown matches and
+    /// the request is a fresh question after all.
+    private static func shownItemResolution(_ request: MediaRequest, items: [Snapshot.Item]) -> Resolution? {
+        var candidates = Array(items.indices)
+        if !request.years.isEmpty {
+            candidates = candidates.filter { index in
+                request.years.allSatisfy { items[index].years.contains($0) }
+            }
+        }
+        if !request.content.isEmpty {
+            candidates = candidates.filter { index in
+                let haystack = Set(ArchivistKeywordText.tokens(items[index].filename))
+                return request.content.allSatisfy { haystack.contains($0) }
+            }
+        }
+        if !candidates.isEmpty {
+            if let numbered = request.numbered, candidates.indices.contains(numbered - 1) {
+                return .mediaAction(verb: request.verb, indices: [candidates[numbered - 1]])
+            }
+            if request.wantsLast, let last = candidates.last {
+                return .mediaAction(verb: request.verb, indices: [last])
+            }
+            return .mediaAction(verb: request.verb, indices: request.hasAll ? candidates : [candidates[0]])
+        }
+        if request.hasReferentNoun && request.content.isEmpty {
+            // "the one from 1994" with nothing from 1994 shown.
+            return .declineNoMatchingItem(
+                request.years.map(String.init).joined(separator: " "))
+        }
+        return nil
     }
 
     private static let referentNouns: Set<String> = [

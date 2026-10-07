@@ -2377,7 +2377,13 @@ final class FamilyTreeLiveModel: ObservableObject {
         // would disagree until relaunch. A failed save changes nothing.
         if let directory = bookmarksDirectory ?? originalsDirectory as URL?, sourceAccess == .readWrite {
             do {
-                try updated.save(to: directory)
+                // A damaged rulings file is moved aside (never overwritten)
+                // inside save; if it cannot be, the save throws and this
+                // ruling is refused (N1009-D F1).
+                // Compare-and-swap: if the file changed since the tree
+                // loaded it, only this ruling is applied onto the current
+                // file; keep what was actually written, not the snapshot.
+                updated = try updated.save(to: directory, log: { appLog.write($0) })
                 identityRulingsUnsaved = false
                 appLog.write("Family Tree: \(hidden ? "HID" : "un-hid") \(person.name) (\(fsid)) — "
                     + "\(updated.suppressedFamilySearchIDs.count) record(s) now hidden")

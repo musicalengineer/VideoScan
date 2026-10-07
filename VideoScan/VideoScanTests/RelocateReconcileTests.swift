@@ -33,6 +33,11 @@ struct RelocateReconcileTests {
         { table[$0] ?? "" }
     }
 
+    /// These classify-logic tests use made-up /Volumes witness paths, so
+    /// they assume each witness is on disk. Presence and liveness are
+    /// pinned separately in RelocateWitnessLivenessTests (N1007-R F1/F5).
+    private static let assumeWitnessOnDisk: WitnessPresenceProbe = { _, _ in true }
+
     /// Shorthand: call reconcile with `allCatalogRecords == records` and
     /// `skipDupsOnOtherVolumes = false`. Preserves the pre-Bucket-E test
     /// semantics for legacy A/B/C/D coverage. The Bucket E tests further
@@ -323,6 +328,7 @@ struct RelocateReconcileTests {
             sourceFiles: [],
             destFiles: [],
             skipDupsOnOtherVolumes: true,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: hashFn([:])
         )
         #expect(result.safelyRedundant.count == 1)
@@ -356,6 +362,7 @@ struct RelocateReconcileTests {
             sourceFiles: [],
             destFiles: [.init(path: destPath, size: 1000)],
             skipDupsOnOtherVolumes: true,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: hashFn([destPath: "HASH-A"])
         )
         #expect(result.adopted.count == 1)
@@ -416,6 +423,7 @@ struct RelocateReconcileTests {
             sourceFiles: [.init(path: here.path, size: 1024)],
             destFiles: [],
             skipDupsOnOtherVolumes: true,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: hashFn([here.path: "HASH-A"])
         )
         #expect(result.safelyRedundant.count == 1)
@@ -444,6 +452,7 @@ struct RelocateReconcileTests {
             sourceFiles: [],
             destFiles: [],
             skipDupsOnOtherVolumes: true,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: hashFn([:])
         )
         #expect(result.safelyRedundant.count == 1)
@@ -471,6 +480,7 @@ struct RelocateReconcileTests {
             sourceFiles: [],
             destFiles: [],
             skipDupsOnOtherVolumes: true,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: hashFn([:])
         )
         #expect(result.safelyRedundant.isEmpty)
@@ -495,6 +505,7 @@ struct RelocateReconcileTests {
             sourceFiles: [],
             destFiles: [],
             skipDupsOnOtherVolumes: true,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: hashFn([:])
         )
         #expect(result.safelyRedundant.isEmpty)
@@ -519,6 +530,7 @@ struct RelocateReconcileTests {
             sourceFiles: [],
             destFiles: [],
             skipDupsOnOtherVolumes: true,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: hashFn([:])
         )
         #expect(result.safelyRedundant.isEmpty)
@@ -543,6 +555,7 @@ struct RelocateReconcileTests {
             sourceFiles: [],
             destFiles: [],
             skipDupsOnOtherVolumes: true,
+            witnessOnDisk: Self.assumeWitnessOnDisk,
             hash: hashFn([:])
         )
         #expect(result.safelyRedundant.isEmpty)
