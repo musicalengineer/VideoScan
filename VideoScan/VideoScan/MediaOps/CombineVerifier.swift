@@ -11,17 +11,37 @@ enum CombineVerifier {
         var warning: String?
     }
 
+    /// Deadline on each verify subprocess — the ffprobe, the one-frame
+    /// decode tests (N1014-F3, 2026-10-07: none had one, so a wedged probe on
+    /// a drive that stopped answering hung the pair, and the batch, forever).
+    /// Each reads a header or one frame, so 2 minutes is far past healthy.
+    /// volumedetect reads the whole audio stream: see `levelTimeoutSeconds`.
+    static let toolTimeoutSeconds: Double = 120
+
+    /// volumedetect's deadline: the tool deadline, or the program's own
+    /// length if longer (decoding audio is far faster than real time, so a
+    /// healthy run never gets near it). A timeout only loses the "may be
+    /// silent" warning; it never fails or passes verification.
+    static func levelTimeoutSeconds(base: Double, expectedDuration: Double) -> Double {
+        guard expectedDuration.isFinite else { return base }
+        return max(base, expectedDuration)
+    }
+
     /// Probe the combined output to confirm it has both video and audio streams
-    /// and a reasonable duration relative to the source.
+    /// and a reasonable duration relative to the source. Every subprocess has
+    /// a deadline (`CombineTestSeams.verifyToolTimeoutSeconds`, production =
+    /// `toolTimeoutSeconds`); a probe or decode that times out fails verify.
     static func verifyCombineOutput(
         url: URL,
         expectedDuration: Double,
         ffprobePath: String,
         ffmpegPath: String
     ) async -> VerifyResult {
-        let (probe, stderr) = await runFFProbe(url: url, ffprobePath: ffprobePath)
-        guard let probe else {
-            return VerifyResult(ok: false, reason: "ffprobe failed: \(stderr)", summary: "")
+        let timeout = CombineTestSeams.verifyToolTimeoutSeconds
+        let probed = await runFFProbeDetailed(url: url, ffprobePath: ffprobePath, timeoutSeconds: timeout)
+        guard let probe = probed.output else {
+            let why = probed.timedOut ? "timed out after \(Int(timeout))s" : probed.stderr
+            return VerifyResult(ok: false, reason: "ffprobe failed: \(why)", summary: "")
         }
 
         let streams = probe.streams ?? []
@@ -82,16 +102,13 @@ enum CombineVerifier {
             )
         }
 
-        let vDecode = await decodeTestFrame(url: url, streamType: "v", ffmpegPath: ffmpegPath)
-        if !vDecode.ok {
-            return VerifyResult(ok: false, reason: "video decode failed: \(vDecode.reason)", summary: "")
-        }
-        let aDecode = await decodeTestFrame(url: url, streamType: "a", ffmpegPath: ffmpegPath)
-        if !aDecode.ok {
-            return VerifyResult(ok: false, reason: "audio decode failed: \(aDecode.reason)", summary: "")
+        if let reason = await decodeFailure(url: url, ffmpegPath: ffmpegPath, timeoutSeconds: timeout) {
+            return VerifyResult(ok: false, reason: reason, summary: "")
         }
 
-        let meanDB = await detectAudioLevel(url: url, ffmpegPath: ffmpegPath)
+        let meanDB = await detectAudioLevel(
+            url: url, ffmpegPath: ffmpegPath,
+            timeoutSeconds: levelTimeoutSeconds(base: timeout, expectedDuration: expectedDuration))
         var warning: String?
         if let db = meanDB, db < -60 {
             warning = String(format: "Audio may be silent (%.1f dB)", db)
@@ -155,10 +172,11 @@ enum CombineVerifier {
     /// continuously — ffmpeg's `-v info` output for a long file can easily
     /// exceed the OS pipe buffer (~64KB on macOS) and deadlock if we only
     /// read after termination.
-    static func detectAudioLevel(url: URL, ffmpegPath: String) async -> Double? {
+    static func detectAudioLevel(url: URL, ffmpegPath: String, timeoutSeconds: Double? = nil) async -> Double? {
         let args = ["-v", "info", "-i", url.path, "-map", "0:a:0",
                     "-af", "volumedetect", "-f", "null", "-"]
-        let result = await ProcessRunner.runCapturingStderr(executable: ffmpegPath, arguments: args)
+        let result = await ProcessRunner.runCapturingStderr(executable: ffmpegPath, arguments: args,
+                                                            deadlineSeconds: timeoutSeconds)
         return parseMeanVolumeDB(from: result.stderr)
     }
 
@@ -178,8 +196,21 @@ enum CombineVerifier {
 
     // MARK: - Decode Test
 
+    /// Decode one video frame, then one audio frame. The failure reason
+    /// (which stream, and why), or nil when both decode.
+    static func decodeFailure(url: URL, ffmpegPath: String, timeoutSeconds: Double?) async -> String? {
+        let video = await decodeTestFrame(url: url, streamType: "v", ffmpegPath: ffmpegPath, timeoutSeconds: timeoutSeconds)
+        if !video.ok { return "video decode failed: \(video.reason)" }
+        let audio = await decodeTestFrame(url: url, streamType: "a", ffmpegPath: ffmpegPath, timeoutSeconds: timeoutSeconds)
+        if !audio.ok { return "audio decode failed: \(audio.reason)" }
+        return nil
+    }
+
     /// Attempt to decode one frame from the specified stream type ("v" or "a").
-    static func decodeTestFrame(url: URL, streamType: String, ffmpegPath: String) async -> (ok: Bool, reason: String) {
+    /// `timeoutSeconds` bounds the subprocess; a run killed at its deadline
+    /// fails as "timed out" (never as a decode error, never as a pass).
+    static func decodeTestFrame(url: URL, streamType: String, ffmpegPath: String,
+                                timeoutSeconds: Double? = nil) async -> (ok: Bool, reason: String) {
         let args: [String]
         if streamType == "v" {
             args = ["-v", "error", "-i", url.path, "-map", "0:v:0", "-vframes", "1", "-f", "null", "-"]
@@ -191,8 +222,13 @@ enum CombineVerifier {
         // ffmpeg can't deadlock by filling the pipe buffer. Need the full
         // Result here (not runCapturingStderr) because we still want the
         // exit-code branch from the original implementation.
-        let result = await ProcessRunner.runProcess(executable: ffmpegPath, arguments: args)
+        let result = await ProcessRunner.runProcess(executable: ffmpegPath, arguments: args,
+                                                    deadlineSeconds: timeoutSeconds)
         let errStr = result.stderr
+        // Gate on a nonzero exit FIRST (ProcessRunner.Result's race note).
+        if result.exitCode != 0, result.timedOut {
+            return (false, "timed out after \(Int(timeoutSeconds ?? 0))s")
+        }
         if result.exitCode != 0 {
             return (false, "exit \(result.exitCode): \(String(errStr.prefix(200)))")
         }
@@ -210,15 +246,26 @@ enum CombineVerifier {
     /// wedged on dead-volume I/O can't outlive the timeout that's supposed
     /// to bound it.
     static func runFFProbe(url: URL, ffprobePath: String, timeoutSeconds: Double? = nil) async -> (output: FFProbeOutput?, stderr: String) {
+        let probed = await runFFProbeDetailed(url: url, ffprobePath: ffprobePath, timeoutSeconds: timeoutSeconds)
+        return (probed.output, probed.stderr)
+    }
+
+    /// `runFFProbe` plus whether THIS run was killed at its own deadline
+    /// (gated on a nonzero exit first — ProcessRunner.Result's race note).
+    /// Combine's verify uses it to say "timed out"; the scan path keeps
+    /// `runFFProbe`, whose stderr becomes catalog notes unchanged.
+    static func runFFProbeDetailed(url: URL, ffprobePath: String, timeoutSeconds: Double?) async
+        -> (output: FFProbeOutput?, stderr: String, timedOut: Bool) {
         let args = ["-v", "warning", "-probesize", "50M", "-analyzeduration", "10M",
                     "-print_format", "json", "-show_format", "-show_streams", url.path]
-        let result = await ProcessRunner.runCapturingStderr(executable: ffprobePath, arguments: args,
-                                                            deadlineSeconds: timeoutSeconds)
+        let result = await ProcessRunner.runProcess(executable: ffprobePath, arguments: args,
+                                                    deadlineSeconds: timeoutSeconds)
+        let timedOut = result.exitCode != 0 && result.timedOut
         guard let json = result.stdout, let data = json.data(using: .utf8) else {
-            return (nil, result.stderr)
+            return (nil, result.stderr, timedOut)
         }
         let output = try? JSONDecoder().decode(FFProbeOutput.self, from: data)
-        return (output, result.stderr)
+        return (output, result.stderr, timedOut)
     }
 
     // MARK: - Network Detection

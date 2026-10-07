@@ -536,6 +536,23 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsDamagedFileTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FamilyIdentityDecisionsDamagedFileTests"
+      ],
+      "tests": [
+        "aDamagedFileIsMovedAsideNotOverwrittenByTheNextRuling",
+        "aDamagedFileThatCannotBeMovedAsideRefusesTheSave",
+        "aHealthyFileIsReplacedWithoutLeavingADamagedCopy",
+        "aStaleSnapshotOverAFileThatIsNowUnreadableIsRefused",
+        "qaRedAFileFixedByHandAfterLoadIsNotOverwrittenByTheStaleSnapshot",
+        "twoDamagedSavesInARowKeepBothDamagedCopies"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsTests.swift",
       "stage": "unit",
       "suites": [
@@ -1944,6 +1961,7 @@
         "testAFourHopProvenanceChainJoinsAFiveHopChainDoesNot",
         "testAVersionJoinsItsArchivedOriginalsFamilyAndIsCheckableUncheckedByDefault",
         "testAdviceForAnImportantFamilyWithNoAttestationAndTheOverride",
+        "testAnArchiveVolumeCopyHoldsNoDeviceForTheBar",
         "testDefaultsMatchTheDesignTable",
         "testFamiliesKeyByContentAndArchiveCopyJoinsItsSource",
         "testImportantFamilyNeedsDeviceAndAttestationBeforeAnythingGoes",
@@ -1959,6 +1977,7 @@
         "testRowsAreTheWorkingCopiesAndOnlyCandidatesWithAVerifiedArchiveAreCheckable",
         "testScale100kSnapshotsIn5kFamiliesUnderBudget",
         "testSelectionAcrossFamiliesDeduplicatesShortfallsAndNamesEveryArchiveOnlyFile",
+        "testSelectionDoesNotCountAnArchiveVolumeCopyAsAnExtraDevice",
         "testTheLogLineSaysWhyEachCopyCouldOrCouldNotBeSelected",
         "testUnverifiedArchiveRowsAreShownButNeverCheckable",
         "testVolumeChoicesAndTotalsAcrossFamilies"
@@ -3573,6 +3592,8 @@
       "tests": [
         "aLongStepInARunningBatchIsNeverSettledOrDeleted",
         "aStrandedPromoteIsSettledAgainstTheCatalog",
+        "aStrandedRowWhoseCompanionDidNotLandKeepsItsBuffer",
+        "identicalBytesFromAnotherBatchAreNotThisRowLanding",
         "liveRegistrationIsCountedAndPathNormalized"
       ]
     },
@@ -3595,8 +3616,10 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelNoSoundMediaMatrixTests.swift",
+      "stage": "unit",
       "suites": [
         "ArchiveAngelNoSoundMediaMatrixTests"
       ],
@@ -3610,13 +3633,13 @@
         "mp4",
         "mxf",
         "silent"
-      ],
-      "stage": "unit",
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+      ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveAngelNoSoundTests.swift",
+      "stage": "unit",
       "suites": [
         "ArchiveAngelNoSoundTests"
       ],
@@ -3636,9 +3659,7 @@
         "uncheckedIsCandidateNotReady",
         "verifiedNoStreamRejected",
         "videoOnlyRejected"
-      ],
-      "stage": "unit",
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+      ]
     },
     {
       "kind": "xcode",
@@ -3677,6 +3698,7 @@
         "ArchiveAngelPromoterSameNameTests"
       ],
       "tests": [
+        "aLandedOriginalWhoseCompanionFailedKeepsItsBuffer",
         "dateHints",
         "hashMismatch",
         "noHint",
@@ -7308,6 +7330,20 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CleanupLengthCheckTests.swift",
+      "suites": [
+        "CleanupLengthCheckTests"
+      ],
+      "tests": [
+        "aFullLengthRenderPasses",
+        "aShortRenderIsRefused",
+        "engineUsesTheSharedLengthRule"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CleanupMediaMatrixTests.swift",
@@ -7426,6 +7462,24 @@
         "progressFlagOnlyAppearsWhenRequested",
         "streamCopyUsesCopyCodec"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CombineMuxStallTests.swift",
+      "suites": [
+        "CombineMuxStallTests"
+      ],
+      "tests": [
+        "faststartPassIsNotAStall",
+        "healthyMuxIsNotAStall",
+        "heartbeatSignatureTracksWrites",
+        "silentButWritingIsNotAStall",
+        "silentMuxFailsAsStalled",
+        "wedgedDecodeFailsVerify",
+        "wedgedProbeFailsVerify"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
     {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
@@ -9525,6 +9579,9 @@
         "FamilyAssetStoreTests"
       ],
       "tests": [
+        "aDamagedExclusionSidecarIsNeverSavedOver",
+        "aDamagedExclusionSidecarThatCannotBeSetAsideRefusesTheWrite",
+        "aFailedExclusionWriteReportsTheRealErrno",
         "aPersonUnknownToTheDirectoryFallsBackToNameMatching",
         "anExcludedPhotoIsNeverShownForThatPersonAgain",
         "crestLookupIsCaseAndDiacriticInsensitiveAndContentVerified",
@@ -19582,6 +19639,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ReformatPartialReservationTests.swift",
+      "suites": [
+        "ReformatPartialReservationTests"
+      ],
+      "tests": [
+        "reformatUsesSharedPartialPublishers",
+        "sameStemJobsNeverShareOrDeleteAPartial"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RelocateEngineTests.swift",
@@ -19853,6 +19923,34 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RelocateWitnessLivenessTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RelocateWitnessLivenessTests"
+      ],
+      "tests": [
+        "aWitnessOnTheSourceDriveIsNotIndependentEvenIfItIsAnotherFile",
+        "appCodeNeverWeakensTheWitnessIndependenceRule",
+        "applyTimeReproofKeepsAnEntryWhoseWitnessIsStillThere",
+        "applyTimeReproofRefusesAWitnessThatIsTheSourceFile",
+        "applyTimeReproofRefusesAnEntryWhoseWitnessVanishedSinceClassify",
+        "liveWitnessPresentOnDiskStillMakesTheRecordSafelyRedundant",
+        "liveWitnessWhoseFileChangedSizeIsNotASurvivingCopy",
+        "liveWitnessWhoseFileIsGoneIsNotASurvivingCopy",
+        "manuallyDeletedWitnessRecordIsNotASurvivingCopy",
+        "oneDeadAndOneLiveWitnessStillVouchesWithOnlyTheLiveOne",
+        "permanentlyDeletedWitnessRecordIsNotASurvivingCopy",
+        "purgedButNotTrashedWitnessRecordIsNotASurvivingCopy",
+        "qaR2ProductionDefaults",
+        "qaRedSourceFileReachedThroughASymlinkIsNotItsOwnWitness",
+        "qaRedSourceFileSpelledWithDifferentCaseIsNotItsOwnWitness",
+        "reproofOrderIsStableAndUsesEachRecordsOwnSize",
+        "trashedWitnessRecordIsNotASurvivingCopy"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RemoteViewerIsolationTests.swift",
@@ -19874,10 +19972,16 @@
         "RemoteViewerReadOnlySensorTests"
       ],
       "tests": [
+        "everyCallerOfDeleteConfirmedJunkSitsBehindTheViewerGuard",
+        "everyFileRemovalInAppCodeIsClassifiedAndMediaRemovalsAreViewerGuarded",
         "everyWritePathRefusesInViewerModeWithALogLine",
         "masterModeExecutesGuardedWritersAndLogsNoRefusal",
+        "qaRedViewerModeRefusesDiscardWorkbenchAndLeavesTheFileOnDisk",
+        "removalSensorGivesTheSameAnswerFromASymlinkedCheckout",
         "statusChipWordingAndMasterOnlyHint",
         "viewerFamilyTreeRefreshKeepsPersonAndShippedLayersWithoutCreatingAFile",
+        "viewerModeRefusesDeleteConfirmedJunkAndLeavesTheFileOnDisk",
+        "viewerModeRefusesDeleteFromVolumesList",
         "viewerReturnCannotSubmitPronunciationButPreviewRemainsAvailable",
         "viewerSpeechResolutionKeepsPersonAndShippedLayersWithoutCreatingAFile"
       ]
@@ -20151,13 +20255,18 @@
         "ResearchQueryPlanTests",
         "ResearchSourceAdapterTests",
         "ResearchStoreTests",
-        "ResearchAttestationTests"
+        "ResearchAttestationTests",
+        "ResearchLoreNeverDroppedTests"
       ],
       "tests": [
+        "aRerunThatNoLongerReturnsAFindingKeepsItsTypedLore",
         "birthOnlyWindowAssumesALifespanAndNeverPassesToday",
         "cacheCapsOversizedBodies",
         "chroniclingAmericaClipsToCoverageAndSkipsOutOfRange",
         "chroniclingAmericaParsesItemsAndConstrainsTheQuery",
+        "closingTheSheetSavesTypedLore",
+        "closingWithItsFindingGoneStillKeepsTheWords",
+        "committingLoreForAFindingGoneFromDiskSaysSoAndKeepsTheDraft",
         "confirmedFindingBecomesAConfirmedCitedItemLinkedToTheTreeRecord",
         "deceasedTreePersonIsEligibleAndKeyedByFamilySearchID",
         "dossierRoundTripsAndVerdictsSurviveARerun",
@@ -25047,6 +25156,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsDamagedFileTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FamilyIdentityDecisionsTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -25859,8 +25972,16 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/CleanupLengthCheckTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/CleanupTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CombineMuxStallTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/CombineNeverOverwritesTests.swift",
@@ -26683,6 +26804,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/ReformatPartialReservationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/RelocateEngineTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -26716,6 +26841,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/RelocateSummarySheetTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/RelocateWitnessLivenessTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

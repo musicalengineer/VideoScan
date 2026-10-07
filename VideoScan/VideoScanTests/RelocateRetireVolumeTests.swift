@@ -105,6 +105,10 @@ struct RelocateRetireVolumeTests {
         defer { try? FileManager.default.removeItem(at: ws.root) }
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         let target = CatalogScanTarget(searchPath: ws.source.path)
         model.scanTargets = [target]
@@ -129,6 +133,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func retire_returnsFalseWhenNoMatchingTarget() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         // No scan targets configured.
         model.scanTargets = []
         let ok = model.retireVolume(at: "/Volumes/Nope",
@@ -198,6 +204,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func retire_skipDoesNothing() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let target = CatalogScanTarget(searchPath: "/Volumes/Test")
         model.scanTargets = [target]
 
@@ -224,6 +232,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func reinstate_clearsAllRetirementFields() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let target = CatalogScanTarget(searchPath: "/Volumes/Test")
         model.scanTargets = [target]
 
@@ -249,6 +259,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func legacyRetiredRoleString_stampsRetiredAt_gatesScan_andReinstateClears() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let target = CatalogScanTarget(searchPath: "/Volumes/RicksBackups")
         target.retiredAt = nil
         let decode = ScanTargetPersistence.applyPersistedRole("Retired", to: target)
@@ -274,6 +286,8 @@ struct RelocateRetireVolumeTests {
     @Test
     func reinstate_returnsFalseWhenNoMatchingTarget() {
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.scanTargets = []
         let ok = model.reinstateVolume(at: "/Volumes/Nope")
         #expect(ok == false)
@@ -287,6 +301,8 @@ struct RelocateRetireVolumeTests {
         // predicate clauses the loop uses. Avoids actually kicking off a
         // scan (which would touch real filesystem state).
         let model = VideoScanModel()
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let active = CatalogScanTarget(searchPath: "/Volumes/Active")
         let retired = CatalogScanTarget(searchPath: "/Volumes/Retired")
         model.scanTargets = [active, retired]
@@ -336,12 +352,22 @@ struct RelocateRetireVolumeTests {
         let src = ws.source.appendingPathComponent("clip.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 2048)
         let sourceRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
+        // A real third-volume copy: since N1007-R F1 (2026-10-06) a witness
+        // must be on disk at its recorded size to vouch.
+        let witnessVol = ws.root.appendingPathComponent("MyBook", isDirectory: true)
+        try FileManager.default.createDirectory(at: witnessVol, withIntermediateDirectories: true)
+        let witnessFile = witnessVol.appendingPathComponent("clip.bin")
+        try FileManager.default.copyItem(at: src, to: witnessFile)
         let witnessRec = makeRecord(
-            fullPath: "/Volumes/MyBook/clip.bin",
+            fullPath: witnessFile.path,
             size: sx, md5: hx
         )
 
         let model = VideoScanModel()
+
+        // Sibling temp "volumes" share one disk; simulate separate drives.
+
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         model.catalogStore = CatalogStore(directory: ws.catalog)
         model.records = [sourceRec, witnessRec]
         model.scanTargets = [CatalogScanTarget(searchPath: ws.source.path)]
@@ -379,7 +405,7 @@ struct RelocateRetireVolumeTests {
         let offer = try #require(model.pendingRetireOffer)
         #expect(offer.volumeRootPath == ws.source.path)
         #expect(offer.recordCount == 1)
-        #expect(offer.witnesses == ["/Volumes/MyBook/clip.bin"])
+        #expect(offer.witnesses == [witnessFile.path])
 
         // The pre-relocate snapshot the engine writes captures the
         // pristine catalog. Decoding it should NOT contain the

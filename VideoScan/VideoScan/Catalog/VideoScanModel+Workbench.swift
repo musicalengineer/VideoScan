@@ -38,6 +38,16 @@ extension VideoScanModel {
         saveCatalogNow()
     }
 
+    /// A viewer Mac never trashes a file or purges a row (QA round 1 on
+    /// C04-F5, 2026-10-06). Either signal refuses: the model flag or
+    /// ViewerModeCenter. Logs one line; true = refused, touch nothing.
+    func workbenchDiscardRefusedOnViewer(_ records: [VideoRecord]) -> Bool {
+        let viewer = ViewerWriteGuard.refuse("VideoScanModel.discardWorkbench")
+        guard viewer || isReadOnly else { return false }
+        log("Discard refused — this Mac is a read-only viewer of the catalog; \(records.count) file(s) left untouched.")
+        return true
+    }
+
     /// Discard workbench items: move the file to macOS Trash (recoverable
     /// from Finder until emptied) and soft-delete the record via
     /// `purgedAt`. The trash step is best-effort — if the file is already
@@ -59,6 +69,7 @@ extension VideoScanModel {
     @discardableResult
     func discardWorkbench(_ requested: [VideoRecord],
                           trash: (URL) throws -> Void = { try FileManager.default.trashItem(at: $0, resultingItemURL: nil) }) -> Int {
+        if workbenchDiscardRefusedOnViewer(requested) { return 0 }
         let recs = excludingMasterArchiveFiles(requested, verb: "Discard")
         var count = 0
         let now = Date()

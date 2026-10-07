@@ -543,6 +543,8 @@ struct TriageView: View {
                 }
                 .vsGlassButtonStyle()
                 .tint(.red)
+                // A viewer never deletes; the model refuses too (C04-F5).
+                .disabled(model.isReadOnly)
                 .help("Move to Trash or delete permanently — sheet shows the split between reachable and offline volumes")
             }
 
@@ -701,7 +703,8 @@ struct TriageView: View {
                 Label("Discard", systemImage: "trash")
             }
             .vsGlassButtonStyle()
-            .disabled(selectedIDs.isEmpty)
+            // A viewer never trashes; the model refuses too.
+            .disabled(selectedIDs.isEmpty || model.isReadOnly)
             .help("Move the file to Trash and remove the record (recoverable from Finder until emptied)")
         }
     }

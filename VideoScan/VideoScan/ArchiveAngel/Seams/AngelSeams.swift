@@ -131,6 +131,10 @@ protocol AngelJobRunner: AnyObject {
 @MainActor
 protocol AngelArchive: AnyObject {
     var masterArchiveRootPath: String? { get }
+    /// `path` lies inside the Master Archive root — canonical, component-
+    /// wise (VideoScanModel+MasterArchive). The quit-recovery "landed"
+    /// rule asks it (GH #288 N1016-F2).
+    func isInsideMasterArchive(path: String) -> Bool
     func buildPromotePlan(recordIDs ids: [UUID]) -> ArchivePromotePlan?
 }
 

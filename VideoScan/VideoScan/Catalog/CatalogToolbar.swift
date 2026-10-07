@@ -155,6 +155,8 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// filter (tree or volume, 2026-09-22) runs here, once, not in the
     /// sheet's body.
     private func openJunkConfirmSheet() {
+        // A viewer never deletes; the model refuses too (C04-F5).
+        guard !model.isReadOnly else { return }
         junkConfirmRecords = model.recordsBulkVerbsMayRemove(confirmedJunk)
         showJunkConfirmSheet = true
     }

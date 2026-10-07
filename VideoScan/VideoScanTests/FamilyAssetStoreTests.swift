@@ -3,6 +3,7 @@ import CoreGraphics
 import ImageIO
 import Testing
 import UniformTypeIdentifiers
+import VideoScanCore
 @testable import VideoScan
 
 @Suite("Family asset store", .serialized)
@@ -630,6 +631,81 @@ struct FamilyAssetStoreTests {
         }
         #expect(throws: FamilyAssetStore.StoreError.invalidPerson) {
             try store.excludePhoto(photo, from: "   ")
+        }
+    }
+
+    // N1012-F2: a damaged "not of" sidecar must never be read as empty and
+    // saved over. Either the write is refused, or the original bytes survive
+    // beside it as `<name>.damaged-<stamp>`.
+    private func damagedSidecarFixture() throws -> (base: URL, store: FamilyAssetStore, photo: URL, sidecar: URL) {
+        let (base, store) = try temporaryStore()
+        let photo = store.peopleDirectory
+            .appendingPathComponent("test_Group", isDirectory: true)
+            .appendingPathComponent("test_photo.png")
+        try writePNG(to: photo)
+        let sidecar = FamilyAssetStore.exclusionSidecarURL(for: photo)
+        try Data("{ not json".utf8).write(to: sidecar)
+        return (base, store, photo, sidecar)
+    }
+
+    private func setAsideSiblings(of sidecar: URL) throws -> [URL] {
+        try fileManager.contentsOfDirectory(at: sidecar.deletingLastPathComponent(),
+                                            includingPropertiesForKeys: nil)
+            .filter { $0.lastPathComponent.hasPrefix(sidecar.lastPathComponent + ".damaged-") }
+    }
+
+    @Test func aDamagedExclusionSidecarIsNeverSavedOver() throws {
+        let (base, store, photo, sidecar) = try damagedSidecarFixture()
+        defer { try? fileManager.removeItem(at: base) }
+        let original = try Data(contentsOf: sidecar)
+        var lines: [String] = []
+        let threw = (try? store.excludePhoto(photo, from: "@I3@", log: { lines.append($0) })) == nil
+        let kept = try setAsideSiblings(of: sidecar)
+        let originalSurvives = (try? Data(contentsOf: sidecar)) == original
+            || kept.contains { (try? Data(contentsOf: $0)) == original }
+        #expect(originalSurvives, "the damaged sidecar's bytes were lost")
+        if !threw {
+            #expect(kept.count == 1, "a write over a damaged sidecar must set it aside first")
+            #expect(store.photoExclusions(for: photo) == ["I3"])
+            #expect(lines.contains { $0.hasPrefix("🔴") && $0.contains(kept[0].lastPathComponent) },
+                    "the set-aside is logged with where the old notes now live")
+        }
+    }
+
+    @Test func aDamagedExclusionSidecarThatCannotBeSetAsideRefusesTheWrite() throws {
+        let (base, store, photo, sidecar) = try damagedSidecarFixture()
+        let folder = sidecar.deletingLastPathComponent()
+        defer {
+            try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? fileManager.removeItem(at: base)
+        }
+        let original = try Data(contentsOf: sidecar)
+        try fileManager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        var lines: [String] = []
+        #expect(throws: DamagedFileSetAside.NotPreserved.self) {
+            try store.excludePhoto(photo, from: "@I3@", log: { lines.append($0) })
+        }
+        #expect(try Data(contentsOf: sidecar) == original, "refused write left the damaged file as it was")
+        #expect(lines.contains { $0.hasPrefix("🔴") && $0.contains("nothing was saved") })
+    }
+
+    /// A failed publish reports the errno of the CAUGHT error, not whatever
+    /// `errno` happened to hold afterwards.
+    @Test func aFailedExclusionWriteReportsTheRealErrno() throws {
+        let (base, store) = try temporaryStore()
+        let photo = store.peopleDirectory
+            .appendingPathComponent("test_Group", isDirectory: true)
+            .appendingPathComponent("test_photo.png")
+        try writePNG(to: photo)
+        let folder = photo.deletingLastPathComponent()
+        defer {
+            try? fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: folder.path)
+            try? fileManager.removeItem(at: base)
+        }
+        try fileManager.setAttributes([.posixPermissions: 0o555], ofItemAtPath: folder.path)
+        let name = FamilyAssetStore.exclusionSidecarURL(for: photo).lastPathComponent
+        #expect(throws: FamilyAssetStore.StoreError.createFailed(name, errno: EACCES)) {
+            try store.excludePhoto(photo, from: "@I3@", log: { _ in })
         }
     }
 

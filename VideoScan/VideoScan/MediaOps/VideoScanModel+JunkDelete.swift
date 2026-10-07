@@ -140,6 +140,55 @@ extension VideoScanModel {
         case refused(String)
     }
 
+    /// C04-F5 (P1, 2026-10-06): a viewer Mac never moves or deletes a file.
+    /// Either signal refuses on its own: the model flag VideoScanApp sets
+    /// from CatalogSync (`isReadOnly`), or the process-wide
+    /// ViewerModeCenter (which also records the refusal for the sensor).
+    /// Returns nil on the master. On a viewer nothing is touched, every
+    /// record comes back in `refused`, and one line is logged. It is the
+    /// first step of `junkDeletionPreflight`, which is the first statement
+    /// of `deleteConfirmedJunk`, so every caller (row menu, toolbar and
+    /// Triage sheets, Cmd-Delete, prune) sits behind it.
+    func junkDeletionRefusedOnViewer(_ records: [VideoRecord]) -> JunkDeletionResult? {
+        let viewer = ViewerWriteGuard.refuse("VideoScanModel.deleteConfirmedJunk")
+        guard viewer || isReadOnly else { return nil }
+        let reason = "this Mac is a read-only viewer of the catalog"
+        log("Delete Confirmed Junk refused — \(reason); \(records.count) file(s) left untouched.")
+        return JunkDeletionResult(
+            attempted: records.count,
+            succeeded: 0,
+            alreadyMissing: 0,
+            skippedOffline: 0,
+            failed: [],
+            refused: records.map { (record: $0, reason: reason) }
+        )
+    }
+
+    /// Everything `deleteConfirmedJunk` decides before any disk work, in
+    /// order: (1) the viewer refusal — FIRST, before anything else;
+    /// (2) Master Archive files are never bulk-deleted
+    /// (excludingMasterArchiveFiles); (3) the empty-selection
+    /// short-circuit — keeps the public contract crisp and avoids a
+    /// debounced save() that would re-write identical catalog bytes. A
+    /// non-nil `finished` is the whole answer; otherwise `records` are the
+    /// eligible ones. (Pulled out so the viewer guard does not grow the
+    /// already-large deleteConfirmedJunk.)
+    func junkDeletionPreflight(_ requested: [VideoRecord])
+        -> (records: [VideoRecord], finished: JunkDeletionResult?) {
+        if let refused = junkDeletionRefusedOnViewer(requested) { return ([], refused) }
+        let records = excludingMasterArchiveFiles(requested, verb: "Delete Confirmed Junk")
+        guard !records.isEmpty else {
+            return ([], JunkDeletionResult(
+                attempted: 0,
+                succeeded: 0,
+                alreadyMissing: 0,
+                skippedOffline: 0,
+                failed: []
+            ))
+        }
+        return (records, nil)
+    }
+
     /// Delete (trash or hard-remove) every record in `records`, regardless
     /// of their current `mediaDisposition`. Caller filters to
     /// `.confirmedJunk` before invoking — this method does not double-check
@@ -163,22 +212,8 @@ extension VideoScanModel {
         mode: JunkDeletionMode,
         guard fileGuard: JunkDeletionGuard? = nil
     ) async -> JunkDeletionResult {
-        // Master Archive files are never bulk-deleted (see
-        // excludingMasterArchiveFiles).
-        let records = excludingMasterArchiveFiles(requested, verb: "Delete Confirmed Junk")
-        // Empty-selection short-circuit: keep the public contract crisp and
-        // avoid an unnecessary debounced save() that would re-write
-        // catalog.json identical-bytes. Empty selection is a UI no-op,
-        // not an error.
-        guard !records.isEmpty else {
-            return JunkDeletionResult(
-                attempted: 0,
-                succeeded: 0,
-                alreadyMissing: 0,
-                skippedOffline: 0,
-                failed: []
-            )
-        }
+        let (records, finished) = junkDeletionPreflight(requested)
+        if let finished { return finished }
 
         // -------------------------------------------------------------
         // Phase 1 — main-thread pre-flight (no disk I/O).

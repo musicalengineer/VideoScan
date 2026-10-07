@@ -705,9 +705,14 @@ public struct PrunePlan: Equatable, Sendable {
                 // does not keep the family off "archive only".
                 if row.isMissingFile { continue }
                 switch row.role {
-                case .kept:
+                case .kept(let reason):
                     archiveOnly = false
-                    if !row.copy.volumeName.isEmpty { devicesAfter.insert(row.copy.volumeName) }
+                    // A copy on the archive's own volume is not an EXTRA
+                    // device beyond the archive — the same rule the plan
+                    // uses when it counts kept devices (GH #288, N1011-F1).
+                    if reason != .onArchiveVolume, !row.copy.volumeName.isEmpty {
+                        devicesAfter.insert(row.copy.volumeName)
+                    }
                 case .candidate:
                     if selected.contains(row.id) {
                         count += 1

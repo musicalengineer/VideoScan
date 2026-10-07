@@ -46,6 +46,12 @@ final class VideoScanModel: ObservableObject {
     /// CatalogStore layer also refuses writes — this flag is the UI
     /// half of the belt-and-suspenders. See CatalogSync.swift.
     @Published var isReadOnly: Bool = false
+
+    /// Relocate Bucket E: is a witness an independent copy, off the drive
+    /// being emptied? Production compares devices + inodes. Test seam only:
+    /// hermetic tests whose "volumes" are sibling temp folders on one disk
+    /// swap in `RelocateReconcile.witnessIsNotTheSourceFile`.
+    var relocateWitnessIndependence: WitnessIndependenceProbe = RelocateReconcile.witnessIsOffTheSourceDrive
     @Published var isScanning: Bool = false
     @Published var isCombining: Bool = false
     /// §3 Relocate Job Queue — backing store for the per-volume queue.

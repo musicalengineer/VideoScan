@@ -311,16 +311,14 @@ extension VideoScanModel {
             technique: technique,
             durationSeconds: duration,
             onProgress: progressFn,
+            stallThresholdSeconds: CombineTestSeams.muxStallThresholdSeconds,
             log: logFn
         )
 
         removeCombineTempDir(staged.tempDir)
         if !result.success || Task.isCancelled {
-            let stopped = Task.isCancelled
             removeCombinePartial(partialURL)
-            if !stopped { log("ffmpeg exit code \(result.exitCode)") }
-            await failCombineJob(jobIndex, stopped ? "    ✗ STOPPED: \(outName) — partial removed"
-                                 : "    ✗ FAILED: \(outName)")
+            await failCombineJob(jobIndex, muxFailureLine(result, outName: outName))
             return false
         }
 
@@ -372,6 +370,20 @@ extension VideoScanModel {
             }
         }
         return true
+    }
+
+    /// The console line for a mux that did not succeed (its partial is
+    /// already removed): a watchdog stall first — the watchdog kills ffmpeg
+    /// without cancelling the batch — then the user's Stop, then an ffmpeg
+    /// failure (its exit code logged).
+    private func muxFailureLine(_ result: CombineEngine.CombineResult, outName: String) -> String {
+        if let reason = result.stallReason {
+            appLog.write("combine: \(outName) stalled — \(reason); partial removed")
+            return "    ✗ STALLED: \(outName) — \(reason) — partial removed"
+        }
+        if Task.isCancelled { return "    ✗ STOPPED: \(outName) — partial removed" }
+        log("ffmpeg exit code \(result.exitCode)")
+        return "    ✗ FAILED: \(outName)"
     }
 
     /// Reserve this run's partial beside `outURL` (O_EXCL). On failure the
@@ -513,7 +525,8 @@ extension VideoScanModel {
     nonisolated func buildCombinedRecord(
         outputURL: URL, video: VideoRecordSnapshot, audio: VideoRecordSnapshot, summary: String
     ) async -> CombinedRecordSpec? {
-        let (probe, _) = await CombineVerifier.runFFProbe(url: outputURL, ffprobePath: ffprobePath)
+        let (probe, _) = await CombineVerifier.runFFProbe(url: outputURL, ffprobePath: ffprobePath,
+                                                          timeoutSeconds: CombineTestSeams.verifyToolTimeoutSeconds)
         guard let probe else { return nil }
         let fm = FileManager.default
         let attrs = try? fm.attributesOfItem(atPath: outputURL.path)

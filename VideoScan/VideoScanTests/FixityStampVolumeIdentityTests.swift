@@ -542,6 +542,12 @@ struct FixityStampVolumeIdentityTests {
             "VideoScan/MediaOps/DeleteDuplicatesSiblingProof.swift": 1,
             // names which identity field moved, for the log line only.
             "VideoScan/Archive/FixityRebind.swift": 1,
+            // Relocate witness independence (fix/p1-relocate-witness-and-
+            // rulings, N1007-R F1): two LIVE stats taken in the same probe —
+            // witness vs source root (not on the drive being emptied) and
+            // witness vs source file (dev+ino: not the file itself). Both
+            // via DeviceID.from, never a stored stamp.
+            "VideoScan/MediaOps/RelocateReconcile.swift": 2,
         ]
         let pattern = try NSRegularExpression(pattern:
             #"(\.device\s*[!=]=)|([!=]=\s*[\w.()]*\.device\b)|(st_dev\)?\s*[!=]=)|([!=]=\s*[\w.()]*st_dev\b)|(\\\(\w+\.device\))"#)
