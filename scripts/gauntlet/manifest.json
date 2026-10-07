@@ -19105,6 +19105,25 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteDuplicateRefusalTests.swift",
+      "stage": "regression",
+      "suites": [
+        "PromoteDuplicateRefusalTests"
+      ],
+      "tests": [
+        "aDifferentDigestIsNotRefused",
+        "aDigestWhoseByteCountDisagreesWithTheCopyIsNotTrusted",
+        "aFingerprintWhoseFileHasSinceChangedIsNotRefusedAtPlanTime",
+        "anUnlinkedSiblingWithTheArchivedDigestIsRefusedAtPlanTime",
+        "everyPromoteEntryPointGoesThroughTheDuplicatePreflight",
+        "requestPromoteThenTheJobWritesNothingAndKeepsOneCopy",
+        "theArchiveCopyItselfIsStillRefusedAsACopyNotAsItsOwnDuplicate",
+        "theDigestLegStaysAnIndexLookupOverALargeCatalog"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PronunciationVariationsTests.swift",
@@ -27909,6 +27928,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/PromoteRefusalRollbackTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PromoteDuplicateRefusalTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
