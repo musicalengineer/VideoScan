@@ -475,6 +475,15 @@ struct ArchiveView: View {
                 MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
             }
             .disabled(model.isReadOnly)
+            // GH #293: keep a perceptual fingerprint on every video (archive
+            // first) so Find Similar, delete-excess and the Year check can
+            // reuse it. Read-only on media; an MFO job Rick starts.
+            Button("Fingerprint Pictures (archive first)…") {
+                _ = fileOpsCenter.startedByUser { $0.startPerceptualFingerprintBackfill(model: model) }
+                MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+            }
+            .disabled(model.isReadOnly)
+            .help("Read each video once and keep its picture fingerprint in the catalog, archived files first. Nothing on disk is changed. Can run overnight; Pause / Stop any time.")
             // One-time catch-up (Rick 2026-09-27): Promote locks every new
             // file; this locks the ones promoted before locking existed. Gone
             // once it has completed cleanly (marker in App Support).

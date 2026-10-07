@@ -15443,6 +15443,27 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/InferredDateYearOnlyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "InferredDateYearOnlyLogicTests",
+        "InferredDateYearOnlyScaleTests",
+        "InferredDateYearOnlySensorTests"
+      ],
+      "tests": [
+        "capeReplicaShowsYearAndWhy",
+        "currentFolderYearUnchanged",
+        "dayPreciseUnchanged",
+        "hundredThousandRows",
+        "inspectorLineForCapeReplica",
+        "legacyPathYearIsAYear",
+        "noFabricatedJanFirst",
+        "userDateWins",
+        "writtenReasonTrustsTheSpan"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/InspectorArchivedBannerTests.swift",
       "stage": "unit",
       "suites": [
@@ -17763,6 +17784,42 @@
         "setPersonMatchesCaseInsensitively",
         "unsetOfManualOnlyTagDoesNotReject",
         "unsetScrubsAutoDetectionsAndRecordsRejection"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PerceptualFingerprintStoreTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PerceptualFingerprintBackfillJobTests",
+        "PerceptualFingerprintIsolationTests",
+        "PerceptualFingerprintMediaMatrixTests",
+        "PerceptualFingerprintPlanTests",
+        "PerceptualFingerprintScaleTests",
+        "StoredPerceptualFingerprintLogicTests"
+      ],
+      "tests": [
+        "additiveCodable",
+        "cloneCarriesIt",
+        "compareAndSet",
+        "compareWriteBack",
+        "currentness",
+        "damagedTextIsAbsent",
+        "damagedValueStillDecodes",
+        "failedSaveUndoes",
+        "hundredThousand",
+        "mediaMatrix",
+        "pauseFeedback",
+        "planOrderAndFilter",
+        "poisonedValuesAreRecomputed",
+        "progressLine",
+        "refusedReadOnly",
+        "rescanCarriesOnlyForTheSameBytes",
+        "roundTripInDesignedForm",
+        "runsArchiveFirstAndReports",
+        "stalledPassFailsCleanly",
+        "stopEndsCancelled"
       ]
     },
     {
@@ -26780,6 +26837,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/PerceptualFingerprintStoreTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/PerceptualFingerprinterTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
@@ -27532,7 +27593,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2138,
+      "expected_floor": 2147,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -27691,6 +27752,9 @@
         "VideoScanTests/IdentityNarrowingRegressionSensors",
         "VideoScanTests/IdentityNarrowingTests",
         "VideoScanTests/IdentityPriorScoringTests",
+        "VideoScanTests/InferredDateYearOnlyLogicTests",
+        "VideoScanTests/InferredDateYearOnlyScaleTests",
+        "VideoScanTests/InferredDateYearOnlySensorTests",
         "VideoScanTests/InspectorArchivedBannerTests",
         "VideoScanTests/InspectorPanelRulesTests",
         "VideoScanTests/InspectorPanelSectionOrderTests",

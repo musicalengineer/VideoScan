@@ -285,12 +285,13 @@ enum PerceptualHash {
         return ln / log(10.0)
     }
 
-    // MARK: Fingerprint encoding (future catalog persistence)
+    // MARK: Fingerprint encoding (catalog persistence)
     //
-    // Compact round-trip helpers so a future schema change can store
-    // fingerprints (32 hashes → 256 bytes → 344 base64 chars) in
-    // SQLite without re-decoding video. Deliberately NOT wired into
-    // the catalog in this feature — persistence is a schema decision.
+    // Compact round-trip helpers (32 hashes → 256 bytes → 344 base64
+    // chars). GH #293 (2026-10-07) wired persistence: the catalog keeps
+    // this exact form in `VideoRecord.perceptualFingerprint`
+    // (VideoScanCore/StoredPerceptualFingerprint.swift, which re-implements
+    // it in the Core package — a test pins the two byte-identical).
 
     /// Big-endian packed bytes — endian-pinned so a fingerprint written
     /// on one machine reads identically anywhere.

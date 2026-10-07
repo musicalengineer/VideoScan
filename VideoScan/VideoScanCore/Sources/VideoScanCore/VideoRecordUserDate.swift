@@ -338,7 +338,7 @@ extension VideoRecord {
         if let moved = displacedStampResolution {
             // Codex F4: a displaced stamp must not hide the inference's span —
             // "2003–2004" reads the same with or without the stamp.
-            if moved.source == .inferred, let range = inferredDateRange { return range.displayString }
+            if moved.source == .inferred, let range = effectiveInferredDateRange { return range.displayString }
             return moved.isoString
         }
         if let embedded = embeddedCreationDate {
@@ -346,8 +346,9 @@ extension VideoRecord {
         }
         if let inferred = inferredRecordDate {
             // GH #201: a year-precise inference shows its span ("2004",
-            // "2003–2004"), never a fabricated Jan 1.
-            if let range = inferredDateRange { return range.displayString }
+            // "2003–2004"), never a fabricated Jan 1. GH #293: so does a
+            // LEGACY year-only row with no span (folder-year, path-year).
+            if let range = effectiveInferredDateRange { return range.displayString }
             return Self.isoDayString(from: inferred)
         }
         return dateCreated
@@ -406,6 +407,11 @@ extension VideoRecord {
             if embeddedCreationDate != nil {
                 return "Creation date written inside the file by the camera or app that made it (\(embeddedDateOriginLabel)). Survives copies; enter your own in the inspector to override it."
             }
+            if inferredRecordDate != nil, inferredDateSource == Self.folderYearInferredDateSource {
+                // GH #293: a folder's name is not "what the video shows".
+                return "Year taken from the name of the folder this file sits in — a placeholder, not evidence of when it was filmed. Enter your own in the inspector to override it."
+                    + inferredReasonSuffix
+            }
             if inferredRecordDate != nil {
                 return "Date figured out from the video (on-screen dates / speech) — a machine guess for you to confirm. Enter your own in the inspector to override it."
                     + inferredReasonSuffix
@@ -418,7 +424,8 @@ extension VideoRecord {
     /// paragraph ("\n\nWhy: spoken now-cue … ; export stamp … set aside").
     /// Empty when no triangulation pass has written one.
     public var inferredReasonSuffix: String {
-        guard let reason = inferredDateReason, !reason.isEmpty else { return "" }
+        // GH #293: a legacy folder-year row (no written reason) still says why.
+        guard let reason = inferredDateReasonShown, !reason.isEmpty else { return "" }
         let pct = inferredDateConfidence.map { " (\(Int(($0 * 100).rounded()))% sure)" } ?? ""
         return "\n\nWhy\(pct): \(reason)"
     }

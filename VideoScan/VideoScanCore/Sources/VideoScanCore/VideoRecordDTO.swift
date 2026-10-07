@@ -161,6 +161,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let footage: FootageMembership?
     public let footageDecisions: [FootageDecision]
     public let familyMusic: FamilyMusicInfo?
+    public let perceptualFingerprint: StoredPerceptualFingerprint?
 
     // MARK: Capture from a live VideoRecord (called ON the main actor)
 
@@ -293,6 +294,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         footage                     = r.footage
         footageDecisions            = r.footageDecisions
         familyMusic                 = r.familyMusic
+        perceptualFingerprint       = r.perceptualFingerprint
     }
 
     // MARK: Encode — VERBATIM from VideoRecord.encode(to:)
@@ -547,5 +549,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         }
         // Family Music (2026-09-23): only when Rick marked the file.
         try c.encodeIfPresent(familyMusic, forKey: .familyMusic)
+        // Perceptual fingerprint (GH #293): only when one was kept — every
+        // other record round-trips byte-identical.
+        try c.encodeIfPresent(perceptualFingerprint, forKey: .perceptualFingerprint)
     }
 }

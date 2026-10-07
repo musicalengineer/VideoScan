@@ -592,6 +592,12 @@ struct MediaFileOperationRow: View {
                     .padding(.bottom, 10)
             }
 
+            if isExpanded, let fingerprints = job as? PerceptualFingerprintBackfillJob {
+                PerceptualFingerprintBackfillDetailView(job: fingerprints)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 10)
+            }
+
             if isExpanded, let prune = job as? PruneApplyJob {
                 PruneApplyDetailView(job: prune)
                     .padding(.horizontal, 12)
@@ -946,7 +952,7 @@ extension MediaFileOperationKind {
     var hasDetailView: Bool {
         switch self {
         case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies, .verifyVideo, .lockArchive, .compareFootage:
+             .pruneCopies, .verifyVideo, .lockArchive, .compareFootage, .fingerprintBackfill:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -1047,6 +1053,10 @@ extension MediaFileOperationKind {
         // verb like Compare's cobalt, but its own family. Δ ≥ 0.22 from every
         // other fill (nearest: Balance's raspberry), contrast vs white ≈ 9.
         case .compareFootage: return Color(red: 0.50, green: 0.10, blue: 0.45)
+        // Fingerprint Pictures (GH #293, 2026-10-07) — deep ultramarine: a
+        // reading verb that only writes catalog notes. Δ ≥ 0.35 from every
+        // other fill (nearest: Lock's navy slate), contrast vs white ≈ 14.7.
+        case .fingerprintBackfill: return Color(red: 0.00, green: 0.00, blue: 0.58)
         }
     }
 }
