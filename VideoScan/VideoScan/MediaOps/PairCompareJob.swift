@@ -101,10 +101,14 @@ final class PairCompareJob: @MainActor MediaFileOperationJob {
 
     // MARK: Init / start
 
-    init(recordA: VideoRecord, recordB: VideoRecord, gates: [Gate]) {
+    init(recordA: VideoRecord, recordB: VideoRecord, gates: [Gate],
+         onFingerprintKept: (@MainActor () -> Void)? = nil) {
         self.recordA = recordA
         self.recordB = recordB
         self.gates = gates
+        // GH #293: a fingerprint the visual tier computes is kept on the
+        // record; the owner (the catalog) persists it.
+        comparator.onFingerprintKept = onFingerprintKept
         comparatorForwarder = comparator.objectWillChange.sink { [weak self] _ in
             // Each comparator publish (progress line / hash-loop tick) is a
             // liveness signal — kick the stall watchdog before re-broadcast.

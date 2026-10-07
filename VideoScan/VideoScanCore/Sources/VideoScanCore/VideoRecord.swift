@@ -644,6 +644,14 @@ public class VideoRecord: Identifiable, Decodable {
     /// catalogs decode nil, the DTO writes the key only when present.
     public var familyMusic: FamilyMusicInfo?
 
+    /// GH #293 (2026-10-07): the 32-frame perceptual fingerprint, KEPT so
+    /// Find Similar / delete-excess / the Year check / Compare can reuse
+    /// it instead of re-decoding the file (StoredPerceptualFingerprint.swift).
+    /// Additive optional — legacy catalogs decode nil, the DTO writes the
+    /// key only when present. A machine-derived value: trusted only while
+    /// its recipe and file size still match (`isCurrent`).
+    public var perceptualFingerprint: StoredPerceptualFingerprint?
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -846,6 +854,9 @@ public class VideoRecord: Identifiable, Decodable {
         footageDecisions            = try c.decodeIfPresent([FootageDecision].self, forKey: .footageDecisions) ?? []
         // Family Music (2026-09-23) — additive optional; legacy → nil.
         familyMusic                 = try c.decodeIfPresent(FamilyMusicInfo.self, forKey: .familyMusic)
+        // Perceptual fingerprint (GH #293) — additive optional; legacy → nil.
+        // Its own decoder never fails on a damaged hex (reads as absent).
+        perceptualFingerprint       = try c.decodeIfPresent(StoredPerceptualFingerprint.self, forKey: .perceptualFingerprint)
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.

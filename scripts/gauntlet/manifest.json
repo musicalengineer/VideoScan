@@ -17756,6 +17756,42 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PerceptualFingerprintStoreTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PerceptualFingerprintBackfillJobTests",
+        "PerceptualFingerprintIsolationTests",
+        "PerceptualFingerprintMediaMatrixTests",
+        "PerceptualFingerprintPlanTests",
+        "PerceptualFingerprintScaleTests",
+        "StoredPerceptualFingerprintLogicTests"
+      ],
+      "tests": [
+        "additiveCodable",
+        "cloneCarriesIt",
+        "compareAndSet",
+        "compareWriteBack",
+        "currentness",
+        "damagedTextIsAbsent",
+        "damagedValueStillDecodes",
+        "failedSaveUndoes",
+        "hundredThousand",
+        "mediaMatrix",
+        "pauseFeedback",
+        "planOrderAndFilter",
+        "poisonedValuesAreRecomputed",
+        "progressLine",
+        "refusedReadOnly",
+        "rescanCarriesOnlyForTheSameBytes",
+        "roundTripInDesignedForm",
+        "runsArchiveFirstAndReports",
+        "stalledPassFailsCleanly",
+        "stopEndsCancelled"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PerceptualFingerprinterTests.swift",
@@ -26710,6 +26746,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/PeopleTabSourceOfTruthTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PerceptualFingerprintStoreTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

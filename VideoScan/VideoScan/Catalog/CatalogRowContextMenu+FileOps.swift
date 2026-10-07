@@ -59,7 +59,10 @@ extension CatalogContent {
             // Compare & Rescue feature.
             Button("Compare These Two Files…") {
                 _ = fileOpsCenter.startedByUser {
-                    $0.startCompare(recordA: fileA, recordB: fileB)
+                    // GH #293: a fingerprint the visual tier computes is
+                    // kept on the record and saved with the catalog.
+                    $0.startCompare(recordA: fileA, recordB: fileB,
+                                    onFingerprintKept: { [weak model] in model?.saveCatalogDebounced() })
                 }
                 // The compare result lives in the job window — in front (codex #964).
                 MediaFileOperationsWindowOpener.openInFront(openWindow)
