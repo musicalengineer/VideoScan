@@ -51,6 +51,14 @@ half-written; force-unwraps and `try!` on input or disk data; logs leaking media
 3. Write a **ranked refactor plan**: for each item, the behavior-preserving steps,
    the pinning tests that must exist BEFORE the move, the risk, and the size (S/M/L).
    Top 5 only in detail; the rest as a one-line backlog.
+4. **Design, not just mechanics (Rick 10/7: "not a slave to a low CCN").** For each of the top 5,
+   name the real concept the split follows (an enum with associated values, a value type, a focused
+   protocol, a pure function, an actor that owns state), cite the canonical source it rests on
+   (Swift API Design Guidelines, The Swift Programming Language, Swift Concurrency, SwiftUI data
+   flow, Apple sample code, NetNewsWire), and sketch the before/after type and function signatures.
+   A step1/step2 chunking, a closure-lookup table hiding branches, or access widened just to split
+   a file is a **rejected** plan, even if CCN falls. The gate blocks any rise in Σ max(0, CCN−15)
+   across the touched files, so an honest split (52 → 26 + 26) passes.
 
 ## Schedule
 (Tag format: `N<MMDD>-<theme>-<area>`.)
@@ -60,6 +68,8 @@ half-written; force-unwraps and `try!` on input or disk data; logs leaking media
 | 10-06 | N1006-D-next-refactors | D | Plan the NEXT local refactors (GH #281): `Archive/CopyFamilyAssessor.swift` (`assess` CCN 57) and `Catalog/CatalogAudit.swift` (`run` CCN 66). Both data-adjacent: list every guard and the pinning test that must exist before the split. (Catalog table is being refactored locally tonight, R1; don't plan it.) |
 | 10-07 | N1007-D-Hallie-rewrite-eval | D | **Evaluate rewrite vs. refactor** of the Hallie question parsers: `HallieLineageQuestion.swift` (`get` CCN 93, `detectShape` 88), `HalliePersonaQuestion.init` (72), `HallieTurnExecutor+Relationship.executeRelationship` (50). Deliver: (1) what the corpora pin (`tests/hallie_eval_corpus.json`, `archivist_golden_answers.json`, `hallie_interaction_corpus.json`, `hallie_live_misses_corpus.json`): which parser branches no corpus entry reaches; (2) a sketch of a table-driven design (pattern → intent as data) with the same interface; (3) a back-to-back plan: old and new run side by side on every corpus entry, disagreements logged, switch when there are none; (4) a recommendation, rewrite or refactor, with a size estimate. **Python-runnable:** you may run scripts that read the corpora. |
 | 10-07b | N1007-R-MediaOps-prune | R | MediaOps prune / relocate / purges / soft delete / junk + trash selection (the data-risk list in docs/guides/source_layout.md) |
+| 10-07c | N1007-P-swift-playbook | P | **Draft `docs/practices/swift_playbook.md`** (Rick 10/7: "a good template for just about every kind of coding job"). For each job this app does repeatedly (long MFO operation; list/table over 100k records; ffmpeg/ffprobe call; SQLite/ledger write; settings pane; background analyzer/cycler; a decision with several outcomes; a Hallie query path), give: the pattern, a 15–30 line Swift skeleton, the canonical source it follows (named, as in theme D step 4), the smells to avoid, and the **best existing in-repo example** (file:line) plus the worst one that should migrate. Measure, don't guess: grep for each job's current implementations. One page per job, C++ analogies for Rick. This one writes a doc, not a report: commit it on `cloud/<id>` at that path. |
+| 10-07d | N1007-D-Catalog-over-30 | D | Every **Catalog/** (+ `Model/`) function with CCN > 30 in `ci/baselines/complexity_debt.json`, aiming for zero over 30 before the M5 Ultra. Theme D in full, step 4 for every function, not just the top 5. Skip whatever a merged branch already changed (check `git log -- <file>` since 10-05). |
 | 10-08 | N1008-T-Archive | T | `Archive/` and its tests |
 | 10-09 | N1009-D-Core | D | `VideoScan/VideoScanCore/Sources/` (highest Swift churn) |
 | 10-10 | N1010-H-Volumes | H | `Volumes/` (scan engine, checkpoints, reachability, retire/delete scan target) |
