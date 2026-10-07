@@ -5,6 +5,55 @@ Owner: `refactor` agent. **Not merged and not pushed.**
 Brief: the Manager's R4 queue (InspectorPanel.body → catchUpInferredDates → mediaResolution /
 GedcomFamilyGraph.init), same method and report shape as R1 / R2.
 
+## ✅ Update 03:55 — everything proven and folded back
+
+The coordinator allowed test runs after the 2 AM nightly (the app was idle and no Promote or
+MFO job was open in videoscan.log). The WIP queue was finished in the order I was given. The
+sections below this one are the 01:05 snapshot. Where they disagree with this section, this
+section is correct.
+
+1. **Goldens from the OLD code.** I checked out `d39ffccb` (harnesses + inspector; neither
+   function moved yet) in this worktree with its own `.derivedData`, not a separate scratch
+   worktree. That is the same tree, and it reuses the incremental build. The run printed every
+   actual snapshot, and all six were pasted unedited. On that tree, the 156-suite set was green:
+   **942 Swift Testing tests / 154 suites + 48 XCTest**.
+2. **Green runs.** I ran the same 156 suites at three points, and all were green with the goldens
+   unchanged: after both moves, after both simplify steps, and at the branch head after the fold.
+3. **Mutations, each red, then reverted.** I built three batches of one date mutation plus one
+   media mutation each. The two kinds land in different suites, so each red is attributable:
+   (a) rule 0's stale-share branch disabled, (b) rule 1 without its archive guard, (c)
+   `keepOwnPass` flipped, (d) `hasAll` ignored in the shown-item pick, (e) the "finder" → reveal
+   override removed, (f) the out-of-range guard weakened. Each turned its characterization
+   snapshot red.
+4. **Inspector.** Four mutations in one build, each caught by exactly its own test:
+   NO AUDIO without the `pairedWith` check (`missingStreamBadgeOnlyOnUnpairedHalves`),
+   Video/Audio swapped in `body` (`bodyCallsTheSectionsInTheOldOrder`), "Timestamps" renamed
+   (`eachBuilderShowsItsOldTitle`), and the confirm button without the set-aside check
+   (`confirmButtonNeedsAwaitingASourceAndALiveRecord`). The other 15 inspector tests stayed green.
+
+**Folded onto this branch** as golden → move → simplify. I cherry-picked the commits and dropped
+the WIP wording from the messages. `wip/r4-untested` is left exactly as it was, and nothing was
+deleted.
+
+| SHA | What |
+|---|---|
+| `0bab172f` | InspectorPanel split + rules + 13 tests |
+| `399aa933` | catchUp / media characterization tests, goldens captured from the old code |
+| `8f6ec15a` | catchUpInferredDates move |
+| `9c2c134a` | mediaResolution move |
+| `65413af1` | catchUp simplify |
+| `9d84d7c7` | media simplify; also corrects the "latest" comment (comment only) |
+
+The folded tree is byte-identical to the tested WIP tree apart from this report and that one
+comment. The head run above covers it.
+
+**Correction to lead 2: withdrawn.** The golden shows that "play the latest one" never reaches
+`mediaResolution`. `dateOrderResolution` answers it first, as `dateOrdered(newestFirst, 1, play)`.
+There is no bug there.
+
+Still open: the Release spot test of the inspector (below), lead 1 (the BOM'd GEDCOM HEAD), and
+`formatAllMetadata`.
+
 ## 🔴 Status first: most of tonight's work is UNTESTED, because no test run was allowed
 
 Rick's Debug app (`/Volumes/XcodeRAM/…/Debug/VideoScan.app`, pid 26667) was running from before I
