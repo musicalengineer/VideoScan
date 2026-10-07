@@ -811,11 +811,16 @@ struct ArchivistGraphExecutorTests {
     /// only as deterministic values. Adding a translator dependency or call
     /// to this production component intentionally breaks this test for review.
     @Test func executorSourceHasNoTranslatorDependencyOrCall() throws {
-        let source = try SourceTree.appSource(named: "ArchivistGraphExecutor.swift")
-
-        #expect(!source.contains("NLQueryTranslating"))
-        #expect(!source.contains("OllamaQueryTranslator"))
-        #expect(!source.contains(".translate("))
+        let files = SourceTree.appSources.filter {
+            $0.url.lastPathComponent.hasPrefix("ArchivistGraph")
+        }
+        #expect(!files.isEmpty)
+        for file in files {
+            let source = try String(contentsOf: file.url, encoding: .utf8)
+            #expect(!source.contains("NLQueryTranslating"), Comment(rawValue: file.relative))
+            #expect(!source.contains("OllamaQueryTranslator"), Comment(rawValue: file.relative))
+            #expect(!source.contains(".translate("), Comment(rawValue: file.relative))
+        }
     }
 
     /// Production bridge sensor: POIProfile is UI/persistence state; only its
