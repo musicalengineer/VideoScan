@@ -809,14 +809,20 @@ extension VideoScanModel {
         }
     }
 
+    /// Rules 0 and 1 write only to a live, readable row with no date of
+    /// Rick's that is not a Master Archive file.
+    @MainActor
+    private static func catchUpMayWrite(_ rec: VideoRecord, archived: Set<UUID>) -> Bool {
+        isEligibleForDateInference(rec) && rec.userDate == nil && !archived.contains(rec.id)
+    }
+
     /// Rule 0 (GH #201) — housekeeping before anything is derived: a
     /// legacy filesystem-tier "inference" is cleared (a copy date is
     /// never an inferred date); a footage-shared date whose donor left
     /// the group is cleared so rules 1 / 2b re-derive it honestly.
     @MainActor
     private static func clearStaleInferredDates(_ pass: inout InferredDateCatchUpPass) {
-        for rec in pass.candidates where isEligibleForDateInference(rec) && rec.userDate == nil
-            && !pass.archived.contains(rec.id) {
+        for rec in pass.candidates where catchUpMayWrite(rec, archived: pass.archived) {
             if isLegacyFilesystemInference(rec) {
                 clearInferredDate(rec, reason: clearedFilesystemReason)
                 pass.result.cleared += 1
@@ -839,10 +845,7 @@ extension VideoScanModel {
     /// (`refreshScope`, from the transcript / caption writebacks).
     @MainActor
     private func inferDatesFromOwnEvidence(_ pass: inout InferredDateCatchUpPass) {
-        for rec in pass.candidates where Self.isEligibleForDateInference(rec)
-            && rec.userDate == nil
-            && !pass.archived.contains(rec.id)
-            && Self.hasDateEvidence(rec) {
+        for rec in pass.candidates where Self.catchUpMayWrite(rec, archived: pass.archived) && Self.hasDateEvidence(rec) {
             inferDateFromOwnEvidence(rec, &pass)
         }
     }
@@ -871,8 +874,16 @@ extension VideoScanModel {
             return
         }
         pass.result.examined += 1
-        let hadDate = rec.inferredRecordDate != nil
         let r = Self.triangulateStoredEvidence(rec, people: pass.people, now: pass.started)
+        recordOwnEvidence(r, on: rec, fingerprint: fingerprint, &pass)
+    }
+
+    /// Rule 1's write-back: what one triangulation of a row's own evidence
+    /// leaves on the row, in the "no date" memo and in the counts.
+    @MainActor
+    private func recordOwnEvidence(_ r: DateTriangulationResult, on rec: VideoRecord, fingerprint: Int,
+                                   _ pass: inout InferredDateCatchUpPass) {
+        let hadDate = rec.inferredRecordDate != nil
         if r.date != nil {
             // A legacy row re-derived from its OWN dossier pass keeps
             // that provenance (nil); everything else — a new date, a
