@@ -1,61 +1,26 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-06T11:36:25Z",
- "sha": "a70a3562",
+ "ts": "2026-10-07T11:26:01Z",
+ "sha": "4b79bbbb",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 521,
- "baseline_before": 518,
- "baseline_after": 518,
- "new": [
-  {
-   "key": "scripts/complexity_backfill.py::main",
-   "file": "scripts/complexity_backfill.py",
-   "function": "main",
-   "ccn": 20,
-   "nloc": 83,
-   "lang": "python"
-  },
-  {
-   "key": "scripts/complexity_metrics.py::alert_lines",
-   "file": "scripts/complexity_metrics.py",
-   "function": "alert_lines",
-   "ccn": 17,
-   "nloc": 31,
-   "lang": "python"
-  },
-  {
-   "key": "scripts/complexity_baseline_nightly.py::run",
-   "file": "scripts/complexity_baseline_nightly.py",
-   "function": "run",
-   "ccn": 16,
-   "nloc": 53,
-   "lang": "python"
-  }
- ],
+ "offenders": 447,
+ "baseline_before": 447,
+ "baseline_after": 447,
+ "new": [],
  "worse": [
   {
-   "key": "scripts/complexity_metrics.py::main",
-   "file": "scripts/complexity_metrics.py",
-   "function": "main",
-   "ccn": 21,
-   "nloc": 95,
-   "lang": "python",
-   "base_ccn": 20,
-   "base_nloc": 89
-  },
-  {
-   "key": "VideoScan/VideoScan/Steward/StewardCaseBuilder.swift::StewardCaseBuilder.init.reclaimGroupCases",
-   "file": "VideoScan/VideoScan/Steward/StewardCaseBuilder.swift",
-   "function": "StewardCaseBuilder.init.reclaimGroupCases",
-   "ccn": 17,
-   "nloc": 83,
+   "key": "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift::ArchiveAngelRejection.name",
+   "file": "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift",
+   "function": "ArchiveAngelRejection.name",
+   "ccn": 28,
+   "nloc": 31,
    "lang": "swift",
-   "base_ccn": 16,
-   "base_nloc": 79
+   "base_ccn": 27,
+   "base_nloc": 30
   }
  ],
  "fixed": [],
