@@ -23,3 +23,8 @@ Mark a row done by adding it here when its branch is pushed.
 | N1010-H-Volumes | 10-06 | (batch) | 7: 6 REAL / 1 NOISE | 6 confirmed | #287 | report on main |
 
 **Balance check 10-06 (Rick):** $214 of $250 left. $242 → $214 = **$28 for 8 sessions** (C02, N1006, N1007-Hallie, N1007-prune, N1008, N1009, N1010, C04): about **$3.50/session**. About 50 findings, 3 P1s confirmed and fixed, 0 refuted by local qa; roughly 1.7 verified findings per dollar.
+| C05 | 10-06 night | (batch of 5) | 9 | 7 confirmed + 2 partly | design amended 2592d671 | report on main |
+| N1011-D-PrunePlan | 10-06 night | (batch) | 5 | 2 confirmed (P2, P3), 1 noise | issue | report on main |
+| N1012-R-FamilyTree-writes | 10-06 night | (batch) | 4 | 4 confirmed incl. **P1** photo sidecar | fixing (fix/family-writes-n1012) | report on main |
+| N1014-H-MediaOps-jobs | 10-06 night | (batch) | 6 | 3 confirmed + 1 partly + 2 noise | fixing (fix/mfo-jobs-n1014) | report on main |
+| N1016-D-ArchiveAngel | 10-06 night | (batch) | 3 | 3 confirmed (P2, P2, P3) | issue | report on main |
