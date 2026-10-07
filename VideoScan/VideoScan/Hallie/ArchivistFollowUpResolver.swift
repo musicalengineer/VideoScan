@@ -588,6 +588,21 @@ enum ArchivistFollowUpResolver {
         let years: [Int]
     }
 
+    /// Words of a media follow-up that are not a filename token: the
+    /// referent filler, all / both / every, ordinals and counts, numbers
+    /// (years are read separately), and the linking words below.
+    /// ("latest" is not here, as before: "play the latest one" is answered
+    /// earlier, by dateOrderResolution.)
+    private static let mediaLinkWords: Set<String> = [
+        "number", "last", "from", "with", "about", "called", "named", "titled", "which", "where",
+    ]
+
+    private static func isMediaContentWord(_ word: String) -> Bool {
+        !referentFiller.contains(word) && !allWords.contains(word)
+            && ordinals[word] == nil && cardinalWords[word] == nil
+            && !mediaLinkWords.contains(word) && Int(word) == nil
+    }
+
     private static func mediaVerb(_ word: String) -> MediaVerb? {
         if playVerbs.contains(word) {
             return .play
@@ -613,18 +628,11 @@ enum ArchivistFollowUpResolver {
         let hasAll = words.contains { allWords.contains($0) }
             || (words.contains { ["them", "those", "these"].contains($0) }
                 && !words.contains("of"))
-        let content = words.filter {
-            !referentFiller.contains($0) && !allWords.contains($0)
-                && ordinals[$0] == nil && cardinalWords[$0] == nil
-                && $0 != "number" && $0 != "last" && Int($0) == nil
-                && $0 != "from" && $0 != "with" && $0 != "about" && $0 != "called"
-                && $0 != "named" && $0 != "titled" && $0 != "which" && $0 != "where"
-        }
         return MediaRequest(
             verb: effectiveVerb, words: words, hasReferentNoun: hasReferentNoun, hasAll: hasAll,
             numbered: numberedIndex(words),
             wantsLast: words.contains("last") || words.contains("latest"),
-            content: content,
+            content: words.filter(isMediaContentWord),
             years: words.compactMap { Int($0) }.filter { (1900...2099).contains($0) })
     }
 
