@@ -481,7 +481,12 @@ struct ResearchDossier: Equatable, Sendable, Codable {
     /// dropped only when they are bare search hits. Records Rick FILED
     /// (`.recordFinder`) are never a source's output, so a run never drops
     /// or trims them. The 500-finding trim spares the same set.
-    mutating func merge(fresh: [ResearchFinding], at date: Date) {
+    ///
+    /// `pending` (N1012-F3): ids the user has typed lore into that is not
+    /// saved yet. They count as Rick's work too, so the draft still has a
+    /// finding to land on when it is committed.
+    mutating func merge(fresh: [ResearchFinding], at date: Date, keeping pending: Set<String> = []) {
+        let keeps: (ResearchFinding) -> Bool = { $0.holdsRicksWork || pending.contains($0.id) }
         var byID: [String: ResearchFinding] = [:]
         for finding in findings { byID[finding.id] = finding }
         var merged: [ResearchFinding] = []
@@ -495,12 +500,12 @@ struct ResearchDossier: Equatable, Sendable, Codable {
             }
             merged.append(finding)
         }
-        for finding in findings where !seen.contains(finding.id) && finding.holdsRicksWork {
+        for finding in findings where !seen.contains(finding.id) && keeps(finding) {
             merged.append(finding)
         }
         if merged.count > Self.maxFindings {
-            let kept = merged.filter(\.holdsRicksWork)
-            let trimmable = merged.filter { !$0.holdsRicksWork }
+            let kept = merged.filter(keeps)
+            let trimmable = merged.filter { !keeps($0) }
             merged = kept + trimmable.prefix(max(0, Self.maxFindings - kept.count))
         }
         findings = merged

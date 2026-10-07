@@ -9452,6 +9452,9 @@
         "FamilyAssetStoreTests"
       ],
       "tests": [
+        "aDamagedExclusionSidecarIsNeverSavedOver",
+        "aDamagedExclusionSidecarThatCannotBeSetAsideRefusesTheWrite",
+        "aFailedExclusionWriteReportsTheRealErrno",
         "aPersonUnknownToTheDirectoryFallsBackToNameMatching",
         "anExcludedPhotoIsNeverShownForThatPersonAgain",
         "crestLookupIsCaseAndDiacriticInsensitiveAndContentVerified",
@@ -20039,13 +20042,18 @@
         "ResearchQueryPlanTests",
         "ResearchSourceAdapterTests",
         "ResearchStoreTests",
-        "ResearchAttestationTests"
+        "ResearchAttestationTests",
+        "ResearchLoreNeverDroppedTests"
       ],
       "tests": [
+        "aRerunThatNoLongerReturnsAFindingKeepsItsTypedLore",
         "birthOnlyWindowAssumesALifespanAndNeverPassesToday",
         "cacheCapsOversizedBodies",
         "chroniclingAmericaClipsToCoverageAndSkipsOutOfRange",
         "chroniclingAmericaParsesItemsAndConstrainsTheQuery",
+        "closingTheSheetSavesTypedLore",
+        "closingWithItsFindingGoneStillKeepsTheWords",
+        "committingLoreForAFindingGoneFromDiskSaysSoAndKeepsTheDraft",
         "confirmedFindingBecomesAConfirmedCitedItemLinkedToTheTreeRecord",
         "deceasedTreePersonIsEligibleAndKeyedByFamilySearchID",
         "dossierRoundTripsAndVerdictsSurviveARerun",
