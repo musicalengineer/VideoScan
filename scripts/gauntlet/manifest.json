@@ -5335,6 +5335,18 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivistTemporalGroupSnapshotTests.swift",
+      "suites": [
+        "ArchivistTemporalGroupSnapshotTests"
+      ],
+      "tests": [
+        "everyGroupAskAndReferenceMatchesItsRecordedSnapshot"
+      ],
+      "stage": "hallie",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AsyncSemaphoreTests.swift",
@@ -5985,6 +5997,25 @@
         "undesignated",
         "versionsOfArchivedAreHidden"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogAuditGuardTests.swift",
+      "suites": [
+        "CatalogAuditGuardTests"
+      ],
+      "tests": [
+        "coldCacheIsWarmingNotMismatch",
+        "findingOrderAndNames",
+        "masterArchiveCheckSkippedWithoutIndex",
+        "membersThatDisagreeAreStale",
+        "purgedAndDeletedIsTerminal",
+        "retiredEmptyTargetIsNotOffered",
+        "staleGroupFocusSkipsPurgedMembers",
+        "wholeReportSnapshot"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
     {
       "kind": "xcode",
@@ -7728,6 +7759,26 @@
         "nativeCopyDerivedFromAbsentRecordIsNotCalledTheProvenOriginal",
         "oneStaleDerivedFromInAnIdenticalGroupDoesNotDemoteTheOriginal"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CopyFamilyGuardTests.swift",
+      "suites": [
+        "CopyFamilyGuardTests"
+      ],
+      "tests": [
+        "audioOnlyOriginalNeedsVerify",
+        "damagedAudioWithoutRepair",
+        "derivationTargetOutranksLossless",
+        "earliestStampBeatsSignatureOrder",
+        "losslessRootBeatsLossyRoot",
+        "presumedOriginalGetsNoCreateCompanion",
+        "twoNativeRootsCaution",
+        "unknownCodecDependsOnLineage",
+        "wholeAssessmentSnapshot"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
     {
       "kind": "xcode",
@@ -12936,6 +12987,18 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HalliePersonaParserOracleTests.swift",
+      "suites": [
+        "HalliePersonaParserOracleTests"
+      ],
+      "tests": [
+        "theRefactoredDetectAgreesWithTheLegacyCopyOnEveryInput"
+      ],
+      "stage": "hallie",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HalliePersonaQuestionTests.swift",
       "stage": "hallie",
       "suites": [
@@ -12943,6 +13006,7 @@
       ],
       "tests": [
         "aThirdPartyWithYouAndAYearKeepsThePresenceRoad",
+        "birthBranchCueOrderIsPinned",
         "howOldWasDonnaInThisVideoStaysTemporal",
         "lifeFactsAskedOfHallieAreDetected",
         "theNamesakeResolvesThroughHerNameLadderOnlyWhenUnique",
@@ -13473,6 +13537,18 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieRelationshipSnapshotTests.swift",
+      "suites": [
+        "HallieRelationshipSnapshotTests"
+      ],
+      "tests": [
+        "everyRelationshipBranchMatchesItsRecordedSnapshot"
+      ],
+      "stage": "hallie",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieRelationshipTests.swift",
       "stage": "hallie",
       "suites": [
@@ -13758,6 +13834,18 @@
         "unknownDetailsStory",
         "worldWarTwoAsk"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieShellAnswerSnapshotTests.swift",
+      "suites": [
+        "HallieShellAnswerSnapshotTests"
+      ],
+      "tests": [
+        "scriptedSessionsMatchTheirRecordedSnapshots"
+      ],
+      "stage": "hallie",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
     {
       "kind": "xcode",
@@ -14092,6 +14180,18 @@
         "theUnscopedSuperlativeStillRanksTheWholeTreeWordForWord",
         "unscopedAndSurnameShapesAreUntouched"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieSuperlativeSnapshotTests.swift",
+      "suites": [
+        "HallieSuperlativeSnapshotTests"
+      ],
+      "tests": [
+        "everyKindAndScopeMatchesItsRecordedSnapshot"
+      ],
+      "stage": "hallie",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
@@ -25643,6 +25743,10 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
         {
+          "name": "VideoScan/VideoScanTests/CatalogAuditGuardTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/CatalogDistributionTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
@@ -25781,6 +25885,10 @@
         {
           "name": "VideoScan/VideoScanTests/CopyFamilyAssessorTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CopyFamilyGuardTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/CorrelatorDurationGateTests.swift",
@@ -27885,6 +27993,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanTests/ArchivistTemporalGroupSnapshotTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/HallieAmpersandRoundTripTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -27977,6 +28089,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/HalliePersonaParserOracleTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/HalliePhotoCaptionTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -28029,11 +28145,19 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/HallieRelationshipSnapshotTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/HallieRelaxedOfferWordingTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/HallieRemoteClientTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/HallieShellAnswerSnapshotTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -28047,6 +28171,10 @@
         {
           "name": "VideoScan/VideoScanTests/HallieSpeechChunkerTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/HallieSuperlativeSnapshotTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/HallieSuperlativeTests.swift",
@@ -28113,7 +28241,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1081,
+      "expected_floor": 1082,
       "modes": [
         {
           "name": "strict",

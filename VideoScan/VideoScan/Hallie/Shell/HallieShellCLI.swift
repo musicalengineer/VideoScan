@@ -937,6 +937,56 @@ enum HallieShellCLI {
             }
             return outcome
         }
+        // GH #281 R3 (2026-10-06): the steps below were one 419-line
+        // function; each is now its own function, called in the same order.
+        if let outcome = await modalTurn(
+                question, options: options, state: &state,
+                output: output, dependencies: dependencies) {
+            return outcome
+        }
+        if let pending = state.pendingClarification,
+           let outcome = await pendingClarificationTurn(
+                question, pending: pending, options: options, state: &state,
+                output: output, dependencies: dependencies) {
+            return outcome
+        }
+        let routingQuestion = frontDoorRoutingQuestion(
+            question, state: state, options: options, output: output)
+        do {
+            return try await routedTurn(
+                question, routingQuestion: routingQuestion, options: options,
+                state: &state, output: output, dependencies: dependencies)
+        } catch {
+            state.citations = []
+            let diagnostic = String(reflecting: error)
+            appLog.write("Hallie shell interpretation failed — \(diagnostic)")
+            let message = HallieHelperFailure.message(for: error)
+            output(message)
+            if options.diagnostics
+                || ProcessInfo.processInfo.environment["HALLIE_DEBUG_ERRORS"] == "1" {
+                output("diagnostic: \(diagnostic)")
+            }
+            let event = transcriptEvent(
+                kind: .error,
+                text: message,
+                basisLine: HallieHelperFailure.basisLine,
+                outcome: "interpretation-failed",
+                state: &state)
+            await dependencies.recordTranscript([event])
+            return .interpretationFailed
+        }
+    }
+
+    /// The turns a mode owns before any routing: a natural reset, the
+    /// variations picker, the name drill, pronunciation, and telling.
+    /// nil = no mode claimed the turn.
+    private static func modalTurn(
+        _ question: String,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async -> AnswerOutcome? {
         // A reset is a control-plane turn, not modal input. Detect it before
         // the picker / drill / telling owners: otherwise "start over" can be
         // consumed as a drill correction or as the end of a telling session.
@@ -988,87 +1038,108 @@ enum HallieShellCLI {
                 opening, options: options, state: &state,
                 output: output, dependencies: dependencies)
         }
-        if let pending = state.pendingClarification {
-            // A discriminator that fits several of the choices narrows the
-            // list; one that fits nobody is said and the same question
-            // stays open (same wording as the chat window, 2026-08-29).
-            switch HallieTurnExecutor.clarificationReply(question, from: pending.value.candidates) {
-            case .narrowed(let subset, let discriminator):
-                let narrowed = pending.value.narrowed(to: subset) ?? pending.value
-                state.pendingClarification = Session.PendingClarification(
-                    value: narrowed, context: pending.context)
-                return await reaskClarification(
-                    narrowed,
-                    preface: HallieTurnExecutor.narrowedClarificationPreface(
-                        count: narrowed.candidates.count, discriminator: discriminator),
-                    state: &state, output: output, dependencies: dependencies)
-            case .unmatched(let discriminator):
-                return await reaskClarification(
-                    pending.value,
-                    preface: HallieTurnExecutor.unmatchedClarificationPreface(discriminator),
-                    state: &state, output: output, dependencies: dependencies)
-            case .selected, .notASelection:
-                break
-            }
-            // "no" / "not now" to an OFFER (the gallery offer after a
-            // biography, 2026-09-10) just closes it — same wording as the
-            // chat window (HallieClarificationDecline); a which-one keeps
-            // the policy below.
-            if pending.value.stage.isOffer, HallieClarificationDecline.matches(question) {
-                state.pendingClarification = nil
-                let line = HallieClarificationDecline.reply(for: pending.value.stage)
-                output(line)
-                let event = transcriptEvent(
-                    kind: .assistant, text: line,
-                    basisLine: "The offer was declined; nothing was looked up.",
-                    outcome: "declined", state: &state)
-                await dependencies.recordTranscript([event])
-                return .declined
-            }
-            // A clarifying question must expire when the person changes the
-            // subject. Before this, a pending clarification was cleared only
-            // by :cancel, so one "which Tim did you mean?" swallowed every
-            // later turn — 25 in a row in the 2026-08-21 eval. The selector
-            // below is still THE selector; the policy only decides what a
-            // NON-selection means (ask again vs follow the person).
-            let decision = HallieClarificationPolicy.decide(
-                reply: question,
-                candidates: pending.value.candidates.map(\.label),
-                select: { reply in
-                    clarificationSelection(reply, from: pending.value.candidates)
-                        .map(String.init(describing:))
-                })
-            if HallieRepairTurn.isRepair(question) {
-                // A complaint about the which-one list itself ("those people
-                // are from the 1300s"): the question stays pending and the
-                // repair reply (pre-translation) re-asks it, narrowed; a
-                // typed name / year / number afterwards still selects.
-            } else if decision == .abandon {
-                state.pendingClarification = nil
-                // An unanswered OFFER just lapses (the chat window never
-                // says anything either); only a which-one question is
-                // acknowledged as set aside.
-                if !pending.value.stage.isOffer {
-                    output(HallieClarificationPolicy.abandonNote)
-                }
-                // fall through: answer THIS question as a fresh turn
-            } else {
-                return await continueClarification(
-                    question,
-                    pending: pending,
-                    options: options,
-                    state: &state,
-                    output: output,
-                    dependencies: dependencies)
-            }
+        return nil
+    }
+
+    /// A reply while a which-one (or an offer) is pending. nil = the turn
+    /// is answered fresh below (the question was abandoned, or it is a
+    /// repair complaint that keeps the question pending).
+    private static func pendingClarificationTurn(
+        _ question: String,
+        pending: Session.PendingClarification,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async -> AnswerOutcome? {
+        // A discriminator that fits several of the choices narrows the
+        // list; one that fits nobody is said and the same question
+        // stays open (same wording as the chat window, 2026-08-29).
+        switch HallieTurnExecutor.clarificationReply(question, from: pending.value.candidates) {
+        case .narrowed(let subset, let discriminator):
+            let narrowed = pending.value.narrowed(to: subset) ?? pending.value
+            state.pendingClarification = Session.PendingClarification(
+                value: narrowed, context: pending.context)
+            return await reaskClarification(
+                narrowed,
+                preface: HallieTurnExecutor.narrowedClarificationPreface(
+                    count: narrowed.candidates.count, discriminator: discriminator),
+                state: &state, output: output, dependencies: dependencies)
+        case .unmatched(let discriminator):
+            return await reaskClarification(
+                pending.value,
+                preface: HallieTurnExecutor.unmatchedClarificationPreface(discriminator),
+                state: &state, output: output, dependencies: dependencies)
+        case .selected, .notASelection:
+            break
         }
-        // THE FRONT DOOR (2026-09-21), the same pass the app runs: typos
-        // read as their words, a leading greeting set aside. The typed
-        // `question` stays the transcript.
+        // "no" / "not now" to an OFFER (the gallery offer after a
+        // biography, 2026-09-10) just closes it — same wording as the
+        // chat window (HallieClarificationDecline); a which-one keeps
+        // the policy below.
+        if pending.value.stage.isOffer, HallieClarificationDecline.matches(question) {
+            state.pendingClarification = nil
+            let line = HallieClarificationDecline.reply(for: pending.value.stage)
+            output(line)
+            let event = transcriptEvent(
+                kind: .assistant, text: line,
+                basisLine: "The offer was declined; nothing was looked up.",
+                outcome: "declined", state: &state)
+            await dependencies.recordTranscript([event])
+            return .declined
+        }
+        // A clarifying question must expire when the person changes the
+        // subject. Before this, a pending clarification was cleared only
+        // by :cancel, so one "which Tim did you mean?" swallowed every
+        // later turn — 25 in a row in the 2026-08-21 eval. The selector
+        // below is still THE selector; the policy only decides what a
+        // NON-selection means (ask again vs follow the person).
+        let decision = HallieClarificationPolicy.decide(
+            reply: question,
+            candidates: pending.value.candidates.map(\.label),
+            select: { reply in
+                clarificationSelection(reply, from: pending.value.candidates)
+                    .map(String.init(describing:))
+            })
+        if HallieRepairTurn.isRepair(question) {
+            // A complaint about the which-one list itself ("those people
+            // are from the 1300s"): the question stays pending and the
+            // repair reply (pre-translation) re-asks it, narrowed; a
+            // typed name / year / number afterwards still selects.
+            return nil
+        }
+        if decision == .abandon {
+            state.pendingClarification = nil
+            // An unanswered OFFER just lapses (the chat window never
+            // says anything either); only a which-one question is
+            // acknowledged as set aside.
+            if !pending.value.stage.isOffer {
+                output(HallieClarificationPolicy.abandonNote)
+            }
+            // fall through: answer THIS question as a fresh turn
+            return nil
+        }
+        return await continueClarification(
+            question,
+            pending: pending,
+            options: options,
+            state: &state,
+            output: output,
+            dependencies: dependencies)
+    }
+
+    /// THE FRONT DOOR (2026-09-21), the same pass the app runs: typos
+    /// read as their words, a leading greeting set aside. The typed
+    /// `question` stays the transcript; this is the text that is routed.
+    private static func frontDoorRoutingQuestion(
+        _ question: String,
+        state: Session,
+        options: Options,
+        output: (String) -> Void
+    ) -> String {
         let door = frontDoor(question, identity: state.identityContext,
                              diagnostics: options.diagnostics, output: output)
         let repair = HallieSpellingRecovery.repairRequestOpener(door.routingText)
-        let routingQuestion = repair.text
         if let original = repair.originalWord,
            let replacement = repair.replacementWord {
             appLog.write(
@@ -1077,340 +1148,450 @@ enum HallieShellCLI {
                 output("corrected: \(original) → \(replacement)")
             }
         }
-        do {
-            state.biographyPhoto = nil
-            // Model-free step first: capability questions, follow-ups on the
-            // last answer, refinements, local family-tree shapes.
-            let identity = state.identityContext
-            if HallieCatalogStats.detect(routingQuestion) != nil, state.catalogStats == nil {
-                state.catalogStats = HallieCatalogStats.compute(records: state.records)
+        return repair.text
+    }
+
+    /// What the routing decided to execute: the intent, the mode gate's
+    /// basis note (design §3.4 B; nil otherwise), and the mode the turn
+    /// runs in (the classifier's verdict, or the catalog when the gate
+    /// switched a media ask out of tree mode).
+    private struct PlannedTurn {
+        let intent: HallieTurnExecutor.Intent
+        let gateNote: String?
+        let mode: HallieMode
+    }
+
+    /// Either a plan to execute or a turn that already finished.
+    private enum TurnStep {
+        case execute(PlannedTurn)
+        case finished(AnswerOutcome)
+    }
+
+    /// The model-free classifier, the translator lane, and execution.
+    private static func routedTurn(
+        _ question: String,
+        routingQuestion: String,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async throws -> AnswerOutcome {
+        state.biographyPhoto = nil
+        // Model-free step first: capability questions, follow-ups on the
+        // last answer, refinements, local family-tree shapes.
+        let identity = state.identityContext
+        if HallieCatalogStats.detect(routingQuestion) != nil, state.catalogStats == nil {
+            state.catalogStats = HallieCatalogStats.compute(records: state.records)
+        }
+        // The selected row and its resolved date, captured once for the
+        // whole turn (the pre-translation lane and the executor context
+        // must agree on which date "this" is).
+        let selectedRecord = state.selectedRecordID.flatMap(state.record)
+        let selectedDate = selectedRecord.flatMap(temporalSelectionDate)
+        let classified = classifyTurn(
+            routingQuestion, state: state, identity: identity,
+            selectedRecord: selectedRecord, selectedDate: selectedDate)
+        // One `[hallie-mode]` line per turn (design §3.3).
+        appLog.write(classified.verdict.logLine(
+            question: routingQuestion, forced: state.memory.forcedMode != nil))
+        let planned: PlannedTurn
+        switch classified.decision {
+        case .answer(let result):
+            return await completeLocalAnswer(
+                result,
+                question: question,
+                identity: identity,
+                options: options,
+                state: &state,
+                output: output,
+                dependencies: dependencies)
+        case .run(let local):
+            state.lastResponder = "local"
+            planned = PlannedTurn(intent: local, gateNote: nil, mode: classified.verdict.mode)
+            if options.diagnostics {
+                output("interpreted: \(HallieTurnExecutor.description(of: local.ast)) (local)")
             }
-            // The selected row and its resolved date, captured once for the
-            // whole turn (the pre-translation lane and the executor context
-            // must agree on which date "this" is).
-            let selectedRecord = state.selectedRecordID.flatMap(state.record)
-            let selectedDate = selectedRecord.flatMap(temporalSelectionDate)
-            let treeGraph = state.graph
-            let classified = HallieTurnExecutor.preTranslationClassified(
-                question: routingQuestion,
-                playAfterAnswer: false,
-                memory: state.memory,
-                isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) },
+        case .translate(let effectiveQuestion, let wantsPlay):
+            switch try await translatedTurn(
+                question, effectiveQuestion: effectiveQuestion, wantsPlay: wantsPlay,
+                routingQuestion: routingQuestion, classified: classified, identity: identity,
+                options: options, state: &state, output: output, dependencies: dependencies) {
+            case .finished(let outcome): return outcome
+            case .execute(let plan): planned = plan
+            }
+        }
+        if options.diagnostics {
+            output("mode: \(classified.verdict.mode.rawValue) (\(classified.verdict.reasonText))")
+        }
+        return try await executePlannedTurn(
+            planned, question: question, selectedDate: selectedDate, options: options,
+            state: &state, output: output, dependencies: dependencies)
+    }
+
+    /// The pre-translation lane with every oracle the app gives it.
+    private static func classifyTurn(
+        _ routingQuestion: String,
+        state: Session,
+        identity: HallieTurnExecutor.Context,
+        selectedRecord: VideoRecord?,
+        selectedDate: ArchivistTemporalSelectionDateSnapshot?
+    ) -> HallieTurnExecutor.Classified {
+        let treeGraph = state.graph
+        return HallieTurnExecutor.preTranslationClassified(
+            question: routingQuestion,
+            playAfterAnswer: false,
+            memory: state.memory,
+            isKnownPerson: { HallieTurnExecutor.isKnownPerson($0, context: identity) },
+            isInnerCircleName: {
+                HallieTurnExecutor.isInnerCircleName($0, context: identity)
+            },
+            catalogStats: state.catalogStats,
+            rosterAnswer: { scope in
+                HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity, scope: scope)
+            },
+            lineageAnswer: { HallieLineageAnswer.answer($0, context: identity) },
+            relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: identity) },
+            researchAnswer: { HallieResearchQuestion.answer($0, context: identity) },
+            selectedRecord: selectedRecord.map {
+                HallieTurnExecutor.SelectedRecord(recordID: $0.id, date: selectedDate)
+            },
+            // Exact-name and persona oracles (GH #184 items 4–5).
+            identity: HallieTurnExecutor.nameIdentity { identity },
+            isTreePersonID: { treeGraph?.people[$0] != nil })
+    }
+
+    /// The translator lane: deterministic general-lane routing, the model,
+    /// the social backstop, the archive re-check, then the mode gate.
+    private static func translatedTurn(
+        _ question: String,
+        effectiveQuestion: String,
+        wantsPlay: Bool,
+        routingQuestion: String,
+        classified: HallieTurnExecutor.Classified,
+        identity: HallieTurnExecutor.Context,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async throws -> TurnStep {
+        // Anti-hallucination boundary: the translator receives exactly
+        // the user's question. Catalog, profile, GEDCOM, and citations
+        // stay local.
+        output(options.diagnostics
+            ? "Hallie is interpreting that question…"
+            : "Hallie is thinking…")
+        let interpretation = try await interpretTurn(
+            effectiveQuestion, wantsPlay: wantsPlay, identity: identity,
+            options: options, dependencies: dependencies)
+        // THE SOCIAL BACKSTOP (2026-09-21), the same check the app
+        // runs: a catalog AST naming nobody and no time, for a
+        // sentence addressed to Hallie or a bare reaction with no
+        // archive word in it, is conversation — never a transcript
+        // search for "nice to meet you". It skips the archive
+        // re-check below on purpose (see HallieSocialShapeGuard).
+        var interpreted = interpretation.value
+        var socialByShape: HallieSocialShapeGuard.Verdict?
+        if case .archive(let ast) = interpreted, !wantsPlay,
+           let verdict = HallieSocialShapeGuard.verdict(
+               question: effectiveQuestion, ast: ast,
+               isKnownPerson: {
+                   HallieTurnExecutor.isKnownPerson($0, context: identity)
+               },
+               isInnerCircleName: {
+                   HallieTurnExecutor.isInnerCircleName($0, context: identity)
+               }) {
+            appLog.write(verdict.logLine(question: effectiveQuestion, ast: ast))
+            if options.diagnostics { output("social guard: \(verdict.reason)") }
+            socialByShape = verdict
+            interpreted = .conversation(verdict.kind)
+        }
+        let translatedAST: ArchivistQueryAST
+        switch interpreted {
+        case .archive(let ast):
+            state.lastResponder = interpretation.responderHost
+            if options.diagnostics {
+                output("interpreted: \(HallieTurnExecutor.description(of: ast))")
+            }
+            translatedAST = ast
+
+        case .conversation(let kind):
+            // A model classification never gets the last word on the
+            // safety boundary. Known people and archive language are
+            // retranslated with the archive-only schema.
+            if socialByShape == nil, HallieConversationGuard.requiresArchive(
+                effectiveQuestion,
+                kind: kind,
+                isKnownPerson: {
+                    HallieTurnExecutor.isKnownPerson($0, context: identity)
+                },
                 isInnerCircleName: {
                     HallieTurnExecutor.isInnerCircleName($0, context: identity)
-                },
-                catalogStats: state.catalogStats,
-                rosterAnswer: { scope in
-                    HallieTurnExecutor.PeopleTab.rosterAnswer(context: identity, scope: scope)
-                },
-                lineageAnswer: { HallieLineageAnswer.answer($0, context: identity) },
-                relationshipsOverview: { HallieRelationshipsOverview.answer($0, context: identity) },
-                researchAnswer: { HallieResearchQuestion.answer($0, context: identity) },
-                selectedRecord: selectedRecord.map {
-                    HallieTurnExecutor.SelectedRecord(recordID: $0.id, date: selectedDate)
-                },
-                // Exact-name and persona oracles (GH #184 items 4–5).
-                identity: HallieTurnExecutor.nameIdentity { identity },
-                isTreePersonID: { treeGraph?.people[$0] != nil })
-            let pre = classified.decision
-            // One `[hallie-mode]` line per turn (design §3.3).
-            appLog.write(classified.verdict.logLine(
-                question: routingQuestion, forced: state.memory.forcedMode != nil))
-            let intent: HallieTurnExecutor.Intent
-            /// A mode-gate rewrite's basis note (design §3.4 B); nil otherwise.
-            let gateNote: String?
-            /// The mode the turn runs in: the classifier's verdict, or the
-            /// catalog when the gate switched a media ask out of tree mode.
-            var turnMode = classified.verdict.mode
-            switch pre {
-            case .answer(let result):
-                return await completeLocalAnswer(
-                    result,
-                    question: question,
-                    identity: identity,
-                    options: options,
-                    state: &state,
-                    output: output,
-                    dependencies: dependencies)
-            case .run(let local):
-                state.lastResponder = "local"
-                intent = local
-                gateNote = nil
+                }) {
+                let translation = try await dependencies.translateAST(
+                    effectiveQuestion, options)
+                state.lastResponder = translation.responderHost
                 if options.diagnostics {
-                    output("interpreted: \(HallieTurnExecutor.description(of: local.ast)) (local)")
+                    output("interpreted: \(HallieTurnExecutor.description(of: translation.ast))")
                 }
-            case .translate(let effectiveQuestion, let wantsPlay):
-                // Anti-hallucination boundary: the translator receives exactly
-                // the user's question. Catalog, profile, GEDCOM, and citations
-                // stay local.
-                output(options.diagnostics
-                    ? "Hallie is interpreting that question…"
-                    : "Hallie is thinking…")
-                let interpretation: TurnInterpretation
-                // DETERMINISTIC ROUTING. The model is never asked whether
-                // it may answer freely; Swift decides, and only then is the
-                // model given either the archive schema or the social lane.
-                let verdict = HallieConversationGuard.generalVerdict(
-                    effectiveQuestion,
-                    isKnownPerson: {
-                        HallieTurnExecutor.isKnownPerson($0, context: identity)
-                    },
-                    isInnerCircleName: {
-                        HallieTurnExecutor.isInnerCircleName($0, context: identity)
-                    })
-                // A turn whose verb was peeled into a play intent is an
-                // archive request by construction — "play donna at the
-                // cape" arrives here as "donna at the cape", stripped of
-                // the one word that made it a command. It never goes to
-                // the general lane.
-                if let kind = verdict.kind, !wantsPlay {
-                    appLog.write(
-                        "[hallie-general] lane=\(kind.rawValue) reason=\(verdict.reason) — “\(effectiveQuestion.prefix(120))”")
-                    interpretation = TurnInterpretation(
-                        value: .conversation(kind), responderHost: "local")
-                } else {
-                    interpretation = try await dependencies.interpretTurn(
-                        effectiveQuestion, options)
-                }
-                // THE SOCIAL BACKSTOP (2026-09-21), the same check the app
-                // runs: a catalog AST naming nobody and no time, for a
-                // sentence addressed to Hallie or a bare reaction with no
-                // archive word in it, is conversation — never a transcript
-                // search for "nice to meet you". It skips the archive
-                // re-check below on purpose (see HallieSocialShapeGuard).
-                var interpreted = interpretation.value
-                var socialByShape: HallieSocialShapeGuard.Verdict?
-                if case .archive(let ast) = interpreted, !wantsPlay,
-                   let verdict = HallieSocialShapeGuard.verdict(
-                       question: effectiveQuestion, ast: ast,
-                       isKnownPerson: {
-                           HallieTurnExecutor.isKnownPerson($0, context: identity)
-                       },
-                       isInnerCircleName: {
-                           HallieTurnExecutor.isInnerCircleName($0, context: identity)
-                       }) {
-                    appLog.write(verdict.logLine(question: effectiveQuestion, ast: ast))
-                    if options.diagnostics { output("social guard: \(verdict.reason)") }
-                    socialByShape = verdict
-                    interpreted = .conversation(verdict.kind)
-                }
-                let translatedAST: ArchivistQueryAST
-                switch interpreted {
-                case .archive(let ast):
-                    state.lastResponder = interpretation.responderHost
-                    if options.diagnostics {
-                        output("interpreted: \(HallieTurnExecutor.description(of: ast))")
-                    }
-                    translatedAST = ast
-
-                case .conversation(let kind):
-                    // A model classification never gets the last word on the
-                    // safety boundary. Known people and archive language are
-                    // retranslated with the archive-only schema.
-                    if socialByShape == nil, HallieConversationGuard.requiresArchive(
-                        effectiveQuestion,
-                        kind: kind,
-                        isKnownPerson: {
-                            HallieTurnExecutor.isKnownPerson($0, context: identity)
-                        },
-                        isInnerCircleName: {
-                            HallieTurnExecutor.isInnerCircleName($0, context: identity)
-                        }) {
-                        let translation = try await dependencies.translateAST(
-                            effectiveQuestion, options)
-                        state.lastResponder = translation.responderHost
-                        if options.diagnostics {
-                            output("interpreted: \(HallieTurnExecutor.description(of: translation.ast))")
-                        }
-                        translatedAST = translation.ast
-                    } else {
-                        let social = await dependencies.composeConversation(
-                            kind, routingQuestion, state.socialHistory, options)
-                        state.lastResponder = social.responderHost
-                        // THE BOUNDARY. A general answer may not assert
-                        // anything about Rick's family, his media, or his
-                        // archive; one that does is replaced, not edited.
-                        let bounded = HallieGeneralAnswerBoundary.enforce(
-                            social.value,
-                            kind: kind,
-                            isFamilyName: {
-                                HallieTurnExecutor.isFamilyReferenceName(
-                                    $0, context: identity)
-                            },
-                            log: { appLog.write($0) })
-                        if !bounded.composedByModel, social.value.composedByModel {
-                            state.lastResponder = "local"
-                        }
-                        let result = HallieSocialConversation.result(for: bounded)
-                        state.memory.record(intent: nil, result: result)
-                        if options.diagnostics { output("interpreted: conversation") }
-                        render(result, ast: nil, context: identity, state: &state,
-                               diagnostics: options.diagnostics, output: output)
-                        if options.diagnostics {
-                            output("interpreted by \(state.lastResponder)")
-                        }
-                        state.rememberSocial(
-                            question: question, answer: result.prose)
-                        let event = transcriptEvent(
-                            result: result,
-                            responder: state.lastResponder,
-                            state: &state)
-                        await dependencies.recordTranscript([event])
-                        return .answered
-                    }
-                }
-                // THE MODE GATE (design §3.4 B), the same check the app runs.
-                switch HallieModeGate.reconcile(
-                    ast: translatedAST, mode: classified.verdict.mode,
-                    question: effectiveQuestion, memory: state.memory,
-                    playAfterAnswer: wantsPlay) {
-                case .keep:
-                    intent = HallieTurnExecutor.Intent(
-                        originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay,
-                        modeForce: classified.modeForce)
-                    gateNote = nil
-                case .rewrite(let ast, let note):
-                    appLog.write("[hallie-mode] rewrite: \(note)")
-                    if options.diagnostics { output("mode gate: \(note)") }
-                    intent = HallieTurnExecutor.Intent(
-                        originalQuestion: question, ast: ast, playAfterAnswer: wantsPlay,
-                        modeForce: classified.modeForce)
-                    gateNote = note
-                case .switchToCatalog(let note):
-                    appLog.write("[hallie-mode] switched tree→catalog for "
-                        + HallieTurnExecutor.description(of: translatedAST))
-                    if options.diagnostics { output("mode gate: \(note)") }
-                    turnMode = .catalog
-                    intent = HallieTurnExecutor.Intent(
-                        originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay,
-                        modeForce: classified.modeForce)
-                    gateNote = note
-                case .decline(let result):
-                    appLog.write("[hallie-mode] declined: \(result.queryDescription ?? "")")
-                    return await completeLocalAnswer(
-                        result,
-                        question: question,
-                        identity: identity,
-                        options: options,
-                        state: &state,
-                        output: output,
-                        dependencies: dependencies)
-                }
+                translatedAST = translation.ast
+            } else {
+                return .finished(await socialTurn(
+                    question, kind: kind, routingQuestion: routingQuestion, identity: identity,
+                    options: options, state: &state, output: output, dependencies: dependencies))
             }
-            if options.diagnostics {
-                output("mode: \(classified.verdict.mode.rawValue) (\(classified.verdict.reasonText))")
-            }
+        }
+        return await modeGatedTurn(
+            question, ast: translatedAST, effectiveQuestion: effectiveQuestion,
+            wantsPlay: wantsPlay, classified: classified, identity: identity,
+            options: options, state: &state, output: output, dependencies: dependencies)
+    }
 
-            var recordScope: HallieTurnExecutor.RecordScope = .noSelection
-            switch HallieTurnExecutor.route(intent.ast) {
-            case .presence, .cross, .event:
-                if state.presenceSnapshots == nil {
-                    state.presenceSnapshots = await ArchivistPresenceRecordSnapshot
-                        .capture(state.records)
-                }
-            case .aggregate:
-                if state.aggregateSnapshots == nil {
-                    state.aggregateSnapshots = await ArchivistAggregateRecordSnapshot
-                        .capture(state.records)
-                }
-            case .record:
-                // ONE record, resolved here (selection or named file); the
-                // executor never sees the catalog. No catalog-wide snapshot.
-                recordScope = await captureRecordScope(
-                    for: intent.ast, question: intent.originalQuestion, state: state)
-            case .temporal, .graph, .followUp, .capability,
-                 .help, .smalltalk, .conversation, .telling, .reset:
-                break
-            }
+    /// DETERMINISTIC ROUTING. The model is never asked whether it may
+    /// answer freely; Swift decides, and only then is the model given
+    /// either the archive schema or the social lane.
+    private static func interpretTurn(
+        _ effectiveQuestion: String,
+        wantsPlay: Bool,
+        identity: HallieTurnExecutor.Context,
+        options: Options,
+        dependencies: Dependencies
+    ) async throws -> TurnInterpretation {
+        let verdict = HallieConversationGuard.generalVerdict(
+            effectiveQuestion,
+            isKnownPerson: {
+                HallieTurnExecutor.isKnownPerson($0, context: identity)
+            },
+            isInnerCircleName: {
+                HallieTurnExecutor.isInnerCircleName($0, context: identity)
+            })
+        // A turn whose verb was peeled into a play intent is an
+        // archive request by construction — "play donna at the
+        // cape" arrives here as "donna at the cape", stripped of
+        // the one word that made it a command. It never goes to
+        // the general lane.
+        if let kind = verdict.kind, !wantsPlay {
+            appLog.write(
+                "[hallie-general] lane=\(kind.rawValue) reason=\(verdict.reason) — “\(effectiveQuestion.prefix(120))”")
+            return TurnInterpretation(
+                value: .conversation(kind), responderHost: "local")
+        }
+        return try await dependencies.interpretTurn(
+            effectiveQuestion, options)
+    }
 
-            let profiles = state.profiles?.map {
-                HallieTurnExecutor.ProfileSnapshot(
-                    stableID: $0.id,
-                    canonicalName: $0.name,
-                    aliases: $0.aliases,
-                    birthdate: $0.birthdate, note: $0.notes,
-                    kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid,
-                    treeIdentity: $0.treeIdentity, deathdate: $0.deathdate,
-                    surname: $0.surname, maidenName: $0.maidenName,
-                    middleName: $0.middleName, suffix: $0.suffix,
-                    notInFamilyTree: $0.notInFamilyTree,
-                    treeIdentityUnreadable: $0.treeIdentityQuarantined != nil)
-            }
-            let context = HallieTurnExecutor.Context(
-                presenceRecords: state.presenceSnapshots ?? [],
-                aggregateRecords: state.aggregateSnapshots ?? [],
-                profiles: profiles,
-                graph: state.graph,
-                needsRecompile: state.needsRecompile,
-                cyberBrain: state.cyberBrain,
-                selectedTemporalDate: selectedDate,
-                recordScope: recordScope,
-                speakers: state.speakers,
-                mode: turnMode)
-            let request = HallieTurnExecutor.Request(intent: intent)
-            var result = try await dependencies.executeRequest(request, context)
-            if let gateNote { result = result.prefixingBasis(gateNote) }
-            state.memory.record(intent: intent, result: result)
-            result = await phrase(result, question: question, options: options,
-                                  state: &state, dependencies: dependencies)
-            // Rick's kind word, after phrasing (the verifier never sees it).
-            result = HallieKindWords.apply(
-                HallieKindWords.biographyOffer(
-                    result: result, ast: intent.ast,
-                    profiles: context.profiles, graph: context.graph,
-                    loadBook: dependencies.loadKindWords),
-                to: result, memory: &state.memory)
+    /// The social lane: the composed reply, bounded, rendered and logged.
+    private static func socialTurn(
+        _ question: String,
+        kind: HallieConversationKind,
+        routingQuestion: String,
+        identity: HallieTurnExecutor.Context,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async -> AnswerOutcome {
+        let social = await dependencies.composeConversation(
+            kind, routingQuestion, state.socialHistory, options)
+        state.lastResponder = social.responderHost
+        // THE BOUNDARY. A general answer may not assert
+        // anything about Rick's family, his media, or his
+        // archive; one that does is replaced, not edited.
+        let bounded = HallieGeneralAnswerBoundary.enforce(
+            social.value,
+            kind: kind,
+            isFamilyName: {
+                HallieTurnExecutor.isFamilyReferenceName(
+                    $0, context: identity)
+            },
+            log: { appLog.write($0) })
+        if !bounded.composedByModel, social.value.composedByModel {
+            state.lastResponder = "local"
+        }
+        let result = HallieSocialConversation.result(for: bounded)
+        state.memory.record(intent: nil, result: result)
+        if options.diagnostics { output("interpreted: conversation") }
+        render(result, ast: nil, context: identity, state: &state,
+               diagnostics: options.diagnostics, output: output)
+        if options.diagnostics {
+            output("interpreted by \(state.lastResponder)")
+        }
+        state.rememberSocial(
+            question: question, answer: result.prose)
+        let event = transcriptEvent(
+            result: result,
+            responder: state.lastResponder,
+            state: &state)
+        await dependencies.recordTranscript([event])
+        return .answered
+    }
 
-            render(
+    /// THE MODE GATE (design §3.4 B), the same check the app runs.
+    private static func modeGatedTurn(
+        _ question: String,
+        ast translatedAST: ArchivistQueryAST,
+        effectiveQuestion: String,
+        wantsPlay: Bool,
+        classified: HallieTurnExecutor.Classified,
+        identity: HallieTurnExecutor.Context,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async -> TurnStep {
+        switch HallieModeGate.reconcile(
+            ast: translatedAST, mode: classified.verdict.mode,
+            question: effectiveQuestion, memory: state.memory,
+            playAfterAnswer: wantsPlay) {
+        case .keep:
+            return .execute(PlannedTurn(
+                intent: HallieTurnExecutor.Intent(
+                    originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay,
+                    modeForce: classified.modeForce),
+                gateNote: nil, mode: classified.verdict.mode))
+        case .rewrite(let ast, let note):
+            appLog.write("[hallie-mode] rewrite: \(note)")
+            if options.diagnostics { output("mode gate: \(note)") }
+            return .execute(PlannedTurn(
+                intent: HallieTurnExecutor.Intent(
+                    originalQuestion: question, ast: ast, playAfterAnswer: wantsPlay,
+                    modeForce: classified.modeForce),
+                gateNote: note, mode: classified.verdict.mode))
+        case .switchToCatalog(let note):
+            appLog.write("[hallie-mode] switched tree→catalog for "
+                + HallieTurnExecutor.description(of: translatedAST))
+            if options.diagnostics { output("mode gate: \(note)") }
+            return .execute(PlannedTurn(
+                intent: HallieTurnExecutor.Intent(
+                    originalQuestion: question, ast: translatedAST, playAfterAnswer: wantsPlay,
+                    modeForce: classified.modeForce),
+                gateNote: note, mode: .catalog))
+        case .decline(let result):
+            appLog.write("[hallie-mode] declined: \(result.queryDescription ?? "")")
+            return .finished(await completeLocalAnswer(
                 result,
-                ast: intent.ast,
-                context: context,
+                question: question,
+                identity: identity,
+                options: options,
                 state: &state,
-                diagnostics: options.diagnostics,
-                output: output)
-            if options.diagnostics {
-                output("interpreted by \(state.lastResponder)")
+                output: output,
+                dependencies: dependencies))
+        }
+    }
+
+    /// Snapshots for the route, the executor, phrasing, kind words, the
+    /// render and transcript, and play-after-answer.
+    private static func executePlannedTurn(
+        _ planned: PlannedTurn,
+        question: String,
+        selectedDate: ArchivistTemporalSelectionDateSnapshot?,
+        options: Options,
+        state: inout Session,
+        output: (String) -> Void,
+        dependencies: Dependencies
+    ) async throws -> AnswerOutcome {
+        let intent = planned.intent
+        let recordScope = await captureSnapshots(for: intent, state: &state)
+        let context = HallieTurnExecutor.Context(
+            presenceRecords: state.presenceSnapshots ?? [],
+            aggregateRecords: state.aggregateSnapshots ?? [],
+            profiles: profileSnapshots(state),
+            graph: state.graph,
+            needsRecompile: state.needsRecompile,
+            cyberBrain: state.cyberBrain,
+            selectedTemporalDate: selectedDate,
+            recordScope: recordScope,
+            speakers: state.speakers,
+            mode: planned.mode)
+        let request = HallieTurnExecutor.Request(intent: intent)
+        var result = try await dependencies.executeRequest(request, context)
+        if let gateNote = planned.gateNote { result = result.prefixingBasis(gateNote) }
+        state.memory.record(intent: intent, result: result)
+        result = await phrase(result, question: question, options: options,
+                              state: &state, dependencies: dependencies)
+        // Rick's kind word, after phrasing (the verifier never sees it).
+        result = HallieKindWords.apply(
+            HallieKindWords.biographyOffer(
+                result: result, ast: intent.ast,
+                profiles: context.profiles, graph: context.graph,
+                loadBook: dependencies.loadKindWords),
+            to: result, memory: &state.memory)
+
+        render(
+            result,
+            ast: intent.ast,
+            context: context,
+            state: &state,
+            diagnostics: options.diagnostics,
+            output: output)
+        if options.diagnostics {
+            output("interpreted by \(state.lastResponder)")
+        }
+        state.remember(question: question, answer: result.prose)
+        let assistantEvent = transcriptEvent(
+            result: result,
+            responder: state.lastResponder,
+            state: &state)
+        await dependencies.recordTranscript([assistantEvent])
+        // "play donna at christmas": the search ran; now play the first
+        // available citation, honestly reporting when none is.
+        if intent.playAfterAnswer, result.outcome == .answered,
+           result.clarification == nil, !result.citations.isEmpty {
+            _ = performMediaAction(
+                .init(kind: .play, citations: result.citations),
+                output: output, dependencies: dependencies,
+                allowActions: options.allowActions)
+        }
+        switch result.outcome {
+        case .answered, .repaired: return .answered
+        case .declined: return .declined
+        case .unsupported: return .unsupported
+        case .needsClarification: return .declined
+        case .failed: return .declined   // a save that did not happen is not an answer
+        }
+    }
+
+    /// The catalog snapshots the route reads, captured once per session;
+    /// a record route resolves its ONE record here instead.
+    private static func captureSnapshots(
+        for intent: HallieTurnExecutor.Intent,
+        state: inout Session
+    ) async -> HallieTurnExecutor.RecordScope {
+        switch HallieTurnExecutor.route(intent.ast) {
+        case .presence, .cross, .event:
+            if state.presenceSnapshots == nil {
+                state.presenceSnapshots = await ArchivistPresenceRecordSnapshot
+                    .capture(state.records)
             }
-            state.remember(question: question, answer: result.prose)
-            let assistantEvent = transcriptEvent(
-                result: result,
-                responder: state.lastResponder,
-                state: &state)
-            await dependencies.recordTranscript([assistantEvent])
-            // "play donna at christmas": the search ran; now play the first
-            // available citation, honestly reporting when none is.
-            if intent.playAfterAnswer, result.outcome == .answered,
-               result.clarification == nil, !result.citations.isEmpty {
-                _ = performMediaAction(
-                    .init(kind: .play, citations: result.citations),
-                    output: output, dependencies: dependencies,
-                    allowActions: options.allowActions)
+        case .aggregate:
+            if state.aggregateSnapshots == nil {
+                state.aggregateSnapshots = await ArchivistAggregateRecordSnapshot
+                    .capture(state.records)
             }
-            switch result.outcome {
-            case .answered, .repaired: return .answered
-            case .declined: return .declined
-            case .unsupported: return .unsupported
-            case .needsClarification: return .declined
-            case .failed: return .declined   // a save that did not happen is not an answer
-            }
-        } catch {
-            state.citations = []
-            let diagnostic = String(reflecting: error)
-            appLog.write("Hallie shell interpretation failed — \(diagnostic)")
-            let message = HallieHelperFailure.message(for: error)
-            output(message)
-            if options.diagnostics
-                || ProcessInfo.processInfo.environment["HALLIE_DEBUG_ERRORS"] == "1" {
-                output("diagnostic: \(diagnostic)")
-            }
-            let event = transcriptEvent(
-                kind: .error,
-                text: message,
-                basisLine: HallieHelperFailure.basisLine,
-                outcome: "interpretation-failed",
-                state: &state)
-            await dependencies.recordTranscript([event])
-            return .interpretationFailed
+        case .record:
+            // ONE record, resolved here (selection or named file); the
+            // executor never sees the catalog. No catalog-wide snapshot.
+            return await captureRecordScope(
+                for: intent.ast, question: intent.originalQuestion, state: state)
+        case .temporal, .graph, .followUp, .capability,
+             .help, .smalltalk, .conversation, .telling, .reset:
+            break
+        }
+        return .noSelection
+    }
+
+    private static func profileSnapshots(_ state: Session) -> [HallieTurnExecutor.ProfileSnapshot]? {
+        state.profiles?.map {
+            HallieTurnExecutor.ProfileSnapshot(
+                stableID: $0.id,
+                canonicalName: $0.name,
+                aliases: $0.aliases,
+                birthdate: $0.birthdate, note: $0.notes,
+                kinships: $0.kinships, sex: $0.sex, uuid: $0.uuid,
+                treeIdentity: $0.treeIdentity, deathdate: $0.deathdate,
+                surname: $0.surname, maidenName: $0.maidenName,
+                middleName: $0.middleName, suffix: $0.suffix,
+                notInFamilyTree: $0.notInFamilyTree,
+                treeIdentityUnreadable: $0.treeIdentityQuarantined != nil)
         }
     }
 
