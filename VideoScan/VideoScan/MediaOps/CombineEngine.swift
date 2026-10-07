@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// Handles batch remuxing of correlated audio/video MXF pairs into MOV containers.
 /// Supports stream copy (no re-encode) and re-encode modes, with RAM disk buffering for network sources.
@@ -10,6 +11,9 @@ enum CombineEngine {
         let success: Bool
         let stderr: String
         let exitCode: Int32
+        /// Set when the stall watchdog killed ffmpeg (N1014-F3): the
+        /// specific reason, with volume-drop vs read-error attribution.
+        var stallReason: String? = nil
     }
 
     // MARK: - ffmpeg Remux
@@ -18,6 +22,15 @@ enum CombineEngine {
     /// Supports progress reporting via `-progress pipe:1` when a progress callback is provided.
     /// Cancellation-aware: terminates ffmpeg immediately when task is cancelled
     /// (with SIGKILL escalation via ProcessRunner if ffmpeg ignores SIGTERM).
+    ///
+    /// Stall watchdog (N1014-F3, 2026-10-07): the mux runs under a
+    /// StallMonitor (the pattern every other MFO ffmpeg job uses). Every
+    /// line ffmpeg prints kicks it — `-progress pipe:1` is always requested
+    /// while it is armed, so a healthy mux prints several lines a second. A
+    /// drive that stops answering leaves ffmpeg blocked in read(2), silent;
+    /// past `stallThresholdSeconds` the watchdog kills ffmpeg and the result
+    /// carries `stallReason`. Before this a wedged mux sat "muxing" forever
+    /// and the rest of an overnight batch never ran. nil = no watchdog.
     ///
     /// Subprocess plumbing consolidated onto ProcessRunner (codex finding #3):
     /// same arguments, same stderr→log routing, same exit-code semantics —
@@ -29,33 +42,34 @@ enum CombineEngine {
         technique: CombineJobStatus.CombineTechnique = .streamCopy,
         durationSeconds: Double = 0,
         onProgress: (@Sendable (Double) -> Void)? = nil,
+        stallThresholdSeconds: Double? = StallMonitor.defaultStallThresholdSeconds,
         log: @escaping @Sendable (String) -> Void
     ) async -> CombineResult {
-        // Parse `-progress pipe:1` key=value lines (out_time_us=<microsecs>).
-        var progressLine: (@Sendable (String) -> Void)?
-        if let onProgress, durationSeconds > 0 {
-            progressLine = { line in
-                if line.hasPrefix("out_time_us="), let us = Double(line.dropFirst(12)) {
-                    let seconds = us / 1_000_000
-                    let frac = min(seconds / durationSeconds, 1.0)
-                    onProgress(frac)
-                }
-            }
-        }
-
-        let result = await ProcessRunner.runProcess(
-            executable: ffmpegPath,
-            arguments: buildArgs(
-                videoPath: videoPath,
-                audioPath: audioPath,
-                outputPath: outputPath,
-                technique: technique,
-                withProgress: onProgress != nil
-            ),
-            stdoutLine: progressLine,
-            stderrLine: { line in DispatchQueue.main.async { log(line) } },
-            stderrLimitBytes: nil   // callers keep the full transcript (pre-refactor behavior)
+        let arguments = buildArgs(
+            videoPath: videoPath,
+            audioPath: audioPath,
+            outputPath: outputPath,
+            technique: technique,
+            withProgress: onProgress != nil || stallThresholdSeconds != nil
         )
+        let watched = await runWatched(
+            arguments: arguments,
+            label: (outputPath as NSString).lastPathComponent,
+            stallThresholdSeconds: stallThresholdSeconds,
+            stdoutLine: progressParser(onProgress: onProgress, durationSeconds: durationSeconds),
+            log: log
+        )
+        let result = watched.result
+
+        if let silentFor = watched.stalledAfterSeconds {
+            let attribution = StallMonitor.attribution(forPaths: [videoPath, audioPath])
+            return CombineResult(
+                success: false,
+                stderr: result.stderr,
+                exitCode: result.exitCode,
+                stallReason: "no ffmpeg progress for \(Int(silentFor))s during the mux — \(attribution)"
+            )
+        }
 
         // Launch failure (stdout nil + synthetic -1, not user cancellation):
         // preserve the historical message prefix that callers/logs expect.
@@ -72,6 +86,80 @@ enum CombineEngine {
             stderr: result.stderr,
             exitCode: result.exitCode
         )
+    }
+
+    /// Parse `-progress pipe:1` key=value lines (out_time_us=<microsecs>)
+    /// into a 0…1 fraction. nil when there is nothing to report to.
+    private static func progressParser(onProgress: (@Sendable (Double) -> Void)?,
+                                       durationSeconds: Double) -> (@Sendable (String) -> Void)? {
+        guard let onProgress, durationSeconds > 0 else { return nil }
+        return { line in
+            if line.hasPrefix("out_time_us="), let us = Double(line.dropFirst(12)) {
+                let seconds = us / 1_000_000
+                onProgress(min(seconds / durationSeconds, 1.0))
+            }
+        }
+    }
+
+    /// The mux Task (for the watchdog to cancel) and when the watchdog fired.
+    private struct MuxWatch: Sendable {
+        var task: Task<ProcessRunner.Result, Never>?
+        var stalledAfterSeconds: Double?
+    }
+
+    /// Run ffmpeg as a child Task under the stall watchdog. The watchdog
+    /// does not own the Process: on silence it cancels the Task, which
+    /// reaches ProcessRunner's SIGTERM → SIGKILL → abandon escalation. The
+    /// caller's own cancellation (the user's Stop) is forwarded to the same
+    /// Task. (For Rick: ≈ a std::thread + watchdog timer, where the timer's
+    /// reset handler sets a flag and signals the worker to abort.)
+    private static func runWatched(
+        arguments: [String],
+        label: String,
+        stallThresholdSeconds: Double?,
+        stdoutLine: (@Sendable (String) -> Void)?,
+        log: @escaping @Sendable (String) -> Void
+    ) async -> (result: ProcessRunner.Result, stalledAfterSeconds: Double?) {
+        let watch = OSAllocatedUnfairLock(initialState: MuxWatch())
+        let monitor = stallThresholdSeconds.map { threshold in
+            StallMonitor(label: "combine mux \(label)",
+                         thresholdSeconds: threshold,
+                         pollIntervalSeconds: min(StallMonitor.defaultPollIntervalSeconds, max(threshold / 4, 0.25))) { silentFor in
+                let task = watch.withLock { state -> Task<ProcessRunner.Result, Never>? in
+                    state.stalledAfterSeconds = silentFor
+                    return state.task
+                }
+                appLog.write("combine watchdog: \(label) — no ffmpeg progress for \(Int(silentFor))s; killing ffmpeg")
+                task?.cancel()
+            }
+        }
+        let executable = ffmpegPath
+        let mux = Task.detached {
+            await ProcessRunner.runProcess(
+                executable: executable,
+                arguments: arguments,
+                stdoutLine: { line in
+                    monitor?.tick()
+                    stdoutLine?(line)
+                },
+                stderrLine: { line in
+                    monitor?.tick()
+                    DispatchQueue.main.async { log(line) }
+                },
+                stderrLimitBytes: nil   // callers keep the full transcript (pre-refactor behavior)
+            )
+        }
+        // Stored BEFORE the watchdog starts, so a firing watchdog always
+        // finds the Task to cancel.
+        watch.withLock { $0.task = mux }
+        monitor?.start()
+        let result = await withTaskCancellationHandler {
+            await mux.value
+        } onCancel: {
+            mux.cancel()
+        }
+        monitor?.stop()
+        return (result, watch.withLock { $0.stalledAfterSeconds })
     }
 
     // MARK: - Argument Construction
