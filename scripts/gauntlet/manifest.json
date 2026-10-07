@@ -13698,6 +13698,17 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieShellAnswerSnapshotTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieShellAnswerSnapshotTests"
+      ],
+      "tests": [
+        "scriptedSessionsMatchTheirRecordedSnapshots"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieShellCLIConjunctionTests.swift",
       "stage": "hallie",
       "suites": [
@@ -28011,7 +28022,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1081,
+      "expected_floor": 1082,
       "modes": [
         {
           "name": "strict",
@@ -28137,6 +28148,7 @@
         "VideoScanTests/HallieScaffoldNarrationTests",
         "VideoScanTests/HallieServiceQuestionTests",
         "VideoScanTests/HallieServiceStoriesTests",
+        "VideoScanTests/HallieShellAnswerSnapshotTests",
         "VideoScanTests/HallieShellCLIConjunctionTests",
         "VideoScanTests/HallieShellCLIFollowUpTests",
         "VideoScanTests/HallieSocialConversationTests",
