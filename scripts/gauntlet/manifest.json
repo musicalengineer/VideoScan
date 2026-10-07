@@ -9413,10 +9413,12 @@
       ],
       "tests": [
         "aHoldAddedMidJob",
+        "aShownSurvivorDroppedFromTheCatalogHoldsTheMove",
         "aSurvivorThatLeavesHoldsTheMove",
         "bitRotInTheArchiveHoldsEverything",
         "changesAfterTheForecast",
         "forecastEqualsRun",
+        "keepDoesNotRepairADamagedList",
         "keepInTheLane",
         "lastCopyReadsTheArchiveInFull",
         "networkMountRefused",
@@ -9451,10 +9453,12 @@
         "backupLikeDriveRefusedWhole",
         "backupWordingFirst",
         "keepRule",
+        "longerGuardWithUnverifiedMaster",
         "longerThanMasterIsFlagged",
         "nomination",
         "threeStarsSetByPromoteIsNotAHold",
         "toleranceAndUnknown",
+        "unprovenSurvivorDoesNotCount",
         "unverifiedArchiveAndArchiveSide"
       ]
     },
@@ -27665,7 +27669,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2159,
+      "expected_floor": 2161,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

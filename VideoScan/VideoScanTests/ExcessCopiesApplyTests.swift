@@ -221,9 +221,47 @@ struct ExcessCopiesApplyTests {
         #expect(exists(f.source) && exists(f.copy))
     }
 
+    /// Give a copy its own stored whole-file digest (= the archive's), so it
+    /// is PROVEN to match — only such a copy counts as staying (QA MAJOR 2).
+    private func proveByDigest(_ r: VideoRecord, _ f: Fixture) throws {
+        let digest = try #require(f.archive.archiveFixity?.digest)
+        r.contentFixity = try #require(ContentFixity.captured(path: r.fullPath, digest: digest, byteCount: r.sizeBytes))
+        try #require(VideoScanModel.excessWholeDigest(r) != nil, "fixture: the copy is digest-proven")
+    }
+
+    @Test("QA MAJOR 1: a survivor the sheet showed that drops out of the catalog holds the move — never a silent archive-only")
+    func aShownSurvivorDroppedFromTheCatalogHoldsTheMove() async throws {
+        let f = try await fixture("dropped"); defer { f.cleanup() }
+        try proveByDigest(f.copy, f)
+        let ro = CatalogScanTarget(searchPath: f.copiesDir.path)
+        ro.readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil)
+        await addTarget(ro, to: f.model)
+        let plan = await f.model.excessCopiesPlan(env: f.env)
+        #expect(plan.offeredIDs == [f.source.id])
+        #expect(plan.items.first?.leavesArchiveOnly == false, "the sheet said a copy stays")
+        // The survivor leaves the catalog (Remove from Catalog, a rescan) — its file is still there.
+        f.model.records.removeAll { $0.id == f.copy.id }
+        let opens = OpenCounter()
+        let mover = Mover(trash: f.trashDir)
+        let out = await f.model.applyExcess(shown: plan, env: f.env, hooks: hooks(mover, opens: opens))
+        #expect(out.trashed == 0 && mover.paths.isEmpty, "\(out)")
+        #expect(exists(f.source))
+        #expect(out.held.contains { $0.contains("would stay") }, "\(out.held)")
+    }
+
+    @Test("QA MINOR 4: Keep never writes over a damaged Keep list")
+    func keepDoesNotRepairADamagedList() async throws {
+        let f = try await fixture("keepdamaged"); defer { f.cleanup() }
+        f.defaults.set(42, forKey: ExcessKeepStore.key)
+        #expect(ExcessKeepStore(defaults: f.defaults).keep([f.copy.id]) == false, "refused")
+        #expect(f.defaults.object(forKey: ExcessKeepStore.key) as? Int == 42, "the damaged value is left for a person to look at")
+        #expect(await f.model.excessCopiesPlan(env: f.env).offeredCount == 0, "and the lane still offers nothing")
+    }
+
     @Test("a copy that stays (Read-only drive) is re-checked at the move; gone → held, nothing of its family moved")
     func aSurvivorThatLeavesHoldsTheMove() async throws {
         let f = try await fixture("survivor"); defer { f.cleanup() }
+        try proveByDigest(f.copy, f)
         let ro = CatalogScanTarget(searchPath: f.copiesDir.path)
         ro.readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil)
         await addTarget(ro, to: f.model)

@@ -92,6 +92,12 @@ public struct ExcessCopySnapshot: Equatable, Sendable, Identifiable {
     public var isOnline: Bool
     /// The one bulk-verb gate's refusal, in words; nil = clear.
     public var gateRefusal: String?
+    /// The gate's refusal is the MASTER ARCHIVE's (its tree, its volume, or
+    /// a drive that cannot be told apart from it — e.g. a firmlink spelling
+    /// of an archive file). Such a copy is never a surviving copy outside
+    /// the archive. A Read-only / Archive backup refusal is not this: those
+    /// files are real copies elsewhere and still count (QA MAJOR 2).
+    public var gateRefusesAsArchive: Bool
     public var isOnArchiveBackupDrive: Bool
     public var isNetworkMount: Bool
     public var isPairMember: Bool
@@ -106,7 +112,8 @@ public struct ExcessCopySnapshot: Equatable, Sendable, Identifiable {
                 wholeDigest: String? = nil, isArchiveSide: Bool = false, archiveDigest: String? = nil,
                 archiveVerifiedAt: Date? = nil, isPreservationMaster: Bool = false,
                 archiveRelPath: String? = nil, derivedFrom: UUID? = nil, isPurged: Bool = false,
-                isOnline: Bool = true, gateRefusal: String? = nil, isOnArchiveBackupDrive: Bool = false,
+                isOnline: Bool = true, gateRefusal: String? = nil, gateRefusesAsArchive: Bool = false,
+                isOnArchiveBackupDrive: Bool = false,
                 isNetworkMount: Bool = false, isPairMember: Bool = false, heldByAngel: Bool = false,
                 starRating: Int = 0, tags: [String] = [], keptInLane: Bool = false) {
         self.id = id; self.filename = filename; self.fullPath = fullPath; self.volumeName = volumeName
@@ -114,7 +121,8 @@ public struct ExcessCopySnapshot: Equatable, Sendable, Identifiable {
         self.wholeDigest = wholeDigest; self.isArchiveSide = isArchiveSide; self.archiveDigest = archiveDigest
         self.archiveVerifiedAt = archiveVerifiedAt; self.isPreservationMaster = isPreservationMaster
         self.archiveRelPath = archiveRelPath; self.derivedFrom = derivedFrom; self.isPurged = isPurged
-        self.isOnline = isOnline; self.gateRefusal = gateRefusal; self.isOnArchiveBackupDrive = isOnArchiveBackupDrive
+        self.isOnline = isOnline; self.gateRefusal = gateRefusal
+        self.gateRefusesAsArchive = gateRefusesAsArchive; self.isOnArchiveBackupDrive = isOnArchiveBackupDrive
         self.isNetworkMount = isNetworkMount; self.isPairMember = isPairMember; self.heldByAngel = heldByAngel
         self.starRating = starRating; self.tags = tags; self.keptInLane = keptInLane
     }

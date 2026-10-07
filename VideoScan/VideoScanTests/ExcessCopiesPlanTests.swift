@@ -116,6 +116,42 @@ struct ExcessCopiesPlanTests {
         .init(name: "Rick's Keep in the lane", reason: "you chose Keep for it") { $0.keptInLane = true },
     ]
 
+    // MARK: QA 2026-10-07 (FIX-FIRST)
+
+    @Test("QA MAJOR 2: a sampled-only or archive-refused copy is not a survivor; a digest-proven Read-only copy is")
+    func unprovenSurvivorDoesNotCount() {
+        let a = Self.archive()
+        let goes = Self.copy("test_goes.mov")
+        var sampledStays = Self.copy("test_sampled_stays.mov", vol: "SanDisk", digest: nil, hash: Self.v1)
+        sampledStays.tags = ["Keep"]
+        let p1 = ExcessCopiesPlan.compute(a.all + [goes, sampledStays]).items[0]
+        #expect(p1.survivors(of: a.access.id).isEmpty, "a sampled hash proves nothing stays")
+        #expect(p1.leavesArchiveOnly, "so the dialog must say ONLY copy")
+        var archiveSpelling = Self.copy("test_firmlink.mov", vol: "FamilyArchive")
+        archiveSpelling.gateRefusal = "lives in the Master Archive, which only archive actions may change"
+        archiveSpelling.gateRefusesAsArchive = true
+        let p2 = ExcessCopiesPlan.compute(a.all + [goes, archiveSpelling]).items[0]
+        #expect(p2.survivors(of: a.access.id).isEmpty, "the archive file under another spelling is not a copy outside it")
+        #expect(p2.leavesArchiveOnly)
+        var readOnly = Self.copy("test_ro.mov", vol: "SanDisk")
+        readOnly.gateRefusal = "lives on SanDisk, which you marked Read only"
+        let p3 = ExcessCopiesPlan.compute(a.all + [goes, readOnly]).items[0]
+        #expect(p3.survivors(of: a.access.id).map(\.id) == [readOnly.id], "a proven copy on a Read-only drive stays")
+        #expect(!p3.leavesArchiveOnly)
+    }
+
+    @Test("QA MINOR 3: length is judged against the master even when its digest is unverified — and then nothing goes")
+    func longerGuardWithUnverifiedMaster() {
+        let a = Self.archive(masterSeconds: 3_600, accessSeconds: 7_200)
+        var master = a.master
+        master.archiveDigest = nil
+        let long = Self.copy("test_long.mov", seconds: 7_200)
+        let plan = ExcessCopiesPlan.compute([master, a.access, long])
+        #expect(!plan.offeredIDs.contains(long.id), "a copy longer than the master is never offered")
+        #expect(plan.items.first?.master.id == master.id, "the unverified FFV1 is still the item's master")
+        #expect(plan.offeredCount == 0, "an unverified master: hold rather than guess")
+    }
+
     @Test("★★★ alone is not a hold — Promote sets it on every promotion source")
     func threeStarsSetByPromoteIsNotAHold() {
         #expect(ExcessCopiesPlan.personHold(starRating: 3, tags: [], keptInLane: false) == nil)

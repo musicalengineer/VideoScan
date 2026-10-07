@@ -75,8 +75,11 @@ struct ExcessKeepStore {
 
     var keptIDs: Set<UUID> { keptIDsIfReadable ?? [] }
 
-    func keep(_ ids: some Sequence<UUID>) {
+    /// Add to the Keep list. Returns whether it was written.
+    @discardableResult
+    func keep(_ ids: some Sequence<UUID>) -> Bool {
         defaults.set(keptIDs.union(ids).map(\.uuidString).sorted(), forKey: Self.key)
+        return true
     }
 
     func bringBack(_ ids: some Sequence<UUID>) {
