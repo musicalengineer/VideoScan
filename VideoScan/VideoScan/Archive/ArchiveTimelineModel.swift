@@ -51,6 +51,10 @@ struct ArchiveTimelineItem: Identifiable, Equatable {
     /// VideoRecord.derivationKind for `derivedFromID` ("balanceAudio",
     /// "trim", …) — names the chip when the filename does not.
     var derivationKind: String? = nil
+    /// The occasion cue (ArchiveOccasion.swift): the Angel's reading of
+    /// this item's date and name, folded into a display category. nil =
+    /// no cue (photos — milestone markers, not footage).
+    var occasion: ArchiveOccasionCue? = nil
 
     enum Kind: Equatable {
         case video
@@ -149,6 +153,9 @@ enum ArchiveTimelinePath {
 struct ArchiveTimelineYear: Identifiable, Equatable {
     let year: Int
     var items: [ArchiveTimelineItem]
+    /// Minutes per occasion for the strip under the year header — built
+    /// with the grouping (once per data change), never in a view body.
+    var occasionStrip = ArchiveOccasionStrip()
     var id: Int { year }
 }
 
@@ -218,7 +225,7 @@ struct ArchiveTimeline: Equatable {
                 its.sort {
                     $0.title.localizedCaseInsensitiveCompare($1.title) == .orderedAscending
                 }
-                return ArchiveTimelineYear(year: y, items: its)
+                return ArchiveTimelineYear(year: y, items: its, occasionStrip: .build(its))
             }
             decades.append(ArchiveTimelineDecade(start: start, years: years))
             start += 10
