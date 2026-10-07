@@ -1149,7 +1149,70 @@
     "operation=familyTree",
     "Donna Hudson was born"
    ],
-   "notes": "lv260926-012 (2026-09-26 16:49 ET). LIVE MISS: 'shape=graph operation=familyTree person=donna' — Donna's biography ('born 4 August 1959 in Brockton …'). 'that is X's line' after a ranking = the OTHER side of the family from X's: SuperlativeScope.otherSideOf(X) → the owner's ancestors when X is not the owner, the spouse's when X is ('that is my line'). Fixed with strict-062; pinned by HallieSuperlativeScopeTests.thatIsDonnasLineRerunsTheRankingOverRicksAncestors."
+   "notes": "lv260926-012 (2026-09-26 16:49 ET). LIVE MISS: 'shape=graph operation=familyTree person=donna' — Donna's biography ('born 4 August 1959 in Brockton …'). 'that is X's line' after a ranking = the OTHER side of the family from X's: SuperlativeScope.otherSideOf(X) → the owner's ancestors when X is not the owner, the spouse's when X is the owner by name. Since 2026-10-07 the first-person 'that is my line' is NOT this scope — it ranks the speaker's own ancestors (strict-066). Fixed with strict-062; pinned by HallieSuperlativeScopeTests.thatIsDonnasLineRerunsTheRankingOverRicksAncestors."
+  },
+  {
+   "id": "strict-065",
+   "category": "strict",
+   "text": "Who was the oldest person in the family tree?",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "earliest birth year"
+   ],
+   "mustMatchQueryDescription": [
+    "superlative: earliestBorn scope=wholeTree"
+   ],
+   "notes": "Replay 2026-10-07, the first turn of the strict-066 chain. Unchanged behaviour: the whole tree is ranked. Pinned by HallieSuperlativeScopeTests.thatIsMyLineRanksTheSpeakersOwnAncestors (first turn)."
+  },
+  {
+   "id": "strict-066",
+   "category": "strict",
+   "text": "that is my line",
+   "followsPrevious": true,
+   "expect": "kinship",
+   "expectedRoutes": [
+    "graph"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "recorded ancestors"
+   ],
+   "mustMatchQueryDescription": [
+    "superlative: earliestBorn scope=ancestorsOf\\(nil\\)"
+   ],
+   "mustNotContain": [
+    "Brockton"
+   ],
+   "notes": "Replay 2026-10-07 (end-to-end, pre- and post-refactor builds alike). 'that is my line' after a whole-tree ranking was read as 'that one is mine, rank the other side' (SuperlativeScope.otherSideOf(nil)) and ranked the SPOUSE's ancestors. Said by the speaker, 'my line' names the line to rank: the owner's own ancestors (scope=ancestorsOf(nil), 'my' = Speakers.ownerFamilySearchID). The named form 'that is X's line' keeps the other-side reading (strict-064). Pinned by HallieSuperlativeScopeTests.thatIsMyLineRanksTheSpeakersOwnAncestors."
+  },
+  {
+   "id": "strict-067",
+   "category": "strict",
+   "text": "Were the boys born yet in 1990?",
+   "expect": "kinship",
+   "expectedRoutes": [
+    "temporal"
+   ],
+   "expectedOutcome": "answered",
+   "mustContain": [
+    "1990"
+   ],
+   "mustMatch": [
+    "\\bborn (?:by|in)\\b"
+   ],
+   "mustNotContain": [
+    "couldn't tell who it is about",
+    "name the person"
+   ],
+   "mustMatchQueryDescription": [
+    "shape=temporal",
+    "subject=the boys"
+   ],
+   "notes": "Replay 2026-10-07 (pre- and post-refactor builds alike). The translator read a born-yet ask with a stated year as a catalog search naming nobody (shape=event / shape=presence) and the tree-mode gate declined it, while 'how old were the boys in 1994?' answered. HallieBornYetQuestion now routes it model-free to the temporal route: a yes / no per son with the birth years. Pinned by HallieShellCLITests.bornYetWithAStatedYearIsAPerPersonAnswerNotADecline and bornYetRecogniserClaimsOnlyItsOwnShape."
   }
  ]
 }

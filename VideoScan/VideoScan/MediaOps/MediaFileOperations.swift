@@ -168,6 +168,11 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// window. Read-only on media; output only under
     /// ~/Library/Caches/VideoScan/spectrum. FootageSpectrumJob.
     case compareFootage
+    /// "Fingerprint Pictures…" (GH #293, 2026-10-07): computes and KEEPS the
+    /// 32-frame perceptual fingerprint of every video without one, archived
+    /// files first. Read-only on media; writes only the catalog field.
+    /// PerceptualFingerprintBackfillJob.
+    case fingerprintBackfill
 
     /// Badge text — rendered in small caps by the row view.
     /// `.extract` says "Faces" (not "Extract") since the verb split:
@@ -204,6 +209,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .bindFixity: return "Bind"
         case .lockArchive: return "Lock"
         case .compareFootage: return "Spectrum"
+        case .fingerprintBackfill: return "Fingerprint"
         }
     }
 
@@ -237,6 +243,7 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .bindFixity: return "bind fixity"
         case .lockArchive: return "lock archive files"
         case .compareFootage: return "compare footage"
+        case .fingerprintBackfill: return "fingerprint pictures"
         }
     }
 }
@@ -1015,9 +1022,11 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// Kick off a quick two-file check. The job owns its run Task; the
     /// caller just opens the operations window to watch it.
     @discardableResult
-    func startCompare(recordA: VideoRecord, recordB: VideoRecord) -> PairCompareJob {
+    func startCompare(recordA: VideoRecord, recordB: VideoRecord,
+                      onFingerprintKept: (@MainActor () -> Void)? = nil) -> PairCompareJob {
         let gates = gatePlan(forPaths: [recordA.fullPath, recordB.fullPath])
-        let job = PairCompareJob(recordA: recordA, recordB: recordB, gates: gates)
+        let job = PairCompareJob(recordA: recordA, recordB: recordB, gates: gates,
+                                 onFingerprintKept: onFingerprintKept)
         guard add(job) else { return job }
         job.start()
         fileOpsLog.info("compare started: \(recordA.filename, privacy: .public) vs \(recordB.filename, privacy: .public) (gates: \(gates.count))")

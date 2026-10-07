@@ -1283,6 +1283,18 @@ extension HallieTurnExecutor {
         return nil
     }
 
+    /// The model-free ASTs of `preTranslationSingle`'s record step: a
+    /// one-record question, else a born-yet ask with a stated year ("were
+    /// the boys born yet in 1990?" — replay 2026-10-07, the translator read
+    /// it as a catalog search and tree mode declined it). The record
+    /// recogniser keeps its precedence; it never claims a born-yet ask
+    /// (ArchivistRecordQuestion's age guard).
+    static func recordOrBornYetAST(_ question: String) -> ArchivistQueryAST? {
+        if let record = ArchivistRecordQuestion.detect(question) { return .record(record) }
+        if let bornYet = HallieBornYetQuestion.detect(question) { return .temporal(bornYet) }
+        return nil
+    }
+
     private static func preTranslationSingle(
         question: String,
         playAfterAnswer: Bool,
@@ -1376,10 +1388,10 @@ extension HallieTurnExecutor {
         // 4f74d809): a file named in the question is a record question
         // whatever else the sentence says — "who is in Breen surname
         // origin.mov" is about that file, not about the Breen surname.
-        if let record = ArchivistRecordQuestion.detect(question) {
+        if let ast = recordOrBornYetAST(question) {
             return .run(Intent(
                 originalQuestion: question,
-                ast: .record(record),
+                ast: ast,
                 playAfterAnswer: playAfterAnswer))
         }
         // "hallie mae mcgill" (GH #184 item 4): a bare utterance that is

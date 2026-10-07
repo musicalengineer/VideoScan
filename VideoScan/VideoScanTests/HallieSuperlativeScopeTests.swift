@@ -319,6 +319,8 @@ struct HallieSuperlativeScopeTests {
             ("i meant donna", "Gruffudd ap Einion"),
             ("what about donna's side", "Gruffudd ap Einion"),
             ("that is rick's line", "Gruffudd ap Einion"),
+            ("that's my line", "Patrick Breen"),
+            ("that is our line", "Patrick Breen"),
         ]
         for (phrase, expected) in phrases {
             var memory = Exec.ConversationMemory()
@@ -341,6 +343,32 @@ struct HallieSuperlativeScopeTests {
             } else {
                 #expect(donnaSays, Comment(rawValue: "\(phrase) → \(r.prose) | \(r.basisLine)"))
             }
+        }
+    }
+
+    /// Replay 2026-10-07: "who was the oldest person in the family tree?"
+    /// then "that is my line" ranked DONNA's ancestors — the first-person
+    /// form was read as "that one is mine, give me the other side". The
+    /// speaker saying "my line" asks for their own line: the owner's
+    /// ancestors (Speakers.ownerFamilySearchID pins who "my" is). "that is
+    /// donna's line" still means the other side — Rick's 2026-09-26 ruling,
+    /// pinned above by thatIsDonnasLineRerunsTheRankingOverRicksAncestors.
+    @Test func thatIsMyLineRanksTheSpeakersOwnAncestors() throws {
+        #expect(HallieSuperlativeCorrection.scope(in: "that is my line") == .ancestorsOf(nil))
+        for phrase in ["that is my line", "that's my line", "That is my line.", "those are my ancestors", "that is our side"] {
+            var memory = Exec.ConversationMemory()
+            let first = try #require(turn("who was the oldest person in the family tree", memory: &memory))
+            #expect(first.prose.contains("Gruffudd ap Einion"), Comment(rawValue: first.prose))
+            guard let r = turn(phrase, memory: &memory) else {
+                Issue.record("\"\(phrase)\" went to the translator"); continue
+            }
+            #expect(r.outcome == .answered, Comment(rawValue: phrase))
+            #expect(r.prose.hasPrefix("The earliest birth year among Richard Harding Breen Jr’s 6 recorded ancestors is born 1860: Patrick Breen"),
+                    Comment(rawValue: "\(phrase) → \(r.prose)"))
+            #expect(!r.prose.contains("Donna Hudson") && !r.basisLine.contains("Donna Hudson"),
+                    Comment(rawValue: "\(phrase) → \(r.basisLine)"))
+            #expect(!r.basisLine.contains("set aside"), Comment(rawValue: r.basisLine))
+            #expect(r.superlative == .init(kind: .earliestBorn, scope: .ancestorsOf(nil)))
         }
     }
 

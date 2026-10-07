@@ -213,6 +213,48 @@ def test_nightly_refuses_a_shrink_that_would_turn_ci_gate_red(tmp_path):
     assert nightly.alert_lines(status)[0].startswith("🔴")
 
 
+class ExcessFakeGit(FakeGit):
+    """FakeGit whose `show HEAD:<excess file>` answers with the old CCN 15 excess."""
+
+    def __init__(self, old: dict, old_excess: dict, **kw):
+        super().__init__(old, **kw)
+        self.old_excess = old_excess
+
+    def __call__(self, *args, check=True):
+        if "show" in args and any(str(a).endswith(nightly.EXCESS_REL) for a in args):
+            self.calls.append(args)
+            return subprocess.CompletedProcess(args, 0, json.dumps(self.old_excess), "")
+        return super().__call__(*args, check=check)
+
+
+def excess_in(wt, total, files):
+    cm.write_ccn15_excess(str(Path(wt) / nightly.EXCESS_REL), total, files)
+    return json.loads((Path(wt) / nightly.EXCESS_REL).read_text())
+
+
+def test_nightly_commits_a_shrunk_ccn15_excess_even_when_the_debt_baseline_is_unchanged(tmp_path):
+    wt, old = worktree(tmp_path, OLD)
+    old_excess = excess_in(wt, 40, {"a.swift": 40})
+    git = ExcessFakeGit(old, old_excess)
+    eplan = lambda w, p: {"changed": True, "problems": [], "before": 40, "after": 31, "files": {"a.swift": 31}}
+    status = nightly.run("repo", wt, git, plan_of(OLD, changed=False), NOW, gate_check=lambda w: 0,
+                         excess_plan=eplan)
+    assert status["outcome"] == "committed", status
+    assert cm.load_ccn15_excess(str(Path(wt) / nightly.EXCESS_REL))["total_excess"] == 31
+    assert any(nightly.EXCESS_REL in c for c in git.ran("add"))
+
+
+def test_nightly_refuses_a_ccn15_excess_that_would_grow(tmp_path):
+    wt, old = worktree(tmp_path, OLD)
+    old_excess = excess_in(wt, 40, {"a.swift": 40})
+    git = ExcessFakeGit(old, old_excess)
+    eplan = lambda w, p: {"changed": True, "problems": [], "before": 40, "after": 41, "files": {}}
+    status = nightly.run("repo", wt, git, plan_of(OLD, changed=False), NOW, gate_check=lambda w: 0,
+                         excess_plan=eplan)
+    assert status["outcome"] == "refused" and "CCN 15" in status["detail"]
+    assert not git.ran("commit") and not git.ran("push")
+
+
 def test_nightly_retries_once_after_a_rejected_push_then_reports_red(tmp_path):
     wt, old = worktree(tmp_path, OLD)
     git = FakeGit(old, push_ok=(False, False))

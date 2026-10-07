@@ -2173,6 +2173,88 @@ struct HallieShellCLITests {
         #expect(!harness.output.contains { $0.contains("I need to know who you mean") })
     }
 
+    /// Replay 2026-10-07: "Were the boys born yet in 1990?" — the
+    /// translator read it as a catalog search naming nobody (shape=event,
+    /// then shape=presence) and the tree-mode gate declined it, while "how
+    /// old were the boys in 1994?" answered. A born-yet ask with a stated
+    /// year is answered by the temporal route without the model: a yes / no
+    /// per son with the birth years. The fixture translator hands back the
+    /// live mis-read, so a regression that consults it again fails here.
+    @Test func bornYetWithAStatedYearIsAPerPersonAnswerNotADecline() async throws {
+        var utc = Calendar(identifier: .gregorian)
+        utc.timeZone = TimeZone(secondsFromGMT: 0)!
+        func day(_ y: Int, _ m: Int, _ d: Int) -> Date {
+            utc.date(from: DateComponents(year: y, month: m, day: d, hour: 12))!
+        }
+        func profile(_ name: String, born: Date, sex: PersonSex = .male,
+                     kinships: [Kinship] = []) -> POIProfile {
+            var value = POIProfile(name: name, referencePath: "/isolated/\(name.lowercased())",
+                                   birthdate: born, sex: sex)
+            value.kinships = kinships
+            return value
+        }
+        let profiles = [
+            profile("Rick", born: day(1958, 3, 1), kinships: [
+                Kinship(relation: .spouse, relativeTo: .profile(name: "Donna")),
+                Kinship(relation: .parent, relativeTo: .profile(name: "Dan")),
+                Kinship(relation: .parent, relativeTo: .profile(name: "Mark")),
+            ]),
+            profile("Donna", born: day(1959, 8, 4), sex: .female, kinships: [
+                Kinship(relation: .parent, relativeTo: .profile(name: "Matt")),
+                Kinship(relation: .parent, relativeTo: .profile(name: "Timmy")),
+            ]),
+            profile("Dan", born: day(1984, 6, 1)),
+            profile("Mark", born: day(1986, 11, 15)),
+            profile("Matt", born: day(1996, 5, 10)),
+            profile("Timmy", born: day(1999, 4, 22)),
+        ]
+        let harness = Harness(
+            inputs: [":mode tree", "Were the boys born yet in 1990?", ":quit"],
+            profiles: profiles,
+            translations: [.event(.init(keywords: ["boys", "born"]))])
+        harness.executeRequest = { request, context in
+            try await HallieTurnExecutor.execute(request, context: context)
+        }
+        let options = try HallieShellCLI.parse(arguments: ["--hallie"])
+
+        let code = await HallieShellCLI.run(
+            options: options, input: harness.nextInput,
+            output: { harness.output.append($0) },
+            dependencies: harness.dependencies())
+
+        #expect(code == HallieShellCLI.ExitCode.success.rawValue)
+        let transcript = harness.output.joined(separator: "\n")
+        #expect(harness.translatedQuestions.isEmpty, Comment(rawValue: transcript))
+        #expect(harness.output.contains {
+            $0.contains("Dan and Mark were born by 1990; Matt and Timmy were not (Matt was born in 1996, Timmy in 1999).")
+        }, Comment(rawValue: transcript))
+        #expect(!transcript.contains("couldn't tell who it is about"), Comment(rawValue: transcript))
+    }
+
+    /// The recogniser's edges: it claims only a born-yet ask with a
+    /// subject and exactly one stated year, and abstains (→ the
+    /// translator, as before) on everything else.
+    @Test func bornYetRecogniserClaimsOnlyItsOwnShape() {
+        typealias Temporal = ArchivistQueryAST.Temporal
+        #expect(HallieBornYetQuestion.detect("Were the boys born yet in 1990?")
+                == Temporal(subject: "the boys", operation: .age, reference: .explicitYear(1990)))
+        #expect(HallieBornYetQuestion.detect("had the boys been born by 1990")
+                == Temporal(subject: "the boys", operation: .age, reference: .explicitYear(1990)))
+        #expect(HallieBornYetQuestion.detect("was Timmy already born in 1998?")
+                == Temporal(subject: "timmy", operation: .age, reference: .explicitYear(1998)))
+        // The selected video's date, not a stated year: the translator's road.
+        #expect(HallieBornYetQuestion.detect("were the boys born yet when this was shot") == nil)
+        // A birth-year check, not a born-yet ask.
+        #expect(HallieBornYetQuestion.detect("was dan born in 1984") == nil)
+        // A plain age ask keeps the translator's temporal road.
+        #expect(HallieBornYetQuestion.detect("how old were the boys in 1994") == nil)
+        // A pronoun subject is memory's to resolve.
+        #expect(HallieBornYetQuestion.detect("were they born yet in 1990") == nil)
+        // Two years, or a media word: not this shape.
+        #expect(HallieBornYetQuestion.detect("were the boys born yet in 1990 or 1991") == nil)
+        #expect(HallieBornYetQuestion.detect("were the boys born yet in the 1990 videos") == nil)
+    }
+
     // MARK: - Record scope: one video (2026-09-02 sensors)
 
     private static let newHampshirePath =

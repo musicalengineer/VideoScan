@@ -74,6 +74,8 @@ struct ArchiveView: View {
     @State var updatePreview: ArchiveUpdatePreview?
     /// Why Update… did not open (e.g. already being edited in another sheet).
     @State var updateRefusal: String?
+    /// Year header ▸ Audit <year>… (Rick 2026-10-07) — the sheet driver.
+    @State var auditYearRequest: ArchiveAuditRequest?
 
     @Environment(\.openWindow) var openWindow
 
@@ -134,6 +136,15 @@ struct ArchiveView: View {
                 // Every close path releases the one-editor claim.
                 .onDisappear { model.closeArchiveUpdate(preview) }
         }
+        .sheet(item: $auditYearRequest) { request in
+            ArchiveAuditYearSheet(
+                year: request.year,
+                snapshot: { auditSnapshot(year: request.year) },
+                showInCatalog: { ids in
+                    auditYearRequest = nil
+                    showInCatalog(ids: ids)
+                })
+        }
         .alert("Update…", isPresented: Binding(get: { updateRefusal != nil }, set: { if !$0 { updateRefusal = nil } })) {
             Button("OK", role: .cancel) { updateRefusal = nil }
         } message: {
@@ -143,6 +154,8 @@ struct ArchiveView: View {
         // I/O) — refreshed on entry and when the MFO job list changes (the
         // strip refreshes after its own sheets and cards).
         .task { model.archiveAngel.refreshBatches(reason: "Archive tab entry") }
+        // Audit decisions + occasion tags (app-data sidecar), once per launch.
+        .task { await model.loadArchiveAuditIfNeeded() }
         // The progress bar's unique-file totals and the "Needs a date"
         // answer, off the main actor.
         .task(id: archiveStorageKey) { await refreshArchiveStorageTotals() }
@@ -475,6 +488,15 @@ struct ArchiveView: View {
                 MediaFileOperationsWindowOpener.openBehindMain(openWindow)   // Media File Operations window (legacy id)
             }
             .disabled(model.isReadOnly)
+            // GH #293: keep a perceptual fingerprint on every video (archive
+            // first) so Find Similar, delete-excess and the Year check can
+            // reuse it. Read-only on media; an MFO job Rick starts.
+            Button("Fingerprint Pictures (archive first)…") {
+                _ = fileOpsCenter.startedByUser { $0.startPerceptualFingerprintBackfill(model: model) }
+                MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+            }
+            .disabled(model.isReadOnly)
+            .help("Read each video once and keep its picture fingerprint in the catalog, archived files first. Nothing on disk is changed. Can run overnight; Pause / Stop any time.")
             // One-time catch-up (Rick 2026-09-27): Promote locks every new
             // file; this locks the ones promoted before locking existed. Gone
             // once it has completed cleanly (marker in App Support).

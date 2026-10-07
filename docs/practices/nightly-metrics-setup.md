@@ -23,6 +23,7 @@ a metric with no data says "no data yet", never zero.
 | `metrics/codex_reviews.jsonl` | `tools/publish_metrics.py` (parses `docs/reviews/codex/*.md` headers) | with either of the two above |
 | `metrics/search_benchmarks.jsonl` | `scripts/publish_search_benchmarks.py` | when the benchmark is run |
 | `metrics/complexity.jsonl`, `metrics/complexity_debt_latest.json`, `metrics/complexity_baseline_proposed.json` | `nightly-analysis.yml` `complexity` job → `aggregate` (`scripts/complexity_metrics.py`) | GitHub nightly |
+| `metrics/exposure.jsonl`, `metrics/exposure_new_latest.json`, `metrics/exposure_files_latest.json`, `metrics/problem_files_latest.json` | same job (`scripts/exposure_metrics.py`, `scripts/problem_files.py`) → `aggregate`, privacy-gated by `tools/publish_metrics.py --validate` | GitHub nightly |
 
 ## Complexity and tech debt (2026-10-05, GH #281)
 
@@ -40,12 +41,52 @@ a metric with no data says "no data yet", never zero.
   function_body_length / file_length / type_body_length, fails. Escape hatch:
   `COMPLEXITY_OVERRIDE="reason" git commit …`, appended to
   `ci/baselines/complexity_overrides.jsonl` (staged into the commit; CI honors it).
-- **Baseline.** One committed file, `ci/baselines/complexity_debt.json`. It only shrinks:
-  the nightly publishes the shrunk proposal; `python3 scripts/complexity_metrics.py
-  --shrink-baseline` applies it locally for a commit. Re-grow only deliberately with
-  `--update-baseline`.
+- **CCN 15 excess ratchet (blocking, 2026-10-07).** Functions over CCN 15 went 277 → 345
+  in ten nights while the count over 30 stayed flat. CCN is one signal for flagging a
+  module, not a target to obey, so the ratchet watches the EXCESS, the sum of
+  max(0, CCN − 15), not the number of functions over 15. Splitting `PrunePlan.plan`
+  (CCN 52, excess 37) into two honest 26s brings it to 22 and passes; a 40 plus a 20
+  (25 + 5 = 30) passes too. Pre-commit: the touched files' total excess may not rise from
+  HEAD to the staged copy (`RATCHET`; moving a function between touched files or
+  splitting a file passes), and no function above 15 may grow, even if another one in the
+  same commit shrank more (`RATCHET-WORSE`). CI: the whole tree's total excess may not
+  exceed `ci/baselines/complexity_ccn15_excess.json` (2,403 on 2026-10-07). The same
+  `COMPLEXITY_OVERRIDE` covers it and records the excess it let in, which CI credits back.
+- **Baseline.** `ci/baselines/complexity_debt.json`, plus the CCN 15 total excess in
+  `ci/baselines/complexity_ccn15_excess.json`. Both only shrink: the 2 AM nightly
+  (`scripts/complexity_baseline_nightly.py`) commits the shrink; `python3
+  scripts/complexity_metrics.py --shrink-baseline` applies it locally. Re-grow only
+  deliberately with `--update-baseline` / `--update-ccn15-excess`, and say why in the commit.
 - After pulling this change, run `scripts/install-git-hooks.sh` once per clone: the
   hook in `.git/hooks` is a copy.
+
+### Splitting a function
+
+CCN is a signal, not the goal. When the gate asks for a function to be split, split it
+along a real concept: an enum whose cases carry the branching, a value type that owns
+its own rules, a focused protocol, or a pure function that makes one named decision
+(`shouldKeep`, `pickKeeper`). A table of cases (pattern → action as data) often replaces
+a long `switch`/`if` ladder outright. Each piece should be testable on its own and named
+for WHAT it decides, not WHEN it runs. Never cut a function into `step1` / `step2` /
+`part3` helpers that pass the same half-dozen locals around: CCN drops on paper and the
+code gets harder to read.
+
+## Over-exposure and problem files (2026-10-07)
+
+- **Over-exposure (report only, no gate).** `scripts/exposure_metrics.py` finds internal
+  declarations in app Swift that could be `private` (used only in their own file) or were
+  widened for a `T+*.swift` split (used only from files extending the same type). Tests
+  that `@testable import` count as users. Rules, skips and the collision policy are in
+  the script's docstring. Ratchet: `ci/baselines/exposure_baseline.json`, shrink-only
+  (`--shrink-baseline`; regrow deliberately with `--update-baseline`). NEW ones are 🔴 in
+  the morning digest.
+- **Problem files.** `scripts/problem_files.py` joins complexity offenders (baseline),
+  tonight's new/worse, file length, the exposure counts and 7-day churn into one score
+  (formula in its docstring); the digest prints the top 15 and the nightly refactor picks
+  from it.
+- Both run in the `complexity` job; `aggregate` publishes `metrics/exposure.jsonl`,
+  `exposure_new_latest.json`, `exposure_files_latest.json` and
+  `problem_files_latest.json` only after `tools/publish_metrics.py --validate` passes.
 
 Why `coverage_logic_pct` / `swiftlint_*` in `history.jsonl` looked broken: coverage is
 deliberately off in ci.yml (`-enableCodeCoverage NO`, 2026-09-26), and

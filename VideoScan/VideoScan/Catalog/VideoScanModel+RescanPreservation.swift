@@ -257,6 +257,11 @@ struct RescanPreservedFields: Sendable {
     /// relink pass has nothing to follow.
     let familyMusic: FamilyMusicInfo?
 
+    /// GH #293: the kept perceptual fingerprint — a derived product of the
+    /// BYTES, so it follows the file across a rescan only while the fresh
+    /// probe reports the same size (else the next backfill recomputes it).
+    let perceptualFingerprint: StoredPerceptualFingerprint?
+
     /// True if this snapshot carries anything worth restoring.
     /// Records that have only scan-derived data don't need to be in
     /// the snapshot map at all — caller can use this to filter and
@@ -302,6 +307,11 @@ struct RescanPreservedFields: Sendable {
             || footage != nil
             || familyMusic != nil
     }
+
+    /// GH #293: worth snapshotting for its kept perceptual fingerprint
+    /// alone (an ffmpeg pass per file to recompute). Kept apart from
+    /// `isWorthRestoring` so that known complexity offender does not grow.
+    var carriesKeptFingerprint: Bool { perceptualFingerprint != nil }
 
     @MainActor
     init(from rec: VideoRecord) {
@@ -351,6 +361,7 @@ struct RescanPreservedFields: Sendable {
         self.footageDecisions = rec.footageDecisions
         self.footage = rec.footage
         self.familyMusic = rec.familyMusic
+        self.perceptualFingerprint = rec.perceptualFingerprint
     }
 
     // MARK: Fixity identity guard
@@ -455,6 +466,7 @@ struct RescanPreservedFields: Sendable {
         rec.footageDecisions = self.footageDecisions
         rec.footage = self.footage
         rec.familyMusic = self.familyMusic
+        rec.perceptualFingerprint = (perceptualFingerprint?.sizeBytes == rec.sizeBytes) ? perceptualFingerprint : nil
         return carry
     }
 }
@@ -488,7 +500,7 @@ extension VideoScanModel {
             // restoring (deep-test finding 2).
             oldIDs[rec.fullPath] = rec.id
             let snap = RescanPreservedFields(from: rec)
-            if snap.isWorthRestoring {
+            if snap.isWorthRestoring || snap.carriesKeptFingerprint {
                 map[rec.fullPath] = snap
             }
         }

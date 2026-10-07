@@ -181,16 +181,20 @@ struct InspectorDateView: View {
 
     /// Pure text for the line (tested without a view host).
     static func inferredSummary(_ record: VideoRecord) -> String? {
-        guard let reason = record.inferredDateReason, !reason.isEmpty else {
+        // GH #293: `inferredDateReasonShown` / `effectiveInferredDateRange`
+        // keep a legacy year-only row (folder-year, path-year — no span, no
+        // written reason) a YEAR with its WHY, never "Guess: 1995-01-01".
+        guard let reason = record.inferredDateReasonShown, !reason.isEmpty else {
             // Legacy inference (no written reason): still show the date.
             guard let d = record.inferredRecordDate else { return nil }
             let pct = record.inferredDateConfidence.map { " (\(Int(($0 * 100).rounded()))% sure)" } ?? ""
-            return "Guess: \(inferredDayFormatter.string(from: d))\(pct) — from an earlier pass, no written reason"
+            let shown = record.effectiveInferredDateRange?.displayString ?? inferredDayFormatter.string(from: d)
+            return "Guess: \(shown)\(pct) — from an earlier pass, no written reason"
         }
         guard let d = record.inferredRecordDate else {
             return "No guess — \(reason)"
         }
-        let shown = record.inferredDateRange?.displayString ?? inferredDayFormatter.string(from: d)
+        let shown = record.effectiveInferredDateRange?.displayString ?? inferredDayFormatter.string(from: d)
         let pct = record.inferredDateConfidence.map { " (\(Int(($0 * 100).rounded()))% sure)" } ?? ""
         return "Guess: \(shown)\(pct) — \(reason)"
     }

@@ -93,5 +93,6 @@ extension VideoRecord {
         case footage
         case footageDecisions
         case familyMusic
+        case perceptualFingerprint   // GH #293, additive
     }
 }

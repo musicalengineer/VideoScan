@@ -38,7 +38,9 @@ jobs:
       # GH #281: the same gate as the pre-commit hook, over the whole tree.
       # Fails on a function over CCN 30 / 300 lines that is new or worse than
       # ci/baselines/complexity_debt.json, or on a new swiftlint:disable of a
-      # size/complexity rule. Honors overrides recorded in
+      # size/complexity rule, or when the tree's total excess over CCN 15
+      # (sum of max(0, CCN - 15)) is above ci/baselines/complexity_ccn15_excess.json.
+      # Honors overrides recorded in
       # ci/baselines/complexity_overrides.jsonl, so `--no-verify` does not get
       # past it. lizard pinned to the nightly's version (CCN must not drift).
       - name: Complexity gate (blocking)
