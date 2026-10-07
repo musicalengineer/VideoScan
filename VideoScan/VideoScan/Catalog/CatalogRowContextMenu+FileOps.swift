@@ -9,15 +9,21 @@ import SwiftUI
 
 extension CatalogContent {
 
-    /// The file-operations section of the full row menu: every verb that
-    /// runs as a job in the Media File Operations window, then Archive,
-    /// Verify and the Whisper / VLM analyze shortcuts (R1 split, GH #281).
+    /// The file-operations section of the full row menu: the pair verbs,
+    /// Get Media Info / Check Media, Analyze ▸, Transcode ▸ / Clean Up
+    /// Video ▸, then Archive (R1 split, GH #281; regrouped 2026-10-07).
     @ViewBuilder
     func fileOperationItems(rec: VideoRecord, selection: CatalogRowMenuSelection) -> some View {
         pairItems(rec: rec, selectedRecs: selection.selected, pureActive: selection.pureActive)
-        extractAndMatchItems(rec: rec)
+        matchItems(rec: rec)
 
-        analyzeItem(activeRecs: selection.active)
+        // Get Media Info… / Check Media… and the repair lifecycle
+        // (CatalogRowContextMenu+Media.swift).
+        mediaCheckMenuItems(rec: rec,
+                            activeRecs: selection.active,
+                            pureActive: selection.pureActive)
+
+        analyzeMenu(rec: rec, activeRecs: selection.active)
 
         // Read once per menu open: Transcode greys out on it, and the
         // Archive Angel items drop their transcode hand-off on it.
@@ -27,11 +33,9 @@ extension CatalogContent {
         }
         transcodeAndCleanupMenus(rec: rec, transcodeRunning: transcodeRunning)
 
-        archiveAndVerifyItems(rec: rec, activeRecs: selection.active,
-                              pureActive: selection.pureActive,
-                              transcodeRunning: transcodeRunning)
-
-        transcriptionItems(rec: rec)
+        archiveItems(activeRecs: selection.active,
+                     pureActive: selection.pureActive,
+                     transcodeRunning: transcodeRunning)
     }
 
     /// Combine This Pair… and Compare These Two Files….
@@ -39,8 +43,7 @@ extension CatalogContent {
     private func pairItems(rec: VideoRecord, selectedRecs: [VideoRecord], pureActive: Bool) -> some View {
         // File operations — every verb that runs as a job
         // in the Media File Operations window lives in this
-        // ONE section, alphabetized (Rick 2026-06-10). New
-        // verbs (merge, analyze, …) join here, in order.
+        // ONE section (Rick 2026-06-10).
         if pureActive, let partner = rec.pairedWith {
             Button("Combine This Pair…") {
                 let video = rec.streamType == .videoOnly ? rec : partner
@@ -74,31 +77,12 @@ extension CatalogContent {
         }
     }
 
-    /// Extract Facial Frames… / Extract Frames… / Find Matching Audio…
-    /// / Find Missing Audio… / Find Matching Video….
+    /// Find Matching Audio… / Find Missing Audio… / Find Matching Video….
+    /// ("Extract Facial Frames…" and "Extract Frames…" were retired
+    /// 2026-10-07 — Rick: deprecated and unverified; VLC exports frames.
+    /// Their code is in the repo's .trash/ and in git history.)
     @ViewBuilder
-    private func extractAndMatchItems(rec: VideoRecord) -> some View {
-        // Extract Facial Frames — best portrait frames as
-        // lossless PNGs, Vision face-quality ranked (Donna's
-        // Aug 4 birthday print). Disabled when the file is
-        // offline. (Renamed from "Extract Frames…" when the
-        // ffmpeg-only verb below was added, 2026-06-10.)
-        Button("Extract Facial Frames…") {
-            startFrameRip(for: rec)
-        }
-        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
-        .accessibilityIdentifier("catalog.row.extractFacialFrames")
-        // Extract Frames — ffmpeg-only frame export (every
-        // frame / every Nth / N per second), no Vision.
-        // Opens an options sheet first: this verb can write
-        // tens of thousands of PNGs, so the user sees the
-        // frame-count + disk estimate before anything runs.
-        Button("Extract Frames…") {
-            ripAllFramesTarget = rec
-        }
-        .disabled(!VolumeReachability.isReachable(path: rec.fullPath))
-        .accessibilityIdentifier("catalog.row.extractFrames")
-
+    private func matchItems(rec: VideoRecord) -> some View {
         // Find Matching Audio — Rick 2026-06-14 (renamed
         // from "Repair Audio" with GH #116, which freed
         // the repair/fix verb space for Balance Audio).
@@ -145,29 +129,26 @@ extension CatalogContent {
         }
     }
 
-    /// Analyze (whole selection).
+    /// Analyze ▸ — Analyze (whole selection), Transcribe Audio, Generate
+    /// Scene Captions (grouped 2026-10-07).
     @ViewBuilder
-    private func analyzeItem(activeRecs: [VideoRecord]) -> some View {
-        // Analyze applies to the FULL selection (fix
-        // 2026-07-14 — it used only ids.first, so
-        // multi-selecting N files analyzed just one;
-        // the Tag menu below is the pattern). Jobs
-        // wait their turn behind a running batch, so
-        // the old currentStatus.isActive disable is
-        // gone — intent is never blocked, just queued.
-        Button(CatalogRowMenuText.analyze(count: activeRecs.count)) {
-            requestAnalyze(forAll: activeRecs, stages: AnalyzeStage.all)
-        }
-        .disabled(!activeRecs.contains {
-            VolumeReachability.isReachable(path: $0.fullPath)
-        })
-        .accessibilityIdentifier("catalog.row.analyze")
+    private func analyzeMenu(rec: VideoRecord, activeRecs: [VideoRecord]) -> some View {
+        Menu("Analyze") {
+            // Analyze applies to the FULL selection (fix
+            // 2026-07-14 — it used only ids.first, so
+            // multi-selecting N files analyzed just one).
+            // Jobs wait their turn behind a running batch,
+            // so intent is never blocked, just queued.
+            Button(CatalogRowMenuText.analyze(count: activeRecs.count)) {
+                requestAnalyze(forAll: activeRecs, stages: AnalyzeStage.all)
+            }
+            .disabled(!activeRecs.contains {
+                VolumeReachability.isReachable(path: $0.fullPath)
+            })
+            .accessibilityIdentifier("catalog.row.analyze")
 
-        // (The standalone "Balance Audio…" verb retired with
-        // the GH #137 consolidation — Verify Audio is the
-        // single audio-examination entry point, and its
-        // results sheet offers Balance as a treatment. The
-        // balance RENDER still runs as a BalanceAudioJob.)
+            transcriptionItems(rec: rec)
+        }
     }
 
     /// Transcode ▸ and Clean Up Video ▸ submenus.
@@ -243,10 +224,10 @@ extension CatalogContent {
     }
 
     /// Promote to Archive, the Archive Angel items, Remove from Catalog
-    /// (keep files), then the Verify / repair-lifecycle cluster.
+    /// (keep files).
     @ViewBuilder
-    private func archiveAndVerifyItems(rec: VideoRecord, activeRecs: [VideoRecord],
-                                       pureActive: Bool, transcodeRunning: Bool) -> some View {
+    private func archiveItems(activeRecs: [VideoRecord],
+                              pureActive: Bool, transcodeRunning: Bool) -> some View {
         // Promote to Archive (Master Archive, 2026-08-15) —
         // single + multi select; the model routes to the
         // no-master alert or the confirmation sheet.
@@ -256,18 +237,9 @@ extension CatalogContent {
         ArchiveAngelMenuItems(model: model, center: fileOpsCenter, activeRecs: activeRecs, pureActive: pureActive,
                               onTranscode: transcodeRunning ? nil : { rec, preset in configureTranscode(for: rec, preset: preset) })
         removeFromCatalogMenuItem(activeRecs: activeRecs, pureActive: pureActive)
-
-        // Verify Audio / Verification Results / Repair
-        // Damaged Audio / Confirm Repair — extracted to
-        // a dedicated builder (GH #132/#135) so the
-        // context-menu expression stays inside Xcode's
-        // type-check budget (same fix as onlineCopyMenu).
-        audioLifecycleMenuItems(rec: rec,
-                                activeRecs: activeRecs,
-                                pureActive: pureActive)
     }
 
-    /// Transcribe Audio / Generate Scene Captions.
+    /// Transcribe Audio / Generate Scene Captions (inside Analyze ▸).
     @ViewBuilder
     private func transcriptionItems(rec: VideoRecord) -> some View {
         // Rick 2026-06-14: grey out (don't hide) when

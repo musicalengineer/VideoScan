@@ -1034,44 +1034,10 @@ final class MediaFileOperationsCenter: ObservableObject {
         return job
     }
 
-    /// Kick off a best-frames extraction (phase 2). Same ownership
-    /// model as compare: the job owns its run Task, so the rip keeps
-    /// going when the operations window closes; the caller just opens
-    /// the window to watch it. Reads gate on the source file's volume
-    /// (a rip is a long sequential decode — same HDD-thrash concern as
-    /// compare).
-    @discardableResult
-    func startExtract(record: VideoRecord, destinationParent: URL) -> ExtractFramesJob {
-        let gates = gatePlan(forPaths: [record.fullPath])
-        let job = ExtractFramesJob(record: record,
-                                   destinationParent: destinationParent,
-                                   gates: gates)
-        guard add(job) else { return job }
-        job.start()
-        fileOpsLog.info("extract started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (gates: \(gates.count))")
-        logStart(job, plan: "best portrait frames → \(destinationParent.lastPathComponent)/")
-        return job
-    }
-
-    /// Kick off an ffmpeg-only frame export ("Extract Frames…", verb
-    /// split 2026-06-10). Same ownership/gating model as the facial
-    /// extract above — one long sequential read of the source file.
-    /// `options` carries the sampling choice from RipAllFramesSheet.
-    @discardableResult
-    func startRipAllFrames(record: VideoRecord,
-                           destinationParent: URL,
-                           options: AllFramesRipper.Options) -> RipAllFramesJob {
-        let gates = gatePlan(forPaths: [record.fullPath])
-        let job = RipAllFramesJob(record: record,
-                                  destinationParent: destinationParent,
-                                  gates: gates,
-                                  options: options)
-        guard add(job) else { return job }
-        job.start()
-        fileOpsLog.info("ripFrames started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (\(options.sampling.logDescription, privacy: .public), gates: \(gates.count))")
-        logStart(job, plan: "\(options.sampling.logDescription) → \(destinationParent.lastPathComponent)/")
-        return job
-    }
+    // (startExtract / startRipAllFrames — the "Extract Facial Frames…" and
+    // "Extract Frames…" jobs — retired 2026-10-07 with their menu items.
+    // The .extract / .ripFrames kinds stay, like .trim, so the vocabulary
+    // never loses a word an old log line used.)
 
     /// Kick off "Reformat and Analyze" on a single record — ffmpeg
     /// transcodes the source's legacy-codec stream into modern

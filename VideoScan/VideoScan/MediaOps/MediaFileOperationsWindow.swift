@@ -672,19 +672,6 @@ struct MediaFileOperationRow: View {
                 if let compare = job as? PairCompareJob,
                    let verdict = compare.comparator.verdict {
                     PairCompareVerdictChip(verdict: verdict)
-                } else if let extract = job as? ExtractFramesJob,
-                          let dest = extract.ripper.completedDestination {
-                    // Verdict in-row, like compare's chip: frame count
-                    // + jump straight to the PNGs (the affordance the
-                    // retired FrameRipperSheet had).
-                    finishedChip(summary)
-                    revealButton(dest)
-                } else if let rip = job as? RipAllFramesJob,
-                          let dest = rip.ripper.completedDestination {
-                    // Same finished treatment for the ffmpeg-only frame
-                    // export — count + size chip, Reveal to the PNGs.
-                    finishedChip(summary)
-                    revealButton(dest)
                 } else if let reformat = job as? ReformatJob {
                     // Rick 2026-06-14: after a Reformat finishes the
                     // user wants to see WHERE the output landed AND
@@ -753,18 +740,6 @@ struct MediaFileOperationRow: View {
                 // Rick 2026-08-26: a cancelled job is not a failed one —
                 // blue stop symbol + "Cancelled", never the red X.
                 stateBadge(job.state.badge)
-                // A cancelled extract keeps its already-saved frames —
-                // offer Reveal on the partial output too. Both frame
-                // verbs behave the same way here.
-                if let extract = job as? ExtractFramesJob,
-                   extract.ripper.framesSaved > 0,
-                   let dest = extract.ripper.completedDestination {
-                    revealButton(dest)
-                } else if let rip = job as? RipAllFramesJob,
-                          rip.ripper.framesWritten > 0,
-                          let dest = rip.ripper.completedDestination {
-                    revealButton(dest)
-                }
             }
 
             // Row clock. Active job: live elapsed via SwiftUI's

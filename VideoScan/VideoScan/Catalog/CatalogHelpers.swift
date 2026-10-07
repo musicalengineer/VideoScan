@@ -162,22 +162,11 @@ struct CatalogContent: View {
     @State var fileJourneyPayload: FileJourney?
     /// "Find Similar Footage…" sheet (2026-09-23) — .sheet(item:).
     @State var footageSheetRequest: FootageSheetRequest?
-    /// "Mark as Family Music…" sheet (2026-09-23) — .sheet(item:).
-    @State var familyMusicSheetRequest: FamilyMusicSheetRequest?
+    // ("Mark as Family Music…", "Extract Facial Frames…" and "Extract
+    // Frames…" retired 2026-10-07 with their sheet state.)
 
     // (`tableData` and `angelBadgeRevision` live in CatalogTableState.swift.)
 
-    // "Extract Facial Frames…" (Rick 2026-06-09, Donna's birthday-
-    // print project) runs as an ExtractFramesJob in the Media File
-    // Operations window since phase 2 — no view-local ripper state.
-
-    /// "Extract Frames…" (ffmpeg-only, verb split 2026-06-10) — the
-    /// right-clicked record awaiting its sampling-options sheet.
-    /// Non-nil drives the sheet; the job itself lives in the Media
-    /// File Operations center once the user confirms.
-    /// Internal (not private): set by the row context menu in
-    /// CatalogRowContextMenu.swift.
-    @State var ripAllFramesTarget: VideoRecord?
     /// Non-nil presents format + destination choices before a transcode.
     @State var transcodeRequest: TranscodeRequest?
     /// Non-nil presents the "Clean Up Video" recipe confirmation sheet.
@@ -841,23 +830,10 @@ struct CatalogContent: View {
             FileJourneySheet(journey: payload)
         }
         // Find Similar Footage — the read-only group sheet.
-        // Family Music — performer + title, applied to the selection.
-        .sheet(item: $familyMusicSheetRequest) { request in
-            FamilyMusicSheet(request: request) { performer, title in
-                model.markFamilyMusic(request.recordIDs, performer: performer, title: title)
-            }
-        }
         .sheet(item: $footageSheetRequest) { request in
             FootageGroupSheet(request: request, model: model, startRun: { [fileOpsCenter, model] scope in
                 fileOpsCenter.startFindSimilarFootage(scope: scope, model: model)
             })
-        }
-        // "Extract Frames…" options sheet (sampling + disk estimate).
-        // .sheet(item:) per the chained-sheet antipattern memo —
-        // VideoRecord is Identifiable, so the binding drives the
-        // present/dismiss cycle directly.
-        .sheet(item: $ripAllFramesTarget) { rec in
-            RipAllFramesSheet(record: rec)
         }
         .sheet(item: $transcodeRequest) { request in
             TranscodeSheet(request: request)
@@ -929,30 +905,6 @@ struct CatalogContent: View {
                 but none of those volumes is mounted right now.
                 """
         }
-    }
-
-    /// User picked "Extract Facial Frames…" — show a folder picker,
-    /// then hand the rip to the Media File Operations center and open
-    /// its window (same pattern as "Compare These Two Files…"). The
-    /// job owns the run Task, so it survives this view and the window
-    /// closing. (The ffmpeg-only "Extract Frames…" verb goes through
-    /// RipAllFramesSheet instead — it needs sampling options and a
-    /// disk-usage estimate before start.)
-    /// Internal (not private): invoked by the row context menu in
-    /// CatalogRowContextMenu.swift.
-    func startFrameRip(for rec: VideoRecord) {
-        let panel = NSOpenPanel()
-        panel.title = "Save extracted facial frames into…"
-        panel.message = "Pick the parent folder. A subfolder named \"<video>-frames\" will be created inside."
-        panel.canCreateDirectories = true
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Select"
-        guard panel.runModal() == .OK, let dest = panel.url else { return }
-        _ = fileOpsCenter.startedByUser { $0.startExtract(record: rec, destinationParent: dest) }
-        // The job brings the operations window forward itself (not key,
-        // Settings-gated) — MediaFileOperationsWindowForwarder, 2026-09-21.
     }
 
     private func performRename() {

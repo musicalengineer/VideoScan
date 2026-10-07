@@ -318,10 +318,11 @@ struct VerifyVideoScaleTests {
 @Suite("VerifyVideo — catalog menu sensor")
 struct VerifyVideoMenuSensorTests {
 
-    /// The Verify items live in CatalogRowContextMenu+Audio.swift since the
-    /// R1 split (GH #281; they were in CatalogContent+Table.swift).
+    /// The media-check items live in CatalogRowContextMenu+Media.swift
+    /// (was +Audio.swift until Verify Audio + Verify Video became one
+    /// Check Media…, 2026-10-07).
     private func tableSource() throws -> String {
-        try SourceTree.appSource(named: "CatalogRowContextMenu+Audio.swift")
+        try SourceTree.appSource(named: "CatalogRowContextMenu+Media.swift")
     }
 
     /// Every file the row menu spans: the table file plus EVERY
@@ -358,28 +359,21 @@ struct VerifyVideoMenuSensorTests {
                 "the retirement note's file (+FileOps) is read")
     }
 
-    @Test func verifyVideoSitsRightAfterVerifyAudio() throws {
-        let s = try tableSource()
-        let audio = try #require(s.range(of: ".accessibilityIdentifier(\"catalog.row.verifyAudio\")"))
-        let next = try #require(s.range(of: "verifyVideoMenuItem(activeRecs: activeRecs)",
-                                         range: audio.upperBound..<s.endIndex))
-        let between = s[audio.upperBound..<next.lowerBound]
-        #expect(!between.contains("Button("), "nothing may sit between Verify Audio and Verify Video")
-    }
-
-    @Test func labelHasNoEllipsisLikeVerifyAudio() throws {
-        let s = try tableSource()
-        // Since e8e15c5c the verb reaches the label through CatalogVerifyMenuPlan.
-        #expect(s.contains("verb: \"Verify Video\""))
-        #expect(s.contains("verb: \"Verify Audio\""))
-        #expect(!s.contains("Verify Video…") && !s.contains("Verify Audio…"),
-                "macOS: '…' only when a dialog opens first — both verbs start a job directly")
+    /// Rick 2026-10-07: ONE Check Media… replaces the Verify Audio and
+    /// Verify Video verbs. Neither old item may come back by accident.
+    @Test func checkMediaReplacedBothVerifyVerbs() throws {
+        let s = try rowMenuSources()
+        #expect(s.contains("\"catalog.row.checkMedia\""))
+        #expect(!s.contains("\"catalog.row.verifyAudio\""))
+        #expect(!s.contains("\"catalog.row.verifyVideo\""))
+        #expect(!s.contains("Button(\"Audio Info…\")"))
     }
 
     @Test func menuBuilderIsOSelectionNotORecords() throws {
         let s = try tableSource()
-        let start = try #require(s.range(of: "private func verifyVideoMenuItem("))
-        let end = try #require(s.range(of: "/// Verify Audio + repair-lifecycle", range: start.upperBound..<s.endIndex))
+        let start = try #require(s.range(of: "private func checkMediaMenuItem("))
+        let end = try #require(s.range(of: "/// Get Media Info… / Check Media… + the repair-lifecycle",
+                                        range: start.upperBound..<s.endIndex))
         let body = s[start.upperBound..<end.lowerBound]
         #expect(!body.contains("model.records") && !body.contains("records.filter"),
                 "NO O(records) work in a menu builder")

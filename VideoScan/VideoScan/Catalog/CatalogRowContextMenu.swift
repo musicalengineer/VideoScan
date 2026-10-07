@@ -93,7 +93,7 @@ extension CatalogContent {
     ///
     /// R1 (GH #281): the full menu's body is now one builder per section
     /// (activeRowContextMenu below, CatalogRowContextMenu+FileOps.swift,
-    /// +Organize.swift, +Audio.swift); the selection split and menu
+    /// +Organize.swift, +Media.swift); the selection split and menu
     /// choice are plain data (CatalogRowMenuPlan.swift). The old SwiftLint
     /// disable-next directive (cyclomatic complexity, function body length)
     /// is gone with it.
@@ -170,7 +170,7 @@ extension CatalogContent {
                      supersededRecs: selection.superseded)
     }
 
-    /// Reveal in Finder / Open in QuickTime Player / Open in VLC.
+    /// Reveal in Finder, then Open With ▸ (QuickTime Player, VLC).
     @ViewBuilder
     private func openItems(rec: VideoRecord) -> some View {
         Button(VolumeReachability.isReachable(path: rec.fullPath)
@@ -191,25 +191,28 @@ extension CatalogContent {
                 alert.runModal()
             }
         }
-        Button("Open in QuickTime Player") {
-            model.noteMissingFileForUserAction(rec)
-            if let qtURL = NSWorkspace.shared.urlForApplication(
-                withBundleIdentifier: "com.apple.QuickTimePlayerX"
-            ) {
-                NSWorkspace.shared.open(
-                    [URL(fileURLWithPath: rec.fullPath)],
-                    withApplicationAt: qtURL,
-                    configuration: NSWorkspace.OpenConfiguration()
-                )
+        // Open With ▸ (Rick 2026-10-07): the two players grouped,
+        // Reveal in Finder kept at the very top.
+        Menu("Open With") {
+            Button("QuickTime Player") {
+                model.noteMissingFileForUserAction(rec)
+                if let qtURL = NSWorkspace.shared.urlForApplication(
+                    withBundleIdentifier: "com.apple.QuickTimePlayerX"
+                ) {
+                    NSWorkspace.shared.open(
+                        [URL(fileURLWithPath: rec.fullPath)],
+                        withApplicationAt: qtURL,
+                        configuration: NSWorkspace.OpenConfiguration()
+                    )
+                }
             }
-        }
-        // Explicit manual override sibling of the QuickTime
-        // item above — forces VLC regardless of the smart
-        // double-click auto-decision. Falls back to the
-        // system default handler when VLC isn't installed.
-        Button("Open in VLC") {
-            model.noteMissingFileForUserAction(rec)
-            MediaOpener.openInVLC([rec])
+            // Explicit manual override of the smart double-click
+            // auto-decision — forces VLC. Falls back to the system
+            // default handler when VLC isn't installed.
+            Button("VLC") {
+                model.noteMissingFileForUserAction(rec)
+                MediaOpener.openInVLC([rec])
+            }
         }
     }
 

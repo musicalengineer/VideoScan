@@ -378,14 +378,14 @@ struct MediaFileOperationsWindowForwardSensorTests {
         "CatalogRowContextMenu.swift": 0,         // dispatcher + open/remove/restore: none
         "CatalogRowContextMenu+FileOps.swift": 1, // compare
         "CatalogRowContextMenu+Organize.swift": 1, // Find and Tag
-        "CatalogRowContextMenu+Audio.swift": 3,   // verify audio×2, verify video
+        "CatalogRowContextMenu+Media.swift": 2,   // check media, repair damaged audio
         "CatalogRowContextMenu+Actions.swift": 4, // analyze×2, reformat×2
-        "CatalogHelpers.swift": 1,                // Extract Facial Frames
+        "CatalogHelpers.swift": 0,                // (Extract Facial Frames retired 2026-10-07)
         "CleanupSheet.swift": 1,
         "ContentView.swift": 2,                   // Delete Duplicates + accepted Resume
         "MediaFileOperationsWindow.swift": 1,     // banner Resume
         "PromoteToArchiveSheet.swift": 1,
-        "RipAllFramesSheet.swift": 1,
+        // (RipAllFramesSheet.swift retired with "Extract Frames…", 2026-10-07.)
         "TranscodeSheet.swift": 1,
         // (TrimSheet.swift retired with the "Trim Master…" menu item, 2026-09-23.)
         "VerifyAudioSheet.swift": 2,              // Balance + Rebuild

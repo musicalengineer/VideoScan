@@ -662,7 +662,6 @@ struct ArchiveVolumeProtectionSourceSensor {
 
     /// `"-y"` — ffmpeg's "overwrite the output without asking".
     static let reviewedFFmpegOverwrites: [String: Reviewed] = [
-        "VideoScan/Media/AllFramesRipper.swift": Reviewed(count: 1, reason: "frames into its own fresh temp folder"),
         "VideoScan/MediaOps/BalanceAudioJob.swift": Reviewed(count: 1, reason: "writes its own .vs-partial; published with a non-clobbering moveItem + re-uniquify"),
         "VideoScan/Media/CaptionRunner.swift": Reviewed(count: 1, reason: "a frame PNG in its own temp folder"),
         "VideoScan/MediaOps/CleanupFFmpegEngine.swift": Reviewed(count: 1, reason: "renders into the job's scratch dir; CleanupJob publishes non-clobbering"),
