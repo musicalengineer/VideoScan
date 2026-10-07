@@ -19419,6 +19419,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ReformatPartialReservationTests.swift",
+      "suites": [
+        "ReformatPartialReservationTests"
+      ],
+      "tests": [
+        "reformatUsesSharedPartialPublishers",
+        "sameStemJobsNeverShareOrDeleteAPartial"
+      ],
+      "stage": "unit",
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RelocateEngineTests.swift",
@@ -26505,6 +26518,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ReferencePhotoImporterTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ReformatPartialReservationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
