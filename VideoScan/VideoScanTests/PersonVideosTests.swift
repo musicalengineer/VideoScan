@@ -215,7 +215,11 @@ struct FamilyGroupTests {
     @Test func familiesAreNotPeople() throws {
         let source = try SourceTree.appSource(named: "FamilyGroup.swift")
         #expect(!source.contains("POIProfile("), "a family is never written as a person profile")
-        #expect(source.contains("appendingPathComponent(\"Families\""))
+        // Families live in their own folder under the People store, named by
+        // ONE constant that Hallie's reader and People's migration also skip
+        // (2026-10-06: the literal moved into `FamilyGroupStore.folderName`).
+        #expect(FamilyGroupStore.folderName == "Families")
+        #expect(source.contains("appendingPathComponent(folderName"), "families are stored under the Families folder")
     }
 }
 
