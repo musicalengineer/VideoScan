@@ -308,6 +308,12 @@ extension CaptionOrchestrator {
     /// further VLM results were silently discarded and never reached
     /// applyDossier. C++ analogy: it was a lossy ring buffer of size 1,
     /// not a blocking bounded queue.)
+    ///
+    /// Shape (2026-10-07 split): this function is only the driver. Each
+    /// file goes preflight (`preflightDossierFile`, shared with the serial
+    /// loop) → `runPipelinedDossierFile` (scenes, hand-off) → the Whisper
+    /// task (`transcribeAndBankDossier`); the batch ends in
+    /// `finishDossierBatch`, also shared.
     func runDossierBatch(
         runner: CaptionRunner,
         transcriber: AudioTranscriber?,
@@ -330,22 +336,12 @@ extension CaptionOrchestrator {
         activeWhisperWorker = transcriber as? WhisperWorkerTranscriber
 
         let stackID: String = transcriber.map { "\(runner.modelID)+\($0.modelID)" } ?? runner.modelID
-        let vlmModelID = runner.modelID
 
-        // Stage gating (Rick 2026-06-14): the menu items "Transcribe
-        // Audio" and "Generate Scene Captions" promised to do ONLY
-        // that thing. Honor the promise by skipping the irrelevant
-        // stage instead of running both and pretending. The pipelined
-        // path's overlap is only valuable when BOTH stages run; for
-        // single-stage batches the serial path is honest and simpler.
-        let runCaptions = stages.contains(.captions)
-        let runTranscript = stages.contains(.transcript)
-
-        // No transcriber, OR transcript-stage disabled, OR captions-
-        // stage disabled → serial path. The pipelined path is the
-        // VLM+Whisper backpressure optimization; it only beats serial
-        // when both stages run for every file.
-        guard transcriber != nil, runCaptions, runTranscript else {
+        // Stage gating (Rick 2026-06-14): "Transcribe Audio" and "Generate
+        // Scene Captions" do ONLY that thing. The pipelined overlap only
+        // pays when BOTH stages run with a transcriber, so anything else
+        // takes the serial path, which is honest and simpler.
+        guard let transcriber, stages.contains(.captions), stages.contains(.transcript) else {
             await runDossierBatchSerial(
                 runner: runner, transcriber: transcriber,
                 candidates: candidates, framesPerFile: framesPerFile,
@@ -354,16 +350,12 @@ extension CaptionOrchestrator {
             )
             return
         }
-        let transcriber = transcriber!
-        let whisperModelID = transcriber.modelID
 
         // Whisper task for the previous file. Awaited before the next
-        // Whisper dispatch (backpressure) and once after the loop so
-        // the summary below sees final counts. Always assigned together
-        // with `self.pendingWhisperTask` / `self.pendingWhisperLaneID`
-        // so `skipLane(_:)` can cancel exactly the right task from the
-        // UI — local-variable observers aren't a thing in Swift, so we
-        // mirror by hand at each assignment site.
+        // Whisper dispatch (backpressure) and once after the loop so the
+        // summary sees final counts. Mirrored into `self.pendingWhisperTask`
+        // / `self.pendingWhisperLaneID` so `skipLane(_:)` can cancel exactly
+        // the right task from the UI.
         var pendingWhisper: Task<Void, Never>?
 
         for (idx, record) in candidates.enumerated() {
@@ -371,375 +363,21 @@ extension CaptionOrchestrator {
                 captionOrchLog.notice("Dossier: VLM cancelled at file \(idx) of \(total)")
                 break
             }
-            // Pause gate: while paused, poll every 200ms. The
-            // currently-in-flight Whisper task (file N-1) keeps
-            // running — we only block dispatching the NEXT file's
-            // VLM. Honors Task.isCancelled so Stop still breaks
-            // through a paused state cleanly.
-            while paused && !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(200))
-            }
+            // The in-flight Whisper task (file N-1) keeps running while
+            // paused; only the next file's VLM waits.
+            await waitWhileDossierPaused()
             if Task.isCancelled { break }
 
-            let path = record.fullPath
-            let filename = record.filename
+            guard let plan = await preflightDossierFile(
+                record, index: idx, total: total, force: force,
+                framesPerFile: framesPerFile, started: started
+            ) else { continue }
 
-            // Idempotent skip: any record that already carries a dossier
-            // timestamp is left alone. The previous predicate also
-            // required dossierProcessedBy == stackID, which silently
-            // re-ran thousands of records whenever the external fleet
-            // and in-app stackIDs differed (e.g. "...whisper-medium-mlx-q4"
-            // vs "...python-whisper-medium-mlx-q4"). force=true is the
-            // explicit escape hatch for re-dossier-with-current-stack.
-            if !force, record.dossierProcessedAt != nil {
-                liveSkipped += 1
-                liveSkipAlreadyAnalyzed += 1
-                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                continue
-            }
-
-            if !FileManager.default.fileExists(atPath: path) {
-                // Auto-purge: candidate filter only passed records whose
-                // volume IS reachable. So if the file is missing, the
-                // volume is mounted but the entry is stale (Combine
-                // engine output that moved, prior cleanup didn't update
-                // the catalog, etc.). Soft-purge so the row's eligible
-                // count drops by one and "Analyze Complete" can finally
-                // become true. Reversible via the catalog's restore
-                // action. Rick 2026-06-13.
-                Self.flagMissingOnDisk(record)
-                liveSkipped += 1
-                liveSkipMissing += 1
-                captionOrchLog.notice("Dossier: missing on disk → auto-purged: \(path, privacy: .public)")
-                appLog.write("Dossier: auto-purged missing on disk: \(filename)")
-                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                continue
-            }
-
-            // DRM gate. Cached short-circuit; otherwise inline probe via
-            // AVAsset.hasProtectedContent (fast — metadata only, no decode).
-            // Encrypted m4v/m4p files (vintage iTunes purchases from
-            // forgotten user accounts) would otherwise eat hours of
-            // Whisper time grinding ciphertext. We mark + skip; the
-            // candidate filter excludes on subsequent runs. Note the
-            // Analysis Scope gate already ran at candidate-filter time —
-            // out-of-scope files (music, camera raws) never get here, so
-            // this probe only spends I/O on genuinely analyzable files.
-            if record.drmProtected {
-                liveSkipped += 1
-                liveSkipProtected += 1
-                captionOrchLog.notice("Dossier: skip DRM-protected (cached): \(filename, privacy: .public)")
-                appLog.write("Dossier: skip protected (can't read): \(filename)")
-                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                continue
-            }
-            if await Self.isDRMProtected(path: path) {
-                Self.flagDRMSuspectJunk(record)
-                liveSkipped += 1
-                liveSkipProtected += 1
-                captionOrchLog.notice("Dossier: skip DRM-protected (probed, → suspectedJunk): \(filename, privacy: .public)")
-                appLog.write("Dossier: skip DRM-protected: \(filename) (flagged suspectedJunk)")
-                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                continue
-            }
-
-            publishProgress(idx: idx, total: total, currentFile: filename, started: started)
-
-            let dur = max(0.5, record.durationSeconds)
-            let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
-
-            // Capture the file's stream type up-front: videoOnly records
-            // cannot have audio, so the pipeline must NOT dispatch
-            // Whisper for them. We still preserve chronological completion
-            // order by awaiting the previous file's pendingWhisper before
-            // banking the no-audio VLM-only result (see below).
-            let hasNoAudio = (record.streamType == .videoOnly)
-
-            // Symmetric gate for audio-classified records (in a batch
-            // only when Analysis Scope includes audio, or via a
-            // single-file AnalyzeJob): NO frame extraction / VLM.
-            // Extension-aware — an mp3 with embedded cover art probes
-            // as Video+Audio, and feeding it to the frame extractor is
-            // the exact waste the 2026-07-14 diagnosis caught.
-            let hasNoVideo = {
-                if case .audio = AnalysisScope.classify(
-                    streamTypeRaw: record.streamTypeRaw,
-                    filename: filename) { return true }
-                return false
-            }()
-
-            // Open this file's dashboard lane. ONE lane per file across
-            // both stages — VLM and Whisper transitions mutate it in
-            // place so the user sees one row tick through the pipeline
-            // with the per-channel ✓/✗/— indicators lighting up.
-            // Audio-class files open directly on the Whisper stage.
-            let laneID = beginLane(
-                path: path,
-                filename: filename,
-                isVideoOnly: hasNoAudio,
-                stage: hasNoVideo
-                    ? Self.stageDisplayName(forModelID: whisperModelID)
-                    : Self.stageDisplayName(forModelID: vlmModelID),
-                verb: hasNoVideo ? "transcribing audio…" : "extracting scenes…"
+            let control = await runPipelinedDossierFile(
+                plan, runner: runner, transcriber: transcriber, model: model,
+                total: total, started: started, pendingWhisper: &pendingWhisper
             )
-
-            do {
-                let vlmStart = CFAbsoluteTimeGetCurrent()
-                let extraction: DossierExtraction = hasNoVideo
-                    ? .empty
-                    : try await runner.dossier(
-                        videoPath: path,
-                        atTimestamps: timestamps
-                    )
-                let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
-                // hasCaptions reflects whether we actually got usable
-                // scene captions, NOT just that VLM completed without
-                // error. Rick 2026-06-13: music videos returning
-                // "0 scenes, 0 dates, 0 text" were lighting up green ✓
-                // on the dashboard even though applyDossier would write
-                // an empty sceneCaptions array. Indicator now matches
-                // banked content — green only when scenes is non-empty.
-                let didExtractCaptions = !extraction.scenes.isEmpty
-                // "0 scenes in <1s" is the unmistakable signature of
-                // the AVFoundation frame extractor bailing out because
-                // it can't decode the source codec (svq3, qdm2,
-                // cinepak, etc.). A real VLM run on a featureless or
-                // black video takes 5–15s because it actually
-                // processes frames. Flag the record so the catalog
-                // surfaces a red "!" and the user can right-click →
-                // Reformat and Analyze (Rick 2026-06-14).
-                //
-                // Static codec heuristic already catches known-bad
-                // codecs at catalog-read time via record.isLikelyUnanalyzable;
-                // this dynamic backstop catches unfamiliar codecs by
-                // their failure signature. Audio-class records skipped
-                // VLM by design — "0 scenes instantly" is expected, not
-                // a decode failure, so they must not be flagged.
-                if !hasNoVideo && !didExtractCaptions && vlmSec < 1.0 && !record.needsReformat {
-                    record.needsReformat = true
-                    captionOrchLog.notice("Dossier: VLM bailed in \(vlmSec, format: .fixed(precision: 2), privacy: .public)s with 0 scenes — flagging \(filename, privacy: .public) needsReformat")
-                    appLog.write(String(format: "Dossier: flagged needsReformat (codec couldn't be decoded): %@", filename))
-                }
-                if hasNoAudio {
-                    updateLane(laneID, hasCaptions: didExtractCaptions)
-                } else {
-                    updateLane(
-                        laneID,
-                        stage: Self.stageDisplayName(forModelID: whisperModelID),
-                        verb: pendingWhisper == nil ? "transcribing audio…" : "waiting for prior transcript…",
-                        hasCaptions: didExtractCaptions
-                    )
-                }
-                appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs (%d scene(s))", filename, vlmSec, extraction.scenes.count))
-
-                // Backpressure: wait for the previous file's Whisper to
-                // finish before dispatching this one. At most one Whisper
-                // outstanding; every VLM result is handed off, never dropped.
-                await pendingWhisper?.value
-                pendingWhisper = nil
-                self.pendingWhisperTask = nil
-                self.pendingWhisperLaneID = nil
-                // Whisper slot just freed — flip the verb so the user
-                // sees the lane move from "waiting" to "transcribing"
-                // even before the subprocess actually starts.
-                if !hasNoAudio {
-                    updateLane(laneID, verb: "transcribing audio…")
-                }
-
-                if Task.isCancelled {
-                    // Cancelled while waiting on the previous Whisper:
-                    // still bank this file's VLM result, sans transcript.
-                    _ = model.applyDossier(
-                        extraction, to: path,
-                        vlmModel: vlmModelID,
-                        transcript: nil,
-                        whisperModel: nil
-                    )
-                    // Snapshot indicator state BEFORE endLane so the
-                    // completion row reflects what VLM banked. Order
-                    // matters: recordCompletion(fromLane:) reads the
-                    // lane out of activeLanes; endLane removes it.
-                    recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
-                                     whisperSeconds: nil,
-                                     note: hasNoAudio ? "no audio" : "transcript failed")
-                    endLane(laneID)
-                    liveCaptioned += 1
-                    break
-                }
-
-                // User-initiated skip during the VLM phase: don't
-                // dispatch Whisper, bank VLM-only, tag "user skipped".
-                // We catch this BEFORE the video-only bypass so the
-                // user's intent wins over the auto-bypass and the note
-                // is correctly attributed.
-                if userSkippedLaneIDs.contains(laneID) {
-                    _ = model.applyDossier(
-                        extraction, to: path,
-                        vlmModel: vlmModelID,
-                        transcript: nil,
-                        whisperModel: nil
-                    )
-                    recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
-                                     whisperSeconds: nil, note: "user skipped")
-                    endLane(laneID)
-                    liveCaptioned += 1
-                    publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                    continue
-                }
-
-                // Video-only record: skip Whisper entirely. Apply the
-                // dossier inline VLM-only so banking still happens in
-                // VLM-stage order. pendingWhisper stays nil — the NEXT
-                // file's loop iteration will await it as a no-op.
-                if hasNoAudio {
-                    _ = model.applyDossier(
-                        extraction, to: path,
-                        vlmModel: vlmModelID,
-                        transcript: nil,
-                        whisperModel: nil
-                    )
-                    recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
-                                     whisperSeconds: nil, note: "no audio")
-                    endLane(laneID)
-                    liveCaptioned += 1
-                    publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                    continue
-                }
-
-                // Publish the lane ID BEFORE the task is created so a
-                // simultaneous skipLane(_:) call from the UI sees a
-                // matching pendingWhisperLaneID and finds the cancel
-                // target the moment we mirror pendingWhisperTask below.
-                self.pendingWhisperLaneID = laneID
-                // Per-file Whisper deadline. max(60s floor, 2× clip
-                // duration) so a 30s clip gets 60s, a 5-min clip gets
-                // 10min, a 30-min clip gets 60min. Whisper-medium-mlx-q4
-                // realistically runs at 5–15× realtime on M4 Max, so 2×
-                // is generous slack; anything past it is almost
-                // certainly hung (the symptom Rick hit on the BT music
-                // video that wedged the pipeline for 26+ minutes).
-                let whisperDeadlineSeconds = max(60.0, 2.0 * record.durationSeconds)
-                pendingWhisper = Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    appLog.write(String(format: "Pipeline Whisper start: %@ (deadline %.0fs)", filename, whisperDeadlineSeconds))
-                    let whisperStart = CFAbsoluteTimeGetCurrent()
-                    var transcript: String?
-                    do {
-                        transcript = try await transcriber.transcribe(
-                            videoPath: path,
-                            deadlineSeconds: whisperDeadlineSeconds
-                        )
-                    } catch is CancellationError {
-                        // Cancelled mid-transcription: apply VLM-only so
-                        // the extraction isn't lost. Note depends on who
-                        // pulled the cord — user via skipLane vs an
-                        // upstream task cancel (batch cancel / shutdown).
-                        _ = model.applyDossier(
-                            extraction, to: path,
-                            vlmModel: vlmModelID,
-                            transcript: nil,
-                            whisperModel: nil
-                        )
-                        let userSkipped = self.userSkippedLaneIDs.contains(laneID)
-                        self.updateLane(laneID, transcriptFailed: !userSkipped)
-                        self.recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
-                                              whisperSeconds: nil,
-                                              note: userSkipped ? "user skipped" : "transcript failed")
-                        self.endLane(laneID)
-                        liveCaptioned += 1
-                        return
-                    } catch AudioTranscriberError.deadlineExceeded(let secs) {
-                        // Auto-kill: subprocess exceeded its deadline.
-                        // VLM result still banks — captions are valid
-                        // even when the transcript path failed. Note
-                        // is distinct from "transcript failed" so the
-                        // dashboard can show "whisper timed out" and
-                        // we can later flag chronically-stuck files
-                        // (probably junk) for triage.
-                        captionOrchLog.warning("Dossier: whisper deadline (\(secs, format: .fixed(precision: 0), privacy: .public)s) exceeded on \(filename, privacy: .public)")
-                        _ = model.applyDossier(
-                            extraction, to: path,
-                            vlmModel: vlmModelID,
-                            transcript: nil,
-                            whisperModel: nil
-                        )
-                        self.updateLane(laneID, transcriptFailed: true)
-                        self.recordCompletion(fromLane: laneID, vlmSeconds: vlmSec,
-                                              whisperSeconds: nil, note: "whisper timed out")
-                        self.endLane(laneID)
-                        self.transcriptFailures += 1
-                        liveCaptioned += 1
-                        return
-                    } catch {
-                        captionOrchLog.warning("Dossier: whisper failed on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                        transcript = nil
-                        self.transcriptFailures += 1
-                    }
-
-                    _ = model.applyDossier(
-                        extraction, to: path,
-                        vlmModel: vlmModelID,
-                        transcript: transcript,
-                        whisperModel: transcript != nil ? whisperModelID : nil
-                    )
-                    let whisperSec = CFAbsoluteTimeGetCurrent() - whisperStart
-                    appLog.write(String(format: "Pipeline Whisper done: %@ — %.1fs", filename, whisperSec))
-                    // hasTranscript reflects banked content. Empty /
-                    // whitespace-only transcripts (Whisper ran on
-                    // silent audio, found nothing) get filtered by
-                    // applyDossier — record.audioTranscript stays nil
-                    // — so the dashboard's ✓ must follow the same
-                    // truth. Otherwise the user sees a checkmark for
-                    // a file whose catalog row has no transcript.
-                    let bankedTranscript = transcript?.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let didExtractTranscript = (bankedTranscript?.isEmpty == false)
-                    if didExtractTranscript {
-                        self.updateLane(laneID, hasTranscript: true)
-                    } else {
-                        self.updateLane(laneID, transcriptFailed: true)
-                    }
-                    // Snapshot indicators FROM the lane via the fromLane
-                    // overload — order matters: read before endLane.
-                    //
-                    // Note semantics in the pipelined path:
-                    //   nil                → transcript obtained AND non-empty
-                    //   "transcript failed" → whisper threw OR returned only
-                    //                         whitespace (cancellation
-                    //                         returned early above, and
-                    //                         "no audio" bypasses Whisper
-                    //                         before this task is ever
-                    //                         created).
-                    let note: String? = didExtractTranscript ? nil : "transcript failed"
-                    self.recordCompletion(
-                        fromLane: laneID,
-                        vlmSeconds: vlmSec,
-                        whisperSeconds: didExtractTranscript ? whisperSec : nil,
-                        note: note
-                    )
-                    self.endLane(laneID)
-                    liveCaptioned += 1
-                    publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                }
-                // Mirror the just-created task into instance state so
-                // skipLane(_:) can target it. Done OUTSIDE the closure
-                // so the reference is resolved (Swift forbids a Task's
-                // closure capturing the var being assigned to).
-                self.pendingWhisperTask = pendingWhisper
-            } catch is CancellationError {
-                endLane(laneID)
-                captionOrchLog.notice("Dossier: VLM cancellation at \(filename, privacy: .public)")
-                break
-            } catch {
-                endLane(laneID)
-                liveFailed += 1
-                captionOrchLog.warning("Dossier: VLM error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                // One visible line per failure — the 2026-07-14 perf
-                // diagnosis found 1,097 failed extraction attempts that
-                // produced ~1 log line total, which is what kept 3.1 h
-                // of nightly waste invisible.
-                appLog.write("Dossier: failed (extraction error): \(filename) — \(error.localizedDescription)")
-                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-            }
+            if control == .stop { break }
         }
 
         // pendingWhisper is unstructured, so cancellation of the batch
@@ -749,35 +387,224 @@ extension CaptionOrchestrator {
         // the VLM result).
         if Task.isCancelled { pendingWhisper?.cancel() }
         await pendingWhisper?.value
-        // Batch fully drained — clear the in-flight Whisper handles so
-        // a late skipLane(_:) call (e.g. UI race during shutdown) is a
-        // clean no-op rather than poking at a finished task.
+        // Batch fully drained — a late skipLane(_:) (e.g. a UI race
+        // during shutdown) is then a clean no-op.
         self.pendingWhisperTask = nil
         self.pendingWhisperLaneID = nil
 
-        // Batch settled — nothing is in flight. History stays.
-        clearActiveLanes()
-        await settleWhisperWorker(transcriber)
-
-        let elapsed = CFAbsoluteTimeGetCurrent() - started
-        let captioned = liveCaptioned
-        let skipped = liveSkipped
-        let failed = liveFailed
-        captionOrchLog.info("Dossier batch done: captioned=\(captioned), skipped=\(skipped), failed=\(failed) in \(String(format: "%.1f", elapsed))s")
-        appLog.write(String(format: "Dossier: done — %d processed, %d skipped (%d already analyzed, %d missing, %d protected), %d failed in %.1fs (%@)",
-                            captioned, skipped,
-                            liveSkipAlreadyAnalyzed, liveSkipMissing, liveSkipProtected,
-                            failed, elapsed, stackID))
-        // #160: auto-purged missing-on-disk rows flipped purgedAt in place;
-        // announce once per batch so cached table/aggregates recompute.
-        if liveSkipMissing > 0 { model.noteCatalogRecordsMutated() }
-        if Task.isCancelled {
-            appLog.write("Dossier: cancelled (done \(captioned), skipped \(skipped), failed \(failed))")
-        }
-        currentStatus = .finished(captioned: captioned, skipped: skipped, failed: failed)
+        await finishDossierBatch(model: model, transcriber: transcriber, stackID: stackID,
+                                 started: started, reportCancellation: true)
     }
 
-    /// Serial fallback when no transcriber is configured (no overlap benefit).
+    /// One file of the pipelined batch: extract scenes, then either bank
+    /// them alone (cancelled / skipped / video-only) or hand off to a
+    /// Whisper task once the previous file's Whisper has finished.
+    /// ONE dashboard lane per file across both stages.
+    func runPipelinedDossierFile(
+        _ plan: DossierFilePlan,
+        runner: CaptionRunner,
+        transcriber: AudioTranscriber,
+        model: VideoScanModel,
+        total: Int,
+        started: CFAbsoluteTime,
+        pendingWhisper: inout Task<Void, Never>?
+    ) async -> DossierLoopControl {
+        let vlmModelID = runner.modelID
+        let whisperStage = Self.stageDisplayName(forModelID: transcriber.modelID)
+        // Audio-class files open directly on the Whisper stage.
+        let laneID = beginLane(
+            path: plan.path,
+            filename: plan.filename,
+            isVideoOnly: plan.hasNoAudio,
+            stage: plan.hasNoVideo ? whisperStage : Self.stageDisplayName(forModelID: vlmModelID),
+            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…"
+        )
+
+        do {
+            let (extraction, vlmSec) = try await extractDossierScenes(plan, runner: runner)
+            // hasCaptions reflects banked content: green only when scenes
+            // is non-empty (Rick 2026-06-13: music videos with "0 scenes"
+            // were lighting up ✓).
+            let hasCaptions = !extraction.scenes.isEmpty
+            if plan.hasNoAudio {
+                updateLane(laneID, hasCaptions: hasCaptions)
+            } else {
+                updateLane(
+                    laneID,
+                    stage: whisperStage,
+                    verb: pendingWhisper == nil ? "transcribing audio…" : "waiting for prior transcript…",
+                    hasCaptions: hasCaptions
+                )
+            }
+            appLog.write(String(format: "Pipeline VLM done: %@ — %.1fs (%d scene(s))", plan.filename, vlmSec, extraction.scenes.count))
+
+            // Backpressure: at most one Whisper outstanding; every VLM
+            // result is handed off, never dropped.
+            await pendingWhisper?.value
+            pendingWhisper = nil
+            self.pendingWhisperTask = nil
+            self.pendingWhisperLaneID = nil
+            if !plan.hasNoAudio {
+                updateLane(laneID, verb: "transcribing audio…")
+            }
+
+            if let reason = vlmOnlyReason(laneID: laneID, plan: plan) {
+                bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
+                completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil,
+                                    note: reason.note(hasNoAudio: plan.hasNoAudio))
+                // Cancelled while waiting on the previous Whisper: stop
+                // the batch (no progress tick). Skip / video-only: next.
+                if reason == .cancelledWhileWaiting { return .stop }
+                publishProgress(idx: plan.index + 1, total: total, currentFile: plan.filename, started: started)
+                return .next
+            }
+
+            // Publish the lane ID BEFORE the task exists so a simultaneous
+            // skipLane(_:) finds its target the moment the task is mirrored.
+            self.pendingWhisperLaneID = laneID
+            // Per-file deadline: max(60 s floor, 2× clip). Whisper runs at
+            // 5–15× realtime on the M4 Max, so anything past 2× is hung
+            // (a music video once wedged the pipeline for 26+ minutes).
+            let deadline = max(60.0, 2.0 * plan.record.durationSeconds)
+            pendingWhisper = Task { @MainActor [weak self] in
+                await self?.transcribeAndBankDossier(
+                    plan, extraction: extraction, vlmSeconds: vlmSec, laneID: laneID,
+                    deadlineSeconds: deadline, transcriber: transcriber, model: model,
+                    vlmModelID: vlmModelID, total: total, started: started)
+            }
+            // Mirrored outside the closure (a Task's closure can't capture
+            // the var it's being assigned to).
+            self.pendingWhisperTask = pendingWhisper
+            return .next
+        } catch is CancellationError {
+            endLane(laneID)
+            captionOrchLog.notice("Dossier: VLM cancellation at \(plan.filename, privacy: .public)")
+            return .stop
+        } catch {
+            countDossierExtractionFailure(laneID, filename: plan.filename, error: error, label: "VLM error")
+            publishProgress(idx: plan.index + 1, total: total, currentFile: plan.filename, started: started)
+            return .next
+        }
+    }
+
+    /// Why a file's scenes are banked WITHOUT a transcript; nil when
+    /// Whisper should run. Checked in this order: cancelled while waiting
+    /// for the previous Whisper; the user's Skip (wins over the video-only
+    /// bypass so the note is attributed right); a video-only file.
+    enum VLMOnlyReason {
+        case cancelledWhileWaiting, userSkipped, videoOnly
+
+        func note(hasNoAudio: Bool) -> String {
+            switch self {
+            case .cancelledWhileWaiting: return hasNoAudio ? "no audio" : "transcript failed"
+            case .userSkipped: return "user skipped"
+            case .videoOnly: return "no audio"
+            }
+        }
+    }
+
+    func vlmOnlyReason(laneID: UUID, plan: DossierFilePlan) -> VLMOnlyReason? {
+        if Task.isCancelled { return .cancelledWhileWaiting }
+        if userSkippedLaneIDs.contains(laneID) { return .userSkipped }
+        if plan.hasNoAudio { return .videoOnly }
+        return nil
+    }
+
+    /// Run the scene extractor (skipped for audio-class files) and flag
+    /// files whose codec it evidently couldn't decode.
+    func extractDossierScenes(_ plan: DossierFilePlan, runner: CaptionRunner) async throws -> (DossierExtraction, Double) {
+        let vlmStart = CFAbsoluteTimeGetCurrent()
+        let extraction: DossierExtraction = plan.hasNoVideo
+            ? .empty
+            : try await runner.dossier(videoPath: plan.path, atTimestamps: plan.timestamps)
+        let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
+        flagUndecodableIfExtractorBailed(plan, extraction: extraction, vlmSeconds: vlmSec)
+        return (extraction, vlmSec)
+    }
+
+    /// "0 scenes in <1 s" is the signature of the AVFoundation frame
+    /// extractor bailing on a codec it can't decode (svq3, qdm2, cinepak…);
+    /// a real VLM run on a black video takes 5–15 s. Flag the record so the
+    /// catalog shows a red "!" and offers Reformat and Analyze (Rick
+    /// 2026-06-14). Dynamic backstop to the static codec heuristic
+    /// (`isLikelyUnanalyzable`). Audio-class files skip VLM by design.
+    func flagUndecodableIfExtractorBailed(_ plan: DossierFilePlan, extraction: DossierExtraction, vlmSeconds: Double) {
+        let record = plan.record
+        guard !plan.hasNoVideo, extraction.scenes.isEmpty, vlmSeconds < 1.0, !record.needsReformat else { return }
+        record.needsReformat = true
+        captionOrchLog.notice("Dossier: VLM bailed in \(vlmSeconds, format: .fixed(precision: 2), privacy: .public)s with 0 scenes — flagging \(plan.filename, privacy: .public) needsReformat")
+        appLog.write(String(format: "Dossier: flagged needsReformat (codec couldn't be decoded): %@", plan.filename))
+    }
+
+    /// The Whisper stage of one pipelined file: transcribe, bank the full
+    /// dossier, close the lane. Runs as the unstructured `pendingWhisper`
+    /// task so the next file's VLM can overlap it.
+    func transcribeAndBankDossier(
+        _ plan: DossierFilePlan,
+        extraction: DossierExtraction,
+        vlmSeconds vlmSec: Double,
+        laneID: UUID,
+        deadlineSeconds: Double,
+        transcriber: AudioTranscriber,
+        model: VideoScanModel,
+        vlmModelID: String,
+        total: Int,
+        started: CFAbsoluteTime
+    ) async {
+        let filename = plan.filename
+        appLog.write(String(format: "Pipeline Whisper start: %@ (deadline %.0fs)", filename, deadlineSeconds))
+        let whisperStart = CFAbsoluteTimeGetCurrent()
+        var transcript: String?
+        do {
+            transcript = try await transcriber.transcribe(videoPath: plan.path, deadlineSeconds: deadlineSeconds)
+        } catch is CancellationError {
+            // Cancelled mid-transcription: the scenes still bank. The note
+            // says who pulled the cord: the user's Skip, or a batch cancel.
+            bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
+            let userSkipped = userSkippedLaneIDs.contains(laneID)
+            updateLane(laneID, transcriptFailed: !userSkipped)
+            completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil,
+                                note: userSkipped ? "user skipped" : "transcript failed")
+            return
+        } catch AudioTranscriberError.deadlineExceeded(let secs) {
+            // Auto-kill past the deadline. Captions are still valid; the
+            // distinct note lets chronically stuck files be triaged.
+            captionOrchLog.warning("Dossier: whisper deadline (\(secs, format: .fixed(precision: 0), privacy: .public)s) exceeded on \(filename, privacy: .public)")
+            bankVLMOnly(extraction, plan, model: model, vlmModelID: vlmModelID)
+            updateLane(laneID, transcriptFailed: true)
+            completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil, note: "whisper timed out")
+            transcriptFailures += 1
+            return
+        } catch {
+            captionOrchLog.warning("Dossier: whisper failed on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            transcript = nil
+            transcriptFailures += 1
+        }
+
+        _ = model.applyDossier(
+            extraction, to: plan.path,
+            vlmModel: vlmModelID,
+            transcript: transcript,
+            whisperModel: transcript != nil ? transcriber.modelID : nil
+        )
+        let whisperSec = CFAbsoluteTimeGetCurrent() - whisperStart
+        appLog.write(String(format: "Pipeline Whisper done: %@ — %.1fs", filename, whisperSec))
+        // ✓ follows banked truth: an empty / whitespace-only transcript
+        // is "transcript failed", not a checkmark.
+        let usable = Self.isUsableTranscript(transcript)
+        if usable {
+            updateLane(laneID, hasTranscript: true)
+        } else {
+            updateLane(laneID, transcriptFailed: true)
+        }
+        completeDossierLane(laneID, vlmSeconds: vlmSec,
+                            whisperSeconds: usable ? whisperSec : nil,
+                            note: usable ? nil : "transcript failed")
+        publishProgress(idx: plan.index + 1, total: total, currentFile: filename, started: started)
+    }
+
+    /// Serial batch: one file at a time, both stages inline. Used when no
+    /// transcriber is configured or only one stage was asked for.
     ///
     /// `internal` (not `private`) so CaptionOrchestratorActivityTests can
     /// drive this path deterministically — the public entry point's
@@ -805,251 +632,156 @@ extension CaptionOrchestrator {
             if Task.isCancelled {
                 captionOrchLog.notice("Dossier: cancelled at file \(idx) of \(total)")
                 appLog.write("Dossier: cancelled at file \(idx) of \(total) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
-                clearActiveLanes()
-                await settleWhisperWorker(transcriber)
-                currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
+                await settleCancelledDossierBatch(transcriber)
                 return
             }
-            while paused && !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(200))
-            }
+            await waitWhileDossierPaused()
             if Task.isCancelled {
-                clearActiveLanes()
-                await settleWhisperWorker(transcriber)
-                currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
+                await settleCancelledDossierBatch(transcriber)
                 return
             }
 
-            let path = record.fullPath
-            let filename = record.filename
+            guard let plan = await preflightDossierFile(
+                record, index: idx, total: total, force: force,
+                framesPerFile: framesPerFile, started: started
+            ) else { continue }
 
-            // Idempotent skip: a record that already has a dossier
-            // timestamp is left alone, regardless of which stack
-            // produced it. See the doc comment on
-            // startCatalogWideDossier for why dossierProcessedBy is
-            // no longer part of this predicate.
-            if !force, record.dossierProcessedAt != nil {
-                liveSkipped += 1
-                liveSkipAlreadyAnalyzed += 1
-                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                continue
-            }
-
-            if !FileManager.default.fileExists(atPath: path) {
-                // Auto-purge: candidate filter only passed records whose
-                // volume IS reachable. So if the file is missing, the
-                // volume is mounted but the entry is stale (Combine
-                // engine output that moved, prior cleanup didn't update
-                // the catalog, etc.). Soft-purge so the row's eligible
-                // count drops by one and "Analyze Complete" can finally
-                // become true. Reversible via the catalog's restore
-                // action. Rick 2026-06-13.
-                Self.flagMissingOnDisk(record)
-                liveSkipped += 1
-                liveSkipMissing += 1
-                captionOrchLog.notice("Dossier: missing on disk → auto-purged: \(path, privacy: .public)")
-                appLog.write("Dossier: auto-purged missing on disk: \(filename)")
-                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                continue
-            }
-
-            // DRM gate — same semantics as the pipelined path.
-            if record.drmProtected {
-                liveSkipped += 1
-                liveSkipProtected += 1
-                captionOrchLog.notice("Dossier: skip DRM-protected (cached): \(filename, privacy: .public)")
-                appLog.write("Dossier: skip protected (can't read): \(filename)")
-                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                continue
-            }
-            if await Self.isDRMProtected(path: path) {
-                Self.flagDRMSuspectJunk(record)
-                liveSkipped += 1
-                liveSkipProtected += 1
-                captionOrchLog.notice("Dossier: skip DRM-protected (probed, → suspectedJunk): \(filename, privacy: .public)")
-                appLog.write("Dossier: skip DRM-protected: \(filename) (flagged suspectedJunk)")
-                publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
-                continue
-            }
-
-            publishProgress(idx: idx, total: total, currentFile: filename, started: started)
-
-            let dur = max(0.5, record.durationSeconds)
-            let timestamps = framesEvenlySpaced(framesPerFile: framesPerFile, durationSec: dur)
-
-            let hasNoAudio = (record.streamType == .videoOnly)
-
-            // Symmetric no-video gate — same rationale as the pipelined
-            // path: audio-classified records (mp3 cover art probes as a
-            // video stream; here via single-file AnalyzeJob or scope-ON
-            // batches) must never reach frame extraction / VLM.
-            let hasNoVideo = {
-                if case .audio = AnalysisScope.classify(
-                    streamTypeRaw: record.streamTypeRaw,
-                    filename: filename) { return true }
-                return false
-            }()
-
-            // One lane per file. Stage transitions VLM → Whisper happen
-            // in place via updateLane so the dashboard shows a single
-            // row per file with the per-channel indicators lighting up.
-            // Audio-class files open directly on the transcribe stage.
-            let laneStage: String = {
-                if hasNoVideo, let transcriber {
-                    return Self.stageDisplayName(forModelID: transcriber.modelID)
-                }
-                return Self.stageDisplayName(forModelID: runner.modelID)
-            }()
-            let laneID = beginLane(
-                path: path,
-                filename: filename,
-                isVideoOnly: hasNoAudio,
-                stage: laneStage,
-                verb: hasNoVideo ? "transcribing audio…" : "extracting scenes…"
-            )
-
-            do {
-                // Stage gating (Rick 2026-06-14): skip VLM entirely
-                // when the caller asked for transcript-only. Empty
-                // extraction propagates "no captions" cleanly through
-                // applyDossier; vlmModel passed as nil so the record's
-                // provenance reflects what actually ran.
-                let runCaptions = stages.contains(.captions)
-                let runTranscript = stages.contains(.transcript)
-
-                let vlmStart = CFAbsoluteTimeGetCurrent()
-                let extraction: DossierExtraction
-                if runCaptions && !hasNoVideo {
-                    extraction = try await runner.dossier(
-                        videoPath: path, atTimestamps: timestamps
-                    )
-                } else {
-                    extraction = DossierExtraction.empty
-                }
-                let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
-
-                let didExtractCaptions = !extraction.scenes.isEmpty
-                let userSkipped = userSkippedLaneIDs.contains(laneID)
-                if let transcriber, runTranscript, !hasNoAudio, !userSkipped {
-                    updateLane(
-                        laneID,
-                        stage: Self.stageDisplayName(forModelID: transcriber.modelID),
-                        verb: "transcribing audio…",
-                        hasCaptions: didExtractCaptions
-                    )
-                } else {
-                    updateLane(laneID, hasCaptions: didExtractCaptions)
-                }
-
-                var transcript: String?
-                var transcriptFailed = false
-                var transcriptTimedOut = false
-                if let transcriber, runTranscript, !hasNoAudio, !userSkipped {
-                    let whisperDeadlineSeconds = max(60.0, 2.0 * record.durationSeconds)
-                    do {
-                        transcript = try await transcriber.transcribe(
-                            videoPath: path,
-                            deadlineSeconds: whisperDeadlineSeconds
-                        )
-                    } catch is CancellationError {
-                        throw CancellationError()
-                    } catch AudioTranscriberError.deadlineExceeded(let secs) {
-                        captionOrchLog.warning("Dossier: whisper deadline (\(secs, format: .fixed(precision: 0), privacy: .public)s) exceeded on \(filename, privacy: .public)")
-                        transcriptTimedOut = true
-                        transcriptFailures += 1
-                    } catch {
-                        captionOrchLog.warning("Dossier: whisper failed on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                        transcriptFailed = true
-                        transcriptFailures += 1
-                    }
-                }
-
-                _ = model.applyDossier(
-                    extraction, to: path,
-                    vlmModel: runner.modelID,
-                    transcript: transcript,
-                    whisperModel: transcript != nil ? transcriber?.modelID : nil
-                )
-                // didExtractTranscript matches what applyDossier banks
-                // (empty / whitespace-only transcripts get filtered).
-                // hasTranscript ✓ must follow banked truth, not "we
-                // called Whisper" — same rationale as the captions
-                // gate above. Empty transcripts on audio files are
-                // common: Whisper on silent/music-only audio
-                // legitimately returns "" — the dashboard should mark
-                // that as "no useful content" (red ✗), not "got it ✓".
-                let didExtractTranscript = (transcript?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
-                if didExtractTranscript {
-                    updateLane(laneID, hasTranscript: true)
-                } else if transcriptFailed || transcriptTimedOut {
-                    updateLane(laneID, transcriptFailed: true)
-                }
-                // Disambiguate the note:
-                //   nil                → transcript obtained AND non-empty
-                //   "no audio"         → file has no audio stream by design
-                //   "user skipped"     → user right-clicked Skip on the lane
-                //   "whisper timed out"→ subprocess exceeded deadline
-                //   "transcript failed"→ whisper threw OR returned empty
-                //   "no transcriber"   → serial path, no transcriber wired
-                let note: String?
-                if didExtractTranscript {
-                    note = nil
-                } else if userSkipped {
-                    note = "user skipped"
-                } else if hasNoAudio {
-                    note = "no audio"
-                } else if transcriptTimedOut {
-                    note = "whisper timed out"
-                } else if transcriptFailed {
-                    note = "transcript failed"
-                } else if transcriber != nil {
-                    note = "transcript failed"   // whisper returned empty
-                } else {
-                    note = "no transcriber"
-                }
-                // Snapshot indicators via fromLane BEFORE endLane.
-                // Serial path doesn't track Whisper duration separately
-                // (it's inline awaited), so whisperSeconds stays nil
-                // — matches historical behavior.
-                recordCompletion(
-                    fromLane: laneID,
-                    vlmSeconds: vlmSec,
-                    whisperSeconds: nil,
-                    note: note
-                )
-                endLane(laneID)
-                liveCaptioned += 1
-            } catch is CancellationError {
-                captionOrchLog.notice("Dossier: cancelled at \(filename, privacy: .public)")
-                appLog.write("Dossier: cancelled mid-file \(filename) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
-                clearActiveLanes()
-                await settleWhisperWorker(transcriber)
-                currentStatus = .finished(captioned: liveCaptioned, skipped: liveSkipped, failed: liveFailed)
+            if await runSerialDossierFile(plan, runner: runner, transcriber: transcriber,
+                                          model: model, stages: stages) == .stop {
+                await settleCancelledDossierBatch(transcriber)
                 return
-            } catch {
-                endLane(laneID)
-                liveFailed += 1
-                captionOrchLog.warning("Dossier: error on \(filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
-                // One visible line per failure — same observability rule
-                // as the pipelined path (2026-07-14: 1,097 silent fails).
-                appLog.write("Dossier: failed (extraction error): \(filename) — \(error.localizedDescription)")
             }
-
-            publishProgress(idx: idx + 1, total: total, currentFile: filename, started: started)
+            publishProgress(idx: idx + 1, total: total, currentFile: plan.filename, started: started)
         }
 
-        clearActiveLanes()
-        await settleWhisperWorker(transcriber)
+        await finishDossierBatch(model: model, transcriber: transcriber, stackID: stackID,
+                                 started: started, reportCancellation: false)
+    }
 
-        let elapsed = CFAbsoluteTimeGetCurrent() - started
-        let c = self.liveCaptioned, s = self.liveSkipped, f = self.liveFailed
-        captionOrchLog.info("Dossier batch done: captioned=\(c), skipped=\(s), failed=\(f) in \(String(format: "%.1f", elapsed))s")
-        appLog.write(String(format: "Dossier: done — %d processed, %d skipped (%d already analyzed, %d missing, %d protected), %d failed in %.1fs (%@)",
-                            c, s,
-                            liveSkipAlreadyAnalyzed, liveSkipMissing, liveSkipProtected,
-                            f, elapsed, stackID))
-        if liveSkipMissing > 0 { model.noteCatalogRecordsMutated() }   // #160
-        currentStatus = .finished(captioned: c, skipped: s, failed: f)
+    /// One file of the serial batch: scenes (unless transcript-only or
+    /// audio-class), then the transcript (unless captions-only, video-only
+    /// or skipped), then bank and close the lane.
+    func runSerialDossierFile(
+        _ plan: DossierFilePlan,
+        runner: CaptionRunner,
+        transcriber: AudioTranscriber?,
+        model: VideoScanModel,
+        stages: Set<AnalyzeStage>
+    ) async -> DossierLoopControl {
+        // Audio-class files open directly on the transcribe stage.
+        let laneStage: String = {
+            if plan.hasNoVideo, let transcriber {
+                return Self.stageDisplayName(forModelID: transcriber.modelID)
+            }
+            return Self.stageDisplayName(forModelID: runner.modelID)
+        }()
+        let laneID = beginLane(
+            path: plan.path,
+            filename: plan.filename,
+            isVideoOnly: plan.hasNoAudio,
+            stage: laneStage,
+            verb: plan.hasNoVideo ? "transcribing audio…" : "extracting scenes…"
+        )
+
+        do {
+            // Stage gating (Rick 2026-06-14): transcript-only skips VLM;
+            // the empty extraction propagates "no captions" cleanly.
+            let vlmStart = CFAbsoluteTimeGetCurrent()
+            let extraction: DossierExtraction = stages.contains(.captions) && !plan.hasNoVideo
+                ? try await runner.dossier(videoPath: plan.path, atTimestamps: plan.timestamps)
+                : DossierExtraction.empty
+            let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
+
+            let hasCaptions = !extraction.scenes.isEmpty
+            let userSkipped = userSkippedLaneIDs.contains(laneID)
+            // The transcriber to run for this file, if any.
+            let whisper = stages.contains(.transcript) && !plan.hasNoAudio && !userSkipped ? transcriber : nil
+            if let whisper {
+                updateLane(laneID, stage: Self.stageDisplayName(forModelID: whisper.modelID),
+                           verb: "transcribing audio…", hasCaptions: hasCaptions)
+            } else {
+                updateLane(laneID, hasCaptions: hasCaptions)
+            }
+
+            let outcome = try await serialTranscribe(plan, with: whisper)
+
+            _ = model.applyDossier(
+                extraction, to: plan.path,
+                vlmModel: runner.modelID,
+                transcript: outcome.transcript,
+                whisperModel: outcome.transcript != nil ? transcriber?.modelID : nil
+            )
+            let usable = Self.isUsableTranscript(outcome.transcript)
+            if usable {
+                updateLane(laneID, hasTranscript: true)
+            } else if outcome.failed || outcome.timedOut {
+                updateLane(laneID, transcriptFailed: true)
+            }
+            // The serial path awaits Whisper inline and doesn't time it
+            // separately: whisperSeconds stays nil (historical behaviour).
+            completeDossierLane(laneID, vlmSeconds: vlmSec, whisperSeconds: nil,
+                                note: Self.serialDossierNote(
+                                    usableTranscript: usable, userSkipped: userSkipped,
+                                    hasNoAudio: plan.hasNoAudio, timedOut: outcome.timedOut,
+                                    failed: outcome.failed, hasTranscriber: transcriber != nil))
+            return .next
+        } catch is CancellationError {
+            captionOrchLog.notice("Dossier: cancelled at \(plan.filename, privacy: .public)")
+            appLog.write("Dossier: cancelled mid-file \(plan.filename) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
+            return .stop
+        } catch {
+            countDossierExtractionFailure(laneID, filename: plan.filename, error: error, label: "error")
+            return .next
+        }
+    }
+
+    /// What the serial path's inline Whisper call produced.
+    struct SerialTranscriptOutcome {
+        var transcript: String?
+        var failed = false
+        var timedOut = false
+    }
+
+    /// Transcribe inline (nil `whisper` = this file gets no transcript).
+    /// Cancellation propagates; a deadline or any other error is recorded
+    /// and the file still banks its scenes.
+    func serialTranscribe(_ plan: DossierFilePlan, with whisper: AudioTranscriber?) async throws -> SerialTranscriptOutcome {
+        var outcome = SerialTranscriptOutcome()
+        guard let whisper else { return outcome }
+        let deadline = max(60.0, 2.0 * plan.record.durationSeconds)
+        do {
+            outcome.transcript = try await whisper.transcribe(videoPath: plan.path, deadlineSeconds: deadline)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch AudioTranscriberError.deadlineExceeded(let secs) {
+            captionOrchLog.warning("Dossier: whisper deadline (\(secs, format: .fixed(precision: 0), privacy: .public)s) exceeded on \(plan.filename, privacy: .public)")
+            outcome.timedOut = true
+            transcriptFailures += 1
+        } catch {
+            captionOrchLog.warning("Dossier: whisper failed on \(plan.filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            outcome.failed = true
+            transcriptFailures += 1
+        }
+        return outcome
+    }
+
+    /// The activity-feed note for a serial-path file:
+    ///   nil                 → transcript obtained and non-empty
+    ///   "user skipped"      → the user right-clicked Skip on the lane
+    ///   "no audio"          → the file has no audio stream by design
+    ///   "whisper timed out" → the subprocess exceeded its deadline
+    ///   "transcript failed" → Whisper threw, or returned only whitespace
+    ///   "no transcriber"    → no transcriber wired
+    static func serialDossierNote(
+        usableTranscript: Bool, userSkipped: Bool, hasNoAudio: Bool,
+        timedOut: Bool, failed: Bool, hasTranscriber: Bool
+    ) -> String? {
+        if usableTranscript { return nil }
+        if userSkipped { return "user skipped" }
+        if hasNoAudio { return "no audio" }
+        if timedOut { return "whisper timed out" }
+        if failed { return "transcript failed" }
+        return hasTranscriber ? "transcript failed" : "no transcriber"
     }
 
     /// Batch-settle hook for the persistent Whisper worker (perf item

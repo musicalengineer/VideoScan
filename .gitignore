@@ -125,3 +125,5 @@ default.profraw
 
 # R3 golden snapshots: a mismatch writes <name>.actual.json beside the golden (never commit)
 tests/fixtures/hallie_snapshots/*.actual.json
+# Dossier batch characterization: a mismatch writes <case>.actual.txt beside the golden (never commit)
+VideoScan/VideoScanTests/*.actual.txt
