@@ -180,8 +180,10 @@ extension HallieLineageAnswer {
         }
     }
 
-    /// "that is donna's line" → the owner's ancestors; "that is my
-    /// line" → the spouse's. Nobody else's side has an "other".
+    /// "that is donna's line" → the owner's ancestors; `.otherSideOf(nil)`
+    /// (the owner's other side) → the spouse's. Nobody else's side has an
+    /// "other". Since 2026-10-07 "that is my line" is NOT this scope — it
+    /// asks for the owner's own ancestors (HallieSuperlativeCorrection).
     private static func otherSideStart(_ kind: HallieLineageQuestion.SuperlativeKind,
                                        scope: HallieLineageQuestion.SuperlativeScope,
                                        typed: String?,
