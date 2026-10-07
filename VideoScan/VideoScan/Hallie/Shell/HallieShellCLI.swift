@@ -690,11 +690,7 @@ enum HallieShellCLI {
             return ExitCode.catalogUnavailable.rawValue
         }
         dependencies.configureFamilyAssets(options)
-        let profiles: [POIProfile]?
-        switch dependencies.loadProfiles() {
-        case .loaded(let values): profiles = values
-        case .unavailable: profiles = nil
-        }
+        let profiles = profilesLoggingCause(dependencies.loadProfiles())
         let graph = dependencies.loadGraph(options.gedcomURL)
         let needsRecompile = graph == nil ? dependencies.loadNeedsRecompile(options.gedcomURL) : []
         let cyberBrain = dependencies.loadCyberBrain()
@@ -1836,14 +1832,44 @@ enum HallieShellCLI {
         return base.appendingPathComponent("VideoScan/catalog.json")
     }
 
+    /// True for a POI/ entry that is never a person: the family-groups
+    /// folder (FamilyGroupStore) and import/rename staging dirs (POIStorage).
+    static func isNonPersonPOIFolder(_ name: String) -> Bool {
+        POIStorage.isKnownNonPersonFolderName(name)
+    }
+
+    /// Callers' one way to turn a load into `Context.profiles`: on
+    /// `.unavailable` the log line names the cause, so a declined
+    /// "People profiles are unavailable" answer is traceable.
+    static func profilesLoggingCause(
+        _ result: ProfileLoadResult,
+        log: (String) -> Void = { appLog.write($0) }
+    ) -> [POIProfile]? {
+        switch result {
+        case .loaded(let profiles):
+            return profiles
+        case .unavailable(let failure):
+            log("Hallie: People profiles unavailable — \(failure.localizedDescription)")
+            return nil
+        }
+    }
+
     /// The app's normal POI loader may perform a one-time legacy migration.
     /// A read-only shell must not do that implicitly, so enumerate and decode
     /// only the already-current POI folders without creating or rewriting
     /// anything.
+    ///
+    /// One bad folder never hides the rest (2026-10-06: the family-groups
+    /// folder, which has no profile.json, made EVERY profile unavailable).
+    /// Non-person folders are skipped silently; an unreadable or corrupt
+    /// person profile is skipped and logged. `.unavailable` is returned only
+    /// when the store itself can't be read, or when person folders exist but
+    /// not one of them could be read — then "unavailable" is the truth.
     static func loadProfilesReadOnly(
         applicationSupportURL: URL? = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask).first,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        log: (String) -> Void = { appLog.write($0) }
     ) -> ProfileLoadResult {
         guard let applicationSupportURL else {
             return .unavailable(.applicationSupportUnavailable)
@@ -1870,7 +1896,17 @@ enum HallieShellCLI {
         }
 
         var profiles: [POIProfile] = []
+        // First skipped person folder, kept so an all-bad store still
+        // reports a concrete cause (≈ a C++ std::optional<Failure>).
+        var firstSkip: ProfileLoadFailure?
+        func skip(_ failure: ProfileLoadFailure, _ error: Error) {
+            log("Hallie: skipped People profile — \(failure.localizedDescription)"
+                + " (\(error.localizedDescription)); other profiles still load")
+            if firstSkip == nil { firstSkip = failure }
+        }
+
         for folder in folders {
+            if isNonPersonPOIFolder(folder.lastPathComponent) { continue }
             // Directory enumeration may canonicalize /var to /private/var.
             // Diagnostics retain the caller's spelling so paths are stable
             // and directly comparable to the URL the caller supplied.
@@ -1883,7 +1919,8 @@ enum HallieShellCLI {
                 isDirectory = try folder.resourceValues(
                     forKeys: [.isDirectoryKey]).isDirectory == true
             } catch {
-                return .unavailable(.directoryUnreadable(reportedFolder.path))
+                skip(.directoryUnreadable(reportedFolder.path), error)
+                continue
             }
             guard isDirectory else { continue }
 
@@ -1892,18 +1929,21 @@ enum HallieShellCLI {
             do {
                 data = try Data(contentsOf: profileURL)
             } catch {
-                return .unavailable(.profileUnreadable(reportedProfileURL.path))
+                skip(.profileUnreadable(reportedProfileURL.path), error)
+                continue
             }
             var profile: POIProfile
             do {
                 profile = try JSONDecoder().decode(POIProfile.self, from: data)
             } catch {
-                return .unavailable(.profileCorrupt(reportedProfileURL.path))
+                skip(.profileCorrupt(reportedProfileURL.path), error)
+                continue
             }
             profile.referencePath = folder.path
             profiles.append(profile)
         }
 
+        if profiles.isEmpty, let firstSkip { return .unavailable(firstSkip) }
         return .loaded(profiles.sorted {
             if $0.sortOrder != $1.sortOrder { return $0.sortOrder < $1.sortOrder }
             return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending

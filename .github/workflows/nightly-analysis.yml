@@ -26,6 +26,10 @@ name: Nightly Static Analysis
 #                         subprocess-injection + check-then-act on removable
 #                         volumes, both against grandfathered baselines in
 #                         ci/baselines/. Fails only on NEW violations.
+#   complexity          — lizard CCN/NLOC over Swift + Python production code
+#                         and a REPORT-ONLY debt ratchet (new / worse / fixed
+#                         offenders vs a shrinking baseline). Never fails on
+#                         debt. scripts/complexity_metrics.py.
 #   findings-to-issues  — (after the above) tools/nightly_findings_to_issues.py:
 #                         ONE "Nightly findings — YYYY-MM-DD" ticket per night
 #                         (NEW high / NEW medium / changed / fixed / still
@@ -64,7 +68,7 @@ on:
         type: boolean
         default: false
       only:
-        description: 'Comma list of jobs to run (blank = all): strict-concurrency,codeql,sanitizers,lint-strict,lint-warn,source-ratchets'
+        description: 'Comma list of jobs to run (blank = all): strict-concurrency,codeql,sanitizers,lint-strict,lint-warn,source-ratchets,complexity'
         type: string
         default: ''
       asan_app:
@@ -1195,6 +1199,67 @@ jobs:
           retention-days: 30
 
   # -------------------------------------------------------------------
+  # Complexity + tech-debt (Rick, 2026-10-05): lizard over Swift and Python
+  # production code, plus a REPORT-ONLY debt ratchet. Design and keys: the
+  # docstring of scripts/complexity_metrics.py. Never fails on debt; only a
+  # broken pipeline (lizard missing, script crash) turns it red.
+  #
+  # Baseline: the committed ci/baselines/complexity_debt.json, the same file
+  # the blocking gate (pre-commit + CI preflight) reads. CI cannot commit to
+  # main, so the shrunk version is published as a PROPOSAL
+  # (metrics/complexity_baseline_proposed.json); `--shrink-baseline` applies
+  # it locally. `aggregate` publishes the row, the new/worse list (with gate
+  # overrides from the last 48 h) and the proposal (main only).
+  complexity:
+    name: Complexity + debt ratchet (report only)
+    if: ${{ !inputs.only || contains(format(',{0},', inputs.only), ',complexity,') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      offenders: ${{ steps.measure.outputs.offenders }}
+      new_offenders: ${{ steps.measure.outputs.new_offenders }}
+      worse_offenders: ${{ steps.measure.outputs.worse_offenders }}
+      fixed_offenders: ${{ steps.measure.outputs.fixed_offenders }}
+      overrides_recent: ${{ steps.measure.outputs.overrides_recent }}
+
+    steps:
+      # Full history: the override log's commit SHAs are resolved from it
+      # (the pre-commit hook cannot know its own commit).
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Pinned: a lizard upgrade can change how CCN is counted, which would
+      # read as a debt jump that nobody wrote. Bump it deliberately, and
+      # re-baseline in the same commit.
+      - name: Install lizard
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cx"
+          "$RUNNER_TEMP/cx/bin/pip" install --disable-pip-version-check -q 'lizard==1.22.1'
+
+      - name: Measure + ratchet
+        id: measure
+        run: |
+          "$RUNNER_TEMP/cx/bin/python" scripts/complexity_metrics.py \
+            --root . \
+            --baseline ci/baselines/complexity_debt.json \
+            --baseline-out complexity_baseline_proposed.json \
+            --row-out complexity-row.json \
+            --debt-out complexity_debt_latest.json
+
+      - name: Upload complexity results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: complexity
+          path: |
+            complexity-row.json
+            complexity_debt_latest.json
+            complexity_baseline_proposed.json
+          retention-days: 30
+
+  # -------------------------------------------------------------------
   # Nightly findings → GitHub issues (Rick, 2026-10-01; reshaped by Rick
   # 2026-10-02 to ONE nightly ticket + high-only tracking issues, "organized
   # in such a way as we won't ignore the issues"). Design, severity rules and
@@ -1322,7 +1387,7 @@ jobs:
   # -------------------------------------------------------------------
   aggregate:
     name: Aggregate & push to metrics branch
-    needs: [strict-concurrency, codeql, thread-sanitizer, sanitizers, lint-strict, source-ratchets, findings-to-issues]
+    needs: [strict-concurrency, codeql, thread-sanitizer, sanitizers, lint-strict, source-ratchets, complexity, findings-to-issues]
     if: always()
     runs-on: macos-15
     timeout-minutes: 10
@@ -1344,6 +1409,13 @@ jobs:
           name: nightly-findings-summary
           path: findings-summary
 
+      - name: Fetch complexity results
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: complexity
+          path: complexity
+
       - name: Build aggregate row
         env:
           CONCURRENCY_WARNINGS: ${{ needs.strict-concurrency.outputs.warning_count }}
@@ -1361,6 +1433,10 @@ jobs:
           TYPECHECK_SATURATED: ${{ needs.strict-concurrency.outputs.typecheck_saturated }}
           RATCHET_INJECTION_NEW: ${{ needs.source-ratchets.outputs.injection_new }}
           RATCHET_CHECKTHENACT_NEW: ${{ needs.source-ratchets.outputs.checkthenact_new }}
+          COMPLEXITY_OFFENDERS: ${{ needs.complexity.outputs.offenders }}
+          COMPLEXITY_NEW: ${{ needs.complexity.outputs.new_offenders }}
+          COMPLEXITY_WORSE: ${{ needs.complexity.outputs.worse_offenders }}
+          COMPLEXITY_OVERRIDES: ${{ needs.complexity.outputs.overrides_recent }}
         run: |
           # One python step instead of a printf with 13 positional %s: every
           # value is either an int or null, and a sanitizer/finding count
@@ -1404,6 +1480,10 @@ jobs:
               "typecheck_saturated": num("TYPECHECK_SATURATED"),
               "ratchet_injection_new": num("RATCHET_INJECTION_NEW"),
               "ratchet_check_then_act_new": num("RATCHET_CHECKTHENACT_NEW"),
+              "complexity_offenders": num("COMPLEXITY_OFFENDERS"),
+              "complexity_new_offenders": num("COMPLEXITY_NEW"),
+              "complexity_worse_offenders": num("COMPLEXITY_WORSE"),
+              "complexity_gate_overrides_48h": num("COMPLEXITY_OVERRIDES"),
               "nightly_finding_fingerprints": summ.get("fingerprints"),
               "nightly_findings_new_high": len(summ["new_high"]) if "new_high" in summ else None,
               "nightly_findings_new_medium": len(summ["new_medium"]) if "new_medium" in summ else None,
@@ -1455,6 +1535,21 @@ jobs:
             cp "$RUNNER_TEMP/findings.json" metrics/nightly_findings_latest.json
             git add metrics/nightly_findings_latest.json
           fi
+          # Complexity (scripts/complexity_metrics.py): the trend row, the
+          # new/worse offender list the morning digest prints, and the proposed
+          # shrunk baseline (applied locally with --shrink-baseline).
+          CX="$GITHUB_WORKSPACE/complexity"
+          if [ -f "$CX/complexity-row.json" ]; then
+            touch metrics/complexity.jsonl
+            cat "$CX/complexity-row.json" >> metrics/complexity.jsonl
+            git add metrics/complexity.jsonl
+            for f in complexity_debt_latest.json complexity_baseline_proposed.json; do
+              if [ -f "$CX/$f" ]; then
+                cp "$CX/$f" "metrics/$f"
+                git add "metrics/$f"
+              fi
+            done
+          fi
           git commit -m "static analysis nightly $TS" || {
             echo "Nothing to commit"
             exit 0
@@ -1479,6 +1574,10 @@ jobs:
           RATCHET_INJECTION_BASE: ${{ needs.source-ratchets.outputs.injection_baseline }}
           RATCHET_CTA_NEW: ${{ needs.source-ratchets.outputs.checkthenact_new }}
           RATCHET_CTA_BASE: ${{ needs.source-ratchets.outputs.checkthenact_baseline }}
+          COMPLEXITY_OFFENDERS: ${{ needs.complexity.outputs.offenders }}
+          COMPLEXITY_NEW: ${{ needs.complexity.outputs.new_offenders }}
+          COMPLEXITY_WORSE: ${{ needs.complexity.outputs.worse_offenders }}
+          COMPLEXITY_FIXED: ${{ needs.complexity.outputs.fixed_offenders }}
           NEW_HIGH: ${{ needs.findings-to-issues.outputs.new_high }}
           NEW_MEDIUM: ${{ needs.findings-to-issues.outputs.new_medium }}
           TICKET_URL: ${{ needs.findings-to-issues.outputs.ticket_url }}
@@ -1511,6 +1610,11 @@ jobs:
             echo "| Subprocess injection / concat escaping | ${RATCHET_INJECTION_NEW:-?} | ${RATCHET_INJECTION_BASE:-?} |"
             echo "| Check-then-act on removable volumes | ${RATCHET_CTA_NEW:-?} | ${RATCHET_CTA_BASE:-?} |"
             echo "| New function over the type-check threshold | ${TYPECHECK_NEW_SLOW:-?} | — |"
+            echo ""
+            echo "Complexity debt (report only; CCN > 15 or NLOC > 80): **${COMPLEXITY_NEW:-?} new**, "
+            echo "**${COMPLEXITY_WORSE:-?} worse**, ${COMPLEXITY_FIXED:-?} fixed, ${COMPLEXITY_OFFENDERS:-?} offenders in all. "
+            echo "Gate overrides in the last 48 h: **${COMPLEXITY_OVERRIDES:-?}**. "
+            echo "Lists: the complexity job summary and \`metrics/complexity_debt_latest.json\`."
             echo ""
             echo "Slow-to-type-check identities tracked: **${TYPECHECK_IDENTITIES:-?}** "
             echo "(saturated / \"unable to type-check\": **${TYPECHECK_SATURATED:-?}**). "

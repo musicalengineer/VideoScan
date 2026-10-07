@@ -10,6 +10,21 @@ extension ArchiveView {
 
     // MARK: - File List
 
+    /// Timeline ⇄ Files as GlassTabStrip items (the strip keys tabs by Int).
+    static let archiveViewModeTabs: [(label: String, icon: String, tag: Int)] = [
+        ("Timeline", "calendar.day.timeline.left", 0),
+        ("Files", "tablecells", 1)
+    ]
+
+    /// The persisted String mode seen as the strip's Int tag.
+    /// (For Rick: a `Binding` ≈ a getter/setter pair passed by reference,
+    /// so the strip writes straight through to the @AppStorage string.)
+    var archiveViewModeTab: Binding<Int> {
+        Binding(
+            get: { archiveViewMode == ArchiveViewMode.files.rawValue ? 1 : 0 },
+            set: { archiveViewMode = ($0 == 1 ? ArchiveViewMode.files : .timeline).rawValue })
+    }
+
     var fileList: some View {
         VStack(spacing: 0) {
             // Toolbar
@@ -24,17 +39,14 @@ extension ArchiveView {
                 // Timeline ⇄ Files — the Archived shelf's two readings:
                 // the story over time, or the archivist's bench
                 // (docs/archive-view.md). Other categories are table-only.
+                // Liquid Glass spots 2026-10-06: the app's own glass
+                // sub-tab strip (as People ▸ Find Person / Identify
+                // Family) instead of a plain segmented control.
                 if selectedCategory == .archived {
-                    Picker("", selection: $archiveViewMode) {
-                        Label("Timeline", systemImage: "calendar.day.timeline.left")
-                            .tag("timeline")
-                        Label("Files", systemImage: "tablecells")
-                            .tag("files")
-                    }
-                    .pickerStyle(.segmented)
-                    .labelsHidden()
-                    .frame(width: 200)
-                    .help("Timeline: the archive as a story by decade and year. Files: the table with paths and status.")
+                    GlassTabStrip(selection: archiveViewModeTab,
+                                  items: Self.archiveViewModeTabs, fontSize: 13)
+                        .fixedSize()
+                        .help("Timeline: the archive as a story by decade and year. Files: the table with paths and status.")
                 }
 
                 TextField("Search", text: $searchText)

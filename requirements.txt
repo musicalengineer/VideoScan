@@ -47,7 +47,7 @@ pandas
 
 # ---- Utilities ----
 tqdm
-lizard
+lizard==1.22.1  # pinned: CCN counting must match the nightly + gate (scripts/complexity_metrics.py)
 pyshp       # `import shapefile` — scripts/build_family_map_units.py (Family Map county borders)
 pyyaml      # `import yaml` — tests/test_nightly_findings_to_issues.py
 

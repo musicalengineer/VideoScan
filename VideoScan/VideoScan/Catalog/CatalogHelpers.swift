@@ -13,7 +13,7 @@ import os.log
 
 struct CatalogContent: View {
     @EnvironmentObject var model: VideoScanModel
-    // Used in CatalogContent+Table.swift's "Reformat and Analyze…"
+    // Used in CatalogRowContextMenu+Actions.swift's "Reformat and Analyze…"
     // context-menu button (Rick 2026-06-14). The lint hook is per-file
     // so the use is invisible to it.
     // vs-lint:disable-next vs-env-object-unused
@@ -25,10 +25,14 @@ struct CatalogContent: View {
     @Environment(\.openWindow) var openWindow
     let records: [VideoRecord]
     @Binding var selectedIDs: Set<UUID>
-    /// The files table claims keyboard focus when a file is picked
-    /// (Rick 2026-10-05: ↑/↓ moved the VOLUMES table — the window's first
-    /// key view kept focus because clicking a file row never moved it).
-    @FocusState var filesTableFocused: Bool
+    /// Which Catalog pane has the keyboard. The ONE `@FocusState` lives in
+    /// CatalogView (the ancestor of both tables); this is its binding
+    /// (≈ a C++ reference to the parent's member).
+    @FocusState.Binding var focusedPane: CatalogPane?
+    /// The files table's rows snapshot and badge revision — gathered in
+    /// CatalogTableState.swift (R1, GH #281). Read and written through the
+    /// `tableData` / `angelBadgeRevision` forwarders there.
+    var tableState = CatalogTableState()
     @Binding var sortOrder: [KeyPathComparator<VideoRecord>]
     let searchText: String
     /// Search-hit badge count, published UP to the parent as a
@@ -161,19 +165,7 @@ struct CatalogContent: View {
     /// "Mark as Family Music…" sheet (2026-09-23) — .sheet(item:).
     @State var familyMusicSheetRequest: FamilyMusicSheetRequest?
 
-    /// Stable snapshot the Table reads from. Decoupled from `records` so the
-    /// Table never sees the data array mutate mid-gesture (which races with
-    /// AppKit's canDragRows / mouseDown handling and crashes inside
-    /// ForEach.IDGenerator with an out-of-bounds subscript).
-    @State var tableData: [VideoRecord] = []
-
-    /// Archive Angel evidence revision the rows last drew against (codex
-    /// #1345). Bumped from the store's `revision` publisher so a sweep
-    /// that changes a grade/summary WITHOUT changing the A+B set still
-    /// re-renders the "Promote me" badge and its tooltip. Read by the Tag
-    /// column cell; never recomputes `tableData` (≈ a dirty counter the
-    /// cell painter compares, not a data reload).
-    @State var angelBadgeRevision: Int = 0
+    // (`tableData` and `angelBadgeRevision` live in CatalogTableState.swift.)
 
     // "Extract Facial Frames…" (Rick 2026-06-09, Donna's birthday-
     // print project) runs as an ExtractFramesJob in the Media File
@@ -184,7 +176,7 @@ struct CatalogContent: View {
     /// Non-nil drives the sheet; the job itself lives in the Media
     /// File Operations center once the user confirms.
     /// Internal (not private): set by the row context menu in
-    /// CatalogContent+Table.swift.
+    /// CatalogRowContextMenu.swift.
     @State var ripAllFramesTarget: VideoRecord?
     /// Non-nil presents format + destination choices before a transcode.
     @State var transcodeRequest: TranscodeRequest?
@@ -223,7 +215,7 @@ struct CatalogContent: View {
     /// "Find Missing Audio…" target (GH #111). Non-nil presents the
     /// three-tier search sheet for that video-only record. Internal (not
     /// private) because the context-menu entry lives in
-    /// CatalogContent+Table.swift.
+    /// CatalogRowContextMenu.swift.
     @State var missingAudioTarget: VideoRecord?
     /// The candidate count the user last dismissed the banner at.
     /// @SceneStorage so the dismissal survives tab switches (CatalogView
@@ -340,6 +332,8 @@ struct CatalogContent: View {
     /// Space pressed while the catalog table owns focus — toggle the mode.
     private func toggleLivePreview() {
         let action = livePreviewMode.toggle(candidatePath: livePreviewCandidatePath())
+        // Test-host trace only (no-op unless the Gauntlet harness started it).
+        GauntletKeyTrace.note("space toggled live preview")
         applyLivePreview(action)
     }
 
@@ -349,6 +343,9 @@ struct CatalogContent: View {
     /// field editor is an NSText), and to buttons (which handle Space
     /// themselves). This is the text-field guard the feature promises.
     private func spaceShouldToggleLivePreview() -> Bool {
+        // The volumes table is an NSTableView too: Space there is not a
+        // live-preview gesture. Only the FILES pane counts (2026-10-06).
+        guard tableState.paneFocusMirror.pane == .files else { return false }
         guard let responder = NSApp.keyWindow?.firstResponder else { return false }
         // Field editors (search box, rename sheet, notes) are NSText —
         // never hijack Space from text entry.
@@ -739,12 +736,10 @@ struct CatalogContent: View {
             }
         }
         .onChange(of: selectedIDs) {
-            // Keyboard focus follows a file pick (2026-10-05), so ↑/↓ walk
-            // the files — but never out of a text field (typing in Search
-            // must keep the cursor while results change the selection).
-            if !selectedIDs.isEmpty, !(NSApp.keyWindow?.firstResponder is NSText) {
-                filesTableFocused = true
-            }
+            // NO focus change here (2026-10-06). A volume click re-filters
+            // the files, which can change this selection; grabbing focus
+            // here pulled the keyboard out of the volumes table. A click on
+            // a row focuses its own table natively.
             if isPlaying {
                 player?.pause()
                 player = nil
@@ -767,15 +762,9 @@ struct CatalogContent: View {
         // Space-toggle monitor lives for the catalog pane's on-screen
         // lifetime — installed here, torn down (and the mode reset) on
         // disappear so it can't fire from another tab.
-        .onAppear {
-            installSpaceKeyMonitor()
-            // The files table, not the volumes table above it, starts with
-            // keyboard focus when the Catalog opens (Apple's focus cookbook:
-            // say where focus goes instead of inheriting the window's first
-            // key view).
-            filesTableFocused = true
-        }
-        .defaultFocus($filesTableFocused, true)
+        .onAppear { installSpaceKeyMonitor() }
+        // (The files table's default focus is declared on CatalogView's
+        // rootSplit, the common ancestor of both panes.)
         .onDisappear { removeSpaceKeyMonitor() }
         .sheet(isPresented: $showRenameSheet) {
             RenameSheet(
@@ -920,7 +909,7 @@ struct CatalogContent: View {
     /// offline → alert naming their volumes; no copies → alert saying
     /// this is the only cataloged one.
     /// Internal (not private): invoked by the row context menu in
-    /// CatalogContent+Table.swift.
+    /// CatalogRowContextMenu.swift.
     func findOnlineVersion(for rec: VideoRecord) {
         let copies = OnlineCopyFinder(records: records).sameContentCopies(of: rec)
         let online = copies.filter { VolumeReachability.isReachable(path: $0.fullPath) }
@@ -950,7 +939,7 @@ struct CatalogContent: View {
     /// RipAllFramesSheet instead — it needs sampling options and a
     /// disk-usage estimate before start.)
     /// Internal (not private): invoked by the row context menu in
-    /// CatalogContent+Table.swift.
+    /// CatalogRowContextMenu.swift.
     func startFrameRip(for rec: VideoRecord) {
         let panel = NSOpenPanel()
         panel.title = "Save extracted facial frames into…"

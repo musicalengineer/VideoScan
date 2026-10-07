@@ -27,10 +27,30 @@ if [ -n "$NF" ]; then
     printf '%s' "$NF" | python3 "$REPO_ROOT/scripts/nightly_findings_alert.py" || true
 fi
 
+# Complexity debt (Rick 2026-10-05: nothing gets quietly baselined): 🔴 for
+# every NEW / WORSE offender and every gate override (function, CCN, lines,
+# reason, commit, author); 🔴 if the 2 AM nightly refused or failed to commit
+# the shrunk baseline (local status file, M4 only). Never fails the digest.
+CXS="$HOME/Library/Logs/VideoScan/complexity_baseline_commit.json"
+if [ -f "$CXS" ]; then
+    python3 "$REPO_ROOT/scripts/complexity_baseline_nightly.py" --alert "$CXS" || true
+fi
+CX="$(git show origin/metrics:metrics/complexity_debt_latest.json 2>/dev/null || true)"
+if [ -n "$CX" ]; then
+    printf '%s' "$CX" | python3 "$REPO_ROOT/scripts/complexity_metrics.py" --alert - || true
+fi
+
 # Weekly Address/Thread Sanitizer runs (2026-10-04): 🔴 on findings or a
 # failed run, 🟡 if skipped, silent when green. Local files on the M4, so
 # quiet on other hosts. Never fails the digest.
 python3 "$REPO_ROOT/scripts/sanitizer_alert.py" || true
+
+# Nightly Hallie replay (Rick 2026-10-06: the 10/5 eval caught "People
+# profiles are unavailable" and nothing surfaced it): 🔴 when the decline
+# rate jumps > 5 pts night over night or a NEW decline reason covers ≥ 5
+# questions; one plain numbers line every morning. Local files on the M4,
+# so quiet on other hosts. Never fails the digest.
+python3 "$REPO_ROOT/scripts/hallie_eval_alert.py" || true
 
 TD="$(git show origin/metrics:metrics/testdriver.jsonl 2>/dev/null || true)"
 SA="$(git show origin/metrics:metrics/static_analysis.jsonl 2>/dev/null || true)"

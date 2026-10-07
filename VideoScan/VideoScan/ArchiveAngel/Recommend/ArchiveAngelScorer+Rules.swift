@@ -86,11 +86,8 @@ extension ArchiveAngelScorer {
         switch kind {
         case .match:
             return nil
-        case .notVideo:
-            switch c.streamTypeRaw {
-            case StreamType.videoAndAudio.rawValue, StreamType.videoOnly.rawValue: return nil
-            default: return .notVideo
-            }
+        case .notVideo, .notPlayable, .pairedHalf, .noSound:
+            return mediaFloorFires(kind, c)
         case .onMasterArchive:
             return c.isOnMasterArchive ? .alreadyArchived : nil
         case .angelWorkingCopy:
@@ -103,11 +100,6 @@ extension ArchiveAngelScorer {
             // footage is archived (QA v12 #6).
             if c.hasArchivedDuplicate { return .duplicateArchived }
             return c.archivedFootageOriginal ? .footageOriginalArchived : nil
-        case .notPlayable:
-            let playable = c.isPlayable.lowercased()
-            return playable.hasPrefix("no") || playable.contains("unsupported") ? .notPlayable : nil
-        case .pairedHalf:
-            return c.isPairedHalf ? .pairedHalf : nil
         case .livePhotoMotion:
             // Rick 2026-09-21. Ahead of `.tooShort` so a 3 s Live Photo
             // half is counted as what it is, not as a short clip.
@@ -138,6 +130,31 @@ extension ArchiveAngelScorer {
             return c.attention.restingUntil(now: now, weights: p.weights) != nil ? .resting : nil
         default:
             return nil   // a signal kind in the floors list — validation refuses it
+        }
+    }
+
+    /// The floors about the file's own media — is it a video, can it be
+    /// played, is it half of an A/V pair, does it have usable sound (rules
+    /// v15 `noSound`: ArchiveReadiness.lacksUsableSound). Split out of
+    /// `floorFires` (complexity gate). Pure.
+    static func mediaFloorFires(_ kind: AngelRuleKind, _ c: ArchiveAngelCandidate) -> ArchiveAngelRejection? {
+        switch kind {
+        case .notVideo:
+            let video = c.streamTypeRaw == StreamType.videoAndAudio.rawValue
+                || c.streamTypeRaw == StreamType.videoOnly.rawValue
+            return video ? nil : .notVideo
+        case .notPlayable:
+            let playable = c.isPlayable.lowercased()
+            return playable.hasPrefix("no") || playable.contains("unsupported") ? .notPlayable : nil
+        case .pairedHalf:
+            return c.isPairedHalf ? .pairedHalf : nil
+        case .noSound:
+            let lacks = ArchiveReadiness.lacksUsableSound(streamTypeRaw: c.streamTypeRaw,
+                                                          audioVerifyStatus: c.audioVerifyStatus,
+                                                          audioVerifyNote: c.audioProblem ?? "")
+            return lacks ? .noSound : nil
+        default:
+            return nil
         }
     }
 

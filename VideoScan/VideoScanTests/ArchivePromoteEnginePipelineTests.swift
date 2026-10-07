@@ -154,6 +154,93 @@ struct ArchivePromoteEnginePipelineTests {
         #expect(leftovers.isEmpty, "cancel left files behind: \(leftovers)")
     }
 
+    // MARK: verify compare + O_EXCL partial (N1008-T-Archive-F1)
+
+    /// The bytes on the archive drive are damaged AFTER the copy wrote them
+    /// (here: byte 0 of the partial flipped from the 2nd progress callback,
+    /// through a second descriptor). The source is untouched, so only the
+    /// verify read-back can tell — the copy must be refused, not published.
+    @Test("N1008-F1: a partial damaged after it was written fails VERIFY (.verifyMismatch); no destination, no partial")
+    func damagedPartialFailsVerify() throws {
+        let sb = try makeArchiveSandbox("pipe_verify_mismatch")
+        defer { sb.cleanup() }
+        let size = ArchivePromoteEngine.pipelineChunkSize * 3          // 3 chunks → 3 progress callbacks
+        let data = randomBlob(bytes: size, seed: 0xF1)
+        let src = sb.sources.appendingPathComponent("test_vm.bin")
+        try data.write(to: src)
+        let handle = try ArchivePromoteEngine.openSource(path: src.path)
+        defer { handle.close() }
+        let rel = "30_Video/Undated/test_vm.bin"
+        let dest = sb.archiveRoot.appendingPathComponent(rel)
+        let partial = dest.path + ".partial"
+
+        var calls = 0
+        var flipped = false
+        var thrown: Error?
+        do {
+            _ = try ArchivePromoteEngine.copyVerifyPublish(
+                source: handle, root: sb.archiveRoot.path, relativePath: rel,
+                progress: { _ in
+                    calls += 1
+                    guard calls == 2 else { return }
+                    // pwrite(2) through our own fd: the engine's write offset is untouched.
+                    let fd = open(partial, O_RDWR)
+                    guard fd >= 0 else { return }
+                    defer { close(fd) }
+                    var b: UInt8 = 0
+                    guard pread(fd, &b, 1, 0) == 1 else { return }
+                    b ^= 0xFF
+                    flipped = pwrite(fd, &b, 1, 0) == 1
+                })
+        } catch {
+            thrown = error
+        }
+        #expect(flipped, "fixture: byte 0 of the partial was not flipped on the 2nd progress callback (calls=\(calls))")
+        // (Swift: `if case .x(let a, let b) = value` ≈ a C++ std::get_if on a variant + structured binding.)
+        if case .verifyMismatch(let expected, let actual)? = thrown as? ArchivePromoteEngine.Failure {
+            #expect(expected == referenceSHA256(data), "expected = the SOURCE digest")
+            #expect(actual != expected)
+        } else {
+            Issue.record("expected .verifyMismatch, got \(String(describing: thrown))")
+        }
+        let fm = FileManager.default
+        #expect(!fm.fileExists(atPath: dest.path), "a copy that failed verify was published")
+        #expect(!fm.fileExists(atPath: partial), "the damaged partial was left behind")
+    }
+
+    /// The partial is opened O_CREAT|O_EXCL: a `.partial` already there (an
+    /// in-flight copy, a crash leftover) is never adopted or overwritten.
+    @Test("N1008-F1: a pre-existing <dest>.partial refuses the copy (.partialExists); its bytes are untouched")
+    func existingPartialIsRefused() throws {
+        let sb = try makeArchiveSandbox("pipe_partial_exists")
+        defer { sb.cleanup() }
+        let data = randomBlob(bytes: 64 * 1024, seed: 0xF1B)
+        let src = sb.sources.appendingPathComponent("test_pe.bin")
+        try data.write(to: src)
+        let rel = "30_Video/Undated/test_pe.bin"
+        let dest = sb.archiveRoot.appendingPathComponent(rel)
+        let partial = URL(fileURLWithPath: dest.path + ".partial")
+        try FileManager.default.createDirectory(at: dest.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let planted = Data("planted partial — another copy owns me".utf8)
+        try planted.write(to: partial)
+
+        let handle = try ArchivePromoteEngine.openSource(path: src.path)
+        defer { handle.close() }
+        var thrown: Error?
+        do {
+            _ = try ArchivePromoteEngine.copyVerifyPublish(source: handle, root: sb.archiveRoot.path, relativePath: rel)
+        } catch {
+            thrown = error
+        }
+        if case .partialExists(let path)? = thrown as? ArchivePromoteEngine.Failure {
+            #expect(path.hasSuffix("test_pe.bin.partial"), "\(path)")
+        } else {
+            Issue.record("expected .partialExists, got \(String(describing: thrown))")
+        }
+        #expect(try Data(contentsOf: partial) == planted, "the planted partial was overwritten")
+        #expect(!FileManager.default.fileExists(atPath: dest.path), "nothing may be published")
+    }
+
     // MARK: progress semantics
 
     @Test("progress is strictly monotonic, phase-ordered (all copying before any verifying), and both phases end at the file size")

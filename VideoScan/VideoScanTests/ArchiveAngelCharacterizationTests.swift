@@ -318,6 +318,7 @@ extension AngelRecommendationPolicy {
     static var rulesV10: AngelRecommendationPolicy {
         var p = AngelRecommendationPolicy.builtIn
         p.coverage = .off   // rules v13: v10 had no coverage rules
+        p.floors.removeAll { $0.id == "noSound" }   // rules v15: v10 had no sound floor
         let stage = AngelRule(
             id: "stageMeansArchived", kind: .match,
             when: [.init(field: .archiveStage, op: .in,
@@ -358,21 +359,26 @@ struct ArchiveAngelScaleCharacterizationTests {
     // (`terminalStages: true` — every 53rd record Manually Deleted, every
     // 97th Salvage Failed), so `fileGone` is exercised at scale: 2,127
     // files. The v10 pins above stay on the original fixture.
-    static let pinnedGrades: [ArchiveAngelGrade: Int] = [.a: 15281, .b: 5447, .c: 2315, .d: 128, .x: 76829]
+    // Re-pinned 2026-10-06 for rules v15 — DELIBERATE: the `noSound` floor
+    // (Rick: a video-only export was "Ready") refuses every S0 record with
+    // no sound track: 21,465 of 100k, taken from the floors that used to
+    // fire after it (tooShort, junk, appCache, proxyStream, …) and from
+    // the graded. The safety floors and pairedHalf (before it) hold.
+    static let pinnedGrades: [ArchiveAngelGrade: Int] = [.a: 10220, .b: 3681, .c: 1558, .d: 87, .x: 84454]
     static let pinnedRejections: [ArchiveAngelRejection: Int] = [
-        .notVideo: 24976, .alreadyArchived: 1477, .duplicateArchived: 2783, .volumeOffline: 1726,
-        .tooShort: 771, .recentPhoneClip: 11999, .junk: 6698, .suspectedJunk: 7640, .notPlayable: 1705,
-        .pairedHalf: 2241, .derivativeOfOriginal: 234, .appCache: 5731, .proxyStream: 5908, .resting: 811,
-        .fileGone: 2127,
+        .notVideo: 24976, .alreadyArchived: 1477, .duplicateArchived: 2783, .volumeOffline: 1161,
+        .tooShort: 513, .recentPhoneClip: 7987, .junk: 4513, .suspectedJunk: 5116, .notPlayable: 1705,
+        .pairedHalf: 2241, .derivativeOfOriginal: 119, .appCache: 3821, .proxyStream: 3888, .resting: 560,
+        .fileGone: 2127, .noSound: 21465,
     ]
-    static let pinnedScoreSum = 2_876_281
+    static let pinnedScoreSum = 1_925_887
     static let pinnedNudgeReady = 11_787
     static let pinnedNudgeNear = 11_482
     static let pinnedNudgeHead = [2649, 31596, 76168, 40491, 15136, 42680, 66721, 35713, 40586, 75163, 93926, 13672, 92296, 13579, 82583]
-    static let pinnedSelectionHead = [61588, 33829, 24591, 23613, 6218, 8665, 1885, 12279, 73414, 26643]
-    static let pinnedSelectionOverflow = 21_192
+    static let pinnedSelectionHead = [61588, 24591, 6218, 1885, 12279, 73414, 26643, 28174, 32916, 17105]
+    static let pinnedSelectionOverflow = 14_556
     static let pinnedSelectionRejected: [ArchiveAngelRejection: Int] =
-        pinnedRejections.merging([.duplicateOfPick: 1666, .sameFamilyAsPick: 305]) { a, _ in a }
+        pinnedRejections.merging([.duplicateOfPick: 835, .sameFamilyAsPick: 147]) { a, _ in a }
     /// The unified classifier over the same 100k (rules v11 default). For
     /// comparison, the legacy nudge rules over these candidates say 25,123
     /// ready + 7,586 need a date (no floors, no grades, no copy chooser
@@ -389,10 +395,13 @@ struct ArchiveAngelScaleCharacterizationTests {
     /// inferred date set aside a camera-less stamp, so the file is no longer
     /// "dated 2026, looks like a digitization". Pinned exactly by
     /// `v13SetAsideMovesRecentDigitizationsToReady`.
+    /// Rules v15 (2026-10-06): the `noSound` floor excludes the S0 records
+    /// with no sound track (excluded 76,827 → 84,452); of the v13 movers,
+    /// 28 keep their sound (was 43).
     static let pinnedClasses: [ArchiveAngelRecommendationClass: Int] = [
-        .ready: 14356, .needsDate: 3865, .worthALook: 2155, .notNow: 1235, .excluded: 76827, .anotherCopy: 1562,
+        .ready: 9796, .needsDate: 2613, .worthALook: 1516, .notNow: 850, .excluded: 84452, .anotherCopy: 773,
     ]
-    static let v13MovedToReady = 43
+    static let v13MovedToReady = 28   // v15 noSound: 43 → 28 (15 movers have no sound track)
 
     /// The index `i` of a synthetic record from its UUID.
     static func index(_ id: UUID) -> Int {
@@ -558,7 +567,7 @@ struct ArchiveAngelScaleCharacterizationTests {
         for i in moved { before[i].inferredDateConfidence = 0.59 }
         let old = ArchiveAngelRecommendations.classify(before, evidence: ArchiveAngelS0Catalog.evidence(before),
                                                        rules: .standard, now: now)
-        #expect(old.counts[.ready] == 14313 && old.counts[.needsDate] == 3908, "\(old.counts)")
+        #expect(old.counts[.ready] == 9768 && old.counts[.needsDate] == 2641, "\(old.counts)")   // v15: was 14313 / 3908
         #expect(moved.allSatisfy { old.verdicts[$0].kind == .needsDate })
     }
 
@@ -638,6 +647,7 @@ struct ArchiveAngelVocabularyTests {
             // Rules v13 (2026-09-26): ADDED — coverage's two batch limits (held for a later batch, never excluded).
             "Another pick from the same day is already in this batch — spreading picks across events",
             "Held for a later batch — this batch already has its share of that year",
+            "No usable sound — no sound track, or the sound is silent or damaged; find its audio and combine first",
         ])
     }
 
@@ -655,7 +665,7 @@ struct ArchiveAngelVocabularyTests {
         #expect(ArchiveAngelPlan.planFilename == "plan.json")
         #expect(ArchiveAngelEvidenceStore.filename == "evidence.json")
         #expect(ArchiveAngelEvidenceFile.currentVersion == 1)
-        #expect(ArchiveAngelScorer.rulesVersion == 14, "v14 2026-09-29: event labels — one per day OR labelled occasion (holiday, birthday, name word + year)")
+        #expect(ArchiveAngelScorer.rulesVersion == 15, "v15 2026-10-06: the noSound floor — no sound track, silent or damaged audio is never recommended")
     }
 
     @Test("grade bands unchanged: A ≥ 100, B 60–99, C 25–59, D 1–24, else X")

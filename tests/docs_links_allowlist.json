@@ -75,7 +75,7 @@
   "VideoScan/VideoScan/Catalog/CatalogContent+Promote.swift": {
     "docs/archive_promotion_workflow.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
-  "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift": {
+  "VideoScan/VideoScan/Catalog/CatalogRowContextMenu+Organize.swift": {
     "docs/find-and-tag-design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
   "VideoScan/VideoScan/Catalog/CatalogStore.swift": {
@@ -205,6 +205,12 @@
   "VideoScan/VideoScanTests/VolumeRoleTests.swift": {
     "docs/volume_taxonomy_proposal.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
+  "docs/briefs/cloud/C03-python-run-and-review.md": {
+    "docs/reviews/cloud/C03-python-run-and-review.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
+  },
+  "docs/briefs/cloud/C05-delete-excess-design-review.md": {
+    "docs/reviews/cloud/C05-delete-excess-design-review.md": "Report path a brief names before its session writes it; remove when the report is merged."
+  },
   "docs/design/analysis_ledger_design.md": {
     "docs/immich_ideas.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
@@ -318,11 +324,32 @@
   "docs/research/pronunciation_training_research.md": {
     "docs/pronunciation_drill_design.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
+  "docs/reviews/briefs/catalog-versioning-167-2026-10-02-brief.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/briefs/catalog-versioning-167-r2-2026-10-02-brief.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/briefs/catalog-versioning-167-r3-2026-10-02-brief.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/briefs/codex-brief-p1-287-2026-10-06.md": {
+    "docs/reviews/codex/codex-review-p1-287-2026-10-06.md": "Verdict path the codex brief names before codex writes it; remove this entry when the review lands."
+  },
   "docs/reviews/briefs/docs-reorg-brief.md": {
     "docs/analysis": "The reorganization brief names the pre-reorganization folders it moved.",
     "docs/metrics": "The reorganization brief names the pre-reorganization folders it moved.",
     "docs/perf": "The reorganization brief names the pre-reorganization folders it moved.",
     "docs/team-channel/": "The team channel was retired 2026-10-02 and docs/team-channel/ removed; historical citation, kept as written."
+  },
+  "docs/reviews/codex/codex-review-catalog-versioning-167-2026-10-02.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/codex/codex-review-catalog-versioning-167-r2-2026-10-02.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
+  },
+  "docs/reviews/codex/codex-review-catalog-versioning-167-r3-2026-10-02.md": {
+    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
   },
   "scripts/find_donna_scan.py": {
     "docs/find_donna_scan.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
@@ -336,6 +363,9 @@
     "docs/new-missing.md": "Deliberately missing target used to test link-check failures and exact allowlisting.",
     "docs/old-reviews/review-<slug>.md": "Deliberately missing target used to test link-check failures and exact allowlisting.",
     "docs/retired.md": "Deliberately missing target used to test link-check failures and exact allowlisting."
+  },
+  "tests/test_gauntlet_manifest_drift.py": {
+    "docs/notes.md": "Synthetic non-test path used as a fixture string in the drift-check tests; not a real citation."
   },
   "tools/donna-recipe/gallery_report.py": {
     "docs/donna-gallery-report.md": "Example generated gallery-report output; tools/donna-recipe/gallery_report.py creates it when invoked.",
@@ -352,23 +382,5 @@
     "docs/poi-holdout": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
     "docs/poi-holdout/": "Generated aggregate report output directory created by tools/person-eval/build_holdout_queue_skeleton.py.",
     "docs/team-channel/2026-07-23-1213-codex-poi-c4-c6-execution-handoff.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
-  },
-  "docs/reviews/briefs/catalog-versioning-167-2026-10-02-brief.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/briefs/catalog-versioning-167-r2-2026-10-02-brief.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/briefs/catalog-versioning-167-r3-2026-10-02-brief.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/codex/codex-review-catalog-versioning-167-2026-10-02.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/codex/codex-review-catalog-versioning-167-r2-2026-10-02.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
-  },
-  "docs/reviews/codex/codex-review-catalog-versioning-167-r3-2026-10-02.md": {
-    "docs/practices/invariants/Catalog.md": "Pending: docs/practices/invariants/Catalog.md lands with feat/167-catalog-versioning (GH #167); remove these entries when that branch merges."
   }
 }

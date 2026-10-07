@@ -288,10 +288,17 @@ struct FamilyTreeMapView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             legend
-            HStack {
-                Button("Fit") { fitIfPossible(force: true) }
-                Button("Back to the fan") { onBack() }
-                if let onRollCall { rollCallButton(onRollCall) }
+            // Liquid Glass spots 2026-10-06: the map's controls as one glass
+            // group (they blend where they meet); Roll Call, the screen's
+            // one primary action, is the tinted one.
+            VSGlassContainer(spacing: 8) {
+                HStack {
+                    Button("Fit") { fitIfPossible(force: true) }
+                        .vsGlassButtonStyle()
+                    Button("Back to the fan") { onBack() }
+                        .vsGlassButtonStyle()
+                    if let onRollCall { rollCallButton(onRollCall) }
+                }
             }
             .controlSize(.small)
             Divider()
@@ -332,6 +339,7 @@ struct FamilyTreeMapView: View {
                 play(FamilyTreeWalkSheet.defaultRollCallOrder, false)
             }
             .menuStyle(.button)
+            .vsGlassProminentButtonStyle()
             .fixedSize()
             .disabled(rollCallBusy)
             .help("Play the roll call of the family again (click), or pick an order (arrow)")

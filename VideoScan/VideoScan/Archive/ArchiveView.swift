@@ -41,6 +41,10 @@ struct ArchiveView: View {
     /// version — same discipline as categoryMemo. Not private: the
     /// Timeline extension lives in its own file.
     @State var timelineItemMemo = RenderMemo<RecordsVersion, [ArchiveTimelineItem]>()
+    /// The decade→year grouping + ribbon ticks, memoized per records
+    /// version AND search text (decade ribbon, 2026-10-06): grouping is
+    /// O(n log n) in archived items and must never run on every render.
+    @State var timelineMemo = RenderMemo<ArchiveTimelineKey, ArchiveTimelineSnapshot>()
     /// Unique-file totals for the progress bar (ArchiveProgress.swift),
     /// computed OFF the main actor per records version
     /// (`refreshArchiveStorageTotals`, 2026-10-04 perf) —

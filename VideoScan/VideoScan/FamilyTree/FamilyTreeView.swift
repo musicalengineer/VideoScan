@@ -407,12 +407,20 @@ struct FamilyTreeView: View {
                     toolSheet = nil
                 }
             }
-        case .walk:
-            // "Walk Tree…" (2026-09-27): one sheet with its own stages.
-            FamilyTreeWalkSheet(model: model, hostSize: toolSheetHostSize) {
+        case .walk(let start):
+            // "Walk Tree…" (2026-09-27): one sheet with its own stages. A
+            // `start` (a card's right-click) skips setup and walks at once.
+            FamilyTreeWalkSheet(model: model, hostSize: toolSheetHostSize, start: start) {
                 toolSheet = nil
             }
         }
+    }
+
+    /// The one way into the Walk Tree sheet — the toolbar (nil = setup) and
+    /// a card's right-click (walk from that person at once).
+    private func presentWalk(_ start: FamilyTreeWalkStart?) {
+        FamilyTreeWalkCenter.shared.consoleLog = { [weak catalogModel] line in catalogModel?.log(line) }
+        toolSheet = .walk(start)
     }
 
     /// Stage 2: window background, colour scheme, every sheet and alert.
@@ -745,8 +753,7 @@ struct FamilyTreeView: View {
                 .disabled(model.isVerifying)
 
                 Button {
-                    FamilyTreeWalkCenter.shared.consoleLog = { [weak catalogModel] line in catalogModel?.log(line) }
-                    toolSheet = .walk
+                    presentWalk(nil)
                 } label: {
                     Label("Walk Tree…", systemImage: "figure.walk.circle")
                 }
@@ -1180,6 +1187,10 @@ struct FamilyTreeView: View {
                 },
                 isBookmarked: model.isBookmarked(card.person.id),
                 onToggleBookmark: { model.toggleBookmark(card.person.id) },
+                canWalkTree: model.isLive,
+                onWalkTree: { toMap in
+                    presentWalk(FamilyTreeWalkStart(personID: card.person.id, toMap: toMap))
+                },
                 childrenOf: { model.children(of: card.person.id) },
                 onSelectPerson: { model.select($0) },
                 researchLinksFor: { model.researchLinks(for: card.person.id) },
@@ -2224,6 +2235,7 @@ struct FamilyTreeView: View {
 /// instead of racing a dismiss against a present.
 enum FamilyTreeToolSheet: Identifiable {
     case verify
-    case walk
+    /// nil = the setup step; set = walk from one person at once.
+    case walk(FamilyTreeWalkStart?)
     var id: String { "familyTree.toolSheet" }
 }

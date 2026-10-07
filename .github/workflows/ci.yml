@@ -35,6 +35,25 @@ jobs:
           python3 scripts/lint_environment_objects.py --selftest
           python3 scripts/lint_environment_objects.py
 
+      # GH #281: the same gate as the pre-commit hook, over the whole tree.
+      # Fails on a function over CCN 30 / 300 lines that is new or worse than
+      # ci/baselines/complexity_debt.json, or on a new swiftlint:disable of a
+      # size/complexity rule. Honors overrides recorded in
+      # ci/baselines/complexity_overrides.jsonl, so `--no-verify` does not get
+      # past it. lizard pinned to the nightly's version (CCN must not drift).
+      - name: Complexity gate (blocking)
+        run: |
+          python3 -m venv "$RUNNER_TEMP/cx"
+          "$RUNNER_TEMP/cx/bin/pip" install --disable-pip-version-check -q 'lizard==1.22.1'
+          "$RUNNER_TEMP/cx/bin/python" scripts/complexity_gate.py --all --root .
+
+      # Same check as the pre-commit hook, over the whole tree, so a commit
+      # made with --no-verify (or from a clone without the hook) still turns
+      # CI red when a test file has no gauntlet stage. 2026-10-06: 103
+      # unassigned files blocked every gauntlet stage. Pure Python, < 1 s.
+      - name: Gauntlet manifest — every test file has a stage
+        run: python3 scripts/gauntlet/manifest_drift.py --all --root .
+
       - name: Person metrics contract tests
         run: |
           python3 -m unittest \

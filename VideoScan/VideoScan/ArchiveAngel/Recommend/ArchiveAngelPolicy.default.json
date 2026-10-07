@@ -68,6 +68,12 @@
     },
     {
       "explicitPicks" : false,
+      "id" : "noSound",
+      "kind" : "noSound",
+      "note" : "No sound track, or Verify Audio found it silent or damaged — switch off to allow silent footage"
+    },
+    {
+      "explicitPicks" : false,
       "id" : "livePhotoMotion",
       "kind" : "livePhotoMotion",
       "note" : "Rick 2026-09-21: a Live Photo's motion half is part of a photo"

@@ -408,7 +408,7 @@ struct CatalogView: View {
     /// Internal (not private): set by showMigrationReport(for:) in
     /// CatalogView+VolumeTable.swift (the volume context menu's file).
     @State var migrationReportItem: VolumeMigrationItem?
-    // Volume pane height is now managed by NSSplitView (VerticalSplitView)
+    // Volume pane height: the VSplitView divider (rootSplit).
     @State private var showPairsOnly = false
     @State private var catalogViewFilters: Set<CatalogViewFilter> = []
     /// The filter set, persisted (2026-08-22). Until now the Show ▸ filters
@@ -480,6 +480,18 @@ struct CatalogView: View {
     @State var deleteVolumesCatalogPrompt: DeleteVolumesCatalogPrompt?
     /// Selected volume IDs in the scan volumes table.
     @State var selectedVolumeIDs: Set<UUID> = []
+    /// Which Catalog pane has the keyboard — the ONE focus state for both
+    /// tables, in their common ancestor (both now live in this view's one
+    /// SwiftUI hierarchy, see rootSplit). NOTHING assigns it: a click
+    /// focuses a table natively, Tab moves it, and CatalogContent declares
+    /// `.defaultFocus(.files)` once. `@FocusState` ≈ a member the framework
+    /// writes when the AppKit first responder changes, and reads to move it.
+    /// Internal (not private) so CatalogView+VolumeTable.swift can bind it.
+    @FocusState var focusedPane: CatalogPane?
+    /// Click → that table gets the keyboard (SwiftUI's Table does not do
+    /// it on its own; see CatalogTableClickFocus.swift). Installed only
+    /// while this tab is on screen.
+    @State private var tableClickFocus = CatalogTableClickFocus()
     /// Per-volume aggregate cache (file count, error count, byte sum,
     /// pre-built Cmd+I popover text). Recomputed once per records or
     /// scan-target change via the `.onChange` modifiers below. Without
@@ -569,18 +581,30 @@ struct CatalogView: View {
         withAlerts(withSheets(rootSplit))
     }
 
+    /// Volumes on top, files below, in ONE SwiftUI hierarchy (2026-10-06,
+    /// docs/design/catalog_window_architecture_2026_10_06.md). The old
+    /// VerticalSplitView hosted each pane in its own NSHostingController —
+    /// two SwiftUI graphs, so a click in the volumes table never took the
+    /// keyboard from the files table. `VSplitView` is NSSplitView-backed
+    /// like Finder's panes; the divider starts at `idealHeight` and then
+    /// stays where Rick drags it (no auto-grow, no max cap — his ruling).
     private var rootSplit: some View {
-        VerticalSplitView(
-            topMinHeight: 60,
-            topIdealHeight: scanTargetsPaneAutoHeight,
-            topMaxHeight: 400,
-            top: {
-                scanTargetsPane
-            },
-            bottom: {
-                bottomPane
-            }
-        )
+        VSplitView {
+            scanTargetsPane
+                .frame(minHeight: 60, idealHeight: scanTargetsPaneAutoHeight)
+            bottomPane
+                .frame(minHeight: 100)
+        }
+        // Where the keyboard starts when the Catalog opens: the files table.
+        // On the common ancestor of both panes, so it outranks the window's
+        // first key view (the volumes table). The ONE place a pane is named
+        // as a focus target in code.
+        .defaultFocus($focusedPane, .files)
+        // The click hook acts only in THIS window (never another window or
+        // a sheet) — the reader hands it the window once it is known.
+        .background(CatalogWindowReader { tableClickFocus.catalogWindow = $0 })
+        .onAppear { tableClickFocus.install() }
+        .onDisappear { tableClickFocus.remove() }
     }
 
     private var bottomPane: some View {
@@ -699,6 +723,7 @@ struct CatalogView: View {
         CatalogContent(
             records: model.records,
             selectedIDs: $selectedIDs,
+            focusedPane: $focusedPane,
             sortOrder: $sortOrder,
             searchText: debouncedSearchText,
             searchHitCount: $searchHitCount,
@@ -796,9 +821,6 @@ struct CatalogView: View {
                 model.hallieCurrentSelectionID = selectedIDs.count == 1
                     ? selectedIDs.first
                     : nil
-                // Mirror for the File ▸ Archive ▸ Promote Selected menu
-                // command (plain var — no publish, no re-render).
-                model.catalogSelectedIDs = selectedIDs
                 // Update volume highlight when table selection changes.
                 // O(1) index lookup — runs per arrow-key step.
                 if let id = selectedIDs.first,
