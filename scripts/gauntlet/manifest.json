@@ -9435,6 +9435,8 @@
         "FamilyAssetStoreTests"
       ],
       "tests": [
+        "aDamagedExclusionSidecarIsNeverSavedOver",
+        "aDamagedExclusionSidecarThatCannotBeSetAsideRefusesTheWrite",
         "aPersonUnknownToTheDirectoryFallsBackToNameMatching",
         "anExcludedPhotoIsNeverShownForThatPersonAgain",
         "crestLookupIsCaseAndDiacriticInsensitiveAndContentVerified",
