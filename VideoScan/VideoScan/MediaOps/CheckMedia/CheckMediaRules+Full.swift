@@ -219,6 +219,13 @@ extension CheckMediaRules {
                         checks: checks)
     }
 
+    /// The card a quick Verify writes: the quick rows, the full-tier rows
+    /// honestly "not run". (Repair verifies its output with this — the
+    /// same rows CheckMediaJob's quick tier writes.)
+    static func quickCard(_ quick: CheckMediaQuickInputs, at date: Date) -> MediaReportCard {
+        card(tier: .quick, checks: quickChecks(quick) + fullRowsNotRun(), quick: quick, at: date)
+    }
+
     /// The verdict sentence at the top of the card.
     static func headline(checks: [MediaCheck], quick: CheckMediaQuickInputs,
                          tier: MediaReportCard.Tier) -> String {
