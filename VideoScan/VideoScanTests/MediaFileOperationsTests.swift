@@ -692,24 +692,8 @@ struct MediaFileOperationFinishedAtTests {
         #expect(job.finishedAt != nil)
     }
 
-    @Test func extractJobCancelledBeforeStartStampsFinishedAt() {
-        let job = ExtractFramesJob(record: record("/tmp/x.mov"),
-                                   destinationParent: FileManager.default.temporaryDirectory,
-                                   gates: [])
-        job.cancel()
-        #expect(job.state == .cancelled)
-        #expect(job.finishedAt != nil)
-    }
-
-    @Test func ripAllFramesJobCancelledBeforeStartStampsFinishedAt() {
-        let job = RipAllFramesJob(record: record("/tmp/x.mov"),
-                                  destinationParent: FileManager.default.temporaryDirectory,
-                                  gates: [],
-                                  options: AllFramesRipper.Options())
-        job.cancel()
-        #expect(job.state == .cancelled)
-        #expect(job.finishedAt != nil)
-    }
+    // (ExtractFramesJob / RipAllFramesJob cancel-stamp tests retired with
+    // the two frame-extract verbs, 2026-10-07.)
 
     /// Stored-state job (TranscodeJob — same `didSet` hook as
     /// Reformat/Analyze/Cleanup): a missing source fails fast, before

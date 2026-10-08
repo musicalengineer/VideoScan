@@ -200,6 +200,14 @@ extension CatalogContent {
                           CatalogPromoteSelection(count: selectedIDs.count, visibleRecordIDs: {
                               CatalogPromoteScope.recordIDs(selection: selectedIDs, visibleRows: tableData)
                           }))
+            // File ▸ Get Media Info ⌘I (2026-10-07): one highlighted file
+            // while this table has the keyboard. CatalogInfoCommand.swift.
+            .focusedValue(\.catalogFileInfo,
+                          CatalogFileInfo(isAvailable: selectedIDs.count == 1, perform: {
+                              guard selectedIDs.count == 1, let id = selectedIDs.first,
+                                    let rec = model.record(forID: id) else { return }
+                              presentMediaInfo(for: rec)
+                          }))
             // NO .onKeyPress here (Rick 2026-10-05: "still can't arrow up and
             // down in cat view"). A key handler on the Table wrapped it in
             // SwiftUI's own focus handling, so ↑/↓ never reached the table's

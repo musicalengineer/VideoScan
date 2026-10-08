@@ -320,10 +320,18 @@ final class VerifyAudioJob: @MainActor MediaFileOperationJob {
         // diagnosis runs. Commit onto the current catalog object by UUID.
         let currentRecord = model?.records.first(where: { $0.id == record.id })
             ?? record
-        currentRecord.audioVerifyStatus = diagnosis.persistedStatus
-        currentRecord.audioVerifyNote = diagnosis.persistedNote
-        currentRecord.audioVerifyDate = Date()
+        Self.write(diagnosis, onto: currentRecord, at: Date())
         model?.saveCatalogDebounced()
+    }
+
+    /// THE writer of the persisted audio verdict — shared with Check Media
+    /// (2026-10-07) so `audioVerifyStatus/Note/Date` keep one meaning for
+    /// every reader (Angel, readiness, copy family, red rows). Only ever
+    /// called with a complete diagnosis.
+    static func write(_ diagnosis: AudioVerifyDiagnosis, onto record: VideoRecord, at date: Date) {
+        record.audioVerifyStatus = diagnosis.persistedStatus
+        record.audioVerifyNote = diagnosis.persistedNote
+        record.audioVerifyDate = date
     }
 
     // MARK: Finish helpers

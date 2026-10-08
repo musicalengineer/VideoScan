@@ -102,16 +102,8 @@ struct MFODerivedStateCancelTests {
     private func compareJob() -> PairCompareJob {
         PairCompareJob(recordA: rec("/tmp/a.mov"), recordB: rec("/tmp/b.mov"), gates: [])
     }
-    private func extractJob() -> ExtractFramesJob {
-        ExtractFramesJob(record: rec("/tmp/clip.mov"),
-                         destinationParent: FileManager.default.temporaryDirectory,
-                         gates: [])
-    }
-    private func ripJob() -> RipAllFramesJob {
-        RipAllFramesJob(record: rec("/tmp/clip.mov"),
-                        destinationParent: FileManager.default.temporaryDirectory,
-                        gates: [], options: AllFramesRipper.Options())
-    }
+    // (extractJob / ripJob fixtures retired with the two frame-extract
+    // verbs, 2026-10-07.)
 
     // The bug: Stop → SIGTERM → child exits non-zero → engine records
     // lastError → row said Failed.
@@ -127,26 +119,6 @@ struct MFODerivedStateCancelTests {
         #expect(job.state.badge.label == "Cancelled")
     }
 
-    @Test func extractCancelThenDecodeErrorIsCancelled() {
-        let job = extractJob()
-        job.ripper.isRunning = true
-        job.cancel()
-        job.ripper.lastError = "Couldn't read video"
-        job.ripper.isRunning = false
-        #expect(job.state == .cancelled, "got \(job.state)")
-        #expect(job.subtitle.hasPrefix("Cancelled"))
-    }
-
-    @Test func ripAllFramesCancelThenFfmpegErrorIsCancelled() {
-        let job = ripJob()
-        job.ripper.isRunning = true
-        job.cancel()
-        job.ripper.lastError = "ffmpeg exited with status 255"
-        job.ripper.isRunning = false
-        #expect(job.state == .cancelled, "got \(job.state)")
-        #expect(job.subtitle.hasPrefix("Cancelled"))
-    }
-
     // Regression: an error that landed BEFORE the user pressed Stop is a
     // real failure — cancel() on a terminal row is a no-op.
     @Test func errorBeforeCancelStaysFailed() {
@@ -155,16 +127,6 @@ struct MFODerivedStateCancelTests {
         c.cancel()
         #expect(!c.wasCancelled)
         #expect(c.state == .failed(message: "Couldn't read a.mov"))
-
-        let e = extractJob()
-        e.ripper.lastError = "Zero-duration video."
-        e.cancel()
-        #expect(e.state == .failed(message: "Zero-duration video."))
-
-        let r = ripJob()
-        r.ripper.lastError = "no video stream"
-        r.cancel()
-        #expect(r.state == .failed(message: "no video stream"))
     }
 
     // Regression: the stall watchdog is a genuine failure with an
@@ -186,8 +148,6 @@ struct MFODerivedStateCancelTests {
 
     @Test func cancelBeforeStartIsCancelled() {
         let c = compareJob(); c.cancel(); #expect(c.state == .cancelled)
-        let e = extractJob(); e.cancel(); #expect(e.state == .cancelled)
-        let r = ripJob();     r.cancel(); #expect(r.state == .cancelled)
     }
 }
 

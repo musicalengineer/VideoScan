@@ -297,7 +297,7 @@ private let copyFamilyGoldenAssessments = #"""
     - VideoScan.CopyFamilyAction.createAndPromoteCompanion
   ▿ cautions: 2 elements
     - "FFV1 720x480 29.97 fps · FLAC 2ch 48000 Hz · mkv: lossless but provenance unknown — not promoted automatically."
-    - "Audio on the recommended original has not been verified — run Verify Audio before promoting (bad or missing audio is the one thing that ruins a keeper)."
+    - "Audio on the recommended original has not been verified — run Check Media before promoting (bad or missing audio is the one thing that ruins a keeper)."
   - locationCount: 5
 ▿ VideoScan.CopyFamilyAssessment
   ▿ representations: 3 elements
@@ -386,7 +386,7 @@ private let copyFamilyGoldenAssessments = #"""
   ▿ cautions: 3 elements
     - "The original generation cannot be confirmed from metadata alone — the recommended copy is presumed, not proven."
     - "FFV1 720x480 29.97 fps · FLAC 2ch 48000 Hz · mkv: lossless but provenance unknown — not promoted automatically."
-    - "Audio on the recommended original has not been verified — run Verify Audio before promoting (bad or missing audio is the one thing that ruins a keeper)."
+    - "Audio on the recommended original has not been verified — run Check Media before promoting (bad or missing audio is the one thing that ruins a keeper)."
   - locationCount: 3
 ▿ VideoScan.CopyFamilyAssessment
   ▿ representations: 2 elements
@@ -450,7 +450,7 @@ private let copyFamilyGoldenAssessments = #"""
   ▿ cautions: 3 elements
     - "The original generation cannot be confirmed from metadata alone — the recommended copy is presumed, not proven."
     - "DVVIDEO 720x480 29.97 fps · PCM_S16LE 2ch 48000 Hz · dv: derived from a file no longer in the catalog — its source cannot be checked."
-    - "Audio on the recommended original has not been verified — run Verify Audio before promoting (bad or missing audio is the one thing that ruins a keeper)."
+    - "Audio on the recommended original has not been verified — run Check Media before promoting (bad or missing audio is the one thing that ruins a keeper)."
   - locationCount: 2
 ▿ VideoScan.CopyFamilyAssessment
   ▿ representations: 3 elements
@@ -722,7 +722,7 @@ private let copyFamilyGoldenAssessments = #"""
     - VideoScan.CopyFamilyAction.createAccessCopy
   ▿ cautions: 2 elements
     - "The original generation cannot be confirmed from metadata alone — the recommended copy is presumed, not proven."
-    - "Audio on the recommended original has not been verified — run Verify Audio before promoting (bad or missing audio is the one thing that ruins a keeper)."
+    - "Audio on the recommended original has not been verified — run Check Media before promoting (bad or missing audio is the one thing that ruins a keeper)."
   - locationCount: 2
 ▿ VideoScan.CopyFamilyAssessment
   ▿ representations: 3 elements
@@ -810,7 +810,7 @@ private let copyFamilyGoldenAssessments = #"""
     - VideoScan.CopyFamilyAction.createAndPromoteCompanion
   ▿ cautions: 2 elements
     - "More than one native encoding is present (DVVIDEO 720x480 29.97 fps · PCM_S16LE 2ch 48000 Hz · dv; DVVIDEO 720x480 29.97 fps · PCM_S16LE 2ch 48000 Hz · mov). The first is recommended; compare them before promoting."
-    - "Audio on the recommended original has not been verified — run Verify Audio before promoting (bad or missing audio is the one thing that ruins a keeper)."
+    - "Audio on the recommended original has not been verified — run Check Media before promoting (bad or missing audio is the one thing that ruins a keeper)."
   - locationCount: 3
 ▿ VideoScan.CopyFamilyAssessment
   - representations: 0 elements
