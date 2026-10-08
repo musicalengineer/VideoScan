@@ -123,7 +123,6 @@ struct CatalogRowMenuTextTests {
         #expect(T.restoreToCatalog(count: 1) == "Restore to Catalog")
         #expect(T.putBackInCatalog(count: 1) == "Put Back in Catalog")
         #expect(T.restoreOriginals(count: 1) == "Restore Original (Un-supersede)")
-        #expect(T.repairDamagedAudio(count: 1) == "Repair Damaged Audio")
         #expect(T.confirmRepairs(count: 1) == "Sounds Good — Confirm Repair")
     }
 
@@ -134,7 +133,6 @@ struct CatalogRowMenuTextTests {
         #expect(T.restoreToCatalog(count: 4) == "Restore 4 to Catalog")
         #expect(T.putBackInCatalog(count: 5) == "Put 5 Back in Catalog")
         #expect(T.restoreOriginals(count: 6) == "Restore 6 Originals (Un-supersede)")
-        #expect(T.repairDamagedAudio(count: 7) == "Repair Damaged Audio (7 Files)")
         #expect(T.confirmRepairs(count: 8) == "Sounds Good — Confirm 8 Repairs")
     }
 

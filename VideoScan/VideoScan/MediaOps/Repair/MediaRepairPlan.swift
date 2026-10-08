@@ -118,6 +118,7 @@ enum MediaRepairMenuState: Equatable {
     var help: String {
         switch self {
         case .verifyFirst: return "Not verified yet — Repair offers a Verify first so it can recommend what to fix (or a lossless re-wrap now). Your original is never changed."
+        case .ready(count: 0): return "Link a copy you repaired yourself, or confirm a repaired copy that sounds right."
         case .ready: return "Show this file's report card and the fixes it offers. Every fix writes a NEW file; your original is never changed."
         case .disabled(let why): return why
         }
@@ -164,10 +165,49 @@ enum MediaRepairPlan {
                          unavailableReason: originalProtected ? protectedSoundReason : nil)
     }
 
+    /// Every fix, for the sheet's "More repairs": the ones the card earned
+    /// (ticked by default) first, then the rest — each available or not,
+    /// with the reason in plain words. A fix nothing asked for is offered
+    /// only where it can't hurt a file that plays properly: remux always,
+    /// rebuilt sound when there is sound, balance only with a channel
+    /// measurement; removing repeated frames never (it would cut real
+    /// stills). O(rows).
+    static func allOffers(for card: MediaReportCard?, sound: MediaRepairSoundFacts,
+                          hasPicture: Bool, hasSound: Bool) -> [MediaRepairOffer] {
+        let earned = card.map { offers(for: $0, sound: sound, originalProtected: false) }
+            ?? [MediaRepairOffer(fix: .remux, answers: nil, unavailableReason: nil)]
+        let present = Set(earned.map(\.fix))
+        let more = MediaRepairRecipe.order.filter { !present.contains($0) }.map {
+            MediaRepairOffer(fix: $0, answers: nil,
+                             unavailableReason: moreRepairsReason($0, card: card, sound: sound,
+                                                                  hasPicture: hasPicture, hasSound: hasSound))
+        }
+        return earned + more
+    }
+
+    static func moreRepairsReason(_ fix: MediaRepairFix, card: MediaReportCard?, sound: MediaRepairSoundFacts,
+                                  hasPicture: Bool, hasSound: Bool) -> String? {
+        switch fix {
+        case .remux: return nil
+        case .removeRepeatedFrames:
+            guard hasPicture else { return "This file has no picture." }
+            return card == nil
+                ? "Verify the file first — only Verify can tell repeated frames from real stills."
+                : "Verify didn't find repeated frames; removing them from this file would cut real still moments."
+        case .rebuildAudio:
+            return hasSound ? nil : "This file has no sound."
+        case .balanceAudio:
+            guard hasSound else { return "This file has no sound." }
+            return sound.canBalance ? nil : "Needs a full Verify that measures each sound channel first."
+        }
+    }
+
     /// Repair… in the row menu. `card` is the record's card (nil = never
     /// verified); a card for a different file size is stale = no card.
+    /// `lifecycle` = the sheet has a Link / Confirm action for this file,
+    /// which keeps the item enabled even when there is nothing to fix.
     static func menuState(card: MediaReportCard?, fileSizeBytes: Int64, sound: MediaRepairSoundFacts,
-                          reachable: Bool, selectionCount: Int) -> MediaRepairMenuState {
+                          reachable: Bool, selectionCount: Int, lifecycle: Bool = false) -> MediaRepairMenuState {
         guard selectionCount == 1 else {
             return .disabled(help: "Repair works on one file at a time — select a single file.")
         }
@@ -176,8 +216,9 @@ enum MediaRepairPlan {
         }
         guard let card, card.isCurrent(forSizeBytes: fileSizeBytes) else { return .verifyFirst }
         let fixes = offers(for: card, sound: sound, originalProtected: false).filter { $0.answers != nil }
-        guard !fixes.isEmpty else {
-            return .disabled(help: "The last Verify found nothing Repair can fix. Run a full Verify to look deeper.")
+        if fixes.isEmpty {
+            return lifecycle ? .ready(count: 0)
+                : .disabled(help: "The last Verify found nothing to repair — the file plays properly. Run a full Verify to look deeper.")
         }
         return .ready(count: fixes.count)
     }

@@ -225,6 +225,24 @@ struct MediaRepairJobTests {
         #expect(MediaRepairSelection.streamLines(MediaRepairRecipe(fixes: [], balance: nil), picture: nil).isEmpty)
     }
 
+    /// "More repairs" lists every fix, each with a reason when it can't be
+    /// used; removing repeated frames is never offered unless Verify found
+    /// them (it would cut real stills from a file that plays properly).
+    @Test func moreRepairsListsEveryFix_withHonestAvailability() {
+        let clean = MediaReportCard(tier: .quick, checkedAt: Date(), fileSizeBytes: 1, headline: "",
+                                    checks: [MediaCheck(kind: .layout, verdict: .ok, sentence: "fine")])
+        let all = MediaRepairPlan.allOffers(for: clean, sound: MediaRepairSoundFacts(), hasPicture: true, hasSound: true)
+        #expect(Set(all.map(\.fix)) == Set(MediaRepairFix.allCases))
+        let byFix = Dictionary(uniqueKeysWithValues: all.map { ($0.fix, $0) })
+        #expect(byFix[.remux]?.isAvailable == true)
+        #expect(byFix[.rebuildAudio]?.isAvailable == true)
+        #expect(byFix[.balanceAudio]?.unavailableReason?.contains("measures each sound channel") == true)
+        #expect(byFix[.removeRepeatedFrames]?.unavailableReason?.contains("real still") == true)
+        #expect(MediaRepairSelection(offers: all).chosen.isEmpty, "nothing earned, nothing ticked")
+        let silent = MediaRepairPlan.allOffers(for: nil, sound: MediaRepairSoundFacts(), hasPicture: true, hasSound: false)
+        #expect(silent.first { $0.fix == .rebuildAudio }?.unavailableReason == "This file has no sound.")
+    }
+
     /// Repair means "play properly" (Rick 2026-10-08): no Repair wording
     /// promises to improve or enhance, or claims a full verification.
     @Test func repairWordingNeverSaysImproveOrEnhance() {

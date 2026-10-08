@@ -159,7 +159,7 @@ extension CatalogContent {
 
         openItems(rec: rec)
         Divider()
-        mediaCheckMenuItems(rec: rec, activeRecs: selection.active, pureActive: selection.pureActive)
+        mediaCheckMenuItems(rec: rec, activeRecs: selection.active)
         Divider()
         processItems(rec: rec, selection: selection, transcodeRunning: transcodeRunning)
         Divider()

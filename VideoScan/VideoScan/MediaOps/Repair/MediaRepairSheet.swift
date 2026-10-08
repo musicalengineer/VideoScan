@@ -24,6 +24,8 @@ struct MediaRepairSheetRequest: Identifiable {
     let audioDiagnosis: AudioVerifyDiagnosis?
     /// Hand off to Verify… (after this sheet starts dismissing).
     let onVerify: () -> Void
+    /// Select a row in the catalog (after Link Repaired Copy…).
+    var onSelectRecord: (UUID) -> Void = { _ in }
 }
 
 struct MediaRepairSheet: View {
@@ -58,15 +60,14 @@ struct MediaRepairSheet: View {
     private var balance: MediaRepairBalanceInput? { MediaRepairBalanceInput(diagnosis: request.audioDiagnosis) }
     private var recipe: MediaRepairRecipe { selection.recipe(balance: balance) }
 
+    /// Every fix: the card's earned ones first (ticked), then "More
+    /// repairs", each available or not with the reason.
     static func offers(for request: MediaRepairSheetRequest) -> [MediaRepairOffer] {
         let r = request.record
-        guard let card = r.mediaReportCard, card.isCurrent(forSizeBytes: r.sizeBytes) else {
-            return [MediaRepairOffer(fix: .remux, answers: nil, unavailableReason: nil)]
-        }
-        // The one pass writes wherever the destination rule says, so a
-        // protected original no longer disables the sound fixes.
-        return MediaRepairPlan.offers(for: card, sound: MediaRepairSoundFacts(diagnosis: request.audioDiagnosis),
-                                      originalProtected: false)
+        let card = r.mediaReportCard.flatMap { $0.isCurrent(forSizeBytes: r.sizeBytes) ? $0 : nil }
+        return MediaRepairPlan.allOffers(for: card, sound: MediaRepairSoundFacts(diagnosis: request.audioDiagnosis),
+                                         hasPicture: r.streamType == .videoAndAudio || r.streamType == .videoOnly,
+                                         hasSound: r.streamType == .videoAndAudio || r.streamType == .audioOnly)
     }
 
     var body: some View {
@@ -105,7 +106,19 @@ struct MediaRepairSheet: View {
         }
         GroupBox("What Repair will do") {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(selection.offers) { offer in fixRow(offer) }
+                ForEach(selection.offers.filter { $0.answers != nil }) { offer in fixRow(offer) }
+                if selection.offers.allSatisfy({ $0.answers == nil }) {
+                    Text("Nothing is ticked yet — Verify recommends what this file needs.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+                DisclosureGroup("More repairs") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        ForEach(selection.offers.filter { $0.answers == nil }) { offer in fixRow(offer) }
+                    }
+                    .padding(.top, 6)
+                }
+                .font(.callout)
+                .accessibilityIdentifier("repair.moreRepairs")
                 Text(selection.isRecommendation ? "Ticked: VideoScan's recommendation." : "You changed the recommendation.")
                     .font(.callout).foregroundStyle(.secondary)
             }
@@ -114,6 +127,7 @@ struct MediaRepairSheet: View {
         }
         streamsBox
         destinationBox
+        MediaRepairLifecycleSection(record: record, onSelectRecord: request.onSelectRecord)
         DisclosureGroup("The same steps by hand (for reference)") {
             ForEach(MediaRepairAdvice.manualSteps(recipe, sourceName: record.filename), id: \.self) { step in
                 Text(step).font(.callout.monospaced()).textSelection(.enabled)
@@ -312,6 +326,82 @@ struct MediaRepairRunningView: View {
         case .finished: return "checkmark.circle"
         case .cancelled: return "stop.circle"
         default: return "exclamationmark.triangle"
+        }
+    }
+}
+
+/// The repair lifecycle, behind the same door (Rick 2026-10-08): link a
+/// copy repaired with another tool, or confirm a repaired copy that sounds
+/// right. Same model calls the row menu used; nothing new is decided here.
+struct MediaRepairLifecycleSection: View {
+    @EnvironmentObject private var model: VideoScanModel
+    @Environment(\.dismiss) private var dismiss
+    let record: VideoRecord
+    let onSelectRecord: (UUID) -> Void
+
+    /// Link Repaired Copy… — for a file whose sound Verify called damaged
+    /// (the menu item's old condition), not itself a repaired copy.
+    private var canLink: Bool {
+        record.derivedFrom == nil && !CatalogRowMenuRules.damagedAudio([record]).isEmpty
+    }
+
+    /// Confirm — this file IS a repaired copy awaiting "Sounds Good".
+    private var canConfirm: Bool {
+        record.isAwaitingConfirmation && record.derivedFrom.flatMap { model.record(forID: $0) } != nil
+    }
+
+    var body: some View {
+        if canLink || canConfirm {
+            GroupBox("Repaired copies") {
+                VStack(alignment: .leading, spacing: 8) {
+                    if canConfirm {
+                        Button(CatalogRowMenuText.confirmRepairs(count: 1)) {
+                            _ = model.confirmRepairs(repairIDs: [record.id])
+                            dismiss()
+                        }
+                        .accessibilityIdentifier("catalog.row.confirmRepair")
+                        Text("You've listened and it sounds right: keep this repaired copy as the one to use. The original is hidden from the everyday view — never deleted — and your tags, notes, people and ratings carry over.")
+                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    if canLink {
+                        Button("Link Repaired Copy\u{2026}") { link() }
+                            .accessibilityIdentifier("catalog.row.linkRepairedCopy")
+                        Text("Already repaired this file with another tool? Pick that file and it joins the catalog as this one's repaired copy — then confirm it when it sounds right.")
+                            .font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(4)
+            }
+        }
+    }
+
+    /// Pick the externally repaired file and adopt it (GH #132 P4 — the
+    /// handler that lived in the row menu, unchanged). Failures alert
+    /// with the model's message and change nothing.
+    private func link() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.message = "Choose the repaired copy of \(record.filename)"
+        panel.prompt = "Link Repaired Copy"
+        panel.directoryURL = URL(fileURLWithPath: record.directory, isDirectory: true)
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let originalID = record.id
+        Task { @MainActor in
+            do {
+                let newRec = try await model.adoptExternalRepair(originalID: originalID, fileURL: url)
+                onSelectRecord(newRec.id)
+                dismiss()
+            } catch {
+                let alert = NSAlert()
+                alert.messageText = "Couldn't Link the Repaired Copy"
+                alert.informativeText = error.localizedDescription
+                alert.alertStyle = .warning
+                alert.addButton(withTitle: "OK")
+                alert.runModal()
+            }
         }
     }
 }

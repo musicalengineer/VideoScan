@@ -16883,6 +16883,7 @@
         "cancelled_rowSaysStopped_noBookkeeping",
         "comparisonNeverClaimsAFixItCouldNotRecheck",
         "failed_rowSaysOriginalUntouched_andWhereTheCopyWasKept",
+        "moreRepairsListsEveryFix_withHonestAvailability",
         "progressNeverRunsBackwards_andTheWriteDominates",
         "refused_targetTaken_rowSaysNotStarted_noBookkeeping",
         "repairWordingNeverSaysImproveOrEnhance",

@@ -70,6 +70,17 @@ struct CatalogRowMenuLayoutSensorTests {
         let verify = try #require(group.range(of: "checkMediaMenuItem("))
         let repair = try #require(group.range(of: "repairMenuItem("))
         #expect(info.lowerBound < verify.lowerBound && verify.lowerBound < repair.lowerBound)
+        // One door: the repair lifecycle lives in the Repair sheet now
+        // (code only — comments may keep the history).
+        let code = group.split(separator: "\n").filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
+        for gone in ["confirmRepairs(", "Link Repaired Copy", "startVerifyAudio(", "autoRepair:"] {
+            #expect(!code.contains(gone), "\(gone) moved behind Repair…")
+        }
+        let sheet = try SourceTree.appSource(named: "MediaRepairSheet.swift")
+        for kept in ["catalog.row.confirmRepair", "catalog.row.linkRepairedCopy", "adoptExternalRepair(", "confirmRepairs("] {
+            #expect(sheet.contains(kept), "\(kept) lives in the Repair sheet")
+        }
     }
 
     /// Repair… is enabled for one connected file (Verify first when there
@@ -86,6 +97,9 @@ struct CatalogRowMenuLayoutSensorTests {
         #expect(!MediaRepairPlan.menuState(card: clean, fileSizeBytes: 10, sound: none, reachable: true, selectionCount: 1).isEnabled)
         #expect(!MediaRepairPlan.menuState(card: layout, fileSizeBytes: 10, sound: none, reachable: false, selectionCount: 1).isEnabled)
         #expect(!MediaRepairPlan.menuState(card: layout, fileSizeBytes: 10, sound: none, reachable: true, selectionCount: 2).isEnabled)
+        // Nothing to fix, but a copy to link / confirm: still the door.
+        #expect(MediaRepairPlan.menuState(card: clean, fileSizeBytes: 10, sound: none, reachable: true,
+                                          selectionCount: 1, lifecycle: true) == .ready(count: 0))
     }
 
     /// No user-visible string literal in the app still says the old verbs

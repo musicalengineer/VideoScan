@@ -101,9 +101,6 @@ enum CatalogRowMenuText {
     static func restoreOriginals(count: Int) -> String {
         count > 1 ? "Restore \(count) Originals (Un-supersede)" : "Restore Original (Un-supersede)"
     }
-    static func repairDamagedAudio(count: Int) -> String {
-        count > 1 ? "Repair Damaged Audio (\(count) Files)" : "Repair Damaged Audio"
-    }
     static func confirmRepairs(count: Int) -> String {
         count > 1 ? "Sounds Good — Confirm \(count) Repairs" : "Sounds Good — Confirm Repair"
     }
@@ -203,8 +200,8 @@ enum CatalogRowMenuRules {
     // Family Music… item, 2026-10-07 — Rick: "this app is not going to
     // track Rick's Music". Existing marks stay on records, inert.)
 
-    /// Rows Repair Damaged Audio acts on: the reachable rows whose last
-    /// sound check (Verify Audio, now Check Media) said damaged.
+    /// Rows whose last sound check (Verify Audio, now Verify) said
+    /// damaged — the Repair sheet offers Link Repaired Copy… for these.
     static func damagedAudio(_ verifiable: [VideoRecord]) -> [VideoRecord] {
         verifiable.filter { $0.audioVerifyStatus == "damaged" }
     }
