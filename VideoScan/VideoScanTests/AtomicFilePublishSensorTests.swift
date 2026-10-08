@@ -237,8 +237,9 @@ struct AtomicFilePublishSensorTests {
             "VideoScan/VideoScan/MediaOps/RescueFileCopier.swift",
             // rebases a symlink atomically (People #3, codex review 2026-09-13)
             "VideoScan/VideoScan/People/POIStorage.swift",
-            // publishes a validated CyberBrain archive
-            "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainWriter.swift",
+            // publishes a validated CyberBrain archive (moved out of
+            // CyberBrainWriter.swift by the 7b919780 split, 2026-10-07)
+            "VideoScan/VideoScanCore/Sources/VideoScanCore/CyberBrainWriter+Persistence.swift",
             // CombineOutputPublish.swift REMOVED (codex #1642, 2026-09-23):
             // its bare rename(2) onto an lstat-checked placeholder overwrote
             // a second writer in the check→rename window. Media publishes

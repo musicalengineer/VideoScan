@@ -100,7 +100,8 @@ class AllModeTests(unittest.TestCase):
         os.remove(pathlib.Path(self.root, md.MANIFEST))
         self.assertEqual(md.main(['--all', '--root', self.root]), 1)
 
-    @unittest.skipUnless(shutil.which('swift') and INVENTORY.exists(), 'needs swift for the parity check')
+    @unittest.skipUnless(sys.platform == 'darwin' and shutil.which('swift') and INVENTORY.exists(),
+                         'macOS-only: inventory.swift imports Darwin; the Python CI runner is Linux')
     def test_same_file_set_as_inventory_swift(self):
         out = subprocess.run(['swift', str(INVENTORY), '--discover', self.root],
                              capture_output=True, text=True, timeout=300)

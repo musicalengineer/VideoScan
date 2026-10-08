@@ -594,7 +594,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         // pair's own freshly created `VS_<uuid>` staging dir.
         "VideoScan/MediaOps/VideoScanModel+Combine.swift": 1, "VideoScan/MediaOps/VideoScanModel+JunkDelete.swift": 2,
         "VideoScan/Media/VideoScanModel+ProbeEngine.swift": 1, "VideoScan/Catalog/VideoScanModel+Workbench.swift": 1,
-        "VideoScanCore/AtomicFilePublish.swift": 2, "VideoScanCore/CyberBrainWriter.swift": 3,
+        "VideoScanCore/AtomicFilePublish.swift": 2,
+        // CyberBrainWriter.swift → CyberBrainWriter+Persistence.swift (7b919780, 2026-10-07):
+        // the same 3 calls moved verbatim with the writer split — the temp file after a
+        // failed write, the probe root, and a stale lock — none touches media.
+        "VideoScanCore/CyberBrainWriter+Persistence.swift": 3,
         "VideoScanCore/FFmpegFrameRip.swift": 1, "VideoScanCore/FamilyGraphCompiledStore.swift": 5,
         "VideoScanCore/PreviewDiskCache.swift": 4,
     ]
@@ -632,8 +636,8 @@ struct ArchiveVolumeProtectionSourceSensor {
             "repairs a KNOWN-INCOMPLETE earlier rescue copy (previousSize != nil) by renaming the verified partial over it; a fresh destination uses RENAME_EXCL"),
         "VideoScanCore/AtomicFilePublish.swift": Reviewed(count: 1, reason:
             "the app-wide atomic save for sidecars/stores (never RENAME_SWAP); callers publish app data, not catalogued media"),
-        "VideoScanCore/CyberBrainWriter.swift": Reviewed(count: 1, reason:
-            "publishes CyberBrain's own knowledge file from its temp; app data"),
+        "VideoScanCore/CyberBrainWriter+Persistence.swift": Reviewed(count: 1, reason:
+            "publishes CyberBrain's own knowledge file from its temp; app data (moved from CyberBrainWriter.swift with the 7b919780 split)"),
     ]
 
     /// No-clobber renames (`renamex_np` / `renameatx_np` WITH RENAME_EXCL)
