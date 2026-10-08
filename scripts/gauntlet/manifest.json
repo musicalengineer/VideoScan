@@ -6675,11 +6675,11 @@
         "CatalogRowMenuLayoutSensorTests"
       ],
       "tests": [
-        "bothRemoveItemsSitInTheBottomGroup",
         "deleteFileIsDisabledForAProtectedRecordAndEnabledForANormalOne",
         "deleteFileStateTruthTable",
         "groupsAppearInOrderWithASeparatorBetweenEach",
         "inspectGroupReadsGetInfoVerifyRepair",
+        "oneRemoveItemSitsInTheBottomGroup",
         "renamedLabels",
         "repairMenuStateTruthTable",
         "theDisabledItemNeverActs",

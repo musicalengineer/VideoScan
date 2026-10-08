@@ -172,7 +172,7 @@ extension CatalogContent {
         Divider()
         findItems(rec: rec, pureActive: selection.pureActive)
         Divider()
-        removeAndDeleteItems(activeRecs: selection.active, pureActive: selection.pureActive,
+        removeAndDeleteItems(activeRecs: selection.active,
                              deletableRecs: deletableRecs)
 
         restoreItems(purgedRecs: selection.purged,
@@ -234,15 +234,16 @@ extension CatalogContent {
         }
     }
 
-    /// The bottom group (Rick 2026-10-08): Remove from Catalog (hide the
-    /// rows), Remove from Catalog (keep files) — moved down from the
-    /// archive group, label and behaviour unchanged — and the Delete File
-    /// submenu (Move to Trash / Delete Permanently…). The destructive
+    /// The bottom group (Rick 2026-10-08): ONE Remove from Catalog (hide
+    /// the rows; Show Removed brings them back) and the Delete File
+    /// submenu (Move to Trash / Delete Permanently…). "Remove from Catalog
+    /// (keep files)" left the row menu the same day — the set-aside model,
+    /// Show ▸ Set-aside files and Put Back are unchanged. The destructive
     /// scope is still exactly `deletableRecs`, the right-click-time
     /// snapshot the dispatcher takes; only how an EMPTY scope shows changed
     /// (disabled with the reason, `CatalogDeleteFileItem`).
     @ViewBuilder
-    private func removeAndDeleteItems(activeRecs: [VideoRecord], pureActive: Bool,
+    private func removeAndDeleteItems(activeRecs: [VideoRecord],
                                       deletableRecs: [VideoRecord]) -> some View {
         // Remove from Catalog — visible when the selection
         // contains at least one active row. The label and the
@@ -260,8 +261,6 @@ extension CatalogContent {
             }
             .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
         }
-
-        removeFromCatalogMenuItem(activeRecs: activeRecs, pureActive: pureActive)
 
         // Delete File — per-row parity with the triage window's
         // batch path (Rick 2026-06-15). Move to Trash is

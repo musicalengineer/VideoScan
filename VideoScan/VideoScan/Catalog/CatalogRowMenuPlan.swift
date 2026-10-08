@@ -133,7 +133,7 @@ enum CatalogRowMenuGroup: CaseIterable {
     case describe
     /// The Find verbs · Find ▸ · Copy Path
     case find
-    /// Remove from Catalog · Remove from Catalog (keep files) · Delete File ▸
+    /// Remove from Catalog · Delete File ▸
     case remove
 
     /// The builder function that emits this group (the sensor's anchor).

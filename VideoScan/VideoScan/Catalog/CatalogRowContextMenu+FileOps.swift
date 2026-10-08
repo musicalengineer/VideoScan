@@ -209,8 +209,8 @@ extension CatalogContent {
     }
 
     /// The `.archive` group: Promote to Archive, the Archive Angel items.
-    /// (Remove from Catalog (keep files) moved to the bottom group,
-    /// 2026-10-08.)
+    /// (Remove from Catalog (keep files) moved to the bottom group, then
+    /// left the row menu, 2026-10-08.)
     @ViewBuilder
     func archiveItems(activeRecs: [VideoRecord],
                       pureActive: Bool, transcodeRunning: Bool) -> some View {

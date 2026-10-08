@@ -120,22 +120,27 @@ struct CatalogRowMenuLayoutSensorTests {
         #expect(hits.isEmpty, "\(hits)")
     }
 
-    /// Both Remove items live in the bottom group, above Delete File; the
-    /// keep-files one left the archive group.
-    @Test func bothRemoveItemsSitInTheBottomGroup() throws {
+    /// ONE Remove from Catalog in the bottom group, above Delete File
+    /// (Rick 2026-10-08): "Remove from Catalog (keep files)" left the row
+    /// menu; its set-aside path, Show ▸ Set-aside files and Put Back stay.
+    @Test func oneRemoveItemSitsInTheBottomGroup() throws {
         let bottom = try slice("CatalogRowContextMenu.swift",
                                from: "private func removeAndDeleteItems(", to: "private func deleteFileItem(")
         let remove = try #require(bottom.range(of: "CatalogRowMenuText.removeFromCatalog(count:"))
-        let keep = try #require(bottom.range(of: "removeFromCatalogMenuItem("))
         let delete = try #require(bottom.range(of: "switch deleteFileItem("))
-        #expect(remove.lowerBound < keep.lowerBound && keep.lowerBound < delete.lowerBound)
-        let archive = try slice("CatalogRowContextMenu+FileOps.swift",
-                                from: "func archiveItems(", to: "/// Transcribe Audio")
-        #expect(!archive.contains("removeFromCatalogMenuItem("), "moved down, not duplicated")
-        // Labels unchanged (Rick hasn't decided on renames).
+        #expect(remove.lowerBound < delete.lowerBound)
+        #expect(bottom.contains("model.purgeRecords(ids:"), "the one Remove is the purge (hide) action, unchanged")
+        #expect(!bottom.contains("removeFromCatalogMenuItem("))
+        let menu = try activeMenuBody()
+        #expect(!menu.contains("removeFromCatalogMenuItem("))
+        for file in ["CatalogRowContextMenu+FileOps.swift", "CatalogRowContextMenu+Media.swift", "CatalogContent+Promote.swift"] {
+            let src = try SourceTree.appSource(named: file)
+            #expect(!src.contains("\"Remove from Catalog (keep files)\""), "\(file) still builds the keep-files item")
+        }
         #expect(CatalogRowMenuText.removeFromCatalog(count: 1) == "Remove from Catalog")
-        let promote = try SourceTree.appSource(named: "CatalogContent+Promote.swift")
-        #expect(promote.contains("\"Remove from Catalog (keep files)\""))
+        // The set-aside path is untouched (model + Put Back).
+        let tidy = try SourceTree.appSource(named: "VideoScanModel+TidyCatalog.swift")
+        #expect(tidy.contains("func removeFromCatalog(recordIDs ids: [UUID])"))
     }
 
     // MARK: Delete File ▸ — presentation of the gate's answer
