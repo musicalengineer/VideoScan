@@ -100,20 +100,132 @@ struct CombineMuxStallTests {
     // "stalled" on every retry. The heartbeat is ANY ffmpeg line OR a change
     // in the output's size/mtime. (A truly wedged ffmpeg — no lines, no file
     // change — is still caught: silentMuxFailsAsStalled above.)
+    //
+    // Default-suite proof is DETERMINISTIC (2026-10-07): the first cut used
+    // a real 1 s wall-clock threshold, which failed in the M5's full suite
+    // under load — a flaky timing bet, not a product bug (production is
+    // 300 s). The tests below drive the production wiring
+    // (CombineEngine.makeMuxWatchdog) with a virtual clock and a fake file:
+    // no ffmpeg, no disk, no waiting. The wall-clock and 8 GB real-ffmpeg
+    // versions are opt-in (VS_HEAVY_TESTS=1) for manual / soak runs.
 
-    /// Silent for ~3 s but appending to its output every 0.1 s — the shape
-    /// of faststart's rewrite, without gigabytes of fixture.
+    /// Virtual time and a fake output file for the watchdog seam.
+    final class VirtualMux: Sendable {
+        private struct State {
+            var t: Double = 0
+            var size: Int64 = 0
+            var mtime = 0
+            var exists = true
+        }
+        private let state = OSAllocatedUnfairLock(initialState: State())
+
+        var now: Double { state.withLock { $0.t } }
+        var clock: @Sendable () -> Double { { [self] in now } }
+        var signature: @Sendable (String) -> OutputFileHeartbeat.Signature? {
+            { [self] _ in
+                state.withLock { s in
+                    s.exists ? OutputFileHeartbeat.Signature(size: s.size, mtimeSeconds: s.mtime, mtimeNanoseconds: 0) : nil
+                }
+            }
+        }
+        func advance(_ seconds: Double) { state.withLock { $0.t += seconds } }
+        func append(_ bytes: Int64) { state.withLock { $0.size += bytes; $0.mtime += 1 } }
+        /// faststart's rewrite: same size, new mtime.
+        func rewriteInPlace() { state.withLock { $0.mtime += 1 } }
+        func remove() { state.withLock { $0.exists = false } }
+    }
+
+    /// Run `seconds` of virtual time at the production sampling cadence:
+    /// each step advances the clock, applies `fileActivity`, takes one
+    /// heartbeat sample and asks the watchdog. Returns the first virtual
+    /// time the watchdog called a stall, or nil.
+    static func drive(_ dog: CombineEngine.MuxWatchdog, _ v: VirtualMux, seconds: Double,
+                      threshold: Double, fileActivity: (VirtualMux) -> Void) -> Double? {
+        let step = CombineEngine.watchIntervalSeconds(threshold: threshold)
+        var elapsed = 0.0
+        while elapsed < seconds {
+            v.advance(step); elapsed += step
+            fileActivity(v)
+            dog.heartbeat.sample()
+            if dog.monitor.evaluateStall(at: v.now) { return v.now }
+        }
+        return nil
+    }
+
+    static func virtualWatchdog(_ v: VirtualMux, threshold: Double) -> CombineEngine.MuxWatchdog {
+        let dog = CombineEngine.makeMuxWatchdog(outputPath: "/virtual/test_seam_combined.mov",
+                                                thresholdSeconds: threshold,
+                                                clock: v.clock, signature: v.signature, onStall: { _ in })
+        dog.heartbeat.sample()   // baseline, as the timer's first fire does
+        return dog
+    }
+
+    @Test("seam: no ffmpeg output, but the file keeps growing — never a stall (120 virtual s, 1 s threshold)")
+    func seamGrowingFileIsNeverAStall() {
+        let v = VirtualMux()
+        let dog = Self.virtualWatchdog(v, threshold: 1)
+        #expect(Self.drive(dog, v, seconds: 120, threshold: 1) { $0.append(8 << 20) } == nil)
+    }
+
+    @Test("seam: faststart's in-place rewrite (same size, new mtime) — never a stall")
+    func seamInPlaceRewriteIsNeverAStall() {
+        let v = VirtualMux()
+        let dog = Self.virtualWatchdog(v, threshold: 1)
+        #expect(Self.drive(dog, v, seconds: 120, threshold: 1) { $0.rewriteInPlace() } == nil)
+    }
+
+    @Test("seam: no output and no file change — a stall, at the threshold and not before")
+    func seamUntouchedFileIsAStall() {
+        let v = VirtualMux()
+        let dog = Self.virtualWatchdog(v, threshold: 1)
+        let stalledAt = Self.drive(dog, v, seconds: 10, threshold: 1) { _ in }
+        #expect(stalledAt.map { $0 >= 1.0 && $0 < 1.5 } == true, "stalled at \(String(describing: stalledAt))")
+    }
+
+    @Test("seam: writing that stops is a stall one threshold after the last change")
+    func seamWritingThatStopsIsAStall() {
+        let v = VirtualMux()
+        let dog = Self.virtualWatchdog(v, threshold: 1)
+        let stalledAt = Self.drive(dog, v, seconds: 30, threshold: 1) { $0.now <= 10 ? $0.append(1) : () }
+        #expect(stalledAt.map { $0 >= 11.0 && $0 < 11.5 } == true, "stalled at \(String(describing: stalledAt))")
+    }
+
+    @Test("seam: an output file that never appears is a stall (production 300 s threshold)")
+    func seamMissingFileIsAStall() {
+        let v = VirtualMux()
+        v.remove()
+        let dog = Self.virtualWatchdog(v, threshold: 300)
+        let stalledAt = Self.drive(dog, v, seconds: 600, threshold: 300) { _ in }
+        #expect(stalledAt.map { $0 >= 300 && $0 < 300 + CombineEngine.watchIntervalSeconds(threshold: 300) + 0.001 } == true,
+                "stalled at \(String(describing: stalledAt))")
+    }
+
+    // MARK: Opt-in: wall-clock and real-ffmpeg (VS_HEAVY_TESTS=1)
+    //
+    // Never in the default suite or the nightly. Run by hand or in a soak:
+    //   xcodebuild test … TEST_RUNNER_VS_HEAVY_TESTS=1 -only-testing:VideoScanTests/CombineMuxStallTests
+    // (the TEST_RUNNER_ prefix is how xcodebuild passes an env var to the
+    // test host).
+
+    nonisolated static var heavyTestsEnabled: Bool {
+        ProcessInfo.processInfo.environment["VS_HEAVY_TESTS"] == "1"
+    }
+
+    /// Silent for ~8 s but appending to its output every 0.1 s — the shape
+    /// of faststart's rewrite, without gigabytes of fixture, on a real
+    /// process and the real timer. Wall-clock, so opt-in.
     static func silentWriterFFmpeg(in dir: URL, real: String) throws -> URL {
         try script("""
         case "$*" in *-movflags*test_silentwrite_*) ;; *) exec "\(real)" "$@" ;; esac
         for out; do :; done
         i=0
-        while [ $i -lt 30 ]; do head -c 65536 /dev/zero >> "$out"; sleep 0.1; i=$((i+1)); done
+        while [ $i -lt 80 ]; do head -c 65536 /dev/zero >> "$out"; sleep 0.1; i=$((i+1)); done
         exit 0
         """, named: "ffmpeg", in: dir)
     }
 
-    @Test("an ffmpeg that prints nothing but keeps writing its output is not a stall")
+    @Test("an ffmpeg that prints nothing but keeps writing its output is not a stall",
+          .enabled(if: CombineMuxStallTests.heavyTestsEnabled, "wall-clock: opt-in with VS_HEAVY_TESTS=1"))
     func silentButWritingIsNotAStall() async throws {
         let real = ToolLocator.ffmpegPath
         try #require(FileManager.default.isExecutableFile(atPath: real), "ffmpeg not found")
@@ -129,28 +241,31 @@ struct CombineMuxStallTests {
         let result = await CombineEngine.runFFMpeg(
             videoPath: root.appendingPathComponent("test_silentwrite_v.mov").path,
             audioPath: root.appendingPathComponent("test_silentwrite_a.wav").path,
-            outputPath: out.path, stallThresholdSeconds: 1.0, log: { _ in })
+            outputPath: out.path, stallThresholdSeconds: 3.0, log: { _ in })
         let elapsed = Date().timeIntervalSince(started)
 
-        #expect(elapsed > 2.0, "the fake must stay silent well past the 1 s threshold (ran \(elapsed) s)")
+        #expect(elapsed > 6.0, "the fake must stay silent well past the 3 s threshold (ran \(elapsed) s)")
         #expect(result.stallReason == nil, "a silent-but-writing ffmpeg was killed: \(result.stallReason ?? "")")
         #expect(result.success)
     }
 
     /// QA's real-media pin. Writes ~8 GB (a 3.9 GB rawvideo source and its
-    /// mux), so it is off on GitHub runners and when the temp volume is short
-    /// of space; on Rick's fleet it runs.
+    /// mux): opt-in only, never on GitHub runners, and only with 20 GB free.
     nonisolated static var heavyFaststartAllowed: Bool {
-        guard ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true" else { return false }
+        guard heavyTestsEnabled, ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] != "true" else { return false }
         let tmp = FileManager.default.temporaryDirectory
         let free = (try? tmp.resourceValues(forKeys: [.volumeAvailableCapacityForImportantUsageKey]))?
             .volumeAvailableCapacityForImportantUsage ?? 0
         return free > 20_000_000_000
     }
 
+    /// QA's 1 s. Meaningful on a slow drive, where the rewrite outlasts it;
+    /// a timing bet on a loaded machine — which is why the test is opt-in.
+    static let faststartThreshold: Double = 1.0
+
     @Test("faststart's silent second pass is not a stall",
           .enabled(if: CombineMuxStallTests.heavyFaststartAllowed,
-                   "writes ~8 GB: skipped on GitHub runners and below 20 GB free"))
+                   "writes ~8 GB: opt-in with VS_HEAVY_TESTS=1; never on GitHub runners or below 20 GB free"))
     func faststartPassIsNotAStall() async throws {
         try #require(H.toolsPresent, "ffmpeg/ffprobe not found")
         let root = try H.makeDir("faststart")
@@ -170,18 +285,26 @@ struct CombineMuxStallTests {
         let result = await CombineEngine.runFFMpeg(
             videoPath: video.path, audioPath: audio.path, outputPath: out.path,
             durationSeconds: 50, onProgress: { _ in stamp() },
-            stallThresholdSeconds: 1.0, log: { _ in stamp() })
+            stallThresholdSeconds: Self.faststartThreshold, log: { _ in stamp() })
         let times = stamps.withLock { $0 }.sorted() + [Date()]
         let longestSilence = zip(times, times.dropFirst()).map { $1.timeIntervalSince($0) }.max() ?? 0
 
         #expect(result.stallReason == nil, "faststart's rewrite was killed as a stall: \(result.stallReason ?? "")")
         #expect(result.success, "\(result.stderr.suffix(300))")
-        // Only a slow disk makes this silence outlast StallMonitor's 1 s
-        // minimum threshold: an internal M-series SSD rewrites 3.9 GB faster
-        // than that. The gap is reported so a run on a slow drive shows that
-        // the file heartbeat (not a line) carried the mux through. The
-        // always-on pin is silentButWritingIsNotAStall.
-        print("faststartPassIsNotAStall: longest silence between ffmpeg lines \(String(format: "%.2f", longestSilence)) s (threshold 1.0 s)")
+        // On an internal M-series SSD the rewrite of 3.9 GB is silent for
+        // 0.06–0.6 s idle and ~3.6 s with the machine loaded; only a slow
+        // drive outlasts the threshold, and then the file heartbeat (not a
+        // line) carries the mux through. The gap is reported for that
+        // reason. The always-on pins are the seam tests above.
+        print("faststartPassIsNotAStall: longest silence between ffmpeg lines \(String(format: "%.2f", longestSilence)) s (threshold \(Self.faststartThreshold) s)")
+    }
+
+    @Test("the watchdog and heartbeat sample at least four times per window")
+    func watchIntervalSamplesEveryWindow() {
+        for threshold in [1.0, 2.0, 3.0, 5.0, 30.0, 60.0, 300.0, 600.0] {
+            let interval = CombineEngine.watchIntervalSeconds(threshold: threshold)
+            #expect(interval * 4 <= threshold, "threshold \(threshold): interval \(interval)")
+        }
     }
 
     @Test("the output heartbeat sees size and mtime changes, and nothing for an untouched file")

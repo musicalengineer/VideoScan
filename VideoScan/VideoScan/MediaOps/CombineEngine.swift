@@ -131,10 +131,8 @@ enum CombineEngine {
     ) async -> (result: ProcessRunner.Result, stalledAfterSeconds: Double?) {
         let label = (outputPath as NSString).lastPathComponent
         let watch = OSAllocatedUnfairLock(initialState: MuxWatch())
-        let monitor = stallThresholdSeconds.map { threshold in
-            StallMonitor(label: "combine mux \(label)",
-                         thresholdSeconds: threshold,
-                         pollIntervalSeconds: watchIntervalSeconds(threshold: threshold)) { silentFor in
+        let watchdog = stallThresholdSeconds.map { threshold in
+            makeMuxWatchdog(outputPath: outputPath, thresholdSeconds: threshold) { silentFor in
                 let task = watch.withLock { state -> Task<ProcessRunner.Result, Never>? in
                     state.stalledAfterSeconds = silentFor
                     return state.task
@@ -143,6 +141,7 @@ enum CombineEngine {
                 task?.cancel()
             }
         }
+        let monitor = watchdog?.monitor
         let executable = ffmpegPath
         let mux = Task.detached {
             await ProcessRunner.runProcess(
@@ -162,11 +161,7 @@ enum CombineEngine {
         // Stored BEFORE the watchdog starts, so a firing watchdog always
         // finds the Task to cancel.
         watch.withLock { $0.task = mux }
-        let heartbeat = monitor.map { monitor in
-            OutputFileHeartbeat(path: outputPath,
-                                intervalSeconds: watchIntervalSeconds(threshold: stallThresholdSeconds ?? 0),
-                                onChange: { monitor.tick() })
-        }
+        let heartbeat = watchdog?.heartbeat
         monitor?.start()
         heartbeat?.start()
         let result = await withTaskCancellationHandler {
@@ -177,6 +172,35 @@ enum CombineEngine {
         heartbeat?.stop()
         monitor?.stop()
         return (result, watch.withLock { $0.stalledAfterSeconds })
+    }
+
+    /// The mux watchdog: a StallMonitor plus the output-file heartbeat that
+    /// kicks it. runWatched also kicks it on every ffmpeg line.
+    struct MuxWatchdog {
+        let monitor: StallMonitor
+        let heartbeat: OutputFileHeartbeat
+    }
+
+    /// Build the mux watchdog. The ONE wiring runWatched uses; `clock` and
+    /// `signature` are seams so a test can drive virtual time and a fake
+    /// file (CombineMuxStallTests) without ffmpeg, a disk or wall-clock waits.
+    /// Production passes neither.
+    static func makeMuxWatchdog(
+        outputPath: String,
+        thresholdSeconds: Double,
+        clock: @escaping @Sendable () -> Double = { StallMonitor.monotonicSeconds },
+        signature: @escaping @Sendable (String) -> OutputFileHeartbeat.Signature? = OutputFileHeartbeat.signature,
+        onStall: @escaping @Sendable (Double) -> Void
+    ) -> MuxWatchdog {
+        let interval = watchIntervalSeconds(threshold: thresholdSeconds)
+        let monitor = StallMonitor(label: "combine mux \((outputPath as NSString).lastPathComponent)",
+                                   thresholdSeconds: thresholdSeconds,
+                                   pollIntervalSeconds: interval,
+                                   clock: clock,
+                                   onStall: onStall)
+        let heartbeat = OutputFileHeartbeat(path: outputPath, intervalSeconds: interval,
+                                            signature: signature, onChange: { monitor.tick() })
+        return MuxWatchdog(monitor: monitor, heartbeat: heartbeat)
     }
 
     /// Poll cadence for both the watchdog and the file heartbeat: a quarter
@@ -350,16 +374,22 @@ final class OutputFileHeartbeat: @unchecked Sendable {
     private let path: String
     private let intervalSeconds: Double
     private let onChange: @Sendable () -> Void
+    private let signatureOf: @Sendable (String) -> Signature?
     private let queue = DispatchQueue(label: "Rick-Breen.VideoScan.combine-output-heartbeat", qos: .utility)
-    /// `last` is touched only on `queue`; `timer` is guarded by `lock`
+    /// `last` is touched only on `queue` (or by a test calling `sample()`
+    /// with the timer never started); `timer` is guarded by `lock`
     /// (start/stop run on the caller's thread).
     private var last: Signature?
     private let lock = NSLock()
     private var timer: DispatchSourceTimer?
 
-    init(path: String, intervalSeconds: Double, onChange: @escaping @Sendable () -> Void) {
+    /// `signature` is a test seam (a fake file); production stats the path.
+    init(path: String, intervalSeconds: Double,
+         signature: @escaping @Sendable (String) -> Signature? = OutputFileHeartbeat.signature,
+         onChange: @escaping @Sendable () -> Void) {
         self.path = path
         self.intervalSeconds = max(intervalSeconds, 0.05)
+        self.signatureOf = signature
         self.onChange = onChange
     }
 
@@ -382,8 +412,10 @@ final class OutputFileHeartbeat: @unchecked Sendable {
         source?.cancel()
     }
 
-    private func sample() {
-        let now = Self.signature(path)
+    /// One sample: kick `onChange` if size/mtime moved since the last one.
+    /// The timer calls it; a test drives it directly (never both).
+    func sample() {
+        let now = signatureOf(path)
         defer { last = now }
         if let last, now != last { onChange() }
     }
