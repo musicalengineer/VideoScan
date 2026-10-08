@@ -1,7 +1,7 @@
 {
  "note": "CCN 15 excess ratchet (Rick 2026-10-07): CI preflight (scripts/complexity_gate.py --all) fails when the tree's total excess, the sum of max(0, CCN - 15) over every function, is above `total_excess` (excess a recorded override let in is not counted). CCN is a signal, not the goal. `files` is a per-file snapshot for the error message only. `total_excess` only shrinks: the 2 AM nightly lowers it; regenerate deliberately with `scripts/complexity_metrics.py --update-ccn15-excess` and say why in the commit.",
  "threshold_ccn": 15,
- "total_excess": 2403,
+ "total_excess": 2375,
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": 13,
   "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift": 3,
@@ -154,8 +154,8 @@
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift": 70,
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesPlan.swift": 7,
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesSiblingProof.swift": 4,
-  "VideoScan/VideoScan/MediaOps/MediaFileOperations.swift": 20,
-  "VideoScan/VideoScan/MediaOps/MediaFileOperationsWindow.swift": 24,
+  "VideoScan/VideoScan/MediaOps/MediaFileOperations.swift": 11,
+  "VideoScan/VideoScan/MediaOps/MediaFileOperationsWindow.swift": 5,
   "VideoScan/VideoScan/MediaOps/MissingAudioFinder.swift": 16,
   "VideoScan/VideoScan/MediaOps/PruneApplyJob.swift": 8,
   "VideoScan/VideoScan/MediaOps/RebuildAudioJob.swift": 12,
