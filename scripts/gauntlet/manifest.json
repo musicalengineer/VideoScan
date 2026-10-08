@@ -9417,6 +9417,7 @@
         "aShownSurvivorDroppedFromTheCatalogHoldsTheMove",
         "aShownSurvivorRepointedElsewhereHoldsTheMove",
         "aSurvivorThatLeavesHoldsTheMove",
+        "aTrashFailureIsHeldAndNothingIsDeleted",
         "anOmittedIntermediateStillJoinsTheMaster",
         "bitRotInTheArchiveHoldsEverything",
         "changesAfterTheForecast",
@@ -9426,6 +9427,7 @@
         "lastCopyReadsTheArchiveInFull",
         "networkMountRefused",
         "neverExceedsTheForecast",
+        "onlyATrashFailureBecomesAHold",
         "poisonedKeepListHoldsEverything",
         "readOnlyAndBackupDrives",
         "sampledOnlyCandidateNeverMovedWithoutAMatchingRead",
@@ -27674,7 +27676,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2161,
+      "expected_floor": 2162,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

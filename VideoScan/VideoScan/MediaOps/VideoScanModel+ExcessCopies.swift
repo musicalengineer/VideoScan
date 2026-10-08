@@ -39,9 +39,11 @@
 //
 // Outcomes (PruneCopyResult): trashed · held(reason) — a keep rule, a hold,
 // a proof failure, "archive copy changed" (the archive file failed its read:
-// every copy of it is held) · failed (the Trash move threw — the file is
-// where it was) · alreadyMissing · skippedOffline. None reads as success
-// unless the file is in its drive's Trash.
+// every copy of it is held), "couldn't move it to the Trash on <drive>"
+// (the Trash move threw — the file is where it was; codex F3: a hold in this
+// lane, never a failure, never a permanent delete) · alreadyMissing ·
+// skippedOffline. None reads as success unless the file is in its drive's
+// Trash.
 //
 // Memory: the plan is O(nominated copies) — hundreds; the snapshot pass is
 // one O(records) value capture on the main actor with no allocation for a
@@ -419,10 +421,29 @@ extension VideoScanModel {
 
     // MARK: Run (one await — tests, and the job's loop body)
 
-    /// One copy, through the shared pipeline, Trash only.
+    /// One copy, through the shared pipeline, Trash only. A copy its drive
+    /// would not take to the Trash is HELD here, not failed (codex F3 /
+    /// invariant 6) — mapped in THIS lane only, so every other prune caller
+    /// keeps `pruneCopyResult` exactly as it was (invariant 5).
     func excessOneCopy(_ item: PruneItem, batch: PruneBatchState, env: ExcessLaneEnvironment,
                        hooks: PruneVerifyHooks) async -> PruneCopyOutcome {
-        await pruneOneCopy(item, batch: batch, mode: .toTrash, hooks: hooks, laneGuard: excessLaneGuard(env: env))
+        let one = await pruneOneCopy(item, batch: batch, mode: .toTrash, hooks: hooks, laneGuard: excessLaneGuard(env: env))
+        let volume = record(forID: item.copyID).map(\.volumeName).flatMap { $0.isEmpty ? nil : $0 }
+            ?? VolumeReachability.volumeName(forPath: item.path)
+        return Self.excessTrashFailureHeld(one, volume: volume)
+    }
+
+    /// `.failed` out of `pruneOneCopy` means exactly one thing: the Trash
+    /// routine's own trashItem threw (`pruneCopyResult`). The routine has
+    /// no permanent-delete fallback in `.toTrash`, so the file is where it
+    /// was: for Rick that is a HOLD with the drive and the reason — the
+    /// Trash is his safety net — never an error that ends the job. Every
+    /// other outcome passes through unchanged. Pure.
+    nonisolated static func excessTrashFailureHeld(_ one: PruneCopyOutcome, volume: String) -> PruneCopyOutcome {
+        guard case .failed(let why) = one.result else { return one }
+        return PruneCopyOutcome(result: .held("couldn't move it to the Trash on \(volume): \(why) — nothing was deleted"),
+                                readInFull: one.readInFull, archiveReadInFull: one.archiveReadInFull,
+                                carried: one.carried)
     }
 
     /// The whole run in one await: prepare → one copy at a time → the

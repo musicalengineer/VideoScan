@@ -355,6 +355,62 @@ struct ExcessCopiesApplyTests {
         #expect(exists(f.source) && exists(f.copy))
     }
 
+    /// codex F3 (2026-10-08, P2; invariant 6, Rick: the Trash is his safety
+    /// net): a drive that cannot take a copy to the Trash (no Trash, the
+    /// call fails, ExFAT/SMB quirks) HOLDS that copy, named with the drive
+    /// and the reason — never FAILED, never a fallback to a permanent
+    /// delete. The file operation is the `removeFile` seam, which stands in
+    /// for trashItem AND removeItem inside the one Trash routine: exactly
+    /// one attempt per copy, and the file still there, proves no second
+    /// (permanent) removal was tried through it.
+    @Test("codex F3: the Trash refuses a copy → HELD with the drive and the reason; nothing deleted, no second attempt")
+    func aTrashFailureIsHeldAndNothingIsDeleted() async throws {
+        let f = try await fixture("trashfail"); defer { f.cleanup() }
+        let plan = await f.model.excessCopiesPlan(env: f.env)
+        #expect(plan.offeredIDs == [f.source.id, f.copy.id])
+        let attempts = OpenCounter()
+        var h = VideoScanModel.PruneVerifyHooks(shouldCancel: { false })
+        h.removeFile = { url in
+            attempts.add(url.path)
+            throw CocoaError(.featureUnsupported)                            // "no Trash on this volume"
+        }
+        let out = await f.model.applyExcess(shown: plan, env: f.env, hooks: h)
+        #expect(out.trashed == 0 && out.failed.isEmpty, "a Trash refusal is a hold, not a failure: \(out)")
+        #expect(out.held.count == 2 && out.held.allSatisfy {
+            $0.contains("couldn't move it to the Trash on ") && $0.contains("nothing was deleted")
+        }, "\(out.held)")
+        #expect(attempts.opens(of: f.source.fullPath) == 1 && attempts.opens(of: f.copy.fullPath) == 1,
+                "one Trash attempt per copy — never a second, permanent one")
+        #expect(exists(f.source) && exists(f.copy))
+        #expect(f.source.purgedAt == nil && f.copy.purgedAt == nil)
+        await f.model.mediaLedger.waitForPendingWrites()
+        let kinds = f.model.mediaLedger.allEvents().map(\.event)
+        #expect(!kinds.contains(.copyDeleted) && !kinds.contains(.copyTrashed) && !kinds.contains(.approval), "\(kinds)")
+
+        // The MFO job: the same copies are HELD rows and the job does not end in error.
+        let job = ExcessCopiesJob(model: f.model, shown: plan, env: f.env, hooks: h)
+        job.start()
+        await job.task?.value
+        #expect(job.rows.count == 2 && job.rows.allSatisfy { $0.status == .held && $0.note.contains("nothing was deleted") },
+                "\(job.rows)")
+        if case .failed(let message) = job.state { Issue.record("a Trash refusal must not fail the job: \(message)") }
+        #expect(attempts.opens(of: f.source.fullPath) == 2 && attempts.opens(of: f.copy.fullPath) == 2, "one more attempt each, no more")
+        #expect(exists(f.source) && exists(f.copy))
+    }
+
+    @Test("codex F3: only a Trash failure becomes a hold — every other outcome passes through unchanged")
+    func onlyATrashFailureBecomesAHold() {
+        func one(_ r: VideoScanModel.PruneCopyResult) -> VideoScanModel.PruneCopyOutcome {
+            .init(result: r, readInFull: true, archiveReadInFull: true, carried: false)
+        }
+        let mapped = VideoScanModel.excessTrashFailureHeld(one(.failed("no Trash here")), volume: "test_ExFAT")
+        #expect(mapped.result == .held("couldn't move it to the Trash on test_ExFAT: no Trash here — nothing was deleted"))
+        #expect(mapped.readInFull && mapped.archiveReadInFull, "the reads still count")
+        for r: VideoScanModel.PruneCopyResult in [.trashed(bytes: 5), .held("x"), .alreadyMissing, .skippedOffline] {
+            #expect(VideoScanModel.excessTrashFailureHeld(one(r), volume: "v") == one(r))
+        }
+    }
+
     @Test("QA MINOR 4: Keep never writes over a damaged Keep list")
     func keepDoesNotRepairADamagedList() async throws {
         let f = try await fixture("keepdamaged"); defer { f.cleanup() }
