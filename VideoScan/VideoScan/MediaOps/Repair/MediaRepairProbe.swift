@@ -29,17 +29,22 @@ enum MediaRepairProbe {
     private final class TallyBox: @unchecked Sendable {
         private let lock = NSLock()
         private var tallies: [Int: MediaStreamTally]
+        private var lines = 0
 
         init(_ streams: [MediaStreamTally]) {
             tallies = Dictionary(uniqueKeysWithValues: streams.map { ($0.index, $0) })
         }
 
-        func note(_ line: String) {
-            guard let p = MediaStreamTally.parseCensusLine(line) else { return }
+        /// Counts one census line; returns how many lines so far.
+        @discardableResult
+        func note(_ line: String) -> Int {
             lock.lock(); defer { lock.unlock() }
+            lines += 1
+            guard let p = MediaStreamTally.parseCensusLine(line) else { return lines }
             tallies[p.index]?.packets += 1
             tallies[p.index]?.bytes += p.size
             tallies[p.index]?.durationTicks += p.duration
+            return lines
         }
 
         var result: [MediaStreamTally] {
@@ -60,8 +65,10 @@ enum MediaRepairProbe {
     }
 
     /// Every stream's packet tally.
+    /// `heartbeat` is called every 10,000 packets (the stall watchdog's tick).
     @concurrent
-    static func streamTallies(path: String, control: ProcessControl?) async throws -> [MediaStreamTally] {
+    static func streamTallies(path: String, control: ProcessControl?,
+                              heartbeat: (@Sendable () -> Void)? = nil) async throws -> [MediaStreamTally] {
         let ffprobe = try tool(ToolLocator.ffprobePath, "ffprobe")
         let header = await ProcessRunner.runProcess(
             executable: ffprobe, arguments: MediaRepairCommand.streamHeaderArgs(input: path),
@@ -79,13 +86,46 @@ enum MediaRepairProbe {
         })
         let census = await ProcessRunner.runProcess(
             executable: ffprobe, arguments: MediaRepairCommand.packetCensusArgs(input: path),
-            stdoutLine: { box.note($0) },
+            stdoutLine: { line in
+                if box.note(line) % 10_000 == 0 { heartbeat?() }
+            },
             stdoutLimitBytes: 0, stderrLimitBytes: 16 * 1024, control: control)
         try Task.checkCancellation()
         guard census.exitCode == 0 else {
             throw ProbeFailure(message: "ffprobe could not read every packet (exit \(census.exitCode))")
         }
         return box.result
+    }
+
+    private struct SummaryJSON: Decodable {
+        struct Stream: Decodable {
+            let codec_type: String?
+            let codec_name: String?
+        }
+        struct Format: Decodable {
+            let duration: String?
+        }
+        let streams: [Stream]?
+        let format: Format?
+    }
+
+    /// Streams + container length from the header (no decode).
+    @concurrent
+    static func summary(path: String, control: ProcessControl?) async throws -> MediaRepairStreamSummary {
+        let ffprobe = try tool(ToolLocator.ffprobePath, "ffprobe")
+        let r = await ProcessRunner.runProcess(
+            executable: ffprobe, arguments: MediaRepairCommand.summaryArgs(input: path),
+            stdoutLimitBytes: 1_000_000, deadlineSeconds: 120, control: control)
+        try Task.checkCancellation()
+        guard r.exitCode == 0, let json = r.stdout,
+              let parsed = try? JSONDecoder().decode(SummaryJSON.self, from: Data(json.utf8)) else {
+            throw ProbeFailure(message: "ffprobe could not read \((path as NSString).lastPathComponent)")
+        }
+        return MediaRepairStreamSummary(
+            streams: (parsed.streams ?? []).map {
+                MediaRepairStreamSummary.Stream(codecType: $0.codec_type ?? "", codec: $0.codec_name ?? "")
+            },
+            durationSeconds: parsed.format?.duration.flatMap(Double.init) ?? 0)
     }
 
     /// Times of the frames `mpdecimate` keeps in one window.

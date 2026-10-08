@@ -51,6 +51,14 @@ enum MediaRepairCommand {
          "-of", "json", input]
     }
 
+    /// ffprobe: each stream's kind and codec, and the container's length
+    /// (header only) — the proof for a pass that re-encodes.
+    static func summaryArgs(input: String) -> [String] {
+        ["-v", "error",
+         "-show_entries", "format=duration:stream=index,codec_type,codec_name",
+         "-of", "json", input]
+    }
+
     /// ffprobe: one line per packet, "stream_index,size,duration" (no
     /// decode; the whole file is read once). Field order is the order
     /// ffprobe prints packet fields in, pinned by a test on real output.
@@ -156,6 +164,21 @@ struct MediaStreamTally: Equatable, Sendable {
     }
 }
 
+/// One file's streams and length, from the header (no decode).
+struct MediaRepairStreamSummary: Equatable, Sendable {
+    struct Stream: Equatable, Sendable {
+        var codecType: String
+        var codec: String
+    }
+    var streams: [Stream]
+    var durationSeconds: Double
+
+    /// The codecs of one kind ("video" / "audio"), in stream order.
+    func codecs(_ type: String) -> [String] {
+        streams.filter { $0.codecType == type }.map(\.codec)
+    }
+}
+
 enum MediaRepairParity: Equatable {
     case identical(detail: String)
     case different(reason: String)
@@ -183,6 +206,52 @@ enum MediaRepairParity: Equatable {
             return String(format: "%.3f s became %.3f s", s.seconds, o.seconds)
         }
         return nil
+    }
+
+    /// The proof for a pass that decodes (repeated frames removed, sound
+    /// rebuilt or balanced): nothing packet-identical is expected, so the
+    /// copy must keep the picture (H.264 when re-encoded, else the same
+    /// codec), keep the sound (all tracks unchanged when copied; the first
+    /// one, rewritten, otherwise — PCM for a rebuild) and keep its length
+    /// (± 1 s or 1 %).
+    static func compareRewritten(source: MediaRepairStreamSummary, output: MediaRepairStreamSummary,
+                                 recipe: MediaRepairRecipe) -> MediaRepairParity {
+        if let why = pictureDifference(source, output, recipe) ?? soundDifference(source, output, recipe) {
+            return .different(reason: why)
+        }
+        let tolerance = max(1.0, source.durationSeconds * 0.01)
+        if source.durationSeconds > 0, abs(output.durationSeconds - source.durationSeconds) > tolerance {
+            return .different(reason: String(format: "the copy runs %.1f s, the original %.1f s",
+                                             output.durationSeconds, source.durationSeconds))
+        }
+        let parts = output.streams.map { "\($0.codecType) \($0.codec)" }
+        return .identical(detail: parts.joined(separator: " · ")
+                          + String(format: " · %.1f s, same length as the original", output.durationSeconds))
+    }
+
+    private static func pictureDifference(_ s: MediaRepairStreamSummary, _ o: MediaRepairStreamSummary,
+                                          _ recipe: MediaRepairRecipe) -> String? {
+        guard let srcVideo = s.codecs("video").first else { return nil }
+        let outVideo = o.codecs("video")
+        guard outVideo.count == 1 else { return "the copy has \(outVideo.count) picture streams, expected 1" }
+        let expected = recipe.picture == .removeRepeatedFrames ? "h264" : srcVideo
+        return outVideo[0] == expected ? nil : "the picture is \(outVideo[0]), expected \(expected)"
+    }
+
+    private static func soundDifference(_ s: MediaRepairStreamSummary, _ o: MediaRepairStreamSummary,
+                                        _ recipe: MediaRepairRecipe) -> String? {
+        let src = s.codecs("audio"), out = o.codecs("audio")
+        switch recipe.sound {
+        case .copy:
+            return src == out ? nil : "the sound tracks changed (\(src.joined(separator: ", ")) became \(out.joined(separator: ", ")))"
+        case .rebuild, .balance:
+            let expectedCount = min(src.count, 1)
+            guard out.count == expectedCount else { return "the copy has \(out.count) sound tracks, expected \(expectedCount)" }
+            if recipe.sound == .rebuild, let codec = out.first, codec != RebuildAudioFix.outputAudioCodec {
+                return "the rebuilt sound is \(codec), expected \(RebuildAudioFix.outputAudioCodec)"
+            }
+            return nil
+        }
     }
 
     static func describe(_ t: MediaStreamTally) -> String {
