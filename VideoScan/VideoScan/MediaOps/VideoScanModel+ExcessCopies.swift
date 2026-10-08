@@ -205,7 +205,20 @@ extension VideoScanModel {
         }
         let snaps = excessCopySnapshots(env: env)
         guard !snaps.isEmpty else { return .empty }
-        return await Self.excessCopiesPlanOffMain(snaps, isNetworkMount: env.isNetworkMount)
+        return await Self.excessCopiesPlanOffMain(snaps, lineage: excessLineage(), isNetworkMount: env.isNetworkMount)
+    }
+
+    /// Every record's `derivedFrom` link (child → parent), purged or not —
+    /// the plan's ancestry is the CATALOG's, never only the nominated
+    /// snapshots' (codex F2: an intermediate that matches nothing still
+    /// joins a preservation master to its archived original). One O(records)
+    /// pass on main per plan, no disk, nothing cached; never in a view body.
+    func excessLineage() -> [UUID: UUID] {
+        var parentOf: [UUID: UUID] = [:]
+        for r in records {
+            if let p = r.derivedFrom { parentOf[r.id] = p }
+        }
+        return parentOf
     }
 
     /// The network probe (one statfs per nominated copy — hundreds, not the
@@ -213,13 +226,13 @@ extension VideoScanModel {
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated static func excessCopiesPlanOffMain(_ snapshots: [ExcessCopySnapshot],
+    nonisolated static func excessCopiesPlanOffMain(_ snapshots: [ExcessCopySnapshot], lineage: [UUID: UUID],
                                                     isNetworkMount: @Sendable (String) -> Bool) async -> ExcessCopiesPlan {
         var snaps = snapshots
         for i in snaps.indices where !snaps[i].isArchiveSide && snaps[i].isOnline {
             snaps[i].isNetworkMount = isNetworkMount(snaps[i].fullPath)
         }
-        return ExcessCopiesPlan.compute(snaps)
+        return ExcessCopiesPlan.compute(snaps, lineage: lineage)
     }
 
     // MARK: The keep rules, live (asked before the read and at the move)

@@ -152,6 +152,26 @@ struct ExcessCopiesPlanTests {
         #expect(plan.offeredCount == 0, "an unverified master: hold rather than guess")
     }
 
+    @Test("codex F2: the complete lineage joins master and archived file through an intermediate that is not a snapshot")
+    func completeLineageJoinsTheMasterThroughAnOmittedIntermediate() {
+        let a = Self.archive(masterSeconds: 3_600, accessSeconds: 7_200)
+        let source = UUID(), intermediate = UUID()
+        var master = a.master, access = a.access
+        master.derivedFrom = intermediate      // master → intermediate → source
+        access.derivedFrom = source            // archived original → source
+        let long = Self.copy("test_long.mov", seconds: 7_200)
+        let snaps = [master, access, long]
+        // The snapshots alone cannot see the intermediate: the item splits
+        // and the 2 h copy is judged against the 2 h access file. Pinned so
+        // the reason for `lineage` stays visible.
+        #expect(ExcessCopiesPlan.compute(snaps).offeredIDs == [long.id])
+        let lineage = [master.id: intermediate, intermediate: source, access.id: source]
+        let plan = ExcessCopiesPlan.compute(snaps, lineage: lineage)
+        #expect(plan.offeredIDs.isEmpty, "longer than the preservation master: never offered")
+        #expect(plan.items.first?.master.id == master.id)
+        #expect(plan.items.first?.longer.map(\.id) == [long.id])
+    }
+
     @Test("★★★ alone is not a hold — Promote sets it on every promotion source")
     func threeStarsSetByPromoteIsNotAHold() {
         #expect(ExcessCopiesPlan.personHold(starRating: 3, tags: [], keptInLane: false) == nil)

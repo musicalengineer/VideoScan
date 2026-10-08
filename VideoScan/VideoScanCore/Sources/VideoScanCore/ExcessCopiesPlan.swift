@@ -287,10 +287,19 @@ public struct ExcessCopiesPlan: Equatable, Sendable {
 
     // MARK: Compute
 
-    /// The plan, from every catalog snapshot. O(snapshots) with dictionary
-    /// passes; pure.
-    public static func compute(_ snapshots: [ExcessCopySnapshot]) -> ExcessCopiesPlan {
-        let index = ArchiveIndex(snapshots)
+    /// The plan, from every catalog snapshot. O(snapshots + lineage) with
+    /// dictionary passes; pure.
+    ///
+    /// `lineage` is the WHOLE catalog's `derivedFrom` (child id → parent
+    /// id), independent of which records were nominated (codex F2): an
+    /// intermediate that matches no archived file is not a snapshot, but it
+    /// still joins a preservation master to the archived original that
+    /// shares its root. The app always passes it. nil = the snapshots' own
+    /// links only — right only when the snapshots ARE the whole catalog
+    /// (the pure tests).
+    public static func compute(_ snapshots: [ExcessCopySnapshot],
+                               lineage: [UUID: UUID]? = nil) -> ExcessCopiesPlan {
+        let index = ArchiveIndex(snapshots, lineage: lineage)
         guard !index.isEmpty else { return .empty }
         var nominated: [(snap: ExcessCopySnapshot, archive: ExcessCopySnapshot, proof: Proof)] = []
         for s in snapshots where !s.isPurged && !s.isArchiveSide {
@@ -354,8 +363,11 @@ struct ArchiveIndex {
 
     var isEmpty: Bool { byDigest.isEmpty && bySampled.isEmpty }
 
-    init(_ snapshots: [ExcessCopySnapshot]) {
-        for s in snapshots {
+    /// `lineage`: the complete catalog ancestry (see `compute`); the
+    /// snapshots' own links fill in anything it lacks.
+    init(_ snapshots: [ExcessCopySnapshot], lineage: [UUID: UUID]? = nil) {
+        parentOf = lineage ?? [:]
+        for s in snapshots where parentOf[s.id] == nil {
             if let p = s.derivedFrom { parentOf[s.id] = p }
         }
         for s in snapshots where s.isArchiveSide && !s.isPurged {

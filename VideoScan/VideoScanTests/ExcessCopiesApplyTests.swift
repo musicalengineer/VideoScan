@@ -320,6 +320,41 @@ struct ExcessCopiesApplyTests {
         #expect(alias("/Volumes/Other/test_a.mov", nil) == nil)
     }
 
+    /// codex F2 (2026-10-08, P1): the catalog's lineage is preservation
+    /// master → intermediate → source, and archived original → source. The
+    /// intermediate matches no archived file, so it is not a snapshot. The
+    /// plan must still join the 1 h master to the 2 h archived original: a
+    /// 2 h copy is LONGER than the master — flagged, never offered (Rick's
+    /// rule) — not compared against the 2 h original and offered.
+    @Test("codex F2: an intermediate that matches nothing still joins the master — a copy longer than it is held")
+    func anOmittedIntermediateStillJoinsTheMaster() async throws {
+        let f = try await fixture("lineage"); defer { f.cleanup() }
+        let root = try #require(f.model.masterArchiveRootPath)
+        let intermediate = MasterArchiveTestSupport.makeRecord(
+            path: f.sb.sources.appendingPathComponent("test_excess_a_intermediate.mov").path)
+        intermediate.derivedFrom = f.source.id
+        intermediate.contentHash = "v1:test-excess-intermediate"            // matches nothing
+        intermediate.durationSeconds = 3_600
+        let master = MasterArchiveTestSupport.makeRecord(
+            path: (root as NSString).appendingPathComponent("30_Video/1995/test_excess_a.vs.preserve.mkv"))
+        master.derivedFrom = intermediate.id
+        master.durationSeconds = 3_600
+        master.archiveFixity = ArchiveFixity(digest: "f2f2f2", verifiedAt: Date(), sizeBytes: 1)
+        f.archive.derivedFrom = f.source.id
+        for r in [f.source, f.copy, f.archive] { r.durationSeconds = 7_200 }
+        f.model.records.append(contentsOf: [intermediate, master])
+        try #require(f.model.isArchiveElement(master) && !f.model.isArchiveElement(intermediate), "fixture: who is archived")
+        let plan = await f.model.excessCopiesPlan(env: f.env)
+        #expect(plan.offeredIDs.isEmpty, "a copy longer than the preservation master is never offered: \(plan)")
+        let item = try #require(plan.items.first)
+        #expect(item.master.id == master.id, "the master is found through the omitted intermediate")
+        #expect(Set(item.longer.map(\.id)) == [f.source.id, f.copy.id], "flagged LONGER: \(item)")
+        let mover = Mover(trash: f.trashDir)
+        let out = await f.model.applyExcess(shown: plan, env: f.env, hooks: hooks(mover))
+        #expect(out.trashed == 0 && mover.paths.isEmpty, "\(out)")
+        #expect(exists(f.source) && exists(f.copy))
+    }
+
     @Test("QA MINOR 4: Keep never writes over a damaged Keep list")
     func keepDoesNotRepairADamagedList() async throws {
         let f = try await fixture("keepdamaged"); defer { f.cleanup() }
