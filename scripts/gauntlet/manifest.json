@@ -16833,6 +16833,39 @@
       ]
     },
     {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MediaRepairEngineTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MediaRepairEngineTests",
+        "MediaRepairMediaMatrixTests",
+        "MediaRepairRefusalTests"
+      ],
+      "tests": [
+        "cancelled_removesPartial_publishesNothing",
+        "cleanFactsGo",
+        "driveWithoutExclusivePublish_keepsCopy_unpublished",
+        "everyRefusalHasAReason",
+        "familyArchiveIsNeverATarget",
+        "ffmpegFailsPartway_failed_partialKeptUnpublished",
+        "ffmpegFailsWritingNothing_failed_nothingKept",
+        "losslessRemux_provesParity_originalUnchanged",
+        "losslessRemux_publishesOneOutput_originalUnchanged",
+        "noApplicableFix_refused",
+        "offlineOriginal_refused",
+        "oneRunOneOutput_secondRunRefusedByTheFirstOutput",
+        "parityMismatch_failed_copyKeptUnpublished",
+        "poisonedFolder_danglingLinkAtTarget_refused_staleLeftoverUntouched",
+        "protectedFolder_refusedBeforeAnyWrite",
+        "rebuildSound_writesPCMCopy_sameLength",
+        "removeRepeatedFrames_retimesAtRealRate_sameLength",
+        "spaceNeedIncludesRebuiltPCM",
+        "targetAppearsMidRun_neverOverwritten_notPublishedBeside",
+        "targetExists_refusedBeforeAnyWrite"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/MediaSignaturesTests.swift",
