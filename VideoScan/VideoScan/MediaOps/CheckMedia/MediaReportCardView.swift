@@ -18,11 +18,11 @@ struct MediaReportCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label {
-                Text(card.headline)
+                Text(card.displayHeadline)
                     .font(.body.weight(.semibold))
                     .fixedSize(horizontal: false, vertical: true)
             } icon: {
-                MediaVerdictIcon(verdict: card.verdict)
+                MediaVerdictIcon(verdict: card.verdict, quickPassOnly: card.isQuickPassOnly)
             }
             .accessibilityIdentifier("checkMedia.headline")
 
@@ -72,9 +72,14 @@ struct MediaReportCardView: View {
 /// ✓ / ⚠︎ / ✕ / – for a verdict.
 struct MediaVerdictIcon: View {
     let verdict: MediaCheckVerdict
+    /// A whole card from a quick check that found nothing: an outlined,
+    /// grey tick — never the solid green "healthy" one (Rick 2026-10-07).
+    var quickPassOnly = false
 
     var body: some View {
         switch verdict {
+        case .ok where quickPassOnly:
+            Image(systemName: "checkmark.circle").foregroundStyle(.secondary)
         case .ok:
             Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
         case .warning:

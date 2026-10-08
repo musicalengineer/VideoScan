@@ -125,3 +125,135 @@ of size; reads a few MB of the file. Deep tier: the Verify Video decode (bounded
 tallies, ≈ 1.2 MB) + Verify Audio astats (KBs). Deep reads the whole file twice
 (picture once, sound once) — the price of reusing both engines unchanged; a
 single combined pass is possible later if the audio engine grows a filter hook.
+
+## 7. Follow-up (same day): Layout, Sound continuity, honest quick verdict
+
+**Why.** A quick check called a file "Looks healthy" whose sound stutters badly
+(a 41.5 GB DNxHD 220 + pcm_s24be mov from an FCP library). The Manager's hand
+diagnosis: the sound is perfect (70,038 packets, no PTS gaps, no dropouts, no
+replays, no clicks) but every picture packet is stored at the front of the file
+and every sound packet at the end, 41 GB apart. A player on a spinning RAID
+seeks between the two ends for every refill and the sound starves.
+
+**Shape.**
+- *Layout* (quick tier, `CheckMediaLayout.swift`: `MediaLayoutMeasure` /
+  `MediaLayoutSample` value types + `CheckMediaRules.checkLayout`; I/O in
+  `CheckMediaProbe.layoutSample`). Three windows (start, middle, end). Per
+  window: ≤ 300 picture packets (≈ 5 s, by count so a 60,000 fps file can't
+  read gigabytes), then the sound packets for the same time span, both with
+  `pos`, fields named in `-show_entries` (never csv column order). Measured
+  only over the time BOTH windows cover (otherwise a shorter sound window
+  reads as a long picture run; seen on a healthy ffmpeg mp4).
+  Separation = median (sound byte − byte of the picture packet nearest in
+  time); longest run = longest file-order stretch of one stream, in seconds.
+  Brockton: 0.2 s per window, whole quick tier 2.7 s.
+- *Sound continuity* (full tier, `SoundContinuity.swift`: four single-job
+  detectors — `SilenceRunTracker`, `BlockRepeatTracker`, `ClickTracker`,
+  `SoundTimeline` — composed by `SoundContinuityAnalyzer`, a value type wrapped
+  in a locked `SoundContinuityTally`; I/O in `CheckMediaProbe+SoundContinuity`).
+  One ffmpeg pass: `-map 0:a:0 -af asettb=1/sr,ashowinfo -c:a pcm_s32le -f
+  s32le pipe:1`. PCM streams through a new additive `stdoutData:` callback on
+  `ProcessRunner.runProcess` (raw chunks, nothing collected, pipe
+  back-pressure); `ashowinfo` lines (pts in samples after `asettb`; pts_time
+  is only 6 significant digits) feed the timing check and the progress bar.
+  Runs inside the existing full-tier MFO job as phase "listening to every
+  sample" (`CheckMediaProbe.FullPhase`). Memory ≈ 0.4 MB worst case,
+  independent of length. Brockton: 25 min of sound in 23 s (mov: the demuxer
+  reads only the sound by index).
+- *PTS gaps/overlaps stay in the full tier.* An audio-only packet scan reads
+  only the sound for mov/mp4, but the whole file for mxf/mkv/avi, so it can't
+  be "quick" in general; the decode pass gets it for free.
+- *Honest quick verdict.* `MediaReportCard.isQuickPassOnly`, `verdictWord`,
+  `displayHeadline` (Core). A quick pass reads "No problems found in the quick
+  check — run the full check to listen to every sample and decode every
+  frame.", an outlined grey tick (never the solid green one), and "N with no
+  problems in the quick check" in the MFO summary. `displayHeadline` also
+  fixes cards persisted before today with the old "Looks healthy (quick
+  check …)" headline. Only a full pass may say "Looks healthy".
+
+**Layout thresholds (pinned by tests).**
+- **Problem:** the sound sits > **64 MB** from its picture AND one stream runs
+  ≥ **2 s** before the other appears. 64 MB is far past any player's read-ahead
+  (a few MB to tens of MB), ≈ 2.3 s of DNxHD 220, ≈ 20 s of 25 Mbit/s HDV; a
+  sane 0.5–1 s interleave of even 4K ProRes stays under it. 2 s is longer
+  than a player's default sound buffer (≈ 1 s), so the sound runs dry while the
+  picture is read. Bytes are the physical cause (a seek per refill on a
+  spinning disk); seconds guard against huge-bitrate files with fine
+  interleave.
+- **Warning:** > 64 MB apart with short runs (very high bitrate, big pieces), or
+  runs ≥ **4 s** at a low bitrate (close in bytes, long in time).
+- **OK:** everything else, e.g. 1 s chunks of DNxHD 220 (≤ 27 MB apart).
+- A window where the two streams share < 0.2 s is not measured; no window →
+  "not run" (CapeCod: 300 packets at 60,000 fps span 5 ms). A file whose
+  streams are stored wholly apart in a *file-order* container (mkv/avi/mxf)
+  is found the same way: ffprobe's `-select_streams` keeps reading until the
+  selected stream's interval appears.
+
+**Sound continuity rules.** Dropout = exact digital zero on every channel for
+5 ms – 2 s, not within the first/last 100 ms (≥ 2 s = "silent passage",
+counted only: often a deliberate gap in an edit). Replay = 1024 sounding
+frames (peak-to-peak ≥ −60 dBFS) identical to the 1024 before them, any
+alignment. Timing jump = decoded frame pts off the expected by > 2 ms (mkv
+stores ms). Click = second difference > 0.5 FS AND > 25× its own 10 ms level
+AND > 4× the 10 ms signal envelope — calibrated on Brockton, where the first
+two tests alone flagged 43 loud real transients. Verdict: ≥ 3 stutter events
+(dropouts + replays + timing jumps) = Problem, 1–2 = Warning; clicks alone =
+Warning.
+
+**Compatibility.** `layout` and `soundContinuity` are new `MediaCheckKind` raw
+values (additive). An older build reading a newer card drops the card (the
+record decodes it with `try?`), never the record.
+
+**Follow-ups (not built).** A "Remux side by side" button on the Layout row
+(lossless `-c copy` into a new file next to the original; needs Rick's UI
+approval and the delete-safety rules); replay detection for buffer lengths
+other than 1024; one combined sound pass (Verify Audio astats + continuity).
+
+## 8. Broadened full tier (same day: "do as much as possible; OK to wait")
+
+**Passes — two reads of the picture, one of the sound (chosen over a
+single pass).** One combined pass would mean reworking the shared Verify
+Video / Verify Audio engines that other jobs use; two passes were allowed.
+1. *Picture decode* (Verify Video's, unchanged for Verify Video): the signal
+   chain gains `signalstats` + two `metadata=print` filters → each frame's
+   YMIN/YMAX and pts_time; decoder error lines are now also handed to the
+   signal hook, so each complaint is stamped with the last frame's time
+   (`DecodeErrorClock`, ± a few frames).
+2. *Packet census* (new, `PacketCensus.swift` + `CheckMediaProbe+Census`):
+   `ffprobe -select_streams v:0` then `a:0`, `packet=pts_time,dts_time,
+   duration_time,size,pos,flags`, streamed line by line, nothing collected.
+   One stream per run so ffprobe discards the other and a non-interleaved
+   mov is read straight through. Feeds packet timing (dts backwards, gaps),
+   keyframes, picture bytes per second, A/V first/last times, and a ¼-second
+   picture index against which EVERY sound packet's distance is measured
+   (the whole-file Layout row, which replaces the quick sample on the card:
+   `CheckMediaRules.merging`).
+3. *Sound pass* (part 1's) gains `ebur128=peak=true:framelog=quiet` in its
+   chain and three sample trackers (`SoundLevels.swift`): DC offset, clip
+   runs (≥ 3 samples pinned at full scale), channel relation (identical /
+   inverted / independent + correlation).
+Header facts gain colour labels (`MediaColourLabels`, Core) and timecode tags
+(additive probe entries).
+
+**Memory (worst case):** census ≤ 8 MB (¼-s picture index capped at 55 h,
+bytes-per-second capped at 200,000 s; a 2 h tape ≈ 0.3 MB); sound pass
+≈ 0.4 MB; decode tallies O(1). No whole-file buffers; pipe back-pressure.
+No read-ahead buffer was added: on the M4's internal SSD the full tier ran
+at 168 MB/s on a 1 GB ProRes 422 HQ file (decode + census + sound, Debug
+app build), so ffmpeg's own decode, not I/O, is the limit there.
+
+**New rows (all full tier; raw values additive):**
+| Row | Problem | Warning | Notes |
+|---|---|---|---|
+| Timing, every packet | dts goes back | gap > max(0.5 s, 3 packets) | dts only (B-frame pts reorder is normal) |
+| Keyframes | — | only one keyframe (> 300 frames); gap > 10 s | all-intra = OK |
+| Data rate over time | — | an interior second with no picture bytes (≥ 2 fps) | evidence: low/median/high |
+| Sound and picture start together | ≥ 5 s | ≥ 0.5 s | end difference as evidence |
+| Timecode track | — | invalid HH:MM:SS:FF; tags disagree; track ≠ picture length by > 1 s | not run when no timecode |
+| Colour labels | — | HD with SD matrix (or reverse); YUV labelled full range whose luma stays 8–246 | the opposite direction is NOT judged: compression ringing puts single pixels at 0/255 (mpeg2 fixture) |
+| Loudness (EBU R128) | — | true peak > 0 dBTP; integrated < −36 LUFS | |
+| Sound centred on zero | — | \|DC\| > 1 % FS | |
+| Left and right | — | inverted (≥ 99.9 % of frames L = −R, or r < −0.9) | identical = "mono stored as stereo", OK |
+| Clipped stretches | — | any run of ≥ 3 pinned samples | |
+The Layout threshold is now a decimal 64 MB (64,000,000 B) so the card's
+"64 MB" and the rule agree.

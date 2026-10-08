@@ -53,6 +53,10 @@ public struct MediaStreamFacts: Sendable, Equatable, Identifiable {
     public var channelLayout: String = ""
     public var sampleFormat: String = ""
     public var bitsPerSample: Int?
+    /// Start timecode tag (tmcd tracks, some video streams); "" when none.
+    public var timecode: String = ""
+    /// The picture's colour labels (2026-10-07; all "" when unlabelled).
+    public var colour = MediaColourLabels()
 
     public var id: Int { index }
 
@@ -98,6 +102,8 @@ public struct MediaFacts: Sendable, Equatable {
     public var bitRate: Int64?
     public var encoder: String = ""
     public var creationTime: String = ""
+    /// The container's start timecode tag ("01:00:00:00"), "" when none.
+    public var timecode: String = ""
     public var streams: [MediaStreamFacts] = []
 
     public init() {}
@@ -135,10 +141,11 @@ public struct MediaFacts: Sendable, Equatable {
         "stream=index,codec_type,codec_name,codec_long_name,profile,width,height,"
         + "sample_aspect_ratio,display_aspect_ratio,pix_fmt,field_order,r_frame_rate,"
         + "avg_frame_rate,nb_frames,time_base,start_time,duration,duration_ts,bit_rate,"
-        + "sample_rate,channels,channel_layout,sample_fmt,bits_per_sample,bits_per_raw_sample"
-        + ":stream_disposition=attached_pic:stream_tags=creation_time"
+        + "sample_rate,channels,channel_layout,sample_fmt,bits_per_sample,bits_per_raw_sample,"
+        + "color_range,color_space,color_transfer,color_primaries"
+        + ":stream_disposition=attached_pic:stream_tags=creation_time,timecode"
         + ":format=format_name,format_long_name,duration,size,bit_rate,start_time"
-        + ":format_tags=encoder,creation_time"
+        + ":format_tags=encoder,creation_time,timecode"
 
     public enum ParseError: Error, Equatable { case unreadable }
 
@@ -157,6 +164,7 @@ public struct MediaFacts: Sendable, Equatable {
             f.bitRate = fmt.bit_rate.flatMap { Int64($0) }
             f.encoder = fmt.tags?["encoder"] ?? ""
             f.creationTime = fmt.tags?["creation_time"] ?? ""
+            f.timecode = fmt.tags?["timecode"] ?? ""
         }
         f.streams = (report.streams ?? []).enumerated().map { offset, s in
             stream(from: s, fallbackIndex: offset)
@@ -178,6 +186,9 @@ public struct MediaFacts: Sendable, Equatable {
         m.bitRate = s.bit_rate.flatMap { Int64($0) }
         m.frameCount = s.nb_frames.flatMap { Int($0) }.flatMap { $0 > 0 ? $0 : nil }
         m.creationTime = s.tags?["creation_time"] ?? ""
+        m.timecode = s.tags?["timecode"] ?? ""
+        m.colour = MediaColourLabels(range: s.color_range, matrix: s.color_space,
+                                     transfer: s.color_transfer, primaries: s.color_primaries)
         m.width = s.width
         m.height = s.height
         m.sampleAspectRatio = s.sample_aspect_ratio ?? ""
@@ -224,6 +235,10 @@ public struct MediaFacts: Sendable, Equatable {
             let sample_fmt: String?
             let bits_per_sample: Int?
             let bits_per_raw_sample: String?
+            let color_range: String?
+            let color_space: String?
+            let color_transfer: String?
+            let color_primaries: String?
             let disposition: Disposition?
             let tags: [String: String]?
         }

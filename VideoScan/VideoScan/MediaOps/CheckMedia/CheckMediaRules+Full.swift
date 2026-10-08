@@ -12,13 +12,20 @@ extension CheckMediaRules {
 
     // MARK: The full tier
 
+    /// Every full-tier row. Merge onto the quick rows with
+    /// `merging(_:with:)`: the whole-file Layout row replaces the sample.
     static func fullChecks(_ i: CheckMediaFullInputs, facts: MediaFacts) -> [MediaCheck] {
-        [checkDecode(i.video), checkBlack(i.signals, facts: facts), checkFreeze(i.signals, facts: facts),
-         checkSound(i.audio, facts: facts), checkInterlace(i.signals, facts: facts)]
+        [checkDecode(i.video, errorTimes: i.signals?.errorClock.errors),
+         checkBlack(i.signals, facts: facts), checkFreeze(i.signals, facts: facts),
+         checkSound(i.audio, facts: facts), checkSoundContinuity(i.continuity, facts: facts),
+         checkInterlace(i.signals, facts: facts), checkColour(facts, signals: i.signals)]
+            + censusChecks(i.census, facts: facts)
+            + levelChecks(i.continuity, facts: facts)
     }
 
     // 9. Every frame decodes.
-    static func checkDecode(_ result: Result<VideoVerifyDiagnosis, CheckMediaSkip>?) -> MediaCheck {
+    static func checkDecode(_ result: Result<VideoVerifyDiagnosis, CheckMediaSkip>?,
+                            errorTimes: MediaEventLog? = nil) -> MediaCheck {
         guard let result else { return .notRun(.decode, because: noPicture) }
         let diagnosis: VideoVerifyDiagnosis
         switch result {
@@ -30,6 +37,9 @@ extension CheckMediaRules {
         if let d = diagnosis.decode {
             evidence.append(MediaEvidence("Decode complaints", V.groupedInt(d.errorCount)))
             evidence += d.sampleErrors.prefix(3).map { MediaEvidence("Example", $0) }
+        }
+        if let times = errorTimes, times.occurrences >= 1 {
+            evidence.append(MediaEvidence("Near", times.timesText))
         }
         if let first = decodeFindings.first, case .decodeSkipped(let reason) = first {
             return .notRun(.decode, because: reason)
@@ -169,7 +179,7 @@ extension CheckMediaRules {
     /// The full-tier rows of a quick check: present, honestly "not run".
     static func fullRowsNotRun() -> [MediaCheck] {
         MediaCheckKind.allCases.filter(\.isFullTier).map {
-            .notRun($0, because: "quick check only — run a full check to decode every frame")
+            .notRun($0, because: "quick check only — the full check decodes every frame and listens to every sample")
         }
     }
 
@@ -223,10 +233,16 @@ extension CheckMediaRules {
         if checks.allSatisfy({ if case .notRun = $0.verdict { return true }; return false }) {
             return "Couldn't be checked."
         }
-        return tier == .quick
-            ? "Looks healthy (quick check — a full check decodes every frame)."
-            : "Healthy — every check passed."
+        return tier == .quick ? quickPassHeadline : fullPassHeadline
     }
+
+    /// A quick check that found nothing is NOT a clean bill of health
+    /// (Rick 2026-10-07: "Looks healthy" was shown for a file whose sound
+    /// stutters). Never "fine", "healthy" or "OK" for the quick tier.
+    static let quickPassHeadline = MediaReportCard.quickPassHeadline
+    /// Only a full check, every row OK or not run (each row says why).
+    static let fullPassHeadline =
+        "Looks healthy — the full check read the whole file and found nothing wrong."
 
     /// The duplicate-frame / broken-timing headline (the CapeCod class).
     private static func timingHeadline(problems: [MediaCheck], quick: CheckMediaQuickInputs) -> String? {
@@ -252,6 +268,8 @@ extension CheckMediaRules {
         case .decode: return "Damaged picture: \(c.sentence)"
         case .sound: return "Damaged sound: \(c.sentence)"
         case .audioSamples: return "Plays at the wrong speed: \(c.sentence)"
+        case .layout: return "Sound may stutter: \(c.sentence)"
+        case .soundContinuity: return "Sound breaks up: \(c.sentence)"
         case .bitrate: return "Plays, but it is a broken encode: \(c.sentence)"
         default: return "Has a problem — \(c.kind.title.lowercased()): \(c.sentence)"
         }
@@ -259,7 +277,7 @@ extension CheckMediaRules {
 
     /// Plain-text card (the MFO detail, the log and the report).
     static func text(of card: MediaReportCard) -> String {
-        var lines = [card.headline, ""]
+        var lines = [card.displayHeadline, ""]
         for c in card.checks {
             lines.append("[\(c.verdict.word)] \(c.kind.title): \(c.sentence)")
             if !c.evidence.isEmpty {

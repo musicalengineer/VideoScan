@@ -15,12 +15,18 @@ import os
 //      Verify Video windows), ≤ 200 at the end (where the file stops).
 //   3. Up to three `mpdecimate` windows of ≤ 300 frames each: how many
 //      decoded frames are really a new picture.
-// Full tier (reads the whole file twice — picture once, sound once):
+//   3b. Layout windows (start / middle / end): ≤ 300 picture packets
+//      (≈ 5 s) then the sound packets for the same time span, with their
+//      byte positions — where sound and picture sit in the file. Reads
+//      ≈ 3 × 5 s of the file (≈ 0.4 GB for DNxHD 220; 0.2 s per window
+//      on Rick's RAID).
+// Full tier (reads the whole file up to three times):
 //   4. VerifyVideoProbe.diagnose with the signal filters riding along.
 //   5. VerifyAudioProbe.diagnose (astats per channel).
+//   6. The sound-continuity decode (CheckMediaProbe+SoundContinuity).
 //
 // Memory (worst case, per file): header JSON ≤ 1 MB (stdout cap); packet
-// text ≤ 3 × 96 KB; mpdecimate windows keep ≤ 16 KB of -progress text
+// text ≤ 3 × 96 KB; layout text ≤ 3 × (96 + 128) KB; mpdecimate windows keep ≤ 16 KB of -progress text
 // each; the full tier's own bounds are documented in VerifyVideoProbe
 // (≈ 1.2 MB) and VerifyAudioProbe (KBs); the signal tally is O(1).
 // ≈ 1.6 MB in all, independent of the file's size.
@@ -58,6 +64,21 @@ enum CheckMediaProbe {
                 "-read_intervals", "\(start)%+#\(maxPackets)",
                 "-show_entries", "packet=pts_time,dts_time,duration_time,size,pos",
                 "-of", "compact=p=0", input]
+    }
+
+    /// One stream's packets with byte positions, for the layout windows.
+    /// `interval` is ffprobe's -read_intervals syntax.
+    static func layoutArgs(input: String, stream: String, interval: String) -> [String] {
+        ["-hide_banner", "-v", "error", "-select_streams", stream,
+         "-read_intervals", interval,
+         "-show_entries", "packet=pts_time,size,pos",
+         "-of", "compact=p=0", input]
+    }
+
+    /// Picture packets per layout window: ≈ 5 s, 30…300.
+    static func layoutVideoPackets(fps: Double) -> Int {
+        guard fps.isFinite, fps > 0 else { return 150 }
+        return min(300, max(30, Int((5 * fps).rounded())))
     }
 
     /// `trim` ends the graph after `frames` decoded frames, so ffmpeg stops
@@ -149,6 +170,11 @@ enum CheckMediaProbe {
             inputs.distinct = await distinctSample(path: path, ffmpeg: ffmpeg, facts: videoFacts,
                                                    fps: fps, control: control)
             try Task.checkCancellation()
+            if facts.audio != nil {
+                inputs.layout = await layoutSample(path: path, ffprobe: ffprobe, facts: videoFacts,
+                                                   fps: fps, control: control)
+                try Task.checkCancellation()
+            }
         }
         return .measured(inputs)
     }
@@ -194,6 +220,39 @@ enum CheckMediaProbe {
         return MediaPacketRow.rows(fromCompact: text)
     }
 
+    /// Start, middle and end windows: the picture packets first (a packet
+    /// count, so a 60,000 fps file can't make it read gigabytes), then the
+    /// sound for the same time span. A window that fails is just missing.
+    private static func layoutSample(path: String, ffprobe: String, facts: VideoVerifyFacts,
+                                     fps: Double, control: ProcessControl?) async -> MediaLayoutSample {
+        let d = facts.videoDurationSeconds
+        var starts: [Double?] = [nil]
+        if d > 20 { starts += [d / 2, d - 8] }
+        var windows: [MediaLayoutMeasure] = []
+        for start in starts {
+            let from = start.map { String(format: "%.3f", $0) } ?? ""
+            let video = await layoutRows(path: path, ffprobe: ffprobe, stream: "v:0",
+                                         interval: "\(from)%+#\(layoutVideoPackets(fps: fps))",
+                                         limit: 96 * 1024, control: control)
+            let times = video.compactMap(\.pts)
+            guard let lo = times.min(), let hi = times.max(), hi > lo else { continue }
+            let audio = await layoutRows(path: path, ffprobe: ffprobe, stream: "a:0",
+                                         interval: String(format: "%.3f%%+%.3f", lo, hi - lo),
+                                         limit: 128 * 1024, control: control)
+            if let m = MediaLayoutMeasure.measure(video: video, audio: audio) { windows.append(m) }
+        }
+        return MediaLayoutSample(windows: windows)
+    }
+
+    private static func layoutRows(path: String, ffprobe: String, stream: String, interval: String,
+                                   limit: Int, control: ProcessControl?) async -> [MediaPacketRow] {
+        let r = await ProcessRunner.runProcess(
+            executable: ffprobe, arguments: layoutArgs(input: path, stream: stream, interval: interval),
+            stdoutLimitBytes: limit, deadlineSeconds: 60, control: control)
+        guard r.exitCode == 0, let text = r.stdout else { return [] }
+        return MediaPacketRow.rows(fromCompact: text)
+    }
+
     private static func distinctSample(path: String, ffmpeg: String, facts: VideoVerifyFacts,
                                        fps: Double, control: ProcessControl?) async -> DistinctFrameSample {
         let asked = DistinctFrameSample.framesPerWindow
@@ -215,18 +274,47 @@ enum CheckMediaProbe {
 
     // MARK: Full tier
 
+    /// Which full-tier pass is running — the MFO row names it.
+    enum FullPhase: Sendable {
+        case picture
+        case census
+        case sound
+
+        var step: String {
+            switch self {
+            case .picture: return "decoding every frame"
+            case .census: return "reading every packet"
+            case .sound: return "listening to every sample"
+            }
+        }
+
+        /// This phase's slice of one file's progress bar (after the 10 %
+        /// quick tier). Picture decode is most of the work.
+        var span: ClosedRange<Double> {
+            switch self {
+            case .picture: return 0.10...0.60
+            case .census: return 0.60...0.75
+            case .sound: return 0.75...0.98
+            }
+        }
+    }
+
+    /// Progress of the full tier: the phase and its own 0…1 fraction.
+    typealias FullProgress = @Sendable (FullPhase, Double) -> Void
+
     /// Runs both existing engines. Each failure becomes that row's "not
     /// run" reason; only cancellation is thrown.
     #if compiler(>=6.2)
     @concurrent
     #endif
     static func full(path: String, facts: MediaFacts, control: ProcessControl? = nil,
-                     progress: VerifyVideoProbe.Progress? = nil) async throws -> CheckMediaFullInputs {
+                     progress: FullProgress? = nil) async throws -> CheckMediaFullInputs {
         var out = CheckMediaFullInputs()
         if facts.video != nil {
-            let tally = MediaSignalTally()
+            let tally = MediaSignalTally(bitDepth: CheckMediaRules.lumaBitDepth(facts.video))
             do {
-                let d = try await VerifyVideoProbe.diagnose(path: path, control: control, progress: progress,
+                let d = try await VerifyVideoProbe.diagnose(path: path, control: control,
+                                                            progress: { progress?(.picture, $0) },
                                                             signalLine: { tally.note($0) })
                 out.video = .success(d)
                 if case .skipped = d.decode?.coverage {} else { out.signals = tally.snapshot }
@@ -237,6 +325,9 @@ enum CheckMediaProbe {
                 out.video = .failure(CheckMediaSkip(reason: reason(for: error)))
             }
         }
+        progress?(.census, 0)
+        out.census = try await census(path: path, facts: facts, control: control,
+                                      progress: { progress?(.census, $0) })
         if facts.audio != nil {
             do {
                 out.audio = .success(try await VerifyAudioProbe.diagnose(path: path, control: control))
@@ -246,6 +337,9 @@ enum CheckMediaProbe {
                 try Task.checkCancellation()
                 out.audio = .failure(CheckMediaSkip(reason: reason(for: error)))
             }
+            progress?(.sound, 0)
+            out.continuity = try await soundContinuity(path: path, facts: facts, control: control,
+                                                       progress: { progress?(.sound, $0) })
         }
         checkMediaLog.info("checkMedia full: \((path as NSString).lastPathComponent, privacy: .public) video=\(String(describing: out.video.map { (try? $0.get())?.verdict.rawValue ?? "skipped" }), privacy: .public)")
         return out

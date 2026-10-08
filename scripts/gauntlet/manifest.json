@@ -7410,7 +7410,78 @@
         "mkv",
         "mov",
         "mp4",
-        "mxf"
+        "mxf",
+        "nonInterleavedFixture"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CheckMediaFullTierTests.swift",
+      "stage": "integration",
+      "suites": [
+        "CheckMediaCensusTests",
+        "CheckMediaLevelsColourTimecodeTests",
+        "CheckMediaFullTierFixtureTests",
+        "CheckMediaFullTierThroughputTests"
+      ],
+      "tests": [
+        "bFrameReorderWithoutDtsIsNotBackwards",
+        "censusAtTwoHundredThousandPackets",
+        "censusRowsWording",
+        "channelRelationKinds",
+        "clipRunsNeedThreePinnedSamples",
+        "colourLabelsAgainstThePicture",
+        "everyKindHasATitleAndATier",
+        "fullRowsReplaceQuickRowsOfTheSameKind",
+        "fullTierThroughput",
+        "healthyMatrixFullTier",
+        "keyframesAndDataRate",
+        "levelRowsWording",
+        "loudnessSummaryParses",
+        "lumaAndErrorClockParse",
+        "packetLineParses",
+        "pictureAndSyncFixtures",
+        "soundLevelFixtures",
+        "timecodeRules",
+        "timingFindsBackwardsAndGaps",
+        "wholeFileLayoutInterleavedVersusSeparated"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CheckMediaLayoutContinuityTests.swift",
+      "stage": "integration",
+      "suites": [
+        "CheckMediaLayoutRuleTests",
+        "CheckMediaSoundContinuityTests",
+        "CheckMediaQuickPassWordingTests",
+        "CheckMediaLayoutRealFileTests"
+      ],
+      "tests": [
+        "allSoundAtTheEndIsAProblem",
+        "argumentsAreReadOnlyAndNamed",
+        "cleanToneHasNothing",
+        "clickIsFound",
+        "edgesAndLongSilencesAreNotDropouts",
+        "fiftyMsGapIsADropout",
+        "fullPassMaySayHealthy",
+        "legacyQuickCardDisplaysTheNewSentence",
+        "longLowBitrateChunksAreAWarning",
+        "newKindsAreAdditive",
+        "nonInterleavedRealFile",
+        "oneSecondChunksAreOK",
+        "oneStreamOnlyIsNotMeasured",
+        "onlyTheSharedTimeCounts",
+        "perFrameInterleaveIsOK",
+        "quickPassNeverSaysFine",
+        "replayedBlockIsFoundAtAnyAlignment",
+        "ruleWording",
+        "tenMinutesStreamInBudget",
+        "thresholdsArePinned",
+        "throughFFmpeg",
+        "timingGapsAndOverlapsFromShowInfo"
       ]
     },
     {
@@ -28227,6 +28298,14 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogScopeScanIntegrationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CheckMediaFullTierTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CheckMediaLayoutContinuityTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
