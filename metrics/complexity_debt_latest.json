@@ -1,16 +1,25 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-07T11:26:01Z",
- "sha": "4b79bbbb",
+ "ts": "2026-10-08T11:41:43Z",
+ "sha": "7c6f33be",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 447,
- "baseline_before": 447,
- "baseline_after": 447,
- "new": [],
+ "offenders": 422,
+ "baseline_before": 421,
+ "baseline_after": 421,
+ "new": [
+  {
+   "key": "VideoScan/VideoScan/MediaOps/MediaFileOperations.swift::MediaFileOperationKind.style",
+   "file": "VideoScan/VideoScan/MediaOps/MediaFileOperations.swift",
+   "function": "MediaFileOperationKind.style",
+   "ccn": 26,
+   "nloc": 29,
+   "lang": "swift"
+  }
+ ],
  "worse": [
   {
    "key": "VideoScan/VideoScan/ArchiveAngel/Recommend/AngelRuleLanguage.swift::ArchiveAngelRejection.name",
@@ -21,6 +30,26 @@
    "lang": "swift",
    "base_ccn": 27,
    "base_nloc": 30
+  },
+  {
+   "key": "VideoScan/VideoScan/Volumes/VolumesWindow.swift::VolumesWindow.contextMenuItems",
+   "file": "VideoScan/VideoScan/Volumes/VolumesWindow.swift",
+   "function": "VolumesWindow.contextMenuItems",
+   "ccn": 17,
+   "nloc": 104,
+   "lang": "swift",
+   "base_ccn": 16,
+   "base_nloc": 104
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::ProcessRunner.runProcess",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift",
+   "function": "ProcessRunner.runProcess",
+   "ccn": 9,
+   "nloc": 93,
+   "lang": "swift",
+   "base_ccn": 8,
+   "base_nloc": 90
   }
  ],
  "fixed": [],
