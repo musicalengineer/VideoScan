@@ -46,11 +46,18 @@ enum MediaRepairFix: String, CaseIterable, Sendable, Identifiable {
         }
     }
 
-    /// The fixes MediaRepairJob runs (the other two are the existing jobs).
-    var isRepairJob: Bool { self == .remux || self == .removeRepeatedFrames }
+    /// The card row this fix answers.
+    var answers: MediaCheckKind {
+        switch self {
+        case .remux: return .layout
+        case .removeRepeatedFrames: return .distinctFrames
+        case .balanceAudio, .rebuildAudio: return .sound
+        }
+    }
 
-    /// `<stem><suffix>.<ext>` for the new file.
-    var outputSuffix: String { self == .remux ? "_remuxed" : "_repaired" }
+    /// The full-tier rows Verify must re-run on the output to judge this
+    /// fix (the quick tier already covers layout and repeated frames).
+    var needsSoundPass: Bool { self == .balanceAudio || self == .rebuildAudio }
 }
 
 /// One fix offered on a card.

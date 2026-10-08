@@ -227,6 +227,9 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
                          on rec: VideoRecord, index: Int) {
         let current = model?.records.first { $0.id == rec.id } ?? rec
         let now = Date()
+        var card = card
+        // A re-Verify keeps the link to a repaired copy (Repair…, 2026-10-08).
+        card.repairedCopy = card.repairedCopy ?? current.mediaReportCard?.repairedCopy
         current.mediaReportCard = card
         if let video { VerifyVideoJob.write(video, onto: current, at: now) }
         if let audio {

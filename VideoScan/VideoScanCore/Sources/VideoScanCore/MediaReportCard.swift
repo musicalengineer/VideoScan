@@ -158,6 +158,26 @@ public struct MediaCheck: Codable, Sendable, Equatable, Identifiable {
     }
 }
 
+/// Where Repair… put this file's repaired copy (Rick 2026-10-08). Lives
+/// on the ORIGINAL's card so Get Info can say "Repaired copy: …". Additive:
+/// an optional on a synthesized-Codable struct decodes as absent from
+/// older cards, and an older build ignores the key.
+public struct MediaRepairLink: Codable, Sendable, Equatable {
+    /// The repaired copy's catalog record.
+    public var recordID: UUID
+    public var path: String
+    public var repairedAt: Date
+    /// The fixes applied (`MediaRepairFix` raw values), in order.
+    public var fixes: [String]
+
+    public init(recordID: UUID, path: String, repairedAt: Date, fixes: [String]) {
+        self.recordID = recordID
+        self.path = path
+        self.repairedAt = repairedAt
+        self.fixes = fixes
+    }
+}
+
 /// The whole card: a headline over one row per check.
 public struct MediaReportCard: Codable, Sendable, Equatable {
     public enum Tier: String, Codable, Sendable {
@@ -174,14 +194,18 @@ public struct MediaReportCard: Codable, Sendable, Equatable {
     /// The verdict sentence at the top of the card.
     public var headline: String
     public var checks: [MediaCheck]
+    /// The repaired copy Repair… made from this file, if any (additive,
+    /// 2026-10-08). A later Verify of this file carries it over.
+    public var repairedCopy: MediaRepairLink?
 
     public init(tier: Tier, checkedAt: Date, fileSizeBytes: Int64,
-                headline: String, checks: [MediaCheck]) {
+                headline: String, checks: [MediaCheck], repairedCopy: MediaRepairLink? = nil) {
         self.tier = tier
         self.checkedAt = checkedAt
         self.fileSizeBytes = fileSizeBytes
         self.headline = headline
         self.checks = checks
+        self.repairedCopy = repairedCopy
     }
 
     /// Worst row wins; a card whose every row was not run says not run.

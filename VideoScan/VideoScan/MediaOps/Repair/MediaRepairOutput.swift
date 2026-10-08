@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Where a repair's NEW file goes (Rick 2026-10-08)
 //
 // The rule, non-negotiable: a fix never modifies, moves or deletes the
-// original. The new file is `<stem>_remuxed.<ext>` / `<stem>_repaired.<ext>`
+// original. The new file is `<stem>_repaired.<ext>`
 // beside the original — EXCEPT when the original's drive is protected
 // (the delete-protection predicate: the Master Archive tree or volume, an
 // archive volume that can't be told apart, a drive marked Read only).
@@ -34,12 +34,18 @@ enum MediaRepairOutput {
         }
     }
 
-    /// `<stem><suffix>.<ext>`.
-    static func fileName(sourcePath: String, fix: MediaRepairFix, audioCodec: String) -> String {
-        let src = URL(fileURLWithPath: sourcePath)
-        let stem = src.deletingPathExtension().lastPathComponent
-        let ext = fileExtension(for: fix, sourceExtension: src.pathExtension, audioCodec: audioCodec)
-        return ext.isEmpty ? "\(stem)\(fix.outputSuffix)" : "\(stem)\(fix.outputSuffix).\(ext)"
+    /// `<stem>_repaired.<ext>` — one name for every repair (Repair Now
+    /// writes ONE file whatever it combined).
+    static func fileName(sourcePath: String, fileExtension ext: String) -> String {
+        let stem = URL(fileURLWithPath: sourcePath).deletingPathExtension().lastPathComponent
+        return ext.isEmpty ? "\(stem)_repaired" : "\(stem)_repaired.\(ext)"
+    }
+
+    /// The name for a recipe's output.
+    static func fileName(sourcePath: String, recipe: MediaRepairRecipe, audioCodec: String) -> String {
+        let ext = recipe.fileExtension(sourceExtension: URL(fileURLWithPath: sourcePath).pathExtension,
+                                       audioCodec: audioCodec)
+        return fileName(sourcePath: sourcePath, fileExtension: ext)
     }
 
     /// Where the new file should go.
@@ -52,9 +58,8 @@ enum MediaRepairOutput {
 
     /// `protectionNote` is the delete gate's sentence for the original's
     /// path (nil = not protected).
-    static func destination(sourcePath: String, fix: MediaRepairFix, audioCodec: String,
+    static func destination(sourcePath: String, fileName name: String,
                             protectionNote: String?, workspace: URL) -> Destination {
-        let name = fileName(sourcePath: sourcePath, fix: fix, audioCodec: audioCodec)
         guard let protectionNote else {
             return .beside(URL(fileURLWithPath: sourcePath).deletingLastPathComponent().appendingPathComponent(name))
         }

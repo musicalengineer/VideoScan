@@ -20,22 +20,12 @@ enum MediaRepairCommand {
          output]
     }
 
-    /// Remove repeated frames: `mpdecimate` drops each stored copy of the
-    /// previous picture, `fps=` lays the real frames on an even grid at
-    /// the real rate (their own timestamps decide which slot, so the sound
-    /// stays in step). The picture must be re-encoded — H.264, CRF 16,
-    /// preset slow (visually lossless for home video); the sound is
-    /// copied. Subtitles / data are not carried (a re-encode).
-    static func removeRepeatedFramesArgs(input: String, output: String, rate: Double) -> [String] {
-        ["-hide_banner", "-nostdin", "-y",
-         "-i", input,
-         "-map", "0:v:0", "-map", "0:a?",
-         "-vf", "mpdecimate,fps=\(RepeatedFrameRate.ffmpegText(rate))",
-         "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p",
-         "-c:a", "copy",
-         "-progress", "pipe:2",
-         output]
-    }
+    // (Every pass that decodes — removing repeated frames, rebuilding or
+    // balancing the sound — is built by MediaRepairRecipe.ffmpegArgs:
+    // `mpdecimate` drops each stored copy of the previous picture, `fps=`
+    // lays the real frames on an even grid at the real rate — their own
+    // timestamps decide the slot, so the sound stays in step — and the
+    // picture is re-encoded H.264 CRF 16, preset slow.)
 
     /// One rate-measuring window: decode `seconds` from `start`, keep only
     /// changed pictures, print each kept frame's time (showinfo → stderr).
