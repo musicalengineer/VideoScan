@@ -104,7 +104,7 @@ struct MediaRepairSoundFacts: Equatable, Sendable {
 
 /// How Repair… shows in the row menu.
 enum MediaRepairMenuState: Equatable {
-    /// No current card: Repair… runs the quick Verify first.
+    /// No current card: the sheet offers Verify first (or a lossless re-wrap).
     case verifyFirst
     /// The card has `count` fixes for its problems.
     case ready(count: Int)
@@ -117,7 +117,7 @@ enum MediaRepairMenuState: Equatable {
 
     var help: String {
         switch self {
-        case .verifyFirst: return "Not verified yet — Repair runs a quick Verify first, then shows what it can fix. Your original is never changed."
+        case .verifyFirst: return "Not verified yet — Repair offers a Verify first so it can recommend what to fix (or a lossless re-wrap now). Your original is never changed."
         case .ready: return "Show this file's report card and the fixes it offers. Every fix writes a NEW file; your original is never changed."
         case .disabled(let why): return why
         }

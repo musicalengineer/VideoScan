@@ -62,6 +62,32 @@ struct CatalogRowMenuLayoutSensorTests {
         #expect(CatalogRowMenuText.repair == "Repair\u{2026}")
     }
 
+    /// The inspect group reads Get Info… · Verify… · Repair…, in that order.
+    @Test func inspectGroupReadsGetInfoVerifyRepair() throws {
+        let group = try slice("CatalogRowContextMenu+Media.swift",
+                              from: "func mediaCheckMenuItems(", to: "func presentMediaInfo(")
+        let info = try #require(group.range(of: "CatalogRowMenuText.getInfo"))
+        let verify = try #require(group.range(of: "checkMediaMenuItem("))
+        let repair = try #require(group.range(of: "repairMenuItem("))
+        #expect(info.lowerBound < verify.lowerBound && verify.lowerBound < repair.lowerBound)
+    }
+
+    /// Repair… is enabled for one connected file (Verify first when there
+    /// is no current card), disabled with the reason otherwise.
+    @Test func repairMenuStateTruthTable() {
+        let none = MediaRepairSoundFacts()
+        let layout = MediaReportCard(tier: .quick, checkedAt: Date(), fileSizeBytes: 10, headline: "",
+                                     checks: [MediaCheck(kind: .layout, verdict: .problem, sentence: "apart")])
+        let clean = MediaReportCard(tier: .quick, checkedAt: Date(), fileSizeBytes: 10, headline: "",
+                                    checks: [MediaCheck(kind: .layout, verdict: .ok, sentence: "fine")])
+        #expect(MediaRepairPlan.menuState(card: nil, fileSizeBytes: 10, sound: none, reachable: true, selectionCount: 1) == .verifyFirst)
+        #expect(MediaRepairPlan.menuState(card: layout, fileSizeBytes: 99, sound: none, reachable: true, selectionCount: 1) == .verifyFirst)
+        #expect(MediaRepairPlan.menuState(card: layout, fileSizeBytes: 10, sound: none, reachable: true, selectionCount: 1) == .ready(count: 1))
+        #expect(!MediaRepairPlan.menuState(card: clean, fileSizeBytes: 10, sound: none, reachable: true, selectionCount: 1).isEnabled)
+        #expect(!MediaRepairPlan.menuState(card: layout, fileSizeBytes: 10, sound: none, reachable: false, selectionCount: 1).isEnabled)
+        #expect(!MediaRepairPlan.menuState(card: layout, fileSizeBytes: 10, sound: none, reachable: true, selectionCount: 2).isEnabled)
+    }
+
     /// No user-visible string literal in the app still says the old verbs
     /// (comments may keep the history).
     @Test func theOldVerbsAreGoneFromEveryUserVisibleString() throws {

@@ -477,6 +477,8 @@ struct MediaFileOperationDetail: View {
             VerifyVideoDetailView(job: verifyVideo)
         } else if let check = job as? CheckMediaJob {
             CheckMediaDetailView(job: check)
+        } else if let repair = job as? MediaRepairJob {
+            MediaRepairDetailView(job: repair)
         } else if let lock = job as? ArchiveLockJob {
             ArchiveLockDetailView(job: lock)
         } else if let spectrum = job as? FootageSpectrumJob {
@@ -911,7 +913,7 @@ extension MediaFileOperationKind {
     var hasDetailView: Bool {
         switch self {
         case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies, .verifyVideo, .checkMedia, .lockArchive, .compareFootage, .fingerprintBackfill:
+             .pruneCopies, .verifyVideo, .checkMedia, .repair, .lockArchive, .compareFootage, .fingerprintBackfill:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,

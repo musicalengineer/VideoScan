@@ -106,6 +106,13 @@ struct MediaRepairComparison: Equatable, Sendable {
 
         var id: MediaCheckKind { kind }
         var isFixed: Bool { after == .ok }
+        /// The copy's check looked at this row (a quick Verify leaves the
+        /// full-tier rows — sound — "not run": unknown, not failed).
+        var wasRechecked: Bool {
+            guard let after else { return false }
+            if case .notRun = after { return false }
+            return true
+        }
     }
 
     let rows: [Row]
@@ -128,15 +135,26 @@ struct MediaRepairComparison: Equatable, Sendable {
     }
 
     var fixedCount: Int { rows.filter(\.isFixed).count }
-    /// Every row a fix aimed at now reads OK.
-    var isFullyRepaired: Bool { rows.filter(\.targeted).allSatisfy(\.isFixed) && fixedCount > 0 }
+    private var aimedRechecked: [Row] { rows.filter { $0.targeted && $0.wasRechecked } }
+    /// Rows a fix aimed at that the quick Verify of the copy couldn't look at.
+    var notRecheckedCount: Int { rows.filter { $0.targeted && !$0.wasRechecked }.count }
+
+    /// Every row a fix aimed at was re-checked and now reads OK. Never true
+    /// on a guess: an un-re-checked row keeps this false.
+    var isFullyRepaired: Bool {
+        notRecheckedCount == 0 && !aimedRechecked.isEmpty && aimedRechecked.allSatisfy(\.isFixed)
+    }
 
     var headline: String {
         let place = besideOriginal ? "beside the original" : "in the folder you chose"
         let saved = "saved as \(outputName) \(place)"
-        let noun = fixedCount == 1 ? "problem" : "problems"
-        if isFullyRepaired { return "Repaired: \(fixedCount) \(noun) fixed \u{2014} \(saved)" }
-        let aimed = rows.filter(\.targeted).count
-        return "Partly repaired: \(rows.filter { $0.targeted && $0.isFixed }.count) of \(aimed) fixed \u{2014} \(saved)"
+        let fixed = aimedRechecked.filter(\.isFixed).count
+        let later = notRecheckedCount > 0
+            ? " \u{2014} \(notRecheckedCount) not re-checked yet (a full Verify of the copy listens to the sound)"
+            : ""
+        if aimedRechecked.isEmpty { return "Repaired copy \(saved)\(later)" }
+        let noun = fixed == 1 ? "problem" : "problems"
+        if fixed == aimedRechecked.count { return "Repaired: \(fixed) \(noun) fixed \u{2014} \(saved)\(later)" }
+        return "Partly repaired: \(fixed) of \(aimedRechecked.count) fixed \u{2014} \(saved)\(later)"
     }
 }

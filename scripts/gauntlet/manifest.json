@@ -6679,7 +6679,9 @@
         "deleteFileIsDisabledForAProtectedRecordAndEnabledForANormalOne",
         "deleteFileStateTruthTable",
         "groupsAppearInOrderWithASeparatorBetweenEach",
+        "inspectGroupReadsGetInfoVerifyRepair",
         "renamedLabels",
+        "repairMenuStateTruthTable",
         "theDisabledItemNeverActs",
         "theGroupsAreTheSevenRickAskedFor",
         "theOldVerbsAreGoneFromEveryUserVisibleString"
@@ -16865,6 +16867,30 @@
         "spaceNeedIncludesRebuiltPCM",
         "targetAppearsMidRun_neverOverwritten_notPublishedBeside",
         "targetExists_refusedBeforeAnyWrite"
+      ]
+    },
+    {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MediaRepairJobTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MediaRepairJobTests",
+        "MediaRepairSelectionTests"
+      ],
+      "tests": [
+        "anUnavailableFixCannotBeTicked",
+        "cancelled_rowSaysStopped_noBookkeeping",
+        "comparisonNeverClaimsAFixItCouldNotRecheck",
+        "failed_rowSaysOriginalUntouched_andWhereTheCopyWasKept",
+        "progressNeverRunsBackwards_andTheWriteDominates",
+        "refused_targetTaken_rowSaysNotStarted_noBookkeeping",
+        "repairWordingNeverSaysImproveOrEnhance",
+        "requestCarriesTheRecipeInOrder_andNoProtectionForATempFolder",
+        "secondDispatchForTheSameFile_isRefused",
+        "startsAtTheRecommendation_andCanBeChanged",
+        "streamLinesSayCopiedOrReencoded_andTheVerificationLevel",
+        "success_catalogsCopy_linksOriginal_finished_originalUnchanged"
       ]
     },
     {

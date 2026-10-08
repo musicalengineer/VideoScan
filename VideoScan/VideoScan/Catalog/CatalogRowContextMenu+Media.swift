@@ -33,6 +33,31 @@ extension CatalogContent {
         .accessibilityIdentifier("catalog.row.checkMedia")
     }
 
+    /// "Repair…" (Rick 2026-10-08) — the one repair door: the plan, then
+    /// ONE job writing ONE new file; the original is never changed.
+    /// Enabled / disabled by MediaRepairPlan.menuState (one file, its drive
+    /// connected; a card with nothing to fix says why). O(1).
+    @ViewBuilder
+    private func repairMenuItem(rec: VideoRecord, activeRecs: [VideoRecord]) -> some View {
+        let state = MediaRepairPlan.menuState(
+            card: rec.mediaReportCard, fileSizeBytes: rec.sizeBytes,
+            sound: MediaRepairSoundFacts(diagnosis: fileOpsCenter.verifyDiagnosis(forRecordID: rec.id)),
+            reachable: VolumeReachability.isReachable(path: rec.fullPath),
+            selectionCount: activeRecs.count)
+        Button(CatalogRowMenuText.repair) { presentRepair(for: rec) }
+            .disabled(!state.isEnabled)
+            .help(state.help)
+            .accessibilityIdentifier("catalog.row.repair")
+    }
+
+    /// The Repair sheet for one record (the row menu and Get Info's banner).
+    func presentRepair(for rec: VideoRecord) {
+        repairSheetRequest = MediaRepairSheetRequest(
+            record: rec,
+            audioDiagnosis: fileOpsCenter.verifyDiagnosis(forRecordID: rec.id),
+            onVerify: { checkMediaRequest = CheckMediaRequest(records: [rec]) })
+    }
+
     /// Get Info… / Verify… / Repair… + the repair-lifecycle cluster
     /// (GH #128 / #132 / #135) — the `.inspect` group — extracted from the
     /// row context menu so the menu's ViewBuilder expression stays inside
@@ -66,6 +91,7 @@ extension CatalogContent {
         }
 
         checkMediaMenuItem(activeRecs: activeRecs)
+        repairMenuItem(rec: rec, activeRecs: activeRecs)
 
         let reachable = activeRecs.filter { VolumeReachability.isReachable(path: $0.fullPath) }
         let damagedRecs = CatalogRowMenuRules.damagedAudio(reachable)
@@ -121,6 +147,7 @@ extension CatalogContent {
             record: rec,
             audioDiagnosis: diagnosis,
             onCheckMedia: { checkMediaRequest = CheckMediaRequest(records: [rec]) },
+            onRepair: { presentRepair(for: rec) },
             onSoundDetails: diagnosis.map { d in
                 {
                     verifyAudioRequest = VerifyAudioRequest(

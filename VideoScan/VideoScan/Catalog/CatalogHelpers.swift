@@ -179,6 +179,8 @@ struct CatalogContent: View {
     @State var mediaInfoRequest: MediaInfoRequest?
     /// "Check Media…" quick/full choice (2026-10-07) — .sheet(item:).
     @State var checkMediaRequest: CheckMediaRequest?
+    /// "Repair…" — the one repair door (2026-10-08) — .sheet(item:).
+    @State var repairSheetRequest: MediaRepairSheetRequest?
 
     /// "Find Online Version" came up empty — non-nil drives an alert
     /// explaining where copies exist (all offline) or that this is the
@@ -864,6 +866,9 @@ struct CatalogContent: View {
         }
         .sheet(item: $checkMediaRequest) { request in
             CheckMediaSheet(request: request)
+        }
+        .sheet(item: $repairSheetRequest) { request in
+            MediaRepairSheet(request: request)
         }
         // Music-triage candidates, off the main actor (2026-10-04 perf).
         .task(id: musicTriageKey) { await refreshMusicTriageCandidates() }

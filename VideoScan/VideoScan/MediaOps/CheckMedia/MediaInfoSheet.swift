@@ -22,6 +22,8 @@ struct MediaInfoRequest: Identifiable {
     /// carries the per-channel levels and the Balance / Rebuild offers.
     let audioDiagnosis: AudioVerifyDiagnosis?
     let onCheckMedia: () -> Void
+    /// Opens the Repair sheet (the plan) — Get Info's banner button.
+    var onRepair: (() -> Void)?
     let onSoundDetails: (() -> Void)?
 }
 
@@ -47,6 +49,8 @@ struct MediaInfoSheet: View {
                 .truncationMode(.middle)
 
             verdictBox
+            repairBanner
+            repairedCopyLine
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -89,6 +93,35 @@ struct MediaInfoSheet: View {
                   systemImage: "info.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The ORANGE "Recommended action" box with the GREEN button, when the
+    /// current card has something Repair can fix (Rick 2026-10-08). The
+    /// button opens the Repair sheet, which shows the plan before running.
+    @ViewBuilder
+    private var repairBanner: some View {
+        let r = request.record
+        if let card = r.mediaReportCard, card.isCurrent(forSizeBytes: r.sizeBytes), let onRepair = request.onRepair {
+            let offers = MediaRepairPlan.offers(for: card, sound: MediaRepairSoundFacts(diagnosis: request.audioDiagnosis),
+                                                originalProtected: false)
+            MediaRepairBanner(advice: MediaRepairAdvice.advice(for: card, offers: offers,
+                                                              balance: MediaRepairBalanceInput(diagnosis: request.audioDiagnosis),
+                                                              sourceName: r.filename),
+                              buttonTitle: "Repair Now\u{2026}", action: { handOff(onRepair) })
+        }
+    }
+
+    /// "Repaired copy: …" — the link Repair left on this file's card.
+    @ViewBuilder
+    private var repairedCopyLine: some View {
+        if let link = request.record.mediaReportCard?.repairedCopy {
+            Label("Repaired copy: \((link.path as NSString).lastPathComponent) (\(link.repairedAt.formatted(date: .abbreviated, time: .shortened)))",
+                  systemImage: "checkmark.seal")
+                .font(.callout)
+                .foregroundStyle(.green)
+                .help(link.path)
+                .accessibilityIdentifier("mediaInfo.repairedCopy")
         }
     }
 
