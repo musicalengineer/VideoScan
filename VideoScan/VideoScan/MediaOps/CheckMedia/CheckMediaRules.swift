@@ -82,7 +82,8 @@ enum CheckMediaRules {
 
     static func quickChecks(_ i: CheckMediaQuickInputs) -> [MediaCheck] {
         [checkBitrate(i), checkFrameRate(i), checkTimestamps(i), checkAVDuration(i),
-         checkAudioSamples(i), checkAspect(i), checkTruncation(i), checkDistinctFrames(i)]
+         checkAudioSamples(i), checkAspect(i), checkTruncation(i), checkDistinctFrames(i),
+         checkLayout(i)]
     }
 
     // 1. Size for the picture.

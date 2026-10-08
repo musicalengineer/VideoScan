@@ -37,6 +37,8 @@ struct CheckMediaMediaMatrixTests {
         #expect(q.facts.video != nil && q.facts.audio != nil, "\(name): both streams probed")
         #expect((q.packets?.packets ?? 0) > 0, "\(name): the packet sample ran")
         #expect(!(q.distinct?.usable.isEmpty ?? true), "\(name): a frame window decoded")
+        #expect(!(q.layout?.windows.isEmpty ?? true), "\(name): the layout window measured both streams")
+        #expect(checks.first { $0.kind == .layout }?.verdict == .ok, "\(name): no false layout problem")
         for c in checks {
             if case .notRun = c.verdict { continue }   // e.g. no sample count in this container
             #expect(c.verdict == .ok, "\(name) \(c.kind): \(c.sentence)")
@@ -126,5 +128,36 @@ struct CheckMediaMediaMatrixTests {
         #expect(v[.black] == .ok && v[.freeze] == .ok)
         #expect(full.signals != nil, "the signal filters rode the decode")
         #expect(checks.first { $0.kind == .sound }?.evidence.count == 2, "loudness per channel")
+        #expect(v[.soundContinuity] == .ok, "\(checks.first { $0.kind == .soundContinuity }?.sentence ?? "")")
+        let card = CheckMediaRules.card(tier: .full, checks: CheckMediaRules.quickChecks(q) + checks, quick: q, at: Date())
+        #expect(card.headline == CheckMediaRules.fullPassHeadline, "only a full pass may say healthy: \(card.headline)")
+    }
+
+    /// SENSOR (the Brockton class): all the picture stored, then all the
+    /// sound. A fragmented mov written as ONE fragment puts every picture
+    /// sample before every sound sample; 8 s of uncompressed 640×480
+    /// (≈ 147 MB) puts the sound ≈ 80–150 MB from its picture, past the
+    /// 64 MB threshold (5 s ≈ 92 MB was only 47 MB median — a Warning). The quick tier must say
+    /// Problem, in seconds, and the headline must name the stutter.
+    @Test("sound stored after all the picture is a Layout Problem", .timeLimit(.minutes(2)))
+    func nonInterleavedFixture() async throws {
+        try #require(VerifyVideoTestMedia.toolsAvailable)
+        let dir = try VerifyVideoTestMedia.makeScratchDir("cmlayout")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let path = try VerifyVideoTestMedia.generate(
+            into: dir, name: "test_cm_notinterleaved.mov", videoCodec: "rawvideo",
+            extraVideoArgs: ["-pix_fmt", "uyvy422"], size: "640x480", rate: "30", videoDuration: 8,
+            outputArgs: ["-movflags", "+empty_moov+frag_custom", "-frag_duration", "60000000"])
+        let clock = ContinuousClock()
+        var result: (CheckMediaQuickInputs, [MediaCheck])?
+        let elapsed = try await clock.measure { result = try await quickCard(path) }
+        let (q, checks) = try #require(result)
+        let layout = try #require(checks.first { $0.kind == .layout })
+        #expect(layout.verdict == .problem, "\(layout.sentence) \(layout.evidence)")
+        #expect(layout.sentence.hasPrefix("All the sound is stored after all the picture"), "\(layout.sentence)")
+        #expect(layout.fix == CheckMediaRules.layoutFix)
+        let card = CheckMediaRules.card(tier: .quick, checks: checks + CheckMediaRules.fullRowsNotRun(), quick: q, at: Date())
+        #expect(card.headline.hasPrefix("Sound may stutter: "), "\(card.headline)")
+        #expect(elapsed < .seconds(20), "quick tier took \(elapsed)")
     }
 }

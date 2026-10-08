@@ -50,7 +50,7 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
 
     typealias QuickRunner = @Sendable (String, ProcessControl) async throws -> CheckMediaProbe.QuickOutcome
     typealias FullRunner = @Sendable (String, MediaFacts, ProcessControl,
-                                      @escaping VerifyVideoProbe.Progress) async throws -> CheckMediaFullInputs
+                                      @escaping CheckMediaProbe.FullProgress) async throws -> CheckMediaFullInputs
 
     let id = UUID()
     let kind: MediaFileOperationKind = .checkMedia
@@ -200,8 +200,10 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         var audio: AudioVerifyDiagnosis?
         if tier == .full {
             setStep("decoding every frame", index: index, within: 0.1)
-            let progress: VerifyVideoProbe.Progress = { [weak self] f in
-                Task { @MainActor in self?.setStep("decoding every frame", index: index, within: 0.1 + 0.75 * f) }
+            // Picture decode = 10…70 % of this file, the sound passes 70…98 %.
+            let progress: CheckMediaProbe.FullProgress = { [weak self] phase, f in
+                let within = phase == .picture ? 0.1 + 0.6 * f : 0.7 + 0.28 * f
+                Task { @MainActor in self?.setStep(phase.step, index: index, within: within) }
             }
             let full = try await fullRunner(rec.fullPath, quick.facts, pauser.control, progress)
             try Task.checkCancellation()
@@ -230,8 +232,8 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         }
         model?.saveCatalogDebounced()
         items[index].outcome = .checked(card)
-        model?.log("Check Media: \(rec.filename) → \(card.verdict.word) — \(card.headline)")
-        checkMediaJobLog.info("check media: \(rec.filename, privacy: .public) → \(card.verdict.word, privacy: .public): \(card.headline, privacy: .public)")
+        model?.log("Check Media: \(rec.filename) → \(card.verdictWord) — \(card.headline)")
+        checkMediaJobLog.info("check media: \(rec.filename, privacy: .public) → \(card.verdictWord, privacy: .public): \(card.headline, privacy: .public)")
     }
 
     private func setStep(_ step: String, index: Int, within: Double) {
@@ -276,29 +278,47 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
     }
 
     /// The one-line finished summary: "3 checked — 1 problem, 1 warning, 1 OK".
+    /// A quick pass is never "OK": it is "no problems in the quick check".
     static func summary(_ items: [CheckMediaItem]) -> String {
-        var problem = 0, warning = 0, ok = 0, failed = 0
-        for item in items {
-            switch item.outcome {
-            case .checked(let card):
-                switch card.verdict {
-                case .problem: problem += 1
-                case .warning: warning += 1
-                default: ok += 1
-                }
-            case .failed: failed += 1
-            default: break
-            }
-        }
         if items.count == 1, case .checked(let card) = items[0].outcome {
-            return "\(card.verdict.word) — \(card.headline)"
+            return card.isQuickPassOnly ? card.displayHeadline : "\(card.verdict.word) — \(card.headline)"
         }
-        var parts: [String] = []
-        if problem > 0 { parts.append("\(problem) problem\(problem == 1 ? "" : "s")") }
-        if warning > 0 { parts.append("\(warning) warning\(warning == 1 ? "" : "s")") }
-        if ok > 0 { parts.append("\(ok) OK") }
-        if failed > 0 { parts.append("\(failed) couldn't be checked") }
-        let checked = problem + warning + ok
-        return "\(checked) checked — " + (parts.isEmpty ? "nothing to report" : parts.joined(separator: ", "))
+        let tally = CheckMediaTally(items)
+        let parts = tally.parts
+        return "\(tally.checked) checked — " + (parts.isEmpty ? "nothing to report" : parts.joined(separator: ", "))
+    }
+}
+
+/// How a finished selection came out, counted once. A quick pass is its
+/// own outcome (never folded into "OK").
+struct CheckMediaTally: Equatable {
+    var problem = 0, warning = 0, ok = 0, quickPass = 0, failed = 0
+
+    init(_ items: [CheckMediaItem]) {
+        for item in items { add(item.outcome) }
+    }
+
+    private mutating func add(_ outcome: CheckMediaItem.Outcome) {
+        switch outcome {
+        case .checked(let card) where card.isQuickPassOnly: quickPass += 1
+        case .checked(let card) where card.verdict == .problem: problem += 1
+        case .checked(let card) where card.verdict == .warning: warning += 1
+        case .checked: ok += 1
+        case .failed: failed += 1
+        default: break
+        }
+    }
+
+    var checked: Int { problem + warning + ok + quickPass }
+
+    /// "1 problem", "2 warnings", … in reading order; empty counts omitted.
+    var parts: [String] {
+        [(problem, problem == 1 ? "problem" : "problems"),
+         (warning, warning == 1 ? "warning" : "warnings"),
+         (ok, "OK"),
+         (quickPass, "with no problems in the quick check"),
+         (failed, "couldn't be checked")]
+            .filter { $0.0 > 0 }
+            .map { "\($0.0) \($0.1)" }
     }
 }

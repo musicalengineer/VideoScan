@@ -54,35 +54,44 @@ public enum MediaCheckKind: String, Codable, Sendable, CaseIterable, Hashable {
     case aspect
     case truncation
     case distinctFrames
+    /// Sound and picture for the same moment stored side by side (2026-10-07).
+    case layout
     // Full tier (decodes the whole file).
     case decode
     case black
     case freeze
     case sound
+    /// Every sample decoded: dropouts, replayed buffers, clicks, timing gaps.
+    case soundContinuity
     case interlace
 
     /// The row's short title, in family words.
-    public var title: String {
-        switch self {
-        case .bitrate: return "Size for the picture"
-        case .frameRate: return "Frame rate"
-        case .timestamps: return "Timing"
-        case .avDuration: return "Picture and sound lengths"
-        case .audioSamples: return "Sound speed"
-        case .aspect: return "Shape of the picture"
-        case .truncation: return "Complete file"
-        case .distinctFrames: return "Real frames vs repeats"
-        case .decode: return "Every frame decodes"
-        case .black: return "Black stretches"
-        case .freeze: return "Frozen picture"
-        case .sound: return "Sound track"
-        case .interlace: return "Interlacing"
-        }
-    }
+    public var title: String { Self.titles[self] ?? rawValue }
+
+    /// Titles as data, not a growing switch: the list of checks keeps
+    /// growing and each is one line here. A test pins that every case has
+    /// one (the switch's exhaustiveness check, kept as a test).
+    public static let titles: [MediaCheckKind: String] = [
+        .bitrate: "Size for the picture",
+        .frameRate: "Frame rate",
+        .timestamps: "Timing",
+        .avDuration: "Picture and sound lengths",
+        .audioSamples: "Sound speed",
+        .aspect: "Shape of the picture",
+        .truncation: "Complete file",
+        .distinctFrames: "Real frames vs repeats",
+        .layout: "Sound stored beside picture",
+        .decode: "Every frame decodes",
+        .black: "Black stretches",
+        .freeze: "Frozen picture",
+        .sound: "Sound track",
+        .soundContinuity: "Sound continuity",
+        .interlace: "Interlacing",
+    ]
 
     public var isFullTier: Bool {
         switch self {
-        case .decode, .black, .freeze, .sound, .interlace: return true
+        case .decode, .black, .freeze, .sound, .soundContinuity, .interlace: return true
         default: return false
         }
     }
@@ -156,6 +165,31 @@ public struct MediaReportCard: Codable, Sendable, Equatable {
     public var verdict: MediaCheckVerdict {
         let worst = checks.map(\.verdict).max { $0.rank < $1.rank }
         return worst ?? .notRun(reason: "no checks ran")
+    }
+
+    /// A quick check that found nothing wrong. It is NOT a clean bill of
+    /// health — the quick tier never decodes the whole file — so it must
+    /// never be worded or drawn like one (Rick 2026-10-07: a stuttering
+    /// file was called fine after a quick check).
+    public var isQuickPassOnly: Bool {
+        tier == .quick && verdict == .ok
+    }
+
+    /// The card's one-word-ish verdict for summaries and logs: "OK" only
+    /// when the full check ran; a quick pass says what it is.
+    public var verdictWord: String {
+        isQuickPassOnly ? "No problems found (quick check only)" : verdict.word
+    }
+
+    /// The headline a quick pass always carries.
+    public static let quickPassHeadline =
+        "No problems found in the quick check — run the full check to listen to every sample and decode every frame."
+
+    /// What to show: a quick pass ALWAYS reads `quickPassHeadline`, even on
+    /// a card persisted before 2026-10-07 whose stored headline said
+    /// "Looks healthy (quick check …)".
+    public var displayHeadline: String {
+        isQuickPassOnly ? Self.quickPassHeadline : headline
     }
 
     /// True while the file on disk is still the size it was checked at.

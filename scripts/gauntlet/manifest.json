@@ -7410,7 +7410,44 @@
         "mkv",
         "mov",
         "mp4",
-        "mxf"
+        "mxf",
+        "nonInterleavedFixture"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CheckMediaLayoutContinuityTests.swift",
+      "stage": "integration",
+      "suites": [
+        "CheckMediaLayoutRuleTests",
+        "CheckMediaSoundContinuityTests",
+        "CheckMediaQuickPassWordingTests",
+        "CheckMediaLayoutRealFileTests"
+      ],
+      "tests": [
+        "allSoundAtTheEndIsAProblem",
+        "argumentsAreReadOnlyAndNamed",
+        "cleanToneHasNothing",
+        "clickIsFound",
+        "edgesAndLongSilencesAreNotDropouts",
+        "fiftyMsGapIsADropout",
+        "fullPassMaySayHealthy",
+        "legacyQuickCardDisplaysTheNewSentence",
+        "longLowBitrateChunksAreAWarning",
+        "newKindsAreAdditive",
+        "nonInterleavedRealFile",
+        "oneSecondChunksAreOK",
+        "oneStreamOnlyIsNotMeasured",
+        "onlyTheSharedTimeCounts",
+        "perFrameInterleaveIsOK",
+        "quickPassNeverSaysFine",
+        "replayedBlockIsFoundAtAnyAlignment",
+        "ruleWording",
+        "tenMinutesStreamInBudget",
+        "thresholdsArePinned",
+        "throughFFmpeg",
+        "timingGapsAndOverlapsFromShowInfo"
       ]
     },
     {
@@ -28227,6 +28264,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogScopeScanIntegrationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CheckMediaLayoutContinuityTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

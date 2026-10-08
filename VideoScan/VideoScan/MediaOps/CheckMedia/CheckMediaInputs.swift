@@ -158,7 +158,7 @@ struct MediaSignalScan: Sendable, Equatable {
         return s
     }
 
-    private static func token(after key: String, in line: String) -> Substring? {
+    static func token(after key: String, in line: String) -> Substring? {
         guard let r = line.range(of: key) else { return nil }
         let rest = line[r.upperBound...].drop(while: { $0 == " " })
         return rest.prefix { !$0.isWhitespace }
@@ -197,6 +197,8 @@ struct CheckMediaQuickInputs: Sendable, Equatable {
     var videoFacts: VideoVerifyFacts
     var packets: MediaPacketScan?
     var distinct: DistinctFrameSample?
+    /// Where sound and picture sit in the file (CheckMediaLayout.swift).
+    var layout: MediaLayoutSample?
 }
 
 /// Everything the full tier measured. A nil diagnosis carries its reason.
@@ -204,6 +206,8 @@ struct CheckMediaFullInputs: Sendable {
     var video: Result<VideoVerifyDiagnosis, CheckMediaSkip>?
     var audio: Result<AudioVerifyDiagnosis, CheckMediaSkip>?
     var signals: MediaSignalScan?
+    /// The streamed decode of every sound sample (SoundContinuity.swift).
+    var continuity: Result<SoundContinuityReport, CheckMediaSkip>?
 }
 
 /// Why a full-tier pass produced no diagnosis — becomes a "not run" row.
