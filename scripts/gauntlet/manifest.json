@@ -2626,28 +2626,6 @@
     },
     {
       "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/AllFramesRipPlannerTests.swift",
-      "stage": "unit",
-      "suites": [
-        "AllFramesRipPlannerTests"
-      ],
-      "tests": [
-        "byteEstimateHandlesCaseAndJunkResolutions",
-        "commonFlagsPresentInAllModes",
-        "destinationDirNameNeverCollidesWithFacialRipper",
-        "dvFrameByteEstimateMatchesReferencePoint",
-        "estimatesRicksTenMinuteDVReference",
-        "everyFrameUsesPassthroughAndNoFilter",
-        "everyNthBuildsEscapedSelectFilter",
-        "everyNthDividesAndFpsModeIgnoresSourceRate",
-        "framesPerSecondUsesFpsFilter",
-        "missingMetadataYieldsNilNotZero",
-        "parsesDecimalAndFractionAndRejectsJunk",
-        "shortClipClampsToAtLeastOneFrame"
-      ]
-    },
-    {
-      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AmbiguousAnchorNoteConcurrencyTests.swift",
       "stage": "unit",
       "suites": [
@@ -6701,10 +6679,9 @@
         "activeAnchorWithNoActiveRowsGetsNoMenu",
         "anchorPrecedenceFollowsTheOldIfChain",
         "anyActiveRowGivesTheFullMenuWhateverTheAnchor",
+        "checkMediaLabelCountsTheRowsItRuns",
         "cleanupNeedsAPictureAnOnlineVolumeAndNoRunningJob",
         "damagedAudioIsExactlyTheDamagedVerdicts",
-        "familyMusicMarkableSkipsStreamlessAndUnprobed",
-        "familyMusicMarkedIsExactlyTheMarkedRows",
         "hasAudioOnlyForAudioBearingStreams",
         "hundredThousandRowSelectionSplitsFast",
         "mixedInertSelectionFollowsTheAnchor",
@@ -7416,6 +7393,83 @@
         "aBudgetOfTwoDefersTheRest",
         "aScopedRefreshPassReachesItsGroups",
         "wholeCatalogPassThenASecondPass"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CheckMediaMediaMatrixTests.swift",
+      "stage": "integration",
+      "suites": [
+        "CheckMediaMediaMatrixTests"
+      ],
+      "tests": [
+        "avi",
+        "capeCodClassFixture",
+        "fullCheckOnHealthyMp4",
+        "mkv",
+        "mov",
+        "mp4",
+        "mxf"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CheckMediaTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CheckMediaFactsTests",
+        "CheckMediaQuickRuleTests",
+        "CheckMediaFullRuleTests",
+        "CheckMediaCardPersistenceTests",
+        "CheckMediaJobTests",
+        "CheckMediaMenuSensorTests",
+        "CheckMediaRealFileTests"
+      ],
+      "tests": [
+        "aCardForAnotherSizeIsStale",
+        "aFailedReadPersistsNothing",
+        "argumentBuildersAreReadOnly",
+        "audioOnlyFileSkipsPictureChecksWithAReason",
+        "avLengthTolerances",
+        "blackAndFreezeShares",
+        "capeCodClassIsAProblemOnEveryTimingCheck",
+        "capeCodHeaderParses",
+        "capeCodHeadlineIsThePlainSentence",
+        "cardRoundTripsWithNotRunReasons",
+        "commandIFollowsTheFocusedTable",
+        "coverArtIsNotThePicture",
+        "decodeMapping",
+        "distinctOffsetsStayInsideTheFile",
+        "factsRowsName_rFrameRateAndAverage",
+        "fullCheckWritesSoundVerdictAndFillsTheCenterCache",
+        "healthyClipIsOKEverywhere",
+        "healthyQuickCheckLeavesVerifyFieldsAlone",
+        "interlaceLabelMismatch",
+        "kindBadgeAndVerb",
+        "levelTaggedErrorLinesAreRecognised",
+        "mislabelledSampleRateIsAProblem",
+        "onlyTheFilesTablePublishesFileInfo",
+        "packetParserReadsDurationAndPos",
+        "persistsOntoTheCurrentRecordInstance",
+        "progressParserTakesTheLastFrameLine",
+        "quickCardForARealFile",
+        "quickCheckPersistsCardAndTheConclusiveVideoVerdict",
+        "recordWithACardRoundTripsAndClones",
+        "recordWithoutACardStaysKeyless",
+        "repeatsWithoutAnAbsurdRateAreOnlyAWarning",
+        "retiredItemsStayRetired",
+        "signalLinesParse",
+        "soundVerdicts",
+        "squarePixelSDIsAWarning",
+        "summaryAndTimeLeftWording",
+        "summaryAtHundredThousand",
+        "tinyWindowsDontCount",
+        "truncatedFileIsAProblem",
+        "unreadableCardNeverFailsTheRecord",
+        "unreadableJSONThrows",
+        "variableFrameRateIsAWarning"
       ]
     },
     {
@@ -9474,36 +9528,6 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/ExtractFramesJobTests.swift",
-      "stage": "unit",
-      "suites": [
-        "ExtractFramesJobStateTests",
-        "ExtractFramesJobFractionTests",
-        "StartExtractCenterTests"
-      ],
-      "tests": [
-        "cancelAfterSuccessDoesNotOverrideFinished",
-        "cancelBeforeStartIsImmediatelyCancelled",
-        "cancelMidSaveStaysCancelledAndNotesKeptFrames",
-        "cancelWhileRipperRunningIsCancelling",
-        "cancelWithNothingSavedSaysNoFrames",
-        "destinationMapsToFinishedWithFrameCount",
-        "errorMapsToFailed",
-        "errorWinsOverDestination",
-        "extractAndCompareShareTheList",
-        "extractOnMissingFileRegistersAndFailsFast",
-        "extractPauseIsOffInPhaseTwo",
-        "fractionClampsAtOne",
-        "freshJobIsRunning",
-        "indeterminateUntilCandidateTargetKnown",
-        "samplingPhaseFillsFirstHalf",
-        "savingPhaseFillsSecondHalf",
-        "singleFrameSummaryIsSingular"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ExtractedModuleTests.swift",
       "stage": "unit",
       "suites": [
@@ -11294,27 +11318,6 @@
         "frameSkipping",
         "yieldsFramesFromMOV",
         "yieldsFramesFromTS"
-      ]
-    },
-    {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
-      "kind": "xcode",
-      "path": "VideoScan/VideoScanTests/FrameRipperTests.swift",
-      "stage": "unit",
-      "suites": [
-        "FrameRipperTests"
-      ],
-      "tests": [
-        "filenameEmbedsQuality",
-        "filenameEmbedsTimestamp",
-        "filenameHasPngExtension",
-        "filenameLargeTimestamp",
-        "filenameQualityClampsToBounds",
-        "filenameSortsByRank",
-        "filenameZeroTimestamp",
-        "scoreFaceReturnsZeroForBlankImage",
-        "writePNGProducesNonZeroFile",
-        "writePNGSucceedsOnValidImage"
       ]
     },
     {
@@ -15942,7 +15945,6 @@
         "cleanupStallThenStop",
         "compareCancelThenFfmpegErrorIsCancelled",
         "errorBeforeCancelStaysFailed",
-        "extractCancelThenDecodeErrorIsCancelled",
         "failedStaysRedX",
         "findPersonStallThenStopIsFailedAndStopThenErrorIsCancelled",
         "finishedAndRunning",
@@ -15951,7 +15953,6 @@
         "rebuildStallThenStop",
         "reformatCancelIsCancelled",
         "reformatStallThenStop",
-        "ripAllFramesCancelThenFfmpegErrorIsCancelled",
         "stallStillRendersFailed",
         "transcodeCancelIsCancelled",
         "transcodeStallThenStop",
@@ -16425,7 +16426,6 @@
         "compareJobStampsFinishedAtOnFailure",
         "comparePauseIsOffInPhaseOne",
         "errorMapsToFailed",
-        "extractJobCancelledBeforeStartStampsFinishedAt",
         "failedJobDurationIsFrozen",
         "finishedJobReadsRunDurationNotWallClock",
         "finishedJobsAreCappedAtFifty",
@@ -16442,7 +16442,6 @@
         "reformatJobStampsFinishedAtOnFailure",
         "resumeAllIsNoOpWhenNothingPaused",
         "resumeAllReachesOnlyPausedActiveJobs",
-        "ripAllFramesJobCancelledBeforeStartStampsFinishedAt",
         "runningCountCountsOnlyActiveStates",
         "runningJobTicksLive",
         "ssdIsUnrestricted",
@@ -22663,10 +22662,10 @@
       "tests": [
         "brokenDiagnosisSummaryIsThePersistedNote",
         "cancelWhileQueuedEndsCancelledAndPersistsNothing",
+        "checkMediaReplacedBothVerifyVerbs",
         "duplicateDispatchIsRefusedAndLogged",
         "failedProbePersistsNothing",
         "kindWords",
-        "labelHasNoEllipsisLikeVerifyAudio",
         "menuBuilderIsOSelectionNotORecords",
         "neverVerifiedRecordsGainZeroBytes",
         "noVideoStreamIsAPlainFailureWithNoVerdict",
@@ -22678,8 +22677,7 @@
         "trimMasterSensorCoversEveryRowMenuFile",
         "verdictPersistenceNeverWritesTheRealCatalog",
         "verdictPersistsToReplacementRecordWithSameID",
-        "verifiedRecordsRoundTripAndClone",
-        "verifyVideoSitsRightAfterVerifyAudio"
+        "verifiedRecordsRoundTripAndClone"
       ]
     },
     {
@@ -26229,6 +26227,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/CheckMediaTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/CleanupIsolationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -26414,10 +26416,6 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ExtensionlessScanTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/ExtractFramesJobTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -26619,10 +26617,6 @@
         {
           "name": "VideoScan/VideoScanTests/FramePrefetcherTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/FrameRipperTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/HiddenPersonLeavesFamilyRecordsBehindTests.swift",
@@ -27638,7 +27632,6 @@
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
         "VideoScanTests/AgeBucketTests",
-        "VideoScanTests/AllFramesRipPlannerTests",
         "VideoScanTests/AmbiguousAnchorNoteConcurrencyTests",
         "VideoScanTests/AnalyzeReclaimableLogicTests",
         "VideoScanTests/AnalyzeReclaimableScaleTests",
@@ -28234,6 +28227,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogScopeScanIntegrationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CheckMediaMediaMatrixTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

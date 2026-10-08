@@ -116,6 +116,41 @@ enum VerifyVideoProbe {
         ]
     }
 
+    /// The Check Media full-tier decode (2026-10-07): the SAME single
+    /// decode, with idet / blackdetect / freezedetect riding along. The log
+    /// level drops to info so the filters' reports reach stderr; every line
+    /// then carries its level tag (`level+`), and only error-level lines
+    /// count as decode complaints — exactly what `-v error` let through.
+    static func decodeWithSignalsArgs(input: String) -> [String] {
+        [
+            "-nostdin", "-hide_banner", "-loglevel", "level+info",
+            "-i", input,
+            "-map", "0:v:0",
+            "-vf", CheckMediaRules.signalFilterChain,
+            "-f", "null", "-",
+            "-progress", "pipe:1", "-nostats",
+        ]
+    }
+
+    /// With `level+` logging: the line's level, or nil for an untagged line.
+    /// "[h264 @ 0x…] [error] error while decoding MB 18 11" → "error".
+    static func logLevel(ofTaggedLine line: String) -> String? {
+        for level in ["error", "fatal", "panic", "warning", "info"] where line.contains("[\(level)] ") {
+            return level
+        }
+        return nil
+    }
+
+    /// "[h264 @ 0x…] [error] msg" → "[h264 @ 0x…] msg" — so the tagged
+    /// line cleans up exactly like an untagged one.
+    static func strippingLevelTag(_ line: String) -> String {
+        var out = line
+        for level in ["error", "fatal", "panic", "warning", "info"] {
+            out = out.replacingOccurrences(of: "[\(level)] ", with: "")
+        }
+        return out
+    }
+
     // MARK: Full diagnosis
 
     /// Test seams (the VerifyAudioProbe convention) — production passes
@@ -125,11 +160,15 @@ enum VerifyVideoProbe {
     #if compiler(>=6.2)
     @concurrent
     #endif
+    /// `signalLine` (Check Media's full tier) switches the decode to
+    /// `decodeWithSignalsArgs` and hands every info-level line to the
+    /// caller; nil (Verify Video, every existing caller) changes nothing.
     static func diagnose(path: String,
                          control: ProcessControl? = nil,
                          progress: Progress? = nil,
                          decodeBudgetOverride: Double? = nil,
-                         sourceRecheckOverride: SourceRecheck? = nil
+                         sourceRecheckOverride: SourceRecheck? = nil,
+                         signalLine: (@Sendable (String) -> Void)? = nil
     ) async throws -> VideoVerifyDiagnosis {
         let ffprobe = ToolLocator.ffprobePath
         let ffmpeg = ToolLocator.ffmpegPath
@@ -158,12 +197,7 @@ enum VerifyVideoProbe {
                await recheck(path) {
                 let detail = VerifyVideoRules.unopenableDetail(fromProbeStderr: header.stderr)
                 verifyVideoLog.notice("verifyVideo: \(name, privacy: .public) cannot be opened (\(detail, privacy: .public)) — Broken")
-                var facts = VideoVerifyFacts()
-                facts.fileSizeBytes = fileSize(path)
-                return VideoVerifyDiagnosis(
-                    findings: [.unopenable(detail: detail)], facts: facts,
-                    sample: nil,
-                    decode: VideoDecodeFacts(coverage: .skipped(reason: "the file can't be opened")))
+                return unopenableDiagnosis(detail: detail, sizeBytes: fileSize(path))
             }
             verifyVideoLog.notice("verifyVideo: header probe failed for \(name, privacy: .public) (exit \(header.exitCode), timedOut=\(header.timedOut)) — no verdict")
             throw VideoVerifyProbeError.probeFailed(header.timedOut
@@ -196,15 +230,15 @@ enum VerifyVideoProbe {
         let pre = VerifyVideoRules.preDecodeFindings(facts: facts, sample: sample)
         let decode: VideoDecodeFacts
         if VerifyVideoRules.decodeIsPointless(pre) {
-            decode = VideoDecodeFacts(coverage: .skipped(
-                reason: "already known broken — decoding \(VerifyVideoRules.sizeText(facts.fileSizeBytes)) would add nothing"))
+            decode = skippedAsPointless(facts)
         } else {
             decode = try await runDecode(path: path, ffmpeg: ffmpeg, facts: facts,
                                          control: control, progress: progress,
                                          budget: decodeBudgetOverride
                                             ?? VerifyVideoRules.decodeBudgetSeconds(
                                                 durationSeconds: facts.videoDurationSeconds),
-                                         recheck: recheck)
+                                         recheck: recheck,
+                                         signalLine: signalLine)
         }
 
         let findings = VerifyVideoRules.findings(facts: facts, sample: sample, decode: decode)
@@ -212,6 +246,23 @@ enum VerifyVideoProbe {
                                              sample: sample, decode: decode)
         verifyVideoLog.info("verifyVideo: \(name, privacy: .public) → \(diagnosis.verdict.rawValue, privacy: .public): \(diagnosis.persistedNote.isEmpty ? "clean" : diagnosis.persistedNote, privacy: .public) (codec=\(facts.videoCodec, privacy: .public) \(facts.width)x\(facts.height), frames=\(facts.frameCount ?? -1), decodeErrors=\(decode.errorCount))")
         return diagnosis
+    }
+
+    /// The decode record when the header + sample already prove the file
+    /// broken — shared with Check Media's quick tier so both write the
+    /// identical verdict.
+    static func skippedAsPointless(_ facts: VideoVerifyFacts) -> VideoDecodeFacts {
+        VideoDecodeFacts(coverage: .skipped(
+            reason: "already known broken — decoding \(VerifyVideoRules.sizeText(facts.fileSizeBytes)) would add nothing"))
+    }
+
+    /// The diagnosis Verify Video records for a file ffprobe can't open.
+    static func unopenableDiagnosis(detail: String, sizeBytes: Int64) -> VideoVerifyDiagnosis {
+        var facts = VideoVerifyFacts()
+        facts.fileSizeBytes = sizeBytes
+        return VideoVerifyDiagnosis(
+            findings: [.unopenable(detail: detail)], facts: facts, sample: nil,
+            decode: VideoDecodeFacts(coverage: .skipped(reason: "the file can't be opened")))
     }
 
     /// The full decode pass. Throws only for cancellation and for an I/O
@@ -223,18 +274,29 @@ enum VerifyVideoProbe {
                                   control: ProcessControl?,
                                   progress: Progress?,
                                   budget: Double,
-                                  recheck: SourceRecheck) async throws -> VideoDecodeFacts {
+                                  recheck: SourceRecheck,
+                                  signalLine: (@Sendable (String) -> Void)?) async throws -> VideoDecodeFacts {
         let tally = VideoDecodeTally()
         let total = facts.videoDurationSeconds
+        let args = signalLine == nil ? decodeArgs(input: path) : decodeWithSignalsArgs(input: path)
         let result = await ProcessRunner.runProcess(
             executable: ffmpeg,
-            arguments: decodeArgs(input: path),
+            arguments: args,
             stdoutLine: { line in
                 guard let s = VerifyVideoRules.progressSeconds(fromLine: line),
                       let advanced = tally.noteProgress(s), total > 0 else { return }
                 progress?(min(1, advanced / total))
             },
-            stderrLine: { line in tally.noteError(line) },
+            stderrLine: { line in
+                // Untagged (`-v error`): every line is a complaint, as
+                // before. Tagged (signal pass): only error-level lines are.
+                guard let signalLine else { tally.noteError(line); return }
+                switch logLevel(ofTaggedLine: line) {
+                case "error", "fatal", "panic": tally.noteError(strippingLevelTag(line))
+                case "info": signalLine(line)
+                default: break
+                }
+            },
             stdoutLimitBytes: 16 * 1024,
             stderrLimitBytes: 64 * 1024,
             deadlineSeconds: budget,

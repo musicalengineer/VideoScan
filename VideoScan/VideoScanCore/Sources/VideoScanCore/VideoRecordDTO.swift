@@ -162,6 +162,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let footageDecisions: [FootageDecision]
     public let familyMusic: FamilyMusicInfo?
     public let perceptualFingerprint: StoredPerceptualFingerprint?
+    public let mediaReportCard: MediaReportCard?
 
     // MARK: Capture from a live VideoRecord (called ON the main actor)
 
@@ -295,6 +296,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         footageDecisions            = r.footageDecisions
         familyMusic                 = r.familyMusic
         perceptualFingerprint       = r.perceptualFingerprint
+        mediaReportCard             = r.mediaReportCard
     }
 
     // MARK: Encode — VERBATIM from VideoRecord.encode(to:)
@@ -552,5 +554,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // Perceptual fingerprint (GH #293): only when one was kept — every
         // other record round-trips byte-identical.
         try c.encodeIfPresent(perceptualFingerprint, forKey: .perceptualFingerprint)
+        // Check Media (2026-10-07): only once a check has run.
+        try c.encodeIfPresent(mediaReportCard, forKey: .mediaReportCard)
     }
 }

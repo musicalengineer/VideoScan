@@ -73,6 +73,10 @@ enum CatalogRowMenuText {
     static func analyze(count: Int) -> String {
         count > 1 ? "Analyze \(count) Files" : "Analyze"
     }
+    /// The ellipsis is earned: a tier choice (quick / full) opens first.
+    static func checkMedia(count: Int) -> String {
+        count > 1 ? "Check \(count) Files\u{2026}" : "Check Media\u{2026}"
+    }
     static func removeFromCatalog(count: Int) -> String {
         count > 1 ? "Remove \(count) from Catalog" : "Remove from Catalog"
     }
@@ -129,16 +133,12 @@ enum CatalogRowMenuRules {
     static func hasAudio(_ streamType: StreamType) -> Bool {
         streamType == .videoAndAudio || streamType == .audioOnly
     }
-    /// Rows Mark as Family Music… may mark: anything with a stream.
-    static func familyMusicMarkable(_ active: [VideoRecord]) -> [VideoRecord] {
-        active.filter { $0.streamType != .noStreams && $0.streamType != .ffprobeFailed }
-    }
-    /// Rows Unmark acts on (the item shows only when this is non-empty).
-    static func familyMusicMarked(_ active: [VideoRecord]) -> [VideoRecord] {
-        active.filter { $0.familyMusic != nil }
-    }
-    /// Rows Repair Damaged Audio acts on: the verifiable rows Verify
-    /// Audio called damaged.
+    // (familyMusicMarkable / familyMusicMarked retired with the Mark as
+    // Family Music… item, 2026-10-07 — Rick: "this app is not going to
+    // track Rick's Music". Existing marks stay on records, inert.)
+
+    /// Rows Repair Damaged Audio acts on: the reachable rows whose last
+    /// sound check (Verify Audio, now Check Media) said damaged.
     static func damagedAudio(_ verifiable: [VideoRecord]) -> [VideoRecord] {
         verifiable.filter { $0.audioVerifyStatus == "damaged" }
     }

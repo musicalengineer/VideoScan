@@ -199,16 +199,12 @@ struct CatalogRowMenuRulesTests {
         }
     }
 
-    @Test func familyMusicMarkableSkipsStreamlessAndUnprobed() {
-        let recs = Self.allStreams.enumerated().map { rec($1, $0) }
-        #expect(R.familyMusicMarkable(recs).map(\.streamType) == [.videoAndAudio, .videoOnly, .audioOnly])
-    }
+    // (familyMusicMarkable / familyMusicMarked retired with the Mark as
+    // Family Music… item, 2026-10-07.)
 
-    @Test func familyMusicMarkedIsExactlyTheMarkedRows() {
-        let a = rec(.audioOnly, 0), b = rec(.audioOnly, 1), c = rec(.videoAndAudio, 2)
-        b.familyMusic = FamilyMusicInfo(performer: "Tim")
-        #expect(R.familyMusicMarked([a, b, c]).map(\.id) == [b.id])
-        #expect(R.familyMusicMarked([a, c]).isEmpty, "Unmark hidden when nothing is marked")
+    @Test func checkMediaLabelCountsTheRowsItRuns() {
+        #expect(CatalogRowMenuText.checkMedia(count: 1) == "Check Media\u{2026}")
+        #expect(CatalogRowMenuText.checkMedia(count: 3) == "Check 3 Files\u{2026}")
     }
 
     @Test func damagedAudioIsExactlyTheDamagedVerdicts() {
@@ -220,13 +216,17 @@ struct CatalogRowMenuRulesTests {
 
     /// SCALE: the selection-wide rules stay O(selection) at a 100k select-all.
     @Test func selectionRulesAtHundredThousand() {
-        let recs = (0..<100_000).map { rec($0 % 5 == 0 ? .noStreams : .audioOnly, $0) }
+        let recs = (0..<100_000).map { i -> VideoRecord in
+            let r = rec(i % 5 == 0 ? .noStreams : .audioOnly, i)
+            if i % 5 == 1 { r.audioVerifyStatus = "damaged" }
+            return r
+        }
         let clock = ContinuousClock()
         var n = 0
         let elapsed = clock.measure {
-            n = R.familyMusicMarkable(recs).count + R.familyMusicMarked(recs).count + R.damagedAudio(recs).count
+            n = R.damagedAudio(recs).count
         }
-        #expect(n == 80_000)
+        #expect(n == 20_000)
         #expect(elapsed < .seconds(2), "100k rule pass took \(elapsed)")
     }
 }

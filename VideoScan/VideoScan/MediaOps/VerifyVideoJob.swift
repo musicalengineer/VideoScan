@@ -274,10 +274,17 @@ final class VerifyVideoJob: @MainActor MediaFileOperationJob {
     private func persistVerdict(_ diagnosis: VideoVerifyDiagnosis) {
         let currentRecord = model?.records.first(where: { $0.id == record.id })
             ?? record
-        currentRecord.videoVerifyStatus = diagnosis.persistedStatus
-        currentRecord.videoVerifyNote = diagnosis.persistedNote
-        currentRecord.videoVerifyDate = Date()
+        Self.write(diagnosis, onto: currentRecord, at: Date())
         model?.saveCatalogDebounced()
+    }
+
+    /// THE writer of the persisted video verdict — shared with Check Media
+    /// (2026-10-07) so both verbs give `videoVerifyStatus/Note/Date` one
+    /// meaning. Only ever called with a complete diagnosis.
+    static func write(_ diagnosis: VideoVerifyDiagnosis, onto record: VideoRecord, at date: Date) {
+        record.videoVerifyStatus = diagnosis.persistedStatus
+        record.videoVerifyNote = diagnosis.persistedNote
+        record.videoVerifyDate = date
     }
 
     // MARK: Finish helpers

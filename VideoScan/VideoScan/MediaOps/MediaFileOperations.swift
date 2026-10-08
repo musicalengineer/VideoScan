@@ -35,6 +35,22 @@ private let fileOpsLog = Logger(subsystem: "Rick-Breen.VideoScan",
 /// Which verb a job performs. Drives the colored badge capsule in the
 /// operations window ("Combine" green, "Compare" blue, "Faces" orange,
 /// "Frames" purple).
+/// One job kind's look in the operations window and its log wording.
+/// Plain values — the SwiftUI Color is made from `fill` in the window file.
+struct MediaFileOperationKindStyle: Equatable {
+    struct RGB: Equatable {
+        let red, green, blue: Double
+        init(_ red: Double, _ green: Double, _ blue: Double) {
+            self.red = red
+            self.green = green
+            self.blue = blue
+        }
+    }
+    let badge: String
+    let logVerb: String
+    let fill: RGB
+}
+
 enum MediaFileOperationKind: String, CaseIterable {
     case combine
     case compare
@@ -98,6 +114,12 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// Read-only on media; verdict persisted on the record. Its row
     /// expands to the reasons (VerifyVideoDetailView). VerifyVideoJob.
     case verifyVideo
+    /// "Check Media…" (Rick 2026-10-07) — the catalog's one examination
+    /// verb: a quick tier (header, packet samples, short frame windows)
+    /// and an optional full tier (the Verify Video decode with signal
+    /// filters + the Verify Audio levels pass). One row for the whole
+    /// selection; per-file report cards in its detail. CheckMediaJob.
+    case checkMedia
     /// "Find & Tag" — runs a per-person detector recipe (Donna Recipe,
     /// docs/find-and-tag-design.md) over selected records and writes
     /// MACHINE-tier person tags (detected "Donna*" / suspected
@@ -174,78 +196,118 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// PerceptualFingerprintBackfillJob.
     case fingerprintBackfill
 
-    /// Badge text — rendered in small caps by the row view.
-    /// `.extract` says "Faces" (not "Extract") since the verb split:
-    /// with two extract-style rows in the window, the badge is what
-    /// tells them apart at a glance.
-    var badgeText: String {
+    /// How this kind presents itself — badge text, log verb and badge
+    /// fill — as ONE value per kind (2026-10-07). These used to be three
+    /// parallel exhaustive switches that each grew a branch per new verb;
+    /// now one switch does, still with no `default`, so a new kind cannot
+    /// compile without all three. Badge: small caps in the row (`.extract`
+    /// says "Faces" since the verb split; DELETE / TRASH are upper-case on
+    /// purpose — the destructive rows must be unmistakable). Log verb: the
+    /// lowercase verb in the videoscan.log START/OUTCOME lines, matching
+    /// the older ad-hoc lines so greps over old logs keep working. Fill:
+    /// hand-darkened hues that carry white small-caps text (Rick
+    /// 2026-07-31), pairwise distinct (the nightly sensor).
+    var style: MediaFileOperationKindStyle {
         switch self {
-        case .combine: return "Combine"
-        case .compare: return "Compare"
-        case .extract: return "Faces"
-        case .ripFrames: return "Frames"
-        case .reformat: return "Reformat"
-        case .analyze: return "Analyze"
-        case .transcode: return "Transcode"
-        case .cleanup: return "Clean Up"
-        case .trim: return "Trim"
-        case .balanceAudio: return "Balance"
-        case .rebuildAudio: return "Rebuild"
-        case .verifyAudio: return "Verify"
-        case .verifyVideo: return "Verify Video"
-        case .findPerson: return "Find"
-        case .promote: return "Promote"
-        case .verifyArchive: return "Fixity"
-        case .archiveAngel: return "Angel"
-        // Upper-case on purpose (the badge is small caps, so "Delete"
-        // would read like every other verb): the one destructive row in
-        // the list must be unmistakable at a glance.
-        case .deleteDuplicates: return "DELETE"
-        // The other destructive row — the same treatment (upper-case, its
-        // own high-contrast fill) so it is never mistaken for a verb that
-        // only reads.
-        case .pruneCopies: return "TRASH"
-        case .findSimilarFootage: return "Footage"
-        case .bindFixity: return "Bind"
-        case .lockArchive: return "Lock"
-        case .compareFootage: return "Spectrum"
-        case .fingerprintBackfill: return "Fingerprint"
+        // Forest green — Combine's original green, darkened.
+        case .combine: return .init(badge: "Combine", logVerb: "combine", fill: .init(0.10, 0.45, 0.16))
+        // Cobalt — Compare's blue.
+        case .compare: return .init(badge: "Compare", logVerb: "compare", fill: .init(0.08, 0.32, 0.72))
+        // Burnt orange — Extract/Faces' orange.
+        case .extract: return .init(badge: "Faces", logVerb: "extract faces", fill: .init(0.75, 0.42, 0.00))
+        // Deep purple — Frames' purple.
+        case .ripFrames: return .init(badge: "Frames", logVerb: "extract frames", fill: .init(0.44, 0.22, 0.65))
+        // Crimson — Reformat's red.
+        case .reformat: return .init(badge: "Reformat", logVerb: "reformat", fill: .init(0.70, 0.14, 0.16))
+        // Dark cyan (blue-leaning) — Analyze. Sits between compare's
+        // cobalt and cleanup's teal; the blue cast keeps it apart.
+        case .analyze: return .init(badge: "Analyze", logVerb: "analyze", fill: .init(0.00, 0.42, 0.58))
+        // Pass C — Transcode's mint matches the workspaceActive tint
+        // (mint hammer icon in the catalog filename column), so the user
+        // reads "transcode → workspace" as the same visual lineage.
+        // Dark sea-green keeps the mint family, green-leaning.
+        case .transcode: return .init(badge: "Transcode", logVerb: "transcode", fill: .init(0.00, 0.52, 0.36))
+        // Clean Up shares transcode's derivative-producing nature but
+        // gets its own hue so the two verbs read apart at a glance —
+        // balanced teal between transcode's green and analyze's blue.
+        case .cleanup: return .init(badge: "Clean Up", logVerb: "cleanup", fill: .init(0.00, 0.44, 0.46))
+        // Trim is the third derivative-producing verb — indigo keeps it
+        // distinct from transcode's mint and cleanup's teal.
+        case .trim: return .init(badge: "Trim", logVerb: "trim", fill: .init(0.32, 0.31, 0.75))
+        // Balance Audio — raspberry keeps pink's identity but darker;
+        // distinct from the other derivative-producing verbs. GH #116.
+        case .balanceAudio: return .init(badge: "Balance", logVerb: "balance audio", fill: .init(0.72, 0.16, 0.40))
+        // Rebuild Audio Track (Verify Audio's repair, GH #128) — dark
+        // brown keeps the audio-repair pair (raspberry/brown) adjacent
+        // but distinguishable.
+        case .rebuildAudio: return .init(badge: "Rebuild", logVerb: "rebuild audio", fill: .init(0.47, 0.32, 0.20))
+        // Verify Audio (the diagnosis as a job, GH #135) — dark goldenrod
+        // keeps the yellow "checking" semantics; reads apart from its
+        // brown repair sibling and from extract's burnt orange.
+        case .verifyAudio: return .init(badge: "Verify", logVerb: "verify audio", fill: .init(0.72, 0.53, 0.04))
+        // Verify Video (2026-09-23) — dark olive: the picture-side sibling
+        // of Verify Audio's goldenrod (same "checking" family, Δ ≈ 0.31
+        // from it), apart from combine's forest green and promote's bronze.
+        case .verifyVideo: return .init(badge: "Verify Video", logVerb: "verify video", fill: .init(0.42, 0.45, 0.05))
+        // Check Media (2026-10-07) — dark moss: the same "checking" family
+        // as the two Verify fills, Δ ≈ 0.20 from every other fill.
+        case .checkMedia: return .init(badge: "Check", logVerb: "check media", fill: .init(0.25, 0.35, 0.00))
+        // Find & Tag (per-person recipe, 2026-08-02) — dark slate blue,
+        // distinct from trim's indigo and compare's cobalt; passes the
+        // white-text contrast sensor like the rest of the 2026-07-31
+        // legibility palette.
+        case .findPerson: return .init(badge: "Find", logVerb: "find person", fill: .init(0.28, 0.24, 0.50))
+        // Promote to Archive (2026-08-15) — deep archival bronze: warm
+        // like the retire/archivebox family, darker than rebuild's brown,
+        // and clearly apart from extract's burnt orange.
+        case .promote: return .init(badge: "Promote", logVerb: "promote", fill: .init(0.55, 0.36, 0.10))
+        // Verify Archive Copies (GH #167, 2026-08-20) — steel slate:
+        // cooler and grayer than trim's indigo and findPerson's slate
+        // blue; reads as "the auditor", apart from verifyAudio's
+        // goldenrod despite sharing the verb.
+        case .verifyArchive: return .init(badge: "Fixity", logVerb: "verify archive", fill: .init(0.36, 0.42, 0.60))
+        // Archive Angel (2026-09-09) — deep violet: the proposer that
+        // precedes Promote's bronze (the retired assessCopies' plum it once
+        // stood apart from went with the Promote Helper, S4).
+        case .archiveAngel: return .init(badge: "Angel", logVerb: "archive angel", fill: .init(0.70, 0.30, 0.05))   // dark amber — the Angel's orange; Δ≥0.14 from every other fill (nightly sensor 9/10)
+        // Delete Duplicates (2026-09-20) — Rick asked for "DELETE in clear
+        // high contrast color": white on a strong, saturated red. System
+        // `.red` fails the white-text legibility sensor (contrast < 3), so
+        // this is red darkened just enough — contrast vs white ≈ 5.6, Δ
+        // from Reformat's crimson ≈ 0.17, and still unmistakably RED.
+        case .deleteDuplicates: return .init(badge: "DELETE", logVerb: "delete duplicates", fill: .init(0.82, 0.04, 0.06))
+        // "Move to Trash" (2026-09-20) — oxblood: the other destructive
+        // row, unmistakably red beside DELETE's brighter red (Δ ≈ 0.26)
+        // and apart from Reformat's crimson (Δ ≈ 0.14); contrast vs white
+        // ≈ 8.9.
+        case .pruneCopies: return .init(badge: "TRASH", logVerb: "trash copies", fill: .init(0.58, 0.06, 0.16))
+        // Find Similar Footage (2026-09-23) — graphite: a metadata walk,
+        // not a media verb. Δ ≥ 0.19 from every other fill (nearest:
+        // Rebuild's brown), contrast vs white ≈ 8.5.
+        case .findSimilarFootage: return .init(badge: "Footage", logVerb: "find similar footage", fill: .init(0.30, 0.30, 0.30))
+        // Bind Fixity to Volume (2026-09-23) — deep violet: a slow full
+        // read that only rewrites catalog stamps. Δ ≥ 0.29 from every
+        // other fill (nearest: Frames' purple), contrast vs white ≈ 7.
+        case .bindFixity: return .init(badge: "Bind", logVerb: "bind fixity", fill: .init(0.55, 0.00, 0.80))
+        // Lock files already in the archive (2026-09-27) — deep navy slate: "the vault".
+        // Δ ≥ 0.22 from every other fill; contrast vs white ≈ 13.
+        case .lockArchive: return .init(badge: "Lock", logVerb: "lock archive files", fill: .init(0.10, 0.20, 0.30))
+        // Compare Footage / Footage Spectrum (2026-10-03) — plum: a reading
+        // verb like Compare's cobalt, but its own family. Δ ≥ 0.22 from every
+        // other fill (nearest: Balance's raspberry), contrast vs white ≈ 9.
+        case .compareFootage: return .init(badge: "Spectrum", logVerb: "compare footage", fill: .init(0.50, 0.10, 0.45))
+        // Fingerprint Pictures (GH #293, 2026-10-07) — deep ultramarine: a
+        // reading verb that only writes catalog notes. Δ ≥ 0.35 from every
+        // other fill (nearest: Lock's navy slate), contrast vs white ≈ 14.7.
+        case .fingerprintBackfill: return .init(badge: "Fingerprint", logVerb: "fingerprint pictures", fill: .init(0.00, 0.00, 0.58))
         }
     }
 
-    /// Lowercase verb used in the videoscan.log START/OUTCOME summary
-    /// lines ("trim done: …", "balance audio FAILED: …"). Distinct from
-    /// `badgeText` (UI capitalization) and deliberately matching the
-    /// wording the pre-existing ad-hoc log lines already used, so
-    /// greps over old logs keep working.
-    var logVerb: String {
-        switch self {
-        case .combine: return "combine"
-        case .compare: return "compare"
-        case .extract: return "extract faces"
-        case .ripFrames: return "extract frames"
-        case .reformat: return "reformat"
-        case .analyze: return "analyze"
-        case .transcode: return "transcode"
-        case .cleanup: return "cleanup"
-        case .trim: return "trim"
-        case .balanceAudio: return "balance audio"
-        case .rebuildAudio: return "rebuild audio"
-        case .verifyAudio: return "verify audio"
-        case .verifyVideo: return "verify video"
-        case .findPerson: return "find person"
-        case .promote: return "promote"
-        case .verifyArchive: return "verify archive"
-        case .archiveAngel: return "archive angel"
-        case .deleteDuplicates: return "delete duplicates"
-        case .pruneCopies: return "trash copies"
-        case .findSimilarFootage: return "find similar footage"
-        case .bindFixity: return "bind fixity"
-        case .lockArchive: return "lock archive files"
-        case .compareFootage: return "compare footage"
-        case .fingerprintBackfill: return "fingerprint pictures"
-        }
-    }
+    /// Badge text — rendered in small caps by the row view.
+    var badgeText: String { style.badge }
+
+    /// Lowercase verb for the videoscan.log START/OUTCOME summary lines.
+    var logVerb: String { style.logVerb }
 }
 
 // MARK: - State
@@ -1034,44 +1096,10 @@ final class MediaFileOperationsCenter: ObservableObject {
         return job
     }
 
-    /// Kick off a best-frames extraction (phase 2). Same ownership
-    /// model as compare: the job owns its run Task, so the rip keeps
-    /// going when the operations window closes; the caller just opens
-    /// the window to watch it. Reads gate on the source file's volume
-    /// (a rip is a long sequential decode — same HDD-thrash concern as
-    /// compare).
-    @discardableResult
-    func startExtract(record: VideoRecord, destinationParent: URL) -> ExtractFramesJob {
-        let gates = gatePlan(forPaths: [record.fullPath])
-        let job = ExtractFramesJob(record: record,
-                                   destinationParent: destinationParent,
-                                   gates: gates)
-        guard add(job) else { return job }
-        job.start()
-        fileOpsLog.info("extract started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (gates: \(gates.count))")
-        logStart(job, plan: "best portrait frames → \(destinationParent.lastPathComponent)/")
-        return job
-    }
-
-    /// Kick off an ffmpeg-only frame export ("Extract Frames…", verb
-    /// split 2026-06-10). Same ownership/gating model as the facial
-    /// extract above — one long sequential read of the source file.
-    /// `options` carries the sampling choice from RipAllFramesSheet.
-    @discardableResult
-    func startRipAllFrames(record: VideoRecord,
-                           destinationParent: URL,
-                           options: AllFramesRipper.Options) -> RipAllFramesJob {
-        let gates = gatePlan(forPaths: [record.fullPath])
-        let job = RipAllFramesJob(record: record,
-                                  destinationParent: destinationParent,
-                                  gates: gates,
-                                  options: options)
-        guard add(job) else { return job }
-        job.start()
-        fileOpsLog.info("ripFrames started: \(record.filename, privacy: .public) → \(destinationParent.path, privacy: .public) (\(options.sampling.logDescription, privacy: .public), gates: \(gates.count))")
-        logStart(job, plan: "\(options.sampling.logDescription) → \(destinationParent.lastPathComponent)/")
-        return job
-    }
+    // (startExtract / startRipAllFrames — the "Extract Facial Frames…" and
+    // "Extract Frames…" jobs — retired 2026-10-07 with their menu items.
+    // The .extract / .ripFrames kinds stay, like .trim, so the vocabulary
+    // never loses a word an old log line used.)
 
     /// Kick off "Reformat and Analyze" on a single record — ffmpeg
     /// transcodes the source's legacy-codec stream into modern
@@ -1360,6 +1388,40 @@ final class MediaFileOperationsCenter: ObservableObject {
         job.start()
         fileOpsLog.info("verifyVideo started: \(record.filename, privacy: .public)")
         logStart(job, plan: "check the picture (header, timestamps, full decode)")
+        return job
+    }
+
+    /// "Check Media…" (Rick 2026-10-07) — ONE job for the whole selection,
+    /// gated per volume file by file. Records already inside an active
+    /// Check Media job are left out (never checked twice at once); nil when
+    /// nothing is left to start.
+    ///
+    /// `quickRunner` / `fullRunner` are TEST SEAMS only — production passes nil.
+    @discardableResult
+    func startCheckMedia(records: [VideoRecord],
+                         tier: MediaReportCard.Tier,
+                         model: VideoScanModel,
+                         quickRunner: CheckMediaJob.QuickRunner? = nil,
+                         fullRunner: CheckMediaJob.FullRunner? = nil) -> CheckMediaJob? {
+        let busy = Set(jobs.compactMap { job -> [UUID]? in
+            guard job.state.isActive, let c = job as? CheckMediaJob else { return nil }
+            return c.records.map(\.id)
+        }.joined())
+        let fresh = records.filter { !busy.contains($0.id) }
+        guard !fresh.isEmpty else {
+            fileOpsLog.notice("checkMedia REFUSED duplicate dispatch: every selected file is already being checked")
+            appLog.write("check media refused: the selected file(s) are already being checked; nothing was started")
+            return nil
+        }
+        let job = CheckMediaJob(records: fresh, tier: tier, model: model, center: self,
+                                gatesFor: { [weak self] in self?.gatePlan(forPaths: [$0]) ?? [] },
+                                quickRunner: quickRunner, fullRunner: fullRunner)
+        guard add(job) else { return job }
+        job.start()
+        fileOpsLog.info("checkMedia started: \(fresh.count) file(s), tier=\(tier.rawValue, privacy: .public)")
+        logStart(job, plan: tier == .full
+                 ? "full check (header, timing, frame windows, every frame decoded, sound levels)"
+                 : "quick check (header, timing, frame windows)")
         return job
     }
 
