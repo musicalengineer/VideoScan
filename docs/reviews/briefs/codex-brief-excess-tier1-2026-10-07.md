@@ -18,6 +18,7 @@ Design, amendments and Rick's decisions: `docs/design/delete_excess_copies_2026_
 3. Never a target: the archive set or its volume (any path spelling: symlink, case, firmlink), an attested archive-backup drive, a read-only drive, a network mount (checked at move time), an Angel or Rick hold, a viewer-mode Mac, a copy LONGER than the archive master (Rick's rule) or of unknown length, a sampled-hash-only match.
 4. When the archive becomes the only copy, the dialog said so (Rick's decision 1).
 5. Existing prune callers behave exactly as before (seams nil / false).
+6. (Added 2026-10-08, Rick: the Trash is his safety net; he empties it daily.) When a copy's volume cannot take it to the Trash (no Trash support, trash call fails, ExFAT/network quirks), that copy is HELD and reported with a reason. Nothing on this path falls back to a permanent delete / unlink.
 
 **Evidence already run:** the Excess* suites (164 tests in 14 suites, Release); in-house qa round 1 (2 major + 2 minor, all fixed red → green).
 **Known/accepted, do not report:** the ★★★ hold threshold (≥ 4) is pending Rick's decision; SMB trashing is unverified on a real Mac.
