@@ -47,7 +47,11 @@ struct MediaRepairSheet: View {
         /// `keptFrames` = pictures the fix keeps (counted for files with
         /// sound, so the sound can be checked against the shorter picture).
         case ready(MediaRepairPicturePlan, keptFrames: Int?)
+        /// Counting the kept pictures (files with sound): 0…1.
+        case checking(Double)
         case refused(String)
+
+        var isReady: Bool { if case .ready = self { return true }; return false }
     }
 
     init(request: MediaRepairSheetRequest) {
@@ -60,7 +64,13 @@ struct MediaRepairSheet: View {
         record.mediaReportCard.flatMap { $0.isCurrent(forSizeBytes: record.sizeBytes) ? $0 : nil }
     }
     private var balance: MediaRepairBalanceInput? { MediaRepairBalanceInput(diagnosis: request.audioDiagnosis) }
-    private var recipe: MediaRepairRecipe { selection.recipe(balance: balance) }
+    /// The plan Repair Now runs. Remove repeated frames rides it only once
+    /// its check has finished (the other fixes never wait for it).
+    private var recipe: MediaRepairRecipe {
+        var effective = selection
+        if !picture.isReady { effective.set(.removeRepeatedFrames, on: false) }
+        return effective.recipe(balance: balance)
+    }
 
     /// Every fix: the card's earned ones first (ticked), then "More
     /// repairs", each available or not with the reason.
@@ -141,7 +151,7 @@ struct MediaRepairSheet: View {
 
     private func fixRow(_ offer: MediaRepairOffer) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Toggle(offer.fix.title, isOn: Binding(get: { selection.isOn(offer.fix) },
+            Toggle(offer.fix.title, isOn: Binding(get: { selection.isOn(offer.fix) && (offer.fix != .removeRepeatedFrames || picture.isReady) },
                                                   set: { selection.set(offer.fix, on: $0) }))
                 .disabled(!offer.isAvailable || pictureRefusal(for: offer.fix) != nil)
                 .accessibilityIdentifier("repair.fix.\(offer.fix.rawValue)")
@@ -156,7 +166,8 @@ struct MediaRepairSheet: View {
         guard fix == .removeRepeatedFrames else { return nil }
         switch picture {
         case .refused(let why): return why
-        case .loading: return "Checking the picture's frame rate and that the sound lines up (reads the whole picture once)…"
+        case .loading: return "Reading the picture's frame rate…"
+        case .checking(let f): return "Checking the sound lines up with the cleaned-up picture\u{2026} \(Int((f * 100).rounded()))%"
         default: return nil
         }
     }
@@ -233,9 +244,7 @@ struct MediaRepairSheet: View {
     // MARK: Buttons
 
     private var canRun: Bool {
-        guard job == nil, !recipe.isEmpty, outputURL != nil else { return false }
-        if recipe.picture == .removeRepeatedFrames, case .ready = picture { return true }  // plan + sound checked
-        return recipe.picture != .removeRepeatedFrames
+        job == nil && !recipe.isEmpty && outputURL != nil
     }
 
     private var buttons: some View {
@@ -281,19 +290,35 @@ struct MediaRepairSheet: View {
 
     // MARK: The picture plan (header only, off the main actor)
 
+    /// Only when Verify found repeated frames (the fix is offered and
+    /// earned). Runs in this sheet's `.task`: closing the sheet cancels the
+    /// task, which kills ffmpeg (ProcessRunner's cancellation handler).
     private func loadPicturePlan() async {
-        guard selection.offers.contains(where: { $0.fix == .removeRepeatedFrames && $0.isAvailable }) else {
+        guard selection.offers.contains(where: { $0.fix == .removeRepeatedFrames && $0.answers != nil && $0.isAvailable }) else {
             picture = .notNeeded
             return
         }
         picture = .loading
-        picture = await Self.planPicture(path: record.fullPath)
+        let key = MediaRepairKeptFrameCache.Key(recordID: record.id, sizeBytes: record.sizeBytes)
+        picture = await Self.planPicture(path: record.fullPath, durationSeconds: record.durationSeconds,
+                                         cacheKey: key, cache: .shared,
+                                         onChecking: { f in
+                                             // A late progress hop never overwrites the answer.
+                                             switch picture {
+                                             case .loading, .checking: picture = .checking(f)
+                                             default: break
+                                             }
+                                         })
         if case .refused = picture { selection.set(.removeRepeatedFrames, on: false) }
     }
 
-    /// The justified plan, then — for a file with sound — the plan-time
-    /// count of kept pictures and the sound-lines-up check. Read-only.
-    static func planPicture(path: String) async -> PictureLoad {
+    /// The justified plan, then — for a file with sound — the kept-picture
+    /// count (from this session's cache, else one read-only decode with
+    /// progress) and the sound-lines-up check.
+    static func planPicture(path: String, durationSeconds: Double, cacheKey: MediaRepairKeptFrameCache.Key,
+                            cache: MediaRepairKeptFrameCache,
+                            ffmpegPath: String = ToolLocator.ffmpegPath,
+                            onChecking: @escaping @MainActor (Double) -> Void) async -> PictureLoad {
         do {
             let summary = try await MediaRepairProbe.summary(path: path, control: nil)
             guard let facts = summary.picture else { return .refused("This file has no picture.") }
@@ -304,12 +329,23 @@ struct MediaRepairSheet: View {
             }
             let sound = summary.streams.filter { $0.codecType == "audio" }.map(\.durationSeconds)
             guard !sound.isEmpty else { return .ready(plan, keptFrames: nil) }
-            let kept = try await MediaRepairProbe.keptFrameCount(path: path, control: nil)
+            let kept: Int
+            if let cached = cache.count(for: cacheKey) {
+                kept = cached
+            } else {
+                onChecking(0)
+                kept = try await MediaRepairProbe.keptFrameCount(
+                    path: path, control: nil, durationSeconds: durationSeconds, ffmpegPath: ffmpegPath,
+                    progress: { f in Task { @MainActor in onChecking(f) } })
+                try Task.checkCancellation()
+                cache.store(kept, for: cacheKey)
+            }
             if let why = MediaRepairSoundAlignment.refusal(soundDurations: sound, keptFrames: kept, rate: plan.rate) {
                 return .refused("Not available: \(why).")
             }
             return .ready(plan, keptFrames: kept)
         } catch {
+            if Task.isCancelled || error is CancellationError { return .refused("Stopped.") }
             return .refused("The picture couldn't be read (\(error.localizedDescription)).")
         }
     }

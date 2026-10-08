@@ -203,3 +203,24 @@ enum MediaRepairSoundAlignment {
         return nil
     }
 }
+
+/// Kept-picture counts already measured this session, per file (record id
+/// + size, so a changed file is counted again). Reopening Repair… on the
+/// same file never decodes twice. Bounded: 256 entries, oldest dropped
+/// (a few KB). (≈ a small std::map owned by the UI thread.)
+@MainActor
+final class MediaRepairKeptFrameCache {
+    static let shared = MediaRepairKeptFrameCache()
+    static let capacity = 256
+
+    struct Key: Hashable { let recordID: UUID; let sizeBytes: Int64 }
+    private var counts: [Key: Int] = [:]
+    private var order: [Key] = []
+
+    func count(for key: Key) -> Int? { counts[key] }
+
+    func store(_ n: Int, for key: Key) {
+        if counts.updateValue(n, forKey: key) == nil { order.append(key) }
+        while order.count > Self.capacity { counts.removeValue(forKey: order.removeFirst()) }
+    }
+}

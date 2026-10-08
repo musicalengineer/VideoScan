@@ -16880,12 +16880,16 @@
       "stage": "unit",
       "suites": [
         "MediaRepairJobTests",
+        "MediaRepairPlanTimeCountTests",
         "MediaRepairSelectionTests"
       ],
       "tests": [
         "anUnavailableFixCannotBeTicked",
+        "cachedCountSkipsTheDecode",
         "cancelled_rowSaysStopped_noBookkeeping",
+        "cancellingTheCountKillsFFmpeg",
         "comparisonNeverClaimsAFixItCouldNotRecheck",
+        "countReportsProgressAndIsCached",
         "failed_rowSaysOriginalUntouched_andWhereTheCopyWasKept",
         "moreRepairsListsEveryFix_withHonestAvailability",
         "progressNeverRunsBackwards_andTheWriteDominates",
@@ -16895,7 +16899,8 @@
         "secondDispatchForTheSameFile_isRefused",
         "startsAtTheRecommendation_andCanBeChanged",
         "streamLinesSayCopiedOrReencoded_andTheVerificationLevel",
-        "success_catalogsCopy_linksOriginal_finished_originalUnchanged"
+        "success_catalogsCopy_linksOriginal_finished_originalUnchanged",
+        "videoOnlyNeverCounts"
       ]
     },
     {

@@ -152,11 +152,16 @@ enum MediaRepairProbe {
 
     /// How many pictures Remove repeated frames would keep (a read-only
     /// decode of the whole picture; nothing written). O(1) memory: only
-    /// the latest `frame=` count is held.
+    /// the latest `frame=` count is held. Cancelling the calling Task kills
+    /// ffmpeg (ProcessRunner's cancellation handler: SIGTERM → SIGKILL).
+    /// `progress` gets 0…1 from ffmpeg's out_time over `durationSeconds`.
+    /// `ffmpegPath` is a test seam.
     @concurrent
-    static func keptFrameCount(path: String, control: ProcessControl?,
+    static func keptFrameCount(path: String, control: ProcessControl?, durationSeconds: Double = 0,
+                               ffmpegPath: String = ToolLocator.ffmpegPath,
+                               progress: (@Sendable (Double) -> Void)? = nil,
                                heartbeat: (@Sendable () -> Void)? = nil) async throws -> Int {
-        let ffmpeg = try tool(ToolLocator.ffmpegPath, "ffmpeg")
+        let ffmpeg = try tool(ffmpegPath, "ffmpeg")
         let latest = OSAllocatedUnfairLock(initialState: 0)
         let r = await ProcessRunner.runProcess(
             executable: ffmpeg, arguments: MediaRepairCommand.keptFrameCountArgs(input: path),
@@ -164,6 +169,8 @@ enum MediaRepairProbe {
                 if let n = MediaRepairCommand.progressFrame(line) {
                     latest.withLock { $0 = n }
                     heartbeat?()
+                } else if durationSeconds > 0, let at = ReformatJob.parseProgressSeconds(line: line) {
+                    progress?(min(1, max(0, at / durationSeconds)))
                 }
             },
             stdoutLimitBytes: 0, stderrLimitBytes: 16 * 1024, control: control)

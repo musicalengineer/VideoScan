@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 import Testing
 @testable import VideoScan
@@ -254,5 +255,92 @@ struct MediaRepairJobTests {
             let lower = line.lowercased()
             #expect(!lower.contains("improv") && !lower.contains("enhanc") && !lower.contains("fully verified"), "\(line)")
         }
+    }
+}
+
+// MARK: - The sheet's plan-time count: cancellable, cached, with progress
+
+@Suite(.serialized, .timeLimit(.minutes(2))) @MainActor
+struct MediaRepairPlanTimeCountTests {
+
+    typealias F = RepairFixtures
+
+    final class Seen: @unchecked Sendable {
+        var values: [Double] = []
+    }
+
+    /// Closing the sheet cancels its task; the counting ffmpeg must die.
+    @Test func cancellingTheCountKillsFFmpeg() async throws {
+        let dir = try F.makeDir("count_cancel")
+        let pidFile = dir.appendingPathComponent("test_pid")
+        let fake = try F.fakeFFmpeg(in: dir, body: "echo $$ > '\(pidFile.path)'\nexec sleep 30")
+        let task = Task { try await MediaRepairProbe.keptFrameCount(path: "/dev/null", control: nil, ffmpegPath: fake) }
+        var pid: pid_t = 0
+        for _ in 0..<100 {
+            if let text = try? String(contentsOf: pidFile, encoding: .utf8),
+               let p = pid_t(text.trimmingCharacters(in: .whitespacesAndNewlines)) { pid = p; break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(pid > 0)
+        #expect(kill(pid, 0) == 0, "ffmpeg stand-in is running")
+        task.cancel()
+        _ = try? await task.value
+        var gone = false
+        for _ in 0..<200 {
+            if kill(pid, 0) != 0 { gone = true; break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(gone, "cancel must kill the counting process")
+    }
+
+    /// Reopening the sheet uses this session's count — no second decode
+    /// (a failing ffmpeg proves none ran).
+    @Test func cachedCountSkipsTheDecode() async throws {
+        let dir = try F.makeDir("count_cache")
+        let src = try MediaRepairEngineTests.makeRepeatedWithSound(in: dir, soundSeconds: 12)
+        let failing = try F.fakeFFmpeg(in: dir, body: "exit 1")
+        let cache = MediaRepairKeptFrameCache()
+        let key = MediaRepairKeptFrameCache.Key(recordID: UUID(), sizeBytes: F.size(src))
+        let cold = await MediaRepairSheet.planPicture(path: src.path, durationSeconds: 60, cacheKey: key, cache: cache,
+                                                      ffmpegPath: failing, onChecking: { _ in })
+        guard case .refused = cold else { Issue.record("no cache + failing ffmpeg must not be ready: \(cold)"); return }
+        cache.store(360, for: key)
+        let warm = await MediaRepairSheet.planPicture(path: src.path, durationSeconds: 60, cacheKey: key, cache: cache,
+                                                      ffmpegPath: failing, onChecking: { _ in Issue.record("no check expected") })
+        guard case .ready(_, let kept) = warm else { Issue.record("cached count must be ready: \(warm)"); return }
+        #expect(kept == 360)
+        // A changed file (different size) is a different key: counted again.
+        #expect(cache.count(for: .init(recordID: key.recordID, sizeBytes: key.sizeBytes + 1)) == nil)
+    }
+
+    /// The count reports real progress (out_time over the duration) and
+    /// stores its answer for the session.
+    @Test func countReportsProgressAndIsCached() async throws {
+        let dir = try F.makeDir("count_progress")
+        let src = try MediaRepairEngineTests.makeRepeatedWithSound(in: dir, soundSeconds: 12)
+        let cache = MediaRepairKeptFrameCache()
+        let key = MediaRepairKeptFrameCache.Key(recordID: UUID(), sizeBytes: F.size(src))
+        let seen = Seen()
+        let result = await MediaRepairSheet.planPicture(path: src.path, durationSeconds: 60, cacheKey: key, cache: cache,
+                                                        onChecking: { seen.values.append($0) })
+        guard case .ready(_, let kept) = result else { Issue.record("expected ready: \(result)"); return }
+        #expect(kept == cache.count(for: key))
+        #expect(seen.values.first == 0)
+        #expect(seen.values.allSatisfy { (0...1).contains($0) })
+    }
+
+    /// A file without sound never decodes (nothing to line up).
+    @Test func videoOnlyNeverCounts() async throws {
+        let dir = try F.makeDir("count_videoonly")
+        let src = dir.appendingPathComponent("test_silent.mov")
+        try F.ffmpeg(["-f", "lavfi", "-i", "testsrc=duration=4:size=160x120:rate=6", "-vf", "fps=30",
+                      "-c:v", "mjpeg", "-an", src.path])
+        let failing = try F.fakeFFmpeg(in: dir, body: "exit 1")
+        let result = await MediaRepairSheet.planPicture(
+            path: src.path, durationSeconds: 4,
+            cacheKey: .init(recordID: UUID(), sizeBytes: 1), cache: MediaRepairKeptFrameCache(),
+            ffmpegPath: failing, onChecking: { _ in Issue.record("no check for a silent file") })
+        guard case .ready(_, let kept) = result else { Issue.record("expected ready: \(result)"); return }
+        #expect(kept == nil)
     }
 }
