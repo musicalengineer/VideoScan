@@ -172,6 +172,14 @@ public enum ProcessRunner {
     ///     trimmed, delivered in order). Used by callers that parse progress
     ///     streams (e.g. ffmpeg `-progress pipe:1`).
     ///   - stderrLine: same, for stderr.
+    ///   - stdoutData: optional raw-bytes callback for stdout (chunks in
+    ///     order, as read from the pipe — typically ≤ 64 KB). For binary
+    ///     streams (e.g. raw PCM from `ffmpeg -f s32le pipe:1`) that must be
+    ///     analysed without buffering the whole output: pass
+    ///     `stdoutLimitBytes: 0` so nothing is collected. The callback runs
+    ///     on the pipe's reader thread; while it runs the pipe isn't drained,
+    ///     so the child blocks — natural back-pressure, bounded memory.
+    ///     (≈ C++: a read() loop handing each buffer to a consumer.)
     ///   - stdoutLimitBytes / stderrLimitBytes: cap on the *collected* copy
     ///     returned in `Result`. `nil` = unbounded. Line callbacks always see
     ///     the full stream regardless of the cap.
@@ -195,6 +203,7 @@ public enum ProcessRunner {
         environment: [String: String]? = nil,
         stdoutLine: (@Sendable (String) -> Void)? = nil,
         stderrLine: (@Sendable (String) -> Void)? = nil,
+        stdoutData: (@Sendable (Data) -> Void)? = nil,
         stdoutLimitBytes: Int? = nil,
         stderrLimitBytes: Int? = 256 * 1024,
         deadlineSeconds: Double? = nil,
@@ -271,6 +280,7 @@ public enum ProcessRunner {
             lifecycle.readAndDeliver(from: handle) { data in
                 stdoutCollector.append(data)
                 stdoutStreamer.append(data)
+                stdoutData?(data)
             }
         }
         stderrHandle.readabilityHandler = { handle in
@@ -289,6 +299,7 @@ public enum ProcessRunner {
                     stdoutHandle: stdoutHandle, stderrHandle: stderrHandle,
                     stdoutCollector: stdoutCollector, stderrCollector: stderrCollector,
                     stdoutStreamer: stdoutStreamer, stderrStreamer: stderrStreamer,
+                    stdoutData: stdoutData,
                     completion: completion, lifecycle: lifecycle,
                     deadlineFlag: deadlineFlag
                 )
@@ -340,6 +351,7 @@ public enum ProcessRunner {
         stderrCollector: DataCollector,
         stdoutStreamer: LineStreamer,
         stderrStreamer: LineStreamer,
+        stdoutData: (@Sendable (Data) -> Void)?,
         completion: CompletionBox<Result>,
         lifecycle: PipeLifecycle,
         deadlineFlag: DeadlineFlag
@@ -363,6 +375,7 @@ public enum ProcessRunner {
                 if !remainingOut.isEmpty {
                     stdoutCollector.append(remainingOut)
                     stdoutStreamer.append(remainingOut)
+                    stdoutData?(remainingOut)
                 }
                 stdoutStreamer.finish()
 

@@ -134,6 +134,10 @@ struct MediaSignalScan: Sendable, Equatable {
     var bottomFieldFirst = 0
     var progressive = 0
     var undetermined = 0
+    /// signalstats luma extremes (PictureSignals.swift).
+    var luma = LumaRangeScan()
+    /// Decoder complaints with the time of the frame they came near.
+    var errorClock = DecodeErrorClock()
 
     var idetJudged: Int { topFieldFirst + bottomFieldFirst + progressive }
     var interlacedShare: Double? {
@@ -143,7 +147,10 @@ struct MediaSignalScan: Sendable, Equatable {
     /// Fold one info-level stderr line in. Pure (returns the new value).
     func adding(line: String) -> MediaSignalScan {
         var s = self
-        if let d = Self.number(after: "black_duration:", in: line) {
+        s.errorClock = errorClock.adding(line: line)
+        if line.contains("lavfi.signalstats.") {
+            s.luma = luma.adding(line: line)
+        } else if let d = Self.number(after: "black_duration:", in: line) {
             s.blackStretches += 1
             s.blackSeconds += d
         } else if let d = Self.number(after: "freezedetect.freeze_duration:", in: line) {
@@ -158,7 +165,7 @@ struct MediaSignalScan: Sendable, Equatable {
         return s
     }
 
-    private static func token(after key: String, in line: String) -> Substring? {
+    static func token(after key: String, in line: String) -> Substring? {
         guard let r = line.range(of: key) else { return nil }
         let rest = line[r.upperBound...].drop(while: { $0 == " " })
         return rest.prefix { !$0.isWhitespace }
@@ -179,6 +186,11 @@ final class MediaSignalTally: @unchecked Sendable {
     private let lock = NSLock()
     private var scan = MediaSignalScan()
 
+    /// `bitDepth` scales the luma thresholds (8 → 1, 10 → 4, …).
+    init(bitDepth: Int = 8) {
+        scan.luma.codeScale = 1 << max(0, min(8, bitDepth - 8))
+    }
+
     func note(_ line: String) {
         lock.lock(); defer { lock.unlock() }
         scan = scan.adding(line: line)
@@ -197,6 +209,8 @@ struct CheckMediaQuickInputs: Sendable, Equatable {
     var videoFacts: VideoVerifyFacts
     var packets: MediaPacketScan?
     var distinct: DistinctFrameSample?
+    /// Where sound and picture sit in the file (CheckMediaLayout.swift).
+    var layout: MediaLayoutSample?
 }
 
 /// Everything the full tier measured. A nil diagnosis carries its reason.
@@ -204,6 +218,10 @@ struct CheckMediaFullInputs: Sendable {
     var video: Result<VideoVerifyDiagnosis, CheckMediaSkip>?
     var audio: Result<AudioVerifyDiagnosis, CheckMediaSkip>?
     var signals: MediaSignalScan?
+    /// The streamed decode of every sound sample (SoundContinuity.swift).
+    var continuity: Result<SoundContinuityReport, CheckMediaSkip>?
+    /// Every packet, listed (PacketCensus.swift).
+    var census: Result<PacketCensusReport, CheckMediaSkip>?
 }
 
 /// Why a full-tier pass produced no diagnosis — becomes a "not run" row.

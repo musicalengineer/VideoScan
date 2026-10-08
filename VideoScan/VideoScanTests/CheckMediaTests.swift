@@ -56,11 +56,18 @@ enum CheckMediaFixtures {
     """#
 
     static func quick(_ json: String, packets: MediaPacketScan? = nil,
-                      distinct: DistinctFrameSample? = nil) throws -> CheckMediaQuickInputs {
+                      distinct: DistinctFrameSample? = nil,
+                      layout: MediaLayoutSample? = nil) throws -> CheckMediaQuickInputs {
         let data = Data(json.utf8)
         return CheckMediaQuickInputs(facts: try MediaFacts.parse(probeJSON: data),
                                      videoFacts: try VerifyVideoRules.facts(fromProbeJSON: data),
-                                     packets: packets, distinct: distinct)
+                                     packets: packets, distinct: distinct, layout: layout)
+    }
+
+    /// DV-style: each frame's sound right after its picture.
+    static func interleavedLayout() -> MediaLayoutSample {
+        MediaLayoutSample(windows: [MediaLayoutMeasure(startSeconds: 0, separationBytes: 120_000,
+                                                       longestRunSeconds: 0.03)])
     }
 
     /// 300 packets 1–2 ticks apart at 1/90000, a 235 KB keyframe every 12.
@@ -106,7 +113,8 @@ enum CheckMediaFixtures {
     }
 
     static func healthy() throws -> CheckMediaQuickInputs {
-        try quick(healthyJSON, packets: healthyPackets(), distinct: healthyDistinct())
+        try quick(healthyJSON, packets: healthyPackets(), distinct: healthyDistinct(),
+                  layout: interleavedLayout())
     }
 }
 
@@ -188,7 +196,8 @@ struct CheckMediaQuickRuleTests {
         for c in checks { #expect(c.verdict == .ok, "\(c.kind): \(c.sentence)") }
         let card = R.card(tier: .quick, checks: checks + R.fullRowsNotRun(), quick: try F.healthy(), at: Date())
         #expect(card.verdict == .ok)
-        #expect(card.headline.hasPrefix("Looks healthy"))
+        #expect(card.headline == MediaReportCard.quickPassHeadline,
+                "a quick pass never claims the file is healthy (Rick 2026-10-07)")
     }
 
     @Test func audioOnlyFileSkipsPictureChecksWithAReason() throws {
@@ -399,7 +408,7 @@ struct CheckMediaCardPersistenceTests {
         let c = try card()
         let back = try JSONDecoder().decode(MediaReportCard.self, from: JSONEncoder().encode(c))
         #expect(back == c)
-        #expect(back.check(.decode)?.verdict == .notRun(reason: "quick check only — run a full check to decode every frame"))
+        #expect(back.check(.decode)?.verdict == .notRun(reason: "quick check only — the full check decodes every frame and listens to every sample"))
     }
 
     @Test func recordWithoutACardStaysKeyless() throws {
@@ -545,7 +554,7 @@ struct CheckMediaJobTests {
         let card = R.card(tier: .quick, checks: R.quickChecks(try F.healthy()), quick: try F.healthy(), at: Date())
         let items = [CheckMediaItem(id: UUID(), filename: "a", outcome: .checked(card)),
                      CheckMediaItem(id: UUID(), filename: "b", outcome: .failed("x"))]
-        #expect(CheckMediaJob.summary(items) == "1 checked — 1 OK, 1 couldn't be checked")
+        #expect(CheckMediaJob.summary(items) == "1 checked — 1 with no problems in the quick check, 1 couldn't be checked")
         #expect(CheckMediaJob.timeLeftText(elapsed: 2, fraction: 0.5) == nil, "too early to say")
         #expect(CheckMediaJob.timeLeftText(elapsed: 60, fraction: 0.25) == "about 3 min left")
     }
@@ -557,7 +566,7 @@ struct CheckMediaJobTests {
         let clock = ContinuousClock()
         var s = ""
         let elapsed = clock.measure { s = CheckMediaJob.summary(items) }
-        #expect(s == "100000 checked — 100000 OK")
+        #expect(s == "100000 checked — 100000 with no problems in the quick check")
         #expect(elapsed < .seconds(2), "100k summary took \(elapsed)")
     }
 

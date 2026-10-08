@@ -75,12 +75,12 @@ struct MediaInfoSheet: View {
         if let card = request.record.mediaReportCard {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(card.headline).font(.body.weight(.medium))
+                    Text(card.displayHeadline).font(.body.weight(.medium))
                     Text("Last checked \(card.checkedAt.formatted(date: .abbreviated, time: .shortened))\(card.isCurrent(forSizeBytes: request.record.sizeBytes) ? "" : " — the file has changed since")")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             } icon: {
-                MediaVerdictIcon(verdict: card.verdict)
+                MediaVerdictIcon(verdict: card.verdict, quickPassOnly: card.isQuickPassOnly)
             }
             .accessibilityIdentifier("mediaInfo.verdict")
         } else {
