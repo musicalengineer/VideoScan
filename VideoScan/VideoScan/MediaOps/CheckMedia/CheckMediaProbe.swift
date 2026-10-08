@@ -277,12 +277,24 @@ enum CheckMediaProbe {
     /// Which full-tier pass is running — the MFO row names it.
     enum FullPhase: Sendable {
         case picture
+        case census
         case sound
 
         var step: String {
             switch self {
             case .picture: return "decoding every frame"
+            case .census: return "reading every packet"
             case .sound: return "listening to every sample"
+            }
+        }
+
+        /// This phase's slice of one file's progress bar (after the 10 %
+        /// quick tier). Picture decode is most of the work.
+        var span: ClosedRange<Double> {
+            switch self {
+            case .picture: return 0.10...0.60
+            case .census: return 0.60...0.75
+            case .sound: return 0.75...0.98
             }
         }
     }
@@ -299,7 +311,7 @@ enum CheckMediaProbe {
                      progress: FullProgress? = nil) async throws -> CheckMediaFullInputs {
         var out = CheckMediaFullInputs()
         if facts.video != nil {
-            let tally = MediaSignalTally()
+            let tally = MediaSignalTally(bitDepth: CheckMediaRules.lumaBitDepth(facts.video))
             do {
                 let d = try await VerifyVideoProbe.diagnose(path: path, control: control,
                                                             progress: { progress?(.picture, $0) },
@@ -313,6 +325,9 @@ enum CheckMediaProbe {
                 out.video = .failure(CheckMediaSkip(reason: reason(for: error)))
             }
         }
+        progress?(.census, 0)
+        out.census = try await census(path: path, facts: facts, control: control,
+                                      progress: { progress?(.census, $0) })
         if facts.audio != nil {
             do {
                 out.audio = .success(try await VerifyAudioProbe.diagnose(path: path, control: control))

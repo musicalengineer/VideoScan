@@ -25,7 +25,7 @@ extension CheckMediaProbe {
         ["-nostdin", "-hide_banner", "-v", "info", "-nostats",
          "-i", input,
          "-map", "0:a:0", "-vn", "-sn", "-dn",
-         "-af", "asettb=1/sr,ashowinfo",
+         "-af", "asettb=1/sr,ashowinfo,ebur128=peak=true:framelog=quiet",
          "-c:a", "pcm_s32le", "-f", "s32le", "pipe:1"]
     }
 

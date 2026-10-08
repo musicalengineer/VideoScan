@@ -125,7 +125,7 @@ extension CheckMediaRules {
     /// buffer refill: far beyond any player's read-ahead (a few MB to a
     /// few tens of MB), ≈ 2.3 s of DNxHD 220 and ≈ 20 s of 25 Mbit/s HDV.
     /// A sane 0.5–1 s interleave of even 4K ProRes stays under it.
-    static let layoutApartBytes: Int64 = 64 << 20
+    static let layoutApartBytes: Int64 = 64_000_000   // decimal, as the card prints sizes
     /// …and that separation holds for at least this long in one stream:
     /// longer than a player's default sound buffer (≈ 1 s), so the sound
     /// runs dry while the picture is still being read.

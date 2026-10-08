@@ -52,7 +52,11 @@ enum CheckMediaRules {
     ]
 
     /// The full tier's filters, riding the one Verify Video decode.
-    static let signalFilterChain = "idet,blackdetect=d=2:pix_th=0.10,freezedetect=n=-60dB:d=5"
+    /// `signalstats` + two `metadata=print`s add each frame's luma range
+    /// and pts_time (PictureSignals.swift): 4 short info lines per frame.
+    static let signalFilterChain = "idet,blackdetect=d=2:pix_th=0.10,freezedetect=n=-60dB:d=5,"
+        + "signalstats,metadata=mode=print:key=lavfi.signalstats.YMIN,"
+        + "metadata=mode=print:key=lavfi.signalstats.YMAX"
 
     // MARK: Small helpers (formatting is VerifyVideoRules', deterministic)
 

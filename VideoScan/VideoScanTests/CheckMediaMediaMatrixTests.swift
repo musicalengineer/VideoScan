@@ -129,7 +129,8 @@ struct CheckMediaMediaMatrixTests {
         #expect(full.signals != nil, "the signal filters rode the decode")
         #expect(checks.first { $0.kind == .sound }?.evidence.count == 2, "loudness per channel")
         #expect(v[.soundContinuity] == .ok, "\(checks.first { $0.kind == .soundContinuity }?.sentence ?? "")")
-        let card = CheckMediaRules.card(tier: .full, checks: CheckMediaRules.quickChecks(q) + checks, quick: q, at: Date())
+        let card = CheckMediaRules.card(tier: .full, checks: CheckMediaRules.merging(CheckMediaRules.quickChecks(q), with: checks),
+                                        quick: q, at: Date())
         #expect(card.headline == CheckMediaRules.fullPassHeadline, "only a full pass may say healthy: \(card.headline)")
     }
 

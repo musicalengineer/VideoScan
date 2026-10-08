@@ -12,14 +12,20 @@ extension CheckMediaRules {
 
     // MARK: The full tier
 
+    /// Every full-tier row. Merge onto the quick rows with
+    /// `merging(_:with:)`: the whole-file Layout row replaces the sample.
     static func fullChecks(_ i: CheckMediaFullInputs, facts: MediaFacts) -> [MediaCheck] {
-        [checkDecode(i.video), checkBlack(i.signals, facts: facts), checkFreeze(i.signals, facts: facts),
+        [checkDecode(i.video, errorTimes: i.signals?.errorClock.errors),
+         checkBlack(i.signals, facts: facts), checkFreeze(i.signals, facts: facts),
          checkSound(i.audio, facts: facts), checkSoundContinuity(i.continuity, facts: facts),
-         checkInterlace(i.signals, facts: facts)]
+         checkInterlace(i.signals, facts: facts), checkColour(facts, signals: i.signals)]
+            + censusChecks(i.census, facts: facts)
+            + levelChecks(i.continuity, facts: facts)
     }
 
     // 9. Every frame decodes.
-    static func checkDecode(_ result: Result<VideoVerifyDiagnosis, CheckMediaSkip>?) -> MediaCheck {
+    static func checkDecode(_ result: Result<VideoVerifyDiagnosis, CheckMediaSkip>?,
+                            errorTimes: MediaEventLog? = nil) -> MediaCheck {
         guard let result else { return .notRun(.decode, because: noPicture) }
         let diagnosis: VideoVerifyDiagnosis
         switch result {
@@ -31,6 +37,9 @@ extension CheckMediaRules {
         if let d = diagnosis.decode {
             evidence.append(MediaEvidence("Decode complaints", V.groupedInt(d.errorCount)))
             evidence += d.sampleErrors.prefix(3).map { MediaEvidence("Example", $0) }
+        }
+        if let times = errorTimes, times.occurrences >= 1 {
+            evidence.append(MediaEvidence("Near", times.timesText))
         }
         if let first = decodeFindings.first, case .decodeSkipped(let reason) = first {
             return .notRun(.decode, because: reason)

@@ -128,7 +128,7 @@ struct CheckMediaLayoutRuleTests {
 
     /// Thresholds pinned: 64 MB, 2 s for a Problem, 4 s for a Warning.
     @Test func thresholdsArePinned() {
-        #expect(R.layoutApartBytes == 67_108_864)
+        #expect(R.layoutApartBytes == 64_000_000)
         #expect(R.layoutRunProblemSeconds == 2.0)
         #expect(R.layoutRunWarningSeconds == 4.0)
     }

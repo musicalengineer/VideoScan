@@ -31,7 +31,7 @@ import Foundation
 // ≈ 0.4 MB in all. (≈ C++: a fixed-size ring of state, no growth.)
 
 /// A counted kind of event plus the first few times it happened.
-struct SoundEventLog: Sendable, Equatable {
+struct MediaEventLog: Sendable, Equatable {
     static let kept = 5
     var occurrences = 0
     var firstSeconds: [Double] = []
@@ -50,13 +50,15 @@ struct SoundEventLog: Sendable, Equatable {
 /// What the continuity pass found.
 struct SoundContinuityReport: Sendable, Equatable {
     var seconds: Double = 0
-    var dropouts = SoundEventLog()
+    var dropouts = MediaEventLog()
     var longestDropoutSeconds: Double = 0
     var silentPassages = 0
-    var repeatedBlocks = SoundEventLog()
-    var clicks = SoundEventLog()
-    var timingJumps = SoundEventLog()
+    var repeatedBlocks = MediaEventLog()
+    var clicks = MediaEventLog()
+    var timingJumps = MediaEventLog()
     var largestTimingJumpSeconds: Double = 0
+    /// DC offset, clipping runs, channel relation, loudness (SoundLevels.swift).
+    var levels = SoundLevelReport()
 
     /// Dropouts, replays and timing jumps — the stutter family.
     var stutterEvents: Int { dropouts.occurrences + repeatedBlocks.occurrences + timingJumps.occurrences }
@@ -208,6 +210,8 @@ struct SoundContinuityAnalyzer {
     private var blocks: BlockRepeatTracker
     private var clickers: [ClickTracker]
     private var timeline = SoundTimeline()
+    private var levels: SoundLevelTracker
+    private var loudness = LoudnessSummary()
     private var carry = Data()
     private var frame = 0
     private var lastClickFrame = Int.min / 2
@@ -219,6 +223,7 @@ struct SoundContinuityAnalyzer {
         self.sampleRate = max(sampleRate, 1)
         blocks = BlockRepeatTracker(channels: self.channels)
         clickers = Array(repeating: ClickTracker(sampleRate: self.sampleRate), count: self.channels)
+        levels = SoundLevelTracker(channels: self.channels)
     }
 
     private var edgeFrames: Int { Int(Self.edgeSeconds * Double(sampleRate)) }
@@ -252,7 +257,9 @@ struct SoundContinuityAnalyzer {
             if x != 0 { silent = false }
             if blocks.append(x) { repeated = true }
             if clickers[ch].observe(x) { click = true }
+            levels.observe(x, channel: ch, at: seconds(frame))
         }
+        levels.endFrame()
         if let run = silence.observe(silent: silent, at: frame) { noteSilence(run) }
         if repeated { enqueue(.repeated, frame + 1 - BlockRepeatTracker.blockFrames, frame + 1) }
         if click, frame - lastClickFrame > sampleRate / 20 {   // ≤ one click per 50 ms
@@ -297,7 +304,10 @@ struct SoundContinuityAnalyzer {
     /// Returns the frame's time in seconds (for progress), nil for other lines.
     @discardableResult
     mutating func consume(showInfoLine line: String) -> Double? {
-        guard let f = SoundTimeline.frame(fromShowInfo: line) else { return nil }
+        guard let f = SoundTimeline.frame(fromShowInfo: line) else {
+            loudness = loudness.adding(line: line)
+            return nil
+        }
         let tolerance = Int64(Self.timingToleranceSeconds * Double(sampleRate))
         if let jump = timeline.observe(pts: f.pts, samples: f.samples, tolerance: tolerance) {
             report.timingJumps.note(Double(f.pts) / Double(sampleRate))
@@ -311,6 +321,7 @@ struct SoundContinuityAnalyzer {
     /// a silence that ran to the end) — dropped by design.
     mutating func finish() -> SoundContinuityReport {
         report.seconds = seconds(frame)
+        report.levels = levels.report(loudness: loudness)
         pending.removeAll()
         return report
     }
@@ -390,7 +401,7 @@ extension CheckMediaRules {
 
     private static func continuityEvidence(_ r: SoundContinuityReport) -> [MediaEvidence] {
         var e = [MediaEvidence("Listened to", V.durationText(r.seconds))]
-        let logs: [(String, SoundEventLog)] = [("Dropouts", r.dropouts), ("Replayed blocks", r.repeatedBlocks),
+        let logs: [(String, MediaEventLog)] = [("Dropouts", r.dropouts), ("Replayed blocks", r.repeatedBlocks),
                                                ("Timing jumps", r.timingJumps), ("Clicks", r.clicks)]
         for (label, log) in logs {
             e.append(MediaEvidence(label, log.occurrences < 1 ? "0" : "\(V.groupedInt(log.occurrences)) at \(log.timesText)"))

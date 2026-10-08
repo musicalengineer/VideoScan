@@ -208,3 +208,52 @@ record decodes it with `try?`), never the record.
 (lossless `-c copy` into a new file next to the original; needs Rick's UI
 approval and the delete-safety rules); replay detection for buffer lengths
 other than 1024; one combined sound pass (Verify Audio astats + continuity).
+
+## 8. Broadened full tier (same day: "do as much as possible; OK to wait")
+
+**Passes — two reads of the picture, one of the sound (chosen over a
+single pass).** One combined pass would mean reworking the shared Verify
+Video / Verify Audio engines that other jobs use; two passes were allowed.
+1. *Picture decode* (Verify Video's, unchanged for Verify Video): the signal
+   chain gains `signalstats` + two `metadata=print` filters → each frame's
+   YMIN/YMAX and pts_time; decoder error lines are now also handed to the
+   signal hook, so each complaint is stamped with the last frame's time
+   (`DecodeErrorClock`, ± a few frames).
+2. *Packet census* (new, `PacketCensus.swift` + `CheckMediaProbe+Census`):
+   `ffprobe -select_streams v:0` then `a:0`, `packet=pts_time,dts_time,
+   duration_time,size,pos,flags`, streamed line by line, nothing collected.
+   One stream per run so ffprobe discards the other and a non-interleaved
+   mov is read straight through. Feeds packet timing (dts backwards, gaps),
+   keyframes, picture bytes per second, A/V first/last times, and a ¼-second
+   picture index against which EVERY sound packet's distance is measured
+   (the whole-file Layout row, which replaces the quick sample on the card:
+   `CheckMediaRules.merging`).
+3. *Sound pass* (part 1's) gains `ebur128=peak=true:framelog=quiet` in its
+   chain and three sample trackers (`SoundLevels.swift`): DC offset, clip
+   runs (≥ 3 samples pinned at full scale), channel relation (identical /
+   inverted / independent + correlation).
+Header facts gain colour labels (`MediaColourLabels`, Core) and timecode tags
+(additive probe entries).
+
+**Memory (worst case):** census ≤ 8 MB (¼-s picture index capped at 55 h,
+bytes-per-second capped at 200,000 s; a 2 h tape ≈ 0.3 MB); sound pass
+≈ 0.4 MB; decode tallies O(1). No whole-file buffers; pipe back-pressure.
+No read-ahead buffer was added: on the M4's internal SSD the full tier ran
+at 168 MB/s on a 1 GB ProRes 422 HQ file (decode + census + sound, Debug
+app build), so ffmpeg's own decode, not I/O, is the limit there.
+
+**New rows (all full tier; raw values additive):**
+| Row | Problem | Warning | Notes |
+|---|---|---|---|
+| Timing, every packet | dts goes back | gap > max(0.5 s, 3 packets) | dts only (B-frame pts reorder is normal) |
+| Keyframes | — | only one keyframe (> 300 frames); gap > 10 s | all-intra = OK |
+| Data rate over time | — | an interior second with no picture bytes (≥ 2 fps) | evidence: low/median/high |
+| Sound and picture start together | ≥ 5 s | ≥ 0.5 s | end difference as evidence |
+| Timecode track | — | invalid HH:MM:SS:FF; tags disagree; track ≠ picture length by > 1 s | not run when no timecode |
+| Colour labels | — | HD with SD matrix (or reverse); YUV labelled full range whose luma stays 8–246 | the opposite direction is NOT judged: compression ringing puts single pixels at 0/255 (mpeg2 fixture) |
+| Loudness (EBU R128) | — | true peak > 0 dBTP; integrated < −36 LUFS | |
+| Sound centred on zero | — | \|DC\| > 1 % FS | |
+| Left and right | — | inverted (≥ 99.9 % of frames L = −R, or r < −0.9) | identical = "mono stored as stereo", OK |
+| Clipped stretches | — | any run of ≥ 3 pinned samples | |
+The Layout threshold is now a decimal 64 MB (64,000,000 B) so the card's
+"64 MB" and the rule agree.

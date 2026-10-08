@@ -200,14 +200,15 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         var audio: AudioVerifyDiagnosis?
         if tier == .full {
             setStep("decoding every frame", index: index, within: 0.1)
-            // Picture decode = 10…70 % of this file, the sound passes 70…98 %.
+            // Each phase fills its own slice of this file's bar (FullPhase.span).
             let progress: CheckMediaProbe.FullProgress = { [weak self] phase, f in
-                let within = phase == .picture ? 0.1 + 0.6 * f : 0.7 + 0.28 * f
+                let span = phase.span
+                let within = span.lowerBound + (span.upperBound - span.lowerBound) * f
                 Task { @MainActor in self?.setStep(phase.step, index: index, within: within) }
             }
             let full = try await fullRunner(rec.fullPath, quick.facts, pauser.control, progress)
             try Task.checkCancellation()
-            checks += CheckMediaRules.fullChecks(full, facts: quick.facts)
+            checks = CheckMediaRules.merging(checks, with: CheckMediaRules.fullChecks(full, facts: quick.facts))
             if case .success(let d)? = full.video { video = d }
             if case .success(let d)? = full.audio { audio = d }
         } else {

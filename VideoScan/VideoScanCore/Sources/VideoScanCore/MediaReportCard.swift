@@ -64,6 +64,17 @@ public enum MediaCheckKind: String, Codable, Sendable, CaseIterable, Hashable {
     /// Every sample decoded: dropouts, replayed buffers, clicks, timing gaps.
     case soundContinuity
     case interlace
+    // Full tier, broadened 2026-10-07 ("do as much as possible").
+    case packetTiming
+    case keyframes
+    case dataRate
+    case sync
+    case timecode
+    case colour
+    case loudness
+    case dcOffset
+    case channels
+    case clipping
 
     /// The row's short title, in family words.
     public var title: String { Self.titles[self] ?? rawValue }
@@ -87,14 +98,26 @@ public enum MediaCheckKind: String, Codable, Sendable, CaseIterable, Hashable {
         .sound: "Sound track",
         .soundContinuity: "Sound continuity",
         .interlace: "Interlacing",
+        .packetTiming: "Timing, every packet",
+        .keyframes: "Keyframes",
+        .dataRate: "Data rate over time",
+        .sync: "Sound and picture start together",
+        .timecode: "Timecode track",
+        .colour: "Colour labels",
+        .loudness: "Loudness (EBU R128)",
+        .dcOffset: "Sound centred on zero",
+        .channels: "Left and right",
+        .clipping: "Clipped stretches",
     ]
 
-    public var isFullTier: Bool {
-        switch self {
-        case .decode, .black, .freeze, .sound, .soundContinuity, .interlace: return true
-        default: return false
-        }
-    }
+    /// The checks that need the full tier (decode / every packet).
+    public static let fullTier: Set<MediaCheckKind> = [
+        .decode, .black, .freeze, .sound, .soundContinuity, .interlace,
+        .packetTiming, .keyframes, .dataRate, .sync, .timecode, .colour,
+        .loudness, .dcOffset, .channels, .clipping,
+    ]
+
+    public var isFullTier: Bool { Self.fullTier.contains(self) }
 }
 
 /// One labelled number behind a sentence ("Stored frame rate" → "60,000 fps").

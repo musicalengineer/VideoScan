@@ -292,7 +292,9 @@ enum VerifyVideoProbe {
                 // before. Tagged (signal pass): only error-level lines are.
                 guard let signalLine else { tally.noteError(line); return }
                 switch logLevel(ofTaggedLine: line) {
-                case "error", "fatal", "panic": tally.noteError(strippingLevelTag(line))
+                case "error", "fatal", "panic":
+                    tally.noteError(strippingLevelTag(line))
+                    signalLine(line)   // Check Media stamps it with a time
                 case "info": signalLine(line)
                 default: break
                 }
