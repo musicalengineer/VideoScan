@@ -652,6 +652,12 @@ public class VideoRecord: Identifiable, Decodable {
     /// its recipe and file size still match (`isCurrent`).
     public var perceptualFingerprint: StoredPerceptualFingerprint?
 
+    /// Check Media (2026-10-07): the latest report card — headline plus one
+    /// row per check (MediaReportCard.swift). Additive optional — legacy
+    /// catalogs decode nil, the DTO writes the key only when present. The
+    /// verify fields above keep their own meaning; this never replaces them.
+    public var mediaReportCard: MediaReportCard?
+
     /// Provenance captured at scan time: which machine ran the scan, what
     /// kind of volume the file lived on (local/smb/nfs/afp), the volume's
     /// stable UUID if available, and the remote server name for network
@@ -857,6 +863,10 @@ public class VideoRecord: Identifiable, Decodable {
         // Perceptual fingerprint (GH #293) — additive optional; legacy → nil.
         // Its own decoder never fails on a damaged hex (reads as absent).
         perceptualFingerprint       = try c.decodeIfPresent(StoredPerceptualFingerprint.self, forKey: .perceptualFingerprint)
+        // Check Media report card (2026-10-07) — additive optional. A card
+        // this build can't read (a future check kind) reads as absent
+        // rather than failing the whole catalog load.
+        mediaReportCard             = try? c.decodeIfPresent(MediaReportCard.self, forKey: .mediaReportCard)
         // Relocate provenance. Legacy catalogs (no keys) decode as nil and
         // remain treated as "never relocated." Once set on first migration
         // these keys are encoded on every subsequent write.

@@ -453,6 +453,42 @@ struct DeleteDuplicatesResumeBanner: View {
 /// progress bar, Cancel / Pause, relative start time — plus an
 /// expandable detail area (compare jobs show the verdict banner and
 /// the side-by-side metadata diff).
+/// A job's double-click detail — the ONE place that maps a job to its
+/// detail view (2026-10-07; this chain used to sit inline in the row's
+/// body, growing it by a branch per verb). `hasDetailView` stays the
+/// exhaustive list of which kinds expand; a kind marked true with no
+/// branch here simply shows nothing. (`if let x = job as? T` ≈ C++
+/// `dynamic_cast` to each concrete job type in turn.)
+struct MediaFileOperationDetail: View {
+    let job: any MediaFileOperationJob
+
+    var body: some View {
+        if let compare = job as? PairCompareJob {
+            PairCompareDetailView(job: compare)
+        } else if let find = job as? FindPersonJob {
+            FindPersonDetailView(job: find)
+        } else if let verify = job as? VerifyArchiveCopiesJob {
+            VerifyArchiveDetailView(job: verify)
+        } else if let angel = ArchiveAngelJobDetailView(job: job) {
+            angel
+        } else if let deletion = job as? DeleteDuplicatesJob {
+            DeleteDuplicatesDetailView(job: deletion)
+        } else if let verifyVideo = job as? VerifyVideoJob {
+            VerifyVideoDetailView(job: verifyVideo)
+        } else if let check = job as? CheckMediaJob {
+            CheckMediaDetailView(job: check)
+        } else if let lock = job as? ArchiveLockJob {
+            ArchiveLockDetailView(job: lock)
+        } else if let spectrum = job as? FootageSpectrumJob {
+            FootageSpectrumDetailView(job: spectrum)
+        } else if let fingerprints = job as? PerceptualFingerprintBackfillJob {
+            PerceptualFingerprintBackfillDetailView(job: fingerprints)
+        } else if let prune = job as? PruneApplyJob {
+            PruneApplyDetailView(job: prune)
+        }
+    }
+}
+
 struct MediaFileOperationRow: View {
     let job: any MediaFileOperationJob
     let isExpanded: Bool
@@ -544,62 +580,10 @@ struct MediaFileOperationRow: View {
                 if job.kind.hasDetailView { onToggleExpand() }
             }
 
-            if isExpanded, let compare = job as? PairCompareJob {
-                PairCompareDetailView(job: compare)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let find = job as? FindPersonJob {
-                FindPersonDetailView(job: find)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let verify = job as? VerifyArchiveCopiesJob {
-                VerifyArchiveDetailView(job: verify)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let angel = ArchiveAngelJobDetailView(job: job) {
-                angel
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let deletion = job as? DeleteDuplicatesJob {
-                DeleteDuplicatesDetailView(job: deletion)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let verifyVideo = job as? VerifyVideoJob {
-                VerifyVideoDetailView(job: verifyVideo)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let lock = job as? ArchiveLockJob {
-                ArchiveLockDetailView(job: lock)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let spectrum = job as? FootageSpectrumJob {
-                FootageSpectrumDetailView(job: spectrum)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let fingerprints = job as? PerceptualFingerprintBackfillJob {
-                PerceptualFingerprintBackfillDetailView(job: fingerprints)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 10)
-            }
-
-            if isExpanded, let prune = job as? PruneApplyJob {
-                PruneApplyDetailView(job: prune)
+            // The double-click detail (MediaFileOperationDetail below —
+            // one place that maps a job to its detail view, 2026-10-07).
+            if isExpanded {
+                MediaFileOperationDetail(job: job)
                     .padding(.horizontal, 12)
                     .padding(.bottom, 10)
             }
@@ -927,7 +911,7 @@ extension MediaFileOperationKind {
     var hasDetailView: Bool {
         switch self {
         case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies, .verifyVideo, .lockArchive, .compareFootage, .fingerprintBackfill:
+             .pruneCopies, .verifyVideo, .checkMedia, .lockArchive, .compareFootage, .fingerprintBackfill:
             return true
         case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
              .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
@@ -936,103 +920,11 @@ extension MediaFileOperationKind {
         }
     }
 
-    /// Badge capsule fills. Every value is a hand-darkened variant of the
-    /// verb's original hue — dark enough to carry the badge's white
-    /// small-caps text (Rick 2026-07-31: the system colors were too light;
-    /// Verify's dark goldenrod set the legibility bar). Hue assignments
-    /// and their pairwise-distinct rationale are unchanged from the
-    /// system-color era; only luminance dropped.
+    /// Badge capsule fill — `style.fill` (MediaFileOperations.swift keeps
+    /// each kind's hue and the rationale for it).
     var badgeColor: Color {
-        switch self {
-        // Forest green — Combine's original green, darkened.
-        case .combine: return Color(red: 0.10, green: 0.45, blue: 0.16)
-        // Cobalt — Compare's blue.
-        case .compare: return Color(red: 0.08, green: 0.32, blue: 0.72)
-        // Burnt orange — Extract/Faces' orange.
-        case .extract: return Color(red: 0.75, green: 0.42, blue: 0.00)
-        // Deep purple — Frames' purple.
-        case .ripFrames: return Color(red: 0.44, green: 0.22, blue: 0.65)
-        // Crimson — Reformat's red.
-        case .reformat: return Color(red: 0.70, green: 0.14, blue: 0.16)
-        // Dark cyan (blue-leaning) — Analyze. Sits between compare's
-        // cobalt and cleanup's teal; the blue cast keeps it apart.
-        case .analyze: return Color(red: 0.00, green: 0.42, blue: 0.58)
-        // Pass C — Transcode's mint matches the workspaceActive tint
-        // (mint hammer icon in the catalog filename column), so the user
-        // reads "transcode → workspace" as the same visual lineage.
-        // Dark sea-green keeps the mint family, green-leaning.
-        case .transcode: return Color(red: 0.00, green: 0.52, blue: 0.36)
-        // Clean Up shares transcode's derivative-producing nature but
-        // gets its own hue so the two verbs read apart at a glance —
-        // balanced teal between transcode's green and analyze's blue.
-        case .cleanup: return Color(red: 0.00, green: 0.44, blue: 0.46)
-        // Trim is the third derivative-producing verb — indigo keeps it
-        // distinct from transcode's mint and cleanup's teal.
-        case .trim: return Color(red: 0.32, green: 0.31, blue: 0.75)
-        // Balance Audio — raspberry keeps pink's identity but darker;
-        // distinct from the other derivative-producing verbs. GH #116.
-        case .balanceAudio: return Color(red: 0.72, green: 0.16, blue: 0.40)
-        // Rebuild Audio Track (Verify Audio's repair, GH #128) — dark
-        // brown keeps the audio-repair pair (raspberry/brown) adjacent
-        // but distinguishable.
-        case .rebuildAudio: return Color(red: 0.47, green: 0.32, blue: 0.20)
-        // Verify Audio (the diagnosis as a job, GH #135) — dark goldenrod
-        // keeps the yellow "checking" semantics; reads apart from its
-        // brown repair sibling and from extract's burnt orange.
-        case .verifyAudio: return Color(red: 0.72, green: 0.53, blue: 0.04)
-        // Verify Video (2026-09-23) — dark olive: the picture-side sibling
-        // of Verify Audio's goldenrod (same "checking" family, Δ ≈ 0.31
-        // from it), apart from combine's forest green and promote's bronze.
-        case .verifyVideo: return Color(red: 0.42, green: 0.45, blue: 0.05)
-        // Find & Tag (per-person recipe, 2026-08-02) — dark slate blue,
-        // distinct from trim's indigo and compare's cobalt; passes the
-        // white-text contrast sensor like the rest of the 2026-07-31
-        // legibility palette.
-        case .findPerson: return Color(red: 0.28, green: 0.24, blue: 0.50)
-        // Promote to Archive (2026-08-15) — deep archival bronze: warm
-        // like the retire/archivebox family, darker than rebuild's brown,
-        // and clearly apart from extract's burnt orange.
-        case .promote: return Color(red: 0.55, green: 0.36, blue: 0.10)
-        // Verify Archive Copies (GH #167, 2026-08-20) — steel slate:
-        // cooler and grayer than trim's indigo and findPerson's slate
-        // blue; reads as "the auditor", apart from verifyAudio's
-        // goldenrod despite sharing the verb.
-        case .verifyArchive: return Color(red: 0.36, green: 0.42, blue: 0.60)
-        // Archive Angel (2026-09-09) — deep violet: the proposer that
-        // precedes Promote's bronze (the retired assessCopies' plum it once
-        // stood apart from went with the Promote Helper, S4).
-        case .archiveAngel: return Color(red: 0.70, green: 0.30, blue: 0.05)   // dark amber — the Angel's orange; Δ≥0.14 from every other fill (nightly sensor 9/10)
-        // Delete Duplicates (2026-09-20) — Rick asked for "DELETE in clear
-        // high contrast color": white on a strong, saturated red. System
-        // `.red` fails the white-text legibility sensor (contrast < 3), so
-        // this is red darkened just enough — contrast vs white ≈ 5.6, Δ
-        // from Reformat's crimson ≈ 0.17, and still unmistakably RED.
-        case .deleteDuplicates: return Color(red: 0.82, green: 0.04, blue: 0.06)
-        // "Move to Trash" (2026-09-20) — oxblood: the other destructive
-        // row, unmistakably red beside DELETE's brighter red (Δ ≈ 0.26)
-        // and apart from Reformat's crimson (Δ ≈ 0.14); contrast vs white
-        // ≈ 8.9.
-        case .pruneCopies: return Color(red: 0.58, green: 0.06, blue: 0.16)
-        // Find Similar Footage (2026-09-23) — graphite: a metadata walk,
-        // not a media verb. Δ ≥ 0.19 from every other fill (nearest:
-        // Rebuild's brown), contrast vs white ≈ 8.5.
-        case .findSimilarFootage: return Color(red: 0.30, green: 0.30, blue: 0.30)
-        // Bind Fixity to Volume (2026-09-23) — deep violet: a slow full
-        // read that only rewrites catalog stamps. Δ ≥ 0.29 from every
-        // other fill (nearest: Frames' purple), contrast vs white ≈ 7.
-        case .bindFixity: return Color(red: 0.55, green: 0.00, blue: 0.80)
-        // Lock files already in the archive (2026-09-27) — deep navy slate: "the vault".
-        // Δ ≥ 0.22 from every other fill; contrast vs white ≈ 13.
-        case .lockArchive: return Color(red: 0.10, green: 0.20, blue: 0.30)
-        // Compare Footage / Footage Spectrum (2026-10-03) — plum: a reading
-        // verb like Compare's cobalt, but its own family. Δ ≥ 0.22 from every
-        // other fill (nearest: Balance's raspberry), contrast vs white ≈ 9.
-        case .compareFootage: return Color(red: 0.50, green: 0.10, blue: 0.45)
-        // Fingerprint Pictures (GH #293, 2026-10-07) — deep ultramarine: a
-        // reading verb that only writes catalog notes. Δ ≥ 0.35 from every
-        // other fill (nearest: Lock's navy slate), contrast vs white ≈ 14.7.
-        case .fingerprintBackfill: return Color(red: 0.00, green: 0.00, blue: 0.58)
-        }
+        let c = style.fill
+        return Color(red: c.red, green: c.green, blue: c.blue)
     }
 }
 

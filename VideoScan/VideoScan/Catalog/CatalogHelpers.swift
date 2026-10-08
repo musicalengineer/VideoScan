@@ -175,6 +175,10 @@ struct CatalogContent: View {
     /// since the GH #137 consolidation it also carries the Balance
     /// Audio offer — the retired standalone Balance sheet's job).
     @State var verifyAudioRequest: VerifyAudioRequest?
+    /// "Get Media Info…" ⌘I (2026-10-07) — .sheet(item:).
+    @State var mediaInfoRequest: MediaInfoRequest?
+    /// "Check Media…" quick/full choice (2026-10-07) — .sheet(item:).
+    @State var checkMediaRequest: CheckMediaRequest?
 
     /// "Find Online Version" came up empty — non-nil drives an alert
     /// explaining where copies exist (all offline) or that this is the
@@ -851,6 +855,15 @@ struct CatalogContent: View {
         // consolidation. Same .sheet(item:) shape.
         .sheet(item: $verifyAudioRequest) { request in
             VerifyAudioSheet(request: request)
+        }
+        // "Get Media Info…" ⌘I and "Check Media…" (2026-10-07). Same
+        // .sheet(item:) shape; each hands off to the next only after it
+        // starts dismissing (VerifyAudioDismissHandoff).
+        .sheet(item: $mediaInfoRequest) { request in
+            MediaInfoSheet(request: request)
+        }
+        .sheet(item: $checkMediaRequest) { request in
+            CheckMediaSheet(request: request)
         }
         // Music-triage candidates, off the main actor (2026-10-04 perf).
         .task(id: musicTriageKey) { await refreshMusicTriageCandidates() }

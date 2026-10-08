@@ -378,7 +378,8 @@ struct MediaFileOperationsWindowForwardSensorTests {
         "CatalogRowContextMenu.swift": 0,         // dispatcher + open/remove/restore: none
         "CatalogRowContextMenu+FileOps.swift": 1, // compare
         "CatalogRowContextMenu+Organize.swift": 1, // Find and Tag
-        "CatalogRowContextMenu+Media.swift": 2,   // check media, repair damaged audio
+        "CatalogRowContextMenu+Media.swift": 1,   // repair damaged audio
+        "CheckMediaSheet.swift": 1,               // Check Media (quick / full), 2026-10-07
         "CatalogRowContextMenu+Actions.swift": 4, // analyze×2, reformat×2
         "CatalogHelpers.swift": 0,                // (Extract Facial Frames retired 2026-10-07)
         "CleanupSheet.swift": 1,

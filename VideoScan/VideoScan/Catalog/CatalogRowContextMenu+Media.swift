@@ -12,10 +12,9 @@ import SwiftUI
 extension CatalogContent {
 
     /// "Check Media…" (Rick 2026-10-07) — replaces the separate Verify
-    /// Audio and Verify Video verbs. Interim (Phase 1): dispatches the two
-    /// existing verify jobs per reachable row (audio where there is sound,
-    /// picture where there is a picture), into the MFO window, any
-    /// selection size. O(selection), never O(records).
+    /// Audio and Verify Video verbs. Opens the quick / full choice
+    /// (CheckMediaSheet); the run is ONE CheckMediaJob for the reachable
+    /// rows. O(selection), never O(records).
     @ViewBuilder
     private func checkMediaMenuItem(activeRecs: [VideoRecord]) -> some View {
         // The label counts exactly the rows the action runs on (the
@@ -25,19 +24,7 @@ extension CatalogContent {
         }
         let checkable = plan.runnable
         Button(CatalogRowMenuText.checkMedia(count: checkable.count)) {
-            // One scope for the whole selection: N jobs, one raise.
-            fileOpsCenter.startedByUser { center in
-                for r in checkable {
-                    model.noteMissingFileForUserAction(r)
-                    if CatalogRowMenuRules.hasAudio(r.streamType) {
-                        center.startVerifyAudio(record: r, model: model)
-                    }
-                    if r.streamType != .audioOnly {
-                        center.startVerifyVideo(record: r, model: model)
-                    }
-                }
-            }
-            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+            checkMediaRequest = CheckMediaRequest(records: checkable)
         }
         .disabled(plan.isDisabled)
         .help("Check the file — picture, sound and timing — and say in plain words whether it is OK, has a warning, or has a problem, and what to do. Runs in the operations window; the catalog stays usable.")
@@ -68,13 +55,11 @@ extension CatalogContent {
         // 2026-10-07): instant, no media I/O beyond one header probe.
         if activeRecs.count == 1 {
             Button("Get Media Info\u{2026}") {
-                verifyAudioRequest = VerifyAudioRequest(
-                    record: rec,
-                    diagnosis: fileOpsCenter.verifyDiagnosis(forRecordID: rec.id),
-                    onFindMatchingAudio: {
-                        repairAudio(for: rec)   // Combine sheet or alert is the result; no job window (codex #964)
-                    })
+                presentMediaInfo(for: rec)
             }
+            // Display only: in a context menu the shortcut is a hint; the
+            // live ⌘I is File ▸ Get Media Info (CatalogInfoCommand.swift).
+            .keyboardShortcut("i", modifiers: .command)
             .help("What this file is made of — container, picture, sound, timing — and the last Check Media verdict.")
             .accessibilityIdentifier("catalog.row.getMediaInfo")
         }
@@ -123,6 +108,25 @@ extension CatalogContent {
             .help("You've listened and it sounds right: keep this repaired copy as the one to use. The original is hidden from the everyday view — never deleted — and your tags, notes, people, and ratings carry over.")
             .accessibilityIdentifier("catalog.row.confirmRepair")
         }
+    }
+
+    /// Get Media Info… (the row menu and File ▸ Get Media Info ⌘I). Its
+    /// Check Media… button opens the quick/full choice for this file; its
+    /// Sound Details… button (only with a session sound diagnosis) opens
+    /// the Verify Audio results sheet with the Balance / Rebuild offers.
+    func presentMediaInfo(for rec: VideoRecord) {
+        let diagnosis = fileOpsCenter.verifyDiagnosis(forRecordID: rec.id)
+        mediaInfoRequest = MediaInfoRequest(
+            record: rec,
+            audioDiagnosis: diagnosis,
+            onCheckMedia: { checkMediaRequest = CheckMediaRequest(records: [rec]) },
+            onSoundDetails: diagnosis.map { d in
+                {
+                    verifyAudioRequest = VerifyAudioRequest(
+                        record: rec, diagnosis: d,
+                        onFindMatchingAudio: { repairAudio(for: rec) })   // Combine sheet or alert; no job window (codex #964)
+                }
+            })
     }
 
     /// "Link Repaired Copy…" handler (GH #132 P4): pick the externally-
