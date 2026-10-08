@@ -44,7 +44,9 @@ struct MediaRepairSheet: View {
 
     enum PictureLoad: Equatable {
         case notNeeded, loading
-        case ready(MediaRepairPicturePlan)
+        /// `keptFrames` = pictures the fix keeps (counted for files with
+        /// sound, so the sound can be checked against the shorter picture).
+        case ready(MediaRepairPicturePlan, keptFrames: Int?)
         case refused(String)
     }
 
@@ -89,7 +91,7 @@ struct MediaRepairSheet: View {
         }
         .padding(24)
         .frame(width: 640)
-        .task(id: recipe.picture == .removeRepeatedFrames) { await loadPicturePlan() }
+        .task { await loadPicturePlan() }
     }
 
     // MARK: Plan
@@ -151,12 +153,16 @@ struct MediaRepairSheet: View {
     }
 
     private func pictureRefusal(for fix: MediaRepairFix) -> String? {
-        guard fix == .removeRepeatedFrames, case .refused(let why) = picture else { return nil }
-        return why
+        guard fix == .removeRepeatedFrames else { return nil }
+        switch picture {
+        case .refused(let why): return why
+        case .loading: return "Checking the picture's frame rate and that the sound lines up (reads the whole picture once)…"
+        default: return nil
+        }
     }
 
     private var streamsBox: some View {
-        let plan: MediaRepairPicturePlan? = { if case .ready(let p) = picture { return p }; return nil }()
+        let plan: MediaRepairPicturePlan? = { if case .ready(let p, _) = picture { return p }; return nil }()
         let lines = MediaRepairSelection.streamLines(recipe, picture: plan)
             + recipe.skipped.map { "Not in this pass — \($0.fix.title): \($0.reason)." }
         return VStack(alignment: .leading, spacing: 4) {
@@ -228,7 +234,7 @@ struct MediaRepairSheet: View {
 
     private var canRun: Bool {
         guard job == nil, !recipe.isEmpty, outputURL != nil else { return false }
-        if recipe.picture == .removeRepeatedFrames, case .ready = picture { return true }
+        if recipe.picture == .removeRepeatedFrames, case .ready = picture { return true }  // plan + sound checked
         return recipe.picture != .removeRepeatedFrames
     }
 
@@ -263,10 +269,12 @@ struct MediaRepairSheet: View {
         guard let output = outputURL else { return }
         let besideOriginal: Bool = { if case .beside = destination { return true }; return false }()
         let fixes = Array(selection.chosen)
+        let plannedFrames: Int? = { if case .ready(_, let n) = picture { return n }; return nil }()
         _ = model.noteMissingFileForUserAction(record)
         job = fileOpsCenter.startedByUser { center in
             center.startRepair(record: record, fixes: fixes, output: output,
-                               besideOriginal: besideOriginal, model: model)
+                               besideOriginal: besideOriginal, model: model,
+                               plannedPictureFrames: plannedFrames)
         }
         MediaFileOperationsWindowOpener.openBehindMain(openWindow)
     }
@@ -274,19 +282,35 @@ struct MediaRepairSheet: View {
     // MARK: The picture plan (header only, off the main actor)
 
     private func loadPicturePlan() async {
-        guard recipe.picture == .removeRepeatedFrames else { picture = .notNeeded; return }
+        guard selection.offers.contains(where: { $0.fix == .removeRepeatedFrames && $0.isAvailable }) else {
+            picture = .notNeeded
+            return
+        }
         picture = .loading
+        picture = await Self.planPicture(path: record.fullPath)
+        if case .refused = picture { selection.set(.removeRepeatedFrames, on: false) }
+    }
+
+    /// The justified plan, then — for a file with sound — the plan-time
+    /// count of kept pictures and the sound-lines-up check. Read-only.
+    static func planPicture(path: String) async -> PictureLoad {
         do {
-            guard let facts = try await MediaRepairProbe.summary(path: record.fullPath, control: nil).picture else {
-                picture = .refused("This file has no picture.")
-                return
-            }
+            let summary = try await MediaRepairProbe.summary(path: path, control: nil)
+            guard let facts = summary.picture else { return .refused("This file has no picture.") }
+            let plan: MediaRepairPicturePlan
             switch MediaRepairPicturePlan.justify(facts) {
-            case .success(let plan): picture = .ready(plan)
-            case .failure(let refusal): picture = .refused(refusal.reason)
+            case .success(let p): plan = p
+            case .failure(let refusal): return .refused(refusal.reason)
             }
+            let sound = summary.streams.filter { $0.codecType == "audio" }.map(\.durationSeconds)
+            guard !sound.isEmpty else { return .ready(plan, keptFrames: nil) }
+            let kept = try await MediaRepairProbe.keptFrameCount(path: path, control: nil)
+            if let why = MediaRepairSoundAlignment.refusal(soundDurations: sound, keptFrames: kept, rate: plan.rate) {
+                return .refused("Not available: \(why).")
+            }
+            return .ready(plan, keptFrames: kept)
         } catch {
-            picture = .refused("The picture couldn't be read (\(error.localizedDescription)).")
+            return .refused("The picture couldn't be read (\(error.localizedDescription)).")
         }
     }
 }

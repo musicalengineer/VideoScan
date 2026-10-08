@@ -16852,6 +16852,7 @@
         "familyArchiveIsNeverATarget",
         "ffmpegFailsPartway_failed_partialKeptUnpublished",
         "ffmpegFailsWritingNothing_failed_nothingKept",
+        "fullRangeJFormatsCountAsPreserved",
         "losslessRemux_provesParity_originalUnchanged",
         "losslessRemux_publishesOneOutput_originalUnchanged",
         "noApplicableFix_refused",
@@ -16864,6 +16865,9 @@
         "rebuildSound_writesPCMCopy_sameLength",
         "removeRepeatedFrames_keepsOnePicturePerFrame_atStatedRate_tagsPreserved",
         "removeRepeatedFrames_noJustifiedRate_refusedBeforeAnyWrite",
+        "removeRepeatedFrames_soundMatchingThePicture_isAllowed",
+        "removeRepeatedFrames_soundNotLiningUp_refusedBeforeAnyWrite",
+        "soundAlignmentRule",
         "spaceNeedIncludesRebuiltPCM",
         "targetAppearsMidRun_neverOverwritten_notPublishedBeside",
         "targetExists_refusedBeforeAnyWrite"

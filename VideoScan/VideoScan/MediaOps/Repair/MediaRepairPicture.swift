@@ -138,7 +138,10 @@ struct MediaRepairPicturePlan: Equatable, Sendable {
     /// file's header, never assumed from the command.
     func mismatch(output o: MediaRepairPictureFacts) -> String? {
         if o.codec != "h264" { return "the picture is \(o.codec), expected h264" }
-        if o.pixelFormat != pixelFormat { return "the colour format is \(o.pixelFormat), expected \(pixelFormat)" }
+        // A decoder reports full-range H.264 as the "j" twin (yuvj444p):
+        // the same picture as yuv444p + range pc, which is what we wrote.
+        let written = Self.fullRangeTwins[o.pixelFormat] ?? o.pixelFormat
+        if written != pixelFormat { return "the colour format is \(o.pixelFormat), expected \(pixelFormat)" }
         if let rate = Self.rational(o.rFrameRate), abs(rate - self.rate) / self.rate > 0.01 {
             return "the copy plays at \(o.rFrameRate), expected \(rateText)"
         }
@@ -166,4 +169,37 @@ struct MediaRepairPicturePlan: Equatable, Sendable {
 struct MediaRepairRefusal: Error, Equatable, Sendable {
     let reason: String
     init(_ reason: String) { self.reason = reason }
+}
+
+// MARK: - Does the sound line up with the cleaned-up picture?
+//
+// Removing repeated frames makes the PICTURE shorter (kept pictures ÷ the
+// justified rate) while the sound is copied as it is. If they no longer
+// agree (within 1 %), the copy would play sound past the picture — so the
+// fix is unavailable, refused before any write (Rick 2026-10-08). A file
+// with no sound is unaffected.
+enum MediaRepairSoundAlignment {
+
+    static let tolerance = 0.01
+
+    /// The planned picture length.
+    static func pictureSeconds(keptFrames: Int, rate: Double) -> Double {
+        rate > 0 ? Double(keptFrames) / rate : 0
+    }
+
+    /// nil = every sound stream lines up (or there is no sound); else why not.
+    static func refusal(soundDurations: [Double?], keptFrames: Int, rate: Double) -> String? {
+        guard !soundDurations.isEmpty else { return nil }
+        let picture = pictureSeconds(keptFrames: keptFrames, rate: rate)
+        for d in soundDurations {
+            guard let sound = d, sound > 0 else {
+                return "the sound's length can't be read, so VideoScan can't tell whether it lines up with the cleaned-up picture"
+            }
+            if picture <= 0 || abs(sound - picture) / max(sound, picture) > tolerance {
+                return String(format: "the sound doesn't line up with the cleaned-up picture (sound %.1f s, picture %.1f s)",
+                              sound, picture)
+            }
+        }
+        return nil
+    }
 }

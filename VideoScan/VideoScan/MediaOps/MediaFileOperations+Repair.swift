@@ -41,9 +41,11 @@ extension MediaFileOperationsCenter {
     @discardableResult
     func startRepair(record: VideoRecord, fixes: [MediaRepairFix], output: URL, besideOriginal: Bool,
                      model: VideoScanModel,
+                     plannedPictureFrames: Int? = nil,
                      runner: MediaRepairJob.Runner? = nil,
                      quickVerifier: MediaRepairJob.QuickVerifier? = nil) -> MediaRepairJob {
-        let request = repairRequest(record: record, fixes: fixes, output: output, model: model)
+        var request = repairRequest(record: record, fixes: fixes, output: output, model: model)
+        request.plannedPictureFrames = plannedPictureFrames
         let busy = activeRepairJob(forRecordID: record.id)
         let job = MediaRepairJob(record: record, request: request, beforeCard: record.mediaReportCard,
                                  besideOriginal: besideOriginal, model: model,

@@ -102,6 +102,7 @@ enum MediaRepairProbe {
         struct Stream: Decodable {
             let codec_type: String?
             let codec_name: String?
+            let duration: String?
             let pix_fmt: String?
             let r_frame_rate: String?
             let avg_frame_rate: String?
@@ -142,10 +143,35 @@ enum MediaRepairProbe {
         }
         return MediaRepairStreamSummary(
             streams: streams.map {
-                MediaRepairStreamSummary.Stream(codecType: $0.codec_type ?? "", codec: $0.codec_name ?? "")
+                MediaRepairStreamSummary.Stream(codecType: $0.codec_type ?? "", codec: $0.codec_name ?? "",
+                                                durationSeconds: $0.duration.flatMap(Double.init))
             },
             durationSeconds: parsed.format?.duration.flatMap(Double.init) ?? 0,
             picture: picture)
+    }
+
+    /// How many pictures Remove repeated frames would keep (a read-only
+    /// decode of the whole picture; nothing written). O(1) memory: only
+    /// the latest `frame=` count is held.
+    @concurrent
+    static func keptFrameCount(path: String, control: ProcessControl?,
+                               heartbeat: (@Sendable () -> Void)? = nil) async throws -> Int {
+        let ffmpeg = try tool(ToolLocator.ffmpegPath, "ffmpeg")
+        let latest = OSAllocatedUnfairLock(initialState: 0)
+        let r = await ProcessRunner.runProcess(
+            executable: ffmpeg, arguments: MediaRepairCommand.keptFrameCountArgs(input: path),
+            stderrLine: { line in
+                if let n = MediaRepairCommand.progressFrame(line) {
+                    latest.withLock { $0 = n }
+                    heartbeat?()
+                }
+            },
+            stdoutLimitBytes: 0, stderrLimitBytes: 16 * 1024, control: control)
+        try Task.checkCancellation()
+        guard r.exitCode == 0 else {
+            throw ProbeFailure(message: "the picture couldn't be read to count its real frames (exit \(r.exitCode))")
+        }
+        return latest.withLock { $0 }
     }
 
     /// The sampled decode (codex consult #6): decode a short window at the

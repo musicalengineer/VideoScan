@@ -33,6 +33,21 @@ enum MediaRepairCommand {
 
     static let sampleWindowSeconds = 2.0
 
+    /// Plan-time count of the pictures Remove repeated frames would keep:
+    /// the whole picture decoded through `mpdecimate`, nothing written
+    /// (`-f null`). Read-only; progress lines carry `frame=N`.
+    static func keptFrameCountArgs(input: String) -> [String] {
+        ["-hide_banner", "-nostdin", "-v", "error",
+         "-i", input, "-map", "0:v:0", "-vf", "mpdecimate", "-fps_mode", "vfr",
+         "-progress", "pipe:2", "-f", "null", "-"]
+    }
+
+    /// `frame=123` (an ffmpeg -progress line) → 123.
+    static func progressFrame(_ line: String) -> Int? {
+        guard line.hasPrefix("frame=") else { return nil }
+        return Int(line.dropFirst("frame=".count).trimmingCharacters(in: .whitespaces))
+    }
+
     /// Decode one window of every stream, report only errors.
     static func sampledDecodeArgs(input: String, start: Double) -> [String] {
         ["-hide_banner", "-nostdin", "-v", "error",
@@ -51,7 +66,7 @@ enum MediaRepairCommand {
     /// (header only) — the proof for a pass that re-encodes.
     static func summaryArgs(input: String) -> [String] {
         ["-v", "error",
-         "-show_entries", "format=duration:stream=index,codec_type,codec_name,pix_fmt,r_frame_rate,avg_frame_rate,"
+         "-show_entries", "format=duration:stream=index,codec_type,codec_name,duration,pix_fmt,r_frame_rate,avg_frame_rate,"
          + "color_primaries,color_transfer,color_space,color_range,sample_aspect_ratio,field_order",
          "-of", "json", input]
     }
@@ -105,6 +120,14 @@ struct MediaRepairStreamSummary: Equatable, Sendable {
     struct Stream: Equatable, Sendable {
         var codecType: String
         var codec: String
+        /// The stream's own length, when the header states it.
+        var durationSeconds: Double?
+
+        init(codecType: String, codec: String, durationSeconds: Double? = nil) {
+            self.codecType = codecType
+            self.codec = codec
+            self.durationSeconds = durationSeconds
+        }
     }
     var streams: [Stream]
     var durationSeconds: Double

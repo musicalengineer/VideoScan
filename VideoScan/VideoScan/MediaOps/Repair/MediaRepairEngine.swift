@@ -77,6 +77,9 @@ struct MediaRepairRequest: Sendable {
     /// The same gate re-asked on the disk thread (volume UUID, mount
     /// identity); nil = no archive designated and no Read-only marks.
     let archiveCheck: ArchiveRemovalCheck?
+    /// Pictures Remove repeated frames keeps, counted by the sheet at plan
+    /// time (saves a second decode); nil = the engine counts them itself.
+    var plannedPictureFrames: Int? = nil
 }
 
 /// The steps a run walks through, for the row's "N of M".
@@ -266,18 +269,49 @@ enum MediaRepairEngine {
             return Task.isCancelled ? .stop(.cancelled) : .go(picture: nil)
         }
         progress(.plan, nil)
-        let facts: MediaRepairPictureFacts?
+        let summary: MediaRepairStreamSummary
         do {
-            facts = try await MediaRepairProbe.summary(path: req.sourcePath, control: control).picture
+            summary = try await MediaRepairProbe.summary(path: req.sourcePath, control: control)
         } catch {
             if Task.isCancelled || error is CancellationError { return .stop(.cancelled) }
             return .stop(.refused(reason: "The original's picture couldn't be read (\(error.localizedDescription)). Nothing was written."))
         }
-        guard let facts else { return .stop(.refused(reason: "This file has no picture to repair. Nothing was written.")) }
-        switch MediaRepairPicturePlan.justify(facts) {
-        case .success(let plan): return Task.isCancelled ? .stop(.cancelled) : .go(picture: plan)
-        case .failure(let refusal): return .stop(.refused(reason: refusal.reason))
+        guard let facts = summary.picture else {
+            return .stop(.refused(reason: "This file has no picture to repair. Nothing was written."))
         }
+        switch MediaRepairPicturePlan.justify(facts) {
+        case .failure(let refusal): return .stop(.refused(reason: refusal.reason))
+        case .success(let plan):
+            if let stop = await soundAlignmentStop(req, summary: summary, plan: plan, control: control, progress: progress) {
+                return .stop(stop)
+            }
+            return Task.isCancelled ? .stop(.cancelled) : .go(picture: plan)
+        }
+    }
+
+    /// The sound must line up with the shorter picture (files with sound
+    /// only). Counts the kept pictures unless the sheet already did.
+    private static func soundAlignmentStop(_ req: MediaRepairRequest, summary: MediaRepairStreamSummary,
+                                           plan: MediaRepairPicturePlan, control: ProcessControl?,
+                                           progress: @escaping Progress) async -> MediaRepairOutcome? {
+        let sound = summary.streams.filter { $0.codecType == "audio" }.map(\.durationSeconds)
+        guard !sound.isEmpty else { return nil }
+        let kept: Int
+        if let planned = req.plannedPictureFrames {
+            kept = planned
+        } else {
+            do {
+                kept = try await MediaRepairProbe.keptFrameCount(path: req.sourcePath, control: control,
+                                                                 heartbeat: { progress(.plan, nil) })
+            } catch {
+                if Task.isCancelled || error is CancellationError { return .cancelled }
+                return .refused(reason: "The real pictures couldn't be counted (\(error.localizedDescription)). Nothing was written.")
+            }
+        }
+        guard let why = MediaRepairSoundAlignment.refusal(soundDurations: sound, keptFrames: kept, rate: plan.rate) else {
+            return nil
+        }
+        return .refused(reason: "Remove repeated frames isn't available: \(why). Nothing was written.")
     }
 }
 

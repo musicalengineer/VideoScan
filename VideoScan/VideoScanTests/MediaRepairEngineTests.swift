@@ -219,6 +219,36 @@ enum RepairFixtures {
         }
     }
 
+    /// Removing repeated frames shortens the picture; the copied sound must
+    /// still line up with it (within 1 %), or the fix is unavailable.
+    @Test func soundAlignmentRule() {
+        // 360 kept pictures at 30 fps = 12 s.
+        #expect(MediaRepairSoundAlignment.refusal(soundDurations: [], keptFrames: 360, rate: 30) == nil)
+        #expect(MediaRepairSoundAlignment.refusal(soundDurations: [12.0], keptFrames: 360, rate: 30) == nil)
+        #expect(MediaRepairSoundAlignment.refusal(soundDurations: [12.1], keptFrames: 360, rate: 30) == nil)
+        let long = MediaRepairSoundAlignment.refusal(soundDurations: [12.0, 60.0], keptFrames: 360, rate: 30)
+        #expect(long == "the sound doesn't line up with the cleaned-up picture (sound 60.0 s, picture 12.0 s)")
+        #expect(MediaRepairSoundAlignment.refusal(soundDurations: [nil], keptFrames: 360, rate: 30)?
+            .contains("can't be read") == true)
+        #expect(MediaRepairSoundAlignment.refusal(soundDurations: [12.0], keptFrames: 0, rate: 30) != nil)
+    }
+
+    /// MJPEG home video (yuvj444p): the H.264 copy decodes as yuvj444p —
+    /// the same full-range picture the plan wrote as yuv444p + range pc.
+    /// It must count as preserved, not block the publish.
+    @Test func fullRangeJFormatsCountAsPreserved() throws {
+        let src = MediaRepairPictureFacts(codec: "mjpeg", pixelFormat: "yuvj444p", rFrameRate: "30", colorRange: "pc")
+        guard case .success(let plan) = MediaRepairPicturePlan.justify(src) else { Issue.record("justified"); return }
+        #expect(plan.pixelFormat == "yuv444p")
+        var out = src
+        out.codec = "h264"
+        #expect(plan.mismatch(output: out) == nil)
+        out.pixelFormat = "yuv444p"
+        #expect(plan.mismatch(output: out) == nil)
+        out.pixelFormat = "yuvj420p"
+        #expect(plan.mismatch(output: out)?.contains("colour format") == true)
+    }
+
     @Test func spaceNeedIncludesRebuiltPCM() {
         let copy = MediaRepairEngine.requiredFreeBytes(recipe: MediaRepairRecipe(fixes: [.remux], balance: nil),
                                                        sourceBytes: 1_000, durationSeconds: 10)
@@ -458,6 +488,42 @@ struct MediaRepairEngineTests {
         #expect(pic.colorSpace == srcPic.colorSpace && pic.colorRange == srcPic.colorRange)
         // 16 s × 6 real pictures at 30 fps ≈ 3.2 s.
         #expect(summary.durationSeconds > 2 && summary.durationSeconds < 5)
+    }
+
+    /// 6 real pictures a second stored 5× at 30 fps for 60 s → 360 kept
+    /// pictures = 12 s at the stated 30 fps. `soundSeconds` decides.
+    static func makeRepeatedWithSound(in dir: URL, soundSeconds: Int) throws -> URL {
+        let src = dir.appendingPathComponent("test_repeated_sound.mov")
+        try F.ffmpeg(["-f", "lavfi", "-i", "testsrc=duration=60:size=160x120:rate=6",
+                      "-f", "lavfi", "-i", "sine=duration=\(soundSeconds):sample_rate=48000",
+                      "-vf", "fps=30", "-c:v", "mjpeg", "-q:v", "5", "-c:a", "pcm_s16le", src.path])
+        return src
+    }
+
+    @Test func removeRepeatedFrames_soundMatchingThePicture_isAllowed() async throws {
+        let dir = try F.makeDir("repeated_sound_ok")
+        let src = try Self.makeRepeatedWithSound(in: dir, soundSeconds: 12)
+        let before = try F.sha256(src)
+        let recipe = MediaRepairRecipe(fixes: [.removeRepeatedFrames], balance: nil)
+        let out = F.repairedURL(for: src, ext: recipe.fileExtension(sourceExtension: "mov", audioCodec: "pcm_s16le"))
+        let outcome = await F.run(F.request(source: src, output: out, fixes: [.removeRepeatedFrames], seconds: 60))
+        guard case .repaired = outcome else { Issue.record("expected repaired, got \(outcome)"); return }
+        #expect(try F.sha256(src) == before)
+    }
+
+    /// The CapeCod shape: the sound runs the whole stored length, the
+    /// cleaned-up picture far less — refused BEFORE any write.
+    @Test func removeRepeatedFrames_soundNotLiningUp_refusedBeforeAnyWrite() async throws {
+        let dir = try F.makeDir("repeated_sound_bad")
+        let src = try Self.makeRepeatedWithSound(in: dir, soundSeconds: 60)
+        let before = try F.sha256(src), listing = F.listing(dir)
+        let recipe = MediaRepairRecipe(fixes: [.removeRepeatedFrames], balance: nil)
+        let out = F.repairedURL(for: src, ext: recipe.fileExtension(sourceExtension: "mov", audioCodec: "pcm_s16le"))
+        let outcome = await F.run(F.request(source: src, output: out, fixes: [.removeRepeatedFrames], seconds: 60))
+        guard case .refused(let why) = outcome else { Issue.record("expected refused, got \(outcome)"); return }
+        #expect(why.contains("the sound doesn't line up with the cleaned-up picture (sound 60.0 s, picture 12.0 s)"))
+        #expect(F.listing(dir) == listing)
+        #expect(try F.sha256(src) == before)
     }
 
     @Test func removeRepeatedFrames_noJustifiedRate_refusedBeforeAnyWrite() async throws {
