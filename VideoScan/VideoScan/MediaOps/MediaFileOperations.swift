@@ -251,7 +251,8 @@ enum MediaFileOperationKind: String, CaseIterable {
         case .verifyVideo: return .init(badge: "Verify Video", logVerb: "verify video", fill: .init(0.42, 0.45, 0.05))
         // Check Media (2026-10-07) — dark moss: the same "checking" family
         // as the two Verify fills, Δ ≈ 0.20 from every other fill.
-        case .checkMedia: return .init(badge: "Check", logVerb: "check media", fill: .init(0.25, 0.35, 0.00))
+        // Renamed in words only 2026-10-08 (the menu verb is Verify…).
+        case .checkMedia: return .init(badge: "Verify Media", logVerb: "verify media", fill: .init(0.25, 0.35, 0.00))
         // Find & Tag (per-person recipe, 2026-08-02) — dark slate blue,
         // distinct from trim's indigo and compare's cobalt; passes the
         // white-text contrast sensor like the rest of the 2026-07-31
@@ -1410,7 +1411,7 @@ final class MediaFileOperationsCenter: ObservableObject {
         let fresh = records.filter { !busy.contains($0.id) }
         guard !fresh.isEmpty else {
             fileOpsLog.notice("checkMedia REFUSED duplicate dispatch: every selected file is already being checked")
-            appLog.write("check media refused: the selected file(s) are already being checked; nothing was started")
+            appLog.write("verify media refused: the selected file(s) are already being verified; nothing was started")
             return nil
         }
         let job = CheckMediaJob(records: fresh, tier: tier, model: model, center: self,

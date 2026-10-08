@@ -4,7 +4,8 @@
 //   - the volumes table has the keyboard, one volume highlighted
 //       → "Catalog Info" (where, when and how it was cataloged);
 //   - the files table has the keyboard, one file highlighted
-//       → "Get Media Info…" (container, streams, last Check Media verdict).
+//       → "Get Info…" (container, streams, last Verify verdict; renamed
+//         from "Get Media Info…" 2026-10-08).
 //
 // Until 2026-10-06 ⌘I had two owners: a hidden zero-size Button("") in the
 // volumes pane and File ▸ Import Catalog…. Views get key equivalents
@@ -78,10 +79,10 @@ struct CatalogInfoMenuItem: View {
 
     var body: some View {
         if fileInfo != nil {
-            Button("Get Media Info\u{2026}") { fileInfo?.perform() }
+            Button(CatalogRowMenuText.getInfo) { fileInfo?.perform() }
                 .keyboardShortcut("i", modifiers: .command)
                 .disabled(target != .file)
-                .help("Show what the highlighted file is made of and its last Check Media verdict. Click one file in the Catalog first.")
+                .help("Show what the highlighted file is made of and its last Verify verdict. Click one file in the Catalog first.")
         } else {
             Button("Catalog Info") { volumeInfo?.perform() }
                 .keyboardShortcut("i", modifiers: .command)

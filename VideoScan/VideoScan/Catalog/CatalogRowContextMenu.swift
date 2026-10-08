@@ -143,31 +143,49 @@ extension CatalogContent {
         }
     }
 
-    /// The full menu for an active or mixed selection — its sections in
-    /// menu order (R1 split, GH #281). Active-row actions are gated on the
-    /// selection being free of ALL inert states: purged / set-aside /
-    /// superseded rows must never receive destructive ops.
+    /// The full menu for an active or mixed selection — the seven groups
+    /// of `CatalogRowMenuGroup`, in that order, a separator between each
+    /// (Rick 2026-10-08; CatalogRowMenuLayoutSensorTests pins the order).
+    /// Active-row actions are gated on the selection being free of ALL
+    /// inert states: purged / set-aside / superseded rows must never
+    /// receive destructive ops.
     @ViewBuilder
     private func activeRowContextMenu(rec: VideoRecord,
                                       selection: CatalogRowMenuSelection,
                                       deletableRecs: [VideoRecord]) -> some View {
+        // Read once per menu open: Transcode greys out on it, and the
+        // Archive Angel items drop their transcode hand-off on it.
+        let transcodeRunning = isTranscodeRunning(for: rec)
+
         openItems(rec: rec)
-
         Divider()
-
-        fileOperationItems(rec: rec, selection: selection)
-
+        mediaCheckMenuItems(rec: rec, activeRecs: selection.active, pureActive: selection.pureActive)
+        Divider()
+        processItems(rec: rec, selection: selection, transcodeRunning: transcodeRunning)
+        Divider()
+        archiveItems(activeRecs: selection.active, pureActive: selection.pureActive,
+                     transcodeRunning: transcodeRunning)
         if selection.pureActive {
-            organizeItems(rec: rec, selection: selection)
-        } // end pureActive
-
+            Divider()
+            describeItems(rec: rec, selection: selection)
+        }
         Divider()
-
-        removeAndDeleteItems(activeRecs: selection.active, deletableRecs: deletableRecs)
+        findItems(rec: rec, pureActive: selection.pureActive)
+        Divider()
+        removeAndDeleteItems(activeRecs: selection.active, pureActive: selection.pureActive,
+                             deletableRecs: deletableRecs)
 
         restoreItems(purgedRecs: selection.purged,
                      setAsideRecs: selection.setAside,
                      supersededRecs: selection.superseded)
+    }
+
+    /// A transcode of this record is running (O(jobs), once per menu open).
+    private func isTranscodeRunning(for rec: VideoRecord) -> Bool {
+        fileOpsCenter.jobs.contains { job in
+            guard job.state.isActive, let t = job as? TranscodeJob else { return false }
+            return t.record.id == rec.id
+        }
     }
 
     /// Reveal in Finder, then Open With ▸ (QuickTime Player, VLC).
@@ -216,12 +234,15 @@ extension CatalogContent {
         }
     }
 
-    /// Remove from Catalog (hide the rows) and the Delete File submenu
-    /// (Move to Trash / Delete Permanently…). Moved verbatim — the
-    /// destructive scope is still exactly `deletableRecs`, the
-    /// right-click-time snapshot the dispatcher takes.
+    /// The bottom group (Rick 2026-10-08): Remove from Catalog (hide the
+    /// rows), Remove from Catalog (keep files) — moved down from the
+    /// archive group, label and behaviour unchanged — and the Delete File
+    /// submenu (Move to Trash / Delete Permanently…). The destructive
+    /// scope is still exactly `deletableRecs`, the right-click-time
+    /// snapshot the dispatcher takes; only how an EMPTY scope shows changed
+    /// (disabled with the reason, `CatalogDeleteFileItem`).
     @ViewBuilder
-    private func removeAndDeleteItems(activeRecs: [VideoRecord],
+    private func removeAndDeleteItems(activeRecs: [VideoRecord], pureActive: Bool,
                                       deletableRecs: [VideoRecord]) -> some View {
         // Remove from Catalog — visible when the selection
         // contains at least one active row. The label and the
@@ -240,6 +261,8 @@ extension CatalogContent {
             .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
         }
 
+        removeFromCatalogMenuItem(activeRecs: activeRecs, pureActive: pureActive)
+
         // Delete File — per-row parity with the triage window's
         // batch path (Rick 2026-06-15). Move to Trash is
         // recoverable; Delete Permanently shows a confirmation
@@ -247,7 +270,22 @@ extension CatalogContent {
         // already handles offline-skip, already-missing, and
         // per-file failures on a detached task. Distinct from
         // Remove from Catalog (above) which only hides the row.
-        if !deletableRecs.isEmpty {
+        switch deleteFileItem(activeRecs: activeRecs, deletableRecs: deletableRecs) {
+        case .hidden:
+            EmptyView()
+        case .disabled(let help):
+            // Nothing selected may be deleted: say why instead of hiding
+            // the verb (Rick 2026-10-08). Disabled, so nothing inside can
+            // run — and its scope would be the empty `deletableRecs` anyway.
+            Menu {
+                EmptyView()
+            } label: {
+                Label(CatalogRowMenuText.deleteFiles(count: activeRecs.count), systemImage: "xmark.bin")
+            }
+            .disabled(true)
+            .help(help)
+            .accessibilityIdentifier("catalog.row.deleteFile.protected")
+        case .enabled:
             Menu {
                 Button(role: .destructive) {
                     let targets = deletableRecs
@@ -288,6 +326,11 @@ extension CatalogContent {
             .disabled(model.isReadOnly)
             .help("Move the file(s) to Trash or remove them from disk permanently. Distinct from \u{201C}Remove from Catalog\u{201D} which only hides the row.")
         }
+    }
+
+    private func deleteFileItem(activeRecs: [VideoRecord],
+                                deletableRecs: [VideoRecord]) -> CatalogDeleteFileItem {
+        model.deleteFileMenuItem(activeRecs: activeRecs, deletableRecs: deletableRecs)
     }
 
     /// Restore / Put Back / Restore Original for the inert rows a
@@ -376,5 +419,23 @@ extension CatalogContent {
                 }
             }
         }
+    }
+}
+
+extension VideoScanModel {
+    /// How Delete File ▸ shows for this right-click (Rick 2026-10-08).
+    /// `deletableRecs` is the menu's own `recordsBulkVerbsMayRemove`
+    /// snapshot — this never widens or narrows it. The refusal sentence is
+    /// asked of the delete gate only when nothing may be deleted (the first
+    /// active row, one cached snapshot), and only for the help text.
+    func deleteFileMenuItem(activeRecs: [VideoRecord], deletableRecs: [VideoRecord]) -> CatalogDeleteFileItem {
+        var note: String?
+        if deletableRecs.isEmpty, let first = activeRecs.first {
+            let snapshot = archiveVolumeProtection()
+            note = bulkDeleteRefusal(first, volume: snapshot).map {
+                Self.bulkDeleteRefusalNote($0, volume: snapshot?.label ?? "the archive volume")
+            }
+        }
+        return .resolve(activeCount: activeRecs.count, deletableCount: deletableRecs.count, refusalNote: note)
     }
 }

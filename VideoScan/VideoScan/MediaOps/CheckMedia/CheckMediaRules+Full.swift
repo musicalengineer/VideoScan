@@ -107,13 +107,13 @@ extension CheckMediaRules {
             return MediaCheck(kind: .sound, verdict: .problem,
                               sentence: "The sound is damaged: \(diagnosis.persistedNote.replacingOccurrences(of: VerifyAudioRules.damagedNotePrefix, with: "")).",
                               evidence: evidence,
-                              fix: "Right-click ▸ Repair Damaged Audio where offered, or look for another copy.")
+                              fix: "Right-click ▸ Repair… to rebuild the sound track, or look for another copy.")
         }
         if !diagnosis.isHealthy {
             return MediaCheck(kind: .sound, verdict: .warning,
                               sentence: "The sound plays, but: \(diagnosis.persistedNote).",
                               evidence: evidence,
-                              fix: "Get Media Info ▸ Sound Details… shows the fix on offer (for example Balance Audio).")
+                              fix: "Right-click ▸ Repair… shows the fix on offer (for example Balance Audio).")
         }
         return levelsCheck(channels, evidence: evidence)
     }

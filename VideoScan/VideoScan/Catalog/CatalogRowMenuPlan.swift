@@ -73,10 +73,16 @@ enum CatalogRowMenuText {
     static func analyze(count: Int) -> String {
         count > 1 ? "Analyze \(count) Files" : "Analyze"
     }
-    /// The ellipsis is earned: a tier choice (quick / full) opens first.
-    static func checkMedia(count: Int) -> String {
-        count > 1 ? "Check \(count) Files\u{2026}" : "Check Media\u{2026}"
+    /// "Get Info…" ⌘I (renamed from "Get Media Info…", Rick 2026-10-08).
+    static let getInfo = "Get Info\u{2026}"
+    /// "Verify…" (renamed from "Check Media…", Rick 2026-10-08). The
+    /// ellipsis is earned: a tier choice (quick / full) opens first.
+    static func verify(count: Int) -> String {
+        count > 1 ? "Verify \(count) Files\u{2026}" : "Verify\u{2026}"
     }
+    /// "Repair…" (new, Rick 2026-10-08): the file's report card, opened at
+    /// its Fixes section.
+    static let repair = "Repair\u{2026}"
     static func removeFromCatalog(count: Int) -> String {
         count > 1 ? "Remove \(count) from Catalog" : "Remove from Catalog"
     }
@@ -110,6 +116,66 @@ enum CatalogRowMenuText {
     }
     static func permanentDeleteWarning(count: Int) -> String {
         "This cannot be undone \u{2014} the file\(count == 1 ? " is" : "s are") removed from disk immediately, not moved to Trash."
+    }
+}
+
+/// The full row menu's groups, top to bottom, with a separator between
+/// each (Rick 2026-10-08). `activeRowContextMenu` emits them in this
+/// order; CatalogRowMenuLayoutSensorTests pins the order against the
+/// builder's source, so the list and the menu cannot drift.
+enum CatalogRowMenuGroup: CaseIterable {
+    /// Reveal in Finder · Open With ▸
+    case open
+    /// Get Info… · Verify… · Repair… (+ the repair-lifecycle items)
+    case inspect
+    /// The pair verbs · Analyze ▸ · Transcode ▸ · Clean Up Video ▸
+    case process
+    /// Promote to Archive · Archive Angel ▸
+    case archive
+    /// Rename… · Tags ▸ · People ▸ · Notes…
+    case describe
+    /// The Find verbs · Find ▸ · Copy Path
+    case find
+    /// Remove from Catalog · Remove from Catalog (keep files) · Delete File ▸
+    case remove
+
+    /// The builder function that emits this group (the sensor's anchor).
+    var builderName: String {
+        switch self {
+        case .open: return "openItems"
+        case .inspect: return "mediaCheckMenuItems"
+        case .process: return "processItems"
+        case .archive: return "archiveItems"
+        case .describe: return "describeItems"
+        case .find: return "findItems"
+        case .remove: return "removeAndDeleteItems"
+        }
+    }
+}
+
+/// How Delete File ▸ shows for a selection (Rick 2026-10-08): never
+/// silently missing when the reason is protection. PRESENTATION ONLY —
+/// which records are deletable is `recordsBulkVerbsMayRemove`, untouched;
+/// the submenu still acts on exactly that set.
+enum CatalogDeleteFileItem: Equatable {
+    /// No active row selected: no item.
+    case hidden
+    /// `count` of the selection may be deleted.
+    case enabled(count: Int)
+    /// Something is selected but none of it may be deleted; `help` says why.
+    case disabled(help: String)
+
+    /// `refusalNote` is the delete gate's own sentence for the first
+    /// protected row (`VideoScanModel.bulkDeleteRefusalNote`), e.g. "lives
+    /// on FamilyArchive, the Master Archive volume, which only archive
+    /// actions may change".
+    static func resolve(activeCount: Int, deletableCount: Int, refusalNote: String?) -> CatalogDeleteFileItem {
+        guard activeCount > 0 else { return .hidden }
+        if deletableCount > 0 { return .enabled(count: deletableCount) }
+        let why = refusalNote ?? "is protected by the delete rules"
+        return .disabled(help: activeCount == 1
+                         ? "Protected: this file \(why)."
+                         : "Protected: none of these files may be deleted \u{2014} the first \(why).")
     }
 }
 

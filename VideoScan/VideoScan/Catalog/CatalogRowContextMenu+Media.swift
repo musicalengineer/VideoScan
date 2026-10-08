@@ -1,8 +1,9 @@
 // CatalogRowContextMenu+Media.swift
-// Get Media Info… / Check Media… and the repair-lifecycle items of the
+// Get Info… / Verify… / Repair… and the repair-lifecycle items of the
 // Catalog row menu, plus the Link Repaired Copy handler (R1 refactor,
 // GH #281; was +Audio.swift until the 2026-10-07 consolidation folded
-// Verify Audio + Verify Video into one Check Media…).
+// Verify Audio + Verify Video into one Check Media…, renamed Verify… on
+// 2026-10-08).
 // (Swift extension ≈ C++ partial class via free member functions: no new
 // stored state allowed, methods share the same `self`; `private` here
 // means file-private to THIS file.)
@@ -11,33 +12,34 @@ import SwiftUI
 
 extension CatalogContent {
 
-    /// "Check Media…" (Rick 2026-10-07) — replaces the separate Verify
-    /// Audio and Verify Video verbs. Opens the quick / full choice
-    /// (CheckMediaSheet); the run is ONE CheckMediaJob for the reachable
-    /// rows. O(selection), never O(records).
+    /// "Verify…" (renamed from "Check Media…", Rick 2026-10-08; that one
+    /// replaced the separate Verify Audio and Verify Video verbs on
+    /// 2026-10-07). Opens the quick / full choice (CheckMediaSheet); the
+    /// run is ONE CheckMediaJob for the reachable rows. O(selection),
+    /// never O(records).
     @ViewBuilder
     private func checkMediaMenuItem(activeRecs: [VideoRecord]) -> some View {
         // The label counts exactly the rows the action runs on (the
         // CatalogVerifyMenuPlan rule, stage-0 triage R4).
-        let plan = CatalogVerifyMenuPlan(verb: "Check Media", selection: activeRecs) {
+        let plan = CatalogVerifyMenuPlan(verb: "Verify", selection: activeRecs) {
             VolumeReachability.isReachable(path: $0.fullPath)
         }
         let checkable = plan.runnable
-        Button(CatalogRowMenuText.checkMedia(count: checkable.count)) {
+        Button(CatalogRowMenuText.verify(count: checkable.count)) {
             checkMediaRequest = CheckMediaRequest(records: checkable)
         }
         .disabled(plan.isDisabled)
-        .help("Check the file — picture, sound and timing — and say in plain words whether it is OK, has a warning, or has a problem, and what to do. Runs in the operations window; the catalog stays usable.")
+        .help("Verify the file — picture, sound and timing — and say in plain words whether it is OK, has a warning, or has a problem, and what to do. Runs in the operations window; the catalog stays usable.")
         .accessibilityIdentifier("catalog.row.checkMedia")
     }
 
-    /// Get Media Info… / Check Media… + the repair-lifecycle cluster
-    /// (GH #128 / #132 / #135), extracted from the row context menu so
-    /// the menu's ViewBuilder expression stays inside Xcode's type-check
-    /// budget (the onlineCopyMenu precedent).
+    /// Get Info… / Verify… / Repair… + the repair-lifecycle cluster
+    /// (GH #128 / #132 / #135) — the `.inspect` group — extracted from the
+    /// row context menu so the menu's ViewBuilder expression stays inside
+    /// Xcode's type-check budget (the onlineCopyMenu precedent).
     ///
-    ///   Get Media Info…             — instant facts sheet (single row).
-    ///   Check Media…                — the checks, as MFO jobs.
+    ///   Get Info…                   — instant facts sheet (single row).
+    ///   Verify…                     — the checks, as MFO jobs.
     ///   Repair Damaged Audio (N)    — re-verify each damaged row and
     ///     chain into Rebuild Audio Track when the damage is the
     ///     repairable codec class (GH #132 P1).
@@ -49,18 +51,17 @@ extension CatalogContent {
     func mediaCheckMenuItems(rec: VideoRecord,
                              activeRecs: [VideoRecord],
                              pureActive: Bool) -> some View {
-        Divider()
-
         // Always available for a single row (Rick 2026-08-14, renamed
-        // 2026-10-07): instant, no media I/O beyond one header probe.
+        // 2026-10-07 and 2026-10-08): instant, no media I/O beyond one
+        // header probe.
         if activeRecs.count == 1 {
-            Button("Get Media Info\u{2026}") {
+            Button(CatalogRowMenuText.getInfo) {
                 presentMediaInfo(for: rec)
             }
             // Display only: in a context menu the shortcut is a hint; the
-            // live ⌘I is File ▸ Get Media Info (CatalogInfoCommand.swift).
+            // live ⌘I is File ▸ Get Info (CatalogInfoCommand.swift).
             .keyboardShortcut("i", modifiers: .command)
-            .help("What this file is made of — container, picture, sound, timing — and the last Check Media verdict.")
+            .help("What this file is made of — container, picture, sound, timing — and the last Verify verdict.")
             .accessibilityIdentifier("catalog.row.getMediaInfo")
         }
 
@@ -110,8 +111,8 @@ extension CatalogContent {
         }
     }
 
-    /// Get Media Info… (the row menu and File ▸ Get Media Info ⌘I). Its
-    /// Check Media… button opens the quick/full choice for this file; its
+    /// Get Info… (the row menu and File ▸ Get Info ⌘I). Its
+    /// Verify… button opens the quick/full choice for this file; its
     /// Sound Details… button (only with a session sound diagnosis) opens
     /// the Verify Audio results sheet with the Balance / Rebuild offers.
     func presentMediaInfo(for rec: VideoRecord) {

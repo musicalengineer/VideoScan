@@ -202,9 +202,10 @@ struct CatalogRowMenuRulesTests {
     // (familyMusicMarkable / familyMusicMarked retired with the Mark as
     // Family Music… item, 2026-10-07.)
 
-    @Test func checkMediaLabelCountsTheRowsItRuns() {
-        #expect(CatalogRowMenuText.checkMedia(count: 1) == "Check Media\u{2026}")
-        #expect(CatalogRowMenuText.checkMedia(count: 3) == "Check 3 Files\u{2026}")
+    /// Renamed from "Check Media…" 2026-10-08.
+    @Test func verifyLabelCountsTheRowsItRuns() {
+        #expect(CatalogRowMenuText.verify(count: 1) == "Verify\u{2026}")
+        #expect(CatalogRowMenuText.verify(count: 3) == "Verify 3 Files\u{2026}")
     }
 
     @Test func damagedAudioIsExactlyTheDamagedVerdicts() {

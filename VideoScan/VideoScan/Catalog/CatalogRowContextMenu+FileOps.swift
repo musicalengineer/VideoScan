@@ -1,6 +1,8 @@
 // CatalogRowContextMenu+FileOps.swift
 // File-operation items of the Catalog row menu, cut out of the single
-// rowContextMenu builder section by section (R1 refactor, GH #281).
+// rowContextMenu builder section by section (R1 refactor, GH #281):
+// the `.process` and `.archive` groups, plus the Find Matching verbs the
+// `.find` group opens with (regrouped 2026-10-08, CatalogRowMenuGroup).
 // (Swift extension ≈ C++ partial class via free member functions: no new
 // stored state allowed, methods share the same `self`; `private` here
 // means file-private to THIS file.)
@@ -9,33 +11,15 @@ import SwiftUI
 
 extension CatalogContent {
 
-    /// The file-operations section of the full row menu: the pair verbs,
-    /// Get Media Info / Check Media, Analyze ▸, Transcode ▸ / Clean Up
-    /// Video ▸, then Archive (R1 split, GH #281; regrouped 2026-10-07).
+    /// The `.process` group (Rick 2026-10-08): the pair verbs (when they
+    /// apply), Analyze ▸, Transcode ▸, Clean Up Video ▸ — the verbs that
+    /// make or study media, not fixes (fixes are Repair…).
     @ViewBuilder
-    func fileOperationItems(rec: VideoRecord, selection: CatalogRowMenuSelection) -> some View {
+    func processItems(rec: VideoRecord, selection: CatalogRowMenuSelection,
+                      transcodeRunning: Bool) -> some View {
         pairItems(rec: rec, selectedRecs: selection.selected, pureActive: selection.pureActive)
-        matchItems(rec: rec)
-
-        // Get Media Info… / Check Media… and the repair lifecycle
-        // (CatalogRowContextMenu+Media.swift).
-        mediaCheckMenuItems(rec: rec,
-                            activeRecs: selection.active,
-                            pureActive: selection.pureActive)
-
         analyzeMenu(rec: rec, activeRecs: selection.active)
-
-        // Read once per menu open: Transcode greys out on it, and the
-        // Archive Angel items drop their transcode hand-off on it.
-        let transcodeRunning = fileOpsCenter.jobs.contains { job in
-            guard job.state.isActive, let t = job as? TranscodeJob else { return false }
-            return t.record.id == rec.id
-        }
         transcodeAndCleanupMenus(rec: rec, transcodeRunning: transcodeRunning)
-
-        archiveItems(activeRecs: selection.active,
-                     pureActive: selection.pureActive,
-                     transcodeRunning: transcodeRunning)
     }
 
     /// Combine This Pair… and Compare These Two Files….
@@ -77,12 +61,13 @@ extension CatalogContent {
         }
     }
 
-    /// Find Matching Audio… / Find Missing Audio… / Find Matching Video….
+    /// Find Matching Audio… / Find Missing Audio… / Find Matching Video…
+    /// — the head of the `.find` group since 2026-10-08.
     /// ("Extract Facial Frames…" and "Extract Frames…" were retired
     /// 2026-10-07 — Rick: deprecated and unverified; VLC exports frames.
     /// Their code is in the repo's .trash/ and in git history.)
     @ViewBuilder
-    private func matchItems(rec: VideoRecord) -> some View {
+    func matchItems(rec: VideoRecord) -> some View {
         // Find Matching Audio — Rick 2026-06-14 (renamed
         // from "Repair Audio" with GH #116, which freed
         // the repair/fix verb space for Balance Audio).
@@ -223,11 +208,12 @@ extension CatalogContent {
         // only the menu entry and its now-unreachable sheet went.)
     }
 
-    /// Promote to Archive, the Archive Angel items, Remove from Catalog
-    /// (keep files).
+    /// The `.archive` group: Promote to Archive, the Archive Angel items.
+    /// (Remove from Catalog (keep files) moved to the bottom group,
+    /// 2026-10-08.)
     @ViewBuilder
-    private func archiveItems(activeRecs: [VideoRecord],
-                              pureActive: Bool, transcodeRunning: Bool) -> some View {
+    func archiveItems(activeRecs: [VideoRecord],
+                      pureActive: Bool, transcodeRunning: Bool) -> some View {
         // Promote to Archive (Master Archive, 2026-08-15) —
         // single + multi select; the model routes to the
         // no-master alert or the confirmation sheet.
@@ -236,7 +222,6 @@ extension CatalogContent {
         promoteToArchiveMenuItem(activeRecs: activeRecs, pureActive: pureActive)
         ArchiveAngelMenuItems(model: model, center: fileOpsCenter, activeRecs: activeRecs, pureActive: pureActive,
                               onTranscode: transcodeRunning ? nil : { rec, preset in configureTranscode(for: rec, preset: preset) })
-        removeFromCatalogMenuItem(activeRecs: activeRecs, pureActive: pureActive)
     }
 
     /// Transcribe Audio / Generate Scene Captions (inside Analyze ▸).

@@ -4,7 +4,9 @@ import os
 
 // MARK: - CheckMediaJob (Rick 2026-10-07)
 //
-// "Check Media…" as ONE Media File Operations job for the whole selection
+// "Verify…" (the menu verb was "Check Media…" until 2026-10-08; the type,
+// the kind case and the Logger category keep the old name) as ONE Media
+// File Operations job for the whole selection
 // (the CLAUDE.md long-operations rule): verb chip · "N of M" · current file
 // · step · time left · progress · Pause / Stop; double-click for every
 // file's report card; a one-line summary when finished; START / OUTCOME to
@@ -145,12 +147,12 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
     // MARK: Run
 
     private func run() async {
-        checkMediaJobLog.info("check media START: \(self.records.count) file(s), tier=\(self.tier.rawValue, privacy: .public)")
+        checkMediaJobLog.info("verify media START: \(self.records.count) file(s), tier=\(self.tier.rawValue, privacy: .public)")
         for index in records.indices {
             guard !Task.isCancelled, state != .cancelling else { break }
             await waitWhilePaused()
             let rec = records[index]
-            let hold = MediaVolumeGateHold(jobID: id, holderName: "Check Media \(rec.filename)")
+            let hold = MediaVolumeGateHold(jobID: id, holderName: "Verify \(rec.filename)")
             self.hold = hold
             guard await hold.acquire(gatesFor(rec.fullPath), isPaused: { [weak self] in self?.isPausedValue ?? false }) else {
                 break
@@ -189,8 +191,8 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
             }
             let reason = Self.failureReason(error)
             items[index].outcome = .failed(reason)
-            model?.log("Check Media: \(rec.filename) — couldn't check: \(reason)")
-            checkMediaJobLog.notice("check media: \(rec.filename, privacy: .public) couldn't check — \(reason, privacy: .public)")
+            model?.log("Verify: \(rec.filename) — couldn't check: \(reason)")
+            checkMediaJobLog.notice("verify media: \(rec.filename, privacy: .public) couldn't check — \(reason, privacy: .public)")
         }
     }
 
@@ -233,8 +235,8 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         }
         model?.saveCatalogDebounced()
         items[index].outcome = .checked(card)
-        model?.log("Check Media: \(rec.filename) → \(card.verdictWord) — \(card.headline)")
-        checkMediaJobLog.info("check media: \(rec.filename, privacy: .public) → \(card.verdictWord, privacy: .public): \(card.headline, privacy: .public)")
+        model?.log("Verify: \(rec.filename) → \(card.verdictWord) — \(card.headline)")
+        checkMediaJobLog.info("verify media: \(rec.filename, privacy: .public) → \(card.verdictWord, privacy: .public): \(card.headline, privacy: .public)")
     }
 
     private func setStep(_ step: String, index: Int, within: Double) {
@@ -256,7 +258,7 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         let summary = Self.summary(items)
         state = .finished(summary: summary)
         subtitleText = summary
-        checkMediaJobLog.info("check media DONE: \(summary, privacy: .public)")
+        checkMediaJobLog.info("verify media DONE: \(summary, privacy: .public)")
     }
 
     // MARK: Pure helpers (tested)

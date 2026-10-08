@@ -1,6 +1,7 @@
 import SwiftUI
 
-// MARK: - "Check Media…" — choose quick or full (Rick 2026-10-07)
+// MARK: - "Verify…" — choose quick or full (Rick 2026-10-07; renamed
+// from "Check Media…" 2026-10-08)
 //
 // The ellipsis earns its keep: one small choice before a job starts. A
 // quick check costs seconds whatever the file's size; a full check reads
@@ -26,7 +27,7 @@ struct CheckMediaSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            Text(request.records.count == 1 ? "Check Media" : "Check \(request.records.count) Files")
+            Text(request.records.count == 1 ? "Verify" : "Verify \(request.records.count) Files")
                 .font(.title2.weight(.semibold))
             if request.records.count == 1 {
                 Text(request.records[0].filename)
@@ -37,7 +38,7 @@ struct CheckMediaSheet: View {
             Text("A quick check reads the file's header, samples its timing and decodes a few short stretches — seconds, however big the file is. A full check also decodes every frame and measures the sound (reads \(VerifyVideoRules.sizeText(request.totalBytes))).")
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
-            Text("Nothing on disk is changed. Results go on each file's report card (Get Media Info).")
+            Text("Nothing on disk is changed. Results go on each file's report card (Get Info).")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             HStack {

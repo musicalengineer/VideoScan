@@ -1,8 +1,9 @@
 import SwiftUI
 
-// MARK: - "Get Media Info…" ⌘I (Rick 2026-10-07; was "Audio Info…")
+// MARK: - "Get Info…" ⌘I (Rick 2026-10-08; was "Get Media Info…", and
+// before that "Audio Info…")
 //
-// The facts sheet: container, every stream, and the last Check Media
+// The facts sheet: container, every stream, and the last Verify
 // verdict. Presentation only — it writes nothing. One header probe in
 // `.task` (sub-second, off the main actor via the @concurrent probe);
 // offline files show what the catalog already knows instead.
@@ -84,7 +85,7 @@ struct MediaInfoSheet: View {
             }
             .accessibilityIdentifier("mediaInfo.verdict")
         } else {
-            Label("Not checked yet — Check Media looks for broken timing, damage and sound problems.",
+            Label("Not verified yet — Verify… looks for broken timing, damage and sound problems.",
                   systemImage: "info.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -93,7 +94,7 @@ struct MediaInfoSheet: View {
 
     private var buttons: some View {
         HStack {
-            Button("Check Media\u{2026}") { handOff(request.onCheckMedia) }
+            Button(CatalogRowMenuText.verify(count: 1)) { handOff(request.onCheckMedia) }
                 .accessibilityIdentifier("mediaInfo.checkMedia")
             if let sound = request.onSoundDetails {
                 Button("Sound Details\u{2026}") { handOff(sound) }

@@ -6667,6 +6667,25 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRowMenuLayoutSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogRowMenuLayoutSensorTests"
+      ],
+      "tests": [
+        "bothRemoveItemsSitInTheBottomGroup",
+        "deleteFileIsDisabledForAProtectedRecordAndEnabledForANormalOne",
+        "deleteFileStateTruthTable",
+        "groupsAppearInOrderWithASeparatorBetweenEach",
+        "renamedLabels",
+        "theDisabledItemNeverActs",
+        "theGroupsAreTheSevenRickAskedFor",
+        "theOldVerbsAreGoneFromEveryUserVisibleString"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogRowMenuPlanTests.swift",
       "stage": "unit",
@@ -6679,7 +6698,6 @@
         "activeAnchorWithNoActiveRowsGetsNoMenu",
         "anchorPrecedenceFollowsTheOldIfChain",
         "anyActiveRowGivesTheFullMenuWhateverTheAnchor",
-        "checkMediaLabelCountsTheRowsItRuns",
         "cleanupNeedsAPictureAnOnlineVolumeAndNoRunningJob",
         "damagedAudioIsExactlyTheDamagedVerdicts",
         "hasAudioOnlyForAudioBearingStreams",
@@ -6694,6 +6712,7 @@
         "singularLabelsCarryNoCount",
         "subsetsAreDisjointAndPurgeWins",
         "transcodeBlockedTruthTable",
+        "verifyLabelCountsTheRowsItRuns",
         "zeroReadsLikeOne"
       ]
     },
@@ -26231,6 +26250,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogRenameTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogRowMenuLayoutSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
