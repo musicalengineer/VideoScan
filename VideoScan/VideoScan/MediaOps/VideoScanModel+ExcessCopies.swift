@@ -310,9 +310,18 @@ extension VideoScanModel {
         let fresh = await excessCopiesPlan(env: env)
         let (go, changed) = Self.excessTargets(shown: shown, fresh: fresh)
         var held = changed
-        let survivorIDs = Set(go.flatMap { pair in pair.item.survivors(of: pair.copy.archiveID).map(\.id) })
-        let survivorPaths = survivorIDs.compactMap { record(forID: $0) }.filter { !$0.isPurged }.map(\.fullPath)
-        let stamps = await Self.captureStamps(paths: Array(Set(survivorPaths)))
+        // Stat only, off-main (codex F1): the survivors at the paths the
+        // SHEET showed — never wherever their records point now — plus each
+        // target copy and its archived file, so a survivor that is one of
+        // them under another name (symlink, hard link, case, firmlink) is
+        // seen for what it is.
+        var paths = Set<String>()
+        for (item, copy) in go {
+            for s in item.survivors(of: copy.archiveID) { paths.insert(s.fullPath) }
+            paths.insert(copy.fullPath)
+            if let a = record(forID: copy.archiveID) { paths.insert(a.fullPath) }
+        }
+        let stamps = await Self.captureStamps(paths: Array(paths))
         var items: [PruneItem] = []
         for (item, copy) in go {
             switch excessPruneItem(item: item, copy: copy, stamps: stamps) {
@@ -341,10 +350,10 @@ extension VideoScanModel {
         }
         var survivors: [PruneSurvivor] = []
         for s in item.survivors(of: copy.archiveID) {
-            guard let live = record(forID: s.id), !live.isPurged, let stamp = stamps[live.fullPath] else {
-                return .failure(ExcessHold(text: "\(s.filename), a copy the list said would stay, is no longer in the catalog or on disk — the list you confirmed has changed, so nothing moved"))
+            switch excessSurvivor(s, targetPath: rec.fullPath, archivePath: archive.fullPath, stamps: stamps) {
+            case .success(let survivor): survivors.append(survivor)
+            case .failure(let hold): return .failure(hold)
             }
-            survivors.append(PruneSurvivor(recordID: s.id, filename: s.filename, path: live.fullPath, stamp: stamp))
         }
         var pruneItem = PruneItem(copyID: copy.id, filename: copy.filename, path: rec.fullPath, sizeBytes: rec.sizeBytes,
                                   kind: .duplicate, archiveID: archive.id, archivePath: archive.fullPath,
@@ -352,6 +361,47 @@ extension VideoScanModel {
         pruneItem.survivors = survivors
         pruneItem.forceArchiveRead = survivors.isEmpty
         return .success(pruneItem)
+    }
+
+    /// One copy the sheet said would STAY → the move's survivor requirement
+    /// (codex F1). It must still be an active record AT THE PATH THE SHEET
+    /// SHOWED (a record re-pointed at another file is not the copy that was
+    /// promised), on disk there now, and a separate file — not the copy
+    /// being moved, nor the archived file, under another name. Anything
+    /// else holds the move, named; the survivor is never substituted.
+    func excessSurvivor(_ s: ExcessCopiesPlan.Copy, targetPath: String, archivePath: String,
+                        stamps: [String: FileIdentityStamp]) -> Result<PruneSurvivor, ExcessHold> {
+        func hold(_ why: String) -> Result<PruneSurvivor, ExcessHold> {
+            .failure(ExcessHold(text: "\(s.filename), a copy the list said would stay, \(why) — the list you confirmed has changed, so nothing moved"))
+        }
+        guard let live = record(forID: s.id), !live.isPurged else { return hold("is no longer in the catalog") }
+        guard live.fullPath == s.fullPath else { return hold("is no longer at the place the list showed") }
+        guard let stamp = stamps[s.fullPath] else { return hold("is no longer on disk, or its drive is no longer connected") }
+        if let alias = Self.excessSurvivorAlias(path: s.fullPath, stamp: stamp,
+                                                targetPath: targetPath, targetStamp: stamps[targetPath],
+                                                archivePath: archivePath, archiveStamp: stamps[archivePath]) {
+            return hold("is \(alias) — not a separate copy")
+        }
+        return .success(PruneSurvivor(recordID: s.id, filename: s.filename, path: s.fullPath, stamp: stamp))
+    }
+
+    /// Whether a survivor path is really the target copy or the archived
+    /// file: the same canonical spelling (firmlink, "."/"..", trailing "/",
+    /// ASCII case — APFS/HFS+ volumes are case-insensitive; folding can only
+    /// hold MORE), or the same device + inode (a symlink — `capture` opens
+    /// through it — or a hard link). nil = a separate file. Pure.
+    nonisolated static func excessSurvivorAlias(path: String, stamp: FileIdentityStamp?,
+                                                targetPath: String, targetStamp: FileIdentityStamp?,
+                                                archivePath: String, archiveStamp: FileIdentityStamp?) -> String? {
+        func key(_ p: String) -> String { ArchiveVolumeProtection.canonical(p).lowercased() }
+        func sameFile(_ a: FileIdentityStamp?, _ b: FileIdentityStamp?) -> Bool {
+            guard let a, let b else { return false }
+            return a.device == b.device && a.inode == b.inode
+        }
+        let me = key(path)
+        if me == key(targetPath) || sameFile(stamp, targetStamp) { return "the copy being moved, under another name" }
+        if me == key(archivePath) || sameFile(stamp, archiveStamp) { return "the archived file itself, under another name" }
+        return nil
     }
 
     // MARK: Run (one await — tests, and the job's loop body)

@@ -9413,7 +9413,9 @@
       ],
       "tests": [
         "aHoldAddedMidJob",
+        "aShownSurvivorAliasingTheTargetHoldsTheMove",
         "aShownSurvivorDroppedFromTheCatalogHoldsTheMove",
+        "aShownSurvivorRepointedElsewhereHoldsTheMove",
         "aSurvivorThatLeavesHoldsTheMove",
         "bitRotInTheArchiveHoldsEverything",
         "changesAfterTheForecast",
@@ -9426,6 +9428,7 @@
         "poisonedKeepListHoldsEverything",
         "readOnlyAndBackupDrives",
         "sampledOnlyCandidateNeverMovedWithoutAMatchingRead",
+        "survivorAliasTable",
         "viewerModeRefused"
       ]
     },

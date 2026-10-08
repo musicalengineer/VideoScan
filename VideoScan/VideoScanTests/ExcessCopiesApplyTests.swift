@@ -249,6 +249,77 @@ struct ExcessCopiesApplyTests {
         #expect(out.held.contains { $0.contains("would stay") }, "\(out.held)")
     }
 
+    /// codex F1 (2026-10-08, P1): the sheet showed survivor X at path P. X's
+    /// file leaves P and its RECORD is re-pointed at another existing file
+    /// (a rescan, a rename elsewhere). The run must hold — the copy the sheet
+    /// promised would stay is not at P any more — never accept the record's
+    /// new path as a substitute survivor (that skipped the archive read).
+    @Test("codex F1: a shown survivor whose record now points at another file holds the move")
+    func aShownSurvivorRepointedElsewhereHoldsTheMove() async throws {
+        let f = try await fixture("repointed"); defer { f.cleanup() }
+        try proveByDigest(f.copy, f)
+        let ro = CatalogScanTarget(searchPath: f.copiesDir.path)
+        ro.readOnlyMark = VolumeReadOnlyMark(markedAt: Date(), volumeUUID: nil)
+        await addTarget(ro, to: f.model)
+        let plan = await f.model.excessCopiesPlan(env: f.env)
+        #expect(plan.offeredIDs == [f.source.id])
+        #expect(plan.items.first?.leavesArchiveOnly == false, "the sheet said a copy stays")
+        let shownPath = f.copy.fullPath
+        let elsewhere = f.copiesDir.appendingPathComponent("test_excess_a_elsewhere.mov")
+        try FileManager.default.moveItem(atPath: shownPath, toPath: elsewhere.path)
+        f.copy.fullPath = elsewhere.path
+        let prepared = await f.model.prepareExcess(shown: plan, env: f.env)
+        #expect(prepared.items.isEmpty, "no substitute survivor: \(prepared.items)")
+        #expect(prepared.held.contains { $0.copyID == f.source.id && $0.reason.contains("would stay") }, "\(prepared.held)")
+        let mover = Mover(trash: f.trashDir)
+        let out = await f.model.applyExcess(shown: plan, env: f.env, hooks: hooks(mover))
+        #expect(out.trashed == 0 && mover.paths.isEmpty, "\(out)")
+        #expect(exists(f.source))
+    }
+
+    /// codex F1, second half: a survivor that IS the copy being moved, under
+    /// another name (here a symlink to it), is not a copy that stays. Before
+    /// the fix it counted, so the archive read was skipped and the move left
+    /// the survivor dangling.
+    @Test("codex F1: a shown survivor that aliases the target copy (symlink) holds the move")
+    func aShownSurvivorAliasingTheTargetHoldsTheMove() async throws {
+        let f = try await fixture("aliastarget"); defer { f.cleanup() }
+        try FileManager.default.removeItem(atPath: f.copy.fullPath)          // sandbox temp file only
+        try FileManager.default.createSymbolicLink(atPath: f.copy.fullPath, withDestinationPath: f.source.fullPath)
+        try proveByDigest(f.copy, f)
+        f.copy.tags = ["Keep"]                                               // shown as a copy that stays
+        let plan = await f.model.excessCopiesPlan(env: f.env)
+        #expect(plan.offeredIDs == [f.source.id], "\(plan)")
+        #expect(plan.items.first?.leavesArchiveOnly == false, "fixture: the sheet said a copy stays")
+        let prepared = await f.model.prepareExcess(shown: plan, env: f.env)
+        #expect(prepared.items.isEmpty, "an alias of the target is not a survivor: \(prepared.items)")
+        #expect(prepared.held.contains { $0.copyID == f.source.id && $0.reason.contains("not a separate copy") },
+                "\(prepared.held)")
+        let mover = Mover(trash: f.trashDir)
+        let out = await f.model.applyExcess(shown: plan, env: f.env, hooks: hooks(mover))
+        #expect(out.trashed == 0 && mover.paths.isEmpty, "\(out)")
+        #expect(exists(f.source))
+    }
+
+    @Test("codex F1: alias table — case, firmlink, symlink/hard link (same inode) and the archive file are not separate copies")
+    func survivorAliasTable() {
+        func stamp(_ dev: UInt64, _ ino: UInt64) -> FileIdentityStamp {
+            FileIdentityStamp(device: dev, inode: ino, size: 10, mtimeNs: 1)
+        }
+        let target = "/Volumes/Media/work/test_a.mov", archive = "/Volumes/FamilyArchive/Breen/test_a.mov"
+        func alias(_ path: String, _ s: FileIdentityStamp?) -> String? {
+            VideoScanModel.excessSurvivorAlias(path: path, stamp: s, targetPath: target, targetStamp: stamp(1, 100),
+                                               archivePath: archive, archiveStamp: stamp(2, 200))
+        }
+        #expect(alias("/Volumes/Media/Work/TEST_A.mov", stamp(1, 999))?.contains("copy being moved") == true, "case spelling")
+        #expect(alias("/System/Volumes/Data/Volumes/Media/work/test_a.mov", nil)?.contains("copy being moved") == true, "firmlink spelling")
+        #expect(alias("/Volumes/Media/elsewhere/link.mov", stamp(1, 100))?.contains("copy being moved") == true, "same inode")
+        #expect(alias("/Volumes/Other/a.mov", stamp(2, 200))?.contains("archived file") == true, "the archive under another name")
+        #expect(alias("/Volumes/familyarchive/breen/test_a.mov", nil)?.contains("archived file") == true)
+        #expect(alias("/Volumes/Other/test_a.mov", stamp(3, 100)) == nil, "a separate file (same inode number, other device)")
+        #expect(alias("/Volumes/Other/test_a.mov", nil) == nil)
+    }
+
     @Test("QA MINOR 4: Keep never writes over a damaged Keep list")
     func keepDoesNotRepairADamagedList() async throws {
         let f = try await fixture("keepdamaged"); defer { f.cleanup() }
