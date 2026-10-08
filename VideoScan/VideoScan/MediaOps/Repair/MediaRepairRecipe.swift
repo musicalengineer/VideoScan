@@ -28,7 +28,7 @@ enum MediaRepairPicture: Equatable, Sendable {
 /// How the sound is written.
 enum MediaRepairSound: Equatable, Sendable {
     case copy
-    /// Re-encoded to 16-bit PCM (Rebuild Audio Track's codec).
+    /// Re-encoded to 24-bit PCM (`rebuiltSoundCodec`).
     case rebuild
     /// The Balance Audio pan, re-encoded in the same codec family
     /// (BalanceAudioFix's own encoder rule).
@@ -139,28 +139,29 @@ struct MediaRepairRecipe: Equatable, Sendable {
         return sourceExtension
     }
 
-    /// The one ffmpeg command for this pass. `rate` is the measured real
-    /// frame rate (only read for `.removeRepeatedFrames`).
-    func ffmpegArgs(input: String, output: String, rate: Double?) -> [String] {
+    /// The one ffmpeg command for this pass — THE seam every encoder
+    /// choice goes through (a hardware variant replaces `picture`'s encode
+    /// args, nothing else). `picture` is the justified plan, required for
+    /// `.removeRepeatedFrames` (nil there = the picture is copied).
+    func ffmpegArgs(input: String, output: String, picture plan: MediaRepairPicturePlan?) -> [String] {
         if isLossless { return MediaRepairCommand.remuxArgs(input: input, output: output) }
         var args = ["-hide_banner", "-nostdin", "-y", "-i", input]
         args += ["-map", "0:v:0?", "-map", sound == .copy ? "0:a?" : "0:a:0?"]
-        args += pictureArgs(rate: rate)
+        args += picture == .removeRepeatedFrames ? (plan?.encodeArgs ?? ["-c:v", "copy"]) : ["-c:v", "copy"]
         args += soundArgs
-        args += ["-map_metadata", "0", "-progress", "pipe:2", output]
+        args += ["-map_metadata", "0", "-map_chapters", "0", "-progress", "pipe:2", output]
         return args
     }
 
-    private func pictureArgs(rate: Double?) -> [String] {
-        guard picture == .removeRepeatedFrames, let rate else { return ["-c:v", "copy"] }
-        return ["-vf", "mpdecimate,fps=\(RepeatedFrameRate.ffmpegText(rate))",
-                "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-pix_fmt", "yuv420p"]
-    }
+    /// Rebuilt sound: 24-bit PCM, the decoded samples kept exactly; sample
+    /// rate and channel layout are left as the source has them (codex
+    /// consult #2 — PCM keeps what decoded; it cannot invent what is lost).
+    static let rebuiltSoundCodec = "pcm_s24le"
 
     private var soundArgs: [String] {
         switch sound {
         case .copy: return ["-c:a", "copy"]
-        case .rebuild: return ["-c:a", RebuildAudioFix.outputAudioCodec]
+        case .rebuild: return ["-c:a", Self.rebuiltSoundCodec]
         case .balance(let pan, let encodeArgs): return ["-af", pan] + encodeArgs
         }
     }
@@ -170,11 +171,11 @@ struct MediaRepairRecipe: Equatable, Sendable {
     var stepLines: [String] {
         applied.map { fix in
             switch fix {
-            case .removeRepeatedFrames: return "Remove repeated frames and re-time the picture at its real rate (re-encoded: H.264, CRF 16)."
+            case .removeRepeatedFrames: return "Remove repeated frames: one picture per real frame at the file's own frame rate (re-encoded: H.264, CRF 16; the copy is shorter)."
             case .remux: return isLossless
                 ? "Re-wrap every stream unchanged with sound stored beside picture (nothing re-encoded)."
                 : "Store sound beside picture (done by the same write)."
-            case .rebuildAudio: return "Rebuild the sound track as 16-bit PCM (the picture is \(picture == .copy ? "copied exactly" : "the step above"))."
+            case .rebuildAudio: return "Rebuild the sound track as 24-bit PCM (the picture is \(picture == .copy ? "copied exactly" : "the step above"))."
             case .balanceAudio: return "Balance the sound: the live channel goes to both speakers."
             }
         }

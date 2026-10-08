@@ -16856,10 +16856,12 @@
         "offlineOriginal_refused",
         "oneRunOneOutput_secondRunRefusedByTheFirstOutput",
         "parityMismatch_failed_copyKeptUnpublished",
+        "pictureMismatchCatchesEveryLostProperty",
         "poisonedFolder_danglingLinkAtTarget_refused_staleLeftoverUntouched",
         "protectedFolder_refusedBeforeAnyWrite",
         "rebuildSound_writesPCMCopy_sameLength",
-        "removeRepeatedFrames_retimesAtRealRate_sameLength",
+        "removeRepeatedFrames_keepsOnePicturePerFrame_atStatedRate_tagsPreserved",
+        "removeRepeatedFrames_noJustifiedRate_refusedBeforeAnyWrite",
         "spaceNeedIncludesRebuiltPCM",
         "targetAppearsMidRun_neverOverwritten_notPublishedBeside",
         "targetExists_refusedBeforeAnyWrite"

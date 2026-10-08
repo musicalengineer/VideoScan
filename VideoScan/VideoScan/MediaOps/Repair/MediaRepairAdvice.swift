@@ -65,17 +65,19 @@ enum MediaRepairAdvice: Equatable {
             fileExtension: recipe.fileExtension(sourceExtension: (sourceName as NSString).pathExtension, audioCodec: "")))
         var steps: [String] = []
         if recipe.picture == .removeRepeatedFrames {
-            steps.append("Measure the real frame rate (the spacing of the frames that change):\n  ffmpeg -t 4 -i \(src) -vf mpdecimate,showinfo -fps_mode vfr -f null -")
+            steps.append("Read the file's own frame rate F (it must be a camera rate — 25, 29.97, 30 …):\n  ffprobe -v error -select_streams v:0 -show_entries stream=r_frame_rate,avg_frame_rate \(src)")
         }
-        // A placeholder rate; the filter text is replaced by "<real rate>" below.
-        let placeholderRate: Double? = recipe.picture == .removeRepeatedFrames ? 0 : nil
-        let cmd = recipe.ffmpegArgs(input: "\u{1}SRC", output: "\u{1}OUT", rate: placeholderRate)
+        // A placeholder plan: F and the colour tags are shown as names.
+        let placeholder = recipe.picture == .removeRepeatedFrames
+            ? MediaRepairPicturePlan(rateText: "F", rate: 30, rateSource: "", pixelFormat: "<source format>",
+                                     reducesColourDetail: false, tagArgs: [], sampleAspectRatio: nil)
+            : nil
+        let cmd = recipe.ffmpegArgs(input: "\u{1}SRC", output: "\u{1}OUT", picture: placeholder)
             .filter { $0 != "-progress" && $0 != "pipe:2" && $0 != "-hide_banner" && $0 != "-nostdin" && $0 != "-y" }
             .map { arg -> String in
                 if arg == "\u{1}SRC" { return src }
                 if arg == "\u{1}OUT" { return out }
-                if arg.hasPrefix("mpdecimate,fps=") { return "mpdecimate,fps=<real rate>" }
-                return arg.contains(" ") || arg.contains("|") ? shellQuoted(arg) : arg
+                return arg.contains(" ") || arg.contains("|") || arg.contains("(") ? shellQuoted(arg) : arg
             }
         steps.append((steps.isEmpty ? "" : "Then write the repaired copy:\n  ") + "ffmpeg " + cmd.joined(separator: " "))
         if recipe.isLossless {

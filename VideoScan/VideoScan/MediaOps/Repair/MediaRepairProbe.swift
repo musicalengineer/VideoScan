@@ -8,8 +8,9 @@ import os
 //     before-and-after proof. Streams one line per packet into counters
 //     (O(streams) memory, nothing collected; the whole file is read once,
 //     no decode).
-//   - `keptFrameTimes`: a short window decoded through `mpdecimate`; the
-//     kept frames' times (≤ 4 s of real frames — a few hundred doubles).
+//   - `summary`: streams, length and the picture's facts (header only).
+//   - `sampledDecodeFailure`: ≤ 5 short windows of the COPY decoded
+//     ("structural checks + sampled decode" — never "fully verified").
 //
 // `@concurrent` so the work never runs on the caller's actor (this repo's
 // Approachable Concurrency trap: a plain `nonisolated async` func runs ON
@@ -101,6 +102,15 @@ enum MediaRepairProbe {
         struct Stream: Decodable {
             let codec_type: String?
             let codec_name: String?
+            let pix_fmt: String?
+            let r_frame_rate: String?
+            let avg_frame_rate: String?
+            let color_primaries: String?
+            let color_transfer: String?
+            let color_space: String?
+            let color_range: String?
+            let sample_aspect_ratio: String?
+            let field_order: String?
         }
         struct Format: Decodable {
             let duration: String?
@@ -109,7 +119,8 @@ enum MediaRepairProbe {
         let format: Format?
     }
 
-    /// Streams + container length from the header (no decode).
+    /// Streams, container length and the first picture stream's facts,
+    /// from the header (no decode).
     @concurrent
     static func summary(path: String, control: ProcessControl?) async throws -> MediaRepairStreamSummary {
         let ffprobe = try tool(ToolLocator.ffprobePath, "ffprobe")
@@ -121,47 +132,43 @@ enum MediaRepairProbe {
               let parsed = try? JSONDecoder().decode(SummaryJSON.self, from: Data(json.utf8)) else {
             throw ProbeFailure(message: "ffprobe could not read \((path as NSString).lastPathComponent)")
         }
+        let streams = parsed.streams ?? []
+        let picture = streams.first { $0.codec_type == "video" }.map {
+            MediaRepairPictureFacts(codec: $0.codec_name ?? "", pixelFormat: $0.pix_fmt ?? "",
+                                    rFrameRate: $0.r_frame_rate ?? "", avgFrameRate: $0.avg_frame_rate ?? "",
+                                    colorPrimaries: $0.color_primaries ?? "", colorTransfer: $0.color_transfer ?? "",
+                                    colorSpace: $0.color_space ?? "", colorRange: $0.color_range ?? "",
+                                    sampleAspectRatio: $0.sample_aspect_ratio ?? "", fieldOrder: $0.field_order ?? "")
+        }
         return MediaRepairStreamSummary(
-            streams: (parsed.streams ?? []).map {
+            streams: streams.map {
                 MediaRepairStreamSummary.Stream(codecType: $0.codec_type ?? "", codec: $0.codec_name ?? "")
             },
-            durationSeconds: parsed.format?.duration.flatMap(Double.init) ?? 0)
+            durationSeconds: parsed.format?.duration.flatMap(Double.init) ?? 0,
+            picture: picture)
     }
 
-    /// Times of the frames `mpdecimate` keeps in one window.
+    /// The sampled decode (codex consult #6): decode a short window at the
+    /// start, three spread through, and the end; any decode error fails.
+    /// nil = every window decoded. Bounded: ≤ 5 × 2 s decoded, stderr capped.
     @concurrent
-    static func keptFrameTimes(path: String, start: Double, seconds: Double,
-                               control: ProcessControl?) async throws -> [Double] {
+    static func sampledDecodeFailure(path: String, durationSeconds: Double,
+                                     control: ProcessControl?) async throws -> String? {
         let ffmpeg = try tool(ToolLocator.ffmpegPath, "ffmpeg")
-        let times = TimesBox()
-        let r = await ProcessRunner.runProcess(
-            executable: ffmpeg,
-            arguments: MediaRepairCommand.rateSampleArgs(input: path, start: start, seconds: seconds),
-            stderrLine: { line in
-                if let t = MediaRepairCommand.keptFrameTime(fromShowinfoLine: line) { times.append(t) }
-            },
-            stdoutLimitBytes: 0, stderrLimitBytes: 16 * 1024, control: control)
-        try Task.checkCancellation()
-        guard r.exitCode == 0 else {
-            throw ProbeFailure(message: "ffmpeg could not decode a sample of the picture (exit \(r.exitCode))")
+        for start in MediaRepairCommand.sampleWindowStarts(durationSeconds: durationSeconds) {
+            let r = await ProcessRunner.runProcess(
+                executable: ffmpeg,
+                arguments: MediaRepairCommand.sampledDecodeArgs(input: path, start: start),
+                stdoutLimitBytes: 0, stderrLimitBytes: 16 * 1024, deadlineSeconds: 300, control: control)
+            try Task.checkCancellation()
+            let errors = r.stderr.split(separator: "\n").filter { !$0.isEmpty }
+            if r.exitCode != 0 || !errors.isEmpty {
+                let at = String(format: "%.1f s", start)
+                return "the copy didn't decode cleanly at \(at)\(errors.first.map { " (\($0))" } ?? "")"
+            }
         }
-        repairProbeLog.info("repair rate sample: \((path as NSString).lastPathComponent, privacy: .public) @\(start, format: .fixed(precision: 1))s kept \(times.count) frame(s)")
-        return times.values
-    }
-
-    /// Kept-frame times, appended from the stderr reader thread. Bounded:
-    /// a window keeps at most a few hundred real frames; capped anyway.
-    private final class TimesBox: @unchecked Sendable {
-        private let lock = NSLock()
-        private var times: [Double] = []
-        static let cap = 20_000
-
-        func append(_ t: Double) {
-            lock.lock(); defer { lock.unlock() }
-            if times.count < Self.cap { times.append(t) }
-        }
-        var values: [Double] { lock.lock(); defer { lock.unlock() }; return times }
-        var count: Int { lock.lock(); defer { lock.unlock() }; return times.count }
+        repairProbeLog.info("repair sampled decode OK: \((path as NSString).lastPathComponent, privacy: .public)")
+        return nil
     }
 
     private static func tool(_ path: String, _ name: String) throws -> String {

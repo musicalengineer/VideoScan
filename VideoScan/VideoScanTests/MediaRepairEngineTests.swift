@@ -195,6 +195,30 @@ enum RepairFixtures {
         }
     }
 
+    /// Preservation is CHECKED on the written copy, never assumed from the
+    /// flags (codex consult #6): every stated tag, the chroma format, the
+    /// rate and the sample aspect must come back.
+    @Test func pictureMismatchCatchesEveryLostProperty() throws {
+        let src = MediaRepairPictureFacts(codec: "prores", pixelFormat: "yuv422p10le", rFrameRate: "25",
+                                          colorPrimaries: "bt709", colorTransfer: "bt709", colorSpace: "bt709",
+                                          colorRange: "tv", sampleAspectRatio: "64:45", fieldOrder: "progressive")
+        guard case .success(let plan) = MediaRepairPicturePlan.justify(src) else { Issue.record("justified"); return }
+        var good = src
+        good.codec = "h264"
+        #expect(plan.mismatch(output: good) == nil)
+        var lost: [(String, MediaRepairPictureFacts)] = []
+        var a = good; a.colorTransfer = "unknown"; lost.append(("color_trc", a))
+        var b = good; b.colorRange = "pc"; lost.append(("color_range", b))
+        var c = good; c.pixelFormat = "yuv420p"; lost.append(("colour format", c))
+        var d = good; d.rFrameRate = "30"; lost.append(("plays at", d))
+        var e = good; e.sampleAspectRatio = "1:1"; lost.append(("sample aspect", e))
+        var f = good; f.codec = "mpeg4"; lost.append(("expected h264", f))
+        for (phrase, facts) in lost {
+            let why = plan.mismatch(output: facts)
+            #expect(why?.contains(phrase) == true, "expected \(phrase), got \(why ?? "nil")")
+        }
+    }
+
     @Test func spaceNeedIncludesRebuiltPCM() {
         let copy = MediaRepairEngine.requiredFreeBytes(recipe: MediaRepairRecipe(fixes: [.remux], balance: nil),
                                                        sourceBytes: 1_000, durationSeconds: 10)
@@ -399,28 +423,61 @@ struct MediaRepairEngineTests {
         #expect(out.pathExtension == "mov")
         let outcome = await F.run(F.request(source: src, output: out, fixes: [.rebuildAudio]))
         guard case .repaired(_, let proof) = outcome else { Issue.record("expected repaired, got \(outcome)"); return }
-        #expect(proof.contains("pcm_s16le"))
+        #expect(proof.contains("pcm_s24le"))
         #expect(try F.sha256(src) == before)
     }
 
     /// The CapeCod class: every real picture stored several times. The
-    /// copy keeps one of each, re-timed at the real rate, same length.
-    @Test func removeRepeatedFrames_retimesAtRealRate_sameLength() async throws {
+    /// copy keeps one picture per real frame at the file's OWN stated rate
+    /// (justified, never inferred from timestamps) — shorter by design —
+    /// with the colour tags and chroma format carried and checked.
+    @Test func removeRepeatedFrames_keepsOnePicturePerFrame_atStatedRate_tagsPreserved() async throws {
         let dir = try F.makeDir("repeated")
         let src = dir.appendingPathComponent("test_repeated.mov")
-        // 6 real pictures a second, each stored 5 times (30 fps on disk).
+        // 6 real pictures a second, each stored 5 times (30 fps on disk), 4:2:2, tagged BT.709.
         try F.ffmpeg(["-f", "lavfi", "-i", "testsrc=duration=16:size=320x240:rate=6",
-                      "-f", "lavfi", "-i", "sine=duration=16:sample_rate=48000",
-                      "-vf", "fps=30", "-c:v", "mjpeg", "-q:v", "3", "-c:a", "pcm_s16le", "-shortest", src.path])
+                      "-vf", "fps=30", "-c:v", "prores_ks", "-profile:v", "2", "-pix_fmt", "yuv422p10le",
+                      "-color_primaries", "bt709", "-color_trc", "bt709", "-colorspace", "bt709", "-color_range", "tv",
+                      "-an", src.path])
         let before = try F.sha256(src)
         let recipe = MediaRepairRecipe(fixes: [.removeRepeatedFrames], balance: nil)
-        let out = F.repairedURL(for: src, ext: recipe.fileExtension(sourceExtension: "mov", audioCodec: "pcm_s16le"))
+        let out = F.repairedURL(for: src, ext: recipe.fileExtension(sourceExtension: "mov", audioCodec: ""))
         let outcome = await F.run(F.request(source: src, output: out, fixes: [.removeRepeatedFrames], seconds: 16))
         guard case .repaired(_, let proof) = outcome else { Issue.record("expected repaired, got \(outcome)"); return }
-        #expect(proof.contains("h264"))
+        #expect(proof.contains("shorter by design"))
+        #expect(proof.contains(MediaRepairEngine.verificationLevel))
         #expect(try F.sha256(src) == before)
         let summary = try await MediaRepairProbe.summary(path: out.path, control: nil)
-        #expect(abs(summary.durationSeconds - 16) <= 1)
+        let pic = try #require(summary.picture)
+        #expect(pic.codec == "h264")
+        #expect(pic.pixelFormat == "yuv422p10le")
+        // The copy carries exactly the colour tags the original states.
+        let srcPic = try #require(try await MediaRepairProbe.summary(path: src.path, control: nil).picture)
+        #expect(srcPic.colorSpace == "bt709" && srcPic.colorRange == "tv")
+        #expect(pic.colorPrimaries == srcPic.colorPrimaries && pic.colorTransfer == srcPic.colorTransfer)
+        #expect(pic.colorSpace == srcPic.colorSpace && pic.colorRange == srcPic.colorRange)
+        // 16 s × 6 real pictures at 30 fps ≈ 3.2 s.
+        #expect(summary.durationSeconds > 2 && summary.durationSeconds < 5)
+    }
+
+    @Test func removeRepeatedFrames_noJustifiedRate_refusedBeforeAnyWrite() async throws {
+        let facts = MediaRepairPictureFacts(codec: "h264", pixelFormat: "yuv420p", rFrameRate: "90000/1",
+                                            avgFrameRate: "1000/1")
+        guard case .failure(let refusal) = MediaRepairPicturePlan.justify(facts) else {
+            Issue.record("a non-camera rate must be refused"); return
+        }
+        #expect(refusal.reason.contains("believable frame rate"))
+        var interlaced = facts
+        interlaced.rFrameRate = "25"
+        interlaced.fieldOrder = "tt"
+        guard case .failure(let r2) = MediaRepairPicturePlan.justify(interlaced) else {
+            Issue.record("interlaced must be refused"); return
+        }
+        #expect(r2.reason.contains("interlaced"))
+        var ok = facts
+        ok.rFrameRate = "30000/1001"
+        guard case .success(let plan) = MediaRepairPicturePlan.justify(ok) else { Issue.record("29.97 is justified"); return }
+        #expect(plan.filter.hasPrefix("mpdecimate,setpts=N/((30000/1001)*TB)"))
     }
 
     @Test func oneRunOneOutput_secondRunRefusedByTheFirstOutput() async throws {

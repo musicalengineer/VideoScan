@@ -14,14 +14,17 @@ import os
 //      folder protected (the delete gate: Master Archive tree / volume,
 //      Read-only marks; plus any volume named FamilyArchive, gate or no
 //      gate), the folder not writable, not enough space, ffmpeg missing,
-//      no believable frame rate — runs before the partial is reserved.
+//      no justified frame rate (MediaRepairPicturePlan) — runs before the
+//      partial is reserved.
 //   2. ffmpeg writes ONE reserved partial (`<stem>.<8 hex>.vs-partial.<ext>`,
 //      O_EXCL, registered live) beside the target. The original is opened
 //      read-only by ffmpeg / ffprobe and by nothing else.
-//   3. PROVE before publishing. A lossless remux must match the original
+//   3. PROVE before publishing — "structural checks + sampled decode",
+//      never "fully verified". A lossless remux must match the original
 //      packet for packet per stream (MediaRepairParity.compare); a pass that
-//      re-encodes must keep its streams and its length
-//      (MediaRepairParity.compareRewritten).
+//      re-encodes must keep its streams, its planned length and (picture)
+//      its colour tags / aspect / chroma (MediaRepairParity.compareRewritten).
+//      Then ≤ 5 short windows of the copy are decoded.
 //   4. PUBLISH with the one no-clobber rename (ExclusivePublish:
 //      RENAME_EXCL, else link(2), else refuse). A name that appeared while
 //      we worked is NEVER written over and NEVER published beside — the
@@ -33,8 +36,7 @@ import os
 //      (the person stopped it; nothing worth keeping).
 //
 // Memory: ffmpeg / ffprobe do all media I/O. In process: the packet
-// census's per-stream counters (O(streams)), ≤ 2 × 4 s of kept-frame
-// times, ≤ 256 KB of ffmpeg stderr, a few KB of probe JSON. < 2 MB worst
+// census's per-stream counters (O(streams)), ≤ 256 KB of ffmpeg stderr, a few KB of probe JSON. < 2 MB worst
 // case, whatever the file size.
 //
 // (For Rick: a caseless `enum` with static funcs ≈ a C++ namespace of free
@@ -79,13 +81,13 @@ struct MediaRepairRequest: Sendable {
 
 /// The steps a run walks through, for the row's "N of M".
 enum MediaRepairPhase: Int, Sendable, CaseIterable {
-    case measure, write, prove, publish
+    case plan, write, prove, publish
 
     var step: String {
         switch self {
-        case .measure: return "measuring the real frame rate"
+        case .plan: return "reading the picture's frame rate and colour"
         case .write: return "writing the repaired copy"
-        case .prove: return "checking the copy against the original"
+        case .prove: return "checking the copy (structure + sampled decode)"
         case .publish: return "saving the copy"
         }
     }
@@ -108,6 +110,10 @@ struct MediaRepairPreflightFacts: Equatable, Sendable {
 }
 
 enum MediaRepairEngine {
+
+    /// What "checked" means here — said exactly, never "fully verified"
+    /// (codex consult #6).
+    static let verificationLevel = "structural checks + sampled decode"
 
     /// Muxer / index headroom on top of the size estimate.
     static let headroomBytes: Int64 = 64 << 20
@@ -211,19 +217,20 @@ enum MediaRepairEngine {
 
     // MARK: The run
 
-    /// Preflight's answer: go (with the measured rate when the recipe
+    /// Preflight's answer: go (with the justified picture plan when the recipe
     /// needs one), or stop with an outcome — nothing written either way.
     enum Preflight: Equatable, Sendable {
-        case go(rate: Double?)
+        /// `picture` = the justified re-encode plan (repeated frames only).
+        case go(picture: MediaRepairPicturePlan?)
         case stop(MediaRepairOutcome)
     }
 
     @concurrent
     static func run(_ req: MediaRepairRequest, tools: Tools = .located,
                     control: ProcessControl?, progress: @escaping Progress) async -> MediaRepairOutcome {
-        let rate: Double?
+        let picture: MediaRepairPicturePlan?
         switch await preflight(req, tools: tools, control: control, progress: progress) {
-        case .go(let measured): rate = measured
+        case .go(let plan): picture = plan
         case .stop(let outcome): return outcome
         }
         // ---- First write: this run's own reserved partial.
@@ -234,11 +241,11 @@ enum MediaRepairEngine {
             return .failed(reason: "Could not start the repaired copy: \(error.localizedDescription)", keptAt: nil)
         }
         defer { partial.release() }
-        if let stop = await partial.write(req, tools: tools, rate: rate, control: control, progress: progress) {
+        if let stop = await partial.write(req, tools: tools, picture: picture, control: control, progress: progress) {
             return stop
         }
         progress(.prove, nil)
-        switch await partial.prove(req, control: control, heartbeat: { progress(.prove, nil) }) {
+        switch await partial.prove(req, picture: picture, control: control, heartbeat: { progress(.prove, nil) }) {
         case .stop(let outcome): return outcome
         case .passed(let detail):
             progress(.publish, nil)
@@ -246,7 +253,7 @@ enum MediaRepairEngine {
         }
     }
 
-    /// Every refusal, then (for repeated frames) the real rate — all
+    /// Every refusal, then (for repeated frames) the justified picture plan — all
     /// before the first write.
     static func preflight(_ req: MediaRepairRequest, tools: Tools, control: ProcessControl?,
                           progress: @escaping Progress) async -> Preflight {
@@ -256,42 +263,21 @@ enum MediaRepairEngine {
             return .stop(.refused(reason: why))
         }
         guard req.recipe.picture == .removeRepeatedFrames else {
-            return Task.isCancelled ? .stop(.cancelled) : .go(rate: nil)
+            return Task.isCancelled ? .stop(.cancelled) : .go(picture: nil)
         }
-        progress(.measure, nil)
-        switch await measureRate(req, control: control) {
-        case .success(let r): return Task.isCancelled ? .stop(.cancelled) : .go(rate: r)
-        case .failure(.cancelled): return .stop(.cancelled)
-        case .failure(.unmeasurable(let why)): return .stop(.refused(reason: why))
+        progress(.plan, nil)
+        let facts: MediaRepairPictureFacts?
+        do {
+            facts = try await MediaRepairProbe.summary(path: req.sourcePath, control: control).picture
+        } catch {
+            if Task.isCancelled || error is CancellationError { return .stop(.cancelled) }
+            return .stop(.refused(reason: "The original's picture couldn't be read (\(error.localizedDescription)). Nothing was written."))
         }
-    }
-
-    // MARK: Pieces of the run
-
-    enum RateFailure: Error, Equatable {
-        case cancelled
-        case unmeasurable(String)
-    }
-
-    /// Two short windows (10 % and 50 % in), kept-frame spacing → rate.
-    private static func measureRate(_ req: MediaRepairRequest, control: ProcessControl?) async -> Result<Double, RateFailure> {
-        let d = req.sourceDurationSeconds
-        let w = RepeatedFrameRate.windowSeconds
-        let starts = d > 3 * w ? [d * 0.10, d * 0.50] : [0]
-        var windows: [[Double]] = []
-        for start in starts {
-            do {
-                windows.append(try await MediaRepairProbe.keptFrameTimes(path: req.sourcePath, start: start,
-                                                                         seconds: w, control: control))
-            } catch {
-                if Task.isCancelled || error is CancellationError { return .failure(.cancelled) }
-                return .failure(.unmeasurable("The real frame rate couldn't be measured (\(error.localizedDescription)). Nothing was written."))
-            }
+        guard let facts else { return .stop(.refused(reason: "This file has no picture to repair. Nothing was written.")) }
+        switch MediaRepairPicturePlan.justify(facts) {
+        case .success(let plan): return Task.isCancelled ? .stop(.cancelled) : .go(picture: plan)
+        case .failure(let refusal): return .stop(.refused(reason: refusal.reason))
         }
-        guard let rate = RepeatedFrameRate.estimate(windows: windows) else {
-            return .failure(.unmeasurable("The real frame rate couldn't be told from the picture, so the repeated frames can't be removed safely. Nothing was written."))
-        }
-        return .success(rate)
     }
 }
 
@@ -314,10 +300,10 @@ struct MediaRepairPartial: Sendable {
 
     /// The recipe's one ffmpeg pass into the partial. nil = written.
     @concurrent
-    func write(_ req: MediaRepairRequest, tools: MediaRepairEngine.Tools, rate: Double?,
+    func write(_ req: MediaRepairRequest, tools: MediaRepairEngine.Tools, picture: MediaRepairPicturePlan?,
                control: ProcessControl?, progress: @escaping MediaRepairEngine.Progress) async -> MediaRepairOutcome? {
         progress(.write, 0)
-        let args = req.recipe.ffmpegArgs(input: req.sourcePath, output: url.path, rate: rate)
+        let args = req.recipe.ffmpegArgs(input: req.sourcePath, output: url.path, picture: picture)
         repairLog.info("repair write: ffmpeg \(args.joined(separator: " "), privacy: .public)")
         let duration = req.sourceDurationSeconds
         let result = await ProcessRunner.runProcess(
@@ -343,11 +329,11 @@ struct MediaRepairPartial: Sendable {
     /// Packet parity for a pure stream copy; streams + length for a pass
     /// that re-encodes. Anything but a pass keeps the copy unpublished.
     @concurrent
-    func prove(_ req: MediaRepairRequest, control: ProcessControl?,
+    func prove(_ req: MediaRepairRequest, picture: MediaRepairPicturePlan?, control: ProcessControl?,
                heartbeat: @escaping @Sendable () -> Void) async -> Proof {
         let verdict: MediaRepairParity
         do {
-            verdict = try await Self.parity(req, partial: url, control: control, heartbeat: heartbeat)
+            verdict = try await Self.parity(req, picture: picture, partial: url, control: control, heartbeat: heartbeat)
         } catch {
             if Task.isCancelled || error is CancellationError { return .stop(discard()) }
             return .stop(keep(reason: "The copy couldn't be checked: \(error.localizedDescription)"))
@@ -360,16 +346,28 @@ struct MediaRepairPartial: Sendable {
         }
     }
 
-    private static func parity(_ req: MediaRepairRequest, partial: URL, control: ProcessControl?,
+    /// Structure first (packets for a stream copy; streams, tags and
+    /// length for a re-encode), then the sampled decode of the copy.
+    private static func parity(_ req: MediaRepairRequest, picture: MediaRepairPicturePlan?, partial: URL,
+                               control: ProcessControl?,
                                heartbeat: @escaping @Sendable () -> Void) async throws -> MediaRepairParity {
-        if req.recipe.isLossless {
-            let before = try await MediaRepairProbe.streamTallies(path: req.sourcePath, control: control, heartbeat: heartbeat)
-            let after = try await MediaRepairProbe.streamTallies(path: partial.path, control: control, heartbeat: heartbeat)
-            return MediaRepairParity.compare(source: before, output: after)
-        }
-        let before = try await MediaRepairProbe.summary(path: req.sourcePath, control: control)
+        let structure: MediaRepairParity
         let after = try await MediaRepairProbe.summary(path: partial.path, control: control)
-        return MediaRepairParity.compareRewritten(source: before, output: after, recipe: req.recipe)
+        if req.recipe.isLossless {
+            let tallyBefore = try await MediaRepairProbe.streamTallies(path: req.sourcePath, control: control, heartbeat: heartbeat)
+            let tallyAfter = try await MediaRepairProbe.streamTallies(path: partial.path, control: control, heartbeat: heartbeat)
+            structure = MediaRepairParity.compare(source: tallyBefore, output: tallyAfter)
+        } else {
+            let before = try await MediaRepairProbe.summary(path: req.sourcePath, control: control)
+            structure = MediaRepairParity.compareRewritten(source: before, output: after, recipe: req.recipe, picture: picture)
+        }
+        guard case .identical(let detail) = structure else { return structure }
+        heartbeat()
+        if let why = try await MediaRepairProbe.sampledDecodeFailure(path: partial.path, durationSeconds: after.durationSeconds,
+                                                                     control: control) {
+            return .different(reason: why)
+        }
+        return .identical(detail: detail + " · " + MediaRepairEngine.verificationLevel)
     }
 
     /// The one no-clobber rename. A taken name is never written over and
