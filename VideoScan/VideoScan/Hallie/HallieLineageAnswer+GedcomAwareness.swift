@@ -192,6 +192,11 @@ extension HallieLineageAnswer {
                              context: HallieTurnExecutor.Context) -> Result? {
         guard let graph = context.graph else { return nil }
         if HalliePronounContinuity.isThirdPersonPronoun(typed) { return pronounAsk(typed) }
+        // A name tagged in the catalog (New Person… / New Family…) is
+        // searched there, never answered by a tree namesake (demo probe
+        // 2026-10-09: "videos of the <X>s" → "<tree person> died in 1387").
+        if HallieTagOnlyName.namesATag(
+            typed, taggedNames: HallieTurnExecutor.confirmedTagNames(context)) { return nil }
         guard case .success(let person, _) = resolve(typed, context: context, graph: graph),
               let line = photographyFloorLine(person, medium: .film) else { return nil }
         return Result(

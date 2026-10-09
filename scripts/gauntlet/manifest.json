@@ -13538,6 +13538,32 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieTagOnlyNameTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieTagOnlyNameTests"
+      ],
+      "tests": [
+        "aFamilyGroupReadAsCoOccurrenceStillFindsTheFamilyTag",
+        "aFamilyShapedKeywordThatNamesATagIsSearchedAsTheTag",
+        "aKinTitleBeforeATagOnlyNameStillFindsIt",
+        "aKinTitleKeywordBeforeTheNamedPersonIsNotSearched",
+        "aPluralWithNoMatchingTagIsNotRewrittenToAFamily",
+        "aProfileNameStillFindsOnlyItsOwnTag",
+        "aTagOnlyFirstNameIsFound",
+        "aTaggedNameIsNeverAnsweredByAPreFilmTreeNamesake",
+        "anUnknownCoOccurrenceAnchorStillDeclines",
+        "catalogSearchFindsTagOnlyNames",
+        "theDefiniteArticlePluralAlsoFindsTheFamilyTag",
+        "theFamilyPhraseFindsABareSurnameTag",
+        "theFamilyPhraseFindsAFamilyTag",
+        "thePluralSurnameFindsTheFamilyTagNotTheMaidenNamePerson",
+        "theResolverMapsOnlyFamilyShapesOntoExistingTags",
+        "videosWithATagOnlyNameReadAsCoOccurrenceStillSearchesTheCatalog"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieProfileNoteAndChildCountTests.swift",
       "stage": "hallie",
       "suites": [
@@ -28919,7 +28945,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1082,
+      "expected_floor": 1098,
       "modes": [
         {
           "name": "strict",
@@ -29060,6 +29086,7 @@
         "VideoScanTests/HallieSuperlativeScopeTests",
         "VideoScanTests/HallieSurnameReferenceTests",
         "VideoScanTests/HallieSurnameRosterTests",
+        "VideoScanTests/HallieTagOnlyNameTests",
         "VideoScanTests/HallieTellingModeTests",
         "VideoScanTests/HallieTerminalLineEditorTests",
         "VideoScanTests/HallieTitledNameRecoveryTests",
