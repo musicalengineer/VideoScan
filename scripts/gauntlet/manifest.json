@@ -7274,6 +7274,19 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashConsistencyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTrashConsistencyTests"
+      ],
+      "tests": [
+        "deadToolbarSheetsAreGone",
+        "ignoreListFollowsWhatMoved",
+        "rowMenuAndShortcutShareOneFunction"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogTrashShortcutTests.swift",

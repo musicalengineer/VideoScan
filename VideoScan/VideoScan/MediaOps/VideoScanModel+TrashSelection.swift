@@ -1,21 +1,23 @@
 // VideoScanModel+TrashSelection.swift
-// ⌘⌫ in the Catalog table — the Finder gesture — moves the highlighted
-// rows to the macOS Trash (Rick, 2026-09-13).
+// The Catalog's Move to Trash: ⌘⌫ in the table — the Finder gesture — and
+// the row menu's Move to Trash both call `trashSelectedRecords` (Rick,
+// 2026-09-13; one function for both since 2026-10-09, so they behave
+// identically, ignore list included).
 //
 // This is a DELETE path, so it adds NO file-deletion code of its own. It
 // is a pure PLAN in front of the ONE existing "move to Trash" routine,
-// `deleteConfirmedJunk(_:mode: .toTrash)` (VideoScanModel+JunkDelete.swift)
-// — the same call the catalog row's "Delete File → Move to Trash" menu
-// item makes. That routine already: leaves Master Archive files alone
+// `deleteConfirmedJunk(_:mode: .toTrash)` (VideoScanModel+JunkDelete.swift).
+// That routine already: leaves Master Archive files alone
 // (excludingMasterArchiveFiles), skips files whose drive is offline,
 // stamps `purgedAt` + `lifecycleStage = .trashed`, publishes the change
 // (#160), and writes one `copyTrashed` Media Ledger line per file that
 // actually left the disk, by: rick. Rows it trashes are recoverable from
 // Finder's Trash and, in the catalog, via Show Removed → Restore.
 //
-// The plan adds the gate the row menu never had: a member of a recovered
+// The plan adds a gate the routine does not have: a member of a recovered
 // audio/video pair (Combine's raw material) is refused, the way Tidy
-// refuses it. Every refusal is a console line, never a silent skip. The
+// refuses it. Every refusal is a console line AND a held row in the
+// result (with its reason), never a silent skip. The
 // existing routine re-checks the archive and offline gates itself, so
 // they are enforced twice (plan time + apply time — the Tidy shape).
 //

@@ -284,8 +284,10 @@ extension CatalogContent {
         case .enabled:
             Button(role: .destructive) {
                 let targets = deletableRecs
+                // The SAME function as ⌘⌫ (item 6, 2026-10-09): same gates,
+                // same held-with-reason result, same ignore list.
                 Task { @MainActor in
-                    let result = await model.deleteConfirmedJunk(targets, mode: .toTrash)
+                    let result = await model.trashSelectedRecords(targets)
                     reportDeleteResult(result)
                 }
             } label: {

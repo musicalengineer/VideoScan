@@ -678,7 +678,7 @@ struct RemoteViewerReadOnlySensorTests {
                 callers.insert(url.lastPathComponent)
             }
         }
-        #expect(callers == ["CatalogRowContextMenu.swift", "VideoScanModel+TrashSelection.swift",
+        #expect(callers == ["VideoScanModel+TrashSelection.swift",
                             "VideoScanModel+PruneApply.swift", "VideoScanModel+JunkTrashSnapshot.swift"],
                 "a new deleteConfirmedJunk caller: confirm it relies on the model's viewer guard, then add it here")
     }

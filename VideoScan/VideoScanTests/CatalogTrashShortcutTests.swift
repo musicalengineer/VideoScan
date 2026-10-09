@@ -202,7 +202,8 @@ struct CatalogTrashShortcutTests {
         #expect(!table.contains(".onKeyPress("), "no key handler on the Catalog table — it breaks arrow-key navigation")
         // The row menu moved to CatalogRowContextMenu.swift (R1, GH #281).
         let rowMenu = try productionSource("CatalogRowContextMenu.swift")
-        #expect(rowMenu.contains("await model.deleteConfirmedJunk(targets, mode: .toTrash)"), "the row menu's Move to Trash still exists")
+        // 2026-10-09: the row menu calls the SAME function as ⌘⌫.
+        #expect(rowMenu.contains("await model.trashSelectedRecords(targets)"), "the row menu's Move to Trash still exists")
         #expect(!rowMenu.contains(".onKeyPress("), "no key handler in the row menu either")
 
         // 2026-09-20 (Rick's second "why can't I hit cmd-delete"): a Command
