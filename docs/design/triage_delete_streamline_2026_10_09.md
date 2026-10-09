@@ -107,3 +107,42 @@ permanent tier and permanent menu items.
 - Undo: is put-back from the Trash reliable on every drive type, or is "Open Trash" enough?
 - Should Excess copies (archived) become simply the "archive copy is the keeper" case of
   the Duplicates view, retiring the separate pane?
+
+## 9. Revisions after the codex design review (2026-10-09, verdict "revise", 9 findings)
+Review: `docs/reviews/codex/codex-design-triage-delete-2026-10-09.md`. Manager verified F3, F5
+and F7 against the source. These override §3–§7 where they conflict.
+- **R1 (F1) Junk acts on a frozen snapshot**: IDs + expected paths + file identities + sizes
+  frozen when the confirmation opens; execute only that; at each file's turn re-check
+  Confirmed status, identity, reachability, protections; any change → a named hold. Never act
+  on whatever now sits at a counted path. Per-file authorization freshness (today it is once
+  per batch, VideoScanModel+JunkDelete.swift ~282).
+- **R2 (F2) Duplicates run the exact reviewed plan**: new job entry point taking the reviewed
+  `DeleteDuplicatesPlan` (today a fresh job re-plans, DeleteDuplicatesJob.swift ~925);
+  partition into sequential per-volume plans; one fixed keeper per group; no keeper is ever a
+  target (aliases included).
+- **R3 (F3) Trash-only is an execution rule**, not a button removal: junk `.permanent` /
+  `removeItem` and the duplicates `.permanent` disposal (DeleteDuplicatesJob.swift ~395, ~458)
+  become unexecutable in these flows, including resumed legacy plans; old values stay
+  decodable for history. Trash failure never falls back to unlink; a quarantined/stranded
+  file gets a visible recovery action.
+- **R4 (F4) Invariant scope**: keeper proof (§6.1) applies to duplicates only (junk may be
+  unique — a human confirmed it). Wording: "nothing is DISPOSED of unless proven" (the
+  duplicate path quarantines before hashing). Name the execution gates for network mounts,
+  archive-backup drives, longer-than-master and A/V halves; keeper precedence is election, not
+  protection.
+- **R5 (F5) Survival rule — DECISION FOR RICK**: today Trash needs ≥ 2 verified copies to
+  REMAIN (`minimumForTrash = 2`, DeleteDuplicatesPlan.swift ~557), so "keep 1" is refused:
+  with 2 copies, nothing moves. Options: keep the 2-remain rule (the UI says "keeps 2"), or
+  allow 1 verified keeper for Trash (Trash is the safety net). Digest/identity verification
+  is unchanged either way.
+- **R6 (F6) One outcome per requested ID**, including preflight exclusions (an all-protected
+  selection today returns attempted 0 with no reasons); lazy lists, never truncated reasons;
+  rows leave only after confirmed success.
+- **R7 (F7) Accounting**: frozen requested set = moved + held + failed + missing + cancelled
+  (mutually exclusive). Junk bytes = sum of moved files' sizes (today scaled by success ratio,
+  JunkDeleteAction.swift ~99 — wrong when sizes differ). Label "moved to Trash", not "freed".
+- **R8 (F8) Undo → "Open Trash"** in v1; real put-back is a separate feature later.
+- **R9 (F9) One selection authority**: checkboxes are the truth; volume chips bulk-toggle
+  eligible checkboxes; the button reads "Move selected extras to Trash". v1 CUTS: arbitrary
+  keeper override (only eligible higher-ranked keepers), custom Undo, skipping the confirmation
+  for small selections, retiring the Excess pane.
