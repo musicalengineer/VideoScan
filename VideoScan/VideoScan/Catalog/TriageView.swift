@@ -442,17 +442,13 @@ struct TriageView: View {
                     // Move to Trash acts on exactly this set (design R1).
                     snapshot: frozen,
                     onCancel: { /* dismiss is automatic via @Environment(\.dismiss) */ },
-                    onAct: JunkDeleteAction.makeOnAct(model: model, snapshot: frozen) { result, mode, bytesSucceeded in
+                    onAct: JunkDeleteAction.makeOnAct(model: model, snapshot: frozen) { result, _, bytesSucceeded in
                         // Atomic content transition: confirm → result.
-                        junkSheet = .result(result, mode, bytesSucceeded)
+                        junkSheet = .result(JunkDeletionReport(result), bytesSucceeded)
                     }
                 )
-            case .result(let r, let mode, let bytes):
-                DeleteConfirmedJunkResultSheet(
-                    mode: mode,
-                    result: r,
-                    bytesSucceeded: bytes
-                )
+            case .result(let report, let bytes):
+                DeleteConfirmedJunkResultSheet(report: report, bytesMoved: bytes)
             }
         }
         // Pass B — Workspace-import lineage picker. Driven by the same

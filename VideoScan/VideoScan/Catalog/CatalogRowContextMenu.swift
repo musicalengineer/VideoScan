@@ -290,7 +290,7 @@ extension CatalogContent {
                     let targets = deletableRecs
                     Task { @MainActor in
                         let result = await model.deleteConfirmedJunk(targets, mode: .toTrash)
-                        reportDeleteResult(result, mode: .toTrash)
+                        reportDeleteResult(result)
                     }
                 } label: {
                     Label("Move to Trash", systemImage: "trash")
@@ -310,7 +310,7 @@ extension CatalogContent {
                     if alert.runModal() == .alertFirstButtonReturn {
                         Task { @MainActor in
                             let result = await model.deleteConfirmedJunk(targets, mode: .permanent)
-                            reportDeleteResult(result, mode: .permanent)
+                            reportDeleteResult(result)
                         }
                     }
                 } label: {

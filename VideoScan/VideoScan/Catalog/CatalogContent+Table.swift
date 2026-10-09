@@ -465,7 +465,7 @@ extension CatalogContent {
         }
         Task { @MainActor in
             let result = await model.trashSelectedRecords(targets)
-            reportDeleteResult(result, mode: .toTrash)
+            reportDeleteResult(result)
         }
     }
 
@@ -484,34 +484,36 @@ extension CatalogContent {
         CatalogOpenAction.open(ids: ids, rows: tableData, gesture: gesture, model: model)
     }
 
-    func reportDeleteResult(
-        _ result: VideoScanModel.JunkDeletionResult,
-        mode: VideoScanModel.JunkDeletionMode
-    ) {
-        let interesting = result.alreadyMissing > 0
-            || result.skippedOffline > 0
-            || !result.failed.isEmpty
-        guard interesting else { return }
-
-        var lines: [String] = []
-        if result.succeeded > 0 {
-            lines.append("\(result.succeeded) \(mode == .toTrash ? "moved to Trash" : "deleted permanently")")
-        }
-        if result.alreadyMissing > 0 {
-            lines.append("\(result.alreadyMissing) already missing \u{2014} catalog updated")
-        }
-        if result.skippedOffline > 0 {
-            lines.append("\(result.skippedOffline) skipped \u{2014} volume offline")
-        }
-        if !result.failed.isEmpty {
-            lines.append("\(result.failed.count) failed (permissions or locked)")
-        }
+    /// The result of ⌘⌫ / the row menu's Move to Trash. Silent when every
+    /// file moved (Finder's behaviour); otherwise an alert with one
+    /// sentence per bucket and EVERY file that stayed, with its reason, in
+    /// a scrolling list (design R6 — nothing console-only, nothing
+    /// truncated). Same presenter as Triage's result sheet.
+    func reportDeleteResult(_ result: VideoScanModel.JunkDeletionResult) {
+        let report = JunkDeletionReport(result)
+        guard report.hasNotes else { return }
         let alert = NSAlert()
-        alert.messageText = "Delete completed with notes"
-        alert.informativeText = lines.joined(separator: "\n")
+        alert.messageText = "Move to Trash \u{2014} some files stayed"
+        alert.informativeText = report.summary.joined(separator: "\n")
         alert.alertStyle = result.failed.isEmpty ? .informational : .warning
+        alert.accessoryView = Self.reportListView(report.linesText)
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    /// A read-only, selectable, scrolling text list for the alert.
+    private static func reportListView(_ text: String) -> NSView {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 180))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let textView = NSTextView(frame: scroll.bounds)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        textView.string = text
+        textView.autoresizingMask = [.width]
+        scroll.documentView = textView
+        return scroll
     }
 
     /// Extracted Tag-column cell. Moved out of the Table body to keep

@@ -15810,6 +15810,25 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/JunkOutcomeAccountingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JunkOutcomeAccountingTests"
+      ],
+      "tests": [
+        "allProtectedIsReported",
+        "bothSurfacesRenderTheReport",
+        "cancelledFilesAreCounted",
+        "catalogPlanRefusalsReachTheResult",
+        "catalogViewerIsReported",
+        "everyBucketSums",
+        "mixedPreflightAndMoved",
+        "reportAtScale",
+        "reportListsEveryHeldFile"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/KinshipExplicitOverInferredTests.swift",

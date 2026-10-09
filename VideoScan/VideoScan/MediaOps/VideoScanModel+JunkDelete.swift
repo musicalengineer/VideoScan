@@ -55,26 +55,48 @@ extension VideoScanModel {
         case permanent
     }
 
-    /// Outcome of a single batch. The result sheet renders these counts;
-    /// tests assert against them directly.
+    /// Outcome of a batch: ONE item per requested record, in request
+    /// order, each with exactly one outcome (design R6/R7: requested ==
+    /// moved + held + failed + missing + offline + cancelled). The counts
+    /// the sheets and the prune lane read are derived from the items, so
+    /// they cannot disagree with them.
     struct JunkDeletionResult {
-        /// Total records passed in (could include records already missing
-        /// from disk or that ultimately fail).
-        let attempted: Int
-        /// Files actually moved to Trash or removed from disk this pass.
-        let succeeded: Int
-        /// Records whose `fullPath` did not exist when we tried — catalog
-        /// was still updated (purgedAt + lifecycleStage), but no disk op.
-        /// (Volume WAS reachable; the specific file just wasn't there.)
-        let alreadyMissing: Int
-        /// Records whose volume isn't currently mounted. Untouched — they
-        /// stay tagged and the user can retry after remounting the drive.
-        let skippedOffline: Int
-        /// Per-record failures with the underlying FileManager error.
-        let failed: [(record: VideoRecord, error: Error)]
-        /// Records refused at their turn (a caller's guard, the archive or
-        /// read-only last word). Nothing moved; the record is untouched.
-        var refused: [(record: VideoRecord, reason: String)] = []
+        struct Item {
+            let record: VideoRecord
+            let outcome: JunkFileOutcome
+        }
+        let items: [Item]
+
+        init(items: [Item]) { self.items = items }
+        static let empty = JunkDeletionResult(items: [])
+
+        /// Every record that was requested (each has one outcome).
+        var attempted: Int { items.count }
+        /// Files actually moved this pass.
+        var succeeded: Int { items.count { $0.outcome.isMoved } }
+        /// The file was already gone (its drive WAS reachable) — the catalog
+        /// was updated (purgedAt + lifecycleStage), no disk op.
+        var alreadyMissing: Int { items.count { $0.outcome.kind == .missing } }
+        /// Its drive isn't mounted. Untouched — retry after remounting.
+        var skippedOffline: Int { items.count { $0.outcome.kind == .offline } }
+        /// Not reached: the run was stopped before this file's turn.
+        var cancelled: Int { items.count { $0.outcome.kind == .cancelled } }
+        /// The file operation itself failed (the file is where it was).
+        var failed: [(record: VideoRecord, error: Error)] {
+            items.compactMap { item in
+                guard case .failed(let error) = item.outcome else { return nil }
+                return (record: item.record, error: error)
+            }
+        }
+        /// Held back — before any disk work (viewer, Master Archive, a drive
+        /// marked Read only) or at the file's turn (a caller's guard, the
+        /// archive / read-only last word). Nothing moved; record untouched.
+        var refused: [(record: VideoRecord, reason: String)] {
+            items.compactMap { item in
+                guard case .held(let why) = item.outcome else { return nil }
+                return (record: item.record, reason: why)
+            }
+        }
     }
 
     /// A per-file guard for a caller that PROVED something about a file
@@ -101,14 +123,30 @@ extension VideoScanModel {
         var remove: (@Sendable (URL) throws -> Void)? = nil
     }
 
-    /// One file's outcome. Built per file at its turn; the batch result is
-    /// assembled from these on the main actor.
+    /// One file's outcome — mutually exclusive by construction (one enum
+    /// value per file; ≈ a C++ std::variant).
     enum JunkFileOutcome: Sendable {
         case moved
         case held(String)
         case failed(any Error)
         case missing
         case offline
+        /// The run was stopped (task cancelled) before this file's turn.
+        case cancelled
+
+        /// The case without its payload, for counting and grouping.
+        enum Kind: Equatable { case moved, held, failed, missing, offline, cancelled }
+        var kind: Kind {
+            switch self {
+            case .moved: return .moved
+            case .held: return .held
+            case .failed: return .failed
+            case .missing: return .missing
+            case .offline: return .offline
+            case .cancelled: return .cancelled
+            }
+        }
+        var isMoved: Bool { kind == .moved }
     }
 
     /// C04-F5 (P1, 2026-10-06): a viewer Mac never moves or deletes a file.
@@ -124,36 +162,33 @@ extension VideoScanModel {
         guard viewer || isReadOnly else { return nil }
         let reason = "this Mac is a read-only viewer of the catalog"
         log("Delete Confirmed Junk refused — \(reason); \(records.count) file(s) left untouched.")
-        return JunkDeletionResult(
-            attempted: records.count,
-            succeeded: 0,
-            alreadyMissing: 0,
-            skippedOffline: 0,
-            failed: [],
-            refused: records.map { (record: $0, reason: reason) }
-        )
+        return JunkDeletionResult(items: records.map { .init(record: $0, outcome: .held(reason)) })
     }
 
     /// Everything `deleteConfirmedJunk` decides before any disk work, in
     /// order: (1) the viewer refusal — FIRST, before anything else;
-    /// (2) Master Archive files are never bulk-deleted
-    /// (excludingMasterArchiveFiles); (3) the empty-selection
-    /// short-circuit. A non-nil `finished` is the whole answer; otherwise
-    /// `records` are the eligible ones.
+    /// (2) the empty-selection short-circuit; (3) Master Archive files and
+    /// drives marked Read only are never bulk-deleted
+    /// (excludingMasterArchiveFiles, which also writes the console lines) —
+    /// each such file gets a HOLD with the gate's own sentence, never a
+    /// silent drop (design R6). A non-nil `finished` is the whole answer;
+    /// otherwise `pending[i]` is file i's outcome when it is already
+    /// decided, nil when it goes on to its turn.
     func junkDeletionPreflight(_ requested: [VideoRecord])
-        -> (records: [VideoRecord], finished: JunkDeletionResult?) {
+        -> (pending: [JunkFileOutcome?], finished: JunkDeletionResult?) {
         if let refused = junkDeletionRefusedOnViewer(requested) { return ([], refused) }
-        let records = excludingMasterArchiveFiles(requested, verb: "Delete Confirmed Junk")
-        guard !records.isEmpty else {
-            return ([], JunkDeletionResult(
-                attempted: 0,
-                succeeded: 0,
-                alreadyMissing: 0,
-                skippedOffline: 0,
-                failed: []
-            ))
+        guard !requested.isEmpty else { return ([], .empty) }
+        let mayGo = Set(excludingMasterArchiveFiles(requested, verb: "Delete Confirmed Junk").map(ObjectIdentifier.init))
+        var pending = [JunkFileOutcome?](repeating: nil, count: requested.count)
+        guard mayGo.count < requested.count else { return (pending, nil) }
+        let archiveVolume = archiveVolumeProtection()
+        let label = archiveVolume?.label ?? "the archive volume"
+        for (i, rec) in requested.enumerated() where !mayGo.contains(ObjectIdentifier(rec)) {
+            let note = bulkDeleteRefusal(rec, volume: archiveVolume)
+                .map { Self.bulkDeleteRefusalNote($0, volume: label) } ?? "is protected by the delete rules"
+            pending[i] = .held(note + " — nothing moved")
         }
-        return (records, nil)
+        return (pending, nil)
     }
 
     /// Trash every record in `records`, one file at a time, regardless of
@@ -168,7 +203,7 @@ extension VideoScanModel {
         mode: JunkDeletionMode,
         guard fileGuard: JunkDeletionGuard? = nil
     ) async -> JunkDeletionResult {
-        let (records, finished) = junkDeletionPreflight(requested)
+        let (pending, finished) = junkDeletionPreflight(requested)
         if let finished { return finished }
 
         // The disk half's fixed inputs — all Sendable, so they may cross to
@@ -184,11 +219,17 @@ extension VideoScanModel {
             remove: fileGuard?.remove)
 
         var outcomes: [JunkFileOutcome] = []
-        outcomes.reserveCapacity(records.count)
-        for rec in records {
-            outcomes.append(await junkTurn(rec, guard: fileGuard, disk: disk))
+        outcomes.reserveCapacity(requested.count)
+        for (rec, decided) in zip(requested, pending) {
+            if let decided {
+                outcomes.append(decided)
+            } else if Task.isCancelled {
+                outcomes.append(.cancelled)
+            } else {
+                outcomes.append(await junkTurn(rec, guard: fileGuard, disk: disk))
+            }
         }
-        return applyJunkOutcomes(records, outcomes, mode: mode)
+        return applyJunkOutcomes(requested, outcomes, mode: mode)
     }
 
     /// One file's turn. The catalog half, here on the main actor, as late
@@ -223,37 +264,27 @@ extension VideoScanModel {
                                    mode: JunkDeletionMode) -> JunkDeletionResult {
         let now = Date()
         let stage: LifecycleStage = mode == .toTrash ? .trashed : .deletedPermanently
-        var succeeded = 0, alreadyMissing = 0, skippedOffline = 0
-        var failed: [(record: VideoRecord, error: Error)] = []
-        var refused: [(record: VideoRecord, reason: String)] = []
         var removedFromDisk: [VideoRecord] = []
 
         for (rec, outcome) in zip(records, outcomes) {
             switch outcome {
-            case .offline:
-                // Untouched — the row stays tagged for a remount-then-retry.
-                skippedOffline += 1
-            case .held(let why):
-                // Untouched, like a failure: the file is still there (or is
-                // not what was verified), the row stays active.
-                refused.append((record: rec, reason: why))
+            case .offline, .held, .failed, .cancelled:
+                // Untouched: the file is still there (or is not what was
+                // verified, or its drive is away); the row stays active so
+                // the user can retry or inspect.
+                break
             case .missing:
                 // Stamped so the row stops showing as active junk; the stage
                 // follows the requested mode even though no disk op ran.
-                alreadyMissing += 1
                 rec.purgedAt = now
                 rec.lifecycleStage = stage
             case .moved:
-                succeeded += 1
                 rec.lifecycleStage = stage
                 rec.purgedAt = now
                 removedFromDisk.append(rec)
-            case .failed(let error):
-                // Not stamped — the file is still there; the row stays
-                // active so the user can retry or inspect.
-                failed.append((record: rec, error: error))
             }
         }
+        let result = JunkDeletionResult(items: zip(records, outcomes).map { .init(record: $0, outcome: $1) })
 
         // Single batched persist (a per-record save would saturate the
         // debouncer and could leave a half-written catalog on a crash).
@@ -266,16 +297,9 @@ extension VideoScanModel {
         ledgerCopyRemoved(removedFromDisk, permanent: mode == .permanent, by: .rick, at: now,
                           batchID: "junk-\(UUID().uuidString.prefix(8))")
 
-        log("Delete Confirmed Junk: attempted=\(records.count) succeeded=\(succeeded) missing=\(alreadyMissing) offline=\(skippedOffline) failed=\(failed.count)\(refused.isEmpty ? "" : " refused=\(refused.count)") mode=\(mode == .toTrash ? "trash" : "permanent")")
-
-        return JunkDeletionResult(
-            attempted: records.count,
-            succeeded: succeeded,
-            alreadyMissing: alreadyMissing,
-            skippedOffline: skippedOffline,
-            failed: failed,
-            refused: refused
-        )
+        let refused = result.refused.count, cancelled = result.cancelled
+        log("Delete Confirmed Junk: attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode == .toTrash ? "trash" : "permanent")")
+        return result
     }
 
     /// Convenience filter: every active (non-purged) record currently

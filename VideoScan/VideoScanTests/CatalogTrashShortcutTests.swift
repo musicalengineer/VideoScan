@@ -108,7 +108,9 @@ struct CatalogTrashShortcutTests {
         #expect(model.isInsideMasterArchive(path: archiveFile.path), "sandbox archive root is the model's Master Archive")
 
         let result = await model.trashSelectedRecords([recA, recPair, recB, recArchived])
-        #expect(result.attempted == 2 && result.succeeded == 2 && result.failed.isEmpty, "\(result)")
+        // One outcome per selected row (design R6): 2 moved, 2 held with why.
+        #expect(result.attempted == 4 && result.succeeded == 2 && result.failed.isEmpty, "\(result)")
+        #expect(result.refused.map(\.record.id) == [recPair.id, recArchived.id], "\(result.refused.map(\.reason))")
 
         // Disk: the two ordinary files left; the refused ones did not.
         #expect(!FileManager.default.fileExists(atPath: a.path))
@@ -156,11 +158,11 @@ struct CatalogTrashShortcutTests {
         let empty = await model.trashSelectedRecords([])
         #expect(empty.attempted == 0)
         let refused = await model.trashSelectedRecords([rec])
-        #expect(refused.attempted == 0 && refused.succeeded == 0)
+        #expect(refused.attempted == 1 && refused.succeeded == 0 && refused.refused.count == 1, "the refusal is reported, not dropped")
         rec.pairGroupID = nil
         model.isReadOnly = true
         let readOnly = await model.trashSelectedRecords([rec])
-        #expect(readOnly.attempted == 0)
+        #expect(readOnly.attempted == 1 && readOnly.refused.first?.reason.contains("read-only viewer") == true)
         #expect(FileManager.default.fileExists(atPath: file.path))
         await model.mediaLedger.waitForPendingWrites()
         #expect(model.mediaLedger.allEvents().isEmpty)
@@ -183,7 +185,7 @@ struct CatalogTrashShortcutTests {
         // quiet rather than a sensor that passes.
         let handler = String(table[handlerRange.lowerBound...].prefix(1_800))
         #expect(handler.contains("model.trashSelectedRecords(targets)"))
-        #expect(handler.contains("reportDeleteResult(result, mode: .toTrash)"))
+        #expect(handler.contains("reportDeleteResult(result)"))
         // The guard was `press.modifiers == .command` until 2026-09-16.
         // Exact equality made any stray flag macOS reported alongside
         // Command an `.ignored` with NO trace, which is indistinguishable

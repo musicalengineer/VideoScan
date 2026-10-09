@@ -87,111 +87,56 @@ struct DeleteConfirmedJunkConfirmSheet: View {
 
 // MARK: - Result Sheet
 //
-// Shown after the delete pass completes. Renders the per-bucket counts
-// (succeeded / skippedOffline / alreadyMissing / failed) plus per-record
-// errors so the user can see which files refused to move and why.
-//
-// Mode is passed in so the success label can read either "Moved N files
-// to Trash" or "Deleted N files permanently". We also pin the total
-// successful bytes for the size summary — computed by the parent from
-// the input records (Note: not from the result; the result doesn't
-// re-carry the records that succeeded, only those that failed).
+// Shown after the pass completes. Renders the report built ONCE from the
+// result (JunkDeletionReport): one sentence per bucket, then EVERY file
+// that did not move with its reason — a lazy list, never truncated, never
+// "see the app log" (design R6).
 
 struct DeleteConfirmedJunkResultSheet: View {
-    let mode: VideoScanModel.JunkDeletionMode
-    let result: VideoScanModel.JunkDeletionResult
-    let bytesSucceeded: Int64
+    let report: JunkDeletionReport
+    let bytesMoved: Int64
 
     @Environment(\.dismiss) private var dismiss
 
-    private var actionVerb: String {
-        switch mode {
-        case .toTrash:   return "Moved"
-        case .permanent: return "Deleted"
-        }
-    }
-
-    private var destinationPhrase: String {
-        switch mode {
-        case .toTrash:   return "to Trash"
-        case .permanent: return "permanently"
-        }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Label("Done", systemImage: result.failed.isEmpty
-                  ? "checkmark.seal.fill"
-                  : "exclamationmark.triangle.fill")
+            Label(report.hasNotes ? "Done \u{2014} with notes" : "Done",
+                  systemImage: report.hasNotes ? "exclamationmark.triangle.fill" : "checkmark.seal.fill")
                 .font(.title2.weight(.semibold))
-                .foregroundStyle(result.failed.isEmpty ? .green : .orange)
+                .foregroundStyle(report.hasNotes ? .orange : .green)
 
-            VStack(alignment: .leading, spacing: 6) {
-                if result.succeeded > 0 {
-                    Label {
-                        Text("\(actionVerb) \(result.succeeded) file\(result.succeeded == 1 ? "" : "s") (\(Formatting.humanSize(bytesSucceeded))) \(destinationPhrase)")
-                    } icon: {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    }
+            VStack(alignment: .leading, spacing: 4) {
+                ForEach(Array(report.summary.enumerated()), id: \.offset) { index, sentence in
+                    Text(index == 0 && report.movedCount > 0
+                         ? "\(sentence) (\(Formatting.humanSize(bytesMoved)))"
+                         : sentence)
+                        .font(.callout)
                 }
+            }
 
-                if result.skippedOffline > 0 {
-                    Label {
-                        Text("\(result.skippedOffline) skipped: on offline volume\(result.skippedOffline == 1 ? "" : "s")")
-                    } icon: {
-                        Image(systemName: "nosign")
-                            .foregroundStyle(.secondary)
-                    }
-                }
-
-                if result.alreadyMissing > 0 {
-                    Label {
-                        Text("\(result.alreadyMissing) file\(result.alreadyMissing == 1 ? " was" : "s were") already missing (catalog updated)")
-                    } icon: {
-                        Image(systemName: "questionmark.circle.fill")
-                            .foregroundStyle(.yellow)
-                    }
-                }
-
-                if !result.failed.isEmpty {
-                    Label {
-                        Text("\(result.failed.count) file\(result.failed.count == 1 ? "" : "s") failed:")
-                    } icon: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.red)
-                    }
-                    // Capped at first 8 errors; if the user really wants the
-                    // full list we punt them to the app log (line emitted by
-                    // deleteConfirmedJunk). Keeps the sheet a manageable
-                    // size for a worst-case batch with many failures.
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 4) {
-                            ForEach(Array(result.failed.prefix(8).enumerated()), id: \.offset) { _, item in
-                                VStack(alignment: .leading, spacing: 1) {
-                                    Text(item.record.filename)
-                                        .font(.callout.weight(.medium))
-                                        .lineLimit(1)
-                                    Text(item.error.localizedDescription)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                        .lineLimit(2)
-                                }
-                            }
-                            if result.failed.count > 8 {
-                                Text("…and \(result.failed.count - 8) more (see app log)")
+            if report.hasNotes {
+                Text("These stayed where they are:")
+                    .font(.callout.weight(.medium))
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        ForEach(report.lines) { line in
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(line.filename)
+                                    .font(.callout.weight(.medium))
+                                    .lineLimit(1)
+                                Text(line.reason)
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
-                                    .italic()
+                                    .fixedSize(horizontal: false, vertical: true)
                             }
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .frame(maxHeight: 120)
-                    .padding(8)
-                    .background(Color(NSColor.controlBackgroundColor))
-                    .cornerRadius(6)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
+                .frame(maxHeight: 220)
+                .padding(8)
+                .background(Color(NSColor.controlBackgroundColor))
+                .cornerRadius(6)
             }
 
             HStack {
@@ -201,6 +146,7 @@ struct DeleteConfirmedJunkResultSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 480)
+        .frame(width: 520)
     }
 }
+

@@ -22,9 +22,9 @@ import Foundation
 
 enum JunkSheet: Identifiable {
     case confirm(VideoScanModel.JunkTrashSnapshot)
-    case result(VideoScanModel.JunkDeletionResult,
-                VideoScanModel.JunkDeletionMode,
-                Int64)
+    /// The report is built ONCE when the run finishes (never in a body);
+    /// the Int64 is the bytes moved to the Trash.
+    case result(JunkDeletionReport, Int64)
 
     /// CRITICAL: both cases return the SAME id. SwiftUI uses `id` to
     /// decide whether an item change should animate a dismiss-then-present

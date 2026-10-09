@@ -659,7 +659,7 @@ struct RemoteViewerReadOnlySensorTests {
         }
         let entry = try firstStatement(after: "func deleteConfirmedJunk(",
                                        opener: ") async -> JunkDeletionResult {")
-        #expect(entry?.hasPrefix("let (records, finished) = junkDeletionPreflight(") == true,
+        #expect(entry?.hasPrefix("let (pending, finished) = junkDeletionPreflight(") == true,
                 "deleteConfirmedJunk must start with the preflight; found \(entry ?? "nil")")
         let preflight = try firstStatement(after: "func junkDeletionPreflight(",
                                            opener: "finished: JunkDeletionResult?) {")
