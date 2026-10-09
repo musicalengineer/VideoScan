@@ -25622,6 +25622,23 @@
         "halfOfARecoveredAVPairIsNeverATarget",
         "whenTheKeeperIsTheArchiveCopyTheLengthRuleDoesNotHold"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeleteDuplicatesOutcomeTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesOutcomeTests"
+      ],
+      "tests": [
+        "aMixedRunReportsEveryCopyOnce",
+        "aReviewedPlanOnADriveThatIsAwayIsOfflineRowByRow",
+        "aStoppedBatchReportsTheDrivesItNeverReached",
+        "everyRequestedCopyHasExactlyOneOutcomeAndTheyAddUp",
+        "theHeldListIsNeverTruncated",
+        "theSubtitleSaysMovedToTheTrashNeverFreed"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -26635,6 +26652,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteDuplicatesOfferShadowTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeleteDuplicatesOutcomeTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

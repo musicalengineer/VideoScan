@@ -260,13 +260,16 @@ struct DeletionTierRuleTests {
     @Test func subtitleAndSummaryNameTheTrash() {
         var c = DeleteDuplicatesPlan.Counts()
         c.total = 10; c.deleted = 3; c.trashed = 2; c.freedBytes = 1_200_000_000; c.trashedBytes = 800_000_000
+        // R7: bytes are MOVED TO THE TRASH, never "freed"; an older plan's
+        // outright deletes (history) are said as such.
         let text = DeleteDuplicatesRate.subtitle(counts: c, rate: DeleteDuplicatesRate(), trashVolumes: ["SanDisk"])
-        #expect(text == "verified 5 of 10 · 3 deleted · 2 to the Trash · 1.2 GB freed now · 800 MB waiting in the Trash of SanDisk", Comment(rawValue: text))
-        #expect(DeleteDuplicatesRate.freedText(counts: c, trashVolumes: []) == "1.2 GB freed now · 800 MB waiting in the Trash")
+        #expect(text == "checked 5 of 10 · 2 moved to the Trash · 3 deleted outright · 800 MB moved to the Trash of SanDisk · 1.2 GB deleted outright",
+                Comment(rawValue: text))
+        #expect(DeleteDuplicatesRate.movedText(counts: c, trashVolumes: []) == "800 MB moved to the Trash · 1.2 GB deleted outright")
         var permanentOnly = DeleteDuplicatesPlan.Counts(); permanentOnly.freedBytes = 1_000
-        #expect(DeleteDuplicatesRate.freedText(counts: permanentOnly, trashVolumes: []) == "1 KB freed")
+        #expect(DeleteDuplicatesRate.movedText(counts: permanentOnly, trashVolumes: []) == "1 KB deleted outright")
         #expect(DeleteDuplicatesRate.subtitle(counts: c, rate: DeleteDuplicatesRate(), paused: true, trashVolumes: ["SanDisk"])
-                == "Paused at 5 of 10 · 1.2 GB freed now · 800 MB waiting in the Trash of SanDisk so far")
+                == "Paused at 5 of 10 · 800 MB moved to the Trash of SanDisk · 1.2 GB deleted outright so far")
         #expect(DeleteDuplicatesRate.subtitle(counts: c, rate: DeleteDuplicatesRate(), pausing: true)
                 == "Pausing — finishing the current file (6 of 10)")
     }
@@ -496,7 +499,7 @@ struct DeleteDuplicatesTierAndSpeedTests {
 
         let moved = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
         let volume = VolumeReachability.volumeName(forPath: rig.copies[0].fullPath)
-        #expect(job.state == .finished(summary: "0 deleted · 1 to the Trash · \(moved) waiting in the Trash of \(volume)"), "\(job.state)")
+        #expect(job.state == .finished(summary: "Moved 1 (\(moved)) to the Trash"), "\(job.state)")
         #expect(job.result.deleted == 1 && job.result.bytesFreed == 0)
         let plan = try #require(job.plan)
         #expect(plan.entries[0].status == .trashed && plan.entries[0].tier == .trash)
@@ -539,9 +542,9 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy1.mov").path), "moved into the (scratch) Trash")
         #expect(quarantineFolders(in: rig.dir).isEmpty)
         let waiting = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
-        #expect(job.state == .finished(summary: "0 deleted · 1 to the Trash · \(waiting) waiting in the Trash of \(volume)"), "\(job.state)")
+        #expect(job.state == .finished(summary: "Moved 1 (\(waiting)) to the Trash"), "\(job.state)")
         #expect(job.result.deleted == 1 && job.result.bytesFreed == 0, "trashed counts as removed, not as freed")
-        #expect(rig.model.duplicateStatus == "1 deleted, \(waiting) waiting in the Trash of \(volume)")
+        #expect(rig.model.duplicateStatus == "Moved 1 (\(waiting)) to the Trash")
         #expect(rig.copies[0].lifecycleStage == .trashed)
         await rig.model.mediaLedger.waitForPendingWrites()
         let events = rig.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }
@@ -849,7 +852,7 @@ struct DeleteDuplicatesTierAndSpeedTests {
         await job.task?.value
 
         #expect(job.state == .cancelled)
-        #expect(job.subtitle == "Stopped — 1 deleted; 2 remaining kept for later (Resume in Media File Operations)", Comment(rawValue: job.subtitle))
+        #expect(job.subtitle == "Stopped — 1 moved to the Trash; 2 remaining kept for later (Resume in Media File Operations)", Comment(rawValue: job.subtitle))
         #expect(job.result.deleted == 1 && job.result.failed == 0, "nothing is counted as not done")
         #expect(FileManager.default.fileExists(atPath: rig.copies[1].fullPath), "the file in flight was put back")
         #expect(rig.copies[1].duplicateDisposition == .extraCopy)
@@ -863,7 +866,7 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(rig.model.pendingDeleteDuplicatesResume?.id == plan.id, "offered at once, not only at the next launch")
         let console = await consoleText(rig.model)
         #expect(console.contains("Stopped while verifying copy2.mov — put back"))
-        #expect(console.contains("suspended for Stop: 1 deleted, 2 remaining — kept"))
+        #expect(console.contains("suspended for Stop: 1 moved to the Trash, 2 remaining — kept"))
 
         // And the resume picks up exactly there.
         let center = MediaFileOperationsCenter()

@@ -141,6 +141,9 @@ struct DeleteDuplicatesWorkItem: Sendable {
     /// A/V pair; longer than an archive master, or not comparable with
     /// one), found at the copy's turn (`duplicateTargetHold`). nil = none.
     var targetHold: String? = nil
+    /// The drive the plan cleans — so a copy not on disk at its turn can be
+    /// told MISSING (drive here, file gone) from OFFLINE (drive away). R6.
+    var volumePath: String = ""
     /// The Master Archive VOLUME re-check (2026-09-22 follow-up, QA
     /// MINOR 3), captured on the main actor: the snapshot plus the UUID
     /// probe. Asked of the file's OWN volume before it is moved into
@@ -189,6 +192,10 @@ enum DeleteDuplicatesDiskOutcome: Sendable {
     case leftAlone(reason: String, facts: DeletionTierFacts)
     case failed(reason: String)
     case retained(path: String, reason: String)
+    /// R6: not on disk at its turn, its drive connected — nothing to move.
+    case missing(reason: String)
+    /// R6: its drive is not connected at its turn.
+    case offline(reason: String)
 }
 
 /// Phase 1's result: the outcome, plus the keeper's fresh whole-file
@@ -321,6 +328,10 @@ enum DeleteDuplicatesDiskWorker {
             return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: nil,
                                             notCountedWhy: refusal.leavesAlone ? refusal.note : nil)
         }
+        // R6: not there at all — missing (drive here) or offline (drive away).
+        if let absent = absence(of: item) {
+            return DeleteDuplicatesPhaseOne(outcome: absent, learnedKeeperFixity: nil)
+        }
         // R4: a target gate holds the copy before anything moves — a catalog
         // gate found at the turn, or a network share. A hold, never counted.
         if let why = item.targetHold ?? DeleteDuplicatesTargetGate.networkHold(item.path, isNetworkMount: item.isNetworkMount) {
@@ -340,6 +351,20 @@ enum DeleteDuplicatesDiskWorker {
         return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: box.value,
                                         retainedInQuarantine: retainedInQuarantine(outcome),
                                         siblingReads: reads)
+    }
+
+    /// R6: a copy that cannot be stat'ed at its turn is OFFLINE when its
+    /// drive is not connected, MISSING when the drive is here and the name
+    /// is empty — never a refusal (it is not re-marked Review). Anything
+    /// else (a permission error) goes on to the gate, which names it.
+    static func absence(of item: DeleteDuplicatesWorkItem) -> DeleteDuplicatesDiskOutcome? {
+        guard FileIdentityStamp.capture(path: item.path) == nil else { return nil }
+        if !item.volumePath.isEmpty, !DeleteDuplicatesJob.volumeIsReachable(item.volumePath) {
+            return .offline(reason: DeletionTierText.notConnected(URL(fileURLWithPath: item.volumePath).lastPathComponent,
+                                                                  path: item.volumePath, action: "Move to Trash"))
+        }
+        guard !FileManager.default.fileExists(atPath: item.path) else { return nil }
+        return .missing(reason: "not on disk at \(item.path) — nothing to move")
     }
 
     /// The quarantine folder a `.retained` outcome left the file in, with
@@ -768,9 +793,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         if let plan {
             let f = NumberFormatter(); f.numberStyle = .decimal
             let n = f.string(from: NSNumber(value: plan.entries.count)) ?? "\(plan.entries.count)"
-            return "Delete \(n) file\(plan.entries.count == 1 ? "" : "s") from \(volumeName)"
+            return "Move \(n) extra cop\(plan.entries.count == 1 ? "y" : "ies") on \(volumeName) to the Trash"
         }
-        return "Delete duplicates on \(volumeName)"
+        return "Move duplicates on \(volumeName) to the Trash"
     }
     var subtitle: String { subtitleText }
     var fraction: Double { fractionValue }
@@ -871,7 +896,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         finishInFlightForQuit = false
         if discardingRemaining {
             discardRequested = true
-            subtitleText = "Stopping — files already deleted stay deleted, the rest are left alone…"
+            subtitleText = "Stopping — copies already in the Trash stay there, the rest are left alone…"
         } else {
             stopKeepingPlan = true
             subtitleText = "Stopping — the file being checked is put back; the rest is kept to resume later…"
@@ -893,7 +918,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         finishInFlightForQuit = false
         quitRequested = true
         state = .cancelling
-        subtitleText = "Quitting — files already deleted stay deleted; the rest will be offered to resume at the next launch…"
+        subtitleText = "Quitting — copies already in the Trash stay there; the rest will be offered to resume at the next launch…"
         cancelWorkers()
         wakeAll()
     }
@@ -1165,7 +1190,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 record = r; keeper = k
             case .skip(let note, let line, let notCountedWhy):
                 mutatePlan {
-                    $0.set(entry.id, .skipped, note: note)
+                    $0.set(entry.id, .skipped, note: note, kind: model.skipOutcome(for: entry))
                     if let notCountedWhy { $0.setNotCounted(entry.id, why: notCountedWhy) }
                 }
                 model.log("  " + line)
@@ -1264,6 +1289,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 isNetworkMount: isNetworkMountForPath ?? DeleteDuplicatesTargetGate.liveIsNetworkMount,
                 targetHold: model.duplicateTargetHold(record: record, keeper: keeper,
                                                       archiveMasterDurations: candidates.archiveMasterDurations),
+                volumePath: volumePath,
                 // The volume re-check travels with the pair (off-main)…
                 archiveCheck: model.archiveRemovalCheck(),
                 // …and so does the question it asks at the removal itself.
@@ -1301,12 +1327,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                                  + (quitRequested ? "at the next launch" : "now, or at the next launch"))
             self.plan = finalPlan
             result = (tally.removed, tally.failed, finalPlan.skippedBeforePlan + tally.leftAlone, tally.bytesFreed)
-            let freed = DeleteDuplicatesRate.freedText(counts: finalPlan.counts, trashVolumes: finalPlan.trashVolumes)
-            model.log("\nDelete Duplicates on \(volumeName) suspended for \(how): \(tally.removed) deleted, \(remaining) remaining — "
+            let moved = DeleteDuplicatesRate.movedText(counts: finalPlan.counts, trashVolumes: finalPlan.trashVolumes)
+            model.log("\nDelete Duplicates on \(volumeName) suspended for \(how): \(tally.removed) moved to the Trash, \(remaining) remaining — "
                       + (quitRequested ? "the run will be offered to resume at the next launch."
                          : "kept; Resume in Media File Operations, or at the next launch.")
-                      + (freed.isEmpty ? "" : " (\(freed))"))
-            model.duplicateStatus = "\(tally.removed) deleted — \(remaining) remaining, resume offered"
+                      + (moved.isEmpty ? "" : " (\(moved))"))
+            model.duplicateStatus = "\(tally.removed) moved to the Trash — \(remaining) remaining, resume offered"
             logSummary(quitRequested ? "suspended for quit" : "stopped")
             if !(await savePlan(context: "suspended for \(how)")) {
                 model.log("  The suspended plan could not be saved — the last saved plan stays in place and will be offered instead.")
@@ -1322,7 +1348,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 ? "stopped — the plan could not be saved, so the rest was left alone"
                 : "cancelled before verification"
             let leftBytes = finalPlan.entries.reduce(Int64(0)) { $0 + ($1.status.isSettled ? 0 : $1.sizeBytes) }
-            let left = finalPlan.skipRemaining(reason: reason)
+            let left = finalPlan.skipRemaining(reason: reason, kind: planSaveFailed ? .failed : .cancelled)
             tally.failed += left
             tally.bytesFailed += leftBytes
             if !planSaveFailed {
@@ -1330,20 +1356,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             }
         }
 
-        let counts = finalPlan.counts
-        let (deleted, trashed, failed, refused, leftAlone) =
-            (tally.deleted, tally.trashed, tally.failed, tally.refused, tally.leftAlone)
-        let freedNow = ByteCountFormatter.string(fromByteCount: tally.bytesFreed, countStyle: .file)
-        let freedText = DeleteDuplicatesRate.freedText(counts: counts, trashVolumes: finalPlan.trashVolumes)
-        var completion = "\(deleted) deleted, "
-        if trashed > 0 { completion += "\(trashed) to the Trash, " }
-        completion += "\(failed) failed, \(refused) refused by verification, \(finalPlan.skippedBeforePlan) skipped, "
-        if leftAlone > 0 { completion += "\(leftAlone) left alone (no verified copy would remain), " }
-        completion += (freedText.isEmpty ? "\(freedNow) freed" : freedText) + " (\(finalPlan.summaryLine))"
+        let (deleted, trashed, refused, leftAlone) = (tally.deleted, tally.trashed, tally.refused, tally.leftAlone)
+        // R6/R7: one outcome per requested copy; bytes MOVED TO THE TRASH.
+        let report = finalPlan.outcomeReport
+        let completion = report.line + " (\(finalPlan.summaryLine))"
         if finalPlan.crossVolumeMode {
             model.log("\n" + WorkingCopyCleanupText.logSummary(volume: volumeName, detail: "complete — " + completion))
         } else {
-            model.log("\nDuplicate deletion complete: " + completion)
+            model.log("\nDelete Duplicates complete: " + completion)
         }
         if refused > 0 {
             model.log("  \(refused) file(s) were NOT identical to their keeper despite matching "
@@ -1352,10 +1372,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         if leftAlone > 0 {
             model.log("  \(leftAlone) file(s) were left alone because no verified copy would remain — their keeper could not be proven; check it, then run again.")
         }
-        model.duplicateStatus = trashed > 0
-            ? "\(deleted + trashed) deleted, \(freedText)"
-            : "\(deleted) deleted, \(freedNow) freed"
-        result = (deleted + trashed, failed, finalPlan.skippedBeforePlan + leftAlone, tally.bytesFreed)
+        model.duplicateStatus = report.line
+        // The old verb's tuple: `deleted` = copies that left their place.
+        result = (deleted + trashed, tally.failed, finalPlan.skippedBeforePlan + leftAlone, tally.bytesFreed)
 
         finalPlan.finishedAt = Date()
         finalPlan.outcome = planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "completed")
@@ -1380,20 +1399,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             model.log("  Delete Duplicates: the finished plan could not be saved — the last saved plan stays in place under \(DeleteDuplicatesPlanStore.directory(for: finalPlan.id, root: planRoot).path) and is not filed as done.")
         }
 
-        var summaryParts = ["\(deleted) deleted"]
-        if trashed > 0 { summaryParts.append("\(trashed) to the Trash") }
-        summaryParts.append(freedText.isEmpty ? "\(freedNow) freed" : freedText)
-        if refused > 0 { summaryParts.append("\(refused) refused") }
-        if failed > 0 { summaryParts.append("\(failed) not done") }
-        if leftAlone > 0 { summaryParts.append("\(leftAlone) left alone") }
-        // GH #258: copies never taken (or left at their turn) because the
-        // Archive Angel is using them — the row's
-        // one-line summary only; the log lines above are unchanged.
+        // The row's one line: every requested copy's outcome; then (GH #258)
+        // the copies never taken because the Archive Angel is using them.
+        var summaryParts = [report.line]
         if let heldLine = finalPlan.leftAlone.line { summaryParts.append(heldLine) }
         let summary = summaryParts.joined(separator: " · ")
         logSummary(planSaveFailed ? "stopped (plan not saved)" : (stopRequested ? "cancelled" : "done"))
         if planSaveFailed {
-            finish(failed: "Stopped after \(deleted + trashed) deleted — the plan could not be saved (\(summary))")
+            finish(failed: "Stopped after \(deleted + trashed) moved to the Trash — the plan could not be saved (\(summary))")
         } else if state.cancelWasRequested || Task.isCancelled {
             finishCancelled()
         } else {
@@ -1653,6 +1666,14 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             rowLog("failed", entry, reason)
             model.log("  FAILED to delete \(entry.filename): \(reason)")
             mutatePlan { $0.set(entry.id, .failed, note: reason) }
+        case .missing(let reason), .offline(let reason):
+            let kind: DeleteDuplicatesOutcomeKind
+            if case .offline = outcome { kind = .offline } else { kind = .missing }
+            tally.skipped += 1
+            tally.bytesSkipped += entry.sizeBytes
+            rowLog("skipped", entry, reason)
+            model.log("  Skipped \(entry.filename): \(reason)")
+            mutatePlan { $0.set(entry.id, .skipped, note: reason, kind: kind) }
         case .retained(let path, let reason):
             tally.failed += 1
             tally.bytesFailed += entry.sizeBytes
@@ -1805,7 +1826,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             tally.failed += 1
             tally.bytesFailed += entry.sizeBytes
             rowLog("skipped", entry, "the plan could not be saved after quarantine — put back and left alone")
-            mutatePlan { $0.set(entry.id, .skipped, note: "the plan could not be saved after quarantine — put back and left alone") }
+            mutatePlan { $0.set(entry.id, .skipped, note: "the plan could not be saved after quarantine — put back and left alone",
+                                kind: .failed) }
             model.log("  Put back \(entry.filename): the plan could not be saved after quarantine — left alone")
         } else if cancelled {
             // Not done, not refused: the file is untouched and
@@ -1813,7 +1835,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             tally.failed += 1
             tally.bytesFailed += entry.sizeBytes
             rowLog("skipped", entry, "cancelled during verification — left alone")
-            mutatePlan { $0.set(entry.id, .skipped, note: "cancelled during verification — left alone") }
+            mutatePlan { $0.set(entry.id, .skipped, note: "cancelled during verification — left alone", kind: .cancelled) }
             model.log("  Stopped while verifying \(entry.filename) — left alone")
             interruptedFileOutcomes.append("put back \(entry.filename) at \(entry.path)")
         } else {
@@ -2028,9 +2050,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     private func prepareReviewed(_ input: DeleteDuplicatesPlan,
                                  model: VideoScanModel) async -> Result<DeleteDuplicatesPlan, ResumeRefused> {
         var plan = input
-        func refuseAll(_ line: String) -> Result<DeleteDuplicatesPlan, ResumeRefused> {
+        func refuseAll(_ line: String, kind: DeleteDuplicatesOutcomeKind = .held) -> Result<DeleteDuplicatesPlan, ResumeRefused> {
             DeleteDuplicatesReview.apply(Dictionary(plan.entries.map { ($0.id, line) }, uniquingKeysWith: { a, _ in a }),
-                                         to: &plan.entries)
+                                         to: &plan.entries, kind: kind)
             self.plan = plan
             model.log("\nDelete Duplicates (reviewed) on \(plan.volumeName) not started: \(line). Nothing was moved.")
             return .failure(ResumeRefused(line: line))
@@ -2038,7 +2060,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         guard plan.catalogLocation == model.catalogStore.fileLocation else {
             return refuseAll("this plan was made from another catalog")
         }
-        if let away = Self.volumeAwayLine(for: plan, action: "Move to Trash") { return refuseAll(away) }
+        if let away = Self.volumeAwayLine(for: plan, action: "Move to Trash") { return refuseAll(away, kind: .offline) }
         let pending = plan.entries.filter { !$0.status.isSettled }
         let paths = Set(pending.flatMap { [$0.path, $0.keeperPath] }.filter { !$0.isEmpty })
         let stamps = await VideoScanModel.captureStamps(paths: Array(paths))
@@ -2119,8 +2141,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         }
         for i in plan.entries.indices where !plan.entries[i].status.isSettled {
             let e = plan.entries[i]
-            func skip(_ why: String, log line: String, notCountedWhy: String? = nil) {
+            func skip(_ why: String, log line: String, notCountedWhy: String? = nil,
+                      kind: DeleteDuplicatesOutcomeKind = .held) {
                 plan.entries[i].status = .skipped
+                plan.entries[i].outcomeKind = kind
                 plan.entries[i].note = why
                 if let notCountedWhy { plan.entries[i].notCountedWhy = notCountedWhy }
                 plan.entries[i].settledAt = now
@@ -2173,7 +2197,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                                                     crossVolumeMode: plan.crossVolumeMode, reviewed: plan.isReviewed,
                                                     stage: "at resume") {
             case .skip(let note, let line, let notCountedWhy):
-                skip(note, log: line, notCountedWhy: notCountedWhy); continue
+                skip(note, log: line, notCountedWhy: notCountedWhy, kind: model.skipOutcome(for: e)); continue
             case .refuse(let note):
                 refuse(note); continue
             case .authorized:
@@ -2186,7 +2210,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                     model.log("  \(e.filename) is gone from \(e.path); a same-named file sits in \(elsewhere.joined(separator: ", ")) — not this run's quarantine, left alone (put it back by hand if it is yours)")
                 }
                 skip("gone before the crash — nothing on disk at this path",
-                     log: "Skipped \(e.filename): gone before the crash — nothing on disk at \(e.path)")
+                     log: "Skipped \(e.filename): gone before the crash — nothing on disk at \(e.path)", kind: .missing)
                 continue
             } else if e.status == .verified {
                 // The plan said "in quarantine" but nothing is in the
@@ -2689,7 +2713,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     private func finishCancelled() {
         guard state.isActive else { return }
         state = .cancelled
-        subtitleText = "Stopped — \(result.deleted) deleted, the rest left alone"
+        subtitleText = "Stopped — \(result.deleted) moved to the Trash, the rest left alone"
         isIndeterminateValue = false
         isPausedValue = false
         pauseRequested = false
@@ -2699,8 +2723,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         guard state.isActive else { return }
         state = .cancelled
         subtitleText = quit
-            ? "Suspended for quit — \(result.deleted) deleted; \(remaining) remaining will be offered to resume at the next launch"
-            : "Stopped — \(result.deleted) deleted; \(remaining) remaining kept for later (Resume in Media File Operations)"
+            ? "Suspended for quit — \(result.deleted) moved to the Trash; \(remaining) remaining will be offered to resume at the next launch"
+            : "Stopped — \(result.deleted) moved to the Trash; \(remaining) remaining kept for later (Resume in Media File Operations)"
         isIndeterminateValue = false
         isPausedValue = false
         pauseRequested = false
@@ -2718,7 +2742,7 @@ extension MediaFileOperationsCenter {
     func startDeleteDuplicates(onVolume volumePath: String, model: VideoScanModel,
                                planRoot: URL = DeleteDuplicatesPlanStore.defaultRoot) -> DeleteDuplicatesJob {
         launchDeleteDuplicates(DeleteDuplicatesJob(model: model, volumePath: volumePath, planRoot: planRoot),
-                               model: model, plan: "verify each copy against its keeper, then remove it")
+                               model: model, plan: "verify each copy against its keeper, then move it to the Trash")
     }
 
     /// Run a REVIEWED batch (R2): one job per volume, one after the other.
@@ -2837,9 +2861,9 @@ extension MediaFileOperationsCenter {
     static func quitInformativeText(running: Int, deleteDuplicatesActive: Bool, midPair: Bool = false) -> String {
         var text = "Quitting now will stop the work in progress. Anything already finished is safe."
         if deleteDuplicatesActive {
-            text += "\n\nDelete Duplicates: files already deleted stay deleted; the file being checked is left alone, and the rest of the run is kept and offered to resume at the next launch."
+            text += "\n\nDelete Duplicates: copies already moved to the Trash stay there; the file being checked is left alone, and the rest of the run is kept and offered to resume at the next launch."
             if midPair {
-                text += "\n\n“Finish this file, then quit” lets the file being checked land first (deleted, or put back), then quits. “Stop now” puts it back untouched and quits."
+                text += "\n\n“Finish this file, then quit” lets the file being checked land first (moved to the Trash, or put back), then quits. “Stop now” puts it back untouched and quits."
             }
         }
         return text

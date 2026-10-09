@@ -132,11 +132,12 @@ enum DeleteDuplicatesReview {
     /// Settle `holds` on `entries` (status skipped, the note) — before
     /// anything is read; the row stays an entry so it has its outcome.
     nonisolated static func apply(_ holds: [UUID: String], to entries: inout [DeleteDuplicatesPlan.Entry],
-                                  at now: Date = Date()) {
+                                  kind: DeleteDuplicatesOutcomeKind = .held, at now: Date = Date()) {
         guard !holds.isEmpty else { return }
         for i in entries.indices {
             guard let note = holds[entries[i].id], !entries[i].status.isSettled else { continue }
             entries[i].status = .skipped
+            entries[i].outcomeKind = kind
             entries[i].note = note
             entries[i].settledAt = now
         }
@@ -174,19 +175,22 @@ extension VideoScanModel {
         let stamps = await Self.captureStamps(paths: Array(paths))
         for i in entries.indices { entries[i].keeperStamp = stamps[entries[i].keeperPath] }
         holds.merge(DeleteDuplicatesReview.holds(entries, stamps: stamps)) { first, _ in first }
+        // R6: a pick no longer in the catalog where it was reviewed is MISSING.
+        let missing = holds.filter { $0.value == Self.reviewedPickMissingNote }
+        DeleteDuplicatesReview.apply(missing, to: &entries, kind: .missing)
         DeleteDuplicatesReview.apply(holds, to: &entries)
         for (id, why) in holds { log("  Delete Duplicates (reviewed): held \(entries.first { $0.id == id }?.filename ?? "?") — \(why)") }
         return DeleteDuplicatesBatch(plans: DeleteDuplicatesReview.partition(
             entries, catalogLocation: catalogStore.fileLocation, volumeRoot: { self.volumeRoot(for: $0) }))
     }
 
+    static let reviewedPickMissingNote = "no longer in the catalog at the place you reviewed"
+
     /// Why a pick no longer stands (nil = it does): the copy is gone or is
     /// somewhere else now, or the keeper the review showed is no longer its
     /// group's keeper. The row's turn asks all of this again, live.
     func reviewedPickChanged(_ pick: ReviewedDuplicatePick, record rec: VideoRecord?, keeper: VideoRecord?) -> String? {
-        guard let rec, !rec.isPurged, rec.fullPath == pick.path else {
-            return "no longer in the catalog at the place you reviewed"
-        }
+        guard let rec, !rec.isPurged, rec.fullPath == pick.path else { return Self.reviewedPickMissingNote }
         guard rec.duplicateDisposition == .extraCopy, let group = rec.duplicateGroupID else {
             return "no longer marked as an extra copy since you reviewed it"
         }

@@ -596,7 +596,7 @@ struct DeleteDuplicatesJobCodex1593Tests {
                     .contains("Delete Duplicates"))
         let console = await consoleText(rig.model)
         #expect(console.contains("Quit while verifying copy1.mov — put back"))
-        #expect(console.contains("suspended for quit: 0 deleted, 3 remaining"))
+        #expect(console.contains("suspended for quit: 0 moved to the Trash, 3 remaining"))
     }
 
     /// Stop + "discard the rest" still abandons (files the cancelled

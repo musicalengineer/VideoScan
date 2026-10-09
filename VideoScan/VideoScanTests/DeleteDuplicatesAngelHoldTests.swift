@@ -584,7 +584,8 @@ struct DeleteDuplicatesAngelHoldTests {
         #expect(job.result.deleted == 1 && job.result.failed == 0)
         let moved = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
         let volume = VolumeReachability.volumeName(forPath: rig.copies[1].fullPath)
-        #expect(job.state == .finished(summary: "0 deleted · 1 to the Trash · \(moved) waiting in the Trash of \(volume) · 1 copy left alone — in use by the Archive Angel"),
+        _ = volume
+        #expect(job.state == .finished(summary: "Moved 1 (\(moved)) to the Trash · 1 held back · 1 copy left alone — in use by the Archive Angel"),
                 "\(job.state)")
         await rig.model.mediaLedger.waitForPendingWrites()
         #expect(rig.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }.map(\.filename) == ["copy2.mov"])

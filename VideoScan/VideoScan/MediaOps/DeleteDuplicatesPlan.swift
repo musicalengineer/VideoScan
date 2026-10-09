@@ -704,6 +704,10 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// plus Master Archive copies promoted from them) when the plan was
         /// made (additive, 2026-10-09). nil on older plans.
         var groupCopyCount: Int?
+        /// R6: set where the status alone cannot say it — MISSING, OFFLINE,
+        /// CANCELLED, or FAILED for a skip — when the row settles. nil = the
+        /// status says it (`outcome`, DeleteDuplicatesOutcome.swift).
+        var outcomeKind: DeleteDuplicatesOutcomeKind?
 
         /// R5 (Rick 2026-10-09): a group of three or more copies has its
         /// extras PRE-SELECTED; a group of exactly two is allowed but not —
@@ -900,7 +904,7 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     struct Counts: Equatable, Sendable {
         var total = 0
         var pending = 0
-        /// Unlinked (permanent).
+        /// Unlinked — HISTORY ONLY (plans before 2026-10-09).
         var deleted = 0
         /// Moved into a Trash.
         var trashed = 0
@@ -911,9 +915,10 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// Bytes of duplicates whose verification is over (any settled
         /// status) — the progress numerator.
         var settledBytes: Int64 = 0
-        /// Bytes back NOW (permanent deletions only).
+        /// Bytes deleted outright — HISTORY ONLY (plans before 2026-10-09).
         var freedBytes: Int64 = 0
-        /// Bytes waiting in a Trash.
+        /// Bytes MOVED TO THE TRASH (R7: the space comes back when Rick
+        /// empties it — never called "freed").
         var trashedBytes: Int64 = 0
         /// Files that left their place, either way.
         var removed: Int { deleted + trashed }
@@ -978,9 +983,10 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     }
 
     mutating func set(_ id: UUID, _ status: EntryStatus, note: String = "", at now: Date = Date(),
-                      keeperMatchedByStoredFixity: Bool? = nil) {
+                      keeperMatchedByStoredFixity: Bool? = nil, kind: DeleteDuplicatesOutcomeKind? = nil) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[i].status = status
+        entries[i].outcomeKind = status.isSettled ? kind : nil
         if !note.isEmpty { entries[i].note = note }
         if status.isSettled { entries[i].settledAt = now }
         if let k = keeperMatchedByStoredFixity { entries[i].keeperMatchedByStoredFixity = k }
@@ -1049,11 +1055,14 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         log.append(note)
     }
 
-    /// Rows still unsettled become `skipped` with `reason` (cancel / quit).
-    mutating func skipRemaining(reason: String, at now: Date = Date()) -> Int {
+    /// Rows still unsettled become `skipped` with `reason` (cancel / quit),
+    /// their outcome `kind` (not reached, unless the plan could not be saved).
+    mutating func skipRemaining(reason: String, kind: DeleteDuplicatesOutcomeKind = .cancelled,
+                                at now: Date = Date()) -> Int {
         var n = 0
         for i in entries.indices where !entries[i].status.isSettled {
             entries[i].status = .skipped
+            entries[i].outcomeKind = kind
             entries[i].note = reason
             entries[i].settledAt = now
             n += 1
@@ -1124,26 +1133,26 @@ struct DeleteDuplicatesRate: Equatable, Sendable {
         return "about \(h) h \(m) min left"
     }
 
-    /// "1.2 GB freed now · 800 MB waiting in the Trash of SanDisk" — or
-    /// just "1.2 GB freed" when nothing went to a Trash. Empty when
-    /// nothing has left the disk yet.
-    static func freedText(counts c: DeleteDuplicatesPlan.Counts, trashVolumes: [String]) -> String {
+    /// "800 MB moved to the Trash of SanDisk" (R7: bytes MOVED TO THE
+    /// TRASH, never "freed" — the space comes back when Rick empties it),
+    /// plus "1.2 GB deleted outright" only for a plan written before
+    /// 2026-10-09. Empty when nothing has left its place yet.
+    static func movedText(counts c: DeleteDuplicatesPlan.Counts, trashVolumes: [String]) -> String {
         var parts: [String] = []
-        let freed = ByteCountFormatter.string(fromByteCount: c.freedBytes, countStyle: .file)
         if c.trashedBytes > 0 {
-            let waiting = ByteCountFormatter.string(fromByteCount: c.trashedBytes, countStyle: .file)
-            if c.freedBytes > 0 { parts.append("\(freed) freed now") }
+            let moved = ByteCountFormatter.string(fromByteCount: c.trashedBytes, countStyle: .file)
             let where_ = trashVolumes.isEmpty ? "the Trash" : "the Trash of \(trashVolumes.joined(separator: ", "))"
-            parts.append("\(waiting) waiting in \(where_)")
-        } else if c.freedBytes > 0 {
-            parts.append("\(freed) freed")
+            parts.append("\(moved) moved to \(where_)")
+        }
+        if c.freedBytes > 0 {
+            parts.append(ByteCountFormatter.string(fromByteCount: c.freedBytes, countStyle: .file) + " deleted outright")
         }
         return parts.joined(separator: " · ")
     }
 
-    /// The whole subtitle: "verified 2 of 2,992 · 3 deleted · 1 to the
-    /// Trash · 1 refused · 1.2 GB freed now · 800 MB waiting in the Trash
-    /// of SanDisk · 1.4 GB/s · about 2 h 10 min left". Counts first, then
+    /// The whole subtitle: "checked 4 of 2,992 · 3 moved to the Trash ·
+    /// 1 held · 1.2 GB moved to the Trash of SanDisk · 1.4 GB/s · about
+    /// 2 h 10 min left". Counts first, then
     /// only the numbers that exist yet. `pausing` = the pause is requested
     /// and the file in flight is being finished; `paused` = nothing in
     /// flight, the run is holding.
@@ -1156,16 +1165,16 @@ struct DeleteDuplicatesRate: Equatable, Sendable {
             return "Pausing — finishing the current file (\(n(c.settled + 1)) of \(n(c.total)))"
         }
         if paused {
-            let freed = freedText(counts: c, trashVolumes: trashVolumes)
-            return "Paused at \(n(c.settled)) of \(n(c.total))" + (freed.isEmpty ? "" : " · \(freed) so far")
+            let moved = movedText(counts: c, trashVolumes: trashVolumes)
+            return "Paused at \(n(c.settled)) of \(n(c.total))" + (moved.isEmpty ? "" : " · \(moved) so far")
         }
-        var parts = ["verified \(n(c.settled)) of \(n(c.total))"]
-        if c.deleted > 0 { parts.append("\(n(c.deleted)) deleted") }
-        if c.trashed > 0 { parts.append("\(n(c.trashed)) to the Trash") }
-        if c.refused > 0 { parts.append("\(n(c.refused)) refused") }
+        var parts = ["checked \(n(c.settled)) of \(n(c.total))"]
+        if c.trashed > 0 { parts.append("\(n(c.trashed)) moved to the Trash") }
+        if c.refused + c.skipped > 0 { parts.append("\(n(c.refused + c.skipped)) held") }
         if c.failed > 0 { parts.append("\(n(c.failed)) failed") }
-        let freed = freedText(counts: c, trashVolumes: trashVolumes)
-        if !freed.isEmpty { parts.append(freed) }
+        if c.deleted > 0 { parts.append("\(n(c.deleted)) deleted outright") }
+        let moved = movedText(counts: c, trashVolumes: trashVolumes)
+        if !moved.isEmpty { parts.append(moved) }
         if let bps = rate.bytesPerSecond {
             parts.append(rateText(bytesPerSecond: bps))
             if let eta = rate.secondsRemaining(remainingBytes: c.totalBytes - c.settledBytes) {
