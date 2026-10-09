@@ -309,12 +309,19 @@ struct ReadOnlyVolumeCodex258Tests {
         let persistence = try SourceTree.appSource(named: "ScanTargetPersistence.swift")
         #expect(persistence.contains("if let local = t.readOnlyMark {") && persistence.contains("t.readOnlyMark = imported"),
                 "an import may only ADD a mark")
+        // 2026-10-09: one TURN per file — the loop calls junkTurn for each
+        // file, and junkTurn reads the Read-only marks afresh before that
+        // file's disk half, which asks them at the removal.
         let junk = try SourceTree.appSource(named: "VideoScanModel+JunkDelete.swift")
-        let loop = try #require(junk.range(of: "for item in workItems {"))
-        let removal = try #require(junk.range(of: "readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe)",
-                                              range: loop.upperBound..<junk.endIndex))
-        #expect(String(junk[loop.upperBound..<removal.lowerBound]).contains("let readOnlyVolumes = await readOnlyNow()"),
+        let loop = try #require(junk.range(of: "for (rec, decided) in zip(requested, pending) {"))
+        #expect(junk[loop.upperBound...].contains("await junkTurn(rec, guard: fileGuard, disk: disk)"),
+                "the per-file turn left the loop")
+        let turn = try #require(junk.range(of: "private func junkTurn("))
+        let hop = try #require(junk.range(of: "disk.run(path: path, readOnlyVolumes: readOnlyVolumes, catalogBytes: catalogBytes)",
+                                          range: turn.upperBound..<junk.endIndex))
+        #expect(String(junk[turn.upperBound..<hop.lowerBound]).contains("let readOnlyVolumes = readOnlyVolumeProtection()"),
                 "the Read-only marks are read once for the whole batch again")
+        #expect(junk.contains("readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe)"))
         #expect(try SourceTree.appSource(named: "VideoScanModel+TrashSelection.swift").contains("deleteConfirmedJunk("),
                 "Move to Trash shares Junk Delete's loop")
     }

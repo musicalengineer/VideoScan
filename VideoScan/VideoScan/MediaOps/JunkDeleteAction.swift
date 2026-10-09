@@ -13,15 +13,17 @@ import Foundation
 // With .sheet(item:), the transition from .confirm to .result happens via
 // a SINGLE item-binding mutation. SwiftUI handles the content swap inside
 // the same modal presentation context — no second .sheet ever tries to
-// activate. Cancel still dismisses normally (item → nil); Delete buttons
-// don't call dismiss() at all; the JunkDeleteAction callback flips
+// activate. Cancel still dismisses normally (item → nil); the Move button
+// doesn't call dismiss() at all; the JunkDeleteAction callback flips
 // item → .result(...) when the disk pass completes.
+//
+// `.confirm` carries the FROZEN snapshot (design R1, 2026-10-09): what the
+// sheet shows is exactly what Move to Trash acts on.
 
 enum JunkSheet: Identifiable {
-    case confirm
-    case result(VideoScanModel.JunkDeletionResult,
-                VideoScanModel.JunkDeletionMode,
-                Int64)
+    case confirm(VideoScanModel.JunkTrashSnapshot)
+    /// The report is built ONCE when the run finishes (never in a body).
+    case result(JunkDeletionReport)
 
     /// CRITICAL: both cases return the SAME id. SwiftUI uses `id` to
     /// decide whether an item change should animate a dismiss-then-present
@@ -34,78 +36,49 @@ enum JunkSheet: Identifiable {
 
 // MARK: - JunkDeleteAction
 //
-// Shared implementation of the `onAct` closure used by
-// DeleteConfirmedJunkConfirmSheet from both TriageView and CatalogHelpers.
+// The `onAct` closure of DeleteConfirmedJunkConfirmSheet (Triage).
 //
-// Why an extracted factory function: the SwiftUI Button calls
-// `onAct(mode)` and then `dismiss()`. SwiftUI doesn't schedule the
-// dismiss animation until the button's action closure returns. So
-// any synchronous work inside `onAct` delays the dismiss — and if it
-// delays past the next display refresh window, the dismiss animation
-// freezes partway through (the "half-iconified frozen sheet"
-// regression Rick reported on 2026-06-02). The fix is to defer ALL
-// work into a Task so `onAct` returns within the same runloop tick.
-//
-// This factory exists so we can write a regression test that asserts
-// the returned closure returns within a tight time bound regardless
-// of catalog size — see JunkDeleteActionRegressionTests.
+// Why an extracted factory function: the SwiftUI Button calls `onAct()`;
+// SwiftUI doesn't schedule follow-up animation work until the button's
+// action closure returns. So any synchronous work inside `onAct` delays it
+// — and if it delays past the next display refresh window, the sheet
+// freezes partway through (the "half-iconified frozen sheet" regression
+// Rick reported on 2026-06-02). The fix is to defer ALL work into a Task so
+// `onAct` returns within the same runloop tick. See
+// JunkDeleteActionRegressionTests.
 
 @MainActor
 enum JunkDeleteAction {
 
     /// Build the onAct closure for DeleteConfirmedJunkConfirmSheet.
     ///
-    /// The returned closure is callable from a SwiftUI button action.
-    /// It schedules a Task and returns immediately so the button's
-    /// follow-up `dismiss()` call runs unblocked, letting SwiftUI start
-    /// the sheet dismiss animation in the same runloop tick.
-    ///
-    /// All work — record filtering, splitByReachability, the async
-    /// `deleteConfirmedJunk` call, and result post-processing — runs
-    /// inside the deferred Task. Disk I/O inside `deleteConfirmedJunk`
-    /// uses its own `Task.detached`, so the @MainActor Task here only
-    /// awaits without blocking main.
+    /// The returned closure schedules a Task and returns immediately. The
+    /// Task runs `trashFrozenJunk` on EXACTLY `snapshot` — never a fresh
+    /// query of the catalog (a file marked after the sheet opened is not
+    /// in the set). Disk I/O inside uses its own `Task.detached`, so this
+    /// @MainActor Task only awaits without blocking main.
     ///
     /// - Parameters:
     ///   - model: The catalog model.
+    ///   - snapshot: The set the confirmation showed, frozen when it opened.
     ///   - onComplete: Called on MainActor after the disk pass returns,
-    ///     with the JunkDeletionResult, the mode used, and an estimate
-    ///     of the bytes successfully freed (scaled from reachable
-    ///     bytes-before by the success ratio).
+    ///     with the result and the bytes moved to the Trash (the sum of
+    ///     the moved files' sizes). There is no mode: this lane only ever
+    ///     moves files to the Trash.
     static func makeOnAct(
         model: VideoScanModel,
+        snapshot: VideoScanModel.JunkTrashSnapshot,
         onComplete: @escaping @MainActor (
             _ result: VideoScanModel.JunkDeletionResult,
-            _ mode: VideoScanModel.JunkDeletionMode,
-            _ bytesSucceeded: Int64
+            _ bytesMoved: Int64
         ) -> Void
-    ) -> @MainActor (VideoScanModel.JunkDeletionMode) -> Void {
-        return { mode in
+    ) -> @MainActor () -> Void {
+        return {
             Task { @MainActor in
-                // Re-query the model so a record tagged after the sheet
-                // opened doesn't miss the pass.
-                // Master Archive files (the tree AND the rest of the
-                // archive's volume, 2026-09-22) are dropped HERE, logged,
-                // so the "freed N GB" estimate never counts them.
-                let targets = model.excludingMasterArchiveFiles(model.records.filter {
-                    $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
-                }, verb: "Delete Confirmed Junk")
-                // bytesBefore covers only reachable records — offline
-                // ones get skipped without a disk op, so they shouldn't
-                // count toward the "freed N GB" reading.
-                let split = VideoScanModel.splitByReachability(targets)
-                let bytesBefore = split.reachableBytes
-                let result = await model.deleteConfirmedJunk(targets, mode: mode)
-                // Scale reachable-bytes-before by the success ratio over
-                // the actionable denominator (attempted minus the no-ops).
-                let actionable = max(
-                    result.attempted - result.alreadyMissing - result.skippedOffline,
-                    0
-                )
-                let bytesSucceeded: Int64 = actionable > 0
-                    ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
-                    : 0
-                onComplete(result, mode, bytesSucceeded)
+                let result = await model.trashFrozenJunk(snapshot)
+                // The sum of the moved files' own sizes (design R7) —
+                // never the counted total scaled by a success ratio.
+                onComplete(result, result.bytesMoved)
             }
         }
     }

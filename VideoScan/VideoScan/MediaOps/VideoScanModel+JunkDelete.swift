@@ -4,140 +4,162 @@ extension VideoScanModel {
 
     // MARK: - Delete Confirmed Junk
     //
-    // The "Delete Confirmed Junk" workflow. The caller hands us records the
-    // user has already tagged `.confirmedJunk` (via the catalog row context
-    // menu's Tag submenu); we go to disk and either trash or hard-delete the
-    // file, then soft-delete the catalog record so the row stops cluttering
-    // the default view. The record itself is preserved with a deletion
-    // timestamp (`purgedAt`) so the user can still see WHAT got deleted
-    // even though the file is gone.
+    // The ONE "move files to the Trash" routine behind Delete Junk (Triage),
+    // the Catalog row's Move to Trash, ⌘⌫ and the prune / Excess lanes. The
+    // caller hands us records; we go to disk and trash each file, then
+    // soft-delete the catalog record so the row stops cluttering the default
+    // view. The record itself is preserved with a deletion timestamp
+    // (`purgedAt`) so the user can still see WHAT left even though the file
+    // is gone.
     //
-    // Policy (decided 2026-05-25):
+    // Policy (decided 2026-05-25, amended 2026-10-09):
     //  - No backup check, no dup check. The user already promoted these to
-    //    .confirmedJunk; second-guessing them via "did you back this up?"
-    //    is paternalistic, and the dup-check belongs to a different feature.
-    //  - Two flavors. .toTrash uses FileManager.trashItem so the file ends
-    //    up in macOS Finder's Trash (recoverable, disk space freed when
-    //    Trash is emptied). .permanent uses FileManager.removeItem (gone
-    //    immediately, frees space now). The user picks at confirm time.
+    //    .confirmedJunk; second-guessing them is paternalistic, and the
+    //    dup-check belongs to a different feature. (Keeper proof is the
+    //    DUPLICATE path's job — design R4.)
+    //  - Trash only for every user-facing flow (ruling 2026-10-09, R3): the
+    //    Triage and Catalog lanes have no mode at all and always pass
+    //    `.toTrash`. `.permanent` survives ONLY as the prune lane's test
+    //    mode (its fixtures stay out of the real Trash); no production
+    //    caller passes it — JunkTrashOnlyTests pins that.
     //  - "Already missing" is not an error. If the file vanished between
-    //    tagging and the delete pass (network drive ejected, user nuked it
-    //    from Finder), we still update the catalog record so the row reads
-    //    consistently afterward. The count surfaces in the result sheet so
-    //    the user knows what happened.
+    //    tagging and the delete pass we still update the catalog record so
+    //    the row reads consistently afterward.
     //  - "Skipped offline" is a DIFFERENT bucket. If the volume containing
     //    the file isn't currently mounted we do NOT touch the record at
-    //    all — no purgedAt stamp, no lifecycleStage change. The user
-    //    remounts the drive later and runs the workflow again; the rows
-    //    are still tagged .confirmedJunk and waiting. (Distinct from
-    //    "alreadyMissing", which means the volume IS reachable but the
-    //    specific file is gone — that one's a soft-delete because there's
-    //    nothing more to do.)
+    //    all; the user remounts and runs the workflow again.
     //  - Per-record errors are collected and reported, not thrown. One
-    //    permission-denied file does NOT abort the batch — the user marked
-    //    20 things as junk and wants the other 19 gone.
+    //    permission-denied file does NOT abort the batch.
     //
-    // `fullPath` is intentionally NOT cleared on the record. The user might
-    // want to remember "where did that ~/Movies/garbage_2003.mov live?"
-    // months later when they're auditing the archive. We just stamp
-    // purgedAt + lifecycleStage and let the catalog row's "Show removed"
-    // toggle surface it. Same pattern as the soft-delete (Remove from
-    // Catalog) flow above — purgedAt is the source of truth for "this row
-    // is hidden by default."
+    // `fullPath` is intentionally NOT cleared on the record — the user may
+    // want to remember where a file lived months later.
     //
-    // Memory: this is a single pass over the input records (which is the
-    // user's selection, typically O(10²-10³)). No file content is read —
-    // we only call FileManager methods. Worst case footprint is the
-    // outcomes array + failed-errors array; both bounded by `attempted`.
-    //
-    // Threading (2026-05-26 refactor — fix/junk-delete-async):
-    //  - The disk-side FileManager loop (trashItem / removeItem /
-    //    fileExists) used to run synchronously on @MainActor and pinned
-    //    the UI for 1-10+ seconds on batches of a few hundred files.
-    //  - Now: pre-flight on main (cheap, no I/O — just the reachability
-    //    cache + empty-path check), then hop off main via
-    //    `Task.detached(priority: .userInitiated)` to do all FileManager
-    //    work, then come back on main to apply record-state mutations
-    //    (VideoRecord lives on @MainActor) and persist.
-    //  - `Task { … }` would have inherited @MainActor and stayed on the
-    //    main thread; `Task.detached { … }` truly escapes the actor, so
-    //    that's what we use.
+    // Threading (2026-05-26, per-file since 2026-10-09):
+    //  - Each file gets one TURN. The catalog half of the turn runs on the
+    //    main actor (VideoRecord lives there): offline check, the caller's
+    //    `authorize`, a fresh read-only snapshot — asked for THIS file, at
+    //    its turn, never once for the batch (codex design F1). The disk half
+    //    runs on `Task.detached` (≈ a C++ worker thread you then join with
+    //    `await …value`): the caller's `beforeRemoval`, the archive and
+    //    read-only last words, existence, the Trash — one synchronous
+    //    stretch with no await inside it.
+    //  - The main thread is only suspended (never blocked) while a file's
+    //    disk half runs, so the UI stays responsive.
+    //  - Catalog writes for the whole batch happen at the end, once, on main.
 
-    /// User's deletion choice. `.toTrash` is the default reach via the
-    /// confirmation sheet; `.permanent` requires deliberate confirmation
-    /// (.destructive role on the button).
+    /// How a file leaves. `.toTrash` is the only mode any user-facing flow
+    /// can reach (ruling 2026-10-09). `.permanent` = FileManager.removeItem;
+    /// kept for the prune lane's TESTS only (see the policy note above).
     enum JunkDeletionMode {
         case toTrash
         case permanent
     }
 
-    /// Outcome of a single batch deletion. The result sheet renders these
-    /// counts; tests assert against them directly.
+    /// Outcome of a batch: ONE item per requested record, in request
+    /// order, each with exactly one outcome (design R6/R7: requested ==
+    /// moved + held + failed + missing + offline + cancelled). The counts
+    /// the sheets and the prune lane read are derived from the items, so
+    /// they cannot disagree with them.
     struct JunkDeletionResult {
-        /// Total records passed in (could include records already missing
-        /// from disk or that ultimately fail).
-        let attempted: Int
-        /// Files actually moved to Trash or removed from disk this pass.
-        let succeeded: Int
-        /// Records whose `fullPath` did not exist when we tried — catalog
-        /// was still updated (purgedAt + lifecycleStage), but no disk op.
-        /// (Volume WAS reachable; the specific file just wasn't there.)
-        let alreadyMissing: Int
-        /// Records whose volume isn't currently mounted. We do NOT touch
-        /// these records — they stay tagged .confirmedJunk and the user
-        /// can retry after remounting the drive. Distinct from
-        /// `alreadyMissing` because the user can still act on these later.
-        let skippedOffline: Int
-        /// Per-record failures with the underlying FileManager error.
-        /// Surfaced in the result sheet so the user knows which files
-        /// were skipped and why (permissions, locked, etc.).
-        let failed: [(record: VideoRecord, error: Error)]
-        /// Records a caller's `JunkDeletionGuard` refused at the last
-        /// moment (codex follow-up 2026-09-20 #3). Nothing was moved and
-        /// the record is untouched — no purgedAt, no lifecycle change, no
-        /// ledger line. Empty for every caller that passes no guard.
-        var refused: [(record: VideoRecord, reason: String)] = []
+        struct Item {
+            let record: VideoRecord
+            let outcome: JunkFileOutcome
+        }
+        let items: [Item]
+
+        init(items: [Item]) { self.items = items }
+        /// Computed, not a stored static: the result holds `VideoRecord`
+        /// references, which are not Sendable, so a shared global would not
+        /// be concurrency-safe.
+        static var empty: JunkDeletionResult { JunkDeletionResult(items: []) }
+
+        /// Every record that was requested (each has one outcome).
+        var attempted: Int { items.count }
+        /// Files actually moved this pass.
+        var succeeded: Int { items.count { $0.outcome.isMoved } }
+        /// The SUM of the moved files' sizes — bytes moved to the Trash
+        /// (design R7). Never "freed": space comes back when the Trash is
+        /// emptied.
+        var bytesMoved: Int64 {
+            items.reduce(into: Int64(0)) { sum, item in
+                if case .moved(let bytes) = item.outcome { sum += bytes }
+            }
+        }
+        /// The file was already gone (its drive WAS reachable) — the catalog
+        /// was updated (purgedAt + lifecycleStage), no disk op.
+        var alreadyMissing: Int { items.count { $0.outcome.kind == .missing } }
+        /// Its drive isn't mounted. Untouched — retry after remounting.
+        var skippedOffline: Int { items.count { $0.outcome.kind == .offline } }
+        /// Not reached: the run was stopped before this file's turn.
+        var cancelled: Int { items.count { $0.outcome.kind == .cancelled } }
+        /// The file operation itself failed (the file is where it was).
+        var failed: [(record: VideoRecord, error: Error)] {
+            items.compactMap { item in
+                guard case .failed(let error) = item.outcome else { return nil }
+                return (record: item.record, error: error)
+            }
+        }
+        /// Held back — before any disk work (viewer, Master Archive, a drive
+        /// marked Read only) or at the file's turn (a caller's guard, the
+        /// archive / read-only last word). Nothing moved; record untouched.
+        var refused: [(record: VideoRecord, reason: String)] {
+            items.compactMap { item in
+                guard case .held(let why) = item.outcome else { return nil }
+                return (record: item.record, reason: why)
+            }
+        }
     }
 
     /// A per-file guard for a caller that PROVED something about a file
-    /// before asking for its removal ("Archived — what next?" verifies a
-    /// copy byte-for-byte against its archive copy, then asks for the
-    /// Trash). A verdict from moments ago is not authority to remove
-    /// whatever sits at that pathname NOW, so the proof is re-checked
-    /// twice per file, as late as possible (codex follow-up #3):
-    ///   - `authorize` — on the main actor, per record, just before the
-    ///     off-main pass: the LIVE catalog still says what the caller
-    ///     verified (record active, same path, same family…).
+    /// before asking for its removal (the frozen Delete Junk snapshot; the
+    /// "Archived — what next?" byte proof). A verdict from moments ago is
+    /// not authority to remove whatever sits at that pathname NOW, so the
+    /// proof is re-checked twice per file, as late as possible:
+    ///   - `authorize` — on the main actor, at THAT file's turn: the LIVE
+    ///     catalog still says what the caller verified.
     ///   - `beforeRemoval` — off-main, immediately before THAT file's own
-    ///     trashItem / removeItem, with its path: the file (and whatever
-    ///     the proof depends on) still reproduces the proof's identity.
+    ///     trashItem, with its path: the file still reproduces the proof's
+    ///     identity.
     /// Either returning a reason refuses the file: it is reported in
-    /// `JunkDeletionResult.refused`, named, and nothing is moved. Missing
-    /// files are the guard's to judge too (it runs before the existence
-    /// check): a guarded file that vanished is refused, not "already
-    /// gone" — the catalog cannot know where it went.
+    /// `JunkDeletionResult.refused`, named, and nothing is moved. The guard
+    /// runs before the existence check, so a guard decides what a vanished
+    /// file means (return nil → "already missing").
     /// (For Rick: two callbacks, one per thread the routine runs on.)
     struct JunkDeletionGuard {
         let authorize: @MainActor (VideoRecord) -> String?
         let beforeRemoval: @Sendable (String) -> String?
         /// The file operation itself, for tests (a seam that throws on the
-        /// Nth file — codex #1642). nil = FileManager's trashItem /
-        /// removeItem by `mode`, which is what every production caller gets.
+        /// Nth file, or moves into a sandbox "Trash"). nil = FileManager's
+        /// trashItem, which is what every production caller gets.
         var remove: (@Sendable (URL) throws -> Void)? = nil
     }
 
-    /// Per-record decision made by the off-main FileManager pass. The
-    /// detached task returns one of these for every input record (in input
-    /// order); the @MainActor body then walks the list and applies the
-    /// corresponding record-state mutation. We keep this enum file-private
-    /// — it's an implementation detail of the async hop.
-    fileprivate enum JunkDeletionOutcome {
-        case succeeded
-        case alreadyMissing
-        case skippedOffline
-        case failed(Error)
-        /// The caller's guard said no (see `JunkDeletionGuard`).
-        case refused(String)
+    /// One file's outcome — mutually exclusive by construction (one enum
+    /// value per file; ≈ a C++ std::variant).
+    enum JunkFileOutcome: Sendable {
+        /// Moved; `bytes` = the file's size measured at its turn, just
+        /// before the move (the catalog's size if it could not be stat'ed).
+        case moved(bytes: Int64)
+        case held(String)
+        case failed(any Error)
+        case missing
+        case offline
+        /// The run was stopped (task cancelled) before this file's turn.
+        case cancelled
+
+        /// The case without its payload, for counting and grouping.
+        enum Kind: Equatable { case moved, held, failed, missing, offline, cancelled }
+        var kind: Kind {
+            switch self {
+            case .moved: return .moved
+            case .held: return .held
+            case .failed: return .failed
+            case .missing: return .missing
+            case .offline: return .offline
+            case .cancelled: return .cancelled
+            }
+        }
+        var isMoved: Bool { kind == .moved }
     }
 
     /// C04-F5 (P1, 2026-10-06): a viewer Mac never moves or deletes a file.
@@ -147,399 +169,166 @@ extension VideoScanModel {
     /// Returns nil on the master. On a viewer nothing is touched, every
     /// record comes back in `refused`, and one line is logged. It is the
     /// first step of `junkDeletionPreflight`, which is the first statement
-    /// of `deleteConfirmedJunk`, so every caller (row menu, toolbar and
-    /// Triage sheets, Cmd-Delete, prune) sits behind it.
+    /// of `deleteConfirmedJunk`, so every caller sits behind it.
     func junkDeletionRefusedOnViewer(_ records: [VideoRecord]) -> JunkDeletionResult? {
         let viewer = ViewerWriteGuard.refuse("VideoScanModel.deleteConfirmedJunk")
         guard viewer || isReadOnly else { return nil }
         let reason = "this Mac is a read-only viewer of the catalog"
         log("Delete Confirmed Junk refused — \(reason); \(records.count) file(s) left untouched.")
-        return JunkDeletionResult(
-            attempted: records.count,
-            succeeded: 0,
-            alreadyMissing: 0,
-            skippedOffline: 0,
-            failed: [],
-            refused: records.map { (record: $0, reason: reason) }
-        )
+        return JunkDeletionResult(items: records.map { .init(record: $0, outcome: .held(reason)) })
     }
 
     /// Everything `deleteConfirmedJunk` decides before any disk work, in
     /// order: (1) the viewer refusal — FIRST, before anything else;
-    /// (2) Master Archive files are never bulk-deleted
-    /// (excludingMasterArchiveFiles); (3) the empty-selection
-    /// short-circuit — keeps the public contract crisp and avoids a
-    /// debounced save() that would re-write identical catalog bytes. A
-    /// non-nil `finished` is the whole answer; otherwise `records` are the
-    /// eligible ones. (Pulled out so the viewer guard does not grow the
-    /// already-large deleteConfirmedJunk.)
+    /// (2) the empty-selection short-circuit; (3) Master Archive files and
+    /// drives marked Read only are never bulk-deleted
+    /// (excludingMasterArchiveFiles, which also writes the console lines) —
+    /// each such file gets a HOLD with the gate's own sentence, never a
+    /// silent drop (design R6). A non-nil `finished` is the whole answer;
+    /// otherwise `pending[i]` is file i's outcome when it is already
+    /// decided, nil when it goes on to its turn.
     func junkDeletionPreflight(_ requested: [VideoRecord])
-        -> (records: [VideoRecord], finished: JunkDeletionResult?) {
+        -> (pending: [JunkFileOutcome?], finished: JunkDeletionResult?) {
         if let refused = junkDeletionRefusedOnViewer(requested) { return ([], refused) }
-        let records = excludingMasterArchiveFiles(requested, verb: "Delete Confirmed Junk")
-        guard !records.isEmpty else {
-            return ([], JunkDeletionResult(
-                attempted: 0,
-                succeeded: 0,
-                alreadyMissing: 0,
-                skippedOffline: 0,
-                failed: []
-            ))
+        guard !requested.isEmpty else { return ([], .empty) }
+        let mayGo = Set(excludingMasterArchiveFiles(requested, verb: "Delete Confirmed Junk").map(ObjectIdentifier.init))
+        var pending = [JunkFileOutcome?](repeating: nil, count: requested.count)
+        guard mayGo.count < requested.count else { return (pending, nil) }
+        let archiveVolume = archiveVolumeProtection()
+        let label = archiveVolume?.label ?? "the archive volume"
+        for (i, rec) in requested.enumerated() where !mayGo.contains(ObjectIdentifier(rec)) {
+            let note = bulkDeleteRefusal(rec, volume: archiveVolume)
+                .map { Self.bulkDeleteRefusalNote($0, volume: label) } ?? "is protected by the delete rules"
+            pending[i] = .held(note + " — nothing moved")
         }
-        return (records, nil)
+        return (pending, nil)
     }
 
-    /// Delete (trash or hard-remove) every record in `records`, regardless
-    /// of their current `mediaDisposition`. Caller filters to
-    /// `.confirmedJunk` before invoking — this method does not double-check
-    /// the disposition, which keeps it usable from tests with arbitrary
-    /// records and from future callers (e.g. a "Delete Selected" path).
-    ///
-    /// All catalog mutations happen in-memory on the existing
-    /// `VideoRecord` instances; a single `saveCatalogDebounced()` at the
-    /// end persists the batch (per the dispatch — no per-record I/O).
-    ///
-    /// The disk-side FileManager work runs on a detached background task
-    /// so the main thread stays responsive while a 200-file batch trashes
-    /// (~3-10 seconds wall-clock on slow volumes). The function itself
-    /// stays @MainActor because the catalog-state writes (rec.purgedAt,
-    /// rec.lifecycleStage) and `saveCatalogDebounced()` must run on main.
-    ///
-    /// Returns a result summary the UI displays in the result sheet.
+    /// Trash every record in `records`, one file at a time, regardless of
+    /// their current `mediaDisposition` — the CALLER decides what may go
+    /// (the frozen Delete Junk lane re-checks Confirmed status per file
+    /// through its guard). All catalog mutations happen in-memory on the
+    /// existing `VideoRecord` instances; one `saveCatalogDebounced()` at the
+    /// end persists the batch.
     @discardableResult
     func deleteConfirmedJunk(
         _ requested: [VideoRecord],
         mode: JunkDeletionMode,
         guard fileGuard: JunkDeletionGuard? = nil
     ) async -> JunkDeletionResult {
-        let (records, finished) = junkDeletionPreflight(requested)
+        let (pending, finished) = junkDeletionPreflight(requested)
         if let finished { return finished }
 
-        // -------------------------------------------------------------
-        // Phase 1 — main-thread pre-flight (no disk I/O).
-        //
-        // Walk the records and decide which paths are eligible for the
-        // background pass and which are immediate skipOffline hits. The
-        // reachability check is a near-free cache lookup (5s TTL); the
-        // empty-path check is a string test. Neither hits the disk, so
-        // both stay on main.
-        //
-        // We build `workItems` in input order — each entry is either
-        // (path, recordIndex) for the background loop OR a pre-decided
-        // outcome (`skippedOffline`) we'll merge back in after the hop.
-        // Carrying record INDEX through the boundary (rather than the
-        // VideoRecord reference) keeps the detached task's captures
-        // strictly Sendable (String paths + Int indices + the mode).
-        //
-        // Seam D (VideoRecord-Sendable restructure): the `Sendable`
-        // conformance below is the explicit contract that NO `VideoRecord`
-        // crosses into the detached FileManager pass — only this value type
-        // does. The index is the key we apply outcomes back through on the
-        // main actor (Phase 3). The conformance is checked, so a future
-        // edit that tried to smuggle a `VideoRecord` field in here would
-        // fail to compile rather than silently re-cross the boundary.
-        // -------------------------------------------------------------
-        struct WorkItem: Sendable {
-            let index: Int
-            let path: String
-        }
-        var workItems: [WorkItem] = []
-        workItems.reserveCapacity(records.count)
-        // Outcome slots: one per input record, in input order. Pre-seeded
-        // with skippedOffline placeholders so the records that DON'T go
-        // through the background pass still have a slot to read back.
-        // Default-fill is `succeeded` only because we always overwrite
-        // before reading — but use `skippedOffline` as the visible default
-        // to keep the invariant defensive.
-        var outcomes: [JunkDeletionOutcome] = Array(
-            repeating: .skippedOffline,
-            count: records.count
-        )
+        // The disk half's fixed inputs — all Sendable, so they may cross to
+        // the worker. The Master Archive VOLUME is re-asked per file at the
+        // moment of removal (Rick 2026-09-22) with a fresh read of the
+        // file's own volume UUID; the probe is the task-local seam captured
+        // HERE — a detached task does not inherit task-locals.
+        let disk = JunkDiskTurn(
+            mode: mode,
+            archiveVolume: archiveVolumeProtection(),
+            uuidProbe: MasterArchiveDesignation.volumeUUIDProbe,
+            beforeRemoval: fileGuard?.beforeRemoval,
+            remove: fileGuard?.remove)
 
-        for (i, rec) in records.enumerated() {
-            let path = rec.fullPath
-
-            // Offline-volume pre-filter. We only treat /Volumes/<X>/...
-            // paths this way — those are the only paths that can be
-            // legitimately "offline" (drive unmounted). Internal paths
-            // (/Users, /tmp, /private, etc.) live on the boot volume and
-            // are always reachable; for those, a missing file is just
-            // alreadyMissing, not offline.
-            //
-            // The 5s cache on VolumeReachability makes this a near-free
-            // check per record (volume root is stat'd at most once per
-            // 5s per volume) and runs on the calling thread — fine on
-            // main. We do NOT stamp purgedAt / lifecycleStage in this
-            // branch: the user will remount the drive and re-run, and
-            // the row needs to still be tagged .confirmedJunk for that
-            // retry to find it.
-            if Self.isExternalVolumePath(path),
-               !VolumeReachability.isReachable(path: path) {
-                outcomes[i] = .skippedOffline
-                continue
+        var outcomes: [JunkFileOutcome] = []
+        outcomes.reserveCapacity(requested.count)
+        for (rec, decided) in zip(requested, pending) {
+            if let decided {
+                outcomes.append(decided)
+            } else if Task.isCancelled {
+                outcomes.append(.cancelled)
+            } else {
+                outcomes.append(await junkTurn(rec, guard: fileGuard, disk: disk))
             }
-
-            // The caller's live-catalog authorization, per record, on
-            // main, as the last thing before the hop (JunkDeletionGuard).
-            if let fileGuard, let why = fileGuard.authorize(rec) {
-                outcomes[i] = .refused(why)
-                continue
-            }
-
-            // Eligible for the background pass — defer the existence
-            // check (a stat() syscall, potentially slow on a sleeping
-            // drive) and the trash/remove call to the detached task.
-            workItems.append(WorkItem(index: i, path: path))
         }
+        return applyJunkOutcomes(requested, outcomes, mode: mode)
+    }
 
-        // -------------------------------------------------------------
-        // Phase 2 — off-main FileManager pass.
-        //
-        // `Task.detached` runs the closure OFF the current actor (we're
-        // @MainActor here; a plain `Task { … }` would still be pinned
-        // to main). Inside the closure we get a fresh non-actor thread
-        // pool slot, so multi-second FileManager calls don't block UI.
-        //
-        // We return `[(index: Int, outcome: JunkDeletionOutcome)]` — the
-        // (index, outcome) tuple lets us map results back to records on
-        // main without re-walking the input. Index is a plain Int so the
-        // capture is Sendable; outcomes carry Error values which are
-        // Sendable per Swift's typed-error story.
-        //
-        // Swift's `Task.detached` ≈ C++ `std::thread([&]{…})` but with
-        // structured priority and async/await integration — and we await
-        // its .value to suspend the @MainActor function (NOT block) until
-        // the detached work is done.
-        // -------------------------------------------------------------
-        let mode = mode  // capture-in
-        let beforeRemoval = fileGuard?.beforeRemoval   // the parts of the guard that cross
-        let removeOverride = fileGuard?.remove
-        // The Master Archive VOLUME, re-asked per file at the moment of
-        // removal (Rick 2026-09-22): the snapshot's verdict plus a fresh
-        // read of the file's own volume UUID, so a FamilyArchive mounted
-        // (or renamed) since the plan is still refused. The probe is the
-        // task-local seam captured HERE — a detached task does not
-        // inherit task-locals.
-        let archiveVolume = archiveVolumeProtection()
-        let uuidProbe = MasterArchiveDesignation.volumeUUIDProbe
-        // …and the volumes the person marked Read only (2026-10-03) — asked
-        // AGAIN FOR EVERY FILE, from the model as it is at that file's turn
-        // (codex #258 F5): a drive marked Read only while the batch is
-        // running protects every file not yet removed. One hop to the main
-        // actor per file (the gate's snapshot is O(targets) and disk-free),
-        // BEFORE the synchronous check-and-remove stretch below.
-        let readOnlyAtStart = readOnlyVolumeProtection()
-        let readOnlyNow: @Sendable () async -> ReadOnlyVolumeProtection = { [weak self] in
-            await self?.readOnlyVolumeProtection() ?? readOnlyAtStart
+    /// One file's turn. The catalog half, here on the main actor, as late
+    /// as possible (codex design F1: authorization is per FILE, never once
+    /// per batch); then the disk half, off-main.
+    private func junkTurn(_ rec: VideoRecord, guard fileGuard: JunkDeletionGuard?,
+                          disk: JunkDiskTurn) async -> JunkFileOutcome {
+        let path = rec.fullPath
+        // Offline-volume check: only /Volumes/<X>/... paths can be offline
+        // (drive unmounted); internal paths live on the boot volume. The
+        // 5 s VolumeReachability cache makes this near-free. The record is
+        // NOT stamped: the user remounts and re-runs.
+        if Self.isExternalVolumePath(path), !VolumeReachability.isReachable(path: path) {
+            return .offline
         }
-        let detachedResults: [(Int, JunkDeletionOutcome)] =
-            await Task.detached(priority: .userInitiated) {
-                let fm = FileManager.default
-                var results: [(Int, JunkDeletionOutcome)] = []
-                results.reserveCapacity(workItems.count)
-
-                for item in workItems {
-                    let path = item.path
-                    let readOnlyVolumes = await readOnlyNow()
-
-                    // The caller's proof, re-checked immediately before
-                    // THIS file's own disk operation — no await, no other
-                    // file's work in between (JunkDeletionGuard). Before
-                    // the existence check on purpose: a guarded file that
-                    // is gone is refused, never stamped "already gone".
-                    if let beforeRemoval, let why = beforeRemoval(path) {
-                        results.append((item.index, .refused(why)))
-                        continue
-                    }
-
-                    // The archive volume's last word, in the same
-                    // synchronous stretch as the removal below.
-                    if let archiveVolume {
-                        switch archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe) {
-                        case .clear: break
-                        case .onArchiveVolume:
-                            results.append((item.index, .refused(Self.bulkDeleteRefusalNote(
-                                .archiveVolume, volume: archiveVolume.label) + " — nothing moved")))
-                            continue
-                        case .unprovable:
-                            results.append((item.index, .refused(Self.bulkDeleteRefusalNote(
-                                .archiveVolumeUnprovable, volume: archiveVolume.label) + " — nothing moved")))
-                            continue
-                        }
-                    }
-
-                    // A volume marked Read only: the same last word.
-                    if let verdict = readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe) {
-                        results.append((item.index, .refused(Self.readOnlyRefusalNote(verdict) + " — nothing moved")))
-                        continue
-                    }
-
-                    // Missing-file branch. We do NOT pre-flight every
-                    // file with fileExists() outside this loop because
-                    // the disk op below already reports "doesn't exist"
-                    // via NSCocoaErrorDomain.fileNoSuchFileError; the
-                    // explicit check just lets us distinguish "user
-                    // tagged a file that's already gone" from a genuine
-                    // permission failure for the result sheet.
-                    let exists = !path.isEmpty && fm.fileExists(atPath: path)
-                    if !exists {
-                        results.append((item.index, .alreadyMissing))
-                        continue
-                    }
-
-                    // Live-file branch. Wrap the FileManager call so we
-                    // can surface the error per-record without aborting
-                    // the batch. Swift's `do/catch` ≈ C++ try/catch but
-                    // error is a typed value, not an exception you
-                    // `throw` and unwind through.
-                    do {
-                        let url = URL(fileURLWithPath: path)
-                        if let removeOverride {
-                            try removeOverride(url)
-                            results.append((item.index, .succeeded))
-                            continue
-                        }
-                        switch mode {
-                        case .toTrash:
-                            // trashItem moves to the volume's .Trashes;
-                            // if there's no Trash on a network mount it
-                            // throws — caught below.
-                            var resultURL: NSURL?
-                            try fm.trashItem(at: url,
-                                             resultingItemURL: &resultURL)
-                        case .permanent:
-                            try fm.removeItem(at: url)
-                        }
-                        results.append((item.index, .succeeded))
-                    } catch {
-                        results.append((item.index, .failed(error)))
-                    }
-                }
-                return results
-            }.value
-
-        // Merge background results back into the outcomes array. We pre-
-        // seeded with .skippedOffline; this overwrites every index the
-        // background pass touched, leaving only the truly-offline slots.
-        for (idx, outcome) in detachedResults {
-            outcomes[idx] = outcome
+        // The caller's live-catalog authorization, for THIS file, now.
+        if let fileGuard, let why = fileGuard.authorize(rec) {
+            return .held(why)
         }
+        // The volumes the person marked Read only (2026-10-03), as the model
+        // is at THIS file's turn (codex #258 F5): a drive marked Read only
+        // while the batch runs protects every file not yet moved.
+        let readOnlyVolumes = readOnlyVolumeProtection()
+        let catalogBytes = rec.sizeBytes
+        return await Task.detached(priority: .userInitiated) {
+            disk.run(path: path, readOnlyVolumes: readOnlyVolumes, catalogBytes: catalogBytes)
+        }.value
+    }
 
-        // -------------------------------------------------------------
-        // Phase 3 — back on main, apply record-state mutations.
-        //
-        // We're back on @MainActor (the `await` on the detached task's
-        // .value returns to our calling actor). VideoRecord writes are
-        // safe here; the debounced save() at the end persists the batch.
-        // -------------------------------------------------------------
+    /// Back on main: stamp the catalog for the files that left (or were
+    /// already gone), persist once, write the ledger, log, and count.
+    private func applyJunkOutcomes(_ records: [VideoRecord], _ outcomes: [JunkFileOutcome],
+                                   mode: JunkDeletionMode) -> JunkDeletionResult {
         let now = Date()
-        var succeeded = 0
-        var alreadyMissing = 0
-        var skippedOffline = 0
-        var failed: [(record: VideoRecord, error: Error)] = []
-        var refused: [(record: VideoRecord, reason: String)] = []
+        let stage: LifecycleStage = mode == .toTrash ? .trashed : .deletedPermanently
         var removedFromDisk: [VideoRecord] = []
 
-        for (i, rec) in records.enumerated() {
-            switch outcomes[i] {
-            case .skippedOffline:
-                // Untouched — see policy comment at top of file. The row
-                // stays tagged .confirmedJunk so a remount-then-retry
-                // pass picks it up.
-                skippedOffline += 1
-
-            case .refused(let why):
-                // Untouched, like a failure: the file is still there (or
-                // is not what was verified), the row stays active.
-                refused.append((record: rec, reason: why))
-
-            case .alreadyMissing:
-                alreadyMissing += 1
-                // Catalog still gets stamped so the row stops showing
-                // as "active confirmed junk" — otherwise the user runs
-                // the workflow twice in a row and sees the same files
-                // come back, which is confusing.
+        for (rec, outcome) in zip(records, outcomes) {
+            switch outcome {
+            case .offline, .held, .failed, .cancelled:
+                // Untouched: the file is still there (or is not what was
+                // verified, or its drive is away); the row stays active so
+                // the user can retry or inspect.
+                break
+            case .missing:
+                // Stamped so the row stops showing as active junk; the stage
+                // follows the requested mode even though no disk op ran.
                 rec.purgedAt = now
-                // Choose lifecycleStage consistent with the user's
-                // intent even though no disk op ran: they asked to
-                // trash → mark trashed; they asked to delete → mark
-                // deleted. Either way the row is gone from disk; the
-                // distinction only matters if the user later inspects
-                // "what happened to this file" via Show Removed.
-                switch mode {
-                case .toTrash:
-                    rec.lifecycleStage = .trashed
-                case .permanent:
-                    rec.lifecycleStage = .deletedPermanently
-                }
-
-            case .succeeded:
-                succeeded += 1
-                switch mode {
-                case .toTrash:
-                    rec.lifecycleStage = .trashed
-                case .permanent:
-                    rec.lifecycleStage = .deletedPermanently
-                }
+                rec.lifecycleStage = stage
+            case .moved:
+                rec.lifecycleStage = stage
                 rec.purgedAt = now
                 removedFromDisk.append(rec)
-
-            case .failed(let error):
-                failed.append((record: rec, error: error))
-                // Do NOT stamp purgedAt or lifecycleStage on failure —
-                // the file is still there, the row should remain active
-                // so the user can retry or inspect.
             }
         }
+        let result = JunkDeletionResult(items: zip(records, outcomes).map { .init(record: $0, outcome: $1) })
 
-        // Single batched persist. Per-record save() would saturate the
-        // debouncer and (worse) leave the catalog in a partially-written
-        // state if the app crashes mid-loop. One write at the end matches
-        // the pattern used by purgeRecords() above.
+        // Single batched persist (a per-record save would saturate the
+        // debouncer and could leave a half-written catalog on a crash).
         saveCatalogDebounced()
-        // #160: purgedAt/lifecycleStage flipped in place — no count change,
-        // no undo banner — so the table's cache would never recompute and
-        // the deleted rows stayed visible with Show Removed off.
+        // #160: purgedAt/lifecycleStage flipped in place — no count change —
+        // so the table's cache must be told to recompute.
         noteCatalogRecordsMutated()
-        // Media Ledger (stage 2): one copyTrashed / copyDeleted line per
-        // file that actually left the disk (missing / offline / failed
-        // rows are not "what happened to the file").
+        // Media Ledger (stage 2): one copyTrashed / copyDeleted line per file
+        // that actually left the disk.
         ledgerCopyRemoved(removedFromDisk, permanent: mode == .permanent, by: .rick, at: now,
                           batchID: "junk-\(UUID().uuidString.prefix(8))")
 
-        log("Delete Confirmed Junk: attempted=\(records.count) succeeded=\(succeeded) missing=\(alreadyMissing) offline=\(skippedOffline) failed=\(failed.count)\(refused.isEmpty ? "" : " refused=\(refused.count)") mode=\(mode == .toTrash ? "trash" : "permanent")")
-
-        return JunkDeletionResult(
-            attempted: records.count,
-            succeeded: succeeded,
-            alreadyMissing: alreadyMissing,
-            skippedOffline: skippedOffline,
-            failed: failed,
-            refused: refused
-        )
+        let refused = result.refused.count, cancelled = result.cancelled
+        log("Delete Confirmed Junk: attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode == .toTrash ? "trash" : "permanent")")
+        return result
     }
 
     /// Convenience filter: every active (non-purged) record currently
-    /// tagged `.confirmedJunk`. Used by the catalog toolbar to compute the
-    /// "Delete Confirmed Junk…" badge count and to populate the
-    /// confirmation sheet.
+    /// tagged `.confirmedJunk`.
     ///
-    /// We deliberately exclude purged records — once `purgedAt` is set
-    /// the row is hidden by default and the file (per this workflow) is
-    /// already gone or trashed. Re-offering "delete junk" on a purged row
-    /// would either no-op (file is gone) or surprise the user (file in
-    /// Trash gets permanently deleted because we'd re-call removeItem).
+    /// We deliberately exclude purged records — once `purgedAt` is set the
+    /// row is hidden by default and the file is already gone or trashed.
     var confirmedJunkRecords: [VideoRecord] {
         records.filter {
             $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
         }
     }
 
-    /// Reachability-split view over `confirmedJunkRecords`. The
-    /// confirmation sheet shows separate counts/byte totals for
-    /// currently-actionable rows vs. rows whose volume isn't mounted.
-    /// Computed once when the sheet opens; the 5s reachability cache
-    /// makes this O(records) with at most one stat() per unique volume.
+    /// Reachability-split view over a record list (currently-actionable rows
+    /// vs. rows whose volume isn't mounted).
     struct ConfirmedJunkSplit {
         let reachable: [VideoRecord]
         let offline: [VideoRecord]
@@ -552,15 +341,8 @@ extension VideoScanModel {
     }
 
     /// Split an arbitrary record list by current volume reachability.
-    /// Static so the confirmation sheet can call it without going through
-    /// the model — it operates purely on the records + the global
-    /// VolumeReachability cache. Unit-tested independently.
-    ///
     /// Mirrors the predicate in `deleteConfirmedJunk`: only paths under
-    /// `/Volumes/<X>/...` are eligible to be "offline" (drive unmounted).
-    /// Internal paths (/Users, /tmp, /private, ...) live on the boot
-    /// volume and are always reachable; if their file is gone, that's
-    /// alreadyMissing — not offline.
+    /// `/Volumes/<X>/...` are eligible to be "offline".
     static func splitByReachability(
         _ records: [VideoRecord]
     ) -> ConfirmedJunkSplit {
@@ -572,10 +354,6 @@ extension VideoScanModel {
                !VolumeReachability.isReachable(path: r.fullPath) {
                 offline.append(r)
             } else {
-                // Everything else — internal disk, empty path, or
-                // /Volumes path whose drive IS mounted — goes to
-                // reachable so deleteConfirmedJunk gets to bucket it
-                // (succeeded / alreadyMissing / failed).
                 reachable.append(r)
             }
         }
@@ -583,16 +361,82 @@ extension VideoScanModel {
     }
 
     /// True iff `path` is under "/Volumes/<volumeName>/..." — i.e. lives
-    /// on a removable/external mount that could be ejected. Internal
-    /// paths (/Users, /tmp, /private, /System, ...) return false because
-    /// their "volume" is the boot disk and is always present.
-    ///
-    /// Static + nonisolated so callers in any context can use it without
-    /// hopping actors.
+    /// on a removable/external mount that could be ejected.
+    /// Static + nonisolated so callers in any context can use it.
     nonisolated static func isExternalVolumePath(_ path: String) -> Bool {
         guard !path.isEmpty else { return false }
         let comps = (path as NSString).pathComponents
         // ["/", "Volumes", "<name>", ...] → length ≥ 3, comps[1] == "Volumes".
         return comps.count >= 3 && comps[1] == "Volumes"
+    }
+}
+
+// MARK: - The disk half of one file's turn
+
+/// Everything the off-main half of a turn needs, as one Sendable value
+/// (≈ a C++ struct of value members handed to a worker thread by copy). No
+/// `VideoRecord` crosses: only the path does.
+struct JunkDiskTurn: Sendable {
+    let mode: VideoScanModel.JunkDeletionMode
+    let archiveVolume: ArchiveVolumeProtection?
+    let uuidProbe: @Sendable (String) -> String?
+    let beforeRemoval: (@Sendable (String) -> String?)?
+    let remove: (@Sendable (URL) throws -> Void)?
+
+    /// The caller's proof, the archive and read-only last words, existence,
+    /// then the file operation — one synchronous stretch, nothing awaited.
+    func run(path: String, readOnlyVolumes: ReadOnlyVolumeProtection,
+             catalogBytes: Int64) -> VideoScanModel.JunkFileOutcome {
+        // Before the existence check on purpose: the guard decides what a
+        // vanished file means.
+        if let beforeRemoval, let why = beforeRemoval(path) { return .held(why) }
+        if let why = protectionRefusal(path: path, readOnlyVolumes: readOnlyVolumes) { return .held(why) }
+        // Distinguishes "the user tagged a file that's already gone" from a
+        // genuine failure for the result sheet.
+        guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { return .missing }
+        // The size that is about to move (one stat), for "N GB moved to
+        // the Trash" (design R7).
+        let bytes = FileIdentityStamp.capture(path: path)?.size ?? catalogBytes
+        do {
+            try perform(URL(fileURLWithPath: path))
+            return .moved(bytes: bytes)
+        } catch {
+            // Never a fallback to another kind of removal: the file stays.
+            return .failed(error)
+        }
+    }
+
+    /// The archive volume's and the read-only drives' last word, asked in
+    /// the same synchronous stretch as the removal.
+    private func protectionRefusal(path: String, readOnlyVolumes: ReadOnlyVolumeProtection) -> String? {
+        if let archiveVolume {
+            switch archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe) {
+            case .clear: break
+            case .onArchiveVolume:
+                return VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: archiveVolume.label) + " — nothing moved"
+            case .unprovable:
+                return VideoScanModel.bulkDeleteRefusalNote(.archiveVolumeUnprovable, volume: archiveVolume.label) + " — nothing moved"
+            }
+        }
+        if let verdict = readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe) {
+            return VideoScanModel.readOnlyRefusalNote(verdict) + " — nothing moved"
+        }
+        return nil
+    }
+
+    private func perform(_ url: URL) throws {
+        if let remove {
+            try remove(url)
+            return
+        }
+        switch mode {
+        case .toTrash:
+            // trashItem moves to the volume's .Trashes; a volume with no
+            // Trash (some network mounts) throws — caught by the caller.
+            var resultURL: NSURL?
+            try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
+        case .permanent:
+            try FileManager.default.removeItem(at: url)
+        }
     }
 }

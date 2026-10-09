@@ -235,8 +235,9 @@ extension CatalogContent {
     }
 
     /// The bottom group (Rick 2026-10-08): ONE Remove from Catalog (hide
-    /// the rows; Show Removed brings them back) and the Delete File
-    /// submenu (Move to Trash / Delete Permanently…). "Remove from Catalog
+    /// the rows; Show Removed brings them back) and Move to Trash (the
+    /// Delete File submenu and its Delete Permanently… left 2026-10-09 —
+    /// Trash only). "Remove from Catalog
     /// (keep files)" left the row menu the same day — the set-aside model,
     /// Show ▸ Set-aside files and Put Back are unchanged. The destructive
     /// scope is still exactly `deletableRecs`, the right-click-time
@@ -262,68 +263,40 @@ extension CatalogContent {
             .help("Hide these records from the default view. The files on disk are not deleted; toggle Show Removed in the toolbar to recover.")
         }
 
-        // Delete File — per-row parity with the triage window's
-        // batch path (Rick 2026-06-15). Move to Trash is
-        // recoverable; Delete Permanently shows a confirmation
-        // alert first. Both call deleteConfirmedJunk, which
-        // already handles offline-skip, already-missing, and
-        // per-file failures on a detached task. Distinct from
-        // Remove from Catalog (above) which only hides the row.
+        // Move to Trash — the row menu's ONE delete verb (Trash only,
+        // ruling 2026-10-09: the app never deletes permanently; emptying
+        // the Trash is Rick's step). Per-row parity with Triage's Delete
+        // Junk. Distinct from Remove from Catalog (above), which only hides
+        // the row.
         switch deleteFileItem(activeRecs: activeRecs, deletableRecs: deletableRecs) {
         case .hidden:
             EmptyView()
         case .disabled(let help):
-            // Nothing selected may be deleted: say why instead of hiding
-            // the verb (Rick 2026-10-08). Disabled, so nothing inside can
-            // run — and its scope would be the empty `deletableRecs` anyway.
-            Menu {
-                EmptyView()
-            } label: {
-                Label(CatalogRowMenuText.deleteFiles(count: activeRecs.count), systemImage: "xmark.bin")
+            // Nothing selected may be moved: say why instead of hiding the
+            // verb (Rick 2026-10-08). Disabled, so it cannot run — and its
+            // scope would be the empty `deletableRecs` anyway.
+            Button {} label: {
+                Label(CatalogRowMenuText.moveToTrash(count: activeRecs.count), systemImage: "trash")
             }
             .disabled(true)
             .help(help)
             .accessibilityIdentifier("catalog.row.deleteFile.protected")
         case .enabled:
-            Menu {
-                Button(role: .destructive) {
-                    let targets = deletableRecs
-                    Task { @MainActor in
-                        let result = await model.deleteConfirmedJunk(targets, mode: .toTrash)
-                        reportDeleteResult(result, mode: .toTrash)
-                    }
-                } label: {
-                    Label("Move to Trash", systemImage: "trash")
+            Button(role: .destructive) {
+                let targets = deletableRecs
+                // The SAME function as ⌘⌫ (item 6, 2026-10-09): same gates,
+                // same held-with-reason result, same ignore list.
+                Task { @MainActor in
+                    let result = await model.trashSelectedRecords(targets)
+                    reportDeleteResult(result)
                 }
-                .accessibilityIdentifier("catalog.row.deleteToTrash")
-
-                Button(role: .destructive) {
-                    let targets = deletableRecs
-                    let count = targets.count
-                    let alert = NSAlert()
-                    alert.messageText = CatalogRowMenuText.permanentDeleteQuestion(
-                        count: count, firstFilename: targets.first?.filename ?? "")
-                    alert.informativeText = CatalogRowMenuText.permanentDeleteWarning(count: count)
-                    alert.alertStyle = .critical
-                    alert.addButton(withTitle: "Delete Permanently")
-                    alert.addButton(withTitle: "Cancel")
-                    if alert.runModal() == .alertFirstButtonReturn {
-                        Task { @MainActor in
-                            let result = await model.deleteConfirmedJunk(targets, mode: .permanent)
-                            reportDeleteResult(result, mode: .permanent)
-                        }
-                    }
-                } label: {
-                    Label("Delete Permanently\u{2026}", systemImage: "trash.fill")
-                }
-                .accessibilityIdentifier("catalog.row.deletePermanently")
             } label: {
-                Label(CatalogRowMenuText.deleteFiles(count: deletableRecs.count),
-                      systemImage: "xmark.bin")
+                Label(CatalogRowMenuText.moveToTrash(count: deletableRecs.count), systemImage: "trash")
             }
+            .accessibilityIdentifier("catalog.row.moveToTrash")
             // A viewer never deletes; the model refuses too (C04-F5).
             .disabled(model.isReadOnly)
-            .help("Move the file(s) to Trash or remove them from disk permanently. Distinct from \u{201C}Remove from Catalog\u{201D} which only hides the row.")
+            .help("Move the file(s) to the Trash \u{2014} recoverable until you empty the Trash. Distinct from \u{201C}Remove from Catalog\u{201D}, which only hides the row.")
         }
     }
 

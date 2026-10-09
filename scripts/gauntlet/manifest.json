@@ -6705,7 +6705,6 @@
         "hasAudioOnlyForAudioBearingStreams",
         "hundredThousandRowSelectionSplitsFast",
         "mixedInertSelectionFollowsTheAnchor",
-        "permanentDeleteConfirmationWording",
         "pluralLabelsCountExactly",
         "pureActiveOnlyWithoutInertRows",
         "pureInertSelectionsGetTheirMinimalMenus",
@@ -7272,6 +7271,19 @@
         "unscannableBucketCatchesAudioOnly",
         "unscannableTrumpsOtherRules",
         "zeroDurationDoesNotTriggerTooShort"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashConsistencyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTrashConsistencyTests"
+      ],
+      "tests": [
+        "deadToolbarSheetsAreGone",
+        "ignoreListFollowsWhatMoved",
+        "rowMenuAndShortcutShareOneFunction"
       ]
     },
     {
@@ -15798,6 +15810,19 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/JunkBytesMovedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JunkBytesMovedTests"
+      ],
+      "tests": [
+        "bytesAreTheMovedFilesSizes",
+        "noScalingNoFreed",
+        "routineSumsMovedSizes"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/JunkDeleteActionRegressionTests.swift",
       "stage": "regression",
       "suites": [
@@ -15834,6 +15859,66 @@
         "mixedBatchReportsAllBuckets",
         "skippedOfflineIsCountedSeparately",
         "splitByReachability_partitionsCleanly"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/JunkFrozenSnapshotTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JunkFrozenSnapshotTests",
+        "JunkPerFileAuthorizationTests",
+        "JunkSnapshotScaleTests"
+      ],
+      "tests": [
+        "authorizeIsPerFile",
+        "catalogChangesHold",
+        "changedFileHolds",
+        "hundredThousandFreezeInBudget",
+        "masterArchiveNeverMoves",
+        "neverWidens",
+        "offlineWhenFrozenNeverMoves",
+        "readOnlyMarkedLaterHolds",
+        "replacedFileHolds",
+        "revokedMarkHolds",
+        "snapshotFreezesIdentityAndSize",
+        "vanishedIsMissing",
+        "viewerMovesNothing"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/JunkOutcomeAccountingTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JunkOutcomeAccountingTests"
+      ],
+      "tests": [
+        "allProtectedIsReported",
+        "bothSurfacesRenderTheReport",
+        "cancelledFilesAreCounted",
+        "catalogPlanRefusalsReachTheResult",
+        "catalogViewerIsReported",
+        "everyBucketSums",
+        "mixedPreflightAndMoved",
+        "reportAtScale",
+        "reportListsEveryHeldFile"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/JunkTrashOnlyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JunkTrashOnlyTests"
+      ],
+      "tests": [
+        "catalogTrashFailureHolds",
+        "frozenTrashFailureHolds",
+        "noPermanentOnTheJunkLanes",
+        "noProductionCallerAsksForPermanent",
+        "reallyLandsInTheTrash",
+        "rowMenuIsMoveToTrashOnly"
       ]
     },
     {
@@ -22283,6 +22368,19 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TriageJunkButtonTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TriageJunkButtonTests"
+      ],
+      "tests": [
+        "buttonUsesTheConstant",
+        "junkButtonMarksConfirmedJunk",
+        "markedRecordIsDeletable"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TriagePredicateTests.swift",
       "stage": "unit",
       "suites": [
@@ -27933,7 +28031,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2194,
+      "expected_floor": 2230,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -28015,6 +28113,7 @@
         "VideoScanTests/CatalogSearchTokenizeAndTests",
         "VideoScanTests/CatalogSelectionPruneTests",
         "VideoScanTests/CatalogTargetStatusResilienceTests",
+        "VideoScanTests/CatalogTrashConsistencyTests",
         "VideoScanTests/CatalogVerifyMenuPlanTests",
         "VideoScanTests/CatalogWideMetadataCandidatesTests",
         "VideoScanTests/CatchUpInferredDatesCharacterizationTests",
@@ -28109,6 +28208,12 @@
         "VideoScanTests/InspectorPanelRulesTests",
         "VideoScanTests/InspectorPanelSectionOrderTests",
         "VideoScanTests/JobLifecycleUncoveredPathsTests",
+        "VideoScanTests/JunkBytesMovedTests",
+        "VideoScanTests/JunkFrozenSnapshotTests",
+        "VideoScanTests/JunkOutcomeAccountingTests",
+        "VideoScanTests/JunkPerFileAuthorizationTests",
+        "VideoScanTests/JunkSnapshotScaleTests",
+        "VideoScanTests/JunkTrashOnlyTests",
         "VideoScanTests/KeepersByGroupIDTests",
         "VideoScanTests/LifeStatusBiographyCardTests",
         "VideoScanTests/LifeStatusCompositionTests",
@@ -28206,6 +28311,7 @@
         "VideoScanTests/TreeWalkStep0LineAttributionTests",
         "VideoScanTests/TriageCleanedFilterTests",
         "VideoScanTests/TriageDispositionTests",
+        "VideoScanTests/TriageJunkButtonTests",
         "VideoScanTests/TriageQueueTests",
         "VideoScanTests/TruncatedFileTests",
         "VideoScanTests/TypecheckSplitTextTests",

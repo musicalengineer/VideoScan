@@ -352,17 +352,22 @@ struct BulkVerbRemovalBoundaryTests {
                 "Discard no longer asks the gate for each file before it trashes it")
         // Junk Delete's sheet and Prune Apply both move files ONLY through
         // deleteConfirmedJunk, whose loop re-reads the marks for every file.
-        #expect(try SourceTree.appCode(named: "JunkDeleteAction.swift").contains("await model.deleteConfirmedJunk(targets, mode: mode)"))
+        // The sheet runs its FROZEN set (design R1, 2026-10-09).
+        #expect(try SourceTree.appCode(named: "JunkDeleteAction.swift").contains("await model.trashFrozenJunk(snapshot)"))
+        #expect(try SourceTree.appCode(named: "VideoScanModel+JunkTrashSnapshot.swift")
+                    .contains("await deleteConfirmedJunk(snapshot.items.map(\\.record), mode: .toTrash, guard: fileGuard)"))
         let prune = try SourceTree.appCode(named: "VideoScanModel+PruneApply.swift")
         #expect(prune.contains("let result = await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)"))
         #expect(prune.contains("if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {"), "each copy is asked at its turn too")
-        for file in ["JunkDeleteAction.swift", "VideoScanModel+PruneApply.swift", "VideoScanModel+Workbench.swift"] {
+        for file in ["JunkDeleteAction.swift", "VideoScanModel+JunkTrashSnapshot.swift", "VideoScanModel+PruneApply.swift", "VideoScanModel+Workbench.swift"] {
             let text = try SourceTree.appCode(named: file)
             #expect(!text.contains("removeItem(") && !text.contains("FileManager.default.trashItem(at: url, resultingItemURL: nil)) != nil"),
                     "\(file) removes a media file on its own")
         }
         let junk = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
-        #expect(junk.contains("let readOnlyVolumes = await readOnlyNow()"))
+        // Asked again for EVERY file, at its turn, on the main actor.
+        #expect(junk.contains("let readOnlyVolumes = readOnlyVolumeProtection()"))
+        #expect(junk.contains("disk.run(path: path, readOnlyVolumes: readOnlyVolumes, catalogBytes: catalogBytes)"))
         // Transcode's Replace Existing: policy and check are taken AT the
         // publish, and the publish asks the check for the file it would Trash.
         let transcode = try SourceTree.appCode(named: "TranscodeJob.swift")

@@ -359,7 +359,11 @@ struct ReadOnlyVolumeGateTests {
         #expect(rig.model.catalogTrashPlan(for: [a]).toTrash.isEmpty)
         let toTrash = await rig.model.deleteConfirmedJunk([b], mode: .toTrash)
         let permanent = await rig.model.deleteConfirmedJunk([c], mode: .permanent)
-        #expect(toTrash.succeeded == 0 && toTrash.attempted == 0 && permanent.succeeded == 0 && permanent.attempted == 0)
+        // One outcome per requested file (design R6, 2026-10-09): each is
+        // HELD with the read-only sentence, never silently dropped.
+        #expect(toTrash.succeeded == 0 && toTrash.attempted == 1 && permanent.succeeded == 0 && permanent.attempted == 1)
+        #expect(toTrash.refused.first?.reason.contains("which you marked Read only") == true, "\(toTrash.refused.map(\.reason))")
+        #expect(trashed.attempted == 1 && trashed.refused.count == 1, "⌘⌫ reports the refused row too")
         #expect(rig.model.discardWorkbench([d]) == 0)
         for r in [a, b, c, d] {
             #expect(FileManager.default.fileExists(atPath: r.fullPath), "\(r.filename) left a Read-only drive")
@@ -643,12 +647,11 @@ struct ReadOnlyVolumeSensorTests {
             ("DeleteDuplicatesForecast.swift", ["bulkDeleteRefusal(r, volume: archiveVolume)"]),
             ("VideoScanModel+JunkDelete.swift", ["excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")",
                                                  "readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe)"]),
-            ("JunkDeleteAction.swift", ["model.excludingMasterArchiveFiles("]),
+            ("VideoScanModel+JunkTrashSnapshot.swift", ["recordsBulkVerbsMayRemove(recs)"]),   // the frozen Delete Junk set (R1)
             ("VideoScanModel+TrashSelection.swift", ["self.bulkDeleteRefusal($0, volume: archiveVolume)"]),
             ("VideoScanModel+PruneApply.swift", ["bulkDeleteRefusal(rec, volume: archiveVolume)"]),
             ("VideoScanModel+Workbench.swift", ["excludingMasterArchiveFiles(requested, verb: \"Discard\")"]),
             ("TranscodeJob.swift", ["model.bulkDeleteRefusal(forPath: path)", "archiveCheck: model?.archiveRemovalCheck()"]),
-            ("CatalogToolbar.swift", ["model.recordsBulkVerbsMayRemove(confirmedJunk)"]),
             ("CatalogRowContextMenu.swift", ["model.recordsBulkVerbsMayRemove(activeRecs)"]),   // row menu (R1: was CatalogContent+Table.swift)
             ("VideoScanModel+Steward.swift", ["self.bulkDeleteRefusal(r, volume: archiveDrive)"]),
         ]

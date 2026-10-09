@@ -659,7 +659,7 @@ struct RemoteViewerReadOnlySensorTests {
         }
         let entry = try firstStatement(after: "func deleteConfirmedJunk(",
                                        opener: ") async -> JunkDeletionResult {")
-        #expect(entry?.hasPrefix("let (records, finished) = junkDeletionPreflight(") == true,
+        #expect(entry?.hasPrefix("let (pending, finished) = junkDeletionPreflight(") == true,
                 "deleteConfirmedJunk must start with the preflight; found \(entry ?? "nil")")
         let preflight = try firstStatement(after: "func junkDeletionPreflight(",
                                            opener: "finished: JunkDeletionResult?) {")
@@ -678,8 +678,8 @@ struct RemoteViewerReadOnlySensorTests {
                 callers.insert(url.lastPathComponent)
             }
         }
-        #expect(callers == ["CatalogRowContextMenu.swift", "VideoScanModel+TrashSelection.swift",
-                            "VideoScanModel+PruneApply.swift", "JunkDeleteAction.swift"],
+        #expect(callers == ["VideoScanModel+TrashSelection.swift",
+                            "VideoScanModel+PruneApply.swift", "VideoScanModel+JunkTrashSnapshot.swift"],
                 "a new deleteConfirmedJunk caller: confirm it relies on the model's viewer guard, then add it here")
     }
 }
