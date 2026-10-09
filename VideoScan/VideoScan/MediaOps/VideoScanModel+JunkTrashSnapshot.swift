@@ -84,7 +84,7 @@ extension VideoScanModel {
     /// offline predicate is injectable so tests never depend on which drives
     /// the host has mounted (CLAUDE.md isolation dimension).
     func freezeJunkSnapshot(_ recs: [VideoRecord],
-                            isOffline: (VideoRecord) -> Bool = VideoScanModel.isRecordOnOfflineVolume) async
+                            isOffline: @MainActor (VideoRecord) -> Bool = VideoScanModel.isRecordOnOfflineVolume) async
         -> JunkTrashSnapshot {
         let mayGo = Set(recordsBulkVerbsMayRemove(recs).map(ObjectIdentifier.init))
         let archiveVolume = mayGo.count < recs.count ? archiveVolumeProtection() : nil

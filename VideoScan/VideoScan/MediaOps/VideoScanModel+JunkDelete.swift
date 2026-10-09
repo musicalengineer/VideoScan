@@ -68,7 +68,10 @@ extension VideoScanModel {
         let items: [Item]
 
         init(items: [Item]) { self.items = items }
-        static let empty = JunkDeletionResult(items: [])
+        /// Computed, not a stored static: the result holds `VideoRecord`
+        /// references, which are not Sendable, so a shared global would not
+        /// be concurrency-safe.
+        static var empty: JunkDeletionResult { JunkDeletionResult(items: []) }
 
         /// Every record that was requested (each has one outcome).
         var attempted: Int { items.count }
