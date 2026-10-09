@@ -245,9 +245,9 @@ struct DeleteDuplicatesCodex258Round4Tests {
         #expect(rig.a.duplicateDisposition == .review, "an archive refusal still marks the record Review, as on main")
         // EXPLICIT on the row — not read out of its note.
         #expect(rows[0].notCountedWhy == DuplicateDeletionHold.archiveRuleAtRemovalWhy, "\(String(describing: rows[0].notCountedWhy))")
-        #expect(rows[1].status == .skipped && rows[1].remainingVerifiedCopies == 1,
+        // Keep one (2026-10-09): B goes on the keeper alone — never on A.
+        #expect(rows[1].status == .trashed && rows[1].remainingVerifiedCopies == 1,
                 "B was decided \(rows[1].status) on the strength of the copy the boundary retained: \(rows[1].tierReason ?? rows[1].note)")
-        #expect(FileManager.default.fileExists(atPath: rig.b.fullPath), "main leaves B alone — only the keeper would remain")
         // …and B's count left A out BY THE RULE, not because the loop still read A's row as in flight.
         let reason = rows[1].tierReason ?? ""
         #expect(reason.contains("a.mov") && reason.contains("not counted (\(DuplicateDeletionHold.archiveRuleAtRemovalWhy))")
@@ -333,7 +333,7 @@ struct DeleteDuplicatesCodex258Round4Tests {
             }
             remaining = facts.remainingVerifiedCopies
             notCounted = facts.notCounted
-            tier = DeletionTierDecision.decide(facts: facts, preferTrash: false).tier
+            tier = DeletionTierDecision.decide(facts: facts).tier
         })
         #expect(job.plan?.entries.first?.status == .refused && FileManager.default.fileExists(atPath: rig.a.fullPath), "fixture: A was retained")
         #expect(remaining == 2, "K + S1 remain on main; the branch counts \(remaining)")
@@ -520,7 +520,7 @@ struct DeleteDuplicatesCodex258Round4Tests {
                 DuplicateDrives.$identityOverride.withValue(others) { DeletionTierFacts.gather(c, digest: fileDigest) }
             }
         }
-        #expect(gathered.distinctDriveCount == 2 && DeletionTierDecision.decide(facts: gathered, preferTrash: false).tier == .permanent,
+        #expect(gathered.distinctDriveCount == 2 && DeletionTierDecision.decide(facts: gathered).tier == .trash,
                 "fixture: two drives at the turn (\(gathered.summary))")
         // At the verdict the lookup cannot say what s2's device is.
         let checked = DuplicateDrives.$cacheScope.withValue(scope) {
@@ -530,7 +530,7 @@ struct DeleteDuplicatesCodex258Round4Tests {
         }
         #expect(checked.remainingVerifiedCopies == 3, "the copy still counts as a COPY")
         #expect(checked.distinctDriveCount == 1, "an unidentified volume added a drive at the final verdict: \(checked.countedDrives)")
-        #expect(!checked.droppedAtBoundary.isEmpty && DeletionTierDecision.decide(facts: checked, preferTrash: false).tier == .trash)
+        #expect(!checked.droppedAtBoundary.isEmpty && DeletionTierDecision.decide(facts: checked).tier == .trash)
     }
 
     // MARK: R4-3 — the comment stripper fails closed
@@ -656,19 +656,18 @@ struct DeleteDuplicatesCodex258Round4Tests {
     }
 
     /// The model's part of the boundary is ONE value, read in one hop: the
-    /// hold, the marks, the designation and the setting together; a catalog
-    /// that went away holds, with the most conservative setting.
+    /// hold, the marks and the designation together (no setting: Trash
+    /// only); a catalog that went away holds.
     @Test func theBoundaryReadsTheModelOnceAndAGoneCatalogHolds() async throws {
         let rig = makeRig("onehop"); defer { rig.cleanup() }
-        rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate = true
         designateArchive(rig)
         let now = rig.model.duplicateRemovalBoundaryNow(recordID: rig.a.id)
-        #expect(now.preferTrash && now.designation != nil && now.holdNote == nil && now.readOnlyMarks.isEmpty)
+        #expect(now.designation != nil && now.holdNote == nil && now.readOnlyMarks.isEmpty)
         let ask = DeleteDuplicatesJob.removalBoundary(model: rig.model, recordID: rig.a.id, path: rig.a.fullPath)
         let path = rig.a.fullPath
         let answer = await Task.detached { ask(path) }.value
-        #expect(answer.holdNote == nil && answer.archive?.note.contains("the Master Archive") == true && answer.preferTrash)
-        #expect(DuplicateRemovalBoundaryNow.catalogGone.holdNote != nil && DuplicateRemovalBoundaryNow.catalogGone.preferTrash)
+        #expect(answer.holdNote == nil && answer.archive?.note.contains("the Master Archive") == true)
+        #expect(DuplicateRemovalBoundaryNow.catalogGone.holdNote != nil)
     }
 
     // MARK: - Round 5 (codex cycle #38)
@@ -713,7 +712,7 @@ struct DeleteDuplicatesCodex258Round4Tests {
             #expect(legacy.entries[0].notCountedWhy == nil, "fixture: a plan without the field")
             let candidates = rig.model.deletionTierCandidates(record: rig.b, keeper: rig.keeper, run: legacy.runScope(deciding: rig.b.id))
             let facts = DeletionTierFacts.gather(candidates, digest: fileDigest)
-            #expect(facts.remainingVerifiedCopies == 1 && DeletionTierDecision.decide(facts: facts, preferTrash: false).tier == nil,
+            #expect(facts.remainingVerifiedCopies == 1,
                     "\(status): the run's own row A was counted for B (\(facts.summary))")
         }
     }

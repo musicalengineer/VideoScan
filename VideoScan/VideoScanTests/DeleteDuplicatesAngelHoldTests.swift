@@ -664,12 +664,12 @@ struct DeleteDuplicatesAngelHoldTests {
         }
     }
 
-    /// End to end (codex #258 F1 — this test used to pin the opposite):
-    /// keeper + the Angel's verified copy + a free copy. The Angel's copy is
-    /// never a row of the run AND never a survivor for the free copy — only
-    /// the keeper would remain, so the free copy is left alone, exactly as
-    /// on main, where the Angel's copy was a pending row of the same run.
-    @Test func theAngelsVerifiedCopyDoesNotEarnTheFreeCopyTheTrash() async throws {
+    /// End to end (codex #258 F1): keeper + the Angel's verified copy + a
+    /// free copy. The Angel's copy is never a row of the run AND never a
+    /// survivor for the free copy. Keep one (2026-10-09): the keeper alone
+    /// is enough, so the free copy goes to the Trash — counted on the
+    /// keeper ONLY, the Angel's copy named "not counted".
+    @Test func theAngelsVerifiedCopyIsNeverCountedForTheFreeCopy() async throws {
         let rig = makeRig("tier", family: false); defer { rig.cleanup() }
         let free = rig.copies[0], angel = rig.copies[1]
         angel.contentFixity = ContentFixity.captured(path: angel.fullPath, digest: rig.digest, byteCount: Int64(fileSize))
@@ -680,9 +680,10 @@ struct DeleteDuplicatesAngelHoldTests {
         await job.task?.value
         let plan = try #require(job.plan)
         #expect(plan.entries.map(\.id) == [free.id], "the Angel's copy is not a row of the run")
-        #expect(plan.entries.first?.status == .skipped, "\(String(describing: plan.entries.first?.status)) — \(plan.entries.first?.note ?? "")")
-        #expect(plan.entries.first?.remainingVerifiedCopies == 1)
-        #expect(FileManager.default.fileExists(atPath: free.fullPath), "the free copy left the drive on the strength of a held copy")
+        #expect(plan.entries.first?.status == .trashed, "\(String(describing: plan.entries.first?.status)) — \(plan.entries.first?.note ?? "")")
+        #expect(plan.entries.first?.remainingVerifiedCopies == 1, "the Angel's copy was counted as a survivor")
+        let reason = plan.entries.first?.tierReason ?? ""
+        #expect(reason.contains(angel.filename) && reason.contains("not counted"), Comment(rawValue: reason))
         #expect(FileManager.default.fileExists(atPath: angel.fullPath) && FileManager.default.fileExists(atPath: rig.keeper.fullPath))
         #expect(angel.duplicateDisposition == .extraCopy)
     }

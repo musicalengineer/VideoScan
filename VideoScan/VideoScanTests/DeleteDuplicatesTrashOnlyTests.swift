@@ -106,7 +106,6 @@ struct DeleteDuplicatesTrashOnlyTests {
         let legacy = DeletionTierDecision(tier: .permanent, remainingVerifiedCopies: 3,
                                           reason: "space back now (a plan written before 2026-10-09)")
         let two = DeleteDuplicatesDiskWorker.deleteQuarantined(ticket, decided: legacy, facts: DeletionTierFacts(),
-                                                               preferTrash: false,
                                                                keeperFilename: "keeper.mov", hooks: rig.hooks)
         guard case .trashed(_, let location, _) = two.outcome else {
             Issue.record("a recorded permanent disposal must go to the Trash — got \(two.outcome)"); return

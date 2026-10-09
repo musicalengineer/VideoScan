@@ -214,8 +214,8 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
                                           "sibling c.mov on SanDisk gone since it was counted (removed or offline)"])
         #expect(now.notCounted.prefix(2).elementsEqual(now.droppedAtBoundary), "the dropped copies are named first in the reason")
         #expect(now.unverifiedCopies == facts.unverifiedCopies + 2)
-        #expect(DeletionTierDecision.decide(facts: now, preferTrash: false).tier == .trash)
-        #expect(DeletionTierDecision.decide(facts: facts, preferTrash: false).tier == .permanent)
+        #expect(DeletionTierDecision.decide(facts: now).tier == .trash)
+        #expect(DeletionTierDecision.decide(facts: facts).tier == .trash)
 
         // A copy that came back is never ADDED at the boundary: c exists
         // again with the right bytes, but under a new inode / ctime.
@@ -270,9 +270,9 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
     }
 
     /// (b) A counted sibling is REMOVED during the save: keeper + archive
-    /// still make two → the Trash. With the archive gone as well (keeper
-    /// only), the file is put back at its original path, untouched, and
-    /// the row names both copies; the record keeps its disposition.
+    /// still make two → the Trash. With the archive gone as well, the
+    /// keeper alone remains — keep one (2026-10-09): still the Trash, and
+    /// the row names both copies that were dropped at the boundary.
     @Test func removedSiblingDowngradesOrPutsBack() async throws {
         for variant in ["siblingOnly", "siblingAndArchive"] {
             let rig = Rig("sibling-removed-\(variant)"); defer { rig.cleanup() }
@@ -299,21 +299,18 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
                 #expect(!FileManager.default.fileExists(atPath: rig.copy.fullPath))
                 #expect(job.result.deleted == 1 && job.result.bytesFreed == 0)
             } else {
-                #expect(row.status == .skipped && row.tier == nil && row.remainingVerifiedCopies == 1,
-                        "\(variant): \(row.status): \(row.note)")
-                #expect(row.note.contains("sibling verified-sibling-of-keeper.mov on ") && row.note.contains("archive copy on ")
-                        && row.note.contains("gone since it was counted"), Comment(rawValue: row.note))
-                #expect(row.note.contains("left alone"), Comment(rawValue: row.note))
-                #expect(FileManager.default.fileExists(atPath: rig.copy.fullPath), "\(variant): put back at its original path")
-                #expect((try? Data(contentsOf: rig.copyURL)) == Data(rig.bytes), "\(variant): untouched")
-                #expect(!FileManager.default.fileExists(atPath: rig.trashedCopyURL.path))
-                #expect(job.result.deleted == 0 && job.result.bytesFreed == 0)
-                #expect(rig.copy.duplicateDisposition == .extraCopy, "left alone keeps the disposition — not a refusal of the pair")
+                let reason = row.tierReason ?? ""
+                #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 1,
+                        "\(variant): \(row.status): \(reason)")
+                #expect(reason.contains("sibling verified-sibling-of-keeper.mov on ") && reason.contains("archive copy on ")
+                        && reason.contains("gone since it was counted"), Comment(rawValue: reason))
+                #expect(FileManager.default.fileExists(atPath: rig.trashedCopyURL.path), "\(variant): to the Trash on the keeper alone")
+                #expect(job.result.deleted == 1 && job.result.bytesFreed == 0)
                 await rig.model.mediaLedger.waitForPendingWrites()
                 let removals = rig.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed || $0.event == .copyDeleted }
-                #expect(removals.isEmpty, "\(variant): nothing left the disk")
+                #expect(removals.count == 1 && removals.first?.event == .copyTrashed, "\(variant): moved to the Trash, never deleted")
                 let console = await consoleText(rig.model)
-                #expect(console.contains("put back") && console.contains("gone since it was counted"), Comment(rawValue: console))
+                #expect(console.contains("re-checked before removal") && console.contains("gone since it was counted"), Comment(rawValue: console))
             }
         }
     }
@@ -376,7 +373,7 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
         let row = plan.entries[0]
         #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 3, "\(row.status): \(row.tierReason ?? "")")
         #expect(row.tierReason == reasonWhenSaved, "unchanged evidence: the row keeps the reason it was saved with")
-        #expect(row.tierReason?.hasPrefix(DeleteDuplicatesDiskWorker.trashOnlyReasonPrefix) == true, Comment(rawValue: row.tierReason ?? ""))
+        #expect(row.tierReason?.hasPrefix("to the Trash (3 verified remain: ") == true, Comment(rawValue: row.tierReason ?? ""))
         #expect(!FileManager.default.fileExists(atPath: rig.copy.fullPath) && FileManager.default.fileExists(atPath: rig.trashedCopyURL.path),
                 "Trash only: in the (scratch) Trash, never unlinked")
         #expect(job.result.deleted == 1 && job.result.bytesFreed == 0)

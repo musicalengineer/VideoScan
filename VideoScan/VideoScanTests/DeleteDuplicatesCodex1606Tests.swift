@@ -213,7 +213,7 @@ struct DeletionTierArchiveEvidenceCodex1606Tests {
                                label: "sibling sibling.mov on SanDisk")]
         let before = DeletionTierFacts.gather(c, digest: digest)
         #expect(before.remainingVerifiedCopies == 3 && before.counted.contains("archive copy on FamilyArchive"))
-        #expect(DeletionTierDecision.decide(facts: before, preferTrash: false).tier == .permanent)
+        #expect(DeletionTierDecision.decide(facts: before).tier == .trash)
 
         // The corruption: same inode, same size, mtime put back; only the
         // bytes and the kernel ctime differ. Nothing on record changes.
@@ -226,7 +226,7 @@ struct DeletionTierArchiveEvidenceCodex1606Tests {
         #expect(after.counted == ["keeper on LaCieWorkspace", "sibling sibling.mov on SanDisk"])
         #expect(after.notCounted == ["archive copy on FamilyArchive not verified now (changed since it was verified)"])
         #expect(after.hasVerifiedArchive, "on record the family is archived — informational only")
-        let d = DeletionTierDecision.decide(facts: after, preferTrash: false)
+        let d = DeletionTierDecision.decide(facts: after)
         #expect(d.tier == .trash && d.reason.contains("archive copy on FamilyArchive not verified now"), Comment(rawValue: d.reason))
 
         // Promote-time digest only (no stamp-bound fixity): named, never counted.
@@ -235,7 +235,7 @@ struct DeletionTierArchiveEvidenceCodex1606Tests {
         let u = DeletionTierFacts.gather(unaudited, digest: digest)
         #expect(u.remainingVerifiedCopies == 1 && u.hasVerifiedArchive)
         #expect(u.notCounted == ["archive copy on Pegasus not verified now (no stamp-bound fixity — run Verify Archive Copies)"])
-        #expect(DeletionTierDecision.decide(facts: u, preferTrash: false).tier == nil)
+        #expect(DeletionTierDecision.decide(facts: u).tier == .trash, "keep one: the keeper is the one verified copy")
     }
 
     /// The job: keeper + valid sibling + an archive rewritten in place the
@@ -259,7 +259,7 @@ struct DeletionTierArchiveEvidenceCodex1606Tests {
         #expect(row.status == .trashed && row.tier == .trash, "\(row.status): \(row.tierReason ?? "")")
         #expect(row.remainingVerifiedCopies == 2)
         let reason = try #require(row.tierReason)
-        #expect(reason.hasPrefix("only two verified copies would remain — to the Trash"), Comment(rawValue: reason))
+        #expect(reason.hasPrefix("to the Trash (2 verified remain: "), Comment(rawValue: reason))
         #expect(reason.contains("archive copy on ") && reason.contains("not verified now (changed since it was verified)"), Comment(rawValue: reason))
         #expect(reason.contains("sibling verified-sibling-of-keeper.mov on "))
         #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
@@ -273,8 +273,9 @@ struct DeletionTierArchiveEvidenceCodex1606Tests {
     }
 
     /// An archive copy straight from promotion (digest on record, no
-    /// stamp-bound fixity yet) does not count: keeper + it → 1 remain →
-    /// left alone, by stat, before a byte is read; the row says why.
+    /// stamp-bound fixity yet) does not count: only the keeper remains —
+    /// which, keep one (2026-10-09), is enough for the Trash; the row says
+    /// why the archive copy was not counted.
     @Test @MainActor func promotedButUnauditedArchiveDoesNotCount() async throws {
         let rig = Rig("unaudited", copies: 1, archiveFamily: true, withSibling: false); defer { rig.cleanup() }
         let archive = try #require(rig.archive)
@@ -285,13 +286,14 @@ struct DeletionTierArchiveEvidenceCodex1606Tests {
 
         let plan = try #require(job.plan)
         let row = plan.entries[0]
-        #expect(row.status == .skipped && row.tier == nil && row.remainingVerifiedCopies == 1, "\(row.status): \(row.note)")
-        #expect(row.note.contains("archive copy on ") && row.note.contains("not verified now (no stamp-bound fixity — run Verify Archive Copies)"),
-                Comment(rawValue: row.note))
+        let reason = row.tierReason ?? ""
+        #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 1, "\(row.status): \(reason)")
+        #expect(reason.contains("archive copy on ") && reason.contains("not verified now (no stamp-bound fixity — run Verify Archive Copies)"),
+                Comment(rawValue: reason))
         #expect(row.hasVerifiedArchive == true, "archived on record — the label must not say 'not yet archived'")
         #expect(!row.tierLabel.contains(DeletionTierText.notYetArchived))
-        #expect(FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
-        #expect(probe.blocks("quarantine") == 0, "settled by stat, nothing read")
+        #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath), "in the Trash on the keeper alone")
+        #expect(probe.blocks("quarantine") > 0, "the copy itself was read in full before it went")
     }
 }
 

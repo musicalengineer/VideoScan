@@ -374,16 +374,14 @@ extension VideoScanModel {
 
     /// EVERYTHING the removal boundary needs from the model, read in ONE
     /// synchronous hop (codex #258 r4): the hold and today's Read-only marks
-    /// (`duplicateRemovalBoundaryWord`), the current Master Archive
-    /// designation (`duplicateRemovalBoundaryArchive`) and "Prefer the Trash
-    /// for every duplicate" as it is set now.
+    /// (`duplicateRemovalBoundaryWord`) and the current Master Archive
+    /// designation (`duplicateRemovalBoundaryArchive`).
     func duplicateRemovalBoundaryNow(recordID: UUID) -> DuplicateRemovalBoundaryNow {
         let word = duplicateRemovalBoundaryWord(recordID: recordID)
         let archive = duplicateRemovalBoundaryArchive(recordID: recordID)
         return DuplicateRemovalBoundaryNow(holdNote: word.holdNote, readOnlyMarks: word.readOnlyMarks,
                                            designation: archive.designation, aliasCandidates: archive.aliasCandidates,
-                                           isArchiveCopy: archive.isArchiveCopy,
-                                           preferTrash: duplicateKeeperSettings.preferTrashForEveryDuplicate)
+                                           isArchiveCopy: archive.isArchiveCopy)
     }
 
     /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1; SIMPLIFIED in
@@ -525,6 +523,9 @@ extension VideoScanModel {
         // the set is small.
         let keeperPaths = Set(targets.compactMap { rec in rec.duplicateGroupID.flatMap { keepers[$0]?.fullPath } })
         let keeperStamps = await Self.captureStamps(paths: Array(keeperPaths))
+        // R5: how many copies each group has — its extras are pre-selected
+        // at three or more. One pass over `records`.
+        let copyCounts = duplicateGroupCopyCounts(Set(targets.compactMap(\.duplicateGroupID)))
         var entries: [DeleteDuplicatesPlan.Entry] = []
         entries.reserveCapacity(targets.count)
         for rec in targets {
@@ -536,7 +537,9 @@ extension VideoScanModel {
                 keeperID: keeper?.id ?? UUID(), keeperPath: keeper?.fullPath ?? "",
                 keeperFilename: keeper?.filename ?? "",
                 keeperStamp: keeper.flatMap { keeperStamps[$0.fullPath] },
-                isWorkingCopy: isWorkingCopy(rec)))
+                isWorkingCopy: isWorkingCopy(rec),
+                groupID: rec.duplicateGroupID,
+                groupCopyCount: rec.duplicateGroupID.flatMap { copyCounts[$0] }))
         }
         var plan = DeleteDuplicatesPlan(volumePath: volumePath, catalogLocation: catalogStore.fileLocation,
                                         crossVolumeMode: selection.crossVolumeMode, skippedBeforePlan: skippedCount,
@@ -1355,13 +1358,11 @@ struct DuplicateRemovalBoundaryNow: Sendable {
     var designation: MasterArchiveDesignation?
     var aliasCandidates: [String]
     var isArchiveCopy: Bool
-    var preferTrash: Bool
 
-    /// The catalog went away mid-pair: everything is held, and the most
-    /// conservative setting stands.
+    /// The catalog went away mid-pair: everything is held.
     static let catalogGone = DuplicateRemovalBoundaryNow(
         holdNote: DuplicateDeletionHold.leftAlonePrefix + "the catalog is no longer open", readOnlyMarks: [],
-        designation: nil, aliasCandidates: [], isArchiveCopy: false, preferTrash: true)
+        designation: nil, aliasCandidates: [], isArchiveCopy: false)
 }
 
 /// One Delete Duplicates run, as the survivor count needs to know it

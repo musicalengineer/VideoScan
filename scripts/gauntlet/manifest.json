@@ -8468,7 +8468,7 @@
         "class5APromotedCopyIsNeverATargetEvenWithNoMasterArchiveDesignated",
         "resumeLeavesAloneWhatWentIntoABatchOrTheArchiveSinceThePlan",
         "selectionScale100kWithTenThousandAngelIDs",
-        "theAngelsVerifiedCopyDoesNotEarnTheFreeCopyTheTrash",
+        "theAngelsVerifiedCopyIsNeverCountedForTheFreeCopy",
         "thePlanListsTheCopiesLeftAloneAndOlderPlansStillDecode",
         "theReasonsAndTheSummaryLineSayItPlainly",
         "theReclaimableEstimateDoesNotCountCopiesTheRunLeavesAlone",
@@ -8676,14 +8676,13 @@
       "tests": [
         "aCopyTheRunLeavesAloneIsNotASurvivorForAnotherCopy",
         "aDiskImageOrAnUnidentifiedVolumeNeverAddsADrive",
-        "aSiblingOnASecondDriveIsWorthReadingEvenWithThreeCounted",
         "everyCounterOfSurvivorsAsksTheOneRule",
         "everyoneAsksTheOneResolverWhereACopySits",
         "holdingACopyNeverMakesAnotherCopysFateMorePermissive",
+        "noSiblingIsWorthReadingAndNoDriveIsReservedForOne",
         "oneVolumeKeyedTwoWaysIsOneDrive",
         "theForecastCountsDrivesAsTheRunDoes",
         "thePlanTellsARowLeftAloneForAHoldFromOneDecidedOnItsMerits",
-        "theRunReadsTheSecondDriveSiblingAndTheForecastSaysItWill",
         "theStewardsProofEqualsTheRunForTheHeldCopyAndTwoDriveFixtures",
         "theSurvivorRuleMemberByMember",
         "whatTheSystemSaysAboutTheDeviceDecidesTheKind",
@@ -8739,9 +8738,9 @@
         "BulkVerbRemovalBoundaryTests"
       ],
       "tests": [
-        "aSiblingOnAnotherVolumeOfTheSameDeviceIsNotReadToEarnTheOutrightDelete",
         "discardAsksTheFilesOwnVolumeBeforeItTrashesIt",
         "everyBulkVerbAsksTheGateWhereTheFileGoes",
+        "noSiblingIsReadForASecondDriveOnEitherDevice",
         "theBootVolumeAndTheDataVolumeAreOneDrive",
         "theForecastAndTheStewardCountPhysicalDevicesAsTheRunDoes",
         "theKeyIsThePhysicalDevicePath",
@@ -8836,17 +8835,19 @@
         "DeleteDuplicatesRowLoggingTests",
         "DeleteDuplicatesSiblingIsolationTests",
         "DeleteDuplicatesForecastHonestyTests",
-        "DeleteDuplicatesSiblingNeverCountsTests",
-        "DeleteDuplicatesSiblingClaimTests"
+        "DeleteDuplicatesSiblingNeverCountsTests"
       ],
       "tests": [
+        "aCountedSiblingThatChangesAtTheBoundaryIsDroppedAndTheCopyStillGoes",
         "aHardLinkOfTheTargetIsNeverReadAndNeverCounted",
-        "aPoisonedStoredFixityIsReReadNotTrusted",
-        "aSiblingOnAnHDDMakesItsPairRunAlone",
-        "aSiblingThatDiffersIsNotACopyTheRowIsLeftAloneAndNamed",
-        "aStaleWrongDigestIsReadAndTheFreshDigestDecides",
-        "aStoredSiblingFixityIsReusedOnTheNextRunWithoutAnyRead",
-        "anOfflineSiblingIsNotCountedAndNothingIsRead",
+        "aKeeperWithoutADigestIsReadOncePerRun",
+        "aPoisonedStoredFixityIsNeverCounted",
+        "aSiblingOfOtherBytesChangesNeitherTheForecastNorTheRun",
+        "aSiblingThatDiffersIsNamedNotCountedAndTheCopyStillGoes",
+        "aSiblingsDriveNoLongerChangesTheSlotWeight",
+        "aStoredSiblingFixityIsCountedByStatAlone",
+        "anOfflineSiblingIsNamedAndNothingIsReadOfIt",
+        "anUnprovenSiblingIsNotReadTheKeeperAloneSuffices",
         "anUnreadableSiblingIsNeverAMatch",
         "bucketRules",
         "caseVariantOfTheDuplicateNeverCounts",
@@ -8854,21 +8855,13 @@
         "forecastAt100kRowsStaysUnderBudget",
         "forecastMatchesTheRunOnAFixturePlan",
         "gatherNeverCountsTheDuplicatesOwnInode",
-        "ofTwoUnprovenSiblingsOnTheKeepersDriveOneIsReadAndTheCopyGoesToTheTrash",
-        "oneSiblingFileUnderTwoRecordsIsForecastOnce",
+        "nothingToMoveSaysSoInPlainWords",
+        "oneSiblingFileUnderTwoRecordsIsCountedOnce",
         "oneSiblingInodeReachedTwiceCountsOnce",
-        "oneUnprovenSiblingIsReadMatchesAndTheCopyGoesToTheTrash",
         "pauseAndCancelWritePartialTotals",
-        "preferTrashMovesEveryForecastRemovalToTheTrash",
-        "readsStopAtTheGoal",
-        "rowsOfOneRunSeeEachOtherInPlanOrder",
-        "stopWhileASecondPairWaitsOnTheClaim",
         "symlinksToTheKeeperOrTheDuplicateNeverCount",
-        "theRemovalBoundaryStillRefusesWhenAProvenSiblingChanges",
-        "twoPairsNamingOneUnprovenSiblingReadItOnce",
-        "unknownKeeperDigestDoesNotCountASiblingOfOtherBytes",
-        "wholeFileFixityRefusesAFileSwappedBetweenStatAndOpen",
-        "zeroRemovableSaysSoInPlainWords"
+        "twoPairsNamingOneUnprovenSiblingNeitherReadsIt",
+        "wholeFileFixityRefusesAFileSwappedBetweenStatAndOpen"
       ]
     },
     {
@@ -8884,7 +8877,8 @@
       ],
       "tests": [
         "aStrandedQuarantineKeepsThePlanOutOfDone",
-        "archiveCopyHoldingDifferentBytesIsLeftAloneAfterTheHashAndPutBack",
+        "aTwoCopyGroupIsHeldByTheBulkRunNothingMovedOrRead",
+        "anArchiveCopyHoldingDifferentBytesIsNamedAndTheKeeperAloneSuffices",
         "cancelWithTwoInFlightPutsBothBackNeverHalf",
         "contentThatDiffersIsRefusedAsNotADuplicateAndRestored",
         "exactlyArchiveAndKeeperRemainingGoesToTheTrash",
@@ -8895,10 +8889,8 @@
         "keeperWithoutFixityIsReadOnceThenEveryPairIsSingleRead",
         "noUsableFixityMovesNothingAndSizeMismatchRefusesBeforeMoving",
         "oldPlansDecodeWithNoTierAndTrashedRowsCountApart",
-        "onlyTheKeeperRemainingIsLeftAloneAfterTheHashAndPutBack",
         "pausedAtABoundaryIsQuietForQuitAndThePlanIsOnDisk",
         "preferTrashSettingRoundTripsThroughInjectedDefaults",
-        "preferTrashToggleSendsEveryTierToTheTrash",
         "rateDividesWallClockByPairsInFlight",
         "refusedFirstPairStillPublishesTheKeeperFixityForTheNext",
         "resumePutsAQuarantinedFileBackBeforeDecidingEligibility",
@@ -8906,6 +8898,7 @@
         "stopBetweenTheTicketSaveAndPhaseTwoPutsTheFileBack",
         "stopKeepsThePlanResumableByDefaultAndOffersItAtOnce",
         "subtitleAndSummaryNameTheTrash",
+        "thePreferTrashSettingNoLongerChangesAnything",
         "threeVerifiedCopiesRemainingGoToTheTrashWithTierOnTheLedger",
         "tierTable",
         "trashRungHandsTheOriginalPathToTheTrash",
@@ -8937,14 +8930,13 @@
       ],
       "tests": [
         "aCopyDroppedAtTheBoundaryTakesItsDriveWithIt",
-        "aReadThatCannotChangeTheTierIsNotMade",
-        "everyPrintedRuleFollowsTheConstants",
+        "everyPrintedRuleFollowsTheOneSentence",
         "gatherCountsDistinctDrivesOfCountedCopiesOnly",
-        "onlyACountedArchiveCopyEarnsTheException",
-        "theForecastFollowsTheTiersRuleAndTheReadRule",
-        "theRunDoesNotReadASameDriveSiblingJustToReachThree",
+        "noSiblingReadIsWorthMakingUnderKeepOne",
+        "onlyAVerifiedArchiveCopyIsCountedAndNeitherEarnsAnOutrightDelete",
+        "theRunReadsNoSibling",
         "theTruthTable",
-        "threeCopiesOnOneDriveSendTheCopyToTheTrashNotOutright"
+        "threeCopiesOnOneDriveSendTheCopyToTheTrash"
       ]
     },
     {
@@ -25577,6 +25569,23 @@
         "aResumedLegacyPermanentRowGoesToTheTrash",
         "noRemovalPathRemainsInTheJob"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeleteDuplicatesKeepOneTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesKeepOneTests"
+      ],
+      "tests": [
+        "aKeeperThatFailsAtTheBoundaryHoldsTheCopy",
+        "aLoneKeeperIsNeverATarget",
+        "oneVerifiedKeeperIsEnoughForTheTrash",
+        "threeCopiesKeepOneAndTrashTheTwoExtras",
+        "twoCopiesAreNotPreselectedSoTheBulkRunHoldsThem",
+        "twoCopiesWithTheExtraTickedMovesItToTheTrash"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -26582,6 +26591,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteDuplicatesJobTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeleteDuplicatesKeepOneTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

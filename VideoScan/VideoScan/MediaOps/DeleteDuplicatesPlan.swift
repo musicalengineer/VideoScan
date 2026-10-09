@@ -13,34 +13,26 @@
 // filed as done and stays offerable — "N files waiting to be put back" —
 // whatever its `finishedAt` says (codex 1606 #3).
 //
-// COPY-COUNT TIERING (Rick 2026-09-20 evening): each row is decided at
-// deletion time from the fresh catalog by how many VERIFIED copies of the
-// family remain after it goes — the keeper just verified, and any other
-// online copy (archive copy or sibling alike) whose STAMP-BOUND stored
-// fixity reproduces on a fresh stat, ctime included, and whose digest is
-// this one's. An archive copy's promote-time digest alone is a record,
-// not current evidence: a same-size rewrite of the archive leaves size
-// and digest-on-record intact (codex 1606 #1), so only Verify Archive
-// Copies' stamp-bound fixity lets it count:
-//     ≥ 3 remaining, on ≥ 2 different drives (or one of them the
-//       verified archive copy)   → PERMANENT   (space back now)
-//       — a "drive" is a PHYSICAL DEVICE: two volumes of one device are
-//       one drive; a disk image or a volume whose device cannot be
-//       established never adds one (DeleteDuplicatesDrives.swift)
-//     ≥ 2 remaining otherwise     → TRASH       (to the volume's Trash, not gone)
-//     < 2 remaining               → LEFT ALONE  (put back untouched)
-// COPIES AND DRIVES (Rick 2026-10-03, after a ledger row that read
-// "permanent — 3 verified remain: keeper on A, sibling on A, sibling on
-// A"): three copies on ONE drive are one drive failure away from none, so
-// they earn the Trash, not an outright delete.
-// The archive is NOT required (Rick, late 2026-09-20:
-// "the low-hanging fruit is a file with ten copies regardless of
-// promotion"); an archive copy counts like any verified copy, and the
-// row says "not yet archived" for information only. "Prefer the Trash
-// for every duplicate" (Settings) forces TRASH for all tiers. The tier,
-// its reason (who counted, who did not and why) and the count are on the
-// row; the ledger line carries them too. Old plans decode with
-// `tier == nil` and are decided afresh.
+// KEEP ONE, TRASH ONLY (Rick 2026-10-09, design triage_delete_streamline
+// §9 R3/R5; supersedes the 2026-09-20 copy-count tiers): "for content with
+// several verified copies, keep one proven copy and move the extras I
+// selected to the Trash, exactly as I reviewed them."
+//     ≥ 1 verified copy remains (the keeper, proven THIS pair: read in
+//       full or its stamp-bound stored fixity, digest matched, not an
+//       alias of the file going)          → TRASH       (the drive's Trash)
+//     none                                → LEFT ALONE  (put back untouched)
+// Nothing is ever deleted outright: Rick's daily "trash day" is the one
+// permanent step. Copy COUNTS are a disposal default, not proof of
+// identity: a group of three or more copies has its extras PRE-SELECTED
+// (`Entry.preselected`); a group of exactly two is allowed but not
+// pre-selected — a deliberate tick. The bulk run (the Storage card) acts on
+// pre-selected rows only; a reviewed plan acts on exactly its rows.
+// The family's other verified copies are still COUNTED (an archive copy
+// only through Verify Archive Copies' stamp-bound fixity, codex 1606 #1) —
+// for the row's words and the ledger, never as a condition. Plans written
+// before the ruling decode with their `.permanent` rows intact (history);
+// such a row is never executed as recorded (`DeleteDuplicatesDiskWorker
+// .trashOnly`).
 //
 // A sibling with no current evidence is PROVEN by the job — read in full
 // once and stamped, exactly like the keeper (2026-09-21) — and then counts
@@ -55,9 +47,9 @@
 // rides on the row, and phase two re-stats each one immediately before
 // the unlink / Trash move (`DeletionTierFacts.recheck`, stat only — the
 // keeper is never read). A copy whose stamp no longer reproduces, or is
-// gone, is dropped and the tier re-decided from what still holds:
-// permanent → Trash when the count falls to two; put back untouched when
-// it falls below two, the row naming the copy that changed.
+// gone, is dropped and the decision re-made from what still holds — put
+// back untouched only if no verified copy would remain, the row naming
+// the copy that changed.
 //
 // Same shape as ArchiveAngelPlan (plan.json + store + ordered writer), not
 // the same files: a deletion plan has no buffer, no companions, no review.
@@ -73,7 +65,9 @@ import VideoScanCore
 
 /// Where a verified duplicate goes.
 enum DeletionTier: String, Codable, Sendable, Equatable {
-    /// Unlinked — the space is back now.
+    /// HISTORY ONLY. Rows written before 2026-10-09 recorded an outright
+    /// delete this way; they still decode and display. Nothing decides it
+    /// any more, and the job never executes it (Trash only).
     case permanent
     /// Moved into the volume's Trash — the space comes back when Rick
     /// empties it; the file can be put back until then.
@@ -543,68 +537,37 @@ struct DeletionTierFacts: Sendable, Equatable {
     }
 }
 
-/// The tier rule, pure and table-testable. The COUNT (Rick 2026-09-20,
-/// late: the archive is not required — "the low-hanging fruit is a file
-/// with ten copies regardless of promotion") AND, for an outright delete,
-/// WHERE the copies sit (Rick 2026-10-03): three copies on one drive are
-/// one failure from none.
+/// The survival rule, pure and table-testable: KEEP ONE (Rick 2026-10-09).
+/// One verified copy remaining — the keeper, proven this pair — is enough
+/// for the Trash; fewer leaves the file alone. Nothing is ever decided
+/// `.permanent` (Trash only). Where the other copies sit, and how many
+/// there are, is information for the row — not a condition.
 struct DeletionTierDecision: Equatable, Sendable {
-    /// nil → left alone (not deleted, not refused as "not identical").
+    /// nil → left alone (not removed, not refused as "not identical").
     let tier: DeletionTier?
     let remainingVerifiedCopies: Int
     let reason: String
 
-    static let minimumForTrash = 2
-    static let minimumForPermanent = 3
-    /// An outright delete needs the remaining copies on at least this many
-    /// DIFFERENT drives — unless one of them is the verified archive copy.
-    /// A "drive" is a PHYSICAL DEVICE (`DuplicateDrives`): every volume of
-    /// one device is one drive; a network share is one; a disk image or a
-    /// volume whose device cannot be established never adds one. What
-    /// cannot be seen stays a known limit: a hardware RAID is ONE drive
-    /// (its redundancy is not a second one); two disks in one enclosure
-    /// that present as two devices are two
-    /// (docs/practices/invariants/MediaOps.md, MOPS-2).
-    static let minimumDrivesForPermanent = 2
+    /// One independently verified keeper suffices (was 2 — two copies had
+    /// to REMAIN, so a pair of identical files never moved; codex F5).
+    static let minimumForTrash = 1
 
-    /// The survival rule in one sentence, from the constants — every place
+    /// The survival rule in one sentence, from the constant — every place
     /// that prints the rule quotes this.
     static var ruleSentence: String {
-        "Only a copy with at least \(minimumForPermanent) verified copies remaining on at least "
-        + "\(minimumDrivesForPermanent) different drives (or with a verified archive copy among them) is ever deleted outright; "
-        + "with \(minimumForTrash) or more remaining otherwise it goes to the Trash; with fewer it is left alone."
+        "A duplicate goes to the Trash only when at least one verified copy remains — the keeper, proven "
+        + "identical at the moment of the move; with none it is left alone. Nothing is ever deleted outright: "
+        + "emptying the Trash is yours."
     }
 
-    /// Would `n` verified copies on these drives earn an outright delete?
-    static func earnsPermanent(count n: Int, distinctDrives: Int, countsArchiveCopy: Bool) -> Bool {
-        n >= minimumForPermanent && (distinctDrives >= minimumDrivesForPermanent || countsArchiveCopy)
-    }
-
-    static func decide(facts: DeletionTierFacts, preferTrash: Bool) -> DeletionTierDecision {
+    static func decide(facts: DeletionTierFacts) -> DeletionTierDecision {
         let n = facts.remainingVerifiedCopies
         let who = facts.counted.isEmpty ? "\(n) verified remain" : facts.summary
         guard n >= minimumForTrash else {
             return DeletionTierDecision(tier: nil, remainingVerifiedCopies: n,
-                                        reason: "only \(n) verified cop\(n == 1 ? "y" : "ies") would remain — left alone (\(who))")
+                                        reason: "no verified copy would remain — left alone (\(who))")
         }
-        if preferTrash {
-            return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
-                                        reason: "to the Trash by your setting (\(who))")
-        }
-        if earnsPermanent(count: n, distinctDrives: facts.distinctDriveCount, countsArchiveCopy: facts.countsArchiveCopy) {
-            return DeletionTierDecision(tier: .permanent, remainingVerifiedCopies: n,
-                                        reason: "space back now (\(who))")
-        }
-        if n >= minimumForPermanent {
-            // Enough copies, but all on ONE drive and none of them the
-            // archive's: the Trash, never an outright delete.
-            let drive = facts.countedDrives.first?.name ?? "one drive"
-            let notADrive = facts.notADriveNotes.isEmpty ? "" : " — " + facts.notADriveNotes.joined(separator: "; ")
-            return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
-                                        reason: "to the Trash, not gone — the \(n) copies that remain are all on \(drive)\(notADrive) (\(who))")
-        }
-        return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n,
-                                    reason: "only two verified copies would remain — to the Trash, not gone (\(who))")
+        return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: n, reason: "to the Trash (\(who))")
     }
 }
 
@@ -612,10 +575,12 @@ struct DeletionTierDecision: Equatable, Sendable {
 enum DeletionTierText {
     static let notYetArchived = "not yet archived"
     static let preferTrashToggleLabel = "Prefer the Trash for every duplicate"
-    /// Why a pair recorded for an outright delete went to the Trash: the
-    /// setting was turned on while it was being read (codex #258 r4 H).
-    static let preferTrashTurnedOn = "\"\(preferTrashToggleLabel)\" was turned on before the removal"
-    static let preferTrashCaption = "Off: a duplicate with three or more verified copies left behind (the keeper, an archive copy, siblings whose stored fixity still reproduces) on at least two different drives — or with the archive copy among them — is deleted outright; with two or more left otherwise, it goes to the drive's Trash instead; with fewer, it is left alone. On: every duplicate goes to the Trash, whatever the count. An archive copy counts but is not required."
+    /// Since 2026-10-09 the setting changes nothing: every duplicate goes to
+    /// the Trash (Trash only). The toggle stays until the Duplicates view
+    /// retires it; its caption says so.
+    static let preferTrashCaption = "Always the Trash now: a duplicate leaves only when its keeper is proven identical at that moment, and it goes to the drive's Trash — VideoScan never deletes outright. Emptying the Trash is yours. This setting no longer changes anything."
+    /// The bulk run's hold for a row of a two-copy group (R5).
+    static let notPreselected = "only two copies — not pre-selected; tick it in Triage ▸ Duplicates to move it to the Trash"
     static func inTheTrashOf(_ volume: String) -> String { "in the Trash of \(volume)" }
     /// "1 file on SanDisk is waiting to be put back from quarantine".
     static func waitingToBePutBack(_ n: Int, volume: String) -> String {
@@ -728,6 +693,19 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// itself asked — which keeps main's treatment. Additive: rows
         /// written before it decode nil and are classified by their note.
         var notCountedWhy: String?
+        /// The duplicate group the row belongs to (additive, 2026-10-09):
+        /// a reviewed plan keeps ONE keeper per group across its volumes.
+        var groupID: UUID?
+        /// How many copies of this content the catalog knows (group members
+        /// plus Master Archive copies promoted from them) when the plan was
+        /// made (additive, 2026-10-09). nil on older plans.
+        var groupCopyCount: Int?
+
+        /// R5 (Rick 2026-10-09): a group of three or more copies has its
+        /// extras PRE-SELECTED; a group of exactly two is allowed but not —
+        /// a deliberate tick. A disposal default for the UI and the bulk
+        /// run, never proof of identity (the keeper is proven at the move).
+        var preselected: Bool { (groupCopyCount ?? 0) >= DeleteDuplicatesPlan.preselectMinimumCopies }
 
         var keeperVolumeName: String { VolumeReachability.volumeName(forPath: keeperPath) }
 
@@ -836,6 +814,24 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     }
 
     static let leftAloneListCap = 2_000
+
+    /// R5: a group with at least this many copies has its extras pre-selected.
+    static let preselectMinimumCopies = 3
+
+    /// The BULK run (the Storage card) acts on pre-selected rows only: every
+    /// pending row of a two-copy group is held, named, before anything is
+    /// read. Returns how many. Never called for a reviewed plan — there,
+    /// a ticked row of a two-copy group is exactly what Rick chose.
+    mutating func holdRowsNotPreselected(at now: Date = Date()) -> Int {
+        var n = 0
+        for i in entries.indices where entries[i].status == .pending && !entries[i].preselected {
+            entries[i].status = .skipped
+            entries[i].note = DeletionTierText.notPreselected
+            entries[i].settledAt = now
+            n += 1
+        }
+        return n
+    }
 
     /// This run's rows, as the survivor count needs them (codex #258 F1,
     /// r4-1): which are still to be decided, which the run RETAINED FOR A

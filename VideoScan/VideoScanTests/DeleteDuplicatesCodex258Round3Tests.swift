@@ -129,7 +129,7 @@ struct DeleteDuplicatesCodex258Round3Tests {
         #expect(gathered.distinctDriveCount == 2 || gathered.distinctDriveCount == 1,
                 "the per-turn gather may be served from the cache — it is advisory")
         #expect(checked.distinctDriveCount == 1, "the final verdict trusted a cached device path: \(checked.countedDrives)")
-        #expect(DeletionTierDecision.decide(facts: checked, preferTrash: false).tier == .trash)
+        #expect(DeletionTierDecision.decide(facts: checked).tier == .trash)
     }
 
     // MARK: R3-2
@@ -286,8 +286,8 @@ struct DeleteDuplicatesCodex258Round3Tests {
         #expect(verdict.contains("let word = ask?(ticket.quarantinedPath)") && verdict.contains("let now = facts.recheck()"))
         #expect(verdict.components(separatedBy: "ask?(").count == 2, "the final verdict asks the boundary more than once")
         #expect(verdict.contains("if let refusal = word?.archive {"), "the final verdict no longer asks the Master Archive rule afresh")
-        #expect(verdict.contains("let trashEveryDuplicate = preferTrash || word?.preferTrash == true"),
-                "the final verdict no longer reads \"Prefer the Trash\" afresh")
+        #expect(verdict.contains(".proceed(.trash)") && !verdict.contains("preferTrash") && !verdict.contains(".permanent"),
+                "Trash only: the final verdict lets a file go only to the Trash, whatever any setting says")
         #expect(job.contains("boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path))")
                 && job.contains("archiveCheck: archiveCheck, boundary: boundary)"))
         // The boundary: the buffer, ONE hop, the protections built there.
@@ -304,7 +304,7 @@ struct DeleteDuplicatesCodex258Round3Tests {
         let model = try SourceTree.appCode(named: "VideoScanModel+Duplicates.swift")
         let word = try body(model, from: "func duplicateRemovalBoundaryWord(", to: "func duplicateSurvivorStandingRule(")
         #expect(word.contains("return (hold?.note, readOnlyVolumeMarks)") && !word.contains("readOnlyVolumeProtection()"))
-        #expect(word.contains("(masterArchive, archiveAliasCandidates,") && word.contains("preferTrash: duplicateKeeperSettings.preferTrashForEveryDuplicate)"))
+        #expect(word.contains("(masterArchive, archiveAliasCandidates,") && !word.contains("preferTrash"))
         let facade = try SourceTree.appCode(named: "ArchiveAngel.swift")
         let probe = try body(facade, from: "func recordInBatchOnDiskFreshProbe()", to: "static func readRecordIDsInBatches(")
         #expect(probe.contains("ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: root)") && !probe.contains("Cached"))
