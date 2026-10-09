@@ -216,8 +216,14 @@ struct CopiesAdviceSheet: View {
         }
         model.log("Copies & Advice: Move This Copy to Trash — \(fresh.rule.rawValue)")
         let result = await model.trashSelectedRecords([rec])
-        outcome = CopiesAdviceText.trashOutcome(succeeded: result.succeeded, alreadyMissing: result.alreadyMissing,
-                                                skippedOffline: result.skippedOffline, failed: result.failed.count)
+        // A held / refused file now comes back WITH its reason (one outcome
+        // per file, JunkDeletionReport) — say it on the card, not "see the console".
+        if result.succeeded == 0, let why = JunkDeletionReport(result).lines.first?.reason {
+            outcome = "Nothing was moved — this file \(why)."
+        } else {
+            outcome = CopiesAdviceText.trashOutcome(succeeded: result.succeeded, alreadyMissing: result.alreadyMissing,
+                                                    skippedOffline: result.skippedOffline, failed: result.failed.count)
+        }
         generation &+= 1
     }
 }
