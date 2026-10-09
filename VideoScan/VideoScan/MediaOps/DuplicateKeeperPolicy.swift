@@ -384,12 +384,11 @@ struct DuplicateKeeperSettings: Equatable, Sendable {
     /// carry-over are unchanged either way. Strings: WorkingCopyCleanupText.
     var alsoCleanUpWorkingCopies: Bool = false
 
-    /// "Prefer the Trash for every duplicate" (Rick 2026-09-20 evening,
-    /// the copy-count tiering). DEFAULT OFF: a verified duplicate leaving
-    /// three or more verified copies behind is deleted outright, one
-    /// leaving exactly the archive copy and the keeper goes to the drive's
-    /// Trash. ON: every duplicate goes to the Trash, whatever the count.
-    /// Neither setting ever removes a file below the archive copy.
+    /// "Prefer the Trash for every duplicate" (Rick 2026-09-20 evening).
+    /// INERT since 2026-10-09: Delete Duplicates only ever uses the Trash
+    /// (Trash only, design triage_delete_streamline §9 R3), so nothing reads
+    /// this for a decision. Still stored and shown (with a caption saying
+    /// so) until the Duplicates view retires the toggle.
     var preferTrashForEveryDuplicate: Bool = false
 
     /// `DuplicateKeeperPolicy.electionDescriptor` of the policy the LAST

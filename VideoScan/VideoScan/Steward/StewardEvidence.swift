@@ -13,9 +13,9 @@
 //        file on disk, and is it these bytes?
 //   SiblingProver.readableSiblings(_:allowance:)
 //        which copies WITHOUT current evidence the run could read to prove
-//   DeletionTierDecision.decide(facts:preferTrash:)
-//        ≥ 3 remain on ≥ 2 drives (or with the archive copy) → deleted
-//        outright · ≥ 2 otherwise → the Trash · fewer → left alone
+//   DeletionTierDecision.decide(facts:)
+//        keep one (2026-10-09): ≥ 1 verified remains → the Trash ·
+//        none → left alone (nothing is ever deleted outright)
 //   SiblingProver.worthReading(…)
 //        which of those reads the run would actually make
 //
@@ -96,8 +96,8 @@ struct StewardCopyProof: Sendable, Equatable {
 
     private static func fate(_ tier: DeletionTier?) -> String {
         switch tier {
-        case .permanent?: return "be deleted outright"
-        case .trash?: return "go to the Trash, not be deleted"
+        // `.permanent` is history only (Trash only, 2026-10-09).
+        case .permanent?, .trash?: return "go to the Trash, not be deleted"
         case nil: return "be left alone"
         }
     }
@@ -110,7 +110,10 @@ struct StewardCopyProof: Sendable, Equatable {
         if !hadStoredDigest {
             let lead = "The run reads this copy first"
             guard n > 0, tierIfTheyMatch != nil else {
-                return lead + "; as things stand only the keeper would remain, so it would be left alone."
+                // KEEP ONE (2026-10-09): once this copy is proven against the
+                // keeper, the keeper alone is enough.
+                guard let tier else { return lead + "; as things stand only the keeper would remain, so it would be left alone." }
+                return lead + "; if it matches the keeper, it would \(Self.fate(tier))."
             }
             return lead + "; if the other \(n == 1 ? "copy matches" : "\(n) copies match"), it would \(Self.fate(tierIfTheyMatch))."
         }
@@ -166,7 +169,6 @@ enum StewardEvidenceBuilder {
     struct Prepared: Sendable {
         var evidence: StewardGroupEvidence
         var questions: [Question]
-        var preferTrash: Bool
     }
 
     /// Main actor: the keeper's reason and the planner's candidates for
@@ -204,8 +206,7 @@ enum StewardEvidenceBuilder {
         }
         return Prepared(evidence: StewardGroupEvidence(caseID: c.id, keeperReason: reason, proofs: nil,
                                                        unprovedCopies: max(0, checkable.count - maxProvedCopies)),
-                        questions: questions,
-                        preferTrash: model.duplicateKeeperSettings.preferTrashForEveryDuplicate)
+                        questions: questions)
     }
 
     @MainActor
@@ -216,23 +217,23 @@ enum StewardEvidenceBuilder {
 
     /// Off the main actor: ask the disk (one stat per candidate, no reads)
     /// and apply the tier rule — the planner's functions, unchanged.
-    nonisolated static func prove(_ questions: [Question], preferTrash: Bool) -> [UUID: StewardCopyProof] {
+    nonisolated static func prove(_ questions: [Question]) -> [UUID: StewardCopyProof] {
         var out: [UUID: StewardCopyProof] = [:]
-        for q in questions { out[q.copyID] = proof(q, preferTrash: preferTrash) }
+        for q in questions { out[q.copyID] = proof(q) }
         return out
     }
 
     /// `driveOf` = the planner's own test seam for where a copy sits (two
     /// drives cannot be had in one temp folder); nil in production — the
     /// planner's resolver, `DuplicateDrives`.
-    nonisolated static func proof(_ q: Question, preferTrash: Bool,
+    nonisolated static func proof(_ q: Question,
                                   driveOf seam: ((_ path: String, _ stamp: FileIdentityStamp) -> DeletionTierFacts.Drive)? = nil)
         -> StewardCopyProof {
         // The copy's own identity, as the job's worker sets it: a
         // candidate that is the same inode is not another copy.
         var candidates = q.candidates
         candidates.duplicateIdentity = FileIdentityStamp.capture(path: q.copyPath)
-        let goal = SiblingProver.Allowance.goal(preferTrash: preferTrash)
+        let goal = SiblingProver.Allowance.goal
 
         var resolver = DuplicateDrives.Resolver()
         func drive(_ path: String, _ stamp: FileIdentityStamp) -> DeletionTierFacts.Drive {
@@ -247,10 +248,7 @@ enum StewardEvidenceBuilder {
             var reads = 0
             for copy in copies {
                 let d = drive(copy.path, copy.stamp)
-                guard SiblingProver.worthReading(count: hoped.remainingVerifiedCopies,
-                                                 drives: Set(hoped.countedDrives.map(\.key)),
-                                                 countsArchiveCopy: hoped.countsArchiveCopy,
-                                                 candidateDrive: d.kind.addsADrive ? d.key : nil, goal: goal) else { continue }
+                guard SiblingProver.worthReading(count: hoped.remainingVerifiedCopies, goal: goal) else { continue }
                 hoped.addCounted(drive: d, isArchive: copy.isArchive)
                 reads += 1
             }
@@ -277,7 +275,7 @@ enum StewardEvidenceBuilder {
                 if d.kind.addsADrive { facts.countedDrives = [d] }
             }
             facts.countsArchiveCopy = candidates.keeperIsVerifiedArchive
-            let decision = DeletionTierDecision.decide(facts: facts, preferTrash: preferTrash)
+            let decision = DeletionTierDecision.decide(facts: facts)
             let others = candidates.archiveCopies.count + candidates.otherCopies.count
             let reachable = candidates.archiveCopies.compactMap { c in
                 FileIdentityStamp.capture(path: c.path).map { (path: c.path, stamp: $0, isArchive: true) }
@@ -290,10 +288,10 @@ enum StewardEvidenceBuilder {
                                     notCounted: others + candidates.alsoInThisRun.count + candidates.leftAloneByRun.count,
                                     tier: decision.tier, hadStoredDigest: false,
                                     readsFirst: hoped.reads,
-                                    tierIfTheyMatch: DeletionTierDecision.decide(facts: hoped.facts, preferTrash: preferTrash).tier)
+                                    tierIfTheyMatch: DeletionTierDecision.decide(facts: hoped.facts).tier)
         }
         let facts = DeletionTierFacts.gather(candidates, digest: digest, driveOf: seam)
-        let decision = DeletionTierDecision.decide(facts: facts, preferTrash: preferTrash)
+        let decision = DeletionTierDecision.decide(facts: facts)
         // The copies the run could read to prove (stat only here): it
         // reads while a read can still lift the tier, never more.
         let readable = SiblingProver.readableSiblings(
@@ -304,7 +302,7 @@ enum StewardEvidenceBuilder {
                                 tier: decision.tier, hadStoredDigest: true,
                                 readsFirst: hoped.reads,
                                 tierIfTheyMatch: hoped.reads > 0
-                                    ? DeletionTierDecision.decide(facts: hoped.facts, preferTrash: preferTrash).tier
+                                    ? DeletionTierDecision.decide(facts: hoped.facts).tier
                                     : decision.tier)
     }
 }

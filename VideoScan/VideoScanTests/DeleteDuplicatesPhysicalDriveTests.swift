@@ -123,10 +123,10 @@ struct DeleteDuplicatesPhysicalDriveTests {
         let one = DuplicateDrives.$identityOverride.withValue(twoVolumes(sameDevice: true)) { run(rig) }
         #expect(one.remainingVerifiedCopies == 3, "fixture: keeper + near + far (\(one.summary))")
         #expect(one.distinctDriveCount == 1, "two volumes of one device counted as \(one.distinctDriveCount) drives: \(one.countedDrives)")
-        #expect(DeletionTierDecision.decide(facts: one, preferTrash: false).tier == .trash)
+        #expect(DeletionTierDecision.decide(facts: one).tier == .trash)
         let two = DuplicateDrives.$identityOverride.withValue(twoVolumes(sameDevice: false)) { run(rig) }
         #expect(two.remainingVerifiedCopies == 3 && two.distinctDriveCount == 2)
-        #expect(DeletionTierDecision.decide(facts: two, preferTrash: false).tier == .permanent)
+        #expect(DeletionTierDecision.decide(facts: two).tier == .trash)
     }
 
     /// The forecast and the steward's proof count drives the same way.
@@ -134,36 +134,36 @@ struct DeleteDuplicatesPhysicalDriveTests {
         for sameDevice in [true, false] {
             let rig = makeRig("equal"); defer { rig.cleanup() }
             try DuplicateDrives.$identityOverride.withValue(twoVolumes(sameDevice: sameDevice)) {
-                let expected: DeletionTier = sameDevice ? .trash : .permanent
-                #expect(DeletionTierDecision.decide(facts: run(rig), preferTrash: false).tier == expected)
+                let expected: DeletionTier = .trash
+                #expect(DeletionTierDecision.decide(facts: run(rig)).tier == expected)
                 let forecast = rig.model.deleteDuplicatesForecast(onVolume: rig.dir.path).bucket(for: rig.copy.id)
-                #expect(forecast == (sameDevice ? .trash : .permanent), "the forecast says \(String(describing: forecast)); the run \(expected)")
+                #expect(forecast == .trash, "the forecast says \(String(describing: forecast)); the run \(expected)")
                 let inputs = StewardCaseBuilder.project(rig.model.records, protection: rig.model.stewardProtectionRule())
                 let queue = StewardCaseBuilder.build(inputs: inputs, volumes: AnalyzeCoverageCalculator.volumeFacts(rig.model.scanTargets),
                                                      mountedRoots: ["/"], alsoCleanUpWorkingCopies: false)
                 let card = try #require(queue.cases.first { $0.kind == .reclaimGroup })
                 let prepared = try #require(StewardEvidenceBuilder.prepare(model: rig.model, for: card))
                 let question = try #require(prepared.questions.first { $0.copyID == rig.copy.id })
-                let proof = StewardEvidenceBuilder.proof(question, preferTrash: false)
+                let proof = StewardEvidenceBuilder.proof(question)
                 #expect(proof.tier == expected && proof.remaining == 3, "the card says \(String(describing: proof.tier)); the run \(expected)")
             }
         }
     }
 
-    /// A sibling on ANOTHER VOLUME of the same device is not "a second
-    /// drive": it is not read for that purpose. On another device it is.
-    @Test func aSiblingOnAnotherVolumeOfTheSameDeviceIsNotReadToEarnTheOutrightDelete() {
+    /// Keep one (2026-10-09): no sibling is read to reach a second drive —
+    /// on one device or two — and the forecast says the Trash either way.
+    @Test func noSiblingIsReadForASecondDriveOnEitherDevice() {
         for sameDevice in [true, false] {
             let rig = makeRig("read", farVerified: false); defer { rig.cleanup() }
             DuplicateDrives.$identityOverride.withValue(twoVolumes(sameDevice: sameDevice)) {
                 var candidates = rig.model.deletionTierCandidates(record: rig.copy, keeper: rig.keeper)
                 let reads = SiblingProver.prove(&candidates, digest: fileDigest,
-                                                allowance: .init(goal: 3, readablePaths: Set(candidates.otherCopies.map(\.path))),
+                                                allowance: .init(goal: SiblingProver.Allowance.goal,
+                                                                 readablePaths: Set(candidates.otherCopies.map(\.path))),
                                                 hooks: .live)
-                #expect(reads.count == (sameDevice ? 0 : 1),
-                        "\(sameDevice ? "one device" : "two devices"): \(reads.count) sibling read(s)")
+                #expect(reads.isEmpty, "\(sameDevice ? "one device" : "two devices"): \(reads.count) sibling read(s)")
                 let forecast = rig.model.deleteDuplicatesForecast(onVolume: rig.dir.path)
-                #expect(forecast.siblingReads == (sameDevice ? 0 : 1) && forecast.bucket(for: rig.copy.id) == .trash)
+                #expect(forecast.bucket(for: rig.copy.id) == .trash)
             }
         }
     }
@@ -188,18 +188,17 @@ struct DeleteDuplicatesPhysicalDriveTests {
             Drive(key: "disk:raid", label: path.hasSuffix("s2.mov") ? "TestProjects" : "TestArchive", model: "Test RAID")
         }
         #expect(raid.distinctDriveCount == 1 && raid.countedDrives.first?.name == "Test RAID [TestArchive, TestProjects]")
-        let trash = DeletionTierDecision.decide(facts: raid, preferTrash: false)
+        let trash = DeletionTierDecision.decide(facts: raid)
         #expect(trash.tier == .trash)
-        #expect(trash.reason.hasPrefix("to the Trash, not gone — the 3 copies that remain are all on Test RAID [TestArchive, TestProjects] ("),
-                Comment(rawValue: trash.reason))
+        #expect(trash.reason.hasPrefix("to the Trash (3 verified remain: "), Comment(rawValue: trash.reason))
         #expect(trash.reason.contains(" — on 1 drive (Test RAID [TestArchive, TestProjects])"), Comment(rawValue: trash.reason))
 
         let two = DeletionTierFacts.gather(c, digest: fileDigest) { path, _ in
             path.hasSuffix("s1.mov") ? Drive(key: "disk:lacie", label: "TestLaCie", model: "Test d2")
                 : Drive(key: "disk:raid", label: path.hasSuffix("s2.mov") ? "TestProjects" : "TestArchive", model: "Test RAID")
         }
-        let permanent = DeletionTierDecision.decide(facts: two, preferTrash: false)
-        #expect(permanent.tier == .permanent)
+        let permanent = DeletionTierDecision.decide(facts: two)
+        #expect(permanent.tier == .trash, "Trash only: two devices are said, not rewarded")
         #expect(permanent.reason.contains("3 verified remain: keeper, s1.mov, s2.mov — on 2 drives (Test RAID [TestArchive, TestProjects] · TestLaCie)"),
                 Comment(rawValue: permanent.reason))
         // One volume on one device: said as before, nothing added.

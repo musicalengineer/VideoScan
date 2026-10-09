@@ -214,7 +214,9 @@ struct DeleteDuplicatesSafetyTests {
         #expect(result.deleted == 0)
         #expect(model.records.contains { $0.id == missing.id },
                 "catalog removal must be driven by successful deletion IDs")
-        #expect(missing.duplicateDisposition == .review)
+        // R6 (2026-10-09): a copy already gone is MISSING — named, never a
+        // refusal, so the row is not re-marked Review (it was, before).
+        #expect(missing.duplicateDisposition == .extraCopy)
     }
 
     /// Isolation/read-only sensor: a viewer shares the real catalog but must

@@ -103,7 +103,7 @@ struct StewardProofRuleTests {
     private func stewardProof(_ rig: Rig, copy: VideoRecord) throws -> StewardCopyProof {
         let set = try #require(queue(rig.model).cases.first { $0.kind == .reclaimGroup })
         let prepared = try #require(StewardEvidenceBuilder.prepare(model: rig.model, for: set))
-        let proofs = StewardEvidenceBuilder.prove(prepared.questions, preferTrash: prepared.preferTrash)
+        let proofs = StewardEvidenceBuilder.prove(prepared.questions)
         return try #require(proofs[copy.id])
     }
 
@@ -113,8 +113,7 @@ struct StewardProofRuleTests {
                                digest: String) -> (facts: DeletionTierFacts, decision: DeletionTierDecision) {
         let candidates = rig.model.deletionTierCandidates(record: copy, keeper: keeper, excluding: excluding, run: run)
         let facts = DeletionTierFacts.gather(candidates, digest: digest)
-        return (facts, DeletionTierDecision.decide(facts: facts,
-                                                   preferTrash: rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate))
+        return (facts, DeletionTierDecision.decide(facts: facts))
     }
 
     @Test func aCountedSiblingMakesTwoAndTheNumberEqualsThePlanners() throws {
@@ -154,7 +153,7 @@ struct StewardProofRuleTests {
 
         let proof = try stewardProof(rig, copy: copy)
         let planner = plannerAnswer(rig, copy: copy, keeper: keeper, excluding: [], digest: digest)
-        #expect(planner.facts.remainingVerifiedCopies == DeletionTierDecision.minimumForPermanent)
+        #expect(planner.facts.remainingVerifiedCopies == 3)
         #expect(proof.remaining == planner.facts.remainingVerifiedCopies && proof.tier == planner.decision.tier)
         #expect(planner.facts.distinctDriveCount == 1 && proof.tier == .trash)
         #expect(proof.outcomeLine == "It would go to the Trash, not be deleted.")
@@ -177,7 +176,8 @@ struct StewardProofRuleTests {
         #expect(optimistic.facts.remainingVerifiedCopies == 2, "fixture: counting the same-run row would say two")
         #expect(asTheRunAsks.facts.remainingVerifiedCopies == 1)
         #expect(proof.remaining == asTheRunAsks.facts.remainingVerifiedCopies)
-        #expect(proof.tier == nil && proof.outcomeLine == "As things stand, it would be left alone.")
+        // Keep one (2026-10-09): the keeper alone is enough.
+        #expect(proof.tier == .trash && proof.outcomeLine == "As things stand, it would go to the Trash, not be deleted.")
         #expect(proof.notCounted == asTheRunAsks.facts.unverifiedCopies)
         #expect(proof.caveatLine == "1 other copy was not counted — not connected, different, or part of the same cleanup.")
     }
@@ -194,8 +194,8 @@ struct StewardProofRuleTests {
         let proof = try stewardProof(rig, copy: copy)
         #expect(proof.remaining == 1, "fixture: as things stand only the keeper is verified")
         #expect(!proof.outcomeLine.contains("left alone"), "said: \(proof.outcomeLine)")
-        #expect(proof.outcomeLine.contains("reads 1 more copy first"))
-        #expect(proof.outcomeLine.contains("Trash"), "keeper + the sibling once read = two → the Trash")
+        #expect(proof.readsFirst == 0, "keep one: no sibling read is needed")
+        #expect(proof.outcomeLine.contains("Trash"), "the keeper alone → the Trash")
     }
 
     /// GH #258 (was QA F1, 2026-10-03): the Delete planner leaves alone a
@@ -297,7 +297,7 @@ struct StewardProofRuleTests {
         #expect(planner.facts.remainingVerifiedCopies == 1)
         #expect(proof.remaining == 1 && proof.notCounted == planner.facts.unverifiedCopies && proof.notCounted == 1)
         #expect(proof.caveatLine == "1 other copy was not counted — not connected, different, or part of the same cleanup.")
-        #expect(proof.readsFirst == 0 && proof.outcomeLine == "As things stand, it would be left alone.",
+        #expect(proof.readsFirst == 0 && proof.outcomeLine == "As things stand, it would go to the Trash, not be deleted.",
                 "its evidence is current and says different bytes: no read would change that")
     }
 
@@ -309,11 +309,11 @@ struct StewardProofRuleTests {
         let sibling = try file(rig, "elsewhere/sibling.mov", .extraCopy, evidence: digest)
         rig.model.records = [keeper, copy, sibling]
         let proof = try stewardProof(rig, copy: copy)
-        #expect(proof.remaining == 1 && proof.tier == nil && !proof.hadStoredDigest)
+        #expect(proof.remaining == 1 && proof.tier == .trash && !proof.hadStoredDigest)
         #expect(proof.notCounted == 1)
-        // QA F2: not "left alone" — the run reads the copy, and the sibling may then count.
-        #expect(proof.readsFirst == 1 && proof.tierIfTheyMatch == .trash)
-        #expect(proof.outcomeLine == "The run reads this copy first; if the other copy matches, it would go to the Trash, not be deleted.")
+        // QA F2: not "left alone" — the run reads the copy; keep one: the keeper then suffices.
+        #expect(proof.readsFirst == 0 && proof.tierIfTheyMatch == .trash)
+        #expect(proof.outcomeLine == "The run reads this copy first; if it matches the keeper, it would go to the Trash, not be deleted.")
         #expect(proof.caveatLine == nil)
         #expect(proof.counted.count == 1 && proof.counted[0].hasPrefix("keeper on "))
     }
@@ -372,9 +372,9 @@ struct StewardProofRuleTests {
 
     /// The rule printed on the card is the planner's constants, quoted.
     @Test func theSurvivalRuleOnTheCardQuotesThePlannersConstants() {
-        #expect(ReclaimableEstimate.survivalRule.contains("at least \(DeletionTierDecision.minimumForPermanent) verified copies"))
-        #expect(ReclaimableEstimate.survivalRule.contains("at least \(DeletionTierDecision.minimumDrivesForPermanent) different drives"))
-        #expect(ReclaimableEstimate.survivalRule.contains("with \(DeletionTierDecision.minimumForTrash) or more remaining otherwise it goes to the Trash"))
+        #expect(ReclaimableEstimate.survivalRule == DeletionTierDecision.ruleSentence)
+        #expect(ReclaimableEstimate.survivalRule.contains("at least one verified copy remains")
+                && ReclaimableEstimate.survivalRule.contains("Nothing is ever deleted outright"))
     }
 }
 

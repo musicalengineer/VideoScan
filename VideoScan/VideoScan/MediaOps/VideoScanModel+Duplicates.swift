@@ -374,16 +374,16 @@ extension VideoScanModel {
 
     /// EVERYTHING the removal boundary needs from the model, read in ONE
     /// synchronous hop (codex #258 r4): the hold and today's Read-only marks
-    /// (`duplicateRemovalBoundaryWord`), the current Master Archive
-    /// designation (`duplicateRemovalBoundaryArchive`) and "Prefer the Trash
-    /// for every duplicate" as it is set now.
+    /// (`duplicateRemovalBoundaryWord`) and the current Master Archive
+    /// designation (`duplicateRemovalBoundaryArchive`).
     func duplicateRemovalBoundaryNow(recordID: UUID) -> DuplicateRemovalBoundaryNow {
         let word = duplicateRemovalBoundaryWord(recordID: recordID)
         let archive = duplicateRemovalBoundaryArchive(recordID: recordID)
-        return DuplicateRemovalBoundaryNow(holdNote: word.holdNote, readOnlyMarks: word.readOnlyMarks,
+        // R4: paired with its other half by Combine while it was being read.
+        let pair = duplicateTargetHoldAtRemoval(recordID: recordID).map { DuplicateDeletionHold.leftAlonePrefix + $0 }
+        return DuplicateRemovalBoundaryNow(holdNote: word.holdNote ?? pair, readOnlyMarks: word.readOnlyMarks,
                                            designation: archive.designation, aliasCandidates: archive.aliasCandidates,
-                                           isArchiveCopy: archive.isArchiveCopy,
-                                           preferTrash: duplicateKeeperSettings.preferTrashForEveryDuplicate)
+                                           isArchiveCopy: archive.isArchiveCopy)
     }
 
     /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1; SIMPLIFIED in
@@ -525,6 +525,9 @@ extension VideoScanModel {
         // the set is small.
         let keeperPaths = Set(targets.compactMap { rec in rec.duplicateGroupID.flatMap { keepers[$0]?.fullPath } })
         let keeperStamps = await Self.captureStamps(paths: Array(keeperPaths))
+        // R5: how many copies each group has — its extras are pre-selected
+        // at three or more. One pass over `records`.
+        let copyCounts = duplicateGroupCopyCounts(Set(targets.compactMap(\.duplicateGroupID)))
         var entries: [DeleteDuplicatesPlan.Entry] = []
         entries.reserveCapacity(targets.count)
         for rec in targets {
@@ -536,7 +539,9 @@ extension VideoScanModel {
                 keeperID: keeper?.id ?? UUID(), keeperPath: keeper?.fullPath ?? "",
                 keeperFilename: keeper?.filename ?? "",
                 keeperStamp: keeper.flatMap { keeperStamps[$0.fullPath] },
-                isWorkingCopy: isWorkingCopy(rec)))
+                isWorkingCopy: isWorkingCopy(rec),
+                groupID: rec.duplicateGroupID,
+                groupCopyCount: rec.duplicateGroupID.flatMap { copyCounts[$0] }))
         }
         var plan = DeleteDuplicatesPlan(volumePath: volumePath, catalogLocation: catalogStore.fileLocation,
                                         crossVolumeMode: selection.crossVolumeMode, skippedBeforePlan: skippedCount,
@@ -602,8 +607,14 @@ extension VideoScanModel {
         case refuse(note: String)
     }
 
+    /// `reviewed` = the row belongs to a plan Rick reviewed copy by copy
+    /// (`DeleteDuplicatesPlan.isReviewed`): a working copy then needs its
+    /// keeper's eligibility only — online, known, not retired, strictly
+    /// higher-ranked — not the bulk run's "Also clean up working copies"
+    /// toggle. Every other check is the same.
     func authorizeDuplicateDeletion(entry e: DeleteDuplicatesPlan.Entry, volumePath: String,
-                                    crossVolumeMode: Bool, stage: String) -> DuplicateDeletionAuthorization {
+                                    crossVolumeMode: Bool, reviewed: Bool = false,
+                                    stage: String) -> DuplicateDeletionAuthorization {
         guard let rec = record(forID: e.id), !rec.isPurged, rec.fullPath == e.path else {
             return .skip(note: "record is no longer in the catalog at this path — skipped \(stage)",
                          log: "Skipped \(e.filename): no longer in the catalog at \(e.path)")
@@ -662,21 +673,29 @@ extension VideoScanModel {
         if let hold = duplicateDeletionHoldRule()(rec) {
             return .skip(note: hold.note, log: "Skipped \(e.filename): \(hold.note)", notCountedWhy: hold.why)
         }
-        if !PathScope.contains(keeper.fullPath, within: volumePath) {
-            // A working copy: the keeper is on another drive. The policy
-            // is re-read live — the toggle, the drive list, reachability
-            // and retirement can all have changed since the plan.
-            guard crossVolumeMode, duplicateKeeperSettings.alsoCleanUpWorkingCopies else {
-                return .refuse(note: "keeper \(keeper.filename) is on another drive and working-copy cleanup is off — refused \(stage)")
-            }
-            let verdict = duplicateKeeperPolicy().crossVolumeVerdict(
-                extraPath: volumePath, volumeRoot: volumeRoot(for: volumePath),
-                keeperPath: keeper.fullPath, keeperRoot: volumeRoot(for: keeper.fullPath))
-            guard verdict.isEligible else {
-                return .refuse(note: "\(verdict.reason) — refused \(stage)")
-            }
+        if !PathScope.contains(keeper.fullPath, within: volumePath),
+           let why = workingCopyRefusal(keeper: keeper, volumePath: volumePath, crossVolumeMode: crossVolumeMode,
+                                        reviewed: reviewed) {
+            return .refuse(note: why + " — refused \(stage)")
         }
         return .authorized(record: rec, keeper: keeper)
+    }
+
+    /// A WORKING COPY (its keeper on another drive) may go only when the run
+    /// is allowed to clean working copies — a reviewed row (Rick's tick is
+    /// the authorization) or the bulk run with "Also clean up working
+    /// copies" on — AND the keeper is eligible: online, known, not retired,
+    /// strictly higher-ranked. Re-read live: the toggle, the drive list,
+    /// reachability and retirement can all have changed since the plan.
+    /// nil = it may go; else why not.
+    func workingCopyRefusal(keeper: VideoRecord, volumePath: String, crossVolumeMode: Bool, reviewed: Bool) -> String? {
+        guard crossVolumeMode, reviewed || duplicateKeeperSettings.alsoCleanUpWorkingCopies else {
+            return "keeper \(keeper.filename) is on another drive and working-copy cleanup is off"
+        }
+        let verdict = duplicateKeeperPolicy().crossVolumeVerdict(
+            extraPath: volumePath, volumeRoot: volumeRoot(for: volumePath),
+            keeperPath: keeper.fullPath, keeperRoot: volumeRoot(for: keeper.fullPath))
+        return verdict.isEligible ? nil : verdict.reason
     }
 
     /// The catalog side of ONE verified-and-removed pair, exactly as the
@@ -823,6 +842,7 @@ extension VideoScanModel {
         var out = DeletionTierCandidates()
         out.keeperPath = keeper.fullPath
         var seenArchive = Set<UUID>()
+        var lengthSeen = Set<UUID>()
         var members: [VideoRecord] = [keeper]
         if let group = record.duplicateGroupID {
             for r in records where !r.isPurged && r.id != record.id && r.id != keeper.id && r.duplicateGroupID == group {
@@ -832,6 +852,10 @@ extension VideoScanModel {
         func volume(_ r: VideoRecord) -> String { VolumeReachability.volumeName(forPath: r.fullPath) }
         out.keeperLabel = "keeper on \(volume(keeper))"
         func noteArchive(_ copy: VideoRecord) {
+            // R4: every archive master's length, verified or not.
+            if !copy.isPurged, lengthSeen.insert(copy.id).inserted {
+                out.archiveMasterDurations.append(copy.durationSeconds)
+            }
             guard !copy.isPurged, !seenArchive.contains(copy.id), !isRowOfThisRun(copy.id),
                   let fixity = copy.archiveFixity else { return }
             seenArchive.insert(copy.id)
@@ -1355,13 +1379,11 @@ struct DuplicateRemovalBoundaryNow: Sendable {
     var designation: MasterArchiveDesignation?
     var aliasCandidates: [String]
     var isArchiveCopy: Bool
-    var preferTrash: Bool
 
-    /// The catalog went away mid-pair: everything is held, and the most
-    /// conservative setting stands.
+    /// The catalog went away mid-pair: everything is held.
     static let catalogGone = DuplicateRemovalBoundaryNow(
         holdNote: DuplicateDeletionHold.leftAlonePrefix + "the catalog is no longer open", readOnlyMarks: [],
-        designation: nil, aliasCandidates: [], isArchiveCopy: false, preferTrash: true)
+        designation: nil, aliasCandidates: [], isArchiveCopy: false)
 }
 
 /// One Delete Duplicates run, as the survivor count needs to know it
