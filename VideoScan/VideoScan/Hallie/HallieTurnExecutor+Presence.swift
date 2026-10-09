@@ -71,6 +71,9 @@ extension HallieTurnExecutor {
         // recovery can mistake "the Hudsons" for a typo (+HallieTagOnlyName).
         notes.append(contentsOf: mapTagOnlyNames(
             &effective, question: request.intent.originalQuestion, context: context))
+        // A year the question never says (the current year leaking in) is
+        // not a constraint (+HallieInventedPresenceYears).
+        notes.append(contentsOf: dropInventedPresenceYears(&effective, request: request))
 
         if let people = effective.people, !people.isEmpty {
             let recovery = recoverPresencePeople(people, context: context)

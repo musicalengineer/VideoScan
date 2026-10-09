@@ -13538,6 +13538,19 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieInventedPresenceYearsTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieInventedPresenceYearsTests"
+      ],
+      "tests": [
+        "aYearTheQuestionSaysIsKept",
+        "anInventedYearIsDroppedAndTheTaggedVideoIsFound",
+        "timeAndAgeWordsKeepTheTranslatorsYears"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieTagOnlyNameTests.swift",
       "stage": "hallie",
       "suites": [
@@ -28945,7 +28958,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1098,
+      "expected_floor": 1101,
       "modes": [
         {
           "name": "strict",
@@ -29017,6 +29030,7 @@
         "VideoScanTests/HallieHisWifeAfterBiographyTests",
         "VideoScanTests/HallieHonestChildCountTests",
         "VideoScanTests/HallieIdentitySurvivesExecutionTests",
+        "VideoScanTests/HallieInventedPresenceYearsTests",
         "VideoScanTests/HallieKeywordPresenceTemplateTests",
         "VideoScanTests/HallieKinConjunctionSurvivalTests",
         "VideoScanTests/HallieKinDuplicateEntryTests",
