@@ -649,6 +649,15 @@ struct TriageView: View {
         .padding(.vertical, 10)
     }
 
+    /// What the orange Junk button marks. A human's Junk click IS the
+    /// decision (Rick 2026-10-09, "marking is deciding"), so it marks
+    /// Confirmed Junk — the set Delete Junk acts on. Machine guesses stay
+    /// Suspected until a human agrees (right-click ▸ Confirm as Junk).
+    /// (A `static let` on a View struct ≈ a C++ `static constexpr` member:
+    /// one value, readable by tests.)
+    static let junkButtonDisposition: MediaDisposition = .confirmedJunk
+    static let junkButtonHelp = "Mark selected as Confirmed Junk — Delete Junk moves them to the Trash"
+
     private var triageButtons: some View {
         HStack(spacing: 6) {
             Button {
@@ -672,14 +681,14 @@ struct TriageView: View {
             .help("Mark selected as Recoverable")
 
             Button {
-                triageSelected(.suspectedJunk)
+                triageSelected(Self.junkButtonDisposition)
             } label: {
                 Label("Junk", systemImage: "exclamationmark.triangle")
             }
             .vsGlassButtonStyle()
             .tint(.orange)
             .disabled(selectedIDs.isEmpty)
-            .help("Mark selected as Suspected Junk")
+            .help(Self.junkButtonHelp)
 
             Button {
                 triageSelected(.unreviewed)

@@ -22231,6 +22231,19 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TriageJunkButtonTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TriageJunkButtonTests"
+      ],
+      "tests": [
+        "buttonUsesTheConstant",
+        "junkButtonMarksConfirmedJunk",
+        "markedRecordIsDeletable"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/TriagePredicateTests.swift",
       "stage": "unit",
       "suites": [
