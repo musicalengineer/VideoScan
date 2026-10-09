@@ -515,6 +515,36 @@ struct VolumesWindow: View {
         """
     }
 
+    /// The drive-protection section of the volume menu: Read only, and
+    /// Archive Backup (which implies Read only). Both keep a drive off every
+    /// delete list, so they live together.
+    @ViewBuilder
+    private func protectionItems(for target: CatalogScanTarget) -> some View {
+        // "Read only" (2026-10-03): keeps the drive off every delete list.
+        // The Master Archive's volume is read-only by rule.
+        if model.isReadOnlyByRule(target) {
+            Button(VolumeReadOnlyText.byRuleLabel) { }
+                .disabled(true)
+                .accessibilityIdentifier("volumeRow.readOnlyByRule")
+        } else {
+            Button(VolumeReadOnlyText.menuTitle(isMarked: target.readOnlyMark != nil)) {
+                model.setVolumeReadOnly(target.readOnlyMark == nil, for: target)
+            }
+            .disabled(model.isReadOnly)
+            .help(VolumeReadOnlyText.caption)
+            .accessibilityIdentifier("volumeRow.toggleReadOnly")
+            // C05 amendment 3 (2026-10-07): a backup of the archive is never
+            // cleaned up as "excess copies". Marking it makes it Read only.
+            let isBackup = target.readOnlyMark?.isArchiveBackup ?? false
+            Button(isBackup ? "Not an Archive Backup" : "Mark as Archive Backup") {
+                model.setVolumeArchiveBackup(!isBackup, for: target)
+            }
+            .disabled(model.isReadOnly)
+            .help("A drive that holds a backup of the Master Archive. It becomes Read only, and nothing on it is ever offered as an excess copy.")
+            .accessibilityIdentifier("volumeRow.toggleArchiveBackup")
+        }
+    }
+
     /// Compose the right-click menu for a sidebar row. Split out for
     /// readability and because SwiftUI ViewBuilder is happiest with one
     /// expression per branch.
@@ -599,20 +629,7 @@ struct VolumesWindow: View {
 
         Divider()
 
-        // "Read only" (2026-10-03): keeps the drive off every delete list.
-        // The Master Archive's volume is read-only by rule.
-        if model.isReadOnlyByRule(target) {
-            Button(VolumeReadOnlyText.byRuleLabel) { }
-                .disabled(true)
-                .accessibilityIdentifier("volumeRow.readOnlyByRule")
-        } else {
-            Button(VolumeReadOnlyText.menuTitle(isMarked: target.readOnlyMark != nil)) {
-                model.setVolumeReadOnly(target.readOnlyMark == nil, for: target)
-            }
-            .disabled(model.isReadOnly)
-            .help(VolumeReadOnlyText.caption)
-            .accessibilityIdentifier("volumeRow.toggleReadOnly")
-        }
+        protectionItems(for: target)
 
         Divider()
 

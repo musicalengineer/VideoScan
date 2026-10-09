@@ -362,6 +362,23 @@ extension VideoScanModel {
         /// the "so is every copy you left unchecked" promise — re-checked
         /// at the move (rule 7, codex #1642 P2-b).
         var survivors: [PruneSurvivor] = []
+        /// Read the archive copy IN FULL in this batch before this copy may
+        /// go — a reproducing stamp is not enough (delete-excess lane, C05
+        /// amendment 2: set when this is the last copy outside the archive).
+        var forceArchiveRead = false
+    }
+
+    /// A lane's own refusals on top of the pipeline's (the delete-excess
+    /// lane, 2026-10-07: Angel holds, Rick's holds, network mounts,
+    /// Archive backup drives). `catalog` is asked on the main actor before
+    /// the copy is read AND again in the guard's live-catalog check just
+    /// before the move (so a hold that appears mid-job still holds);
+    /// `disk` is asked off-main immediately before the file's own Trash.
+    /// nil (every older caller) = the pipeline exactly as it was.
+    /// (For Rick: two callbacks, one per thread — the JunkDeletionGuard shape.)
+    struct PruneLaneGuard: Sendable {
+        let catalog: @MainActor @Sendable (VideoRecord) -> String?
+        let disk: @Sendable (String) -> String?
     }
 
     /// One unchecked copy a checked copy's move depends on: its catalog
@@ -468,6 +485,9 @@ extension VideoScanModel {
     final class PruneBatchState {
         var archiveFixityNow: [UUID: ContentFixity] = [:]
         var archiveProblem: [UUID: String] = [:]
+        /// Archive copies read end to end IN THIS BATCH — what a
+        /// `forceArchiveRead` item requires (a stamp-only verdict does not count).
+        var archiveReadInFull: Set<UUID> = []
         init() {}
     }
 
@@ -623,7 +643,8 @@ extension VideoScanModel {
     /// holds the copy, named. `hooks.shouldCancel` is honoured before
     /// every read and again before the move.
     func pruneOneCopy(_ item: PruneItem, batch: PruneBatchState,
-                      mode: JunkDeletionMode, hooks: PruneVerifyHooks = .live) async -> PruneCopyOutcome {
+                      mode: JunkDeletionMode, hooks: PruneVerifyHooks = .live,
+                      laneGuard: PruneLaneGuard? = nil) async -> PruneCopyOutcome {
         guard let rec = record(forID: item.copyID), rec.purgedAt == nil else {
             return .held("no longer an active catalog record")
         }
@@ -638,6 +659,7 @@ extension VideoScanModel {
         if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {
             return .held(Self.bulkDeleteRefusalNote(refusal, volume: archiveVolume?.label ?? "the archive volume"))
         }
+        if let why = laneGuard?.catalog(rec) { return .held(why) }
         guard let archive = record(forID: item.archiveID), archive.purgedAt == nil,
               archive.fullPath == item.archivePath else {
             return .held("its archive copy is no longer an active catalog record at the verified path")
@@ -647,32 +669,12 @@ extension VideoScanModel {
         }
         if let why = batch.archiveProblem[archive.id] { return .held(why) }
 
-        // ARCHIVE EVIDENCE (#2), once per archive copy per batch (#6).
-        var archiveReadInFull = false
-        if batch.archiveFixityNow[archive.id] == nil {
-            let evidence = PruneArchiveEvidence(archiveID: archive.id, archivePath: archive.fullPath,
-                                                archiveFixity: archiveFixity, contentFixity: archive.contentFixity)
-            if evidence.contentFixity == nil {
-                log("Archived — what next?: reading \(archive.filename) (archive copy) in full — no stamp yet…")
-            }
-            let verdict = await Task.detached(priority: .userInitiated) {
-                Self.pruneArchiveVerdict(evidence, hooks: hooks)
-            }.value
-            switch verdict {
-            case .current(let fixity, let readInFull):
-                batch.archiveFixityNow[archive.id] = fixity
-                if readInFull {
-                    archiveReadInFull = true
-                    storeContentFixity(recordID: archive.id, path: archive.fullPath, fixity: fixity)
-                    log("Archived — what next?: \(archive.filename) (archive copy) read in full — matches its verified fixity; stamp stored")
-                }
-            case .problem(let why):
-                // A cancel is this copy's alone; anything else is the
-                // archive copy's, and holds the rest of its family unread.
-                if !hooks.shouldCancel() { batch.archiveProblem[archive.id] = why }
-                return .held(why)
-            }
-        }
+        // ARCHIVE EVIDENCE (#2), once per archive copy per batch (#6) — or
+        // read in full now when the item demands it (C05 amendment 2).
+        let evidence = await pruneArchiveEvidenceNow(item: item, archive: archive, archiveFixity: archiveFixity,
+                                                     batch: batch, hooks: hooks)
+        let archiveReadInFull = evidence.readInFull
+        if let why = evidence.problem { return .held(why, archiveReadInFull: archiveReadInFull) }
         guard let archiveFixityNow = batch.archiveFixityNow[archive.id] else {
             return .held("its archive copy presented no evidence", archiveReadInFull: archiveReadInFull)
         }
@@ -726,10 +728,12 @@ extension VideoScanModel {
                 guard let self else { return "the catalog went away — nothing moved" }
                 return self.pruneProofProblemInCatalog(proof, record: rec)
                     ?? self.pruneSurvivorProblemInCatalog(survivors)
+                    ?? laneGuard?.catalog(rec).map { "\($0) — nothing moved" }
             },
             beforeRemoval: { path in
                 guard path == proof.path else { return "was never verified in this batch — nothing moved" }
                 return Self.pruneProofProblemOnDisk(proof) ?? Self.pruneSurvivorProblemOnDisk(survivors)
+                    ?? laneGuard?.disk(path)
             },
             remove: hooks.removeFile)
         let result = await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)
@@ -752,23 +756,61 @@ extension VideoScanModel {
             log("Archived — what next?: \(rec.filename) keeps its note and marks (copy held)")
         }
 
-        let outcome: PruneCopyResult
+        let outcome = Self.pruneCopyResult(result, bytes: rec.sizeBytes)
         if let refused = result.refused.first {
-            outcome = .held(refused.reason)
             log("Archived — what next?: held back at the last moment: \(item.filename) — \(refused.reason)")
-        } else if let failure = result.failed.first {
-            outcome = .failed(failure.error.localizedDescription)
-        } else if result.succeeded == 1 {
-            outcome = .trashed(bytes: rec.sizeBytes)
-        } else if result.alreadyMissing == 1 {
-            outcome = .alreadyMissing
-        } else if result.skippedOffline == 1 {
-            outcome = .skippedOffline
-        } else {
-            outcome = .held("the Trash routine did not move it")
         }
         return PruneCopyOutcome(result: outcome, readInFull: verdict.readInFull,
                                 archiveReadInFull: archiveReadInFull, carried: carried)
+    }
+
+    /// The Trash routine's answer for ONE record, as this copy's result.
+    nonisolated static func pruneCopyResult(_ result: JunkDeletionResult, bytes: Int64) -> PruneCopyResult {
+        if let refused = result.refused.first { return .held(refused.reason) }
+        if let failure = result.failed.first { return .failed(failure.error.localizedDescription) }
+        if result.succeeded == 1 { return .trashed(bytes: bytes) }
+        if result.alreadyMissing == 1 { return .alreadyMissing }
+        if result.skippedOffline == 1 { return .skippedOffline }
+        return .held("the Trash routine did not move it")
+    }
+
+    /// The archive copy's CURRENT evidence for this batch (#2, #6): taken
+    /// once per archive copy and reused — unless `item.forceArchiveRead`
+    /// and the archive copy has not yet been read IN FULL in this batch, in
+    /// which case its stored stamp is ignored and it is read end to end now
+    /// (C05 amendment 2). `problem` non-nil = nothing in its family may go.
+    func pruneArchiveEvidenceNow(item: PruneItem, archive: VideoRecord, archiveFixity: ArchiveFixity,
+                                 batch: PruneBatchState, hooks: PruneVerifyHooks) async
+        -> (problem: String?, readInFull: Bool) {
+        let mustRead = item.forceArchiveRead && !batch.archiveReadInFull.contains(archive.id)
+        guard batch.archiveFixityNow[archive.id] == nil || mustRead else { return (nil, false) }
+        let evidence = PruneArchiveEvidence(archiveID: archive.id, archivePath: archive.fullPath,
+                                            archiveFixity: archiveFixity,
+                                            contentFixity: mustRead ? nil : archive.contentFixity)
+        if evidence.contentFixity == nil {
+            log("Archived — what next?: reading \(archive.filename) (archive copy) in full — "
+                + (mustRead ? "the last copy outside the archive is about to go" : "no stamp yet") + "…")
+        }
+        let verdict = await Task.detached(priority: .userInitiated) {
+            Self.pruneArchiveVerdict(evidence, hooks: hooks)
+        }.value
+        switch verdict {
+        case .current(let fixity, let readInFull):
+            batch.archiveFixityNow[archive.id] = fixity
+            if readInFull {
+                batch.archiveReadInFull.insert(archive.id)
+                storeContentFixity(recordID: archive.id, path: archive.fullPath, fixity: fixity)
+                log("Archived — what next?: \(archive.filename) (archive copy) read in full — matches its verified fixity; stamp stored")
+            }
+            return (nil, readInFull)
+        case .problem(let why):
+            // A cancel is this copy's alone; anything else is the archive
+            // copy's, and holds the rest of its family unread. A forced read
+            // that failed must not leave an earlier stamp-only verdict behind.
+            batch.archiveFixityNow[archive.id] = nil
+            if !hooks.shouldCancel() { batch.archiveProblem[archive.id] = why }
+            return (why, false)
+        }
     }
 
     // MARK: Step 3: finish

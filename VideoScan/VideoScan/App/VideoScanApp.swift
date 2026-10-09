@@ -770,6 +770,11 @@ struct VideoScanApp: App {
             CommandGroup(after: .windowArrangement) {
                 WindowMenuItems()
             }
+            // View ▸ Curator (2026-10-07): persisted, default off — shows
+            // Triage's CLEAN UP section (excess copies of archived videos).
+            CommandGroup(after: .toolbar) {
+                CuratorMenuToggle()
+            }
             // Catalog maintenance actions. The unified "Purge Non-Video
             // Media…" dialog REPLACES the two former single-purpose commands
             // (Purge Cover-Art Music Records / Purge Non-Video Audio Junk).

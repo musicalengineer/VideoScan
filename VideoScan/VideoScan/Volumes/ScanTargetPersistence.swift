@@ -102,6 +102,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
     static let readOnlyVolumeUUIDField = "volumeUUID"
     static let readOnlyResolvedPathField = "resolvedPath"
     static let readOnlyMountPointField = "mountPoint"
+    /// Additive (2026-10-07): the mark says the drive is an Archive backup.
+    static let readOnlyArchiveBackupField = "archiveBackup"
 
     /// The saved marks, keyed by searchPath. An entry without a date is
     /// still a mark (refuse over guess: a damaged entry must not un-protect
@@ -114,7 +116,8 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
             out[path] = VolumeReadOnlyMark(markedAt: fields[readOnlyMarkedAtField] as? Date ?? .distantPast,
                                            volumeUUID: fields[readOnlyVolumeUUIDField] as? String,
                                            resolvedPath: fields[readOnlyResolvedPathField] as? String,
-                                           mountPoint: fields[readOnlyMountPointField] as? String)
+                                           mountPoint: fields[readOnlyMountPointField] as? String,
+                                           isArchiveBackup: fields[readOnlyArchiveBackupField] as? Bool ?? false)
         }
         return out
     }
@@ -128,6 +131,7 @@ private let rolePersistenceLog = Logger(subsystem: "Rick-Breen.VideoScan",
             if let uuid = mark.volumeUUID { fields[readOnlyVolumeUUIDField] = uuid }
             if let resolved = mark.resolvedPath { fields[readOnlyResolvedPathField] = resolved }
             if let mount = mark.mountPoint { fields[readOnlyMountPointField] = mount }
+            if mark.isArchiveBackup { fields[readOnlyArchiveBackupField] = true }
             map[t.searchPath] = fields
         }
         UserDefaults.standard.set(map, forKey: key)
