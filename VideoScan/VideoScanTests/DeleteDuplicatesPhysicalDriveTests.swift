@@ -367,7 +367,7 @@ struct BulkVerbRemovalBoundaryTests {
         let junk = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
         // Asked again for EVERY file, at its turn, on the main actor.
         #expect(junk.contains("let readOnlyVolumes = readOnlyVolumeProtection()"))
-        #expect(junk.contains("disk.run(path: path, readOnlyVolumes: readOnlyVolumes)"))
+        #expect(junk.contains("disk.run(path: path, readOnlyVolumes: readOnlyVolumes, catalogBytes: catalogBytes)"))
         // Transcode's Replace Existing: policy and check are taken AT the
         // publish, and the publish asks the check for the file it would Trash.
         let transcode = try SourceTree.appCode(named: "TranscodeJob.swift")

@@ -146,7 +146,7 @@ struct JunkOutcomeAccountingTests {
         func rec(_ name: String) -> VideoRecord { let r = VideoRecord(); r.filename = name; return r }
         struct Locked: LocalizedError { var errorDescription: String? { "the file is locked" } }
         let result = VideoScanModel.JunkDeletionResult(items: [
-            .init(record: rec("test_moved.mov"), outcome: .moved),
+            .init(record: rec("test_moved.mov"), outcome: .moved(bytes: 2_048)),
             .init(record: rec("test_held.mov"), outcome: .held("lives on FamilyArchive")),
             .init(record: rec("test_failed.mov"), outcome: .failed(Locked())),
             .init(record: rec("test_missing.mov"), outcome: .missing),
@@ -160,7 +160,7 @@ struct JunkOutcomeAccountingTests {
         #expect(report.lines[0].reason == "lives on FamilyArchive")
         #expect(report.lines[1].reason.contains("the file is locked"))
         #expect(report.summary.count == 6, "\(report.summary)")
-        #expect(report.summary.first == "Moved 1 file to the Trash")
+        #expect(report.summary.first == "Moved 1 file (\(Formatting.humanSize(2_048))) to the Trash")
         #expect(report.linesText.components(separatedBy: "\n").count == 5)
     }
 
@@ -168,7 +168,7 @@ struct JunkOutcomeAccountingTests {
     func reportAtScale() {
         let records = (0..<100_000).map { i -> VideoRecord in let r = VideoRecord(); r.filename = "test_\(i).mov"; return r }
         let result = VideoScanModel.JunkDeletionResult(items: records.enumerated().map { i, r in
-            .init(record: r, outcome: i.isMultiple(of: 2) ? .moved : .held("reason \(i)"))
+            .init(record: r, outcome: i.isMultiple(of: 2) ? .moved(bytes: 1) : .held("reason \(i)"))
         })
         let clock = ContinuousClock()
         let start = clock.now

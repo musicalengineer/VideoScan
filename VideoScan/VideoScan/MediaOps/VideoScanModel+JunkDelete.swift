@@ -74,6 +74,14 @@ extension VideoScanModel {
         var attempted: Int { items.count }
         /// Files actually moved this pass.
         var succeeded: Int { items.count { $0.outcome.isMoved } }
+        /// The SUM of the moved files' sizes — bytes moved to the Trash
+        /// (design R7). Never "freed": space comes back when the Trash is
+        /// emptied.
+        var bytesMoved: Int64 {
+            items.reduce(into: Int64(0)) { sum, item in
+                if case .moved(let bytes) = item.outcome { sum += bytes }
+            }
+        }
         /// The file was already gone (its drive WAS reachable) — the catalog
         /// was updated (purgedAt + lifecycleStage), no disk op.
         var alreadyMissing: Int { items.count { $0.outcome.kind == .missing } }
@@ -126,7 +134,9 @@ extension VideoScanModel {
     /// One file's outcome — mutually exclusive by construction (one enum
     /// value per file; ≈ a C++ std::variant).
     enum JunkFileOutcome: Sendable {
-        case moved
+        /// Moved; `bytes` = the file's size measured at its turn, just
+        /// before the move (the catalog's size if it could not be stat'ed).
+        case moved(bytes: Int64)
         case held(String)
         case failed(any Error)
         case missing
@@ -253,8 +263,9 @@ extension VideoScanModel {
         // is at THIS file's turn (codex #258 F5): a drive marked Read only
         // while the batch runs protects every file not yet moved.
         let readOnlyVolumes = readOnlyVolumeProtection()
+        let catalogBytes = rec.sizeBytes
         return await Task.detached(priority: .userInitiated) {
-            disk.run(path: path, readOnlyVolumes: readOnlyVolumes)
+            disk.run(path: path, readOnlyVolumes: readOnlyVolumes, catalogBytes: catalogBytes)
         }.value
     }
 
@@ -371,7 +382,8 @@ struct JunkDiskTurn: Sendable {
 
     /// The caller's proof, the archive and read-only last words, existence,
     /// then the file operation — one synchronous stretch, nothing awaited.
-    func run(path: String, readOnlyVolumes: ReadOnlyVolumeProtection) -> VideoScanModel.JunkFileOutcome {
+    func run(path: String, readOnlyVolumes: ReadOnlyVolumeProtection,
+             catalogBytes: Int64) -> VideoScanModel.JunkFileOutcome {
         // Before the existence check on purpose: the guard decides what a
         // vanished file means.
         if let beforeRemoval, let why = beforeRemoval(path) { return .held(why) }
@@ -379,9 +391,12 @@ struct JunkDiskTurn: Sendable {
         // Distinguishes "the user tagged a file that's already gone" from a
         // genuine failure for the result sheet.
         guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { return .missing }
+        // The size that is about to move (one stat), for "N GB moved to
+        // the Trash" (design R7).
+        let bytes = FileIdentityStamp.capture(path: path)?.size ?? catalogBytes
         do {
             try perform(URL(fileURLWithPath: path))
-            return .moved
+            return .moved(bytes: bytes)
         } catch {
             // Never a fallback to another kind of removal: the file stays.
             return .failed(error)

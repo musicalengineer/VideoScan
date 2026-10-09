@@ -15745,6 +15745,19 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/JunkBytesMovedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JunkBytesMovedTests"
+      ],
+      "tests": [
+        "bytesAreTheMovedFilesSizes",
+        "noScalingNoFreed",
+        "routineSumsMovedSizes"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/JunkDeleteActionRegressionTests.swift",
       "stage": "regression",
       "suites": [

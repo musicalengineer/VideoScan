@@ -17,6 +17,9 @@ struct JunkDeletionReport {
     }
 
     let movedCount: Int
+    /// Bytes moved to the Trash: the sum of the moved files' sizes
+    /// (design R7). Never called "freed".
+    let bytesMoved: Int64
     /// One sentence per non-empty bucket, in a fixed order: moved, held,
     /// couldn't move, already missing, offline, not reached.
     let summary: [String]
@@ -32,6 +35,7 @@ struct JunkDeletionReport {
         }
         self.lines = lines
         self.movedCount = result.succeeded
+        self.bytesMoved = result.bytesMoved
         self.summary = Self.summary(result)
     }
 
@@ -50,7 +54,9 @@ struct JunkDeletionReport {
     private static func summary(_ r: VideoScanModel.JunkDeletionResult) -> [String] {
         func files(_ n: Int) -> String { "\(n) file\(n == 1 ? "" : "s")" }
         var out: [String] = []
-        if r.succeeded > 0 { out.append("Moved \(files(r.succeeded)) to the Trash") }
+        if r.succeeded > 0 {
+            out.append("Moved \(files(r.succeeded)) (\(Formatting.humanSize(r.bytesMoved))) to the Trash")
+        }
         if !r.refused.isEmpty { out.append("\(files(r.refused.count)) held back") }
         if !r.failed.isEmpty { out.append("\(files(r.failed.count)) couldn't be moved") }
         if r.alreadyMissing > 0 { out.append("\(files(r.alreadyMissing)) already missing (catalog updated)") }

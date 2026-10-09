@@ -94,7 +94,6 @@ struct DeleteConfirmedJunkConfirmSheet: View {
 
 struct DeleteConfirmedJunkResultSheet: View {
     let report: JunkDeletionReport
-    let bytesMoved: Int64
 
     @Environment(\.dismiss) private var dismiss
 
@@ -106,11 +105,8 @@ struct DeleteConfirmedJunkResultSheet: View {
                 .foregroundStyle(report.hasNotes ? .orange : .green)
 
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(Array(report.summary.enumerated()), id: \.offset) { index, sentence in
-                    Text(index == 0 && report.movedCount > 0
-                         ? "\(sentence) (\(Formatting.humanSize(bytesMoved)))"
-                         : sentence)
-                        .font(.callout)
+                ForEach(Array(report.summary.enumerated()), id: \.offset) { _, sentence in
+                    Text(sentence).font(.callout)
                 }
             }
 

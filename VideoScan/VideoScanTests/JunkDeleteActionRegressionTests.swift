@@ -112,7 +112,7 @@ struct JunkDeleteActionRegressionTests {
         // iconify and Triage became unresponsive. Diagnosed via lldb — main
         // thread idle, no work blocked, sheet state machine deadlocked.
         let confirm = JunkSheet.confirm(VideoScanModel.JunkTrashSnapshot(items: []))
-        let result = JunkSheet.result(JunkDeletionReport(.empty), 0)
+        let result = JunkSheet.result(JunkDeletionReport(.empty))
         #expect(confirm.id == result.id,
                 "JunkSheet cases must share a single id so SwiftUI keeps the modal context across the .confirm → .result transition. Different ids re-introduce the chained-sheet race.")
     }

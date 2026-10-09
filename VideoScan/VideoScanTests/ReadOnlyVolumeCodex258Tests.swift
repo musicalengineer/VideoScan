@@ -317,7 +317,7 @@ struct ReadOnlyVolumeCodex258Tests {
         #expect(junk[loop.upperBound...].contains("await junkTurn(rec, guard: fileGuard, disk: disk)"),
                 "the per-file turn left the loop")
         let turn = try #require(junk.range(of: "private func junkTurn("))
-        let hop = try #require(junk.range(of: "disk.run(path: path, readOnlyVolumes: readOnlyVolumes)",
+        let hop = try #require(junk.range(of: "disk.run(path: path, readOnlyVolumes: readOnlyVolumes, catalogBytes: catalogBytes)",
                                           range: turn.upperBound..<junk.endIndex))
         #expect(String(junk[turn.upperBound..<hop.lowerBound]).contains("let readOnlyVolumes = readOnlyVolumeProtection()"),
                 "the Read-only marks are read once for the whole batch again")

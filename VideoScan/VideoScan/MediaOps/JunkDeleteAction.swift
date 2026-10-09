@@ -22,9 +22,8 @@ import Foundation
 
 enum JunkSheet: Identifiable {
     case confirm(VideoScanModel.JunkTrashSnapshot)
-    /// The report is built ONCE when the run finishes (never in a body);
-    /// the Int64 is the bytes moved to the Trash.
-    case result(JunkDeletionReport, Int64)
+    /// The report is built ONCE when the run finishes (never in a body).
+    case result(JunkDeletionReport)
 
     /// CRITICAL: both cases return the SAME id. SwiftUI uses `id` to
     /// decide whether an item change should animate a dismiss-then-present
@@ -63,31 +62,23 @@ enum JunkDeleteAction {
     ///   - model: The catalog model.
     ///   - snapshot: The set the confirmation showed, frozen when it opened.
     ///   - onComplete: Called on MainActor after the disk pass returns,
-    ///     with the result and an estimate of the bytes moved (scaled
-    ///     from the counted bytes by the success ratio). There is no mode:
-    ///     this lane only ever moves files to the Trash.
+    ///     with the result and the bytes moved to the Trash (the sum of
+    ///     the moved files' sizes). There is no mode: this lane only ever
+    ///     moves files to the Trash.
     static func makeOnAct(
         model: VideoScanModel,
         snapshot: VideoScanModel.JunkTrashSnapshot,
         onComplete: @escaping @MainActor (
             _ result: VideoScanModel.JunkDeletionResult,
-            _ bytesSucceeded: Int64
+            _ bytesMoved: Int64
         ) -> Void
     ) -> @MainActor () -> Void {
         return {
             Task { @MainActor in
                 let result = await model.trashFrozenJunk(snapshot)
-                let bytesBefore = snapshot.moveBytes
-                // Scale counted bytes by the success ratio over the
-                // actionable denominator (attempted minus the no-ops).
-                let actionable = max(
-                    result.attempted - result.alreadyMissing - result.skippedOffline,
-                    0
-                )
-                let bytesSucceeded: Int64 = actionable > 0
-                    ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
-                    : 0
-                onComplete(result, bytesSucceeded)
+                // The sum of the moved files' own sizes (design R7) —
+                // never the counted total scaled by a success ratio.
+                onComplete(result, result.bytesMoved)
             }
         }
     }
