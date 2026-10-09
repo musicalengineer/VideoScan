@@ -661,6 +661,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     let planRoot: URL
     /// Set when this job resumes a plan found at launch.
     private let resumingPlan: DeleteDuplicatesPlan?
+    /// Set when this job runs the plan Rick reviewed (R2): exactly its rows.
+    private let reviewedPlan: DeleteDuplicatesPlan?
 
     /// The plan — nil until prepared (fresh run) or re-validated (resume).
     @Published private(set) var plan: DeleteDuplicatesPlan?
@@ -776,6 +778,26 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         self.hooks = hooks
         self.planRoot = planRoot
         self.resumingPlan = nil
+        self.reviewedPlan = nil
+    }
+
+    /// Run the plan Rick REVIEWED (R2, design §9): exactly its rows — no
+    /// re-planning. Each row is still asked at its turn whether it stands;
+    /// a changed fact holds it, nothing is ever added. One volume per plan
+    /// (`DeleteDuplicatesBatchRun` runs a batch's plans one after another).
+    init(model: VideoScanModel, reviewed plan: DeleteDuplicatesPlan,
+         hooks: SignatureVerification.Hooks = .live,
+         planRoot: URL = DeleteDuplicatesPlanStore.defaultRoot) {
+        self.model = model
+        self.volumePath = plan.volumePath
+        self.hooks = hooks
+        self.planRoot = planRoot
+        self.resumingPlan = nil
+        var reviewed = plan
+        reviewed.reviewed = true
+        self.reviewedPlan = reviewed
+        self.plan = reviewed
+        self.subtitleText = "Checking \(plan.remainingCount) reviewed cop\(plan.remainingCount == 1 ? "y" : "ies") before anything moves…"
     }
 
     /// Resume a plan found at launch — every remaining row is re-validated
@@ -788,6 +810,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         self.hooks = hooks
         self.planRoot = planRoot
         self.resumingPlan = plan
+        self.reviewedPlan = nil
         self.plan = plan
         self.subtitleText = "Checking \(plan.remainingCount) remaining file(s) against the catalog…"
     }
@@ -1008,32 +1031,18 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         DuplicateDrives.resetVolumeCache()
 
         var prepared: DeleteDuplicatesPlan
-        if let resumed = resumingPlan {
-            switch await revalidateForResume(resumed, model: model) {
-            case .success(let revalidated):
-                prepared = revalidated
-            case .failure(let refusal):
-                // The drive is away (QA 2026-09-21 F4): nothing was
-                // settled and nothing saved — the plan on disk is exactly
-                // as it was, and `start` offers it again.
-                model.duplicateStatus = "Resume refused — \(refusal.line)"
-                wasRefused = true
-                finish(failed: refusal.line)
-                return
-            }
-        } else {
-            guard var fresh = await model.prepareDuplicateDeletion(onVolume: volumePath) else {
-                finish(success: "Nothing to delete")
-                return
-            }
-            // R5: the bulk run takes pre-selected rows only (groups of three
-            // or more copies); a two-copy group's extra waits for a tick.
-            let notPreselected = fresh.holdRowsNotPreselected()
-            if notPreselected > 0 {
-                model.log("  \(notPreselected) cop\(notPreselected == 1 ? "y" : "ies") of two-copy groups held — "
-                          + DeletionTierText.notPreselected)
-            }
-            prepared = fresh
+        switch await planForThisRun(model: model) {
+        case .ready(let plan):
+            prepared = plan
+        case .refused(let line, let status):
+            // Nothing was read, moved or saved; the rows (if any) say why.
+            model.duplicateStatus = status
+            wasRefused = true
+            finish(failed: line)
+            return
+        case .nothing:
+            finish(success: "Nothing to delete")
+            return
         }
         prepared.startedAt = prepared.startedAt ?? Date()
         self.plan = prepared
@@ -1132,6 +1141,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             let keeper: VideoRecord
             switch model.authorizeDuplicateDeletion(entry: entry, volumePath: volumePath,
                                                     crossVolumeMode: current.crossVolumeMode,
+                                                    reviewed: current.isReviewed,
                                                     stage: "before deletion") {
             case .authorized(let r, let k):
                 record = r; keeper = k
@@ -1941,6 +1951,95 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         for w in waiters { w.resume() }
     }
 
+    // MARK: Where the run's plan comes from
+
+    /// The plan this run acts on — ONE answer, from one of three sources:
+    /// a plan found at launch (every remaining row re-validated), the plan
+    /// Rick reviewed (checked, exactly its rows — R2), or a fresh plan for
+    /// the Storage card's bulk run (pre-selected rows only — R5).
+    enum PlanForThisRun {
+        case ready(DeleteDuplicatesPlan)
+        /// Nothing can run: `line` for the row, `status` for the model.
+        case refused(line: String, status: String)
+        /// The catalog has nothing to delete on this volume.
+        case nothing
+    }
+
+    private func planForThisRun(model: VideoScanModel) async -> PlanForThisRun {
+        if let resumed = resumingPlan {
+            // The drive is away (QA 2026-09-21 F4): nothing is settled or
+            // saved — the plan on disk stays as it was and is offered again.
+            switch await revalidateForResume(resumed, model: model) {
+            case .success(let plan): return .ready(plan)
+            case .failure(let refusal): return .refused(line: refusal.line, status: "Resume refused — \(refusal.line)")
+            }
+        }
+        if let reviewed = reviewedPlan {
+            switch await prepareReviewed(reviewed, model: model) {
+            case .success(let plan): return .ready(plan)
+            case .failure(let refusal): return .refused(line: refusal.line, status: "Not started — \(refusal.line)")
+            }
+        }
+        guard var fresh = await model.prepareDuplicateDeletion(onVolume: volumePath) else { return .nothing }
+        // R5: the bulk run takes pre-selected rows only (groups of three or
+        // more copies); a two-copy group's extra waits for a tick.
+        let held = fresh.holdRowsNotPreselected()
+        if held > 0 {
+            model.log("  \(held) cop\(held == 1 ? "y" : "ies") of two-copy groups held — " + DeletionTierText.notPreselected)
+        }
+        return .ready(fresh)
+    }
+
+    // MARK: The reviewed plan (R2)
+
+    /// A reviewed plan, checked before a byte is read: made from THIS
+    /// catalog; its drive connected; no keeper among its rows, under any
+    /// name (stat again, now); every row on the plan's drive. A row that
+    /// does not stand is HELD with its reason — never dropped, nothing
+    /// added. Working copies need the cross-volume safety snapshot (fail
+    /// safe: without one they are held). `.failure` = nothing can run; the
+    /// rows say why, the plan is not saved (nothing happened).
+    private func prepareReviewed(_ input: DeleteDuplicatesPlan,
+                                 model: VideoScanModel) async -> Result<DeleteDuplicatesPlan, ResumeRefused> {
+        var plan = input
+        func refuseAll(_ line: String) -> Result<DeleteDuplicatesPlan, ResumeRefused> {
+            DeleteDuplicatesReview.apply(Dictionary(plan.entries.map { ($0.id, line) }, uniquingKeysWith: { a, _ in a }),
+                                         to: &plan.entries)
+            self.plan = plan
+            model.log("\nDelete Duplicates (reviewed) on \(plan.volumeName) not started: \(line). Nothing was moved.")
+            return .failure(ResumeRefused(line: line))
+        }
+        guard plan.catalogLocation == model.catalogStore.fileLocation else {
+            return refuseAll("this plan was made from another catalog")
+        }
+        if let away = Self.volumeAwayLine(for: plan, action: "Move to Trash") { return refuseAll(away) }
+        let pending = plan.entries.filter { !$0.status.isSettled }
+        let paths = Set(pending.flatMap { [$0.path, $0.keeperPath] }.filter { !$0.isEmpty })
+        let stamps = await VideoScanModel.captureStamps(paths: Array(paths))
+        var holds = DeleteDuplicatesReview.holds(pending, stamps: stamps)
+        for e in pending where holds[e.id] == nil && !PathScope.contains(e.path, within: plan.volumePath) {
+            holds[e.id] = DeleteDuplicatesReview.notOnVolumeNote
+        }
+        DeleteDuplicatesReview.apply(holds, to: &plan.entries)
+        for e in pending { if let why = holds[e.id] { model.log("  Held \(e.filename): \(why)") } }
+        if plan.entries.contains(where: { $0.isWorkingCopy && !$0.status.isSettled }) {
+            model.duplicateStatus = "Writing safety snapshot…"
+            if let snap = await model.snapshotCatalogAsync(prefix: "pre-dup-reviewed") {
+                plan.snapshotPath = snap
+                plan.snapshotTakenAt = Date()
+                model.log("\nPre-delete safety snapshot (reviewed working copies): \(snap)")
+            } else {
+                let why = "the safety snapshot could not be written — working copy left alone"
+                DeleteDuplicatesReview.apply(Dictionary(plan.entries.filter { $0.isWorkingCopy }.map { ($0.id, why) },
+                                                        uniquingKeysWith: { a, _ in a }), to: &plan.entries)
+                model.log("\n⚠️ Could not write the pre-delete safety snapshot — the reviewed working copies are held.")
+            }
+        }
+        model.log("\nMoving \(plan.remainingCount) reviewed cop\(plan.remainingCount == 1 ? "y" : "ies") on \(plan.volumeName) to the Trash"
+                  + (holds.isEmpty ? "…" : " — \(holds.count) held before the run…"))
+        return .success(plan)
+    }
+
     // MARK: Resume re-validation
 
     /// Every remaining row must still be what the plan says: the record is
@@ -2045,7 +2144,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 continue
             }
             switch model.authorizeDuplicateDeletion(entry: e, volumePath: plan.volumePath,
-                                                    crossVolumeMode: plan.crossVolumeMode, stage: "at resume") {
+                                                    crossVolumeMode: plan.crossVolumeMode, reviewed: plan.isReviewed,
+                                                    stage: "at resume") {
             case .skip(let note, let line, let notCountedWhy):
                 skip(note, log: line, notCountedWhy: notCountedWhy); continue
             case .refuse(let note):
@@ -2593,6 +2693,22 @@ extension MediaFileOperationsCenter {
                                planRoot: URL = DeleteDuplicatesPlanStore.defaultRoot) -> DeleteDuplicatesJob {
         launchDeleteDuplicates(DeleteDuplicatesJob(model: model, volumePath: volumePath, planRoot: planRoot),
                                model: model, plan: "verify each copy against its keeper, then remove it")
+    }
+
+    /// Run a REVIEWED batch (R2): one job per volume, one after the other.
+    /// Each job runs exactly its plan's rows. `hooks` = the tests' seam.
+    @discardableResult
+    func startReviewedDeleteDuplicates(_ batch: DeleteDuplicatesBatch, model: VideoScanModel,
+                                       hooks: SignatureVerification.Hooks = .live,
+                                       planRoot: URL = DeleteDuplicatesPlanStore.defaultRoot) -> DeleteDuplicatesBatchRun {
+        let run = DeleteDuplicatesBatchRun(batch: batch)
+        run.start(make: { DeleteDuplicatesJob(model: model, reviewed: $0, hooks: hooks, planRoot: planRoot) },
+                  launch: { [weak self] job in
+                      guard let self else { job.refuseToStart(reason: "Media File Operations went away"); return }
+                      _ = self.launchDeleteDuplicates(job, model: model,
+                                                      plan: "move \(job.plan?.remainingCount ?? 0) reviewed copies to the Trash")
+                  })
+        return run
     }
 
     /// Resume the plan the launch check found (the Resume button). The job

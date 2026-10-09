@@ -777,6 +777,13 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
     var leftAloneCopies: [LeftAloneCopy]?
     /// How many were left alone when the plan was made, by kind.
     var leftAloneAtPlan: LeftAloneCounts?
+    /// R2 (2026-10-09): the plan Rick REVIEWED (Triage ▸ Duplicates) —
+    /// exactly these rows run, nothing is re-planned, and a working copy
+    /// needs only its keeper's eligibility (the per-copy tick is the
+    /// authorization the "Also clean up working copies" toggle gives a bulk
+    /// run). Additive: nil on every older plan.
+    var reviewed: Bool?
+    var isReviewed: Bool { reviewed == true }
 
     /// One copy the run never considered (GH #258).
     struct LeftAloneCopy: Codable, Sendable, Identifiable, Equatable {
