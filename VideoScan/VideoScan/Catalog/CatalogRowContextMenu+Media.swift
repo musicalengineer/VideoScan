@@ -75,6 +75,7 @@ extension CatalogContent {
     /// precedent).
     ///
     ///   Get Info…  — instant facts sheet (single row).
+    ///   Copies & Advice… — the one-file copies card (single row, read-only).
     ///   Verify…    — the checks, as MFO jobs.
     ///   Repair…    — the one repair door: the fixes, Link Repaired
     ///                Copy…, and Sounds Good — Confirm Repair (GH #132)
@@ -94,6 +95,15 @@ extension CatalogContent {
             .keyboardShortcut("i", modifiers: .command)
             .help("What this file is made of — container, picture, sound, timing — and the last Verify verdict.")
             .accessibilityIdentifier("catalog.row.getMediaInfo")
+
+            // One card for one file (design §10, 2026-10-09): copies, the
+            // keeper and why, the archive, same footage, why flagged. O(1)
+            // here — the card builds its advice in its own .task.
+            Button(CopiesAdviceText.menuLabel) {
+                copiesAdviceRequest = CopiesAdviceRequest(recordID: rec.id)
+            }
+            .help(CopiesAdviceText.menuHelp)
+            .accessibilityIdentifier("catalog.row.copiesAndAdvice")
         }
 
         checkMediaMenuItem(activeRecs: activeRecs)

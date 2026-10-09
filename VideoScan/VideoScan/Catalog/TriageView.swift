@@ -163,6 +163,8 @@ struct TriageView: View {
     // Import button's NSOpenPanel callback once the probe completes.
     @State private var importSheet: WorkspaceImportSheet? = nil
     @State private var transcodeRequest: TranscodeRequest?
+    /// "Copies & Advice…" (2026-10-09, design §10) — .sheet(item:).
+    @State private var copiesAdviceRequest: CopiesAdviceRequest?
     // Disables the Import button while a probe is in flight so the
     // user can't queue up half-a-dozen overlapping probes by mashing
     // the button.
@@ -482,6 +484,12 @@ struct TriageView: View {
         }
         .sheet(item: $transcodeRequest) { request in
             TranscodeSheet(request: request)
+        }
+        .sheet(item: $copiesAdviceRequest) { request in
+            CopiesAdviceSheet(request: request, model: model,
+                              startFootageRun: fileOpsCenterReference.map { center in
+                                  { [model] scope in _ = center.startFindSimilarFootage(scope: scope, model: model) }
+                              })
         }
     }
 
@@ -866,6 +874,19 @@ struct TriageView: View {
     private func triageContextMenu(for ids: Set<UUID>) -> some View {
         let count = ids.count
 
+        // First item (design §10): one card for one file. O(1) here — the
+        // card builds its advice in its own .task.
+        Button {
+            openCopiesAdvice(ids)
+        } label: {
+            Label(CopiesAdviceText.menuLabel, systemImage: "doc.on.doc")
+        }
+        .disabled(count != 1)
+        .help(CopiesAdviceText.menuHelp)
+        .accessibilityIdentifier("triage.row.copiesAndAdvice")
+
+        Divider()
+
         Section("Triage (\(count) file\(count == 1 ? "" : "s"))") {
             Button {
                 applyDisposition(.important, to: ids)
@@ -1083,6 +1104,12 @@ struct TriageView: View {
         guard model.startFootageSpectrum(ids: Array(ids), title: "\(ids.count) videos from Triage",
                                          center: center, source: "Triage") != nil else { return }
         FootageSpectrumWindowOpener.open(using: openWindow, source: "triage")
+    }
+
+    /// "Copies & Advice…" — one file only; the card loads itself.
+    private func openCopiesAdvice(_ ids: Set<UUID>) {
+        guard ids.count == 1, let id = ids.first else { return }
+        copiesAdviceRequest = CopiesAdviceRequest(recordID: id)
     }
 
     private func showInCatalog(_ id: UUID) {
