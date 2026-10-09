@@ -242,7 +242,7 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
         }
         job.start(); await job.task?.value
 
-        #expect(tierWhenSaved == .permanent, "three verified copies at the save: the tier was permanent")
+        #expect(tierWhenSaved == .trash, "three verified copies at the save: recorded as the Trash (Trash only)")
         #expect(sibling.contentFixity?.stampMatches(path: sibling.fullPath) == true, "the user-visible stamp still reproduces — only ctime tells")
         let plan = try #require(job.plan)
         let row = plan.entries[0]
@@ -374,11 +374,12 @@ struct DeleteDuplicatesCountedEvidenceCodex1611Tests {
         #expect(Set(evidence.map(\.path)) == Set([rig.archive?.fullPath, rig.sibling?.fullPath].compactMap { $0 }))
         let plan = try #require(job.plan)
         let row = plan.entries[0]
-        #expect(row.status == .deleted && row.tier == .permanent && row.remainingVerifiedCopies == 3, "\(row.status): \(row.tierReason ?? "")")
+        #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 3, "\(row.status): \(row.tierReason ?? "")")
         #expect(row.tierReason == reasonWhenSaved, "unchanged evidence: the row keeps the reason it was saved with")
-        #expect(row.tierReason?.hasPrefix("space back now") == true, Comment(rawValue: row.tierReason ?? ""))
-        #expect(!FileManager.default.fileExists(atPath: rig.copy.fullPath) && !FileManager.default.fileExists(atPath: rig.trashedCopyURL.path))
-        #expect(job.result.deleted == 1 && job.result.bytesFreed == Int64(fileSize))
+        #expect(row.tierReason?.hasPrefix(DeleteDuplicatesDiskWorker.trashOnlyReasonPrefix) == true, Comment(rawValue: row.tierReason ?? ""))
+        #expect(!FileManager.default.fileExists(atPath: rig.copy.fullPath) && FileManager.default.fileExists(atPath: rig.trashedCopyURL.path),
+                "Trash only: in the (scratch) Trash, never unlinked")
+        #expect(job.result.deleted == 1 && job.result.bytesFreed == 0)
         #expect(probe.opens("keeper.mov") == 0 && probe.blocks("keeper") == 0, "keeper stat'ed, never read")
         #expect(probe.blocks("quarantine") == 3, "the one read of the duplicate; nothing else")
         let console = await consoleText(rig.model)

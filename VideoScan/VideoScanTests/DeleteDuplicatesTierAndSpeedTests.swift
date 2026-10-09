@@ -488,7 +488,9 @@ struct DeleteDuplicatesTierAndSpeedTests {
 
     // MARK: Tier
 
-    @Test func threeVerifiedCopiesRemainingDeletesOutrightWithTierOnTheLedger() async throws {
+    /// Trash only (2026-10-09): three verified copies once earned an
+    /// outright delete; the copy goes to the Trash, said on the row and the ledger.
+    @Test func threeVerifiedCopiesRemainingGoToTheTrashWithTierOnTheLedger() async throws {
         let rig = makeRig("tier3", copies: 1, keeperFixity: true); defer { rig.cleanup() }
         addVerifiedArchiveFamily(to: rig.model, keeper: rig.keeper)          // archive + sibling → 3 remain
         let probe = Probe()
@@ -496,27 +498,31 @@ struct DeleteDuplicatesTierAndSpeedTests {
                                       hooks: probe.hooks.withScratchTrash(in: rig.dir), planRoot: rig.root)
         job.start(); await job.task?.value
 
-        let freed = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
-        #expect(job.state == .finished(summary: "1 deleted · \(freed) freed"), "\(job.state)")
-        #expect(job.result.deleted == 1 && job.result.bytesFreed == Int64(fileSize))
+        let moved = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
+        let volume = VolumeReachability.volumeName(forPath: rig.copies[0].fullPath)
+        #expect(job.state == .finished(summary: "0 deleted · 1 to the Trash · \(moved) waiting in the Trash of \(volume)"), "\(job.state)")
+        #expect(job.result.deleted == 1 && job.result.bytesFreed == 0)
         let plan = try #require(job.plan)
-        #expect(plan.entries[0].status == .deleted && plan.entries[0].tier == .permanent)
+        #expect(plan.entries[0].status == .trashed && plan.entries[0].tier == .trash)
         #expect(plan.entries[0].remainingVerifiedCopies == 3 && plan.entries[0].hasVerifiedArchive == true)
         let reason = try #require(plan.entries[0].tierReason)
-        #expect(reason.hasPrefix("space back now (3 verified remain: keeper on ") && reason.contains("archive copy on ")
-                && reason.contains("sibling verified-sibling-of-keeper.mov on "), Comment(rawValue: reason))
+        #expect(reason.hasPrefix(DeleteDuplicatesDiskWorker.trashOnlyReasonPrefix + "space back now (3 verified remain: keeper on ")
+                && reason.contains("archive copy on ") && reason.contains("sibling verified-sibling-of-keeper.mov on "),
+                Comment(rawValue: reason))
         #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
-        #expect(!FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash").path), "nothing went to a Trash")
+        #expect(FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/copy1.mov").path),
+                "in the (scratch) Trash — never unlinked")
         #expect(probe.blocks("keeper") == 0 && probe.blocks("quarantine") == 3 && probe.blocks("duplicate") == 0,
                 "single read: keeper 0, duplicate once in quarantine")
         await rig.model.mediaLedger.waitForPendingWrites()
-        let events = rig.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }
+        #expect(rig.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }.isEmpty, "Trash only")
+        let events = rig.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }
         #expect(events.count == 1)
-        #expect(events.first?.detail[MediaLedgerEvent.Detail.tier] == "permanent")
+        #expect(events.first?.detail[MediaLedgerEvent.Detail.tier] == "trash")
         #expect(events.first?.detail[MediaLedgerEvent.Detail.remainingVerifiedCopies] == "3")
-        #expect(events.first?.detail[MediaLedgerEvent.Detail.mode] == "permanent")
+        #expect(events.first?.detail[MediaLedgerEvent.Detail.mode] == "trash")
         let console = await consoleText(rig.model)
-        #expect(console.contains("Deleted (verified identical to keeper.mov): copy1.mov [keeper matched by stored fixity, not re-read] — 3 verified copies remain"))
+        #expect(console.contains("Moved to the Trash of \(volume) (verified identical to keeper.mov): copy1.mov [keeper matched by stored fixity, not re-read] — 3 verified copies remain"))
     }
 
     @Test func exactlyArchiveAndKeeperRemainingGoesToTheTrash() async throws {
@@ -733,7 +739,7 @@ struct DeleteDuplicatesTierAndSpeedTests {
             #expect(probe.peakQuarantineOverlap == expectedPeak, "\(tech): \(probe.peakQuarantineOverlap) quarantine holds overlapped")
             #expect(quarantineFolders(in: rig.dir).isEmpty)
             let plan = try #require(job.plan)
-            #expect(plan.entries.allSatisfy { $0.status == .deleted })
+            #expect(plan.entries.allSatisfy { $0.status == .trashed })
         }
     }
 
@@ -794,7 +800,7 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(job.pausedForQuitLogLine == "delete duplicates paused at 1 of 3 — plan kept, resume at next launch")
         let plan = try #require(job.plan)
         let onDisk = try DeleteDuplicatesPlanStore.load(url: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: rig.root))
-        #expect(onDisk.isResumable && onDisk.entries.map(\.status) == [.deleted, .pending, .pending])
+        #expect(onDisk.isResumable && onDisk.entries.map(\.status) == [.trashed, .pending, .pending])
         #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath) && FileManager.default.fileExists(atPath: rig.copies[1].fullPath))
 
         job.resume()
@@ -829,7 +835,7 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(job.result.deleted == 1 && job.result.failed == 0)
         let plan = try #require(job.plan)
         let onDisk = try DeleteDuplicatesPlanStore.load(url: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: rig.root))
-        #expect(onDisk.finishedAt == nil && onDisk.outcome == nil && onDisk.entries.map(\.status) == [.deleted, .pending, .pending])
+        #expect(onDisk.finishedAt == nil && onDisk.outcome == nil && onDisk.entries.map(\.status) == [.trashed, .pending, .pending])
         #expect(rig.model.pendingDeleteDuplicatesResume?.id == plan.id, "offered to resume")
         #expect(quarantineFolders(in: rig.dir).isEmpty)
     }
@@ -856,7 +862,7 @@ struct DeleteDuplicatesTierAndSpeedTests {
         let plan = try #require(job.plan)
         let onDisk = try DeleteDuplicatesPlanStore.load(url: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: rig.root))
         #expect(onDisk.finishedAt == nil && onDisk.outcome == nil, "still resumable")
-        #expect(onDisk.entries.map(\.status) == [.deleted, .pending, .pending], "\(onDisk.entries.map(\.status))")
+        #expect(onDisk.entries.map(\.status) == [.trashed, .pending, .pending], "\(onDisk.entries.map(\.status))")
         #expect(onDisk.entries[1].note.contains("interrupted by Stop"))
         #expect(onDisk.log.contains { $0.hasPrefix("Suspended by Stop with 2 remaining") })
         #expect(!FileManager.default.fileExists(atPath: DeleteDuplicatesPlanStore.doneURL(for: plan.id, root: rig.root).path), "never filed as done")
@@ -1057,7 +1063,7 @@ struct DeleteDuplicatesCodexFollowupTests {
         job.start(); await job.task?.value
 
         let plan = try #require(job.plan)
-        #expect(plan.entries.map(\.status) == [.refused, .deleted, .deleted], "\(plan.entries.map(\.status))")
+        #expect(plan.entries.map(\.status) == [.refused, .trashed, .trashed], "\(plan.entries.map(\.status))")
         #expect(probe.blocks("keeper") == 5, "the keeper is read exactly once — \(probe.blocks("keeper")) blocks")
         #expect(probe.opens(of: rig.keeper.fullPath) == 2, "head compare + one full read, both in the refused first pair — \(probe.opens(of: rig.keeper.fullPath))")
         #expect(probe.blocks("duplicate") == 5, "only the first pair read its file at its path")

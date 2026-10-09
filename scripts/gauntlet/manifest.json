@@ -8906,7 +8906,7 @@
         "stopBetweenTheTicketSaveAndPhaseTwoPutsTheFileBack",
         "stopKeepsThePlanResumableByDefaultAndOffersItAtOnce",
         "subtitleAndSummaryNameTheTrash",
-        "threeVerifiedCopiesRemainingDeletesOutrightWithTierOnTheLedger",
+        "threeVerifiedCopiesRemainingGoToTheTrashWithTierOnTheLedger",
         "tierTable",
         "trashRungHandsTheOriginalPathToTheTrash",
         "twoPairsOfOneFamilyDoNotCountEachOther",
@@ -25561,6 +25561,22 @@
         "test_explicit_legacy_gets_no_audited_flags",
         "test_hash_mismatch_writes_nothing"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeleteDuplicatesTrashOnlyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesTrashOnlyTests"
+      ],
+      "tests": [
+        "aFailedMoveToTheTrashIsAVisibleHoldWithTheFileAtHome",
+        "aFamilyThatOnceEarnedAnOutrightDeleteGoesToTheTrash",
+        "aRecordedPermanentDecisionIsExecutedAsTheTrash",
+        "aResumedLegacyPermanentRowGoesToTheTrash",
+        "noRemovalPathRemainsInTheJob"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -26590,6 +26606,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteDuplicatesTrashFailureRedTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeleteDuplicatesTrashOnlyTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

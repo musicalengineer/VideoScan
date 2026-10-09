@@ -652,7 +652,7 @@ struct DeleteDuplicatesCodex258Round4Tests {
         let job = try await run(rig, during: { rig.model.duplicateKeeperSettings.preferTrashForEveryDuplicate = false })
         let rows = try #require(job.plan?.entries)
         #expect(rows[0].status == .trashed, "a recorded Trash was upgraded mid-pair (\(rows[0].status))")
-        #expect(rows[1].status == .deleted, "the NEXT row is decided afresh, with the setting off (\(rows[1].status))")
+        #expect(rows[1].status == .trashed, "the NEXT row is decided afresh — and is the Trash whatever the setting (\(rows[1].status))")
     }
 
     /// The model's part of the boundary is ONE value, read in one hop: the

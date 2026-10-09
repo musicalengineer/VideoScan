@@ -380,7 +380,7 @@ struct DeleteDuplicatesRecoveryCodex1593Tests {
         let after = try #require(job.plan)
         // (a) restored from the recorded folder, re-verified, deleted;
         //     the stranger and the decoy untouched.
-        #expect(after.entries[0].status == .deleted, "\(after.entries[0].note)")
+        #expect(after.entries[0].status == .trashed, "\(after.entries[0].note)")
         #expect(after.entries[0].quarantineDirectory == nil)
         #expect(FileManager.default.fileExists(atPath: stranger.path), "the stranger in the recorded folder survives")
         #expect(FileManager.default.fileExists(atPath: goodDir.path), "the recorded folder was not empty — left in place")
@@ -432,7 +432,7 @@ struct DeleteDuplicatesRecoveryCodex1593Tests {
         await job.task?.value
 
         let after = try #require(job.plan)
-        #expect(after.entries[0].status == .deleted, Comment(rawValue: after.entries[0].note))
+        #expect(after.entries[0].status == .trashed, Comment(rawValue: after.entries[0].note))
         #expect(!FileManager.default.fileExists(atPath: copy.fullPath))
         #expect(!FileManager.default.fileExists(atPath: derived.path), "the (empty) derived folder is gone")
         #expect(job.result.deleted == 1)
@@ -486,9 +486,9 @@ struct DeleteDuplicatesJobCodex1593Tests {
         gate.onFirstDuplicateBlock = { Task { @MainActor in job.pause() } }
         job.start()
         let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline, (job.plan?.counts.deleted ?? 0) < 1 { await Task.yield() }
+        while ContinuousClock.now < deadline, (job.plan?.counts.trashed ?? 0) < 1 { await Task.yield() }
         try? await Task.sleep(nanoseconds: 300_000_000)
-        #expect(job.isPaused && job.plan?.counts.deleted == 1)
+        #expect(job.isPaused && job.plan?.counts.trashed == 1)
 
         rig.copies[1].duplicateDisposition = .keep            // re-elected while paused
         rig.different.duplicateGroupID = UUID()               // regrouped while paused
@@ -543,7 +543,7 @@ struct DeleteDuplicatesJobCodex1593Tests {
         #expect(target.purgedAt == nil)
         #expect(target.fullPath == movedPath)
         await model.mediaLedger.waitForPendingWrites()
-        let events = model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }
+        let events = model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }
         #expect(events.count == 1)
         #expect(events.first?.fullPath == c.path, "the ledger names the file that left the disk, not the row's new path")
         #expect(events.first?.filename == "copy.mov")
@@ -646,7 +646,7 @@ struct DeleteDuplicatesJobCodex1593Tests {
         #expect(FileManager.default.fileExists(atPath: url.path), "the last good plan stays in place")
         let onDisk = try DeleteDuplicatesPlanStore.load(url: url)
         #expect(onDisk.finishedAt == nil && onDisk.outcome == nil, "…and it is the pre-final one")
-        #expect(onDisk.entries.map(\.status) == [.deleted, .deleted, .refused])
+        #expect(onDisk.entries.map(\.status) == [.trashed, .trashed, .refused])
         #expect(!FileManager.default.fileExists(atPath: DeleteDuplicatesPlanStore.doneURL(for: plan.id, root: rig.root).path),
                 "a stale plan is never filed as done")
         let console = await consoleText(rig.model)

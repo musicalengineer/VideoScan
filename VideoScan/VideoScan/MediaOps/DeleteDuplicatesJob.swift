@@ -25,13 +25,18 @@
 //     the duplicate's fresh digest against the stored one;
 //   • there is NO both-sides-stored, nothing-read path — `contentHash` and
 //     `partialMD5` never authorise a delete (design #320);
-//   • COPY-COUNT TIER, decided per pair from the fresh catalog on the
-//     COUNT alone (the archive is not required — Rick, late 2026-09-20):
-//     with three or more verified copies remaining (the keeper just
-//     verified, archive copies online with this digest, siblings whose
-//     stored fixity reproduces) the file is unlinked; with exactly two it
-//     goes to the drive's Trash; with fewer it is put back untouched.
-//     "Prefer the Trash for every duplicate" forces the Trash.
+//   • TRASH ONLY (Rick 2026-10-09, design triage_delete_streamline §9 R3):
+//     a verified duplicate goes to its drive's Trash — NEVER an unlink.
+//     Rick empties the Trash himself ("trash day") and that is the only
+//     permanent step. This is an EXECUTION rule, not a setting: whatever
+//     a row recorded — `.permanent` from a plan written before the ruling
+//     included — the disk worker hands the verifier `.trash` and nothing
+//     else (`trashOnly`), and a failed move to the Trash is a HOLD with the
+//     file back at its path, never a fall-back to unlink. Pinned by
+//     DeleteDuplicatesTrashOnlyTests, including a source sensor;
+//   • the copy-count tier still COUNTS the family's verified copies (for
+//     the row's words and the ledger); it decides only whether the file
+//     goes to the Trash or is put back untouched.
 //
 // ONE PAIR, TWO DISK PHASES. Phase 1 (detached): hold — move the file
 // into an owner-only quarantine folder named from this plan + row, hash
@@ -166,6 +171,10 @@ enum DeleteDuplicatesDiskOutcome: Sendable {
     /// Phase 1 done: verified and in quarantine, not yet removed; the
     /// tier facts were gathered with the file's digest in hand.
     case quarantined(QuarantineTicket, facts: DeletionTierFacts)
+    /// UNLINKED. Never requested since Trash only (2026-10-09): the job
+    /// hands the verifier `.trash` and nothing else. Kept so that if the
+    /// verifier ever reported an unlink, the row would say what really
+    /// happened (the file is gone) instead of a comfortable lie.
     case deleted(bytes: Int64, proof: VerifiedDuplicate)
     case trashed(bytes: Int64, location: String, proof: VerifiedDuplicate)
     case refused(reason: String, cancelled: Bool)
@@ -231,6 +240,46 @@ struct DeleteDuplicatesPhaseTwo: Sendable {
     /// file; so it is never counted as a surviving copy for another copy of
     /// this run (`DeleteDuplicatesPlan.Entry.notCountedWhy`).
     var notCountedWhy: String? = nil
+}
+
+/// A locked slot for the reason the Trash step gave when it refused.
+private final class ReasonBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stored: String?
+    var value: String? { lock.withLock { stored } }
+    func set(_ s: String) { lock.withLock { stored = s } }
+}
+
+/// The job's ONE Trash step as the verifier calls it (`Hooks.trashItem`),
+/// with its refusal remembered. When the drive refuses the Trash the
+/// verifier has already put the file back at its public path and reports
+/// `.failed`; this turns exactly that into a HOLD, named — never "failed",
+/// never followed by an unlink (Trash only: there is no unlink to fall back
+/// to). (For Rick: a small value holding a reference to a locked slot — a
+/// C++ struct with a shared_ptr member — so the closure the verifier calls
+/// and the caller see the same refusal.)
+struct ObservedTrashStep {
+    private let refusal = ReasonBox()
+
+    /// Route `hooks`' Trash step (the test seam, or the live one) through
+    /// this observer.
+    init(wrapping hooks: inout SignatureVerification.Hooks) {
+        let box = refusal
+        let step = hooks.trashItem ?? DeleteDuplicatesDiskWorker.moveToTrash
+        hooks.trashItem = { url in
+            do { return try step(url) } catch {
+                box.set(error.localizedDescription)
+                throw error
+            }
+        }
+    }
+
+    /// The row's hold note when THIS step refused — the file is back at
+    /// `path`; nil for every other outcome.
+    func heldNote(after outcome: DeleteDuplicatesDiskOutcome, path: String) -> String? {
+        guard case .failed = outcome, let why = refusal.value else { return nil }
+        return DeleteDuplicatesDiskWorker.trashRefusedNote(why, path: path)
+    }
 }
 
 /// A locked slot for the fixity the gate reports from the disk thread.
@@ -378,21 +427,32 @@ enum DeleteDuplicatesDiskWorker {
     /// is the tier recorded before the save; it is what the file goes by
     /// when every stamp reproduces. Stat only — the keeper is never read
     /// here.
-    static func deleteQuarantined(_ ticket: QuarantineTicket, decided: DeletionTierDecision,
+    static func deleteQuarantined(_ ticket: QuarantineTicket, decided recorded: DeletionTierDecision,
                                   facts: DeletionTierFacts, preferTrash: Bool,
                                   keeperFilename: String,
                                   hooks: SignatureVerification.Hooks,
                                   archiveCheck: ArchiveRemovalCheck? = nil,
                                   boundary ask: (@Sendable (_ currentPath: String) -> RemovalBoundaryAnswer)? = nil)
         -> DeleteDuplicatesPhaseTwo {
-        guard let decidedTier = decided.tier else {
+        guard recorded.tier != nil else {
             // Never reached — the caller releases a nil tier itself — but
-            // a nil tier must never default to an unlink.
+            // a nil tier must never default to a removal.
             return DeleteDuplicatesPhaseTwo(
-                outcome: release(ticket, reason: decided.reason, keeperFilename: keeperFilename, leftAlone: facts),
-                decision: decided, facts: facts, evidenceChanged: false)
+                outcome: release(ticket, reason: recorded.reason, keeperFilename: keeperFilename, leftAlone: facts),
+                decision: recorded, facts: facts, evidenceChanged: false)
         }
-        let recorded: SignatureVerification.Disposal = decidedTier == .trash ? .trash : .permanent
+        // TRASH ONLY: a recorded `.permanent` (a legacy plan, any caller)
+        // becomes the Trash here, said on the row and in the log.
+        let decided = Self.trashOnly(recorded)
+        let trashOnlyChanged = decided != recorded
+        if trashOnlyChanged {
+            deleteDupLog.notice("\(Self.trashOnlyLogLine(path: ticket.originalPath), privacy: .public)")
+        }
+        // A failed move to the Trash is caught by CAUSE (the step is
+        // observed), so the outcome below can be a HOLD — never confused
+        // with any other failure, never followed by an unlink.
+        var hooks = hooks
+        let trash = ObservedTrashStep(wrapping: &hooks)
         // Set by the final verdict when a counted copy no longer holds:
         // the re-decided tier and the facts behind it. A non-escaping
         // closure may write a local of its caller (for Rick: a lambda
@@ -407,7 +467,7 @@ enum DeleteDuplicatesDiskWorker {
         // protection that main would not have found: never counted as a
         // surviving copy for another copy of this run (codex #258 r4-1).
         var notCountedWhy: String?
-        let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {
+        let result = SignatureVerification.deleteQuarantined(ticket, disposal: .trash, hooks: hooks) {
             // The check captured at the copy's turn: an extra, earlier look
             // that can only refuse — it is never what lets a file go.
             let captured = archiveCheck?.refusal(forPath: ticket.quarantinedPath)
@@ -445,25 +505,11 @@ enum DeleteDuplicatesDiskWorker {
                 notCountedWhy = DuplicateDeletionHold.archiveRuleAtRemovalWhy
                 return .putBack(reason: refusal.note)
             }
-            // "Prefer the Trash", read NOW (r4 H): turned on since the tier
-            // was recorded, it takes effect for this very removal. It only
-            // ever makes the outcome more conservative — turned OFF, the
-            // value sampled before phase two still stands.
             let trashEveryDuplicate = preferTrash || word?.preferTrash == true
             let now = facts.recheck()
-            guard !now.droppedAtBoundary.isEmpty else {
-                // Every counted copy still reproduces its stamp: the
-                // recorded tier stands — or goes to the Trash if the setting
-                // was turned on meanwhile.
-                guard trashEveryDuplicate, recorded == .permanent else { return .proceed(recorded) }
-                var because = now
-                because.droppedAtBoundary = [DeletionTierText.preferTrashTurnedOn]
-                let trash = DeletionTierDecision.decide(facts: because, preferTrash: true)
-                boundary = (DeletionTierDecision(tier: .trash, remainingVerifiedCopies: trash.remainingVerifiedCopies,
-                                                 reason: "downgraded before removal — " + trash.reason), because)
-                return .proceed(.trash)
-            }
-            let redecided = DeletionTierDecision.decide(facts: now, preferTrash: trashEveryDuplicate)
+            // Every counted copy still reproduces its stamp: the Trash.
+            guard !now.droppedAtBoundary.isEmpty else { return .proceed(.trash) }
+            let redecided = Self.trashOnly(DeletionTierDecision.decide(facts: now, preferTrash: trashEveryDuplicate))
             guard let tier = redecided.tier else {
                 // Below two: back to its original path, untouched. Not a
                 // refusal of the PAIR — the duplicate is still identical to
@@ -477,9 +523,14 @@ enum DeleteDuplicatesDiskWorker {
             let prefix = tier == decided.tier ? "re-checked before removal — " : "downgraded before removal — "
             boundary = (DeletionTierDecision(tier: tier, remainingVerifiedCopies: redecided.remainingVerifiedCopies,
                                              reason: prefix + redecided.reason), now)
-            return .proceed(tier == .trash ? .trash : .permanent)
+            return .proceed(.trash)
         }
         var outcome = map(result, proof: ticket.proof, keeper: keeperFilename)
+        if let note = trash.heldNote(after: outcome, path: ticket.originalPath) {
+            return DeleteDuplicatesPhaseTwo(outcome: .leftAlone(reason: note, facts: facts), decision: decided,
+                                            facts: facts, evidenceChanged: false,
+                                            heldNote: note, notCountedWhy: note)
+        }
         if let archiveRefusal {
             // Put back at its path: a REFUSAL of this pair (the row goes to
             // Review with the reason), not a cancel. A failed put-back
@@ -500,7 +551,8 @@ enum DeleteDuplicatesDiskWorker {
                                             heldNote: heldNote, notCountedWhy: notCountedWhy)
         }
         guard let boundary else {
-            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts, evidenceChanged: false)
+            return DeleteDuplicatesPhaseTwo(outcome: outcome, decision: decided, facts: facts,
+                                            evidenceChanged: trashOnlyChanged)
         }
         if boundary.decision.tier == nil, case .refused(_, true) = outcome {
             // The put-back the verdict asked for succeeded: left alone,
@@ -514,6 +566,61 @@ enum DeleteDuplicatesDiskWorker {
     /// The row note for a pair left alone because the archive-volume
     /// snapshot was being rebuilt (a drive just came or went).
     static let driveListRefreshing = "the drive list was refreshing (a drive was just mounted or unmounted) — left alone; try again"
+
+    // MARK: Trash only (Rick 2026-10-09)
+
+    /// The decision a file goes by: a `.permanent` one — recorded by a plan
+    /// written before the ruling, or decided by anything else — becomes the
+    /// Trash, with the reason saying so. Anything else is returned as is.
+    nonisolated static func trashOnly(_ decision: DeletionTierDecision) -> DeletionTierDecision {
+        guard decision.tier == .permanent else { return decision }
+        return DeletionTierDecision(tier: .trash, remainingVerifiedCopies: decision.remainingVerifiedCopies,
+                                    reason: trashOnlyReasonPrefix + decision.reason + ")")
+    }
+
+    static let trashOnlyReasonPrefix = "to the Trash — Trash only: the app never deletes outright (was: "
+
+    nonisolated static func trashOnlyLogLine(path: String) -> String {
+        "[dupjob] trash only: \(path) was recorded for an outright delete — it goes to the Trash instead"
+    }
+
+    /// "couldn't move it to the Trash on SanDisk: … — nothing was deleted;
+    /// it is back at /Volumes/SanDisk/a.mov".
+    nonisolated static func trashRefusedNote(_ why: String, path: String) -> String {
+        "couldn't move it to the Trash on \(VolumeReachability.volumeName(forPath: path)): \(why) — "
+            + "nothing was deleted; it is back at \(path)"
+    }
+
+    /// THE ONE live Trash step of this job (the verifier calls it through
+    /// `Hooks.trashItem`). Under a test host it moves the file into a
+    /// per-process scratch folder instead, so no fixture ever lands in
+    /// Rick's real Trash — whatever hooks a test passes (the plan store's
+    /// discipline, `DeleteDuplicatesPlanStore.defaultRoot`).
+    nonisolated static func moveToTrash(_ url: URL) throws -> URL {
+        if TestEnvironment.isTestHost { return try moveToTestHostTrash(url) }
+        var resulting: NSURL?
+        try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
+        return (resulting as URL?) ?? url
+    }
+
+    nonisolated static let testHostTrash = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("VideoScan-tests/trash-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+
+    /// No-clobber move into `testHostTrash` ("a 2.mov" on a name clash).
+    nonisolated static func moveToTestHostTrash(_ url: URL) throws -> URL {
+        let fm = FileManager.default
+        try fm.createDirectory(at: testHostTrash, withIntermediateDirectories: true)
+        let stem = url.deletingPathExtension().lastPathComponent
+        let ext = url.pathExtension
+        var destination = testHostTrash.appendingPathComponent(url.lastPathComponent)
+        var n = 2
+        while fm.fileExists(atPath: destination.path) {
+            destination = testHostTrash.appendingPathComponent(ext.isEmpty ? "\(stem) \(n)" : "\(stem) \(n).\(ext)")
+            n += 1
+        }
+        try fm.moveItem(at: url, to: destination)
+        return destination
+    }
 
     /// Put a quarantined file back without deleting it (the plan could not
     /// record the quarantine, the run is stopping, or the tier said no).
@@ -1313,7 +1420,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // The preference this decision is made under travels with it to
             // the removal (codex #258 r5-1): a later sample never undoes it.
             let recordedPreferTrash = model.duplicateKeeperSettings.preferTrashForEveryDuplicate
-            let decided = DeletionTierDecision.decide(facts: facts, preferTrash: recordedPreferTrash)
+            // TRASH ONLY where the decision is RECORDED: the saved row says
+            // what will happen (the worker converts once more, for legacy rows).
+            let decided = DeleteDuplicatesDiskWorker.trashOnly(
+                DeletionTierDecision.decide(facts: facts, preferTrash: recordedPreferTrash))
             decision = decided
             // Record WHERE the file is and how it will go before it can be
             // removed (#2).
@@ -1459,6 +1569,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         var leftAlone = 0
         /// Rows the catalog no longer authorised (gone, re-decided).
         var skipped = 0
+        /// Rows HELD at their removal (a protection found there, a move to
+        /// the Trash the drive refused): the file is back at its path.
+        var held = 0
         var bytesFreed: Int64 = 0
         var bytesTrashed: Int64 = 0
         var bytesFailed: Int64 = 0
@@ -1515,6 +1628,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 interruptedFileOutcomes.append("could not put back \(entry.filename) — retained at \(path): \(reason)")
             }
         case .deleted(let bytes, let proof):
+            // Never requested (Trash only) — if the verifier ever reports an
+            // unlink, the row and the log say what really happened.
+            deleteDupLog.fault("Trash only broken: \(entry.path, privacy: .public) was unlinked")
+            model.log("  ⚠️ \(entry.filename) was DELETED outright although this job only uses the Trash — please report this.")
             tally.bytesFreed += bytes
             tally.deleted += 1
             rowLog("deleted", entry, Self.remainWords(facts: facts, decision: decision))
@@ -1545,6 +1662,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     private func settleHeld(_ note: String, entry: DeleteDuplicatesPlan.Entry,
                             facts: DeletionTierFacts, model: VideoScanModel) {
         tally.skipped += 1
+        tally.held += 1
         tally.bytesSkipped += entry.sizeBytes
         rowLog("skipped", entry, note + " — put back, nothing removed")
         mutatePlan {

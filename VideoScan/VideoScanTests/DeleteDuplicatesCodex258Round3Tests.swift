@@ -281,7 +281,7 @@ struct DeleteDuplicatesCodex258Round3Tests {
         }
         let job = try SourceTree.appCode(named: "DeleteDuplicatesJob.swift")
         // The verdict closure itself: the holds, then the copies and their drives.
-        let verdict = try body(job, from: "let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {",
+        let verdict = try body(job, from: "let result = SignatureVerification.deleteQuarantined(ticket, disposal: .trash, hooks: hooks) {",
                                to: "var outcome = map(result, proof: ticket.proof, keeper: keeperFilename)")
         #expect(verdict.contains("let word = ask?(ticket.quarantinedPath)") && verdict.contains("let now = facts.recheck()"))
         #expect(verdict.components(separatedBy: "ask?(").count == 2, "the final verdict asks the boundary more than once")

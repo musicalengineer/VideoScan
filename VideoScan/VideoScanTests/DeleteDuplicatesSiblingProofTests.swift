@@ -247,7 +247,7 @@ struct DeleteDuplicatesSiblingProofTests {
         let job = makeJob(model, dir, probe, sink: sink)
         job.start(); await job.task?.value
 
-        #expect(job.plan?.entries.first?.status == .deleted)
+        #expect(job.plan?.entries.first?.status == .trashed)
         #expect(probe.blocks("sibling") == 3, "one sibling reaches three copies (with the archive's); the other three are not read")
         #expect(job.runTally.siblingReads == 1)
     }
@@ -545,7 +545,7 @@ struct DeleteDuplicatesForecastTests {
         job.start(); await job.task?.value
         let plan = try #require(job.plan)
         func status(_ r: VideoRecord) -> DeleteDuplicatesPlan.EntryStatus? { plan.entries.first { $0.id == r.id }?.status }
-        #expect(status(permanent.copies[0]) == .deleted)
+        #expect(status(permanent.copies[0]) == .trashed, "Trash only")
         #expect(status(trash.copies[0]) == .trashed)
         #expect(status(needs.copies[0]) == .trashed, "the one read proved the sibling")
         #expect(status(alone.copies[0]) == .skipped)
@@ -666,7 +666,7 @@ struct DeleteDuplicatesRowLoggingTests {
             #expect(hits.count == 1, "\(prefix): \(hits)")
             return hits.first
         }
-        let deleted = try #require(one("[dupjob] deleted p-copy1.mov (\(sizeText)) — 3 verified copies remain: keeper on "))
+        let deleted = try #require(one("[dupjob] trashed p-copy1.mov (\(sizeText)) — 3 verified copies remain: keeper on "))
         #expect(deleted.contains("sibling p-sib1.mov on ") && deleted.contains("archive copy on "), Comment(rawValue: deleted))
         let trashed = try #require(one("[dupjob] trashed t-copy1.mov (\(sizeText)) — 2 verified copies remain: keeper on "))
         #expect(trashed.contains("sibling t-sib1.mov on ") && trashed.contains("in the Trash of "), Comment(rawValue: trashed))
@@ -678,9 +678,10 @@ struct DeleteDuplicatesRowLoggingTests {
         #expect(notDup.copies[0].duplicateDisposition == .review, "the refused pair is flagged for Review")
         #expect(lines.filter { $0.hasPrefix("[dupjob] ") }.count == 6, "one line per decided row + one per sibling read: \(lines)")
 
-        let two = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 2), countStyle: .file)
-        let summary = "delete duplicates done: \(dir.lastPathComponent) — deleted 1 (\(sizeText)) · trashed 2 (\(two)) · "
-            + "left alone 1 (\(sizeText)) · refused 1 (\(sizeText)) · freed \(sizeText) · 1 sibling copy read (\(sizeText))"
+        let three = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 3), countStyle: .file)
+        let none = ByteCountFormatter.string(fromByteCount: 0, countStyle: .file)
+        let summary = "delete duplicates done: \(dir.lastPathComponent) — deleted 0 (\(none)) · trashed 3 (\(three)) · "
+            + "left alone 1 (\(sizeText)) · refused 1 (\(sizeText)) · freed \(none) · 1 sibling copy read (\(sizeText))"
         #expect(lines.contains(summary), "expected \(summary)\n got \(lines.filter { $0.hasPrefix("delete duplicates") })")
         #expect(lines.filter { $0.hasPrefix("delete duplicates done: ") }.count == 1)
         #expect(job.wroteOwnTerminalLine, "the MFO center's generic outcome line is skipped — one final line per run")

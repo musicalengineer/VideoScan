@@ -429,7 +429,7 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
     /// buffer first; the Prepare hands over as its state changes.
     @Test func theBoundaryTheTurnAndTheHandOverAreWired() throws {
         let job = try SourceTree.appSource(named: "DeleteDuplicatesJob.swift")
-        let verdict = try #require(job.range(of: "let result = SignatureVerification.deleteQuarantined(ticket, disposal: recorded, hooks: hooks) {"))
+        let verdict = try #require(job.range(of: "let result = SignatureVerification.deleteQuarantined(ticket, disposal: .trash, hooks: hooks) {"))
         let recheck = try #require(job.range(of: "let now = facts.recheck()", range: verdict.upperBound..<job.endIndex))
         #expect(String(job[verdict.upperBound..<recheck.lowerBound]).contains("let word = ask?(ticket.quarantinedPath)\n            if let note = word?.holdNote {"),
                 "the final verdict no longer asks the holds before the removal")

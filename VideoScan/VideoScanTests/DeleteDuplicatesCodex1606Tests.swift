@@ -496,7 +496,7 @@ struct DeleteDuplicatesStrandedRecoveryCodex1606Tests {
         #expect(after.entries[0].status == .refused && after.entries[0].quarantineDirectory == nil, "\(after.entries[0].note)")
         #expect(after.entries[0].note.hasSuffix("— put back at \(stranded.fullPath)"), Comment(rawValue: after.entries[0].note))
         #expect(FileManager.default.fileExists(atPath: stranded.fullPath) && !FileManager.default.fileExists(atPath: qdir.path))
-        #expect(after.entries[1].status == .deleted, "\(after.entries[1].status): \(after.entries[1].note)")
+        #expect(after.entries[1].status == .trashed, "\(after.entries[1].status): \(after.entries[1].note)")
         #expect(!after.needsRecovery && after.finishedAt != nil)
         #expect(FileManager.default.fileExists(
             atPath: DeleteDuplicatesPlanStore.doneURL(for: plan.id, root: rig.root).appendingPathComponent("plan.json").path),

@@ -237,7 +237,7 @@ struct DeleteDuplicatesFallbackBoundaryCodex1619Tests {
         }
         job.start(); await job.task?.value
 
-        #expect(tierWhenSaved == .permanent, "three verified copies at the save")
+        #expect(tierWhenSaved == .trash, "three verified copies at the save: recorded as the Trash (Trash only)")
         #expect(readsWhenSaved == 0 && probe.blocks("quarantine") == 3, "the fallback's re-read happened in phase two")
         #expect(probe.blocks("keeper") == 3 && probe.blocks("duplicate") == 3, "the fallback: both read once in place")
         #expect(probe.didFire("quarantine"), "the sibling was rewritten mid-read")
