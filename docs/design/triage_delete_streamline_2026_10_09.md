@@ -186,3 +186,24 @@ WHY IT WAS FLAGGED   duplicate of an archived file (Content Steward, 10/8)
   detector exists; until then the section shows same-length footage only.
 - Open in < 1 s for one file: O(group), never O(records) per open (needs the duplicate
   groups and footage groups already computed; if stale, say "as of <time> — Refresh").
+
+## 11. Queued after the Duplicates view (Rick, 2026-10-09)
+- **Archive cleanup (ruled: allowed with explicit per-item OK).** Rapid promoting earlier put
+  redundant versions into FamilyArchive (one CapeCod hour has 7: DV original, 3 FFV1, 2 HEVC,
+  1 ProRes). Recommend a keep set: the original capture + one preservation + one access + one
+  edit copy; everything else is offered, one confirmation per item, Trash on the archive
+  volume. MUST keep the 00_Index manifest, journals and the ledger consistent. Data-risk:
+  `/safety-critical` + codex. Background jobs never do this on their own.
+- **Differences & Advice in the Same Footage window**: every member vs the reference (exact
+  copy / different container / re-encode codec→codec / different edit / longer), codec · size
+  · drive · archived, each member's Verify verdict in plain words, and a recommendation line
+  with "Move recommended to Trash…".
+- **Codec ladder** (a data table): original capture (kept whatever the codec — DV from a
+  digital tape is bit-perfect) → preservation (FFV1) → edit (ProRes/DNx) → access (HEVC/H.264/AV1)
+  → legacy derivatives to retire (Cinepak, Sorenson, MPEG-1, RealVideo, WMV, DivX/Xvid, 3GP,
+  low-res MJPEG, Indeo, FLV…). Old derivatives go when a better version exists; a unique file
+  is always kept (Repair can modernise it).
+- **Only-copy badge** in Triage/Catalog ("this is the only copy — keep").
+- **Purchased movies** (FairPlay DRM, iTunes purchase metadata, .m4v under Movies/TV) →
+  suggested "not family media".
+- **Footage Spectrum**: a plain-word verdict line per file (from Verify) instead of colours only.
