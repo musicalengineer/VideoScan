@@ -130,7 +130,12 @@ and F7 against the source. These override §3–§7 where they conflict.
   duplicate path quarantines before hashing). Name the execution gates for network mounts,
   archive-backup drives, longer-than-master and A/V halves; keeper precedence is election, not
   protection.
-- **R5 (F5) Survival rule — DECISION FOR RICK**: today Trash needs ≥ 2 verified copies to
+- **R5 (F5) Survival rule — RULED by Rick 2026-10-09: keep ONE verified copy.** "When we have
+  5 copies, it should be easy to move them to Trash." Groups with 3+ copies: extras
+  pre-checked, bulk "Move selected extras to Trash" is the fast path. Groups with exactly 2:
+  allowed, but NOT pre-checked (a deliberate tick — "it is ok to ask or compare"). The single
+  keeper must still be proven at disposal time (read in full / fixity, digest match, not an
+  alias of the target). Was: today Trash needs ≥ 2 verified copies to
   REMAIN (`minimumForTrash = 2`, DeleteDuplicatesPlan.swift ~557), so "keep 1" is refused:
   with 2 copies, nothing moves. Options: keep the 2-remain rule (the UI says "keeps 2"), or
   allow 1 verified keeper for Trash (Trash is the safety net). Digest/identity verification
