@@ -666,6 +666,9 @@ struct ArchiveVolumeProtectionSourceSensor {
 
     /// `"-y"` — ffmpeg's "overwrite the output without asking".
     static let reviewedFFmpegOverwrites: [String: Reviewed] = [
+        "VideoScan/MediaOps/Repair/MediaRepairCommand.swift": Reviewed(count: 1, reason: "remux writes only this run's reserved O_EXCL .vs-partial (MediaRepairPartial); published via ExclusivePublish, no-clobber"),
+        "VideoScan/MediaOps/Repair/MediaRepairRecipe.swift": Reviewed(count: 1, reason: "Repair Now's one pass writes only this run's reserved O_EXCL .vs-partial; published via ExclusivePublish, no-clobber"),
+        "VideoScan/MediaOps/Repair/MediaRepairAdvice.swift": Reviewed(count: 1, reason: "not an ffmpeg call: filters -y OUT of the human-readable command shown in the Repair sheet"),
         "VideoScan/MediaOps/BalanceAudioJob.swift": Reviewed(count: 1, reason: "writes its own .vs-partial; published with a non-clobbering moveItem + re-uniquify"),
         "VideoScan/Media/CaptionRunner.swift": Reviewed(count: 1, reason: "a frame PNG in its own temp folder"),
         "VideoScan/MediaOps/CleanupFFmpegEngine.swift": Reviewed(count: 1, reason: "renders into the job's scratch dir; CleanupJob publishes non-clobbering"),
