@@ -1,8 +1,9 @@
 import SwiftUI
 
-// MARK: - "Get Media Info…" ⌘I (Rick 2026-10-07; was "Audio Info…")
+// MARK: - "Get Info…" ⌘I (Rick 2026-10-08; was "Get Media Info…", and
+// before that "Audio Info…")
 //
-// The facts sheet: container, every stream, and the last Check Media
+// The facts sheet: container, every stream, and the last Verify
 // verdict. Presentation only — it writes nothing. One header probe in
 // `.task` (sub-second, off the main actor via the @concurrent probe);
 // offline files show what the catalog already knows instead.
@@ -21,6 +22,8 @@ struct MediaInfoRequest: Identifiable {
     /// carries the per-channel levels and the Balance / Rebuild offers.
     let audioDiagnosis: AudioVerifyDiagnosis?
     let onCheckMedia: () -> Void
+    /// Opens the Repair sheet (the plan) — Get Info's banner button.
+    var onRepair: (() -> Void)?
     let onSoundDetails: (() -> Void)?
 }
 
@@ -46,6 +49,8 @@ struct MediaInfoSheet: View {
                 .truncationMode(.middle)
 
             verdictBox
+            repairBanner
+            repairedCopyLine
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -84,16 +89,45 @@ struct MediaInfoSheet: View {
             }
             .accessibilityIdentifier("mediaInfo.verdict")
         } else {
-            Label("Not checked yet — Check Media looks for broken timing, damage and sound problems.",
+            Label("Not verified yet — Verify… looks for broken timing, damage and sound problems.",
                   systemImage: "info.circle")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
     }
 
+    /// The ORANGE "Recommended action" box with the GREEN button, when the
+    /// current card has something Repair can fix (Rick 2026-10-08). The
+    /// button opens the Repair sheet, which shows the plan before running.
+    @ViewBuilder
+    private var repairBanner: some View {
+        let r = request.record
+        if let card = r.mediaReportCard, card.isCurrent(forSizeBytes: r.sizeBytes), let onRepair = request.onRepair {
+            let offers = MediaRepairPlan.offers(for: card, sound: MediaRepairSoundFacts(diagnosis: request.audioDiagnosis),
+                                                originalProtected: false)
+            MediaRepairBanner(advice: MediaRepairAdvice.advice(for: card, offers: offers,
+                                                              balance: MediaRepairBalanceInput(diagnosis: request.audioDiagnosis),
+                                                              sourceName: r.filename),
+                              buttonTitle: "Repair Now\u{2026}", action: { handOff(onRepair) })
+        }
+    }
+
+    /// "Repaired copy: …" — the link Repair left on this file's card.
+    @ViewBuilder
+    private var repairedCopyLine: some View {
+        if let link = request.record.mediaReportCard?.repairedCopy {
+            Label("Repaired copy: \((link.path as NSString).lastPathComponent) (\(link.repairedAt.formatted(date: .abbreviated, time: .shortened)))",
+                  systemImage: "checkmark.seal")
+                .font(.callout)
+                .foregroundStyle(.green)
+                .help(link.path)
+                .accessibilityIdentifier("mediaInfo.repairedCopy")
+        }
+    }
+
     private var buttons: some View {
         HStack {
-            Button("Check Media\u{2026}") { handOff(request.onCheckMedia) }
+            Button(CatalogRowMenuText.verify(count: 1)) { handOff(request.onCheckMedia) }
                 .accessibilityIdentifier("mediaInfo.checkMedia")
             if let sound = request.onSoundDetails {
                 Button("Sound Details\u{2026}") { handOff(sound) }

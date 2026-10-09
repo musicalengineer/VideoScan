@@ -372,7 +372,7 @@ struct VerifyVideoMenuSensorTests {
     @Test func menuBuilderIsOSelectionNotORecords() throws {
         let s = try tableSource()
         let start = try #require(s.range(of: "private func checkMediaMenuItem("))
-        let end = try #require(s.range(of: "/// Get Media Info… / Check Media… + the repair-lifecycle",
+        let end = try #require(s.range(of: "/// Get Info… / Verify… / Repair… — the `.inspect` group",
                                         range: start.upperBound..<s.endIndex))
         let body = s[start.upperBound..<end.lowerBound]
         #expect(!body.contains("model.records") && !body.contains("records.filter"),

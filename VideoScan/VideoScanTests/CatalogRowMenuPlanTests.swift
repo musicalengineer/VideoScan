@@ -123,7 +123,6 @@ struct CatalogRowMenuTextTests {
         #expect(T.restoreToCatalog(count: 1) == "Restore to Catalog")
         #expect(T.putBackInCatalog(count: 1) == "Put Back in Catalog")
         #expect(T.restoreOriginals(count: 1) == "Restore Original (Un-supersede)")
-        #expect(T.repairDamagedAudio(count: 1) == "Repair Damaged Audio")
         #expect(T.confirmRepairs(count: 1) == "Sounds Good — Confirm Repair")
     }
 
@@ -134,7 +133,6 @@ struct CatalogRowMenuTextTests {
         #expect(T.restoreToCatalog(count: 4) == "Restore 4 to Catalog")
         #expect(T.putBackInCatalog(count: 5) == "Put 5 Back in Catalog")
         #expect(T.restoreOriginals(count: 6) == "Restore 6 Originals (Un-supersede)")
-        #expect(T.repairDamagedAudio(count: 7) == "Repair Damaged Audio (7 Files)")
         #expect(T.confirmRepairs(count: 8) == "Sounds Good — Confirm 8 Repairs")
     }
 
@@ -202,9 +200,10 @@ struct CatalogRowMenuRulesTests {
     // (familyMusicMarkable / familyMusicMarked retired with the Mark as
     // Family Music… item, 2026-10-07.)
 
-    @Test func checkMediaLabelCountsTheRowsItRuns() {
-        #expect(CatalogRowMenuText.checkMedia(count: 1) == "Check Media\u{2026}")
-        #expect(CatalogRowMenuText.checkMedia(count: 3) == "Check 3 Files\u{2026}")
+    /// Renamed from "Check Media…" 2026-10-08.
+    @Test func verifyLabelCountsTheRowsItRuns() {
+        #expect(CatalogRowMenuText.verify(count: 1) == "Verify\u{2026}")
+        #expect(CatalogRowMenuText.verify(count: 3) == "Verify 3 Files\u{2026}")
     }
 
     @Test func damagedAudioIsExactlyTheDamagedVerdicts() {

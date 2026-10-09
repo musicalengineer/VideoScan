@@ -6667,6 +6667,27 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRowMenuLayoutSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogRowMenuLayoutSensorTests"
+      ],
+      "tests": [
+        "deleteFileIsDisabledForAProtectedRecordAndEnabledForANormalOne",
+        "deleteFileStateTruthTable",
+        "groupsAppearInOrderWithASeparatorBetweenEach",
+        "inspectGroupReadsGetInfoVerifyRepair",
+        "oneRemoveItemSitsInTheBottomGroup",
+        "renamedLabels",
+        "repairMenuStateTruthTable",
+        "theDisabledItemNeverActs",
+        "theGroupsAreTheSevenRickAskedFor",
+        "theOldVerbsAreGoneFromEveryUserVisibleString"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogRowMenuPlanTests.swift",
       "stage": "unit",
@@ -6679,7 +6700,6 @@
         "activeAnchorWithNoActiveRowsGetsNoMenu",
         "anchorPrecedenceFollowsTheOldIfChain",
         "anyActiveRowGivesTheFullMenuWhateverTheAnchor",
-        "checkMediaLabelCountsTheRowsItRuns",
         "cleanupNeedsAPictureAnOnlineVolumeAndNoRunningJob",
         "damagedAudioIsExactlyTheDamagedVerdicts",
         "hasAudioOnlyForAudioBearingStreams",
@@ -6694,6 +6714,7 @@
         "singularLabelsCarryNoCount",
         "subsetsAreDisjointAndPurgeWins",
         "transcodeBlockedTruthTable",
+        "verifyLabelCountsTheRowsItRuns",
         "zeroReadsLikeOne"
       ]
     },
@@ -16814,6 +16835,75 @@
       ]
     },
     {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MediaRepairEngineTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MediaRepairEngineTests",
+        "MediaRepairMediaMatrixTests",
+        "MediaRepairRefusalTests"
+      ],
+      "tests": [
+        "cancelled_removesPartial_publishesNothing",
+        "cleanFactsGo",
+        "driveWithoutExclusivePublish_keepsCopy_unpublished",
+        "everyRefusalHasAReason",
+        "familyArchiveIsNeverATarget",
+        "ffmpegFailsPartway_failed_partialKeptUnpublished",
+        "ffmpegFailsWritingNothing_failed_nothingKept",
+        "fullRangeJFormatsCountAsPreserved",
+        "losslessRemux_provesParity_originalUnchanged",
+        "losslessRemux_publishesOneOutput_originalUnchanged",
+        "noApplicableFix_refused",
+        "offlineOriginal_refused",
+        "oneRunOneOutput_secondRunRefusedByTheFirstOutput",
+        "parityMismatch_failed_copyKeptUnpublished",
+        "pictureMismatchCatchesEveryLostProperty",
+        "poisonedFolder_danglingLinkAtTarget_refused_staleLeftoverUntouched",
+        "protectedFolder_refusedBeforeAnyWrite",
+        "rebuildSound_writesPCMCopy_sameLength",
+        "removeRepeatedFrames_keepsOnePicturePerFrame_atStatedRate_tagsPreserved",
+        "removeRepeatedFrames_noJustifiedRate_refusedBeforeAnyWrite",
+        "removeRepeatedFrames_soundMatchingThePicture_isAllowed",
+        "removeRepeatedFrames_soundNotLiningUp_refusedBeforeAnyWrite",
+        "soundAlignmentRule",
+        "spaceNeedIncludesRebuiltPCM",
+        "targetAppearsMidRun_neverOverwritten_notPublishedBeside",
+        "targetExists_refusedBeforeAnyWrite"
+      ]
+    },
+    {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MediaRepairJobTests.swift",
+      "stage": "unit",
+      "suites": [
+        "MediaRepairJobTests",
+        "MediaRepairPlanTimeCountTests",
+        "MediaRepairSelectionTests"
+      ],
+      "tests": [
+        "anUnavailableFixCannotBeTicked",
+        "cachedCountSkipsTheDecode",
+        "cancelled_rowSaysStopped_noBookkeeping",
+        "cancellingTheCountKillsFFmpeg",
+        "comparisonNeverClaimsAFixItCouldNotRecheck",
+        "countReportsProgressAndIsCached",
+        "failed_rowSaysOriginalUntouched_andWhereTheCopyWasKept",
+        "moreRepairsListsEveryFix_withHonestAvailability",
+        "progressNeverRunsBackwards_andTheWriteDominates",
+        "refused_targetTaken_rowSaysNotStarted_noBookkeeping",
+        "repairWordingNeverSaysImproveOrEnhance",
+        "requestCarriesTheRecipeInOrder_andNoProtectionForATempFolder",
+        "secondDispatchForTheSameFile_isRefused",
+        "startsAtTheRecommendation_andCanBeChanged",
+        "streamLinesSayCopiedOrReencoded_andTheVerificationLevel",
+        "success_catalogsCopy_linksOriginal_finished_originalUnchanged",
+        "videoOnlyNeverCounts"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/MediaSignaturesTests.swift",
@@ -26237,6 +26327,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogRenameTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogRowMenuLayoutSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

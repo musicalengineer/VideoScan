@@ -477,6 +477,8 @@ struct MediaFileOperationDetail: View {
             VerifyVideoDetailView(job: verifyVideo)
         } else if let check = job as? CheckMediaJob {
             CheckMediaDetailView(job: check)
+        } else if let repair = job as? MediaRepairJob {
+            MediaRepairDetailView(job: repair)
         } else if let lock = job as? ArchiveLockJob {
             ArchiveLockDetailView(job: lock)
         } else if let spectrum = job as? FootageSpectrumJob {
@@ -892,33 +894,6 @@ struct MediaFileOperationBadge: View {
 }
 
 extension MediaFileOperationKind {
-
-    /// Does this row expand to show what the job actually did?
-    ///
-    /// ONE list. Until 2026-09-15 the set of expandable kinds was written
-    /// twice — as a chain of `job is PairCompareJob || …` in the row's tap
-    /// gesture, and again as the `if isExpanded, let x = job as? T` blocks
-    /// in its body. Two lists of the same thing drift, and the drift is
-    /// silent in both directions: a row that refuses to expand, or one that
-    /// expands to nothing.
-    ///
-    /// DELIBERATELY EXHAUSTIVE — no `default`. Adding an eighteenth kind
-    /// will not compile until someone decides whether it has a detail view,
-    /// which is exactly the decision that gets forgotten. The twelve `false`
-    /// cases are not an oversight; they are the backlog Rick picked up on
-    /// 2026-09-15 ("detail views for the remaining job kinds"), and they are
-    /// listed by name so that backlog is readable from the code.
-    var hasDetailView: Bool {
-        switch self {
-        case .compare, .findPerson, .verifyArchive, .archiveAngel, .deleteDuplicates,
-             .pruneCopies, .verifyVideo, .checkMedia, .lockArchive, .compareFootage, .fingerprintBackfill:
-            return true
-        case .combine, .extract, .ripFrames, .reformat, .analyze, .transcode,
-             .cleanup, .trim, .balanceAudio, .rebuildAudio, .verifyAudio,
-             .promote, .findSimilarFootage, .bindFixity:
-            return false
-        }
-    }
 
     /// Badge capsule fill — `style.fill` (MediaFileOperations.swift keeps
     /// each kind's hue and the rationale for it).

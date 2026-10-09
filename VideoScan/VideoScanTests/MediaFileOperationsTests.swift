@@ -446,7 +446,7 @@ struct MediaFileOperationKindTests {
     /// instead of exact hues, so future recolors stay honest without
     /// churning this test.
     @Test func badgeFillsCarryWhiteTextLegibly() throws {
-        for kind in MediaFileOperationKind.allCases {
+        for kind in MediaFileOperationKind.all {
             let lum = try #require(luminance(kind.badgeColor))
             let contrastVsWhite = 1.05 / (lum + 0.05)
             #expect(contrastVsWhite >= 3.0,
@@ -458,7 +458,7 @@ struct MediaFileOperationKindTests {
     /// every verb keeps a visually distinct fill.
     @Test func badgeFillsArePairwiseDistinct() throws {
         var seen: [(MediaFileOperationKind, NSColor)] = []
-        for kind in MediaFileOperationKind.allCases {
+        for kind in MediaFileOperationKind.all {
             let srgb = try #require(NSColor(kind.badgeColor).usingColorSpace(.sRGB))
             for (otherKind, other) in seen {
                 let dr = srgb.redComponent - other.redComponent
@@ -470,6 +470,70 @@ struct MediaFileOperationKindTests {
             }
             seen.append((kind, srgb))
         }
+    }
+
+    // MARK: Kind-as-data sensors (2026-10-08)
+    //
+    // MediaFileOperationKind became a struct with `static let` instances
+    // (was an enum + an exhaustive `style` switch). The compiler no longer
+    // proves `all` lists every kind, so these pins do. The fill sensors
+    // above (legibility, pairwise distinct) iterate `all`, so they cover
+    // every kind only while this list is complete.
+
+    /// The persisted / logged / accessibility-id names, in declaration
+    /// order. Pinned exactly: these were the enum's raw values and must
+    /// never change. UPDATE THIS LIST (and the count) WHEN ADDING A KIND.
+    @Test func allPinsEveryKindInDeclarationOrder() {
+        let expected = [
+            "combine", "compare", "extract", "ripFrames", "reformat", "analyze", "transcode",
+            "cleanup", "trim", "balanceAudio", "rebuildAudio", "verifyAudio", "verifyVideo",
+            "checkMedia", "repair", "findPerson", "promote", "verifyArchive", "archiveAngel",
+            "deleteDuplicates", "pruneCopies", "findSimilarFootage", "bindFixity", "lockArchive",
+            "compareFootage", "fingerprintBackfill",
+        ]
+        #expect(MediaFileOperationKind.all.count == 26)   // update when adding a kind
+        #expect(MediaFileOperationKind.all.map(\.rawValue) == expected)
+    }
+
+    /// Every `static let x = Self(` declared in the type is listed in
+    /// `all` (the compiler used to prove this for `CaseIterable`). Reads
+    /// the source because Swift cannot enumerate static members at run time.
+    @Test func everyDeclaredKindIsInAll() throws {
+        let src = try SourceTree.appSource(named: "MediaFileOperations.swift")
+        let regex = try NSRegularExpression(pattern: #"static let (\w+) = Self\(""#)
+        let declared = regex.matches(in: src, range: NSRange(src.startIndex..., in: src)).compactMap {
+            Range($0.range(at: 1), in: src).map { String(src[$0]) }
+        }
+        #expect(declared.count == MediaFileOperationKind.all.count)
+        #expect(declared == MediaFileOperationKind.all.map(\.rawValue),
+                "a kind is declared but missing from `all`, or listed out of order")
+    }
+
+    @Test func rawValuesAndBadgesAreUnique() {
+        let all = MediaFileOperationKind.all
+        #expect(Set(all.map(\.rawValue)).count == all.count, "duplicate rawValue in MediaFileOperationKind.all")
+        #expect(Set(all.map(\.badgeText)).count == all.count, "duplicate badge text in MediaFileOperationKind.all")
+        #expect(Set(all).count == all.count, "a kind is listed twice in MediaFileOperationKind.all")
+    }
+
+    /// Identity is the rawValue: equal kinds hash equal, distinct kinds
+    /// are unequal, and `"\(kind)"` still prints the old case name.
+    @Test func identityIsTheRawValue() {
+        for kind in MediaFileOperationKind.all {
+            #expect(kind == kind)
+            #expect("\(kind)" == kind.rawValue)
+        }
+        #expect(MediaFileOperationKind.repair != .rebuildAudio)
+        #expect(Set<MediaFileOperationKind>([.repair, .repair, .checkMedia]).count == 2)
+    }
+
+    @Test func repairKindStyle() {
+        let k = MediaFileOperationKind.repair
+        #expect(k.rawValue == "repair")
+        #expect(k.badgeText == "Repair")
+        #expect(k.logVerb == "repair")
+        #expect(k.style.fill == .init(0.00, 0.25, 0.00))
+        #expect(k.hasDetailView)
     }
 
     // The verdict chip colors must keep matching the retired sheet's

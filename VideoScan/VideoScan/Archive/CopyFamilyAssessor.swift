@@ -196,10 +196,12 @@ enum CopyFamilyAction: String, Sendable, Equatable, CaseIterable {
     case createAccessCopy               = "Create Access Copy"
     /// Diagnose the recommended copy's audio track (the retired Helper
     /// offered Balance Audio inline; since S4 the Archive Angel's prepare
-    /// step verifies and balances). The catalog verb is Check Media… since
-    /// 2026-10-07 (it writes the same audioVerifyStatus this reads); the
-    /// case name is kept so the vocabulary tests stay pinned.
-    case verifyAudioFirst               = "Check Media"
+    /// step verifies and balances). The catalog verb is Verify… since
+    /// 2026-10-08 (Check Media… from 2026-10-07; it writes the same
+    /// audioVerifyStatus this reads); the case name is kept so the
+    /// vocabulary tests stay pinned. The raw value is display text, never
+    /// persisted (the enum is not Codable), so it follows the verb.
+    case verifyAudioFirst               = "Verify"
     /// Overlay action, never produced by the assessor itself: the retired
     /// Helper panel's HelperAudioActions.compose added it once a diagnosis
     /// said the track was fixable (2026-08-26). Nothing adds it since S4;
@@ -700,10 +702,10 @@ extension CopyFamilyAssessor {
             cautions.append("Audio was already repaired into \(repaired.instances.first?.filename ?? "a repaired copy") — promote it together with the original (the original keeps its history; the repaired copy is the one to watch).")
         } else if damagedAudio {
             audioNeedsWork = true
-            cautions.append("Check Media reported a problem with the sound on the recommended original — fix or choose another equivalent copy before promoting.")
+            cautions.append("Verify reported a problem with the sound on the recommended original — repair it (Repair…) or choose another equivalent copy before promoting.")
         } else if hasAudio && !verified {
             audioNeedsWork = true
-            cautions.append("Audio on the recommended original has not been verified — run Check Media before promoting (bad or missing audio is the one thing that ruins a keeper).")
+            cautions.append("Audio on the recommended original has not been verified — run Verify before promoting (bad or missing audio is the one thing that ruins a keeper).")
         }
         return (cautions, audioNeedsWork)
     }

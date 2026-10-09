@@ -333,7 +333,7 @@ struct MediaFileOperationsWindowForwardSensorTests {
     /// kind added to the enum is covered automatically; a kind that must
     /// NOT raise even when user-started would have to change this table.
     @Test func everyKindRaisesOnlyForUserOrigin() {
-        for kind in MediaFileOperationKind.allCases {
+        for kind in MediaFileOperationKind.all {
             for origin in MediaFileOperationOrigin.allCases {
                 let rig = Rig()
                 if origin == .user {
@@ -378,8 +378,9 @@ struct MediaFileOperationsWindowForwardSensorTests {
         "CatalogRowContextMenu.swift": 0,         // dispatcher + open/remove/restore: none
         "CatalogRowContextMenu+FileOps.swift": 1, // compare
         "CatalogRowContextMenu+Organize.swift": 1, // Find and Tag
-        "CatalogRowContextMenu+Media.swift": 1,   // repair damaged audio
+        "CatalogRowContextMenu+Media.swift": 0,   // (Repair Damaged Audio moved behind Repair…, 2026-10-08)
         "CheckMediaSheet.swift": 1,               // Check Media (quick / full), 2026-10-07
+        "MediaRepairSheet.swift": 1,              // Repair Now (the one repair door), 2026-10-08
         "CatalogRowContextMenu+Actions.swift": 4, // analyze×2, reformat×2
         "CatalogHelpers.swift": 0,                // (Extract Facial Frames retired 2026-10-07)
         "CleanupSheet.swift": 1,

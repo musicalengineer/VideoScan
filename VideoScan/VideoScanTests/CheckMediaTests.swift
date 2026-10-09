@@ -571,8 +571,9 @@ struct CheckMediaJobTests {
     }
 
     @Test func kindBadgeAndVerb() {
-        #expect(MediaFileOperationKind.checkMedia.badgeText == "Check")
-        #expect(MediaFileOperationKind.checkMedia.logVerb == "check media")
+        // Words renamed 2026-10-08 (Verify…); the case name stays.
+        #expect(MediaFileOperationKind.checkMedia.badgeText == "Verify Media")
+        #expect(MediaFileOperationKind.checkMedia.logVerb == "verify media")
         #expect(MediaFileOperationKind.checkMedia.hasDetailView)
     }
 }

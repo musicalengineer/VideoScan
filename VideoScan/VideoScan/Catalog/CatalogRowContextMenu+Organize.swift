@@ -1,7 +1,8 @@
 // CatalogRowContextMenu+Organize.swift
-// Rename / tags / people / notes / duplicates / Find ▸ items of the
+// Rename / tags / people / notes (the `.describe` group) and the
+// duplicates / Find ▸ / Copy Path items (the `.find` group) of the
 // Catalog row menu, cut out of the single rowContextMenu builder section
-// by section (R1 refactor, GH #281; regrouped 2026-10-07).
+// by section (R1 refactor, GH #281; regrouped 2026-10-07 and 2026-10-08).
 // (Swift extension ≈ C++ partial class via free member functions: no new
 // stored state allowed, methods share the same `self`; `private` here
 // means file-private to THIS file.)
@@ -10,13 +11,11 @@ import SwiftUI
 
 extension CatalogContent {
 
-    /// The active-only half of the full row menu (pure-active selections
-    /// only): Rename…, Tags ▸, People ▸, Notes…, duplicates, Find ▸ and
-    /// Copy Path (R1 split, GH #281; regrouped 2026-10-07).
+    /// The `.describe` group (pure-active selections only): Rename…,
+    /// Tags ▸, People ▸, Notes… (R1 split, GH #281; regrouped 2026-10-07
+    /// and 2026-10-08).
     @ViewBuilder
-    func organizeItems(rec: VideoRecord, selection: CatalogRowMenuSelection) -> some View {
-        Divider()
-
+    func describeItems(rec: VideoRecord, selection: CatalogRowMenuSelection) -> some View {
         Button("Rename…") {
             renameTarget = rec
             renameText = (rec.filename as NSString).deletingPathExtension
@@ -39,16 +38,27 @@ extension CatalogContent {
         // ("Mark as Family Music…" retired 2026-10-07 — Rick: "this app
         // is not going to track Rick's Music". Existing marks stay on the
         // records, inert; the Archive tab's Music shelf still lists them.)
+    }
 
-        duplicateMatchItems(rec: rec)
+    /// The `.find` group (2026-10-08): Find Matching Audio / Video and
+    /// Find Missing Audio (any active selection, as before), then — for
+    /// pure-active selections — the duplicate and online-copy verbs,
+    /// Find ▸ and Copy Path.
+    @ViewBuilder
+    func findItems(rec: VideoRecord, pureActive: Bool) -> some View {
+        matchItems(rec: rec)
 
-        findCopyItems(rec: rec)
+        if pureActive {
+            duplicateMatchItems(rec: rec)
 
-        findMenu(rec: rec)
+            findCopyItems(rec: rec)
 
-        Button("Copy Path") {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(rec.fullPath, forType: .string)
+            findMenu(rec: rec)
+
+            Button("Copy Path") {
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(rec.fullPath, forType: .string)
+            }
         }
     }
 

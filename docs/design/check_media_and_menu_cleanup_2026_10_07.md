@@ -257,3 +257,78 @@ app build), so ffmpeg's own decode, not I/O, is the limit there.
 | Clipped stretches | — | any run of ≥ 3 pinned samples | |
 The Layout threshold is now a decimal 64 MB (64,000,000 B) so the card's
 "64 MB" and the rule agree.
+
+## 9. Get Info → Verify → Repair (Rick 2026-10-08, "EXACTLY!")
+
+Branch `feat/info-verify-repair-menu`. Demo week: stability first.
+
+**The funnel.** Three verbs, one model (the `MediaReportCard` on the record),
+each handing on to the next:
+
+| Verb | What it does | Writes | Owner |
+|---|---|---|---|
+| **Get Info… ⌘I** (was Get Media Info…) | facts + last verdict | nothing | `MediaInfoSheet` (unchanged but for words) |
+| **Verify…** (was Check Media…) | runs the quick / full checks | the card (+ the verify fields, as before) | `CheckMediaSheet` → `CheckMediaJob` (unchanged but for words) |
+| **Repair…** (new) | offers the fixes the latest card earns | a NEW file + a NEW record; never the original | `RepairSheet` → `MediaRepairJob`, or the existing Balance / Rebuild jobs |
+
+Renames are user-visible strings only. Enum cases, accessibility ids,
+`MediaFileOperationKind.checkMedia` and persisted raw values stay. The MFO
+chip reads "Verify Media" (badge) / "verify media" (log verb) — the old
+"check media" log lines stay greppable through the job's own Logger
+category, which keeps the name `checkMedia`.
+
+**Which fix answers which check** (pure, `MediaRepairPlan`):
+
+| Fix | Offered for | How | Output |
+|---|---|---|---|
+| Lossless remux | `layout` Problem / Warning; also listed under "Always available" | `ffmpeg -i src -map 0 -c copy` (muxer interleaves); then a packet census of both files must match per stream (codec, packets, bytes, duration ticks) | `<stem>_remuxed.<same ext>` |
+| Remove repeated frames | `distinctFrames` Problem (the CapeCod class) | measure the real rate first (kept-frame spacing after `mpdecimate`, two short windows, snapped to a camera rate), then `mpdecimate,fps=<rate>` + libx264 CRF 16 / slow, sound copied; re-encode stated in the confirmation | `<stem>_repaired.<ext or mov/mkv>` |
+| Balance Audio | `sound` Warning with a session channel-imbalance diagnosis | the existing `startBalanceAudio(fromDiagnosis:)` — unchanged | unchanged (`_balanced`) |
+| Rebuild Audio Track | `sound` Problem (damaged) | the existing `startRebuildAudio` with a session diagnosis, else the existing "Repair Damaged Audio" path (`startVerifyAudio(autoRepair:)`) — unchanged | unchanged (`_RepairedAudio.mov`) |
+
+Repair… menu state: no card (or a stale card) → enabled, runs the quick Verify
+first; a card with an offered fix → enabled; a card with none → disabled with
+the reason. One file at a time; offline → disabled.
+
+**Safety (non-negotiable).** The original is only ever read. Output goes beside
+the original UNLESS the original's volume is protected (the delete-protection
+predicate `bulkDeleteRefusal(forPath:)`: archive tree/volume, unprovable, Read
+only marks) — then a save panel defaulting to ~/Movies, and a chosen folder that
+is itself protected is refused. ffmpeg writes a reserved partial; the publish is
+`DerivativeOutputPublish.publish(…, policy: .keep)` (ExclusivePublish:
+RENAME_EXCL / link(2) / refuse — never a rename over anything, never
+`replaceItemAt`; no new `rename(` call site). Balance / Rebuild keep their own
+(unchanged) beside-the-original output, so on a protected original they are
+shown disabled with the reason instead of being re-plumbed this week.
+
+**After a fix.** The output is probed and catalogued as a NEW record
+(`derivedFrom` = original, `derivationKind` "remux" / "removeRepeatedFrames",
+NOT a repair-lifecycle kind, so nothing is superseded or hidden), then the
+quick Verify runs on it and its card goes on the new record, the job's detail
+and the open Repair sheet.
+
+**One MFO job.** `MediaRepairJob` (kind `.repair`, badge "Repair"): chip, step,
+"N of M" = phase, fraction from ffmpeg `-progress`, ETA, Pause (SIGSTOP) /
+Stop (SIGTERM), StallMonitor, START / OUTCOME through the Center's `logStart` /
+terminal sink.
+
+**Memory.** Packet census streams lines (O(streams) counters); the rate sample
+keeps ≤ 2 × 4 s of kept-frame timestamps (a few thousand doubles); ffmpeg
+does all media I/O. No in-process media buffers.
+
+**Canon.** Pure / I-O / job split (the `VerifyVideoRules` / `Probe` / `Job`
+exemplar); fixes as an enum, offers as value types; `@concurrent` I/O, a
+`@MainActor` job, `Sendable` results; `.sheet(item:)`; the record stays the
+single source of truth for the card.
+
+**Menu (target).** 1 Reveal · Open With ▸ | 2 Get Info… · Verify… · Repair…
+(+ the existing repair-lifecycle items: Repair Damaged Audio, Link Repaired
+Copy…, Sounds Good — Confirm) | 3 the pair verbs (Combine This Pair…, Compare
+These Two Files…) · Analyze ▸ · Transcode ▸ · Clean Up Video ▸ | 4 Promote ·
+Archive Angel ▸ | 5 Rename… · Tags ▸ · People ▸ · Notes… | 6 Find Matching
+Audio/Video, Find Missing Audio, Find A/V Pair, Find Online Version / Copy,
+All Matches ▸, Find ▸ · Copy Path | 7 Remove from Catalog · Remove from Catalog
+(keep files) · Delete File ▸ (disabled with the reason when nothing selected may
+be deleted). Clean Up Video ▸ holds only VHS Quick Clean (an enhancement), so
+nothing moves out of it; Balance / Rebuild were never in it (they lived behind
+Get Info ▸ Sound Details…) and now also appear under Repair.
