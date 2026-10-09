@@ -379,7 +379,9 @@ extension VideoScanModel {
     func duplicateRemovalBoundaryNow(recordID: UUID) -> DuplicateRemovalBoundaryNow {
         let word = duplicateRemovalBoundaryWord(recordID: recordID)
         let archive = duplicateRemovalBoundaryArchive(recordID: recordID)
-        return DuplicateRemovalBoundaryNow(holdNote: word.holdNote, readOnlyMarks: word.readOnlyMarks,
+        // R4: paired with its other half by Combine while it was being read.
+        let pair = duplicateTargetHoldAtRemoval(recordID: recordID).map { DuplicateDeletionHold.leftAlonePrefix + $0 }
+        return DuplicateRemovalBoundaryNow(holdNote: word.holdNote ?? pair, readOnlyMarks: word.readOnlyMarks,
                                            designation: archive.designation, aliasCandidates: archive.aliasCandidates,
                                            isArchiveCopy: archive.isArchiveCopy)
     }
@@ -840,6 +842,7 @@ extension VideoScanModel {
         var out = DeletionTierCandidates()
         out.keeperPath = keeper.fullPath
         var seenArchive = Set<UUID>()
+        var lengthSeen = Set<UUID>()
         var members: [VideoRecord] = [keeper]
         if let group = record.duplicateGroupID {
             for r in records where !r.isPurged && r.id != record.id && r.id != keeper.id && r.duplicateGroupID == group {
@@ -849,6 +852,10 @@ extension VideoScanModel {
         func volume(_ r: VideoRecord) -> String { VolumeReachability.volumeName(forPath: r.fullPath) }
         out.keeperLabel = "keeper on \(volume(keeper))"
         func noteArchive(_ copy: VideoRecord) {
+            // R4: every archive master's length, verified or not.
+            if !copy.isPurged, lengthSeen.insert(copy.id).inserted {
+                out.archiveMasterDurations.append(copy.durationSeconds)
+            }
             guard !copy.isPurged, !seenArchive.contains(copy.id), !isRowOfThisRun(copy.id),
                   let fixity = copy.archiveFixity else { return }
             seenArchive.insert(copy.id)

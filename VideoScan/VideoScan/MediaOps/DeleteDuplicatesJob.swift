@@ -133,6 +133,14 @@ struct DeleteDuplicatesWorkItem: Sendable {
     /// Which siblings the worker may READ to prove them (2026-09-21), and
     /// when to stop. `.none` = stat only, as before.
     var siblingAllowance: SiblingProver.Allowance = .none
+    /// R4 — the NETWORK gate: a copy on a network share is never a target
+    /// (no reliable Trash, no reliable identity). Asked before the move and
+    /// again at the removal. Tests inject; production asks statfs.
+    var isNetworkMount: @Sendable (String) -> Bool = DeleteDuplicatesTargetGate.liveIsNetworkMount
+    /// R4 — a CATALOG target gate that holds this copy (half of a recovered
+    /// A/V pair; longer than an archive master, or not comparable with
+    /// one), found at the copy's turn (`duplicateTargetHold`). nil = none.
+    var targetHold: String? = nil
     /// The Master Archive VOLUME re-check (2026-09-22 follow-up, QA
     /// MINOR 3), captured on the main actor: the snapshot plus the UUID
     /// probe. Asked of the file's OWN volume before it is moved into
@@ -312,6 +320,13 @@ enum DeleteDuplicatesDiskWorker {
                     : .refused(reason: refusal.note + " — nothing moved", cancelled: false)
             return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: nil,
                                             notCountedWhy: refusal.leavesAlone ? refusal.note : nil)
+        }
+        // R4: a target gate holds the copy before anything moves — a catalog
+        // gate found at the turn, or a network share. A hold, never counted.
+        if let why = item.targetHold ?? DeleteDuplicatesTargetGate.networkHold(item.path, isNetworkMount: item.isNetworkMount) {
+            return DeleteDuplicatesPhaseOne(outcome: .leftAlone(reason: DuplicateDeletionHold.leftAlonePrefix + why,
+                                                                facts: DeletionTierFacts()),
+                                            learnedKeeperFixity: nil, notCountedWhy: why)
         }
         let box = FixityBox()
         var observing = hooks
@@ -733,6 +748,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// Volume classification for the slot weight. nil → the model's scan
     /// targets (longest prefix). Tests inject.
     var mediaTechForPath: ((String) -> VolumeMediaTech)?
+    /// R4's network gate. nil → statfs (`DeleteDuplicatesTargetGate`).
+    /// Tests inject (a network share cannot be had in a temp folder).
+    var isNetworkMountForPath: (@Sendable (String) -> Bool)?
     /// Where the one-line-per-row `[dupjob]` lines, the forecast and the
     /// counts-and-sizes summary go: nil → `appLog` (videoscan.log). Tests
     /// inject an in-memory sink so nothing touches the global.
@@ -1241,6 +1259,11 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 keeperFixity: keeper.contentFixity,
                 quarantineDirectoryName: Self.quarantineDirectoryName(planID: current.id, entryID: entry.id),
                 tierCandidates: candidates, siblingAllowance: allowance,
+                // R4: the target gates travel with the pair — the network
+                // gate, and the catalog's (A/V half, longer than a master).
+                isNetworkMount: isNetworkMountForPath ?? DeleteDuplicatesTargetGate.liveIsNetworkMount,
+                targetHold: model.duplicateTargetHold(record: record, keeper: keeper,
+                                                      archiveMasterDurations: candidates.archiveMasterDurations),
                 // The volume re-check travels with the pair (off-main)…
                 archiveCheck: model.archiveRemovalCheck(),
                 // …and so does the question it asks at the removal itself.
@@ -1728,7 +1751,10 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             }
             var answer = RemovalBoundaryAnswer(holdNote: nil, archive: nil)
             switch buffer {
-            case .free: answer.holdNote = now.holdNote
+            // R4: a network share is asked again here, at the removal.
+            case .free: answer.holdNote = now.holdNote ?? DeleteDuplicatesTargetGate.networkHold(currentPath).map {
+                DuplicateDeletionHold.leftAlonePrefix + $0
+            }
             case .held: answer.holdNote = DuplicateDeletionHold.inUseByAngel.note
             case .uncertain(let why):
                 // FAIL CLOSED (codex #258 r4-2): what could not be read may

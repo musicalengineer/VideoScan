@@ -139,6 +139,10 @@ struct DeletionTierCandidates: Sendable, Equatable {
     var leftAloneByRun: [String] = []
     /// Fixity-verified Master Archive copies of any family member.
     var archiveCopies: [ArchiveCopy] = []
+    /// The lengths (seconds) of EVERY Master Archive copy of the family,
+    /// verified or not — the Tier 1 rule's input (R4: a copy longer than
+    /// an archive master is never a target; `duplicateTargetHold`).
+    var archiveMasterDurations: [Double] = []
     /// Every other active family member except the keeper and the
     /// duplicate itself.
     var otherCopies: [OtherCopy] = []
