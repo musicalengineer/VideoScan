@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-08T11:42:08Z",
- "sha": "7c6f33be",
+ "ts": "2026-10-09T11:35:31Z",
+ "sha": "a11662aa",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": {
    "lines": 384,
@@ -5599,13 +5599,10 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/CombineEngine.swift": {
-   "lines": 390,
-   "decls": 20,
+   "lines": 422,
+   "decls": 25,
    "could_be_private": [
-    "CombineEngine.watchIntervalSeconds",
-    "CombineEngine.CodecCheck",
-    "OutputFileHeartbeat.Signature.mtimeSeconds",
-    "OutputFileHeartbeat.Signature.mtimeNanoseconds"
+    "CombineEngine.CodecCheck"
    ],
    "widened_for_split": []
   },
@@ -7609,7 +7606,6 @@
    "lines": 335,
    "decls": 12,
    "could_be_private": [
-    "StallMonitor.monotonicSeconds",
     "StallMonitor.secondsSinceLastTick"
    ],
    "widened_for_split": []

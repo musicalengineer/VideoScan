@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-08T11:42:08Z",
- "sha": "7c6f33be",
+ "ts": "2026-10-09T11:35:31Z",
+ "sha": "a11662aa",
  "new": [
   {
    "key": "VideoScan/VideoScan/Archive/ArchiveAuditYear.swift::ArchiveAuditBuilder.eventsAndUnlabeled",
@@ -704,8 +704,8 @@
    "classification": "could-be-private"
   }
  ],
- "fixed": 18,
+ "fixed": 22,
  "baseline_before": 2520,
- "baseline_after": 2502,
+ "baseline_after": 2498,
  "shrink_skipped": false
 }
