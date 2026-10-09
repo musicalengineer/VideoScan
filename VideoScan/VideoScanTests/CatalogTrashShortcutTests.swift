@@ -222,7 +222,7 @@ struct CatalogTrashShortcutTests {
         #expect(app.contains("CatalogTrashMenuItem()"), "the item is in the Catalog menu")
 
         let plan = try productionSource("VideoScanModel+TrashSelection.swift")
-        #expect(plan.contains("await deleteConfirmedJunk(targets, mode: .toTrash)"), "the ONE existing Trash routine")
+        #expect(plan.contains("await deleteConfirmedJunk(targets, mode: .toTrash, guard: fileGuard)"), "the ONE existing Trash routine")
         #expect(!plan.contains("trashItem("), "no file deletion of its own")
         #expect(!plan.contains("removeItem("), "no file deletion of its own")
         #expect(!plan.contains("FileManager"), "no file deletion of its own")

@@ -133,7 +133,18 @@ extension VideoScanModel {
             },
             beforeRemoval: { path in frozen.diskProblem(at: path) },
             remove: fileOperation)
-        return await deleteConfirmedJunk(snapshot.items.map(\.record), mode: .toTrash, guard: fileGuard)
+        let result = await deleteConfirmedJunk(snapshot.items.map(\.record), mode: .toTrash, guard: fileGuard)
+            .trashFailuresHeld()
+        logJunkLaneOutcome(result, verb: "Delete Confirmed Junk")
+        return result
+    }
+
+    /// OUTCOME line plus one line per file that stayed, with its reason —
+    /// the console carries the same list the result sheet / alert shows.
+    func logJunkLaneOutcome(_ result: JunkDeletionResult, verb: String) {
+        let report = JunkDeletionReport(result)
+        log("\(verb): OUTCOME — \(report.summary.joined(separator: "; "))")
+        for line in report.lines { log("\(verb): stayed — \(line.filename) — \(line.reason)") }
     }
 
     /// The catalog half of a frozen file's re-check, at its turn: still the
@@ -147,6 +158,25 @@ extension VideoScanModel {
             return "was moved in the catalog after you confirmed — nothing moved"
         }
         return nil
+    }
+}
+
+extension VideoScanModel.JunkDeletionResult {
+    /// The junk lanes' reading of a Trash failure (design R3; the same
+    /// words as the Excess lane): the routine never falls back to another
+    /// kind of removal, so the file is where it was — a HOLD naming the
+    /// drive and the reason, not an error that invites "try harder".
+    /// Every other outcome passes through unchanged.
+    func trashFailuresHeld() -> Self {
+        Self(items: items.map { item in
+            guard case .failed(let error) = item.outcome else { return item }
+            return .init(record: item.record, outcome: .held(Self.trashFailureNote(item.record, error)))
+        })
+    }
+
+    static func trashFailureNote(_ rec: VideoRecord, _ error: any Error) -> String {
+        let volume = rec.volumeName.isEmpty ? VolumeReachability.volumeName(forPath: rec.fullPath) : rec.volumeName
+        return "couldn't move it to the Trash on \(volume): \(error.localizedDescription) — nothing was deleted"
     }
 }
 

@@ -6705,7 +6705,6 @@
         "hasAudioOnlyForAudioBearingStreams",
         "hundredThousandRowSelectionSplitsFast",
         "mixedInertSelectionFollowsTheAnchor",
-        "permanentDeleteConfirmationWording",
         "pluralLabelsCountExactly",
         "pureActiveOnlyWithoutInertRows",
         "pureInertSelectionsGetTheirMinimalMenus",
@@ -15826,6 +15825,22 @@
         "mixedPreflightAndMoved",
         "reportAtScale",
         "reportListsEveryHeldFile"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/JunkTrashOnlyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JunkTrashOnlyTests"
+      ],
+      "tests": [
+        "catalogTrashFailureHolds",
+        "frozenTrashFailureHolds",
+        "noPermanentOnTheJunkLanes",
+        "noProductionCallerAsksForPermanent",
+        "reallyLandsInTheTrash",
+        "rowMenuIsMoveToTrashOnly"
       ]
     },
     {

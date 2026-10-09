@@ -63,14 +63,14 @@ enum JunkDeleteAction {
     ///   - model: The catalog model.
     ///   - snapshot: The set the confirmation showed, frozen when it opened.
     ///   - onComplete: Called on MainActor after the disk pass returns,
-    ///     with the result, the mode used, and an estimate of the bytes
-    ///     moved (scaled from the counted bytes by the success ratio).
+    ///     with the result and an estimate of the bytes moved (scaled
+    ///     from the counted bytes by the success ratio). There is no mode:
+    ///     this lane only ever moves files to the Trash.
     static func makeOnAct(
         model: VideoScanModel,
         snapshot: VideoScanModel.JunkTrashSnapshot,
         onComplete: @escaping @MainActor (
             _ result: VideoScanModel.JunkDeletionResult,
-            _ mode: VideoScanModel.JunkDeletionMode,
             _ bytesSucceeded: Int64
         ) -> Void
     ) -> @MainActor () -> Void {
@@ -87,7 +87,7 @@ enum JunkDeleteAction {
                 let bytesSucceeded: Int64 = actionable > 0
                     ? Int64(Double(bytesBefore) * Double(result.succeeded) / Double(actionable))
                     : 0
-                onComplete(result, .toTrash, bytesSucceeded)
+                onComplete(result, bytesSucceeded)
             }
         }
     }

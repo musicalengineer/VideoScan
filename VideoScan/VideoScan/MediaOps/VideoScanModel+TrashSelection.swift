@@ -111,8 +111,11 @@ extension VideoScanModel {
     /// the routine's outcomes, in selection order — so the alert can list
     /// every row that stayed, and why. An empty or fully-refused selection
     /// never reaches the disk.
+    /// `fileOperation` is the tests' seam for the file operation (nil =
+    /// the routine's own move to the Trash — every production caller).
     @discardableResult
-    func trashSelectedRecords(_ requested: [VideoRecord]) async -> JunkDeletionResult {
+    func trashSelectedRecords(_ requested: [VideoRecord],
+                              fileOperation: (@Sendable (URL) throws -> Void)? = nil) async -> JunkDeletionResult {
         guard !requested.isEmpty else { return .empty }
         guard !isReadOnly else {
             log("Move to Trash refused — read-only viewer mode.")
@@ -137,8 +140,11 @@ extension VideoScanModel {
         let targets = plan.toTrash.compactMap { byID[$0] }
         // The one existing Trash routine — archive + offline gates,
         // purgedAt/.trashed, publish, and the copyTrashed ledger lines.
-        let routine = targets.isEmpty ? .empty : await deleteConfirmedJunk(targets, mode: .toTrash)
-        let result = mergedCatalogTrashResult(requested, plan: plan, routine: routine)
+        let fileGuard = fileOperation.map {
+            JunkDeletionGuard(authorize: { _ in nil }, beforeRemoval: { _ in nil }, remove: $0)
+        }
+        let routine = targets.isEmpty ? .empty : await deleteConfirmedJunk(targets, mode: .toTrash, guard: fileGuard)
+        let result = mergedCatalogTrashResult(requested, plan: plan, routine: routine).trashFailuresHeld()
         // "I don't wanna see it again" (Rick 2026-09-20): the content of
         // every row that actually left the disk goes on the ignore list
         // Tidy and Remove from Catalog use, so a rescan — or another copy
@@ -151,6 +157,7 @@ extension VideoScanModel {
             scheduleIgnoredContentSave()
             log("Move to Trash: remembered \(remembered) file(s) as ignored content — a rescan will not catalog them again (Tidy → Ignored content to put back).")
         }
+        logJunkLaneOutcome(result, verb: "Move to Trash")
         return result
     }
 

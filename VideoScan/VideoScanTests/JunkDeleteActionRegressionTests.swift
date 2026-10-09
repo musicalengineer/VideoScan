@@ -73,7 +73,7 @@ struct JunkDeleteActionRegressionTests {
         // Task hasn't been scheduled yet when onAct returns.
         let probe = ProbeRef()
 
-        let onAct = JunkDeleteAction.makeOnAct(model: model, snapshot: Self.snapshot(of: model)) { _, _, _ in
+        let onAct = JunkDeleteAction.makeOnAct(model: model, snapshot: Self.snapshot(of: model)) { _, _ in
             probe.fired = true
         }
 
@@ -126,7 +126,7 @@ struct JunkDeleteActionRegressionTests {
         // runtime under strict concurrency.
         let model = VideoScanModel()
         var didMutateOnMain = false
-        let onAct = JunkDeleteAction.makeOnAct(model: model, snapshot: Self.snapshot(of: model)) { _, _, _ in
+        let onAct = JunkDeleteAction.makeOnAct(model: model, snapshot: Self.snapshot(of: model)) { _, _ in
             // If this closure body ran off MainActor, mutating @State on
             // a view would be a violation. We test the simpler invariant:
             // the closure receives the MainActor context.

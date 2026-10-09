@@ -442,7 +442,7 @@ struct TriageView: View {
                     // Move to Trash acts on exactly this set (design R1).
                     snapshot: frozen,
                     onCancel: { /* dismiss is automatic via @Environment(\.dismiss) */ },
-                    onAct: JunkDeleteAction.makeOnAct(model: model, snapshot: frozen) { result, _, bytesSucceeded in
+                    onAct: JunkDeleteAction.makeOnAct(model: model, snapshot: frozen) { result, bytesSucceeded in
                         // Atomic content transition: confirm → result.
                         junkSheet = .result(JunkDeletionReport(result), bytesSucceeded)
                     }
