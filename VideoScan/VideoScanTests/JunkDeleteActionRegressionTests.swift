@@ -4,7 +4,7 @@ import Foundation
 
 // MARK: - Regression test for the half-iconified sheet-dismiss hang
 //
-// Bug history (2026-06-02): clicking "Delete Permanently" in the
+// Bug history (2026-06-02): clicking a delete button in the
 // DeleteConfirmedJunkConfirmSheet started the sheet dismiss animation,
 // got partway through (a small rounded "iconified" stub visible mid-
 // collapse), then froze. Cause: the Button's action did synchronous
@@ -55,6 +55,14 @@ struct JunkDeleteActionRegressionTests {
         return model
     }
 
+    /// The confirmation's frozen set for `model` (built before the timing
+    /// starts — freezing happens when the sheet opens, not in onAct).
+    private static func snapshot(of model: VideoScanModel) -> VideoScanModel.JunkTrashSnapshot {
+        VideoScanModel.JunkTrashSnapshot(items: model.records.map {
+            .init(record: $0, path: $0.fullPath, identity: nil, bytes: $0.sizeBytes, plan: .toMove)
+        })
+    }
+
     @Test func onActReturnsBeforeAnyWork() async throws {
         let model = Self.fatModel()
 
@@ -65,12 +73,12 @@ struct JunkDeleteActionRegressionTests {
         // Task hasn't been scheduled yet when onAct returns.
         let probe = ProbeRef()
 
-        let onAct = JunkDeleteAction.makeOnAct(model: model) { _, _, _ in
+        let onAct = JunkDeleteAction.makeOnAct(model: model, snapshot: Self.snapshot(of: model)) { _, _, _ in
             probe.fired = true
         }
 
         let startedAt = CFAbsoluteTimeGetCurrent()
-        onAct(.permanent)
+        onAct()
         let elapsed = CFAbsoluteTimeGetCurrent() - startedAt
 
         // Threshold: 5 ms is plenty for the closure to schedule a Task
@@ -81,14 +89,14 @@ struct JunkDeleteActionRegressionTests {
                 "onAct took \(String(format: "%.3f", elapsed * 1000))ms — should be <5ms; sync work likely crept back into the closure")
 
         // Sanity: the deferred work eventually runs and onComplete fires.
-        // With an empty target set after the filter (all records' files
-        // don't exist so they hit alreadyMissing), the Task completes
-        // quickly. 2s gives generous slack for slow CI runners.
-        let deadline = Date().addingTimeInterval(2.0)
+        // All records' files don't exist, so each hits alreadyMissing.
+        // Every file gets its own turn (per-file authorization, 2026-10-09),
+        // so 10k files take a moment; 15 s is generous slack for CI.
+        let deadline = Date().addingTimeInterval(15.0)
         while !probe.fired && Date() < deadline {
             try await Task.sleep(for: .milliseconds(20))
         }
-        #expect(probe.fired, "onAct's deferred Task didn't fire onComplete within 2s")
+        #expect(probe.fired, "onAct's deferred Task didn't fire onComplete within 15s")
     }
 
     @Test func junkSheetCasesShareSingleIdentity() throws {
@@ -107,7 +115,7 @@ struct JunkDeleteActionRegressionTests {
             attempted: 1, succeeded: 1, alreadyMissing: 0,
             skippedOffline: 0, failed: []
         )
-        let confirm = JunkSheet.confirm
+        let confirm = JunkSheet.confirm(VideoScanModel.JunkTrashSnapshot(items: []))
         let result = JunkSheet.result(dummyResult, .toTrash, 0)
         #expect(confirm.id == result.id,
                 "JunkSheet cases must share a single id so SwiftUI keeps the modal context across the .confirm → .result transition. Different ids re-introduce the chained-sheet race.")
@@ -122,14 +130,14 @@ struct JunkDeleteActionRegressionTests {
         // runtime under strict concurrency.
         let model = VideoScanModel()
         var didMutateOnMain = false
-        let onAct = JunkDeleteAction.makeOnAct(model: model) { _, _, _ in
+        let onAct = JunkDeleteAction.makeOnAct(model: model, snapshot: Self.snapshot(of: model)) { _, _, _ in
             // If this closure body ran off MainActor, mutating @State on
             // a view would be a violation. We test the simpler invariant:
             // the closure receives the MainActor context.
             MainActor.assertIsolated()
             didMutateOnMain = true
         }
-        onAct(.permanent)
+        onAct()
         try await Task.sleep(for: .seconds(1))
         #expect(didMutateOnMain, "onComplete didn't fire on MainActor as expected")
     }

@@ -643,7 +643,7 @@ struct ReadOnlyVolumeSensorTests {
             ("DeleteDuplicatesForecast.swift", ["bulkDeleteRefusal(r, volume: archiveVolume)"]),
             ("VideoScanModel+JunkDelete.swift", ["excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")",
                                                  "readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe)"]),
-            ("JunkDeleteAction.swift", ["model.excludingMasterArchiveFiles("]),
+            ("VideoScanModel+JunkTrashSnapshot.swift", ["recordsBulkVerbsMayRemove(recs)"]),   // the frozen Delete Junk set (R1)
             ("VideoScanModel+TrashSelection.swift", ["self.bulkDeleteRefusal($0, volume: archiveVolume)"]),
             ("VideoScanModel+PruneApply.swift", ["bulkDeleteRefusal(rec, volume: archiveVolume)"]),
             ("VideoScanModel+Workbench.swift", ["excludingMasterArchiveFiles(requested, verb: \"Discard\")"]),

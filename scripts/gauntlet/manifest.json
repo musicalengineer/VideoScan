@@ -15785,6 +15785,31 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/JunkFrozenSnapshotTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JunkFrozenSnapshotTests",
+        "JunkPerFileAuthorizationTests",
+        "JunkSnapshotScaleTests"
+      ],
+      "tests": [
+        "authorizeIsPerFile",
+        "catalogChangesHold",
+        "changedFileHolds",
+        "hundredThousandFreezeInBudget",
+        "masterArchiveNeverMoves",
+        "neverWidens",
+        "offlineWhenFrozenNeverMoves",
+        "readOnlyMarkedLaterHolds",
+        "replacedFileHolds",
+        "revokedMarkHolds",
+        "snapshotFreezesIdentityAndSize",
+        "vanishedIsMissing",
+        "viewerMovesNothing"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/KinshipExplicitOverInferredTests.swift",

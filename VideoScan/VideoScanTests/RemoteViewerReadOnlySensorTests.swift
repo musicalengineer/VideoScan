@@ -679,7 +679,7 @@ struct RemoteViewerReadOnlySensorTests {
             }
         }
         #expect(callers == ["CatalogRowContextMenu.swift", "VideoScanModel+TrashSelection.swift",
-                            "VideoScanModel+PruneApply.swift", "JunkDeleteAction.swift"],
+                            "VideoScanModel+PruneApply.swift", "VideoScanModel+JunkTrashSnapshot.swift"],
                 "a new deleteConfirmedJunk caller: confirm it relies on the model's viewer guard, then add it here")
     }
 }
