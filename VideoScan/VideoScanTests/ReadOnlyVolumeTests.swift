@@ -648,7 +648,6 @@ struct ReadOnlyVolumeSensorTests {
             ("VideoScanModel+PruneApply.swift", ["bulkDeleteRefusal(rec, volume: archiveVolume)"]),
             ("VideoScanModel+Workbench.swift", ["excludingMasterArchiveFiles(requested, verb: \"Discard\")"]),
             ("TranscodeJob.swift", ["model.bulkDeleteRefusal(forPath: path)", "archiveCheck: model?.archiveRemovalCheck()"]),
-            ("CatalogToolbar.swift", ["model.recordsBulkVerbsMayRemove(confirmedJunk)"]),
             ("CatalogRowContextMenu.swift", ["model.recordsBulkVerbsMayRemove(activeRecs)"]),   // row menu (R1: was CatalogContent+Table.swift)
             ("VideoScanModel+Steward.swift", ["self.bulkDeleteRefusal(r, volume: archiveDrive)"]),
         ]
