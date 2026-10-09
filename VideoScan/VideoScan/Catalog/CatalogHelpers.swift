@@ -181,6 +181,8 @@ struct CatalogContent: View {
     @State var checkMediaRequest: CheckMediaRequest?
     /// "Repair…" — the one repair door (2026-10-08) — .sheet(item:).
     @State var repairSheetRequest: MediaRepairSheetRequest?
+    /// "Copies & Advice…" (2026-10-09, design §10) — .sheet(item:).
+    @State var copiesAdviceRequest: CopiesAdviceRequest?
 
     /// "Find Online Version" came up empty — non-nil drives an alert
     /// explaining where copies exist (all offline) or that this is the
@@ -869,6 +871,11 @@ struct CatalogContent: View {
         }
         .sheet(item: $repairSheetRequest) { request in
             MediaRepairSheet(request: request)
+        }
+        .sheet(item: $copiesAdviceRequest) { request in
+            CopiesAdviceSheet(request: request, model: model, startFootageRun: { [fileOpsCenter, model] scope in
+                _ = fileOpsCenter.startFindSimilarFootage(scope: scope, model: model)
+            })
         }
         // Music-triage candidates, off the main actor (2026-10-04 perf).
         .task(id: musicTriageKey) { await refreshMusicTriageCandidates() }

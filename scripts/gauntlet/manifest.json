@@ -8025,6 +8025,58 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CopiesAdviceSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CopiesAdviceScaleTests",
+        "CopiesAdviceSensorTests"
+      ],
+      "tests": [
+        "itFollowsGetInfoInTheCatalogRowMenu",
+        "itIsTheFirstItemOfTheTriageRightClick",
+        "oneCardOver100kRecordsBuildsUnderBudget",
+        "theCardHasNoDeleteCodeOfItsOwn",
+        "theLabelIsCopiesAndAdvice"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CopiesAdviceTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CopiesAdviceEndToEndTests",
+        "CopiesAdviceKeeperTests",
+        "CopiesAdviceRuleTableTests",
+        "CopiesAdviceWordsTests"
+      ],
+      "tests": [
+        "aDifferentFileInTheSameGroup_isNotACopy_soThisIsTheOnlyCopy",
+        "aDriveTheDiskSaysIsAwayIsNeverElected",
+        "aHeldFile_isKeep_beforeAnythingSafe",
+        "aStaleDigest_isOnlyASample",
+        "anotherNameForTheSameFile_isNotASecondCopy",
+        "archiveCopy_beatsSafe",
+        "everyVerdictHasOneOfTheFixedSentenceShapes",
+        "freshnessNeverGuesses",
+        "headAndTailHash_needsTheSameSize",
+        "keeperIsWhatTheDuplicateEngineWouldElect",
+        "offlineKeeper_isConnect",
+        "onlyCopy_beatsSafe_andSaysWhenCopiesWereNeverChecked",
+        "rowFates_keeperKeeps_archiveStays_sampleIsCheck_awayStays",
+        "safe_whenTheArchiveHoldsAVerifiedCopy_andSaysHowManyMore",
+        "safe_withoutTheArchive_namesTheKeepersDrive",
+        "sampleOnly_isCheckFirst_neverSafe",
+        "theRuleOrderIsTheSpec_safetyFirst",
+        "thisFileMissing_isCheckFirst",
+        "thisFilesDriveAway_isConnectThatDrive",
+        "thisIsTheKeeper_isKeep_withTheElectionsReason",
+        "trashOutcomeWords",
+        "twoVerifiedCopies_onePreferred_isSafeForTheOther_thenOnlyCopyWhenItIsGone",
+        "whyFlagged_saysEachSourceInPlainWords"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CopyFamilyAssessorTests.swift",
@@ -27881,7 +27933,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2166,
+      "expected_floor": 2194,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -27972,6 +28024,12 @@
         "VideoScanTests/CompareTests",
         "VideoScanTests/ConfirmJourneyStampTests",
         "VideoScanTests/ConfirmedRejectedTagSchemaTests",
+        "VideoScanTests/CopiesAdviceEndToEndTests",
+        "VideoScanTests/CopiesAdviceKeeperTests",
+        "VideoScanTests/CopiesAdviceRuleTableTests",
+        "VideoScanTests/CopiesAdviceScaleTests",
+        "VideoScanTests/CopiesAdviceSensorTests",
+        "VideoScanTests/CopiesAdviceWordsTests",
         "VideoScanTests/CopyFamilyExternalLineageTests",
         "VideoScanTests/CopyMetadataCrashTests",
         "VideoScanTests/CorrelateLedgerPerfTests",
