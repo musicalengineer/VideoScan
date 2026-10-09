@@ -793,7 +793,9 @@ struct ArchiveVolumeProtectionSourceSensor {
 
     @Test func theCatalogFileRemoversGoThroughTheOneRule() throws {
         let junk = try SourceTree.appSource(named: "VideoScanModel+JunkDelete.swift")
-        #expect(junk.contains("let records = excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")"))
+        // 2026-10-09: the choke point's excluded files become named holds
+        // (one outcome per requested file), so the call is wrapped.
+        #expect(junk.contains("let mayGo = Set(excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")"))
         #expect(junk.contains("archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe)"),
                 "the removal-time re-check sits in the detached pass")
         let bench = try SourceTree.appSource(named: "VideoScanModel+Workbench.swift")

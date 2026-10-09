@@ -27979,7 +27979,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2166,
+      "expected_floor": 2202,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -28061,6 +28061,7 @@
         "VideoScanTests/CatalogSearchTokenizeAndTests",
         "VideoScanTests/CatalogSelectionPruneTests",
         "VideoScanTests/CatalogTargetStatusResilienceTests",
+        "VideoScanTests/CatalogTrashConsistencyTests",
         "VideoScanTests/CatalogVerifyMenuPlanTests",
         "VideoScanTests/CatalogWideMetadataCandidatesTests",
         "VideoScanTests/CatchUpInferredDatesCharacterizationTests",
@@ -28149,6 +28150,12 @@
         "VideoScanTests/InspectorPanelRulesTests",
         "VideoScanTests/InspectorPanelSectionOrderTests",
         "VideoScanTests/JobLifecycleUncoveredPathsTests",
+        "VideoScanTests/JunkBytesMovedTests",
+        "VideoScanTests/JunkFrozenSnapshotTests",
+        "VideoScanTests/JunkOutcomeAccountingTests",
+        "VideoScanTests/JunkPerFileAuthorizationTests",
+        "VideoScanTests/JunkSnapshotScaleTests",
+        "VideoScanTests/JunkTrashOnlyTests",
         "VideoScanTests/KeepersByGroupIDTests",
         "VideoScanTests/LifeStatusBiographyCardTests",
         "VideoScanTests/LifeStatusCompositionTests",
@@ -28246,6 +28253,7 @@
         "VideoScanTests/TreeWalkStep0LineAttributionTests",
         "VideoScanTests/TriageCleanedFilterTests",
         "VideoScanTests/TriageDispositionTests",
+        "VideoScanTests/TriageJunkButtonTests",
         "VideoScanTests/TriageQueueTests",
         "VideoScanTests/TruncatedFileTests",
         "VideoScanTests/TypecheckSplitTextTests",
