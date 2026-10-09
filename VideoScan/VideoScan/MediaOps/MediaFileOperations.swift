@@ -51,106 +51,257 @@ struct MediaFileOperationKindStyle: Equatable {
     let fill: RGB
 }
 
-enum MediaFileOperationKind: String, CaseIterable {
-    case combine
-    case compare
+/// ≈ a C++ class with a private constructor and a fixed set of
+/// `static const` instances: callers still write `.combine`, `==` and
+/// use kinds as Set/Dictionary keys, but each kind CARRIES its look as
+/// data instead of a switch looking it up (Rick 2026-10-08: the style
+/// switch was a hand-written jump table that grew a branch per verb).
+/// Identity is the rawValue alone — see `==` / `hash(into:)`.
+struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
+    /// The old enum's case name, unchanged — log lines (`job.kind.rawValue`)
+    /// and test messages print it.
+    let rawValue: String
+
+    /// How this kind presents itself — badge text, log verb and badge
+    /// fill — as ONE value per kind (2026-10-07). These used to be three
+    /// parallel exhaustive switches that each grew a branch per new verb;
+    /// then one switch (2026-10-07); since 2026-10-08 it is a REQUIRED
+    /// initialiser argument, so a new kind still cannot compile without
+    /// all three. Badge: small caps in the row (`.extract`
+    /// says "Faces" since the verb split; DELETE / TRASH are upper-case on
+    /// purpose — the destructive rows must be unmistakable). Log verb: the
+    /// lowercase verb in the videoscan.log START/OUTCOME lines, matching
+    /// the older ad-hoc lines so greps over old logs keep working. Fill:
+    /// hand-darkened hues that carry white small-caps text (Rick
+    /// 2026-07-31), pairwise distinct (the nightly sensor).
+    let style: MediaFileOperationKindStyle
+
+    /// Does this row expand to show what the job actually did?
+    ///
+    /// ONE list. Until 2026-09-15 the set of expandable kinds was written
+    /// twice — as a chain of `job is PairCompareJob || …` in the row's tap
+    /// gesture, and again as the `if isExpanded, let x = job as? T` blocks
+    /// in its body. Two lists of the same thing drift, and the drift is
+    /// silent in both directions: a row that refuses to expand, or one that
+    /// expands to nothing.
+    ///
+    /// DELIBERATELY REQUIRED — the initialiser has no default for it (it was
+    /// an exhaustive switch with no `default` until 2026-10-08). Adding a
+    /// kind will not compile until someone decides whether it has a detail
+    /// view, which is exactly the decision that gets forgotten. The `false`
+    /// kinds are not an oversight; they are the backlog Rick picked up on
+    /// 2026-09-15 ("detail views for the remaining job kinds"), readable
+    /// from the declarations below.
+    let hasDetailView: Bool
+
+    private init(_ rawValue: String, hasDetailView: Bool, style: MediaFileOperationKindStyle) {
+        self.rawValue = rawValue
+        self.hasDetailView = hasDetailView
+        self.style = style
+    }
+
+    /// Identity is the rawValue only, so a recolour never changes which
+    /// kind a row is (≈ a C++ operator== that compares the key field).
+    static func == (lhs: Self, rhs: Self) -> Bool { lhs.rawValue == rhs.rawValue }
+    func hash(into hasher: inout Hasher) { hasher.combine(rawValue) }
+
+    /// `"\(kind)"` prints the case name, as the enum did.
+    var description: String { rawValue }
+
+    // Forest green — Combine's original green, darkened.
+    static let combine = Self("combine", hasDetailView: false,
+        style: .init(badge: "Combine", logVerb: "combine", fill: .init(0.10, 0.45, 0.16)))
+
+    // Cobalt — Compare's blue.
+    static let compare = Self("compare", hasDetailView: true,
+        style: .init(badge: "Compare", logVerb: "compare", fill: .init(0.08, 0.32, 0.72)))
+
+    // Burnt orange — Extract/Faces' orange.
     /// Vision-scored best-portrait-frames rip ("Extract Facial
     /// Frames…"). The case name predates the verb split — kept as
     /// `.extract` so persisted/test references don't churn; only the
     /// badge text changed.
-    case extract
+    static let extract = Self("extract", hasDetailView: false,
+        style: .init(badge: "Faces", logVerb: "extract faces", fill: .init(0.75, 0.42, 0.00)))
+
+    // Deep purple — Frames' purple.
     /// ffmpeg-only frame export ("Extract Frames…") — every frame, or
     /// sampled every-Nth / N-per-second. No Vision involved.
-    case ripFrames
+    static let ripFrames = Self("ripFrames", hasDetailView: false,
+        style: .init(badge: "Frames", logVerb: "extract frames", fill: .init(0.44, 0.22, 0.65)))
+
+    // Crimson — Reformat's red.
     /// "Reformat and Analyze" — transcode a legacy-codec source
     /// (svq3, qdm2, cinepak, etc.) into modern H.264/AAC mp4 with
     /// conventional ffmpeg filters (bwdif deinterlace, hqdn3d
     /// denoise). Auto-catalogs the output and queues it for analyze.
     /// Rick 2026-06-14: lets the analyzer reach files AVFoundation
     /// can't decode (Apple deprecated svq3/qdm2/etc. in macOS 10.15).
-    case reformat
+    static let reformat = Self("reformat", hasDetailView: false,
+        style: .init(badge: "Reformat", logVerb: "reformat", fill: .init(0.70, 0.14, 0.16)))
+
+    // Dark cyan (blue-leaning) — Analyze. Sits between compare's
+    // cobalt and cleanup's teal; the blue cast keeps it apart.
     /// "Analyze This File" — runs the orchestrator's VLM + Whisper
     /// pipeline on a single record. Rick 2026-06-14: Media File
     /// Operations window owns per-file operations; the Analyze
     /// Dashboard owns batch volume-wide operations. Watching one
     /// file's analyze tick along belongs here.
-    case analyze
+    static let analyze = Self("analyze", hasDetailView: false,
+        style: .init(badge: "Analyze", logVerb: "analyze", fill: .init(0.00, 0.42, 0.58)))
+
+    // Pass C — Transcode's mint matches the workspaceActive tint
+    // (mint hammer icon in the catalog filename column), so the user
+    // reads "transcode → workspace" as the same visual lineage.
+    // Dark sea-green keeps the mint family, green-leaning.
     /// "Transcode" — two-preset faithful conversion to ProRes 422 HQ
     /// (Editing) or HEVC 10-bit (Archival). Rick 2026-06-14 (Pass C):
     /// produces FCP-editable copies and archive-grade copies without
     /// leaving VideoScan. Unlike Reformat, NO deinterlace/denoise and
     /// NO auto-queue Analyze.
-    case transcode
+    static let transcode = Self("transcode", hasDetailView: false,
+        style: .init(badge: "Transcode", logVerb: "transcode", fill: .init(0.00, 0.52, 0.36)))
+
+    // Clean Up shares transcode's derivative-producing nature but
+    // gets its own hue so the two verbs read apart at a glance —
+    // balanced teal between transcode's green and analyze's blue.
     /// "Clean Up Video" — applies a named CleanupRecipe (v1: VHS Quick
     /// Clean single-pass ffmpeg filtergraph) and writes
     /// `<stem>_cleaned.mov` (ProRes LT, audio copied) BESIDE the
     /// original, which is never modified. Rick 2026-07-07.
-    case cleanup
+    static let cleanup = Self("cleanup", hasDetailView: false,
+        style: .init(badge: "Clean Up", logVerb: "cleanup", fill: .init(0.00, 0.44, 0.46)))
+
+    // Trim is the third derivative-producing verb — indigo keeps it
+    // distinct from transcode's mint and cleanup's teal.
     /// "Trim Master…" — cuts static/garbage off the head and tail of an
     /// archival capture with a pure ffmpeg STREAM COPY (no re-encode,
     /// zero quality loss) and writes `<stem>_trimmed.<same ext>` BESIDE
     /// the original, which is never modified. Rick 2026-07-16.
-    case trim
+    static let trim = Self("trim", hasDetailView: false,
+        style: .init(badge: "Trim", logVerb: "trim", fill: .init(0.32, 0.31, 0.75)))
+
+    // Balance Audio — raspberry keeps pink's identity but darker;
+    // distinct from the other derivative-producing verbs. GH #116.
     /// "Balance Audio" — fixes one-sided (left/right-only) or mono
     /// audio by duplicating the live channel to both sides; video
     /// stream-copied, `<stem>_balanced.<ext>` beside the original,
     /// which is never modified. GH #116, Rick 2026-07.
-    case balanceAudio
+    static let balanceAudio = Self("balanceAudio", hasDetailView: false,
+        style: .init(badge: "Balance", logVerb: "balance audio", fill: .init(0.72, 0.16, 0.40)))
+
+    // Rebuild Audio Track (Verify Audio's repair, GH #128) — dark
+    // brown keeps the audio-repair pair (raspberry/brown) adjacent
+    // but distinguishable.
     /// "Rebuild Audio Track" — the Verify Audio repair (GH #128):
     /// video stream-copied, audio re-encoded to pcm_s16le in a .mov,
     /// `<stem>_RepairedAudio.mov` beside the original, which is never
     /// modified. Rick 2026-07-24.
-    case rebuildAudio
+    static let rebuildAudio = Self("rebuildAudio", hasDetailView: false,
+        style: .init(badge: "Rebuild", logVerb: "rebuild audio", fill: .init(0.47, 0.32, 0.20)))
+
+    // Verify Audio (the diagnosis as a job, GH #135) — dark goldenrod
+    // keeps the yellow "checking" semantics; reads apart from its
+    // brown repair sibling and from extract's burnt orange.
     /// "Verify Audio" — the diagnosis itself as a job (GH #135, Rick
     /// 2026-07-24): the levels pass decodes the whole audio track
     /// (minutes on long tapes), so it runs HERE, never in a modal
     /// sheet over the catalog. Single- and multi-select both dispatch
     /// these; the results sheet presents the already-computed
     /// diagnosis afterwards without re-running anything.
-    case verifyAudio
+    static let verifyAudio = Self("verifyAudio", hasDetailView: false,
+        style: .init(badge: "Verify", logVerb: "verify audio", fill: .init(0.72, 0.53, 0.04)))
+
+    // Verify Video (2026-09-23) — dark olive: the picture-side sibling
+    // of Verify Audio's goldenrod (same "checking" family, Δ ≈ 0.31
+    // from it), apart from combine's forest green and promote's bronze.
     /// "Verify Video" — Verify Audio's picture-side sibling (Rick
     /// 2026-09-23): header facts + packet samples + a full decode, then
     /// a plain-words OK / Warning / Broken verdict with a recommendation.
     /// Read-only on media; verdict persisted on the record. Its row
     /// expands to the reasons (VerifyVideoDetailView). VerifyVideoJob.
-    case verifyVideo
+    static let verifyVideo = Self("verifyVideo", hasDetailView: true,
+        style: .init(badge: "Verify Video", logVerb: "verify video", fill: .init(0.42, 0.45, 0.05)))
+
+    // Check Media (2026-10-07) — dark moss: the same "checking" family
+    // as the two Verify fills, Δ ≈ 0.20 from every other fill.
+    // Renamed in words only 2026-10-08 (the menu verb is Verify…).
     /// "Check Media…" (Rick 2026-10-07) — the catalog's one examination
     /// verb: a quick tier (header, packet samples, short frame windows)
     /// and an optional full tier (the Verify Video decode with signal
     /// filters + the Verify Audio levels pass). One row for the whole
     /// selection; per-file report cards in its detail. CheckMediaJob.
-    case checkMedia
+    static let checkMedia = Self("checkMedia", hasDetailView: true,
+        style: .init(badge: "Verify Media", logVerb: "verify media", fill: .init(0.25, 0.35, 0.00)))
+
+    // Repair (2026-10-08) — deep green, the "Repair Now" button's
+    // family; Δ ≈ 0.27 from every other fill, white text legible.
+    /// "Repair…" ▸ Repair Now (Rick 2026-10-08) — every fix the latest
+    /// report card earns, in one ffmpeg pass, into ONE new file beside the
+    /// original (or a chosen folder when the original is protected). The
+    /// original is only read. MediaRepairJob.
+    static let repair = Self("repair", hasDetailView: true,
+        style: .init(badge: "Repair", logVerb: "repair", fill: .init(0.00, 0.25, 0.00)))
+
+    // Find & Tag (per-person recipe, 2026-08-02) — dark slate blue,
+    // distinct from trim's indigo and compare's cobalt; passes the
+    // white-text contrast sensor like the rest of the 2026-07-31
+    // legibility palette.
     /// "Find & Tag" — runs a per-person detector recipe (Donna Recipe,
     /// docs/find-and-tag-design.md) over selected records and writes
     /// MACHINE-tier person tags (detected "Donna*" / suspected
     /// "Donna?"); confirmed stays human-only. v1 bridges to the python
     /// recipe engine via ProcessRunner; Swift-native engine to follow
     /// behind the same job. Rick 2026-08-02.
-    case findPerson
+    static let findPerson = Self("findPerson", hasDetailView: true,
+        style: .init(badge: "Find", logVerb: "find person", fill: .init(0.28, 0.24, 0.50)))
+
+    // Promote to Archive (2026-08-15) — deep archival bronze: warm
+    // like the retire/archivebox family, darker than rebuild's brown,
+    // and clearly apart from extract's burnt orange.
     /// "Promote to Archive" — verified byte-for-byte copy of one or more
     /// records into the Master Archive tree (spec §5): copy → streamed
     /// sha256 of source and destination → rename into place → manifest
     /// row → linked catalog record. Never a move; never a re-encode.
     /// docs/archive_promotion_workflow.md, Rick 2026-08-15.
-    case promote
+    static let promote = Self("promote", hasDetailView: false,
+        style: .init(badge: "Promote", logVerb: "promote", fill: .init(0.55, 0.36, 0.10)))
+
     // (`assessCopies` — the Promote Helper's "Assess Copies for Archive…"
     // row — was retired in Archive Angel consolidation S4, 2026-09-22; its
     // read-only successor is Archive Angel ▸ Show Copies…, a sheet, not a
     // job. The kind was never persisted: no Codable, no saved plan, no
     // defaults key named it.)
+
+    // Verify Archive Copies (GH #167, 2026-08-20) — steel slate:
+    // cooler and grayer than trim's indigo and findPerson's slate
+    // blue; reads as "the auditor", apart from verifyAudio's
+    // goldenrod despite sharing the verb.
     /// "Verify Archive Copies" — the manifest-driven fixity audit +
     /// recovery pass (GH #167, 2026-08-20): re-read every Master
     /// Archive copy end to end, compare its SHA-256 against the
     /// 00_Index manifest, restore `archiveFixity` on a match and flag
     /// a mismatch LOUDLY (never restored — potential corruption).
     /// Read-only on media; catalog writes only. VerifyArchiveCopiesJob.
-    case verifyArchive
+    static let verifyArchive = Self("verifyArchive", hasDetailView: true,
+        style: .init(badge: "Fixity", logVerb: "verify archive", fill: .init(0.36, 0.42, 0.60)))
+
+    // Archive Angel (2026-09-09) — deep violet: the proposer that
+    // precedes Promote's bronze (the retired assessCopies' plum it once
+    // stood apart from went with the Promote Helper, S4).
     /// "Archive Angel" — Stage 1 of the autonomous promoter (Rick
     /// 2026-09-09, docs/archive_angel_design.md): walks the catalog for
     /// important-but-unarchived videos, prepares companions in a buffer
     /// on the fast SSD, and stops for review. Never touches the archive
     /// itself — Stage 2 hands the selected rows to Promote.
-    case archiveAngel
+    static let archiveAngel = Self("archiveAngel", hasDetailView: true,
+        style: .init(badge: "Angel", logVerb: "archive angel", fill: .init(0.70, 0.30, 0.05)))   // dark amber — the Angel's orange; Δ≥0.14 from every other fill (nightly sensor 9/10)
+
+    // Delete Duplicates (2026-09-20) — Rick asked for "DELETE in clear
+    // high contrast color": white on a strong, saturated red. System
+    // `.red` fails the white-text legibility sensor (contrast < 3), so
+    // this is red darkened just enough — contrast vs white ≈ 5.6, Δ
+    // from Reformat's crimson ≈ 0.17, and still unmistakably RED.
     /// "Delete Duplicates" — the verified removal of extra copies on one
     /// volume as a job (Rick 2026-09-20: "MFO window should show DELETE in
     /// clear high contrast color, with progress 2 of N, 3 of N deleted,
@@ -159,150 +310,83 @@ enum MediaFileOperationKind: String, CaseIterable {
     /// the moment of deletion; the keeper is read at most once ever.
     /// Pause/Resume between pairs, a saved plan for resume after a quit.
     /// DeleteDuplicatesJob.
-    case deleteDuplicates
+    static let deleteDuplicates = Self("deleteDuplicates", hasDetailView: true,
+        style: .init(badge: "DELETE", logVerb: "delete duplicates", fill: .init(0.82, 0.04, 0.06)))
+
+    // "Move to Trash" (2026-09-20) — oxblood: the other destructive
+    // row, unmistakably red beside DELETE's brighter red (Δ ≈ 0.26)
+    // and apart from Reformat's crimson (Δ ≈ 0.14); contrast vs white
+    // ≈ 8.9.
     /// "Archived — what next?" → "Move N to Trash" as a job (Rick
     /// 2026-09-20: "the app blocks when post-promote delete of big files").
     /// Every copy is proven identical to its archive copy (read in full,
     /// or trusted on its promotion stamp) and both are re-checked the
     /// instant before the move; one file at a time, Pause/Stop between
     /// files, held copies named in the row. PruneApplyJob.
-    case pruneCopies
+    static let pruneCopies = Self("pruneCopies", hasDetailView: true,
+        style: .init(badge: "TRASH", logVerb: "trash copies", fill: .init(0.58, 0.06, 0.16)))
+
+    // Find Similar Footage (2026-09-23) — graphite: a metadata walk,
+    // not a media verb. Δ ≥ 0.19 from every other fill (nearest:
+    // Rebuild's brown), contrast vs white ≈ 8.5.
     /// "Find Similar Footage" (Rick 2026-09-23, docs/design/find_original_design.md):
     /// walks the catalog METADATA — no media is read — and records which
     /// files are probably the same footage (copies, re-encodes, transcodes,
     /// exports). Pause/Stop between phases and apply slices.
     /// FindSimilarFootageJob.
-    case findSimilarFootage
+    static let findSimilarFootage = Self("findSimilarFootage", hasDetailView: false,
+        style: .init(badge: "Footage", logVerb: "find similar footage", fill: .init(0.30, 0.30, 0.30)))
+
+    // Bind Fixity to Volume (2026-09-23) — deep violet: a slow full
+    // read that only rewrites catalog stamps. Δ ≥ 0.29 from every
+    // other fill (nearest: Frames' purple), contrast vs white ≈ 7.
     /// "Bind Fixity to Volume" (2026-09-23, codex #1707): re-read every
     /// file on one volume whose stored whole-file digest predates volume
     /// identity, in full, with before/after identity checks on the same
     /// opened file, and re-store it bound to the volume's persistent UUID.
     /// Read-only on media; catalog writes only. BindFixityToVolumeJob.
-    case bindFixity
+    static let bindFixity = Self("bindFixity", hasDetailView: false,
+        style: .init(badge: "Bind", logVerb: "bind fixity", fill: .init(0.55, 0.00, 0.80)))
+
+    // Lock files already in the archive (2026-09-27) — deep navy slate: "the vault".
+    // Δ ≥ 0.22 from every other fill; contrast vs white ≈ 13.
     /// "Lock files already in the archive (one-time)…" (Rick 2026-09-27):
     /// walks the archive manifest's rows and sets the macOS user-immutable
     /// flag on each archived file promoted before locking existed.
     /// Metadata only — no media is read. ArchiveLockJob.
-    case lockArchive
+    static let lockArchive = Self("lockArchive", hasDetailView: true,
+        style: .init(badge: "Lock", logVerb: "lock archive files", fill: .init(0.10, 0.20, 0.30)))
+
+    // Compare Footage / Footage Spectrum (2026-10-03) — plum: a reading
+    // verb like Compare's cobalt, but its own family. Δ ≥ 0.22 from every
+    // other fill (nearest: Balance's raspberry), contrast vs white ≈ 9.
     /// "Compare Footage…" (Footage Spectrum trial, 2026-10-03): 2–8 chosen
     /// videos read once each by scripts/footage_spectrum.py and shown as
     /// colour-over-time strips on one time line in the Footage Spectrum
     /// window. Read-only on media; output only under
     /// ~/Library/Caches/VideoScan/spectrum. FootageSpectrumJob.
-    case compareFootage
+    static let compareFootage = Self("compareFootage", hasDetailView: true,
+        style: .init(badge: "Spectrum", logVerb: "compare footage", fill: .init(0.50, 0.10, 0.45)))
+
+    // Fingerprint Pictures (GH #293, 2026-10-07) — deep ultramarine: a
+    // reading verb that only writes catalog notes. Δ ≥ 0.35 from every
+    // other fill (nearest: Lock's navy slate), contrast vs white ≈ 14.7.
     /// "Fingerprint Pictures…" (GH #293, 2026-10-07): computes and KEEPS the
     /// 32-frame perceptual fingerprint of every video without one, archived
     /// files first. Read-only on media; writes only the catalog field.
     /// PerceptualFingerprintBackfillJob.
-    case fingerprintBackfill
+    static let fingerprintBackfill = Self("fingerprintBackfill", hasDetailView: true,
+        style: .init(badge: "Fingerprint", logVerb: "fingerprint pictures", fill: .init(0.00, 0.00, 0.58)))
 
-    /// How this kind presents itself — badge text, log verb and badge
-    /// fill — as ONE value per kind (2026-10-07). These used to be three
-    /// parallel exhaustive switches that each grew a branch per new verb;
-    /// now one switch does, still with no `default`, so a new kind cannot
-    /// compile without all three. Badge: small caps in the row (`.extract`
-    /// says "Faces" since the verb split; DELETE / TRASH are upper-case on
-    /// purpose — the destructive rows must be unmistakable). Log verb: the
-    /// lowercase verb in the videoscan.log START/OUTCOME lines, matching
-    /// the older ad-hoc lines so greps over old logs keep working. Fill:
-    /// hand-darkened hues that carry white small-caps text (Rick
-    /// 2026-07-31), pairwise distinct (the nightly sensor).
-    var style: MediaFileOperationKindStyle {
-        switch self {
-        // Forest green — Combine's original green, darkened.
-        case .combine: return .init(badge: "Combine", logVerb: "combine", fill: .init(0.10, 0.45, 0.16))
-        // Cobalt — Compare's blue.
-        case .compare: return .init(badge: "Compare", logVerb: "compare", fill: .init(0.08, 0.32, 0.72))
-        // Burnt orange — Extract/Faces' orange.
-        case .extract: return .init(badge: "Faces", logVerb: "extract faces", fill: .init(0.75, 0.42, 0.00))
-        // Deep purple — Frames' purple.
-        case .ripFrames: return .init(badge: "Frames", logVerb: "extract frames", fill: .init(0.44, 0.22, 0.65))
-        // Crimson — Reformat's red.
-        case .reformat: return .init(badge: "Reformat", logVerb: "reformat", fill: .init(0.70, 0.14, 0.16))
-        // Dark cyan (blue-leaning) — Analyze. Sits between compare's
-        // cobalt and cleanup's teal; the blue cast keeps it apart.
-        case .analyze: return .init(badge: "Analyze", logVerb: "analyze", fill: .init(0.00, 0.42, 0.58))
-        // Pass C — Transcode's mint matches the workspaceActive tint
-        // (mint hammer icon in the catalog filename column), so the user
-        // reads "transcode → workspace" as the same visual lineage.
-        // Dark sea-green keeps the mint family, green-leaning.
-        case .transcode: return .init(badge: "Transcode", logVerb: "transcode", fill: .init(0.00, 0.52, 0.36))
-        // Clean Up shares transcode's derivative-producing nature but
-        // gets its own hue so the two verbs read apart at a glance —
-        // balanced teal between transcode's green and analyze's blue.
-        case .cleanup: return .init(badge: "Clean Up", logVerb: "cleanup", fill: .init(0.00, 0.44, 0.46))
-        // Trim is the third derivative-producing verb — indigo keeps it
-        // distinct from transcode's mint and cleanup's teal.
-        case .trim: return .init(badge: "Trim", logVerb: "trim", fill: .init(0.32, 0.31, 0.75))
-        // Balance Audio — raspberry keeps pink's identity but darker;
-        // distinct from the other derivative-producing verbs. GH #116.
-        case .balanceAudio: return .init(badge: "Balance", logVerb: "balance audio", fill: .init(0.72, 0.16, 0.40))
-        // Rebuild Audio Track (Verify Audio's repair, GH #128) — dark
-        // brown keeps the audio-repair pair (raspberry/brown) adjacent
-        // but distinguishable.
-        case .rebuildAudio: return .init(badge: "Rebuild", logVerb: "rebuild audio", fill: .init(0.47, 0.32, 0.20))
-        // Verify Audio (the diagnosis as a job, GH #135) — dark goldenrod
-        // keeps the yellow "checking" semantics; reads apart from its
-        // brown repair sibling and from extract's burnt orange.
-        case .verifyAudio: return .init(badge: "Verify", logVerb: "verify audio", fill: .init(0.72, 0.53, 0.04))
-        // Verify Video (2026-09-23) — dark olive: the picture-side sibling
-        // of Verify Audio's goldenrod (same "checking" family, Δ ≈ 0.31
-        // from it), apart from combine's forest green and promote's bronze.
-        case .verifyVideo: return .init(badge: "Verify Video", logVerb: "verify video", fill: .init(0.42, 0.45, 0.05))
-        // Check Media (2026-10-07) — dark moss: the same "checking" family
-        // as the two Verify fills, Δ ≈ 0.20 from every other fill.
-        // Renamed in words only 2026-10-08 (the menu verb is Verify…).
-        case .checkMedia: return .init(badge: "Verify Media", logVerb: "verify media", fill: .init(0.25, 0.35, 0.00))
-        // Find & Tag (per-person recipe, 2026-08-02) — dark slate blue,
-        // distinct from trim's indigo and compare's cobalt; passes the
-        // white-text contrast sensor like the rest of the 2026-07-31
-        // legibility palette.
-        case .findPerson: return .init(badge: "Find", logVerb: "find person", fill: .init(0.28, 0.24, 0.50))
-        // Promote to Archive (2026-08-15) — deep archival bronze: warm
-        // like the retire/archivebox family, darker than rebuild's brown,
-        // and clearly apart from extract's burnt orange.
-        case .promote: return .init(badge: "Promote", logVerb: "promote", fill: .init(0.55, 0.36, 0.10))
-        // Verify Archive Copies (GH #167, 2026-08-20) — steel slate:
-        // cooler and grayer than trim's indigo and findPerson's slate
-        // blue; reads as "the auditor", apart from verifyAudio's
-        // goldenrod despite sharing the verb.
-        case .verifyArchive: return .init(badge: "Fixity", logVerb: "verify archive", fill: .init(0.36, 0.42, 0.60))
-        // Archive Angel (2026-09-09) — deep violet: the proposer that
-        // precedes Promote's bronze (the retired assessCopies' plum it once
-        // stood apart from went with the Promote Helper, S4).
-        case .archiveAngel: return .init(badge: "Angel", logVerb: "archive angel", fill: .init(0.70, 0.30, 0.05))   // dark amber — the Angel's orange; Δ≥0.14 from every other fill (nightly sensor 9/10)
-        // Delete Duplicates (2026-09-20) — Rick asked for "DELETE in clear
-        // high contrast color": white on a strong, saturated red. System
-        // `.red` fails the white-text legibility sensor (contrast < 3), so
-        // this is red darkened just enough — contrast vs white ≈ 5.6, Δ
-        // from Reformat's crimson ≈ 0.17, and still unmistakably RED.
-        case .deleteDuplicates: return .init(badge: "DELETE", logVerb: "delete duplicates", fill: .init(0.82, 0.04, 0.06))
-        // "Move to Trash" (2026-09-20) — oxblood: the other destructive
-        // row, unmistakably red beside DELETE's brighter red (Δ ≈ 0.26)
-        // and apart from Reformat's crimson (Δ ≈ 0.14); contrast vs white
-        // ≈ 8.9.
-        case .pruneCopies: return .init(badge: "TRASH", logVerb: "trash copies", fill: .init(0.58, 0.06, 0.16))
-        // Find Similar Footage (2026-09-23) — graphite: a metadata walk,
-        // not a media verb. Δ ≥ 0.19 from every other fill (nearest:
-        // Rebuild's brown), contrast vs white ≈ 8.5.
-        case .findSimilarFootage: return .init(badge: "Footage", logVerb: "find similar footage", fill: .init(0.30, 0.30, 0.30))
-        // Bind Fixity to Volume (2026-09-23) — deep violet: a slow full
-        // read that only rewrites catalog stamps. Δ ≥ 0.29 from every
-        // other fill (nearest: Frames' purple), contrast vs white ≈ 7.
-        case .bindFixity: return .init(badge: "Bind", logVerb: "bind fixity", fill: .init(0.55, 0.00, 0.80))
-        // Lock files already in the archive (2026-09-27) — deep navy slate: "the vault".
-        // Δ ≥ 0.22 from every other fill; contrast vs white ≈ 13.
-        case .lockArchive: return .init(badge: "Lock", logVerb: "lock archive files", fill: .init(0.10, 0.20, 0.30))
-        // Compare Footage / Footage Spectrum (2026-10-03) — plum: a reading
-        // verb like Compare's cobalt, but its own family. Δ ≥ 0.22 from every
-        // other fill (nearest: Balance's raspberry), contrast vs white ≈ 9.
-        case .compareFootage: return .init(badge: "Spectrum", logVerb: "compare footage", fill: .init(0.50, 0.10, 0.45))
-        // Fingerprint Pictures (GH #293, 2026-10-07) — deep ultramarine: a
-        // reading verb that only writes catalog notes. Δ ≥ 0.35 from every
-        // other fill (nearest: Lock's navy slate), contrast vs white ≈ 14.7.
-        case .fingerprintBackfill: return .init(badge: "Fingerprint", logVerb: "fingerprint pictures", fill: .init(0.00, 0.00, 0.58))
-        }
-    }
+    /// Every kind, in declaration order — what `CaseIterable.allCases` was.
+    /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
+    /// pins the list and count).
+    static let all: [MediaFileOperationKind] = [
+        .combine, .compare, .extract, .ripFrames, .reformat, .analyze, .transcode, .cleanup,
+        .trim, .balanceAudio, .rebuildAudio, .verifyAudio, .verifyVideo, .checkMedia, .repair,
+        .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
+        .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
+    ]
 
     /// Badge text — rendered in small caps by the row view.
     var badgeText: String { style.badge }

@@ -77,7 +77,7 @@ struct MFOStateBadgeTests {
 
     /// The OUTCOME line for a cancelled job must not carry "FAILED".
     @Test func cancelledOutcomeLineNeverSaysFailed() {
-        for kind in MediaFileOperationKind.allCases {
+        for kind in MediaFileOperationKind.all {
             let line = MediaFileOperationsCenter.terminalSummaryLine(
                 verb: kind.logVerb, title: "x.mov", state: .cancelled, wasRefused: false)
             #expect(line == "\(kind.logVerb) cancelled: x.mov")

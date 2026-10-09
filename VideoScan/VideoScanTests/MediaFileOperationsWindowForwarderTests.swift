@@ -333,7 +333,7 @@ struct MediaFileOperationsWindowForwardSensorTests {
     /// kind added to the enum is covered automatically; a kind that must
     /// NOT raise even when user-started would have to change this table.
     @Test func everyKindRaisesOnlyForUserOrigin() {
-        for kind in MediaFileOperationKind.allCases {
+        for kind in MediaFileOperationKind.all {
             for origin in MediaFileOperationOrigin.allCases {
                 let rig = Rig()
                 if origin == .user {
