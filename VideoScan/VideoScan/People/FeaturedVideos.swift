@@ -168,17 +168,18 @@ struct ShowInPeopleTabMenu: View {
     var body: some View {
         Menu("Show in People tab") {
             let families = FamilyGroupStore.listAll()
-            if !families.isEmpty {
-                Section("Families") {
-                    ForEach(families) { family in
-                        let allIn = !records.isEmpty && records.allSatisfy {
-                            FeaturedVideos.isFeatured($0, in: family.featuredVideos)
-                        }
-                        Toggle(family.name, isOn: Binding(
-                            get: { allIn },
-                            set: { FeaturedVideos.set(records, on: $0, forFamily: family.uuid) }))
+            Section("Families") {
+                ForEach(families) { family in
+                    let allIn = !records.isEmpty && records.allSatisfy {
+                        FeaturedVideos.isFeatured($0, in: family.featuredVideos)
                     }
+                    Toggle(family.name, isOn: Binding(
+                        get: { allIn },
+                        set: { FeaturedVideos.set(records, on: $0, forFamily: family.uuid) }))
                 }
+                // Rick 2026-10-09: "Thanksgiving at the Hudsons' — New Family →
+                // Hudson Family", without a trip to the People tab.
+                Button("New Family\u{2026}") { Self.addToNewFamily(records) }
             }
             let profiles = POIProfile.listAll().sorted {
                 $0.displayName.localizedCaseInsensitiveCompare($1.displayName) == .orderedAscending
@@ -195,5 +196,41 @@ struct ShowInPeopleTabMenu: View {
             }
         }
         .disabled(records.isEmpty)
+    }
+
+    /// Ask for a family name, create the family card (People tab), and put
+    /// these videos on its page. A modal NSAlert with a text field, because
+    /// a menu item can't host a SwiftUI text field and this menu is shared
+    /// by several right-click menus (no host state to wire).
+    @MainActor
+    static func addToNewFamily(_ records: [VideoRecord]) {
+        let alert = NSAlert()
+        alert.messageText = "New Family"
+        alert.informativeText = "Name the family, for example \u{201C}Hudson Family\u{201D}. "
+            + "It gets a card in the People tab, and \(records.count == 1 ? "this video goes" : "these \(records.count) videos go") on its page."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "Family name"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Add")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return }
+        if let existing = FamilyGroupStore.listAll().first(where: {
+            $0.name.compare(name, options: .caseInsensitive) == .orderedSame
+        }) {
+            FeaturedVideos.set(records, on: true, forFamily: existing.uuid)
+            return
+        }
+        let group = FamilyGroup(name: name)
+        do {
+            try FamilyGroupStore.save(group)
+            appLog.write("People: added family \(name) from a right-click")
+        } catch {
+            appLog.write("People: could not add family \(name) — \(error.localizedDescription)")
+            return
+        }
+        FeaturedVideos.set(records, on: true, forFamily: group.uuid)
     }
 }
