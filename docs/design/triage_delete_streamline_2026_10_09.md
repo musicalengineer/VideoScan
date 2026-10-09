@@ -151,3 +151,38 @@ and F7 against the source. These override §3–§7 where they conflict.
   eligible checkboxes; the button reads "Move selected extras to Trash". v1 CUTS: arbitrary
   keeper override (only eligible higher-ranked keepers), custom Undo, skipping the confirmation
   for small selections, retiring the Excess pane.
+
+## 10. "Copies & Advice…" — one file, fully explained (Rick 2026-10-09)
+Rick: "a right-click on a specific file in Triage telling me number of copies, which ones to
+keep, which to delete, lives in archive, same event, etc — all explained on one file; then once
+I see the analysis I can feel confident to delete."
+
+First item of the Triage right-click (and the Catalog row menu): **Copies & Advice…** opens one
+read-only card for that file, built off-main from existing engines (no new analysis):
+```
+Brockton_Xmas_1994.mov  · 41 GB · DNxHD · 1:12:04
+ADVICE  Safe to move to Trash — the archive holds a verified copy, and 2 more copies exist.
+EXACT COPIES (same bytes)                                  4 in all
+  KEEPS  FamilyArchive  …/1994/Brockton_Xmas_1994.mov   archived ✓ fixity checked 10/2
+         RAID_A         /Projects/FCP/…                 stays (unchecked)
+  ►THIS  LaCie_8TB      /Imports/old/…                  can go
+         SanDisk_2TB    /Shorts/…                       can go
+SAME FOOTAGE (not the same bytes)                            2
+  Brockton_Xmas_1994_access.mp4   access copy (HEVC) — derived from the archive copy
+  Brockton_Xmas_clip03.mov        4 min clip — looks like part of this tape
+WHY IT WAS FLAGGED   duplicate of an archived file (Content Steward, 10/8)
+[Move this copy to Trash]   [Move all 2 extras to Trash]   [Keep this one]
+```
+- **Sources (reuse):** exact copies + archive status → `CopyFamilyAssessor` / the duplicate
+  engine's verified groups; keeper + why → `DuplicateKeeperPolicy` (archive › RAID › HDD › SSD,
+  never offline); same footage → `FootageGrouping` (re-encodes, transcodes, derivations); "why
+  flagged" → Steward evidence / disposition history.
+- **Advice in plain words**, one of: "Safe to move to Trash — …" / "Keep — this is the only
+  copy" / "Keep — this is the archive copy" / "Check first — copies match by sample only" /
+  "Connect <drive> to decide".
+- **Buttons go through the same door as §5** (frozen set, one confirmation, result banner).
+  "This copy" is never the keeper; the archive copy never shows a delete button.
+- Clip-of-master ("looks like part of this tape") appears only when the future containment
+  detector exists; until then the section shows same-length footage only.
+- Open in < 1 s for one file: O(group), never O(records) per open (needs the duplicate
+  groups and footage groups already computed; if stale, say "as of <time> — Refresh").
