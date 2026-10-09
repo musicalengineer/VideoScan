@@ -154,8 +154,8 @@ extension HallieTurnExecutor {
     /// of a profile's maiden-name form. Returns basis notes (empty = no
     /// change worth saying).
     ///   • a person term naming a family group or "Aunt <tag>" → that tag;
-    ///   • a person term equal to a tag but differently cased → the tag's
-    ///     own spelling (so the answer says "Bonnie", not "bonnie");
+    ///   • a person term that already IS a tag is left exactly as typed
+    ///     (golden answers pin the typed spelling in the query text);
     ///   • a family-shaped KEYWORD naming a tag ("hudsons") → a person;
     ///   • a lone kin-title keyword the question says right before a named
     ///     person ("Aunt Bonnie" → person bonnie + keyword "aunt") → dropped:
@@ -173,7 +173,7 @@ extension HallieTurnExecutor {
                 notes.append("“\(typed)” is the person tag “\(tag)”")
                 return tag
             }
-            return HallieTagOnlyName.exactTag(typed, taggedNames: tagged) ?? typed
+            return typed
         }
         var keywords: [String] = []
         for word in effective.keywords ?? [] {
