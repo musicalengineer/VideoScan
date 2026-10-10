@@ -65,3 +65,7 @@ extra and keeps one, pairs included, no per-file ticks; the proof at the move is
 - F4 remainder (ctime ignored at the reviewed check): closed by e498fddba — the job-start check (before the quarantine rename) uses `changeTime: .mustMatch`; the post-proof check keeps `.ignored` (the job's own rename moves ctime). Pinned by `DeleteDuplicatesReviewedStampTests.anInPlaceRewriteWithRestoredMtimeIsHeldAtJobStart` and the source sensor `theJobStartCheckRequiresAnUnchangedCtime` (not run red first: the ctime parameter did not exist before the fix).
 - After-merge run on main (Release, 153 suites, 955 tests): green except one stale sensor (CatalogTrashShortcutTests, the F8 confirmation moved the call) — re-pointed and green.
 - Two rounds done; per Rick's rule, merged. Credits spent: unavailable (codex reports no telemetry).
+
+## Closed
+
+Closed by `e498fddba` at 2026-10-10T01:46:59Z.
