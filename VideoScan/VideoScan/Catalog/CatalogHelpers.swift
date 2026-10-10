@@ -875,6 +875,8 @@ struct CatalogContent: View {
         .sheet(item: $copiesAdviceRequest) { request in
             CopiesAdviceSheet(request: request, model: model, startFootageRun: { [fileOpsCenter, model] scope in
                 _ = fileOpsCenter.startFindSimilarFootage(scope: scope, model: model)
+            }, startReviewedTrash: { [fileOpsCenter, model] batch in
+                fileOpsCenter.startReviewedDeleteDuplicates(batch, model: model)
             })
         }
         // Music-triage candidates, off the main actor (2026-10-04 perf).

@@ -482,6 +482,9 @@ struct TriageView: View {
             CopiesAdviceSheet(request: request, model: model,
                               startFootageRun: fileOpsCenterReference.map { center in
                                   { [model] scope in _ = center.startFindSimilarFootage(scope: scope, model: model) }
+                              },
+                              startReviewedTrash: fileOpsCenterReference.map { center in
+                                  { [model] batch in center.startReviewedDeleteDuplicates(batch, model: model) }
                               })
         }
     }

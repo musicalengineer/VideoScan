@@ -25803,6 +25803,22 @@
         "theEngineHasNoPermanentRemoval",
         "theProductionModeIsTheTrash"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CopiesAdviceTrashKeeperProofTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CopiesAdviceTrashKeeperProofTests",
+        "CopiesAdviceTrashBehaviourTests"
+      ],
+      "tests": [
+        "aProvenKeeperLetsTheCopyGoToTheTrash",
+        "noPickUnlessSafeBecauseOfAProvenExactCopy",
+        "theCardUsesTheReviewedDuplicatesPath",
+        "theKeeperVanishingAfterTheAdviceHoldsTheCopy"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -26756,6 +26772,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ContentHashBackfillTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CopiesAdviceTrashKeeperProofTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
