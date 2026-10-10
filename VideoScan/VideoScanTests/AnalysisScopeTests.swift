@@ -255,18 +255,28 @@ struct CatalogCoverageTallyTests {
         let junk = scopeRecord(filename: "junk.mp4",
                                streamTypeRaw: StreamType.videoAndAudio.rawValue)
         junk.mediaDisposition = .confirmedJunk
+        // Rick 2026-10-10: Archived and In Triage are IN the Dossier pool;
+        // only Trashed / Deleted are retired. A needs-reformat file with no
+        // dossier is its own tally (a batch does not retry it).
+        let trashed = scopeRecord(filename: "gone.mp4",
+                                  streamTypeRaw: StreamType.videoAndAudio.rawValue)
+        trashed.lifecycleStage = .trashed
+        let reformat = scopeRecord(filename: "unreadable.mxf",
+                                   streamTypeRaw: StreamType.videoAndAudio.rawValue)
+        reformat.needsReformat = true
 
         let cov = CatalogCoverage(records: [eligibleDone, eligibleTodo, extensionless,
-                                            audio, photo, drm, archived, junk])
-        #expect(cov.eligible == 3, "done + todo + extensionless")
+                                            audio, photo, drm, archived, junk, trashed, reformat])
+        #expect(cov.eligible == 4, "done + todo + extensionless + archived")
         #expect(cov.dossiered == 1)
-        #expect(cov.remaining == 2)
+        #expect(cov.remaining == 3)
         #expect(cov.outOfScopeCount == 1)
         #expect(cov.photoCount == 1)
         #expect(cov.drmCount == 1)
-        #expect(cov.archivedCount == 1)
+        #expect(cov.retiredCount == 1, "trashed only — archived is in the pool")
+        #expect(cov.needsReformatCount == 1)
         #expect(cov.junkCount == 1)
-        #expect(cov.total == 7, "junk stays out of total (pre-existing rule)")
+        #expect(cov.total == 9, "junk stays out of total (pre-existing rule)")
     }
 
     @Test("audio toggle ON moves set-aside audio into eligible")

@@ -49,8 +49,13 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     var sizeBytes: Int64
     /// purged / set-aside / superseded — hidden cruft, out of every cycler.
     var isHidden: Bool
-    /// lifecycleStage ∈ {cataloged, workbench} — the dossier pool's gate.
+    /// lifecycleStage ∈ `LifecycleStage.dossierStages` — the dossier pool's
+    /// gate (Cataloged / Workbench / In Triage / Archived since Rick's
+    /// 2026-10-10 ruling).
     var lifecycleOK: Bool
+    /// Flagged needs-reformat and not yet analyzed — a batch skips it, so
+    /// the dossier cyclers count it "not applicable" until it is retried.
+    var awaitingReformat: Bool
     var isJunk: Bool
     var drmProtected: Bool
     var dupStamped: Bool
@@ -66,7 +71,8 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     var hasUserDate: Bool
 
     init(fullPath: String, filename: String = "", streamTypeRaw: String = StreamType.videoAndAudio.rawValue,
-         sizeBytes: Int64 = 1, isHidden: Bool = false, lifecycleOK: Bool = true, isJunk: Bool = false,
+         sizeBytes: Int64 = 1, isHidden: Bool = false, lifecycleOK: Bool = true,
+         awaitingReformat: Bool = false, isJunk: Bool = false,
          drmProtected: Bool = false, dupStamped: Bool = false, footageScannedAt: Date? = nil,
          dossierStamped: Bool = false, hasCaptions: Bool = false, hasOCRText: Bool = false,
          hasTranscript: Bool = false, isPaired: Bool = false, hasHash: Bool = false,
@@ -77,6 +83,7 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
         self.sizeBytes = sizeBytes
         self.isHidden = isHidden
         self.lifecycleOK = lifecycleOK
+        self.awaitingReformat = awaitingReformat
         self.isJunk = isJunk
         self.drmProtected = drmProtected
         self.dupStamped = dupStamped
@@ -92,15 +99,22 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
         self.hasUserDate = hasUserDate
     }
 
+    /// The dossier pool's gate, minus the Analysis Scope (applied by the
+    /// calculator): admitted by stage, not awaiting reformat, not junk,
+    /// not DRM.
+    var inDossierPool: Bool { lifecycleOK && !awaitingReformat && !isJunk && !drmProtected }
+
     /// Project one live record. Main actor (the record lives there).
     @MainActor
     init(record r: VideoRecord) {
+        let pool = DossierPoolStatus(r)
         self.init(fullPath: r.fullPath,
                   filename: r.filename,
                   streamTypeRaw: r.streamTypeRaw,
                   sizeBytes: r.sizeBytes,
                   isHidden: r.isPurged || r.isSetAside || r.isSuperseded,
-                  lifecycleOK: r.lifecycleStage == .cataloged || r.lifecycleStage == .workbench,
+                  lifecycleOK: pool != .retired,
+                  awaitingReformat: pool == .awaitingReformat,
                   isJunk: r.mediaDisposition == .confirmedJunk,
                   drmProtected: r.drmProtected,
                   dupStamped: r.dupAnalyzedAt != nil,
@@ -342,7 +356,7 @@ enum AnalyzeCoverageCalculator {
                   secondary: r.footageScannedAt != nil)
 
             // Dossier pool: lifecycle + not junk + not DRM + in scope + not a photo.
-            let dossierApplies = r.lifecycleOK && !r.isJunk && !r.drmProtected && inScope
+            let dossierApplies = r.inDossierPool && inScope
             let isPhoto: Bool = { if case .photo = classification { return true }; return false }()
             tally(.sceneCaptions, root: root, reachable: reachable,
                   applies: dossierApplies && !isPhoto && hasVideo,
