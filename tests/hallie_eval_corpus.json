@@ -1,7 +1,7 @@
 {
   "version": 1,
   "created": "2026-08-21",
-  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 775 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms.",
+  "description": "Conversational evaluation corpus for Hallie Mae, the VideoScan family-archive chat assistant. 803 questions across sixteen categories, written as a real family member would type them. Follow-up items marked followsPrevious must be evaluated in sequence with the item immediately preceding them in this array. Lineage items (ln0xx, added 2026-08-22) cover maternal/paternal lines, surname trees, origin trails and GEDCOM awareness. Age/death variations (var-age-NNN, 2026-09-21) cover kin term × People-tab alias × the age-at-death, when-died, how-old-in-year, how-old-when-Y-died, outlived and how-old-in-this-video shapes after the 'dad breen → Matthew Rice' miss. Real-family items (fam-NNN, 2026-09-21) imagine Rick's siblings, sons and cousins typing casually: typos, first-name ambiguity, strangers, follow-ups, dictation noise, service and origins. lv-h-NNN items are harvested from the app/shell transcripts. Typo items (typo-NNN, 2026-09-22) are everyday misspellings a retiree types — run-together words, texting forms, stretched and swapped letters, a greeting in front — each with its clean form in the notes; they must route exactly as the clean form does, and names are never corrected. Service-story items (mil260923-NNN, 2026-09-23) cover family military service: war asks by everyday name (Civil War, WW2, the Revolution, WWI), one person's service, the biography's offer and its 'yes' follow-up, and typo forms. Demo-day items (lv261010-NNN, 2026-10-10) are Rick's live turns from the demo for Bonnie; dp261009-NNN are the pre-demo visitor probe's known-bad questions (2026-10-09 night, headless shell).",
   "expect_values": {
     "social": "Courteous non-catalog reply. Warm, brief, no invented facts, no unnecessary pivot to the archive.",
     "catalog": "Evidence-backed answer grounded in the catalog. Numbers and file references must be real or the answer must say the data is not available.",
@@ -6521,6 +6521,411 @@
         "I don't have any videos tagged with ellen ronan"
       ],
       "notes": "Live miss 2026-10-02 (Donna demo, Release): a tree person with no tagged videos but a filed birth certificate; 'show <name>' went to the catalog video search and declined, echoing the name lowercase. Expected: fall back to the tree card/profile (vitals + documents count) when the catalog has nothing, with the name in its canonical case. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-001",
+      "category": "live",
+      "text": "tell me about bonnie",
+      "expect": "biography",
+      "expectedOutcome": "answered",
+      "mustNotContain": [
+        "I don't find Bonnie"
+      ],
+      "mustMatch": [
+        "sister|2011_Reckards_Hudson_Christmas"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:19, 11:28 and 14:02 ET, asked three times (sessions C0E6B84F, CDB20311, 183E1A0B), LIVE MISS: 'I don't find Bonnie in the family tree. Check the spelling, or tell me about them' — basis 'matched no one in the family tree, the People tab or what I've been told. No catalog search was run.' The archive DOES know her: a confirmed person tag Bonnie on 2011_Reckards_Hudson_Christmas.mov (the same session's 'find videos of bonnie' found it), and Rick's note on Donna's People profile names Bonnie as Donna's older sister (demo probe #12 quotes it). Cause: tree mode + unresolvedBiographySubject declines BEFORE the catalog lane (HallieTurnExecutor+Conversation.swift:1518-1521, treeModeNotFound :1585); isKnownPerson consults neither catalog person tags nor names inside told notes. Expected: who she is from the note, and/or the tagged video. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-002",
+      "category": "live",
+      "text": "the name macgregor is pronounced \"ma greggor:",
+      "expect": "social",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "mustNotContain": [
+        "spell it out for me"
+      ],
+      "mustMatch": [
+        "ma ?greg+or"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:21 ET (session C0E6B84F, Debug), LIVE MISS: 'I've noted what you said about macgregor — spell it out for me like “LAT-uh”' although a respelling was typed (unbalanced quote, closing ':'). Cause: the respelling scanner judges ONE token at a time (HalliePronunciationFreeform.swift:421-427); 'ma' is beyond the edit budget of 'macgregor' and 'greggor' fails the same-first-letter rule (isRespellingCandidate :447-453), so a two-word respelling is never joined. Expected: kept as 'ma greggor' (or asked to confirm it). The eval shell keeps a taught pronunciation for the session only. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-003",
+      "category": "live",
+      "text": "mah greggor",
+      "followsPrevious": true,
+      "expect": "social",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "mustNotContain": [
+        "did you mean",
+        "Gregory"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:21 ET, WRONG-CONFIDENT, the answer to Hallie's own 'spell it out for me': read as a family-tree biography of 'greggor' and offered George Gregory Tamworth (b. 1400), Gregory Addis (b. 1465), Gregory Dunham (b. 1382). The 'spell it out' reply leaves no pending-respelling state for the next turn to complete, so sticky tree mode sends the bare respelling to the name resolver (no file:line found cheaply). Expected: taken as the MacGregor respelling. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-004",
+      "category": "live",
+      "text": "macgregor sounds out like \"magreggor\"",
+      "followsPrevious": true,
+      "expect": "social",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "mustNotContain": [
+        "You're right",
+        "I couldn't turn your last question"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:21 ET, LIVE MISS: conversation lane (log: lane=generalKnowledge reason=no archive or family cue) answered 'You're right — that's my job. I couldn't turn your last question into a lookup I trust…' — a reply to a complaint Rick did not make. Cause: 'sounds (out) like' is not a pronounce-word; HalliePronounceWords.canonical (HalliePronunciationFreeform.swift:36-38) holds only pronounce/pronounced/pronunciation forms, so isTeachShaped (:205-212) and detect (:232) never fire. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-005",
+      "category": "live",
+      "text": "MacGregor is pronounced magregor",
+      "expect": "social",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "magregor"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:22 ET: worked live ('OK, noted — MacGregor. I'll say MacGregor as magregor from now on.'). Not a miss; sensor for the one-word form that lv261010-002/-006/-007/-009/-010 vary. Confirmed 2026-10-10."
+    },
+    {
+      "id": "lv261010-006",
+      "category": "live",
+      "text": "Macgregor is pronounced mah gregor",
+      "expect": "social",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "mustNotContain": [
+        "spell it out for me"
+      ],
+      "mustMatch": [
+        "mah ?gregor"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:22 ET, LIVE MISS: hint kept, 'spell it out for me like “LAT-uh”' — the two-word respelling 'mah gregor' was not read (per-token scanner, HalliePronunciationFreeform.swift:421-427, 447-453). Advisory until fixed."
+    },
+    {
+      "id": "lv261010-007",
+      "category": "live",
+      "text": "macgregor is pronounced like mah gregor",
+      "expect": "social",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "mustNotContain": [
+        "spell it out for me"
+      ],
+      "mustMatch": [
+        "mah ?gregor"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:23 ET, LIVE MISS: same reply as lv261010-006, same cause (two-word respelling). Advisory until fixed."
+    },
+    {
+      "id": "lv261010-008",
+      "category": "live",
+      "text": "\"mah gregor\"",
+      "followsPrevious": true,
+      "expect": "social",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "mustNotContain": [
+        "I couldn't tell who it is about"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:23 ET, LIVE MISS, the reply to lv261010-007's 'spell it out for me': declined 'I read that as a family-tree question, but I couldn't tell who it is about' (mode gate: tree refused shape=event). Same missing pending-respelling continuation as lv261010-003. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-009",
+      "category": "live",
+      "text": "macgregor is prnounced as \"ma gregor\"",
+      "expect": "social",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "mustNotContain": [
+        "found nothing in the catalog",
+        "I looked for videos"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:23 ET, WRONG-CONFIDENT: searched the CATALOG for the whole sentence ('I looked for videos with “macgregor is prnounced as ma gregor” and found nothing'). Cause: HalliePronounceWords.canonicalForm requires a 'pro'/'pru'/'por' stem (HalliePronunciationFreeform.swift:45), so the dropped-o typo 'prnounced' is not a pronounce-word and the turn falls to the event route. Clean form: 'macgregor is pronounced as \"ma gregor\"'. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-010",
+      "category": "live",
+      "text": "pronounce the name magregor as \"ma gregor\"",
+      "expect": "social",
+      "expectedRoutes": [
+        "telling"
+      ],
+      "mustNotContain": [
+        "what you said about ma —"
+      ],
+      "mustMatch": [
+        "mac?gregor"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:24 ET, WRONG-CONFIDENT + DATA INTEGRITY: 'I've noted what you said about ma — spell it out for me' and a pronunciation hint was KEPT against 'ma' — Ma is Rick's mother in the People tab. Cause: detect picks the first token after the verb that isKnownName accepts (HalliePronunciationFreeform.swift:236-242); 'magregor' (Rick's respelled form) is not a known name, the first word of the quoted respelling is. Same class as ledger 2026-09-07 row 13 (a note filed under an unrelated person). Expected: subject MacGregor, respelling 'ma gregor'. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-011",
+      "category": "live",
+      "text": "find nana",
+      "expect": "clarify",
+      "mustNotContain": [
+        "people named Nana"
+      ],
+      "mustMatch": [
+        "grandmother|Muriel|O'Connor"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 11:38 ET (session 183E1A0B, Release), WRONG-CONFIDENT: 'The family tree has 111 people named Nana — which one? Add a surname or a birth year, for example “Nana Breen”'. 'nana' is a kin term (grandmother) — mode=tree reason=explicitCue(nana) — but the biography resolver ran it through the given-name lookup (GedcomFamilyGraph+NameIndex.swift:57-64) and HallieWhichOne.swift:109 stated the count; the kin maps that know nana → grandmother (GedcomKinshipPath.swift:360, HallieTurnExecutor+RelativeFacts.swift:136) are not consulted on this shape. The 111 count was not verified against the GEDCOM. Same class as lv260926-001 (dad → Dafydd), on the bare 'find X' shape. Expected: which grandmother (Rick's recorded grandmothers), or videos tagged with one. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-012",
+      "category": "live",
+      "text": "tell about richard breen sr",
+      "expect": "biography",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustContain": [
+        "Marine"
+      ],
+      "mustNotContain": [
+        "GEDCOM bridge"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 14:05 ET (also 11:39 as 'tell me about richard breen sr', lv260906-013): right person and facts, but the prose carried an internal uncertainty line — 'His GEDCOM bridge is not available in the current family tree.' — while the Family Tree tab shows Richard Harding Breen Sr (@I2@) the same session. Source: CyberBrainIndex.swift:347 appends that sentence to the uncertainty list and the composer phrases it. Also seen: the phrase verifier dropped a model claim 'born on 22 February 1929' as alteredDate (correct to drop). Advisory until fixed."
+    },
+    {
+      "id": "lv261010-013",
+      "category": "live",
+      "text": "how many people in the family tree have the surname hudson",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustNotContain": [
+        "Hudde",
+        "patronymic"
+      ],
+      "mustMatch": [
+        "\\b\\d+ (?:people|recorded)[^.]*Hudson"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 12:46 ET (session 183E1A0B, Release), WRONG-CONFIDENT: answered with public surname ETYMOLOGY ('Hudson is an English patronymic surname: … Hudde plus son') — a count was asked. The tree answers this (probe 2026-10-09 19:12, 'find the Hudsons': 'The family tree records 13 people with the surname Hudson — spanning 6 generations'). Cause: the bare word 'surname' is a heritage cue (HallieSurnameReference.swift:36-41) and the surname-history lane runs first in knowledgeLaneTurn (HallieTurnExecutor+Conversation.swift:1619), ahead of every tree count. Advisory until fixed."
+    },
+    {
+      "id": "lv261010-014",
+      "category": "live",
+      "text": "count the people with surname hudson",
+      "followsPrevious": true,
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustNotContain": [
+        "Hudde",
+        "patronymic"
+      ],
+      "mustMatch": [
+        "\\b\\d+ (?:people|recorded)[^.]*Hudson"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 12:47 ET, WRONG-CONFIDENT, Rick's rephrase of lv261010-013: the same etymology word for word. Same cause (HallieSurnameReference.swift:36-41, :1619 ordering). Advisory until fixed."
+    },
+    {
+      "id": "lv261010-015",
+      "category": "live",
+      "text": "tell me about the hudsons",
+      "expect": "kinship",
+      "expectedRoutes": [
+        "graph"
+      ],
+      "expectedOutcome": "answered",
+      "mustNotContain": [
+        "39249",
+        "most common surnames"
+      ],
+      "mustMatch": [
+        "Hudson"
+      ],
+      "notes": "Rick 2026-10-10 (demo for Bonnie, app) 14:02 ET, WRONG-CONFIDENT: the WHOLE-tree summary ('The family tree records 39249 people … The most common surnames are Stewart, Douglas, Smith…'), queryDescription 'shape=graph operation=familyTree' with no person. Two turns earlier 'tell me about the bowser family' got the Bowser surname card. Cause: the surname-family shape matches only 'the X family|clan' (HallieLineageQuestion.swift:417); the plural 'the hudsons' falls to the translator, whose familyTree-with-no-subject is the tree summary. Advisory until fixed."
+    },
+    {
+      "id": "dp261009-001",
+      "category": "catalog_search",
+      "text": "show me videos of the Hudsons at Thanksgiving",
+      "expect": "catalog",
+      "expectedRoutes": [
+        "presence",
+        "cross",
+        "event"
+      ],
+      "mustNotContain": [
+        "mentioned anywhere"
+      ],
+      "mustMatch": [
+        "Thanksgiving-1984_Improved_slp|AtHudsons-Thanksgiving-1984"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), every logged probe run (11 of 11, baseline to final builds): 'I don't see “thanksgiving” mentioned anywhere, but I have 2 videos of Hudson Family — want those?' The probe graded it GOOD (honest); it is WRONG-CONFIDENT: 'show me Thanksgiving videos' found 226 the same night and 'find the Hudsons' returned AtHudsons-Thanksgiving-1984.mov by filename. Cause: the relax sentence says 'mentioned anywhere' when the keyword missed only inside the person-filtered set (ArchivistPresenceExecutor.swift:1201-1205). Expected file: /Volumes/FamilyArchive/Breen_Family_Archive/30_Video/1980-1989/1984/1984-xx-xx_1984-xx-xx_Thanksgiving-1984_Improved_slp.mov — a 94-min tape holding Mark's birthday, the Breen Thanksgiving and the Hudson Thanksgiving. Rick could not find it in the 2026-10-10 demo: no tags, no Dossier captions or transcript, dossierProcessedAt nil (its archive-copy sibling 1984-xx-xx_Thanksgiving-1984_Improved_slp.mov HAS a transcript; the promoted re-encode did not inherit it). Rick tagged it Hudson Family + Reckard at 14:24 ET (confirmedByUserPeople). His hunt that day went through Tidy → Event [occasion thanksgiving] and double-click opens, not Hallie — no Hallie Thanksgiving query was logged — so these rows use the probe's logged phrasings. The grader matches prose only; the file is pinned by name in mustMatch."
+    },
+    {
+      "id": "dp261009-002",
+      "category": "catalog_search",
+      "text": "the Hudsons at Thanksgiving",
+      "expect": "catalog",
+      "mustNotContain": [
+        "drifted into saying",
+        "I couldn't turn your last question"
+      ],
+      "mustMatch": [
+        "Thanksgiving-1984_Improved_slp|AtHudsons-Thanksgiving-1984"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), OFF-RAILS on every logged probe run (21 of 21): 'I started to answer that, but what I had drifted into saying something about your family…' or 'You're right — that's my job. I couldn't turn your last question into a lookup I trust.' Log: mode=unknown, lane=generalKnowledge reason=no archive or family cue — a family surname plus a curated occasion word is not treated as an archive cue. Expected file: /Volumes/FamilyArchive/Breen_Family_Archive/30_Video/1980-1989/1984/1984-xx-xx_1984-xx-xx_Thanksgiving-1984_Improved_slp.mov — a 94-min tape holding Mark's birthday, the Breen Thanksgiving and the Hudson Thanksgiving. Rick could not find it in the 2026-10-10 demo: no tags, no Dossier captions or transcript, dossierProcessedAt nil (its archive-copy sibling 1984-xx-xx_Thanksgiving-1984_Improved_slp.mov HAS a transcript; the promoted re-encode did not inherit it). Rick tagged it Hudson Family + Reckard at 14:24 ET (confirmedByUserPeople). His hunt that day went through Tidy → Event [occasion thanksgiving] and double-click opens, not Hallie — no Hallie Thanksgiving query was logged — so these rows use the probe's logged phrasings. The grader matches prose only; the file is pinned by name in mustMatch."
+    },
+    {
+      "id": "dp261009-003",
+      "category": "catalog_search",
+      "text": "Hudson family at Christmas",
+      "expect": "catalog",
+      "mustNotContain": [
+        "She married me",
+        "currently supports about Donna"
+      ],
+      "mustMatch": [
+        "HudsonChristmasInWestford_2004|Christmas1997-clip2|2011_Reckards_Hudson_Christmas"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), WRONG-CONFIDENT on every logged probe run (11 of 11): 'shape=graph operation=biography person=hudson' → Donna's whole CyberBrain story ('She married me (Rick Breen) on Feb 14 1981 … she gave borth to Dan'). 'hudson' bound to Donna through her maiden name; the occasion word was dropped. Expected: the Hudson Family Christmas videos (HudsonChristmasInWestford_2004.mov, Christmas1997-clip2.mov, 2011_Reckards_Hudson_Christmas.mov)."
+    },
+    {
+      "id": "dp261009-004",
+      "category": "family_tree",
+      "text": "how is Bonnie related to Rick?",
+      "expect": "kinship",
+      "mustNotContain": [
+        "Bourgogne",
+        "Ronnie"
+      ],
+      "mustMatch": [
+        "sister"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), WRONG-CONFIDENT: 'Which Bonnie do you mean — Bonne de Bourgogne (b. 1379, d. 10 SEP 1399) or Ronnie (b. 1513)?' — basis claims the tree has 2 people named Bonnie; it has none, these are near-spellings. Rick's note on Donna's profile: Bonnie is Donna's older sister (so Rick's sister-in-law). Advisory until fixed."
+    },
+    {
+      "id": "dp261009-005",
+      "category": "family_tree",
+      "text": "is Bonnie in the family tree?",
+      "expect": "graceful_decline",
+      "mustNotContain": [
+        "Bourgogne",
+        "Ronnie"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), WRONG-CONFIDENT: the same Bonne de Bourgogne / Ronnie chooser. Honest answer: not in the imported tree; Rick's note names her as Donna's older sister. Advisory until fixed."
+    },
+    {
+      "id": "dp261009-006",
+      "category": "family_tree",
+      "text": "who is Glen?",
+      "expect": "biography",
+      "mustNotContain": [
+        "Glen Spean",
+        "Drummond"
+      ],
+      "mustMatch": [
+        "brother"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), WRONG-CONFIDENT: 'Which Glen do you mean — Catherine MacPhee of Glen Spean (b. 1395, d. 1472), Isabel Glen (b. about 1380 …), or Sir John Drummond of Cargill …?' — a place-name and a surname offered as the given name Glen. Rick's note on Donna's profile names Glen as Donna's brother. Advisory until fixed."
+    },
+    {
+      "id": "dp261009-007",
+      "category": "family_tree",
+      "text": "who is Paula?",
+      "expect": "biography",
+      "mustNotContain": [
+        "I don't find Paula"
+      ],
+      "mustMatch": [
+        "sister"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), MISS: 'I don't find Paula in the family tree… tell me about them' — Rick's note on Donna's profile names Paula as Donna's younger sister ('who are Donna's sisters?' quotes it). Same cause as lv261010-001: told-note names are not resolvable subjects. Advisory until fixed."
+    },
+    {
+      "id": "dp261009-008",
+      "category": "family_tree",
+      "text": "when did Rick and Donna get married?",
+      "expect": "kinship",
+      "mustNotContain": [
+        "couldn't tell who it is about",
+        "rick or donna"
+      ],
+      "mustMatch": [
+        "1981"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), MISS: 'I read that as a family-tree question, but I couldn't tell who it is about…' (baseline: 'rick or donna?'). A two-person tree question; the date is recorded (Feb 14 1981, CyberBrain story). Advisory until fixed."
+    },
+    {
+      "id": "dp261009-009",
+      "category": "family_tree",
+      "text": "how many sons do Rick and Donna have?",
+      "expect": "kinship",
+      "mustNotContain": [
+        "couldn't tell who it is about",
+        "I don't find a donna there"
+      ],
+      "mustMatch": [
+        "\\b(?:four|4)\\b"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), MISS: same non-answer as dp261009-008 (baseline: 'Rick's sons are Daniel, Mark, Matthew and Timothy — I don't find a donna there.'). Advisory until fixed."
+    },
+    {
+      "id": "dp261009-010",
+      "category": "catalog_search",
+      "text": "show me videos of Donna as a kid",
+      "expect": "catalog",
+      "mustNotContain": [
+        "keywords:[",
+        "“as a kid”"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), WRONG (unstable across runs): all 53 Donna videos / '4 items' from 1999 / the malformed echo 'I don't see “keywords:[” or “as a kid” mentioned anywhere, but I have 53 videos of donna]'. There are no tagged childhood videos of Donna; the baseline run's 'I don't see anything from 1962–1971, but I have 53 videos of Donna — want those?' is the right shape (her childhood years named, nothing invented) and passes this row; the year-1999 guess, the unfiltered 53, the literal “as a kid” transcript search and the echo all fail it. Advisory until fixed.",
+      "mustMatch": [
+        "\\b19[67]\\d\\b"
+      ]
+    },
+    {
+      "id": "dp261009-011",
+      "category": "family_tree",
+      "text": "tell me about Donna's childhood",
+      "expect": "biography",
+      "mustNotContain": [
+        "I don't find Donna's childhood"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), MISS: 'I don't find Donna's childhood in the family tree… tell me about them' — 'childhood' read as part of a name. Expected: what the profile and tree record of her early life (born 4 Aug 1959, Brockton; parents), or an honest 'no childhood stories told yet'. Advisory until fixed."
+    },
+    {
+      "id": "dp261009-012",
+      "category": "family_tree",
+      "text": "how are the Hudsons related to the Breens?",
+      "expect": "kinship",
+      "mustNotContain": [
+        "Which Hudsons do you mean"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), MISS: a 12-way chooser of Hudsons back to 1423 (final build: a mode-gate non-answer). Expected: the two families joined by Rick and Donna's marriage, plus the distant-cousin note if it applies. Advisory until fixed."
+    },
+    {
+      "id": "dp261009-013",
+      "category": "catalog_search",
+      "text": "what's the funniest video?",
+      "expect": "graceful_decline",
+      "mustNotContain": [
+        "Pulp Fiction"
+      ],
+      "notes": "Pre-demo visitor probe 2026-10-09 night (headless shell, Release, copy of live data; ~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md), VAGUE: a literal transcript match on 'funniest' — three of Matt's 1994 baby videos and Pulp Fiction.avi (a commercial film). Expected: an honest 'I can't judge funny' with an offer, never a commercial film. Advisory until fixed."
     }
   ]
 }
