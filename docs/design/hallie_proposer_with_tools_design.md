@@ -7,6 +7,10 @@
 
 *Status: PROPOSED. Phase 0 (§8.1) was never built, so nothing ships yet; this revision changes the constraints before any code.*
 
+**Worked out in two companion documents (2026-10-10, design agent):**
+- [`hallie_agent_lane_2026_10_10.md`](hallie_agent_lane_2026_10_10.md) — the Swift design: three lanes (agent / local / deterministic) behind one verifier; the 11-tool catalog with schemas, the engine each wraps (file:line), data class and budget; the `RemoteSerializer` gate and its poisoned-transport sensor; the bounded loop (budgets, deadline, cancellation, progress chips); prompt caching; turn-local provenance and the SubjectCheck that make "decline over guess" structural; the model-policy table; phases with tests; risks; 13 decisions for Rick (§12).
+- [`hallie_e1_experiment.md`](hallie_e1_experiment.md) — the E1 harness spec: read-only snapshots, Python tools over them, the Anthropic-SDK loop, scoring with the existing `grade_record` side by side with today's lane, metrics (accuracy, unverified facts, wrong-subject, decline-correctness, p50/p95, $), the model matrix, a cost estimate with the arithmetic (≈ $23 per full Sonnet run; ≈ $70 recommended plan), and an offline dry-run mode.
+
 **The ruling.** Cloud models may run Hallie where the experience is much better. The genealogy is largely public already (FamilySearch). **Never sent off the machine:** photos, video, audio, frames or face embeddings of **living immediate family**. Everything else may go wherever it helps. It's an experiment: try everything within reason, and learn the techniques along the way.
 
 **What it changes.**
@@ -25,7 +29,7 @@
 - Expose read-only tools over exported snapshots: tree (GEDCOM graph), catalog (catalog.json), People and aliases, CyberBrain.
 - Run `tests/hallie_eval_corpus.json` through a Claude agent loop with those tools, then score it with the existing `hallie_eval.py` grading next to the current Hallie lane.
 - Report accuracy, unverified-fact count, p50/p95 latency and $ per run, per category.
-- Estimated cost: a few dollars to roughly $15 per full corpus run (Sonnet-class); measure it.
+- Estimated cost: a few dollars to roughly $15 per full corpus run (Sonnet-class); measure it. *(Worked arithmetic in `hallie_e1_experiment.md` §8 puts a Sonnet 5.5 full run at ≈ $23 with thinking at medium effort and caching on, ±35%; Haiku ≈ $1.2, Opus ≈ $44, Fable ≈ $107.)*
 - If E1 wins by a wide margin, phase 0 is built with the cloud lane first. If not, we've learned cheaply.
 
 ## 0. Decisions for Rick (rev 3)
