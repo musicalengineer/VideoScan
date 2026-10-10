@@ -2,5 +2,15 @@
  "version": 1,
  "name": "hallie_holdout",
  "description": "Held-out live questions. Append new real questions from Rick and family here (id, text, category, date). Builders NEVER tune against this file; it is scored only to check that acceptance gains generalise. Same shape as tests/hallie_acceptance_v1.json.",
- "categories": []
+ "categories": [],
+ "entries": [
+  {
+   "id": "ho-20261010-001",
+   "text": "find me the peekaboo video hallie",
+   "category": "multi_hop",
+   "date": "2026-10-10",
+   "source": "Rick, live chat with Manager",
+   "expect": "Lists the distinct tapes whose transcript says peekaboo (Thanksgiving 1984 / Dan; Westford 1994-95 / Matthew; Matt's First Bday; Cape Cod June 1998), copies collapsed, offers to play one; with timed transcripts, gives the time in the tape. Must not claim a person appears on the strength of a spoken name alone."
+  }
+ ]
 }
