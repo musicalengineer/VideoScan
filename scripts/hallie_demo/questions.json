@@ -1,0 +1,160 @@
+{
+ "version": 1,
+ "created": "2026-10-10",
+ "note": "Questions only. Answer each with the tools in tools.py; a \"turns\" entry is one conversation, answered in order.",
+ "questions": [
+  {
+   "id": "ac-nb-01",
+   "category": "no_bluff",
+   "text": "tell me about Bonnie"
+  },
+  {
+   "id": "ac-nb-02",
+   "category": "no_bluff",
+   "text": "find nana"
+  },
+  {
+   "id": "ac-nb-03",
+   "category": "no_bluff",
+   "text": "who was Donna's great-grandfather on the Hudson side?"
+  },
+  {
+   "id": "ac-nb-04",
+   "category": "no_bluff",
+   "text": "find videos of bonnie"
+  },
+  {
+   "id": "ac-st-01",
+   "category": "stats",
+   "text": "how many people in the family tree have the surname Hudson?"
+  },
+  {
+   "id": "lv261010-014",
+   "category": "stats",
+   "text": "count the people with surname hudson"
+  },
+  {
+   "id": "ac-st-02",
+   "category": "stats",
+   "text": "how many videos of Donna are from the 1980s?"
+  },
+  {
+   "id": "ac-st-03",
+   "category": "stats",
+   "text": "which decade has the most family video?"
+  },
+  {
+   "id": "ac-st-04",
+   "category": "stats",
+   "text": "how many hours of Thanksgiving video do we have, and how many of those are duplicate copies?"
+  },
+  {
+   "id": "ac-st-05",
+   "category": "stats",
+   "text": "tell me about the bowser family"
+  },
+  {
+   "id": "ac-mh-01",
+   "category": "multi_hop",
+   "text": "which of Donna's sisters appear in videos from before 1990?"
+  },
+  {
+   "id": "ac-mh-02",
+   "category": "multi_hop",
+   "text": "show me videos where both Bonnie and Donna appear at Christmas"
+  },
+  {
+   "id": "ac-mh-03",
+   "category": "multi_hop",
+   "text": "who in the family was born in Ireland, and do we have any video of their children?"
+  },
+  {
+   "id": "dp261009-001",
+   "category": "multi_hop",
+   "text": "show me videos of the Hudsons at Thanksgiving"
+  },
+  {
+   "id": "ac-cv-01",
+   "category": "conversation",
+   "turns": [
+    "tell me about Richard Hudson",
+    "what about his kids?",
+    "any videos of the oldest one?",
+    "when was that filmed?"
+   ]
+  },
+  {
+   "id": "ac-cv-02",
+   "category": "conversation",
+   "turns": [
+    "I think Dad's birth year is wrong in the tree — he was born in 1929",
+    "ok what does the tree say about his parents?"
+   ]
+  },
+  {
+   "id": "ac-lp-01",
+   "category": "loose_phrasing",
+   "text": "who was my materanl grandmother?"
+  },
+  {
+   "id": "ac-lp-02",
+   "category": "loose_phrasing",
+   "text": "the Hudsons at thanksgiving"
+  },
+  {
+   "id": "ac-lp-03",
+   "category": "loose_phrasing",
+   "text": "tell me about dad's side"
+  },
+  {
+   "id": "ac-lp-04",
+   "category": "loose_phrasing",
+   "text": "when was Ma born?"
+  },
+  {
+   "id": "lv261010-002",
+   "category": "loose_phrasing",
+   "text": "the name macgregor is pronounced \"ma greggor:"
+  },
+  {
+   "id": "lv261010-010",
+   "category": "loose_phrasing",
+   "text": "pronounce the name magregor as \"ma gregor\""
+  },
+  {
+   "id": "lv261010-015",
+   "category": "loose_phrasing",
+   "text": "tell me about the hudsons"
+  },
+  {
+   "id": "ac-lp-05",
+   "category": "loose_phrasing",
+   "text": "who was elain bowser"
+  },
+  {
+   "id": "ac-sy-01",
+   "category": "story",
+   "text": "tell me Dad's Marine Corps story"
+  },
+  {
+   "id": "lv261010-012",
+   "category": "story",
+   "text": "tell about richard breen sr"
+  },
+  {
+   "id": "ac-sy-02",
+   "category": "story",
+   "text": "what was going on in Donna's family the year she was born?"
+  },
+  {
+   "id": "ac-sy-03",
+   "category": "story",
+   "text": "tell me about donna"
+  },
+  {
+   "id": "ac-sy-04",
+   "category": "story",
+   "text": "tell me about dan"
+  }
+ ]
+}

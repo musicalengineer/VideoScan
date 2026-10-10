@@ -1,0 +1,1005 @@
+{
+ "version": 1,
+ "created": "2026-10-10",
+ "warning": "NEVER show this file to the blind agent.",
+ "liveSource": "Rick 2026-10-10 demo for Bonnie, app transcript ~/Library/Logs/VideoScan/Hallie/hallie-conversation-2026-10-10.jsonl",
+ "probeSource": "pre-demo visitor probe 2026-10-09 night, headless shell (~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md)",
+ "expectedComputedAgainst": {
+  "catalogSavedAt": "2026-10-10T21:49:04Z",
+  "catalogGeneration": 3189,
+  "treeGeneration": "gen-20260924T222812-b7d9",
+  "gedcom": "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/familysearch-merged-mco-20260917.ged",
+  "snapshotCreatedAt": "2026-10-10T21:51:51+00:00"
+ },
+ "note": "expectedAnswer/expectedNumbers were derived by running tools.py against the snapshot named above and checking the raw data; they move if the catalog changes. \"live\" is what Hallie said in the app on 2026-10-10 (or the probe), or \"not asked live\".",
+ "passBars": {
+  "no_bluff": {
+   "bar": "100%",
+   "rule": "zero wrong-subject answers; every factual sentence cited to an id a tool returned"
+  },
+  "stats": {
+   "bar": "100% exact",
+   "rule": "every number equals expectedNumbers for the basis the answer states; basis stated"
+  },
+  "multi_hop": {
+   "bar": ">= 80%",
+   "rule": "right people/files; evidence kind (tag vs transcript mention) labelled"
+  },
+  "conversation": {
+   "bar": ">= 80% of turns",
+   "rule": "each turn graded in context; one wrong-subject turn fails the chain"
+  },
+  "loose_phrasing": {
+   "bar": ">= 90%",
+   "rule": "typos/kin words/odd quoting resolve as the clean form would"
+  },
+  "story": {
+   "bar": "all cited, nothing invented",
+   "rule": "every claim traceable; world context labelled as such"
+  }
+ },
+ "entries": [
+  {
+   "id": "ac-nb-01",
+   "category": "no_bluff",
+   "text": "tell me about Bonnie",
+   "expect": "biography",
+   "liveIDs": [
+    "lv261010-001"
+   ],
+   "live": {
+    "asked": "tell me about bonnie",
+    "askedAt": "2026-10-10T15:19:00Z",
+    "session": "C0E6B84F",
+    "outcome": "declined",
+    "route": "graph",
+    "answer": "I don't find Bonnie in the family tree. Check the spelling, or tell me about them — “let me tell you about Bonnie” — and I'll remember it.",
+    "basisLine": "Basis: tree mode; \"bonnie\" matched no one in the family tree, the People tab or what I've been told. No catalog search was run."
+   },
+   "liveVerdict": "MISS (asked 3 times, same decline)",
+   "expectedAnswer": "Bonnie is not in the family tree or the People tab. Rick's told note (CyberBrain) says Donna has two sisters, Bonnie (older) and Paula (younger), and a brother Glen, so Bonnie is Donna's older sister and Rick's sister-in-law. She is a confirmed person tag on one video, 2011_Reckards_Hudson_Christmas.mov (Rick's note on it: 'Bonnie and John's House Christmas in January 2011'). Nothing else is recorded about her (no birth date, married name not stated). Offering medieval near-spellings is a fail.",
+   "subjectIDs": [
+    "brain:told.donna-breen.2026-08-24.2",
+    "catalog:DFCC4AB6-CD28-4DEA-B8B1-BD664A5A13F7"
+   ],
+   "computedBy": [
+    "resolve_person Bonnie",
+    "family_knowledge query=Bonnie",
+    "search_media people=Bonnie"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "sister",
+     "2011_Reckards_Hudson_Christmas|Christmas"
+    ],
+    "mustNotContain": [
+     "I don't find Bonnie",
+     "Bourgogne",
+     "Ronnie"
+    ]
+   }
+  },
+  {
+   "id": "ac-nb-02",
+   "category": "no_bluff",
+   "text": "find nana",
+   "expect": "clarify",
+   "liveIDs": [
+    "lv261010-011"
+   ],
+   "live": {
+    "asked": "find nana",
+    "askedAt": "2026-10-10T15:38:12Z",
+    "session": "183E1A0B",
+    "outcome": "needs-clarification",
+    "route": "graph",
+    "answer": "The family tree has 111 people named Nana — which one? Add a surname or a birth year, for example “Nana Breen” or “Nana born 1959”.",
+    "basisLine": "Basis: the family tree has 111 people by the name “Nana”; none offered; nothing was looked up."
+   },
+   "liveVerdict": "WRONG-CONFIDENT",
+   "expectedAnswer": "'Nana' is a kin word (grandmother), not a name: the tree has 0 people with the given name Nana, so Hallie's '111 people named Nana' was invented. Rick's recorded grandmothers are Muriel Lamb (paternal; b. April 1902, Quebec; the tree has no death, Rick's told note says she died in 1977) and Mary Christina O'Connor (maternal; b. 23 Dec 1904 Ireland / County Cork, d. 16 Jul 1985 Brockton). Nothing records which one the family called 'Nana' (Mary's grandchildren called her 'Doody' or 'Doods'), so the right move is to ask which grandmother, or show both. No catalog video is tagged with either. The duplicate record @I5@ 'Mary O'Connor' (b. 1905) must not be offered.",
+   "subjectIDs": [
+    "gedcom:@I4@",
+    "gedcom:@I7@"
+   ],
+   "computedBy": [
+    "resolve_person nana",
+    "search_media people=Muriel",
+    "search_media people=gedcom:@I7@",
+    "family_knowledge id=gedcom:@I7@"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Muriel|O'Connor|grandmother"
+    ],
+    "mustNotContain": [
+     "111",
+     "people named Nana"
+    ]
+   }
+  },
+  {
+   "id": "ac-nb-03",
+   "category": "no_bluff",
+   "text": "who was Donna's great-grandfather on the Hudson side?",
+   "expect": "kinship",
+   "live": "not asked live",
+   "expectedAnswer": "Donna -> father Richard C Hudson (1928-2009) -> his father William S. Hudson (William Saunders Hudson, 1898-1979; Rick's verified identity decision) -> HIS father William Hudson, b. 10 Feb 1877 in Scotland, died 'after 1930 before 1950' (FamilySearch 9NFL-JPS), married Grace Edith Pauline Wyart (1879-1950); his parents were Thomas Haig Hudson (1849-1923) and Agnes Rutherford Hutchinson. If 'Hudson side' is read as her whole paternal side, Gordon MacGregor (b. 1869), Bessie Macgregor's father, is the other great-grandfather there. Naming a medieval William Hudson (b. 1380) is a wrong-subject fail.",
+   "expectedNumbers": {
+    "greatGrandfatherBirthYear": 1877
+   },
+   "subjectIDs": [
+    "gedcom:@IB15@",
+    "gedcom:@IB5@",
+    "gedcom:@IB2@"
+   ],
+   "computedBy": [
+    "relatives id=gedcom:@I14522@ relation=greatgrandparents",
+    "person_facts id=gedcom:@IB15@"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "William Hudson",
+     "1877"
+    ],
+    "mustNotContain": [
+     "1380"
+    ]
+   }
+  },
+  {
+   "id": "ac-nb-04",
+   "category": "no_bluff",
+   "text": "find videos of bonnie",
+   "expect": "catalog",
+   "control": true,
+   "live": {
+    "asked": "find videos of bonnie",
+    "askedAt": "2026-10-10T15:37:48Z",
+    "session": "183E1A0B",
+    "outcome": "answered",
+    "route": "cross",
+    "answer": "There is 1 catalog item matching that. [c1] Bonnie is confirmed in that one item. [c2] The file is 2011_Reckards_Hudson_Christmas.mov, a video with audio. [c3]",
+    "basisLine": "Basis: 1 cited of 1 matching catalog items."
+   },
+   "liveVerdict": "GOOD (control)",
+   "expectedAnswer": "One video: 2011_Reckards_Hudson_Christmas.mov (11 min 46 s; LaCieWorkspace; In Triage), Bonnie confirmed by Rick, Donna face-detected; Rick's note 'Bonnie and John's House Christmas in January 2011'. Transcript mentions of 'Bonnie' in other files (e.g. the 2004 Hudson Christmas in Westford, AtHudsons-Thanksgiving-1984) may be offered as mentions, not as appearances.",
+   "subjectIDs": [
+    "catalog:DFCC4AB6-CD28-4DEA-B8B1-BD664A5A13F7"
+   ],
+   "computedBy": [
+    "search_media people=Bonnie",
+    "search_media text=Bonnie"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "2011_Reckards_Hudson_Christmas"
+    ]
+   }
+  },
+  {
+   "id": "ac-st-01",
+   "category": "stats",
+   "text": "how many people in the family tree have the surname Hudson?",
+   "expect": "kinship",
+   "liveIDs": [
+    "lv261010-013"
+   ],
+   "live": {
+    "asked": "how many people in the family tree have the surname hudson",
+    "askedAt": "2026-10-10T16:46:36Z",
+    "session": "183E1A0B",
+    "outcome": "answered",
+    "route": "conversation",
+    "answer": "Hudson is an English patronymic surname: it comes from the Middle English personal name Hudde plus ‘son.’ The same surname also became established in Ireland. That describes the public history of the name; locating your Hudson branch still requires the family’s records and places.",
+    "basisLine": "Basis: public surname references; this is surname history, not a claim about the Hudson family tree."
+   },
+   "liveVerdict": "WRONG-CONFIDENT (etymology)",
+   "expectedAnswer": "13 people in the family tree carry Hudson in a recorded name; 11 have it as their primary surname (the other two: Catherine Haig, b. 1821, alternate name Catherine Hudson; Elizabeth, b. about 1622, alternate name Elizabeth Hudson). Births span 1380-1959, ending with Donna Hudson (b. 1959). The app's own surname cards count every recorded name (19 Bowsers live, 16 primary), so 13 is the app-consistent number; 11 is correct only if the answer says 'primary surname'. Etymology instead of a count fails.",
+   "expectedNumbers": {
+    "anyRecordedName": 13,
+    "primarySurname": 11,
+    "birthYearSpan": [
+     1380,
+     1959
+    ]
+   },
+   "computedBy": [
+    "catalog_stats surname=Hudson  -> count 11, countIncludingAlternateNames 13"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "\\b(?:13|11|thirteen|eleven)\\b"
+    ],
+    "mustNotContain": [
+     "Hudde",
+     "patronymic"
+    ]
+   }
+  },
+  {
+   "id": "lv261010-014",
+   "category": "stats",
+   "text": "count the people with surname hudson",
+   "expect": "kinship",
+   "liveIDs": [
+    "lv261010-014"
+   ],
+   "live": {
+    "asked": "count the people with surname hudson",
+    "askedAt": "2026-10-10T16:47:10Z",
+    "session": "183E1A0B",
+    "outcome": "answered",
+    "route": "conversation",
+    "answer": "Hudson is an English patronymic surname: it comes from the Middle English personal name Hudde plus ‘son.’ The same surname also became established in Ireland. That describes the public history of the name; locating your Hudson branch still requires the family’s records and places.",
+    "basisLine": "Basis: public surname references; this is surname history, not a claim about the Hudson family tree."
+   },
+   "liveVerdict": "WRONG-CONFIDENT (etymology)",
+   "expectedAnswer": "13 people in the family tree carry Hudson in a recorded name; 11 have it as their primary surname (the other two: Catherine Haig, b. 1821, alternate name Catherine Hudson; Elizabeth, b. about 1622, alternate name Elizabeth Hudson). Births span 1380-1959, ending with Donna Hudson (b. 1959). The app's own surname cards count every recorded name (19 Bowsers live, 16 primary), so 13 is the app-consistent number; 11 is correct only if the answer says 'primary surname'. Etymology instead of a count fails.",
+   "expectedNumbers": {
+    "anyRecordedName": 13,
+    "primarySurname": 11,
+    "birthYearSpan": [
+     1380,
+     1959
+    ]
+   },
+   "computedBy": [
+    "catalog_stats surname=Hudson  -> count 11, countIncludingAlternateNames 13"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "\\b(?:13|11|thirteen|eleven)\\b"
+    ],
+    "mustNotContain": [
+     "Hudde",
+     "patronymic"
+    ]
+   }
+  },
+  {
+   "id": "ac-st-02",
+   "category": "stats",
+   "text": "how many videos of Donna are from the 1980s?",
+   "expect": "catalog",
+   "live": "not asked live",
+   "expectedAnswer": "Basis matters and the answer must state it. Counting video files where Donna is confirmed by Rick or face-detected (rejections removed), dated 1980-1989: 44 distinct videos (64 catalog records, i.e. 20 extra identical copies), 33.2 hours of distinct footage. Only 2 distinct videos (3 records) are Rick-confirmed. A further 385 Donna-tagged video records have no usable date and are not counted. Dates: Rick's typed date, then the inferred range, then a year in the filename, then inferred/embedded stamps.",
+   "expectedNumbers": {
+    "confirmedOrDetected": {
+     "distinctVideos": 44,
+     "records": 64,
+     "extraCopies": 20,
+     "distinctHours": 33.22
+    },
+    "confirmedOnly": {
+     "distinctVideos": 2,
+     "records": 3
+    },
+    "undatedDonnaVideoRecordsExcluded": 385
+   },
+   "computedBy": [
+    "catalog_stats people=Donna years=1980s kind=video",
+    "catalog_stats people=Donna years=1980s kind=video people_basis=confirmed"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "\\b(?:44|64|2|3)\\b"
+    ]
+   }
+  },
+  {
+   "id": "ac-st-03",
+   "category": "stats",
+   "text": "which decade has the most family video?",
+   "expect": "catalog",
+   "live": "not asked live",
+   "expectedAnswer": "The 1990s: 153.1 hours of distinct video (254 distinct videos, 372 records with copies). Next: 2000s 68.0 h, 1980s 32.9 h; 32.7 h (1,349 distinct files) are undated. By raw file count the 2020s lead (2,272 distinct files, only 16.8 h) because those stamps are mostly transfer/conversion dates of short clips; naming the 2020s without that caveat is a fail. Basis: every catalog video stream (purged records excluded; commercial films are not filtered out).",
+   "expectedNumbers": {
+    "1990s": {
+     "distinctHours": 153.14,
+     "distinctVideos": 254,
+     "records": 372
+    },
+    "2000s": {
+     "distinctHours": 68.04
+    },
+    "1980s": {
+     "distinctHours": 32.93
+    },
+    "undated": {
+     "distinctHours": 32.66,
+     "distinctVideos": 1349
+    },
+    "2020s": {
+     "distinctVideos": 2272,
+     "distinctHours": 16.76
+    }
+   },
+   "computedBy": [
+    "catalog_stats group_by=decade kind=video"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "1990s|nineties"
+    ]
+   }
+  },
+  {
+   "id": "ac-st-04",
+   "category": "stats",
+   "text": "how many hours of Thanksgiving video do we have, and how many of those are duplicate copies?",
+   "expect": "catalog",
+   "live": "not asked live",
+   "expectedAnswer": "Basis: video files whose filename, folder path or Rick's notes say Thanksgiving. 93 distinct videos, 40.8 hours; 110 catalog records, so 17 are extra identical copies (59.2 h counting copies, i.e. 18.4 h of duplication). Widening to transcripts and scene captions: 97 distinct, 41.2 h; 117 records, 20 extra copies. 'Duplicate' here means identical content (same content hash); re-encodes of the same tape (e.g. the two 94-min 1984 Thanksgiving files) are NOT identical copies and are counted separately.",
+   "expectedNumbers": {
+    "filenamePathNotes": {
+     "distinctVideos": 93,
+     "distinctHours": 40.77,
+     "records": 110,
+     "extraCopies": 17,
+     "allCopiesHours": 59.2
+    },
+    "allText": {
+     "distinctVideos": 97,
+     "distinctHours": 41.16,
+     "records": 117,
+     "extraCopies": 20,
+     "allCopiesHours": 59.82
+    }
+   },
+   "computedBy": [
+    "catalog_stats text=thanksgiving kind=video in=filename,path,notes",
+    "catalog_stats text=thanksgiving kind=video"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "\\b4[01](?:\\.\\d+)?\\s*(?:hours|h\\b)",
+     "\\b(?:17|20)\\b"
+    ]
+   }
+  },
+  {
+   "id": "ac-st-05",
+   "category": "stats",
+   "text": "tell me about the bowser family",
+   "expect": "kinship",
+   "control": true,
+   "live": {
+    "asked": "tell me about the bowser family",
+    "askedAt": "2026-10-10T17:26:23Z",
+    "session": "183E1A0B",
+    "outcome": "answered",
+    "route": "graph",
+    "answer": "In the family tree, the Bowser family starts with Jacob Bowser (1500–1525), born Germany and Thomas Bowser (b. 1570), born Acklam and Elizabeth Butterwood (1663–1720), born Doncaster, Yorkshire, England, United Kingdom. The tree records 19 people named Bowser; the card shows 15 across 7 generations from those roots.",
+    "basisLine": "Basis: imported family tree (GEDCOM)."
+   },
+   "liveVerdict": "GOOD (control)",
+   "expectedAnswer": "Bowser surname card: 19 people carry Bowser in a recorded name (16 as primary surname), births 1500-1933, earliest Jacob Bowser (1500-1525, Germany), then Acklam, Yorkshire Bowsers; the line reaches Donna through her mother Elaine Bowser (1933-2022) and grandfather James William Bowser (1900-1962).",
+   "expectedNumbers": {
+    "anyRecordedName": 19,
+    "primarySurname": 16
+   },
+   "computedBy": [
+    "catalog_stats surname=Bowser"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Bowser",
+     "\\b(?:19|16)\\b"
+    ]
+   }
+  },
+  {
+   "id": "ac-mh-01",
+   "category": "multi_hop",
+   "text": "which of Donna's sisters appear in videos from before 1990?",
+   "expect": "catalog",
+   "live": "not asked live",
+   "expectedAnswer": "Donna's sisters (Rick's told note; neither is in the tree): Bonnie (older) and Paula (younger). No video dated before 1990 carries a person tag for either. The only pre-1990 evidence is spoken: in AtHudsons-Thanksgiving-1984.mov (1984 by filename; two identical copies) the narrator names Bonnie as someone on camera - a transcript mention, not a confirmed appearance. Nothing for Paula before 1990 (her name is in transcripts only from 1994 on, plus 3 undated files). Claiming Paula appears, or calling the Bonnie mention a confirmed tag, fails.",
+   "subjectIDs": [
+    "brain:told.donna-breen.2026-08-24.2",
+    "catalog:CC2391EA-FE73-44F9-95C4-1ACD38EAC811"
+   ],
+   "computedBy": [
+    "family_knowledge query=sisters",
+    "search_media people=Bonnie",
+    "search_media people=Paula",
+    "search_media text=Bonnie years=1900-1989",
+    "search_media text=Paula years=1900-1989"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Bonnie",
+     "AtHudsons-Thanksgiving-1984|1984"
+    ]
+   }
+  },
+  {
+   "id": "ac-mh-02",
+   "category": "multi_hop",
+   "text": "show me videos where both Bonnie and Donna appear at Christmas",
+   "expect": "catalog",
+   "live": "not asked live",
+   "expectedAnswer": "One: 2011_Reckards_Hudson_Christmas.mov (Bonnie confirmed by Rick, Donna face-detected; 'Bonnie and John's House Christmas in January 2011'). The 2004 HudsonChristmasInWestford files have Donna detected and Bonnie only mentioned by name in the transcript - acceptable as a labelled mention.",
+   "subjectIDs": [
+    "catalog:DFCC4AB6-CD28-4DEA-B8B1-BD664A5A13F7"
+   ],
+   "computedBy": [
+    "search_media people=Bonnie,Donna text=Christmas",
+    "search_media people=Donna text=Christmas Bonnie"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "2011_Reckards_Hudson_Christmas"
+    ]
+   }
+  },
+  {
+   "id": "ac-mh-03",
+   "category": "multi_hop",
+   "text": "who in the family was born in Ireland, and do we have any video of their children?",
+   "expect": "kinship",
+   "live": "not asked live",
+   "expectedAnswer": "Rick's side (direct ancestors, 8 generations): Mary Christina O'Connor (maternal grandmother; b. 23 Dec 1904, Ireland - County Cork per Rick's verified note; d. 1985), her parents Christopher Dennis O'Connor (b. 1883, Ireland) and Ellen Ronan (b. 18 Mar 1882, County Cork), Ellen's father Peter Ronan (1861-1931, County Cork), Samuel Waters (1807-1887, Belfast) and an 'Unknown Latta' (b. 1700, Northern Ireland). Donna's side: Hugh B. Doherty (1831-1908), Joseph Doherty (1794-1871), Margaret Bell (1798-1871), William Maxwell (1729-1824) and Hugh Maxwell I (1701-1759). Video of their children: yes for Mary Christina O'Connor's daughter Eileen (Rick's mother, 'Ma') - 4 distinct videos tagged Ma/Eileen: 1990-xx-xx_Christmas1990-Part3-47mins.mov, 1990-xx-xx_Christmas_1990_2_hours.dv, Clip 01.vs.archive.mov (1997), 2000-05-xx_Mom-and-Dad-Breen-2000.dv. No video is tagged with Mary Christina herself (the child of Christopher and Ellen); the older generations predate video. The duplicate 'Mary O'Connor' record (@I5@, b. 1905) must be ignored.",
+   "subjectIDs": [
+    "gedcom:@I7@",
+    "gedcom:@I14@",
+    "gedcom:@I10@",
+    "gedcom:@I3@",
+    "catalog:CEB845C9-A4F4-4026-A4CC-BC2ADEA23955",
+    "catalog:1066D9B8-E65F-40BE-BC9D-DE27BFE6FC3B",
+    "catalog:E6B1CEAF-E072-47AA-833B-30701127D424",
+    "catalog:7CC68287-2796-417D-AB4E-04B4CB667865"
+   ],
+   "computedBy": [
+    "catalog_stats born_in=Ireland scope=ancestors:gedcom:@I1@ generations=8",
+    "catalog_stats born_in=Ireland scope=ancestors:gedcom:@I14522@ generations=8",
+    "relatives id=gedcom:@I7@ relation=children",
+    "search_media people=Ma"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "O'Connor",
+     "Eileen|\\bMa\\b|mother",
+     "Christmas_?1990|Christmas1990|Mom-and-Dad-Breen|Clip 01"
+    ]
+   }
+  },
+  {
+   "id": "dp261009-001",
+   "category": "multi_hop",
+   "text": "show me videos of the Hudsons at Thanksgiving",
+   "expect": "catalog",
+   "liveIDs": [
+    "dp261009-001"
+   ],
+   "live": {
+    "source": "pre-demo visitor probe 2026-10-09 night, headless shell (~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md)",
+    "answer": "I don't see “thanksgiving” mentioned anywhere, but I have 2 videos of Hudson Family — want those?",
+    "note": "probe answer (11 of 11 runs); not asked in the app on 10/10"
+   },
+   "liveVerdict": "WRONG-CONFIDENT (probe graded GOOD)",
+   "expectedAnswer": "Two Hudson Thanksgiving videos, both 1984: 1984-xx-xx_1984-xx-xx_Thanksgiving-1984_Improved_slp.mov (94 min, FamilyArchive, Archived; confirmed tags 'Hudson Family' and 'Reckard'; per the corpus note the tape also holds Mark's birthday and the Breen Thanksgiving) and AtHudsons-Thanksgiving-1984.mov (4 min, 1984 by its filename; two identical copies, LaCieWorkspace + Projects; the narrator names Glenn Hudson and Bonnie in the transcript). The other 94-min re-encode 1984-xx-xx_Thanksgiving-1984_Improved_slp.mov is untagged. Saying 'Thanksgiving isn't mentioned anywhere' is a fail.",
+   "subjectIDs": [
+    "catalog:90542A43-6A78-4AD4-8B0B-6C26C5A6A8B7",
+    "catalog:CC2391EA-FE73-44F9-95C4-1ACD38EAC811"
+   ],
+   "computedBy": [
+    "search_media text=thanksgiving tags=Hudson Family",
+    "search_media text=Hudsons thanksgiving"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Thanksgiving-1984_Improved_slp|AtHudsons-Thanksgiving-1984"
+    ],
+    "mustNotContain": [
+     "mentioned anywhere"
+    ]
+   }
+  },
+  {
+   "id": "ac-cv-01",
+   "category": "conversation",
+   "expect": "kinship",
+   "live": "not asked live",
+   "turns": [
+    {
+     "id": "ac-cv-01-t1",
+     "text": "tell me about Richard Hudson",
+     "expect": "biography",
+     "live": {
+      "asked": "who was richard hudson",
+      "askedAt": "2026-10-10T17:25:56Z",
+      "session": "183E1A0B",
+      "outcome": "answered",
+      "route": "graph",
+      "answer": "Richard C Hudson was born 27 June 1928 in Randolph, Norfolk, Massachusetts, United States and died 28 September 2009 in Stoughton, Norfolk, Massachusetts, United States [c1]. He was the child of Bessie Macgregor and William S. Hudson, and his recorded grandparents were Ann Watt Ferrier, Gordon MacGregor, Grace Edith Pauline Wyart, and William Hudson [c2]. He was married to Elaine Bowser [c3]. The family tree records one child for him, Donna Hudson [c4]. His family tree includes 8879 recorded ancestors across 23 generations and 1 recorded descendant across 1 generation [c5]. I have 2 photos of him in the archive — want to see them all?",
+      "basisLine": "Basis: imported family tree (GEDCOM)."
+     },
+     "liveNote": "closest live turn: 'who was richard hudson' (17:25, GOOD)",
+     "expectedAnswer": "Richard C Hudson, b. 27 June 1928 Randolph MA, d. 28 Sept 2009 Stoughton MA; parents William S. Hudson and Bessie Macgregor; wife Elaine Bowser; Donna's father.",
+     "subjectIDs": [
+      "gedcom:@IB2@"
+     ],
+     "assertions": {
+      "mustMatch": [
+       "1928",
+       "Donna|Elaine"
+      ]
+     }
+    },
+    {
+     "id": "ac-cv-01-t2",
+     "text": "what about his kids?",
+     "expect": "kinship",
+     "expectedAnswer": "The tree records one child, Donna (b. 4 Aug 1959). Rick's told note adds Bonnie (Donna's older sister), Paula (younger sister) and Glen (brother) - four children known, three of them only from the note.",
+     "subjectIDs": [
+      "gedcom:@I14522@",
+      "brain:told.donna-breen.2026-08-24.2"
+     ],
+     "assertions": {
+      "mustMatch": [
+       "Donna"
+      ]
+     }
+    },
+    {
+     "id": "ac-cv-01-t3",
+     "text": "any videos of the oldest one?",
+     "expect": "catalog",
+     "expectedAnswer": "Birth order is not fully recorded: Bonnie is older than Donna, but Glen's place is not stated. A good answer says so; if it then takes Bonnie (with that caveat), the video is 2011_Reckards_Hudson_Christmas.mov (confirmed tag), plus the 1984 AtHudsons-Thanksgiving transcript mention. Asking 'Bonnie or Glen?' is also a pass. Treating Donna as the oldest, or inventing birth years, fails.",
+     "subjectIDs": [
+      "catalog:DFCC4AB6-CD28-4DEA-B8B1-BD664A5A13F7"
+     ],
+     "assertions": {
+      "mustMatch": [
+       "Bonnie|Glen"
+      ]
+     }
+    },
+    {
+     "id": "ac-cv-01-t4",
+     "text": "when was that filmed?",
+     "expect": "catalog",
+     "expectedAnswer": "January 2011 (Rick's note: 'Christmas in January 2011'; embedded creation stamp 2011-01-30). If the previous turn ended in a question, asking again is a pass.",
+     "assertions": {
+      "mustMatch": [
+       "2011"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "ac-cv-02",
+   "category": "conversation",
+   "expect": "kinship",
+   "live": "not asked live",
+   "turns": [
+    {
+     "id": "ac-cv-02-t1",
+     "text": "I think Dad's birth year is wrong in the tree — he was born in 1929",
+     "expect": "kinship",
+     "expectedAnswer": "Check, don't edit: the tree (Richard Harding Breen Sr, @I2@) already records 22 February 1929 (typed 'feberuary 22 1929'), Boston; the People tab also says 1929. So the year agrees; the month is misspelled in the source. Offer to note it; never claim to have changed the tree.",
+     "subjectIDs": [
+      "gedcom:@I2@"
+     ],
+     "assertions": {
+      "mustMatch": [
+       "1929"
+      ],
+      "mustNotContain": [
+       "I've updated",
+       "I have updated",
+       "I've changed",
+       "I changed",
+       "I've corrected",
+       "I corrected",
+       "I've fixed",
+       "I fixed"
+      ]
+     }
+    },
+    {
+     "id": "ac-cv-02-t2",
+     "text": "ok what does the tree say about his parents?",
+     "expect": "kinship",
+     "expectedAnswer": "George Breen (b. about 10 Aug 1898 Boston, d. 1968 Boston) and Muriel Lamb (b. April 1902, Quebec, Canada; the tree has no death - Rick's told note says 1977); married 17 Oct 1925. (The tree carries two parent sets for George; not needed here.)",
+     "subjectIDs": [
+      "gedcom:@I8@",
+      "gedcom:@I4@"
+     ],
+     "assertions": {
+      "mustMatch": [
+       "George",
+       "Muriel"
+      ]
+     }
+    }
+   ]
+  },
+  {
+   "id": "ac-lp-01",
+   "category": "loose_phrasing",
+   "text": "who was my materanl grandmother?",
+   "expect": "kinship",
+   "live": "not asked live",
+   "expectedAnswer": "Mary Christina O'Connor (b. 23 Dec 1904, Ireland - County Cork; d. 16 Jul 1985 Brockton MA), Eileen's (Ma's) mother; grandchildren called her 'Doody' or 'Doods'. Not the duplicate @I5@ record.",
+   "subjectIDs": [
+    "gedcom:@I7@"
+   ],
+   "computedBy": [
+    "resolve_person my materanl grandmother",
+    "family_knowledge id=gedcom:@I7@"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Mary (?:Christina )?O'Connor"
+    ]
+   }
+  },
+  {
+   "id": "ac-lp-02",
+   "category": "loose_phrasing",
+   "text": "the Hudsons at thanksgiving",
+   "expect": "catalog",
+   "liveIDs": [
+    "dp261009-002"
+   ],
+   "live": {
+    "source": "pre-demo visitor probe 2026-10-09 night, headless shell (~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md)",
+    "answer": "I started to answer that, but what I had drifted into saying something about your family… / You're right — that's my job. I couldn't turn your last question into a lookup I trust.",
+    "note": "probe, 21 of 21 runs"
+   },
+   "liveVerdict": "OFF-RAILS",
+   "expectedAnswer": "Two Hudson Thanksgiving videos, both 1984: 1984-xx-xx_1984-xx-xx_Thanksgiving-1984_Improved_slp.mov (94 min, FamilyArchive, Archived; confirmed tags 'Hudson Family' and 'Reckard'; per the corpus note the tape also holds Mark's birthday and the Breen Thanksgiving) and AtHudsons-Thanksgiving-1984.mov (4 min, 1984 by its filename; two identical copies, LaCieWorkspace + Projects; the narrator names Glenn Hudson and Bonnie in the transcript). The other 94-min re-encode 1984-xx-xx_Thanksgiving-1984_Improved_slp.mov is untagged. Saying 'Thanksgiving isn't mentioned anywhere' is a fail.",
+   "subjectIDs": [
+    "catalog:90542A43-6A78-4AD4-8B0B-6C26C5A6A8B7",
+    "catalog:CC2391EA-FE73-44F9-95C4-1ACD38EAC811"
+   ],
+   "computedBy": [
+    "search_media text=thanksgiving tags=Hudson Family",
+    "search_media text=Hudsons thanksgiving"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Thanksgiving-1984_Improved_slp|AtHudsons-Thanksgiving-1984"
+    ],
+    "mustNotContain": [
+     "drifted into saying",
+     "I couldn't turn your last question"
+    ]
+   }
+  },
+  {
+   "id": "ac-lp-03",
+   "category": "loose_phrasing",
+   "text": "tell me about dad's side",
+   "expect": "kinship",
+   "live": "not asked live",
+   "expectedAnswer": "Rick's paternal side: Dad, Richard Harding Breen Sr (1929-2008, Boston/Brockton; USMC in the 1940s); his parents George Breen (1898-1968) and Muriel Lamb (b. 1902 Quebec; d. 1977 per Rick); Muriel's parents Frederick Burton Lamb (1871-1938) and Edith Lucy Parker (1868-1949, Quebec). Any shape that resolves 'dad' to Richard Sr and walks up the tree passes; 'Dafydd' or any non-family Richard fails.",
+   "subjectIDs": [
+    "gedcom:@I2@",
+    "gedcom:@I8@",
+    "gedcom:@I4@"
+   ],
+   "computedBy": [
+    "resolve_person dad's side",
+    "relatives id=gedcom:@I2@ relation=parents",
+    "relatives id=gedcom:@I2@ relation=grandparents"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Richard Harding Breen Sr|Richard Breen Sr|Dick",
+     "George Breen|Muriel Lamb"
+    ],
+    "mustNotContain": [
+     "Dafydd"
+    ]
+   }
+  },
+  {
+   "id": "ac-lp-04",
+   "category": "loose_phrasing",
+   "text": "when was Ma born?",
+   "expect": "kinship",
+   "live": "not asked live",
+   "expectedAnswer": "31 August 1930, Chelsea, Massachusetts (tree and People tab agree). Ma = Eileen (Latta) Breen, Rick's mother.",
+   "subjectIDs": [
+    "gedcom:@I3@",
+    "people:11892D85-3A1D-4C9F-8451-EFE5D475B196"
+   ],
+   "computedBy": [
+    "resolve_person Ma",
+    "person_facts id=gedcom:@I3@"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "1930",
+     "Aug"
+    ],
+    "mustNotContain": [
+     "Massachusetts is"
+    ]
+   }
+  },
+  {
+   "id": "lv261010-002",
+   "category": "loose_phrasing",
+   "text": "the name macgregor is pronounced \"ma greggor:",
+   "expect": "social",
+   "liveIDs": [
+    "lv261010-002"
+   ],
+   "live": {
+    "asked": "the name macgregor is pronounced \"ma greggor:",
+    "askedAt": "2026-10-10T15:21:13Z",
+    "session": "C0E6B84F",
+    "outcome": "answered",
+    "route": "telling",
+    "answer": "I've noted what you said about macgregor — spell it out for me like “LAT-uh” and I'll say it that way?",
+    "basisLine": "Basis: listening — pronunciation hint kept, needs a respelling; no model call, no catalog query."
+   },
+   "liveVerdict": "MISS",
+   "expectedAnswer": "Pronunciation teaching (a write) - not a tool in this kit. Pass: reads the subject as MacGregor and the respelling as 'ma greggor', and says honestly it cannot save it here (or restates it). Fail: asks to 'spell it out' again, searches the catalog, or attaches it to anyone else.",
+   "assertions": {
+    "mustMatch": [
+     "mac ?gregor"
+    ],
+    "mustNotContain": [
+     "spell it out for me"
+    ]
+   }
+  },
+  {
+   "id": "lv261010-010",
+   "category": "loose_phrasing",
+   "text": "pronounce the name magregor as \"ma gregor\"",
+   "expect": "social",
+   "liveIDs": [
+    "lv261010-010"
+   ],
+   "live": {
+    "asked": "pronounce the name magregor as \"ma gregor\"",
+    "askedAt": "2026-10-10T15:24:29Z",
+    "session": "C0E6B84F",
+    "outcome": "answered",
+    "route": "telling",
+    "answer": "I've noted what you said about ma — spell it out for me like “LAT-uh” and I'll say it that way?",
+    "basisLine": "Basis: listening — pronunciation hint kept, needs a respelling; no model call, no catalog query."
+   },
+   "liveVerdict": "WRONG-CONFIDENT + data integrity (hint kept under \"ma\" = Rick's mother)",
+   "expectedAnswer": "Subject is MacGregor (Rick's respelled 'magregor'), respelling 'ma gregor'. Never Ma/Eileen. No write tool exists here, so an honest 'noted for this conversation, I can't save it' is the pass shape.",
+   "assertions": {
+    "mustMatch": [
+     "mac?gregor"
+    ],
+    "mustNotContain": [
+     "about ma —",
+     "Eileen"
+    ]
+   }
+  },
+  {
+   "id": "lv261010-015",
+   "category": "loose_phrasing",
+   "text": "tell me about the hudsons",
+   "expect": "kinship",
+   "liveIDs": [
+    "lv261010-015"
+   ],
+   "live": {
+    "asked": "tell me about the hudsons",
+    "askedAt": "2026-10-10T18:02:26Z",
+    "session": "183E1A0B",
+    "outcome": "answered",
+    "route": "graph",
+    "answer": "The family tree records 39249 people, with birth years from 780 to 1959 [c1]. The most common surnames are Stewart, Douglas, Smith, Hamilton, and Scott [c1]. To view a specific lineage, please ask for a name like \"Donna's family tree\" or a surname like \"the Breens\" [c2].",
+    "basisLine": "Basis: imported family tree (GEDCOM)."
+   },
+   "liveVerdict": "WRONG-CONFIDENT (whole-tree summary)",
+   "expectedAnswer": "The Hudson surname, not the whole tree: 13 people with Hudson in a recorded name (11 primary), 1380-1959; Donna's line Donna <- Richard C Hudson (1928-2009) <- William S. Hudson (1898-1979) <- William Hudson (1877-) <- Thomas Haig Hudson (1849-1923, Dumfriesshire). Optionally the 'Hudson Family'-tagged videos.",
+   "computedBy": [
+    "catalog_stats surname=Hudson",
+    "relatives id=gedcom:@I14522@ relation=greatgrandparents",
+    "search_media tags=Hudson Family"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Hudson"
+    ],
+    "mustNotContain": [
+     "39249",
+     "39,249",
+     "most common surnames"
+    ]
+   }
+  },
+  {
+   "id": "ac-lp-05",
+   "category": "loose_phrasing",
+   "text": "who was elain bowser",
+   "expect": "biography",
+   "control": true,
+   "live": {
+    "asked": "who was elain bowser",
+    "askedAt": "2026-10-10T17:26:10Z",
+    "session": "183E1A0B",
+    "outcome": "answered",
+    "route": "graph",
+    "answer": "Elaine Bowser was born 16 January 1933 in Weymouth, Norfolk, Massachusetts, United States and died 29 September 2022 in Stoughton, Norfolk, Massachusetts, United States [c1]. She was the child of Ethel Evelyn Damon and James William Bowser, with recorded grandparents Earl Stanley Damon, Eleanor B Corbett, James William Bowser, and Mary Jane Doherty [c2]. She was married to Richard C Hudson [c3]. The family tree records one child for her, Donna Hudson [c4]. Her family tree includes 10195 recorded ancestors across 17 generations and 1 recorded descendant across 1 generation [c5]. I have 4 photos of her in the archive — want to see them all?",
+    "basisLine": "Basis: imported family tree (GEDCOM)."
+   },
+   "liveVerdict": "GOOD (control; typo resolved)",
+   "expectedAnswer": "Elaine Bowser, b. 16 Jan 1933 Weymouth MA, d. 29 Sep 2022 Stoughton MA; parents James William Bowser and Ethel Evelyn Damon; married Richard C Hudson; Donna's mother.",
+   "subjectIDs": [
+    "gedcom:@IB3@"
+   ],
+   "computedBy": [
+    "resolve_person elain bowser",
+    "person_facts id=gedcom:@IB3@"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Elaine Bowser",
+     "1933"
+    ]
+   }
+  },
+  {
+   "id": "ac-sy-01",
+   "category": "story",
+   "text": "tell me Dad's Marine Corps story",
+   "expect": "biography",
+   "live": "not asked live",
+   "expectedAnswer": "Only a short story is recorded: Richard Harding Breen Sr served in the US Marine Corps in the 1940s, joined in time to be counted a World War II veteran (wartime service period ran through 31 Dec 1946), was never in combat 'but served when the danger was real' (CyberBrain, told by Rick 2026-09-11 and -09-23). People tab: born 1929, later a typewriter repairman and bus driver. No units, bases, ranks or places are recorded - say so and offer to record more. Any invented detail (boot camp, unit, Pacific battle, Korea) fails.",
+   "subjectIDs": [
+    "brain:event.richard-harding-breen-sr.service.2026-09-23",
+    "brain:bio.richard-breen-sr-marine-corps.2026-09-11"
+   ],
+   "computedBy": [
+    "resolve_person dad",
+    "family_knowledge id=gedcom:@I2@"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "Marine",
+     "1940s|World War"
+    ],
+    "mustNotContain": [
+     "Parris Island",
+     "Iwo Jima",
+     "Okinawa",
+     "Guadalcanal",
+     "Camp Lejeune",
+     "Korea"
+    ]
+   }
+  },
+  {
+   "id": "lv261010-012",
+   "category": "story",
+   "text": "tell about richard breen sr",
+   "expect": "biography",
+   "liveIDs": [
+    "lv261010-012"
+   ],
+   "live": {
+    "asked": "tell about richard breen sr",
+    "askedAt": "2026-10-10T18:05:12Z",
+    "session": "183E1A0B",
+    "outcome": "answered",
+    "route": "graph",
+    "answer": "Richard Harding Breen Sr was known as Dick to adults and Dad to his children, while his son Richard Jr went by Dicky, Rich, and Rick [c2]. He served in the United States Marine Corps in the 1940s [c1]. His GEDCOM bridge is not available in the current family tree [c3]. Would you like to hear how Richard Harding Breen Sr served his country?",
+    "basisLine": "Basis: Breen Family CyberBrain; 2 supporting sources."
+   },
+   "liveVerdict": "GOOD facts + internal-jargon leak",
+   "expectedAnswer": "Richard Harding Breen Sr: b. 22 Feb 1929 Boston, d. 22 Jun 2008 Brockton; US Marine Corps in the 1940s (WWII-era, no combat); 'Dick' to adults, 'Dad' to his children; typewriter repairman and bus driver; married Eileen Latta (People tab says 1956, Eileen's note says 1955 - a conflict to flag, not resolve); parents George Breen and Muriel Lamb. No internal jargon (e.g. 'GEDCOM bridge').",
+   "subjectIDs": [
+    "gedcom:@I2@"
+   ],
+   "computedBy": [
+    "resolve_person Richard Breen Sr",
+    "person_facts id=gedcom:@I2@",
+    "family_knowledge id=gedcom:@I2@"
+   ],
+   "assertions": {
+    "mustContain": [
+     "Marine"
+    ],
+    "mustNotContain": [
+     "GEDCOM bridge"
+    ]
+   }
+  },
+  {
+   "id": "ac-sy-02",
+   "category": "story",
+   "text": "what was going on in Donna's family the year she was born?",
+   "expect": "biography",
+   "live": "not asked live",
+   "expectedAnswer": "1959, from the tree and notes only: Donna born 4 Aug 1959 in Brockton to Richard C Hudson (31) and Elaine Bowser (26); her older sister Bonnie already born (Rick's note; year unrecorded). Living grandparents: William S. Hudson (1898-1979), Bessie Macgregor (b. 1897; death unrecorded), James William Bowser (1900-1962; remarried 1944 to Ellen Elizabeth McCarthy per the tree), Ethel Evelyn Damon (1903-2004). Living great-grandparents: Earl Stanley Damon (1877-1973), Eleanor B Corbett (1885-1964). No 1959 media in the catalog. Any world context must be labelled as general history, not family record; any invented family event fails.",
+   "subjectIDs": [
+    "gedcom:@I14522@",
+    "gedcom:@IB2@",
+    "gedcom:@IB3@"
+   ],
+   "computedBy": [
+    "person_facts id=gedcom:@I14522@",
+    "relatives id=gedcom:@I14522@ relation=grandparents",
+    "relatives id=gedcom:@I14522@ relation=greatgrandparents",
+    "search_media years=1959"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "1959",
+     "Brockton"
+    ]
+   }
+  },
+  {
+   "id": "ac-sy-03",
+   "category": "story",
+   "text": "tell me about donna",
+   "expect": "biography",
+   "control": true,
+   "live": {
+    "asked": "tell me about donna",
+    "askedAt": "2026-10-10T15:39:44Z",
+    "session": "183E1A0B",
+    "outcome": "answered",
+    "route": "graph",
+    "answer": "Donna Hudson (Donna in the People tab) was born 4 August 1959 in Brockton, Plymouth, Massachusetts, United States. She is the child of Elaine Bowser and Richard C Hudson; her recorded grandparents were Bessie Macgregor, Ethel Evelyn Damon, James William Bowser and William S. Hudson. She is married to Richard Harding Breen Jr. In the People tab: Daniel — son, Mark — son, Matthew — son and Timothy — son. Her family tree includes 10323 recorded ancestors across 17 generations. From Rick's People profile for Donna Breen: “Donna Hudson is intelligent, pretty, and kind. She is the mother of four sons, Dan, Mark, Matt, and Timmy. She got her BS in Science and worked in the computer industry for 15 years, then got a Master’s in Education and became a teacher. She retired in 2020 and she has been married to Rick since february 14, 1981. She loves crafts, birds, reading, and astronomy.” Donna is known for her beautiful blonde hair, easy going nature, and intelligence. I have 11 photos and 1 document of her in the archive — want to see them all?",
+    "basisLine": "Basis: People profile identity bridge “donna” → “Donna” → GEDCOM “Donna Hudson”; family facts from imported family tree (GEDCOM). People tab relationships (stored on Donna's profile); local only, not from the family tree. The birth date is from Donna's People profile."
+   },
+   "liveVerdict": "GOOD (control)",
+   "expectedAnswer": "Donna (Elaine Hudson) Breen: b. 4 Aug 1959 Brockton; parents Richard C Hudson and Elaine Bowser; married Rick 14 Feb 1981; four sons Dan, Mark, Matt, Timmy; BS in science/biology, Prime Computer QA, 15 years in computing, then a Master's in Education and 17 years teaching; retired 2020; lives in Middlefield; loves crafts, birds, reading, astronomy; sisters Bonnie and Paula, brother Glen.",
+   "subjectIDs": [
+    "gedcom:@I14522@",
+    "people:000CD686-6256-4064-BFBD-D720FAE1E2B7"
+   ],
+   "computedBy": [
+    "resolve_person donna",
+    "person_facts id=gedcom:@I14522@",
+    "family_knowledge id=gedcom:@I14522@"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "1959",
+     "1981|Rick"
+    ]
+   }
+  },
+  {
+   "id": "ac-sy-04",
+   "category": "story",
+   "text": "tell me about dan",
+   "expect": "biography",
+   "control": true,
+   "live": {
+    "asked": "tell me about dan",
+    "askedAt": "2026-10-10T15:39:55Z",
+    "session": "183E1A0B",
+    "outcome": "answered",
+    "route": "graph",
+    "answer": "Daniel Breen, also known as Dan, is the oldest son of Rick and Donna Breen [c1][c3]. He was born 3 February 1982 [c2]. Dan is known for his intelligence, good looks, and a certain amount of grace under pressure — and for being a good dad.",
+    "basisLine": "Checked: People profile “Daniel” (alternate names, birth date, biography — quoted from the profile Rick maintains); family tree (35 namesakes, none selected — the People tab named the person)."
+   },
+   "liveVerdict": "GOOD (control); its last sentence comes from Hallie kind-words.json, not a fact source",
+   "expectedAnswer": "Daniel Richard Breen (Dan), b. 3 Feb 1982, oldest son of Rick and Donna; married to Anna (Dalton); their daughter Libby (Elizabeth). Not in the family tree (People tab only).",
+   "subjectIDs": [
+    "people:6A88DB14-1F59-4AA6-AC93-C499C388AE3F"
+   ],
+   "computedBy": [
+    "resolve_person Dan",
+    "person_facts id=people:6A88DB14-1F59-4AA6-AC93-C499C388AE3F"
+   ],
+   "assertions": {
+    "mustMatch": [
+     "oldest",
+     "1982"
+    ]
+   }
+  }
+ ]
+}
