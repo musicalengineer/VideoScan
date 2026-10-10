@@ -42,8 +42,9 @@
 //            drive (CopiesAdviceDisk.driveIsConnected).
 // The 100k-record budget is pinned by SoundCopyFinderScaleTests.
 //
-// READ-ONLY. Nothing here muxes, moves or pairs. "Combine with its sound"
-// opens the existing Combine sheet; the person starts the mux there.
+// READ-ONLY. Nothing here muxes, moves or pairs. Adding the sound goes
+// through Repair… (its "Add its sound from another file" step, Rick
+// 2026-10-10); the person starts the mux there.
 
 import Foundation
 import VideoScanCore
@@ -96,6 +97,17 @@ struct SoundPairCandidate: Sendable, Equatable, Identifiable {
         } else {
             parts.append("its sound runs \(length); this picture's length isn't recorded yet")
         }
+        return parts.joined(separator: ", ")
+    }
+
+    /// The banner's short why: "same folder, same length" — where it is and
+    /// whether the lengths were measured to agree, nothing more.
+    var shortReason: String {
+        var parts: [String] = []
+        if sameFolder { parts.append("same folder") }
+        if sameFootage { parts.append("same footage group") }
+        if sameNameStart, !sameFolder, !sameFootage { parts.append("same name start") }
+        parts.append(lengthMatches ? "same length" : "length not measured yet")
         return parts.joined(separator: ", ")
     }
 }
@@ -334,6 +346,25 @@ enum SoundCopyFinder {
     #endif
     nonisolated static func decideOffMain(_ input: SoundCopyInput) async -> SoundCopyAdvice {
         decide(input, isConnected: CopiesAdviceDisk.driveIsConnected(forPath:))
+    }
+
+    // MARK: For Repair… (add its sound from another file)
+
+    /// The sound file Repair… would add, for a picture with none: the
+    /// top-ranked sound file on a connected drive (a copy WITH sound to
+    /// watch is not a sound file to add, so `decide`'s first answer is
+    /// skipped). Same shape as `load`: one pass on main, decision off it.
+    @MainActor
+    static func loadSoundSource(recordID: UUID, model: VideoScanModel) async -> MediaRepairSoundSource {
+        guard let rec = model.record(forID: recordID) else { return .notFound }
+        return await soundSourceOffMain(gather(for: rec, model: model))
+    }
+
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func soundSourceOffMain(_ input: SoundCopyInput) async -> MediaRepairSoundSource {
+        MediaRepairSoundSource(advice: combineAdvice(input, isConnected: CopiesAdviceDisk.driveIsConnected(forPath:)))
     }
 
     // MARK: For the "no pair found" alerts

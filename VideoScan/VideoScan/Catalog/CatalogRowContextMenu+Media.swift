@@ -57,8 +57,10 @@ extension CatalogContent {
             || (rec.isAwaitingConfirmation && rec.derivedFrom.flatMap { model.record(forID: $0) } != nil)
     }
 
-    /// The Repair sheet for one record (the row menu and Get Info's banner).
-    func presentRepair(for rec: VideoRecord) {
+    /// The Repair sheet for one record (the row menu and Get Info's
+    /// banners). `soundSource` = the sound file Get Info's "No sound"
+    /// banner already found (nil = the sheet looks for it).
+    func presentRepair(for rec: VideoRecord, soundSource: MediaRepairSoundSource? = nil) {
         repairSheetRequest = MediaRepairSheetRequest(
             record: rec,
             audioDiagnosis: fileOpsCenter.verifyDiagnosis(forRecordID: rec.id),
@@ -66,7 +68,8 @@ extension CatalogContent {
             onSelectRecord: { id in
                 selectedIDs = [id]
                 onSelect(id)
-            })
+            },
+            soundSource: soundSource)
     }
 
     /// Get Info… / Verify… / Repair… — the `.inspect` group — extracted
@@ -124,7 +127,7 @@ extension CatalogContent {
             record: rec,
             audioDiagnosis: diagnosis,
             onCheckMedia: { checkMediaRequest = CheckMediaRequest(records: [rec]) },
-            onRepair: { presentRepair(for: rec) },
+            onRepair: { source in presentRepair(for: rec, soundSource: source) },
             onSoundDetails: diagnosis.map { d in
                 {
                     verifyAudioRequest = VerifyAudioRequest(
@@ -138,22 +141,19 @@ extension CatalogContent {
     /// "A copy with sound is here" for Get Info (Rick 2026-10-10). The
     /// lookup runs in the sheet's .task (SoundCopyFinder.load: one pass on
     /// main, decision off main) and only for a file flagged no-sound.
-    /// Combine opens the existing Combine sheet for the picture + the sound
-    /// file; nothing is muxed until the person starts it there.
+    /// Adding the sound is the banner's Repair… (the one repair door).
     func soundCopyHooks(for rec: VideoRecord) -> SoundCopyHooks {
         let videoID = rec.id
         return SoundCopyHooks(
             // Called only when the sheet's live verdict says "no sound".
             load: { [model] in await SoundCopyFinder.load(recordID: videoID, model: model, flagged: true) },
             reveal: { c in NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: c.fullPath)]) },
+            // The catalog's own opener (its double-click's player choice) —
+            // not the Archive Angel's, which is Angel-internal (boundary ratchet).
             play: { [model] c in
                 guard let r = model.record(forID: c.id) else { return }
-                ArchiveAngelPlayerChoice.play(r, log: { model.log($0) })
-            },
-            combine: { [model, onCombinePair] c in
-                guard let video = model.record(forID: videoID), let audio = model.record(forID: c.id) else { return }
-                model.log("Get Info: combine \(video.filename) with its sound \(audio.filename) — opening the Combine sheet")
-                onCombinePair?(video, audio)
+                model.log("Get Info: playing the copy with sound, \(r.filename)")
+                MediaOpener.open([r])
             })
     }
 }

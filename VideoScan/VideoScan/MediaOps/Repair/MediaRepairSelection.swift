@@ -36,8 +36,9 @@ struct MediaRepairSelection: Equatable {
         if on { chosen.insert(fix) } else { chosen.remove(fix) }
     }
 
-    func recipe(balance: MediaRepairBalanceInput?) -> MediaRepairRecipe {
-        MediaRepairRecipe(fixes: Array(chosen), balance: balance)
+    /// `soundFile` = the measured sound file Add sound reads (nil = none).
+    func recipe(balance: MediaRepairBalanceInput?, soundFile: String? = nil) -> MediaRepairRecipe {
+        MediaRepairRecipe(fixes: Array(chosen), balance: balance, soundFile: soundFile)
     }
 
     // MARK: What the plan does to each stream
@@ -57,6 +58,8 @@ struct MediaRepairSelection: Equatable {
         case .copy: lines.append("Sound: copied exactly — not re-encoded.")
         case .rebuild: lines.append("Sound: rebuilt as 24-bit PCM from what decodes (same sample rate and channels). It can't bring back sound that is missing.")
         case .balance: lines.append("Sound: the live channel goes to both speakers (re-encoded in the same kind of format).")
+        case .addFrom(let path):
+            lines.append("Sound: added from \((path as NSString).lastPathComponent) \u{2014} copied exactly, not re-encoded. The sound file is only read.")
         }
         if recipe.isLossless {
             lines.append("Length: the same, packet for packet. Sound is stored beside picture so it plays smoothly.")

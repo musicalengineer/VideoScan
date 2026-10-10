@@ -235,7 +235,8 @@ enum CombineEngine {
         audioPath: String,
         outputPath: String,
         technique: CombineJobStatus.CombineTechnique,
-        withProgress: Bool
+        withProgress: Bool,
+        progressPipe: String = "pipe:1"
     ) -> [String] {
         var args = [
             "-y",
@@ -257,8 +258,10 @@ enum CombineEngine {
         }
 
         args += ["-movflags", "+faststart", "-f", "mov"]
+        // Combine reads progress on stdout; Repair's add-sound pass (the
+        // same mux, MediaRepairRecipe.addSoundArgs) reads it on stderr.
         if withProgress {
-            args += ["-progress", "pipe:1"]
+            args += ["-progress", progressPipe]
         }
         args.append(outputPath)
         return args

@@ -11,6 +11,10 @@ import Foundation
 //      already done by the same write; on its own it is a pure stream copy.
 //   3. Rebuild the sound track (an old / unreadable sound format) → PCM.
 //   4. Balance the sound (one live channel to both speakers).
+// Add sound from another file (a picture with none, Rick 2026-10-10) is
+// its OWN pass: the Combine engine's stream-copy mux of this picture and
+// that sound file, nothing re-encoded (the extension at the bottom).
+// Any other fix asked for alongside it is reported as not combined.
 // Steps 3 and 4 both rewrite the one sound track; when both are offered,
 // the rebuild runs and Balance is reported as not combined (Repair on the
 // new file offers it again once the sound can be measured).
@@ -33,6 +37,8 @@ enum MediaRepairSound: Equatable, Sendable {
     /// The Balance Audio pan, re-encoded in the same codec family
     /// (BalanceAudioFix's own encoder rule).
     case balance(pan: String, encodeArgs: [String])
+    /// Added from another file (a picture with none), copied exactly.
+    case addFrom(path: String)
 }
 
 /// What the session knows about the sound, for the balance step: the
@@ -66,7 +72,7 @@ struct MediaRepairBalanceInput: Equatable, Sendable {
 struct MediaRepairRecipe: Equatable, Sendable {
 
     /// The defined order every recipe applies its fixes in.
-    static let order: [MediaRepairFix] = [.removeRepeatedFrames, .remux, .rebuildAudio, .balanceAudio]
+    static let order: [MediaRepairFix] = [.addSound, .removeRepeatedFrames, .remux, .rebuildAudio, .balanceAudio]
 
     /// A fix that was asked for but is not in this pass, and why.
     struct Skipped: Equatable, Sendable {
@@ -85,8 +91,15 @@ struct MediaRepairRecipe: Equatable, Sendable {
     var isEmpty: Bool { applied.isEmpty }
 
     /// Build the pass from the fixes wanted (any order, duplicates ignored).
-    init(fixes wanted: [MediaRepairFix], balance: MediaRepairBalanceInput?) {
+    /// `soundFile` = the file Add sound takes its sound from; with it, Add
+    /// sound is the whole pass and every other fix wanted is reported as
+    /// not combined.
+    init(fixes wanted: [MediaRepairFix], balance: MediaRepairBalanceInput?, soundFile: String? = nil) {
         let wantedSet = Set(wanted)
+        if wantedSet.contains(.addSound), let soundFile {
+            addSoundPass(from: soundFile, alsoWanted: wantedSet)
+            return
+        }
         for fix in Self.order where wantedSet.contains(fix) {
             add(fix, balance: balance)
         }
@@ -102,6 +115,9 @@ struct MediaRepairRecipe: Equatable, Sendable {
         case .rebuildAudio:
             sound = .rebuild
             applied.append(fix)
+        case .addSound:
+            // Reached only without a sound file (init takes the other road).
+            skipped.append(Skipped(fix: fix, reason: Self.noSoundFileReason))
         case .balanceAudio:
             if let why = Self.balanceRefusal(balance, sound: sound) {
                 skipped.append(Skipped(fix: fix, reason: why))
@@ -131,6 +147,7 @@ struct MediaRepairRecipe: Equatable, Sendable {
     /// sound needs QuickTime (or Matroska, which takes anything).
     func fileExtension(sourceExtension: String, audioCodec: String) -> String {
         let ext = sourceExtension.lowercased()
+        if case .addFrom = sound { return Self.addedSoundExtension }
         if sound == .rebuild { return ext == "mkv" ? "mkv" : "mov" }
         if picture == .removeRepeatedFrames {
             return MediaRepairOutput.fileExtension(for: .removeRepeatedFrames, sourceExtension: sourceExtension,
@@ -144,6 +161,7 @@ struct MediaRepairRecipe: Equatable, Sendable {
     /// args, nothing else). `picture` is the justified plan, required for
     /// `.removeRepeatedFrames` (nil there = the picture is copied).
     func ffmpegArgs(input: String, output: String, picture plan: MediaRepairPicturePlan?) -> [String] {
+        if case .addFrom(let soundPath) = sound { return Self.addSoundArgs(picture: input, sound: soundPath, output: output) }
         if isLossless { return MediaRepairCommand.remuxArgs(input: input, output: output) }
         var args = ["-hide_banner", "-nostdin", "-y", "-i", input]
         args += ["-map", "0:v:0?", "-map", sound == .copy ? "0:a?" : "0:a:0?"]
@@ -163,6 +181,7 @@ struct MediaRepairRecipe: Equatable, Sendable {
         case .copy: return ["-c:a", "copy"]
         case .rebuild: return ["-c:a", Self.rebuiltSoundCodec]
         case .balance(let pan, let encodeArgs): return ["-af", pan] + encodeArgs
+        case .addFrom: return []   // its own command (addSoundArgs)
         }
     }
 
@@ -177,7 +196,58 @@ struct MediaRepairRecipe: Equatable, Sendable {
                 : "Store sound beside picture (done by the same write)."
             case .rebuildAudio: return "Rebuild the sound track as 24-bit PCM (the picture is \(picture == .copy ? "copied exactly" : "the step above"))."
             case .balanceAudio: return "Balance the sound: the live channel goes to both speakers."
+            case .addSound: return addSoundStepLine
             }
         }
+    }
+}
+
+// MARK: - Add sound from another file (Rick 2026-10-10)
+//
+// A picture with no sound track (SoundPresencePolicy's "No sound") and the
+// sound file SoundPairRanker matched to it on a MEASURED length. The write
+// is the Combine engine's own mux — `-map 0:v -map 1:a -c copy` into a
+// QuickTime file — so there is one stream-copy rule in the app, not two.
+// Nothing is decoded; the picture file and the sound file are only read.
+// The proof is MediaRepairParity.compareAddedSound.
+
+extension MediaRepairRecipe {
+
+    /// CombineEngine always writes QuickTime (`-f mov`).
+    static let addedSoundExtension = "mov"
+
+    static let noSoundFileReason =
+        "no sound file was chosen — Repair adds sound only from a file whose length matches this picture"
+
+    static let addSoundAloneReason =
+        "adding the sound is a pass of its own; run Repair on the new file for this one"
+
+    /// The add-sound pass: the sound comes from `path`; any other fix
+    /// wanted is skipped with the reason.
+    fileprivate mutating func addSoundPass(from path: String, alsoWanted: Set<MediaRepairFix>) {
+        sound = .addFrom(path: path)
+        applied = [.addSound]
+        skipped = Self.order
+            .filter { $0 != .addSound && alsoWanted.contains($0) }
+            .map { Skipped(fix: $0, reason: Self.addSoundAloneReason) }
+    }
+
+    /// The Combine engine's stream-copy mux, with its progress on stderr
+    /// (the line stream Repair's write reads). `-y` only ever overwrites
+    /// Repair's own reserved, empty partial.
+    static func addSoundArgs(picture: String, sound: String, output: String) -> [String] {
+        CombineEngine.buildArgs(videoPath: picture, audioPath: sound, outputPath: output,
+                                technique: .streamCopy, withProgress: true, progressPipe: "pipe:2")
+    }
+
+    /// The sound file this pass reads, if it is the add-sound pass.
+    var addedSoundPath: String? {
+        if case .addFrom(let path) = sound { return path }
+        return nil
+    }
+
+    fileprivate var addSoundStepLine: String {
+        let name = addedSoundPath.map { ($0 as NSString).lastPathComponent } ?? "the sound file"
+        return "Add the sound from \(name): picture and sound copied exactly into a new QuickTime file (nothing re-encoded)."
     }
 }

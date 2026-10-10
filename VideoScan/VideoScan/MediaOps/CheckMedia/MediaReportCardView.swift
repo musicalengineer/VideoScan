@@ -14,6 +14,10 @@ struct MediaReportCardView: View {
     /// Show the evidence numbers under each row (the detail view does;
     /// a compact summary can turn them off).
     var showsEvidence = true
+    /// Flags drawn under the headline, loud (Rick 2026-10-10: "No sound").
+    var banners: [DiagnosticBanner] = []
+    /// What a banner's button does; nil = no button.
+    var onAction: (@MainActor (DiagnosticAction) -> Void)?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -25,6 +29,8 @@ struct MediaReportCardView: View {
                 MediaVerdictIcon(verdict: card.verdict, quickPassOnly: card.isQuickPassOnly)
             }
             .accessibilityIdentifier("checkMedia.headline")
+
+            ForEach(banners) { DiagnosticBannerView(banner: $0, onAction: onAction) }
 
             Text("\(card.tier == .full ? "Full" : "Quick") check, \(card.checkedAt.formatted(date: .abbreviated, time: .shortened))")
                 .font(.callout)
@@ -95,6 +101,7 @@ struct MediaVerdictIcon: View {
 /// The Check Media row's double-click detail: every file and its card.
 struct CheckMediaDetailView: View {
     @ObservedObject var job: CheckMediaJob
+    @Environment(\.mediaRepairLauncher) private var repair
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -104,7 +111,7 @@ struct CheckMediaDetailView: View {
                         .font(.body.monospaced())
                         .lineLimit(1)
                         .truncationMode(.middle)
-                    outcome(item.outcome)
+                    outcome(item)
                 }
                 if item.id != job.items.last?.id { Divider() }
             }
@@ -113,19 +120,45 @@ struct CheckMediaDetailView: View {
     }
 
     @ViewBuilder
-    private func outcome(_ o: CheckMediaItem.Outcome) -> some View {
-        switch o {
+    private func outcome(_ item: CheckMediaItem) -> some View {
+        switch item.outcome {
         case .waiting:
             Text("Waiting").font(.callout).foregroundStyle(.secondary)
         case .running(let step):
             Text("Checking — \(step)…").font(.callout).foregroundStyle(.secondary)
         case .checked(let card):
-            MediaReportCardView(card: card)
+            MediaReportCardView(card: card, banners: item.banner.map { [$0] } ?? [], onAction: repair?.onAction)
         case .failed(let reason):
             Label("Couldn't check: \(reason)", systemImage: "questionmark.circle")
                 .font(.callout)
         case .cancelled:
             Text("Stopped before this file").font(.callout).foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// What a finished Verify row shows under its title (Rick 2026-10-10):
+/// one file — its full banner with Repair…; several — the count chip
+/// ("2 of 5 have no sound"), each file's banner one double-click away.
+/// Nothing when no file is flagged.
+struct CheckMediaRowDiagnostics: View {
+    @ObservedObject var job: CheckMediaJob
+    @Environment(\.mediaRepairLauncher) private var repair
+
+    var body: some View {
+        if !job.state.isActive {
+            if job.items.count == 1, let banner = job.items[0].banner {
+                DiagnosticBannerView(banner: banner, onAction: repair?.onAction)
+                    .padding(.horizontal, 12)
+                    .padding(.bottom, 6)
+            } else if let text = NoSoundSummary(job.items).chipText {
+                HStack {
+                    DiagnosticChip(severity: .warning, symbol: DiagnosticBanner.noSoundSymbol, text: text)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 6)
+            }
         }
     }
 }

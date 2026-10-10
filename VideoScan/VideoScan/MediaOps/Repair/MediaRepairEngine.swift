@@ -24,6 +24,8 @@ import os
 //      packet for packet per stream (MediaRepairParity.compare); a pass that
 //      re-encodes must keep its streams, its planned length and (picture)
 //      its colour tags / aspect / chroma (MediaRepairParity.compareRewritten).
+//      Adding sound from another file must keep the picture packet for
+//      packet and carry that file's sound track (compareAddedSound).
 //      Then ≤ 5 short windows of the copy are decoded.
 //   4. PUBLISH with the one no-clobber rename (ExclusivePublish:
 //      RENAME_EXCL, else link(2), else refuse). A name that appeared while
@@ -80,6 +82,8 @@ struct MediaRepairRequest: Sendable {
     /// Pictures Remove repeated frames keeps, counted by the sheet at plan
     /// time (saves a second decode); nil = the engine counts them itself.
     var plannedPictureFrames: Int? = nil
+    /// The sound file's size, for the add-sound pass's free-space check.
+    var addedSoundSizeBytes: Int64 = 0
 }
 
 /// The steps a run walks through, for the row's "N of M".
@@ -100,6 +104,9 @@ enum MediaRepairPhase: Int, Sendable, CaseIterable {
 /// refusal rule is a pure function the tests drive directly.
 struct MediaRepairPreflightFacts: Equatable, Sendable {
     var sourceExists = true
+    /// The add-sound pass's sound file is a regular file (true when the
+    /// pass adds no sound).
+    var addedSoundExists = true
     /// lstat: any kind of entry at the target name (file, folder, link).
     var outputExists = false
     var outputFolderExists = true
@@ -138,9 +145,11 @@ enum MediaRepairEngine {
     /// A rough upper bound on the new file: the original's size (a stream
     /// copy is the same size; repeated frames removed are far smaller),
     /// plus uncompressed stereo PCM when the sound is rebuilt.
-    static func requiredFreeBytes(recipe: MediaRepairRecipe, sourceBytes: Int64, durationSeconds: Double) -> Int64 {
+    static func requiredFreeBytes(recipe: MediaRepairRecipe, sourceBytes: Int64, durationSeconds: Double,
+                                  addedSoundBytes: Int64 = 0) -> Int64 {
         let pcm: Int64 = recipe.sound == .rebuild ? Int64(max(0, durationSeconds) * 192_000) : 0
-        return max(0, sourceBytes) + pcm + headroomBytes
+        let added: Int64 = recipe.addedSoundPath == nil ? 0 : max(0, addedSoundBytes)
+        return max(0, sourceBytes) + pcm + added + headroomBytes
     }
 
     /// A volume named FamilyArchive ("FamilyArchive", "FamilyArchive 1") is
@@ -164,6 +173,9 @@ enum MediaRepairEngine {
         if !facts.sourceExists {
             return "The original isn't reachable — its drive may be disconnected. Nothing was written."
         }
+        if !facts.addedSoundExists {
+            return "The sound file isn't reachable — its drive may be disconnected. Nothing was written."
+        }
         let out = req.output.standardizedFileURL.path
         if out == URL(fileURLWithPath: req.sourcePath).standardizedFileURL.path {
             return "That is the original file — a repair always writes a new file."
@@ -184,7 +196,8 @@ enum MediaRepairEngine {
             return "The folder for the repaired copy is read-only. Choose a folder on another drive."
         }
         let needed = requiredFreeBytes(recipe: req.recipe, sourceBytes: req.sourceSizeBytes,
-                                       durationSeconds: req.sourceDurationSeconds)
+                                       durationSeconds: req.sourceDurationSeconds,
+                                       addedSoundBytes: req.addedSoundSizeBytes)
         if let free = facts.freeBytes, free < needed {
             return "Not enough free space for the repaired copy — it needs about \(MediaBytes.display(needed)), and \(MediaBytes.display(free)) is free."
         }
@@ -201,6 +214,9 @@ enum MediaRepairEngine {
         var facts = MediaRepairPreflightFacts()
         var st = stat()
         facts.sourceExists = stat(req.sourcePath, &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
+        if let sound = req.recipe.addedSoundPath {
+            facts.addedSoundExists = stat(sound, &st) == 0 && (st.st_mode & S_IFMT) == S_IFREG
+        }
         facts.outputExists = lstat(req.output.path, &st) == 0
         let folder = req.output.deletingLastPathComponent().path
         var isDir: ObjCBool = false
@@ -340,6 +356,15 @@ struct MediaRepairPartial: Sendable {
         let args = req.recipe.ffmpegArgs(input: req.sourcePath, output: url.path, picture: picture)
         repairLog.info("repair write: ffmpeg \(args.joined(separator: " "), privacy: .public)")
         let duration = req.sourceDurationSeconds
+        // A muxer's closing pass (QuickTime's +faststart, which the add-sound
+        // mux uses) rewrites the file and prints nothing: the copy growing
+        // or being rewritten is progress too (CombineEngine's rule).
+        let heartbeat = OutputFileHeartbeat(
+            path: url.path,
+            intervalSeconds: CombineEngine.watchIntervalSeconds(threshold: StallMonitor.defaultStallThresholdSeconds),
+            onChange: { progress(.write, nil) })
+        heartbeat.start()
+        defer { heartbeat.stop() }
         let result = await ProcessRunner.runProcess(
             executable: tools.ffmpeg, arguments: args,
             stderrLine: { line in
@@ -387,7 +412,9 @@ struct MediaRepairPartial: Sendable {
                                heartbeat: @escaping @Sendable () -> Void) async throws -> MediaRepairParity {
         let structure: MediaRepairParity
         let after = try await MediaRepairProbe.summary(path: partial.path, control: control)
-        if req.recipe.isLossless {
+        if let sound = req.recipe.addedSoundPath {
+            structure = try await addedSoundParity(req, sound: sound, partial: partial, control: control, heartbeat: heartbeat)
+        } else if req.recipe.isLossless {
             let tallyBefore = try await MediaRepairProbe.streamTallies(path: req.sourcePath, control: control, heartbeat: heartbeat)
             let tallyAfter = try await MediaRepairProbe.streamTallies(path: partial.path, control: control, heartbeat: heartbeat)
             structure = MediaRepairParity.compare(source: tallyBefore, output: tallyAfter)
@@ -402,6 +429,18 @@ struct MediaRepairPartial: Sendable {
             return .different(reason: why)
         }
         return .identical(detail: detail + " · " + MediaRepairEngine.verificationLevel)
+    }
+
+    /// Add sound: the picture packet for packet, plus the sound file's track
+    /// (MediaRepairParity.compareAddedSound). Three packet censuses, each
+    /// one read of its file.
+    private static func addedSoundParity(_ req: MediaRepairRequest, sound: String, partial: URL,
+                                         control: ProcessControl?,
+                                         heartbeat: @escaping @Sendable () -> Void) async throws -> MediaRepairParity {
+        let picture = try await MediaRepairProbe.streamTallies(path: req.sourcePath, control: control, heartbeat: heartbeat)
+        let added = try await MediaRepairProbe.streamTallies(path: sound, control: control, heartbeat: heartbeat)
+        let output = try await MediaRepairProbe.streamTallies(path: partial.path, control: control, heartbeat: heartbeat)
+        return MediaRepairParity.compareAddedSound(picture: picture, sound: added, output: output)
     }
 
     /// The one no-clobber rename. A taken name is never written over and
