@@ -217,6 +217,24 @@ extension CatalogContent {
             // to this table's focus by the focusedValue above.
     }
 
+    /// The filename's colour, highest priority first. Selected wins
+    /// (Rick 2026-10-10: a status colour on the blue selection was
+    /// illegible) — `.primary` is what macOS renders white on the key
+    /// highlight; the row's icon and italics still carry the state.
+    /// Then purged-orange, set-aside-purple, superseded-brown,
+    /// workspace-mint, offline-secondary, pair blue/green, default.
+    static func filenameColor(for rec: VideoRecord, selected: Bool,
+                              offline: Bool, pairTint: Bool) -> Color {
+        if selected { return .primary }
+        if rec.isPurged { return .orange }
+        if rec.isSetAside { return .purple }
+        if rec.isSuperseded { return .brown }
+        if rec.workspaceActive { return .mint }
+        if offline { return .secondary }
+        if pairTint { return rec.streamType == .videoOnly ? .blue : .green }
+        return rec.filenameColor
+    }
+
     private var catalogTableBase: some View {
         Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
@@ -276,14 +294,11 @@ extension CatalogContent {
                         // Workspace tint (.mint / turquoise) sits between
                         // purged-orange (highest priority) and the rest.
                         .italic(offline || purged || setAside || superseded)
-                        .foregroundColor(purged ? .orange
-                            : (setAside ? .purple
-                                : (superseded ? .brown
-                                    : (workspaceActive ? .mint
-                                        : (offline ? .secondary
-                                            : (showPairsOnly && rec.pairedWith != nil
-                                               ? (rec.streamType == .videoOnly ? .blue : .green)
-                                               : rec.filenameColor))))))
+                        .foregroundColor(Self.filenameColor(
+                            for: rec,
+                            selected: selectedIDs.contains(rec.id),
+                            offline: offline,
+                            pairTint: showPairsOnly && rec.pairedWith != nil))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
@@ -294,10 +309,10 @@ extension CatalogContent {
                 // file's name that does NOT depend on focus. O(1) per cell.
                 .background {
                     if selectedIDs.contains(rec.id) {
+                        // Outline only (Rick 2026-10-10): a fill stacked
+                        // on the system highlight hid the filename.
                         RoundedRectangle(cornerRadius: 5)
-                            .fill(Color.accentColor.opacity(0.30))
-                            .overlay(RoundedRectangle(cornerRadius: 5)
-                                .strokeBorder(Color.accentColor.opacity(0.75), lineWidth: 1))
+                            .strokeBorder(Color.accentColor, lineWidth: 1.5)
                             .padding(.horizontal, -4)
                     }
                 }
