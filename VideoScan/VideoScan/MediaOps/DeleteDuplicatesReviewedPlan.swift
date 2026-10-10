@@ -42,6 +42,49 @@ struct ReviewedDuplicatePick: Sendable, Equatable, Hashable {
     let keeperID: UUID
 }
 
+/// What Rick reviewed ON DISK for one pick (codex delete-engines F4): the
+/// target's and the keeper's identity at the freeze. A pick authorizes
+/// THOSE files, not whatever sits at their paths later — both must still
+/// be them (same device, inode, size and mtime; ctime ignored: the
+/// quarantine rename and a Finder tag change it) when the job starts AND
+/// on the very bytes the job proved, else the copy is held.
+struct ReviewedIdentity: Sendable, Equatable {
+    let target: FileIdentityStamp?
+    let keeper: FileIdentityStamp?
+
+    static let changedNote = "changed since you reviewed it"
+
+    nonisolated static func isReviewed(_ reviewed: FileIdentityStamp?, now: FileIdentityStamp) -> Bool {
+        reviewed?.describesSameFile(now: now, changeTime: .ignored, volume: .sameOperation) == true
+    }
+
+    /// The hold note when a file present now is not the one reviewed (or
+    /// was not stamped at the review); nil when both are. An ABSENT file is
+    /// not judged here — the run's own gates name a missing copy or keeper.
+    nonisolated func problem(targetNow: FileIdentityStamp?, keeperNow: FileIdentityStamp?) -> String? {
+        if let now = targetNow, !Self.isReviewed(target, now: now) {
+            return "this copy " + Self.changedNote + " — review it again; nothing moved"
+        }
+        if let now = keeperNow, !Self.isReviewed(keeper, now: now) {
+            return "its keeper " + Self.changedNote + " — review it again; nothing moved"
+        }
+        return nil
+    }
+}
+
+extension DeleteDuplicatesPlan.Entry {
+    /// The files Rick reviewed for this row (reviewed plans only).
+    var reviewedIdentity: ReviewedIdentity { ReviewedIdentity(target: targetStamp, keeper: keeperStamp) }
+}
+
+extension DeleteDuplicatesPlan {
+    /// The identity a row's proven bytes must match: the files Rick
+    /// reviewed, for a reviewed plan; nil for a bulk plan (no review).
+    func reviewedIdentity(of entry: Entry) -> ReviewedIdentity? {
+        isReviewed ? entry.reviewedIdentity : nil
+    }
+}
+
 /// A reviewed plan over one or more volumes: one `DeleteDuplicatesPlan`
 /// per volume, run in order.
 struct DeleteDuplicatesBatch: Sendable, Equatable {
@@ -147,8 +190,9 @@ enum DeleteDuplicatesReview {
 extension VideoScanModel {
 
     /// FREEZE what Rick reviewed: one entry per distinct pick, the keeper
-    /// and the path as he saw them, the keeper's stamp now (a resume
-    /// refuses a rewritten keeper). A pick that no longer stands is entered
+    /// and the path as he saw them, and BOTH files' stamps now — the run
+    /// holds a pick whose target or keeper is no longer the file reviewed
+    /// (codex delete-engines F4). A pick that no longer stands is entered
     /// HELD, with the reason. Then one plan per volume. One O(records) pass
     /// (copy counts) plus O(picks) lookups on the main actor; the stats run
     /// off it. Never in a view body.
@@ -173,7 +217,10 @@ extension VideoScanModel {
         }
         let paths = Set(entries.flatMap { [$0.path, $0.keeperPath] }.filter { !$0.isEmpty })
         let stamps = await Self.captureStamps(paths: Array(paths))
-        for i in entries.indices { entries[i].keeperStamp = stamps[entries[i].keeperPath] }
+        for i in entries.indices {
+            entries[i].keeperStamp = stamps[entries[i].keeperPath]
+            entries[i].targetStamp = stamps[entries[i].path]   // F4: the copy as reviewed
+        }
         holds.merge(DeleteDuplicatesReview.holds(entries, stamps: stamps)) { first, _ in first }
         // R6: a pick no longer in the catalog where it was reviewed is MISSING.
         let missing = holds.filter { $0.value == Self.reviewedPickMissingNote }

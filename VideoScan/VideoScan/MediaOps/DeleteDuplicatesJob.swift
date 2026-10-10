@@ -160,6 +160,11 @@ struct DeleteDuplicatesWorkItem: Sendable {
     /// it is handed the path the file is at when it is asked (its
     /// quarantine path). nil only for hand-built items in tests.
     var boundary: (@Sendable (_ currentPath: String) -> RemovalBoundaryAnswer)? = nil
+    /// REVIEWED plans (codex delete-engines F4): the target and keeper Rick
+    /// reviewed. The bytes phase one PROVED must be those files — the
+    /// quarantine baseline and the proof's keeper — else the copy is put
+    /// back and held. nil for bulk plans.
+    var reviewed: ReviewedIdentity? = nil
 }
 
 /// What the final verdict learns at the removal boundary, all of it read
@@ -347,7 +352,13 @@ enum DeleteDuplicatesDiskWorker {
             downstream?(fixity)
         }
         var reads: [SiblingRead] = []
-        let outcome = phaseOne(item, hooks: observing, siblingReads: &reads)
+        var outcome = phaseOne(item, hooks: observing, siblingReads: &reads)
+        // F4: the proven bytes must be the files Rick reviewed — checked on
+        // the quarantine baseline and the proof's keeper, nothing between.
+        if let reviewed = item.reviewed, case .quarantined(let ticket, let facts) = outcome,
+           let why = reviewed.problem(targetNow: ticket.baseline, keeperNow: ticket.proof.keeperStampAtProof) {
+            outcome = release(ticket, reason: why, keeperFilename: item.keeperFilename, leftAlone: facts)
+        }
         return DeleteDuplicatesPhaseOne(outcome: outcome, learnedKeeperFixity: box.value,
                                         retainedInQuarantine: retainedInQuarantine(outcome),
                                         siblingReads: reads)
@@ -1293,7 +1304,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // The volume re-check travels with the pair (off-main)…
                 archiveCheck: model.archiveRemovalCheck(),
                 // …and so does the question it asks at the removal itself.
-                boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path))
+                boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path),
+                // F4: a reviewed pick is bound to the files reviewed.
+                reviewed: current.reviewedIdentity(of: entry))
             inFlight.insert(entry.id)
             peakInFlight = max(peakInFlight, inFlight.count)
             // The pair runs as its own main-actor task so a second SSD pair
@@ -2065,8 +2078,13 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         let paths = Set(pending.flatMap { [$0.path, $0.keeperPath] }.filter { !$0.isEmpty })
         let stamps = await VideoScanModel.captureStamps(paths: Array(paths))
         var holds = DeleteDuplicatesReview.holds(pending, stamps: stamps)
-        for e in pending where holds[e.id] == nil && !PathScope.contains(e.path, within: plan.volumePath) {
-            holds[e.id] = DeleteDuplicatesReview.notOnVolumeNote
+        for e in pending where holds[e.id] == nil {
+            if !PathScope.contains(e.path, within: plan.volumePath) {
+                holds[e.id] = DeleteDuplicatesReview.notOnVolumeNote
+            } else if let why = e.reviewedIdentity.problem(targetNow: stamps[e.path], keeperNow: stamps[e.keeperPath]) {
+                // F4: not the files Rick reviewed — held before a byte is read.
+                holds[e.id] = why
+            }
         }
         DeleteDuplicatesReview.apply(holds, to: &plan.entries)
         for e in pending { if let why = holds[e.id] { model.log("  Held \(e.filename): \(why)") } }

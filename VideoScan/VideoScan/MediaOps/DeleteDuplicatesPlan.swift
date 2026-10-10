@@ -645,6 +645,11 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// the row when the keeper on disk no longer reproduces it — a
         /// keeper rewritten between sessions is named, not re-trusted.
         var keeperStamp: FileIdentityStamp?
+        /// REVIEWED plans: the target's stat stamp when Rick reviewed it
+        /// (codex delete-engines F4, additive 2026-10-09). With
+        /// `keeperStamp` it binds the pick to the files reviewed: either
+        /// one changed since → held. nil on bulk and older plans.
+        var targetStamp: FileIdentityStamp?
         /// Master on another drive (the "Also clean up working copies"
         /// mode) — drives the [WORKING-COPY] log line.
         var isWorkingCopy: Bool = false

@@ -187,7 +187,7 @@ struct DeleteDuplicatesOutcomeTests {
     @Test func aStoppedBatchReportsTheDrivesItNeverReached() async throws {
         let a = rig("batchA", copies: 1), b = rig("batchB", copies: 1)
         defer { a.cleanup(); b.cleanup() }
-        let planA = DeleteDuplicatesPlan(volumePath: a.dir.path, catalogLocation: a.model.catalogStore.fileLocation,
+        var planA = DeleteDuplicatesPlan(volumePath: a.dir.path, catalogLocation: a.model.catalogStore.fileLocation,
                                          crossVolumeMode: false, skippedBeforePlan: 0, summaryLine: "",
                                          entries: [DeleteDuplicatesPlan.Entry(id: a.copies[0].id, path: a.copies[0].fullPath,
                                                                               filename: "copy1.mov", sizeBytes: a.copies[0].sizeBytes,
@@ -198,6 +198,11 @@ struct DeleteDuplicatesOutcomeTests {
         planB.entries = [DeleteDuplicatesPlan.Entry(id: b.copies[0].id, path: b.copies[0].fullPath, filename: "copy1.mov",
                                                     sizeBytes: 5, keeperID: b.keeper.id, keeperPath: b.keeper.fullPath,
                                                     keeperFilename: "keeper.mov")]
+        // A reviewed plan carries the files as reviewed (codex F4).
+        for i in planA.entries.indices {
+            planA.entries[i].targetStamp = FileIdentityStamp.capture(path: planA.entries[i].path)
+            planA.entries[i].keeperStamp = FileIdentityStamp.capture(path: planA.entries[i].keeperPath)
+        }
         let run = DeleteDuplicatesBatchRun(batch: DeleteDuplicatesBatch(plans: [planA, planB]))
         run.start(make: { DeleteDuplicatesJob(model: a.model, reviewed: $0, hooks: a.hooks, planRoot: a.root) },
                   launch: { job in job.start(); job.cancel() })
