@@ -521,6 +521,9 @@ struct RemoteViewerReadOnlySensorTests {
         // rmdir of its own quarantine folders); reached only from
         // DeleteDuplicatesJob.run, which refuses on a read-only model.
         "MediaOps/SignatureVerification.swift": (4, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
+        // Its one live Trash step (Trash only, 2026-10-09): the same job, the
+        // same refusal on a read-only model.
+        "MediaOps/DeleteDuplicatesJob.swift": (1, nil, "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
         // Reached only from MFO jobs (Transcode, Reformat);
         // MediaFileOperationsCenter.add refuses every job on a viewer.
         "MediaOps/DerivativeOutputPublish.swift": (1, "MediaOps/MediaFileOperations.swift", "ViewerWriteGuard.refuse(\"MediaFileOperationsCenter.add("),

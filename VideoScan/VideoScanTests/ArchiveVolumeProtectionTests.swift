@@ -582,6 +582,13 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/MediaOps/RelocateEngine.swift": 1, "VideoScan/MediaOps/RescueFileCopier.swift": 3,
         "VideoScan/Media/ReviewThumbnailRenderer.swift": 1, "VideoScan/Volumes/ScanCheckpoint.swift": 1,
         "VideoScan/Volumes/ScanJobsStorage.swift": 2, "VideoScan/MediaOps/SignatureVerification.swift": 2,
+        // NEW 1 (Trash only, 2026-10-09 — unclassified until the codex
+        // delete-engines closure): DeleteDuplicatesJob.moveToTrash, the job's
+        // ONE live Trash step (FileManager.trashItem; a scratch folder under
+        // a test host). Reached only through SignatureVerification's `.trash`
+        // disposal, behind authorizeDuplicateDeletion + the removal-time
+        // volume re-check — the same gates as the two sites above.
+        "VideoScan/MediaOps/DeleteDuplicatesJob.swift": 1,
         // 7 → 4 (2026-09-22): no pre-delete of the output name or of a
         // fixed-name partial. 4 → 0 (fix/one-partial-registry, same day):
         // this run's own reserved partial is removed through
