@@ -105,7 +105,14 @@ struct ContentView: View {
                 case 4:
                     ArchiveView()
                 case 5:
-                    FamilyTreeView(sharedModel: familyTreeModel)
+                    // The catalog goes in as a reference plus a value, not
+                    // an environment subscription, and `.equatable()` skips
+                    // this pass when those are unchanged (GH #307: every
+                    // catalog publish rebuilt the tree's cards and any
+                    // open right-click menu).
+                    FamilyTreeView(sharedModel: familyTreeModel, catalog: model,
+                                   sourceRevision: FamilyTreeView.sourceRevision(of: model))
+                        .equatable()
                 case 6:
                     VolumesWindow(embedded: true)
                 default:

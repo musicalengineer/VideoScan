@@ -25986,6 +25986,22 @@
         "everyTrashPathIsAudited",
         "theCatalogMoveToTrashReceiptHasOneRowPerRequestedFile"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FamilyTreeCardInvalidationSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FamilyTreeCardInvalidationSensorTests"
+      ],
+      "tests": [
+        "aParentObservingTheCatalogDoesNotRebuildTheTreeCards",
+        "aResearchRunDoesNotRebuildTheTreeCards",
+        "catalogPublishesDoNotRebuildTheTreeCards",
+        "productionWiringKeepsTheCatalogOffTheTree",
+        "sourceRevisionFollowsTheCatalogFactsItEncodes"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -28958,6 +28974,10 @@
         {
           "name": "tests/test_nightly_build_speed_settings.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FamilyTreeCardInvalidationSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 20,

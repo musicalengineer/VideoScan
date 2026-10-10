@@ -16,11 +16,27 @@ import UniformTypeIdentifiers
 /// through `PersonPhotoResolver` (choice › bridged profile cover › derived).
 /// Nothing here writes to the catalog, POI profiles, Apple Photos, or
 /// FamilySearch.
-struct FamilyTreeView: View {
+struct FamilyTreeView: View, Equatable {
     // `@StateObject` ≈ the view owns this object for its lifetime (created
     // once, survives re-renders) — unlike `@State` for plain values.
     @StateObject private var model: FamilyTreeLiveModel
-    @EnvironmentObject private var catalogModel: VideoScanModel
+    /// The catalog, held WITHOUT observing it (GH #307). As an
+    /// `@EnvironmentObject` every one of VideoScanModel's ~90 published
+    /// changes (a promote, CatalogSync, an Archive Angel pass, a cache
+    /// count) re-ran this body, which rebuilt every card and with it any
+    /// open right-click menu — the menu flickered and could not be used.
+    /// The tree needs the catalog for two actions (Hallie's ask, the Walk's
+    /// console line) and for `catalogSourceRevision`, which the parent
+    /// hands in as a value. (C++: a plain pointer, not a registered observer.)
+    private let catalogModel: VideoScanModel
+    /// `FamilyTreeView.sourceRevision(of:)`, computed by the parent — which
+    /// already observes the catalog — so this view re-runs only when the
+    /// string itself changes.
+    private let catalogSourceRevision: String
+    /// Which tree model this view was built around, for `==` (the
+    /// StateObject itself must not be read outside a body). nil = the view
+    /// owns its own, which lives in the StateObject storage either way.
+    private let modelIdentity: ObjectIdentifier?
     @Environment(\.openWindow) private var openWindow
     private let usesInjectedModel: Bool
     @State private var zoom: Double = FamilyTreeZoomMath.default
@@ -131,9 +147,12 @@ struct FamilyTreeView: View {
     @AppStorage(HallieTurnExecutor.Speakers.ownerFamilySearchIDDefaultsKey)
     private var ownerPinSetting = ""
 
-    init(model: FamilyTreeLiveModel? = nil, preferences: UserDefaults = .standard) {
+    init(model: FamilyTreeLiveModel? = nil, catalog: VideoScanModel, preferences: UserDefaults = .standard) {
         usesInjectedModel = model != nil
         _model = StateObject(wrappedValue: model ?? FamilyTreeLiveModel())
+        modelIdentity = model.map(ObjectIdentifier.init)
+        catalogModel = catalog
+        catalogSourceRevision = "injected"   // unused: the injected seam never reloads
         self.preferences = preferences
         _isSidebarVisible = State(initialValue: FamilyTreeSidebarPreference.load(from: preferences))
         _appearance = State(initialValue: FamilyTreeAppearancePreference.load(from: preferences))
@@ -147,14 +166,35 @@ struct FamilyTreeView: View {
     /// Test sensor: which initialiser built this view.
     var usesInjectedModelForTesting: Bool { usesInjectedModel }
 
-    init(sharedModel: FamilyTreeLiveModel, preferences: UserDefaults = .standard) {
+    init(sharedModel: FamilyTreeLiveModel, catalog: VideoScanModel, sourceRevision: String,
+         preferences: UserDefaults = .standard) {
         usesInjectedModel = false
         _model = StateObject(wrappedValue: sharedModel)
+        modelIdentity = ObjectIdentifier(sharedModel)
+        catalogModel = catalog
+        catalogSourceRevision = sourceRevision
         self.preferences = preferences
         // `State(initialValue:)` ≈ member initializer for @State storage;
         // it is read once when the view is first created.
         _isSidebarVisible = State(initialValue: FamilyTreeSidebarPreference.load(from: preferences))
         _appearance = State(initialValue: FamilyTreeAppearancePreference.load(from: preferences))
+    }
+
+    /// GH #307: ContentView observes the catalog and rebuilds this view's
+    /// inputs on every catalog change. SwiftUI's own field-by-field diff
+    /// cannot prove this view unchanged (its property wrappers carry
+    /// closures), so without this it re-ran the whole tree — every card,
+    /// every open right-click menu — measured as one rebuild of every card
+    /// per catalog publish (FamilyTreeCardInvalidationSensorTests). With `.equatable()` at the call site, a parent
+    /// pass with the same inputs is skipped; the view's own state
+    /// (`model`, the centers, `@State`) still updates it as before.
+    /// (C++: an operator== the framework calls to skip a redraw.)
+    static func == (lhs: FamilyTreeView, rhs: FamilyTreeView) -> Bool {
+        lhs.modelIdentity == rhs.modelIdentity
+            && lhs.catalogModel === rhs.catalogModel
+            && lhs.catalogSourceRevision == rhs.catalogSourceRevision
+            && lhs.usesInjectedModel == rhs.usesInjectedModel
+            && lhs.preferences === rhs.preferences
     }
 
     /// Every surface in this view reads from here. Resolving once per body
@@ -629,12 +669,20 @@ struct FamilyTreeView: View {
     }
 
     private var sourceRevision: String {
-        if usesInjectedModel { return "injected" }
-        return [
-            catalogModel.masterArchiveRootPath ?? "fallback",
-            catalogModel.isMasterArchiveOnline ? "online" : "offline",
-            catalogModel.masterArchiveIdentityMismatch ?? "identity-ok",
-            catalogModel.isReadOnly ? "readonly" : "readwrite",
+        usesInjectedModel ? "injected" : catalogSourceRevision
+    }
+
+    /// Where the tree's files come from, as one comparable string: archive
+    /// root, online, identity, read-only. A change reloads the tree. The
+    /// parent computes it on each of its own passes and passes it in, so
+    /// a catalog change that leaves these four alone never reaches the
+    /// tree (GH #307).
+    static func sourceRevision(of catalog: VideoScanModel) -> String {
+        [
+            catalog.masterArchiveRootPath ?? "fallback",
+            catalog.isMasterArchiveOnline ? "online" : "offline",
+            catalog.masterArchiveIdentityMismatch ?? "identity-ok",
+            catalog.isReadOnly ? "readonly" : "readwrite",
         ].joined(separator: "|")
     }
 
