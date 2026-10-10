@@ -440,10 +440,12 @@ struct DeleteDuplicatesCodex258HoldBoundaryTests {
             let text = try String(contentsOf: url, encoding: .utf8)
             #expect(!text.contains("SignatureVerification.deleteQuarantined("), "\(relative) removes a quarantined duplicate on its own")
         }
-        #expect(job.contains("boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path))"))
+        // + the row's own authorization at the removal (codex delete-engines F5).
+        #expect(job.contains("boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path,\n"
+                             + "                                               authorization: current.boundaryAuthorization(for: entry)),"))
         #expect(job.contains("archiveCheck: archiveCheck, boundary: boundary)"))
         #expect(job.contains("case .held: answer.holdNote = DuplicateDeletionHold.inUseByAngel.note")
-                && job.contains("return model.duplicateRemovalBoundaryNow(recordID: recordID)")
+                && job.contains("return model.duplicateRemovalBoundaryNow(recordID: recordID, authorization: authorization)")
                 && job.contains("?? readOnly.verdictAtRemoval(path: currentPath, probe: uuidProbe, identity: identityProbe)"))
         let dispatch = try #require(job.range(of: "private func dispatchPairs("))
         let authorize = try #require(job.range(of: "switch model.authorizeDuplicateDeletion(entry: entry, volumePath: volumePath,",

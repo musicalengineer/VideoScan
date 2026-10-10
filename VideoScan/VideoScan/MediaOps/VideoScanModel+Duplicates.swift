@@ -376,14 +376,41 @@ extension VideoScanModel {
     /// synchronous hop (codex #258 r4): the hold and today's Read-only marks
     /// (`duplicateRemovalBoundaryWord`) and the current Master Archive
     /// designation (`duplicateRemovalBoundaryArchive`).
-    func duplicateRemovalBoundaryNow(recordID: UUID) -> DuplicateRemovalBoundaryNow {
+    func duplicateRemovalBoundaryNow(recordID: UUID,
+                                     authorization: DuplicateBoundaryAuthorization? = nil) -> DuplicateRemovalBoundaryNow {
         let word = duplicateRemovalBoundaryWord(recordID: recordID)
         let archive = duplicateRemovalBoundaryArchive(recordID: recordID)
         // R4: paired with its other half by Combine while it was being read.
         let pair = duplicateTargetHoldAtRemoval(recordID: recordID).map { DuplicateDeletionHold.leftAlonePrefix + $0 }
-        return DuplicateRemovalBoundaryNow(holdNote: word.holdNote ?? pair, readOnlyMarks: word.readOnlyMarks,
+        // Codex delete-engines F5: the row's own authorization, revoked
+        // while it was being read (re-marked Keep, keeper re-elected…).
+        let revoked = authorization.flatMap { duplicateAuthorizationRevoked(recordID: recordID, $0) }
+            .map { DuplicateDeletionHold.leftAlonePrefix + $0 + " since its turn — put back, nothing moved" }
+        return DuplicateRemovalBoundaryNow(holdNote: word.holdNote ?? pair ?? revoked, readOnlyMarks: word.readOnlyMarks,
                                            designation: archive.designation, aliasCandidates: archive.aliasCandidates,
                                            isArchiveCopy: archive.isArchiveCopy)
+    }
+
+    /// THE ROW'S AUTHORIZATION AGAIN, at the removal boundary (codex
+    /// delete-engines F5): the catalog half of `authorizeDuplicateDeletion`
+    /// — still active at its path, still an extra copy, its keeper still
+    /// that group's Keep at the planned path, and (a working copy) the
+    /// keeper still eligible. nil = it still stands; else why not. The
+    /// protections (archive, Read only, the Angel) are the boundary's own.
+    func duplicateAuthorizationRevoked(recordID: UUID, _ a: DuplicateBoundaryAuthorization) -> String? {
+        guard let rec = record(forID: recordID), !rec.isPurged, rec.fullPath == a.path else {
+            return "no longer in the catalog at this path"
+        }
+        guard rec.duplicateDisposition == .extraCopy, let group = rec.duplicateGroupID else {
+            return "no longer marked as an extra copy"
+        }
+        guard let keeper = record(forID: a.keeperID), !keeper.isPurged, keeper.duplicateDisposition == .keep,
+              keeper.duplicateGroupID == group, keeper.fullPath == a.keeperPath else {
+            return "its keeper is no longer this copy's keeper"
+        }
+        guard !PathScope.contains(keeper.fullPath, within: a.volumePath) else { return nil }
+        return workingCopyRefusal(keeper: keeper, volumePath: a.volumePath, crossVolumeMode: a.crossVolumeMode,
+                                  reviewed: a.reviewed)
     }
 
     /// THE SURVIVOR-COUNTING RULE for a run (codex #258 F1; SIMPLIFIED in
@@ -1368,6 +1395,26 @@ enum DuplicateDeletionHold: String, Sendable, Equatable, CaseIterable {
     static func leftAloneWhy(note: String) -> String? {
         if note.hasPrefix(leftAlonePrefix) { return String(note.dropFirst(leftAlonePrefix.count)) }
         return note.contains(readOnlyMarker) ? note : nil
+    }
+}
+
+/// What a row was authorized as at its turn — asked again at its removal
+/// boundary (codex delete-engines F5). Plain values: it crosses to the disk
+/// thread inside the boundary closure.
+struct DuplicateBoundaryAuthorization: Sendable, Equatable {
+    var path: String
+    var keeperID: UUID
+    var keeperPath: String
+    var volumePath: String
+    var crossVolumeMode: Bool
+    var reviewed: Bool
+}
+
+extension DeleteDuplicatesPlan {
+    /// The authorization `entry` ran under, for its removal boundary.
+    func boundaryAuthorization(for entry: Entry) -> DuplicateBoundaryAuthorization {
+        DuplicateBoundaryAuthorization(path: entry.path, keeperID: entry.keeperID, keeperPath: entry.keeperPath,
+                                       volumePath: volumePath, crossVolumeMode: crossVolumeMode, reviewed: isReviewed)
     }
 }
 

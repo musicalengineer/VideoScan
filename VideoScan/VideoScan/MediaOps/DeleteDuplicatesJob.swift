@@ -1304,7 +1304,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 // The volume re-check travels with the pair (off-main)…
                 archiveCheck: model.archiveRemovalCheck(),
                 // …and so does the question it asks at the removal itself.
-                boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path),
+                boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path,
+                                               authorization: current.boundaryAuthorization(for: entry)),
                 // F4: a reviewed pick is bound to the files reviewed.
                 reviewed: current.reviewedIdentity(of: entry))
             inFlight.insert(entry.id)
@@ -1753,7 +1754,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     ///      full (a failed listing, a batch folder with no plan.json yet, a
     ///      plan that does not decode) HOLDS the copy;
     ///   2. the model's live word through ONE synchronous hop to the main
-    ///      actor (`duplicateRemovalBoundaryNow`): the hold rule (prepared /
+    ///      actor (`duplicateRemovalBoundaryNow`): the row's own
+    ///      authorization again (`authorization`, codex delete-engines F5 —
+    ///      re-marked Keep or keeper re-elected during the read), the hold rule (prepared /
     ///      promoting / a running Prepare / the hand-over / a promoted
     ///      archive copy — by id when the record has left the catalog),
     ///      TODAY's Read-only marks, the CURRENT Master Archive designation
@@ -1771,7 +1774,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     ///      check captures its probes.
     /// The archive rule is asked only when nothing holds the copy (a hold
     /// wins: it is the classification that is never counted, r4-1).
-    static func removalBoundary(model: VideoScanModel, recordID: UUID, path: String)
+    static func removalBoundary(model: VideoScanModel, recordID: UUID, path: String,
+                                authorization: DuplicateBoundaryAuthorization? = nil)
         -> @Sendable (_ currentPath: String) -> RemovalBoundaryAnswer {
         let inBatchOnDisk = model.archiveAngel.recordInBatchOnDiskFreshProbe()
         let uuidProbe = MasterArchiveDesignation.volumeUUIDProbe
@@ -1781,7 +1785,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // THE one hop.
             let now: DuplicateRemovalBoundaryNow = onMainActor {
                 guard let model else { return .catalogGone }
-                return model.duplicateRemovalBoundaryNow(recordID: recordID)
+                return model.duplicateRemovalBoundaryNow(recordID: recordID, authorization: authorization)
             }
             var answer = RemovalBoundaryAnswer(holdNote: nil, archive: nil)
             switch buffer {

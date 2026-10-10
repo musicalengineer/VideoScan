@@ -25848,6 +25848,20 @@
         "rewritingOnlyTheTargetHoldsThePick",
         "theReviewedIdentityRule"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeleteDuplicatesBoundaryAuthorizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesBoundaryAuthorizationTests"
+      ],
+      "tests": [
+        "anUnchangedAuthorizationStillMoves",
+        "theKeeperReElectedDuringTheReadHoldsTheCopy",
+        "theTargetMarkedKeepAfterItsTurnIsHeld"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -26837,6 +26851,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteDuplicatesAngelHoldTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeleteDuplicatesBoundaryAuthorizationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
