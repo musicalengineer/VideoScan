@@ -17,12 +17,14 @@ struct CatalogTrashConsistencyTests {
 
     @Test("sensor: the row menu's Move to Trash calls trashSelectedRecords, like ⌘⌫ — never the routine directly")
     func rowMenuAndShortcutShareOneFunction() throws {
+        // Since codex delete-engines F8 both go through ONE confirmation,
+        // `confirmThenTrash`, which makes the one trashSelectedRecords call.
         let menu = try SourceTree.appCode(named: "CatalogRowContextMenu.swift")
-        #expect(menu.contains("let result = await model.trashSelectedRecords(targets)"))
-        #expect(menu.contains("reportDeleteResult(result)"))
+        #expect(menu.contains("confirmThenTrash(targets)"))
         #expect(!menu.contains("deleteConfirmedJunk("), "the row menu bypasses the shared Move to Trash")
         let table = try SourceTree.appCode(named: "CatalogContent+Table.swift")
         #expect(table.contains("let result = await model.trashSelectedRecords(targets)"))
+        #expect(table.contains("reportDeleteResult(result)"))
         #expect(!table.contains("deleteConfirmedJunk("))
     }
 

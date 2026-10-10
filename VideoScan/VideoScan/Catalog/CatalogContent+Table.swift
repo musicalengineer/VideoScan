@@ -463,10 +463,7 @@ extension CatalogContent {
             model.log("Move to Trash: the \(selectedIDs.count) selected row(s) are no longer in the table — nothing to do.")
             return
         }
-        Task { @MainActor in
-            let result = await model.trashSelectedRecords(targets)
-            reportDeleteResult(result)
-        }
+        confirmThenTrash(targets)
     }
 
     /// ⌘O route (File ▸ Open): the highlighted rows, through `openRows`.
@@ -482,6 +479,35 @@ extension CatalogContent {
     /// came from the rows on screen, and one filter pass is O(n).
     private func openRows(ids: Set<UUID>, gesture: String) {
         CatalogOpenAction.open(ids: ids, rows: tableData, gesture: gesture, model: model)
+    }
+
+    /// THE one confirmation in front of the Catalog's Move to Trash — the
+    /// row menu and ⌘⌫ both land here (codex delete-engines F8): "Move N
+    /// files (X) to the Trash?", what will be held back and why; Return =
+    /// Move to Trash, Esc = Cancel. Only then are the rows handed to the
+    /// one Trash routine. When nothing can move there is no question — the
+    /// result lists every file that stayed, with its reason.
+    func confirmThenTrash(_ targets: [VideoRecord]) {
+        let plan = model.catalogTrashPlan(for: targets)
+        let sizes = Dictionary(targets.map { ($0.id, $0.sizeBytes) }, uniquingKeysWith: { first, _ in first })
+        let confirmation = CatalogTrashConfirmation(plan: plan, sizes: sizes)
+        if confirmation.canMove {
+            let alert = NSAlert()
+            alert.messageText = confirmation.title
+            alert.informativeText = confirmation.detail
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: CatalogTrashConfirmation.moveButton)   // first button: Return
+            let cancel = alert.addButton(withTitle: "Cancel")
+            cancel.keyEquivalent = "\u{1b}"                                    // Esc
+            guard alert.runModal() == .alertFirstButtonReturn else {
+                model.log("Move to Trash: cancelled at the confirmation — nothing moved.")
+                return
+            }
+        }
+        Task { @MainActor in
+            let result = await model.trashSelectedRecords(targets)
+            reportDeleteResult(result)
+        }
     }
 
     /// The result of ⌘⌫ / the row menu's Move to Trash. Silent when every

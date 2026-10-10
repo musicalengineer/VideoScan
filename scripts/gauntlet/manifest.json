@@ -25889,6 +25889,22 @@
       "tests": [
         "theReportSumsTheMeasuredSizeNotTheCatalogs"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashConfirmationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTrashConfirmationSensorTests",
+        "CatalogTrashConfirmationTests"
+      ],
+      "tests": [
+        "bothGesturesConfirmThroughOneDoor",
+        "countsSizeAndEveryHeldReason",
+        "nothingCanMoveAsksNothing",
+        "oneFileAndNothingHeld"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -26782,6 +26798,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogTrashConfirmationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

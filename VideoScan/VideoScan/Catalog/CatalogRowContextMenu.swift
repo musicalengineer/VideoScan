@@ -284,12 +284,10 @@ extension CatalogContent {
         case .enabled:
             Button(role: .destructive) {
                 let targets = deletableRecs
-                // The SAME function as ⌘⌫ (item 6, 2026-10-09): same gates,
-                // same held-with-reason result, same ignore list.
-                Task { @MainActor in
-                    let result = await model.trashSelectedRecords(targets)
-                    reportDeleteResult(result)
-                }
+                // The SAME door as ⌘⌫ (item 6, 2026-10-09): one confirmation
+                // (codex F8), then the same gates, held-with-reason result
+                // and ignore list.
+                confirmThenTrash(targets)
             } label: {
                 Label(CatalogRowMenuText.moveToTrash(count: deletableRecs.count), systemImage: "trash")
             }
