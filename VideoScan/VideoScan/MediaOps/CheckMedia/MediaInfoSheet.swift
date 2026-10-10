@@ -25,6 +25,21 @@ struct MediaInfoRequest: Identifiable {
     /// Opens the Repair sheet (the plan) — Get Info's banner button.
     var onRepair: (() -> Void)?
     let onSoundDetails: (() -> Void)?
+    /// "A copy with sound is here" (Rick 2026-10-10): the lookup and its
+    /// actions, supplied by the presenter (which owns the model). nil =
+    /// the sheet still shows the no-sound warning, without the lookup.
+    var soundCopy: SoundCopyHooks?
+}
+
+/// What Get Info needs to say where the sound is and act on it. Closures,
+/// so the sheet itself never touches the catalog.
+struct SoundCopyHooks {
+    /// Gather on the main actor, decide off it (SoundCopyFinder.load).
+    let load: @MainActor () async -> SoundCopyAdvice
+    let reveal: (SoundCopyCandidate) -> Void
+    let play: (SoundCopyCandidate) -> Void
+    /// Open the existing Combine sheet for this picture + that sound file.
+    let combine: (SoundCopyCandidate) -> Void
 }
 
 struct MediaInfoSheet: View {
@@ -37,6 +52,7 @@ struct MediaInfoSheet: View {
         case unavailable(String)
     }
     @State private var load: Load = .loading
+    @State private var soundAdvice: SoundCopyAdvice?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -49,6 +65,7 @@ struct MediaInfoSheet: View {
                 .truncationMode(.middle)
 
             verdictBox
+            soundSection
             repairBanner
             repairedCopyLine
 
@@ -70,7 +87,10 @@ struct MediaInfoSheet: View {
         }
         .padding(24)
         .frame(width: 640)
-        .task { await loadFacts() }
+        .task {
+            await loadFacts()
+            await loadSoundAdvice()
+        }
     }
 
     // MARK: Verdict line
@@ -80,12 +100,14 @@ struct MediaInfoSheet: View {
         if let card = request.record.mediaReportCard {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(card.displayHeadline).font(.body.weight(.medium))
+                    Text(SoundPresencePolicy.displayHeadline(card: card, presence: soundPresence))
+                        .font(.body.weight(.medium))
                     Text("Last checked \(card.checkedAt.formatted(date: .abbreviated, time: .shortened))\(card.isCurrent(forSizeBytes: request.record.sizeBytes) ? "" : " — the file has changed since")")
                         .font(.callout).foregroundStyle(.secondary)
                 }
             } icon: {
-                MediaVerdictIcon(verdict: card.verdict, quickPassOnly: card.isQuickPassOnly)
+                let shown = SoundPresencePolicy.displayVerdict(card: card, presence: soundPresence)
+                MediaVerdictIcon(verdict: shown, quickPassOnly: shown == card.verdict && card.isQuickPassOnly)
             }
             .accessibilityIdentifier("mediaInfo.verdict")
         } else {
@@ -94,6 +116,89 @@ struct MediaInfoSheet: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    // MARK: Sound (Rick 2026-10-10)
+
+    /// SoundPresencePolicy's answer: from the probe once it has read the
+    /// header, else from the catalog's stream type. O(1) — one date
+    /// resolution and one pointer hop; nothing here scans the catalog.
+    private var soundPresence: SoundPresence {
+        let context = request.record.soundPresenceContext
+        if case .loaded(let f) = load {
+            return SoundPresencePolicy.assess(hasPicture: f.video != nil, hasSound: f.audio != nil, context: context)
+        }
+        return request.record.catalogSoundPresence
+    }
+
+    /// "No sound — this copy has no audio track" (orange) and where the
+    /// sound is; or the pair / silent-film note (quiet). Empty otherwise.
+    @ViewBuilder
+    private var soundSection: some View {
+        let presence = soundPresence
+        if let headline = presence.headline {
+            VStack(alignment: .leading, spacing: 6) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(headline).font(.body.weight(.medium))
+                        if let why = presence.reason {
+                            Text(why).font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: presence.isWarning ? "speaker.slash.fill" : "speaker.slash")
+                        .foregroundStyle(presence.isWarning ? .orange : .secondary)
+                }
+                .accessibilityIdentifier("mediaInfo.sound")
+                if presence.isWarning { soundAdviceRow }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var soundAdviceRow: some View {
+        switch soundAdvice {
+        case nil:
+            if request.soundCopy != nil {
+                ProgressView("Looking for a copy with sound…").controlSize(.small)
+            }
+        case .some(let advice):
+            HStack(spacing: 8) {
+                Text(advice.line).font(.callout).lineLimit(2).truncationMode(.middle)
+                    .help(advice.candidate?.fullPath ?? "")
+                    .accessibilityIdentifier("mediaInfo.soundCopy")
+                Spacer()
+                soundAdviceButtons(advice)
+            }
+            .controlSize(.small)
+        }
+    }
+
+    @ViewBuilder
+    private func soundAdviceButtons(_ advice: SoundCopyAdvice) -> some View {
+        if let hooks = request.soundCopy {
+            switch advice {
+            case .watch(let c):
+                Button("Reveal") { hooks.reveal(c) }
+                Button("Play") { hooks.play(c) }
+            case .combine(let p):
+                Button("Combine\u{2026}") { handOff { hooks.combine(p.audio) } }
+                    .help("Opens the Combine sheet for this picture and \(p.audio.filename). Nothing is muxed until you start it there.")
+                    .accessibilityIdentifier("mediaInfo.combineWithSound")
+                Button("Reveal") { hooks.reveal(p.audio) }
+            case .maybeCombine(let p):
+                Button("Reveal") { hooks.reveal(p.audio) }
+            case .connect:
+                EmptyView()   // its drive is not connected — nothing to reveal yet
+            case .none:
+                EmptyView()
+            }
+        }
+    }
+
+    private func loadSoundAdvice() async {
+        guard soundPresence.isWarning, let hooks = request.soundCopy else { return }
+        soundAdvice = await hooks.load()
     }
 
     /// The ORANGE "Recommended action" box with the GREEN button, when the

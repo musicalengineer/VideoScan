@@ -150,6 +150,11 @@ extension CatalogContent {
             durationTolerance: durationTolerance,
             timestampTolerance: timestampTolerance
         ) else {
+            // Elementary / demuxed streams Correlate cannot pair (an .m2v
+            // records no length; GH #125 refuses unknown lengths): list the
+            // sound files beside it with their reasons; the person chooses
+            // (Rick 2026-10-10). Falls through when there are none.
+            if SoundPairAlert.offer(for: rec, model: model, combine: { v, a in onCombinePair?(v, a) }) { return }
             // GH #125 MINOR 2: distinguish "nothing structurally related"
             // from "a related file exists but its duration is unverifiable
             // or incompatible" — the latter must not blame the score.

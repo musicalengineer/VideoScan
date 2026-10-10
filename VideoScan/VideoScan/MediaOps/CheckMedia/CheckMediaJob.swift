@@ -200,6 +200,7 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         var checks = CheckMediaRules.quickChecks(quick)
         var video = CheckMediaRules.conclusiveVideoDiagnosis(quick)
         var audio: AudioVerifyDiagnosis?
+        var measuredPicture: Double?
         if tier == .full {
             setStep("decoding every frame", index: index, within: 0.1)
             // Each phase fills its own slice of this file's bar (FullPhase.span).
@@ -213,16 +214,26 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
             checks = CheckMediaRules.merging(checks, with: CheckMediaRules.fullChecks(full, facts: quick.facts))
             if case .success(let d)? = full.video { video = d }
             if case .success(let d)? = full.audio { audio = d }
+            measuredPicture = CheckMediaRules.measuredPictureSeconds(full)
         } else {
             setStep("checking frame windows", index: index, within: 0.9)
             checks += CheckMediaRules.fullRowsNotRun()
         }
-        let card = CheckMediaRules.card(tier: tier, checks: checks, quick: quick, at: Date())
+        // A picture with no sound track: the one policy decides the Sound
+        // row (Rick 2026-10-10). The record's date + pairing, O(1).
+        checks = CheckMediaRules.applyingSoundPresence(checks, facts: quick.facts,
+                                                       context: currentRecord(rec).soundPresenceContext)
+        var card = CheckMediaRules.card(tier: tier, checks: checks, quick: quick, at: Date())
+        card.measuredPictureSeconds = measuredPicture
         persist(card: card, video: video, audio: audio, on: rec, index: index)
     }
 
     /// Writes onto the CURRENT catalog object (a rescan may have replaced
     /// the instance mid-run — resolve by UUID, the Verify jobs' rule).
+    private func currentRecord(_ rec: VideoRecord) -> VideoRecord {
+        model?.record(forID: rec.id) ?? rec
+    }
+
     private func persist(card: MediaReportCard, video: VideoVerifyDiagnosis?, audio: AudioVerifyDiagnosis?,
                          on rec: VideoRecord, index: Int) {
         let current = model?.records.first { $0.id == rec.id } ?? rec

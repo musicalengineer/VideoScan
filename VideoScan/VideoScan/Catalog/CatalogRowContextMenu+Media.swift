@@ -131,6 +131,29 @@ extension CatalogContent {
                         record: rec, diagnosis: d,
                         onFindMatchingAudio: { repairAudio(for: rec) })   // Combine sheet or alert; no job window (codex #964)
                 }
+            },
+            soundCopy: soundCopyHooks(for: rec))
+    }
+
+    /// "A copy with sound is here" for Get Info (Rick 2026-10-10). The
+    /// lookup runs in the sheet's .task (SoundCopyFinder.load: one pass on
+    /// main, decision off main) and only for a file flagged no-sound.
+    /// Combine opens the existing Combine sheet for the picture + the sound
+    /// file; nothing is muxed until the person starts it there.
+    func soundCopyHooks(for rec: VideoRecord) -> SoundCopyHooks {
+        let videoID = rec.id
+        return SoundCopyHooks(
+            // Called only when the sheet's live verdict says "no sound".
+            load: { [model] in await SoundCopyFinder.load(recordID: videoID, model: model, flagged: true) },
+            reveal: { c in NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: c.fullPath)]) },
+            play: { [model] c in
+                guard let r = model.record(forID: c.id) else { return }
+                ArchiveAngelPlayerChoice.play(r, log: { model.log($0) })
+            },
+            combine: { [model, onCombinePair] c in
+                guard let video = model.record(forID: videoID), let audio = model.record(forID: c.id) else { return }
+                model.log("Get Info: combine \(video.filename) with its sound \(audio.filename) — opening the Combine sheet")
+                onCombinePair?(video, audio)
             })
     }
 }
