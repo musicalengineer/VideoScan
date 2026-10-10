@@ -13590,6 +13590,58 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieAggregateFallbackSnapshotTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieAggregateFallbackSnapshotTests"
+      ],
+      "tests": [
+        "aFamilyAnchorFindsTheFamilyTagThroughTheShell",
+        "aTagOnlyAnchorFindsItsTaggedVideoThroughTheShell"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieInventedPresenceYearsTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieInventedPresenceYearsTests"
+      ],
+      "tests": [
+        "aYearTheQuestionSaysIsKept",
+        "anInventedYearIsDroppedAndTheTaggedVideoIsFound",
+        "timeAndAgeWordsKeepTheTranslatorsYears"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieTagOnlyNameTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieTagOnlyNameTests"
+      ],
+      "tests": [
+        "aFamilyGroupReadAsCoOccurrenceStillFindsTheFamilyTag",
+        "aFamilyShapedKeywordThatNamesATagIsSearchedAsTheTag",
+        "aKinTitleBeforeATagOnlyNameStillFindsIt",
+        "aKinTitleKeywordBeforeTheNamedPersonIsNotSearched",
+        "aNearSpellingGuessNeverAnswersThePreFilmFloor",
+        "aPluralWithNoMatchingTagIsNotRewrittenToAFamily",
+        "aProfileNameStillFindsOnlyItsOwnTag",
+        "aTagOnlyFirstNameIsFound",
+        "aTaggedNameIsNeverAnsweredByAPreFilmTreeNamesake",
+        "anUnknownCoOccurrenceAnchorStillDeclines",
+        "catalogSearchFindsTagOnlyNames",
+        "theDefiniteArticlePluralAlsoFindsTheFamilyTag",
+        "theFamilyPhraseFindsABareSurnameTag",
+        "theFamilyPhraseFindsAFamilyTag",
+        "thePluralSurnameFindsTheFamilyTagNotTheMaidenNamePerson",
+        "theResolverMapsOnlyFamilyShapesOntoExistingTags",
+        "videosWithATagOnlyNameReadAsCoOccurrenceStillSearchesTheCatalog"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieProfileNoteAndChildCountTests.swift",
       "stage": "hallie",
       "suites": [
@@ -28977,7 +29029,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1082,
+      "expected_floor": 1104,
       "modes": [
         {
           "name": "strict",
@@ -28994,6 +29046,7 @@
       "selectors": [
         "VideoScanTests/ArchivistMediaResolutionCharacterizationTests",
         "VideoScanTests/GedcomLineageTests",
+        "VideoScanTests/HallieAggregateFallbackSnapshotTests",
         "VideoScanTests/HallieAggregateFallbackTests",
         "VideoScanTests/HallieAliasTeachRegressionTests",
         "VideoScanTests/HallieAncestorStatisticsTests",
@@ -29049,6 +29102,7 @@
         "VideoScanTests/HallieHisWifeAfterBiographyTests",
         "VideoScanTests/HallieHonestChildCountTests",
         "VideoScanTests/HallieIdentitySurvivesExecutionTests",
+        "VideoScanTests/HallieInventedPresenceYearsTests",
         "VideoScanTests/HallieKeywordPresenceTemplateTests",
         "VideoScanTests/HallieKinConjunctionSurvivalTests",
         "VideoScanTests/HallieKinDuplicateEntryTests",
@@ -29118,6 +29172,7 @@
         "VideoScanTests/HallieSuperlativeScopeTests",
         "VideoScanTests/HallieSurnameReferenceTests",
         "VideoScanTests/HallieSurnameRosterTests",
+        "VideoScanTests/HallieTagOnlyNameTests",
         "VideoScanTests/HallieTellingModeTests",
         "VideoScanTests/HallieTerminalLineEditorTests",
         "VideoScanTests/HallieTitledNameRecoveryTests",
