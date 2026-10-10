@@ -890,3 +890,93 @@ New corpus rows `ts261001-001…012`.
 ## 2026-10-02 — Donna demo (Release)
 - **"show ellen ronan" → catalog decline.** Tree person with no tagged videos but a filed birth certificate; the bare "show <name>" shape routed to the video catalog and answered "I don't have any videos tagged with ellen ronan yet", echoing the name in lowercase. Expected: when the catalog has nothing for a name the tree knows, fall back to the person (tree card / profile: vitals, documents count, "open in Family Tree"), name in canonical case. Corpus row `lv261002-001` (advisory).
 - Noted, not a defect: "tell me about Bessie Macgregor" → cited bio; "yes" to the photo offer → "There are 3 photos … [c1]" — check the photos actually rendered in the panel.
+
+
+## 2026-10-10 — demo for Bonnie (11:19–14:26 ET)
+
+Rick's own turns from the app transcript (`Hallie/hallie-conversation-2026-10-10.jsonl`,
+client `app`): 11:19–11:28 on the Debug build (sessions `C0E6B84F`, `CDB20311`),
+11:36 onward on Release `40912078` (session `183E1A0B`). Corpus `lv261010-001…015`,
+advisory. Every row was graded against the answer Hallie actually gave
+(`scripts/hallie_eval.py` `grade_record`): each miss row flags today's answer, the
+sensor row (`-005`) passes. 42 user turns: **27 GOOD (2 of them leaking an internal
+line), 8 MISS, 7 WRONG-CONFIDENT.**
+
+**The 1984 Hudson Thanksgiving tape was not a Hallie miss.** No Hallie turn that
+day mentions Thanksgiving. Rick looked for it through Tidy → *Event [occasion
+thanksgiving]* (13:38, 14:00, 14:10, 14:15) and some twenty double-click opens
+(14:08–14:19, catalog.log), then tagged
+`1984-xx-xx_1984-xx-xx_Thanksgiving-1984_Improved_slp.mov` Hudson Family + Reckard
+at 14:24. Hallie would have failed him too, so the probe's logged phrasings for
+it are pinned with the file (`dp261009-001…002`, below).
+
+| # | id | asked | what came back | root cause | status |
+|---|----|-------|----------------|-----------|--------|
+| 1 | `lv261010-001` | "tell me about bonnie" (×3: 11:19, 11:28, 14:02) | "I don't find Bonnie in the family tree… tell me about them", with basis "matched no one in … the People tab or what I've been told" | Tree mode + unresolved subject declines **before** the catalog lane (`HallieTurnExecutor+Conversation.swift:1518-1521`). `isKnownPerson` sees neither the confirmed catalog tag *Bonnie* nor the names in Rick's note on Donna's profile ("Bonnie (older)") | **OPEN** |
+| 2 | `lv261010-002` | `the name macgregor is pronounced "ma greggor:` | "spell it out for me like “LAT-uh”" | The respelling scanner judges one token at a time (`HalliePronunciationFreeform.swift:421-427`, `:447-453`), so a two-word respelling is never joined | **OPEN** |
+| 3 | `lv261010-003` | "mah greggor" (the respelling she asked for) | "did you mean George Gregory Tamworth (b. 1400), Gregory Addis, Gregory Dunham?" | "spell it out" leaves no pending-respelling state. Sticky tree mode sends the reply to the name resolver | **OPEN** |
+| 4 | `lv261010-004` | `macgregor sounds out like "magreggor"` | "You're right — that's my job. I couldn't turn your last question into a lookup…" | "sounds like" is not a pronounce-word (`HalliePronounceWords.canonical`, `HalliePronunciationFreeform.swift:36-38`), so it fell to the general-knowledge lane | **OPEN** |
+| 5 | `lv261010-006`, `-007` | "Macgregor is pronounced (like) mah gregor" | hint kept, "spell it out for me" | as row 2 | **OPEN** |
+| 6 | `lv261010-008` | `"mah gregor"` (reply to the second "spell it out") | "I couldn't tell who it is about" (mode gate: tree refused shape=event) | as row 3 | **OPEN** |
+| 7 | `lv261010-009` | `macgregor is prnounced as "ma gregor"` | **catalog search** for the whole sentence, "found nothing in the catalog" | `canonicalForm` requires a pro/pru/por stem (`HalliePronunciationFreeform.swift:45`), so the dropped-o typo is not a pronounce-word | **OPEN** |
+| 8 | `lv261010-010` | `pronounce the name magregor as "ma gregor"` | "I've noted what you said about **ma**", and a hint **kept against "ma"** | The subject is the first token that `isKnownName` accepts (`HalliePronunciationFreeform.swift:236-242`). Rick's respelling "magregor" isn't a name, but **Ma (Rick's mother, People tab)** is | **OPEN — data integrity** (same class as 09-07 row 13) |
+| 9 | `lv261010-011` | "find nana" | "The family tree has **111 people named Nana** — which one?" | The kin term went through the given-name lookup (`GedcomFamilyGraph+NameIndex.swift:57-64`), and `HallieWhichOne.swift:109` stated the count. The kin maps that know nana → grandmother (`GedcomKinshipPath.swift:360`) are not consulted on this shape. The "dad → Dafydd" class (09-26) on the bare "find X" shape. Count not verified | **OPEN** |
+| 10 | `lv261010-013`, `-014` | "how many people in the family tree have the surname hudson" / "count the people with surname hudson" | Hudson **etymology** ("Hudde plus 'son'"), twice | The bare word "surname" is a heritage cue (`HallieSurnameReference.swift:36-41`), and that lane runs first in `knowledgeLaneTurn` (`HallieTurnExecutor+Conversation.swift:1619`), ahead of every tree count. The tree knows: 13 Hudsons (probe, "find the Hudsons") | **OPEN** |
+| 11 | `lv261010-015` | "tell me about the hudsons" | the **whole-tree summary** (39,249 people, most common surnames Stewart, Douglas…) | Surname-family shape needs "the X family\|clan" (`HallieLineageQuestion.swift:417`). The plural reaches the translator: `familyTree` with no subject. "tell me about the bowser family" two turns earlier got the card | **OPEN** |
+| 12 | `lv261010-012` | "tell about richard breen sr" (also 11:39) | right facts, plus "His **GEDCOM bridge** is not available in the current family tree" | Internal uncertainty line (`VideoScanCore/CyberBrainIndex.swift:347`) phrased to the family, while the tree shows him (@I2@) that session | **OPEN** (minor) |
+| — | `lv261010-005` | "MacGregor is pronounced magregor" | kept, "I'll say MacGregor as magregor" | — | fine — **sensor** |
+
+GOOD, not added: biographies of Donna (×2), Dan, Bessie Macgregor (×5),
+Richard C Hudson (×2), Elaine Bowser (typed "elain"), Ethel Evelyn Damon from
+"find evelyn bowser" (married name resolved), Caleb Parker (×2), Thankful
+Pratt, David T. McGill, Edith Lucy Parker; "find/show videos of/with/including
+bonnie" (×3, the 2011 Christmas video); "tell me about the bowser family"
+(surname card); the photo "yes"; "pronounce ethel as eh-thell"; Dad Breen's
+service story.
+
+### The pre-demo probe's known-bad list (2026-10-09 night, headless shell)
+
+From `~/Library/Logs/VideoScan/demo-probe-2026-10-10/demo_probe.md`. Corpus
+`dp261009-001…013`, advisory, each red on every logged run unless noted.
+
+| # | id | asked | what came back | root cause | status |
+|---|----|-------|----------------|-----------|--------|
+| 1 | `dp261009-001` | "show me videos of the Hudsons at Thanksgiving" | "I don't see “thanksgiving” mentioned **anywhere**, but I have 2 videos of Hudson Family" | The probe graded this GOOD, but it's WRONG: the same night "show me Thanksgiving videos" found 226, and "find the Hudsons" found `AtHudsons-Thanksgiving-1984.mov`. The relax sentence says "anywhere" when the keyword missed only inside the person set (`ArchivistPresenceExecutor.swift:1201-1205`). **Expected file: the 1984 tape** | **OPEN** |
+| 2 | `dp261009-002` | "the Hudsons at Thanksgiving" | "…drifted into saying something about your family…" / "You're right — that's my job…" (21 of 21 logged runs) | `lane=generalKnowledge reason=no archive or family cue`. A family surname plus a curated occasion word is not an archive cue. **Expected file: the 1984 tape** | **OPEN** |
+| 3 | `dp261009-003` | "Hudson family at Christmas" | Donna's entire CyberBrain story | `biography person=hudson` → Donna by maiden name; occasion dropped | **OPEN** |
+| 4 | `dp261009-004`, `-005` | "how is Bonnie related to Rick?" / "is Bonnie in the family tree?" | "Bonne de Bourgogne (b. 1379) or Ronnie (b. 1513)?" | Near-spellings offered as namesakes; basis claims 2 people named Bonnie | **OPEN** |
+| 5 | `dp261009-006` | "who is Glen?" | "Catherine MacPhee of **Glen Spean**, Isabel Glen, Sir John Drummond…" | Place-name and surname tokens matched as a given name | **OPEN** |
+| 6 | `dp261009-007` | "who is Paula?" | "I don't find Paula…" | As `lv261010-001`: names in told notes are not subjects | **OPEN** |
+| 7 | `dp261009-008`, `-009` | "when did Rick and Donna get married?" / "how many sons do Rick and Donna have?" | "I couldn't tell who it is about" | Two-person tree questions | **OPEN** |
+| 8 | `dp261009-010` | "show me videos of Donna as a kid" | year-1999 guess / unfiltered 53 / literal "as a kid" search / `keywords:[` echo | Translator variance with no childhood-years facet. The baseline's "nothing from 1962–1971, but 53 of Donna" is the right shape and passes the row | **OPEN** |
+| 9 | `dp261009-011` | "tell me about Donna's childhood" | "I don't find Donna's childhood…" | "childhood" read as part of a name | **OPEN** |
+| 10 | `dp261009-012` | "how are the Hudsons related to the Breens?" | 12-way Hudson chooser | Surname plural read as a person | **OPEN** |
+| 11 | `dp261009-013` | "what's the funniest video?" | transcript hits for "funniest", incl. **Pulp Fiction.avi** | Literal word search | **OPEN** |
+
+### What the day says
+
+1. **The cue-miss → confident-fallback shape is still the main one** (all 7 of
+   Rick's WRONG-CONFIDENT turns, plus probe rows 1–5 and 10). New today: a lane
+   that runs *first* and claims too much. Surname history wins any "surname"
+   sentence, and the general-knowledge lane takes any sentence without a verb.
+2. **Pronunciation capture is still fragile** (8 of Rick's 15 non-GOOD turns,
+   in five minutes). The causes are token-at-a-time respelling, a typo stem
+   guard, no "sounds like" verb, and no pending-respelling continuation. Row 8
+   wrote a hint under **Ma**. That is the 09-07 row-13 data-integrity class
+   again.
+3. **Names Hallie has been told are not resolvable.** Bonnie, Paula and Glen
+   live in Rick's note on Donna's profile, and Bonnie is a confirmed catalog
+   tag. The tree-mode resolver checks neither, so it declines, or offers
+   medieval near-spellings as namesakes. "nana" is the kin-term version of the
+   same gap.
+
+**Regression seen in the same day's nightly** (`hallie-eval/nightly-20261010T112052-strict`,
+Debug `409120780`): strict-056 "find videos of dad" answered *Dafydd ab Einion … born
+about 1360* again. That is the 2026-09-26 row 1 marked **FIXED (A)**. Strict was 60/67;
+the other red rows were strict-014, -036, -042, -044, -045 and -052.
+
+## Not a Hallie answer, but found the same day (2026-10-10)
+
+| what | where | status |
+|------|-------|--------|
+| The catalog-wide Dossier pass **never sees archived media**. The demo run said "1183 eligible, 0 processed, 1155 skipped (1155 already analyzed…), 28 failed". 1183 is exactly the Cataloged/Workbench, unpurged, not-set-aside, non-junk, non-audio records. Every **Archived** and **In Triage** record is filtered out before the per-file loop, so it is not even counted as skipped. FamilyArchive: **527 of 679** records have no `dossierProcessedAt`. 403 are audio-only (set aside by scope). Of the 123 with video, **74 are Archived and 41 In Triage**, and 97 have no transcript and no captions at all. Promotion makes a new record and does not carry the source's dossier text: 28 promoted video records lack it while an ancestor record has it. The 1984 Thanksgiving re-encode is one; its sibling archive copy has the Mark's-birthday transcript | lifecycle gate `CatalogWideMetadataCandidates.swift:47` (`guard stage == .cataloged \|\| stage == .workbench`), applied at `CaptionOrchestrator+Dossier.swift:248-251`; the "already analyzed" skip is `CaptionOrchestrator+DossierSteps.swift:89` | **OPEN** — needs Rick's ruling (archive = read-only; analysis writes only catalog metadata) |
