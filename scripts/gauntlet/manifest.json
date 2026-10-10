@@ -25986,6 +25986,49 @@
         "everyTrashPathIsAudited",
         "theCatalogMoveToTrashReceiptHasOneRowPerRequestedFile"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DossierArchivedAdmissionTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DossierArchivedAdmissionTests"
+      ],
+      "tests": [
+        "applyDossierControlWritesDateOnCatalogedRow",
+        "applyDossierWritesOnlyDossierFieldsOnArchivedRow",
+        "batchNeverModifiesAnArchivedFileOrItsNonDossierFields",
+        "byteTwinTextIsCarriedOverWithProvenance",
+        "catalogWideDossierAnalyzesArchivedAndInTriage",
+        "dateLaneNeverDatesAnArchivedRowFromDossierEvidence",
+        "missingArchivedFileIsNeverPurged",
+        "missingInTriageFileIsNotAutoPurged",
+        "perVolumeAnalyzeAdmitsArchivedAndInTriage",
+        "sameFootageTextIsCarriedOverOnlyWhenLengthsMatchAndConfident",
+        "secondTwinInTheSameBatchInheritsTheFirst",
+        "unreadableArchivedRowIsNotFlagged",
+        "videoUnreadableIsFlaggedAndNotRetriedByTheNextBatch"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DossierArchivedAdmissionScaleTests.swift",
+      "stage": "integration",
+      "suites": [
+        "DossierArchivedAdmissionScaleTests"
+      ],
+      "tests": [
+        "admissionTruthTable",
+        "archivedFileIsReadNeverWritten",
+        "batchStateIsClearedOnSettle",
+        "familyArchiveShapedPassLeavesNoEligibleVideoWithoutText",
+        "otherGatesStillApplyToArchivedRows",
+        "poisonedDefaultsAndNoDesignationDoNotChangeAdmission",
+        "scale100k",
+        "selectionTallyCountsEveryReason"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -27099,6 +27142,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DocumentTextExtractorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DossierArchivedAdmissionTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -29006,6 +29053,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CoverArtMusicPurgeIntegrationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DossierArchivedAdmissionScaleTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

@@ -36,8 +36,11 @@ struct CatalogCoverage: Equatable {
     let dossiered: Int
     /// Records the orchestrator's candidate filter would actually
     /// process: total minus DRM-flagged, minus retired lifecycle
-    /// stages, minus records the Analysis Scope sets aside (audio-only
-    /// by default) and still images. (Junk + purged are already
+    /// stages (Trashed / Deleted — Archived and In Triage ARE in the
+    /// Dossier pool since 2026-10-10), minus records the Analysis Scope
+    /// sets aside (audio-only by default) and still images, minus files
+    /// an earlier run flagged needs-reformat that have no dossier (a
+    /// batch does not retry them). (Junk + purged are already
     /// excluded by `total`.) This is the honest denominator for
     /// "are we done yet?" — when `dossiered == eligible` and
     /// `missing == 0`, the volume is genuinely complete.
@@ -58,9 +61,14 @@ struct CatalogCoverage: Equatable {
     // non-junk, non-purged records only; a record can appear in more
     // than one bucket (e.g. an archived photo).
 
-    /// Retired lifecycle stages (archived / trashed / in-triage /
-    /// deleted) — dispositioned elsewhere, not part of the pool.
-    let archivedCount: Int
+    /// Retired lifecycle stages (Trashed / Deleted) — not part of the
+    /// Dossier pool. (Was "archivedCount" and included Archived + In
+    /// Triage until Rick's 2026-10-10 ruling admitted them.)
+    let retiredCount: Int
+    /// Not yet analyzed and flagged needs-reformat: a batch won't retry
+    /// them (right-click Analyze or Reformat does). Excluded from
+    /// `eligible` so the dial can reach 100%.
+    let needsReformatCount: Int
     /// confirmedJunk records — the ONE tally counted from records
     /// that `total` excludes, so the user sees the cull pile's size.
     let junkCount: Int
@@ -76,13 +84,14 @@ struct CatalogCoverage: Equatable {
 
     init(total: Int = 0, dossiered: Int = 0, eligible: Int = 0, scenes: Int = 0,
          ocrDates: Int = 0, transcripts: Int = 0, strongDates: Int = 0,
-         drmCount: Int = 0, archivedCount: Int = 0, junkCount: Int = 0,
+         drmCount: Int = 0, retiredCount: Int = 0, needsReformatCount: Int = 0, junkCount: Int = 0,
          outOfScopeCount: Int = 0, photoCount: Int = 0) {
         self.total = total; self.dossiered = dossiered; self.eligible = eligible
         self.scenes = scenes
         self.ocrDates = ocrDates; self.transcripts = transcripts; self.strongDates = strongDates
         self.drmCount = drmCount
-        self.archivedCount = archivedCount; self.junkCount = junkCount
+        self.retiredCount = retiredCount; self.needsReformatCount = needsReformatCount
+        self.junkCount = junkCount
         self.outOfScopeCount = outOfScopeCount; self.photoCount = photoCount
     }
 
@@ -91,7 +100,7 @@ struct CatalogCoverage: Equatable {
     /// passes the orchestrator's live scope.
     init(records: [VideoRecord], scope: AnalysisScope = AnalysisScope()) {
         var t = 0, d = 0, e = 0, s = 0, o = 0, x = 0, sd = 0, drm = 0
-        var arch = 0, junk = 0, oos = 0, photo = 0
+        var retired = 0, reformat = 0, junk = 0, oos = 0, photo = 0
         for r in records {
             // Skip records that are out of scope for dossier work.
             // confirmedJunk: user has already decided to delete
@@ -106,10 +115,11 @@ struct CatalogCoverage: Equatable {
             // `eligible` mirrors the FULL orchestrator candidate
             // filter (pfCatalogWideMetadataCandidates + the Analysis
             // Scope gate), not just junk/purged. Additional gates:
-            //   - lifecycleStage in {cataloged, workbench} —
-            //     archived / deletedPermanently / trashed / inTriage
-            //     records have already been dispositioned elsewhere
-            //     and aren't part of the dossier pool.
+            //   - lifecycleStage in LifecycleStage.dossierStages —
+            //     Cataloged / Workbench / In Triage / Archived (Rick
+            //     2026-10-10); Trashed / Deleted are retired.
+            //   - needs reformat with no dossier yet: batches skip
+            //     them until an explicit retry.
             //   - drmProtected: the pipeline can't decrypt them.
             //   - Analysis Scope: audio-only set aside (reversible)
             //     and still images / camera raw (never candidates).
@@ -121,9 +131,9 @@ struct CatalogCoverage: Equatable {
             // a record with dossierProcessedAt set but stage=archived
             // would push dossiered > eligible and break the
             // "Analyze Complete" check. Rick 2026-06-13.
-            let lifecycleOK = r.lifecycleStage == .cataloged
-                || r.lifecycleStage == .workbench
-            if !lifecycleOK { arch += 1 }
+            let pool = DossierPoolStatus(r)
+            if pool == .retired { retired += 1 }
+            if pool == .awaitingReformat { reformat += 1 }
             if r.drmProtected { drm += 1 }
             let inScope: Bool
             switch AnalysisScope.classify(streamTypeRaw: r.streamTypeRaw,
@@ -138,7 +148,7 @@ struct CatalogCoverage: Equatable {
             case .analyzable:
                 inScope = true
             }
-            if lifecycleOK && !r.drmProtected && inScope {
+            if pool == .admitted && !r.drmProtected && inScope {
                 e += 1
                 if r.dossierProcessedAt != nil { d += 1 }
             }
@@ -152,7 +162,7 @@ struct CatalogCoverage: Equatable {
         }
         total = t; dossiered = d; eligible = e; scenes = s
         ocrDates = o; transcripts = x; strongDates = sd; drmCount = drm
-        archivedCount = arch; junkCount = junk
+        retiredCount = retired; needsReformatCount = reformat; junkCount = junk
         outOfScopeCount = oos; photoCount = photo
     }
 }

@@ -109,20 +109,37 @@ extension CatalogContent {
             codec: "hevc",
             ext: "mp4"
         ).lastPathComponent
+        // 2026-10-10: a file flagged by the analyzer itself (it could not
+        // read the video — not a known legacy codec) can be tried again as
+        // is: batches skip it, an explicit Analyze retries it, and a
+        // successful decode clears the flag.
+        let analyzerFlagOnly = rec.needsReformat
+            && !hasUnplayableLegacyCodec(videoCodec: rec.videoCodec, audioCodec: rec.audioCodec)
+        let why = analyzerFlagOnly
+            ? "The analyzer couldn't read the video in \(rec.filename) on an earlier pass, so batch runs skip it."
+            : "\(rec.filename) uses the \(codecBits) codec, which the analyzer can't decode directly. macOS deprecated this codec in 2019."
         alert.informativeText = """
-            \(rec.filename) uses the \(codecBits) codec, which the analyzer can't decode directly. \
-            macOS deprecated this codec in 2019.
+            \(why)
 
             Convert to HEVC first? A new file \"\(derived)\" will be created next to the original, \
             then analyzed.
             """
         alert.alertStyle = .informational
         alert.addButton(withTitle: "Reformat and Analyze")
+        if analyzerFlagOnly { alert.addButton(withTitle: "Analyze Anyway") }
         alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
+        let choice = alert.runModal()
+        if choice == .alertFirstButtonReturn {
             _ = fileOpsCenter.startedByUser {
                 $0.startReformat(record: rec, model: model,
                                  orchestrator: captionOrchestrator)
+            }
+            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+        } else if analyzerFlagOnly, choice == .alertSecondButtonReturn {
+            _ = fileOpsCenter.startedByUser {
+                $0.startAnalyzeOne(record: rec, model: model,
+                                   orchestrator: captionOrchestrator,
+                                   stages: stages)
             }
             MediaFileOperationsWindowOpener.openBehindMain(openWindow)
         }

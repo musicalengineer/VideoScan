@@ -94,7 +94,7 @@ extension CaptionOrchestrator {
         }()
 
         // Filter candidates to this volume only. We still go through
-        // pfCatalogWideMetadataCandidates because that's where junk /
+        // pfDossierCandidateSelection because that's where junk /
         // DRM / purge / reachability filtering lives. The Analysis
         // Scope gate sits right beside those gates — pure catalog
         // metadata, ZERO disk I/O, so out-of-scope files (music, camera
@@ -109,18 +109,15 @@ extension CaptionOrchestrator {
         // the SAME predicate (junk/purge/DRM/lifecycle semantics
         // unchanged). Volume prefixes don't match a record's exact
         // fullPath, so they fall through to the full pass as before.
-        let base: [VideoRecord]
-        if let exact = model.record(forPath: volumePrefix) {
-            base = pfCatalogWideMetadataCandidates(
-                records: [exact],
-                reachableVolumePaths: [volumePrefix]
-            )
-        } else {
-            base = pfCatalogWideMetadataCandidates(
-                records: model.records,
-                reachableVolumePaths: [volumePrefix]
-            )
-        }
+        //
+        // Dossier pool (Rick 2026-10-10): Archived and In Triage records
+        // are admitted alongside Cataloged / Workbench.
+        let exact = model.record(forPath: volumePrefix)
+        let selection = pfDossierCandidateSelection(
+            records: exact.map { [$0] } ?? model.records,
+            reachableVolumePaths: [volumePrefix]
+        )
+        let base = selection.candidates
         let candidates = ignoringScope
             ? base
             : pfAnalysisScopeCandidates(base, scope: analysisScope)
@@ -131,6 +128,9 @@ extension CaptionOrchestrator {
 
         captionOrchLog.info("Per-volume dossier: \(candidates.count) candidate(s) under \(volumePrefix, privacy: .public); transcriber=\(resolvedTranscriber?.modelID ?? "none", privacy: .public)")
         appLog.write("Dossier: starting volume pass — \(candidates.count) eligible under \(VolumeReachability.displayLabel(forPath: volumePrefix))")
+        if selection.archived + selection.inTriage > 0 {
+            appLog.write("Dossier: admitted \(selection.archived) Archived + \(selection.inTriage) In Triage file(s) under \(VolumeReachability.displayLabel(forPath: volumePrefix)) — read-only analysis; archived rows get text only")
+        }
 
         guard !candidates.isEmpty else {
             captionOrchLog.info("Per-volume dossier: nothing to do under \(volumePrefix, privacy: .public)")
@@ -143,6 +143,12 @@ extension CaptionOrchestrator {
         rememberActiveVolume(volumePrefix)
         currentStatus = .running(progress: 0.0, currentFile: "(loading model…)", etaSec: nil)
         self.force = force
+        // An exact file path is explicit per-file intent (right-click
+        // Analyze, Reformat's follow-up): analyze THIS file — no
+        // carry-over, and a needs-reformat flag is retried.
+        let explicitSingleFile = exact != nil
+        armDossierBatchContext(selection: selection, records: model.records, candidates: candidates,
+                               carryOver: !explicitSingleFile, retryNeedsReformat: explicitSingleFile)
 
         // Keep-alive (perf item 3, 2026-07-14): cached-or-fresh. N
         // multi-selected single-file AnalyzeJobs and every queued-
@@ -163,6 +169,7 @@ extension CaptionOrchestrator {
             )
         }
         await activeTask?.value
+        disarmDossierBatchContext()
         currentVolumePrefix = nil
         forgetActiveVolume(volumePrefix)
         // Batch settled (finished OR cancelled) — keep the runner warm
@@ -245,10 +252,12 @@ extension CaptionOrchestrator {
 
         let reachablePaths = CatalogScanTarget.analyzeCandidates(model.scanTargets)
             .map { $0.searchPath }
-        let base = pfCatalogWideMetadataCandidates(
+        // Dossier pool (Rick 2026-10-10): Archived and In Triage admitted.
+        let selection = pfDossierCandidateSelection(
             records: model.records,
             reachableVolumePaths: reachablePaths
         )
+        let base = selection.candidates
         // Analysis Scope gate — same placement rationale as
         // startAnalyzing: pure metadata, zero disk I/O, BEFORE the
         // per-file loop so out-of-scope files never hit the DRM probe.
@@ -260,6 +269,8 @@ extension CaptionOrchestrator {
 
         captionOrchLog.info("Catalog-wide dossier: \(candidates.count) candidate(s) across \(reachablePaths.count) volume(s); transcriber=\(resolvedTranscriber?.modelID ?? "none", privacy: .public)")
         appLog.write("Dossier: starting catalog-wide pass — \(candidates.count) eligible video(s), VLM=\(MLXVLMCaptionRunner().modelID), transcriber=\(resolvedTranscriber?.modelID ?? "none"), force=\(force)")
+        // Additive START detail (the line above keeps its format).
+        appLog.write("Dossier: admitted \(selection.archived) Archived + \(selection.inTriage) In Triage file(s) (read-only analysis; archived rows get text only); \(selection.offline) on offline volume(s) skipped, not failed; \(selection.notEligibleByStage) not eligible (stage: Trashed / Deleted)")
 
         guard !candidates.isEmpty else {
             currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
@@ -269,6 +280,8 @@ extension CaptionOrchestrator {
         currentTarget = nil
         currentStatus = .running(progress: 0.0, currentFile: "(loading model…)", etaSec: nil)
         self.force = force
+        armDossierBatchContext(selection: selection, records: model.records, candidates: candidates,
+                               carryOver: true, retryNeedsReformat: false)
 
         // Keep-alive: same cached-or-fresh hand-off as startAnalyzing.
         let runner = acquireRunner()
@@ -286,9 +299,29 @@ extension CaptionOrchestrator {
             )
         }
         await activeTask?.value
+        disarmDossierBatchContext()
         // Batch settled — arm the idle-release clock (no-op once
         // shutdown began).
         armRunnerIdleTimer()
+    }
+
+    /// Per-batch state the shared steps read (2026-10-10): the same-footage
+    /// carry-over index (built here, once — O(records), no disk I/O), the
+    /// needs-reformat retry switch, and the admission tally for the OUTCOME
+    /// coverage line. Cleared by `disarmDossierBatchContext` on settle.
+    func armDossierBatchContext(selection: DossierCandidateSelection, records: [VideoRecord],
+                                candidates: [VideoRecord], carryOver: Bool, retryNeedsReformat: Bool) {
+        var tally = selection
+        tally.candidates = []   // counts only; don't hold the array
+        dossierAdmission = tally
+        dossierRetriesNeedsReformat = retryNeedsReformat
+        dossierCarryOver = carryOver ? DossierCarryOverIndex(records: records, candidates: candidates) : nil
+    }
+
+    func disarmDossierBatchContext() {
+        dossierCarryOver = nil
+        dossierRetriesNeedsReformat = false
+        dossierAdmission = nil
     }
 
     /// Pipelined dossier batch: VLM and Whisper overlap across files.
@@ -370,7 +403,7 @@ extension CaptionOrchestrator {
 
             guard let plan = await preflightDossierFile(
                 record, index: idx, total: total, force: force,
-                framesPerFile: framesPerFile, started: started
+                framesPerFile: framesPerFile, started: started, model: model
             ) else { continue }
 
             let control = await runPipelinedDossierFile(
@@ -481,7 +514,7 @@ extension CaptionOrchestrator {
             captionOrchLog.notice("Dossier: VLM cancellation at \(plan.filename, privacy: .public)")
             return .stop
         } catch {
-            countDossierExtractionFailure(laneID, filename: plan.filename, error: error, label: "VLM error")
+            countDossierExtractionFailure(laneID, plan: plan, model: model, error: error, label: "VLM error")
             publishProgress(idx: plan.index + 1, total: total, currentFile: plan.filename, started: started)
             return .next
         }
@@ -519,6 +552,7 @@ extension CaptionOrchestrator {
             : try await runner.dossier(videoPath: plan.path, atTimestamps: plan.timestamps)
         let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
         flagUndecodableIfExtractorBailed(plan, extraction: extraction, vlmSeconds: vlmSec)
+        clearStaleNeedsReformat(plan, extraction: extraction)
         return (extraction, vlmSec)
     }
 
@@ -531,6 +565,13 @@ extension CaptionOrchestrator {
     func flagUndecodableIfExtractorBailed(_ plan: DossierFilePlan, extraction: DossierExtraction, vlmSeconds: Double) {
         let record = plan.record
         guard !plan.hasNoVideo, extraction.scenes.isEmpty, vlmSeconds < 1.0, !record.needsReformat else { return }
+        // An archived row is read-only to analysis (2026-10-10): the flag
+        // would offer to write a reformatted file next to it.
+        guard !plan.readOnly else {
+            liveReadOnlyLeftAsIs += 1
+            appLog.write(String(format: "Dossier: archived file gave 0 scenes — not flagged needsReformat (archived rows are read-only to analysis): %@", plan.filename))
+            return
+        }
         record.needsReformat = true
         captionOrchLog.notice("Dossier: VLM bailed in \(vlmSeconds, format: .fixed(precision: 2), privacy: .public)s with 0 scenes — flagging \(plan.filename, privacy: .public) needsReformat")
         appLog.write(String(format: "Dossier: flagged needsReformat (codec couldn't be decoded): %@", plan.filename))
@@ -643,7 +684,7 @@ extension CaptionOrchestrator {
 
             guard let plan = await preflightDossierFile(
                 record, index: idx, total: total, force: force,
-                framesPerFile: framesPerFile, started: started
+                framesPerFile: framesPerFile, started: started, model: model
             ) else { continue }
 
             if await runSerialDossierFile(plan, runner: runner, transcriber: transcriber,
@@ -691,6 +732,7 @@ extension CaptionOrchestrator {
                 ? try await runner.dossier(videoPath: plan.path, atTimestamps: plan.timestamps)
                 : DossierExtraction.empty
             let vlmSec = CFAbsoluteTimeGetCurrent() - vlmStart
+            clearStaleNeedsReformat(plan, extraction: extraction)
 
             let hasCaptions = !extraction.scenes.isEmpty
             let userSkipped = userSkippedLaneIDs.contains(laneID)
@@ -730,7 +772,7 @@ extension CaptionOrchestrator {
             appLog.write("Dossier: cancelled mid-file \(plan.filename) (done \(liveCaptioned), skipped \(liveSkipped), failed \(liveFailed))")
             return .stop
         } catch {
-            countDossierExtractionFailure(laneID, filename: plan.filename, error: error, label: "error")
+            countDossierExtractionFailure(laneID, plan: plan, model: model, error: error, label: "error")
             return .next
         }
     }
