@@ -592,7 +592,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         // removals on failure / verify failure are gone (partials go through
         // CombineOutputPublish.removePartial); the one left removes this
         // pair's own freshly created `VS_<uuid>` staging dir.
-        "VideoScan/MediaOps/VideoScanModel+Combine.swift": 1, "VideoScan/MediaOps/VideoScanModel+JunkDelete.swift": 2,
+        "VideoScan/MediaOps/VideoScanModel+Combine.swift": 1,
+        // 2 → 1 (codex delete-engines F1, 2026-10-09): trashItem only — the
+        // engine has no removeItem of its own.
+        "VideoScan/MediaOps/VideoScanModel+JunkDelete.swift": 1,
         "VideoScan/Media/VideoScanModel+ProbeEngine.swift": 1, "VideoScan/Catalog/VideoScanModel+Workbench.swift": 1,
         "VideoScanCore/AtomicFilePublish.swift": 2,
         // CyberBrainWriter.swift → CyberBrainWriter+Persistence.swift (7b919780, 2026-10-07):

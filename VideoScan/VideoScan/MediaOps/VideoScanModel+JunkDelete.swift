@@ -17,11 +17,13 @@ extension VideoScanModel {
     //    .confirmedJunk; second-guessing them is paternalistic, and the
     //    dup-check belongs to a different feature. (Keeper proof is the
     //    DUPLICATE path's job — design R4.)
-    //  - Trash only for every user-facing flow (ruling 2026-10-09, R3): the
-    //    Triage and Catalog lanes have no mode at all and always pass
-    //    `.toTrash`. `.permanent` survives ONLY as the prune lane's test
-    //    mode (its fixtures stay out of the real Trash); no production
-    //    caller passes it — JunkTrashOnlyTests pins that.
+    //  - Trash only (ruling 2026-10-09, R3), as an EXECUTION rule (codex
+    //    delete-engines F1): this routine contains no permanent removal of
+    //    its own. `.toTrash` is the only mode the app can spell; the one
+    //    other mode, `.removeThroughTestSeam(op)`, removes through the
+    //    operation the CALLER injects — the test target's `.permanent` is
+    //    that seam (its fixtures stay out of the real Trash). No production
+    //    source builds it — JunkPermanentUnreachableTests pins that.
     //  - "Already missing" is not an error. If the file vanished between
     //    tagging and the delete pass we still update the catalog record so
     //    the row reads consistently afterward.
@@ -47,12 +49,22 @@ extension VideoScanModel {
     //    disk half runs, so the UI stays responsive.
     //  - Catalog writes for the whole batch happen at the end, once, on main.
 
-    /// How a file leaves. `.toTrash` is the only mode any user-facing flow
-    /// can reach (ruling 2026-10-09). `.permanent` = FileManager.removeItem;
-    /// kept for the prune lane's TESTS only (see the policy note above).
-    enum JunkDeletionMode {
+    /// How a file leaves. `.toTrash` is the only mode the app can reach
+    /// (ruling 2026-10-09). `.removeThroughTestSeam(op)` hands the file to
+    /// `op` and records it as removed outright — TESTS ONLY: the engine has
+    /// no removal of its own to fall back to, so without an injected
+    /// operation nothing but the Trash can happen. (For Rick: an enum case
+    /// carrying a closure ≈ a C++ std::variant holding a std::function.)
+    enum JunkDeletionMode: Sendable {
         case toTrash
-        case permanent
+        case removeThroughTestSeam(@Sendable (URL) throws -> Void)
+
+        /// True for the test seam: the catalog and ledger record the file
+        /// as removed outright (`.deletedPermanently`, `copyDeleted`).
+        var isOutrightRemoval: Bool {
+            if case .removeThroughTestSeam = self { return true }
+            return false
+        }
     }
 
     /// Outcome of a batch: ONE item per requested record, in request
@@ -277,7 +289,7 @@ extension VideoScanModel {
     private func applyJunkOutcomes(_ records: [VideoRecord], _ outcomes: [JunkFileOutcome],
                                    mode: JunkDeletionMode) -> JunkDeletionResult {
         let now = Date()
-        let stage: LifecycleStage = mode == .toTrash ? .trashed : .deletedPermanently
+        let stage: LifecycleStage = mode.isOutrightRemoval ? .deletedPermanently : .trashed
         var removedFromDisk: [VideoRecord] = []
 
         for (rec, outcome) in zip(records, outcomes) {
@@ -308,11 +320,11 @@ extension VideoScanModel {
         noteCatalogRecordsMutated()
         // Media Ledger (stage 2): one copyTrashed / copyDeleted line per file
         // that actually left the disk.
-        ledgerCopyRemoved(removedFromDisk, permanent: mode == .permanent, by: .rick, at: now,
+        ledgerCopyRemoved(removedFromDisk, permanent: mode.isOutrightRemoval, by: .rick, at: now,
                           batchID: "junk-\(UUID().uuidString.prefix(8))")
 
         let refused = result.refused.count, cancelled = result.cancelled
-        log("Delete Confirmed Junk: attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode == .toTrash ? "trash" : "permanent")")
+        log("Delete Confirmed Junk: attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode.isOutrightRemoval ? "permanent" : "trash")")
         return result
     }
 
@@ -435,8 +447,9 @@ struct JunkDiskTurn: Sendable {
             // Trash (some network mounts) throws — caught by the caller.
             var resultURL: NSURL?
             try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
-        case .permanent:
-            try FileManager.default.removeItem(at: url)
+        case .removeThroughTestSeam(let operation):
+            // The caller's operation — never one of this routine's own.
+            try operation(url)
         }
     }
 }

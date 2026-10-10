@@ -10,9 +10,10 @@
 //     <drive>: <why> — nothing was deleted" — with exactly one attempt,
 //     never a fallback to another kind of removal.
 //
-// `.permanent` stays in JunkDeletionMode ONLY as the prune lane's test
-// mode (its fixtures stay out of the real Trash); the sensor below pins
-// that no production call site passes it.
+// `.permanent` exists only in the TEST target (JunkDeletionModeTestSeam.swift)
+// as the engine's injected-operation seam — the engine has no permanent
+// removal of its own (codex delete-engines F1); the sensor below pins that
+// no production call site passes it.
 
 import Foundation
 import Testing
@@ -58,9 +59,10 @@ struct JunkTrashOnlyTests {
             }
         }
         #expect(hits.isEmpty, "\(hits)")
-        // The routine's own switch is the one place the case is spelled out.
+        // The routine's one non-Trash case carries the caller's operation.
         let engine = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
-        #expect(engine.contains("case .permanent:"))
+        #expect(engine.contains("case .removeThroughTestSeam(let operation):"))
+        #expect(!engine.contains("removeItem("))
     }
 
     @Test("the row menu's Delete File is ONE item: Move to Trash")

@@ -511,7 +511,9 @@ struct RemoteViewerReadOnlySensorTests {
     /// anywhere — changes a count and fails here until it is classified.
     private static let removalSites: [String: (count: Int, guardFile: String?, token: String?)] = [
         // Media / family files — behind the viewer guard.
-        "MediaOps/VideoScanModel+JunkDelete.swift": (2, nil, "junkDeletionRefusedOnViewer("),
+        // 2 → 1 (codex delete-engines F1, 2026-10-09): the engine's own
+        // removeItem is gone; trashItem is its one file operation.
+        "MediaOps/VideoScanModel+JunkDelete.swift": (1, nil, "junkDeletionRefusedOnViewer("),
         "Catalog/VideoScanModel+Workbench.swift": (1, nil, "workbenchDiscardRefusedOnViewer("),
         "People/FamilyGroup.swift": (2, nil, "ViewerWriteGuard.check(\"FamilyGroupStore.moveToTrash\")"),
         "People/PersonEditSheet.swift": (1, nil, "ViewerWriteGuard.refuse(\"PersonEditSheet.deleteReferencePhoto\")"),

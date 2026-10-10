@@ -25789,6 +25789,20 @@
         "theHeldListIsNeverTruncated",
         "theSubtitleSaysMovedToTheTrashNeverFreed"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/JunkPermanentUnreachableTests.swift",
+      "stage": "unit",
+      "suites": [
+        "JunkPermanentUnreachableTests"
+      ],
+      "tests": [
+        "noProductionCallerBuildsTheSeam",
+        "theEngineHasNoPermanentRemoval",
+        "theProductionModeIsTheTrash"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -27174,6 +27188,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/JunkDeletionTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/JunkPermanentUnreachableTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
