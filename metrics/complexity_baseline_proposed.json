@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 421,
+ "entry_count": 416,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 28,
@@ -303,8 +303,8 @@
    "nloc": 49
   },
   "VideoScan/VideoScan/Catalog/CatalogToolbar.swift::CatalogToolbar.body": {
-   "ccn": 30,
-   "nloc": 260
+   "ccn": 29,
+   "nloc": 237
   },
   "VideoScan/VideoScan/Catalog/CatalogView+ScanTargetsPane.swift::CatalogView.scanTargetsPane": {
    "ccn": 21,
@@ -839,8 +839,8 @@
    "nloc": 35
   },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::HallieTurnExecutor.execute _ request : Request , context : Context , dependencies : Dependencies": {
-   "ccn": 42,
-   "nloc": 165
+   "ccn": 41,
+   "nloc": 164
   },
   "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift::HallieTurnExecutor.executeCyberBrainBiography": {
    "ccn": 21,
@@ -1074,16 +1074,8 @@
    "ccn": 18,
    "nloc": 81
   },
-  "VideoScan/VideoScan/MediaOps/DeleteConfirmedJunkSheet.swift::DeleteConfirmedJunkConfirmSheet.body": {
-   "ccn": 2,
-   "nloc": 83
-  },
-  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesForecast.swift::DeleteDuplicatesForecast.compute": {
-   "ccn": 30,
-   "nloc": 95
-  },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.deleteQuarantined": {
-   "ccn": 26,
+   "ccn": 24,
    "nloc": 86
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.phaseOne": {
@@ -1095,16 +1087,16 @@
    "nloc": 103
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.finishRun": {
-   "ccn": 39,
-   "nloc": 96
+   "ccn": 31,
+   "nloc": 84
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.revalidateForResume": {
    "ccn": 25,
    "nloc": 95
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesJob.runPair": {
-   "ccn": 25,
-   "nloc": 123
+   "ccn": 24,
+   "nloc": 120
   },
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesPlan.swift::DeletionTierFacts.gather": {
    "ccn": 18,
@@ -1113,10 +1105,6 @@
   "VideoScan/VideoScan/MediaOps/DeleteDuplicatesPlan.swift::DeletionTierFacts.recheck": {
    "ccn": 19,
    "nloc": 69
-  },
-  "VideoScan/VideoScan/MediaOps/DeleteDuplicatesSiblingProof.swift::SiblingProver.prove": {
-   "ccn": 19,
-   "nloc": 57
   },
   "VideoScan/VideoScan/MediaOps/MediaFileOperationsWindow.swift::MediaFileOperationRow.trailingStatus": {
    "ccn": 20,
@@ -1190,10 +1178,6 @@
    "ccn": 17,
    "nloc": 50
   },
-  "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.authorizeDuplicateDeletion": {
-   "ccn": 17,
-   "nloc": 55
-  },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.deletionTierCandidates": {
    "ccn": 16,
    "nloc": 40
@@ -1202,17 +1186,13 @@
    "ccn": 17,
    "nloc": 65
   },
-  "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift::VideoScanModel.deleteConfirmedJunk": {
-   "ccn": 30,
-   "nloc": 148
-  },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::VideoScanModel.preparePrune": {
    "ccn": 18,
    "nloc": 85
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::VideoScanModel.pruneOneCopy": {
-   "ccn": 31,
-   "nloc": 114
+   "ccn": 23,
+   "nloc": 88
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::VideoScanModel.pruneOverlap": {
    "ccn": 16,
@@ -1432,7 +1412,7 @@
   },
   "VideoScan/VideoScan/Volumes/VolumesWindow.swift::VolumesWindow.contextMenuItems": {
    "ccn": 16,
-   "nloc": 104
+   "nloc": 93
   },
   "VideoScan/VideoScan/Volumes/VolumesWindow.swift::VolumesWindow.volumeList": {
    "ccn": 4,
