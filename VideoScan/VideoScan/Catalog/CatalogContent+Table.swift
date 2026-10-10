@@ -463,10 +463,7 @@ extension CatalogContent {
             model.log("Move to Trash: the \(selectedIDs.count) selected row(s) are no longer in the table — nothing to do.")
             return
         }
-        Task { @MainActor in
-            let result = await model.trashSelectedRecords(targets)
-            reportDeleteResult(result, mode: .toTrash)
-        }
+        confirmThenTrash(targets)
     }
 
     /// ⌘O route (File ▸ Open): the highlighted rows, through `openRows`.
@@ -484,34 +481,65 @@ extension CatalogContent {
         CatalogOpenAction.open(ids: ids, rows: tableData, gesture: gesture, model: model)
     }
 
-    func reportDeleteResult(
-        _ result: VideoScanModel.JunkDeletionResult,
-        mode: VideoScanModel.JunkDeletionMode
-    ) {
-        let interesting = result.alreadyMissing > 0
-            || result.skippedOffline > 0
-            || !result.failed.isEmpty
-        guard interesting else { return }
+    /// THE one confirmation in front of the Catalog's Move to Trash — the
+    /// row menu and ⌘⌫ both land here (codex delete-engines F8): "Move N
+    /// files (X) to the Trash?", what will be held back and why; Return =
+    /// Move to Trash, Esc = Cancel. Only then are the rows handed to the
+    /// one Trash routine. When nothing can move there is no question — the
+    /// result lists every file that stayed, with its reason.
+    func confirmThenTrash(_ targets: [VideoRecord]) {
+        let plan = model.catalogTrashPlan(for: targets)
+        let sizes = Dictionary(targets.map { ($0.id, $0.sizeBytes) }, uniquingKeysWith: { first, _ in first })
+        let confirmation = CatalogTrashConfirmation(plan: plan, sizes: sizes)
+        if confirmation.canMove {
+            let alert = NSAlert()
+            alert.messageText = confirmation.title
+            alert.informativeText = confirmation.detail
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: CatalogTrashConfirmation.moveButton)   // first button: Return
+            let cancel = alert.addButton(withTitle: "Cancel")
+            cancel.keyEquivalent = "\u{1b}"                                    // Esc
+            guard alert.runModal() == .alertFirstButtonReturn else {
+                model.log("Move to Trash: cancelled at the confirmation — nothing moved.")
+                return
+            }
+        }
+        Task { @MainActor in
+            let result = await model.trashSelectedRecords(targets)
+            reportDeleteResult(result)
+        }
+    }
 
-        var lines: [String] = []
-        if result.succeeded > 0 {
-            lines.append("\(result.succeeded) \(mode == .toTrash ? "moved to Trash" : "deleted permanently")")
-        }
-        if result.alreadyMissing > 0 {
-            lines.append("\(result.alreadyMissing) already missing \u{2014} catalog updated")
-        }
-        if result.skippedOffline > 0 {
-            lines.append("\(result.skippedOffline) skipped \u{2014} volume offline")
-        }
-        if !result.failed.isEmpty {
-            lines.append("\(result.failed.count) failed (permissions or locked)")
-        }
+    /// The result of ⌘⌫ / the row menu's Move to Trash. Silent when every
+    /// file moved (Finder's behaviour); otherwise an alert with one
+    /// sentence per bucket and EVERY file that stayed, with its reason, in
+    /// a scrolling list (design R6 — nothing console-only, nothing
+    /// truncated). Same presenter as Triage's result sheet.
+    func reportDeleteResult(_ result: VideoScanModel.JunkDeletionResult) {
+        let report = JunkDeletionReport(result)
+        guard report.hasNotes else { return }
         let alert = NSAlert()
-        alert.messageText = "Delete completed with notes"
-        alert.informativeText = lines.joined(separator: "\n")
+        alert.messageText = "Move to Trash \u{2014} some files stayed"
+        alert.informativeText = report.summary.joined(separator: "\n")
         alert.alertStyle = result.failed.isEmpty ? .informational : .warning
+        alert.accessoryView = Self.reportListView(report.linesText)
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    /// A read-only, selectable, scrolling text list for the alert.
+    private static func reportListView(_ text: String) -> NSView {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 180))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let textView = NSTextView(frame: scroll.bounds)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        textView.string = text
+        textView.autoresizingMask = [.width]
+        scroll.documentView = textView
+        return scroll
     }
 
     /// Extracted Tag-column cell. Moved out of the Table body to keep

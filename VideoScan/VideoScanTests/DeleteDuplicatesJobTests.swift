@@ -144,10 +144,11 @@ struct DeleteDuplicatesJobTests {
         job.start()
         await job.task?.value
 
-        let freed = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 2), countStyle: .file)
-        #expect(job.state == .finished(summary: "2 deleted · \(freed) freed · 1 refused"), "\(job.state)")
+        let moved = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 2), countStyle: .file)
+        let volume = VolumeReachability.volumeName(forPath: rig.copies[0].fullPath)
+        #expect(job.state == .finished(summary: "Moved 2 (\(moved)) to the Trash · 1 held (content differs from keeper keeper.mov — NOT a duplicate)"), "\(job.state)")
         #expect(job.result.deleted == 2 && job.result.failed == 0 && job.result.skipped == 0)
-        #expect(job.result.bytesFreed == Int64(fileSize * 2))
+        #expect(job.result.bytesFreed == 0, "moved to the Trash (Trash only), never freed")
         #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
         #expect(!FileManager.default.fileExists(atPath: rig.copies[1].fullPath))
         #expect(FileManager.default.fileExists(atPath: rig.different.fullPath), "a look-alike must survive")
@@ -180,7 +181,7 @@ struct DeleteDuplicatesJobTests {
 
         // Plan: statuses + how each keeper match was made; filed under done/.
         let plan = try #require(job.plan)
-        #expect(plan.entries.map(\.status) == [.deleted, .deleted, .refused])
+        #expect(plan.entries.map(\.status) == [.trashed, .trashed, .refused])
         #expect(plan.entries[0].keeperMatchedByStoredFixity == false, "first pair paid the keeper read")
         #expect(plan.entries[1].keeperMatchedByStoredFixity == true, "second pair used the stored fixity")
         #expect(plan.entries[2].note.contains("content differs from keeper keeper.mov"))
@@ -189,16 +190,17 @@ struct DeleteDuplicatesJobTests {
         #expect(FileManager.default.fileExists(atPath: done.path))
         #expect(!FileManager.default.fileExists(atPath: DeleteDuplicatesPlanStore.planURL(for: plan.id, root: rig.root).path))
 
-        // Ledger: one copyDeleted line per file that left the disk, batch-keyed.
+        // Ledger: one copyTrashed line per file that left its place, batch-keyed.
         await rig.model.mediaLedger.waitForPendingWrites()
-        let events = rig.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }
+        #expect(rig.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }.isEmpty, "Trash only")
+        let events = rig.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }
         #expect(events.map(\.filename).sorted() == ["copy1.mov", "copy2.mov"])
         #expect(Set(events.compactMap(\.batchID)).count == 1)
 
         // Log names the keeper and how it was matched.
         let console = await consoleText(rig.model)
-        #expect(console.contains("Deleted (verified identical to keeper.mov): copy1.mov [keeper read in full, fixity stored]"))
-        #expect(console.contains("Deleted (verified identical to keeper.mov): copy2.mov [keeper matched by stored fixity, not re-read]"))
+        #expect(console.contains("Moved to the Trash of \(volume) (verified identical to keeper.mov): copy1.mov [keeper read in full, fixity stored]"))
+        #expect(console.contains("Moved to the Trash of \(volume) (verified identical to keeper.mov): copy2.mov [keeper matched by stored fixity, not re-read]"))
         #expect(console.contains("REFUSED lookalike.mov: content differs from keeper keeper.mov — NOT a duplicate"))
         #expect(rig.model.records.count == 4 && !rig.model.isDeletingDuplicates, "keeper + look-alike + archive copy + verified sibling")
     }
@@ -213,11 +215,11 @@ struct DeleteDuplicatesJobTests {
         job.start()
 
         let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline, (job.plan?.counts.deleted ?? 0) < 1 { await Task.yield() }
-        #expect(job.plan?.counts.deleted == 1)
+        while ContinuousClock.now < deadline, (job.plan?.counts.trashed ?? 0) < 1 { await Task.yield() }
+        #expect(job.plan?.counts.trashed == 1)
         try? await Task.sleep(nanoseconds: 400_000_000)
         #expect(job.isPaused && job.state == .running)
-        #expect(job.plan?.counts.deleted == 1, "nothing moves while paused")
+        #expect(job.plan?.counts.trashed == 1, "nothing moves while paused")
         #expect(FileManager.default.fileExists(atPath: rig.copies[1].fullPath))
         #expect(job.subtitle.localizedCaseInsensitiveContains("paused"), Comment(rawValue: job.subtitle))
 
@@ -292,7 +294,7 @@ struct DeleteDuplicatesJobTests {
         await job.task?.value
 
         let mid = try #require(lock.withLock { snapshotAtSecondQuarantine })
-        #expect(mid.entries[0].status == .deleted)
+        #expect(mid.entries[0].status == .trashed)
         #expect(mid.entries[1].status == .verifying || mid.entries[1].status == .pending)
         #expect(mid.entries[2].status == .pending)
         #expect(mid.finishedAt == nil, "mid-run the plan is still resumable")
@@ -359,7 +361,7 @@ struct DeleteDuplicatesJobTests {
         let after = try #require(job.plan)
         #expect(after.resumeCount == 1)
         #expect(after.entries[0].status == .deleted, "done stays done")
-        #expect(after.entries[1].status == .deleted)
+        #expect(after.entries[1].status == .trashed)
         #expect(!FileManager.default.fileExists(atPath: good.fullPath))
         #expect(after.entries[2].status == .refused)
         #expect(after.entries[2].note == "keeper keeperB.mov changed since the plan was made — refused at resume")
@@ -444,7 +446,7 @@ struct DeleteDuplicatesJobTests {
         #expect(fresh != stale, "the snapshot must be retaken when the catalog was saved after it")
         #expect(FileManager.default.fileExists(atPath: fresh))
         #expect(after.log.contains { $0.hasPrefix("Safety snapshot retaken at resume") })
-        #expect(after.entries[0].status == .deleted && job.result.deleted == 1)
+        #expect(after.entries[0].status == .trashed && job.result.deleted == 1)
     }
 
     /// QA MINOR 4: the shared writer already wrote generation 7 for this
@@ -478,7 +480,7 @@ struct DeleteDuplicatesJobTests {
         #expect(job.result.deleted == 1)
         let done = try DeleteDuplicatesPlanStore.load(
             url: DeleteDuplicatesPlanStore.doneURL(for: plan.id, root: root).appendingPathComponent("plan.json"))
-        #expect(done.outcome == "completed" && done.entries[0].status == .deleted,
+        #expect(done.outcome == "completed" && done.entries[0].status == .trashed,
                 "the finished plan on disk must be the job's, not the stale generation-7 one")
         #expect(await DeleteDuplicatesPlanWriter.shared.lastGeneration(for: plan.id) > 7)
     }
@@ -526,7 +528,7 @@ struct DeleteDuplicatesJobTests {
         await job.task?.value
 
         let after = try #require(job.plan)
-        #expect(after.entries[0].status == .deleted, "restored from quarantine, re-verified, then deleted")
+        #expect(after.entries[0].status == .trashed, "restored from quarantine, re-verified, then moved to the Trash")
         #expect(!FileManager.default.fileExists(atPath: q.path))
         #expect(!FileManager.default.fileExists(atPath: qdir.path), "the orphaned quarantine folder is gone")
         #expect(after.entries[1].status == .skipped && after.entries[1].note.hasPrefix("gone before the crash"))
@@ -590,9 +592,9 @@ struct DeleteDuplicatesJobTests {
     @Test func modelVerbStillReturnsTheTuple() async throws {
         let rig = makeRig("verb"); defer { rig.cleanup() }
         let result = await rig.model.deleteDuplicates(onVolume: rig.dir.path)
-        #expect(result.deleted == 2 && result.failed == 0 && result.skipped == 0 && result.bytesFreed == Int64(fileSize * 2))
+        #expect(result.deleted == 2 && result.failed == 0 && result.skipped == 0 && result.bytesFreed == 0)
         #expect(!rig.model.isDeletingDuplicates)
         let freed = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 2), countStyle: .file)
-        #expect(rig.model.duplicateStatus == "2 deleted, \(freed) freed")
+        #expect(rig.model.duplicateStatus == "Moved 2 (\(freed)) to the Trash · 1 held (content differs from keeper keeper.mov — NOT a duplicate)")
     }
 }

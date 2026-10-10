@@ -828,7 +828,7 @@ extension VideoScanModel {
             MediaLedgerEvent.Detail.count: String(trashed.count),
             MediaLedgerEvent.Detail.bytes: String(bytes),
             MediaLedgerEvent.Detail.files: trashed.map(\.filename).joined(separator: "\n"),
-            MediaLedgerEvent.Detail.action: mode == .toTrash ? "trash" : "delete",
+            MediaLedgerEvent.Detail.action: mode.isOutrightRemoval ? "delete" : "trash",
         ]
         if let against = judged.overrideText {
             detail[MediaLedgerEvent.Detail.barOverride] = against
@@ -846,7 +846,8 @@ extension VideoScanModel {
     /// Apply the person's checklist in one await — the pipeline above,
     /// copy after copy. `shown` is the plan the sheet listed, `selected`
     /// the copy record ids checked in it. `mode` is `.toTrash` in the app;
-    /// tests pass `.permanent` so fixtures never reach the real Trash.
+    /// tests pass `.permanent` (the test target's removal seam, the only
+    /// non-Trash mode) so fixtures never reach the real Trash.
     /// `hooks` are the verification seams (tests count file opens and act
     /// between verdict and mutation). The sheet itself does not call this
     /// — it starts a `PruneApplyJob`, which runs the same steps as a Media

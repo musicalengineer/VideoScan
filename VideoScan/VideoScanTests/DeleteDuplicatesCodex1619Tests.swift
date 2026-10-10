@@ -237,7 +237,7 @@ struct DeleteDuplicatesFallbackBoundaryCodex1619Tests {
         }
         job.start(); await job.task?.value
 
-        #expect(tierWhenSaved == .permanent, "three verified copies at the save")
+        #expect(tierWhenSaved == .trash, "three verified copies at the save: recorded as the Trash (Trash only)")
         #expect(readsWhenSaved == 0 && probe.blocks("quarantine") == 3, "the fallback's re-read happened in phase two")
         #expect(probe.blocks("keeper") == 3 && probe.blocks("duplicate") == 3, "the fallback: both read once in place")
         #expect(probe.didFire("quarantine"), "the sibling was rewritten mid-read")
@@ -286,20 +286,20 @@ struct DeleteDuplicatesFallbackBoundaryCodex1619Tests {
         #expect(probe.blocks("quarantine") == 3 && probe.didFire("quarantine"))
         let plan = try #require(job.plan)
         let row = plan.entries[0]
-        #expect(row.status == .skipped && row.tier == nil && row.remainingVerifiedCopies == 1, "\(row.status): \(row.note)")
-        #expect(row.note.contains("sibling verified-sibling-of-keeper.mov on ") && row.note.contains("archive copy on ")
-                && row.note.contains("gone since it was counted") && row.note.contains("left alone"), Comment(rawValue: row.note))
-        #expect(FileManager.default.fileExists(atPath: rig.copy.fullPath), "put back at its original path")
-        #expect((try? Data(contentsOf: rig.copyURL)) == Data(rig.bytes), "untouched")
-        #expect(!FileManager.default.fileExists(atPath: rig.trashedCopyURL.path))
+        // Keep one (2026-10-09): the keeper alone still holds — the Trash,
+        // with the two copies dropped at the boundary named.
+        let reason = row.tierReason ?? ""
+        #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 1, "\(row.status): \(reason)")
+        #expect(reason.contains("sibling verified-sibling-of-keeper.mov on ") && reason.contains("archive copy on ")
+                && reason.contains("gone since it was counted"), Comment(rawValue: reason))
+        #expect(FileManager.default.fileExists(atPath: rig.trashedCopyURL.path), "to the Trash on the keeper alone")
         #expect(quarantineFolders(in: rig.dir).isEmpty)
-        #expect(job.result.deleted == 0 && job.result.bytesFreed == 0)
-        #expect(rig.copy.duplicateDisposition == .extraCopy, "left alone keeps the disposition")
+        #expect(job.result.deleted == 1 && job.result.bytesFreed == 0)
         await rig.model.mediaLedger.waitForPendingWrites()
         let removals = rig.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed || $0.event == .copyDeleted }
-        #expect(removals.isEmpty, "nothing left the disk")
+        #expect(removals.count == 1 && removals.first?.event == .copyTrashed, "moved to the Trash, never deleted")
         let console = await consoleText(rig.model)
-        #expect(console.contains("put back") && console.contains("gone since it was counted"), Comment(rawValue: console))
+        #expect(console.contains("re-checked before removal") && console.contains("gone since it was counted"), Comment(rawValue: console))
     }
 
     /// The gate itself: `finalVerdict` runs after the re-read (the block

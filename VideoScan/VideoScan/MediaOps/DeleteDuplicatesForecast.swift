@@ -3,48 +3,28 @@
 // 2026-09-21: 2,898 rows, 1.5 hours, ZERO deleted. He should have seen
 // "0 deletable" in seconds, not after ninety minutes).
 //
-// From the catalog and the fixities already stored on its records ALONE —
-// no file is opened — each row of the run is put in one bucket. (Which
-// DRIVE a copy sits on is asked of the disk, exactly as the run asks it —
-// one stat per folder met, `DuplicateDrives.Resolver` — never read off the
-// path's spelling: codex #258 F10.)
-//     permanent          — ≥ 3 copies with stored evidence would remain,
-//                          on ≥ 2 different drives or with the archive
-//                          copy among them (the tier's own rule,
-//                          `DeletionTierDecision.earnsPermanent`)
-//     trash              — 2 or more would remain otherwise (or "Prefer
-//                          the Trash")
-//     needsSiblingReads  — the count falls short, but siblings WITHOUT
-//                          stored evidence are online; the run will read
-//                          N of them to decide
-//     leftAlone          — only the original remains elsewhere (with every
-//                          readable sibling, still fewer than two)
-//     leftAloneOffline   — short only because other copies sit on drives
-//                          that are not connected
+// KEEP ONE, TRASH ONLY (Rick 2026-10-09, design triage_delete_streamline
+// §9 R3/R5): a row goes to the Trash when its keeper is proven identical at
+// the move. So, from the catalog and the fixities already stored on its
+// records ALONE — no file is opened — each row of the run is put in one
+// bucket:
+//     trash              — the keeper is in the catalog and connected, and
+//                          nothing on record says the bytes differ
 //     likelyNotDuplicate — the catalog already says the bytes differ
 //                          (sizes differ, or both stored digests differ)
 //     cannotCheck        — the keeper (or the row) is not in the catalog
 //                          or its drive is not connected
 // plus the bytes the run will read in full (each duplicate once, a keeper
-// with no stored fixity once, each sibling to prove).
+// with no stored fixity once). No sibling is ever read: the keeper alone
+// is the one verified copy the rule needs.
 //
 // It is a FORECAST, and says so. The run still decides every row at the
 // moment of mutation from fresh stats and full reads — nothing here is
-// evidence for anything. The simulation walks the rows in plan order the
-// way the job does: an earlier row forecast to go is gone for later rows;
-// one forecast to stay is a sibling for them (unproven, so a read); a
-// later row is "still to be decided" and never counted; a copy the run
-// LEAVES ALONE on the drive it cleans (in use by the Archive Angel, on a
-// folder marked Read only) is never counted and never read — the run's own
-// survivor-counting rule (codex #258 F1); a sibling read once is known for
-// the rest of the run; a keeper read once is known.
-// Optimistic where the run must read to know (a sibling is assumed to
-// match; a duplicate is assumed identical unless the catalog says not).
+// evidence for anything. Optimistic where the run must read to know (a
+// duplicate is assumed identical unless the catalog says not).
 //
-// Cost: O(records) to index the families once, then O(rows × family
-// size). Tonight's 2,898 rows: milliseconds. 100k rows: under the scale
-// test's budget. Memory: one small value per member record + one bucket
-// per row (~100 bytes × records) — freed when the forecast is dropped.
+// Cost: O(rows) after the keepers are looked up — 100k rows in well under
+// the scale test's budget. Memory: one small value per row and per keeper.
 //
 // (For Rick: plain value types and a static function — a C++ POD struct
 // plus a free function. `[UUID: Copy]` ≈ std::unordered_map.)
@@ -55,12 +35,7 @@ import VideoScanCore
 struct DeleteDuplicatesForecast: Equatable, Sendable {
 
     enum Bucket: String, CaseIterable, Sendable {
-        case permanent
         case trash
-        case needsSiblingReads
-        case leftAlone
-        /// Short only because other copies are on drives not connected.
-        case leftAloneOffline
         case likelyNotDuplicate
         case cannotCheck
     }
@@ -71,8 +46,8 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         var bytes: Int64 = 0
     }
 
-    /// One copy the catalog knows, reduced to what the tier asks about.
-    struct Copy: Sendable, Equatable {
+    /// One keeper the catalog knows, reduced to what the forecast asks.
+    struct Keeper: Sendable, Equatable {
         let id: UUID
         let sizeBytes: Int64
         /// The record's stamp-bound fixity digest when it is usable for
@@ -80,29 +55,6 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         let digest: String?
         /// Its drive is connected (mount table; no stat).
         let online: Bool
-        /// A Master Archive copy with a promote-time digest on record —
-        /// counted like the tier counts it (needs `digest` too), never
-        /// read to prove it.
-        let isArchive: Bool
-        let archiveDigest: String?
-        /// The standardized, lower-cased path: two records naming ONE
-        /// file count once (QA round 3, F-2). Lower-casing merges names
-        /// that differ only in case, which on a case-sensitive volume
-        /// could undercount — the safe direction. Hard links (two paths,
-        /// one inode) cannot be seen without a stat; the forecast may
-        /// over-count those, and the run (which stats) counts them once.
-        /// Empty = unknown (the id stands in).
-        var pathKey: String = ""
-        /// The drive the copy sits on — the run's own key for the volume
-        /// (`DuplicateDrives.key`), or `notADrive` when its volume never
-        /// counts as one (a disk image, unidentified, could not be
-        /// stat'ed). Empty = not given (a hand-built input): the copy then
-        /// counts as a drive of its own.
-        var drive: String = ""
-        /// The run leaves this copy alone on the drive it is cleaning
-        /// (`VideoScanModel.duplicateSurvivorStandingRule`): never counted
-        /// as a copy that remains, never read to prove it.
-        var leftAloneByRun = false
     }
 
     /// One row of the run, in plan order.
@@ -112,60 +64,39 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         /// The duplicate's own usable stored digest, if it has one.
         let digest: String?
         let keeperID: UUID?
-        let groupID: UUID?
         /// False when the row's record is gone or moved (the run skips it).
         var inCatalog: Bool = true
     }
 
     struct Input: Sendable {
         var rows: [Row]
-        /// Every record a row may ask about: keepers, members, archive
-        /// copies, the rows themselves.
-        var copies: [UUID: Copy]
-        /// Group id → the ids of its members (and linked archive copies).
-        var members: [UUID: [UUID]]
-        var preferTrash: Bool
+        var keepers: [UUID: Keeper]
     }
 
     var buckets: [Bucket: Tally] = [:]
     /// Parallel to `Input.rows`: each row's id and its bucket.
     var rowIDs: [UUID] = []
     var rowBuckets: [Bucket] = []
+    /// Everything the run is expected to read in full: each duplicate once,
+    /// each keeper without a stored fixity once.
+    var bytesToRead: Int64 = 0
 
     /// The bucket forecast for one row (tests; O(rows)).
     func bucket(for id: UUID) -> Bucket? {
         rowIDs.firstIndex(of: id).map { rowBuckets[$0] }
     }
-    /// Siblings the run is expected to read to prove them.
-    var siblingReads = 0
-    var siblingReadBytes: Int64 = 0
-    /// Everything the run is expected to read in full: duplicates,
-    /// keepers without a stored fixity, siblings.
-    var bytesToRead: Int64 = 0
-    /// Trash rows that one more proven sibling would make permanent.
-    var trashMayBecomePermanent = 0
-
-    /// `Copy.drive` for a copy whose volume never counts as a drive.
-    static let notADrive = "-"
 
     func tally(_ bucket: Bucket) -> Tally { buckets[bucket] ?? Tally() }
     var total: Tally {
         buckets.values.reduce(into: Tally()) { $0.files += $1.files; $0.bytes += $1.bytes }
     }
 
-    // MARK: The simulation (pure)
+    // MARK: The forecast (pure)
 
     static func compute(_ input: Input) -> DeleteDuplicatesForecast {
         var out = DeleteDuplicatesForecast()
         out.rowBuckets.reserveCapacity(input.rows.count)
         out.rowIDs.reserveCapacity(input.rows.count)
-        let goal = input.preferTrash ? DeletionTierDecision.minimumForTrash : DeletionTierDecision.minimumForPermanent
-        var position: [UUID: Int] = [:]
-        position.reserveCapacity(input.rows.count)
-        for (i, row) in input.rows.enumerated() where position[row.id] == nil { position[row.id] = i }
-        var removed = Set<UUID>()
-        var notACopy = Set<UUID>()
-        var proven = Set<UUID>()
         var learnedKeepers = Set<UUID>()
 
         func put(_ bucket: Bucket, _ row: Row) {
@@ -175,125 +106,27 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
             out.buckets[bucket, default: Tally()].bytes += row.sizeBytes
         }
 
-        for (i, row) in input.rows.enumerated() {
-            guard row.inCatalog, let keeperID = row.keeperID, let keeper = input.copies[keeperID], keeper.online else {
+        for row in input.rows {
+            guard row.inCatalog, let keeperID = row.keeperID, let keeper = input.keepers[keeperID], keeper.online else {
                 put(.cannotCheck, row)
                 continue
             }
-            let keeperKnown = keeper.digest != nil || learnedKeepers.contains(keeperID)
-            // With neither the keeper's nor the duplicate's digest known,
-            // a stored digest proves nothing about THESE bytes (QA round
-            // 3, F-1): such a sibling is unproven, never counted.
-            let wanted = keeper.digest ?? row.digest
-            var counted = 1
-            // Where the counted copies sit — an outright delete needs two
-            // drives or the archive copy (2026-10-03), exactly as the tier.
-            // nil = its volume is not a drive (it never adds one).
-            func drive(_ c: Copy) -> String? {
-                c.drive.isEmpty ? "id:" + c.id.uuidString : (c.drive == Self.notADrive ? nil : c.drive)
-            }
-            var drives: Set<String> = []
-            func note(_ c: Copy) { if let d = drive(c) { drives.insert(d) } }
-            note(keeper)
-            var archiveCounted = keeper.isArchive && keeper.digest != nil
-            var readable: [Copy] = []
-            var offline = 0
-            var seen = Set<UUID>()
-            func key(_ c: Copy) -> String { c.pathKey.isEmpty ? c.id.uuidString : c.pathKey }
-            var seenPaths: Set<String> = [key(keeper)]
-            if let me = input.copies[row.id] { seenPaths.insert(key(me)) }
-            for memberID in input.members[row.groupID ?? UUID()] ?? [] {
-                guard memberID != row.id, memberID != keeperID, seen.insert(memberID).inserted,
-                      let copy = input.copies[memberID], seenPaths.insert(key(copy)).inserted else { continue }
-                if copy.isArchive {
-                    if copy.online, let d = copy.digest, copy.archiveDigest == d, let wanted, d == wanted {
-                        counted += 1
-                        note(copy)
-                        archiveCounted = true
-                    }
-                    continue
-                }
-                if let p = position[memberID], p > i { continue }        // still to be decided in this run
-                if copy.leftAloneByRun { continue }                      // left alone by the run: never a survivor
-                if removed.contains(memberID) || notACopy.contains(memberID) { continue }
-                guard copy.online else { offline += 1; continue }
-                if let d = copy.digest, let wanted {
-                    if d == wanted { counted += 1; note(copy) }
-                    continue
-                }
-                if proven.contains(memberID) { counted += 1; note(copy); continue }
-                readable.append(copy)
-            }
-
-            // The job's pre-check: with the keeper's digest known, a row
-            // that cannot reach two even with every readable sibling is
-            // left where it is — nothing moved, nothing read.
-            let aloneBucket: Bucket = counted + readable.count + offline >= DeletionTierDecision.minimumForTrash
-                ? .leftAloneOffline : .leftAlone
-            if keeperKnown && counted + readable.count < DeletionTierDecision.minimumForTrash {
-                put(aloneBucket, row)
-                continue
-            }
             // Different sizes are refused before a byte is read.
-            if row.sizeBytes != keeper.sizeBytes {
+            guard row.sizeBytes == keeper.sizeBytes else {
                 put(.likelyNotDuplicate, row)
-                notACopy.insert(row.id)
                 continue
             }
-            // From here the duplicate is read in full (and a keeper with
-            // no stored fixity, once).
+            // From here the duplicate is read in full (and a keeper with no
+            // stored fixity, once).
             out.bytesToRead += row.sizeBytes
-            if !keeperKnown {
+            if keeper.digest == nil, learnedKeepers.insert(keeperID).inserted {
                 out.bytesToRead += keeper.sizeBytes
-                learnedKeepers.insert(keeperID)
             }
-            if let k = keeper.digest, let d = row.digest, k != d {
+            if let k = keeper.digest, let d = row.digest, k.lowercased() != d.lowercased() {
                 put(.likelyNotDuplicate, row)
-                notACopy.insert(row.id)
                 continue
             }
-            func permanent(_ n: Int) -> Bool {
-                !input.preferTrash && DeletionTierDecision.earnsPermanent(count: n, distinctDrives: drives.count,
-                                                                          countsArchiveCopy: archiveCounted)
-            }
-            // The reads the run would make, each assumed to match — the
-            // prover's own rule (`SiblingProver.worthReading`): none that
-            // cannot change the tier. Returns the count they would reach.
-            func read(from start: Int) -> (count: Int, made: Int) {
-                var n = start, made = 0
-                for copy in readable where SiblingProver.worthReading(count: n, drives: drives, countsArchiveCopy: archiveCounted,
-                                                                      candidateDrive: drive(copy), goal: goal) {
-                    proven.insert(copy.id)
-                    note(copy)
-                    n += 1
-                    made += 1
-                    out.siblingReads += 1
-                    out.siblingReadBytes += copy.sizeBytes
-                    out.bytesToRead += copy.sizeBytes
-                }
-                return (n, made)
-            }
-            if counted >= DeletionTierDecision.minimumForTrash, permanent(counted) {
-                put(.permanent, row)
-                removed.insert(row.id)
-            } else if counted >= DeletionTierDecision.minimumForTrash {
-                // Two or more with evidence, not (yet) an outright delete:
-                // the Trash at least; a proven sibling more may make it
-                // permanent — when it brings a second drive (however many
-                // are counted on the first: codex #258 F11), or two are
-                // already spanned. The prover's own rule says which reads
-                // are made (none under Prefer the Trash).
-                put(.trash, row)
-                let after = read(from: counted)
-                if after.made > 0, permanent(after.count) { out.trashMayBecomePermanent += 1 }
-                removed.insert(row.id)
-            } else if counted + readable.count >= DeletionTierDecision.minimumForTrash {
-                put(.needsSiblingReads, row)
-                _ = read(from: counted)
-                removed.insert(row.id)
-            } else {
-                put(aloneBucket, row)
-            }
+            put(.trash, row)
         }
         return out
     }
@@ -309,40 +142,25 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         return f.string(from: NSNumber(value: n)) ?? "\(n)"
     }
 
-    /// The Start confirmation's block: one line per non-empty bucket with
-    /// the count and the size, then the bytes to read.
-    static let confirmationButtonTitle = "Check and Remove Proven Copies"
-    static let decidesAtTheMoment = "The run decides each file at the moment it acts; nothing leaves unless the copies are proven."
+    /// The Start confirmation's button: one verb (design §2.3).
+    static let confirmationButtonTitle = "Move Proven Copies to the Trash"
+    static let decidesAtTheMoment = "The run proves each copy against its keeper at the moment it acts; a copy only ever goes to the Trash — emptying it is yours."
 
-    /// The Start confirmation's lead, in plain words (2026-09-22: the old
-    /// "This will permanently delete N…" was untrue — the Trash at exactly
-    /// two, left-alone rows): what will be checked, the forecast with
-    /// sizes, an honest "nothing can be removed yet" when that is the
-    /// forecast, the bytes to read, and that the run decides each file.
+    /// The Start confirmation's lead, in plain words: what will be checked,
+    /// the forecast with sizes, an honest "nothing will move" when that is
+    /// the forecast, the bytes to read, and that the run decides each file.
     func confirmationText(volume: String) -> String {
         let n = total.files
         var text = "Check \(Self.number(n)) cop\(n == 1 ? "y" : "ies") on \(volume).\n\n"
-        let p = tally(.permanent), t = tally(.trash), r = tally(.needsSiblingReads)
-        let l = tally(.leftAlone), o = tally(.leftAloneOffline), x = tally(.likelyNotDuplicate), c = tally(.cannotCheck)
-        var parts: [String?] = [
-            "about \(Self.number(p.files)) deleted (\(Self.size(p.bytes)))",
-            "\(Self.number(t.files)) to the Trash (\(Self.size(t.bytes)))",
-            "\(Self.number(r.files)) need other copies read first (\(Self.size(siblingReadBytes)) to read)",
-            "\(Self.number(l.files)) left alone — only the original remains elsewhere (\(Self.size(l.bytes)))",
-            o.files > 0 ? "\(Self.number(o.files)) left alone — other copies offline (\(Self.size(o.bytes)))" : nil,
-            "\(Self.number(x.files)) likely not duplicates (\(Self.size(x.bytes)))",
-        ]
+        let t = tally(.trash), x = tally(.likelyNotDuplicate), c = tally(.cannotCheck)
+        var parts: [String] = ["about \(Self.number(t.files)) to the Trash (\(Self.size(t.bytes)))"]
+        parts.append("\(Self.number(x.files)) likely not duplicates (\(Self.size(x.bytes)))")
         if c.files > 0 {
             parts.append("\(Self.number(c.files)) cannot be checked — keeper not connected or not in the catalog (\(Self.size(c.bytes)))")
         }
-        text += "Forecast (from the catalog — no file read yet): " + parts.compactMap { $0 }.joined(separator: ", ") + "."
-        if trashMayBecomePermanent > 0 {
-            text += " \(Self.number(trashMayBecomePermanent)) of the Trash ones may be deleted outright once one more copy is proven."
-        }
-        if p.files + t.files == 0 {
-            text += r.files > 0
-                ? "\n\nNothing can be removed yet — \(Self.number(r.files)) cop\(r.files == 1 ? "y needs its" : "ies need their") other copies read first."
-                : "\n\nNothing can be removed — no copy here has enough proven copies elsewhere."
+        text += "Forecast (from the catalog — no file read yet): " + parts.joined(separator: ", ") + "."
+        if t.files == 0 {
+            text += "\n\nNothing will move — no copy here has a keeper that can be checked now."
         }
         text += "\n\nAbout \(Self.size(bytesToRead)) will be read in full. " + Self.decidesAtTheMoment
         return text
@@ -355,11 +173,7 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
             return "\(words) \(t.files) (\(Self.size(t.bytes)))"
         }
         let parts = [
-            part(.permanent, "delete"),
             part(.trash, "trash"),
-            part(.needsSiblingReads, "needs sibling reads") + " [\(siblingReads) reads, \(Self.size(siblingReadBytes))]",
-            part(.leftAlone, "left alone"),
-            part(.leftAloneOffline, "left alone (other copies offline)"),
             part(.likelyNotDuplicate, "likely not duplicates"),
             part(.cannotCheck, "cannot check"),
             "to read \(Self.size(bytesToRead))",
@@ -373,7 +187,8 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
 extension VideoScanModel {
 
     /// One row to forecast: the plan row's id and size, its live record
-    /// (nil when gone or moved) and its keeper's id.
+    /// (nil when gone or moved), and its keeper's id. Every extra is a
+    /// candidate — pairs included (R5 revised 2026-10-09 evening).
     struct DeleteDuplicatesForecastRow {
         let id: UUID
         let sizeBytes: Int64
@@ -383,44 +198,32 @@ extension VideoScanModel {
 
     /// The forecast for the Start confirmation: the same rows, in the same
     /// order, that `prepareDuplicateDeletion` will plan (the selection
-    /// minus Master Archive files). Catalog only — one O(records) pass.
+    /// minus Master Archive files). Catalog only — O(records) passes.
     func deleteDuplicatesForecast(onVolume volumePath: String) -> DeleteDuplicatesForecast {
         let selection = duplicateDeletionSelection(onVolume: volumePath)
         let archiveVolume = archiveVolumeProtection()
-        let rows = selection.targets.compactMap { r -> DeleteDuplicatesForecastRow? in
-            if bulkDeleteRefusal(r, volume: archiveVolume) != nil { return nil }
-            return .init(id: r.id, sizeBytes: r.sizeBytes, record: r,
-                         keeperID: r.duplicateGroupID.flatMap { selection.keepers[$0]?.id })
+        let targets = selection.targets.filter { r in bulkDeleteRefusal(r, volume: archiveVolume) == nil }
+        let rows = targets.map { r in
+            DeleteDuplicatesForecastRow(id: r.id, sizeBytes: r.sizeBytes, record: r,
+                                        keeperID: r.duplicateGroupID.flatMap { selection.keepers[$0]?.id })
         }
-        // Every row is still to be decided; the simulation orders them.
-        return deleteDuplicatesForecast(rows: rows, run: DuplicateRunScope(volumePath: volumePath, pending: Set(rows.map(\.id))))
+        return deleteDuplicatesForecast(rows: rows)
     }
 
-    /// The forecast for a plan about to run (fresh or resumed): its
-    /// unsettled rows, in plan order.
+    /// The forecast for a plan about to run (fresh, resumed or reviewed):
+    /// its unsettled rows, in plan order — every one of them chosen.
     func deleteDuplicatesForecast(for plan: DeleteDuplicatesPlan) -> DeleteDuplicatesForecast {
         let rows = plan.entries.filter { !$0.status.isSettled }.map { e -> DeleteDuplicatesForecastRow in
             let r = record(forID: e.id)
             let live = (r.map { !$0.isPurged && $0.fullPath == e.path } ?? false) ? r : nil
             return .init(id: e.id, sizeBytes: e.sizeBytes, record: live, keeperID: e.keeperPath.isEmpty ? nil : e.keeperID)
         }
-        return deleteDuplicatesForecast(rows: rows, run: plan.runScope(deciding: nil))
+        return deleteDuplicatesForecast(rows: rows)
     }
 
-    /// Build the pure input: the families of every row from ONE pass over
-    /// `records`, keepers and promotion-linked archive copies added,
-    /// drives checked against the mount table once. Where each connected
-    /// copy sits is asked the run's way (`DuplicateDrives.Resolver`): one
-    /// stat per FOLDER met, never per file, and nothing for a copy whose
-    /// drive is not connected.
-    /// `run` = the run being forecast: a family member the run leaves alone
-    /// on the drive it cleans is marked so — the run's own rule.
-    func deleteDuplicatesForecast(rows: [DeleteDuplicatesForecastRow], run: DuplicateRunScope? = nil) -> DeleteDuplicatesForecast {
-        let standing = run.map { duplicateSurvivorStandingRule(in: $0) }
-        func leftAlone(_ r: VideoRecord) -> Bool {
-            if case .leftAlone? = standing?(r) { return true }
-            return false
-        }
+    /// Build the pure input: each row's keeper, looked up once, and whether
+    /// its drive is connected (the mount table, read once).
+    func deleteDuplicatesForecast(rows: [DeleteDuplicatesForecastRow]) -> DeleteDuplicatesForecast {
         let mounted = VolumeReachability.currentMountedRoots()
         var mountCache: [Substring: Bool] = [:]
         func online(_ path: String) -> Bool {
@@ -435,59 +238,20 @@ extension VideoScanModel {
             guard let f = r.contentFixity, f.isUsableForVerification else { return nil }
             return f.digest
         }
-        var copies: [UUID: DeleteDuplicatesForecast.Copy] = [:]
-        var drives = DuplicateDrives.Resolver()
-        /// The run's own key for the copy's volume; `notADrive` when that
-        /// volume never counts as one or could not be asked.
-        func drive(_ r: VideoRecord, online: Bool) -> String {
-            guard online, let d = drives.drive(forPath: r.fullPath), d.kind.addsADrive else {
-                return DeleteDuplicatesForecast.notADrive
-            }
-            return d.key
-        }
-        func add(_ r: VideoRecord) {
-            guard copies[r.id] == nil else { return }
-            let archive = isArchiveCopy(r) ? r.archiveFixity : nil
-            let isOnline = online(r.fullPath)
-            copies[r.id] = .init(id: r.id, sizeBytes: r.sizeBytes, digest: usableDigest(r), online: isOnline,
-                                 isArchive: archive != nil, archiveDigest: archive?.digest.lowercased(),
-                                 pathKey: (r.fullPath as NSString).standardizingPath.lowercased(),
-                                 drive: drive(r, online: isOnline),
-                                 leftAloneByRun: leftAlone(r))
-        }
-        var groups = Set<UUID>()
-        for row in rows { if let g = row.record?.duplicateGroupID { groups.insert(g) } }
-        var members: [UUID: [UUID]] = [:]
-        if !groups.isEmpty {
-            var memberRecords: [VideoRecord] = []
-            for r in records where !r.isPurged {
-                guard let g = r.duplicateGroupID, groups.contains(g) else { continue }
-                members[g, default: []].append(r.id)
-                memberRecords.append(r)
-                add(r)
-            }
-            // Archive copies linked by promotion (the tier asks about
-            // `masterArchiveCopy(of:)` of every member and of the row).
-            for r in memberRecords {
-                guard let g = r.duplicateGroupID, let copy = masterArchiveCopy(of: r), !copy.isPurged,
-                      copies[copy.id] == nil else { continue }
-                add(copy)
-                members[g, default: []].append(copy.id)
-            }
-        }
+        var keepers: [UUID: DeleteDuplicatesForecast.Keeper] = [:]
         var out: [DeleteDuplicatesForecast.Row] = []
         out.reserveCapacity(rows.count)
         for row in rows {
-            if let keeperID = row.keeperID, copies[keeperID] == nil, let k = record(forID: keeperID), !k.isPurged { add(k) }
+            if let keeperID = row.keeperID, keepers[keeperID] == nil, let k = record(forID: keeperID), !k.isPurged {
+                keepers[keeperID] = .init(id: k.id, sizeBytes: k.sizeBytes, digest: usableDigest(k), online: online(k.fullPath))
+            }
             guard let r = row.record else {
                 out.append(.init(id: row.id, sizeBytes: row.sizeBytes, digest: nil, keeperID: row.keeperID,
-                                 groupID: nil, inCatalog: false))
+                                 inCatalog: false))
                 continue
             }
-            out.append(.init(id: r.id, sizeBytes: row.sizeBytes, digest: usableDigest(r), keeperID: row.keeperID,
-                             groupID: r.duplicateGroupID))
+            out.append(.init(id: r.id, sizeBytes: row.sizeBytes, digest: usableDigest(r), keeperID: row.keeperID))
         }
-        return DeleteDuplicatesForecast.compute(.init(rows: out, copies: copies, members: members,
-                                                      preferTrash: duplicateKeeperSettings.preferTrashForEveryDuplicate))
+        return DeleteDuplicatesForecast.compute(.init(rows: out, keepers: keepers))
     }
 }

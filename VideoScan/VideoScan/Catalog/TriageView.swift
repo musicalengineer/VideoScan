@@ -153,10 +153,6 @@ struct TriageView: View {
     // item-binding mutation and SwiftUI swaps content inside the same
     // modal presentation. See JunkSheet definition in JunkDeleteAction.swift.
     @State private var junkSheet: JunkSheet? = nil
-    /// What the confirm sheet offers, computed ONCE when it opens — never
-    /// in the sheet body, which SwiftUI re-runs on every pass (2026-09-22:
-    /// the Master Archive filter is O(records), no work in view bodies).
-    @State private var junkConfirmRecords: [VideoRecord] = []
 
     // Pass B — Import-to-Workspace sheet state. Same Identifiable-enum
     // pattern as JunkSheet to avoid chained-.sheet races. Set by the
@@ -432,9 +428,9 @@ struct TriageView: View {
             statusBar
         }
         // Delete-Junk sheets — mirror the catalog-toolbar wiring so users
-        // can tag-then-delete without leaving Triage. Confirm sheet asks
-        // Move-to-Trash vs Delete Permanently; result sheet shows the
-        // per-bucket breakdown.
+        // can tag-then-delete without leaving Triage. The confirm sheet
+        // shows the frozen set and moves it to the Trash (the only way
+        // out); the result sheet shows what moved and what was held back.
         // Single .sheet(item:) drives both confirm and result. Cancel sets
         // junkSheet = nil; Delete buttons don't call dismiss() — the
         // JunkDeleteAction callback transitions the binding from .confirm
@@ -442,22 +438,19 @@ struct TriageView: View {
         // atomically inside the same modal presentation. No race possible.
         .sheet(item: $junkSheet) { sheet in
             switch sheet {
-            case .confirm:
+            case .confirm(let frozen):
                 DeleteConfirmedJunkConfirmSheet(
-                    // Computed when the sheet opened (the Delete Junk button).
-                    records: junkConfirmRecords,
+                    // Frozen when the sheet opened (the Delete Junk button);
+                    // Move to Trash acts on exactly this set (design R1).
+                    snapshot: frozen,
                     onCancel: { /* dismiss is automatic via @Environment(\.dismiss) */ },
-                    onAct: JunkDeleteAction.makeOnAct(model: model) { result, mode, bytesSucceeded in
+                    onAct: JunkDeleteAction.makeOnAct(model: model, snapshot: frozen) { result, _ in
                         // Atomic content transition: confirm → result.
-                        junkSheet = .result(result, mode, bytesSucceeded)
+                        junkSheet = .result(JunkDeletionReport(result))
                     }
                 )
-            case .result(let r, let mode, let bytes):
-                DeleteConfirmedJunkResultSheet(
-                    mode: mode,
-                    result: r,
-                    bytesSucceeded: bytes
-                )
+            case .result(let report):
+                DeleteConfirmedJunkResultSheet(report: report)
             }
         }
         // Pass B — Workspace-import lineage picker. Driven by the same
@@ -489,6 +482,9 @@ struct TriageView: View {
             CopiesAdviceSheet(request: request, model: model,
                               startFootageRun: fileOpsCenterReference.map { center in
                                   { [model] scope in _ = center.startFindSimilarFootage(scope: scope, model: model) }
+                              },
+                              startReviewedTrash: fileOpsCenterReference.map { center in
+                                  { [model] batch in center.startReviewedDeleteDuplicates(batch, model: model) }
                               })
         }
     }
@@ -565,9 +561,7 @@ struct TriageView: View {
             // gathered at click time.
             if snapshot.value.count(.confirmedJunk) > 0 {
                 Button {
-                    // Never offer Master Archive files (tree or volume, 2026-09-22).
-                    junkConfirmRecords = model.recordsBulkVerbsMayRemove(model.triageConfirmedJunkRecords())
-                    junkSheet = .confirm
+                    openJunkConfirmation()
                 } label: {
                     Label("Delete Junk (\(snapshot.value.count(.confirmedJunk)))",
                           systemImage: "trash.fill")
@@ -576,7 +570,7 @@ struct TriageView: View {
                 .tint(.red)
                 // A viewer never deletes; the model refuses too (C04-F5).
                 .disabled(model.isReadOnly)
-                .help("Move to Trash or delete permanently — sheet shows the split between reachable and offline volumes")
+                .help("Move the Confirmed Junk to the Trash — the sheet shows exactly which files will move and which are held back, and why")
             }
 
             // Footage Spectrum trial (2026-10-03): 2–8 rows → one MFO job,
@@ -657,6 +651,15 @@ struct TriageView: View {
         .padding(.vertical, 10)
     }
 
+    /// What the orange Junk button marks. A human's Junk click IS the
+    /// decision (Rick 2026-10-09, "marking is deciding"), so it marks
+    /// Confirmed Junk — the set Delete Junk acts on. Machine guesses stay
+    /// Suspected until a human agrees (right-click ▸ Confirm as Junk).
+    /// (A `static let` on a View struct ≈ a C++ `static constexpr` member:
+    /// one value, readable by tests.)
+    static let junkButtonDisposition: MediaDisposition = .confirmedJunk
+    static let junkButtonHelp = "Mark selected as Confirmed Junk — Delete Junk moves them to the Trash"
+
     private var triageButtons: some View {
         HStack(spacing: 6) {
             Button {
@@ -680,14 +683,14 @@ struct TriageView: View {
             .help("Mark selected as Recoverable")
 
             Button {
-                triageSelected(.suspectedJunk)
+                triageSelected(Self.junkButtonDisposition)
             } label: {
                 Label("Junk", systemImage: "exclamationmark.triangle")
             }
             .vsGlassButtonStyle()
             .tint(.orange)
             .disabled(selectedIDs.isEmpty)
-            .help("Mark selected as Suspected Junk")
+            .help(Self.junkButtonHelp)
 
             Button {
                 triageSelected(.unreviewed)
@@ -1056,6 +1059,18 @@ struct TriageView: View {
 
     private func triageSelected(_ disposition: MediaDisposition) {
         applyDisposition(disposition, to: selectedIDs)
+    }
+
+    /// Delete Junk: freeze the set the sheet will show — and the only set
+    /// Move to Trash may act on (design R1) — then open the sheet. Held-back
+    /// files (Master Archive, Read-only drives) are in the snapshot WITH
+    /// their reason. The freeze is O(n) on main plus one stat per file
+    /// off-main — never in a view body.
+    private func openJunkConfirmation() {
+        let records = model.triageConfirmedJunkRecords()
+        Task { @MainActor in
+            junkSheet = .confirm(await model.freezeJunkSnapshot(records))
+        }
     }
 
     /// The under-construction records among `ids`, at click time.

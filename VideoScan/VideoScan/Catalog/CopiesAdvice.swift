@@ -31,9 +31,9 @@
 //                         live cases
 //
 // READ-ONLY. Nothing here moves, deletes or writes anything. The card's one
-// delete button hands the record to the existing ⌘⌫ routine
-// (VideoScanModel.trashSelectedRecords) with its refusals, and only after
-// this advice has been re-derived at click time and still says Safe.
+// delete button hands ONE reviewed pick to Delete Duplicates
+// (CopiesAdviceTrash.swift — the keeper is proven at the move), and only
+// after this advice has been re-derived at click time and still says Safe.
 //
 // (For Rick: the rule list is an enum whose CASE ORDER is the spec — the
 // first case that answers wins, like a C++ chain of early returns written

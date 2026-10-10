@@ -6,8 +6,9 @@
 //   * MENUS — the item is the FIRST item of the Triage right-click, and sits
 //     right after Get Info… in the Catalog row menu's inspect group.
 //   * NO DELETE CODE — the card's files never remove, unlink or trash a
-//     file themselves; the one delete button hands the record to the ⌘⌫
-//     routine (`trashSelectedRecords`) and nothing else.
+//     file themselves; the one delete button hands ONE reviewed pick to
+//     Delete Duplicates (`trashCopyThroughDuplicates`, codex F2) and
+//     nothing else.
 
 import Foundation
 import Testing
@@ -106,10 +107,10 @@ struct CopiesAdviceSensorTests {
         #expect(helpers.contains(".sheet(item: $copiesAdviceRequest)"))
     }
 
-    /// The card has no delete code of its own: the only door is the ⌘⌫
-    /// routine, called once, from the sheet.
+    /// The card has no delete code of its own: the only door is Delete
+    /// Duplicates' reviewed path, called once, from the sheet.
     @Test func theCardHasNoDeleteCodeOfItsOwn() throws {
-        let files = ["CopiesAdvice.swift", "CopiesAdvice+Projection.swift", "CopiesAdviceSheet.swift"]
+        let files = ["CopiesAdvice.swift", "CopiesAdvice+Projection.swift", "CopiesAdviceSheet.swift", "CopiesAdviceTrash.swift"]
         let forbidden = ["removeItem(", "trashItem(", "unlink(", "unlinkat(", "rmdir(", "deleteConfirmedJunk(",
                          "DeleteDuplicatesJob", "deleteDuplicates(", "recycle(", "renamex_np(", "moveItem("]
         for file in files {
@@ -119,10 +120,11 @@ struct CopiesAdviceSensorTests {
             }
         }
         let sheet = try SourceTree.appCode(named: "CopiesAdviceSheet.swift")
-        #expect(sheet.components(separatedBy: "trashSelectedRecords(").count - 1 == 1,
-                "exactly one hand-off to the ⌘⌫ routine")
+        #expect(!sheet.contains("trashSelectedRecords("), "never the junk routine — it has no keeper proof")
+        #expect(sheet.components(separatedBy: "model.trashCopyThroughDuplicates(").count - 1 == 1,
+                "exactly one hand-off to Delete Duplicates")
         // …and it sits behind a fresh advice that still offers the Trash.
-        let move = try slice(sheet, from: "private func moveThisCopyToTrash()", to: "trashSelectedRecords(")
+        let move = try slice(sheet, from: "private func moveThisCopyToTrash()", to: "model.trashCopyThroughDuplicates(")
         #expect(move.contains("CopiesAdviceLoader.load("))
         #expect(move.contains("fresh.offersTrash"))
         // The button only exists when the advice offers it.

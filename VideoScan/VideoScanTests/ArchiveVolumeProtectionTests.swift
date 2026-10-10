@@ -582,6 +582,13 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/MediaOps/RelocateEngine.swift": 1, "VideoScan/MediaOps/RescueFileCopier.swift": 3,
         "VideoScan/Media/ReviewThumbnailRenderer.swift": 1, "VideoScan/Volumes/ScanCheckpoint.swift": 1,
         "VideoScan/Volumes/ScanJobsStorage.swift": 2, "VideoScan/MediaOps/SignatureVerification.swift": 2,
+        // NEW 1 (Trash only, 2026-10-09 — unclassified until the codex
+        // delete-engines closure): DeleteDuplicatesJob.moveToTrash, the job's
+        // ONE live Trash step (FileManager.trashItem; a scratch folder under
+        // a test host). Reached only through SignatureVerification's `.trash`
+        // disposal, behind authorizeDuplicateDeletion + the removal-time
+        // volume re-check — the same gates as the two sites above.
+        "VideoScan/MediaOps/DeleteDuplicatesJob.swift": 1,
         // 7 → 4 (2026-09-22): no pre-delete of the output name or of a
         // fixed-name partial. 4 → 0 (fix/one-partial-registry, same day):
         // this run's own reserved partial is removed through
@@ -592,7 +599,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         // removals on failure / verify failure are gone (partials go through
         // CombineOutputPublish.removePartial); the one left removes this
         // pair's own freshly created `VS_<uuid>` staging dir.
-        "VideoScan/MediaOps/VideoScanModel+Combine.swift": 1, "VideoScan/MediaOps/VideoScanModel+JunkDelete.swift": 2,
+        "VideoScan/MediaOps/VideoScanModel+Combine.swift": 1,
+        // 2 → 1 (codex delete-engines F1, 2026-10-09): trashItem only — the
+        // engine has no removeItem of its own.
+        "VideoScan/MediaOps/VideoScanModel+JunkDelete.swift": 1,
         "VideoScan/Media/VideoScanModel+ProbeEngine.swift": 1, "VideoScan/Catalog/VideoScanModel+Workbench.swift": 1,
         "VideoScanCore/AtomicFilePublish.swift": 2,
         // CyberBrainWriter.swift → CyberBrainWriter+Persistence.swift (7b919780, 2026-10-07):
@@ -796,7 +806,9 @@ struct ArchiveVolumeProtectionSourceSensor {
 
     @Test func theCatalogFileRemoversGoThroughTheOneRule() throws {
         let junk = try SourceTree.appSource(named: "VideoScanModel+JunkDelete.swift")
-        #expect(junk.contains("let records = excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")"))
+        // 2026-10-09: the choke point's excluded files become named holds
+        // (one outcome per requested file), so the call is wrapped.
+        #expect(junk.contains("let mayGo = Set(excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")"))
         #expect(junk.contains("archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe)"),
                 "the removal-time re-check sits in the detached pass")
         let bench = try SourceTree.appSource(named: "VideoScanModel+Workbench.swift")

@@ -214,7 +214,9 @@ struct DeleteDuplicatesSafetyTests {
         #expect(result.deleted == 0)
         #expect(model.records.contains { $0.id == missing.id },
                 "catalog removal must be driven by successful deletion IDs")
-        #expect(missing.duplicateDisposition == .review)
+        // R6 (2026-10-09): a copy already gone is MISSING — named, never a
+        // refusal, so the row is not re-marked Review (it was, before).
+        #expect(missing.duplicateDisposition == .extraCopy)
     }
 
     /// Isolation/read-only sensor: a viewer shares the real catalog but must
@@ -329,7 +331,9 @@ struct DeleteDuplicatesSafetyTests {
         allowHashing.signal()
         let result = await deletion.value
 
-        #expect(result.deleted == 1)
+        // Codex delete-engines F5: the replaced row no longer authorizes the
+        // removal — the verified file is held (put back), the row untouched.
+        #expect(result.deleted == 0)
         #expect(model.records.count == 1)
         #expect(model.records[0].id == targetID)
         #expect(model.records[0].fullPath == replacementPath)

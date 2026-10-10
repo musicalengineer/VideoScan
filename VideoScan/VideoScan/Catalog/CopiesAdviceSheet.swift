@@ -12,11 +12,13 @@
 //   Move This Copy to
 //   Trash… .............. Safe ONLY, never on the keeper or an archive
 //                         copy. Asks once, re-derives the advice at the
-//                         click, and only if it still says Safe hands the
-//                         ONE record to VideoScanModel.trashSelectedRecords
-//                         — the ⌘⌫ routine, with its own refusals. The
-//                         card has no delete code of its own (pinned by
-//                         CopiesAdviceSensorTests).
+//                         click, and only if it still says Safe with a
+//                         proven keeper hands ONE reviewed pick (this copy,
+//                         the card's keeper) to Delete Duplicates
+//                         (VideoScanModel.trashCopyThroughDuplicates), which
+//                         proves the keeper AT the move (codex delete-engines
+//                         F2). The card has no delete code of its own (pinned
+//                         by CopiesAdviceSensorTests).
 //
 // The advice is built in `.task` (CopiesAdviceLoader: O(group) on main
 // after one id-compare pass, the rest off main), never in `body`.
@@ -40,6 +42,10 @@ struct CopiesAdviceSheet: View {
     /// Starts Find Similar Footage for one file; nil when this window has
     /// no Media File Operations centre.
     var startFootageRun: ((FootageScope) -> Void)?
+    /// Starts a reviewed Delete Duplicates batch (the window's Media File
+    /// Operations centre); nil when this window has none — the card then
+    /// offers no Trash.
+    var startReviewedTrash: ((DeleteDuplicatesBatch) -> DeleteDuplicatesBatchRun)?
 
     @Environment(\.dismiss) private var dismiss
     @AppStorage("selectedTab") private var selectedTab: Int = 0
@@ -165,8 +171,8 @@ struct CopiesAdviceSheet: View {
             if refreshing { ProgressView().controlSize(.small) }
             if let a = advice, a.offersTrash {
                 Button(CopiesAdviceText.trashButton) { confirmingTrash = true }
-                    .disabled(working || model.isReadOnly)
-                    .help("Moves only this copy to the Trash, through the same Move to Trash the Catalog uses. The keeper and the archive copy stay.")
+                    .disabled(working || model.isReadOnly || startReviewedTrash == nil)
+                    .help("Moves only this copy to the Trash, through Delete Duplicates: it moves only if the keeper is proven the same bytes at that moment. The keeper and the archive copy stay.")
                     .accessibilityIdentifier("copiesAdvice.moveThisCopyToTrash")
             }
             Spacer()
@@ -200,8 +206,9 @@ struct CopiesAdviceSheet: View {
         generation &+= 1
     }
 
-    /// Re-derive the advice NOW; only if it still says Safe, hand the one
-    /// record to the ⌘⌫ routine. Nothing else here touches a file.
+    /// Re-derive the advice NOW; only if it still says Safe with a proven
+    /// keeper, hand the one pick to Delete Duplicates, which proves the
+    /// keeper AT the move. Nothing else here touches a file.
     private func moveThisCopyToTrash() async {
         working = true
         defer { working = false }
@@ -210,14 +217,12 @@ struct CopiesAdviceSheet: View {
             return
         }
         load = .loaded(fresh)
-        guard fresh.offersTrash, let rec = model.record(forID: request.recordID) else {
+        guard fresh.offersTrash, let start = startReviewedTrash else {
             outcome = "Nothing was moved — the advice changed: \(fresh.verdict.sentence)."
             return
         }
-        model.log("Copies & Advice: Move This Copy to Trash — \(fresh.rule.rawValue)")
-        let result = await model.trashSelectedRecords([rec])
-        outcome = CopiesAdviceText.trashOutcome(succeeded: result.succeeded, alreadyMissing: result.alreadyMissing,
-                                                skippedOffline: result.skippedOffline, failed: result.failed.count)
+        // One outcome, in the engine's words, with every reason it stayed.
+        outcome = await model.trashCopyThroughDuplicates(fresh, start: start).cardText
         generation &+= 1
     }
 }
@@ -337,15 +342,6 @@ extension CopiesAdviceText {
         let keeper = a.rows.first { $0.id == a.keeperID }
         let stays = keeper.map { "\($0.volume): \($0.fullPath)" } ?? "the keeper"
         return "\(a.header.filename) goes to the Trash on its own drive; you can put it back until you empty the Trash.\n\n"
-            + "The keeper stays — \(stays)."
-    }
-
-    /// What the ⌘⌫ routine did with the one file, in plain words.
-    static func trashOutcome(succeeded: Int, alreadyMissing: Int, skippedOffline: Int, failed: Int) -> String {
-        if succeeded > 0 { return "Moved to the Trash. You can put it back from the Trash until you empty it." }
-        if alreadyMissing > 0 { return "The file was already gone from its drive; the catalog now says so." }
-        if skippedOffline > 0 { return "Nothing was moved — its drive isn't connected." }
-        if failed > 0 { return "Nothing was moved — the Trash refused it. The console says why." }
-        return "Nothing was moved — Move to Trash left it alone. The console says why."
+            + "The keeper stays — \(stays). This copy moves only if the keeper is proven the same bytes at that moment."
     }
 }

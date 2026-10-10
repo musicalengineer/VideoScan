@@ -485,9 +485,8 @@ struct StewardPaneView: View {
         }
         evidence = prepared.evidence
         let questions = prepared.questions
-        let preferTrash = prepared.preferTrash
         let proofs = await Task.detached(priority: .utility) {
-            StewardEvidenceBuilder.prove(questions, preferTrash: preferTrash)
+            StewardEvidenceBuilder.prove(questions)
         }.value
         guard !Task.isCancelled else { return }
         var done = prepared.evidence

@@ -78,13 +78,13 @@ struct DeleteDuplicatesRateTests {
         let bps = Double(c.totalBytes - c.settledBytes) / 7_800.0
         for _ in 0..<5 { r.add(bytes: Int64(bps), seconds: 1) }
         let text = DeleteDuplicatesRate.subtitle(counts: c, rate: r)
-        #expect(text.hasPrefix("verified 4 of 2,992 · 3 deleted · 1 refused · "))
+        #expect(text.hasPrefix("checked 4 of 2,992 · 1 held · 3 deleted outright · "), Comment(rawValue: text))
         #expect(text.hasSuffix("/s · about 2 h 10 min left"), Comment(rawValue: text))
     }
 
     @Test func subtitleOmitsWhatIsNotKnownYetAndSaysPaused() {
         var c = DeleteDuplicatesPlan.Counts(); c.total = 10
-        #expect(DeleteDuplicatesRate.subtitle(counts: c, rate: DeleteDuplicatesRate()) == "verified 0 of 10")
+        #expect(DeleteDuplicatesRate.subtitle(counts: c, rate: DeleteDuplicatesRate()) == "checked 0 of 10")
         // Rick 2026-09-20 evening: a paused run says where it holds.
         #expect(DeleteDuplicatesRate.subtitle(counts: c, rate: DeleteDuplicatesRate(), paused: true) == "Paused at 0 of 10")
     }

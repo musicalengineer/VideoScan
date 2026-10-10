@@ -1,23 +1,28 @@
 // DeleteDuplicatesSiblingProofTests.swift
 // Rick's SanDisk run, 2026-09-21: 2,898 working copies, 1.5 hours, ZERO
-// deleted — 1,702 rows "left alone" while the siblings they named sat on
-// LaCieWorkspace unproven (a sibling never had a current stamp-bound
-// fixity, because nothing ever read one). Three parts, five dimensions:
+// deleted — rows "left alone" while the siblings they named sat unproven.
+// The cure then was to READ siblings until two (or three) verified copies
+// would remain.
 //
-//   1. PROVE SIBLINGS (logic) — keeper + one unproven sibling → read,
-//      matches → 2 remain → Trash; + two → permanent; differs → left
-//      alone and named; offline → left alone; a hard link of the target
-//      is never read nor counted; a stored sibling fixity is reused on the
-//      next run without a read; the removal boundary still refuses when
-//      the proven sibling changes between counting and mutation; an HDD
-//      sibling makes its pair run alone (the slot gate).
-//   2. PREVIEW (logic + scale) — buckets on a fixture plan match what the
-//      run then does; pure bucket rules; 100k rows under a budget.
-//   3. LOGGING — one `[dupjob]` line per decided row for every outcome,
-//      a counts-and-sizes summary, a partial summary on pause and cancel.
-//   ISOLATION — a poisoned stored fixity on a sibling (right digest,
-//      wrong stamp) is never trusted by the run: it re-reads; every line
-//      goes to the job's injected sink, never the global log.
+// KEEP ONE (Rick 2026-10-09, design triage_delete_streamline §9 R5): one
+// verified keeper is enough for the Trash, so the run never needs a
+// sibling read. This file now pins that, and what still stands:
+//
+//   1. SIBLINGS ARE NAMED, NEVER NEEDED (logic) — an unproven, different,
+//      offline or hard-linked sibling is never read; the copy goes to the
+//      Trash on the keeper alone; a sibling with current stored evidence
+//      is COUNTED for the row's words (stat only); a counted sibling that
+//      changes at the removal is dropped from the words, and the copy still
+//      goes; the slot gate no longer reserves a sibling's drive.
+//   2. PREVIEW (logic + scale) — the forecast's buckets on a fixture plan
+//      match what the run then does; the pure bucket rules; the bulk run's
+//      pre-selection; 100k rows under a budget.
+//   3. LOGGING — one `[dupjob]` line per decided row (rows held before the
+//      first read included), a counts-and-sizes summary, a partial summary
+//      on pause and cancel.
+//   ISOLATION — a poisoned stored fixity on a sibling is never counted and
+//      never "repaired" by the run; every line goes to the job's injected
+//      sink, never the global log.
 //
 // Everything lives under the process temp dir; the Trash step is routed
 // into a scratch folder (DeleteDuplicatesTierFixtures). No personal
@@ -89,7 +94,8 @@ private func rewriteInPlace(_ url: URL, bytes: [UInt8]) throws {
     try #require(futimens(fd, &times) == 0)
 }
 
-/// Counts read blocks per label, holds the first open of named files.
+/// Counts read blocks per label and opens per file; holds the first open
+/// of named files.
 private final class Probe: @unchecked Sendable {
     private let lock = NSLock()
     private var blocks: [String: Int] = [:]
@@ -184,13 +190,15 @@ private func waitUntil(_ condition: @MainActor () -> Bool, seconds: Double = 10)
     while ContinuousClock.now < deadline, !(await condition()) { await Task.yield() }
 }
 
-// MARK: - 1. Prove siblings
+// MARK: - 1. Siblings are named, never needed
 
-@Suite("Delete Duplicates — prove siblings", .serialized)
+@Suite("Delete Duplicates — keep one: siblings are named, never read", .serialized)
 @MainActor
 struct DeleteDuplicatesSiblingProofTests {
 
-    @Test func oneUnprovenSiblingIsReadMatchesAndTheCopyGoesToTheTrash() async throws {
+    /// A sibling with no evidence is NOT read: the keeper alone is the one
+    /// verified copy, and the copy goes to the Trash. The sibling is named.
+    @Test func anUnprovenSiblingIsNotReadTheKeeperAloneSuffices() async throws {
         let dir = tempDir("one"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
         let fam = addFamily(to: model, in: dir, name: "a", siblings: 1)
@@ -199,85 +207,45 @@ struct DeleteDuplicatesSiblingProofTests {
         job.start(); await job.task?.value
 
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 2,
+        #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 1,
                 "\(row.status): \(row.tierReason ?? row.note)")
-        let evidence = try #require(row.countedCopies)
-        #expect(evidence.map(\.path) == [fam.siblings[0].fullPath], "the proven sibling rides on the row as evidence")
-        #expect(probe.blocks("sibling") == 3, "the sibling was read in full, once")
-        #expect(probe.blocks("keeper") == 0, "the keeper is never read")
-        let stored = try #require(fam.siblings[0].contentFixity)
-        #expect(stored.isUsableForVerification && stored.describesFileNow(FileIdentityStamp.capture(path: fam.siblings[0].fullPath)),
-                "the sibling's stamp-bound fixity is persisted where the keeper's is")
-        #expect(stored.digest == plainSHA256(URL(fileURLWithPath: fam.siblings[0].fullPath)))
+        #expect(row.tierReason?.contains("sibling a-sib1.mov on ") == true && row.tierReason?.contains("not verified yet") == true,
+                Comment(rawValue: row.tierReason ?? ""))
+        #expect(probe.blocks("sibling") == 0 && probe.opens("a-sib1.mov") == 0, "no sibling is read under keep one")
+        #expect(probe.blocks("keeper") == 0, "the keeper is never read (its stored fixity is current)")
+        #expect(fam.siblings[0].contentFixity == nil, "nothing was read, nothing stored")
         #expect(FileManager.default.fileExists(atPath: fam.siblings[0].fullPath), "the sibling is never touched")
-        #expect(job.runTally.siblingReads == 1 && job.runTally.siblingBytes == Int64(fileSize))
-        #expect(sink.joined.contains("[dupjob] read sibling a-sib1.mov on "), Comment(rawValue: sink.joined))
-        #expect(sink.joined.contains("for a-copy1.mov — matches"))
+        #expect(job.runTally.siblingReads == 0)
+        #expect(!sink.joined.contains("[dupjob] read sibling"), Comment(rawValue: sink.joined))
     }
 
-    /// Two unproven siblings on the keeper's own drive: ONE is read (to
-    /// reach the Trash's two); the second is not — a third copy on the same
-    /// drive could not make the row permanent (2026-10-03) — and the copy
-    /// goes to the Trash.
-    @Test func ofTwoUnprovenSiblingsOnTheKeepersDriveOneIsReadAndTheCopyGoesToTheTrash() async throws {
-        let dir = tempDir("two"); defer { try? FileManager.default.removeItem(at: dir) }
-        let model = makeModel(dir)
-        let fam = addFamily(to: model, in: dir, name: "b", siblings: 2)
-        let probe = Probe(); let sink = InMemoryLogSink()
-        let job = makeJob(model, dir, probe, sink: sink)
-        job.start(); await job.task?.value
-
-        let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .trashed && row.tier == .trash && row.remainingVerifiedCopies == 2,
-                "\(row.status): \(row.tierReason ?? row.note)")
-        #expect(probe.blocks("sibling") == 3, "one sibling read in full; the other could not change the tier")
-        #expect(FileManager.default.fileExists(atPath: dir.appendingPathComponent("Trash/b-copy1.mov").path))
-        #expect(fam.siblings.map { $0.contentFixity?.isUsableForVerification == true } == [true, false])
-    }
-
-    /// With the archive copy among the counted (keeper + archive = two), a
-    /// third copy anywhere makes the row permanent: ONE sibling is read,
-    /// the goal of three is reached, and the rest are not read.
-    @Test func readsStopAtTheGoal() async throws {
-        let dir = tempDir("goal"); defer { try? FileManager.default.removeItem(at: dir) }
-        let model = makeModel(dir)
-        let fam = addFamily(to: model, in: dir, name: "g", siblings: 4)
-        addVerifiedArchiveFamily(to: model, keeper: fam.keeper, withSibling: false)
-        let probe = Probe(); let sink = InMemoryLogSink()
-        let job = makeJob(model, dir, probe, sink: sink)
-        job.start(); await job.task?.value
-
-        #expect(job.plan?.entries.first?.status == .deleted)
-        #expect(probe.blocks("sibling") == 3, "one sibling reaches three copies (with the archive's); the other three are not read")
-        #expect(job.runTally.siblingReads == 1)
-    }
-
-    @Test func aSiblingThatDiffersIsNotACopyTheRowIsLeftAloneAndNamed() async throws {
+    /// A sibling whose stored evidence names OTHER bytes is named and not
+    /// counted; the copy still goes on the keeper alone.
+    @Test func aSiblingThatDiffersIsNamedNotCountedAndTheCopyStillGoes() async throws {
         let dir = tempDir("differs"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
         let fam = addFamily(to: model, in: dir, name: "c", siblings: 1)
         var other = fam.bytes; other[blockSize + 3] ^= 0x44
-        write(URL(fileURLWithPath: fam.siblings[0].fullPath), other)
+        let sib = URL(fileURLWithPath: fam.siblings[0].fullPath)
+        write(sib, other)
+        fam.siblings[0].contentFixity = ContentFixity.captured(path: sib.path, digest: plainSHA256(sib), byteCount: Int64(fileSize))
         let probe = Probe(); let sink = InMemoryLogSink()
         let job = makeJob(model, dir, probe, sink: sink)
         job.start(); await job.task?.value
 
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .skipped && row.tier == nil && row.remainingVerifiedCopies == 1, "\(row.status): \(row.note)")
-        #expect(row.note.contains("sibling c-sib1.mov on ") && row.note.hasSuffix("holds different bytes)"), Comment(rawValue: row.note))
-        #expect(FileManager.default.fileExists(atPath: fam.copies[0].fullPath), "put back at its path")
-        #expect(quarantineFolders(in: dir).isEmpty)
-        #expect(fam.copies[0].duplicateDisposition == .extraCopy, "left alone is not a refusal")
-        #expect(fam.siblings[0].contentFixity?.digest == plainSHA256(URL(fileURLWithPath: fam.siblings[0].fullPath)),
-                "a mismatching sibling's fixity is stored too — no later row reads it again")
-        #expect(sink.joined.contains("for c-copy1.mov — differs"))
-        #expect(sink.joined.contains("[dupjob] left alone c-copy1.mov (\(sizeText)) — only the keeper on "), Comment(rawValue: sink.joined))
+        #expect(row.status == .trashed && row.remainingVerifiedCopies == 1, "\(row.status): \(row.tierReason ?? row.note)")
+        #expect(row.tierReason?.contains("sibling c-sib1.mov on ") == true && row.tierReason?.contains("holds different bytes") == true,
+                Comment(rawValue: row.tierReason ?? ""))
+        #expect(probe.blocks("sibling") == 0)
+        #expect(sink.joined.contains("[dupjob] trashed c-copy1.mov (\(sizeText)) — 1 verified copy remains: keeper on "),
+                Comment(rawValue: sink.joined))
     }
 
-    @Test func anOfflineSiblingIsNotCountedAndNothingIsRead() async throws {
+    @Test func anOfflineSiblingIsNamedAndNothingIsReadOfIt() async throws {
         let dir = tempDir("offline"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        let fam = addFamily(to: model, in: dir, name: "d")
+        let fam = addFamily(to: model, in: dir, name: "d", siblings: 1)
         let away = dupRecord(path: "/Volumes/NotConnected-\(UUID().uuidString.prefix(8))/d-sib.mov", size: Int64(fileSize),
                              group: fam.keeper.duplicateGroupID!, disposition: .review)
         model.records.append(away)
@@ -286,30 +254,29 @@ struct DeleteDuplicatesSiblingProofTests {
         job.start(); await job.task?.value
 
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .skipped && row.remainingVerifiedCopies == 1, "\(row.status): \(row.note)")
-        #expect(row.note.contains("sibling d-sib.mov on ") && row.note.contains("offline — not counted"), Comment(rawValue: row.note))
-        #expect(probe.blocks("sibling") == 0 && probe.blocks("quarantine") == 0, "decided by stat before the hold — nothing moved or read")
-        #expect(sink.joined.contains("[dupjob] left alone d-copy1.mov (\(sizeText)) — other copies offline — only the keeper on "),
-                Comment(rawValue: sink.joined))
-        #expect(FileManager.default.fileExists(atPath: fam.copies[0].fullPath))
+        #expect(row.status == .trashed && row.remainingVerifiedCopies == 1, "\(row.status): \(row.tierReason ?? row.note)")
+        #expect(row.tierReason?.contains("sibling d-sib.mov on ") == true, Comment(rawValue: row.tierReason ?? ""))
+        #expect(probe.blocks("sibling") == 0 && probe.opens("d-sib.mov") == 0)
     }
 
     @Test func aHardLinkOfTheTargetIsNeverReadAndNeverCounted() async throws {
         let dir = tempDir("hardlink"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        let fam = addFamily(to: model, in: dir, name: "e")
+        let fam = addFamily(to: model, in: dir, name: "e", siblings: 1)
         let linked = dir.appendingPathComponent("e-linked.mov")
         try #require(link(fam.copies[0].fullPath, linked.path) == 0)
-        model.records.append(dupRecord(path: linked.path, size: Int64(fileSize), group: fam.keeper.duplicateGroupID!,
-                                       disposition: .review))
+        let linkRecord = dupRecord(path: linked.path, size: Int64(fileSize), group: fam.keeper.duplicateGroupID!, disposition: .review)
+        linkRecord.contentFixity = ContentFixity.captured(path: linked.path, digest: plainSHA256(linked), byteCount: Int64(fileSize))
+        model.records.append(linkRecord)
         let probe = Probe(); let sink = InMemoryLogSink()
         let job = makeJob(model, dir, probe, sink: sink)
         job.start(); await job.task?.value
 
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .skipped && row.remainingVerifiedCopies == 1, "\(row.status): \(row.note)")
-        #expect(probe.blocks("sibling") == 0, "the same inode as the file about to go is not another copy")
-        #expect(FileManager.default.fileExists(atPath: fam.copies[0].fullPath) && FileManager.default.fileExists(atPath: linked.path))
+        #expect(row.status == .trashed && row.remainingVerifiedCopies == 1, "the link is the copy itself, never another copy: \(row.tierReason ?? row.note)")
+        #expect(row.tierReason?.contains("e-linked.mov") == true, Comment(rawValue: row.tierReason ?? ""))
+        #expect(probe.blocks("sibling") == 0)
+        #expect(FileManager.default.fileExists(atPath: linked.path), "the other name keeps its bytes")
     }
 
     /// A stored hard-link fixity cannot sneak in either: the gather names it.
@@ -350,33 +317,27 @@ struct DeleteDuplicatesSiblingProofTests {
         #expect(f.digest == plainSHA256(b))
     }
 
-    @Test func aStoredSiblingFixityIsReusedOnTheNextRunWithoutAnyRead() async throws {
+    /// A sibling with CURRENT stored evidence is counted for the row's words
+    /// — stat only, no read.
+    @Test func aStoredSiblingFixityIsCountedByStatAlone() async throws {
         let dir = tempDir("reuse"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        let fam = addFamily(to: model, in: dir, name: "f", siblings: 1)
-        let first = Probe(); let sink = InMemoryLogSink()
-        let job1 = makeJob(model, dir, first, sink: sink)
-        job1.start(); await job1.task?.value
-        #expect(job1.plan?.entries.first?.status == .trashed)
-        #expect(first.blocks("sibling") == 3)
-
-        // A second duplicate turns up; the sibling's stored stamp still holds.
-        let copy2 = dir.appendingPathComponent("f-copy2.mov"); write(copy2, fam.bytes)
-        model.records.append(dupRecord(path: copy2.path, size: Int64(fileSize), group: fam.keeper.duplicateGroupID!,
-                                       disposition: .extraCopy))
-        let second = Probe()
-        let job2 = makeJob(model, dir, second, sink: sink)
-        job2.start(); await job2.task?.value
-        let row = try #require(job2.plan?.entries.first)
+        _ = addFamily(to: model, in: dir, name: "f", siblings: 1, siblingFixity: true)
+        let probe = Probe()
+        let job = makeJob(model, dir, probe, sink: InMemoryLogSink())
+        job.start(); await job.task?.value
+        let row = try #require(job.plan?.entries.first)
         #expect(row.status == .trashed && row.remainingVerifiedCopies == 2, "\(row.status): \(row.tierReason ?? row.note)")
-        #expect(second.blocks("sibling") == 0 && second.opens("f-sib1.mov") == 0, "stat only — the stored fixity stands in for the read")
-        #expect(job2.runTally.siblingReads == 0)
+        #expect(probe.blocks("sibling") == 0 && probe.opens("f-sib1.mov") == 0, "stat only — the stored fixity stands in for the read")
     }
 
-    @Test func theRemovalBoundaryStillRefusesWhenAProvenSiblingChanges() async throws {
+    /// The removal boundary still re-stats every counted copy: a sibling
+    /// rewritten after the save is DROPPED from the words. The keeper still
+    /// holds, so the copy still goes to the Trash — and the row says why.
+    @Test func aCountedSiblingThatChangesAtTheBoundaryIsDroppedAndTheCopyStillGoes() async throws {
         let dir = tempDir("boundary"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        let fam = addFamily(to: model, in: dir, name: "h", siblings: 1)
+        let fam = addFamily(to: model, in: dir, name: "h", siblings: 1, siblingFixity: true)
         let probe = Probe(); let sink = InMemoryLogSink()
         let job = makeJob(model, dir, probe, sink: sink)
         var tierWhenSaved: DeletionTier?
@@ -386,18 +347,18 @@ struct DeleteDuplicatesSiblingProofTests {
         }
         job.start(); await job.task?.value
 
-        #expect(tierWhenSaved == .trash, "the proven sibling made two at the save")
+        #expect(tierWhenSaved == .trash)
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .skipped && row.tier == nil && row.remainingVerifiedCopies == 1, "\(row.status): \(row.tierReason ?? row.note)")
-        #expect(row.note.hasPrefix("evidence changed before removal") && row.note.contains("h-sib1.mov"), Comment(rawValue: row.note))
-        #expect(FileManager.default.fileExists(atPath: fam.copies[0].fullPath), "put back untouched")
+        #expect(row.status == .trashed && row.remainingVerifiedCopies == 1, "\(row.status): \(row.tierReason ?? row.note)")
+        #expect(row.tierReason?.hasPrefix("re-checked before removal — to the Trash (") == true
+                && row.tierReason?.contains("h-sib1.mov") == true, Comment(rawValue: row.tierReason ?? ""))
+        #expect(!FileManager.default.fileExists(atPath: fam.copies[0].fullPath))
         #expect(quarantineFolders(in: dir).isEmpty)
     }
 
-    /// ONE READ PER SIBLING PER RUN: two SSD pairs in flight together
-    /// that both name the same unproven sibling — the second waits for
-    /// the first's read and reuses the stored fixity.
-    @Test func twoPairsNamingOneUnprovenSiblingReadItOnce() async throws {
+    /// Two SSD pairs naming one unproven sibling: nothing waits on a claim
+    /// (no sibling is read), both go.
+    @Test func twoPairsNamingOneUnprovenSiblingNeitherReadsIt() async throws {
         let dir = tempDir("dedup"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
         let fam = addFamily(to: model, in: dir, name: "u", copies: 2, siblings: 1)
@@ -407,17 +368,15 @@ struct DeleteDuplicatesSiblingProofTests {
         job.start(); await job.task?.value
 
         #expect(job.plan?.entries.map(\.status) == [.trashed, .trashed], "\(job.plan?.entries.map(\.note) ?? [])")
-        #expect(probe.blocks("sibling") == 3 && probe.opens("u-sib1.mov") == 1, "the sibling was read once, not twice")
-        #expect(job.siblingReadWaits == 1, "the second pair waited for the first's read")
-        #expect(job.runTally.siblingReads == 1)
+        #expect(probe.opens("u-sib1.mov") == 0 && job.siblingReadWaits == 0 && job.runTally.siblingReads == 0)
+        #expect(job.peakInFlight == 2, "two SSD pairs overlap")
         #expect(FileManager.default.fileExists(atPath: fam.siblings[0].fullPath))
     }
 
-    /// The slot gate: a sibling read occupies a slot on the SIBLING's
-    /// drive. SSD siblings → two SSD pairs overlap; HDD siblings → each
-    /// pair runs alone.
+    /// The slot gate no longer reserves a SIBLING's drive: with no read to
+    /// make, an HDD sibling does not make its pair run alone.
     @Test(arguments: [VolumeMediaTech.ssd, .hdd])
-    func aSiblingOnAnHDDMakesItsPairRunAlone(siblingTech: VolumeMediaTech) async throws {
+    func aSiblingsDriveNoLongerChangesTheSlotWeight(siblingTech: VolumeMediaTech) async throws {
         let dir = tempDir("slots-\(siblingTech)"); defer { try? FileManager.default.removeItem(at: dir) }
         let sibDir = dir.appendingPathComponent("sibdrive", isDirectory: true)
         let model = makeModel(dir)
@@ -429,7 +388,7 @@ struct DeleteDuplicatesSiblingProofTests {
         job.start(); await job.task?.value
 
         #expect(job.plan?.entries.map(\.status) == [.trashed, .trashed], "\(job.plan?.entries.map(\.note) ?? [])")
-        #expect(job.peakInFlight == (siblingTech == .ssd ? 2 : 1), "peak \(job.peakInFlight) with \(siblingTech) siblings")
+        #expect(job.peakInFlight == 2, "peak \(job.peakInFlight) with \(siblingTech) siblings")
     }
 }
 
@@ -439,88 +398,53 @@ struct DeleteDuplicatesSiblingProofTests {
 @MainActor
 struct DeleteDuplicatesForecastTests {
 
-    private static func copy(_ id: UUID = UUID(), digest: String? = nil, online: Bool = true, size: Int64 = 100,
-                             archive: String? = nil) -> DeleteDuplicatesForecast.Copy {
-        .init(id: id, sizeBytes: size, digest: digest, online: online, isArchive: archive != nil, archiveDigest: archive)
+    private typealias F = DeleteDuplicatesForecast
+
+    private static func keeper(_ id: UUID = UUID(), digest: String? = "aa", online: Bool = true, size: Int64 = 100) -> F.Keeper {
+        .init(id: id, sizeBytes: size, digest: digest, online: online)
     }
 
-    /// One row, one family — the pure rule table.
+    /// One row — the pure rule table.
     @Test func bucketRules() {
-        typealias F = DeleteDuplicatesForecast
-        func run(keeper: F.Copy?, row: (size: Int64, digest: String?), siblings: [F.Copy], preferTrash: Bool = false) -> F {
-            let g = UUID()
-            let rowID = UUID()
-            var copies: [UUID: F.Copy] = [:]
-            if let keeper { copies[keeper.id] = keeper }
-            for s in siblings { copies[s.id] = s }
-            copies[rowID] = Self.copy(rowID, digest: row.digest, size: row.size)
-            let members = [rowID] + (keeper.map { [$0.id] } ?? []) + siblings.map(\.id)
-            return F.compute(.init(rows: [.init(id: rowID, sizeBytes: row.size, digest: row.digest, keeperID: keeper?.id ?? UUID(),
-                                                groupID: g)],
-                                   copies: copies, members: [g: members], preferTrash: preferTrash))
+        func run(_ k: F.Keeper?, size: Int64 = 100, digest: String? = nil,
+                 inCatalog: Bool = true) -> F {
+            let row = F.Row(id: UUID(), sizeBytes: size, digest: digest, keeperID: k?.id ?? UUID(),
+                            inCatalog: inCatalog)
+            return F.compute(.init(rows: [row], keepers: k.map { [$0.id: $0] } ?? [:]))
         }
-        let k = Self.copy(digest: "aa")
-        // Stored evidence alone.
-        #expect(run(keeper: k, row: (100, nil), siblings: [Self.copy(digest: "aa"), Self.copy(digest: "aa")]).rowBuckets == [.permanent])
-        #expect(run(keeper: k, row: (100, nil), siblings: [Self.copy(digest: "aa")]).rowBuckets == [.trash])
-        #expect(run(keeper: k, row: (100, nil), siblings: [Self.copy(digest: "aa"), Self.copy(digest: "aa")], preferTrash: true).rowBuckets == [.trash])
-        // Trash that one read could upgrade.
-        let upgrade = run(keeper: k, row: (100, nil), siblings: [Self.copy(digest: "aa"), Self.copy()])
-        #expect(upgrade.rowBuckets == [.trash] && upgrade.trashMayBecomePermanent == 1 && upgrade.siblingReads == 1)
-        // Reads needed.
-        let needs = run(keeper: k, row: (100, nil), siblings: [Self.copy(), Self.copy(), Self.copy()])
-        #expect(needs.rowBuckets == [.needsSiblingReads] && needs.siblingReads == 2, "reads stop at the goal (3)")
-        #expect(needs.bytesToRead == 100 + 200, "the duplicate once + two siblings")
-        // Only the original remains elsewhere.
-        let alone = run(keeper: k, row: (100, nil), siblings: [Self.copy(digest: "bb")])
-        #expect(alone.rowBuckets == [.leftAlone] && alone.bytesToRead == 0, "a different sibling never counts; nothing read")
-        // Short only because another copy's drive is away: said so.
-        let away = run(keeper: k, row: (100, nil), siblings: [Self.copy(online: false)])
-        #expect(away.rowBuckets == [.leftAloneOffline] && away.bytesToRead == 0)
-        #expect(away.confirmationText(volume: "V").contains("1 left alone — other copies offline ("), Comment(rawValue: away.confirmationText(volume: "V")))
-        #expect(!alone.confirmationText(volume: "V").contains("other copies offline"))
-        // Catalog already says different.
-        #expect(run(keeper: k, row: (99, nil), siblings: [Self.copy(digest: "aa")]).rowBuckets == [.likelyNotDuplicate])
-        #expect(run(keeper: k, row: (100, "cc"), siblings: [Self.copy(digest: "aa")]).rowBuckets == [.likelyNotDuplicate])
-        // Keeper away / missing.
-        #expect(run(keeper: Self.copy(digest: "aa", online: false), row: (100, nil), siblings: []).rowBuckets == [.cannotCheck])
-        #expect(run(keeper: nil, row: (100, nil), siblings: []).rowBuckets == [.cannotCheck])
-        // Archive copy counts only with a stamp-bound digest equal to its record.
-        #expect(run(keeper: k, row: (100, nil), siblings: [Self.copy(digest: "aa", archive: "aa")]).rowBuckets == [.trash])
-        #expect(run(keeper: k, row: (100, nil), siblings: [Self.copy(archive: "aa")]).rowBuckets == [.leftAlone])
+        let k = Self.keeper()
+        #expect(run(k).rowBuckets == [.trash], "a keeper that can be checked: the Trash")
+        #expect(run(k).bytesToRead == 100, "the duplicate is read once; the keeper's digest is stored")
+        let unknown = run(Self.keeper(digest: nil))
+        #expect(unknown.rowBuckets == [.trash] && unknown.bytesToRead == 200, "a keeper without a stored digest is read once too")
+        #expect(run(k, digest: "aa").rowBuckets == [.trash])
+        #expect(run(k, size: 99).rowBuckets == [.likelyNotDuplicate])
+        #expect(run(k, digest: "cc").rowBuckets == [.likelyNotDuplicate])
+        #expect(run(Self.keeper(online: false)).rowBuckets == [.cannotCheck])
+        #expect(run(nil).rowBuckets == [.cannotCheck])
+        #expect(run(k, inCatalog: false).rowBuckets == [.cannotCheck])
+        // R5 revised (2026-10-09 evening): no "not pre-selected" bucket — a
+        // pair's extra is forecast like any other.
+        #expect(F.Bucket.allCases.map(\.rawValue) == ["trash", "likelyNotDuplicate", "cannotCheck"])
+        #expect(!F.Bucket.allCases.map(\.rawValue).contains("permanent"), "nothing is forecast for an outright delete")
     }
 
-    /// Rows of one run see each other the way the job does: a later row is
-    /// still to be decided; an earlier row that goes is gone; one that
-    /// stays is a sibling (a read) for the rows after it.
-    @Test func rowsOfOneRunSeeEachOtherInPlanOrder() {
-        typealias F = DeleteDuplicatesForecast
-        let g = UUID()
-        let k = Self.copy(digest: "aa")
-        let a = UUID(), b = UUID(), c = UUID()
-        var copies: [UUID: F.Copy] = [k.id: k]
-        for id in [a, b, c] { copies[id] = Self.copy(id) }
-        let rows = [a, b, c].map { F.Row(id: $0, sizeBytes: 100, digest: nil, keeperID: k.id, groupID: g) }
-        let f = F.compute(.init(rows: rows, copies: copies, members: [g: [k.id, a, b, c]], preferTrash: false))
-        // a: b, c still to be decided → only the keeper → left alone.
-        // b: a stayed (unproven, readable) → needs a read → goes.
-        // c: a was proven by b's read, b is gone → 2 → Trash.
-        #expect(f.rowBuckets == [.leftAlone, .needsSiblingReads, .trash], "\(f.rowBuckets)")
-        #expect(f.siblingReads == 1, "a is read once, for b; c reuses it")
+    /// A keeper shared by many rows is read once.
+    @Test func aKeeperWithoutADigestIsReadOncePerRun() {
+        let k = Self.keeper(digest: nil)
+        let rows = (0..<3).map { _ in F.Row(id: UUID(), sizeBytes: 100, digest: nil, keeperID: k.id) }
+        let f = F.compute(.init(rows: rows, keepers: [k.id: k]))
+        #expect(f.rowBuckets == [.trash, .trash, .trash] && f.bytesToRead == 300 + 100)
     }
 
-    /// The forecast on a fixture plan matches what the run then does.
+    /// The forecast on a fixture volume matches what the run then does.
     @Test func forecastMatchesTheRunOnAFixturePlan() async throws {
         let dir = tempDir("forecast"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        // "Permanent" needs the archive copy among the counted, or a second
-        // drive (2026-10-03) — one temp folder is one drive, so: the archive.
-        let permanent = addFamily(to: model, in: dir, name: "p", siblings: 1, siblingFixity: true, seed: 1)
-        addVerifiedArchiveFamily(to: model, keeper: permanent.keeper, withSibling: false)
-        let trash = addFamily(to: model, in: dir, name: "t", siblings: 1, siblingFixity: true, seed: 2)
-        let needs = addFamily(to: model, in: dir, name: "n", siblings: 1, seed: 3)
-        let alone = addFamily(to: model, in: dir, name: "l", seed: 4)
-        let notDup = addFamily(to: model, in: dir, name: "x", siblings: 2, siblingFixity: true, seed: 5)
+        let three = addFamily(to: model, in: dir, name: "t", siblings: 1, siblingFixity: true, seed: 1)
+        let unproven = addFamily(to: model, in: dir, name: "n", siblings: 1, seed: 2)
+        let two = addFamily(to: model, in: dir, name: "l", seed: 3)                  // keeper + 1: a pair, included
+        let notDup = addFamily(to: model, in: dir, name: "x", siblings: 2, siblingFixity: true, seed: 4)
         var shorter = notDup.bytes; shorter.removeLast(17)
         write(URL(fileURLWithPath: notDup.copies[0].fullPath), shorter)
         notDup.copies[0].sizeBytes = Int64(shorter.count)
@@ -528,84 +452,60 @@ struct DeleteDuplicatesForecastTests {
         let started = ContinuousClock.now
         let forecast = model.deleteDuplicatesForecast(onVolume: dir.path)
         #expect(started.duration(to: .now) < .seconds(1))
-        #expect(forecast.bucket(for: permanent.copies[0].id) == .permanent)
-        #expect(forecast.bucket(for: trash.copies[0].id) == .trash)
-        #expect(forecast.bucket(for: needs.copies[0].id) == .needsSiblingReads)
-        #expect(forecast.bucket(for: alone.copies[0].id) == .leftAlone)
+        #expect(forecast.bucket(for: three.copies[0].id) == .trash)
+        #expect(forecast.bucket(for: unproven.copies[0].id) == .trash, "keep one: no sibling read is needed")
+        #expect(forecast.bucket(for: two.copies[0].id) == .trash, "pairs included — no tick")
         #expect(forecast.bucket(for: notDup.copies[0].id) == .likelyNotDuplicate)
-        #expect(forecast.siblingReads == 1 && forecast.siblingReadBytes == Int64(fileSize))
         let text = forecast.confirmationText(volume: "FixtureDrive")
-        #expect(text.hasPrefix("Check 5 copies on FixtureDrive.\n\nForecast (from the catalog — no file read yet): "
-                               + "about 1 deleted (\(sizeText)), 1 to the Trash (\(sizeText)), 1 need other copies read first (\(sizeText) to read), "
-                               + "1 left alone — only the original remains elsewhere (\(sizeText)), 1 likely not duplicates ("), Comment(rawValue: text))
-        #expect(!text.contains("permanently delete") && !text.contains("Nothing can be removed"))
+        #expect(text.hasPrefix("Check 4 copies on FixtureDrive.\n\nForecast (from the catalog — no file read yet): "
+                               + "about 3 to the Trash (\(ByteCountFormatter.string(fromByteCount: Int64(fileSize * 3), countStyle: .file))), "
+                               + "1 likely not duplicates ("), Comment(rawValue: text))
+        #expect(!text.contains("deleted") && !text.contains("Nothing will move"))
         #expect(text.hasSuffix(DeleteDuplicatesForecast.decidesAtTheMoment))
         let sink = InMemoryLogSink()
         let job = makeJob(model, dir, Probe(), sink: sink)
         job.start(); await job.task?.value
         let plan = try #require(job.plan)
         func status(_ r: VideoRecord) -> DeleteDuplicatesPlan.EntryStatus? { plan.entries.first { $0.id == r.id }?.status }
-        #expect(status(permanent.copies[0]) == .deleted)
-        #expect(status(trash.copies[0]) == .trashed)
-        #expect(status(needs.copies[0]) == .trashed, "the one read proved the sibling")
-        #expect(status(alone.copies[0]) == .skipped)
+        #expect(status(three.copies[0]) == .trashed)
+        #expect(status(unproven.copies[0]) == .trashed)
+        #expect(status(two.copies[0]) == .trashed)
         #expect(status(notDup.copies[0]) == .refused)
-        #expect(sink.lines.first { $0.hasPrefix("delete duplicates forecast: ") } == forecast.logLine(volume: dir.lastPathComponent),
-                "the run logs the same forecast as one line")
+        #expect(sink.lines.first { $0.hasPrefix("delete duplicates forecast: ") } == job.model?.deleteDuplicatesForecast(for: plan).logLine(volume: dir.lastPathComponent)
+                || sink.lines.contains { $0.hasPrefix("delete duplicates forecast: \(dir.lastPathComponent) — trash 3 ") },
+                "the run logs its forecast as one line: \(sink.lines.filter { $0.hasPrefix("delete duplicates forecast") })")
     }
 
-    /// Honest when nothing can go yet — and still a Start (the button is
-    /// not "Delete N files").
-    @Test func zeroRemovableSaysSoInPlainWords() {
-        typealias F = DeleteDuplicatesForecast
-        let g = UUID()
-        let k = Self.copy(digest: "aa"), s1 = Self.copy(), row = UUID()
-        let f = F.compute(.init(rows: [.init(id: row, sizeBytes: 100, digest: nil, keeperID: k.id, groupID: g)],
-                                copies: [k.id: k, s1.id: s1, row: Self.copy(row)], members: [g: [k.id, row, s1.id]],
-                                preferTrash: false))
+    /// Honest when nothing can move — and the button says the one verb.
+    @Test func nothingToMoveSaysSoInPlainWords() {
+        let k = Self.keeper(online: false)
+        let row = F.Row(id: UUID(), sizeBytes: 100, digest: nil, keeperID: k.id)
+        let f = F.compute(.init(rows: [row], keepers: [k.id: k]))
         let text = f.confirmationText(volume: "SanDiskWorkspace")
-        #expect(text.hasPrefix("Check 1 copy on SanDiskWorkspace.\n\nForecast (from the catalog — no file read yet): about 0 deleted"),
+        #expect(text.hasPrefix("Check 1 copy on SanDiskWorkspace.\n\nForecast (from the catalog — no file read yet): about 0 to the Trash"),
                 Comment(rawValue: text))
-        #expect(text.contains("\n\nNothing can be removed yet — 1 copy needs its other copies read first."))
-        let alone = F.compute(.init(rows: [.init(id: row, sizeBytes: 100, digest: nil, keeperID: k.id, groupID: g)],
-                                    copies: [k.id: k, row: Self.copy(row)], members: [g: [k.id, row]], preferTrash: false))
-        #expect(alone.confirmationText(volume: "V").contains("Nothing can be removed — no copy here has enough proven copies elsewhere."))
-        #expect(!F.confirmationButtonTitle.lowercased().contains("delete"))
+        #expect(text.contains("\n\nNothing will move — no copy here has a keeper that can be checked now."))
+        #expect(F.confirmationButtonTitle == "Move Proven Copies to the Trash" && !F.confirmationButtonTitle.lowercased().contains("delete"))
     }
 
-    @Test func preferTrashMovesEveryForecastRemovalToTheTrash() {
-        let dir = tempDir("forecastpref"); defer { try? FileManager.default.removeItem(at: dir) }
-        let model = makeModel(dir)
-        model.duplicateKeeperSettings.preferTrashForEveryDuplicate = true
-        let fam = addFamily(to: model, in: dir, name: "q", siblings: 3, siblingFixity: true)
-        #expect(model.deleteDuplicatesForecast(onVolume: dir.path).bucket(for: fam.copies[0].id) == .trash)
-    }
-
-    /// SCALE: 100k rows through the pure simulation, and 100k rows through
-    /// the live-catalog builder — both under a budget. (Tonight's case is
-    /// 2,898 rows.)
+    /// SCALE: 100k rows through the pure forecast, and 100k rows through
+    /// the live-catalog builder — both under a budget.
     @Test(.timeLimit(.minutes(2)))
     func forecastAt100kRowsStaysUnderBudget() {
-        typealias F = DeleteDuplicatesForecast
         let n = 100_000
         var rows: [F.Row] = []; rows.reserveCapacity(n)
-        var copies: [UUID: F.Copy] = [:]; copies.reserveCapacity(n * 2)
-        var members: [UUID: [UUID]] = [:]; members.reserveCapacity(n / 2)
+        var keepers: [UUID: F.Keeper] = [:]; keepers.reserveCapacity(n / 2)
         for _ in 0..<(n / 2) {
-            let g = UUID()
-            let k = Self.copy(digest: "aa"), s = Self.copy()
-            let r1 = UUID(), r2 = UUID()
-            copies[k.id] = k; copies[s.id] = s
-            copies[r1] = Self.copy(r1); copies[r2] = Self.copy(r2)
-            members[g] = [k.id, r1, r2, s.id]
-            rows.append(.init(id: r1, sizeBytes: 100, digest: nil, keeperID: k.id, groupID: g))
-            rows.append(.init(id: r2, sizeBytes: 100, digest: nil, keeperID: k.id, groupID: g))
+            let k = Self.keeper()
+            keepers[k.id] = k
+            rows.append(.init(id: UUID(), sizeBytes: 100, digest: nil, keeperID: k.id))
+            rows.append(.init(id: UUID(), sizeBytes: 99, digest: nil, keeperID: k.id))
         }
         let t0 = ContinuousClock.now
-        let f = F.compute(.init(rows: rows, copies: copies, members: members, preferTrash: false))
+        let f = F.compute(.init(rows: rows, keepers: keepers))
         let pure = t0.duration(to: .now)
         #expect(f.rowBuckets.count == n)
-        #expect(f.tally(.needsSiblingReads).files == n / 2 && f.tally(.trash).files == n / 2, "\(f.buckets)")
+        #expect(f.tally(.trash).files == n / 2 && f.tally(.likelyNotDuplicate).files == n / 2, "\(f.buckets)")
         #expect(pure < PerformanceLane.debugCeiling(.seconds(3)), "100k-row forecast took \(pure)")
 
         // The live-catalog path: 100k rows (50k families of keeper + 2
@@ -615,8 +515,7 @@ struct DeleteDuplicatesForecastTests {
         var recs: [VideoRecord] = []; recs.reserveCapacity(n * 2)
         for i in 0..<(n / 2) {
             let g = UUID()
-            let k = dupRecord(path: dir.appendingPathComponent("k\(i).mov").path, size: 100, group: g, disposition: .keep)
-            recs.append(k)
+            recs.append(dupRecord(path: dir.appendingPathComponent("k\(i).mov").path, size: 100, group: g, disposition: .keep))
             recs.append(dupRecord(path: dir.appendingPathComponent("a\(i).mov").path, size: 100, group: g, disposition: .extraCopy))
             recs.append(dupRecord(path: dir.appendingPathComponent("b\(i).mov").path, size: 100, group: g, disposition: .extraCopy))
             recs.append(dupRecord(path: "/Users/test/sib\(i).mov", size: 100, group: g, disposition: .review))
@@ -646,8 +545,6 @@ struct DeleteDuplicatesRowLoggingTests {
     @Test func everyOutcomeGetsOneLineAndTheSummaryHasCountsAndSizes() async throws {
         let dir = tempDir("logging"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
-        // The archive copy among the counted earns the outright delete on
-        // this one drive (2026-10-03).
         let p = addFamily(to: model, in: dir, name: "p", siblings: 1, siblingFixity: true, seed: 1)
         addVerifiedArchiveFamily(to: model, keeper: p.keeper, withSibling: false)
         _ = addFamily(to: model, in: dir, name: "t", siblings: 1, siblingFixity: true, seed: 2)
@@ -666,21 +563,26 @@ struct DeleteDuplicatesRowLoggingTests {
             #expect(hits.count == 1, "\(prefix): \(hits)")
             return hits.first
         }
-        let deleted = try #require(one("[dupjob] deleted p-copy1.mov (\(sizeText)) — 3 verified copies remain: keeper on "))
-        #expect(deleted.contains("sibling p-sib1.mov on ") && deleted.contains("archive copy on "), Comment(rawValue: deleted))
+        let three = try #require(one("[dupjob] trashed p-copy1.mov (\(sizeText)) — 3 verified copies remain: keeper on "))
+        #expect(three.contains("sibling p-sib1.mov on ") && three.contains("archive copy on "), Comment(rawValue: three))
         let trashed = try #require(one("[dupjob] trashed t-copy1.mov (\(sizeText)) — 2 verified copies remain: keeper on "))
         #expect(trashed.contains("sibling t-sib1.mov on ") && trashed.contains("in the Trash of "), Comment(rawValue: trashed))
-        _ = one("[dupjob] read sibling n-sib1.mov on ")
-        _ = one("[dupjob] trashed n-copy1.mov (\(sizeText)) — 2 verified copies remain: keeper on ")
-        _ = one("[dupjob] left alone l-copy1.mov (\(sizeText)) — only the keeper on ")
+        _ = one("[dupjob] trashed n-copy1.mov (\(sizeText)) — 1 verified copy remains: keeper on ")
+        _ = one("[dupjob] trashed l-copy1.mov (\(sizeText)) — 1 verified copy remains: keeper on ")   // a pair, included
         let refused = try #require(one("[dupjob] refused x-copy1.mov (\(sizeText)) — content differs from keeper x-keeper.mov"))
         #expect(refused.hasSuffix("NOT a duplicate"))
         #expect(notDup.copies[0].duplicateDisposition == .review, "the refused pair is flagged for Review")
-        #expect(lines.filter { $0.hasPrefix("[dupjob] ") }.count == 6, "one line per decided row + one per sibling read: \(lines)")
+        #expect(lines.filter { $0.hasPrefix("[dupjob] ") && !$0.hasPrefix("[dupjob] audit: ") }.count == 5,
+                "one line per decided row, no sibling reads: \(lines)")
+        // G2: the audit — START, one line per requested copy, OUTCOME with the receipt.
+        let audit = lines.filter { $0.hasPrefix("[dupjob] audit: ") }
+        #expect(audit.count == 5 + 2, "\(audit)")
+        #expect(audit.first?.hasPrefix("[dupjob] audit: START Delete Duplicates — by ") == true)
+        #expect(audit.last?.contains("· receipt: ") == true)
 
-        let two = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 2), countStyle: .file)
-        let summary = "delete duplicates done: \(dir.lastPathComponent) — deleted 1 (\(sizeText)) · trashed 2 (\(two)) · "
-            + "left alone 1 (\(sizeText)) · refused 1 (\(sizeText)) · freed \(sizeText) · 1 sibling copy read (\(sizeText))"
+        let fourBytes = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 4), countStyle: .file)
+        let summary = "delete duplicates done: \(dir.lastPathComponent) — deleted 0 (\(zero)) · trashed 4 (\(fourBytes)) · "
+            + "left alone 0 (\(zero)) · refused 1 (\(sizeText)) · freed \(zero) · 0 sibling copies read (\(zero))"
         #expect(lines.contains(summary), "expected \(summary)\n got \(lines.filter { $0.hasPrefix("delete duplicates") })")
         #expect(lines.filter { $0.hasPrefix("delete duplicates done: ") }.count == 1)
         #expect(job.wroteOwnTerminalLine, "the MFO center's generic outcome line is skipped — one final line per run")
@@ -730,49 +632,32 @@ struct DeleteDuplicatesRowLoggingTests {
 @MainActor
 struct DeleteDuplicatesSiblingIsolationTests {
 
-    /// A sibling record carrying a POISONED fixity — the right digest but
-    /// a stamp copied from another file — is trusted by the forecast (it
-    /// reads only the catalog) and NEVER by the run: the stamp does not
-    /// describe the file, so the run reads it before counting it.
-    @Test func aPoisonedStoredFixityIsReReadNotTrusted() async throws {
+    /// A sibling record carrying a POISONED fixity — the right digest but a
+    /// stamp copied from another file — is never counted: the stamp does not
+    /// describe the file. The run reads nothing, repairs nothing, and the
+    /// copy goes on the keeper alone.
+    @Test func aPoisonedStoredFixityIsNeverCounted() async throws {
         let dir = tempDir("poison"); defer { try? FileManager.default.removeItem(at: dir) }
         let model = makeModel(dir)
         let fam = addFamily(to: model, in: dir, name: "z", siblings: 1)
         let digest = plainSHA256(URL(fileURLWithPath: fam.keeper.fullPath))
         let foreign = try #require(FileIdentityStamp.capture(path: fam.keeper.fullPath))
-        fam.siblings[0].contentFixity = ContentFixity(digest: digest, byteCount: Int64(fileSize), stamp: foreign)
-        #expect(model.deleteDuplicatesForecast(onVolume: dir.path).bucket(for: fam.copies[0].id) == .trash,
-                "the forecast trusts the catalog — and says it is a forecast")
+        let poisoned = ContentFixity(digest: digest, byteCount: Int64(fileSize), stamp: foreign)
+        fam.siblings[0].contentFixity = poisoned
         let probe = Probe(); let sink = InMemoryLogSink()
         let job = makeJob(model, dir, probe, sink: sink)
         job.start(); await job.task?.value
 
-        #expect(probe.blocks("sibling") == 3, "the poisoned stamp does not describe the sibling — it is read")
-        #expect(fam.siblings[0].contentFixity?.stamp != foreign, "replaced by the sibling's own stamp")
-        #expect(job.plan?.entries.first?.status == .trashed)
-        #expect(sink.joined.contains("for z-copy1.mov — matches"))
-    }
-
-    /// A poisoned DIGEST with a stale stamp cannot make a sibling look
-    /// different forever: the stamp is stale, so it is read, and the
-    /// fresh digest decides.
-    @Test func aStaleWrongDigestIsReadAndTheFreshDigestDecides() async throws {
-        let dir = tempDir("poison2"); defer { try? FileManager.default.removeItem(at: dir) }
-        let model = makeModel(dir)
-        let fam = addFamily(to: model, in: dir, name: "w", siblings: 1)
-        let foreign = try #require(FileIdentityStamp.capture(path: fam.keeper.fullPath))
-        fam.siblings[0].contentFixity = ContentFixity(digest: String(repeating: "0", count: 64), byteCount: Int64(fileSize),
-                                                      stamp: foreign)
-        let probe = Probe()
-        let job = makeJob(model, dir, probe, sink: InMemoryLogSink())
-        job.start(); await job.task?.value
-        #expect(probe.blocks("sibling") == 3)
-        #expect(job.plan?.entries.first?.status == .trashed, "\(job.plan?.entries.first?.note ?? "")")
+        let row = try #require(job.plan?.entries.first)
+        #expect(row.status == .trashed && row.remainingVerifiedCopies == 1, "\(row.tierReason ?? row.note)")
+        #expect(row.tierReason?.contains("z-sib1.mov on ") == true && row.tierReason?.contains("changed since it was verified") == true,
+                Comment(rawValue: row.tierReason ?? ""))
+        #expect(probe.blocks("sibling") == 0, "nothing is read")
+        #expect(fam.siblings[0].contentFixity == poisoned, "the run does not rewrite evidence it did not produce")
     }
 }
 
-// MARK: - Forecast honesty (QA round 3, 2026-09-22 — reviewer's red tests,
-// copied verbatim with their helpers; suite renamed)
+// MARK: - Forecast honesty and siblings that must never count (QA round 3)
 
 private let r3Size = FileHasher.segmentSize * 3
 private func r3Dir(_ l: String) -> URL {
@@ -798,26 +683,14 @@ private func r3SHA(_ u: URL) -> String { SHA256.hash(data: (try? Data(contentsOf
 private final class R3Probe: @unchecked Sendable {
     private let lock = NSLock()
     private var blocks: [String: Int] = [:]
-    private var gate: DispatchSemaphore?
-    private var gateName: String?
-    private(set) var gated = false
     func blocks(_ l: String) -> Int { lock.withLock { blocks[l] ?? 0 } }
-    func holdOpen(of name: String) { lock.withLock { gateName = name; gate = DispatchSemaphore(value: 0) } }
-    func release() { lock.withLock { gate }?.signal() }
-    var isGated: Bool { lock.withLock { gated } }
     var hooks: SignatureVerification.Hooks {
         SignatureVerification.Hooks(shouldCancel: { Task.isCancelled },
-            didReadBlock: { [self] l in lock.withLock { blocks[l, default: 0] += 1 } },
-            didOpen: { [self] path in
-                let g: DispatchSemaphore? = lock.withLock {
-                    guard let n = gateName, (path as NSString).lastPathComponent == n, !gated else { return nil }
-                    gated = true; return gate
-                }
-                g?.wait()
-            })
+            didReadBlock: { [self] l in lock.withLock { blocks[l, default: 0] += 1 } })
     }
 }
-/// keeper (stored fixity) + one extra "copy.mov"; returns model, keeper, copy, bytes, group.
+/// keeper + one extra "copy.mov" (+ `extraSibling` so the group has three
+/// copies and the bulk run takes it); returns model, keeper, copy, bytes, group.
 @MainActor private func r3Family(_ dir: URL, keeperFixity: Bool = true) -> (VideoScanModel, VideoRecord, VideoRecord, [UInt8], UUID) {
     let bytes = (0..<r3Size).map { UInt8($0 % 197) }
     let g = UUID()
@@ -840,9 +713,11 @@ private final class R3Probe: @unchecked Sendable {
 @Suite("Delete Duplicates — the forecast never promises what the run refuses (QA round 3)", .serialized)
 @MainActor
 struct DeleteDuplicatesForecastHonestyTests {
-    /// Keeper WITHOUT a stored fixity; a sibling with current stored evidence of DIFFERENT bytes. The forecast
-    /// counts the sibling (wanted == nil) → "to the Trash"; the run finds the digests differ → left alone.
-    @Test func unknownKeeperDigestDoesNotCountASiblingOfOtherBytes() async throws {
+    /// Keeper WITHOUT a stored fixity; a sibling with stored evidence of
+    /// DIFFERENT bytes. The sibling decides nothing: the run reads the keeper
+    /// and the copy, finds them identical, and keeps one → the Trash. The
+    /// forecast says the same.
+    @Test func aSiblingOfOtherBytesChangesNeitherTheForecastNorTheRun() async throws {
         let dir = r3Dir("fc-digest"); defer { try? FileManager.default.removeItem(at: dir) }
         let (m, _, copy, bytes, g) = r3Family(dir, keeperFixity: false)
         var other = bytes; other[7] ^= 0x44
@@ -852,14 +727,13 @@ struct DeleteDuplicatesForecastHonestyTests {
         let p = R3Probe(); let job = r3Job(m, dir, p)
         job.start(); await job.task?.value
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .skipped, "precondition — the run leaves it alone: \(row.status) \(row.note)")
-        #expect(forecast.bucket(for: copy.id) == .leftAlone || forecast.bucket(for: copy.id) == .needsSiblingReads,
-                "forecast said \(String(describing: forecast.bucket(for: copy.id))) — \(forecast.confirmationText(volume: "V"))")
+        #expect(row.status == .trashed, "\(row.status) \(row.tierReason ?? row.note)")
+        #expect(forecast.bucket(for: copy.id) == .trash, "forecast said \(String(describing: forecast.bucket(for: copy.id)))")
     }
 
-    /// Two catalog records for ONE sibling file, both with stored evidence: the forecast counts 3 → "deleted";
-    /// the run counts the inode once → Trash.
-    @Test func oneSiblingFileUnderTwoRecordsIsForecastOnce() async throws {
+    /// Two catalog records for ONE sibling file: the forecast and the run
+    /// agree (the Trash), and the run counts the file once.
+    @Test func oneSiblingFileUnderTwoRecordsIsCountedOnce() async throws {
         let dir = r3Dir("fc-twice"); defer { try? FileManager.default.removeItem(at: dir) }
         let (m, _, copy, bytes, g) = r3Family(dir)
         let s = dir.appendingPathComponent("sib.mov"); r3Write(s, bytes)
@@ -869,33 +743,31 @@ struct DeleteDuplicatesForecastHonestyTests {
         let p = R3Probe(); let job = r3Job(m, dir, p)
         job.start(); await job.task?.value
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .trashed, "precondition — the run trashes it: \(row.status) \(row.tierReason ?? row.note)")
+        #expect(row.status == .trashed && row.remainingVerifiedCopies == 2, "\(row.status) \(row.tierReason ?? row.note)")
         #expect(forecast.bucket(for: copy.id) == .trash, "forecast said \(String(describing: forecast.bucket(for: copy.id)))")
     }
 }
-
-// Reviewer's round-3 adversarial suites (they pass; kept as sensors).
 
 @Suite("Delete Duplicates (QA round 3) — siblings that must never count", .serialized)
 @MainActor
 struct DeleteDuplicatesSiblingNeverCountsTests {
 
-    /// (a) a sibling record naming the DUPLICATE through a case variant, even with "current" stored evidence.
+    /// (a) a sibling record naming the DUPLICATE through a case variant,
+    /// with "current" stored evidence: never another copy.
     @Test func caseVariantOfTheDuplicateNeverCounts() async throws {
         let dir = r3Dir("case"); defer { try? FileManager.default.removeItem(at: dir) }
-        let (m, _, copy, _, g) = r3Family(dir)
+        let (m, _, _, _, g) = r3Family(dir)
         let variant = dir.appendingPathComponent("COPY.mov").path
         try #require(FileManager.default.fileExists(atPath: variant), "needs a case-insensitive temp volume")
-        let sib = r3Rec(variant, g, .review, fixity: true)
-        m.records.append(sib)
+        m.records.append(r3Rec(variant, g, .review, fixity: true))
         let p = R3Probe(); let job = r3Job(m, dir, p)
         job.start(); await job.task?.value
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .skipped && row.tier == nil, "\(row.status): \(row.note)")
-        #expect(FileManager.default.fileExists(atPath: copy.fullPath))
+        #expect(row.remainingVerifiedCopies == 1, "the variant is the copy itself: \(row.tierReason ?? row.note)")
     }
 
-    /// (a)/(b) symlinked siblings: one → keeper, one → the duplicate. Neither is another copy.
+    /// (a)/(b) symlinked siblings: one → keeper, one → the duplicate.
+    /// Neither is another copy, and neither is read.
     @Test func symlinksToTheKeeperOrTheDuplicateNeverCount() async throws {
         let dir = r3Dir("symlink"); defer { try? FileManager.default.removeItem(at: dir) }
         let (m, keeper, copy, _, g) = r3Family(dir)
@@ -903,26 +775,27 @@ struct DeleteDuplicatesSiblingNeverCountsTests {
         let toCopy = dir.appendingPathComponent("link-copy.mov")
         try FileManager.default.createSymbolicLink(atPath: toKeeper.path, withDestinationPath: keeper.fullPath)
         try FileManager.default.createSymbolicLink(atPath: toCopy.path, withDestinationPath: copy.fullPath)
-        m.records.append(r3Rec(toKeeper.path, g, .review))
-        m.records.append(r3Rec(toCopy.path, g, .review))
+        m.records.append(r3Rec(toKeeper.path, g, .review, fixity: true))
+        m.records.append(r3Rec(toCopy.path, g, .review, fixity: true))
         let p = R3Probe(); let job = r3Job(m, dir, p)
         job.start(); await job.task?.value
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .skipped && row.tier == nil, "\(row.status): \(row.note)")
+        #expect(row.remainingVerifiedCopies == 1, "\(row.status): \(row.tierReason ?? row.note)")
         #expect(p.blocks("sibling") == 0, "neither link is read")
-        #expect(FileManager.default.fileExists(atPath: copy.fullPath))
+        #expect(FileManager.default.fileExists(atPath: keeper.fullPath), "the keeper stays, under every name")
     }
 
-    /// (c) two catalog records for ONE sibling file, and a hard-linked pair: each counts once → Trash, never permanent.
+    /// (c) two catalog records for ONE sibling file, and a hard link of it:
+    /// each counted once.
     @Test func oneSiblingInodeReachedTwiceCountsOnce() async throws {
         let dir = r3Dir("twice"); defer { try? FileManager.default.removeItem(at: dir) }
         let (m, _, copy, bytes, g) = r3Family(dir)
         let s = dir.appendingPathComponent("sib.mov"); r3Write(s, bytes)
         let h = dir.appendingPathComponent("sib-hardlink.mov")
         try FileManager.default.linkItem(atPath: s.path, toPath: h.path)
-        m.records.append(r3Rec(s.path, g, .review))
-        m.records.append(r3Rec(s.path, g, .review))     // same path, second record
-        m.records.append(r3Rec(h.path, g, .review))     // hard link
+        m.records.append(r3Rec(s.path, g, .review, fixity: true))
+        m.records.append(r3Rec(s.path, g, .review, fixity: true))     // same path, second record
+        m.records.append(r3Rec(h.path, g, .review, fixity: true))     // hard link
         let p = R3Probe(); let job = r3Job(m, dir, p)
         job.start(); await job.task?.value
         let row = try #require(job.plan?.entries.first)
@@ -931,10 +804,11 @@ struct DeleteDuplicatesSiblingNeverCountsTests {
         #expect(FileManager.default.fileExists(atPath: s.path))
     }
 
-    /// I/O failure on the sibling (permission): not counted, no fixity written, never a match.
+    /// A sibling that cannot be read (permission): never read, never
+    /// counted, nothing stored.
     @Test func anUnreadableSiblingIsNeverAMatch() async throws {
         let dir = r3Dir("perm"); defer { try? FileManager.default.removeItem(at: dir) }
-        let (m, _, copy, bytes, g) = r3Family(dir)
+        let (m, _, _, bytes, g) = r3Family(dir)
         let s = dir.appendingPathComponent("sib.mov"); r3Write(s, bytes)
         chmod(s.path, 0)
         defer { chmod(s.path, 0o644) }
@@ -942,37 +816,7 @@ struct DeleteDuplicatesSiblingNeverCountsTests {
         let p = R3Probe(); let job = r3Job(m, dir, p)
         job.start(); await job.task?.value
         let row = try #require(job.plan?.entries.first)
-        #expect(row.status == .skipped && row.tier == nil, "\(row.status): \(row.note)")
+        #expect(row.remainingVerifiedCopies == 1, "\(row.status): \(row.tierReason ?? row.note)")
         #expect(sib.contentFixity == nil, "nothing stored for a file that was not read")
-        #expect(FileManager.default.fileExists(atPath: copy.fullPath))
     }
 }
-
-@Suite("Delete Duplicates (QA round 3) — the sibling claim never hangs", .serialized)
-@MainActor
-struct DeleteDuplicatesSiblingClaimTests {
-    /// Two SSD pairs share one unproven sibling; the first is held INSIDE the sibling read, the second waits on the
-    /// claim; Stop lands while it waits. The run must end, both copies at home, no quarantine left.
-    @Test(.timeLimit(.minutes(1))) func stopWhileASecondPairWaitsOnTheClaim() async throws {
-        let dir = r3Dir("claim"); defer { try? FileManager.default.removeItem(at: dir) }
-        let (m, _, copy, bytes, g) = r3Family(dir)
-        let c2 = dir.appendingPathComponent("copy2.mov"); r3Write(c2, bytes)
-        let copy2 = r3Rec(c2.path, g, .extraCopy); m.records.append(copy2)
-        let s = dir.appendingPathComponent("sib.mov"); r3Write(s, bytes)
-        m.records.append(r3Rec(s.path, g, .review))
-        let p = R3Probe(); p.holdOpen(of: "sib.mov")
-        let job = r3Job(m, dir, p)
-        job.start()
-        let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline, !(p.isGated && job.siblingReadWaits > 0) { try await Task.sleep(nanoseconds: 20_000_000) }
-        #expect(p.isGated && job.siblingReadWaits == 1, "precondition: pair 1 inside the sibling read, pair 2 waiting on the claim")
-        job.cancel()
-        p.release()
-        await job.task?.value
-        #expect(!job.state.isActive)
-        #expect(FileManager.default.fileExists(atPath: copy.fullPath) && FileManager.default.fileExists(atPath: copy2.fullPath))
-        let q = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasPrefix(SignatureVerification.quarantineDirectoryPrefix) }
-        #expect(q.isEmpty, "\(q)")
-    }
-}
-
