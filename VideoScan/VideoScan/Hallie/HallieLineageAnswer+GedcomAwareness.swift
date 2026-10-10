@@ -197,7 +197,11 @@ extension HallieLineageAnswer {
         // 2026-10-09: "videos of the <X>s" → "<tree person> died in 1387").
         if HallieTagOnlyName.namesATag(
             typed, taggedNames: HallieTurnExecutor.confirmedTagNames(context)) { return nil }
-        guard case .success(let person, _) = resolve(typed, context: context, graph: graph),
+        // A near-spelling guess never refuses a catalog search: "videos of
+        // the <X>s" spelling-recovered to a 1387 namesake while the catalog
+        // has the family tagged (demo probe 2026-10-09). Exact names only.
+        guard case .success(let person, let note) = resolve(typed, context: context, graph: graph),
+              !isSpellingRecovery(note),
               let line = photographyFloorLine(person, medium: .film) else { return nil }
         return Result(
             route: .graph, outcome: .declined,

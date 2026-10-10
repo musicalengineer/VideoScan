@@ -241,6 +241,13 @@ struct HallieTagOnlyNameTests {
     2 DATE 1320
     1 DEAT
     2 DATE 1387
+    0 @I2@ INDI
+    1 NAME Rockwell /Burke/
+    1 SEX M
+    1 BIRT
+    2 DATE 1322
+    1 DEAT
+    2 DATE 1388
     0 TRLR
     """
 
@@ -257,6 +264,23 @@ struct HallieTagOnlyNameTests {
                                     speakers: tagged.speakers, mode: .catalog)
         let floor = HallieLineageAnswer.answer(.personVideos(person: "Quenby"), context: untagged)
         #expect(floor?.prose.contains("motion pictures") == true, Comment(rawValue: floor?.prose ?? "nil"))
+    }
+
+    /// The real pre-translation path has NO catalog records in its context,
+    /// so the tag guard above cannot see the tag there. The live miss was a
+    /// near-spelling guess ("<X>s" → a 1387 "Rickard"-style namesake): a
+    /// spelling-recovered person never answers the pre-film floor.
+    @Test func aNearSpellingGuessNeverAnswersThePreFilmFloor() {
+        let graph = GedcomFamilyGraph(gedcomText: Self.medievalTree)
+        let noRecords = Exec.Context(presenceRecords: [], profiles: Self.profiles, graph: graph,
+                                     speakers: .none, mode: .catalog)
+        // "Rackwells" is two edits from the tree's "Rockwell" (the 8+ letter
+        // band that spelling recovery accepts) — the live shape.
+        let guess = HallieLineageAnswer.answer(.personVideos(person: "Rackwells"), context: noRecords)
+        #expect(guess == nil, Comment(rawValue: guess?.prose ?? "nil"))
+        // Sensor: the exact name still gets the honest pre-film line.
+        let exact = HallieLineageAnswer.answer(.personVideos(person: "Rockwell Burke"), context: noRecords)
+        #expect(exact?.prose.contains("motion pictures") == true, Comment(rawValue: exact?.prose ?? "nil"))
     }
 
     // MARK: - Sensors

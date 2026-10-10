@@ -13573,6 +13573,7 @@
         "aFamilyShapedKeywordThatNamesATagIsSearchedAsTheTag",
         "aKinTitleBeforeATagOnlyNameStillFindsIt",
         "aKinTitleKeywordBeforeTheNamedPersonIsNotSearched",
+        "aNearSpellingGuessNeverAnswersThePreFilmFloor",
         "aPluralWithNoMatchingTagIsNotRewrittenToAFamily",
         "aProfileNameStillFindsOnlyItsOwnTag",
         "aTagOnlyFirstNameIsFound",
@@ -28970,7 +28971,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1103,
+      "expected_floor": 1104,
       "modes": [
         {
           "name": "strict",
