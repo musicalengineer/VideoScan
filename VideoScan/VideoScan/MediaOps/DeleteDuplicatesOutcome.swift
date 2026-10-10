@@ -45,7 +45,7 @@ enum DeleteDuplicatesOutcomeKind: String, Codable, Sendable, CaseIterable {
         case .held: return "held back"
         case .failed: return "failed"
         case .recoveryNeeded: return "waiting to be put back"
-        case .missing: return "missing"
+        case .missing: return "not on disk"
         case .offline: return "drive not connected"
         case .cancelled: return "not reached"
         case .deletedOutright: return "deleted outright (an older run)"
@@ -115,15 +115,39 @@ struct DeleteDuplicatesOutcomeReport: Equatable, Sendable {
     /// Every row of a kind (the held list, the missing list, …).
     func rows(_ kind: DeleteDuplicatesOutcomeKind) -> [Row] { rows.filter { $0.kind == kind } }
 
-    /// "Moved 212 (48 GB) to the Trash · 3 held back · 1 missing" — the
-    /// counts that are not zero, in a fixed order.
+    /// "Moved 212 (48 GB) to the Trash · 3 held (keeper not reachable ×2;
+    /// in use by the Archive Angel) · 1 not on disk" — the counts that are
+    /// not zero, in a fixed order, and WHY copies stayed (G1, Rick
+    /// 2026-10-09: the result shows in the window — the MFO row and the
+    /// status line — not only in the log). One line, always.
     var line: String {
         let size = { (b: Int64) in ByteCountFormatter.string(fromByteCount: b, countStyle: .file) }
         var parts = ["Moved \(count(.moved)) (\(size(bytesMovedToTrash))) to the Trash"]
         for kind in DeleteDuplicatesOutcomeKind.allCases where kind != .moved && count(kind) > 0 {
-            parts.append("\(count(kind)) \(kind.words)")
+            parts.append(kind == .held ? "\(count(.held)) held (\(heldReasons))" : "\(count(kind)) \(kind.words)")
         }
         return parts.joined(separator: " · ")
+    }
+
+    /// Distinct reasons shown on the one line; the rest are counted.
+    static let reasonsOnTheLine = 3
+
+    /// "reason ×n; reason; +2 more reasons" — commonest first (ties: first
+    /// met), one line.
+    var heldReasons: String {
+        var order: [String] = []
+        var n: [String: Int] = [:]
+        for row in rows where row.kind == .held {
+            let why = row.reason.replacingOccurrences(of: "\n", with: " ")
+            if n[why] == nil { order.append(why) }
+            n[why, default: 0] += 1
+        }
+        let count = { (why: String) in n[why, default: 0] }
+        let ranked = order.enumerated().sorted { (count($0.element), -$0.offset) > (count($1.element), -$1.offset) }.map(\.element)
+        var shown = ranked.prefix(Self.reasonsOnTheLine).map { count($0) > 1 ? "\($0) ×\(count($0))" : $0 }
+        let more = ranked.count - shown.count
+        if more > 0 { shown.append("+\(more) more reason\(more == 1 ? "" : "s")") }
+        return shown.joined(separator: "; ")
     }
 }
 

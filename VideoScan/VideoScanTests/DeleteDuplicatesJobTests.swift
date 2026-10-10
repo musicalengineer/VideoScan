@@ -146,7 +146,7 @@ struct DeleteDuplicatesJobTests {
 
         let moved = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 2), countStyle: .file)
         let volume = VolumeReachability.volumeName(forPath: rig.copies[0].fullPath)
-        #expect(job.state == .finished(summary: "Moved 2 (\(moved)) to the Trash · 1 held back"), "\(job.state)")
+        #expect(job.state == .finished(summary: "Moved 2 (\(moved)) to the Trash · 1 held (content differs from keeper keeper.mov — NOT a duplicate)"), "\(job.state)")
         #expect(job.result.deleted == 2 && job.result.failed == 0 && job.result.skipped == 0)
         #expect(job.result.bytesFreed == 0, "moved to the Trash (Trash only), never freed")
         #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
@@ -595,6 +595,6 @@ struct DeleteDuplicatesJobTests {
         #expect(result.deleted == 2 && result.failed == 0 && result.skipped == 0 && result.bytesFreed == 0)
         #expect(!rig.model.isDeletingDuplicates)
         let freed = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 2), countStyle: .file)
-        #expect(rig.model.duplicateStatus == "Moved 2 (\(freed)) to the Trash · 1 held back")
+        #expect(rig.model.duplicateStatus == "Moved 2 (\(freed)) to the Trash · 1 held (content differs from keeper keeper.mov — NOT a duplicate)")
     }
 }

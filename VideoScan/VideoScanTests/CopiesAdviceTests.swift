@@ -318,13 +318,13 @@ struct CopiesAdviceWordsTests {
     }
 
     /// The card's one sentence after Move This Copy to Trash… (codex F2):
-    /// the engine's result line, then every reason the copy stayed.
+    /// the engine's result line, which names why the copy stayed (G1).
     @Test func trashOutcomeWords() {
         let moved = CopiesAdviceTrashOutcome(line: "Moved 1 (4 KB) to the Trash", reasons: [], moved: true)
         #expect(moved.cardText == "Moved 1 (4 KB) to the Trash")
-        let held = CopiesAdviceTrashOutcome(line: "Moved 0 (Zero KB) to the Trash · 1 held back",
+        let held = CopiesAdviceTrashOutcome(line: "Moved 0 (Zero KB) to the Trash · 1 held (could not read keeper.mov to verify)",
                                             reasons: ["could not read keeper.mov to verify"], moved: false)
-        #expect(held.cardText == "Moved 0 (Zero KB) to the Trash · 1 held back — could not read keeper.mov to verify")
+        #expect(held.cardText == "Moved 0 (Zero KB) to the Trash · 1 held (could not read keeper.mov to verify)")
     }
 }
 

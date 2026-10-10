@@ -25905,6 +25905,19 @@
         "nothingCanMoveAsksNothing",
         "oneFileAndNothingHeld"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeleteDuplicatesResultLineTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesResultLineTests"
+      ],
+      "tests": [
+        "heldCopiesCarryTheirReasonsAndMissingSaysNotOnDisk",
+        "theLineStaysOneLine"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -26950,6 +26963,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteDuplicatesPlanTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeleteDuplicatesResultLineTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

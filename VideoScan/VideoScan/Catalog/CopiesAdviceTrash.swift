@@ -43,10 +43,9 @@ struct CopiesAdviceTrashOutcome: Equatable, Sendable {
     let reasons: [String]
     let moved: Bool
 
-    /// The card's one sentence.
-    var cardText: String {
-        reasons.isEmpty ? line : line + " — " + reasons.joined(separator: "; ")
-    }
+    /// The card's one sentence: the engine's line, which names why the
+    /// copy stayed (G1).
+    var cardText: String { line }
 }
 
 extension VideoScanModel {
