@@ -2179,6 +2179,11 @@ final class FamilyTreeLiveModel: ObservableObject {
 
     func isBookmarked(_ personID: String) -> Bool { bookmarks.contains(personID) }
 
+    /// Diagnostic sensor (GH #307): how many times a card's menu content
+    /// asked for research links. SwiftUI builds `.contextMenu` with the card
+    /// body, so this counts card-body evaluations. NOT @Published.
+    private(set) var researchLinksEvaluations = 0
+
     /// One "context menu opened" line per person per this interval.
     static let menuLogInterval: TimeInterval = 10 * 60
 
@@ -2202,6 +2207,7 @@ final class FamilyTreeLiveModel: ObservableObject {
     /// 400–2,800 log writes a minute on the main thread while the tree was
     /// live. Now at most one line per person per `menuLogInterval`.
     func researchLinks(for personID: String, logMenuOpen: Bool = true) -> [FamilyTreeResearchLinks.Link] {
+        researchLinksEvaluations += 1
         let shouldLog = logMenuOpen && menuLogDue(personID)
         guard let graph, let person = graph.people[personID] else {
             if shouldLog {
