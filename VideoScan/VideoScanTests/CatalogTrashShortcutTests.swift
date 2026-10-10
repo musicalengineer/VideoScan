@@ -184,8 +184,14 @@ struct CatalogTrashShortcutTests {
         // A slice too small to reach what it asserts is a sensor that goes
         // quiet rather than a sensor that passes.
         let handler = String(table[handlerRange.lowerBound...].prefix(1_800))
-        #expect(handler.contains("model.trashSelectedRecords(targets)"))
-        #expect(handler.contains("reportDeleteResult(result)"))
+        // 2026-10-09 (codex delete-engines F8): ⌘⌫ and the row menu both ask
+        // ONE confirmation first — the handler hands off to confirmThenTrash,
+        // which owns the one trashSelectedRecords call and the result report.
+        #expect(handler.contains("confirmThenTrash(targets)"))
+        let confirmRange = try #require(table.range(of: "func confirmThenTrash(_ targets: [VideoRecord])"))
+        let confirm = String(table[confirmRange.lowerBound...].prefix(1_800))
+        #expect(confirm.contains("await model.trashSelectedRecords(targets)"))
+        #expect(confirm.contains("reportDeleteResult(result)"))
         // The guard was `press.modifiers == .command` until 2026-09-16.
         // Exact equality made any stray flag macOS reported alongside
         // Command an `.ignored` with NO trace, which is indistinguishable
@@ -203,7 +209,7 @@ struct CatalogTrashShortcutTests {
         // The row menu moved to CatalogRowContextMenu.swift (R1, GH #281).
         let rowMenu = try productionSource("CatalogRowContextMenu.swift")
         // 2026-10-09: the row menu calls the SAME function as ⌘⌫.
-        #expect(rowMenu.contains("await model.trashSelectedRecords(targets)"), "the row menu's Move to Trash still exists")
+        #expect(rowMenu.contains("confirmThenTrash(targets)"), "the row menu's Move to Trash still exists and asks first")
         #expect(!rowMenu.contains(".onKeyPress("), "no key handler in the row menu either")
 
         // 2026-09-20 (Rick's second "why can't I hit cmd-delete"): a Command
