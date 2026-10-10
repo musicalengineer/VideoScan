@@ -22,16 +22,21 @@ import VideoScanCore
 //     length (±2 s / 1 %). Captions carry timestamps; without the §3.4
 //     alignment (phase 2) only an equal-length copy can reuse them, so a
 //     trim or an export of a different length is ANALYZED, not carried.
-//   * a person's "not the same footage" decision wins over both — and
-//     about ANY member of the group, not just the donor: text that went
-//     A → B (carried) must not reach C when Rick said C ≠ A. A group the
-//     person has split is ambiguous, so the file is analyzed instead.
+//     A same-footage donor must also have the same stream type.
+//   * a person's "not the same footage" decision wins over both — about
+//     ANY member of the recipient's same-bytes OR same-footage group, and
+//     about every hop of a carried donor's "from <uuid>" chain: text that
+//     went A → B (carried) must not reach C when Rick said C ≠ A. A group
+//     the person has split is ambiguous, so the file is analyzed instead.
 //
 // Donors: a live (not purged), readable (not `isExcludedFromPropagation`)
-// row with a `dossierProcessedAt` stamp and real text (scene captions, or
-// a non-degenerate transcript). A row that was itself carried over is a
-// donor of last resort — a direct analysis is preferred so provenance
-// points at the origin when one is available.
+// row with a `dossierProcessedAt` stamp that COVERS the recipient's
+// channels (QA 2026-10-10): video needs scene captions, audio needs a
+// Whisper result (a transcript, or "" for no speech). An A/V-pair video
+// half can therefore never stamp the muxed file done without its
+// transcript. A row that was itself carried over is a donor of last
+// resort — a direct analysis is preferred so provenance points at the
+// origin when one is available.
 //
 // What is written: ONLY the dossier channels (captions, OCR text, OCR
 // date candidates, transcript, dossierProcessed*). No date, no name — the
@@ -66,10 +71,15 @@ struct DossierCarryOverIndex {
 
     private var byContent: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
     private var byFootage: [UUID: [VideoRecord]] = [:]
+    /// Resolves a carried donor's "from <uuid>" back to its origin: the
+    /// model's O(1) id index in production, the bucketed records otherwise.
+    private let lookup: (UUID) -> VideoRecord?
 
     /// Build over the whole catalog, keeping only the groups the batch's
-    /// `candidates` belong to.
-    init(records: [VideoRecord], candidates: [VideoRecord]) {
+    /// `candidates` belong to. `lookup` resolves provenance hops (pass
+    /// `model.record(forID:)`); nil falls back to the bucketed records.
+    init(records: [VideoRecord], candidates: [VideoRecord],
+         lookup: ((UUID) -> VideoRecord?)? = nil) {
         let minimum = VideoScanModel.footageShareMinimumConfidence
         var contentKeys = Set<CatalogSizeTotals.GroupKey>()
         var footageKeys = Set<UUID>()
@@ -77,54 +87,118 @@ struct DossierCarryOverIndex {
             if let k = VideoScanModel.contentGroupKey(c) { contentKeys.insert(k) }
             if let f = c.footage, f.confidence >= minimum { footageKeys.insert(f.groupID) }
         }
-        guard !contentKeys.isEmpty || !footageKeys.isEmpty else { return }
-        for r in records {
-            if let k = VideoScanModel.contentGroupKey(r), contentKeys.contains(k) {
-                byContent[k, default: []].append(r)
-            }
-            if let f = r.footage, f.confidence >= minimum, footageKeys.contains(f.groupID) {
-                byFootage[f.groupID, default: []].append(r)
+        var content: [CatalogSizeTotals.GroupKey: [VideoRecord]] = [:]
+        var footage: [UUID: [VideoRecord]] = [:]
+        if !contentKeys.isEmpty || !footageKeys.isEmpty {
+            for r in records {
+                if let k = VideoScanModel.contentGroupKey(r), contentKeys.contains(k) {
+                    content[k, default: []].append(r)
+                }
+                if let f = r.footage, f.confidence >= minimum, footageKeys.contains(f.groupID) {
+                    footage[f.groupID, default: []].append(r)
+                }
             }
         }
-        byContent = byContent.filter { $0.value.count >= 2 }
-        byFootage = byFootage.filter { $0.value.count >= 2 }
+        byContent = content.filter { $0.value.count >= 2 }
+        byFootage = footage.filter { $0.value.count >= 2 }
+        if let lookup {
+            self.lookup = lookup
+        } else {
+            var byID: [UUID: VideoRecord] = [:]
+            for group in content.values { for r in group { byID[r.id] = r } }
+            for group in footage.values { for r in group { byID[r.id] = r } }
+            self.lookup = { byID[$0] }
+        }
     }
 
     /// Number of buckets (tests / the scale sensor).
     var groupCount: Int { byContent.count + byFootage.count }
 
+    /// The recipient's same-bytes and same-footage groups (each may be empty).
+    private func groups(of rec: VideoRecord) -> (content: [VideoRecord], footage: [VideoRecord]) {
+        let content = VideoScanModel.contentGroupKey(rec).flatMap { byContent[$0] } ?? []
+        guard let f = rec.footage, f.confidence >= VideoScanModel.footageShareMinimumConfidence else {
+            return (content, [])
+        }
+        return (content, byFootage[f.groupID] ?? [])
+    }
+
     /// The best sibling to copy text from, or nil (analyze the file).
     /// Same bytes beats same footage; within a kind, a directly analyzed
     /// donor beats a carried one, then more captions, then a longer
     /// transcript; ties break on the id string (deterministic).
+    ///
+    /// QA 2026-10-10 — P2-b: a person's "not the same" decision between the
+    /// recipient and ANY member of the union of its same-bytes and
+    /// same-footage groups makes the question ambiguous, so the file is
+    /// analyzed; and a carried donor's provenance is walked back to its
+    /// origin, every hop free of such a decision, so text never crosses one
+    /// through a same-bytes hop. P2-a: the donor must cover every channel
+    /// the recipient has (`coversChannels`); a same-footage donor must also
+    /// have the same stream type.
     func donor(for rec: VideoRecord) -> (record: VideoRecord, relation: DossierCarryRelation)? {
         guard !VideoScanModel.isExcludedFromPropagation(rec) else { return nil }
-        if let key = VideoScanModel.contentGroupKey(rec), let group = byContent[key],
-           !Self.personSplit(rec, from: group) {
-            let twins = group.filter {
-                $0 !== rec && VideoScanModel.haveVerifiedSameContent(rec, $0) && Self.mayDonate($0, to: rec)
-            }
-            if let best = Self.best(twins) { return (best, .sameBytes) }
+        let (content, footage) = groups(of: rec)
+        guard !Self.personSplit(rec, from: content + footage) else { return nil }
+        let twins = content.filter {
+            $0 !== rec && VideoScanModel.haveVerifiedSameContent(rec, $0)
+                && Self.mayDonate($0, to: rec) && provenanceIsClear($0, for: rec)
         }
-        let minimum = VideoScanModel.footageShareMinimumConfidence
-        if let f = rec.footage, f.confidence >= minimum, let group = byFootage[f.groupID],
-           !Self.personSplit(rec, from: group) {
-            let peers = group.filter { other in
-                guard other !== rec, let of = other.footage, of.groupID == f.groupID,
-                      of.confidence >= minimum else { return false }
-                return Self.sameLength(rec, other) && Self.mayDonate(other, to: rec)
-            }
-            if let best = Self.best(peers) { return (best, .sameFootage) }
+        if let best = Self.best(twins) { return (best, .sameBytes) }
+        let peers = footage.filter { other in
+            other !== rec && rec.streamTypeRaw == other.streamTypeRaw
+                && Self.sameLength(rec, other) && Self.mayDonate(other, to: rec)
+                && provenanceIsClear(other, for: rec)
         }
+        if let best = Self.best(peers) { return (best, .sameFootage) }
         return nil
+    }
+
+    /// Walk a carried donor's "from <uuid>" chain (≤ 16 hops, cycle-safe)
+    /// and refuse when the person ruled the recipient and any hop "not the
+    /// same". An unresolvable hop ends the walk (the immediate donor was
+    /// already checked against the recipient's groups).
+    private func provenanceIsClear(_ donor: VideoRecord, for rec: VideoRecord) -> Bool {
+        var current = donor
+        var seen: Set<UUID> = [donor.id]
+        for _ in 0..<16 {
+            guard let originID = Self.carriedFromID(current), !seen.contains(originID),
+                  let origin = lookup(originID) else { return true }
+            if Self.personSplit(rec, from: [origin]) { return false }
+            seen.insert(originID)
+            current = origin
+        }
+        return true
     }
 
     // MARK: Pure rules (static so tests can pin them)
 
-    /// A donor is live, readable, stamped and carries real text.
+    /// A donor is live, readable, stamped and covers the recipient's
+    /// channels.
     static func mayDonate(_ donor: VideoRecord, to rec: VideoRecord) -> Bool {
         donor.purgedAt == nil && donor.dossierProcessedAt != nil
-            && !VideoScanModel.isExcludedFromPropagation(donor) && hasText(donor)
+            && !VideoScanModel.isExcludedFromPropagation(donor) && coversChannels(donor, for: rec)
+    }
+
+    /// P2-a (QA 2026-10-10): a recipient with video needs a donor with
+    /// scene captions; a recipient with audio (anything but video-only)
+    /// needs a donor whose Whisper ran — a transcript, or "" for "no
+    /// speech" — never a recognizer artifact. Otherwise carry-over would
+    /// stamp the recipient done and no batch would ever fill the channel.
+    static func coversChannels(_ donor: VideoRecord, for rec: VideoRecord) -> Bool {
+        let stream = rec.streamType
+        if stream == .videoAndAudio || stream == .videoOnly, donor.sceneCaptions.isEmpty { return false }
+        guard stream != .videoOnly else { return true }
+        guard let transcript = donor.audioTranscript else { return false }
+        return transcript.isEmpty || !VideoScanModel.isDegenerateDossierText(transcript)
+    }
+
+    /// The donor id in a carried stamp "from <uuid> (…)", or nil.
+    static func carriedFromID(_ r: VideoRecord) -> UUID? {
+        guard let by = r.dossierProcessedBy,
+              by.hasPrefix(VideoScanModel.dossierCarriedProvenancePrefix) else { return nil }
+        let rest = by.dropFirst(VideoScanModel.dossierCarriedProvenancePrefix.count)
+        return UUID(uuidString: String(rest.prefix { $0 != " " }))
     }
 
     /// True when the person said `rec` is NOT the same footage as any
@@ -134,13 +208,6 @@ struct DossierCarryOverIndex {
             other !== rec && (rec.footageDecision(about: other.id)?.verdict == .notSame
                               || other.footageDecision(about: rec.id)?.verdict == .notSame)
         }
-    }
-
-    /// Scene captions, or a transcript that is not a recognizer artifact.
-    static func hasText(_ r: VideoRecord) -> Bool {
-        if !r.sceneCaptions.isEmpty { return true }
-        guard let t = r.audioTranscript else { return false }
-        return !VideoScanModel.isDegenerateDossierText(t)
     }
 
     /// Equal length within ±2 s or 1 % (both durations known).

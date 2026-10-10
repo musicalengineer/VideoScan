@@ -138,23 +138,45 @@ struct DossierCandidateSelection {
     var notEligibleByStage = 0
 }
 
+extension DossierCandidateSelection {
+    /// The tally for a log line, with the Archived / In Triage counts taken
+    /// from `pool` — the post-Analysis-Scope work list, so "admitted N
+    /// Archived" agrees with the START line's "N eligible" (QA P3-a).
+    /// The candidate array is dropped (counts only).
+    func tally(admittedFrom pool: [VideoRecord]) -> DossierCandidateSelection {
+        var t = self
+        t.candidates = []
+        t.archived = pool.filter { $0.lifecycleStage == .archived }.count
+        t.inTriage = pool.filter { $0.lifecycleStage == .reviewing }.count
+        return t
+    }
+}
+
 /// One pass over `records`: Dossier's candidate list plus the admission
 /// tally. O(records × reachable prefixes); no disk I/O.
+///
+/// `scopedToPrefixes` (a per-volume or single-file pass): records outside
+/// `reachableVolumePaths` are not this pass's business — they are neither
+/// counted offline nor counted by stage (QA P3-a: a volume pass used to
+/// call every other mounted volume "offline").
 nonisolated func pfDossierCandidateSelection(
     records: [VideoRecord],
-    reachableVolumePaths: [String]
+    reachableVolumePaths: [String],
+    scopedToPrefixes: Bool = false
 ) -> DossierCandidateSelection {
     let prefixes = reachableVolumePaths.filter { !$0.isEmpty }
     let stages = LifecycleStage.dossierStages
     var out = DossierCandidateSelection()
     for rec in records {
+        let underPrefix = prefixes.contains(where: { rec.fullPath.hasPrefix($0) })
+        if scopedToPrefixes && !underPrefix { continue }
         guard pfMetadataCandidateIsEligible(rec, admitting: stages) else {
             if rec.purgedAt == nil, rec.setAsideReason == nil, !stages.contains(rec.lifecycleStage) {
                 out.notEligibleByStage += 1
             }
             continue
         }
-        guard prefixes.contains(where: { rec.fullPath.hasPrefix($0) }) else {
+        guard underPrefix else {
             out.offline += 1
             continue
         }

@@ -126,7 +126,7 @@ extension CaptionOrchestrator {
             return Self.isOnOfflineVolume(record.fullPath) ? .offline : .missingOnDisk
         }
         if record.drmProtected { return .drmCached }
-        if await Self.isDRMProtected(path: record.fullPath) { return .drmProbed }
+        if await drmProbe(record.fullPath) { return .drmProbed }
         return nil
     }
 

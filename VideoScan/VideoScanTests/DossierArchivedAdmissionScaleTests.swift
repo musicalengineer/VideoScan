@@ -137,13 +137,17 @@ struct DossierArchivedAdmissionScaleTests {
                                               role: .copy, rank: i % 5, likelyOriginalID: r.id,
                                               originalInCatalog: true, evidence: [], scannedAt: Date(),
                                               algorithmVersion: 1)
-                if i % 5 == 0 {   // one donor per group
+                if i % 5 == 0 {   // one donor per group, covering both channels
                     r.sceneCaptions = [SceneCaption(timestamp: 1, text: "scene")]
+                    r.audioTranscript = "words"
                     r.dossierProcessedAt = Date()
                 }
             } else if i < 14_000 {
                 r.partialMD5 = "twin-\(i / 2)"; r.sizeBytes = 1_000
-                if i % 2 == 0 { r.audioTranscript = "words"; r.dossierProcessedAt = Date() }
+                if i % 2 == 0 {
+                    r.sceneCaptions = [SceneCaption(timestamp: 1, text: "scene")]
+                    r.audioTranscript = "words"; r.dossierProcessedAt = Date()
+                }
             }
             recs.append(r)
         }
@@ -268,6 +272,9 @@ struct DossierArchivedAdmissionScaleTests {
         let offline = VideoRecord()
         offline.fullPath = "/Volumes/TestOfflineFamilyDrive/test_far.mov"; offline.filename = "test_far.mov"
         offline.streamTypeRaw = StreamType.videoAndAudio.rawValue; offline.lifecycleStage = .archived
+        // Video-only fixtures: this pass runs with no transcriber, and a
+        // donor must cover every channel its recipient has (QA P2-a).
+        for r in [tape, triageCopy, wedding, improved] { r.streamTypeRaw = StreamType.videoOnly.rawValue }
         sb.model.records = [tape, triageCopy, wedding, improved, trashed, offline]
         let shaBefore = [tape, wedding, improved].map { MasterArchiveTestSupport.sha256(ofFile: $0.fullPath) }
 

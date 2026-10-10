@@ -514,6 +514,12 @@ final class CaptionOrchestrator: ObservableObject {
     /// the OUTCOME coverage line. nil for batches started by tests.
     var dossierAdmission: DossierCandidateSelection?
 
+    /// The per-file DRM probe (AVAsset `hasProtectedContent`). A seam so
+    /// tests can pin the probed-DRM branch without a real FairPlay file;
+    /// production never reassigns it. (≈ a C++ std::function member
+    /// defaulted to the real implementation.)
+    var drmProbe: @Sendable (String) async -> Bool = { await CaptionOrchestrator.isDRMProtected(path: $0) }
+
     /// Test seam / regression sensor (QA F5 2026-07-14): counts every
     /// ENTRY into `startAnalyzing`, successful or refused. AnalyzeJob's
     /// wait loop must poll a plain bool while the orchestrator is busy

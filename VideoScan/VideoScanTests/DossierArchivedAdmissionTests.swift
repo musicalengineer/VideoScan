@@ -452,7 +452,12 @@ struct DossierArchivedAdmissionTests {
         defer { sb.cleanup() }
         let a = sb.record("test_pair_a.mov", stage: .archived)
         let b = sb.record("test_pair_b.mov", stage: .reviewing)
-        for r in [a, b] { r.partialMD5 = "md5-pair"; r.sizeBytes = 77 }
+        // Video-only: this serial run has no transcriber, so only a
+        // captions-only recipient may inherit (QA P2-a channel coverage).
+        for r in [a, b] {
+            r.partialMD5 = "md5-pair"; r.sizeBytes = 77
+            r.streamTypeRaw = StreamType.videoOnly.rawValue
+        }
         sb.model.records = [a, b]
         let stub = StubDossierRunner(modelID: "stub-carry")
         let orch = CaptionOrchestrator(runnerFactory: { stub })
@@ -460,5 +465,77 @@ struct DossierArchivedAdmissionTests {
         #expect(await stub.countCalled() == 1)
         #expect(b.dossierProcessedBy == "from \(a.id.uuidString) (same bytes)", "\(b.dossierProcessedBy ?? "nil")")
         #expect(b.sceneCaptions == a.sceneCaptions)
+    }
+
+    /// QA P2-a companion: a donor whose Whisper ran and found no speech
+    /// ("") covers the audio channel — silent footage still carries.
+    /// CONTROL: the same donor with NO Whisper result (nil) does not.
+    @Test("a silent donor (\"\") covers audio; a never-transcribed donor does not", arguments: [true, false])
+    func silentDonorCoversAudioButUntranscribedDoesNot(_ whisperRan: Bool) async throws {
+        let sb = try F.Sandbox("carry-silent-\(whisperRan)")
+        defer { sb.cleanup() }
+        let donor = sb.record("test_silent_a.mov", stage: .cataloged)
+        donor.sceneCaptions = [SceneCaption(timestamp: 1, text: "a quiet lake")]
+        donor.audioTranscript = whisperRan ? "" : nil
+        donor.dossierProcessedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let twin = sb.record("test_silent_b.mov", stage: .archived)
+        for r in [donor, twin] { r.partialMD5 = "md5-silent"; r.sizeBytes = 55 }
+        sb.model.records = [donor, twin]
+        let stub = StubDossierRunner(modelID: "stub-silent")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+        await orch.startCatalogWideDossier(model: sb.model)
+        let carried = VideoScanModel.dossierCarriedProvenance(from: donor.id, relation: .sameBytes)
+        if whisperRan {
+            #expect(await stub.countCalled() == 0, "silent footage must still carry over")
+            #expect(twin.dossierProcessedBy == carried)
+        } else {
+            #expect(await stub.countCalled() == 1, "control: no Whisper result → the twin is analyzed")
+            #expect(twin.dossierProcessedBy != carried)
+        }
+    }
+
+    // MARK: - QA P3-d: the remaining read-only guards, on the PIPELINED loop
+
+    /// The probed-DRM branch: an archived row is skipped but never flagged
+    /// (drmProtected / suspectedJunk / junkReasons); the control row is.
+    @Test("pipelined: a DRM-probed archived row is not flagged", arguments: [true, false])
+    func pipelinedDRMProbedArchivedRowIsNotFlagged(_ archived: Bool) async throws {
+        let sb = try F.Sandbox("drm-\(archived)")
+        defer { sb.cleanup() }
+        let r = sb.record("test_purchase.m4v", stage: archived ? .archived : .cataloged)
+        sb.model.records = [r]
+        let before = try F.persisted(r)
+        let stub = StubDossierRunner(modelID: "stub-drm")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+        orch.drmProbe = { _ in true }
+        _ = await orch.startAnalyzing(volumePrefix: sb.dir.path, model: sb.model,
+                                      transcriber: StubAudioTranscriber())
+        #expect(await stub.countCalled() == 0, "a DRM file is never decoded")
+        #expect(orch.liveSkipProtected == 1)
+        if archived {
+            #expect(F.changedKeys(before, try F.persisted(r)).isEmpty, "archived row flagged by the DRM probe")
+        } else {
+            #expect(r.drmProtected && r.mediaDisposition == .suspectedJunk,
+                    "control: a live DRM row IS flagged (else this pin proves nothing)")
+        }
+    }
+
+    /// `clearStaleNeedsReformat`'s `!plan.readOnly`: an explicit retry that
+    /// decodes clears the flag on a live row, never on an archived one
+    /// (needsReformat is not a dossier field).
+    @Test("pipelined: a decoded retry clears needsReformat on live rows only", arguments: [true, false])
+    func pipelinedRetryClearsNeedsReformatOnLiveRowsOnly(_ archived: Bool) async throws {
+        let sb = try F.Sandbox("clear-\(archived)")
+        defer { sb.cleanup() }
+        let r = sb.record("test_retry.mov", stage: archived ? .archived : .cataloged)
+        r.needsReformat = true   // flagged before 2026-10-10, or by hand
+        sb.model.records = [r]
+        let stub = StubDossierRunner(modelID: "stub-clear")
+        let orch = CaptionOrchestrator(runnerFactory: { stub })
+        _ = await orch.startAnalyzing(volumePrefix: r.fullPath, model: sb.model,
+                                      transcriber: StubAudioTranscriber(), ignoringScope: true)
+        #expect(await stub.countCalled() == 1, "explicit retry decodes")
+        #expect(r.needsReformat == archived,
+                archived ? "needsReformat cleared on an archived row" : "control: the stale flag IS cleared")
     }
 }

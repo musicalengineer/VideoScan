@@ -26005,8 +26005,11 @@
         "missingArchivedFileIsNeverPurged",
         "missingInTriageFileIsNotAutoPurged",
         "perVolumeAnalyzeAdmitsArchivedAndInTriage",
+        "pipelinedDRMProbedArchivedRowIsNotFlagged",
+        "pipelinedRetryClearsNeedsReformatOnLiveRowsOnly",
         "sameFootageTextIsCarriedOverOnlyWhenLengthsMatchAndConfident",
         "secondTwinInTheSameBatchInheritsTheFirst",
+        "silentDonorCoversAudioButUntranscribedDoesNot",
         "unreadableArchivedRowIsNotFlagged",
         "videoUnreadableIsFlaggedAndNotRetriedByTheNextBatch"
       ]
@@ -26028,6 +26031,23 @@
         "poisonedDefaultsAndNoDesignationDoNotChangeAdmission",
         "scale100k",
         "selectionTallyCountsEveryReason"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/QADossierAdmissionRedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "QADossierAdmissionRedTests"
+      ],
+      "tests": [
+        "carryOverNeverSkipsARecipientWhoseAudioTheDonorNeverHad",
+        "duplicateEnrichmentDoesNotDateAnArchivedStageKeeper",
+        "liveReloadMergeLeavesAnArchivedStageRowsDateAlone",
+        "notSameDecisionSurvivesASameBytesHop",
+        "perVolumeCoverageLineDoesNotCallOtherVolumesOffline",
+        "pipelinedZeroSceneArchivedRowIsNotFlagged"
       ]
     }
   ],
@@ -27810,6 +27830,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/PublishNeverOverwritesOrLosesOutputTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/QADossierAdmissionRedTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

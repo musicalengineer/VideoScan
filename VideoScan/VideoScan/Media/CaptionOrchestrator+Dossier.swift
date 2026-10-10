@@ -115,7 +115,8 @@ extension CaptionOrchestrator {
         let exact = model.record(forPath: volumePrefix)
         let selection = pfDossierCandidateSelection(
             records: exact.map { [$0] } ?? model.records,
-            reachableVolumePaths: [volumePrefix]
+            reachableVolumePaths: [volumePrefix],
+            scopedToPrefixes: true   // other volumes are not "offline" here
         )
         let base = selection.candidates
         let candidates = ignoringScope
@@ -128,8 +129,9 @@ extension CaptionOrchestrator {
 
         captionOrchLog.info("Per-volume dossier: \(candidates.count) candidate(s) under \(volumePrefix, privacy: .public); transcriber=\(resolvedTranscriber?.modelID ?? "none", privacy: .public)")
         appLog.write("Dossier: starting volume pass — \(candidates.count) eligible under \(VolumeReachability.displayLabel(forPath: volumePrefix))")
-        if selection.archived + selection.inTriage > 0 {
-            appLog.write("Dossier: admitted \(selection.archived) Archived + \(selection.inTriage) In Triage file(s) under \(VolumeReachability.displayLabel(forPath: volumePrefix)) — read-only analysis; archived rows get text only")
+        let admitted = selection.tally(admittedFrom: candidates)
+        if admitted.archived + admitted.inTriage > 0 {
+            appLog.write("Dossier: admitted \(admitted.archived) Archived + \(admitted.inTriage) In Triage file(s) under \(VolumeReachability.displayLabel(forPath: volumePrefix)) — read-only analysis; archived rows get text only")
         }
 
         guard !candidates.isEmpty else {
@@ -147,7 +149,7 @@ extension CaptionOrchestrator {
         // Analyze, Reformat's follow-up): analyze THIS file — no
         // carry-over, and a needs-reformat flag is retried.
         let explicitSingleFile = exact != nil
-        armDossierBatchContext(selection: selection, records: model.records, candidates: candidates,
+        armDossierBatchContext(selection: selection, model: model, candidates: candidates,
                                carryOver: !explicitSingleFile, retryNeedsReformat: explicitSingleFile)
 
         // Keep-alive (perf item 3, 2026-07-14): cached-or-fresh. N
@@ -270,7 +272,8 @@ extension CaptionOrchestrator {
         captionOrchLog.info("Catalog-wide dossier: \(candidates.count) candidate(s) across \(reachablePaths.count) volume(s); transcriber=\(resolvedTranscriber?.modelID ?? "none", privacy: .public)")
         appLog.write("Dossier: starting catalog-wide pass — \(candidates.count) eligible video(s), VLM=\(MLXVLMCaptionRunner().modelID), transcriber=\(resolvedTranscriber?.modelID ?? "none"), force=\(force)")
         // Additive START detail (the line above keeps its format).
-        appLog.write("Dossier: admitted \(selection.archived) Archived + \(selection.inTriage) In Triage file(s) (read-only analysis; archived rows get text only); \(selection.offline) on offline volume(s) skipped, not failed; \(selection.notEligibleByStage) not eligible (stage: Trashed / Deleted)")
+        let admitted = selection.tally(admittedFrom: candidates)
+        appLog.write("Dossier: admitted \(admitted.archived) Archived + \(admitted.inTriage) In Triage file(s) (read-only analysis; archived rows get text only); \(admitted.offline) on offline volume(s) skipped, not failed; \(admitted.notEligibleByStage) not eligible (stage: Trashed / Deleted)")
 
         guard !candidates.isEmpty else {
             currentStatus = .finished(captioned: 0, skipped: 0, failed: 0)
@@ -280,7 +283,7 @@ extension CaptionOrchestrator {
         currentTarget = nil
         currentStatus = .running(progress: 0.0, currentFile: "(loading model…)", etaSec: nil)
         self.force = force
-        armDossierBatchContext(selection: selection, records: model.records, candidates: candidates,
+        armDossierBatchContext(selection: selection, model: model, candidates: candidates,
                                carryOver: true, retryNeedsReformat: false)
 
         // Keep-alive: same cached-or-fresh hand-off as startAnalyzing.
@@ -309,13 +312,18 @@ extension CaptionOrchestrator {
     /// carry-over index (built here, once — O(records), no disk I/O), the
     /// needs-reformat retry switch, and the admission tally for the OUTCOME
     /// coverage line. Cleared by `disarmDossierBatchContext` on settle.
-    func armDossierBatchContext(selection: DossierCandidateSelection, records: [VideoRecord],
+    func armDossierBatchContext(selection: DossierCandidateSelection, model: VideoScanModel,
                                 candidates: [VideoRecord], carryOver: Bool, retryNeedsReformat: Bool) {
-        var tally = selection
-        tally.candidates = []   // counts only; don't hold the array
-        dossierAdmission = tally
+        // Counts only (the array is dropped); Archived / In Triage counted
+        // from the post-Analysis-Scope work list, like the START line.
+        dossierAdmission = selection.tally(admittedFrom: candidates)
         dossierRetriesNeedsReformat = retryNeedsReformat
-        dossierCarryOver = carryOver ? DossierCarryOverIndex(records: records, candidates: candidates) : nil
+        // The index resolves "from <uuid>" provenance through the model's
+        // O(1) id index; it is dropped at settle, releasing the capture.
+        dossierCarryOver = carryOver
+            ? DossierCarryOverIndex(records: model.records, candidates: candidates,
+                                    lookup: { model.record(forID: $0) })
+            : nil
     }
 
     func disarmDossierBatchContext() {
