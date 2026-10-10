@@ -23,9 +23,15 @@ import os
 //   - a file that couldn't be read writes NOTHING ("couldn't check" is
 //     not a verdict).
 //
+// A file whose card says "No sound" (SoundPresencePolicy) gets one more
+// step: where its sound is (SoundCopyFinder.load — one main-actor catalog
+// pass, ~ms at 100k records, after that file's seconds of probing; never
+// for a file with sound). The row and detail draw it as a banner with
+// Repair… (DiagnosticBanner, Rick 2026-10-10).
+//
 // Memory: per file ≈ 1.6 MB of probe text (CheckMediaProbe header); the
-// job keeps one report card per file (a few KB each) — 1,000 files ≈ a
-// few MB.
+// job keeps one report card per file (a few KB each) plus, for a flagged
+// file, one small advice value — 1,000 files ≈ a few MB.
 //
 // Concurrency: the job is @MainActor (≈ "all members on the UI thread");
 // the probe's entry points are @concurrent, so the heavy work never runs
@@ -45,6 +51,9 @@ struct CheckMediaItem: Identifiable, Sendable {
     let id: UUID
     let filename: String
     var outcome: Outcome
+    /// Where a no-sound file's sound is (nil = not looked up: the file has
+    /// sound, or the lookup hasn't finished).
+    var soundAdvice: SoundCopyAdvice?
 }
 
 @MainActor
@@ -53,6 +62,8 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
     typealias QuickRunner = @Sendable (String, ProcessControl) async throws -> CheckMediaProbe.QuickOutcome
     typealias FullRunner = @Sendable (String, MediaFacts, ProcessControl,
                                       @escaping CheckMediaProbe.FullProgress) async throws -> CheckMediaFullInputs
+    /// Where a flagged file's sound is, by record id.
+    typealias SoundAdviceLookup = @MainActor (UUID) async -> SoundCopyAdvice
 
     let id = UUID()
     let kind: MediaFileOperationKind = .checkMedia
@@ -74,6 +85,7 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
     private let gatesFor: (String) -> [MediaVolumeGate]
     private let quickRunner: QuickRunner
     private let fullRunner: FullRunner
+    private let soundAdviceLookup: SoundAdviceLookup
     private let pauser = JobPauseCoordinator()
     private var hold: MediaVolumeGateHold?
 
@@ -86,7 +98,8 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
          center: MediaFileOperationsCenter?,
          gatesFor: @escaping (String) -> [MediaVolumeGate] = { _ in [] },
          quickRunner: QuickRunner? = nil,
-         fullRunner: FullRunner? = nil) {
+         fullRunner: FullRunner? = nil,
+         soundAdviceLookup: SoundAdviceLookup? = nil) {
         self.records = records
         self.tier = tier
         self.model = model
@@ -96,6 +109,10 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         self.quickRunner = quickRunner ?? { try await CheckMediaProbe.quick(path: $0, control: $1) }
         self.fullRunner = fullRunner ?? { path, facts, control, progress in
             try await CheckMediaProbe.full(path: path, facts: facts, control: control, progress: progress)
+        }
+        self.soundAdviceLookup = soundAdviceLookup ?? { [weak model] id in
+            guard let model else { return .none }
+            return await SoundCopyFinder.load(recordID: id, model: model, flagged: true)
         }
     }
 
@@ -226,6 +243,15 @@ final class CheckMediaJob: @MainActor MediaFileOperationJob {
         var card = CheckMediaRules.card(tier: tier, checks: checks, quick: quick, at: Date())
         card.measuredPictureSeconds = measuredPicture
         persist(card: card, video: video, audio: audio, on: rec, index: index)
+        await lookUpSound(for: card, recordID: rec.id, index: index)
+    }
+
+    /// Only a file whose card says "No sound": where its sound is. After
+    /// `persist`, so a full check's measured picture length is on the card
+    /// the lookup reads (that is what turns "may be" into a match).
+    private func lookUpSound(for card: MediaReportCard, recordID: UUID, index: Int) async {
+        guard CheckMediaRules.hasNoSoundRow(card) else { return }
+        items[index].soundAdvice = await soundAdviceLookup(recordID)
     }
 
     /// Writes onto the CURRENT catalog object (a rescan may have replaced

@@ -9067,6 +9067,51 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DiagnosticBannerMediaTests.swift",
+      "stage": "integration",
+      "suites": [
+        "DiagnosticBannerVerifySensorTests",
+        "MediaRepairAddSoundEngineTests"
+      ],
+      "tests": [
+        "addsTheSoundIntoANewFileAndTouchesNothingElse",
+        "fullVerifyOfTheM2vEndsWithTheBannerAndItsRepairRuns",
+        "theCensusReadsFfprobesFieldOrder"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DiagnosticBannerTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DiagnosticBannerNoSoundTests",
+        "MediaRepairAddSoundPlanTests",
+        "NoSoundSummaryTests"
+      ],
+      "tests": [
+        "aCopyWithSoundIsNamedAndRepairStillLooks",
+        "aFileWithSoundGetsNoBanner",
+        "aMaybeAsksForAFullVerifyFirst",
+        "aMaybeIsShownUntickedWithRunAFullVerifyFirst",
+        "aMeasuredCandidateIsTickedAndBecomesTheRecipe",
+        "aMeasuredMatchNamesTheFileAndCarriesIt",
+        "addSoundIsItsOwnPass",
+        "anUnreachableSoundFileIsRefusedBeforeAnyWrite",
+        "countsOnlyCheckedFilesWithTheNoSoundRow",
+        "moreRepairsNeverAddsSoundToAFileThatHasIt",
+        "noSoundIsAYellowWarningWithTheSymbolHeadlineAndRepair",
+        "nothingFoundOrNotLookedForCannotRun",
+        "pairHalfAndPre1980GetNoBanner",
+        "singularAndNone",
+        "theFreeSpaceCheckCountsTheSoundFile",
+        "theLiveAssessmentWinsOverAStaleCard",
+        "theProofIsThePictureUntouchedPlusTheSoundTrack",
+        "verdictsMapToSeverities"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/DiscoveryCompletenessTests.swift",

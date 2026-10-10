@@ -20,17 +20,21 @@ extension MediaFileOperationsCenter {
     /// (with this session's sound measurement for Balance), the delete
     /// gate's sentence for the output path, and the gate packaged for the
     /// engine's off-main re-check. Pure apart from the model reads.
+    /// `addingSound` = the measured sound file for Add sound (nil = none).
     func repairRequest(record: VideoRecord, fixes: [MediaRepairFix], output: URL,
-                       model: VideoScanModel) -> MediaRepairRequest {
+                       model: VideoScanModel, addingSound: SoundCopyCandidate? = nil) -> MediaRepairRequest {
         let diagnosis = verifyDiagnosis(forRecordID: record.id)
-        let recipe = MediaRepairRecipe(fixes: fixes, balance: MediaRepairBalanceInput(diagnosis: diagnosis))
+        let recipe = MediaRepairRecipe(fixes: fixes, balance: MediaRepairBalanceInput(diagnosis: diagnosis),
+                                       soundFile: addingSound?.fullPath)
         let label = model.archiveVolumeProtection()?.label ?? "the archive volume"
         let note = model.bulkDeleteRefusal(forPath: output.path)
             .map { VideoScanModel.bulkDeleteRefusalNote($0, volume: label) }
-        return MediaRepairRequest(sourcePath: record.fullPath, sourceSizeBytes: record.sizeBytes,
-                                  sourceDurationSeconds: max(0, record.durationSeconds),
-                                  output: output, recipe: recipe,
-                                  outputProtectionNote: note, archiveCheck: model.archiveRemovalCheck())
+        var request = MediaRepairRequest(sourcePath: record.fullPath, sourceSizeBytes: record.sizeBytes,
+                                         sourceDurationSeconds: max(0, record.durationSeconds),
+                                         output: output, recipe: recipe,
+                                         outputProtectionNote: note, archiveCheck: model.archiveRemovalCheck())
+        request.addedSoundSizeBytes = addingSound.flatMap { model.record(forID: $0.id)?.sizeBytes } ?? 0
+        return request
     }
 
     /// Kick off ONE Repair Now job: every selected fix, one ffmpeg pass, one
@@ -42,14 +46,18 @@ extension MediaFileOperationsCenter {
     func startRepair(record: VideoRecord, fixes: [MediaRepairFix], output: URL, besideOriginal: Bool,
                      model: VideoScanModel,
                      plannedPictureFrames: Int? = nil,
+                     addingSound: SoundCopyCandidate? = nil,
                      runner: MediaRepairJob.Runner? = nil,
                      quickVerifier: MediaRepairJob.QuickVerifier? = nil) -> MediaRepairJob {
-        var request = repairRequest(record: record, fixes: fixes, output: output, model: model)
+        var request = repairRequest(record: record, fixes: fixes, output: output, model: model,
+                                    addingSound: addingSound)
         request.plannedPictureFrames = plannedPictureFrames
+        // The sound file's drive is paced like the picture's (one slot per HDD).
+        let paths = [record.fullPath, output.path] + (request.recipe.addedSoundPath.map { [$0] } ?? [])
         let busy = activeRepairJob(forRecordID: record.id)
         let job = MediaRepairJob(record: record, request: request, beforeCard: record.mediaReportCard,
                                  besideOriginal: besideOriginal, model: model,
-                                 gates: gatePlan(forPaths: [record.fullPath, output.path]),
+                                 gates: gatePlan(forPaths: paths),
                                  runner: runner, quickVerifier: quickVerifier)
         guard add(job) else { return job }
         if busy != nil {

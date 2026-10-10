@@ -22,8 +22,10 @@ struct MediaInfoRequest: Identifiable {
     /// carries the per-channel levels and the Balance / Rebuild offers.
     let audioDiagnosis: AudioVerifyDiagnosis?
     let onCheckMedia: () -> Void
-    /// Opens the Repair sheet (the plan) — Get Info's banner button.
-    var onRepair: (() -> Void)?
+    /// Opens the Repair sheet (the plan) — Get Info's banner buttons. The
+    /// argument is the sound file the "No sound" banner found (nil = the
+    /// sheet looks itself).
+    var onRepair: ((MediaRepairSoundSource?) -> Void)?
     let onSoundDetails: (() -> Void)?
     /// "A copy with sound is here" (Rick 2026-10-10): the lookup and its
     /// actions, supplied by the presenter (which owns the model). nil =
@@ -38,8 +40,8 @@ struct SoundCopyHooks {
     let load: @MainActor () async -> SoundCopyAdvice
     let reveal: (SoundCopyCandidate) -> Void
     let play: (SoundCopyCandidate) -> Void
-    /// Open the existing Combine sheet for this picture + that sound file.
-    let combine: (SoundCopyCandidate) -> Void
+    // Adding the sound is Repair…'s job (the banner's button) — the one
+    // repair door, Rick's 10/8 ruling; there is no Combine button here.
 }
 
 struct MediaInfoSheet: View {
@@ -95,15 +97,25 @@ struct MediaInfoSheet: View {
 
     // MARK: Verdict line
 
+    /// The verdict line. A file with no sound (and that should have it)
+    /// gets the loud banner with Repair… instead of a plain headline (Rick
+    /// 2026-10-10), whether or not it has been verified.
     @ViewBuilder
     private var verdictBox: some View {
-        if let card = request.record.mediaReportCard {
+        if let banner = noSoundBanner {
+            VStack(alignment: .leading, spacing: 4) {
+                DiagnosticBannerView(banner: banner, onAction: bannerHandler)
+                if let card = request.record.mediaReportCard {
+                    lastChecked(card).padding(.leading, 4)
+                }
+            }
+            .accessibilityIdentifier("mediaInfo.verdict")
+        } else if let card = request.record.mediaReportCard {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(SoundPresencePolicy.displayHeadline(card: card, presence: soundPresence))
                         .font(.body.weight(.medium))
-                    Text("Last checked \(card.checkedAt.formatted(date: .abbreviated, time: .shortened))\(card.isCurrent(forSizeBytes: request.record.sizeBytes) ? "" : " — the file has changed since")")
-                        .font(.callout).foregroundStyle(.secondary)
+                    lastChecked(card)
                 }
             } icon: {
                 let shown = SoundPresencePolicy.displayVerdict(card: card, presence: soundPresence)
@@ -118,7 +130,33 @@ struct MediaInfoSheet: View {
         }
     }
 
+    /// nil when this sheet can't open Repair (then the banner draws no button).
+    private var bannerHandler: (@MainActor (DiagnosticAction) -> Void)? {
+        guard request.onRepair != nil else { return nil }
+        return { bannerAction($0) }
+    }
+
+    /// The banner's Repair…: hand off to the Repair sheet with the sound
+    /// file the banner found.
+    private func bannerAction(_ action: DiagnosticAction) {
+        guard case .repair(let prefill) = action, let onRepair = request.onRepair else { return }
+        handOff { onRepair(prefill.soundSource) }
+    }
+
+    private func lastChecked(_ card: MediaReportCard) -> some View {
+        Text("Last checked \(card.checkedAt.formatted(date: .abbreviated, time: .shortened))\(card.isCurrent(forSizeBytes: request.record.sizeBytes) ? "" : " — the file has changed since")")
+            .font(.callout).foregroundStyle(.secondary)
+    }
+
     // MARK: Sound (Rick 2026-10-10)
+
+    /// The "No sound" banner: the live assessment (or a card that says so),
+    /// with where the sound is once the lookup has answered. O(card rows).
+    private var noSoundBanner: DiagnosticBanner? {
+        let r = request.record
+        let card = r.mediaReportCard.flatMap { $0.isCurrent(forSizeBytes: r.sizeBytes) ? $0 : nil }
+        return DiagnosticBanner.noSound(recordID: r.id, card: card, presence: soundPresence, advice: soundAdvice)
+    }
 
     /// SoundPresencePolicy's answer: from the probe once it has read the
     /// header, else from the catalog's stream type. O(1) — one date
@@ -131,12 +169,14 @@ struct MediaInfoSheet: View {
         return request.record.catalogSoundPresence
     }
 
-    /// "No sound — this copy has no audio track" (orange) and where the
-    /// sound is; or the pair / silent-film note (quiet). Empty otherwise.
+    /// The pair / silent-film note (quiet); for "No sound" (the banner
+    /// above says it) only the lookup's Reveal / Play. Empty otherwise.
     @ViewBuilder
     private var soundSection: some View {
         let presence = soundPresence
-        if let headline = presence.headline {
+        if presence.isWarning {
+            soundAdviceRow
+        } else if let headline = presence.headline {
             VStack(alignment: .leading, spacing: 6) {
                 Label {
                     VStack(alignment: .leading, spacing: 2) {
@@ -146,11 +186,9 @@ struct MediaInfoSheet: View {
                         }
                     }
                 } icon: {
-                    Image(systemName: presence.isWarning ? "speaker.slash.fill" : "speaker.slash")
-                        .foregroundStyle(presence.isWarning ? .orange : .secondary)
+                    Image(systemName: "speaker.slash").foregroundStyle(.secondary)
                 }
                 .accessibilityIdentifier("mediaInfo.sound")
-                if presence.isWarning { soundAdviceRow }
             }
         }
     }
@@ -163,14 +201,17 @@ struct MediaInfoSheet: View {
                 ProgressView("Looking for a copy with sound…").controlSize(.small)
             }
         case .some(let advice):
-            HStack(spacing: 8) {
-                Text(advice.line).font(.callout).lineLimit(2).truncationMode(.middle)
-                    .help(advice.candidate?.fullPath ?? "")
-                    .accessibilityIdentifier("mediaInfo.soundCopy")
-                Spacer()
-                soundAdviceButtons(advice)
+            if let candidate = advice.candidate {
+                HStack(spacing: 8) {
+                    Text(candidate.fullPath).font(.callout.monospaced()).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(candidate.fullPath)
+                        .accessibilityIdentifier("mediaInfo.soundCopy")
+                    Spacer()
+                    soundAdviceButtons(advice)
+                }
+                .controlSize(.small)
             }
-            .controlSize(.small)
         }
     }
 
@@ -181,12 +222,7 @@ struct MediaInfoSheet: View {
             case .watch(let c):
                 Button("Reveal") { hooks.reveal(c) }
                 Button("Play") { hooks.play(c) }
-            case .combine(let p):
-                Button("Combine\u{2026}") { handOff { hooks.combine(p.audio) } }
-                    .help("Opens the Combine sheet for this picture and \(p.audio.filename). Nothing is muxed until you start it there.")
-                    .accessibilityIdentifier("mediaInfo.combineWithSound")
-                Button("Reveal") { hooks.reveal(p.audio) }
-            case .maybeCombine(let p):
+            case .combine(let p), .maybeCombine(let p):
                 Button("Reveal") { hooks.reveal(p.audio) }
             case .connect:
                 EmptyView()   // its drive is not connected — nothing to reveal yet
@@ -213,7 +249,7 @@ struct MediaInfoSheet: View {
             MediaRepairBanner(advice: MediaRepairAdvice.advice(for: card, offers: offers,
                                                               balance: MediaRepairBalanceInput(diagnosis: request.audioDiagnosis),
                                                               sourceName: r.filename),
-                              buttonTitle: "Repair Now\u{2026}", action: { handOff(onRepair) })
+                              buttonTitle: "Repair Now\u{2026}", action: { handOff { onRepair(nil) } })
         }
     }
 

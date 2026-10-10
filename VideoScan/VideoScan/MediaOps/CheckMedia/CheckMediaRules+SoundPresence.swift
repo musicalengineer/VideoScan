@@ -51,6 +51,11 @@ extension CheckMediaRules {
         c.kind == .sound && c.verdict == .warning && c.sentence.hasPrefix(SoundPresencePolicy.noSoundTitle)
     }
 
+    /// The card carries the policy's no-sound Warning row. O(rows).
+    static func hasNoSoundRow(_ card: MediaReportCard) -> Bool {
+        card.checks.contains(where: isNoSoundRow)
+    }
+
     /// The headline when the no-sound row is the most serious thing on the
     /// card (no Problem rows): it names the missing sound first, then any
     /// other warnings. nil when there is no such row.
