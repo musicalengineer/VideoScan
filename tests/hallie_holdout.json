@@ -1,0 +1,6 @@
+{
+ "version": 1,
+ "name": "hallie_holdout",
+ "description": "Held-out live questions. Append new real questions from Rick and family here (id, text, category, date). Builders NEVER tune against this file; it is scored only to check that acceptance gains generalise. Same shape as tests/hallie_acceptance_v1.json.",
+ "categories": []
+}
