@@ -126,16 +126,23 @@ extension VideoScanModel {
         log("Delete Confirmed Junk: START — \(snapshot.count) file(s) as confirmed at \(snapshot.frozenAt.formatted(date: .omitted, time: .standard)): \(snapshot.moveCount) to move to the Trash (\(Formatting.humanSize(snapshot.moveBytes))), \(snapshot.offlineCount) offline, \(snapshot.heldCount) held back")
         let frozen = FrozenJunkFiles(snapshot)
         let pathByID = Dictionary(snapshot.items.map { ($0.record.id, $0.path) }, uniquingKeysWith: { first, _ in first })
-        let fileGuard = JunkDeletionGuard(
+        // G2: the auditor's record — START, a line + receipt row per file, OUTCOME.
+        let audit = DeletionAudit(kind: .junk, verb: "Delete Junk", linePrefix: "[junk] ", sink: deletionAuditSink())
+        audit.start(scope: "\(snapshot.count) confirmed junk file(s) as confirmed at \(snapshot.frozenAt.formatted(date: .omitted, time: .standard))",
+                    requested: snapshot.count, bytes: snapshot.items.reduce(Int64(0)) { $0 + $1.bytes })
+        var fileGuard = JunkDeletionGuard(
             authorize: { [weak self] rec in
                 guard let self else { return "the catalog went away — nothing moved" }
                 return self.frozenJunkCatalogProblem(rec, frozenPath: pathByID[rec.id])
             },
             beforeRemoval: { path in frozen.diskProblem(at: path) },
             remove: fileOperation)
-        let result = await deleteConfirmedJunk(snapshot.items.map(\.record), mode: .toTrash, guard: fileGuard)
+        fileGuard.settled = { rec, outcome in audit.record(JunkDeletionResult.auditRow(rec, outcome), id: rec.id) }
+        var result = await deleteConfirmedJunk(snapshot.items.map(\.record), mode: .toTrash, guard: fileGuard)
             .trashFailuresHeld()
         logJunkLaneOutcome(result, verb: "Delete Confirmed Junk")
+        audit.finish(result)
+        result.receipt = audit.receipt.url
         return result
     }
 
@@ -179,6 +186,26 @@ extension VideoScanModel.JunkDeletionResult {
             guard case .failed(let error) = item.outcome else { return item }
             return .init(record: item.record, outcome: .held(Self.trashFailureNote(item.record, error)))
         })
+    }
+
+    /// One junk file's outcome as the audit and the receipt say it (a
+    /// Trash failure is the lanes' hold — `trashFailuresHeld`).
+    static func auditRow(_ rec: VideoRecord, _ outcome: VideoScanModel.JunkFileOutcome) -> DeletionAuditRow {
+        var row = DeletionAuditRow(outcome: .held, originalPath: rec.fullPath, trashPath: nil, sizeBytes: rec.sizeBytes,
+                                   keeperPath: nil, keeperProof: nil, reason: "")
+        switch outcome {
+        case .moved(let bytes, let trashPath):
+            row.outcome = .moved; row.sizeBytes = bytes; row.trashPath = trashPath
+        case .held(let why): row.reason = why
+        case .failed(let error): row.reason = trashFailureNote(rec, error)
+        case .missing:
+            row.outcome = .missing; row.reason = "already gone from its drive — the catalog now says so"
+        case .offline:
+            row.outcome = .offline; row.reason = "its drive isn't connected — untouched"
+        case .cancelled:
+            row.outcome = .cancelled; row.reason = "not reached — the run was stopped first"
+        }
+        return row
     }
 
     static func trashFailureNote(_ rec: VideoRecord, _ error: any Error) -> String {

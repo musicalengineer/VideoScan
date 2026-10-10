@@ -572,7 +572,13 @@ struct DeleteDuplicatesRowLoggingTests {
         let refused = try #require(one("[dupjob] refused x-copy1.mov (\(sizeText)) — content differs from keeper x-keeper.mov"))
         #expect(refused.hasSuffix("NOT a duplicate"))
         #expect(notDup.copies[0].duplicateDisposition == .review, "the refused pair is flagged for Review")
-        #expect(lines.filter { $0.hasPrefix("[dupjob] ") }.count == 5, "one line per decided row, no sibling reads: \(lines)")
+        #expect(lines.filter { $0.hasPrefix("[dupjob] ") && !$0.hasPrefix("[dupjob] audit: ") }.count == 5,
+                "one line per decided row, no sibling reads: \(lines)")
+        // G2: the audit — START, one line per requested copy, OUTCOME with the receipt.
+        let audit = lines.filter { $0.hasPrefix("[dupjob] audit: ") }
+        #expect(audit.count == 5 + 2, "\(audit)")
+        #expect(audit.first?.hasPrefix("[dupjob] audit: START Delete Duplicates — by ") == true)
+        #expect(audit.last?.contains("· receipt: ") == true)
 
         let fourBytes = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 4), countStyle: .file)
         let summary = "delete duplicates done: \(dir.lastPathComponent) — deleted 0 (\(zero)) · trashed 4 (\(fourBytes)) · "

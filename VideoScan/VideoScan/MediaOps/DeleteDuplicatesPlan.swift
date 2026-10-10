@@ -653,6 +653,13 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// additive 2026-10-09): what "moved to the Trash" reports. nil
         /// until it moves, and on older plans (their catalog size is used).
         var movedBytes: Int64?
+        /// Where the Trash put the file (G2, additive): the receipt's
+        /// "where did my file go". nil until it moves, and on older plans.
+        var trashPath: String?
+        /// How the keeper was proven at the move (G2, additive): digest
+        /// prefix and whether the keeper was read in full or matched by its
+        /// stored fixity. nil until it moves.
+        var keeperProof: String?
         /// Master on another drive (the "Also clean up working copies"
         /// mode) — drives the [WORKING-COPY] log line.
         var isWorkingCopy: Bool = false
@@ -987,10 +994,14 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         if let k = keeperMatchedByStoredFixity { entries[i].keeperMatchedByStoredFixity = k }
     }
 
-    /// The size measured as the row's file left (F7): reported as moved.
-    mutating func setMovedBytes(_ id: UUID, _ bytes: Int64) {
+    /// What really happened as the row's file left: its measured size
+    /// (codex F7 — reported as moved), where the Trash put it and how the
+    /// keeper was proven (G2 — the receipt).
+    mutating func setMoved(_ id: UUID, bytes: Int64, trashPath: String?, keeperProof: String) {
         guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
         entries[i].movedBytes = bytes
+        entries[i].trashPath = trashPath
+        entries[i].keeperProof = keeperProof
     }
 
     /// The row is in quarantine: record exactly where, and the file's

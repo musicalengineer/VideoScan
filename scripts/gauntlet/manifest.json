@@ -25918,6 +25918,22 @@
         "heldCopiesCarryTheirReasonsAndMissingSaysNotOnDisk",
         "theLineStaysOneLine"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeletionAuditTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeletionAuditSensorTests",
+        "DeletionAuditReceiptTests"
+      ],
+      "tests": [
+        "aDuplicatesRunWritesEveryCopyWithTrashLocationAndKeeperProof",
+        "aMovedFilesRowNamesItsTrashLocation",
+        "everyTrashPathIsAudited",
+        "theCatalogMoveToTrashReceiptHasOneRowPerRequestedFile"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -27007,6 +27023,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteVolumeCatalogPlanTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeletionAuditTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

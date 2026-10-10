@@ -78,8 +78,14 @@ extension VideoScanModel {
             let outcome: JunkFileOutcome
         }
         let items: [Item]
+        /// The lane's per-run receipt (G2), once written; nil from the bare
+        /// engine.
+        var receipt: URL?
 
-        init(items: [Item]) { self.items = items }
+        init(items: [Item], receipt: URL? = nil) {
+            self.items = items
+            self.receipt = receipt
+        }
         /// Computed, not a stored static: the result holds `VideoRecord`
         /// references, which are not Sendable, so a shared global would not
         /// be concurrency-safe.
@@ -94,7 +100,7 @@ extension VideoScanModel {
         /// emptied.
         var bytesMoved: Int64 {
             items.reduce(into: Int64(0)) { sum, item in
-                if case .moved(let bytes) = item.outcome { sum += bytes }
+                if case .moved(let bytes, _) = item.outcome { sum += bytes }
             }
         }
         /// The file was already gone (its drive WAS reachable) — the catalog
@@ -144,14 +150,19 @@ extension VideoScanModel {
         /// Nth file, or moves into a sandbox "Trash"). nil = FileManager's
         /// trashItem, which is what every production caller gets.
         var remove: (@Sendable (URL) throws -> Void)? = nil
+        /// Told each file's outcome the moment it is decided (G2: the audit
+        /// writes its line and receipt row as the run goes).
+        var settled: (@MainActor (VideoRecord, JunkFileOutcome) -> Void)? = nil
     }
 
     /// One file's outcome — mutually exclusive by construction (one enum
     /// value per file; ≈ a C++ std::variant).
     enum JunkFileOutcome: Sendable {
         /// Moved; `bytes` = the file's size measured at its turn, just
-        /// before the move (the catalog's size if it could not be stat'ed).
-        case moved(bytes: Int64)
+        /// before the move (the catalog's size if it could not be stat'ed);
+        /// `trashPath` = where the Trash put it (G2 — "where did my file
+        /// go"); nil through a test seam, which does not say.
+        case moved(bytes: Int64, trashPath: String? = nil)
         case held(String)
         case failed(any Error)
         case missing
@@ -252,6 +263,7 @@ extension VideoScanModel {
             } else {
                 outcomes.append(await junkTurn(rec, guard: fileGuard, disk: disk))
             }
+            if let last = outcomes.last { fileGuard?.settled?(rec, last) }
         }
         return applyJunkOutcomes(requested, outcomes, mode: mode)
     }
@@ -425,8 +437,8 @@ struct JunkDiskTurn: Sendable {
         // the Trash" (design R7).
         let bytes = FileIdentityStamp.capture(path: path)?.size ?? catalogBytes
         do {
-            try perform(URL(fileURLWithPath: path))
-            return .moved(bytes: bytes)
+            let landed = try perform(URL(fileURLWithPath: path))
+            return .moved(bytes: bytes, trashPath: landed)
         } catch {
             // Never a fallback to another kind of removal: the file stays.
             return .failed(error)
@@ -451,20 +463,26 @@ struct JunkDiskTurn: Sendable {
         return nil
     }
 
-    private func perform(_ url: URL) throws {
+    /// The file operation; returns where the Trash put the file (nil
+    /// through a seam).
+    private func perform(_ url: URL) throws -> String? {
         if let remove {
             try remove(url)
-            return
+            return nil
         }
         switch mode {
         case .toTrash:
             // trashItem moves to the volume's .Trashes; a volume with no
             // Trash (some network mounts) throws — caught by the caller.
+            // Its resulting location is KEPT (G2: the receipt says where).
             var resultURL: NSURL?
             try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
+            return resultURL?.path
         case .removeThroughTestSeam(let operation):
             // The caller's operation — never one of this routine's own.
             try operation(url)
+            return nil
         }
     }
+
 }

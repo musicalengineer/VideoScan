@@ -712,6 +712,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     let planRoot: URL
     /// Set when this job resumes a plan found at launch.
     private let resumingPlan: DeleteDuplicatesPlan?
+    /// True for a resumed run (the audit leaves the earlier rows alone).
+    var resumingPlanIsSet: Bool { resumingPlan != nil }
     /// Set when this job runs the plan Rick reviewed (R2): exactly its rows.
     private let reviewedPlan: DeleteDuplicatesPlan?
 
@@ -791,6 +793,12 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// counts-and-sizes summary go: nil → `appLog` (videoscan.log). Tests
     /// inject an in-memory sink so nothing touches the global.
     var appLogSink: (any LogSink)?
+    /// G2: this run's audit (START / one line per file / OUTCOME + the
+    /// receipt) and the rows already written to it.
+    var audit: DeletionAudit?
+    var auditedRows = Set<UUID>()
+    /// Where this run's receipt was written (G2), once finished.
+    var receiptURL: URL?
     /// Test seam: runs just before the final save (finding #6 regression
     /// makes that save fail and checks the last good plan stays put).
     var testHookBeforeFinalSave: (@MainActor () -> Void)?
@@ -1092,6 +1100,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             // Nothing was read, moved or saved; the rows (if any) say why.
             model.duplicateStatus = status
             wasRefused = true
+            if reviewedPlan != nil { auditRefusedReviewedPlan(model: model) }
             finish(failed: line)
             return
         case .nothing:
@@ -1117,6 +1126,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         }
         await savePlan(context: "plan made")
         publishProgress()
+        startAudit(prepared, model: model)
         // The honest forecast, from the catalog + stored fixities alone
         // (no file reads) — the same numbers the Start confirmation showed.
         let forecast = model.deleteDuplicatesForecast(for: prepared)
@@ -1348,6 +1358,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                       + (moved.isEmpty ? "" : " (\(moved))"))
             model.duplicateStatus = "\(tally.removed) moved to the Trash — \(remaining) remaining, resume offered"
             logSummary(quitRequested ? "suspended for quit" : "stopped")
+            auditRemainingAndFinish(finalPlan)
             if !(await savePlan(context: "suspended for \(how)")) {
                 model.log("  The suspended plan could not be saved — the last saved plan stays in place and will be offered instead.")
             }
@@ -1370,6 +1381,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             }
         }
 
+        auditRemainingAndFinish(finalPlan)
         let (deleted, trashed, refused, leftAlone) = (tally.deleted, tally.trashed, tally.refused, tally.leftAlone)
         // R6/R7: one outcome per requested copy; bytes MOVED TO THE TRASH.
         let report = finalPlan.outcomeReport
@@ -1620,6 +1632,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         guard var p = plan else { return }
         body(&p)
         plan = p
+        // G2: every row that settled here gets its audit line + receipt row.
+        auditNewlySettledRows()
     }
 
     /// The run's counters (the old loop's five locals).
@@ -1710,9 +1724,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             mutatePlan {
                 $0.set(entry.id, .deleted, note: "verified identical to \(keeper.filename)",
                        keeperMatchedByStoredFixity: !proof.keeperReadInFull)
-                $0.setMovedBytes(entry.id, bytes)
+                $0.setMoved(entry.id, bytes: bytes, trashPath: nil, keeperProof: Self.keeperProofWords(proof))
             }
-        case .trashed(let bytes, _, let proof):
+        case .trashed(let bytes, let location, let proof):
             tally.bytesTrashed += bytes
             tally.trashed += 1
             rowLog("trashed", entry, Self.remainWords(facts: facts, decision: decision)
@@ -1723,7 +1737,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 $0.set(entry.id, .trashed,
                        note: "verified identical to \(keeper.filename) — \(DeletionTierText.inTheTrashOf(trashVolume))",
                        keeperMatchedByStoredFixity: !proof.keeperReadInFull)
-                $0.setMovedBytes(entry.id, bytes)   // F7: what really moved
+                // F7 + G2: what really moved, where it went, how the keeper was proven.
+                $0.setMoved(entry.id, bytes: bytes, trashPath: location, keeperProof: Self.keeperProofWords(proof))
             }
         }
     }

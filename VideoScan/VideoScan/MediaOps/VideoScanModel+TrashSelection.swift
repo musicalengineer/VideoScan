@@ -125,6 +125,10 @@ extension VideoScanModel {
             return JunkDeletionResult(items: requested.map { .init(record: $0, outcome: .held(why)) })
         }
         let plan = catalogTrashPlan(for: requested)
+        // G2: the auditor's record — START, a line + receipt row per file, OUTCOME.
+        let audit = DeletionAudit(kind: .junk, verb: "Move to Trash", linePrefix: "[junk] ", sink: deletionAuditSink())
+        audit.start(scope: "\(requested.count) selected in the Catalog", requested: requested.count,
+                    bytes: requested.reduce(Int64(0)) { $0 + $1.sizeBytes })
         logMasterArchiveRefusals(plan, requested: requested)
         let paired = plan.refusedCount(.pairMember)
         if paired > 0 {
@@ -145,15 +149,16 @@ extension VideoScanModel {
         // plan's own catalog gates are asked AGAIN at each file's turn
         // (codex delete-engines F3): a row Combine pairs, or that is
         // removed or set aside, while the batch runs is held.
-        let fileGuard = JunkDeletionGuard(
+        var fileGuard = JunkDeletionGuard(
             authorize: { [weak self] rec in
                 guard let self else { return "the catalog went away — nothing moved" }
                 return self.catalogTrashTurnProblem(rec)
             },
             beforeRemoval: { _ in nil },
             remove: fileOperation)
+        fileGuard.settled = { rec, outcome in audit.record(JunkDeletionResult.auditRow(rec, outcome), id: rec.id) }
         let routine = targets.isEmpty ? .empty : await deleteConfirmedJunk(targets, mode: .toTrash, guard: fileGuard)
-        let result = mergedCatalogTrashResult(requested, plan: plan, routine: routine).trashFailuresHeld()
+        var result = mergedCatalogTrashResult(requested, plan: plan, routine: routine).trashFailuresHeld()
         // "I don't wanna see it again" (Rick 2026-09-20): the content of
         // every row that actually left the disk goes on the ignore list
         // Tidy and Remove from Catalog use, so a rescan — or another copy
@@ -167,6 +172,8 @@ extension VideoScanModel {
             log("Move to Trash: remembered \(remembered) file(s) as ignored content — a rescan will not catalog them again (Tidy → Ignored content to put back).")
         }
         logJunkLaneOutcome(result, verb: "Move to Trash")
+        audit.finish(result)   // the plan's refusals, then OUTCOME + the receipt
+        result.receipt = audit.receipt.url
         return result
     }
 
