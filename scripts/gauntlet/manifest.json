@@ -13538,6 +13538,18 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieAggregateFallbackSnapshotTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieAggregateFallbackSnapshotTests"
+      ],
+      "tests": [
+        "aFamilyAnchorFindsTheFamilyTagThroughTheShell",
+        "aTagOnlyAnchorFindsItsTaggedVideoThroughTheShell"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieInventedPresenceYearsTests.swift",
       "stage": "hallie",
       "suites": [
@@ -28958,7 +28970,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1101,
+      "expected_floor": 1103,
       "modes": [
         {
           "name": "strict",
@@ -28975,6 +28987,7 @@
       "selectors": [
         "VideoScanTests/ArchivistMediaResolutionCharacterizationTests",
         "VideoScanTests/GedcomLineageTests",
+        "VideoScanTests/HallieAggregateFallbackSnapshotTests",
         "VideoScanTests/HallieAggregateFallbackTests",
         "VideoScanTests/HallieAliasTeachRegressionTests",
         "VideoScanTests/HallieAncestorStatisticsTests",
