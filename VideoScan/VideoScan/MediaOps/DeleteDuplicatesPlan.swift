@@ -584,7 +584,6 @@ enum DeletionTierText {
     /// retires it; its caption says so.
     static let preferTrashCaption = "Always the Trash now: a duplicate leaves only when its keeper is proven identical at that moment, and it goes to the drive's Trash — VideoScan never deletes outright. Emptying the Trash is yours. This setting no longer changes anything."
     /// The bulk run's hold for a row of a two-copy group (R5).
-    static let notPreselected = "only two copies — not pre-selected; tick it in Triage ▸ Duplicates to move it to the Trash"
     static func inTheTrashOf(_ volume: String) -> String { "in the Trash of \(volume)" }
     /// "1 file on SanDisk is waiting to be put back from quarantine".
     static func waitingToBePutBack(_ n: Int, volume: String) -> String {
@@ -714,10 +713,9 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// status says it (`outcome`, DeleteDuplicatesOutcome.swift).
         var outcomeKind: DeleteDuplicatesOutcomeKind?
 
-        /// R5 (Rick 2026-10-09): a group of three or more copies has its
-        /// extras PRE-SELECTED; a group of exactly two is allowed but not —
-        /// a deliberate tick. A disposal default for the UI and the bulk
-        /// run, never proof of identity (the keeper is proven at the move).
+        /// UI INFORMATION ONLY (R5 revised by Rick 2026-10-09 evening — "no
+        /// per-file ticks; pairs included"): the group has three or more
+        /// copies. A future Duplicates view may sort by it; it gates nothing.
         var preselected: Bool { (groupCopyCount ?? 0) >= DeleteDuplicatesPlan.preselectMinimumCopies }
 
         var keeperVolumeName: String { VolumeReachability.volumeName(forPath: keeperPath) }
@@ -835,23 +833,8 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
 
     static let leftAloneListCap = 2_000
 
-    /// R5: a group with at least this many copies has its extras pre-selected.
+    /// A group with at least this many copies is `preselected` (UI only).
     static let preselectMinimumCopies = 3
-
-    /// The BULK run (the Storage card) acts on pre-selected rows only: every
-    /// pending row of a two-copy group is held, named, before anything is
-    /// read. Returns how many. Never called for a reviewed plan — there,
-    /// a ticked row of a two-copy group is exactly what Rick chose.
-    mutating func holdRowsNotPreselected(at now: Date = Date()) -> Int {
-        var n = 0
-        for i in entries.indices where entries[i].status == .pending && !entries[i].preselected {
-            entries[i].status = .skipped
-            entries[i].note = DeletionTierText.notPreselected
-            entries[i].settledAt = now
-            n += 1
-        }
-        return n
-    }
 
     /// This run's rows, as the survivor count needs them (codex #258 F1,
     /// r4-1): which are still to be decided, which the run RETAINED FOR A

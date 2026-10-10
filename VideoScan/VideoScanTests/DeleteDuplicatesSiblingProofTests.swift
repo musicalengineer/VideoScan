@@ -406,10 +406,10 @@ struct DeleteDuplicatesForecastTests {
 
     /// One row — the pure rule table.
     @Test func bucketRules() {
-        func run(_ k: F.Keeper?, size: Int64 = 100, digest: String? = nil, preselected: Bool = true,
+        func run(_ k: F.Keeper?, size: Int64 = 100, digest: String? = nil,
                  inCatalog: Bool = true) -> F {
             let row = F.Row(id: UUID(), sizeBytes: size, digest: digest, keeperID: k?.id ?? UUID(),
-                            inCatalog: inCatalog, preselected: preselected)
+                            inCatalog: inCatalog)
             return F.compute(.init(rows: [row], keepers: k.map { [$0.id: $0] } ?? [:]))
         }
         let k = Self.keeper()
@@ -423,9 +423,9 @@ struct DeleteDuplicatesForecastTests {
         #expect(run(Self.keeper(online: false)).rowBuckets == [.cannotCheck])
         #expect(run(nil).rowBuckets == [.cannotCheck])
         #expect(run(k, inCatalog: false).rowBuckets == [.cannotCheck])
-        let held = run(k, preselected: false)
-        #expect(held.rowBuckets == [.notPreselected] && held.bytesToRead == 0, "the bulk run holds a two-copy group's extra")
-        #expect(held.confirmationText(volume: "V").contains("1 held — only two copies, not pre-selected ("))
+        // R5 revised (2026-10-09 evening): no "not pre-selected" bucket — a
+        // pair's extra is forecast like any other.
+        #expect(F.Bucket.allCases.map(\.rawValue) == ["trash", "likelyNotDuplicate", "cannotCheck"])
         #expect(!F.Bucket.allCases.map(\.rawValue).contains("permanent"), "nothing is forecast for an outright delete")
     }
 
@@ -443,7 +443,7 @@ struct DeleteDuplicatesForecastTests {
         let model = makeModel(dir)
         let three = addFamily(to: model, in: dir, name: "t", siblings: 1, siblingFixity: true, seed: 1)
         let unproven = addFamily(to: model, in: dir, name: "n", siblings: 1, seed: 2)
-        let two = addFamily(to: model, in: dir, name: "l", seed: 3)                  // keeper + 1: not pre-selected
+        let two = addFamily(to: model, in: dir, name: "l", seed: 3)                  // keeper + 1: a pair, included
         let notDup = addFamily(to: model, in: dir, name: "x", siblings: 2, siblingFixity: true, seed: 4)
         var shorter = notDup.bytes; shorter.removeLast(17)
         write(URL(fileURLWithPath: notDup.copies[0].fullPath), shorter)
@@ -454,12 +454,12 @@ struct DeleteDuplicatesForecastTests {
         #expect(started.duration(to: .now) < .seconds(1))
         #expect(forecast.bucket(for: three.copies[0].id) == .trash)
         #expect(forecast.bucket(for: unproven.copies[0].id) == .trash, "keep one: no sibling read is needed")
-        #expect(forecast.bucket(for: two.copies[0].id) == .notPreselected)
+        #expect(forecast.bucket(for: two.copies[0].id) == .trash, "pairs included — no tick")
         #expect(forecast.bucket(for: notDup.copies[0].id) == .likelyNotDuplicate)
         let text = forecast.confirmationText(volume: "FixtureDrive")
         #expect(text.hasPrefix("Check 4 copies on FixtureDrive.\n\nForecast (from the catalog — no file read yet): "
-                               + "about 2 to the Trash (\(ByteCountFormatter.string(fromByteCount: Int64(fileSize * 2), countStyle: .file))), "
-                               + "1 held — only two copies, not pre-selected (\(sizeText)), 1 likely not duplicates ("), Comment(rawValue: text))
+                               + "about 3 to the Trash (\(ByteCountFormatter.string(fromByteCount: Int64(fileSize * 3), countStyle: .file))), "
+                               + "1 likely not duplicates ("), Comment(rawValue: text))
         #expect(!text.contains("deleted") && !text.contains("Nothing will move"))
         #expect(text.hasSuffix(DeleteDuplicatesForecast.decidesAtTheMoment))
         let sink = InMemoryLogSink()
@@ -469,10 +469,10 @@ struct DeleteDuplicatesForecastTests {
         func status(_ r: VideoRecord) -> DeleteDuplicatesPlan.EntryStatus? { plan.entries.first { $0.id == r.id }?.status }
         #expect(status(three.copies[0]) == .trashed)
         #expect(status(unproven.copies[0]) == .trashed)
-        #expect(status(two.copies[0]) == .skipped)
+        #expect(status(two.copies[0]) == .trashed)
         #expect(status(notDup.copies[0]) == .refused)
         #expect(sink.lines.first { $0.hasPrefix("delete duplicates forecast: ") } == job.model?.deleteDuplicatesForecast(for: plan).logLine(volume: dir.lastPathComponent)
-                || sink.lines.contains { $0.hasPrefix("delete duplicates forecast: \(dir.lastPathComponent) — trash 2 ") },
+                || sink.lines.contains { $0.hasPrefix("delete duplicates forecast: \(dir.lastPathComponent) — trash 3 ") },
                 "the run logs its forecast as one line: \(sink.lines.filter { $0.hasPrefix("delete duplicates forecast") })")
     }
 
@@ -499,13 +499,13 @@ struct DeleteDuplicatesForecastTests {
             let k = Self.keeper()
             keepers[k.id] = k
             rows.append(.init(id: UUID(), sizeBytes: 100, digest: nil, keeperID: k.id))
-            rows.append(.init(id: UUID(), sizeBytes: 100, digest: nil, keeperID: k.id, preselected: false))
+            rows.append(.init(id: UUID(), sizeBytes: 99, digest: nil, keeperID: k.id))
         }
         let t0 = ContinuousClock.now
         let f = F.compute(.init(rows: rows, keepers: keepers))
         let pure = t0.duration(to: .now)
         #expect(f.rowBuckets.count == n)
-        #expect(f.tally(.trash).files == n / 2 && f.tally(.notPreselected).files == n / 2, "\(f.buckets)")
+        #expect(f.tally(.trash).files == n / 2 && f.tally(.likelyNotDuplicate).files == n / 2, "\(f.buckets)")
         #expect(pure < PerformanceLane.debugCeiling(.seconds(3)), "100k-row forecast took \(pure)")
 
         // The live-catalog path: 100k rows (50k families of keeper + 2
@@ -568,15 +568,15 @@ struct DeleteDuplicatesRowLoggingTests {
         let trashed = try #require(one("[dupjob] trashed t-copy1.mov (\(sizeText)) — 2 verified copies remain: keeper on "))
         #expect(trashed.contains("sibling t-sib1.mov on ") && trashed.contains("in the Trash of "), Comment(rawValue: trashed))
         _ = one("[dupjob] trashed n-copy1.mov (\(sizeText)) — 1 verified copy remains: keeper on ")
-        _ = one("[dupjob] skipped l-copy1.mov (\(sizeText)) — \(DeletionTierText.notPreselected)")
+        _ = one("[dupjob] trashed l-copy1.mov (\(sizeText)) — 1 verified copy remains: keeper on ")   // a pair, included
         let refused = try #require(one("[dupjob] refused x-copy1.mov (\(sizeText)) — content differs from keeper x-keeper.mov"))
         #expect(refused.hasSuffix("NOT a duplicate"))
         #expect(notDup.copies[0].duplicateDisposition == .review, "the refused pair is flagged for Review")
         #expect(lines.filter { $0.hasPrefix("[dupjob] ") }.count == 5, "one line per decided row, no sibling reads: \(lines)")
 
-        let threeBytes = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 3), countStyle: .file)
-        let summary = "delete duplicates done: \(dir.lastPathComponent) — deleted 0 (\(zero)) · trashed 3 (\(threeBytes)) · "
-            + "left alone 0 (\(zero)) · refused 1 (\(sizeText)) · skipped 1 (\(sizeText)) · freed \(zero) · 0 sibling copies read (\(zero))"
+        let fourBytes = ByteCountFormatter.string(fromByteCount: Int64(fileSize * 4), countStyle: .file)
+        let summary = "delete duplicates done: \(dir.lastPathComponent) — deleted 0 (\(zero)) · trashed 4 (\(fourBytes)) · "
+            + "left alone 0 (\(zero)) · refused 1 (\(sizeText)) · freed \(zero) · 0 sibling copies read (\(zero))"
         #expect(lines.contains(summary), "expected \(summary)\n got \(lines.filter { $0.hasPrefix("delete duplicates") })")
         #expect(lines.filter { $0.hasPrefix("delete duplicates done: ") }.count == 1)
         #expect(job.wroteOwnTerminalLine, "the MFO center's generic outcome line is skipped — one final line per run")

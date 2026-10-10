@@ -10,9 +10,6 @@
 // bucket:
 //     trash              — the keeper is in the catalog and connected, and
 //                          nothing on record says the bytes differ
-//     notPreselected     — a two-copy group's extra in the BULK run: held
-//                          until Rick ticks it (R5); never in a reviewed
-//                          plan, where every row is one he chose
 //     likelyNotDuplicate — the catalog already says the bytes differ
 //                          (sizes differ, or both stored digests differ)
 //     cannotCheck        — the keeper (or the row) is not in the catalog
@@ -39,8 +36,6 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
 
     enum Bucket: String, CaseIterable, Sendable {
         case trash
-        /// A two-copy group's extra in the bulk run: held, not pre-selected.
-        case notPreselected
         case likelyNotDuplicate
         case cannotCheck
     }
@@ -71,8 +66,6 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         let keeperID: UUID?
         /// False when the row's record is gone or moved (the run skips it).
         var inCatalog: Bool = true
-        /// False for a two-copy group's extra in the BULK run (R5).
-        var preselected: Bool = true
     }
 
     struct Input: Sendable {
@@ -118,10 +111,6 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
                 put(.cannotCheck, row)
                 continue
             }
-            guard row.preselected else {
-                put(.notPreselected, row)
-                continue
-            }
             // Different sizes are refused before a byte is read.
             guard row.sizeBytes == keeper.sizeBytes else {
                 put(.likelyNotDuplicate, row)
@@ -163,11 +152,8 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
     func confirmationText(volume: String) -> String {
         let n = total.files
         var text = "Check \(Self.number(n)) cop\(n == 1 ? "y" : "ies") on \(volume).\n\n"
-        let t = tally(.trash), h = tally(.notPreselected), x = tally(.likelyNotDuplicate), c = tally(.cannotCheck)
+        let t = tally(.trash), x = tally(.likelyNotDuplicate), c = tally(.cannotCheck)
         var parts: [String] = ["about \(Self.number(t.files)) to the Trash (\(Self.size(t.bytes)))"]
-        if h.files > 0 {
-            parts.append("\(Self.number(h.files)) held — only two copies, not pre-selected (\(Self.size(h.bytes)))")
-        }
         parts.append("\(Self.number(x.files)) likely not duplicates (\(Self.size(x.bytes)))")
         if c.files > 0 {
             parts.append("\(Self.number(c.files)) cannot be checked — keeper not connected or not in the catalog (\(Self.size(c.bytes)))")
@@ -188,7 +174,6 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
         }
         let parts = [
             part(.trash, "trash"),
-            part(.notPreselected, "held, not pre-selected"),
             part(.likelyNotDuplicate, "likely not duplicates"),
             part(.cannotCheck, "cannot check"),
             "to read \(Self.size(bytesToRead))",
@@ -202,37 +187,31 @@ struct DeleteDuplicatesForecast: Equatable, Sendable {
 extension VideoScanModel {
 
     /// One row to forecast: the plan row's id and size, its live record
-    /// (nil when gone or moved), its keeper's id, and whether the bulk run
-    /// would take it (R5).
+    /// (nil when gone or moved), and its keeper's id. Every extra is a
+    /// candidate — pairs included (R5 revised 2026-10-09 evening).
     struct DeleteDuplicatesForecastRow {
         let id: UUID
         let sizeBytes: Int64
         let record: VideoRecord?
         let keeperID: UUID?
-        var preselected: Bool = true
     }
 
     /// The forecast for the Start confirmation: the same rows, in the same
     /// order, that `prepareDuplicateDeletion` will plan (the selection
-    /// minus Master Archive files), with the bulk run's pre-selection.
-    /// Catalog only — O(records) passes.
+    /// minus Master Archive files). Catalog only — O(records) passes.
     func deleteDuplicatesForecast(onVolume volumePath: String) -> DeleteDuplicatesForecast {
         let selection = duplicateDeletionSelection(onVolume: volumePath)
         let archiveVolume = archiveVolumeProtection()
         let targets = selection.targets.filter { r in bulkDeleteRefusal(r, volume: archiveVolume) == nil }
-        let copyCounts = duplicateGroupCopyCounts(Set(targets.compactMap(\.duplicateGroupID)))
-        let rows = targets.map { r -> DeleteDuplicatesForecastRow in
-            let copies = r.duplicateGroupID.flatMap { copyCounts[$0] } ?? 0
-            return .init(id: r.id, sizeBytes: r.sizeBytes, record: r,
-                         keeperID: r.duplicateGroupID.flatMap { selection.keepers[$0]?.id },
-                         preselected: copies >= DeleteDuplicatesPlan.preselectMinimumCopies)
+        let rows = targets.map { r in
+            DeleteDuplicatesForecastRow(id: r.id, sizeBytes: r.sizeBytes, record: r,
+                                        keeperID: r.duplicateGroupID.flatMap { selection.keepers[$0]?.id })
         }
         return deleteDuplicatesForecast(rows: rows)
     }
 
     /// The forecast for a plan about to run (fresh, resumed or reviewed):
-    /// its unsettled rows, in plan order — every one of them chosen (the
-    /// bulk run has already held the rows it does not take).
+    /// its unsettled rows, in plan order — every one of them chosen.
     func deleteDuplicatesForecast(for plan: DeleteDuplicatesPlan) -> DeleteDuplicatesForecast {
         let rows = plan.entries.filter { !$0.status.isSettled }.map { e -> DeleteDuplicatesForecastRow in
             let r = record(forID: e.id)
@@ -268,11 +247,10 @@ extension VideoScanModel {
             }
             guard let r = row.record else {
                 out.append(.init(id: row.id, sizeBytes: row.sizeBytes, digest: nil, keeperID: row.keeperID,
-                                 inCatalog: false, preselected: row.preselected))
+                                 inCatalog: false))
                 continue
             }
-            out.append(.init(id: r.id, sizeBytes: row.sizeBytes, digest: usableDigest(r), keeperID: row.keeperID,
-                             preselected: row.preselected))
+            out.append(.init(id: r.id, sizeBytes: row.sizeBytes, digest: usableDigest(r), keeperID: row.keeperID))
         }
         return DeleteDuplicatesForecast.compute(.init(rows: out, keepers: keepers))
     }

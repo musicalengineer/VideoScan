@@ -556,28 +556,24 @@ struct DeleteDuplicatesTierAndSpeedTests {
         #expect(console.contains("Moved to the Trash of \(volume) (verified identical to keeper.mov): copy1.mov"))
     }
 
-    /// R5: a group of exactly two copies is allowed but NOT pre-selected —
-    /// the bulk run holds its extra before anything is moved or read, named,
-    /// and never re-marks it Review. (A ticked one runs: KeepOne tests.)
-    @Test func aTwoCopyGroupIsHeldByTheBulkRunNothingMovedOrRead() async throws {
+    /// R5 revised (Rick 2026-10-09 evening — no ticks, pairs included): a
+    /// group of exactly two copies has its extra moved by the bulk run, the
+    /// keeper proven at the move; `preselected` is UI information only.
+    @Test func aTwoCopyGroupsExtraIsTrashedByTheBulkRunKeeperProven() async throws {
         let rig = makeRig("keeperonly", copies: 1, keeperFixity: true); defer { rig.cleanup() }
         let probe = Probe()
         let job = DeleteDuplicatesJob(model: rig.model, volumePath: rig.dir.path, hooks: probe.hooks, planRoot: rig.root)
         job.start(); await job.task?.value
 
         let plan = try #require(job.plan)
-        #expect(plan.entries[0].status == .skipped, "\(plan.entries[0].status)")
-        #expect(plan.entries[0].note == DeletionTierText.notPreselected, Comment(rawValue: plan.entries[0].note))
-        #expect(plan.entries[0].groupCopyCount == 2 && !plan.entries[0].preselected)
-        #expect(plan.entries[0].tier == nil)
-        #expect(FileManager.default.fileExists(atPath: rig.copies[0].fullPath), "untouched at its path")
-        #expect((try? Data(contentsOf: URL(fileURLWithPath: rig.copies[0].fullPath))) == Data(rig.bytes))
+        #expect(plan.entries[0].status == .trashed, "\(plan.entries[0].status): \(plan.entries[0].note)")
+        #expect(plan.entries[0].groupCopyCount == 2 && !plan.entries[0].preselected, "information only — it gated nothing")
+        #expect(plan.entries[0].tier == .trash && plan.entries[0].remainingVerifiedCopies == 1)
+        #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
+        #expect(FileManager.default.fileExists(atPath: rig.keeper.fullPath), "the keeper stays")
         #expect(quarantineFolders(in: rig.dir).isEmpty)
-        #expect(rig.copies[0].duplicateDisposition == .extraCopy, "a hold — the row is not re-marked Review")
-        #expect(probe.blocks("quarantine") == 0 && probe.quarantineCount == 0, "nothing moved or read")
-        #expect(job.result.deleted == 0 && job.runTally.held == 1)
-        let console = await consoleText(rig.model)
-        #expect(console.contains("1 copy of two-copy groups held — " + DeletionTierText.notPreselected), Comment(rawValue: console))
+        #expect(probe.quarantineCount == 1, "proven in quarantine before it moved")
+        #expect(job.result.deleted == 1 && job.runTally.held == 0)
     }
 
     /// The archive is not required: a keeper + one verified sibling is

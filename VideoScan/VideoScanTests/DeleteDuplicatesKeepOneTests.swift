@@ -6,9 +6,8 @@
 //   • one independently verified keeper is enough for the Trash (was: two
 //     copies had to REMAIN — `minimumForTrash = 2` — so with exactly two
 //     identical files nothing ever moved);
-//   • groups with 3+ copies: extras PRE-SELECTED; groups with exactly 2:
-//     allowed, NOT pre-selected (a deliberate tick). The Storage card's
-//     bulk run acts on pre-selected rows only; a reviewed plan acts on
+//   • REVISED by Rick 2026-10-09 evening: no per-file ticks — the bulk run
+//     moves every proven extra, pairs included; a reviewed plan acts on
 //     exactly the rows Rick ticked;
 //   • the keeper is still proven at the moment of the move (digest +
 //     identity, unchanged): a keeper that fails there → HOLD.
@@ -134,18 +133,18 @@ struct DeleteDuplicatesKeepOneTests {
         #expect(f.atHome(f.keeper), "the keeper stays")
     }
 
-    /// keeper + 1 extra = 2 copies: allowed, but NOT pre-selected — the bulk
-    /// run holds it, named, and touches nothing.
-    @Test func twoCopiesAreNotPreselectedSoTheBulkRunHoldsThem() async throws {
+    /// keeper + 1 extra = 2 copies (R5 revised by Rick 2026-10-09 evening:
+    /// no ticks, pairs included): the bulk run proves the keeper at the
+    /// move and the extra goes to the Trash; the keeper stays.
+    @Test func aPairsExtraMovesInTheBulkRunWhenTheKeeperIsProven() async throws {
         let f = Family("two-bulk", extras: 1); defer { f.cleanup() }
         let job = DeleteDuplicatesJob(model: f.model, volumePath: f.dir.path, hooks: f.hooks, planRoot: f.root)
         job.start(); await job.task?.value
 
         let plan = try #require(job.plan)
         let row = try #require(plan.entries.first)
-        #expect(row.status == .skipped && row.note.contains("not pre-selected"), "\(row.status): \(row.note)")
-        #expect(f.atHome(f.extras[0]) && !f.inTrash(f.extras[0]))
-        #expect(f.extras[0].duplicateDisposition == .extraCopy, "a hold never re-marks the copy Review")
+        #expect(row.status == .trashed && row.remainingVerifiedCopies == 1, "\(row.status): \(row.note)")
+        #expect(f.inTrash(f.extras[0]) && f.atHome(f.keeper))
     }
 
     // MARK: A plan with the row ticked

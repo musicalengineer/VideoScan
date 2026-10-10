@@ -8941,7 +8941,7 @@
       ],
       "tests": [
         "aStrandedQuarantineKeepsThePlanOutOfDone",
-        "aTwoCopyGroupIsHeldByTheBulkRunNothingMovedOrRead",
+        "aTwoCopyGroupsExtraIsTrashedByTheBulkRunKeeperProven",
         "anArchiveCopyHoldingDifferentBytesIsNamedAndTheKeeperAloneSuffices",
         "cancelWithTwoInFlightPutsBothBackNeverHalf",
         "contentThatDiffersIsRefusedAsNotADuplicateAndRestored",
@@ -25731,9 +25731,9 @@
       "tests": [
         "aKeeperThatFailsAtTheBoundaryHoldsTheCopy",
         "aLoneKeeperIsNeverATarget",
+        "aPairsExtraMovesInTheBulkRunWhenTheKeeperIsProven",
         "oneVerifiedKeeperIsEnoughForTheTrash",
         "threeCopiesKeepOneAndTrashTheTwoExtras",
-        "twoCopiesAreNotPreselectedSoTheBulkRunHoldsThem",
         "twoCopiesWithTheExtraTickedMovesItToTheTrash"
       ]
     },
@@ -25861,6 +25861,21 @@
         "anUnchangedAuthorizationStillMoves",
         "theKeeperReElectedDuringTheReadHoldsTheCopy",
         "theTargetMarkedKeepAfterItsTurnIsHeld"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeleteDuplicatesPairsIncludedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesPairsIncludedTests"
+      ],
+      "tests": [
+        "aFreshBulkRunMovesAPairsExtraWhenItsKeeperIsProven",
+        "aPairWhoseKeeperCannotBeProvenIsHeldWithItsReason",
+        "aResumedOlderPlanFollowsTheSameRule",
+        "theForecastCountsAPairsExtraForTheTrash"
       ]
     }
   ],
@@ -26887,6 +26902,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteDuplicatesOutcomeTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeleteDuplicatesPairsIncludedTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

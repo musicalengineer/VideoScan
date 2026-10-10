@@ -1124,8 +1124,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         model.log("  " + forecast.logLine(volume: volumeName))
 
         tally = PairTally()
-        // Rows held before the first read (R5: a two-copy group's extra in
-        // the bulk run; R2: a reviewed row that no longer stands) — one line
+        // Rows held before the first read (R2: a reviewed row that no
+        // longer stands) — one line
         // each and counted, like every decided row. Never for a resumed
         // plan: its settled rows were logged by the run that settled them.
         if resumingPlan == nil {
@@ -2021,7 +2021,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
     /// The plan this run acts on — ONE answer, from one of three sources:
     /// a plan found at launch (every remaining row re-validated), the plan
     /// Rick reviewed (checked, exactly its rows — R2), or a fresh plan for
-    /// the Storage card's bulk run (pre-selected rows only — R5).
+    /// the Storage card's bulk run (every extra, pairs included — R5 revised).
     enum PlanForThisRun {
         case ready(DeleteDuplicatesPlan)
         /// Nothing can run: `line` for the row, `status` for the model.
@@ -2045,13 +2045,9 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             case .failure(let refusal): return .refused(line: refusal.line, status: "Not started — \(refusal.line)")
             }
         }
-        guard var fresh = await model.prepareDuplicateDeletion(onVolume: volumePath) else { return .nothing }
-        // R5: the bulk run takes pre-selected rows only (groups of three or
-        // more copies); a two-copy group's extra waits for a tick.
-        let held = fresh.holdRowsNotPreselected()
-        if held > 0 {
-            model.log("  \(held) cop\(held == 1 ? "y" : "ies") of two-copy groups held — " + DeletionTierText.notPreselected)
-        }
+        // R5 (revised by Rick 2026-10-09 evening): the bulk run takes EVERY
+        // extra — pairs included, no tick. The proof at the move is the safety.
+        guard let fresh = await model.prepareDuplicateDeletion(onVolume: volumePath) else { return .nothing }
         return .ready(fresh)
     }
 

@@ -130,7 +130,13 @@ and F7 against the source. These override §3–§7 where they conflict.
   duplicate path quarantines before hashing). Name the execution gates for network mounts,
   archive-backup drives, longer-than-master and A/V halves; keeper precedence is election, not
   protection.
-- **R5 (F5) Survival rule — RULED by Rick 2026-10-09: keep ONE verified copy.** "When we have
+- **R5 (F5) Survival rule — Revised by Rick 2026-10-09 evening: keep ONE proven copy; no
+  per-file ticks; pairs included; proof at the move is the safety.** ("why do I need to
+  checkbox every file … when I select delete dups it should do what it said, ensure it is
+  only deleting extras.") A bulk Delete Duplicates run (fresh or resumed) moves every proven
+  extra; `preselected` is UI information only and gates nothing. Supersedes the "2 copies
+  not pre-checked" rule below and codex delete-engines F6.
+  Earlier ruling (same day, superseded): **keep ONE verified copy.** "When we have
   5 copies, it should be easy to move them to Trash." Groups with 3+ copies: extras
   pre-checked, bulk "Move selected extras to Trash" is the fast path. Groups with exactly 2:
   allowed, but NOT pre-checked (a deliberate tick — "it is ok to ask or compare"). The single
