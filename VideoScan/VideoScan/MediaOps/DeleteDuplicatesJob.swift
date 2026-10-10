@@ -2098,7 +2098,8 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
         for e in pending where holds[e.id] == nil {
             if !PathScope.contains(e.path, within: plan.volumePath) {
                 holds[e.id] = DeleteDuplicatesReview.notOnVolumeNote
-            } else if let why = e.reviewedIdentity.problem(targetNow: stamps[e.path], keeperNow: stamps[e.keeperPath]) {
+            } else if let why = e.reviewedIdentity.problem(targetNow: stamps[e.path], keeperNow: stamps[e.keeperPath],
+                                                                 changeTime: .mustMatch) {
                 // F4: not the files Rick reviewed — held before a byte is read.
                 holds[e.id] = why
             }

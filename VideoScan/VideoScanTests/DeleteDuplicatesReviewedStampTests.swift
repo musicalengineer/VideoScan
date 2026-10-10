@@ -132,4 +132,28 @@ struct DeleteDuplicatesReviewedStampTests {
         #expect(ReviewedIdentity(target: nil, keeper: k).problem(targetNow: t, keeperNow: k) != nil,
                 "a copy not stamped at the review is never taken on trust")
     }
+
+    /// Codex delete-engines r2 F4: both files rewritten IN PLACE with identical
+    /// same-length bytes and their mtimes restored — device, inode, size and
+    /// mtime all match; only ctime moved. The job-start check (before the
+    /// quarantine rename) must catch it; the post-proof check may not, since
+    /// the job's own rename changes ctime.
+    @Test func anInPlaceRewriteWithRestoredMtimeIsHeldAtJobStart() {
+        let t = FileIdentityStamp(device: 1, inode: 10, size: 100, mtimeNs: 5, ctimeNs: 7)
+        let k = FileIdentityStamp(device: 1, inode: 20, size: 100, mtimeNs: 6, ctimeNs: 8)
+        let reviewed = ReviewedIdentity(target: t, keeper: k)
+        let tRewritten = FileIdentityStamp(device: 1, inode: 10, size: 100, mtimeNs: 5, ctimeNs: 70)
+        let kRewritten = FileIdentityStamp(device: 1, inode: 20, size: 100, mtimeNs: 6, ctimeNs: 80)
+        #expect(reviewed.problem(targetNow: tRewritten, keeperNow: kRewritten, changeTime: .mustMatch)?
+            .hasPrefix("this copy changed since you reviewed it") == true)
+        #expect(reviewed.problem(targetNow: t, keeperNow: kRewritten, changeTime: .mustMatch)?
+            .hasPrefix("its keeper changed since you reviewed it") == true)
+        #expect(reviewed.problem(targetNow: t, keeperNow: k, changeTime: .mustMatch) == nil)
+    }
+
+    @Test func theJobStartCheckRequiresAnUnchangedCtime() throws {
+        let job = try SourceTree.appSource(named: "DeleteDuplicatesJob.swift")
+        #expect(job.contains("keeperNow: stamps[e.keeperPath],\n                                                                 changeTime: .mustMatch)"),
+                "the pre-quarantine reviewed check must use changeTime: .mustMatch")
+    }
 }

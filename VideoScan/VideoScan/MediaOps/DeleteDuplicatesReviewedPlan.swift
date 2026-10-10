@@ -45,27 +45,32 @@ struct ReviewedDuplicatePick: Sendable, Equatable, Hashable {
 /// What Rick reviewed ON DISK for one pick (codex delete-engines F4): the
 /// target's and the keeper's identity at the freeze. A pick authorizes
 /// THOSE files, not whatever sits at their paths later — both must still
-/// be them (same device, inode, size and mtime; ctime ignored: the
-/// quarantine rename and a Finder tag change it) when the job starts AND
-/// on the very bytes the job proved, else the copy is held.
+/// be them (same device, inode, size and mtime) when the job starts AND
+/// on the very bytes the job proved, else the copy is held. ctime MUST
+/// match at the job-start check, before the quarantine rename (codex r2 F4:
+/// an in-place rewrite with a restored mtime still changes ctime); it is
+/// ignored only on the post-proof check, which the job's own rename moves
+/// (a Finder tag change in between fails closed: held, review again).
 struct ReviewedIdentity: Sendable, Equatable {
     let target: FileIdentityStamp?
     let keeper: FileIdentityStamp?
 
     static let changedNote = "changed since you reviewed it"
 
-    nonisolated static func isReviewed(_ reviewed: FileIdentityStamp?, now: FileIdentityStamp) -> Bool {
-        reviewed?.describesSameFile(now: now, changeTime: .ignored, volume: .sameOperation) == true
+    nonisolated static func isReviewed(_ reviewed: FileIdentityStamp?, now: FileIdentityStamp,
+                                       changeTime: FileIdentityStamp.ChangeTimeRule = .ignored) -> Bool {
+        reviewed?.describesSameFile(now: now, changeTime: changeTime, volume: .sameOperation) == true
     }
 
     /// The hold note when a file present now is not the one reviewed (or
     /// was not stamped at the review); nil when both are. An ABSENT file is
     /// not judged here — the run's own gates name a missing copy or keeper.
-    nonisolated func problem(targetNow: FileIdentityStamp?, keeperNow: FileIdentityStamp?) -> String? {
-        if let now = targetNow, !Self.isReviewed(target, now: now) {
+    nonisolated func problem(targetNow: FileIdentityStamp?, keeperNow: FileIdentityStamp?,
+                             changeTime: FileIdentityStamp.ChangeTimeRule = .ignored) -> String? {
+        if let now = targetNow, !Self.isReviewed(target, now: now, changeTime: changeTime) {
             return "this copy " + Self.changedNote + " — review it again; nothing moved"
         }
-        if let now = keeperNow, !Self.isReviewed(keeper, now: now) {
+        if let now = keeperNow, !Self.isReviewed(keeper, now: now, changeTime: changeTime) {
             return "its keeper " + Self.changedNote + " — review it again; nothing moved"
         }
         return nil
