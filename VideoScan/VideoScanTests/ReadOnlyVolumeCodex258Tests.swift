@@ -317,10 +317,14 @@ struct ReadOnlyVolumeCodex258Tests {
         #expect(junk[loop.upperBound...].contains("await junkTurn(rec, guard: fileGuard, disk: disk)"),
                 "the per-file turn left the loop")
         let turn = try #require(junk.range(of: "private func junkTurn("))
-        let hop = try #require(junk.range(of: "disk.run(path: path, readOnlyVolumes: readOnlyVolumes, catalogBytes: catalogBytes)",
+        let hop = try #require(junk.range(of: "disk.run(path: path, protections: protections, catalogBytes: catalogBytes)",
                                           range: turn.upperBound..<junk.endIndex))
-        #expect(String(junk[turn.upperBound..<hop.lowerBound]).contains("let readOnlyVolumes = readOnlyVolumeProtection()"),
+        // The archive too, since codex delete-engines F3 (2026-10-09).
+        let perTurn = String(junk[turn.upperBound..<hop.lowerBound])
+        #expect(perTurn.contains("readOnlyVolumes: readOnlyVolumeProtection()"),
                 "the Read-only marks are read once for the whole batch again")
+        #expect(perTurn.contains("let archiveVolume = archiveVolumeProtection()"),
+                "the Master Archive is read once for the whole batch again")
         #expect(junk.contains("readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe)"))
         #expect(try SourceTree.appSource(named: "VideoScanModel+TrashSelection.swift").contains("deleteConfirmedJunk("),
                 "Move to Trash shares Junk Delete's loop")

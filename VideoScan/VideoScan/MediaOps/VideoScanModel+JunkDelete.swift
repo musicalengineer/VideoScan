@@ -232,13 +232,12 @@ extension VideoScanModel {
         if let finished { return finished }
 
         // The disk half's fixed inputs — all Sendable, so they may cross to
-        // the worker. The Master Archive VOLUME is re-asked per file at the
-        // moment of removal (Rick 2026-09-22) with a fresh read of the
-        // file's own volume UUID; the probe is the task-local seam captured
-        // HERE — a detached task does not inherit task-locals.
+        // the worker. The protections are NOT among them: each file's turn
+        // reads them afresh (codex delete-engines F3). The probe is the
+        // task-local seam captured HERE — a detached task does not inherit
+        // task-locals.
         let disk = JunkDiskTurn(
             mode: mode,
-            archiveVolume: archiveVolumeProtection(),
             uuidProbe: MasterArchiveDesignation.volumeUUIDProbe,
             beforeRemoval: fileGuard?.beforeRemoval,
             remove: fileGuard?.remove)
@@ -274,13 +273,22 @@ extension VideoScanModel {
         if let fileGuard, let why = fileGuard.authorize(rec) {
             return .held(why)
         }
+        // The Master Archive, as the model is at THIS file's turn (codex
+        // delete-engines F3): an archive designated while the batch runs
+        // protects every file not yet moved — its tree and its volume here,
+        // the file's own volume UUID again in the disk half.
+        let archiveVolume = archiveVolumeProtection()
+        if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {
+            return .held(Self.bulkDeleteRefusalNote(refusal, volume: archiveVolume?.label ?? "the archive volume")
+                         + " — nothing moved")
+        }
         // The volumes the person marked Read only (2026-10-03), as the model
         // is at THIS file's turn (codex #258 F5): a drive marked Read only
         // while the batch runs protects every file not yet moved.
-        let readOnlyVolumes = readOnlyVolumeProtection()
+        let protections = JunkTurnProtections(archiveVolume: archiveVolume, readOnlyVolumes: readOnlyVolumeProtection())
         let catalogBytes = rec.sizeBytes
         return await Task.detached(priority: .userInitiated) {
-            disk.run(path: path, readOnlyVolumes: readOnlyVolumes, catalogBytes: catalogBytes)
+            disk.run(path: path, protections: protections, catalogBytes: catalogBytes)
         }.value
     }
 
@@ -385,24 +393,31 @@ extension VideoScanModel {
 
 // MARK: - The disk half of one file's turn
 
+/// The protections as the model is at ONE file's turn (codex delete-engines
+/// F3: never captured once for the batch): the Master Archive volume and
+/// the drives marked Read only.
+struct JunkTurnProtections: Sendable {
+    let archiveVolume: ArchiveVolumeProtection?
+    let readOnlyVolumes: ReadOnlyVolumeProtection
+}
+
 /// Everything the off-main half of a turn needs, as one Sendable value
 /// (≈ a C++ struct of value members handed to a worker thread by copy). No
 /// `VideoRecord` crosses: only the path does.
 struct JunkDiskTurn: Sendable {
     let mode: VideoScanModel.JunkDeletionMode
-    let archiveVolume: ArchiveVolumeProtection?
     let uuidProbe: @Sendable (String) -> String?
     let beforeRemoval: (@Sendable (String) -> String?)?
     let remove: (@Sendable (URL) throws -> Void)?
 
     /// The caller's proof, the archive and read-only last words, existence,
     /// then the file operation — one synchronous stretch, nothing awaited.
-    func run(path: String, readOnlyVolumes: ReadOnlyVolumeProtection,
+    func run(path: String, protections: JunkTurnProtections,
              catalogBytes: Int64) -> VideoScanModel.JunkFileOutcome {
         // Before the existence check on purpose: the guard decides what a
         // vanished file means.
         if let beforeRemoval, let why = beforeRemoval(path) { return .held(why) }
-        if let why = protectionRefusal(path: path, readOnlyVolumes: readOnlyVolumes) { return .held(why) }
+        if let why = protectionRefusal(path: path, protections: protections) { return .held(why) }
         // Distinguishes "the user tagged a file that's already gone" from a
         // genuine failure for the result sheet.
         guard !path.isEmpty, FileManager.default.fileExists(atPath: path) else { return .missing }
@@ -420,8 +435,8 @@ struct JunkDiskTurn: Sendable {
 
     /// The archive volume's and the read-only drives' last word, asked in
     /// the same synchronous stretch as the removal.
-    private func protectionRefusal(path: String, readOnlyVolumes: ReadOnlyVolumeProtection) -> String? {
-        if let archiveVolume {
+    private func protectionRefusal(path: String, protections: JunkTurnProtections) -> String? {
+        if let archiveVolume = protections.archiveVolume {
             switch archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe) {
             case .clear: break
             case .onArchiveVolume:
@@ -430,7 +445,7 @@ struct JunkDiskTurn: Sendable {
                 return VideoScanModel.bulkDeleteRefusalNote(.archiveVolumeUnprovable, volume: archiveVolume.label) + " — nothing moved"
             }
         }
-        if let verdict = readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe) {
+        if let verdict = protections.readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe) {
             return VideoScanModel.readOnlyRefusalNote(verdict) + " — nothing moved"
         }
         return nil

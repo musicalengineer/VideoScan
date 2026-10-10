@@ -149,7 +149,9 @@ extension VideoScanModel {
 
     /// The catalog half of a frozen file's re-check, at its turn: still the
     /// same catalog record, still active, still Confirmed Junk, still at
-    /// the path that was counted. nil = go on.
+    /// the path that was counted, and not half of a recovered A/V pair
+    /// (Combine can pair it after the freeze — codex delete-engines F3).
+    /// nil = go on.
     func frozenJunkCatalogProblem(_ rec: VideoRecord, frozenPath: String?) -> String? {
         guard record(forID: rec.id) === rec else { return "is no longer in the catalog — nothing moved" }
         guard rec.purgedAt == nil else { return "was already removed from the catalog — nothing moved" }
@@ -157,8 +159,13 @@ extension VideoScanModel {
         guard let frozenPath, rec.fullPath == frozenPath else {
             return "was moved in the catalog after you confirmed — nothing moved"
         }
+        if CatalogScopePolicy.isPairProtected(rec) { return Self.pairMemberHeldNote }
         return nil
     }
+
+    /// A file that became half of a recovered audio/video pair since it was
+    /// chosen (the same words as the ⌘⌫ plan's refusal).
+    static let pairMemberHeldNote = "is half of a recovered audio/video pair, which Combine still needs — nothing moved"
 }
 
 extension VideoScanModel.JunkDeletionResult {

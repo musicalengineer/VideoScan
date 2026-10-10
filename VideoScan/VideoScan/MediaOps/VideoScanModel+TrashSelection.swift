@@ -141,10 +141,17 @@ extension VideoScanModel {
         let byID = Dictionary(requested.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let targets = plan.toTrash.compactMap { byID[$0] }
         // The one existing Trash routine — archive + offline gates,
-        // purgedAt/.trashed, publish, and the copyTrashed ledger lines.
-        let fileGuard = fileOperation.map {
-            JunkDeletionGuard(authorize: { _ in nil }, beforeRemoval: { _ in nil }, remove: $0)
-        }
+        // purgedAt/.trashed, publish, and the copyTrashed ledger lines. The
+        // plan's own catalog gates are asked AGAIN at each file's turn
+        // (codex delete-engines F3): a row Combine pairs, or that is
+        // removed or set aside, while the batch runs is held.
+        let fileGuard = JunkDeletionGuard(
+            authorize: { [weak self] rec in
+                guard let self else { return "the catalog went away — nothing moved" }
+                return self.catalogTrashTurnProblem(rec)
+            },
+            beforeRemoval: { _ in nil },
+            remove: fileOperation)
         let routine = targets.isEmpty ? .empty : await deleteConfirmedJunk(targets, mode: .toTrash, guard: fileGuard)
         let result = mergedCatalogTrashResult(requested, plan: plan, routine: routine).trashFailuresHeld()
         // "I don't wanna see it again" (Rick 2026-09-20): the content of
@@ -161,6 +168,17 @@ extension VideoScanModel {
         }
         logJunkLaneOutcome(result, verb: "Move to Trash")
         return result
+    }
+
+    /// The ⌘⌫ plan's catalog gates at ONE file's turn: still active, still
+    /// not half of a recovered A/V pair. nil = go on. (The archive and
+    /// read-only gates are the routine's own, also asked per file.)
+    func catalogTrashTurnProblem(_ rec: VideoRecord) -> String? {
+        if rec.isPurged || rec.isSetAside || rec.isSuperseded {
+            return "was removed, set aside or replaced by a repair since you chose it — nothing moved"
+        }
+        if CatalogScopePolicy.isPairProtected(rec) { return Self.pairMemberHeldNote }
+        return nil
     }
 
     /// One outcome per selected row, in selection order: the routine's
