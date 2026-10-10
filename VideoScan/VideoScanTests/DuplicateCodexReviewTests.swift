@@ -446,9 +446,10 @@ struct DuplicateWorkingCopyMediaMatrixTests {
 struct DuplicateCarryOverLiveRowGuardTests {
 
     /// MAJOR 1: the extra's catalog row is replaced while byte-verify runs
-    /// → the (verified identical) file is still deleted, but NOTHING is
-    /// carried onto the master — neither human nor enrichment fields — and
-    /// the console says why.
+    /// → NOTHING is carried onto the master. Since codex delete-engines F5
+    /// (2026-10-09) the file is not removed either: the replaced row no
+    /// longer authorizes it at the removal boundary, so it is held (put
+    /// back). The test name keeps its manifest entry.
     @Test func replacedRowDuringVerifyDeletesButCarriesNothing() async throws {
         let dir = tempDir("DupLiveRow")
         defer { try? FileManager.default.removeItem(at: dir) }
@@ -491,13 +492,10 @@ struct DuplicateCarryOverLiveRowGuardTests {
         allowHashing.signal()
         let result = await deletion.value
 
-        #expect(result.deleted == 1)
-        #expect(!FileManager.default.fileExists(atPath: copyURL.path))
+        #expect(result.deleted == 0)
+        #expect(FileManager.default.fileExists(atPath: copyURL.path), "held at the removal boundary")
         #expect(master.starRating == 0 && master.userNotes.isEmpty, "human merge skipped")
         #expect(master.audioTranscript == nil && master.notes.isEmpty, "enrichment merge skipped")
-        try? await Task.sleep(nanoseconds: 400_000_000)   // console flush debounce (150 ms)
-        let console = model.dashboard.consoleLines.joined(separator: "\n")
-        #expect(console.contains("catalog changed during verification — carry-over skipped for copy.mov (file already verified and removed)"))
     }
 }
 

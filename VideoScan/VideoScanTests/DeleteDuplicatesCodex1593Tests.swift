@@ -508,9 +508,11 @@ struct DeleteDuplicatesJobCodex1593Tests {
     }
 
     /// #4: the SAME row instance has its path changed during the disk
-    /// await (a move, not a replacement). The file at the old path was
-    /// verified and removed; the live row is retained untouched — not
-    /// tombstoned — and the ledger line names the OLD path.
+    /// await (a move, not a replacement). The live row is retained
+    /// untouched — never tombstoned. Since codex delete-engines F5
+    /// (2026-10-09) the removal boundary asks the row's authorization
+    /// again: the row no longer names this path, so the file is HELD — put
+    /// back at its old path, no ledger line (was: removed anyway).
     @Test func retainedRowWhosePathMovedDuringTheAwaitIsNotTombstoned() async throws {
         let dir = tempDir("alias"); defer { try? FileManager.default.removeItem(at: dir) }
         let bytes = (0..<fileSize).map { UInt8($0 % 131) }
@@ -535,20 +537,15 @@ struct DeleteDuplicatesJobCodex1593Tests {
         gate.release.signal()
         let result = await deletion.value
 
-        #expect(result.deleted == 1)
-        #expect(!FileManager.default.fileExists(atPath: c.path), "the verified bytes at the old path are gone")
+        #expect(result.deleted == 0)
+        #expect(FileManager.default.fileExists(atPath: c.path), "held at the boundary: put back at its old path")
         #expect(model.records.count == 4, "the moved row is retained (plus the archive copy and the verified sibling)")
         #expect(model.records.contains { $0 === target })
         #expect(target.lifecycleStage == .cataloged, "never tombstoned — codex 1593 #4")
         #expect(target.purgedAt == nil)
         #expect(target.fullPath == movedPath)
         await model.mediaLedger.waitForPendingWrites()
-        let events = model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }
-        #expect(events.count == 1)
-        #expect(events.first?.fullPath == c.path, "the ledger names the file that left the disk, not the row's new path")
-        #expect(events.first?.filename == "copy.mov")
-        let console = await consoleText(model)
-        #expect(console.contains("current row retained"))
+        #expect(model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }.isEmpty, "nothing left the disk")
     }
 
     /// #5: Quit SUSPENDS. The pair in flight is put back and returns to

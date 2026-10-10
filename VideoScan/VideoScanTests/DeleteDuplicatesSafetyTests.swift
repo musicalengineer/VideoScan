@@ -331,7 +331,9 @@ struct DeleteDuplicatesSafetyTests {
         allowHashing.signal()
         let result = await deletion.value
 
-        #expect(result.deleted == 1)
+        // Codex delete-engines F5: the replaced row no longer authorizes the
+        // removal — the verified file is held (put back), the row untouched.
+        #expect(result.deleted == 0)
         #expect(model.records.count == 1)
         #expect(model.records[0].id == targetID)
         #expect(model.records[0].fullPath == replacementPath)

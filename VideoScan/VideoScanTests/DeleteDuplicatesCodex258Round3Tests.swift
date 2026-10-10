@@ -288,12 +288,13 @@ struct DeleteDuplicatesCodex258Round3Tests {
         #expect(verdict.contains("if let refusal = word?.archive {"), "the final verdict no longer asks the Master Archive rule afresh")
         #expect(verdict.contains(".proceed(.trash)") && !verdict.contains("preferTrash") && !verdict.contains(".permanent"),
                 "Trash only: the final verdict lets a file go only to the Trash, whatever any setting says")
-        #expect(job.contains("boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path))")
+        #expect(job.contains("boundary: Self.removalBoundary(model: model, recordID: entry.id, path: entry.path,\n"
+                             + "                                               authorization: current.boundaryAuthorization(for: entry)),")
                 && job.contains("archiveCheck: archiveCheck, boundary: boundary)"))
         // The boundary: the buffer, ONE hop, the protections built there.
         let boundary = try body(job, from: "static func removalBoundary(", to: "static func removalBoundaryHold(")
         #expect(boundary.components(separatedBy: "onMainActor").count == 2, "the boundary hops to the main actor more than once")
-        #expect(boundary.contains("return model.duplicateRemovalBoundaryNow(recordID: recordID)"))
+        #expect(boundary.contains("return model.duplicateRemovalBoundaryNow(recordID: recordID, authorization: authorization)"))
         #expect(boundary.contains("model.archiveAngel.recordInBatchOnDiskFreshProbe()"))
         #expect(boundary.contains("ReadOnlyVolumeProtection.make(marks: now.readOnlyMarks, probe: uuidProbe, identity: identityProbe)"))
         #expect(boundary.contains("ArchiveVolumeProtection.make(designation: designation, aliasCandidates: now.aliasCandidates,"))
