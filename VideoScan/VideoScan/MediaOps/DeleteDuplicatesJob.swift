@@ -1710,6 +1710,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             mutatePlan {
                 $0.set(entry.id, .deleted, note: "verified identical to \(keeper.filename)",
                        keeperMatchedByStoredFixity: !proof.keeperReadInFull)
+                $0.setMovedBytes(entry.id, bytes)
             }
         case .trashed(let bytes, _, let proof):
             tally.bytesTrashed += bytes
@@ -1722,6 +1723,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
                 $0.set(entry.id, .trashed,
                        note: "verified identical to \(keeper.filename) — \(DeletionTierText.inTheTrashOf(trashVolume))",
                        keeperMatchedByStoredFixity: !proof.keeperReadInFull)
+                $0.setMovedBytes(entry.id, bytes)   // F7: what really moved
             }
         }
     }

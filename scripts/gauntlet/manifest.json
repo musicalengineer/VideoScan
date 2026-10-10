@@ -25877,6 +25877,18 @@
         "aResumedOlderPlanFollowsTheSameRule",
         "theForecastCountsAPairsExtraForTheTrash"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/DeleteDuplicatesMovedBytesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DeleteDuplicatesMovedBytesTests"
+      ],
+      "tests": [
+        "theReportSumsTheMeasuredSizeNotTheCatalogs"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -26894,6 +26906,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/DeleteDuplicatesKeepOneTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/DeleteDuplicatesMovedBytesTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

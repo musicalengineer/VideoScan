@@ -649,6 +649,10 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// `keeperStamp` it binds the pick to the files reviewed: either
         /// one changed since → held. nil on bulk and older plans.
         var targetStamp: FileIdentityStamp?
+        /// The file's size MEASURED as it left (codex delete-engines F7,
+        /// additive 2026-10-09): what "moved to the Trash" reports. nil
+        /// until it moves, and on older plans (their catalog size is used).
+        var movedBytes: Int64?
         /// Master on another drive (the "Also clean up working copies"
         /// mode) — drives the [WORKING-COPY] log line.
         var isWorkingCopy: Bool = false
@@ -712,6 +716,9 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         /// CANCELLED, or FAILED for a skip — when the row settles. nil = the
         /// status says it (`outcome`, DeleteDuplicatesOutcome.swift).
         var outcomeKind: DeleteDuplicatesOutcomeKind?
+
+        /// The bytes this row moved: measured, else (older plans) the catalog's.
+        var bytesMoved: Int64 { movedBytes ?? sizeBytes }
 
         /// UI INFORMATION ONLY (R5 revised by Rick 2026-10-09 evening — "no
         /// per-file ticks; pairs included"): the group has three or more
@@ -921,8 +928,8 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
             c.totalBytes += e.sizeBytes
             switch e.status {
             case .pending, .verifying, .verified: c.pending += 1
-            case .deleted: c.deleted += 1; c.settledBytes += e.sizeBytes; c.freedBytes += e.sizeBytes
-            case .trashed: c.trashed += 1; c.settledBytes += e.sizeBytes; c.trashedBytes += e.sizeBytes
+            case .deleted: c.deleted += 1; c.settledBytes += e.sizeBytes; c.freedBytes += e.bytesMoved
+            case .trashed: c.trashed += 1; c.settledBytes += e.sizeBytes; c.trashedBytes += e.bytesMoved
             case .refused: c.refused += 1; c.settledBytes += e.sizeBytes
             case .failed: c.failed += 1; c.settledBytes += e.sizeBytes
             case .skipped: c.skipped += 1; c.settledBytes += e.sizeBytes
@@ -978,6 +985,12 @@ struct DeleteDuplicatesPlan: Codable, Sendable, Identifiable, Equatable {
         if !note.isEmpty { entries[i].note = note }
         if status.isSettled { entries[i].settledAt = now }
         if let k = keeperMatchedByStoredFixity { entries[i].keeperMatchedByStoredFixity = k }
+    }
+
+    /// The size measured as the row's file left (F7): reported as moved.
+    mutating func setMovedBytes(_ id: UUID, _ bytes: Int64) {
+        guard let i = entries.firstIndex(where: { $0.id == id }) else { return }
+        entries[i].movedBytes = bytes
     }
 
     /// The row is in quarantine: record exactly where, and the file's

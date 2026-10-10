@@ -94,10 +94,12 @@ struct DeleteDuplicatesOutcomeReport: Equatable, Sendable {
             for e in plan.entries {
                 let kind = e.outcome
                 let reason = kind == .cancelled && e.note.isEmpty ? Self.notReachedReason : e.note
-                rows.append(Row(id: e.id, filename: e.filename, path: e.path, sizeBytes: e.sizeBytes, kind: kind,
+                // F7: a file that left reports its MEASURED size.
+                let bytes = kind == .moved || kind == .deletedOutright ? e.bytesMoved : e.sizeBytes
+                rows.append(Row(id: e.id, filename: e.filename, path: e.path, sizeBytes: bytes, kind: kind,
                                 reason: reason, trashVolume: kind == .moved ? e.trashedOnVolume : nil))
                 let c = counts[kind] ?? (0, 0)
-                counts[kind] = (c.n + 1, c.bytes + e.sizeBytes)
+                counts[kind] = (c.n + 1, c.bytes + bytes)
             }
         }
     }
@@ -107,7 +109,8 @@ struct DeleteDuplicatesOutcomeReport: Equatable, Sendable {
     var requested: Int { rows.count }
     func count(_ kind: DeleteDuplicatesOutcomeKind) -> Int { counts[kind]?.n ?? 0 }
     func bytes(_ kind: DeleteDuplicatesOutcomeKind) -> Int64 { counts[kind]?.bytes ?? 0 }
-    /// The sum of the moved copies' own sizes (R7: never scaled).
+    /// The sum of the moved copies' own MEASURED sizes (R7: never scaled;
+    /// codex F7: never the catalog's).
     var bytesMovedToTrash: Int64 { bytes(.moved) }
     /// Every row of a kind (the held list, the missing list, …).
     func rows(_ kind: DeleteDuplicatesOutcomeKind) -> [Row] { rows.filter { $0.kind == kind } }
