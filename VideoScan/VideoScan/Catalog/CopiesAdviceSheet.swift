@@ -62,6 +62,9 @@ struct CopiesAdviceSheet: View {
     @State private var confirmingTrash = false
     @State private var working = false
     @State private var outcome: String?
+    /// SoundPresencePolicy's answer for this file and, when it has no sound
+    /// and should, where the sound is (Rick 2026-10-10). Built in `.task`.
+    @State private var sound: (presence: SoundPresence, copy: SoundCopyAdvice?)?
 
     private var advice: CopiesAdvice? {
         if case .loaded(let a) = load { return a }
@@ -89,6 +92,7 @@ struct CopiesAdviceSheet: View {
         .task(id: generation) {
             let fresh = await CopiesAdviceLoader.load(recordID: request.recordID, model: model)
             load = fresh.map { .loaded($0) } ?? .gone
+            await loadSound()
         }
         .alert("Move this copy to the Trash?", isPresented: $confirmingTrash, presenting: advice) { _ in
             Button("Move to Trash") { Task { await moveThisCopyToTrash() } }
@@ -112,6 +116,7 @@ struct CopiesAdviceSheet: View {
         }
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                soundSection
                 exactCopies(a)
                 sameFootage(a)
                 whyFlagged(a)
@@ -153,6 +158,43 @@ struct CopiesAdviceSheet: View {
         if a.sameFootageHidden > 0 {
             Text("and \(a.sameFootageHidden) more").font(.caption).foregroundColor(.secondary)
         }
+    }
+
+    /// SOUND — only when the policy has something to say: "No sound — this
+    /// copy has no audio track" with where the sound is, or the pair /
+    /// silent-film note. Nothing for a file with sound.
+    @ViewBuilder
+    private var soundSection: some View {
+        if let sound, let headline = sound.presence.headline {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("SOUND").font(.caption.weight(.semibold)).foregroundColor(.secondary)
+                Label(headline, systemImage: sound.presence.isWarning ? "speaker.slash.fill" : "speaker.slash")
+                    .foregroundColor(sound.presence.isWarning ? .orange : .primary)
+                    .accessibilityIdentifier("copiesAdvice.sound")
+                if let why = sound.presence.reason {
+                    Text(why).font(.caption).foregroundColor(.secondary)
+                }
+                if let copy = sound.copy {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Text(copy.line).font(.callout).lineLimit(2).truncationMode(.middle)
+                        Spacer()
+                        if let c = copy.candidate {
+                            Button("Show in Catalog") { showInCatalog(c.id) }.buttonStyle(.link)
+                            Button("Reveal") { reveal(c.fullPath) }.buttonStyle(.link)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// The policy (O(1)) and, only for a flagged file, the lookup
+    /// (SoundCopyFinder: one pass on main, decision off main).
+    private func loadSound() async {
+        guard let rec = model.record(forID: request.recordID) else { sound = nil; return }
+        let presence = rec.catalogSoundPresence
+        let copy = presence.isWarning ? await SoundCopyFinder.load(recordID: request.recordID, model: model) : nil
+        sound = (presence, copy)
     }
 
     @ViewBuilder

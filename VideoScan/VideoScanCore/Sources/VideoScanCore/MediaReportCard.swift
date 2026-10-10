@@ -197,15 +197,24 @@ public struct MediaReportCard: Codable, Sendable, Equatable {
     /// The repaired copy Repair… made from this file, if any (additive,
     /// 2026-10-08). A later Verify of this file carries it over.
     public var repairedCopy: MediaRepairLink?
+    /// How long the picture really runs, measured by the full check's
+    /// packet census (first to last picture packet). Additive, 2026-10-10:
+    /// an MPEG-2 elementary stream (.m2v) records no duration in its header,
+    /// so the catalog says 0 — this is the only length anyone measured, and
+    /// "Combine with its sound" needs it to match a sound file by length.
+    /// nil on quick cards and on cards saved before this field existed.
+    public var measuredPictureSeconds: Double?
 
     public init(tier: Tier, checkedAt: Date, fileSizeBytes: Int64,
-                headline: String, checks: [MediaCheck], repairedCopy: MediaRepairLink? = nil) {
+                headline: String, checks: [MediaCheck], repairedCopy: MediaRepairLink? = nil,
+                measuredPictureSeconds: Double? = nil) {
         self.tier = tier
         self.checkedAt = checkedAt
         self.fileSizeBytes = fileSizeBytes
         self.headline = headline
         self.checks = checks
         self.repairedCopy = repairedCopy
+        self.measuredPictureSeconds = measuredPictureSeconds
     }
 
     /// Worst row wins; a card whose every row was not run says not run.
