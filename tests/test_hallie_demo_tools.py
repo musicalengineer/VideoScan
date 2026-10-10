@@ -60,7 +60,15 @@ def snap(tmp_path):
          "treeIdentityAttestation": "derived: tree root",
          "kinships": [{"relation": "child", "to": "U-MABEL"}], "notes": "Owner. Sister Bonnie lives nearby."},
     ], "families": [{"uuid": "FAM-1", "name": "Hudson Family", "featuredVideos": []}]}
-    brain = {"people": [], "items": [], "sources": []}
+    P["@I6@"]["death"] = {"date": "after 1930 before 1950", "year": 1930}
+    P["@I4@"]["birth"]["place"] = "Cork, Ireland"
+    P["@I9@"]["birth"]["place"] = "Dublin, Ireland"
+    brain = {"people": [{"id": "frank", "canonicalName": "Frank Test", "aliases": ["Frank"], "gedcomPersonID": "@I2@"}],
+             "items": [{"id": "note.frank.1", "kind": "note", "text": "Frank served in the Navy from 1950.",
+                        "subjectPersonIDs": ["frank"], "privacy": "family", "confidence": "told"},
+                       {"id": "note.frank.2", "kind": "note", "text": "PRIVATE-CANARY", "subjectPersonIDs": ["frank"],
+                        "privacy": "private"}],
+             "sources": []}
     recs = [
         {"id": "R1", "filename": "Thanksgiving-1984.mov", "path": "/v/Thanksgiving-1984.mov", "year": 1984,
          "durationSeconds": 3600, "streamType": "Video+Audio", "contentHash": "h1",
@@ -74,6 +82,15 @@ def snap(tmp_path):
         {"id": "R4", "filename": "Rejected.mov", "path": "/v/Rejected.mov", "year": 1991, "durationSeconds": 60,
          "streamType": "Video+Audio", "contentHash": "h4", "detectedPeople": ["Hudson Family"],
          "rejectedPeople": ["Hudson Family"]},
+        {"id": "R5", "filename": "Thanksgiving-1984.wav", "path": "/a/Thanksgiving-1984.wav", "year": 1984,
+         "durationSeconds": 1800, "streamType": "Audio only", "contentHash": "h5",
+         "confirmedPeople": ["Hudson Family"]},
+        {"id": "R6", "filename": "AtHudsons-Feast-1985.mov", "path": "/v/AtHudsons-Feast-1985.mov", "year": 1985,
+         "durationSeconds": 900, "streamType": "Video+Audio", "contentHash": "h6",
+         "transcriptSnippet": "and there's Tessa by the pie table"},
+        {"id": "R7", "filename": "Feast-1985.mov", "path": "/v/Feast-1985.mov", "year": 1985,
+         "durationSeconds": 900, "streamType": "Video+Audio", "contentHash": "h7",
+         "confirmedPeople": ["Hudson Family"]},
     ]
     catalog = {"meta": {}, "records": recs}
     for name, obj in (("tree.json", tree), ("people.json", people), ("brain.json", brain), ("catalog.json", catalog)):
@@ -127,7 +144,7 @@ def test_surname_count_primary_and_alternate(snap):
 
 
 def test_search_media_by_people_tag_collapses_identical_copies(snap):
-    r = call(snap, "search_media", "tags=Hudson", "Family")   # unquoted multi-word value
+    r = call(snap, "search_media", "tags=Hudson", "Family", "years=1984")   # unquoted multi-word value
     assert r["args"]["tags"] == "Hudson Family"
     assert r["matchCount"] == 1 and r["recordCount"] == 2
     item = r["items"][0]
@@ -166,3 +183,102 @@ def test_relationship_between_blood_and_in_law(snap):
 def test_bad_args_fail_closed(snap):
     assert call(snap, "search_media")["ok"] is False
     assert call(snap, "nope")["error"] == "unknownTool"
+
+
+# ---------------------------------------------------------------- E1 tool-gap fixes (demo review 2026-10-10)
+
+def test_media_counts_default_to_video_and_say_what_they_counted(snap):
+    r = call(snap, "catalog_stats", "text=thanksgiving", "in=filename,path,notes")
+    assert r["kindCounted"] == "video"
+    assert "audio-only" in r["countBasis"]
+    assert r["notCountedByKind"] == {"Audio only": 1}          # the .wav is named, not counted
+    assert r["totals"]["records"] == 2
+    r = call(snap, "catalog_stats", "text=thanksgiving", "in=filename,path,notes", "kind=any")
+    assert r["totals"]["records"] == 3 and "notCountedByKind" not in r
+    r = call(snap, "search_media", "text=thanksgiving")
+    assert r["kindCounted"] == "video" and r["matchCount"] == 1 and "countBasis" in r
+    assert r["notCountedByKind"] == {"Audio only": 1}
+    assert call(snap, "search_media", "text=thanksgiving", "kind=audio")["matchCount"] == 1
+
+
+def test_date_qualifiers_become_ranges_never_one_year(snap):
+    assert tools.date_range("after 1930 before 1950")["text"] == "between 1930 and 1950"
+    assert tools.date_range("AFT 1930")["qualifier"] == "after"
+    assert tools.date_range("bef. 3 Mar 1950") == {"qualifier": "before", "earliest": None, "latest": 1950,
+                                                   "text": "before 1950"}
+    assert tools.date_range("abt 1877")["text"] == "about 1877"
+    assert tools.date_range("from 1800 to 1810")["qualifier"] == "between"
+    assert tools.date_range("10 February 1877")["qualifier"] == "exact"
+    r = call(snap, "person_facts", "id=gedcom:@I6@")
+    death = r["items"]["tree"]["death"]
+    assert death["range"] == [1930, 1950] and "year" not in death
+    assert death["yearText"] == "between 1930 and 1950"
+    r = call(snap, "relatives", "id=gedcom:@I3@", "relation=parents")
+    ivy = next(i for i in r["items"] if i["id"] == "gedcom:@I6@")
+    assert "1930" not in ivy["years"].split("between")[0]       # never "1907–1930"
+    assert ivy["years"] == "b. 1907; d. between 1930 and 1950"
+
+
+def test_relatives_side_is_honoured_for_all(snap):
+    r = call(snap, "relatives", "id=gedcom:@I1@", "relation=all", "side=paternal")
+    parents = [i["id"] for i in r["items"] if i["relation"] == "parent"]
+    assert parents == ["gedcom:@I2@"]
+    r = call(snap, "relatives", "id=gedcom:@I1@", "relation=all", "side=maternal")
+    assert [i["id"] for i in r["items"] if i["relation"] == "parent"] == ["gedcom:@I3@"]
+    assert any("side=maternal" in n for n in r["notes"])
+
+
+def test_people_search_returns_transcript_mentions_labelled_and_uncounted(snap):
+    r = call(snap, "search_media", "people=Tessa")
+    assert r["matchCount"] == 0 and r["items"] == []
+    assert r["mentionCount"] == 1
+    m = r["mentions"][0]
+    assert m["id"] == "catalog:R6" and m["evidence"][0]["kind"] == "spokenMention:transcript"
+    assert "not proof" in r["mentionNote"]
+    assert "catalog:R6" in r["ids"]
+    assert "mentions" not in call(snap, "search_media", "people=Tessa", "include_mentions=false")
+    red = tools.run(["--snapshots", snap, "--redact-media-text", "search_media", "people=Tessa"])
+    assert red["mentions"][0]["evidence"][0]["snippet"] == tools.REDACTED
+
+
+def test_tag_and_text_reports_filename_matches_it_would_hide(snap):
+    r = call(snap, "search_media", "tags=Hudson Family", "text=feast")
+    assert [i["id"] for i in r["items"]] == ["catalog:R7"]
+    tw = r["textMatchesWithoutTag"]
+    assert tw["count"] == 1 and tw["items"][0]["id"] == "catalog:R6"
+    assert tw["items"][0]["tagWordsInFilenameOrPath"] is True      # 'AtHudsons-…' says Hudson
+    assert r["matchCount"] == 1                                      # not counted
+
+
+def test_born_in_defaults_to_the_family_and_truncation_summarises(snap):
+    r = call(snap, "catalog_stats", "born_in=Ireland")
+    assert [i["id"] for i in r["items"]] == ["gedcom:@I4@"]         # Ann Smith (not an ancestor) left out
+    assert "ancestors of Owen Test" in r["countBasis"] and "scopeNote" in r
+    r = call(snap, "catalog_stats", "born_in=Ireland", "scope=all")
+    assert r["count"] == 2
+    old = tools.MAX_ITEMS
+    tools.MAX_ITEMS = 1
+    try:
+        r = call(snap, "catalog_stats", "surname=Hudson")
+    finally:
+        tools.MAX_ITEMS = old
+    assert r["truncated"] and r["truncationSummary"]["of"] == 4
+    assert r["truncationSummary"]["bySurname"] == {"Hudson": 4}
+
+
+def test_person_facts_inlines_told_text_and_withholds_private(snap):
+    r = call(snap, "person_facts", "id=gedcom:@I2@")
+    cb = r["items"]["cyberBrain"][0]
+    assert cb["toldItems"][0]["text"].startswith("Frank served in the Navy")
+    assert "brain:note.frank.1" in r["ids"]
+    assert cb["privateItemsWithheld"] == 1
+    assert "PRIVATE-CANARY" not in json.dumps(r)
+
+
+def test_call_tool_validates_args_and_never_raises(snap):
+    D = tools.Data(snap)
+    assert tools.call_tool(D, "nope", {})["error"] == "unknownTool"
+    assert tools.call_tool(D, "person_facts", {})["error"] == "badArgs"
+    assert tools.call_tool(D, "person_facts", {"id": "gedcom:@I1@", "bogus": 1})["error"] == "badArgs"
+    assert tools.call_tool(D, "search_media", {"text": "feast", "limit": 3, "include_mentions": False})["ok"]
+    assert tools.call_tool(D, "search_media", {"years": "nineteen"})["error"] == "badArgs"

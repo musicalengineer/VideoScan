@@ -47,15 +47,71 @@ def toks(s: str | None) -> list[str]:
     return norm(s).split()
 
 
+ABOUT_WORDS = ("about", "abt", "circa", "cir", "ca", "c", "est", "estimated", "environ", "um", "approx")
+AFTER_WORDS = ("after", "aft")
+BEFORE_WORDS = ("before", "bef")
+RANGE_WORDS = ("between", "bet", "from", "or")
+
+
+def date_range(date: str | None, fallback_year: int | None = None) -> dict:
+    """A GEDCOM date as {qualifier, earliest, latest, text}.
+
+    "after 1930 before 1950" is a RANGE, never the year 1930 (the demo
+    printed "1877–1930" for a death the tree only bounds). qualifier is one
+    of exact | about | after | before | between | unknown; earliest/latest
+    are years or None for an open end. `text` is how to say it.
+    """
+    s = (date or "").lower()
+    ys = [int(y) for y in re.findall(r"(?<!\d)(\d{3,4})(?!\d)", s)]
+    if not ys and fallback_year:
+        ys = [fallback_year]
+    if not ys:
+        return {"qualifier": "unknown", "earliest": None, "latest": None, "text": date or ""}
+    words = set(re.findall(r"[a-z]+", s))
+    has = lambda vocab: bool(words & set(vocab))  # noqa: E731
+    if len(ys) >= 2 and (has(RANGE_WORDS) or (has(AFTER_WORDS) and has(BEFORE_WORDS)) or " to " in s):
+        lo, hi = min(ys), max(ys)
+        return {"qualifier": "between", "earliest": lo, "latest": hi, "text": f"between {lo} and {hi}"}
+    y = ys[0]
+    if has(AFTER_WORDS):
+        return {"qualifier": "after", "earliest": y, "latest": None, "text": f"after {y}"}
+    if has(BEFORE_WORDS):
+        return {"qualifier": "before", "earliest": None, "latest": y, "text": f"before {y}"}
+    if has(ABOUT_WORDS):
+        return {"qualifier": "about", "earliest": y, "latest": y, "text": f"about {y}"}
+    return {"qualifier": "exact", "earliest": y, "latest": y, "text": str(y)}
+
+
+def event_view(ev: dict | None) -> dict | None:
+    """A birth/death event with its qualifier carried through. `year` stays
+    only when the tree gives one year (exact or about); bounded dates carry
+    `range` [earliest, latest] instead, so nothing can flatten them."""
+    if not ev:
+        return None
+    r = date_range(ev.get("date"), ev.get("year"))
+    out = {k: v for k, v in ev.items() if k != "year"}
+    out["qualifier"] = r["qualifier"]
+    out["yearText"] = r["text"]
+    if r["qualifier"] in ("exact", "about"):
+        out["year"] = r["earliest"]
+    elif r["qualifier"] != "unknown":
+        out["range"] = [r["earliest"], r["latest"]]
+    return out
+
+
 def years(birth: dict | None, death: dict | None) -> str:
-    b = (birth or {}).get("year")
-    d = (death or {}).get("year")
+    b = date_range((birth or {}).get("date"), (birth or {}).get("year")) if birth else None
+    d = date_range((death or {}).get("date"), (death or {}).get("year")) if death else None
+    b = b if b and b["qualifier"] != "unknown" else None
+    d = d if d and d["qualifier"] != "unknown" else None
     if b and d:
-        return f"{b}–{d}"
+        if b["qualifier"] == "exact" and d["qualifier"] == "exact":
+            return f"{b['text']}–{d['text']}"
+        return f"b. {b['text']}; d. {d['text']}"
     if b:
-        return f"b. {b}"
+        return f"b. {b['text']}"
     if d:
-        return f"d. {d}"
+        return f"d. {d['text']}"
     return ""
 
 
@@ -327,7 +383,8 @@ def tree_kin(D, pid, rel, sex, side, greats=0):
     """[(tree id, path note)] for owner-relative kin in the tree."""
     out = []
     if rel == "parent":
-        out = [(x, "parent") for x in D.parents(pid)]
+        out = [(x, "parent") for x in D.parents(pid)
+               if not side or (D.tp(x) or {}).get("sex") == ("F" if side == "maternal" else "M")]
     elif rel in ("grandparent",):
         gen = 2 + greats
         frontier = [(pid, [])]
@@ -536,13 +593,15 @@ def t_resolve_person(D, a):
                 order.append(m["id"])
 
     # 7. people tags on catalog media
-    tagcount = 0
+    tagged = collections.Counter()
     for r in D.catalog["records"]:
         names = {norm(x) for x in r.get("confirmedPeople", []) + r.get("detectedPeople", [])}
         if qn in names and qn not in {norm(x) for x in r.get("rejectedPeople", [])}:
-            tagcount += 1
-    if tagcount:
-        notes.append(f"'{q}' is also a person tag on {tagcount} catalog record(s) — use search_media people={q}")
+            tagged["video" if "Video" in (r.get("streamType") or "") else "other"] += 1
+    if tagged:
+        notes.append(f"'{q}' is also a person tag on {tagged['video']} video record(s)"
+                     + (f" and {tagged['other']} audio-only/other record(s)" if tagged["other"] else "")
+                     + f" (copies not collapsed) — use search_media people={q} for distinct videos")
 
     # 8. surname
     sn = qn[:-1] if qn.endswith("s") and len(t) == 1 else qn
@@ -614,7 +673,7 @@ def t_person_facts(D, a):
             return fail("person_facts", "unknownID", eid)
         out["tree"] = {
             "names": [n["full"] for n in p["names"]], "sex": p.get("sex"),
-            "birth": p.get("birth") or None, "death": p.get("death") or None,
+            "birth": event_view(p.get("birth")), "death": event_view(p.get("death")),
             "familySearchID": p.get("fsid"), "identityDecision": p.get("identityDecision"),
             "isOwner": tree == D.owner,
             "parents": [D.brief(x) for x in D.parents(tree)],
@@ -632,24 +691,49 @@ def t_person_facts(D, a):
         out["peopleTab"] = {k: v for k, v in p.items() if k not in ("kinships",)}
         out["peopleTab"]["id"] = f"people:{prof}"
         out["peopleTab"]["kinships"] = sorted(kin, key=lambda k: k["relation"])
+    told_ids = []
     if brains:
         out["cyberBrain"] = []
         for b in brains:
             bp = D.bpeople.get(b)
             if not bp:
                 continue
-            items = [i["id"] for i in D.bitems.values() if b in (i.get("subjectPersonIDs") or [])]
-            out["cyberBrain"].append({"id": f"brain:{b}", "canonicalName": bp["canonicalName"],
-                                      "aliases": bp.get("aliases"), "terminology": bp.get("terminology"),
-                                      "itemIDs": [f"brain:{i}" for i in items],
-                                      "hint": "read the items with family_knowledge id=..."})
+            items = [i for i in D.bitems.values() if b in (i.get("subjectPersonIDs") or [])]
+            shown = [i for i in items if i.get("privacy") != "private"]
+            told = [{"id": f"brain:{i['id']}", "kind": i.get("kind"), "text": short_text(i.get("text")),
+                     "confidence": i.get("confidence"),
+                     **({"service": i["service"]} if i.get("service") else {})}
+                    for i in shown[:PERSON_FACTS_TOLD]]
+            told_ids += [t["id"] for t in told]
+            entry = {"id": f"brain:{b}", "canonicalName": bp["canonicalName"],
+                     "aliases": bp.get("aliases"), "terminology": bp.get("terminology"),
+                     "toldItems": told}
+            if len(shown) > len(told):
+                entry["moreItems"] = f"{len(shown) - len(told)} more; family_knowledge id=brain:{b}"
+            if len(items) > len(shown):
+                entry["privateItemsWithheld"] = len(items) - len(shown)
+            out["cyberBrain"].append(entry)
     if len(out) == 2:
         return fail("person_facts", "unknownID", eid)
     flat = [out["id"]] + out["sameAs"]
     if "tree" in out:
         for k in ("parents", "spouses", "children"):
             flat += [x["id"] for x in out["tree"][k]]
+    if "peopleTab" in out:
+        for fld in ("notes", "identityNotes"):
+            if out["peopleTab"].get(fld):
+                flat.append(f"{out['peopleTab']['id']}#{fld}")
+    flat += told_ids
     return result("person_facts", a, out, ids=flat)
+
+
+PERSON_FACTS_TOLD = 8
+TOLD_CHARS = 400
+
+
+def short_text(s: str | None, limit: int = TOLD_CHARS) -> str:
+    s = (s or "").strip()
+    return s if len(s) <= limit else s[:limit].rsplit(" ", 1)[0] + "…"
 
 
 REL_ALIASES = {"parents": "parent", "parent": "parent", "children": "child", "child": "child", "kids": "child",
@@ -657,6 +741,9 @@ REL_ALIASES = {"parents": "parent", "parent": "parent", "children": "child", "ch
                "grandparents": "grandparent", "grandparent": "grandparent",
                "greatgrandparents": "greatgrandparent", "great_grandparents": "greatgrandparent",
                "grandchildren": "grandchild", "grandchild": "grandchild", "all": "all"}
+
+
+SIDED_RELATIONS = ("parent", "grandparent", "greatgrandparent", "auntuncle")
 
 
 def t_relatives(D, a):
@@ -677,7 +764,7 @@ def t_relatives(D, a):
             if r == "greatgrandparent":
                 found = tree_kin(D, tree, "grandparent", None, side, 1)
             else:
-                found = tree_kin(D, tree, r, None, side if r in ("grandparent", "auntuncle") else None)
+                found = tree_kin(D, tree, r, None, side if r in SIDED_RELATIONS else None)
             for x, note in found:
                 items.append(D.brief(x, relation=r, source="family tree", path=note))
         if prof and r in PROFILE_REL:
@@ -690,6 +777,14 @@ def t_relatives(D, a):
                     items.append({"id": f"people:{b_}", "sameAs": sid[1:], "name": describe(D, f"people:{b_}")["displayName"],
                                   "aliases": q.get("aliases"), "relation": r, "source": "People tab kinship row"})
     notes = []
+    if side not in (None, "maternal", "paternal"):
+        return fail("relatives", "badArgs", "side must be maternal or paternal")
+    if side:
+        notes.append(f"side={side} applied to parents/grandparents (through the {'mother' if side == 'maternal' else 'father'}); "
+                     "siblings, spouses and children have no side")
+        # People-tab kinship rows carry no side: keep only rows the tree did not already answer
+        # for sided relations, and drop People-tab parents of the wrong sex.
+        items = [i for i in items if not (i.get("source") == "People tab kinship row" and i["relation"] in SIDED_RELATIONS)]
     if not tree:
         notes.append("this person has no linked family-tree record; only People-tab kinship rows were used")
     if not items:
@@ -961,15 +1056,73 @@ def parse_years(s):
     return lo, int(m.group(2) or m.group(1))
 
 
-def filter_media(D, a, redact):
+KINDS = {
+    "video": "video files (stream type Video+Audio or Video only); audio-only and unreadable files NOT counted",
+    "audio": "audio-only files",
+    "any": "every catalog record of any stream type, audio-only files included",
+}
+MENTION_ITEMS = 10
+TEXT_ONLY_ITEMS = 5
+MENTION_NOTE = ("NOT counted in matchCount: nobody tagged this person on these files; the name occurs in "
+                "machine-made transcript or caption text. A spoken mention is not proof the person appears.")
+
+
+def kind_of(a):
+    """The stream kind a media count covers. Default video: an audio-only
+    file is never a "video" unless the asker says so (demo review gap 1)."""
+    k = (a.get("kind") or "video").strip().lower()
+    if k not in KINDS:
+        raise ValueError("kind must be video|audio|any")
+    return k
+
+
+def kind_ok(r, kind):
+    st = r.get("streamType") or ""
+    if kind == "video":
+        return "Video" in st
+    if kind == "audio":
+        return st == "Audio only"
+    return True
+
+
+def truthy(v, default):
+    if v is None or v == "":
+        return default
+    if isinstance(v, bool):
+        return v
+    return str(v).strip().lower() not in ("0", "false", "no", "off")
+
+
+def mention_terms(names):
+    """Name strings worth looking for in speech: no kin words, no 1–2 letter aliases."""
+    return {n for n in names if len(n) >= 3 and n not in KIN and n not in OWNER_WORDS}
+
+
+def find_mention(r, terms, redact):
+    for fld, s in text_fields(r, ("transcript", "captions")):
+        ns = norm(s)
+        for t in sorted(terms, key=len, reverse=True):
+            if re.search(r"\b" + re.escape(t) + r"\b", ns):
+                sn = snippet(s, t.split()[-1]) or snippet(s, t.split()[0]) or s[:180]
+                return {"kind": f"spokenMention:{fld}", "term": t,
+                        "snippet": REDACTED if redact else sn}
+    return None
+
+
+def filter_media(D, a, redact, *, skip_tags=False, mentions=False):
+    """(matches, undatedExcluded, mentionMatches). A mention match is a record
+    where at least one asked-for person is not tagged but named in a
+    transcript/caption; it is kept apart and never counted as a match."""
     people = [p for p in re.split(r"[,;]", a.get("people") or "") if p.strip()]
     tags = [t for t in re.split(r"[,;]", a.get("tags") or "") if t.strip()]
+    if skip_tags:
+        people, tags = [], []
     text = a.get("text") or ""
     terms = [w for w in re.findall(r'"[^"]+"|\S+', text)]
     terms = [w.strip('"') for w in terms if w.strip('"')]
     place = (a.get("place") or "").strip()
     yr = parse_years(a.get("years"))
-    kind = (a.get("kind") or "any").lower()
+    kind = kind_of(a)
     basis = (a.get("people_basis") or "detected").lower()
     if basis not in PEOPLE_BASIS:
         raise ValueError("people_basis must be confirmed|detected|any")
@@ -977,23 +1130,26 @@ def filter_media(D, a, redact):
     bad = [f for f in fields if f not in TEXT_FIELDS]
     if bad:
         raise ValueError(f"in= takes {','.join(TEXT_FIELDS)}; got {bad}")
-    pnames = [(p, person_name_set(D, p)) for p in people]
-    matches, undated_excluded = [], 0
+    pnames = [(p, names, mention_terms(names)) for p in people for names in [person_name_set(D, p)]]
+    matches, mention_matches, undated_excluded = [], [], 0
     for r in D.catalog["records"]:
-        st = r.get("streamType") or ""
-        if kind == "video" and "Video" not in st:
-            continue
-        if kind == "audio" and st != "Audio only":
+        if not kind_ok(r, kind):
             continue
         ev = []
         rp = record_people(r, basis)
-        ok = True
-        for ref, names in pnames:
+        ok, mentioned = True, False
+        for ref, names, mterms in pnames:
             hit = next(((n, rp[n]) for n in names if n in rp), None)
-            if not hit:
-                ok = False
-                break
-            ev.append({"kind": f"personTag:{hit[1][1]}", "term": hit[1][0], "for": ref})
+            if hit:
+                ev.append({"kind": f"personTag:{hit[1][1]}", "term": hit[1][0], "for": ref})
+                continue
+            m = find_mention(r, mterms, redact) if mentions and mterms else None
+            if m:
+                ev.append({**m, "for": ref})
+                mentioned = True
+                continue
+            ok = False
+            break
         if not ok:
             continue
         for tg in tags:
@@ -1033,13 +1189,14 @@ def filter_media(D, a, redact):
         if yr:
             y = r.get("year")
             if y is None:
-                undated_excluded += 1
+                if not mentioned:
+                    undated_excluded += 1
                 continue
             if not (yr[0] <= y <= yr[1]):
                 continue
             ev.append({"kind": "year", "term": f"{y} ({r.get('yearSource')})"})
-        matches.append((r, ev))
-    return matches, undated_excluded
+        (mention_matches if mentioned else matches).append((r, ev))
+    return matches, undated_excluded, mention_matches
 
 
 def group_copies(matches):
@@ -1069,90 +1226,192 @@ def media_item(r, ev, copies, redact):
     return {k: v for k, v in it.items() if v not in (None, [], {})}
 
 
+def kind_exclusions(D, a, redact, kept_ids):
+    """Stream types of records that match everything EXCEPT the kind filter —
+    so a count can say what it left out ("+12 audio-only files not counted")."""
+    if kind_of(a) == "any":
+        return {}
+    other, _, _ = filter_media(D, {**a, "kind": "any"}, redact)
+    return dict(collections.Counter(r.get("streamType") or "unknown" for r, _ in other if r["id"] not in kept_ids))
+
+
+def text_without_tag(D, a, redact, kept_ids):
+    """Records matching the other filters but not the tag/person filter. A
+    filename like 'AtHudsons-Thanksgiving-1984.mov' carries no tag; AND-ing a
+    tag with the text used to hide it (demo review gap 4)."""
+    if not ((a.get("tags") or a.get("people")) and (a.get("text") or a.get("years") or a.get("place"))):
+        return None
+    loose, _, _ = filter_media(D, a, redact, skip_tags=True)
+    extra = [(r, ev) for r, ev in loose if r["id"] not in kept_ids]
+    if not extra:
+        return None
+    words = [w for w in toks((a.get("tags") or "") + " " + (a.get("people") or ""))
+             if w not in {"family", "the", "and"} and len(w) >= 3]
+    words = [w[:-1] if w.endswith("s") and len(w) > 4 else w for w in words]
+    groups = group_copies(extra)
+
+    def has_words(r):
+        s = " ".join([r.get("filename") or "", r.get("path") or "", r.get("userNotes") or "",
+                      r.get("userPlace") or ""]).lower()
+        return bool(words) and all(w in s for w in words)
+
+    groups.sort(key=lambda g: (not has_words(g[0][0]), g[0][0].get("year") or 9999))
+    items = []
+    for g in groups[:TEXT_ONLY_ITEMS]:
+        it = media_item(g[0][0], g[0][1], [r for r, _ in g], redact)
+        it["tagWordsInFilenameOrPath"] = has_words(g[0][0])
+        items.append(it)
+    return {"count": len(groups), "withTagWordsInFilenameOrPath": sum(1 for g in groups if has_words(g[0][0])),
+            "items": items,
+            "note": "these match the other filters but carry no such tag/person tag; check filenames and paths "
+                    "(tagWordsInFilenameOrPath) before ruling them out. Not counted in matchCount."}
+
+
 def t_search_media(D, a, redact):
     if not any(a.get(k) for k in ("people", "tags", "text", "place", "years")):
         return fail("search_media", "badArgs", "give at least one of people= tags= text= place= years=")
     try:
-        matches, undated = filter_media(D, a, redact)
+        kind = kind_of(a)
+        want_mentions = truthy(a.get("include_mentions"), True) and bool(a.get("people"))
+        matches, undated, mentions = filter_media(D, a, redact, mentions=want_mentions)
     except ValueError as e:
         return fail("search_media", "badArgs", str(e))
     groups = group_copies(matches)
     groups.sort(key=lambda g: (g[0][0].get("year") or 9999, g[0][0].get("filename") or ""))
     limit = min(int(a.get("limit", MAX_ITEMS)), MAX_ITEMS)
     items = [media_item(g[0][0], g[0][1], [r for r, _ in g], redact) for g in groups[:limit]]
-    extra = {"matchCount": len(groups), "recordCount": len(matches),
-             "note": "matchCount counts distinct content (identical copies collapsed); recordCount counts every catalog record"}
+    kept = {r["id"] for r, _ in matches}
+    extra = {"matchCount": len(groups), "recordCount": len(matches), "kindCounted": kind,
+             "countBasis": f"matchCount = distinct {KINDS[kind]} (identical copies collapsed); "
+                           "recordCount counts every catalog record incl. copies"}
     if undated:
         extra["undatedExcluded"] = undated
-    return result("search_media", a, items, truncated=len(groups) > limit, extra=extra)
+    excl = kind_exclusions(D, a, redact, kept)
+    if excl:
+        extra["notCountedByKind"] = excl
+    if mentions:
+        mg = group_copies(mentions)
+        mg.sort(key=lambda g: (g[0][0].get("year") or 9999, g[0][0].get("filename") or ""))
+        extra["mentionCount"] = len(mg)
+        extra["mentions"] = [media_item(g[0][0], g[0][1], [r for r, _ in g], redact) for g in mg[:MENTION_ITEMS]]
+        extra["mentionNote"] = MENTION_NOTE
+    tw = text_without_tag(D, a, redact, kept)
+    if tw:
+        extra["textMatchesWithoutTag"] = tw
+    ids = [i["id"] for i in items] + [x for i in items for x in i.get("copyIDs", [])]
+    ids += [i["id"] for i in extra.get("mentions", [])]
+    ids += [i["id"] for i in (tw or {}).get("items", [])]
+    return result("search_media", a, items, truncated=len(groups) > limit, extra=extra, ids=ids)
+
+
+def tree_scope(D, a):
+    """(pool {pid: generations}, description); pool None = whole tree.
+
+    born_in= with no scope defaults to the owner's and spouse's ancestors:
+    "who in the family was born in Ireland" means the family, not 39k
+    medieval records (demo review gap 5). scope=all asks for the whole tree."""
+    scope = (a.get("scope") or "").strip()
+    if not scope and a.get("born_in") and not a.get("surname"):
+        scope = "family"
+    gens = min(int(a.get("generations") or (12 if scope == "family" else 6)), 25)
+    if not scope or scope == "all":
+        return None, "the whole family tree"
+    if scope == "family":
+        roots = ([D.owner] + [x for x, _ in D.spouses(D.owner)]) if D.owner else []
+        pool = {}
+        for root in roots:
+            for k, v in ancestors(D, root, gens).items():
+                if k not in roots and (k not in pool or v[0] < pool[k]):
+                    pool[k] = v[0]
+        names = " and ".join(D.name(r) for r in roots)
+        return pool, f"the ancestors of {names} (up to {gens} generations)"
+    m = re.match(r"^(ancestors|descendants):(.+)$", scope)
+    if not m:
+        raise ValueError("scope=family | all | ancestors:<id> | descendants:<id>")
+    tid = next((x.split(":", 1)[1] for x in D.same_as(m.group(2)) if x.startswith("gedcom:")), None)
+    if not tid:
+        raise ValueError(f"{m.group(2)} has no family-tree record")
+    if m.group(1) == "ancestors":
+        return ({k: v[0] for k, v in ancestors(D, tid, gens).items() if k != tid},
+                f"the ancestors of {D.name(tid)} (up to {gens} generations)")
+    pool, frontier = {}, [tid]
+    for d in range(1, gens + 1):
+        nxt = []
+        for x in frontier:
+            for c in D.children(x):
+                if c not in pool:
+                    pool[c] = d
+                    nxt.append(c)
+        frontier = nxt
+    return pool, f"the descendants of {D.name(tid)} (up to {gens} generations)"
+
+
+def tree_stats(D, a):
+    D.tree
+    sn = norm(a.get("surname")) if a.get("surname") else None
+    born_in = (a.get("born_in") or "").lower() or None
+    try:
+        pool, scope_text = tree_scope(D, a)
+    except ValueError as e:
+        return fail("catalog_stats", "badArgs", str(e))
+    primary, anyname, rows = 0, 0, []
+    for pid, p in D.P.items():
+        if pool is not None and pid not in pool:
+            continue
+        if sn:
+            sns = [norm(n["surname"]) for n in p["names"]]
+            if not sns or sn not in sns:
+                continue
+            anyname += 1
+            if sns[0] != sn:
+                continue
+        if born_in and born_in not in ((p.get("birth") or {}).get("place") or "").lower():
+            continue
+        primary += 1
+        rows.append(pid)
+
+    def birth_year(x):
+        return (D.tp(x).get("birth") or {}).get("year")
+
+    if pool is not None:
+        rows.sort(key=lambda x: (pool[x], birth_year(x) or 9999))   # closest generations first
+    else:
+        rows.sort(key=lambda x: birth_year(x) or 9999)
+    by = [y for y in (birth_year(x) for x in rows) if y]
+    items = [D.brief(x, birthPlace=(D.tp(x).get("birth") or {}).get("place"),
+                     **({"generationsFromScope": pool[x]} if pool else {})) for x in rows[:MAX_ITEMS]]
+    extra = {"count": primary, "countBasis": "people whose PRIMARY name matches"
+             + (" the surname" if sn else "") + (" and whose birth place contains the text" if born_in else "")
+             + f", within {scope_text}", "scope": scope_text}
+    if pool is not None and a.get("born_in") and not a.get("scope"):
+        extra["scopeNote"] = "born_in defaults to the family's own ancestors; pass scope=all for the whole tree"
+    if sn:
+        extra["countIncludingAlternateNames"] = anyname
+    if by:
+        extra["birthYearSpan"] = [min(by), max(by)]
+    extra["familyTreeSize"] = len(D.P)
+    if len(rows) > MAX_ITEMS:
+        sur = collections.Counter(((D.tp(x)["names"] or [{}])[0].get("surname") or "?") for x in rows)
+        extra["truncationSummary"] = {
+            "shown": MAX_ITEMS, "of": len(rows),
+            "order": "closest generations first" if pool is not None else "earliest birth first",
+            "bySurname": dict(sur.most_common(12)),
+            "byCentury": dict(sorted(collections.Counter(f"{y // 100 * 100}s" for y in by).items())),
+            "hint": "narrow with surname=, scope= or generations= rather than guessing about the rest"}
+    return result("catalog_stats", a, items, truncated=len(rows) > MAX_ITEMS, extra=extra)
 
 
 def t_catalog_stats(D, a, redact):
     # ---- family-tree counts
     if a.get("surname") or a.get("born_in") or a.get("scope"):
-        D.tree
-        sn = norm(a.get("surname")) if a.get("surname") else None
-        born_in = (a.get("born_in") or "").lower() or None
-        pool = None
-        if a.get("scope"):
-            m = re.match(r"^(ancestors|descendants):(.+)$", a["scope"])
-            if not m:
-                return fail("catalog_stats", "badArgs", "scope=ancestors:<id> or descendants:<id>")
-            tid = next((x.split(":", 1)[1] for x in D.same_as(m.group(2)) if x.startswith("gedcom:")), None)
-            if not tid:
-                return fail("catalog_stats", "badArgs", f"{m.group(2)} has no family-tree record")
-            gens = min(int(a.get("generations", 6)), 25)
-            if m.group(1) == "ancestors":
-                pool = {k: v[0] for k, v in ancestors(D, tid, gens).items() if k != tid}
-            else:
-                pool, frontier = {}, [tid]
-                for d in range(1, gens + 1):
-                    nxt = []
-                    for x in frontier:
-                        for c in D.children(x):
-                            if c not in pool:
-                                pool[c] = d
-                                nxt.append(c)
-                    frontier = nxt
-        primary, anyname, rows = 0, 0, []
-        for pid, p in D.P.items():
-            if pool is not None and pid not in pool:
-                continue
-            if sn:
-                sns = [norm(n["surname"]) for n in p["names"]]
-                if not sns or sn not in sns:
-                    continue
-                anyname += 1
-                if sns[0] != sn:
-                    continue
-            if born_in and born_in not in ((p.get("birth") or {}).get("place") or "").lower():
-                continue
-            primary += 1
-            rows.append(pid)
-        rows.sort(key=lambda x: ((D.tp(x).get("birth") or {}).get("year") or 9999))
-        by = [(D.tp(x).get("birth") or {}).get("year") for x in rows]
-        by = [y for y in by if y]
-        items = [D.brief(x, birthPlace=(D.tp(x).get("birth") or {}).get("place"),
-                         **({"generationsFromScope": pool[x]} if pool else {})) for x in rows[:MAX_ITEMS]]
-        extra = {"count": primary, "countBasis": "people whose PRIMARY name matches"
-                 + (" the surname" if sn else "") + (" and whose birth place contains the text" if born_in else "")
-                 + (" within the scope" if pool is not None else "")}
-        if sn:
-            extra["countIncludingAlternateNames"] = anyname
-        if by:
-            extra["birthYearSpan"] = [min(by), max(by)]
-        extra["familyTreeSize"] = len(D.P)
-        return result("catalog_stats", a, items, truncated=len(rows) > MAX_ITEMS, extra=extra)
+        return tree_stats(D, a)
 
-    # ---- catalog counts
-    filtered = any(a.get(k) for k in ("people", "tags", "text", "place", "years", "kind"))
-    if filtered:
-        try:
-            matches, undated = filter_media(D, a, redact)
-        except ValueError as e:
-            return fail("catalog_stats", "badArgs", str(e))
-    else:
-        matches, undated = [(r, []) for r in D.catalog["records"]], 0
+    # ---- catalog counts (kind defaults to video)
+    try:
+        kind = kind_of(a)
+        matches, undated, _ = filter_media(D, a, redact)
+    except ValueError as e:
+        return fail("catalog_stats", "badArgs", str(e))
     groups = group_copies(matches)
 
     def summarize(gs):
@@ -1163,16 +1422,21 @@ def t_catalog_stats(D, a, redact):
                 "distinctHours": round(uniq_secs / 3600, 2), "allCopiesHours": round(all_secs / 3600, 2)}
 
     group_by = (a.get("group_by") or "").lower()
-    extra = {"totals": summarize(groups),
-             "note": "distinct = identical copies (same content hash) collapsed; extraCopies = records beyond the first copy"}
+    kept = {r["id"] for r, _ in matches}
+    extra = {"totals": summarize(groups), "kindCounted": kind,
+             "countBasis": f"counted: {KINDS[kind]}. distinct = identical copies (same content hash) collapsed; "
+                           "extraCopies = records beyond the first copy",
+             "byStreamType": dict(collections.Counter(r.get("streamType") for r, _ in matches))}
     if undated:
         extra["undatedExcluded"] = undated
-    if not filtered:
+    excl = kind_exclusions(D, a, redact, kept)
+    if excl:
+        extra["notCountedByKind"] = excl
+    if not any(a.get(k) for k in ("people", "tags", "text", "place", "years")):
         cnt = collections.Counter
-        recs = D.catalog["records"]
-        extra["byStreamType"] = dict(cnt(r.get("streamType") for r in recs))
-        extra["byStage"] = dict(cnt(r.get("lifecycleStage") for r in recs))
-        extra["undatedRecords"] = sum(1 for r in recs if not r.get("year"))
+        extra["catalogWideByStreamType"] = dict(cnt(r.get("streamType") for r in D.catalog["records"]))
+        extra["byStage"] = dict(cnt(r.get("lifecycleStage") for r, _ in matches))
+        extra["undatedRecords"] = sum(1 for r, _ in matches if not r.get("year"))
     items = []
     if group_by:
         keyf = {
@@ -1206,6 +1470,112 @@ TOOLS = {
     "search_media": ("text", t_search_media),
     "catalog_stats": (None, t_catalog_stats),
 }
+
+# One declaration of every tool's arguments. The E1 harness generates its
+# JSON Schemas from this (scripts/hallie_e1/schemas.py); the CLI above still
+# takes the same names as key=value words. Every value may be given as a
+# string; integers and booleans are also accepted.
+_ID = "an id copied from a tool result (gedcom:@I12@, people:<uuid>, brain:<id>, family:<uuid>)"
+_MEDIA_FILTERS = {
+    "people": {"type": "string", "description": "person names or ids; comma = AND. Matches person TAGS; "
+               "untagged spoken mentions come back separately under `mentions`."},
+    "tags": {"type": "string", "description": "curated tags or person/family tags; comma = AND (e.g. 'Smith Family')"},
+    "text": {"type": "string", "description": "words that must ALL appear (in=fields); quote a phrase"},
+    "in": {"type": "string", "description": "comma list of fields for text: filename,path,notes,place,transcript,captions (default all)"},
+    "place": {"type": "string", "description": "place text"},
+    "years": {"type": "string", "description": "1984 | 1980s | 1980-1989"},
+    "kind": {"type": "string", "enum": ["video", "audio", "any"],
+             "description": "default video: audio-only files are NOT videos and are not counted unless asked"},
+    "people_basis": {"type": "string", "enum": ["confirmed", "detected", "any"],
+                     "description": "which person tags count (default detected = confirmed + face-detected)"},
+}
+TOOL_SPECS = {
+    "resolve_person": {
+        "description": "Find who a name, nickname or kin word means. Kin words (dad, Ma, nana, maternal grandmother, "
+                       "my sister) are relative to the archive owner. Returns candidates with kinds (owner, kinTerm, "
+                       "profile, brain, tree, treeFirstName, mention) and reasons; several candidates = ambiguous, ask "
+                       "which one. `mention` is a name inside a note, not a person record. Notes say when the word "
+                       "is also a media tag or a surname.",
+        "args": {"name": {"type": "string", "description": "the name or kin phrase exactly as the asker wrote it"}},
+        "required": ["name"]},
+    "person_facts": {
+        "description": "Everything recorded about one person: family-tree record (names, birth/death with qualifier "
+                       "and range, parents, spouses + marriage, children), People-tab profile (aliases, dates, "
+                       "notes, kinship rows) and the told CyberBrain items with their text.",
+        "args": {"id": {"type": "string", "description": _ID}},
+        "required": ["id"]},
+    "relatives": {
+        "description": "Relatives of one person from the family tree and People-tab kinship rows, each with path "
+                       "and source. side= limits parents/grandparents/aunts-uncles to one side.",
+        "args": {"id": {"type": "string", "description": _ID},
+                 "relation": {"type": "string", "enum": ["parents", "siblings", "spouses", "children", "grandparents",
+                                                         "greatgrandparents", "grandchildren", "all"]},
+                 "side": {"type": "string", "enum": ["maternal", "paternal"]}},
+        "required": ["id", "relation"]},
+    "relationship_between": {
+        "description": "How person b is related to person a (blood, or one marriage hop), with common ancestors "
+                       "and path ids; noPathWithinLimit when none.",
+        "args": {"a": {"type": "string", "description": _ID}, "b": {"type": "string", "description": _ID},
+                 "max_generations": {"type": "integer", "description": "default 16, at most 25"}},
+        "required": ["a", "b"]},
+    "family_knowledge": {
+        "description": "Told text: CyberBrain items (biography, notes, events) and People-tab notes, with "
+                       "confidence and source. Filter by person id and/or words.",
+        "args": {"id": {"type": "string", "description": _ID},
+                 "query": {"type": "string", "description": "words to look for"},
+                 "limit": {"type": "integer", "description": "default 12, at most 25"}},
+        "required": []},
+    "search_media": {
+        "description": "Find catalog media files. matchCount = distinct content (identical copies collapsed); "
+                       "every result says what it counted (kindCounted, countBasis, notCountedByKind). Untagged "
+                       "transcript mentions of a person come back separately as `mentions`; files that match the "
+                       "text but not a tag come back as `textMatchesWithoutTag`.",
+        "args": {**_MEDIA_FILTERS,
+                 "include_mentions": {"type": "boolean", "description": "default true: also list spoken/caption mentions of people= (labelled, not counted)"},
+                 "limit": {"type": "integer", "description": "default and max 25"}},
+        "required": []},
+    "catalog_stats": {
+        "description": "Counts. Catalog mode (default kind=video): totals {distinctContent, records, extraCopies, "
+                       "distinctHours, allCopiesHours}, byStreamType, notCountedByKind, optional group_by rows. "
+                       "Family-tree mode (surname= / born_in= / scope=): count by primary name, "
+                       "countIncludingAlternateNames, birthYearSpan; born_in defaults to the owner's and spouse's "
+                       "ancestors (scope=all for the whole tree).",
+        "args": {**_MEDIA_FILTERS,
+                 "group_by": {"type": "string", "enum": ["decade", "year", "volume", "stream", "person"]},
+                 "surname": {"type": "string"}, "born_in": {"type": "string", "description": "birth-place text"},
+                 "scope": {"type": "string", "description": "family | all | ancestors:<id> | descendants:<id>"},
+                 "generations": {"type": "integer", "description": "scope depth (default 12 for family, 6 otherwise)"}},
+        "required": []},
+}
+assert set(TOOL_SPECS) == set(TOOLS)
+
+
+def call_tool(D, name, args):
+    """Run one tool by name over a loaded Data. Never raises: an unknown tool
+    or a bad argument comes back as ok:false so the caller can hand it to the
+    model as an error result."""
+    if name not in TOOLS:
+        return fail(name, "unknownTool", f"tools: {', '.join(TOOLS)}")
+    spec = TOOL_SPECS[name]
+    if not isinstance(args, dict):
+        return fail(name, "badArgs", "arguments must be an object")
+    unknown = [k for k in args if k not in spec["args"]]
+    if unknown:
+        return fail(name, "badArgs", f"unknown argument(s) {unknown}; takes {sorted(spec['args'])}")
+    clean = {}
+    for k, v in args.items():
+        if v is None:
+            continue
+        clean[k] = v if isinstance(v, bool) else str(v)
+    missing = [k for k in spec["required"] if not clean.get(k)]
+    if missing:
+        return fail(name, "badArgs", f"missing {missing}")
+    try:
+        return TOOLS[name][1](D, clean, D.redact)
+    except FileNotFoundError as e:
+        return fail(name, "noSnapshot", str(e))
+    except (ValueError, KeyError, TypeError) as e:
+        return fail(name, "badArgs", f"{type(e).__name__}: {e}")
 
 
 def run(argv, snapshots=None, redact=False):

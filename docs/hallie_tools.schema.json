@@ -1,0 +1,389 @@
+{
+ "version": 1,
+ "generatedBy": "scripts/hallie_e1/cli.py schema",
+ "note": "Hallie agent-lane tool schemas (E1). Generated from scripts/hallie_demo/tools.py TOOL_SPECS; the Swift phase-0 catalog is diffed against this file.",
+ "tools": [
+  {
+   "name": "resolve_person",
+   "description": "Find who a name, nickname or kin word means. Kin words (dad, Ma, nana, maternal grandmother, my sister) are relative to the archive owner. Returns candidates with kinds (owner, kinTerm, profile, brain, tree, treeFirstName, mention) and reasons; several candidates = ambiguous, ask which one. `mention` is a name inside a note, not a person record. Notes say when the word is also a media tag or a surname.",
+   "strict": true,
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "name": {
+      "type": "string",
+      "description": "the name or kin phrase exactly as the asker wrote it"
+     }
+    },
+    "required": [
+     "name"
+    ]
+   }
+  },
+  {
+   "name": "person_facts",
+   "description": "Everything recorded about one person: family-tree record (names, birth/death with qualifier and range, parents, spouses + marriage, children), People-tab profile (aliases, dates, notes, kinship rows) and the told CyberBrain items with their text.",
+   "strict": true,
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "an id copied from a tool result (gedcom:@I12@, people:<uuid>, brain:<id>, family:<uuid>)"
+     }
+    },
+    "required": [
+     "id"
+    ]
+   }
+  },
+  {
+   "name": "relatives",
+   "description": "Relatives of one person from the family tree and People-tab kinship rows, each with path and source. side= limits parents/grandparents/aunts-uncles to one side.",
+   "strict": true,
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "an id copied from a tool result (gedcom:@I12@, people:<uuid>, brain:<id>, family:<uuid>)"
+     },
+     "relation": {
+      "type": "string",
+      "enum": [
+       "parents",
+       "siblings",
+       "spouses",
+       "children",
+       "grandparents",
+       "greatgrandparents",
+       "grandchildren",
+       "all"
+      ]
+     },
+     "side": {
+      "type": "string",
+      "enum": [
+       "maternal",
+       "paternal"
+      ]
+     }
+    },
+    "required": [
+     "id",
+     "relation"
+    ]
+   }
+  },
+  {
+   "name": "relationship_between",
+   "description": "How person b is related to person a (blood, or one marriage hop), with common ancestors and path ids; noPathWithinLimit when none.",
+   "strict": true,
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "a": {
+      "type": "string",
+      "description": "an id copied from a tool result (gedcom:@I12@, people:<uuid>, brain:<id>, family:<uuid>)"
+     },
+     "b": {
+      "type": "string",
+      "description": "an id copied from a tool result (gedcom:@I12@, people:<uuid>, brain:<id>, family:<uuid>)"
+     },
+     "max_generations": {
+      "type": "integer",
+      "description": "default 16, at most 25"
+     }
+    },
+    "required": [
+     "a",
+     "b"
+    ]
+   }
+  },
+  {
+   "name": "family_knowledge",
+   "description": "Told text: CyberBrain items (biography, notes, events) and People-tab notes, with confidence and source. Filter by person id and/or words.",
+   "strict": true,
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "id": {
+      "type": "string",
+      "description": "an id copied from a tool result (gedcom:@I12@, people:<uuid>, brain:<id>, family:<uuid>)"
+     },
+     "query": {
+      "type": "string",
+      "description": "words to look for"
+     },
+     "limit": {
+      "type": "integer",
+      "description": "default 12, at most 25"
+     }
+    },
+    "required": []
+   }
+  },
+  {
+   "name": "search_media",
+   "description": "Find catalog media files. matchCount = distinct content (identical copies collapsed); every result says what it counted (kindCounted, countBasis, notCountedByKind). Untagged transcript mentions of a person come back separately as `mentions`; files that match the text but not a tag come back as `textMatchesWithoutTag`.",
+   "strict": true,
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "people": {
+      "type": "string",
+      "description": "person names or ids; comma = AND. Matches person TAGS; untagged spoken mentions come back separately under `mentions`."
+     },
+     "tags": {
+      "type": "string",
+      "description": "curated tags or person/family tags; comma = AND (e.g. 'Smith Family')"
+     },
+     "text": {
+      "type": "string",
+      "description": "words that must ALL appear (in=fields); quote a phrase"
+     },
+     "in": {
+      "type": "string",
+      "description": "comma list of fields for text: filename,path,notes,place,transcript,captions (default all)"
+     },
+     "place": {
+      "type": "string",
+      "description": "place text"
+     },
+     "years": {
+      "type": "string",
+      "description": "1984 | 1980s | 1980-1989"
+     },
+     "kind": {
+      "type": "string",
+      "description": "default video: audio-only files are NOT videos and are not counted unless asked",
+      "enum": [
+       "video",
+       "audio",
+       "any"
+      ]
+     },
+     "people_basis": {
+      "type": "string",
+      "description": "which person tags count (default detected = confirmed + face-detected)",
+      "enum": [
+       "confirmed",
+       "detected",
+       "any"
+      ]
+     },
+     "include_mentions": {
+      "type": "boolean",
+      "description": "default true: also list spoken/caption mentions of people= (labelled, not counted)"
+     },
+     "limit": {
+      "type": "integer",
+      "description": "default and max 25"
+     }
+    },
+    "required": []
+   }
+  },
+  {
+   "name": "catalog_stats",
+   "description": "Counts. Catalog mode (default kind=video): totals {distinctContent, records, extraCopies, distinctHours, allCopiesHours}, byStreamType, notCountedByKind, optional group_by rows. Family-tree mode (surname= / born_in= / scope=): count by primary name, countIncludingAlternateNames, birthYearSpan; born_in defaults to the owner's and spouse's ancestors (scope=all for the whole tree).",
+   "strict": true,
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+     "people": {
+      "type": "string",
+      "description": "person names or ids; comma = AND. Matches person TAGS; untagged spoken mentions come back separately under `mentions`."
+     },
+     "tags": {
+      "type": "string",
+      "description": "curated tags or person/family tags; comma = AND (e.g. 'Smith Family')"
+     },
+     "text": {
+      "type": "string",
+      "description": "words that must ALL appear (in=fields); quote a phrase"
+     },
+     "in": {
+      "type": "string",
+      "description": "comma list of fields for text: filename,path,notes,place,transcript,captions (default all)"
+     },
+     "place": {
+      "type": "string",
+      "description": "place text"
+     },
+     "years": {
+      "type": "string",
+      "description": "1984 | 1980s | 1980-1989"
+     },
+     "kind": {
+      "type": "string",
+      "description": "default video: audio-only files are NOT videos and are not counted unless asked",
+      "enum": [
+       "video",
+       "audio",
+       "any"
+      ]
+     },
+     "people_basis": {
+      "type": "string",
+      "description": "which person tags count (default detected = confirmed + face-detected)",
+      "enum": [
+       "confirmed",
+       "detected",
+       "any"
+      ]
+     },
+     "group_by": {
+      "type": "string",
+      "enum": [
+       "decade",
+       "year",
+       "volume",
+       "stream",
+       "person"
+      ]
+     },
+     "surname": {
+      "type": "string"
+     },
+     "born_in": {
+      "type": "string",
+      "description": "birth-place text"
+     },
+     "scope": {
+      "type": "string",
+      "description": "family | all | ancestors:<id> | descendants:<id>"
+     },
+     "generations": {
+      "type": "integer",
+      "description": "scope depth (default 12 for family, 6 otherwise)"
+     }
+    },
+    "required": []
+   }
+  },
+  {
+   "name": "submit_answer",
+   "description": "End the turn. Every answer — including a decline or a which-one question — is given by calling this exactly once. Cite every fact as a claim whose `cites` are ids returned by a tool in THIS turn, and mark it in prose as [c1], [c2].",
+   "strict": true,
+   "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "questionReading",
+     "subjectIDs",
+     "unresolved",
+     "claims",
+     "prose",
+     "outcome"
+    ],
+    "properties": {
+     "questionReading": {
+      "type": "string",
+      "description": "One sentence: what you understood the asker to want."
+     },
+     "subjectIDs": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "ids from THIS turn's tool results that the answer is about"
+     },
+     "unresolved": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "names the asker used that no tool resolved"
+     },
+     "outcome": {
+      "type": "string",
+      "enum": [
+       "answered",
+       "declined",
+       "needsClarification"
+      ]
+     },
+     "declineReason": {
+      "type": "string",
+      "enum": [
+       "notInTree",
+       "ambiguous",
+       "noMedia",
+       "noKnowledge",
+       "outOfScope",
+       "none"
+      ]
+     },
+     "claims": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "id",
+        "kind",
+        "cites",
+        "value"
+       ],
+       "properties": {
+        "id": {
+         "type": "string",
+         "description": "c1, c2, …"
+        },
+        "kind": {
+         "type": "string",
+         "enum": [
+          "birthDate",
+          "deathDate",
+          "eventPlace",
+          "relationship",
+          "familyItem",
+          "mediaFor",
+          "catalogCount",
+          "mediumFeasibility",
+          "worldFact",
+          "inference"
+         ]
+        },
+        "cites": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        },
+        "value": {
+         "type": "string"
+        }
+       }
+      }
+     },
+     "prose": {
+      "type": "string",
+      "description": "Hallie's wording. Cite claims as [c1], [c2]. A sentence with a name, date, number or place and no citation will be removed."
+     },
+     "offers": {
+      "type": "array",
+      "items": {
+       "type": "string",
+       "enum": [
+        "openFamilyTree",
+        "showPhotos",
+        "playMedia",
+        "narrow"
+       ]
+      }
+     }
+    }
+   }
+  }
+ ]
+}

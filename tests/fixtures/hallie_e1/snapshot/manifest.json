@@ -1,0 +1,16 @@
+{
+ "canaries": [
+  "CANARY-TRANSCRIPT-7f3a",
+  "CANARY-CAPTION-91be",
+  "PRIVATE-CANARY-55c1"
+ ],
+ "counts": {
+  "brainItems": 10,
+  "profiles": 6,
+  "recordsKept": 40,
+  "treePeople": 23
+ },
+ "createdAt": "synthetic",
+ "repo_relative": true,
+ "synthetic": true
+}
