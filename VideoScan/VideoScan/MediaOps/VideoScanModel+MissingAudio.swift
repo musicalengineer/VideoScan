@@ -138,12 +138,15 @@ extension VideoScanModel {
                         ?? record(forPath: candidate.path) {
             let priorReason = existing.setAsideReason
             let priorPurged = existing.purgedAt
+            // Restore can also move a Trashed row back to Cataloged (B4).
+            let priorStage = existing.lifecycleStage
             if existing.isPurged { _ = restoreRecord(id: existing.id) }
             if existing.isSetAside { _ = restoreSetAsideRecords(ids: [existing.id]) }
             audio = existing
             undo = {
                 existing.setAsideReason = priorReason
                 existing.purgedAt = priorPurged
+                existing.lifecycleStage = priorStage
             }
         } else {
             let probed = await probeFile(url: URL(fileURLWithPath: candidate.path))

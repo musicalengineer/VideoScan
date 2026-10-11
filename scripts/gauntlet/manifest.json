@@ -17433,6 +17433,7 @@
         "neverOutsideRoots",
         "omfiTapeName",
         "pairAtomicOnDecline",
+        "pairAtomicOnDeclineKeepsTrashedStage",
         "pairGuards",
         "pairIngestsAndCorrelates",
         "pairRefusesVideoPlusAudio",
@@ -23960,6 +23961,7 @@
         "oneFailureDoesNotStopTheBatchAndOnlyTheMovedFileIsStamped",
         "restoreKeepsALiveStageItAlreadyHad",
         "restoreRecordClearsTheTrashedStage",
+        "restoringATrashedRowWhoseFileIsNotOnDiskDoesNotClaimItIsCataloged",
         "undoLastPurgeClearsTheTrashedStage"
       ]
     },
@@ -29505,7 +29507,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 31,
+      "expected_floor": 32,
       "name": "regression",
       "selectors": [
         "VideoScanTests/AdvRollCallUndatedLivingParentTests",

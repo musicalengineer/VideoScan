@@ -112,13 +112,19 @@ extension VideoScanModel {
     }
 
     /// A restored row is LIVE again (B4, 2026-10-11): `purgedAt` cleared,
-    /// and a post-delete stage (Trashed / Deleted) back to `.cataloged`.
-    /// Any other stage (Archived, Workbench, …) is one the purge never
-    /// changed, so it is kept.
+    /// and a post-delete stage (Trashed / Deleted) back to `.cataloged` —
+    /// but ONLY when the file is back at `fullPath` (Manager ruling, QA on
+    /// 3e8e14dbd). A file still in the Trash, or gone, keeps its stage so
+    /// the row never claims to be live media, and one line says what to
+    /// do. Any other stage (Archived, Workbench, …) is one the purge never
+    /// changed, so it is kept. One stat, and only for a post-delete stage.
     private func returnToLive(_ rec: VideoRecord) {
         rec.purgedAt = nil
-        if rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently {
+        guard rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently else { return }
+        if !rec.fullPath.isEmpty, FileManager.default.fileExists(atPath: rec.fullPath) {
             rec.lifecycleStage = .cataloged
+        } else {
+            log("\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live.")
         }
     }
 

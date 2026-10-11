@@ -748,6 +748,36 @@ struct MissingAudioSensorTests {
         #expect(model.records.count == 2)
     }
 
+    /// QA on 3e8e14dbd: Restore now returns a Trashed row to Cataloged when
+    /// its file is on disk, so a declined Pair must put the STAGE back too,
+    /// not only purgedAt. The audio file is real (a scratch file) so the
+    /// restore does reset the stage — this pins the undo, not the guard.
+    @Test("Pair is atomic: when Correlate declines, a Trashed audio row stays Trashed")
+    func pairAtomicOnDeclineKeepsTrashedStage() async throws {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs_pair_decline_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let model = VideoScanModel()
+        let video = rec("reunion_1994.mov", stream: .videoOnly, dir: "/Volumes/T/video", duration: 300)
+        let stranger = rec("test_stranger.wav", stream: .audioOnly, dir: dir.path, duration: 0)
+        FileManager.default.createFile(atPath: stranger.fullPath, contents: Data([1, 2, 3]))
+        let purgedAt = Date(timeIntervalSince1970: 1_700_000_000)
+        stranger.purgedAt = purgedAt
+        stranger.lifecycleStage = .trashed
+        model.records = [video, stranger]
+        let forced = MissingAudioFinder.Candidate(
+            id: UUID(), path: stranger.fullPath, tier: .hiddenCatalogRecords, score: 4,
+            reasons: ["stem"], durationSeconds: nil, durationDelta: nil,
+            catalogRecordID: stranger.id, catalogState: .purged,
+            correlateWillAccept: false)
+        let outcome = await model.pairMissingAudio(videoID: video.id, candidate: forced)
+        #expect(outcome == .correlateDeclined)
+        #expect(stranger.purgedAt == purgedAt)
+        #expect(stranger.lifecycleStage == .trashed, "a declined Pair left the purged row labelled \(stranger.lifecycleStage)")
+        #expect(video.pairedWith == nil && stranger.pairedWith == nil)
+    }
+
     @Test("Pair refuses when the video is already paired or read-only")
     func pairGuards() async {
         let model = VideoScanModel()

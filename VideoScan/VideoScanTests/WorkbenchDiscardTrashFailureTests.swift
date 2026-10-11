@@ -169,44 +169,68 @@ struct WorkbenchDiscardTrashFailureTests {
 @MainActor
 struct RestoreResetsTrashedStageTests {
 
-    private func purged(_ stage: LifecycleStage) -> VideoRecord {
+    /// A purged record in a fresh scratch dir; `onDisk` = its file is back
+    /// at fullPath (Put Back in Finder happened). The caller removes `dir`.
+    private func purged(_ stage: LifecycleStage, onDisk: Bool) throws -> (rec: VideoRecord, dir: URL) {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("vs_restore_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let r = VideoRecord()
         r.filename = "test_restore.mov"
-        r.fullPath = "/tmp/test_restore_\(UUID().uuidString).mov"
+        r.fullPath = dir.appendingPathComponent(r.filename).path
+        if onDisk { FileManager.default.createFile(atPath: r.fullPath, contents: Data([1, 2, 3])) }
         r.purgedAt = Date()
         r.lifecycleStage = stage
-        return r
+        return (r, dir)
     }
 
-    private func model(_ recs: [VideoRecord]) -> VideoScanModel {
+    private func model(_ recs: [VideoRecord], in dir: URL) -> VideoScanModel {
         let m = VideoScanModel()
-        m.catalogStore = CatalogStore(directory: URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("vs_restore_\(UUID().uuidString.prefix(8))", isDirectory: true))
+        m.catalogStore = CatalogStore(directory: dir.appendingPathComponent("catalog", isDirectory: true))
         m.records = recs
         return m
     }
 
-    @Test func restoreRecordClearsTheTrashedStage() {
-        let rec = purged(.trashed)
-        let m = model([rec])
+    @Test func restoreRecordClearsTheTrashedStage() throws {
+        let (rec, dir) = try purged(.trashed, onDisk: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let m = model([rec], in: dir)
         #expect(m.restoreRecord(id: rec.id))
         #expect(rec.purgedAt == nil)
         #expect(rec.lifecycleStage == .cataloged, "a restored row still reads \(rec.lifecycleStage)")
     }
 
-    @Test func undoLastPurgeClearsTheTrashedStage() {
-        let rec = purged(.trashed)
-        let m = model([rec])
+    @Test func undoLastPurgeClearsTheTrashedStage() throws {
+        let (rec, dir) = try purged(.trashed, onDisk: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let m = model([rec], in: dir)
         m.lastPurgedBatch = .init(ids: [rec.id], timestamp: rec.purgedAt ?? Date())
         #expect(m.undoLastPurge())
         #expect(rec.purgedAt == nil && rec.lifecycleStage == .cataloged)
     }
 
-    @Test func restoreKeepsALiveStageItAlreadyHad() {
-        let rec = purged(.archived)   // Remove from Catalog never touches the stage
-        let m = model([rec])
+    @Test func restoreKeepsALiveStageItAlreadyHad() throws {
+        let (rec, dir) = try purged(.archived, onDisk: true)   // Remove from Catalog never touches the stage
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let m = model([rec], in: dir)
         #expect(m.restoreRecord(id: rec.id))
         #expect(rec.lifecycleStage == .archived)
+    }
+
+    /// Manager ruling (QA on 3e8e14dbd): the file is still in the Trash (or
+    /// gone), so the row must not claim to be live media. It is un-purged as
+    /// before, keeps its Trashed stage, and one line says what to do.
+    @Test func restoringATrashedRowWhoseFileIsNotOnDiskDoesNotClaimItIsCataloged() async throws {
+        let (rec, dir) = try purged(.trashed, onDisk: false)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let m = model([rec], in: dir)
+        #expect(m.restoreRecord(id: rec.id))
+        #expect(rec.purgedAt == nil, "Restore still un-purges the row")
+        #expect(rec.lifecycleStage == .trashed, "a row whose file is not on disk was relabelled \(rec.lifecycleStage)")
+        try? await Task.sleep(nanoseconds: 400_000_000)   // console flush debounce
+        let log = m.dashboard.consoleLines.joined(separator: "\n")
+        #expect(log.contains("test_restore.mov is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."),
+                Comment(rawValue: log))
     }
 }
 
