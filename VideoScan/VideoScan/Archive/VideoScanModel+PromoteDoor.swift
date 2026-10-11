@@ -23,7 +23,13 @@ extension VideoScanModel {
     /// mounted gets the relink offer; the job reports the missing file on
     /// its own — then the Promote engine. Nothing here stamps a stage: a
     /// file is archived only when a verified copy is in the Master Archive.
+    /// A read-only viewer is refused first, before the looks-moved check
+    /// can raise a relink offer (QA round 1 m6).
     func requestPromote(records recs: [VideoRecord]) {
+        guard !isReadOnly else {
+            log("Promote refused — this Mac is a read-only viewer of the catalog.")
+            return
+        }
         for r in recs { noteMissingFileForUserAction(r) }
         requestPromote(recordIDs: recs.map(\.id))
     }

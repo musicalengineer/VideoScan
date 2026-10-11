@@ -23,6 +23,13 @@ import Testing
 struct PromoteLabelOnlySensorTests {
 
     /// path (relative to its source root) → literal `.archived` writers.
+    ///
+    /// Known carry, NOT a literal writer and so not counted here (QA round 1
+    /// m5, pre-existing, tracked as B5): RepairLifecycle copies the
+    /// original's stage onto its repair when `lifecycleStage.travelsWithFootage`
+    /// (`repair.lifecycleStage = original.lifecycleStage`,
+    /// MediaOps/VideoScanModel+RepairLifecycle.swift), so a repair of a row
+    /// carrying a legacy `.archived` stamp inherits it without an archive copy.
     static let allowlist: [String: Int] = [
         // The Promote engine's job completion: the verified archive copy's
         // record (registerPromotedCopy, registerOrphanPromotedCopy).

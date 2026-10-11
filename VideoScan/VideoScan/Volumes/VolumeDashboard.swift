@@ -188,8 +188,10 @@ enum VolumeDashboardCalculator {
                 starRating: r.starRating,
                 isPromotedCopy: r.derivationKind == ArchivePromotion.derivationKind,
                 fixityVerified: r.archiveFixity != nil,
-                // Promote stamps the SOURCE `.masterAssigned` and the copy
-                // `.archived`; the Triage "Archive" button sets `.archived`.
+                // Promote stamps the archive COPY `.archived` /
+                // `.masterAssigned`; older catalogs carry legacy `.archived`
+                // stamps. (Triage's "Archive" no longer stamps anything —
+                // it runs the Promote engine, tab-charter audit T2.)
                 isArchived: r.lifecycleStage == .archived
                     || r.archiveStage == .masterAssigned
                     || r.archiveStage == .archived,

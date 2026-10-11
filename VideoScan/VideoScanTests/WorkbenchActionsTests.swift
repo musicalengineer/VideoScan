@@ -106,11 +106,14 @@ struct WorkbenchActionsTests {
 
         let model = try makeModel(at: dir)
         model.isReadOnly = true
-        let rec = makeWorkbenchRecord("x.mov")
+        // On a mounted volume and missing — the looks-moved check would
+        // raise a relink notice; a viewer is refused BEFORE it (QA m6).
+        let rec = makeDiscardableRecord("x.mov", in: dir, create: false)
         model.records = [rec]
 
         model.promoteWorkbenchToArchive([rec])
         #expect(model.pendingPromoteRequest == nil && model.pendingPromoteWithoutMaster == nil)
+        #expect(model.looksMovedNotice == nil, "no relink offer on a viewer")
         #expect(rec.lifecycleStage == .workbench)
     }
 
