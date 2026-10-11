@@ -55,6 +55,88 @@ enum PersonEvaluationCLI {
             }
             return .legacy
         }
+
+        /// Assign one flag. `value` fetches (and consumes) the next argument,
+        /// throwing when there is none; flags that take no value never call it.
+        mutating func apply(_ flag: Flag, value: () throws -> String) throws {
+            switch flag {
+            case .personEval: break
+            case .engine: try setEngine(token: value())
+            case .pythonPath: pythonPath = try value()
+            case .recognitionScript: recognitionScript = try value()
+            case .person: person = try value()
+            case .references: references = try value()
+            case .video: video = try value()
+            case .threshold: threshold = try PersonEvaluationCLI.floatValue(value(), or: "invalid threshold")
+            case .frameStep: frameStep = try PersonEvaluationCLI.positiveInt(value(), or: "invalid frame step")
+            case .minFaceConfidence: minFaceConfidence = try PersonEvaluationCLI.floatValue(value(), or: "invalid face confidence")
+            case .largestFaceOnly: largestFaceOnly = true
+            case .facePresenceOnly: facePresenceOnly = true
+            // POI cycle 03 — aggregation A/B surface. Strict by design:
+            // duplicates, unknown modes, non-positive/non-integer floors,
+            // and inert flag combinations are all hard errors, so the run
+            // either executes exactly the requested rule or refuses.
+            case .aggregation: try setAggregationMode(value: value)
+            case .minHits: try setMinHits(value: value)
+            }
+        }
+
+        private mutating func setEngine(token: String) throws {
+            let raw = token.lowercased()
+            if raw == "dlib" {
+                // Legacy replay token — see `legacyDlib`. Matches what
+                // pre-#144 manifests emitted (displayName "dlib").
+                legacyDlib = true
+            } else if let match = RecognitionEngine.allCases.first(where: {
+                $0.displayName.lowercased() == raw || $0.title.lowercased() == raw
+            }) {
+                engine = match
+            } else {
+                throw CLIError("unknown engine: \(raw)")
+            }
+        }
+
+        /// The duplicate check comes BEFORE the value is read, so a bare
+        /// second `--aggregation` reports the duplicate, not a missing value.
+        private mutating func setAggregationMode(value: () throws -> String) throws {
+            guard aggregationMode == nil else { throw CLIError("duplicate --aggregation") }
+            let raw = try value().lowercased()
+            switch raw {
+            case "minimum-hits", "minimumhits": aggregationMode = .minimumHits
+            case "legacy", "legacy-any-hit", "legacyanyhit": aggregationMode = .legacyAnyHit
+            default: throw CLIError("unknown aggregation mode: \(raw)")
+            }
+        }
+
+        private mutating func setMinHits(value: () throws -> String) throws {
+            guard minHits == nil else { throw CLIError("duplicate --min-hits") }
+            let raw = try value()
+            minHits = try PersonEvaluationCLI.positiveInt(
+                raw, or: "invalid --min-hits: \(raw) (must be a positive integer)")
+        }
+
+        /// Required values first, then POI cycle 03 flag coherence
+        /// (order-independent, checked post-parse): the emitted config must
+        /// always be the effective config, so a flag that could not
+        /// influence this run is an error, not a no-op.
+        func validate() throws {
+            guard facePresenceOnly || !person.isEmpty else { throw CLIError("--person is required") }
+            guard facePresenceOnly || !references.isEmpty else { throw CLIError("--references is required") }
+            guard !video.isEmpty else { throw CLIError("--video is required") }
+            switch aggregationMode {
+            case .minimumHits:
+                guard minHits != nil else {
+                    throw CLIError("--aggregation minimum-hits requires --min-hits (no silent default)")
+                }
+                guard !facePresenceOnly else {
+                    throw CLIError("--aggregation minimum-hits conflicts with --face-presence-only (a presence-only run has no reference hits to count)")
+                }
+            case .legacyAnyHit, nil:
+                guard minHits == nil else {
+                    throw CLIError("--min-hits requires --aggregation minimum-hits")
+                }
+            }
+        }
     }
 
     struct SegmentOutput: Codable {
@@ -269,92 +351,58 @@ enum PersonEvaluationCLI {
         )
     }
 
+    /// The CLI's flag vocabulary. One place spells every flag, so an
+    /// unknown argument is simply one `Flag(rawValue:)` cannot name, and the
+    /// exhaustive switch in `Options.apply` cannot forget one.
+    enum Flag: String, CaseIterable {
+        case personEval = "--person-eval"
+        case engine = "--engine"
+        case pythonPath = "--python-path"
+        case recognitionScript = "--recognition-script"
+        case person = "--person"
+        case references = "--references"
+        case video = "--video"
+        case threshold = "--threshold"
+        case frameStep = "--frame-step"
+        case minFaceConfidence = "--min-face-confidence"
+        case largestFaceOnly = "--largest-face-only"
+        case facePresenceOnly = "--face-presence-only"
+        case aggregation = "--aggregation"
+        case minHits = "--min-hits"
+    }
+
+    /// One pass over the arguments, applying each flag as it is met (so the
+    /// FIRST malformed argument is the error reported, in argument order),
+    /// then the post-parse checks: required values, then flag coherence.
     static func parse(_ arguments: [String]) throws -> Options {
         var options = Options()
         var index = 0
-        func value(after flag: String) throws -> String {
-            guard index + 1 < arguments.count else { throw CLIError("missing value after \(flag)") }
-            index += 1
-            return arguments[index]
-        }
         while index < arguments.count {
             let argument = arguments[index]
-            switch argument {
-            case "--person-eval": break
-            case "--engine":
-                let raw = try value(after: argument).lowercased()
-                if raw == "dlib" {
-                    // Legacy replay token — see Options.legacyDlib. Matches
-                    // what pre-#144 manifests emitted (displayName "dlib").
-                    options.legacyDlib = true
-                } else if let engine = RecognitionEngine.allCases.first(where: {
-                    $0.displayName.lowercased() == raw || $0.title.lowercased() == raw
-                }) {
-                    options.engine = engine
-                } else {
-                    throw CLIError("unknown engine: \(raw)")
-                }
-            case "--python-path": options.pythonPath = try value(after: argument)
-            case "--recognition-script": options.recognitionScript = try value(after: argument)
-            case "--person": options.person = try value(after: argument)
-            case "--references": options.references = try value(after: argument)
-            case "--video": options.video = try value(after: argument)
-            case "--threshold":
-                guard let number = Float(try value(after: argument)) else { throw CLIError("invalid threshold") }
-                options.threshold = number
-            case "--frame-step":
-                guard let number = Int(try value(after: argument)), number > 0 else { throw CLIError("invalid frame step") }
-                options.frameStep = number
-            case "--min-face-confidence":
-                guard let number = Float(try value(after: argument)) else { throw CLIError("invalid face confidence") }
-                options.minFaceConfidence = number
-            case "--largest-face-only": options.largestFaceOnly = true
-            case "--face-presence-only": options.facePresenceOnly = true
-            // POI cycle 03 — aggregation A/B surface. Strict by design:
-            // duplicates, unknown modes, non-positive/non-integer floors,
-            // and inert flag combinations are all hard errors, so the run
-            // either executes exactly the requested rule or refuses.
-            case "--aggregation":
-                guard options.aggregationMode == nil else { throw CLIError("duplicate --aggregation") }
-                let raw = try value(after: argument).lowercased()
-                switch raw {
-                case "minimum-hits", "minimumhits": options.aggregationMode = .minimumHits
-                case "legacy", "legacy-any-hit", "legacyanyhit": options.aggregationMode = .legacyAnyHit
-                default: throw CLIError("unknown aggregation mode: \(raw)")
-                }
-            case "--min-hits":
-                guard options.minHits == nil else { throw CLIError("duplicate --min-hits") }
-                let raw = try value(after: argument)
-                // Int() rejects floats, NaN, hex, empty, and overflow — every
-                // malformed spelling fails here rather than defaulting.
-                guard let number = Int(raw), number > 0 else {
-                    throw CLIError("invalid --min-hits: \(raw) (must be a positive integer)")
-                }
-                options.minHits = number
-            default: throw CLIError("unknown argument: \(argument)")
+            guard let flag = Flag(rawValue: argument) else { throw CLIError("unknown argument: \(argument)") }
+            try options.apply(flag) {
+                guard index + 1 < arguments.count else { throw CLIError("missing value after \(argument)") }
+                index += 1
+                return arguments[index]
             }
             index += 1
         }
-        guard options.facePresenceOnly || !options.person.isEmpty else { throw CLIError("--person is required") }
-        guard options.facePresenceOnly || !options.references.isEmpty else { throw CLIError("--references is required") }
-        guard !options.video.isEmpty else { throw CLIError("--video is required") }
-        // POI cycle 03 flag coherence (order-independent, checked post-parse):
-        // the emitted config must always be the effective config, so a flag
-        // that could not influence this run is an error, not a no-op.
-        switch options.aggregationMode {
-        case .minimumHits:
-            guard options.minHits != nil else {
-                throw CLIError("--aggregation minimum-hits requires --min-hits (no silent default)")
-            }
-            guard !options.facePresenceOnly else {
-                throw CLIError("--aggregation minimum-hits conflicts with --face-presence-only (a presence-only run has no reference hits to count)")
-            }
-        case .legacyAnyHit, nil:
-            guard options.minHits == nil else {
-                throw CLIError("--min-hits requires --aggregation minimum-hits")
-            }
-        }
+        try options.validate()
         return options
+    }
+
+    // MARK: Value parsers (each names the one thing it checks)
+
+    static func floatValue(_ raw: String, or message: String) throws -> Float {
+        guard let number = Float(raw) else { throw CLIError(message) }
+        return number
+    }
+
+    static func positiveInt(_ raw: String, or message: String) throws -> Int {
+        // Int() rejects floats, NaN, hex, empty, and overflow — every
+        // malformed spelling fails here rather than defaulting.
+        guard let number = Int(raw), number > 0 else { throw CLIError(message) }
+        return number
     }
 
     private static func emit(_ output: Output) throws {

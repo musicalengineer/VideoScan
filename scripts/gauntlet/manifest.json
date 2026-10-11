@@ -18510,6 +18510,26 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PersonEvaluationCLIParseCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PersonEvaluationCLIParseCharacterizationTests"
+      ],
+      "tests": [
+        "test_booleanFlags_setAndNeedNoValue",
+        "test_coherenceMessages_areExact",
+        "test_engineTokens_matchDisplayNameOrTitle_caseInsensitively",
+        "test_firstErrorInArgumentOrderWins_andScanErrorsBeatValidation",
+        "test_numericValues_parseAndRejectWithTheirOwnMessages",
+        "test_repeatedScalarFlags_lastWins_butDlibTokenStaysSet",
+        "test_requiredArgumentMessages_inOrder_personReferencesVideo",
+        "test_requiredOnly_givesTheDocumentedDefaults",
+        "test_toolingPathsAndAggregationSpellings",
+        "test_unknownAndMissingValueMessages"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PersonFinderArcFaceCosineTests.swift",
       "stage": "unit",
       "suites": [
@@ -28703,7 +28723,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2257,
+      "expected_floor": 2267,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -28925,6 +28945,7 @@
         "VideoScanTests/PerceptualStatisticsTests",
         "VideoScanTests/PerceptualVerdictFoldTests",
         "VideoScanTests/PerceptualVerdictGateTests",
+        "VideoScanTests/PersonEvaluationCLIParseCharacterizationTests",
         "VideoScanTests/PersonFinderArcFaceCosineTests",
         "VideoScanTests/PersonFinderCompilationTests",
         "VideoScanTests/PersonFinderDownsampleTests",
