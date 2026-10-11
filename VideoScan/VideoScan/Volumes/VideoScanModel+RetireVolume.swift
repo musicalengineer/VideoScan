@@ -13,9 +13,9 @@ struct PendingRetireOffer: Identifiable, Equatable {
     let volumeRootPath: String
     /// Friendly volume name for headline display ("Maxtor500FW").
     let volumeName: String
-    /// Total catalogued records on the volume (all `.manuallyDeleted` —
-    /// that's what triggered the offer). Drives the "All N records…"
-    /// headline.
+    /// Total catalogued records on the volume (all accounted for —
+    /// `isAccountedForRetire` — that's what triggered the offer). Drives
+    /// the "All N records…" headline.
     let recordCount: Int
     /// Default reason text the modal pre-populates. User-editable.
     let suggestedReason: String
@@ -27,8 +27,9 @@ struct PendingRetireOffer: Identifiable, Equatable {
 // MARK: - VideoScanModel+RetireVolume
 //
 // §1B Retire Volume — companion feature to Relocate. After a Relocate run
-// (Bucket B + Bucket E) leaves 100% of catalogued records on the source
-// volume marked `.manuallyDeleted`, the volume itself can be retired:
+// leaves 100% of catalogued records on the source volume accounted for
+// (Bucket B: missing, labelled `.manuallyDeleted`; Bucket E: skipped because
+// a proven copy is elsewhere, witness note), the volume itself can be retired:
 // physically disconnected with no expectation of reconnection. Retired
 // volumes are excluded from scan suggestions, "missing volume" dashboard
 // nags, and reachability complaints, but their records remain in the
@@ -55,14 +56,30 @@ extension VideoScanModel {
         recordsScoped(to: volumeRootPath, in: all).count
     }
 
-    /// Subset of `totalRecordsOn` whose `archiveStage == .manuallyDeleted`.
-    /// Numerator for the 100% disposed check. Bucket B + Bucket E both
-    /// land in this state, so a Relocate run that retires the source has
-    /// `manuallyDeletedOn == totalRecordsOn`.
-    nonisolated static func manuallyDeletedOn(volumeRootPath: String,
-                                              in all: [VideoRecord]) -> Int {
+    /// Is this record ACCOUNTED FOR on a drive being retired? Two Migrate
+    /// outcomes leave a record behind under the source path:
+    ///   * Bucket B — the source file was missing: labelled `.manuallyDeleted`;
+    ///   * Bucket E — skipped because a proven copy is on another drive: the
+    ///     record keeps its label (2026-10-11 — a skip is not a delete) and
+    ///     carries the structured `reason=dup-on-other-volume` witness note.
+    /// Either way nothing on this drive still needs copying. Older Bucket E
+    /// records were labelled `.manuallyDeleted` and carry the note too.
+    nonisolated static func isAccountedForRetire(archiveStage: ArchiveStage, notes: String) -> Bool {
+        archiveStage == .manuallyDeleted || notes.contains(skippedWithWitnessMarker)
+    }
+
+    /// The marker `formatSafelyRedundantNote` writes (and
+    /// `parseWitnessesFromNote` reads).
+    nonisolated static let skippedWithWitnessMarker = "reason=dup-on-other-volume"
+
+    /// Subset of `totalRecordsOn` that is accounted for
+    /// (`isAccountedForRetire`). Numerator for the 100% disposed check: a
+    /// Migrate run that leaves only Bucket B / Bucket E records behind has
+    /// `disposedOn == totalRecordsOn`.
+    nonisolated static func disposedOn(volumeRootPath: String,
+                                       in all: [VideoRecord]) -> Int {
         recordsScoped(to: volumeRootPath, in: all)
-            .filter { $0.archiveStage == .manuallyDeleted }
+            .filter { isAccountedForRetire(archiveStage: $0.archiveStage, notes: $0.notes) }
             .count
     }
 
@@ -86,12 +103,12 @@ extension VideoScanModel {
 
     /// Pure predicate: "should the retire prompt fire after the current
     /// Relocate run?" True iff the volume has at least one record (current
-    /// OR originated-here) AND no record currently under this volume's
-    /// path has a non-`.manuallyDeleted` archiveStage. That covers three
+    /// OR originated-here) AND every record currently under this volume's
+    /// path is accounted for (`isAccountedForRetire`). That covers three
     /// migration outcomes:
-    ///   - Bucket E (safely redundant): records stay under this path with
-    ///     `.manuallyDeleted` — gate passes when 100% are deleted
-    ///   - Bucket B (source not found): same as above
+    ///   - Bucket E (safely redundant): records stay under this path,
+    ///     skipped, with the witness note
+    ///   - Bucket B (source not found): records stay, labelled `.manuallyDeleted`
     ///   - Bucket D (adopted) / Bucket A (copied): records' `fullPath`
     ///     is rewritten away from this volume — gate passes because the
     ///     "currently under this volume" set becomes empty (0 == 0 trivially
@@ -105,15 +122,15 @@ extension VideoScanModel {
         // OR had records that moved away). Pure-empty volumes that were
         // never scanned shouldn't show as retire-eligible.
         guard total > 0 || originated > 0 else { return false }
-        // Every record currently under this path must be .manuallyDeleted.
+        // Every record currently under this path must be accounted for.
         // If total == 0 (all records moved via Bucket A/D), this is
         // trivially true.
-        return manuallyDeletedOn(volumeRootPath: volumeRootPath, in: all) == total
+        return disposedOn(volumeRootPath: volumeRootPath, in: all) == total
     }
 
     // MARK: - Witness aggregation
 
-    /// Walk every `.manuallyDeleted` record on the volume and pull out
+    /// Walk every accounted-for record on the volume and pull out
     /// the witness paths embedded in their Bucket E audit-trail notes.
     /// Returns a deduped sorted union. Records with non-Bucket-E disposal
     /// notes (plain Bucket B "source file not found") contribute nothing
@@ -129,7 +146,7 @@ extension VideoScanModel {
     ) -> [String] {
         let scoped = recordsScoped(to: volumeRootPath, in: all)
         var seen = Set<String>()
-        for rec in scoped where rec.archiveStage == .manuallyDeleted {
+        for rec in scoped where isAccountedForRetire(archiveStage: rec.archiveStage, notes: rec.notes) {
             for w in parseWitnessesFromNote(rec.notes) {
                 seen.insert(w)
             }

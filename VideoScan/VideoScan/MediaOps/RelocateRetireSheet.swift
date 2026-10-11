@@ -43,7 +43,7 @@ struct RelocateRetireSheet: View {
                     Text("Retire \(offer.volumeName)?")
                         .font(.headline)
                         .accessibilityIdentifier("retireSheet.title")
-                    Text("All \(offer.recordCount) catalogued record(s) on this volume are marked deleted.")
+                    Text("All \(offer.recordCount) catalogued record(s) on this volume are accounted for — missing, or skipped because a copy is on another drive.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }

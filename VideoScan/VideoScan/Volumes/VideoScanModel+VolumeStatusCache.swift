@@ -4,7 +4,7 @@
 //
 // The Volumes window used to compute retire readiness inside its body:
 // `retireStatus(for:)` made FOUR full-catalog sweeps per volume row
-// (totalRecordsOn / manuallyDeletedOn / originatedOnCount /
+// (totalRecordsOn / disposedOn / originatedOnCount /
 // aggregateRetiredWitnesses), each running PathScope normalization per
 // record. At 103k records × ~19 targets that's ~8M path comparisons per
 // body evaluation — and a keystroke in the notes field invalidates the
@@ -79,12 +79,14 @@ struct VolumeRetireStatus: Equatable {
 // MARK: - Sendable snapshots (main-actor reads → off-main compute)
 
 /// The five record fields the aggregator needs, captured as values on the
-/// main actor. `notes` is only kept for `.manuallyDeleted` records (the
-/// only ones whose witness lines are parsed) so the snapshot stays lean
-/// even on 100k+ catalogs.
+/// main actor. `notes` is only kept for accounted-for records
+/// (`VideoScanModel.isAccountedForRetire` — the only ones whose witness
+/// lines are parsed) so the snapshot stays lean even on 100k+ catalogs.
 struct VolumeStatusRecordSnap: Sendable {
     let fullPath: String
-    let isManuallyDeleted: Bool
+    /// Accounted for on a drive being retired: labelled missing, or skipped
+    /// by Migrate because a proven copy is elsewhere.
+    let isDisposed: Bool
     let originVolume: String?
     let originalFullPath: String?
     let notes: String?
@@ -130,12 +132,13 @@ extension VideoScanModel {
         let generation = volumeStatusGeneration
         // Value snapshot — cheap field reads on the main actor, O(records).
         let recordSnaps = records.map { r in
-            VolumeStatusRecordSnap(
+            let disposed = Self.isAccountedForRetire(archiveStage: r.archiveStage, notes: r.notes)
+            return VolumeStatusRecordSnap(
                 fullPath: r.fullPath,
-                isManuallyDeleted: r.archiveStage == .manuallyDeleted,
+                isDisposed: disposed,
                 originVolume: r.originVolume,
                 originalFullPath: r.originalFullPath,
-                notes: r.archiveStage == .manuallyDeleted ? r.notes : nil
+                notes: disposed ? r.notes : nil
             )
         }
         let targetSnaps = scanTargets
@@ -156,7 +159,7 @@ extension VideoScanModel {
 
     /// Compute every volume's retire status in ONE pass over the record
     /// snapshots. Semantics are identical to the four legacy per-volume
-    /// sweeps (totalRecordsOn / manuallyDeletedOn / originatedOnCount /
+    /// sweeps (totalRecordsOn / disposedOn / originatedOnCount /
     /// aggregateRetiredWitnesses + the safe-migrated-destination check) —
     /// VolumeStatusCacheTests pins the parity. Nested roots (a record
     /// under both `/Volumes/X` and a hypothetical broader target) count
@@ -229,7 +232,7 @@ extension VideoScanModel {
                     && (p == root.key || p.hasPrefix(root.slashed))
                 if underRoot {
                     total[i] += 1
-                    if rec.isManuallyDeleted {
+                    if rec.isDisposed {
                         disposed[i] += 1
                         let parsed = parsedWitnesses
                             ?? parseWitnessesFromNote(rec.notes ?? "")

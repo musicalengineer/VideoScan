@@ -66,16 +66,23 @@ struct RelocateSafelyRedundantTests {
         }
     }
 
-    // MARK: - Mutation marks .manuallyDeleted with witness audit trail
+    // MARK: - Skipping is just skipping: no label, witness audit trail kept
+    //
+    // B6 follow-up (2026-10-11, manually_deleted_959_classification): Bucket
+    // E used to stamp the skipped source `.manuallyDeleted` although nothing
+    // was removed — 950 live files on Rick's working drives ended up hidden
+    // behind a "deleted" label. A file Migrate decides not to copy because a
+    // proven copy exists elsewhere is SKIPPED: logged, a File Journey note
+    // naming the witness, and its catalog label left exactly as it was.
 
     @Test
-    func safelyRedundantMutation_marksManuallyDeleted_andPersistsWitnessesInNote() async throws {
+    func safelyRedundantSkip_leavesLabelAlone_andPersistsWitnessesInNote() async throws {
         let ws = try Self.makeWorkspace()
         defer { try? FileManager.default.removeItem(at: ws.root) }
 
         // Source file exists on disk + in catalog. A witness record points
-        // at a path on a third (offline) volume. Reconcile classifies the
-        // source record as safelyRedundant; mutation marks it deleted.
+        // at a path on a third volume. Reconcile classifies the source record
+        // as safelyRedundant; the run skips it (no copy, no label).
         let src = ws.source.appendingPathComponent("kids.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 2048)
         let sourceRec = makeRecord(fullPath: src.path, size: sx, md5: hx)
@@ -103,9 +110,14 @@ struct RelocateSafelyRedundantTests {
         ))
         await waitForRelocateDone(model)
 
-        // Source record is now marked deleted.
-        #expect(sourceRec.archiveStage == .manuallyDeleted)
-        // Source file on disk is untouched — catalog-only mutation.
+        // Nothing was removed, so nothing is labelled removed: the record
+        // stays visible in the catalog with the label it had.
+        #expect(sourceRec.archiveStage == .none, "a skipped file was labelled \(sourceRec.archiveStage)")
+        #expect(!CatalogStorageTotalsCalculator.isManuallyDeleted(sourceRec))
+        #expect(pfActiveRecords(model.records).contains { $0 === sourceRec })
+        // Not copied: the path still points at the source.
+        #expect(sourceRec.fullPath == src.path)
+        // Source file on disk is untouched.
         #expect(FileManager.default.fileExists(atPath: src.path))
         // Dashboard counter incremented.
         #expect(model.dashboard.relocateSafelyRedundant == 1)
@@ -118,6 +130,22 @@ struct RelocateSafelyRedundantTests {
         #expect(sourceRec.originalFullPath == nil)
         // Witness record is untouched.
         #expect(witnessRec.archiveStage == .none)
+    }
+
+    // MARK: - A skip still counts as accounted for when retiring the drive
+
+    @Test
+    func skippedWithWitnessCountsAsAccountedForRetire() {
+        let note = VideoScanModel.formatSafelyRedundantNote(stamp: "2026-10-11T12:00:00Z",
+                                                             witnesses: ["/Volumes/LaCie/a.mov"],
+                                                             totalWitnessCount: 1)
+        #expect(VideoScanModel.isAccountedForRetire(archiveStage: .none, notes: note),
+                "a Bucket E skip leaves nothing on the drive to copy")
+        #expect(VideoScanModel.isAccountedForRetire(archiveStage: .manuallyDeleted, notes: ""),
+                "Bucket B (source missing) is accounted for")
+        #expect(!VideoScanModel.isAccountedForRetire(archiveStage: .none, notes: "Reconcile x: source-side move detected"),
+                "an ordinary live record still needs copying")
+        #expect(VideoScanModel.parseWitnessesFromNote(note) == ["/Volumes/LaCie/a.mov"])
     }
 
     // MARK: - Toggle OFF makes the rule a no-op
@@ -203,8 +231,9 @@ struct RelocateSafelyRedundantTests {
         ))
         await waitForRelocateDone(model)
 
-        // Confirm mutation happened.
-        #expect(sourceRec.archiveStage == .manuallyDeleted)
+        // Confirm the skip happened: classified, noted, never labelled.
+        #expect(sourceRec.archiveStage == .none)
+        #expect(sourceRec.notes.contains("dup-on-other-volume"))
         #expect(model.dashboard.relocateSafelyRedundant == 1)
 
         // Find the snapshot file.
@@ -221,7 +250,7 @@ struct RelocateSafelyRedundantTests {
         let snap = try dec.decode(CatalogSnapshot.self, from: data)
 
         let restoredSource = try #require(snap.records.first { $0.id == sourceRec.id })
-        // The .manuallyDeleted mutation is reverted by rollback.
+        // The pre-run label is in the snapshot (and the run never changed it).
         #expect(restoredSource.archiveStage == .none)
         // The structured witness note is not present in the pre-mutation snapshot.
         #expect(!restoredSource.notes.contains("dup-on-other-volume"))
