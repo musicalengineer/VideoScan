@@ -65,8 +65,8 @@
 //   The two steps exist as separate calls so the job can WRITE the
 //   quarantine location into its plan between them — a crash between the
 //   move and the unlink then leaves a plan that names the exact folder to
-//   put the file back from (blocker 2). `quarantineAndDelete` composes
-//   them for callers that have no plan.
+//   put the file back from (blocker 2). (The old `quarantineAndDelete`
+//   composition was removed — Trash only, GH #143 T5.)
 //
 // Either way the file that gets deleted is read end to end at the moment
 // of deletion. Nothing stored — not `contentHash`, not `partialMD5`, not
@@ -678,7 +678,7 @@ enum SignatureVerification {
     /// volume's Trash. Any doubt puts the file back (or retains it in
     /// place, named).
     static func deleteQuarantined(_ ticket: QuarantineTicket,
-                                  disposal: Disposal = .permanent,
+                                  disposal: Disposal = .trash,
                                   hooks: Hooks = .live,
                                   finalVerdict: (() -> FinalVerdict)? = nil) -> DeletionResult {
         let proof = ticket.proof
@@ -825,17 +825,11 @@ enum SignatureVerification {
                         reason: reason, cancelled: cancelled)
     }
 
-    /// Steps (a) and (b) back to back, for callers without a plan to
-    /// record the quarantine in.
-    static func quarantineAndDelete(_ proof: VerifiedDuplicate,
-                                    hooks: Hooks = .live) -> DeletionResult {
-        switch quarantine(proof, hooks: hooks) {
-        case .quarantined(let ticket): return deleteQuarantined(ticket, hooks: hooks)
-        case .refused(let failure): return .refused(failure)
-        case .failed(let reason): return .failed(reason)
-        case .retainedQuarantine(let path, let reason): return .retainedQuarantine(path: path, reason: reason)
-        }
-    }
+    // `quarantineAndDelete` (steps a + b back to back, outright unlink) was
+    // removed 2026-10-11 (GH #143, tab-charter audit T5): Trash only. It had
+    // no production caller; the test target composes the two steps itself
+    // (SignatureVerificationTestSeam.swift). The default disposal above is
+    // `.trash`, so a caller that names none can never unlink.
 
     /// `rmdir(2)`: succeeds only on an empty directory. Never recursive.
     static func removeEmptyDirectory(_ directory: URL) throws {
