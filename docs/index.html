@@ -173,10 +173,11 @@
 
 <!-- 8 ============ CODE SIZE ============ -->
 <h3 class="section">Code size</h3>
+<p class="section-note">Raw lines (wc -l), incl. comments/blank. <b>App source</b> = app Swift (VideoScan/VideoScan, VideoScanCore/Sources, swift_cli) + the Python the app launches (cluster_faces, face_recognize, footage_spectrum, whisper_transcribe, whisper_worker). <b>Tests</b> = VideoScanTests + VideoScanCore/Tests + tests/*.py. <b>Tooling</b> = the rest of scripts/ and tools/ (.py .sh .swift .mjs .js; no venv, .build, node_modules).</p>
 <div class="cards" id="size-cards"></div>
 <div class="charts">
   <div class="chart-box"><h2>Swift lines by folder &mdash; latest push</h2><canvas id="c-size-folders" class="tall"></canvas><div class="chart-note hidden" id="c-size-folders-note"></div></div>
-  <div class="chart-box"><h2>Total Swift lines (app + tests + CLI) and files over 1,000 lines</h2><canvas id="c-size-trend"></canvas><div class="chart-note hidden" id="c-size-trend-note"></div></div>
+  <div class="chart-box"><h2>App source lines, total Swift lines (app + tests + CLI) and files over 1,000 lines</h2><canvas id="c-size-trend"></canvas><div class="chart-note hidden" id="c-size-trend-note"></div></div>
 </div>
 <div class="section-error hidden" id="size-error"></div>
 
@@ -771,8 +772,21 @@ function renderSize(d) {
   const last = rows[rows.length - 1];
   const daily = lastPerDay(rows);
   const prevDay = daily.length > 1 ? daily[daily.length - 2] : {};
-  cards.appendChild(card("Swift lines", isNum(last.total_swift_lines) ? last.total_swift_lines.toLocaleString("en-US") : null,
-    prevDay.total_swift_lines, last.total_swift_lines, false, "var(--muted)"));
+  // Headline = app source only. Rows before 2026-10-11 lack these keys and
+  // show no data; total_swift_lines (app + tests + CLI Swift) stays in the
+  // trend chart for continuity.
+  const lineCard = (label, key, tip, color) => {
+    const v = last[key];
+    const el = card(label, isNum(v) ? v.toLocaleString("en-US") : null, prevDay[key], v, false, color);
+    el.title = tip;
+    return el;
+  };
+  cards.appendChild(lineCard("App source (lines incl. comments/blank)", "app_source_lines",
+    "App Swift (VideoScan/VideoScan, VideoScanCore/Sources, swift_cli) + the Python scripts the app launches", "var(--accent)"));
+  cards.appendChild(lineCard("Tests", "test_lines",
+    "VideoScanTests + VideoScanCore/Tests (Swift) + tests/*.py", "var(--good)"));
+  cards.appendChild(lineCard("Tooling", "tooling_lines",
+    "The rest of scripts/ and tools/ (.py .sh .swift .mjs .js), excluding venv, .build, node_modules", "var(--muted)"));
   cards.appendChild(card("Files over 1,000 lines", isNum(last.files_over_1000) ? last.files_over_1000 : null,
     prevDay.files_over_1000, last.files_over_1000, true, "var(--bad)"));
   cards.appendChild(card("Test functions in source", isNum(last.test_count) ? last.test_count : null,
@@ -794,7 +808,8 @@ function renderSize(d) {
     note("c-size-folders", "No per-folder breakdown yet: it starts with the first CI run after this page shipped.");
   }
   chartOrNote("c-size-trend", "line", dateLabels(daily), [
-    { label: "Swift lines", data: daily.map(r => isNum(r.total_swift_lines) ? r.total_swift_lines : null), yAxisID: "y", ...lineStyle("#8b949e") },
+    { label: "app source", data: daily.map(r => isNum(r.app_source_lines) ? r.app_source_lines : null), yAxisID: "y", ...lineStyle("#58a6ff") },
+    { label: "Swift lines (app + tests + CLI)", data: daily.map(r => isNum(r.total_swift_lines) ? r.total_swift_lines : null), yAxisID: "y", ...lineStyle("#8b949e") },
     { label: "files > 1,000 lines", data: daily.map(r => isNum(r.files_over_1000) ? r.files_over_1000 : null), yAxisID: "y1", ...lineStyle("#f85149") },
   ], withAxes({ y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false } } }));
 }

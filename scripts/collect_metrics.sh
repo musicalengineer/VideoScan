@@ -122,6 +122,51 @@ while IFS= read -r f; do
 done < <(find VideoScan/VideoScan VideoScan/VideoScanTests swift_cli \
              -name '*.swift' -not -path '*/build/*' -not -path '*/.build/*' 2>/dev/null)
 
+# ---------- App source / Tests / Dev tooling (metrics page headline) ----------
+# Raw `wc -l` lines, comments and blank lines included. total_swift_lines
+# above is kept unchanged for trend continuity (app + tests + CLI Swift);
+# these three keys split the code by what it is for:
+#   app_source_lines = app Swift (VideoScan/VideoScan, VideoScanCore/Sources,
+#                      swift_cli) + the Python the app actually launches
+#   test_lines       = VideoScanTests + VideoScanCore/Tests (Swift) + tests/**/*.py
+#   tooling_lines    = remaining code in scripts/ and tools/ (.py .sh .swift
+#                      .mjs .js), excluding .build, venv and node_modules
+# The runtime Python list was derived 2026-10-11 from the *.py names in
+# VideoScan/VideoScan that exist under scripts/, keeping only the ones the
+# app builds a path to and launches via Process. Comment-only mentions
+# (dossier_batch, merge_dossier_jsonl, dedup_bogus_dates, the dev checkers
+# check_volume_check_then_act / lint_environment_objects / hallie_eval,
+# build_family_map_units) and the vlm_caption.py stub (throws
+# notImplemented) are tooling. Re-derive when the app gains a script.
+APP_PYTHON_SCRIPTS="cluster_faces.py face_recognize.py footage_spectrum.py whisper_transcribe.py whisper_worker.py"
+
+# Sum `wc -l` over a NUL-separated file list on stdin. 0 when empty.
+sum_lines() {
+    xargs -0 wc -l 2>/dev/null \
+        | awk '{ p = substr($0, index($0, $2)); if (p != "total") n += $1 } END { print n + 0 }'
+}
+
+APP_SWIFT_LINES=$(find VideoScan/VideoScan VideoScan/VideoScanCore/Sources swift_cli \
+                       -name '*.swift' -not -path '*/build/*' -not -path '*/.build/*' -print0 2>/dev/null | sum_lines)
+APP_PY_PATHS=""
+for s in $APP_PYTHON_SCRIPTS; do APP_PY_PATHS="$APP_PY_PATHS scripts/$s"; done
+APP_PYTHON_LINES=$(printf '%s\n' $APP_PY_PATHS | while IFS= read -r f; do [ -f "$f" ] && printf '%s\0' "$f"; done | sum_lines)
+APP_SOURCE_LINES=$((APP_SWIFT_LINES + APP_PYTHON_LINES))
+
+TEST_SWIFT_LINES=$(find VideoScan/VideoScanTests VideoScan/VideoScanCore/Tests \
+                        -name '*.swift' -not -path '*/build/*' -not -path '*/.build/*' -print0 2>/dev/null | sum_lines)
+TEST_PYTHON_LINES=$(find tests -name '*.py' -not -path '*/__pycache__/*' -print0 2>/dev/null | sum_lines)
+TEST_LINES=$((TEST_SWIFT_LINES + TEST_PYTHON_LINES))
+
+# Tooling: every code file in scripts/ + tools/ that is not an app script.
+APP_PY_PRUNE=""
+for s in $APP_PYTHON_SCRIPTS; do APP_PY_PRUNE="$APP_PY_PRUNE -not -path scripts/$s"; done
+# shellcheck disable=SC2086  # APP_PY_PRUNE is a deliberate word list
+TOOLING_LINES=$(find scripts tools \
+                     \( -name .build -o -name venv -o -name 'venv-*' -o -name .venv -o -name node_modules -o -name __pycache__ \) -prune \
+                     -o -type f \( -name '*.py' -o -name '*.sh' -o -name '*.swift' -o -name '*.mjs' -o -name '*.js' \) \
+                     $APP_PY_PRUNE -print0 2>/dev/null | sum_lines)
+
 # ---------- Swift lines + files by folder (metrics page "Code size") ----------
 # Top-level app folder (Catalog, Hallie, …), plus Core, Tests and swift_cli.
 # Core is listed here but, for trend continuity, is NOT part of
@@ -185,5 +230,5 @@ fi
 # All numeric fields come from variables that are either a number or the
 # literal string "null" — both safely interpolate into JSON.
 cat <<JSON
-{"ts":"$TS","sha":"$SHORT_SHA","branch":"$BRANCH","coverage_overall_pct":$COV_OVERALL,"coverage_logic_pct":$COV_LOGIC,"logic_lines":$LOGIC_LINES,"logic_covered":$LOGIC_COVERED,"swiftlint_warnings":$SWIFTLINT_WARN,"swiftlint_errors":$SWIFTLINT_ERR,"periphery_findings":$PERIPHERY_FINDINGS,"total_swift_lines":$TOTAL_LINES,"open_issues":$OPEN_ISSUES,"files_over_1000":$FILES_OVER_1000,"worst_file":"$WORST_FILE","test_count":$TEST_COUNT,"regression_count":$REGRESSION_COUNT,"swift_by_folder":$SWIFT_BY_FOLDER}
+{"ts":"$TS","sha":"$SHORT_SHA","branch":"$BRANCH","coverage_overall_pct":$COV_OVERALL,"coverage_logic_pct":$COV_LOGIC,"logic_lines":$LOGIC_LINES,"logic_covered":$LOGIC_COVERED,"swiftlint_warnings":$SWIFTLINT_WARN,"swiftlint_errors":$SWIFTLINT_ERR,"periphery_findings":$PERIPHERY_FINDINGS,"total_swift_lines":$TOTAL_LINES,"app_source_lines":$APP_SOURCE_LINES,"app_swift_lines":$APP_SWIFT_LINES,"app_python_lines":$APP_PYTHON_LINES,"test_lines":$TEST_LINES,"test_swift_lines":$TEST_SWIFT_LINES,"test_python_lines":$TEST_PYTHON_LINES,"tooling_lines":$TOOLING_LINES,"open_issues":$OPEN_ISSUES,"files_over_1000":$FILES_OVER_1000,"worst_file":"$WORST_FILE","test_count":$TEST_COUNT,"regression_count":$REGRESSION_COUNT,"swift_by_folder":$SWIFT_BY_FOLDER}
 JSON
