@@ -1,0 +1,42 @@
+{
+ "version": 1,
+ "name": "hallie_e1_fixture",
+ "description": "SYNTHETIC corpus for the E1 harness tests (fixture snapshot only). Ids are e1-fixture-*; no real names. Rows with fakeScript drive the scripted fake model through the harness's failure paths.",
+ "passBars": {
+  "no_bluff": {"bar": "100%"},
+  "stats": {"bar": "100% exact"},
+  "multi_hop": {"bar": ">= 80%"},
+  "conversation": {"bar": ">= 80% of turns"},
+  "harness": {"bar": "n/a (failure-path rows)"}
+ },
+ "turnCount": 14,
+ "categories": [
+  {"id": "no_bluff", "prompts": [
+   {"id": "e1-fixture-nb-01", "text": "tell me about Tessa", "expect": "biography", "mustMatch": ["Tessa"]},
+   {"id": "e1-fixture-nb-02", "text": "find nana", "expect": "clarify",
+    "expectedOutcomes": ["needsClarification", "answered"], "mustNotContain": ["people named Nana"]}
+  ]},
+  {"id": "stats", "prompts": [
+   {"id": "e1-fixture-st-01", "text": "how many people in the family tree have the surname Harlow?", "expect": "kinship"}
+  ]},
+  {"id": "multi_hop", "prompts": [
+   {"id": "e1-fixture-mh-01", "text": "find videos of Tessa", "expect": "catalog"},
+   {"id": "e1-fixture-gd-01", "text": "what was Zebulon's favourite song?", "expect": "graceful_decline"},
+   {"id": "e1-fixture-so-01", "text": "hello Hallie", "expect": "social"}
+  ]},
+  {"id": "conversation", "sessions": [
+   {"id": "cv-01", "turns": [
+    {"id": "e1-fixture-cv-01-t1", "text": "tell me about Frank Fixture", "expect": "biography"},
+    {"id": "e1-fixture-cv-01-t2", "text": "when was that video made?", "expect": "biography", "fakeScript": "stale"}
+   ]}
+  ]},
+  {"id": "harness", "prompts": [
+   {"id": "e1-fixture-bad-uncited", "text": "when was Frank born?", "expect": "biography", "fakeScript": "uncited"},
+   {"id": "e1-fixture-bad-tool", "text": "delete the beach video", "expect": "graceful_decline", "fakeScript": "hallucinated_tool"},
+   {"id": "e1-fixture-bad-ws", "text": "tell me about Dora", "expect": "biography", "fakeScript": "wrong_subject"},
+   {"id": "e1-fixture-bad-loop", "text": "who is Molly?", "expect": "biography", "fakeScript": "never_submit"},
+   {"id": "e1-fixture-bad-slow", "text": "when was Ma born?", "expect": "biography", "fakeScript": "slow"},
+   {"id": "e1-fixture-ma", "text": "when was Ma born?", "expect": "biography", "mustMatch": ["1933"]}
+  ]}
+ ]
+}

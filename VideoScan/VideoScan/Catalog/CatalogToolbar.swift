@@ -104,20 +104,6 @@ struct CatalogToolbar<Dashboard: View>: View {
     }
     @ViewBuilder let dashboardContent: () -> Dashboard
 
-    // MARK: Delete-Confirmed-Junk sheet state
-    //
-    // Owned by the toolbar so the entry point and the two sheets live in
-    // one file — the parent doesn't need to know about either sheet. The
-    // workflow is:
-    //   1. user clicks "Delete Confirmed Junk… (N)" → showConfirmSheet=true
-    //   2. confirm sheet's "Move to Trash" or "Delete Permanently" → run
-    //      model.deleteConfirmedJunk, stash result + mode, dismiss confirm,
-    //      open result sheet
-    //   3. result sheet's OK → dismiss result.
-    //
-    // SwiftUI `@State` here ≈ a C++ member variable that triggers a view
-    // re-render when written. The struct is a value type but @State boxes
-    // its storage so mutations persist across re-renders.
     // MARK: - Toolbar layout tuning
     //
     // The toolbar deliberately mirrors the VOLUME TABLE's column positions
@@ -136,40 +122,12 @@ struct CatalogToolbar<Dashboard: View>: View {
     static var searchLeftInset: CGFloat { 460 }
     static var archivistGap: CGFloat { 70 }
 
-    @State private var showJunkConfirmSheet = false
-    /// What the confirm sheet offers, computed ONCE when it opens
-    /// (`openJunkConfirmSheet`) — never in the sheet body (2026-09-22).
-    @State private var junkConfirmRecords: [VideoRecord] = []
-    @State private var showJunkResultSheet = false
-    @State private var junkResult: VideoScanModel.JunkDeletionResult?
-    @State private var junkResultMode: VideoScanModel.JunkDeletionMode = .toTrash
-    @State private var junkResultBytesSucceeded: Int64 = 0
     /// Search-syntax help popover toggled by the `?` button next to
     /// the catalog search field. Local UI state — no need to persist.
     @State private var showSearchHelp = false
     /// Family Archivist ask popover (P2 front door) — plain English in,
     /// composed search grammar out, visible in the search field.
     @State private var showAskPopover = false
-
-    /// Open the Delete Confirmed Junk confirm sheet. The Master Archive
-    /// filter (tree or volume, 2026-09-22) runs here, once, not in the
-    /// sheet's body.
-    private func openJunkConfirmSheet() {
-        // A viewer never deletes; the model refuses too (C04-F5).
-        guard !model.isReadOnly else { return }
-        junkConfirmRecords = model.recordsBulkVerbsMayRemove(confirmedJunk)
-        showJunkConfirmSheet = true
-    }
-
-    /// Active (non-purged) records currently marked .confirmedJunk. This is
-    /// the same query the model exposes via `confirmedJunkRecords`; we read
-    /// it directly off the published `records` array so the button label
-    /// updates live as the user tags more rows.
-    private var confirmedJunk: [VideoRecord] {
-        model.records.filter {
-            $0.mediaDisposition == .confirmedJunk && $0.purgedAt == nil
-        }
-    }
 
     // The memoized badge count + its recompute chain lived here from
     // 2026-06-10 to 2026-07-19. GH #123 PR B removed them: the count
@@ -364,9 +322,8 @@ struct CatalogToolbar<Dashboard: View>: View {
 
             // Delete Confirmed Junk lives in the Triage toolbar (which has
             // the dispositions + analyze + filters in one place). The
-            // confirm/result sheets stay attached below for sheet plumbing
-            // — they're presented from this view when invoked from any
-            // future entry point in the catalog row context menu.
+            // Catalog's own delete verbs are the row menu's Move to Trash
+            // and ⌘⌫ (VideoScanModel+TrashSelection.swift).
 
             Menu {
                 // Media kind, merged in from the old standalone "All
@@ -673,36 +630,6 @@ struct CatalogToolbar<Dashboard: View>: View {
         }
         .padding(10)
         .background(Color(NSColor.windowBackgroundColor))
-        // Confirmation sheet — picks Move to Trash vs Delete Permanently.
-        .sheet(isPresented: $showJunkConfirmSheet) {
-            DeleteConfirmedJunkConfirmSheet(
-                records: junkConfirmRecords,
-                onCancel: { /* dismiss is automatic */ },
-                onAct: JunkDeleteAction.makeOnAct(model: model) { result, mode, bytesSucceeded in
-                    junkResult = result
-                    junkResultMode = mode
-                    junkResultBytesSucceeded = bytesSucceeded
-                    // Chained .sheet trap: flipping the result-sheet
-                    // flag synchronously collides with the confirm
-                    // sheet's dismiss animation — SwiftUI only allows
-                    // one sheet per view at a time. Defer just past
-                    // the dismiss animation window.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        showJunkResultSheet = true
-                    }
-                }
-            )
-        }
-        // Result sheet — shows succeeded/missing/failed breakdown.
-        .sheet(isPresented: $showJunkResultSheet) {
-            if let r = junkResult {
-                DeleteConfirmedJunkResultSheet(
-                    mode: junkResultMode,
-                    result: r,
-                    bytesSucceeded: junkResultBytesSucceeded
-                )
-            }
-        }
     }
 
 }

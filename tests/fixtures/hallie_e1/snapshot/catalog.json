@@ -1,0 +1,571 @@
+{
+ "meta": {
+  "generation": 0,
+  "recordsKept": 40
+ },
+ "records": [
+  {
+   "confirmedPeople": [
+    "Lark Family",
+    "Dora"
+   ],
+   "contentHash": "hT",
+   "durationSeconds": 3600,
+   "filename": "Thanksgiving-1984.mov",
+   "id": "FX-001",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1984/Thanksgiving-1984.mov",
+   "streamType": "Video+Audio",
+   "tags": [
+    "Gold"
+   ],
+   "volume": "Fixture",
+   "year": 1984,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Lark Family",
+    "Dora"
+   ],
+   "contentHash": "hT",
+   "durationSeconds": 3600,
+   "filename": "Thanksgiving-1984 copy.mov",
+   "id": "FX-002",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1984/Thanksgiving-1984 copy.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1984,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Lark Family"
+   ],
+   "contentHash": "h003",
+   "durationSeconds": 3600,
+   "filename": "Thanksgiving-1984.wav",
+   "id": "FX-003",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1984/Thanksgiving-1984.wav",
+   "streamType": "Audio only",
+   "volume": "Fixture",
+   "year": 1984,
+   "yearSource": "filename"
+  },
+  {
+   "captions": [
+    {
+     "t": 3.0,
+     "text": "a family at a dinner table CANARY-CAPTION-91be"
+    }
+   ],
+   "contentHash": "h004",
+   "durationSeconds": 1800,
+   "filename": "AtLarks-Thanksgiving-1985.mov",
+   "id": "FX-004",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1985/AtLarks-Thanksgiving-1985.mov",
+   "streamType": "Video+Audio",
+   "transcriptSnippet": "and there's Tessa by the pie table CANARY-TRANSCRIPT-7f3a everyone wave",
+   "volume": "Fixture",
+   "year": 1985,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Tessa",
+    "Dora"
+   ],
+   "contentHash": "h005",
+   "durationSeconds": 1200,
+   "filename": "NewYear-2012.mov",
+   "id": "FX-005",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2012/NewYear-2012.mov",
+   "streamType": "Video+Audio",
+   "userNotes": "Tessa's house, New Year 2012",
+   "volume": "Fixture",
+   "year": 2012,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Danny"
+   ],
+   "contentHash": "h006",
+   "detectedPeople": [
+    "Owen"
+   ],
+   "durationSeconds": 900,
+   "filename": "Danny-Bday-1986.mov",
+   "id": "FX-006",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1986/Danny-Bday-1986.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1986,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Ma"
+   ],
+   "contentHash": "h007",
+   "durationSeconds": 700,
+   "filename": "Beach-1990.mov",
+   "id": "FX-007",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1990/Beach-1990.mov",
+   "streamType": "Video+Audio",
+   "tags": [
+    "Gold"
+   ],
+   "volume": "Fixture",
+   "year": 1990,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Ma"
+   ],
+   "contentHash": "h008",
+   "durationSeconds": 700,
+   "filename": "Beach-1990-noaudio.mov",
+   "id": "FX-008",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1990/Beach-1990-noaudio.mov",
+   "streamType": "Video only",
+   "volume": "Fixture",
+   "year": 1990,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Frank"
+   ],
+   "contentHash": "h009",
+   "durationSeconds": 2400,
+   "filename": "Navy-Reunion-1995.mov",
+   "id": "FX-009",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1995/Navy-Reunion-1995.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1995,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Frank"
+   ],
+   "contentHash": "h010",
+   "durationSeconds": 3000,
+   "filename": "Frank-interview-2001.m4a",
+   "id": "FX-010",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2001/Frank-interview-2001.m4a",
+   "streamType": "Audio only",
+   "volume": "Fixture",
+   "year": 2001,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h011",
+   "durationSeconds": 720,
+   "filename": "Clip-1987-11.mov",
+   "id": "FX-011",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/undated/Clip-1987-11.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "h012",
+   "durationSeconds": 780,
+   "filename": "Clip-1994-12.mov",
+   "id": "FX-012",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1994/Clip-1994-12.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1994,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h013",
+   "durationSeconds": 60,
+   "filename": "Clip-2001-13.mov",
+   "id": "FX-013",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2001/Clip-2001-13.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2001,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h014",
+   "durationSeconds": 120,
+   "filename": "Clip-2008-14.mov",
+   "id": "FX-014",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2008/Clip-2008-14.mov",
+   "streamType": "Video only",
+   "volume": "Fixture",
+   "year": 2008,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "h015",
+   "durationSeconds": 180,
+   "filename": "Clip-2015-15.mov",
+   "id": "FX-015",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2015/Clip-2015-15.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2015,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "hdup",
+   "durationSeconds": 240,
+   "filename": "Clip-1985-16.mov",
+   "id": "FX-016",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1985/Clip-1985-16.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1985,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h017",
+   "durationSeconds": 300,
+   "filename": "Clip-1992-17.mov",
+   "id": "FX-017",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1992/Clip-1992-17.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1992,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "h018",
+   "durationSeconds": 360,
+   "filename": "Tape-1999-18.wav",
+   "id": "FX-018",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1999/Tape-1999-18.wav",
+   "streamType": "Audio only",
+   "volume": "Fixture",
+   "year": 1999,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h019",
+   "durationSeconds": 420,
+   "filename": "Clip-2006-19.mov",
+   "id": "FX-019",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2006/Clip-2006-19.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2006,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Owen"
+   ],
+   "contentHash": "h020",
+   "durationSeconds": 480,
+   "filename": "Clip-2013-20.mov",
+   "id": "FX-020",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2013/Clip-2013-20.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2013,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "h021",
+   "durationSeconds": 540,
+   "filename": "Clip-2020-21.mov",
+   "id": "FX-021",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2020/Clip-2020-21.mov",
+   "streamType": "Video only",
+   "volume": "Fixture",
+   "year": 2020,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h022",
+   "durationSeconds": 600,
+   "filename": "Clip-1990-22.mov",
+   "id": "FX-022",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/undated/Clip-1990-22.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture"
+  },
+  {
+   "contentHash": "h023",
+   "durationSeconds": 660,
+   "filename": "Clip-1997-23.mov",
+   "id": "FX-023",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1997/Clip-1997-23.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1997,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "hdup",
+   "durationSeconds": 720,
+   "filename": "Clip-2004-24.mov",
+   "id": "FX-024",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2004/Clip-2004-24.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2004,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Owen"
+   ],
+   "contentHash": "h025",
+   "durationSeconds": 780,
+   "filename": "Clip-2011-25.mov",
+   "id": "FX-025",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2011/Clip-2011-25.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2011,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h026",
+   "durationSeconds": 60,
+   "filename": "Clip-2018-26.mov",
+   "id": "FX-026",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2018/Clip-2018-26.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2018,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "h027",
+   "durationSeconds": 120,
+   "filename": "Tape-1988-27.wav",
+   "id": "FX-027",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1988/Tape-1988-27.wav",
+   "streamType": "Audio only",
+   "volume": "Fixture",
+   "year": 1988,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h028",
+   "durationSeconds": 180,
+   "filename": "Clip-1995-28.mov",
+   "id": "FX-028",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1995/Clip-1995-28.mov",
+   "streamType": "Video only",
+   "volume": "Fixture",
+   "year": 1995,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h029",
+   "durationSeconds": 240,
+   "filename": "Clip-2002-29.mov",
+   "id": "FX-029",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2002/Clip-2002-29.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2002,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "h030",
+   "durationSeconds": 300,
+   "filename": "Clip-2009-30.mov",
+   "id": "FX-030",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2009/Clip-2009-30.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2009,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h031",
+   "durationSeconds": 360,
+   "filename": "Clip-2016-31.mov",
+   "id": "FX-031",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2016/Clip-2016-31.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2016,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "hdup",
+   "durationSeconds": 420,
+   "filename": "Clip-1986-32.mov",
+   "id": "FX-032",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1986/Clip-1986-32.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1986,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "h033",
+   "durationSeconds": 480,
+   "filename": "Clip-1993-33.mov",
+   "id": "FX-033",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/undated/Clip-1993-33.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture"
+  },
+  {
+   "contentHash": "h034",
+   "durationSeconds": 540,
+   "filename": "Clip-2000-34.mov",
+   "id": "FX-034",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2000/Clip-2000-34.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2000,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Owen"
+   ],
+   "contentHash": "h035",
+   "durationSeconds": 600,
+   "filename": "Clip-2007-35.mov",
+   "id": "FX-035",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2007/Clip-2007-35.mov",
+   "streamType": "Video only",
+   "volume": "Fixture",
+   "year": 2007,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "h036",
+   "durationSeconds": 660,
+   "filename": "Tape-2014-36.wav",
+   "id": "FX-036",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2014/Tape-2014-36.wav",
+   "streamType": "Audio only",
+   "volume": "Fixture",
+   "year": 2014,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h037",
+   "durationSeconds": 720,
+   "filename": "Clip-1984-37.mov",
+   "id": "FX-037",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1984/Clip-1984-37.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1984,
+   "yearSource": "filename"
+  },
+  {
+   "contentHash": "h038",
+   "durationSeconds": 780,
+   "filename": "Clip-1991-38.mov",
+   "id": "FX-038",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1991/Clip-1991-38.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1991,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Dora"
+   ],
+   "contentHash": "h039",
+   "durationSeconds": 60,
+   "filename": "Clip-1998-39.mov",
+   "id": "FX-039",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/1998/Clip-1998-39.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 1998,
+   "yearSource": "filename"
+  },
+  {
+   "confirmedPeople": [
+    "Owen"
+   ],
+   "contentHash": "hdup",
+   "durationSeconds": 120,
+   "filename": "Clip-2005-40.mov",
+   "id": "FX-040",
+   "lifecycleStage": "Cataloged",
+   "path": "/Volumes/Fixture/2005/Clip-2005-40.mov",
+   "streamType": "Video+Audio",
+   "volume": "Fixture",
+   "year": 2005,
+   "yearSource": "filename"
+  }
+ ]
+}

@@ -43,6 +43,9 @@ func addVerifiedArchiveFamily(to model: VideoScanModel, keeper: VideoRecord, in 
     archive.filename = archiveURL.lastPathComponent
     archive.directory = dir.path
     archive.sizeBytes = Int64(bytes.count)
+    // A promoted copy is probed like any record: same length as its source
+    // (R4 holds a copy longer than — or not comparable with — the master).
+    archive.durationSeconds = keeper.durationSeconds
     archive.derivedFrom = keeper.id
     archive.derivationKind = ArchivePromotion.derivationKind
     archive.archiveFixity = ArchiveFixity(digest: digest, verifiedAt: Date(), sizeBytes: Int64(bytes.count))

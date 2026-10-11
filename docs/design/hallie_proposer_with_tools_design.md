@@ -3,6 +3,35 @@
 *Design, 2026-08-26. Rev 5 (08-27 15:00) — measured: qwen3.6:35b-a3b one-turn tool selection 82.6% native / 78.0% constrained-JSON, two-turn agentic loop 0/16 under a 20 s deadline (codex #736). The model leaves the control loop: ONE turn emits a typed ToolPlan, Swift executes, an optional second turn proposes claims, Swift verifies. Rev 4 (early 08-27) resolves codex's overnight review #719/#722/#723 — shared GuardPolicy, disable-don't-delete, tighter inference rules, confirmed-tag-only media facts, no proposer actions, token/cache budgets, endpoint policy. Rev 3 added the phase-0 contract: typed claims + validation table, CyberBrain as the bridge, tool schemas, worked examples. Rev 2 incorporated codex's review #701. Status: PROPOSED — Rick reviews before any code. Author: Claude (Manager). Reviewer: codex.*
 
 
+## R6. Rev 6 — cloud is allowed (Rick, 2026-10-10)
+
+*Status: PROPOSED. Phase 0 (§8.1) was never built, so nothing ships yet; this revision changes the constraints before any code.*
+
+**Worked out in two companion documents (2026-10-10, design agent):**
+- [`hallie_agent_lane_2026_10_10.md`](hallie_agent_lane_2026_10_10.md) — the Swift design: three lanes (agent / local / deterministic) behind one verifier; the 11-tool catalog with schemas, the engine each wraps (file:line), data class and budget; the `RemoteSerializer` gate and its poisoned-transport sensor; the bounded loop (budgets, deadline, cancellation, progress chips); prompt caching; turn-local provenance and the SubjectCheck that make "decline over guess" structural; the model-policy table; phases with tests; risks; 13 decisions for Rick (§12).
+- [`hallie_e1_experiment.md`](hallie_e1_experiment.md) — the E1 harness spec: read-only snapshots, Python tools over them, the Anthropic-SDK loop, scoring with the existing `grade_record` side by side with today's lane, metrics (accuracy, unverified facts, wrong-subject, decline-correctness, p50/p95, $), the model matrix, a cost estimate with the arithmetic (≈ $23 per full Sonnet run; ≈ $70 recommended plan), and an offline dry-run mode.
+
+**The ruling.** Cloud models may run Hallie where the experience is much better. The genealogy is largely public already (FamilySearch). **Never sent off the machine:** photos, video, audio, frames or face embeddings of **living immediate family**. Everything else may go wherever it helps. It's an experiment: try everything within reason, and learn the techniques along the way.
+
+**What it changes.**
+1. **The control loop comes back to the model.** Rev 5 moved the model out of the loop because local qwen 35B scored 0/16 on a two-turn agentic loop (codex #736). Frontier cloud models (Claude Sonnet/Opus class) are built for multi-step tool use: call `find_person`, read the result, call `relationship`, then `search_media`, then answer. The rev-5 shape (one plan turn, Swift executes, optional proposer) stays as the **local/offline lane**. The cloud lane is a bounded agent loop over the **same tools**, with the same §8b budgets and one end-to-end deadline.
+2. **The verifier is unchanged and enforces this in both lanes.** Every claim must carry typed citations that are re-derived in Swift (§3, §6). That's the guard against a wrong-but-confident answer, and that failure mode doesn't change when the model moves to the cloud.
+3. **The endpoint policy (§8b) becomes a data-class policy.** Every tool result carries a class: `public` (tree facts, world knowledge), `familyText` (names, dates, places, tags, filenames, notes), `familyMedia` (pixels, audio, frames, face embeddings). `familyMedia` for living immediate family never serializes to a `remote` endpoint. This is enforced in the adapter, not the prompt, and a poisoned-endpoint sensor proves it. **Open question for Rick:** home-video *transcripts* and scene *captions* are text derived from media of living family. Are they `familyText` (may go to the cloud) or `familyMedia`? The default until he rules: `familyMedia`, so they stay local.
+4. **Fleet roles.**
+   - M5 Ultra (96 GB): local model server (MLX/Ollama) for the local lane, the embedding index, and Dossier backfill.
+   - M4 Max: the app, plus nightly eval.
+   - M5 Pro / M1 Max: Dossier and caption backfill, plus eval runners.
+   - Cloud (Claude API): the agent lane, and the nightly A/B eval lane.
+5. **Content coverage is half the problem.** The 2026-10-10 demo miss (the Hudson Thanksgiving inside a 94-minute tape) had no tags, no captions, no transcript and no segments. No model can find what was never indexed. The program therefore includes the Dossier backfill, a local semantic index over transcripts, captions and notes, and **segments** (time ranges inside a file, each with its own people, event and date; a separate design).
+6. **Fine-tuning is still a non-goal for facts (§9).** A LoRA "translator" (question → tool calls, family idioms) stays as an option only if the local lane trails badly on the eval.
+
+**First experiment (E1: does the cloud agent beat today's Hallie?)** This is a Python harness only, with no app change:
+- Expose read-only tools over exported snapshots: tree (GEDCOM graph), catalog (catalog.json), People and aliases, CyberBrain.
+- Run `tests/hallie_eval_corpus.json` through a Claude agent loop with those tools, then score it with the existing `hallie_eval.py` grading next to the current Hallie lane.
+- Report accuracy, unverified-fact count, p50/p95 latency and $ per run, per category.
+- Estimated cost: a few dollars to roughly $15 per full corpus run (Sonnet-class); measure it. *(Worked arithmetic in `hallie_e1_experiment.md` §8 puts a Sonnet 5.5 full run at ≈ $23 with thinking at medium effort and caching on, ±35%; Haiku ≈ $1.2, Opus ≈ $44, Fable ≈ $107.)*
+- If E1 wins by a wide margin, phase 0 is built with the cloud lane first. If not, we've learned cheaply.
+
 ## 0. Decisions for Rick (rev 3)
 
 1. **Transport**: DECIDED by measurement (codex #736): native tool-calling for the planner turn (82.6% vs 78.0%); the ToolPlan is a single native tool call named `plan` whose arguments are the plan. Re-measure with the rev-5 ToolPlan shape before phase 1 (codex).

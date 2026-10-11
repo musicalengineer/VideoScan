@@ -86,8 +86,10 @@ enum CatalogRowMenuText {
     static func removeFromCatalog(count: Int) -> String {
         count > 1 ? "Remove \(count) from Catalog" : "Remove from Catalog"
     }
-    static func deleteFiles(count: Int) -> String {
-        count > 1 ? "Delete \(count) Files" : "Delete File"
+    /// The row menu's one delete verb (Trash only, ruling 2026-10-09; it
+    /// replaced "Delete File ▸ Move to Trash / Delete Permanently…").
+    static func moveToTrash(count: Int) -> String {
+        count > 1 ? "Move \(count) Files to Trash" : "Move to Trash"
     }
     /// Shared by the removed-rows menu and a mixed selection's item.
     static func restoreToCatalog(count: Int) -> String {
@@ -103,16 +105,6 @@ enum CatalogRowMenuText {
     }
     static func confirmRepairs(count: Int) -> String {
         count > 1 ? "Sounds Good — Confirm \(count) Repairs" : "Sounds Good — Confirm Repair"
-    }
-    /// Delete Permanently… confirmation title. `firstFilename` is used
-    /// only when exactly one file is going.
-    static func permanentDeleteQuestion(count: Int, firstFilename: String) -> String {
-        count == 1
-            ? "Delete \u{201C}\(firstFilename)\u{201D} permanently?"
-            : "Delete \(count) files permanently?"
-    }
-    static func permanentDeleteWarning(count: Int) -> String {
-        "This cannot be undone \u{2014} the file\(count == 1 ? " is" : "s are") removed from disk immediately, not moved to Trash."
     }
 }
 

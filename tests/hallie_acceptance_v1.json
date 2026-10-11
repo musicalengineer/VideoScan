@@ -1,0 +1,597 @@
+{
+ "version": 1,
+ "name": "hallie_acceptance_v1",
+ "frozen": "2026-10-10",
+ "description": "FROZEN acceptance suite for Hallie (eval-driven development). Six categories graded separately; pass bars in passBars. Runnable by scripts/hallie_eval.py (categories shape: prompts + sessions). Expected values were computed against the snapshot in expectedComputedAgainst. Do not edit: a change is a new version (hallie_acceptance_v2.json). New live questions go to tests/hallie_holdout.json.",
+ "expectedComputedAgainst": {
+  "catalogSavedAt": "2026-10-10T21:49:04Z",
+  "catalogGeneration": 3189,
+  "treeGeneration": "gen-20260924T222812-b7d9",
+  "gedcom": "/Volumes/FamilyArchive/Breen_Family_Archive/40_Family_Tree/GEDCOM/familysearch-merged-mco-20260917.ged",
+  "snapshotCreatedAt": "2026-10-10T21:51:51+00:00"
+ },
+ "passBars": {
+  "no_bluff": {
+   "bar": "100%",
+   "rule": "zero wrong-subject answers; every factual sentence cited to an id a tool returned"
+  },
+  "stats": {
+   "bar": "100% exact",
+   "rule": "every number equals expectedNumbers for the basis the answer states; basis stated"
+  },
+  "multi_hop": {
+   "bar": ">= 80%",
+   "rule": "right people/files; evidence kind (tag vs transcript mention) labelled"
+  },
+  "conversation": {
+   "bar": ">= 80% of turns",
+   "rule": "each turn graded in context; one wrong-subject turn fails the chain"
+  },
+  "loose_phrasing": {
+   "bar": ">= 90%",
+   "rule": "typos/kin words/odd quoting resolve as the clean form would"
+  },
+  "story": {
+   "bar": "all cited, nothing invented",
+   "rule": "every claim traceable; world context labelled as such"
+  }
+ },
+ "turnCount": 33,
+ "categories": [
+  {
+   "id": "no_bluff",
+   "prompts": [
+    {
+     "id": "ac-nb-01",
+     "text": "tell me about Bonnie",
+     "expect": "biography",
+     "mustMatch": [
+      "sister",
+      "2011_Reckards_Hudson_Christmas|Christmas"
+     ],
+     "mustNotContain": [
+      "I don't find Bonnie",
+      "Bourgogne",
+      "Ronnie"
+     ],
+     "subjectIDs": [
+      "brain:told.donna-breen.2026-08-24.2",
+      "catalog:DFCC4AB6-CD28-4DEA-B8B1-BD664A5A13F7"
+     ]
+    },
+    {
+     "id": "ac-nb-02",
+     "text": "find nana",
+     "expect": "clarify",
+     "mustMatch": [
+      "Muriel|O'Connor|grandmother"
+     ],
+     "mustNotContain": [
+      "111",
+      "people named Nana"
+     ],
+     "subjectIDs": [
+      "gedcom:@I4@",
+      "gedcom:@I7@"
+     ],
+     "expectedOutcomes": [
+      "needsClarification",
+      "answered"
+     ]
+    },
+    {
+     "id": "ac-nb-03",
+     "text": "who was Donna's great-grandfather on the Hudson side?",
+     "expect": "kinship",
+     "mustMatch": [
+      "William Hudson",
+      "1877"
+     ],
+     "mustNotContain": [
+      "1380"
+     ],
+     "subjectIDs": [
+      "gedcom:@IB15@",
+      "gedcom:@IB5@",
+      "gedcom:@IB2@"
+     ],
+     "expectedNumbers": {
+      "greatGrandfatherBirthYear": 1877
+     }
+    },
+    {
+     "id": "ac-nb-04",
+     "text": "find videos of bonnie",
+     "expect": "catalog",
+     "mustMatch": [
+      "2011_Reckards_Hudson_Christmas"
+     ],
+     "subjectIDs": [
+      "catalog:DFCC4AB6-CD28-4DEA-B8B1-BD664A5A13F7"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "stats",
+   "prompts": [
+    {
+     "id": "ac-st-01",
+     "text": "how many people in the family tree have the surname Hudson?",
+     "expect": "kinship",
+     "mustMatch": [
+      "\\b(?:13|11|thirteen|eleven)\\b"
+     ],
+     "mustNotContain": [
+      "Hudde",
+      "patronymic"
+     ],
+     "expectedNumbers": {
+      "anyRecordedName": 13,
+      "primarySurname": 11,
+      "birthYearSpan": [
+       1380,
+       1959
+      ]
+     }
+    },
+    {
+     "id": "lv261010-014",
+     "text": "count the people with surname hudson",
+     "expect": "kinship",
+     "mustMatch": [
+      "\\b(?:13|11|thirteen|eleven)\\b"
+     ],
+     "mustNotContain": [
+      "Hudde",
+      "patronymic"
+     ],
+     "expectedNumbers": {
+      "anyRecordedName": 13,
+      "primarySurname": 11,
+      "birthYearSpan": [
+       1380,
+       1959
+      ]
+     }
+    },
+    {
+     "id": "ac-st-02",
+     "text": "how many videos of Donna are from the 1980s?",
+     "expect": "catalog",
+     "mustMatch": [
+      "\\b(?:44|64|2|3)\\b"
+     ],
+     "expectedNumbers": {
+      "confirmedOrDetected": {
+       "distinctVideos": 44,
+       "records": 64,
+       "extraCopies": 20,
+       "distinctHours": 33.22
+      },
+      "confirmedOnly": {
+       "distinctVideos": 2,
+       "records": 3
+      },
+      "undatedDonnaVideoRecordsExcluded": 385
+     }
+    },
+    {
+     "id": "ac-st-03",
+     "text": "which decade has the most family video?",
+     "expect": "catalog",
+     "mustMatch": [
+      "1990s|nineties"
+     ],
+     "expectedNumbers": {
+      "1990s": {
+       "distinctHours": 153.14,
+       "distinctVideos": 254,
+       "records": 372
+      },
+      "2000s": {
+       "distinctHours": 68.04
+      },
+      "1980s": {
+       "distinctHours": 32.93
+      },
+      "undated": {
+       "distinctHours": 32.66,
+       "distinctVideos": 1349
+      },
+      "2020s": {
+       "distinctVideos": 2272,
+       "distinctHours": 16.76
+      }
+     }
+    },
+    {
+     "id": "ac-st-04",
+     "text": "how many hours of Thanksgiving video do we have, and how many of those are duplicate copies?",
+     "expect": "catalog",
+     "mustMatch": [
+      "\\b4[01](?:\\.\\d+)?\\s*(?:hours|h\\b)",
+      "\\b(?:17|20)\\b"
+     ],
+     "expectedNumbers": {
+      "filenamePathNotes": {
+       "distinctVideos": 93,
+       "distinctHours": 40.77,
+       "records": 110,
+       "extraCopies": 17,
+       "allCopiesHours": 59.2
+      },
+      "allText": {
+       "distinctVideos": 97,
+       "distinctHours": 41.16,
+       "records": 117,
+       "extraCopies": 20,
+       "allCopiesHours": 59.82
+      }
+     }
+    },
+    {
+     "id": "ac-st-05",
+     "text": "tell me about the bowser family",
+     "expect": "kinship",
+     "mustMatch": [
+      "Bowser",
+      "\\b(?:19|16)\\b"
+     ],
+     "expectedNumbers": {
+      "anyRecordedName": 19,
+      "primarySurname": 16
+     }
+    }
+   ]
+  },
+  {
+   "id": "multi_hop",
+   "prompts": [
+    {
+     "id": "ac-mh-01",
+     "text": "which of Donna's sisters appear in videos from before 1990?",
+     "expect": "catalog",
+     "mustMatch": [
+      "Bonnie",
+      "AtHudsons-Thanksgiving-1984|1984"
+     ],
+     "subjectIDs": [
+      "brain:told.donna-breen.2026-08-24.2",
+      "catalog:CC2391EA-FE73-44F9-95C4-1ACD38EAC811"
+     ]
+    },
+    {
+     "id": "ac-mh-02",
+     "text": "show me videos where both Bonnie and Donna appear at Christmas",
+     "expect": "catalog",
+     "mustMatch": [
+      "2011_Reckards_Hudson_Christmas"
+     ],
+     "subjectIDs": [
+      "catalog:DFCC4AB6-CD28-4DEA-B8B1-BD664A5A13F7"
+     ]
+    },
+    {
+     "id": "ac-mh-03",
+     "text": "who in the family was born in Ireland, and do we have any video of their children?",
+     "expect": "kinship",
+     "mustMatch": [
+      "O'Connor",
+      "Eileen|\\bMa\\b|mother",
+      "Christmas_?1990|Christmas1990|Mom-and-Dad-Breen|Clip 01"
+     ],
+     "subjectIDs": [
+      "gedcom:@I7@",
+      "gedcom:@I14@",
+      "gedcom:@I10@",
+      "gedcom:@I3@",
+      "catalog:CEB845C9-A4F4-4026-A4CC-BC2ADEA23955",
+      "catalog:1066D9B8-E65F-40BE-BC9D-DE27BFE6FC3B",
+      "catalog:E6B1CEAF-E072-47AA-833B-30701127D424",
+      "catalog:7CC68287-2796-417D-AB4E-04B4CB667865"
+     ]
+    },
+    {
+     "id": "dp261009-001",
+     "text": "show me videos of the Hudsons at Thanksgiving",
+     "expect": "catalog",
+     "mustMatch": [
+      "Thanksgiving-1984_Improved_slp|AtHudsons-Thanksgiving-1984"
+     ],
+     "mustNotContain": [
+      "mentioned anywhere"
+     ],
+     "subjectIDs": [
+      "catalog:90542A43-6A78-4AD4-8B0B-6C26C5A6A8B7",
+      "catalog:CC2391EA-FE73-44F9-95C4-1ACD38EAC811"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "conversation",
+   "sessions": [
+    {
+     "id": "cv-01",
+     "turns": [
+      {
+       "id": "ac-cv-01-t1",
+       "text": "tell me about Richard Hudson",
+       "expect": "biography",
+       "mustMatch": [
+        "1928",
+        "Donna|Elaine"
+       ],
+       "subjectIDs": [
+        "gedcom:@IB2@"
+       ]
+      },
+      {
+       "id": "ac-cv-01-t2",
+       "text": "what about his kids?",
+       "expect": "kinship",
+       "mustMatch": [
+        "Donna"
+       ],
+       "subjectIDs": [
+        "gedcom:@I14522@",
+        "brain:told.donna-breen.2026-08-24.2"
+       ]
+      },
+      {
+       "id": "ac-cv-01-t3",
+       "text": "any videos of the oldest one?",
+       "expect": "catalog",
+       "mustMatch": [
+        "Bonnie|Glen"
+       ],
+       "subjectIDs": [
+        "catalog:DFCC4AB6-CD28-4DEA-B8B1-BD664A5A13F7"
+       ]
+      },
+      {
+       "id": "ac-cv-01-t4",
+       "text": "when was that filmed?",
+       "expect": "catalog",
+       "mustMatch": [
+        "2011"
+       ]
+      }
+     ]
+    },
+    {
+     "id": "cv-02",
+     "turns": [
+      {
+       "id": "ac-cv-02-t1",
+       "text": "I think Dad's birth year is wrong in the tree — he was born in 1929",
+       "expect": "kinship",
+       "mustMatch": [
+        "1929"
+       ],
+       "mustNotContain": [
+        "I've updated",
+        "I have updated",
+        "I've changed",
+        "I changed",
+        "I've corrected",
+        "I corrected",
+        "I've fixed",
+        "I fixed"
+       ],
+       "subjectIDs": [
+        "gedcom:@I2@"
+       ]
+      },
+      {
+       "id": "ac-cv-02-t2",
+       "text": "ok what does the tree say about his parents?",
+       "expect": "kinship",
+       "mustMatch": [
+        "George",
+        "Muriel"
+       ],
+       "subjectIDs": [
+        "gedcom:@I8@",
+        "gedcom:@I4@"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  {
+   "id": "loose_phrasing",
+   "prompts": [
+    {
+     "id": "ac-lp-01",
+     "text": "who was my materanl grandmother?",
+     "expect": "kinship",
+     "mustMatch": [
+      "Mary (?:Christina )?O'Connor"
+     ],
+     "subjectIDs": [
+      "gedcom:@I7@"
+     ]
+    },
+    {
+     "id": "ac-lp-02",
+     "text": "the Hudsons at thanksgiving",
+     "expect": "catalog",
+     "mustMatch": [
+      "Thanksgiving-1984_Improved_slp|AtHudsons-Thanksgiving-1984"
+     ],
+     "mustNotContain": [
+      "drifted into saying",
+      "I couldn't turn your last question"
+     ],
+     "subjectIDs": [
+      "catalog:90542A43-6A78-4AD4-8B0B-6C26C5A6A8B7",
+      "catalog:CC2391EA-FE73-44F9-95C4-1ACD38EAC811"
+     ]
+    },
+    {
+     "id": "ac-lp-03",
+     "text": "tell me about dad's side",
+     "expect": "kinship",
+     "mustMatch": [
+      "Richard Harding Breen Sr|Richard Breen Sr|Dick",
+      "George Breen|Muriel Lamb"
+     ],
+     "mustNotContain": [
+      "Dafydd"
+     ],
+     "subjectIDs": [
+      "gedcom:@I2@",
+      "gedcom:@I8@",
+      "gedcom:@I4@"
+     ]
+    },
+    {
+     "id": "ac-lp-04",
+     "text": "when was Ma born?",
+     "expect": "kinship",
+     "mustMatch": [
+      "1930",
+      "Aug"
+     ],
+     "mustNotContain": [
+      "Massachusetts is"
+     ],
+     "subjectIDs": [
+      "gedcom:@I3@",
+      "people:11892D85-3A1D-4C9F-8451-EFE5D475B196"
+     ]
+    },
+    {
+     "id": "lv261010-002",
+     "text": "the name macgregor is pronounced \"ma greggor:",
+     "expect": "social",
+     "mustMatch": [
+      "mac ?gregor"
+     ],
+     "mustNotContain": [
+      "spell it out for me"
+     ]
+    },
+    {
+     "id": "lv261010-010",
+     "text": "pronounce the name magregor as \"ma gregor\"",
+     "expect": "social",
+     "mustMatch": [
+      "mac?gregor"
+     ],
+     "mustNotContain": [
+      "about ma —",
+      "Eileen"
+     ]
+    },
+    {
+     "id": "lv261010-015",
+     "text": "tell me about the hudsons",
+     "expect": "kinship",
+     "mustMatch": [
+      "Hudson"
+     ],
+     "mustNotContain": [
+      "39249",
+      "39,249",
+      "most common surnames"
+     ]
+    },
+    {
+     "id": "ac-lp-05",
+     "text": "who was elain bowser",
+     "expect": "biography",
+     "mustMatch": [
+      "Elaine Bowser",
+      "1933"
+     ],
+     "subjectIDs": [
+      "gedcom:@IB3@"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "story",
+   "prompts": [
+    {
+     "id": "ac-sy-01",
+     "text": "tell me Dad's Marine Corps story",
+     "expect": "biography",
+     "mustMatch": [
+      "Marine",
+      "1940s|World War"
+     ],
+     "mustNotContain": [
+      "Parris Island",
+      "Iwo Jima",
+      "Okinawa",
+      "Guadalcanal",
+      "Camp Lejeune",
+      "Korea"
+     ],
+     "subjectIDs": [
+      "brain:event.richard-harding-breen-sr.service.2026-09-23",
+      "brain:bio.richard-breen-sr-marine-corps.2026-09-11"
+     ]
+    },
+    {
+     "id": "lv261010-012",
+     "text": "tell about richard breen sr",
+     "expect": "biography",
+     "mustContain": [
+      "Marine"
+     ],
+     "mustNotContain": [
+      "GEDCOM bridge"
+     ],
+     "subjectIDs": [
+      "gedcom:@I2@"
+     ]
+    },
+    {
+     "id": "ac-sy-02",
+     "text": "what was going on in Donna's family the year she was born?",
+     "expect": "biography",
+     "mustMatch": [
+      "1959",
+      "Brockton"
+     ],
+     "subjectIDs": [
+      "gedcom:@I14522@",
+      "gedcom:@IB2@",
+      "gedcom:@IB3@"
+     ]
+    },
+    {
+     "id": "ac-sy-03",
+     "text": "tell me about donna",
+     "expect": "biography",
+     "mustMatch": [
+      "1959",
+      "1981|Rick"
+     ],
+     "subjectIDs": [
+      "gedcom:@I14522@",
+      "people:000CD686-6256-4064-BFBD-D720FAE1E2B7"
+     ]
+    },
+    {
+     "id": "ac-sy-04",
+     "text": "tell me about dan",
+     "expect": "biography",
+     "mustMatch": [
+      "oldest",
+      "1982"
+     ],
+     "subjectIDs": [
+      "people:6A88DB14-1F59-4AA6-AC93-C499C388AE3F"
+     ]
+    }
+   ]
+  }
+ ]
+}

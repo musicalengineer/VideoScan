@@ -196,17 +196,20 @@ struct DeleteDuplicatesCodex258SurvivorTests {
         apply(.prepared, to: rig)
         // The forecast says what the run will do — it asks the same rule.
         let forecast = rig.model.deleteDuplicatesForecast(onVolume: rig.dir.path)
-        #expect(forecast.bucket(for: rig.a.id) == .leftAlone && forecast.total.files == 1,
-                "the forecast promised \(String(describing: forecast.bucket(for: rig.a.id))) on the strength of the held copy")
+        #expect(forecast.bucket(for: rig.a.id) == .trash && forecast.total.files == 1,
+                "the forecast promised \(String(describing: forecast.bucket(for: rig.a.id)))")
         let plan = try #require(await run(rig))
         #expect(plan.entries.map(\.id) == [rig.a.id], "the Angel's copy is not a row of the run")
         let row = try #require(plan.entries.first)
-        #expect(row.status == .skipped && row.remainingVerifiedCopies == 1,
+        // Keep one (2026-10-09): A goes on the keeper alone — and the held
+        // copy is still never COUNTED as a survivor.
+        #expect(row.status == .trashed && row.remainingVerifiedCopies == 1,
                 "the held copy was counted as a survivor: \(row.status), \(row.tierReason ?? row.note)")
-        #expect(row.note.contains("h.mov") && row.note.contains("not counted") && row.note.contains("in use by the Archive Angel"),
-                Comment(rawValue: row.note))
-        #expect(FileManager.default.fileExists(atPath: rig.a.fullPath) && FileManager.default.fileExists(atPath: rig.h.fullPath))
-        #expect(!FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash").path), "nothing went to the Trash")
+        let reason = row.tierReason ?? ""
+        #expect(reason.contains("h.mov") && reason.contains("not counted") && reason.contains("in use by the Archive Angel"),
+                Comment(rawValue: reason))
+        #expect(FileManager.default.fileExists(atPath: rig.h.fullPath), "the held copy stays")
+        #expect(!FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/h.mov").path), "the held copy is not in the Trash")
     }
 
     /// NO WEAKENING, as a property over identical inputs: the same records,
@@ -250,7 +253,7 @@ struct DeleteDuplicatesCodex258SurvivorTests {
                          : candidates.alsoInThisRun.count == 1 && candidates.leftAloneByRun.isEmpty)
             let facts = DeletionTierFacts.gather(candidates, digest: fileDigest, driveOf: secondDrive)
             #expect(facts.remainingVerifiedCopies == 2 && facts.distinctDriveCount == 2, "K + R, on two drives: \(facts.summary)")
-            tiers[held] = DeletionTierDecision.decide(facts: facts, preferTrash: false).tier
+            tiers[held] = DeletionTierDecision.decide(facts: facts).tier
         }
         #expect(tiers[false] == .some(.trash), "fixture: main's answer is the Trash")
         #expect(tiers[true] == .some(.trash), "with H held, A was decided \(String(describing: tiers[true])) — main says the Trash")
@@ -345,7 +348,7 @@ struct DeleteDuplicatesCodex258SurvivorTests {
             let plan = try #require(await rig.model.prepareDuplicateDeletion(onVolume: rig.dir.path))
             let candidates = rig.model.deletionTierCandidates(record: rig.a, keeper: rig.keeper, run: plan.runScope(deciding: rig.a.id))
             let facts = DeletionTierFacts.gather(candidates, digest: fileDigest, driveOf: driveOf)
-            let run = DeletionTierDecision.decide(facts: facts, preferTrash: false)
+            let run = DeletionTierDecision.decide(facts: facts)
             // The card.
             let inputs = StewardCaseBuilder.project(rig.model.records, protection: rig.model.stewardProtectionRule())
             let queue = StewardCaseBuilder.build(inputs: inputs, volumes: AnalyzeCoverageCalculator.volumeFacts(rig.model.scanTargets),
@@ -354,11 +357,11 @@ struct DeleteDuplicatesCodex258SurvivorTests {
             let prepared = try #require(StewardEvidenceBuilder.prepare(model: rig.model, for: card))
             let question = try #require(prepared.questions.first { $0.copyID == rig.a.id })
             #expect(!prepared.questions.contains { $0.copyID == rig.h.id }, "the held copy is never proposed")
-            let proof = StewardEvidenceBuilder.proof(question, preferTrash: false, driveOf: driveOf)
+            let proof = StewardEvidenceBuilder.proof(question, driveOf: driveOf)
             #expect(proof.tier == run.tier && proof.remaining == run.remainingVerifiedCopies,
                     "\(fixture.rawValue)\(twoDrives ? " on two drives" : ""): the card says \(String(describing: proof.tier)) with \(proof.remaining) remaining, the run \(String(describing: run.tier)) with \(run.remainingVerifiedCopies)")
             #expect(proof.readsFirst == 0 && proof.tierIfTheyMatch == run.tier, "no read stands between the card and the decision here")
-            #expect(run.tier == (fixture == .kah ? nil : .trash), "fixture: \(String(describing: run.tier))")
+            #expect(run.tier == .trash, "keep one — fixture: \(String(describing: run.tier))")
         }
     }
 
@@ -374,8 +377,10 @@ struct DeleteDuplicatesCodex258SurvivorTests {
         #expect(model.contains("if let held = hold(m) { return .leftAlone(held.why) }")
                 && model.contains("case .readOnlyVolume?, .readOnlyVolumeDifferentDrive?: return .leftAlone("))
         let forecast = try SourceTree.appSource(named: "DeleteDuplicatesForecast.swift")
-        #expect(forecast.contains("duplicateSurvivorStandingRule(in: $0)") && forecast.contains("if copy.leftAloneByRun { continue }"))
-        #expect(forecast.contains("run: plan.runScope(deciding: nil)"))
+        // Keep one: the forecast counts no survivors (the keeper is the one
+        // copy) — so it can never build a survivor set of its own either.
+        #expect(!forecast.contains("leftAloneByRun") && !forecast.contains("excluding:"),
+                "the forecast counts survivors again")
         let steward = try SourceTree.appSource(named: "StewardEvidence.swift")
         #expect(steward.contains("run: DuplicateRunScope(volumePath: row.driveRoot, pending: sameRun)"))
     }
@@ -414,7 +419,7 @@ struct DeleteDuplicatesCodex258DrivesTests {
         }
         #expect(facts.remainingVerifiedCopies == 3, "fixture: keeper + two verified siblings (\(facts.summary))")
         #expect(facts.distinctDriveCount == 1, "one volume counted as \(facts.distinctDriveCount) drives: \(facts.countedDrives)")
-        #expect(DeletionTierDecision.decide(facts: facts, preferTrash: false).tier == .trash)
+        #expect(DeletionTierDecision.decide(facts: facts).tier == .trash)
     }
 
     /// F9: keeper + sibling on drive A; the third verified sibling sits in a
@@ -433,7 +438,7 @@ struct DeleteDuplicatesCodex258DrivesTests {
                 return .init(device: 7, kind: path.hasSuffix("keeper.mov") ? keeper : .physical)
             }) { DeletionTierFacts.gather(c, digest: fileDigest) }
         }
-        func tier(_ f: DeletionTierFacts) -> DeletionTier? { DeletionTierDecision.decide(facts: f, preferTrash: false).tier }
+        func tier(_ f: DeletionTierFacts) -> DeletionTier? { DeletionTierDecision.decide(facts: f).tier }
 
         let image = facts(third: .diskImage)
         #expect(image.remainingVerifiedCopies == 3, "a copy in a disk image still counts as a COPY (\(image.summary))")
@@ -443,16 +448,18 @@ struct DeleteDuplicatesCodex258DrivesTests {
         #expect(unidentified.remainingVerifiedCopies == 3 && unidentified.distinctDriveCount == 1 && tier(unidentified) == .trash,
                 "a volume whose kind cannot be established added a drive")
         // What DOES count: another physical volume, and a network volume.
-        #expect(facts(third: .physical).distinctDriveCount == 2 && tier(facts(third: .physical)) == .permanent)
-        #expect(facts(third: .network).distinctDriveCount == 2 && tier(facts(third: .network)) == .permanent)
+        // (Trash only since 2026-10-09: a second drive is said, never rewarded.)
+        #expect(facts(third: .physical).distinctDriveCount == 2 && tier(facts(third: .physical)) == .trash)
+        #expect(facts(third: .network).distinctDriveCount == 2 && tier(facts(third: .network)) == .trash)
         // The KEEPER in a disk image, both siblings on one physical drive: one drive.
         let keeperInImage = DuplicateDrives.$identityOverride.withValue({ path in
             path.hasSuffix("keeper.mov") ? .init(device: 9_001, kind: .diskImage) : .init(device: 7, kind: .physical)
         }) { DeletionTierFacts.gather(c, digest: fileDigest) }
         #expect(keeperInImage.remainingVerifiedCopies == 3 && keeperInImage.distinctDriveCount == 1 && tier(keeperInImage) == .trash)
-        // The row says why three copies did not earn the outright delete.
-        let reason = DeletionTierDecision.decide(facts: image, preferTrash: false).reason
-        #expect(reason.contains("a disk image is not a second drive"), Comment(rawValue: reason))
+        // The image is never a second drive (said by the facts above); the
+        // row's reason names the copies.
+        let reason = DeletionTierDecision.decide(facts: image).reason
+        #expect(reason.hasPrefix("to the Trash (3 verified remain: "), Comment(rawValue: reason))
         // At the removal boundary nothing is ever added: the copy on the
         // second drive changes → its drive goes with it.
         let two = facts(third: .physical)
@@ -497,7 +504,7 @@ struct DeleteDuplicatesCodex258DrivesTests {
             #expect(try SourceTree.appSource(named: file).contains("seam?(path, stamp) ?? resolver.drive(path: path, stamp: stamp)"), "\(file)")
         }
         let forecast = try SourceTree.appSource(named: "DeleteDuplicatesForecast.swift")
-        #expect(forecast.contains("drives.drive(forPath: r.fullPath), d.kind.addsADrive"), "the forecast no longer asks the run's resolver")
+        #expect(!forecast.contains("DuplicateDrives"), "keep one: drives decide nothing, the forecast does not ask about them")
         #expect(!forecast.contains("\"boot\"") && !forecast.contains("static func drive(ofPath"), "the forecast reads a drive off the path's spelling again")
         let drives = try SourceTree.appSource(named: "DeleteDuplicatesDrives.swift")
         #expect(drives.contains("var addsADrive: Bool { self == .physical || self == .network }"))
@@ -540,7 +547,7 @@ struct DeleteDuplicatesCodex258DrivesTests {
                 let forecast = model.deleteDuplicatesForecast(onVolume: dir.path).bucket(for: copy.id)
                 let candidates = model.deletionTierCandidates(record: copy, keeper: keeper)
                 let facts = DeletionTierFacts.gather(candidates, digest: fileDigest)
-                return (forecast, DeletionTierDecision.decide(facts: facts, preferTrash: false).tier)
+                return (forecast, DeletionTierDecision.decide(facts: facts).tier)
             }
         }
         // One volume, one of its files reached through a symlink: one drive.
@@ -551,67 +558,29 @@ struct DeleteDuplicatesCodex258DrivesTests {
         let far = record(mnt.appendingPathComponent("far.mov"), .review, verified: true)
         model.records.append(far)
         let twoVolumes = both { path in .init(device: path.contains("/mnt/") ? 8 : 7, kind: .physical) }
-        #expect(twoVolumes.run == .permanent, "fixture: the run sees two drives (\(twoVolumes))")
-        #expect(twoVolumes.forecast == .permanent,
-                "the forecast (\(String(describing: twoVolumes.forecast))) disagrees with the run about where the copies sit")
+        #expect(twoVolumes.run == .trash, "Trash only: two drives change the words, not the outcome (\(twoVolumes))")
+        #expect(twoVolumes.forecast == .trash,
+                "the forecast (\(String(describing: twoVolumes.forecast))) disagrees with the run")
         // …and a disk image there is not a drive, for the forecast either.
         let image = both { path in .init(device: path.contains("/mnt/") ? 8 : 7, kind: path.contains("/mnt/") ? .diskImage : .physical) }
         #expect(image.run == .trash && image.forecast == .trash, "\(image)")
     }
 
-    /// F11: three are counted on ONE drive; an unverified sibling sits on a
-    /// SECOND drive. Reading it is what would earn the outright delete.
-    @Test func aSiblingOnASecondDriveIsWorthReadingEvenWithThreeCounted() {
-        #expect(SiblingProver.worthReading(count: 3, drives: ["A"], countsArchiveCopy: false, candidateDrive: "B", goal: 3))
-        #expect(SiblingProver.worthReading(count: 5, drives: ["A"], countsArchiveCopy: false, candidateDrive: "B", goal: 3))
-        #expect(!SiblingProver.worthReading(count: 3, drives: ["A"], countsArchiveCopy: false, candidateDrive: "A", goal: 3),
-                "a fourth copy on the same drive changes nothing")
-        #expect(!SiblingProver.worthReading(count: 3, drives: ["A", "B"], countsArchiveCopy: false, candidateDrive: "C", goal: 3),
-                "already permanent: no read")
-        #expect(!SiblingProver.worthReading(count: 3, drives: ["A"], countsArchiveCopy: true, candidateDrive: "B", goal: 3),
-                "the archive copy is counted: already permanent")
-        #expect(!SiblingProver.worthReading(count: 3, drives: ["A"], countsArchiveCopy: false, candidateDrive: "B", goal: 2),
-                "Prefer the Trash: nothing can lift the tier")
-    }
-
-    @Test func theRunReadsTheSecondDriveSiblingAndTheForecastSaysItWill() throws {
+    /// F11, under keep one (2026-10-09): a sibling on a second drive was the
+    /// read that earned an outright delete. Nothing earns one now, so no
+    /// sibling is ever worth reading and no drive is reserved for one.
+    @Test func noSiblingIsWorthReadingAndNoDriveIsReservedForOne() throws {
+        let goal = SiblingProver.Allowance.goal
+        #expect(!SiblingProver.worthReading(count: 1, goal: goal) && !SiblingProver.worthReading(count: 3, goal: goal))
         let dir = tempDir("f11"); defer { try? FileManager.default.removeItem(at: dir) }
         write(["keeper.mov", "s1.mov", "s2.mov", "far.mov"], in: dir)
         var c = candidates(in: dir, verified: ["s1.mov", "s2.mov"], unverified: ["far.mov"]) { name in
             ContentFixity.captured(path: dir.appendingPathComponent(name).path, digest: fileDigest, byteCount: Int64(fileSize))
         }
-        let driveOf: (String, FileIdentityStamp) -> DeletionTierFacts.Drive = { path, _ in
-            path.hasSuffix("far.mov") ? .init(key: "B", label: "X9") : .init(key: "A", label: "LaCie")
-        }
-        let before = DeletionTierFacts.gather(c, digest: fileDigest, driveOf: driveOf)
-        #expect(before.remainingVerifiedCopies == 3 && DeletionTierDecision.decide(facts: before, preferTrash: false).tier == .trash)
-        let reads = SiblingProver.prove(&c, digest: fileDigest,
-                                        allowance: .init(goal: 3, readablePaths: Set(c.otherCopies.map(\.path))),
-                                        hooks: .live, driveOf: driveOf)
-        #expect(reads.map(\.result) == [.matches], "the sibling on the second drive was not read: \(reads)")
-        let after = DeletionTierFacts.gather(c, digest: fileDigest, driveOf: driveOf)
-        #expect(after.remainingVerifiedCopies == 4 && after.distinctDriveCount == 2)
-        #expect(DeletionTierDecision.decide(facts: after, preferTrash: false).tier == .permanent)
-
-        // The job reserves the sibling's drive for that read…
-        c.otherCopies[2].fixity = nil
         let keeperFixity = ContentFixity.captured(path: c.keeperPath, digest: fileDigest, byteCount: Int64(fileSize))
-        #expect(DeleteDuplicatesJob.siblingsThatMayNeedReading(c, keeperDigest: keeperFixity, goal: 3) == [c.otherCopies[2].path],
-                "no drive is reserved for the read that could earn the outright delete")
-        #expect(DeleteDuplicatesJob.siblingsThatMayNeedReading(c, keeperDigest: keeperFixity, goal: 2).isEmpty, "Prefer the Trash")
-
-        // …and the forecast says so: the Trash as things stand, one read,
-        // and it may become an outright delete.
-        typealias F = DeleteDuplicatesForecast
-        let g = UUID(), keeper = UUID(), row = UUID(), s1 = UUID(), s2 = UUID(), far = UUID()
-        func copy(_ id: UUID, _ digest: String?, _ drive: String) -> F.Copy {
-            .init(id: id, sizeBytes: 10, digest: digest, online: true, isArchive: false, archiveDigest: nil, drive: drive)
-        }
-        let forecast = F.compute(.init(rows: [.init(id: row, sizeBytes: 10, digest: "d", keeperID: keeper, groupID: g)],
-                                       copies: [keeper: copy(keeper, "d", "a"), row: copy(row, "d", "a"), s1: copy(s1, "d", "a"),
-                                                s2: copy(s2, "d", "a"), far: copy(far, nil, "b")],
-                                       members: [g: [keeper, row, s1, s2, far]], preferTrash: false))
-        #expect(forecast.bucket(for: row) == .trash && forecast.siblingReads == 1 && forecast.trashMayBecomePermanent == 1,
-                "forecast: \(String(describing: forecast.bucket(for: row))), \(forecast.siblingReads) reads, \(forecast.trashMayBecomePermanent) may become permanent")
+        #expect(DeleteDuplicatesJob.siblingsThatMayNeedReading(c, keeperDigest: keeperFixity, goal: goal).isEmpty)
+        let reads = SiblingProver.prove(&c, digest: fileDigest,
+                                        allowance: .init(goal: goal, readablePaths: Set(c.otherCopies.map(\.path))), hooks: .live)
+        #expect(reads.isEmpty, "a sibling was read: \(reads)")
     }
 }

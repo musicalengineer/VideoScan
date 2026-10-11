@@ -72,6 +72,10 @@
 // is never WRITTEN by any rule here — not cleared, re-triangulated,
 // propagated to, footage-shared to or folder-year dated — nor by the
 // #1413 unwind. It may still DONATE: its date is the filed one.
+// 2026-10-10: the catch-up pass freezes every Archived-stage row too
+// (`isDossierReadOnly`), because Dossier now analyzes them and its
+// evidence must not turn into a date on an archived row. (The #1413
+// unwind keeps its narrower `isArchiveElement` scope.)
 //
 // NEVER: overwrite a userDate (not touched at all), overwrite an
 // existing own or propagated inference, propagate a copy-local mtime
@@ -798,7 +802,9 @@ extension VideoScanModel {
         pass.byID.reserveCapacity(records.count)
         for rec in records where Self.isEligibleForDateInference(rec) {
             pass.byID[rec.id] = rec
-            if isArchiveElement(rec) { pass.archived.insert(rec.id) }
+            // 2026-10-10: also every Archived-stage row — Dossier now gives
+            // them evidence, and that must never come back as a date.
+            if isDossierReadOnly(rec) { pass.archived.insert(rec.id) }
             if let key = Self.contentGroupKey(rec), scopeKeys?.contains(key) ?? true {
                 pass.groups[key, default: []].append(rec)
             }

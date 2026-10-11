@@ -22,9 +22,26 @@ struct MediaInfoRequest: Identifiable {
     /// carries the per-channel levels and the Balance / Rebuild offers.
     let audioDiagnosis: AudioVerifyDiagnosis?
     let onCheckMedia: () -> Void
-    /// Opens the Repair sheet (the plan) — Get Info's banner button.
-    var onRepair: (() -> Void)?
+    /// Opens the Repair sheet (the plan) — Get Info's banner buttons. The
+    /// argument is the sound file the "No sound" banner found (nil = the
+    /// sheet looks itself).
+    var onRepair: ((MediaRepairSoundSource?) -> Void)?
     let onSoundDetails: (() -> Void)?
+    /// "A copy with sound is here" (Rick 2026-10-10): the lookup and its
+    /// actions, supplied by the presenter (which owns the model). nil =
+    /// the sheet still shows the no-sound warning, without the lookup.
+    var soundCopy: SoundCopyHooks?
+}
+
+/// What Get Info needs to say where the sound is and act on it. Closures,
+/// so the sheet itself never touches the catalog.
+struct SoundCopyHooks {
+    /// Gather on the main actor, decide off it (SoundCopyFinder.load).
+    let load: @MainActor () async -> SoundCopyAdvice
+    let reveal: (SoundCopyCandidate) -> Void
+    let play: (SoundCopyCandidate) -> Void
+    // Adding the sound is Repair…'s job (the banner's button) — the one
+    // repair door, Rick's 10/8 ruling; there is no Combine button here.
 }
 
 struct MediaInfoSheet: View {
@@ -37,6 +54,7 @@ struct MediaInfoSheet: View {
         case unavailable(String)
     }
     @State private var load: Load = .loading
+    @State private var soundAdvice: SoundCopyAdvice?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -49,6 +67,7 @@ struct MediaInfoSheet: View {
                 .truncationMode(.middle)
 
             verdictBox
+            soundSection
             repairBanner
             repairedCopyLine
 
@@ -70,22 +89,37 @@ struct MediaInfoSheet: View {
         }
         .padding(24)
         .frame(width: 640)
-        .task { await loadFacts() }
+        .task {
+            await loadFacts()
+            await loadSoundAdvice()
+        }
     }
 
     // MARK: Verdict line
 
+    /// The verdict line. A file with no sound (and that should have it)
+    /// gets the loud banner with Repair… instead of a plain headline (Rick
+    /// 2026-10-10), whether or not it has been verified.
     @ViewBuilder
     private var verdictBox: some View {
-        if let card = request.record.mediaReportCard {
+        if let banner = noSoundBanner {
+            VStack(alignment: .leading, spacing: 4) {
+                DiagnosticBannerView(banner: banner, onAction: bannerHandler)
+                if let card = request.record.mediaReportCard {
+                    lastChecked(card).padding(.leading, 4)
+                }
+            }
+            .accessibilityIdentifier("mediaInfo.verdict")
+        } else if let card = request.record.mediaReportCard {
             Label {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(card.displayHeadline).font(.body.weight(.medium))
-                    Text("Last checked \(card.checkedAt.formatted(date: .abbreviated, time: .shortened))\(card.isCurrent(forSizeBytes: request.record.sizeBytes) ? "" : " — the file has changed since")")
-                        .font(.callout).foregroundStyle(.secondary)
+                    Text(SoundPresencePolicy.displayHeadline(card: card, presence: soundPresence))
+                        .font(.body.weight(.medium))
+                    lastChecked(card)
                 }
             } icon: {
-                MediaVerdictIcon(verdict: card.verdict, quickPassOnly: card.isQuickPassOnly)
+                let shown = SoundPresencePolicy.displayVerdict(card: card, presence: soundPresence)
+                MediaVerdictIcon(verdict: shown, quickPassOnly: shown == card.verdict && card.isQuickPassOnly)
             }
             .accessibilityIdentifier("mediaInfo.verdict")
         } else {
@@ -94,6 +128,113 @@ struct MediaInfoSheet: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    /// nil when this sheet can't open Repair (then the banner draws no button).
+    private var bannerHandler: (@MainActor (DiagnosticAction) -> Void)? {
+        guard request.onRepair != nil else { return nil }
+        return { bannerAction($0) }
+    }
+
+    /// The banner's Repair…: hand off to the Repair sheet with the sound
+    /// file the banner found.
+    private func bannerAction(_ action: DiagnosticAction) {
+        guard case .repair(let prefill) = action, let onRepair = request.onRepair else { return }
+        handOff { onRepair(prefill.soundSource) }
+    }
+
+    private func lastChecked(_ card: MediaReportCard) -> some View {
+        Text("Last checked \(card.checkedAt.formatted(date: .abbreviated, time: .shortened))\(card.isCurrent(forSizeBytes: request.record.sizeBytes) ? "" : " — the file has changed since")")
+            .font(.callout).foregroundStyle(.secondary)
+    }
+
+    // MARK: Sound (Rick 2026-10-10)
+
+    /// The "No sound" banner: the live assessment (or a card that says so),
+    /// with where the sound is once the lookup has answered. O(card rows).
+    private var noSoundBanner: DiagnosticBanner? {
+        let r = request.record
+        let card = r.mediaReportCard.flatMap { $0.isCurrent(forSizeBytes: r.sizeBytes) ? $0 : nil }
+        return DiagnosticBanner.noSound(recordID: r.id, card: card, presence: soundPresence, advice: soundAdvice)
+    }
+
+    /// SoundPresencePolicy's answer: from the probe once it has read the
+    /// header, else from the catalog's stream type. O(1) — one date
+    /// resolution and one pointer hop; nothing here scans the catalog.
+    private var soundPresence: SoundPresence {
+        let context = request.record.soundPresenceContext
+        if case .loaded(let f) = load {
+            return SoundPresencePolicy.assess(hasPicture: f.video != nil, hasSound: f.audio != nil, context: context)
+        }
+        return request.record.catalogSoundPresence
+    }
+
+    /// The pair / silent-film note (quiet); for "No sound" (the banner
+    /// above says it) only the lookup's Reveal / Play. Empty otherwise.
+    @ViewBuilder
+    private var soundSection: some View {
+        let presence = soundPresence
+        if presence.isWarning {
+            soundAdviceRow
+        } else if let headline = presence.headline {
+            VStack(alignment: .leading, spacing: 6) {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(headline).font(.body.weight(.medium))
+                        if let why = presence.reason {
+                            Text(why).font(.callout).foregroundStyle(.secondary)
+                        }
+                    }
+                } icon: {
+                    Image(systemName: "speaker.slash").foregroundStyle(.secondary)
+                }
+                .accessibilityIdentifier("mediaInfo.sound")
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var soundAdviceRow: some View {
+        switch soundAdvice {
+        case nil:
+            if request.soundCopy != nil {
+                ProgressView("Looking for a copy with sound…").controlSize(.small)
+            }
+        case .some(let advice):
+            if let candidate = advice.candidate {
+                HStack(spacing: 8) {
+                    Text(candidate.fullPath).font(.callout.monospaced()).foregroundStyle(.secondary)
+                        .lineLimit(1).truncationMode(.middle)
+                        .help(candidate.fullPath)
+                        .accessibilityIdentifier("mediaInfo.soundCopy")
+                    Spacer()
+                    soundAdviceButtons(advice)
+                }
+                .controlSize(.small)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func soundAdviceButtons(_ advice: SoundCopyAdvice) -> some View {
+        if let hooks = request.soundCopy {
+            switch advice {
+            case .watch(let c):
+                Button("Reveal") { hooks.reveal(c) }
+                Button("Play") { hooks.play(c) }
+            case .combine(let p), .maybeCombine(let p):
+                Button("Reveal") { hooks.reveal(p.audio) }
+            case .connect:
+                EmptyView()   // its drive is not connected — nothing to reveal yet
+            case .none:
+                EmptyView()
+            }
+        }
+    }
+
+    private func loadSoundAdvice() async {
+        guard soundPresence.isWarning, let hooks = request.soundCopy else { return }
+        soundAdvice = await hooks.load()
     }
 
     /// The ORANGE "Recommended action" box with the GREEN button, when the
@@ -108,7 +249,7 @@ struct MediaInfoSheet: View {
             MediaRepairBanner(advice: MediaRepairAdvice.advice(for: card, offers: offers,
                                                               balance: MediaRepairBalanceInput(diagnosis: request.audioDiagnosis),
                                                               sourceName: r.filename),
-                              buttonTitle: "Repair Now\u{2026}", action: { handOff(onRepair) })
+                              buttonTitle: "Repair Now\u{2026}", action: { handOff { onRepair(nil) } })
         }
     }
 

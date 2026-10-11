@@ -217,6 +217,24 @@ extension CatalogContent {
             // to this table's focus by the focusedValue above.
     }
 
+    /// The filename's colour, highest priority first. Selected wins
+    /// (Rick 2026-10-10: a status colour on the blue selection was
+    /// illegible) — `.primary` is what macOS renders white on the key
+    /// highlight; the row's icon and italics still carry the state.
+    /// Then purged-orange, set-aside-purple, superseded-brown,
+    /// workspace-mint, offline-secondary, pair blue/green, default.
+    static func filenameColor(for rec: VideoRecord, selected: Bool,
+                              offline: Bool, pairTint: Bool) -> Color {
+        if selected { return .primary }
+        if rec.isPurged { return .orange }
+        if rec.isSetAside { return .purple }
+        if rec.isSuperseded { return .brown }
+        if rec.workspaceActive { return .mint }
+        if offline { return .secondary }
+        if pairTint { return rec.streamType == .videoOnly ? .blue : .green }
+        return rec.filenameColor
+    }
+
     private var catalogTableBase: some View {
         Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
@@ -276,14 +294,11 @@ extension CatalogContent {
                         // Workspace tint (.mint / turquoise) sits between
                         // purged-orange (highest priority) and the rest.
                         .italic(offline || purged || setAside || superseded)
-                        .foregroundColor(purged ? .orange
-                            : (setAside ? .purple
-                                : (superseded ? .brown
-                                    : (workspaceActive ? .mint
-                                        : (offline ? .secondary
-                                            : (showPairsOnly && rec.pairedWith != nil
-                                               ? (rec.streamType == .videoOnly ? .blue : .green)
-                                               : rec.filenameColor))))))
+                        .foregroundColor(Self.filenameColor(
+                            for: rec,
+                            selected: selectedIDs.contains(rec.id),
+                            offline: offline,
+                            pairTint: showPairsOnly && rec.pairedWith != nil))
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.vertical, 2)
@@ -294,10 +309,10 @@ extension CatalogContent {
                 // file's name that does NOT depend on focus. O(1) per cell.
                 .background {
                     if selectedIDs.contains(rec.id) {
+                        // Outline only (Rick 2026-10-10): a fill stacked
+                        // on the system highlight hid the filename.
                         RoundedRectangle(cornerRadius: 5)
-                            .fill(Color.accentColor.opacity(0.30))
-                            .overlay(RoundedRectangle(cornerRadius: 5)
-                                .strokeBorder(Color.accentColor.opacity(0.75), lineWidth: 1))
+                            .strokeBorder(Color.accentColor, lineWidth: 1.5)
                             .padding(.horizontal, -4)
                     }
                 }
@@ -463,10 +478,7 @@ extension CatalogContent {
             model.log("Move to Trash: the \(selectedIDs.count) selected row(s) are no longer in the table — nothing to do.")
             return
         }
-        Task { @MainActor in
-            let result = await model.trashSelectedRecords(targets)
-            reportDeleteResult(result, mode: .toTrash)
-        }
+        confirmThenTrash(targets)
     }
 
     /// ⌘O route (File ▸ Open): the highlighted rows, through `openRows`.
@@ -484,34 +496,65 @@ extension CatalogContent {
         CatalogOpenAction.open(ids: ids, rows: tableData, gesture: gesture, model: model)
     }
 
-    func reportDeleteResult(
-        _ result: VideoScanModel.JunkDeletionResult,
-        mode: VideoScanModel.JunkDeletionMode
-    ) {
-        let interesting = result.alreadyMissing > 0
-            || result.skippedOffline > 0
-            || !result.failed.isEmpty
-        guard interesting else { return }
+    /// THE one confirmation in front of the Catalog's Move to Trash — the
+    /// row menu and ⌘⌫ both land here (codex delete-engines F8): "Move N
+    /// files (X) to the Trash?", what will be held back and why; Return =
+    /// Move to Trash, Esc = Cancel. Only then are the rows handed to the
+    /// one Trash routine. When nothing can move there is no question — the
+    /// result lists every file that stayed, with its reason.
+    func confirmThenTrash(_ targets: [VideoRecord]) {
+        let plan = model.catalogTrashPlan(for: targets)
+        let sizes = Dictionary(targets.map { ($0.id, $0.sizeBytes) }, uniquingKeysWith: { first, _ in first })
+        let confirmation = CatalogTrashConfirmation(plan: plan, sizes: sizes)
+        if confirmation.canMove {
+            let alert = NSAlert()
+            alert.messageText = confirmation.title
+            alert.informativeText = confirmation.detail
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: CatalogTrashConfirmation.moveButton)   // first button: Return
+            let cancel = alert.addButton(withTitle: "Cancel")
+            cancel.keyEquivalent = "\u{1b}"                                    // Esc
+            guard alert.runModal() == .alertFirstButtonReturn else {
+                model.log("Move to Trash: cancelled at the confirmation — nothing moved.")
+                return
+            }
+        }
+        Task { @MainActor in
+            let result = await model.trashSelectedRecords(targets)
+            reportDeleteResult(result)
+        }
+    }
 
-        var lines: [String] = []
-        if result.succeeded > 0 {
-            lines.append("\(result.succeeded) \(mode == .toTrash ? "moved to Trash" : "deleted permanently")")
-        }
-        if result.alreadyMissing > 0 {
-            lines.append("\(result.alreadyMissing) already missing \u{2014} catalog updated")
-        }
-        if result.skippedOffline > 0 {
-            lines.append("\(result.skippedOffline) skipped \u{2014} volume offline")
-        }
-        if !result.failed.isEmpty {
-            lines.append("\(result.failed.count) failed (permissions or locked)")
-        }
+    /// The result of ⌘⌫ / the row menu's Move to Trash. Silent when every
+    /// file moved (Finder's behaviour); otherwise an alert with one
+    /// sentence per bucket and EVERY file that stayed, with its reason, in
+    /// a scrolling list (design R6 — nothing console-only, nothing
+    /// truncated). Same presenter as Triage's result sheet.
+    func reportDeleteResult(_ result: VideoScanModel.JunkDeletionResult) {
+        let report = JunkDeletionReport(result)
+        guard report.hasNotes else { return }
         let alert = NSAlert()
-        alert.messageText = "Delete completed with notes"
-        alert.informativeText = lines.joined(separator: "\n")
+        alert.messageText = "Move to Trash \u{2014} some files stayed"
+        alert.informativeText = report.summary.joined(separator: "\n")
         alert.alertStyle = result.failed.isEmpty ? .informational : .warning
+        alert.accessoryView = Self.reportListView(report.linesText)
         alert.addButton(withTitle: "OK")
         alert.runModal()
+    }
+
+    /// A read-only, selectable, scrolling text list for the alert.
+    private static func reportListView(_ text: String) -> NSView {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 460, height: 180))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let textView = NSTextView(frame: scroll.bounds)
+        textView.isEditable = false
+        textView.isSelectable = true
+        textView.font = NSFont.systemFont(ofSize: NSFont.smallSystemFontSize)
+        textView.string = text
+        textView.autoresizingMask = [.width]
+        scroll.documentView = textView
+        return scroll
     }
 
     /// Extracted Tag-column cell. Moved out of the Table body to keep

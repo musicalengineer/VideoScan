@@ -105,7 +105,7 @@ struct DossierVolumeRow: View, Equatable {
                     .font(.system(size: 10))
                     .foregroundColor(.secondary)
                     .lineLimit(1)
-                    .help("Eligible = files Analyze will process · Done = already analyzed · Set aside = audio-only files excluded by the Analysis Scope (flip the toggle below to include them) · Photos = still images (never analyzed here) · DRM = protected files we can't read · Archived = already put away · Junk = marked for cleanup")
+                    .help("Eligible = files Analyze will process · Done = already analyzed · Set aside = audio-only files excluded by the Analysis Scope (flip the toggle below to include them) · Photos = still images (never analyzed here) · DRM = protected files we can't read · Needs reformat = the analyzer couldn't read the video; batches skip it (right-click ▸ Analyze to try again) · Removed = trashed or deleted · Junk = marked for cleanup")
             }
             buttonStack
         }
@@ -154,7 +154,8 @@ struct DossierVolumeRow: View, Equatable {
         if coverage.outOfScopeCount > 0 { parts.append("Set aside \(coverage.outOfScopeCount)") }
         if coverage.photoCount > 0 { parts.append("Photos \(coverage.photoCount)") }
         if coverage.drmCount > 0 { parts.append("DRM \(coverage.drmCount)") }
-        if coverage.archivedCount > 0 { parts.append("Archived \(coverage.archivedCount)") }
+        if coverage.needsReformatCount > 0 { parts.append("Needs reformat \(coverage.needsReformatCount)") }
+        if coverage.retiredCount > 0 { parts.append("Removed \(coverage.retiredCount)") }
         if coverage.junkCount > 0 { parts.append("Junk \(coverage.junkCount)") }
         return parts.joined(separator: " · ")
     }

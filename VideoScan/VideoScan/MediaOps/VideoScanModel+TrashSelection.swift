@@ -1,21 +1,23 @@
 // VideoScanModel+TrashSelection.swift
-// ⌘⌫ in the Catalog table — the Finder gesture — moves the highlighted
-// rows to the macOS Trash (Rick, 2026-09-13).
+// The Catalog's Move to Trash: ⌘⌫ in the table — the Finder gesture — and
+// the row menu's Move to Trash both call `trashSelectedRecords` (Rick,
+// 2026-09-13; one function for both since 2026-10-09, so they behave
+// identically, ignore list included).
 //
 // This is a DELETE path, so it adds NO file-deletion code of its own. It
 // is a pure PLAN in front of the ONE existing "move to Trash" routine,
-// `deleteConfirmedJunk(_:mode: .toTrash)` (VideoScanModel+JunkDelete.swift)
-// — the same call the catalog row's "Delete File → Move to Trash" menu
-// item makes. That routine already: leaves Master Archive files alone
+// `deleteConfirmedJunk(_:mode: .toTrash)` (VideoScanModel+JunkDelete.swift).
+// That routine already: leaves Master Archive files alone
 // (excludingMasterArchiveFiles), skips files whose drive is offline,
 // stamps `purgedAt` + `lifecycleStage = .trashed`, publishes the change
 // (#160), and writes one `copyTrashed` Media Ledger line per file that
 // actually left the disk, by: rick. Rows it trashes are recoverable from
 // Finder's Trash and, in the catalog, via Show Removed → Restore.
 //
-// The plan adds the gate the row menu never had: a member of a recovered
+// The plan adds a gate the routine does not have: a member of a recovered
 // audio/video pair (Combine's raw material) is refused, the way Tidy
-// refuses it. Every refusal is a console line, never a silent skip. The
+// refuses it. Every refusal is a console line AND a held row in the
+// result (with its reason), never a silent skip. The
 // existing routine re-checks the archive and offline gates itself, so
 // they are enforced twice (plan time + apply time — the Tidy shape).
 //
@@ -106,18 +108,27 @@ extension VideoScanModel {
     }
 
     /// ⌘⌫: plan, say what was refused, then hand the rest to the existing
-    /// Trash routine. Returns its result (the table reports it the same
-    /// way the row menu does). An empty or fully-refused selection never
-    /// reaches the disk.
+    /// Trash routine. Returns ONE outcome per selected row (design R6): the
+    /// plan's refusals as held / offline WITH their reasons, merged with
+    /// the routine's outcomes, in selection order — so the alert can list
+    /// every row that stayed, and why. An empty or fully-refused selection
+    /// never reaches the disk.
+    /// `fileOperation` is the tests' seam for the file operation (nil =
+    /// the routine's own move to the Trash — every production caller).
     @discardableResult
-    func trashSelectedRecords(_ requested: [VideoRecord]) async -> JunkDeletionResult {
-        let nothing = JunkDeletionResult(attempted: 0, succeeded: 0, alreadyMissing: 0, skippedOffline: 0, failed: [])
-        guard !requested.isEmpty else { return nothing }
+    func trashSelectedRecords(_ requested: [VideoRecord],
+                              fileOperation: (@Sendable (URL) throws -> Void)? = nil) async -> JunkDeletionResult {
+        guard !requested.isEmpty else { return .empty }
         guard !isReadOnly else {
             log("Move to Trash refused — read-only viewer mode.")
-            return nothing
+            let why = "this Mac is a read-only viewer of the catalog"
+            return JunkDeletionResult(items: requested.map { .init(record: $0, outcome: .held(why)) })
         }
         let plan = catalogTrashPlan(for: requested)
+        // G2: the auditor's record — START, a line + receipt row per file, OUTCOME.
+        let audit = DeletionAudit(kind: .junk, verb: "Move to Trash", linePrefix: "[junk] ", sink: deletionAuditSink())
+        audit.start(scope: "\(requested.count) selected in the Catalog", requested: requested.count,
+                    bytes: requested.reduce(Int64(0)) { $0 + $1.sizeBytes })
         logMasterArchiveRefusals(plan, requested: requested)
         let paired = plan.refusedCount(.pairMember)
         if paired > 0 {
@@ -131,12 +142,23 @@ extension VideoScanModel {
         if inert > 0 {
             log("Move to Trash: \(inert) file(s) were already removed or set aside — nothing more to do for them.")
         }
-        guard !plan.toTrash.isEmpty else { return nothing }
-        let byID = Dictionary(uniqueKeysWithValues: requested.map { ($0.id, $0) })
+        let byID = Dictionary(requested.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let targets = plan.toTrash.compactMap { byID[$0] }
         // The one existing Trash routine — archive + offline gates,
-        // purgedAt/.trashed, publish, and the copyTrashed ledger lines.
-        let result = await deleteConfirmedJunk(targets, mode: .toTrash)
+        // purgedAt/.trashed, publish, and the copyTrashed ledger lines. The
+        // plan's own catalog gates are asked AGAIN at each file's turn
+        // (codex delete-engines F3): a row Combine pairs, or that is
+        // removed or set aside, while the batch runs is held.
+        var fileGuard = JunkDeletionGuard(
+            authorize: { [weak self] rec in
+                guard let self else { return "the catalog went away — nothing moved" }
+                return self.catalogTrashTurnProblem(rec)
+            },
+            beforeRemoval: { _ in nil },
+            remove: fileOperation)
+        fileGuard.settled = { rec, outcome in audit.record(JunkDeletionResult.auditRow(rec, outcome), id: rec.id) }
+        let routine = targets.isEmpty ? .empty : await deleteConfirmedJunk(targets, mode: .toTrash, guard: fileGuard)
+        var result = mergedCatalogTrashResult(requested, plan: plan, routine: routine).trashFailuresHeld()
         // "I don't wanna see it again" (Rick 2026-09-20): the content of
         // every row that actually left the disk goes on the ignore list
         // Tidy and Remove from Catalog use, so a rescan — or another copy
@@ -149,7 +171,55 @@ extension VideoScanModel {
             scheduleIgnoredContentSave()
             log("Move to Trash: remembered \(remembered) file(s) as ignored content — a rescan will not catalog them again (Tidy → Ignored content to put back).")
         }
+        logJunkLaneOutcome(result, verb: "Move to Trash")
+        audit.finish(result)   // the plan's refusals, then OUTCOME + the receipt
+        result.receipt = audit.receipt.url
         return result
+    }
+
+    /// The ⌘⌫ plan's catalog gates at ONE file's turn: still active, still
+    /// not half of a recovered A/V pair. nil = go on. (The archive and
+    /// read-only gates are the routine's own, also asked per file.)
+    func catalogTrashTurnProblem(_ rec: VideoRecord) -> String? {
+        if rec.isPurged || rec.isSetAside || rec.isSuperseded {
+            return "was removed, set aside or replaced by a repair since you chose it — nothing moved"
+        }
+        if CatalogScopePolicy.isPairProtected(rec) { return Self.pairMemberHeldNote }
+        return nil
+    }
+
+    /// One outcome per selected row, in selection order: the routine's
+    /// outcome for a row it was handed, else the plan's refusal as a named
+    /// hold (or "offline" for a drive that isn't connected).
+    private func mergedCatalogTrashResult(_ requested: [VideoRecord], plan: CatalogTrashPlan,
+                                          routine: JunkDeletionResult) -> JunkDeletionResult {
+        let refusals = Dictionary(plan.refused.map { ($0.id, $0.reason) }, uniquingKeysWith: { first, _ in first })
+        let handled = Dictionary(routine.items.map { (ObjectIdentifier($0.record), $0.outcome) },
+                                 uniquingKeysWith: { first, _ in first })
+        let archiveVolume = refusals.values.contains(.masterArchive) ? archiveVolumeProtection() : nil
+        let items: [JunkDeletionResult.Item] = requested.map { rec in
+            if let outcome = handled[ObjectIdentifier(rec)] { return .init(record: rec, outcome: outcome) }
+            let reason = refusals[rec.id] ?? .notActive
+            return .init(record: rec, outcome: catalogTrashRefusalOutcome(reason, rec, archiveVolume: archiveVolume))
+        }
+        return JunkDeletionResult(items: items)
+    }
+
+    /// A plan refusal as the row's outcome, in the person's words.
+    private func catalogTrashRefusalOutcome(_ reason: CatalogTrashPlan.Refusal, _ rec: VideoRecord,
+                                            archiveVolume: ArchiveVolumeProtection?) -> JunkFileOutcome {
+        switch reason {
+        case .offlineVolume:
+            return .offline
+        case .pairMember:
+            return .held("is half of a recovered audio/video pair, which Combine still needs")
+        case .notActive:
+            return .held("was already removed, set aside or replaced by a repair — nothing more to do")
+        case .masterArchive:
+            let note = bulkDeleteRefusal(rec, volume: archiveVolume)
+                .map { Self.bulkDeleteRefusalNote($0, volume: archiveVolume?.label ?? "the archive volume") }
+            return .held(note ?? "lives in the Master Archive, which only archive actions may change")
+        }
     }
 
     /// The SAME sentences excludingMasterArchiveFiles writes, one per kind

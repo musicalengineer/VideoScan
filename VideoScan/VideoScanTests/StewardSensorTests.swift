@@ -287,7 +287,7 @@ struct StewardSensorTests {
                      "SiblingProver.readableSiblings(",
                      "candidates.duplicateIdentity = FileIdentityStamp.capture(path: q.copyPath)",
                      "c.runRows.filter { $0.driveRoot == row.driveRoot && $0.id != row.id }",
-                     "DeletionTierDecision.decide(facts: facts, preferTrash: preferTrash)"] {
+                     "DeletionTierDecision.decide(facts: facts)"] {
             #expect(src.contains(call), "the proof no longer calls `\(call)`")
         }
         let card = code(try source("StewardCardView.swift"))

@@ -26,6 +26,10 @@ struct MediaRepairSheetRequest: Identifiable {
     let onVerify: () -> Void
     /// Select a row in the catalog (after Link Repaired Copy…).
     var onSelectRecord: (UUID) -> Void = { _ in }
+    /// The sound file for "Add its sound from another file", when the
+    /// caller already looked (the Verify job's banner, Get Info). nil = the
+    /// sheet looks for it itself, for a picture with no sound.
+    var soundSource: MediaRepairSoundSource?
 }
 
 struct MediaRepairSheet: View {
@@ -41,6 +45,9 @@ struct MediaRepairSheet: View {
     @State private var chosenFolder: URL?
     @State private var folderRefusal: String?
     @State private var job: MediaRepairJob?
+    /// The add-sound step's sound file (Rick 2026-10-10): the request's,
+    /// else this sheet's own lookup.
+    @State private var soundSource: MediaRepairSoundSource?
 
     enum PictureLoad: Equatable {
         case notNeeded, loading
@@ -56,7 +63,9 @@ struct MediaRepairSheet: View {
 
     init(request: MediaRepairSheetRequest) {
         self.request = request
-        _selection = State(initialValue: MediaRepairSelection(offers: Self.offers(for: request)))
+        _soundSource = State(initialValue: request.soundSource)
+        _selection = State(initialValue: MediaRepairSelection(offers: Self.offers(for: request,
+                                                                                  soundSource: request.soundSource)))
     }
 
     private var record: VideoRecord { request.record }
@@ -69,17 +78,19 @@ struct MediaRepairSheet: View {
     private var recipe: MediaRepairRecipe {
         var effective = selection
         if !picture.isReady { effective.set(.removeRepeatedFrames, on: false) }
-        return effective.recipe(balance: balance)
+        return effective.recipe(balance: balance, soundFile: soundSource?.measured?.audio.fullPath)
     }
 
     /// Every fix: the card's earned ones first (ticked), then "More
     /// repairs", each available or not with the reason.
-    static func offers(for request: MediaRepairSheetRequest) -> [MediaRepairOffer] {
+    static func offers(for request: MediaRepairSheetRequest,
+                       soundSource: MediaRepairSoundSource?) -> [MediaRepairOffer] {
         let r = request.record
         let card = r.mediaReportCard.flatMap { $0.isCurrent(forSizeBytes: r.sizeBytes) ? $0 : nil }
         return MediaRepairPlan.allOffers(for: card, sound: MediaRepairSoundFacts(diagnosis: request.audioDiagnosis),
                                          hasPicture: r.streamType == .videoAndAudio || r.streamType == .videoOnly,
-                                         hasSound: r.streamType == .videoAndAudio || r.streamType == .audioOnly)
+                                         hasSound: r.streamType == .videoAndAudio || r.streamType == .audioOnly,
+                                         soundSource: soundSource)
     }
 
     var body: some View {
@@ -101,7 +112,10 @@ struct MediaRepairSheet: View {
         }
         .padding(24)
         .frame(width: 640)
-        .task { await loadPicturePlan() }
+        .task {
+            await loadSoundSource()
+            await loadPicturePlan()
+        }
     }
 
     // MARK: Plan
@@ -155,11 +169,21 @@ struct MediaRepairSheet: View {
                                                   set: { selection.set(offer.fix, on: $0) }))
                 .disabled(!offer.isAvailable || pictureRefusal(for: offer.fix) != nil)
                 .accessibilityIdentifier("repair.fix.\(offer.fix.rawValue)")
-            Text(pictureRefusal(for: offer.fix) ?? offer.unavailableReason ?? offer.fix.explanation)
+            Text(fixDetail(offer))
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.leading, 20)
         }
+    }
+
+    /// Under each checkbox: why it can't run, else what it does — naming
+    /// the sound file for Add sound.
+    private func fixDetail(_ offer: MediaRepairOffer) -> String {
+        if let why = pictureRefusal(for: offer.fix) ?? offer.unavailableReason { return why }
+        if offer.fix == .addSound, let p = soundSource?.measured {
+            return "From \(p.audio.filename) (\(p.audio.volume)) \u{2014} \(p.reason). " + offer.fix.explanation
+        }
+        return offer.fix.explanation
     }
 
     private func pictureRefusal(for fix: MediaRepairFix) -> String? {
@@ -283,9 +307,28 @@ struct MediaRepairSheet: View {
         job = fileOpsCenter.startedByUser { center in
             center.startRepair(record: record, fixes: fixes, output: output,
                                besideOriginal: besideOriginal, model: model,
-                               plannedPictureFrames: plannedFrames)
+                               plannedPictureFrames: plannedFrames,
+                               addingSound: soundSource?.measured?.audio)
         }
         MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+    }
+
+    // MARK: The sound file for a picture with none (Rick 2026-10-10)
+
+    /// Only for a picture the policy flags (its card's Sound track row, else
+    /// the catalog's stream type) and only when the caller didn't already
+    /// look: one catalog pass on main, the decision off it
+    /// (SoundCopyFinder.loadSoundSource). The plan is rebuilt with the
+    /// answer — ticked only on a measured length match.
+    private func loadSoundSource() async {
+        guard soundSource == nil, Self.needsSound(record, card: card) else { return }
+        let found = await SoundCopyFinder.loadSoundSource(recordID: record.id, model: model)
+        soundSource = found
+        selection = MediaRepairSelection(offers: Self.offers(for: request, soundSource: found))
+    }
+
+    static func needsSound(_ rec: VideoRecord, card: MediaReportCard?) -> Bool {
+        card.map(CheckMediaRules.hasNoSoundRow) ?? rec.catalogSoundPresence.isWarning
     }
 
     // MARK: The picture plan (header only, off the main actor)

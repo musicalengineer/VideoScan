@@ -484,6 +484,42 @@ final class CaptionOrchestrator: ObservableObject {
     var liveSkipMissing = 0
     var liveSkipProtected = 0
 
+    // 2026-10-10 (Dossier admits Archived / In Triage): the coverage line's
+    // split. Same plain-var shape as the three above.
+
+    /// Flagged needsReformat by an earlier run — not retried by a batch.
+    var liveSkipNeedsReformat = 0
+    /// On a volume that is not connected — skipped, never failed.
+    var liveSkipOffline = 0
+    /// Same-footage text copied from a sibling — no decode.
+    var liveCarriedOver = 0
+    /// Newly flagged needsReformat this batch (videoUnreadable).
+    var liveFlaggedNeedsReformat = 0
+    /// Rows left untouched where a live row would have been changed:
+    /// archived (read-only) rows not purged / junk-flagged / reformat-
+    /// flagged, and In Triage rows missing on disk not auto-purged.
+    var liveReadOnlyLeftAsIs = 0
+
+    /// Same-footage carry-over index for the running batch. nil = carry-over
+    /// off (an explicit single-file Analyze, or a test driving the loops
+    /// directly). Set by the batch entry points, cleared when they settle.
+    var dossierCarryOver: DossierCarryOverIndex?
+
+    /// True for an explicit single-file Analyze: a file flagged
+    /// needsReformat is tried again (the "later retry" path). Batches skip
+    /// such files. Set and cleared by `startAnalyzing`.
+    var dossierRetriesNeedsReformat = false
+
+    /// The admission tally of the running batch (candidates dropped), for
+    /// the OUTCOME coverage line. nil for batches started by tests.
+    var dossierAdmission: DossierCandidateSelection?
+
+    /// The per-file DRM probe (AVAsset `hasProtectedContent`). A seam so
+    /// tests can pin the probed-DRM branch without a real FairPlay file;
+    /// production never reassigns it. (≈ a C++ std::function member
+    /// defaulted to the real implementation.)
+    var drmProbe: @Sendable (String) async -> Bool = { await CaptionOrchestrator.isDRMProtected(path: $0) }
+
     /// Test seam / regression sensor (QA F5 2026-07-14): counts every
     /// ENTRY into `startAnalyzing`, successful or refused. AnalyzeJob's
     /// wait loop must poll a plain bool while the orchestrator is busy

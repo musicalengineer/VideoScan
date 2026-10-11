@@ -161,6 +161,50 @@ extension CatalogContent {
         }
     }
 
+    /// Other people / Families as plain TAGS (Rick 2026-10-09: "tag Bonnie,
+    /// or Hudson Family at a Thanksgiving, without making a People-tab
+    /// card"). New Person… / New Family… tag the selection with the typed
+    /// name (a confirmed people tag, same as the inspector's New Person…);
+    /// names used before are remembered in `TagNameMemory`, so they're one
+    /// click the next time. No O(records) work: the lists are that memory.
+    @ViewBuilder
+    private func otherTagItems(selectedRecs: [VideoRecord], poiNames: [String]) -> some View {
+        let poi = Set(poiNames.map { $0.lowercased() })
+        Divider()
+        Section("Other people") {
+            ForEach(TagNameMemory.people.filter { !poi.contains($0.lowercased()) }, id: \.self) { name in
+                tagToggle(name, selectedRecs: selectedRecs)
+            }
+            Button("New Person\u{2026}") {
+                if let name = TagNameMemory.ask(title: "Tag a New Person",
+                                                example: "Bonnie", kind: .people) {
+                    model.setPerson(name, on: selectedRecs, present: true)
+                }
+            }
+        }
+        Section("Families") {
+            ForEach(TagNameMemory.families, id: \.self) { name in
+                tagToggle(name, selectedRecs: selectedRecs)
+            }
+            Button("New Family\u{2026}") {
+                if let name = TagNameMemory.ask(title: "Tag a Family",
+                                                example: "Hudson Family", kind: .families) {
+                    model.setPerson(name, on: selectedRecs, present: true)
+                }
+            }
+        }
+    }
+
+    private func tagToggle(_ name: String, selectedRecs: [VideoRecord]) -> some View {
+        let allHave = selectedRecs.allSatisfy { rec in
+            rec.taggedPeople.contains { $0.compare(name, options: .caseInsensitive) == .orderedSame }
+        }
+        return Toggle(name, isOn: Binding(
+            get: { allHave },
+            set: { model.setPerson(name, on: selectedRecs, present: $0) }
+        ))
+    }
+
     /// People ▸ — ONE menu (2026-10-07): who is in it (confirmed person
     /// tags, POI-database names only) and, at the bottom, Show in People
     /// tab ▸ (hand-pick for a person's or family's page, GH #272 — a tag
@@ -199,6 +243,7 @@ extension CatalogContent {
                     ))
                 }
             }
+            otherTagItems(selectedRecs: selectedRecs, poiNames: poiNames)
             peopleClearItems(selectedRecs: selectedRecs)
             Divider()
             ShowInPeopleTabMenu(records: selectedRecs)
@@ -330,5 +375,50 @@ extension CatalogContent {
             }
             // (Room for "Original Material…" — not built yet.)
         }
+    }
+}
+
+/// The names typed into People ▸ New Person… / New Family… (Rick
+/// 2026-10-09), remembered per Mac so they show up in the menu next time.
+/// A convenience list only — the tags themselves live on the records; losing
+/// this list loses nothing but the shortcut. (For Rick: a tiny persisted
+/// string array, like a recent-items list.)
+enum TagNameMemory {
+    enum Kind: String { case people = "peopleMenu.otherPeople", families = "peopleMenu.families" }
+
+    static var people: [String] { names(.people) }
+    static var families: [String] { names(.families) }
+
+    static func names(_ kind: Kind) -> [String] {
+        (UserDefaults.standard.stringArray(forKey: kind.rawValue) ?? [])
+            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
+    static func remember(_ name: String, _ kind: Kind) {
+        var list = UserDefaults.standard.stringArray(forKey: kind.rawValue) ?? []
+        guard !list.contains(where: { $0.compare(name, options: .caseInsensitive) == .orderedSame }) else { return }
+        list.append(name)
+        UserDefaults.standard.set(list, forKey: kind.rawValue)
+    }
+
+    /// Ask for a name (modal: a menu item can't host a text field), remember
+    /// it, and return it; nil on Cancel or an empty name.
+    @MainActor
+    static func ask(title: String, example: String, kind: Kind) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = "For example \u{201C}\(example)\u{201D}. This only tags the selected videos; "
+            + "it doesn't add a card to the People tab."
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        field.placeholderString = "Name"
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Tag")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
+        remember(name, kind)
+        return name
     }
 }

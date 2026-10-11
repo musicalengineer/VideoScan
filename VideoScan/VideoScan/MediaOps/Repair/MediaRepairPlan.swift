@@ -20,6 +20,10 @@ enum MediaRepairFix: String, CaseIterable, Sendable, Identifiable {
     case balanceAudio
     /// The existing Rebuild Audio Track job (GH #128), re-homed here.
     case rebuildAudio
+    /// A picture with no sound gets its sound from another file: the
+    /// Combine engine's stream-copy mux (Rick 2026-10-10). Its own pass —
+    /// MediaRepairRecipe+AddSound.swift.
+    case addSound
 
     var id: String { rawValue }
 
@@ -29,6 +33,7 @@ enum MediaRepairFix: String, CaseIterable, Sendable, Identifiable {
         case .removeRepeatedFrames: return "Remove repeated frames"
         case .balanceAudio: return "Balance Audio"
         case .rebuildAudio: return "Rebuild Audio Track"
+        case .addSound: return "Add its sound from another file"
         }
     }
 
@@ -43,6 +48,8 @@ enum MediaRepairFix: String, CaseIterable, Sendable, Identifiable {
             return "Copies the live sound channel to both speakers in a new file; the picture is copied exactly."
         case .rebuildAudio:
             return "Re-checks the sound and, when the damage is an old or unreadable sound format, writes a copy with the same picture and the sound converted to a modern lossless format."
+        case .addSound:
+            return "Copies the picture exactly and adds the sound from the matching sound file into a new QuickTime file. Nothing is re-encoded; the original and the sound file are never changed."
         }
     }
 
@@ -51,7 +58,7 @@ enum MediaRepairFix: String, CaseIterable, Sendable, Identifiable {
         switch self {
         case .remux: return .layout
         case .removeRepeatedFrames: return .distinctFrames
-        case .balanceAudio, .rebuildAudio: return .sound
+        case .balanceAudio, .rebuildAudio, .addSound: return .sound
         }
     }
 
@@ -132,9 +139,13 @@ enum MediaRepairPlan {
 
     /// The fixes `card` earns, in card order, then remux as always
     /// available when no row asked for it. O(rows).
+    /// `soundSource` = the sound file found for a picture with none (nil =
+    /// not looked for; the add-sound offer then says so and can't run).
     static func offers(for card: MediaReportCard, sound: MediaRepairSoundFacts,
-                       originalProtected: Bool) -> [MediaRepairOffer] {
-        var offers = card.checks.compactMap { offer(for: $0, sound: sound, originalProtected: originalProtected) }
+                       originalProtected: Bool, soundSource: MediaRepairSoundSource? = nil) -> [MediaRepairOffer] {
+        var offers = card.checks.compactMap {
+            offer(for: $0, sound: sound, originalProtected: originalProtected, soundSource: soundSource)
+        }
         if !offers.contains(where: { $0.fix == .remux }) {
             offers.append(MediaRepairOffer(fix: .remux, answers: nil, unavailableReason: nil))
         }
@@ -143,8 +154,14 @@ enum MediaRepairPlan {
 
     /// The fix one row earns, if any.
     static func offer(for check: MediaCheck, sound: MediaRepairSoundFacts,
-                      originalProtected: Bool) -> MediaRepairOffer? {
+                      originalProtected: Bool, soundSource: MediaRepairSoundSource? = nil) -> MediaRepairOffer? {
         switch (check.kind, check.verdict) {
+        case (.sound, .warning) where CheckMediaRules.isNoSoundRow(check):
+            // The policy's "No sound" row: ticked only on a measured length
+            // match (MediaRepairSoundSource.unavailableReason).
+            return MediaRepairOffer(fix: .addSound, answers: .sound,
+                                    unavailableReason: MediaRepairSoundSource.unavailableReason(soundSource)
+                                        ?? (originalProtected ? protectedSoundReason : nil))
         case (.layout, .problem), (.layout, .warning):
             return MediaRepairOffer(fix: .remux, answers: .layout, unavailableReason: nil)
         case (.distinctFrames, .problem):
@@ -173,20 +190,23 @@ enum MediaRepairPlan {
     /// measurement; removing repeated frames never (it would cut real
     /// stills). O(rows).
     static func allOffers(for card: MediaReportCard?, sound: MediaRepairSoundFacts,
-                          hasPicture: Bool, hasSound: Bool) -> [MediaRepairOffer] {
-        let earned = card.map { offers(for: $0, sound: sound, originalProtected: false) }
+                          hasPicture: Bool, hasSound: Bool,
+                          soundSource: MediaRepairSoundSource? = nil) -> [MediaRepairOffer] {
+        let earned = card.map { offers(for: $0, sound: sound, originalProtected: false, soundSource: soundSource) }
             ?? [MediaRepairOffer(fix: .remux, answers: nil, unavailableReason: nil)]
         let present = Set(earned.map(\.fix))
         let more = MediaRepairRecipe.order.filter { !present.contains($0) }.map {
             MediaRepairOffer(fix: $0, answers: nil,
                              unavailableReason: moreRepairsReason($0, card: card, sound: sound,
-                                                                  hasPicture: hasPicture, hasSound: hasSound))
+                                                                  hasPicture: hasPicture, hasSound: hasSound,
+                                                                  soundSource: soundSource))
         }
         return earned + more
     }
 
     static func moreRepairsReason(_ fix: MediaRepairFix, card: MediaReportCard?, sound: MediaRepairSoundFacts,
-                                  hasPicture: Bool, hasSound: Bool) -> String? {
+                                  hasPicture: Bool, hasSound: Bool,
+                                  soundSource: MediaRepairSoundSource? = nil) -> String? {
         switch fix {
         case .remux: return nil
         case .removeRepeatedFrames:
@@ -199,6 +219,8 @@ enum MediaRepairPlan {
         case .balanceAudio:
             guard hasSound else { return "This file has no sound." }
             return sound.canBalance ? nil : "Needs a full Verify that measures each sound channel first."
+        case .addSound:
+            return MediaRepairSoundSource.moreRepairsReason(soundSource, hasPicture: hasPicture, hasSound: hasSound)
         }
     }
 

@@ -67,8 +67,8 @@ struct AnalyzeReclaimableLogicTests {
         let on = compute(inputs, crossMode: true)
         #expect(on.copies == 1)
         #expect(on.verifiedFloor == 1)
-        #expect(on.copiesShortOfTwo == 1, "one verified copy elsewhere is short of the Trash minimum")
-        #expect(on.copiesLine == "1 of them need other copies read first")
+        #expect(on.copiesShortOfTwo == 0, "keep one: the verified keeper elsewhere is enough for the Trash")
+        #expect(on.copiesLine == "each has 1+ verified copy elsewhere")
     }
 
     @Test func offlineSiblingsAreNotVerifiedAndAreReported() {
@@ -81,7 +81,7 @@ struct AnalyzeReclaimableLogicTests {
         #expect(e.copies == 1)
         #expect(e.verifiedFloor == 1, "the offline sibling's digest does not count")
         #expect(e.copiesWithOfflineSiblings == 1)
-        #expect(e.copiesLine == "1 of them need other copies read first · 1 have copies on drives not connected")
+        #expect(e.copiesLine == "each has 1+ verified copy elsewhere", "keep one: the keeper alone is enough")
     }
 
     @Test func aRowWithItsOwnDigestDoesNotCountItself() {
@@ -140,13 +140,11 @@ struct AnalyzeReclaimableLogicTests {
     /// The card prints the RULE, quoted from the tier decision's constants
     /// — never a paraphrase that could drift from the code.
     @Test func survivalRuleQuotesDeletionTierDecision() {
-        #expect(DeletionTierDecision.minimumForPermanent == 3)
-        #expect(DeletionTierDecision.minimumForTrash == 2)
-        #expect(DeletionTierDecision.minimumDrivesForPermanent == 2)
-        // Since 2026-10-03 the rule also says WHERE the copies must sit.
+        // Keep one, Trash only (2026-10-09).
+        #expect(DeletionTierDecision.minimumForTrash == 1)
         #expect(ReclaimableEstimate.survivalRule == DeletionTierDecision.ruleSentence)
-        #expect(ReclaimableEstimate.survivalRule ==
-                "Only a copy with at least 3 verified copies remaining on at least 2 different drives (or with a verified archive copy among them) is ever deleted outright; with 2 or more remaining otherwise it goes to the Trash; with fewer it is left alone.")
+        #expect(ReclaimableEstimate.survivalRule.contains("at least one verified copy remains")
+                && ReclaimableEstimate.survivalRule.contains("Nothing is ever deleted outright"))
     }
 
     @Test func internalFolderTargetIsItsOwnDrive() {

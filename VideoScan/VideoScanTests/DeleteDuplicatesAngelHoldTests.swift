@@ -498,11 +498,12 @@ struct DeleteDuplicatesAngelHoldTests {
         job.start()
         await job.task?.value
         let after = try #require(job.plan)
-        #expect(after.entries.map(\.status) == [.deleted, .skipped], "\(after.entries.map(\.status))")
+        #expect(after.entries.map(\.status) == [.trashed, .skipped], "\(after.entries.map(\.status))")
         #expect(after.entries[1].note == "left alone — in use by the Archive Angel")
         #expect(!FileManager.default.fileExists(atPath: rig.copies[0].fullPath))
         #expect(FileManager.default.fileExists(atPath: rig.copies[1].fullPath), "the Angel's copy was unlinked or trashed")
-        #expect(!FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash").path), "nothing went to the Trash")
+        #expect(!FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/\(rig.copies[1].filename)").path),
+                "the Angel's copy did not go to the Trash")
         #expect(rig.copies[1].duplicateDisposition == .extraCopy, "left alone is not a refusal — the row is not re-marked Review")
         #expect(rig.model.records.contains { $0 === rig.copies[1] }, "its catalog row stays")
         #expect(job.result.deleted == 1 && job.result.failed == 0)
@@ -537,7 +538,7 @@ struct DeleteDuplicatesAngelHoldTests {
         await job.task?.value
 
         let after = try #require(job.plan)
-        #expect(after.entries.map(\.status) == [.deleted, .skipped], "\(after.entries.map(\.status))")
+        #expect(after.entries.map(\.status) == [.trashed, .skipped], "\(after.entries.map(\.status))")
         #expect(after.entries[1].note == "left alone — in use by the Archive Angel")
         #expect(FileManager.default.fileExists(atPath: rig.copies[1].fullPath), "the Angel's copy was unlinked or trashed")
         #expect(rig.copies[1].duplicateDisposition == .extraCopy)
@@ -567,23 +568,27 @@ struct DeleteDuplicatesAngelHoldTests {
 
         #expect(sawQuarantine, "fixture: the copy was verified and moved aside before the Angel chose it")
         let after = try #require(job.plan)
-        #expect(after.entries.map(\.status) == [.skipped, .deleted], "\(after.entries.map(\.status))")
+        #expect(after.entries.map(\.status) == [.skipped, .trashed], "\(after.entries.map(\.status))")
         #expect(after.entries[0].note == "left alone — in use by the Archive Angel")
         #expect(after.entries[0].quarantineDirectory == nil && after.entries[0].tier == nil)
         #expect(FileManager.default.fileExists(atPath: chosen.fullPath), "the Angel's copy was removed after it was chosen")
         #expect(try Data(contentsOf: URL(fileURLWithPath: chosen.fullPath)) == before, "put back untouched")
         #expect(chosen.duplicateDisposition == .extraCopy && rig.model.records.contains { $0 === chosen })
         let leftovers = try FileManager.default.contentsOfDirectory(atPath: rig.dir.path)
-            .filter { $0.hasPrefix(DeleteDuplicatesJob.quarantinePrefix) || $0 == "Trash" }
-        #expect(leftovers.isEmpty, "nothing left in quarantine or the Trash: \(leftovers)")
+            .filter { $0.hasPrefix(DeleteDuplicatesJob.quarantinePrefix) }
+        #expect(leftovers.isEmpty, "nothing left in quarantine: \(leftovers)")
+        #expect(!FileManager.default.fileExists(atPath: rig.dir.appendingPathComponent("Trash/\(chosen.filename)").path),
+                "the Angel's copy is not in the Trash")
         #expect(job.runTally.skipped == 1 && job.runTally.leftAlone == 0 && job.runTally.refused == 0,
                 "a skip — not the tier's ‘too few copies’, not a refusal")
         #expect(job.result.deleted == 1 && job.result.failed == 0)
-        let freed = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
-        #expect(job.state == .finished(summary: "1 deleted · \(freed) freed · 1 copy left alone — in use by the Archive Angel"),
+        let moved = ByteCountFormatter.string(fromByteCount: Int64(fileSize), countStyle: .file)
+        let volume = VolumeReachability.volumeName(forPath: rig.copies[1].fullPath)
+        _ = volume
+        #expect(job.state == .finished(summary: "Moved 1 (\(moved)) to the Trash · 1 held (left alone — in use by the Archive Angel) · 1 copy left alone — in use by the Archive Angel"),
                 "\(job.state)")
         await rig.model.mediaLedger.waitForPendingWrites()
-        #expect(rig.model.mediaLedger.allEvents().filter { $0.event == .copyDeleted }.map(\.filename) == ["copy2.mov"])
+        #expect(rig.model.mediaLedger.allEvents().filter { $0.event == .copyTrashed }.map(\.filename) == ["copy2.mov"])
     }
 
     /// A saved plan, revalidated later: every class is re-asked.
@@ -660,12 +665,12 @@ struct DeleteDuplicatesAngelHoldTests {
         }
     }
 
-    /// End to end (codex #258 F1 — this test used to pin the opposite):
-    /// keeper + the Angel's verified copy + a free copy. The Angel's copy is
-    /// never a row of the run AND never a survivor for the free copy — only
-    /// the keeper would remain, so the free copy is left alone, exactly as
-    /// on main, where the Angel's copy was a pending row of the same run.
-    @Test func theAngelsVerifiedCopyDoesNotEarnTheFreeCopyTheTrash() async throws {
+    /// End to end (codex #258 F1): keeper + the Angel's verified copy + a
+    /// free copy. The Angel's copy is never a row of the run AND never a
+    /// survivor for the free copy. Keep one (2026-10-09): the keeper alone
+    /// is enough, so the free copy goes to the Trash — counted on the
+    /// keeper ONLY, the Angel's copy named "not counted".
+    @Test func theAngelsVerifiedCopyIsNeverCountedForTheFreeCopy() async throws {
         let rig = makeRig("tier", family: false); defer { rig.cleanup() }
         let free = rig.copies[0], angel = rig.copies[1]
         angel.contentFixity = ContentFixity.captured(path: angel.fullPath, digest: rig.digest, byteCount: Int64(fileSize))
@@ -676,9 +681,10 @@ struct DeleteDuplicatesAngelHoldTests {
         await job.task?.value
         let plan = try #require(job.plan)
         #expect(plan.entries.map(\.id) == [free.id], "the Angel's copy is not a row of the run")
-        #expect(plan.entries.first?.status == .skipped, "\(String(describing: plan.entries.first?.status)) — \(plan.entries.first?.note ?? "")")
-        #expect(plan.entries.first?.remainingVerifiedCopies == 1)
-        #expect(FileManager.default.fileExists(atPath: free.fullPath), "the free copy left the drive on the strength of a held copy")
+        #expect(plan.entries.first?.status == .trashed, "\(String(describing: plan.entries.first?.status)) — \(plan.entries.first?.note ?? "")")
+        #expect(plan.entries.first?.remainingVerifiedCopies == 1, "the Angel's copy was counted as a survivor")
+        let reason = plan.entries.first?.tierReason ?? ""
+        #expect(reason.contains(angel.filename) && reason.contains("not counted"), Comment(rawValue: reason))
         #expect(FileManager.default.fileExists(atPath: angel.fullPath) && FileManager.default.fileExists(atPath: rig.keeper.fullPath))
         #expect(angel.duplicateDisposition == .extraCopy)
     }

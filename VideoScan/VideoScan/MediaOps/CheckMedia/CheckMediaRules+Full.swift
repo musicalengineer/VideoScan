@@ -91,6 +91,9 @@ extension CheckMediaRules {
     }
 
     // 12. Sound track: Verify Audio's verdict + per-channel levels.
+    // A picture with NO sound track is not decided here: the job replaces
+    // this row with SoundPresencePolicy's (applyingSoundPresence), which
+    // needs the record's date and pairing.
     static func checkSound(_ result: Result<AudioVerifyDiagnosis, CheckMediaSkip>?, facts: MediaFacts) -> MediaCheck {
         guard facts.audio != nil else { return .notRun(.sound, because: "this file has no sound track") }
         guard let result else { return .notRun(.sound, because: "the sound pass did not run") }
@@ -233,6 +236,8 @@ extension CheckMediaRules {
         if let timing = timingHeadline(problems: problems, quick: quick) { return timing }
         if let first = problems.first { return problemHeadline(first) }
         let warnings = checks.filter { $0.verdict == .warning }
+        // A picture with no sound track (Rick 2026-10-10) is named first.
+        if let noSound = noSoundHeadline(warnings: warnings) { return noSound }
         if !warnings.isEmpty {
             let titles = warnings.prefix(3).map { $0.kind.title.lowercased() }.joined(separator: ", ")
             return "Plays, with \(warnings.count) thing\(warnings.count == 1 ? "" : "s") to look at: \(titles)."

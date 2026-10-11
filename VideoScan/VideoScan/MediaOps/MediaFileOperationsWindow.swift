@@ -175,6 +175,9 @@ struct MediaFileOperationsWindow: View {
             footerBar
         }
         .frame(minWidth: 640, idealWidth: 760, minHeight: 340, idealHeight: 560)
+        // Repair… from a finished Verify row or its detail opens the Repair
+        // sheet here, on this window (Rick 2026-10-10).
+        .modifier(MediaRepairLaunchHost())
         .onAppear {
             DispatchQueue.main.async {
                 for window in NSApp.windows where window.title.contains("Media File Operations") {
@@ -580,6 +583,13 @@ struct MediaFileOperationRow: View {
                 // 2026-08-04). Clicks INSIDE the expanded detail below
                 // must never reach here (Bug A).
                 if job.kind.hasDetailView { onToggleExpand() }
+            }
+
+            // A finished Verify's diagnostics stay on the collapsed row: one
+            // file's banner with Repair…, or "2 of 5 have no sound" (Rick
+            // 2026-10-10). Outside the tap area, so its button never toggles.
+            if let check = job as? CheckMediaJob {
+                CheckMediaRowDiagnostics(job: check)
             }
 
             // The double-click detail (MediaFileOperationDetail below —

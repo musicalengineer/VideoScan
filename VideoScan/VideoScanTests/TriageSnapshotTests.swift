@@ -719,7 +719,11 @@ struct TriageViewSensorTests {
         #expect(view.contains("runAnalysis(records: model.triageScopeRecords())"))
         #expect(view.contains("let selected = model.triageScopeRecords().filter { selectedIDs.contains($0.id) }"))
         #expect(occurrences(of: "triageConfirmedJunkRecords()", in: view) == 1)
-        #expect(view.contains("junkConfirmRecords = model.recordsBulkVerbsMayRemove(model.triageConfirmedJunkRecords())"),
+        // Since the frozen Delete Junk snapshot (design R1, 2026-10-09) the
+        // records are gathered when the button is pressed and frozen by
+        // `freezeJunkSnapshot`, which applies the bulk-verb gate itself.
+        #expect(view.contains("let records = model.triageConfirmedJunkRecords()")
+                && view.contains("junkSheet = .confirm(await model.freezeJunkSnapshot(records))"),
                 "the Delete Junk records are gathered when the button is pressed")
     }
 

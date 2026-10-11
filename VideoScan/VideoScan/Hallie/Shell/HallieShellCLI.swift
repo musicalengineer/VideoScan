@@ -1567,6 +1567,14 @@ enum HallieShellCLI {
                 state.aggregateSnapshots = await ArchivistAggregateRecordSnapshot
                     .capture(state.records)
             }
+            // The GH #182 fallback answers an unresolvable anchor that is a
+            // person (or a tag-only name) with a PRESENCE search — over
+            // these. Without them it searched nothing and said "no videos
+            // tagged" about a tagged name (demo probe 2026-10-09).
+            if state.presenceSnapshots == nil {
+                state.presenceSnapshots = await ArchivistPresenceRecordSnapshot
+                    .capture(state.records)
+            }
         case .record:
             // ONE record, resolved here (selection or named file); the
             // executor never sees the catalog. No catalog-wide snapshot.

@@ -511,7 +511,9 @@ struct RemoteViewerReadOnlySensorTests {
     /// anywhere — changes a count and fails here until it is classified.
     private static let removalSites: [String: (count: Int, guardFile: String?, token: String?)] = [
         // Media / family files — behind the viewer guard.
-        "MediaOps/VideoScanModel+JunkDelete.swift": (2, nil, "junkDeletionRefusedOnViewer("),
+        // 2 → 1 (codex delete-engines F1, 2026-10-09): the engine's own
+        // removeItem is gone; trashItem is its one file operation.
+        "MediaOps/VideoScanModel+JunkDelete.swift": (1, nil, "junkDeletionRefusedOnViewer("),
         "Catalog/VideoScanModel+Workbench.swift": (1, nil, "workbenchDiscardRefusedOnViewer("),
         "People/FamilyGroup.swift": (2, nil, "ViewerWriteGuard.check(\"FamilyGroupStore.moveToTrash\")"),
         "People/PersonEditSheet.swift": (1, nil, "ViewerWriteGuard.refuse(\"PersonEditSheet.deleteReferencePhoto\")"),
@@ -519,6 +521,9 @@ struct RemoteViewerReadOnlySensorTests {
         // rmdir of its own quarantine folders); reached only from
         // DeleteDuplicatesJob.run, which refuses on a read-only model.
         "MediaOps/SignatureVerification.swift": (4, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
+        // Its one live Trash step (Trash only, 2026-10-09): the same job, the
+        // same refusal on a read-only model.
+        "MediaOps/DeleteDuplicatesJob.swift": (1, nil, "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
         // Reached only from MFO jobs (Transcode, Reformat);
         // MediaFileOperationsCenter.add refuses every job on a viewer.
         "MediaOps/DerivativeOutputPublish.swift": (1, "MediaOps/MediaFileOperations.swift", "ViewerWriteGuard.refuse(\"MediaFileOperationsCenter.add("),
@@ -659,7 +664,7 @@ struct RemoteViewerReadOnlySensorTests {
         }
         let entry = try firstStatement(after: "func deleteConfirmedJunk(",
                                        opener: ") async -> JunkDeletionResult {")
-        #expect(entry?.hasPrefix("let (records, finished) = junkDeletionPreflight(") == true,
+        #expect(entry?.hasPrefix("let (pending, finished) = junkDeletionPreflight(") == true,
                 "deleteConfirmedJunk must start with the preflight; found \(entry ?? "nil")")
         let preflight = try firstStatement(after: "func junkDeletionPreflight(",
                                            opener: "finished: JunkDeletionResult?) {")
@@ -678,8 +683,8 @@ struct RemoteViewerReadOnlySensorTests {
                 callers.insert(url.lastPathComponent)
             }
         }
-        #expect(callers == ["CatalogRowContextMenu.swift", "VideoScanModel+TrashSelection.swift",
-                            "VideoScanModel+PruneApply.swift", "JunkDeleteAction.swift"],
+        #expect(callers == ["VideoScanModel+TrashSelection.swift",
+                            "VideoScanModel+PruneApply.swift", "VideoScanModel+JunkTrashSnapshot.swift"],
                 "a new deleteConfirmedJunk caller: confirm it relies on the model's viewer guard, then add it here")
     }
 }

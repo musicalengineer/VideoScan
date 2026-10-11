@@ -110,9 +110,10 @@ struct DeleteDuplicatesCodex258Round2Tests {
         #expect(rowH.note.hasPrefix("left alone — ") && rowH.note.contains("which you marked Read only"), Comment(rawValue: rowH.note))
         #expect(h.duplicateDisposition == .extraCopy, "the held copy was marked Review")
         #expect(plan.runScope(deciding: a.id).leftAlone[h.id] != nil, "the run reads H's row as decided on its merits")
-        #expect(rowA.status == .skipped && rowA.remainingVerifiedCopies == 1,
+        // Keep one (2026-10-09): A goes on the keeper alone — H is never counted.
+        #expect(rowA.status == .trashed && rowA.remainingVerifiedCopies == 1,
                 "A was decided \(rowA.status) on the strength of the held copy: \(rowA.tierReason ?? rowA.note)")
-        #expect(FileManager.default.fileExists(atPath: h.fullPath) && FileManager.default.fileExists(atPath: a.fullPath))
+        #expect(FileManager.default.fileExists(atPath: h.fullPath), "the held copy stays")
     }
 
     /// The same classification wherever the refusal is found, and for a row
@@ -214,7 +215,7 @@ struct DeleteDuplicatesCodex258Round2Tests {
             }
         }
         #expect(stale.remainingVerifiedCopies == 3 && stale.distinctDriveCount == 2, "fixture: the stale entry adds a phantom drive (\(stale.summary))")
-        #expect(DeletionTierDecision.decide(facts: stale, preferTrash: false).tier == .permanent)
+        #expect(DeletionTierDecision.decide(facts: stale).tier == .trash)
 
         // 2. …the mount change is delivered (every lookup now says Q)…
         DuplicateDrives.resetVolumeCache()
@@ -225,7 +226,7 @@ struct DeleteDuplicatesCodex258Round2Tests {
         }
         // 3. …and the evidence gathered before it is not trusted.
         #expect(after.distinctDriveCount == 1, "drive evidence from before the mount change survived it: \(after.countedDrives)")
-        #expect(DeletionTierDecision.decide(facts: after, preferTrash: false).tier == .trash)
+        #expect(DeletionTierDecision.decide(facts: after).tier == .trash)
         #expect(!after.droppedAtBoundary.isEmpty, "the final verdict must re-decide, and say why")
     }
 
@@ -428,13 +429,13 @@ struct DeleteDuplicatesCodex258Round2Tests {
             try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
             let s2 = record(link, group: g, .review, verified: true, write: false)
             model.records = [keeper, copy, s1, s2]
-            let expected: DeletionTier = linkOnA ? .permanent : .trash   // S2's bytes on B → two drives; on A → one
+            let expected: DeletionTier = .trash   // S2's bytes on B → two drives; on A → one — the Trash either way
             DuplicateDrives.$identityOverride.withValue(identity) {
                 let facts = DeletionTierFacts.gather(model.deletionTierCandidates(record: copy, keeper: keeper), digest: fileDigest)
-                let run = DeletionTierDecision.decide(facts: facts, preferTrash: false).tier
+                let run = DeletionTierDecision.decide(facts: facts).tier
                 let forecast = model.deleteDuplicatesForecast(onVolume: volA.path).bucket(for: copy.id)
                 #expect(run == expected, "the run: \(String(describing: run)) (\(facts.summary))")
-                #expect(forecast == (expected == .permanent ? .permanent : .trash),
+                #expect(forecast == .trash,
                         "link on \(linkOnA ? "A" : "B"): the forecast says \(String(describing: forecast)), the run \(String(describing: run))")
             }
         }

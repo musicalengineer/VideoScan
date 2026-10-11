@@ -39,9 +39,12 @@ extension CatalogContent {
             requestAnalyze(for: reachable[0], stages: stages)
             return
         }
+        // An archived (read-only) row is never offered Reformat — it would
+        // publish a new file beside an archive master (QA P3-e,
+        // 2026-10-10). It is analyzed as is (the ffmpeg fallback may read it).
         let needsReformat = reachable.filter {
-            hasUnplayableLegacyCodec(videoCodec: $0.videoCodec, audioCodec: $0.audioCodec)
-                || $0.needsReformat
+            (hasUnplayableLegacyCodec(videoCodec: $0.videoCodec, audioCodec: $0.audioCodec)
+                || $0.needsReformat) && !model.isDossierReadOnly($0)
         }
         let modern = reachable.filter { rec in !needsReformat.contains(where: { $0.id == rec.id }) }
 
@@ -109,22 +112,58 @@ extension CatalogContent {
             codec: "hevc",
             ext: "mp4"
         ).lastPathComponent
-        alert.informativeText = """
-            \(rec.filename) uses the \(codecBits) codec, which the analyzer can't decode directly. \
-            macOS deprecated this codec in 2019.
-
-            Convert to HEVC first? A new file \"\(derived)\" will be created next to the original, \
-            then analyzed.
-            """
+        // 2026-10-10: a file flagged by the analyzer itself (it could not
+        // read the video — not a known legacy codec) can be tried again as
+        // is: batches skip it, an explicit Analyze retries it, and a
+        // successful decode clears the flag.
+        let analyzerFlagOnly = rec.needsReformat
+            && !hasUnplayableLegacyCodec(videoCodec: rec.videoCodec, audioCodec: rec.audioCodec)
+        // QA P3-e (2026-10-10): an archived (read-only) row is never offered
+        // Reformat — it would publish a new file beside an archive master.
+        let readOnly = model.isDossierReadOnly(rec)
+        let why = analyzerFlagOnly
+            ? "The analyzer couldn't read the video in \(rec.filename) on an earlier pass, so batch runs skip it."
+            : "\(rec.filename) uses the \(codecBits) codec, which the analyzer can't decode directly. macOS deprecated this codec in 2019."
+        let offer = readOnly
+            ? "This file is in the archive, so it is not reformatted. You can try to analyze it as it is."
+            : "Convert to HEVC first? A new file \"\(derived)\" will be created next to the original, then analyzed."
+        alert.informativeText = "\(why)\n\n\(offer)"
         alert.alertStyle = .informational
-        alert.addButton(withTitle: "Reformat and Analyze")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
+        // The buttons on offer, in order (≈ a small C++ vector of actions;
+        // the modal's response index picks one).
+        var choices: [ReformatAlertChoice] = readOnly ? [] : [.reformat]
+        if analyzerFlagOnly || readOnly { choices.append(.analyzeAnyway) }
+        choices.append(.cancel)
+        for c in choices { alert.addButton(withTitle: c.title) }
+        let index = alert.runModal().rawValue - NSApplication.ModalResponse.alertFirstButtonReturn.rawValue
+        switch choices.indices.contains(index) ? choices[index] : .cancel {
+        case .reformat:
             _ = fileOpsCenter.startedByUser {
                 $0.startReformat(record: rec, model: model,
                                  orchestrator: captionOrchestrator)
             }
             MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+        case .analyzeAnyway:
+            _ = fileOpsCenter.startedByUser {
+                $0.startAnalyzeOne(record: rec, model: model,
+                                   orchestrator: captionOrchestrator,
+                                   stages: stages)
+            }
+            MediaFileOperationsWindowOpener.openBehindMain(openWindow)
+        case .cancel:
+            break
+        }
+    }
+
+    /// The single-file Reformat alert's buttons.
+    enum ReformatAlertChoice {
+        case reformat, analyzeAnyway, cancel
+        var title: String {
+            switch self {
+            case .reformat: return "Reformat and Analyze"
+            case .analyzeAnyway: return "Analyze Anyway"
+            case .cancel: return "Cancel"
+            }
         }
     }
 
@@ -150,6 +189,11 @@ extension CatalogContent {
             durationTolerance: durationTolerance,
             timestampTolerance: timestampTolerance
         ) else {
+            // Elementary / demuxed streams Correlate cannot pair (an .m2v
+            // records no length; GH #125 refuses unknown lengths): list the
+            // sound files beside it with their reasons; the person chooses
+            // (Rick 2026-10-10). Falls through when there are none.
+            if SoundPairAlert.offer(for: rec, model: model, combine: { v, a in onCombinePair?(v, a) }) { return }
             // GH #125 MINOR 2: distinguish "nothing structurally related"
             // from "a related file exists but its duration is unverifiable
             // or incompatible" — the latter must not blame the score.

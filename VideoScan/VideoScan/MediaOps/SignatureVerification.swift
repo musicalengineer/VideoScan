@@ -103,6 +103,11 @@ struct VerifiedDuplicate: Equatable, Sendable {
     fileprivate let keeperIdentity: FileIdentityStamp
     fileprivate let duplicateIdentity: FileIdentityStamp
 
+    /// The keeper's identity as it was when its bytes were proven — READ
+    /// ONLY, so a reviewed plan can require it to be the keeper Rick
+    /// reviewed (codex delete-engines F4).
+    var keeperStampAtProof: FileIdentityStamp { keeperIdentity }
+
     fileprivate init(keeperPath: String, duplicatePath: String,
                      fullHash: String, verifiedAt: Date,
                      keeperIdentity: FileIdentityStamp,

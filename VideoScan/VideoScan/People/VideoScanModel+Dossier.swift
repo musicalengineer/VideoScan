@@ -3,6 +3,19 @@ import Combine
 
 extension VideoScanModel {
 
+    // MARK: - Read-only rule for Dossier (Rick 2026-09-27, 2026-10-10)
+
+    /// True when Dossier may write ONLY its own channels on `record`
+    /// (captions, OCR, transcript, dossierProcessed*): a Master Archive
+    /// file (`isArchiveElement`) or any row whose lifecycle stage is
+    /// Archived. Such a row never gets a date, a purge, a junk flag or a
+    /// needsReformat flag from analysis — "archived = read-only except
+    /// Update… {name, date}". Reading its file for analysis is allowed.
+    /// O(1).
+    func isDossierReadOnly(_ record: VideoRecord) -> Bool {
+        record.lifecycleStage == .archived || isArchiveElement(record)
+    }
+
     // MARK: - Dossier Writeback
     //
     // Multi-signal dossier sibling to applyCaptions / applyAudioTranscript.
@@ -99,7 +112,10 @@ extension VideoScanModel {
         // move (its own archive folder would otherwise feed the folder-year
         // hint straight back into it). The narrative line below still says
         // what the pass concluded, so nothing is lost.
-        let archivedFile = isArchiveElement(record)
+        // 2026-10-10: Dossier now admits Archived rows, including the ones
+        // OUTSIDE the archive root (sources stamped Archived) — they are
+        // read-only to Dossier too (`isDossierReadOnly`).
+        let archivedFile = isDossierReadOnly(record)
         if !archivedFile {
             Self.applyTriangulation(inferred, to: record, source: nil)
         }

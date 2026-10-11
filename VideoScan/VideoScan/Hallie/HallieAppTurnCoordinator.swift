@@ -1081,7 +1081,11 @@ enum HallieAppTurnCoordinator {
                 records)
             aggregateRecords = []
         case .aggregate:
-            presenceRecords = []
+            // The GH #182 fallback answers an unresolvable anchor that is a
+            // person (or a tag-only name) with a PRESENCE search over these;
+            // empty, it said "no videos tagged" about a tagged name.
+            presenceRecords = await ArchivistPresenceRecordSnapshot.capture(
+                records)
             aggregateRecords = await ArchivistAggregateRecordSnapshot.capture(
                 records)
         case .record:

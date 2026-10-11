@@ -196,7 +196,10 @@ struct HallieAppV2IntegrationTests {
                 #expect(invocation.profiles?.map(\.stableID) == ["donna"])
                 #expect(!invocation.graphWasInjected)
             case .aggregate:
-                #expect(invocation.presenceCount == 0)
+                // Presence snapshots too (2026-10-09): the GH #182 fallback
+                // answers an unresolvable person anchor with a PRESENCE
+                // search, which had been running over an empty list.
+                #expect(invocation.presenceCount == 1)
                 #expect(invocation.aggregateCount == 1)
                 #expect(invocation.profiles?.map(\.stableID) == ["donna"])
                 #expect(!invocation.graphWasInjected)

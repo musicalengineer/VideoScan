@@ -50,6 +50,7 @@ enum MediaRepairAdvice: Equatable {
             case .remux: return "stores sound beside picture"
             case .rebuildAudio: return "rebuilds the sound track as uncompressed PCM"
             case .balanceAudio: return "balances the sound to both speakers"
+            case .addSound: return "adds the sound from its matching sound file (nothing re-encoded)"
             }
         }
         return "Repair Now " + ListFormatter.localizedString(byJoining: parts)

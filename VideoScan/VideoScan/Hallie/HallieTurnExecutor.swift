@@ -1274,8 +1274,7 @@ enum HallieTurnExecutor {
             }
             switch HallieAggregateFallback.route(
                 question: request.intent.originalQuestion, anchors: payload.anchorPeople, unresolved: unresolved,
-                isKnownPerson: { isKnownPerson($0, context: context)
-                    || HallieOwnerResolver.isOwnerSpelling($0, owner: context.speakers.ownerName) },
+                isKnownPerson: { isSearchablePerson($0, context: context) },
                 isKnownSurname: { !isKnownPerson($0, context: context) && isKnownPerson($0, context: context, acceptSurname: true) }) {
             case .presence(let people, let keywords, let wantsVideo) where context.mode != .tree:
                 var result = try await executePresenceLike(

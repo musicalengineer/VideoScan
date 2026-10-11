@@ -71,9 +71,10 @@ enum MediaRepairCommand {
          "-of", "json", input]
     }
 
-    /// ffprobe: one line per packet, "stream_index,size,duration" (no
-    /// decode; the whole file is read once). Field order is the order
-    /// ffprobe prints packet fields in, pinned by a test on real output.
+    /// ffprobe: one line per packet, "stream_index,duration,size" (no
+    /// decode; the whole file is read once). ffprobe prints the fields in
+    /// ITS order, not the order asked for here — pinned on real output by
+    /// MediaRepairAddSoundEngineTests.theCensusReadsFfprobesFieldOrder.
     static func packetCensusArgs(input: String) -> [String] {
         ["-v", "error",
          "-show_entries", "packet=stream_index,size,duration",
@@ -106,12 +107,15 @@ struct MediaStreamTally: Equatable, Sendable {
         return n / d
     }
 
-    /// Adds one census line ("stream_index,size,duration"). Returns the
-    /// stream index it counted, nil for a line it can't read.
+    /// Adds one census line ("stream_index,duration,size" — ffprobe's own
+    /// field order; until 2026-10-10 this read size and duration swapped,
+    /// which only held up while both files shared a time base). Returns the
+    /// stream index it counted, nil for a line it can't read. A packet with
+    /// no stated duration ("N/A") counts 0 ticks.
     static func parseCensusLine(_ line: String) -> (index: Int, size: Int64, duration: Int64)? {
         let f = line.split(separator: ",", omittingEmptySubsequences: false)
-        guard f.count >= 3, let i = Int(f[0]), let size = Int64(f[1]) else { return nil }
-        return (i, size, Int64(f[2]) ?? 0)
+        guard f.count >= 3, let i = Int(f[0]), let size = Int64(f[2]) else { return nil }
+        return (i, size, Int64(f[1]) ?? 0)
     }
 }
 
@@ -226,6 +230,8 @@ enum MediaRepairParity: Equatable {
         switch recipe.sound {
         case .copy:
             return src == out ? nil : "the sound tracks changed (\(src.joined(separator: ", ")) became \(out.joined(separator: ", ")))"
+        case .addFrom:
+            return nil   // proved packet for packet by compareAddedSound, never here
         case .rebuild, .balance:
             let expectedCount = min(src.count, 1)
             guard out.count == expectedCount else { return "the copy has \(out.count) sound tracks, expected \(expectedCount)" }

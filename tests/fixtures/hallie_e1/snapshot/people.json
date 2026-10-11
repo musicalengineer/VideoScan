@@ -1,0 +1,111 @@
+{
+ "families": [
+  {
+   "featuredVideos": [],
+   "name": "Lark Family",
+   "uuid": "FAM-LARK"
+  }
+ ],
+ "profiles": [
+  {
+   "aliases": [
+    "O"
+   ],
+   "birthDate": "1960-03-03",
+   "kinships": [
+    {
+     "relation": "child",
+     "to": "P-MABEL"
+    },
+    {
+     "relation": "child",
+     "to": "P-FRANK"
+    },
+    {
+     "relation": "spouse",
+     "to": "P-DORA"
+    }
+   ],
+   "name": "Owen",
+   "notes": "Owner of the archive.",
+   "sex": "male",
+   "surname": "Fixture",
+   "treeIdentityAttestation": "derived: tree root",
+   "uuid": "P-OWEN"
+  },
+  {
+   "aliases": [
+    "Ma",
+    "Mom"
+   ],
+   "birthDate": "1933-05-12",
+   "deathDate": "2023-03-03",
+   "familySearchID": "MABL-001",
+   "kinships": [],
+   "maidenName": "Harlow",
+   "name": "Mabel",
+   "sex": "female",
+   "surname": "Fixture",
+   "uuid": "P-MABEL"
+  },
+  {
+   "aliases": [
+    "Dad",
+    "Frankie"
+   ],
+   "birthDate": "1931-02-13",
+   "deathDate": "2007-06-05",
+   "familySearchID": "FRNK-001",
+   "kinships": [],
+   "name": "Frank",
+   "notes": "Served in the US Navy; married in 1957.",
+   "sex": "male",
+   "surname": "Fixture",
+   "uuid": "P-FRANK"
+  },
+  {
+   "aliases": [
+    "Dee"
+   ],
+   "birthDate": "1962-10-17",
+   "familySearchID": "DORA-001",
+   "kinships": [
+    {
+     "relation": "parent",
+     "to": "P-DANNY"
+    }
+   ],
+   "maidenName": "Lark",
+   "name": "Dora",
+   "sex": "female",
+   "surname": "Fixture",
+   "uuid": "P-DORA"
+  },
+  {
+   "aliases": [
+    "Dan"
+   ],
+   "birthDate": "1986-07-11",
+   "familySearchID": "DANN-001",
+   "kinships": [],
+   "name": "Danny",
+   "sex": "male",
+   "surname": "Fixture",
+   "uuid": "P-DANNY"
+  },
+  {
+   "kinships": [
+    {
+     "relation": "sibling",
+     "to": "P-DORA"
+    }
+   ],
+   "name": "Tessa",
+   "notInFamilyTree": true,
+   "notes": "Dora's older sister.",
+   "sex": "female",
+   "surname": "Lark",
+   "uuid": "P-TESSA"
+  }
+ ]
+}

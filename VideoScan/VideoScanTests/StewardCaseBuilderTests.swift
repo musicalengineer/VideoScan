@@ -481,7 +481,8 @@ struct StewardWordsTests {
         let three = StewardCopyProof(copyID: id, remaining: 3, counted: ["keeper on LaCie", "archive copy on FamilyArchive", "sibling b.mov on X9"],
                                      notCounted: 0, tier: .permanent, hadStoredDigest: true, tierIfTheyMatch: .permanent)
         #expect(three.remainLine == "3 verified copies would remain: keeper on LaCie, archive copy on FamilyArchive, sibling b.mov on X9")
-        #expect(three.outcomeLine == "It would be deleted outright." && three.caveatLine == nil)
+        // `.permanent` is history only (Trash only, 2026-10-09): said as the Trash.
+        #expect(three.outcomeLine == "It would go to the Trash, not be deleted." && three.caveatLine == nil)
         // QA F2: an outcome is flat ONLY when nothing was left uncounted.
         let two = StewardCopyProof(copyID: id, remaining: 2, counted: ["keeper on LaCie", "sibling"], notCounted: 1, tier: .trash,
                                    hadStoredDigest: true, tierIfTheyMatch: .trash)
@@ -489,11 +490,13 @@ struct StewardWordsTests {
         #expect(two.caveatLine == "1 other copy was not counted — not connected, different, or part of the same cleanup.")
         let reads = StewardCopyProof(copyID: id, remaining: 2, counted: ["keeper on LaCie", "sibling"], notCounted: 1, tier: .trash,
                                      hadStoredDigest: true, readsFirst: 1, tierIfTheyMatch: .permanent)
-        #expect(reads.outcomeLine == "The run reads 1 more copy first; if it matches, this copy would be deleted outright.")
+        #expect(reads.outcomeLine == "The run reads 1 more copy first; if it matches, this copy would go to the Trash, not be deleted.")
         #expect(reads.caveatLine == nil)
         let twoReads = StewardCopyProof(copyID: id, remaining: 1, counted: ["keeper on LaCie"], notCounted: 2, tier: nil,
                                         hadStoredDigest: true, readsFirst: 2, tierIfTheyMatch: .permanent)
-        #expect(twoReads.outcomeLine == "The run reads 2 more copies first; if they match, this copy would be deleted outright.")
+        #expect(twoReads.outcomeLine == "The run reads 2 more copies first; if they match, this copy would go to the Trash, not be deleted.")
+        let keepOne = StewardCopyProof(copyID: id, remaining: 1, counted: ["keeper on LaCie"], notCounted: 0, tier: .trash, hadStoredDigest: false)
+        #expect(keepOne.outcomeLine == "The run reads this copy first; if it matches the keeper, it would go to the Trash, not be deleted.")
         let unread = StewardCopyProof(copyID: id, remaining: 1, counted: ["keeper on LaCie"], notCounted: 1, tier: nil,
                                       hadStoredDigest: false, readsFirst: 1, tierIfTheyMatch: .trash)
         #expect(unread.remainLine == "1 verified copy would remain: keeper on LaCie")

@@ -119,7 +119,7 @@ struct CatalogRowMenuTextTests {
     @Test func singularLabelsCarryNoCount() {
         #expect(T.analyze(count: 1) == "Analyze")
         #expect(T.removeFromCatalog(count: 1) == "Remove from Catalog")
-        #expect(T.deleteFiles(count: 1) == "Delete File")
+        #expect(T.moveToTrash(count: 1) == "Move to Trash")
         #expect(T.restoreToCatalog(count: 1) == "Restore to Catalog")
         #expect(T.putBackInCatalog(count: 1) == "Put Back in Catalog")
         #expect(T.restoreOriginals(count: 1) == "Restore Original (Un-supersede)")
@@ -129,7 +129,7 @@ struct CatalogRowMenuTextTests {
     @Test func pluralLabelsCountExactly() {
         #expect(T.analyze(count: 3) == "Analyze 3 Files")
         #expect(T.removeFromCatalog(count: 2) == "Remove 2 from Catalog")
-        #expect(T.deleteFiles(count: 12) == "Delete 12 Files")
+        #expect(T.moveToTrash(count: 12) == "Move 12 Files to Trash")
         #expect(T.restoreToCatalog(count: 4) == "Restore 4 to Catalog")
         #expect(T.putBackInCatalog(count: 5) == "Put 5 Back in Catalog")
         #expect(T.restoreOriginals(count: 6) == "Restore 6 Originals (Un-supersede)")
@@ -140,26 +140,16 @@ struct CatalogRowMenuTextTests {
     /// the old `count > 1` behaviour (no count) rather than "0 Files".
     @Test func zeroReadsLikeOne() {
         #expect(T.analyze(count: 0) == "Analyze")
-        #expect(T.deleteFiles(count: 0) == "Delete File")
+        #expect(T.moveToTrash(count: 0) == "Move to Trash")
     }
 
-    /// Hide-the-row and delete-from-disk must never read alike.
+    /// Hide-the-row and move-the-file must never read alike.
     @Test func removeIsNeverWordedAsDelete() {
         for n in [1, 2, 50] {
             #expect(!T.removeFromCatalog(count: n).contains("Delete"))
-            #expect(T.deleteFiles(count: n).hasPrefix("Delete"))
+            #expect(!T.removeFromCatalog(count: n).contains("Trash"))
+            #expect(T.moveToTrash(count: n).hasPrefix("Move") && T.moveToTrash(count: n).hasSuffix("Trash"))
         }
-    }
-
-    @Test func permanentDeleteConfirmationWording() {
-        #expect(T.permanentDeleteQuestion(count: 1, firstFilename: "tape 3.mov")
-                == "Delete \u{201C}tape 3.mov\u{201D} permanently?")
-        #expect(T.permanentDeleteQuestion(count: 4, firstFilename: "ignored.mov")
-                == "Delete 4 files permanently?")
-        #expect(T.permanentDeleteWarning(count: 1)
-                == "This cannot be undone \u{2014} the file is removed from disk immediately, not moved to Trash.")
-        #expect(T.permanentDeleteWarning(count: 2)
-                == "This cannot be undone \u{2014} the files are removed from disk immediately, not moved to Trash.")
     }
 }
 

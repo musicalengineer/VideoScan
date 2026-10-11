@@ -1949,6 +1949,12 @@ enum HallieLineageAnswer {
         "spelling recovery: “\(typed)” taken as \(person.name), the one close name in the tree"
     }
 
+    /// True when a resolution `note` is `spellingRecoveryNote` — the person
+    /// was a near-spelling guess, not the name that was typed.
+    static func isSpellingRecovery(_ note: String?) -> Bool {
+        note?.hasPrefix("spelling recovery:") ?? false
+    }
+
     static func centerTree(_ typed: String?, graph: GedcomFamilyGraph,
                            context: HallieTurnExecutor.Context) -> Result {
         switch resolveDetailed(typed, context: context, graph: graph) {

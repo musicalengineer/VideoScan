@@ -105,7 +105,14 @@ struct ContentView: View {
                 case 4:
                     ArchiveView()
                 case 5:
-                    FamilyTreeView(sharedModel: familyTreeModel)
+                    // The catalog goes in as a reference plus a value, not
+                    // an environment subscription, and `.equatable()` skips
+                    // this pass when those are unchanged (GH #307: every
+                    // catalog publish rebuilt the tree's cards and any
+                    // open right-click menu).
+                    FamilyTreeView(sharedModel: familyTreeModel, catalog: model,
+                                   sourceRevision: FamilyTreeView.sourceRevision(of: model))
+                        .equatable()
                 case 6:
                     VolumesWindow(embedded: true)
                 default:
@@ -1231,6 +1238,13 @@ struct CatalogView: View {
         let score = selection?.score
 
         guard let pair = partner else {
+            // A video-only elementary stream Correlate cannot pair: list
+            // the sound files that may belong to it, with reasons (Rick
+            // 2026-10-10). Nothing is paired; Combine only on a measured
+            // length match, through the existing Combine sheet.
+            if SoundPairAlert.offer(for: rec, model: model, combine: { v, a in
+                combinePairItem = CombinePairItem(video: v, audio: a)
+            }) { return }
             let alert = NSAlert()
             alert.messageText = "No A/V Pair Found"
             alert.informativeText = "No matching \(rec.streamType == .videoOnly ? "audio" : "video")-only file scored highly enough against:\n\n\(rec.filename)"

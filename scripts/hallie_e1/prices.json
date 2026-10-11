@@ -1,0 +1,22 @@
+{
+  "asOf": "2026-10-06",
+  "source": "Anthropic first-party API list prices as cached in the Claude Code `claude-api` skill reference (model table cached 2026-10-06), the same figures as docs/design/hallie_e1_experiment.md §8. Cache write = 1.25 x input (5-minute TTL). Not re-checked against the live pricing page from this machine.",
+  "verified": false,
+  "verifyAt": "https://platform.claude.com/docs/en/about-claude/pricing",
+  "status": "ESTIMATE - Rick to confirm against the pricing page before the first paid run; edit this file and set verified=true",
+  "unit": "USD per million tokens",
+  "cacheWriteMultiplier": 1.25,
+  "models": {
+    "claude-haiku-5-5":  {"input": 0.10,  "output": 0.50,  "cacheRead": 0.01, "cacheWrite": 0.125,
+                          "note": "prompts up to 100K tokens; $0.50 / $2.50 beyond (E1 prompts stay far below)"},
+    "claude-sonnet-5-5": {"input": 2.00,  "output": 10.00, "cacheRead": 0.20, "cacheWrite": 2.50},
+    "claude-opus-5-5":   {"input": 4.00,  "output": 20.00, "cacheRead": 0.20, "cacheWrite": 5.00},
+    "claude-fable-5-1":  {"input": 10.00, "output": 50.00, "cacheRead": 0.25, "cacheWrite": 12.50}
+  },
+  "ollama": {
+    "local": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0,
+              "note": "local Ollama (this Mac or the M5 Ultra): no per-token charge; electricity not counted"},
+    "cloud": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0, "priced": false,
+              "note": "Ollama Cloud is subscription-billed, not per token; $ is reported as 0 and the run is marked unpriced"}
+  }
+}
