@@ -23443,6 +23443,21 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VolumeContextMenuRulesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "VolumeContextMenuRulesTests"
+      ],
+      "tests": [
+        "test_captionableVideoCount_countsVideoStreamsUnderThePath",
+        "test_captionableVideoCount_isAPlainPrefixMatch_pinnedNotEndorsed",
+        "test_offersMigrationReport_forRetiredOrOfflineOnly",
+        "test_offersReset_whenAnyTargetHasFinished",
+        "test_offersVolumeNameBackfill_severalVolumesOrOneWithUnnamedRecords"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/VolumeDashboardTests.swift",
@@ -28756,7 +28771,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2267,
+      "expected_floor": 2272,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -29066,6 +29081,7 @@
         "VideoScanTests/VideoRecordRelocatedVolumeNameTests",
         "VideoScanTests/VideoRecordSnapshotTests",
         "VideoScanTests/VoicemailTests",
+        "VideoScanTests/VolumeContextMenuRulesTests",
         "VideoScanTests/VolumeKeepaliveTests",
         "VideoScanTests/VolumeReachabilityDisplayLabelTests",
         "VideoScanTests/VolumeRelocatedIndicatorTests",

@@ -404,220 +404,258 @@ extension CatalogView {
     private func volumeContextCatalogSection(
         targets: [CatalogScanTarget], first: CatalogScanTarget, single: Bool
     ) -> some View {
+        // One Section, five groups of items in the order they appear, each
+        // group a builder named for what its items do (2026-10-10). The
+        // yes/no rules they read live in VolumeContextMenuRules.
         Section("Catalog") {
-            if single {
-                Button(action: { showCatalogInfo(for: first) }) {
-                    Label("Catalog Info", systemImage: "info.circle")
-                }
-                .keyboardShortcut("i", modifiers: .command)
+            volumeScanItems(targets: targets, first: first, single: single)
+            volumeSignatureItems(first: first, single: single)
+            volumeIntegrityItems(first: first, single: single)
+            volumeCaptionItems(first: first, single: single)
+            volumeRecordItems(targets: targets, first: first, single: single)
+        }
+    }
+
+    /// Catalog Info (single), Rescan / Resume, Update Catalog….
+    @ViewBuilder
+    private func volumeScanItems(
+        targets: [CatalogScanTarget], first: CatalogScanTarget, single: Bool
+    ) -> some View {
+        if single {
+            Button(action: { showCatalogInfo(for: first) }) {
+                Label("Catalog Info", systemImage: "info.circle")
             }
-            Button(action: {
-                for t in targets where t.status.isIdle && t.isReachable {
-                    if t.status == .resumable {
-                        model.resumeTarget(t)
-                    } else {
-                        model.startTarget(t)
+            .keyboardShortcut("i", modifiers: .command)
+        }
+        Button(action: {
+            for t in targets where t.status.isIdle && t.isReachable {
+                if t.status == .resumable {
+                    model.resumeTarget(t)
+                } else {
+                    model.startTarget(t)
+                }
+            }
+        }) {
+            let hasResumable = targets.contains { $0.status == .resumable }
+            Label(ScanVerb.menuLabel(hasResumable: hasResumable, single: single),
+                  systemImage: hasResumable ? "arrow.clockwise" : "arrow.clockwise")
+        }
+        .help(ScanVerb.rescanHelp)
+        // Update Catalog (2026-08-17): the previewed, relinking flavor
+        // of a rescan — for when files were moved/renamed outside the
+        // app. Opens the sheet with these targets pre-checked.
+        Button(action: {
+            model.openUpdateCatalog(preselecting: Set(targets.map(\.id)))
+        }) {
+            Label("Update Catalog…", systemImage: "arrow.triangle.2.circlepath")
+        }
+        .disabled(model.isReadOnly)
+        .help("Preview what a rescan would change (moved / new / missing / unchanged), relink moved files to their records, then Apply.")
+    }
+
+    /// File Signatures (single): coverage first, then the action.
+    @ViewBuilder
+    private func volumeSignatureItems(first: CatalogScanTarget, single: Bool) -> some View {
+        // File signatures for this volume — coverage first, then the
+        // action. Showing "1,204 of 1,513 files have signatures"
+        // BEFORE the button turns a blind command into an informed
+        // one, and answers "did that finish?" without a second trip
+        // (Rick 2026-08-12).
+        if single {
+            let coverage = signatureCoverage(for: first)
+            Section("File Signatures") {
+                Text(coverage.total == 0
+                     ? "No catalogued files"
+                     : "\(coverage.signed) of \(coverage.total) files have signatures")
+                if coverage.missing > 0 {
+                    Button {
+                        Task {
+                            await model.runContentHashBackfill(
+                                pathPrefix: first.searchPath)
+                        }
+                    } label: {
+                        Label("Compute File Signatures (\(coverage.missing))",
+                              systemImage: "number.square")
                     }
+                    .disabled(model.isScanning || !first.isReachable)
+                }
+            }
+        }
+    }
+
+    /// Find Similar Footage, Bind Fixity to Volume, Verify Catalog and
+    /// Show Migrated… — the per-volume integrity verbs (single only).
+    @ViewBuilder
+    private func volumeIntegrityItems(first: CatalogScanTarget, single: Bool) -> some View {
+        // Find Similar Footage on this volume's files (2026-09-23) — the
+        // grouping still sees the whole catalog (the other copies can
+        // be on any drive); only this volume's groups are written.
+        if single, !first.searchPath.isEmpty {
+            Button(action: {
+                let scope = FootageScope.volume(prefix: first.searchPath,
+                                                label: VolumeReachability.displayLabel(forPath: first.searchPath))
+                startFileOperation("Find Similar Footage") { center in
+                    center.startFindSimilarFootage(scope: scope, model: model)
                 }
             }) {
-                let hasResumable = targets.contains { $0.status == .resumable }
-                Label(ScanVerb.menuLabel(hasResumable: hasResumable, single: single),
-                      systemImage: hasResumable ? "arrow.clockwise" : "arrow.clockwise")
-            }
-            .help(ScanVerb.rescanHelp)
-            // Update Catalog (2026-08-17): the previewed, relinking flavor
-            // of a rescan — for when files were moved/renamed outside the
-            // app. Opens the sheet with these targets pre-checked.
-            Button(action: {
-                model.openUpdateCatalog(preselecting: Set(targets.map(\.id)))
-            }) {
-                Label("Update Catalog…", systemImage: "arrow.triangle.2.circlepath")
+                Label("Find Similar Footage", systemImage: "square.stack.3d.up")
             }
             .disabled(model.isReadOnly)
-            .help("Preview what a rescan would change (moved / new / missing / unchanged), relink moved files to their records, then Apply.")
-            // File signatures for this volume — coverage first, then the
-            // action. Showing "1,204 of 1,513 files have signatures"
-            // BEFORE the button turns a blind command into an informed
-            // one, and answers "did that finish?" without a second trip
-            // (Rick 2026-08-12).
-            if single {
-                let coverage = signatureCoverage(for: first)
-                Section("File Signatures") {
-                    Text(coverage.total == 0
-                         ? "No catalogued files"
-                         : "\(coverage.signed) of \(coverage.total) files have signatures")
-                    if coverage.missing > 0 {
-                        Button {
-                            Task {
-                                await model.runContentHashBackfill(
-                                    pathPrefix: first.searchPath)
-                            }
-                        } label: {
-                            Label("Compute File Signatures (\(coverage.missing))",
-                                  systemImage: "number.square")
-                        }
-                        .disabled(model.isScanning || !first.isReachable)
-                    }
+            .help("Record which of this volume's files are probably the same footage as files anywhere in the catalog (copies, re-encodes, transcodes, exports). Catalog metadata only — no media is read.")
+        }
+        // Bind Fixity to Volume (2026-09-23, codex #1707): stored digests
+        // from before volume identity are untrusted after any remount;
+        // one full re-read per file binds them again. Rick starts it —
+        // it reads every such file on the volume in full (overnight-sized).
+        if single, !first.searchPath.isEmpty {
+            Button(action: {
+                startFileOperation("Bind Fixity to Volume") { center in
+                    center.startBindFixityToVolume(scopePath: first.searchPath, model: model)
                 }
+            }) {
+                Label("Bind Fixity to Volume", systemImage: "lock.doc")
             }
+            .disabled(model.isReadOnly || !first.isReachable)
+            .help("Re-read, in full, every file on this volume whose stored whole-file digest predates volume identity, and bind it to this volume's UUID so it survives remounts. Reads a lot — can run overnight; Pause frees the disk.")
+        }
 
-            // Find Similar Footage on this volume's files (2026-09-23) — the
-            // grouping still sees the whole catalog (the other copies can
-            // be on any drive); only this volume's groups are written.
-            if single, !first.searchPath.isEmpty {
-                Button(action: {
-                    let scope = FootageScope.volume(prefix: first.searchPath,
-                                                    label: VolumeReachability.displayLabel(forPath: first.searchPath))
-                    startFileOperation("Find Similar Footage") { center in
-                        center.startFindSimilarFootage(scope: scope, model: model)
-                    }
-                }) {
-                    Label("Find Similar Footage", systemImage: "square.stack.3d.up")
-                }
-                .disabled(model.isReadOnly)
-                .help("Record which of this volume's files are probably the same footage as files anywhere in the catalog (copies, re-encodes, transcodes, exports). Catalog metadata only — no media is read.")
+        if single {
+            Button(action: { model.verifyCatalog(for: first) }) {
+                Label("Verify Catalog", systemImage: "checkmark.shield")
             }
-            // Bind Fixity to Volume (2026-09-23, codex #1707): stored digests
-            // from before volume identity are untrusted after any remount;
-            // one full re-read per file binds them again. Rick starts it —
-            // it reads every such file on the volume in full (overnight-sized).
-            if single, !first.searchPath.isEmpty {
-                Button(action: {
-                    startFileOperation("Bind Fixity to Volume") { center in
-                        center.startBindFixityToVolume(scopePath: first.searchPath, model: model)
-                    }
-                }) {
-                    Label("Bind Fixity to Volume", systemImage: "lock.doc")
-                }
-                .disabled(model.isReadOnly || !first.isReachable)
-                .help("Re-read, in full, every file on this volume whose stored whole-file digest predates volume identity, and bind it to this volume's UUID so it survives remounts. Reads a lot — can run overnight; Pause frees the disk.")
+            .disabled(!first.status.isIdle)
+        }
+        // Show Migrated — offline/retired volumes only: the verb
+        // answers "this disk is gone/parked; is its content safe
+        // somewhere else?" An online volume's files ARE the online
+        // version, so the report would be noise there.
+        if single, VolumeContextMenuRules.offersMigrationReport(isRetired: first.isRetired,
+                                                                isReachable: first.isReachable) {
+            Button(action: { showMigrationReport(for: first) }) {
+                Label("Show Migrated…",
+                      systemImage: "externaldrive.badge.checkmark")
             }
+            .help("Report which of this volume's cataloged files have copies on other volumes, and which have no copy anywhere else.")
+        }
+    }
 
-            if single {
-                Button(action: { model.verifyCatalog(for: first) }) {
-                    Label("Verify Catalog", systemImage: "checkmark.shield")
-                }
-                .disabled(!first.status.isIdle)
-            }
-            // Show Migrated — offline/retired volumes only: the verb
-            // answers "this disk is gone/parked; is its content safe
-            // somewhere else?" An online volume's files ARE the online
-            // version, so the report would be noise there.
-            if single, first.isRetired || !first.isReachable {
-                Button(action: { showMigrationReport(for: first) }) {
-                    Label("Show Migrated…",
-                          systemImage: "externaldrive.badge.checkmark")
-                }
-                .help("Report which of this volume's cataloged files have copies on other volumes, and which have no copy anywhere else.")
-            }
-            if single {
-                // Caption Videos — sibling per-target action to "Find
-                // Person" (which lives on the People tab). Runs the VLM
-                // captioner over every cataloged video on this volume.
-                // Disabled when there are no eligible videos so the
-                // user gets a hint rather than a confusing no-op.
-                let captionableCount = model.records.filter { r in
-                    r.fullPath.hasPrefix(first.searchPath) &&
-                    (r.streamType == .videoAndAudio || r.streamType == .videoOnly)
-                }.count
-                Button(action: {
-                    showCaptionProgress = true
-                    Task {
-                        await captionOrchestrator.startCaptioning(target: first, model: model)
-                    }
-                }) {
-                    Label(
-                        captionableCount > 0
-                            ? "Caption Videos (\(captionableCount))"
-                            : "Caption Videos",
-                        systemImage: "text.viewfinder"
-                    )
-                }
-                .disabled(captionableCount == 0 || captionOrchestrator.currentStatus.isActive)
-                .help(
-                    captionableCount == 0
-                        ? "No video files on this volume — nothing to caption"
-                        : "Run the vision-language model on every video on this volume to generate scene captions"
-                )
-            }
-            // Catalog-wide caption — sweeps every reachable volume in
-            // one go. Idempotent: already-captioned records skip
-            // through fast. Roadmap item #4.
-            let reachableCaptionable = pfCatalogWideCaptionCandidates(
-                pfCatalogWideMetadataCandidates(
-                    records: model.records,
-                    reachableVolumePaths: CatalogScanTarget.analyzeCandidates(model.scanTargets).map { $0.searchPath }
-                )
-            ).count
+    /// The VLM group: Caption Videos on this volume (single), then the
+    /// catalog-wide Caption All and Dossier All sweeps.
+    @ViewBuilder
+    private func volumeCaptionItems(first: CatalogScanTarget, single: Bool) -> some View {
+        if single {
+            // Caption Videos — sibling per-target action to "Find
+            // Person" (which lives on the People tab). Runs the VLM
+            // captioner over every cataloged video on this volume.
+            // Disabled when there are no eligible videos so the
+            // user gets a hint rather than a confusing no-op.
+            let captionableCount = VolumeContextMenuRules.captionableVideoCount(
+                records: model.records, under: first.searchPath)
             Button(action: {
                 showCaptionProgress = true
                 Task {
-                    await captionOrchestrator.startCatalogWideCaptioning(model: model)
+                    await captionOrchestrator.startCaptioning(target: first, model: model)
                 }
             }) {
                 Label(
-                    reachableCaptionable > 0
-                        ? "Caption All Reachable Volumes (\(reachableCaptionable))"
-                        : "Caption All Reachable Volumes",
-                    systemImage: "text.viewfinder.rtl"
+                    captionableCount > 0
+                        ? "Caption Videos (\(captionableCount))"
+                        : "Caption Videos",
+                    systemImage: "text.viewfinder"
                 )
             }
-            .disabled(reachableCaptionable == 0 || captionOrchestrator.currentStatus.isActive)
+            .disabled(captionableCount == 0 || captionOrchestrator.currentStatus.isActive)
             .help(
-                reachableCaptionable == 0
-                    ? "No eligible videos on any reachable volume"
-                    : "Run the VLM across every reachable volume — idempotent, can be re-run to pick up new captures"
+                captionableCount == 0
+                    ? "No video files on this volume — nothing to caption"
+                    : "Run the vision-language model on every video on this volume to generate scene captions"
             )
-            // Dossier sweep — three-prompt VLM (date / scene / text)
-            // plus Whisper transcription per video, idempotent skip on
-            // already-dossiered records. Populates the dossier schema
-            // fields (ocrDateCandidates, ocrText, inferredRecordDate)
-            // that single-prompt captioning leaves empty.
+        }
+        // Catalog-wide caption — sweeps every reachable volume in
+        // one go. Idempotent: already-captioned records skip
+        // through fast. Roadmap item #4.
+        let reachableCaptionable = pfCatalogWideCaptionCandidates(
+            pfCatalogWideMetadataCandidates(
+                records: model.records,
+                reachableVolumePaths: CatalogScanTarget.analyzeCandidates(model.scanTargets).map { $0.searchPath }
+            )
+        ).count
+        Button(action: {
+            showCaptionProgress = true
+            Task {
+                await captionOrchestrator.startCatalogWideCaptioning(model: model)
+            }
+        }) {
+            Label(
+                reachableCaptionable > 0
+                    ? "Caption All Reachable Volumes (\(reachableCaptionable))"
+                    : "Caption All Reachable Volumes",
+                systemImage: "text.viewfinder.rtl"
+            )
+        }
+        .disabled(reachableCaptionable == 0 || captionOrchestrator.currentStatus.isActive)
+        .help(
+            reachableCaptionable == 0
+                ? "No eligible videos on any reachable volume"
+                : "Run the VLM across every reachable volume — idempotent, can be re-run to pick up new captures"
+        )
+        // Dossier sweep — three-prompt VLM (date / scene / text)
+        // plus Whisper transcription per video, idempotent skip on
+        // already-dossiered records. Populates the dossier schema
+        // fields (ocrDateCandidates, ocrText, inferredRecordDate)
+        // that single-prompt captioning leaves empty.
+        Button(action: {
+            showCaptionProgress = true
+            Task {
+                await captionOrchestrator.startCatalogWideDossier(model: model)
+            }
+        }) {
+            Label(
+                reachableCaptionable > 0
+                    ? "Dossier All Reachable Volumes (\(reachableCaptionable))"
+                    : "Dossier All Reachable Volumes",
+                systemImage: "doc.text.magnifyingglass"
+            )
+        }
+        .disabled(reachableCaptionable == 0 || captionOrchestrator.currentStatus.isActive)
+        .help(
+            reachableCaptionable == 0
+                ? "No eligible videos on any reachable volume"
+                : "Run the full dossier (date/scene/text VLM prompts + Whisper transcript) across every reachable volume. ~3× slower than captioning but populates all dossier fields. Idempotent."
+        )
+    }
+
+    /// Backfill All Volume Names, Forget … Records (planned and confirmed
+    /// first), Reset & Re-probe — the catalog-record verbs.
+    @ViewBuilder
+    private func volumeRecordItems(
+        targets: [CatalogScanTarget], first: CatalogScanTarget, single: Bool
+    ) -> some View {
+        if VolumeContextMenuRules.offersVolumeNameBackfill(targetCount: targets.count, records: model.records) {
+            Button(action: { model.backfillAllProvenance() }) {
+                Label("Backfill All Volume Names", systemImage: "arrow.triangle.2.circlepath")
+            }
+        }
+        // Forget catalog records — never files on disk (wording: Rick
+        // 2026-10-03). Both branches plan at the gesture and confirm
+        // first; the multi-select branch used to remove on the spot
+        // with no dialog.
+        Button(role: .destructive, action: {
+            if single {
+                presentDeleteVolumeCatalog(for: first)
+            } else {
+                presentDeleteVolumesCatalog(for: targets)
+            }
+        }) {
+            Label(RemoveFromCatalogWording.contextMenuTitle(volumeCount: targets.count),
+                  systemImage: "xmark.bin")
+        }
+        .help(RemoveFromCatalogWording.contextMenuHelp)
+        if VolumeContextMenuRules.offersReset(statuses: targets.map(\.status)) {
             Button(action: {
-                showCaptionProgress = true
-                Task {
-                    await captionOrchestrator.startCatalogWideDossier(model: model)
-                }
+                for t in targets { model.resetTarget(t) }
             }) {
-                Label(
-                    reachableCaptionable > 0
-                        ? "Dossier All Reachable Volumes (\(reachableCaptionable))"
-                        : "Dossier All Reachable Volumes",
-                    systemImage: "doc.text.magnifyingglass"
-                )
-            }
-            .disabled(reachableCaptionable == 0 || captionOrchestrator.currentStatus.isActive)
-            .help(
-                reachableCaptionable == 0
-                    ? "No eligible videos on any reachable volume"
-                    : "Run the full dossier (date/scene/text VLM prompts + Whisper transcript) across every reachable volume. ~3× slower than captioning but populates all dossier fields. Idempotent."
-            )
-            if targets.count > 1 || (single && model.records.contains(where: { $0.scanContext.volumeName.isEmpty })) {
-                Button(action: { model.backfillAllProvenance() }) {
-                    Label("Backfill All Volume Names", systemImage: "arrow.triangle.2.circlepath")
-                }
-            }
-            // Forget catalog records — never files on disk (wording: Rick
-            // 2026-10-03). Both branches plan at the gesture and confirm
-            // first; the multi-select branch used to remove on the spot
-            // with no dialog.
-            Button(role: .destructive, action: {
-                if single {
-                    presentDeleteVolumeCatalog(for: first)
-                } else {
-                    presentDeleteVolumesCatalog(for: targets)
-                }
-            }) {
-                Label(RemoveFromCatalogWording.contextMenuTitle(volumeCount: targets.count),
-                      systemImage: "xmark.bin")
-            }
-            .help(RemoveFromCatalogWording.contextMenuHelp)
-            if targets.contains(where: { $0.status == .complete || $0.status == .stopped || $0.status == .error }) {
-                Button(action: {
-                    for t in targets { model.resetTarget(t) }
-                }) {
-                    Label("Reset & Re-probe", systemImage: "arrow.counterclockwise")
-                }
+                Label("Reset & Re-probe", systemImage: "arrow.counterclockwise")
             }
         }
     }
