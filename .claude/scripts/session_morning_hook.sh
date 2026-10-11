@@ -26,6 +26,9 @@ find "$STAMP_DIR" -maxdepth 1 -name '.morning_shown_*' ! -name "$(basename "$STA
 echo "=== Daily VideoScan test-metrics digest (first session of the day) ==="
 bash "$REPO_ROOT/scripts/morning_metrics.sh" 2>/dev/null || echo "(morning_metrics.sh unavailable)"
 
+# ── Weekly sprint (Rick 2026-10-11): milestone progress + top 3 bugs ──
+python3 "$REPO_ROOT/scripts/sprint_digest.py" 2>/dev/null || true
+
 # ── Branch hygiene (Rick 2026-07-08: decide purges first thing each day) ──
 # Read-only; every git call tolerant so a weird repo state never kills the digest.
 echo ""
