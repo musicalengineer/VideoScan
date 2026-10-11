@@ -120,9 +120,10 @@ struct QADossierAdmissionRedTests {
     }
 
     /// P3-b — VideoScanModel+LiveReload.swift:205. The external merger's
-    /// date still lands on an Archived-stage row outside the archive root,
-    /// which Dossier (isDossierReadOnly) and the date lane now treat as
-    /// frozen — and the catch-up pass can no longer repair it.
+    /// date landed on an Archived-stage row outside the archive root, which
+    /// Dossier and the date lane treat as frozen. FIXED 2026-10-11 (Rick's
+    /// ruling: the rule follows the stage) — LiveReload consults the date
+    /// seam `isDateReadOnly`. Now an ordinary pin.
     @Test func liveReloadMergeLeavesAnArchivedStageRowsDateAlone() throws {
         let sb = try F.Sandbox("qa-livereload")
         defer { sb.cleanup() }
@@ -139,15 +140,14 @@ struct QADossierAdmissionRedTests {
         fresh.inferredDateReason = "on-screen date 1991"
         fresh.dossierProcessedAt = Date(timeIntervalSince1970: 1_800_000_000)
         _ = sb.model.mergeDossierFields(from: [fresh])
-        // HOLD (Manager 2026-10-10): P3-b awaits Rick's ruling — a known issue
-        // until LiveReload uses isDossierReadOnly; flips to a failure when fixed.
-        withKnownIssue("P3-b pending Rick's ruling") {
-            #expect(t.inferredRecordDate == F.utc(1985), "archived-stage row re-dated by live reload")
-        }
+        #expect(t.inferredRecordDate == F.utc(1985), "archived-stage row re-dated by live reload")
+        #expect(t.inferredDateReason == "filed as 1985" && t.inferredDateConfidence == 0.9)
+        #expect(t.dossierProcessedAt == fresh.dossierProcessedAt, "the dossier channels still merge")
     }
 
     /// P3-c — VideoScanModel+DuplicateEnrichment.swift:60. Same predicate
-    /// gap on the duplicate-delete enrichment merge.
+    /// gap on the duplicate-delete enrichment merge. FIXED 2026-10-11 (the
+    /// date seam `isDateReadOnly`). Now an ordinary pin.
     @Test func duplicateEnrichmentDoesNotDateAnArchivedStageKeeper() throws {
         let sb = try F.Sandbox("qa-dupenrich")
         defer { sb.cleanup() }
@@ -157,11 +157,9 @@ struct QADossierAdmissionRedTests {
         extra.fullPath = "/Volumes/TestOtherQA/test_extra.mov"
         extra.inferredRecordDate = F.utc(1991); extra.inferredDateConfidence = 0.8
         sb.model.records = [master, extra]
-        _ = sb.model.applyEnrichmentInheritance(from: extra, to: master)
-        // HOLD (Manager 2026-10-10): P3-c awaits Rick's ruling.
-        withKnownIssue("P3-c pending Rick's ruling") {
-            #expect(master.inferredRecordDate == nil, "archived-stage keeper dated by duplicate enrichment")
-        }
+        let carried = sb.model.applyEnrichmentInheritance(from: extra, to: master)
+        #expect(master.inferredRecordDate == nil, "archived-stage keeper dated by duplicate enrichment")
+        #expect(!carried.contains("inferred date"), "\(carried)")
     }
 
     /// PIN (green today; red if the guard at CaptionOrchestrator+Dossier.swift

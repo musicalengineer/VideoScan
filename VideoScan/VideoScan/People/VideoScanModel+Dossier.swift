@@ -11,9 +11,10 @@ extension VideoScanModel {
     /// Archived. Such a row never gets a date, a purge, a junk flag or a
     /// needsReformat flag from analysis — "archived = read-only except
     /// Update… {name, date}". Reading its file for analysis is allowed.
-    /// O(1).
+    /// The SAME rule as the date seam (`isDateReadOnly`, Rick 2026-10-11)
+    /// — one definition, named here for Dossier's wider scope. O(1).
     func isDossierReadOnly(_ record: VideoRecord) -> Bool {
-        record.lifecycleStage == .archived || isArchiveElement(record)
+        isDateReadOnly(record)
     }
 
     // MARK: - Dossier Writeback
@@ -114,8 +115,8 @@ extension VideoScanModel {
         // what the pass concluded, so nothing is lost.
         // 2026-10-10: Dossier now admits Archived rows, including the ones
         // OUTSIDE the archive root (sources stamped Archived) — they are
-        // read-only to Dossier too (`isDossierReadOnly`).
-        let archivedFile = isDossierReadOnly(record)
+        // read-only to Dossier too. 2026-10-11: the date seam.
+        let archivedFile = isDateReadOnly(record)
         if !archivedFile {
             Self.applyTriangulation(inferred, to: record, source: nil)
         }

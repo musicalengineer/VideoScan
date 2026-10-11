@@ -681,9 +681,9 @@ extension VideoScanModel {
     /// or anything whose path lies inside the archive root. Rick 2026-09-27:
     /// "once a file is in the archive… only I will update name/date, though
     /// the system may add metadata notes… archived elements mostly
-    /// read-only." Every BACKGROUND date writer (the inferred-date pass,
-    /// applyDossier's triangulation, live reload, duplicate enrichment, the
-    /// #1413 unwind) skips such a record; its date may still DONATE to other
+    /// read-only." Date writers do not ask this directly: they ask the date
+    /// seam `isDateReadOnly` (VideoScanModel+DateReadOnly.swift — this OR the
+    /// Archived stage, Rick 2026-10-11); its date may still DONATE to other
     /// copies. Narrower than `isArchived`, which also counts a SOURCE whose
     /// content has a master copy — the source lives outside the archive and
     /// keeps its ordinary rules. O(1): a string compare and a prefix test.

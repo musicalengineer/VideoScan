@@ -72,10 +72,12 @@
 // is never WRITTEN by any rule here — not cleared, re-triangulated,
 // propagated to, footage-shared to or folder-year dated — nor by the
 // #1413 unwind. It may still DONATE: its date is the filed one.
-// 2026-10-10: the catch-up pass freezes every Archived-stage row too
-// (`isDossierReadOnly`), because Dossier now analyzes them and its
-// evidence must not turn into a date on an archived row. (The #1413
-// unwind keeps its narrower `isArchiveElement` scope.)
+// 2026-10-10: the catch-up pass freezes every Archived-stage row too,
+// because Dossier now analyzes them and its evidence must not turn into a
+// date on an archived row. 2026-10-11 (Rick: the rule follows the stage):
+// every writer here — the pass, the #1413 unwind and its re-anchor, and
+// the sidecar reapply — consults the ONE seam, `isDateReadOnly`
+// (VideoScanModel+DateReadOnly.swift).
 //
 // NEVER: overwrite a userDate (not touched at all), overwrite an
 // existing own or propagated inference, propagate a copy-local mtime
@@ -804,7 +806,7 @@ extension VideoScanModel {
             pass.byID[rec.id] = rec
             // 2026-10-10: also every Archived-stage row — Dossier now gives
             // them evidence, and that must never come back as a date.
-            if isDossierReadOnly(rec) { pass.archived.insert(rec.id) }
+            if isDateReadOnly(rec) { pass.archived.insert(rec.id) }
             if let key = Self.contentGroupKey(rec), scopeKeys?.contains(key) ?? true {
                 pass.groups[key, default: []].append(rec)
             }
@@ -1142,7 +1144,7 @@ extension VideoScanModel {
     /// REVERSIBLE: before the first row is cleared the full prior state is
     /// written to `<dir>/unwound-<yyyyMMdd-HHmmss>.json`; a failed write
     /// aborts the unwind (an irreversible repair is worse than the bug).
-    /// `reapplyUnwoundDates(from:to:)` restores it. IDEMPOTENT: a second
+    /// `reapplyUnwoundDates(from:)` restores it. IDEMPOTENT: a second
     /// call finds nothing, writes nothing, logs nothing.
     ///
     /// Why it exists: the 2026-09-12 20:18 load pass persisted 558 such
@@ -1162,8 +1164,9 @@ extension VideoScanModel {
         var entries: [UnwoundDateEntry] = []
         for rec in records {
             // Rick 2026-09-27: an archive file's date is the filed one — the
-            // repair never clears it (nor re-anchors it, below).
-            guard Self.isPropagatedInferredDate(rec), !isArchiveElement(rec),
+            // repair never clears it (nor re-anchors it, below). 2026-10-11:
+            // the same for every Archived-stage row (the date seam).
+            guard Self.isPropagatedInferredDate(rec), !isDateReadOnly(rec),
                   let source = rec.inferredDateSource,
                   let date = rec.inferredRecordDate else { continue }
             // codex #1439: validate against the ORIGIN of the provenance
@@ -1196,7 +1199,7 @@ extension VideoScanModel {
         let victimIDs = Set(victims.map(\.id))
         var reanchors: [(rec: VideoRecord, entry: ReanchoredProvenanceEntry)] = []
         for rec in records where Self.isPropagatedInferredDate(rec) && !victimIDs.contains(rec.id)
-            && !isArchiveElement(rec) {
+            && !isDateReadOnly(rec) {
             let chain = Self.provenanceChain(of: rec, byID: byID)
             guard let origin = chain.origin, let previous = rec.inferredDateSource,
                   chain.via.contains(where: { victimIDs.contains($0) }) else { continue }
@@ -1316,13 +1319,24 @@ extension VideoScanModel {
     /// row only when it currently holds NO settled inferred date (nil or
     /// the folder-year placeholder) and no userDate — a date a verified
     /// pass or a dossier run derived since is better-founded than the one
-    /// unwound and is kept. Pure over its inputs (no model, no disk
-    /// beyond reading the sidecar); returns the rows restored.
+    /// unwound and is kept. A row the date seam freezes (`isDateReadOnly`
+    /// — archived since, or unwound before the 2026-10-11 stage rule) is
+    /// never written. Pure over its inputs (no model, no disk beyond
+    /// reading the sidecar); returns the rows restored.
     @MainActor
     @discardableResult
-    static func reapplyUnwoundDates(from sidecar: URL, to records: [VideoRecord]) throws -> [VideoRecord] {
+    static func reapplyUnwoundDates(from sidecar: URL, to records: [VideoRecord],
+                                    isDateReadOnly: (VideoRecord) -> Bool) throws -> [VideoRecord] {
         let payload = try unwoundSidecarDecoder().decode(UnwoundDateSidecar.self, from: Data(contentsOf: sidecar))
-        return reapplyUnwoundDates(payload.entries, reanchored: payload.reanchored, to: records)
+        return reapplyUnwoundDates(payload.entries, reanchored: payload.reanchored, to: records,
+                                   isDateReadOnly: isDateReadOnly)
+    }
+
+    /// The model's own catalog and its date seam.
+    @MainActor
+    @discardableResult
+    func reapplyUnwoundDates(from sidecar: URL) throws -> [VideoRecord] {
+        try Self.reapplyUnwoundDates(from: sidecar, to: records, isDateReadOnly: { self.isDateReadOnly($0) })
     }
 
     /// Returns every row touched: dates put back, and re-anchored
@@ -1332,12 +1346,14 @@ extension VideoScanModel {
     @discardableResult
     static func reapplyUnwoundDates(_ entries: [UnwoundDateEntry],
                                     reanchored: [ReanchoredProvenanceEntry] = [],
-                                    to records: [VideoRecord]) -> [VideoRecord] {
+                                    to records: [VideoRecord],
+                                    isDateReadOnly: (VideoRecord) -> Bool) -> [VideoRecord] {
         var byID: [UUID: VideoRecord] = [:]
         for rec in records { byID[rec.id] = rec }
         var restored: [VideoRecord] = []
         for e in entries {
             guard let rec = byID[e.recordID],
+                  !isDateReadOnly(rec),
                   rec.userDate == nil,
                   !hasSettledInferredDate(rec) else { continue }
             rec.inferredRecordDate = e.inferredRecordDate
@@ -1348,7 +1364,7 @@ extension VideoScanModel {
             restored.append(rec)
         }
         for e in reanchored {
-            guard let rec = byID[e.recordID], rec.inferredDateSource == e.newSource else { continue }
+            guard let rec = byID[e.recordID], !isDateReadOnly(rec), rec.inferredDateSource == e.newSource else { continue }
             rec.inferredDateSource = e.previousSource
             if !restored.contains(where: { $0.id == rec.id }) { restored.append(rec) }
         }

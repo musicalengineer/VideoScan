@@ -124,7 +124,10 @@ extension VideoScanModel {
     ///   mediaDisposition        copy only while repair is unreviewed
     ///   lifecycleStage          copy only while repair is cataloged
     ///   archiveStage            copy only while repair is .none
-    ///   userDate(+confidence)   copy only when repair's is nil
+    ///   userDate(+confidence)   copy only when repair's is nil, and never
+    ///                           onto a record the date seam froze
+    ///                           (`isDateReadOnly`, judged on entry —
+    ///                           Rick 2026-10-11)
     ///
     /// Shared with duplicate deletion (2026-08-18): the same rules fold
     /// an extra copy's human metadata into its group keeper before the
@@ -134,6 +137,8 @@ extension VideoScanModel {
     @MainActor
     @discardableResult
     func applyHumanMetadataInheritance(from original: VideoRecord, to repair: VideoRecord) -> [String] {
+        // Judged BEFORE the stage carry below can change it.
+        let dateReadOnly = isDateReadOnly(repair)
         var carried: [String] = []
         let tagsBefore = repair.tags
         for tag in original.tags {
@@ -185,9 +190,8 @@ extension VideoScanModel {
             repair.archiveStage = original.archiveStage
             carried.append("archive stage")
         }
-        if repair.userDate == nil, original.userDate != nil {
-            repair.userDate = original.userDate
-            repair.userDateConfidence = original.userDateConfidence
+        if carryHandEnteredDate(from: original, to: repair, targetDateReadOnly: dateReadOnly,
+                                writer: "carry marks from \(original.filename)") {
             carried.append("date")
         }
         // Rick's hand-entered place rides exactly like his date (codex
@@ -406,17 +410,20 @@ extension VideoScanModel {
             adopted = probed
             records.append(probed)
         }
+        // The date seam, judged before the provenance below rewrites
+        // derivationKind (an archive copy would otherwise stop looking like
+        // one). Rick 2026-10-11.
+        let dateReadOnly = isDateReadOnly(adopted)
 
         // Same provenance shape as RebuildAudioJob.catalogRebuildOutput.
         adopted.derivedFrom = original.id
         adopted.derivationKind = ExternalRepairAdoption.derivationKind
         // The adopted copy is the same footage — Rick's hand-entered
         // date carries over with its confidence (GH #117 convention),
-        // but a date he already put on the adopted record itself wins.
-        if adopted.userDate == nil {
-            adopted.userDate = original.userDate
-            adopted.userDateConfidence = original.userDateConfidence
-        }
+        // but a date he already put on the adopted record itself wins, and
+        // an archived record keeps its filed date (the date seam).
+        carryHandEnteredDate(from: original, to: adopted, targetDateReadOnly: dateReadOnly,
+                             writer: "Link Repaired Copy")
         // Same rule for Rick's place (codex #1370 P0).
         if adopted.userPlace == nil {
             adopted.userPlace = original.userPlace

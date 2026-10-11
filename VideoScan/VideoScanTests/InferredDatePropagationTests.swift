@@ -588,7 +588,7 @@ struct InferredDatePropagationTests {
         f.orphan.inferredRecordDate = Date(timeIntervalSince1970: 700_000_000)
         f.orphan.inferredDateConfidence = 0.75
         f.orphan.inferredDateSource = VideoScanModel.InferredDateSource.catchUp
-        let restored = try VideoScanModel.reapplyUnwoundDates(from: url, to: model.records)
+        let restored = try model.reapplyUnwoundDates(from: url)
         #expect(restored.map(\.id) == [f.heuristic.id])
         #expect(f.heuristic.inferredRecordDate == Self.june21_1991 && f.heuristic.inferredDateConfidence == 0.95
                 && f.heuristic.inferredDateSource == heuristicEntry.inferredDateSource)
@@ -597,7 +597,7 @@ struct InferredDatePropagationTests {
         // Pure over entries: unknown ids are ignored.
         let stray = VideoScanModel.UnwoundDateEntry(recordID: UUID(), fullPath: "/nowhere", inferredRecordDate: Self.june21_1991,
                                                     inferredDateConfidence: 0.9, inferredDateSource: "propagated from x")
-        #expect(VideoScanModel.reapplyUnwoundDates([stray], to: model.records).isEmpty)
+        #expect(VideoScanModel.reapplyUnwoundDates([stray], to: model.records, isDateReadOnly: model.isDateReadOnly).isEmpty)
     }
 
     @Test func unwindNeverTouchesUserDates() throws {
@@ -1709,14 +1709,14 @@ extension InferredDatePropagationTests {
         #expect(VideoScanModel.originDonor(of: d, byID: byID) === a)
 
         // Recovery: B's date comes back AND C/D's previous provenance comes back.
-        let restored = try VideoScanModel.reapplyUnwoundDates(from: url, to: model.records)
+        let restored = try model.reapplyUnwoundDates(from: url)
         #expect(Set(restored.map(\.id)) == [b.id, c.id, d.id])
         #expect(b.inferredRecordDate == Self.june21_1991 && b.inferredDateSource == fromA)
         #expect(c.inferredDateSource == "propagated from \(b.id.uuidString)")
         #expect(d.inferredDateSource == "propagated from \(c.id.uuidString)")
         // A row re-dated since keeps its newer provenance.
         c.inferredDateSource = VideoScanModel.InferredDateSource.catchUp
-        _ = try VideoScanModel.reapplyUnwoundDates(from: url, to: model.records)
+        _ = try model.reapplyUnwoundDates(from: url)
         #expect(c.inferredDateSource == VideoScanModel.InferredDateSource.catchUp)
     }
 

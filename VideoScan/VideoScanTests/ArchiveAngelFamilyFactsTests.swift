@@ -58,16 +58,16 @@ struct ArchiveAngelFamilyFactsTests {
         var e = ArchiveAngelPlan.Entry(id: original.id, sourcePath: original.fullPath, filename: "tape.mov", sizeBytes: 1,
                                        durationSeconds: 60, score: 1, evidence: [], proposedName: "tape.mov",
                                        proposedDate: "1988")
-        let lines = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling]).lines
+        let lines = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling], isDateReadOnly: { _ in false }).lines
         #expect(original.userDate == nil)
         #expect(lines.contains { $0.contains("not stamped: Review set 1988") }, "\(lines)")
         e.proposedDate = "1987-06"
-        let again = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling])
+        let again = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling], isDateReadOnly: { _ in false })
         #expect(original.userDate == "1987-06" && original.userDateConfidence == "known")
         #expect(again.lines == ["Archive Angel: tape.mov — date 1987-06 (known) inherited from copy.mov"])
         #expect(again.facts == [.init(recordID: original.id, field: .date, previousValue: nil, previousConfidence: nil,
                                       writtenValue: "1987-06", writtenConfidence: "known")])
-        let third = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling])
+        let third = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling], isDateReadOnly: { _ in false })
         #expect(third.lines.isEmpty && third.facts.isEmpty, "idempotent: a second promote click writes nothing and logs nothing")
     }
 
@@ -78,7 +78,7 @@ struct ArchiveAngelFamilyFactsTests {
         let sibling = rec("copy.mov"); sibling.userPlace = "Cape Cod"; sibling.userPlaceConfidence = "known"
         let e = ArchiveAngelPlan.Entry(id: original.id, sourcePath: original.fullPath, filename: "tape.mov", sizeBytes: 1,
                                        durationSeconds: 60, score: 1, evidence: [], proposedName: "tape.mov", proposedDate: nil)
-        _ = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [access], family: [original, sibling, access])
+        _ = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [access], family: [original, sibling, access], isDateReadOnly: { _ in false })
         #expect(original.userPlace == "Cape Cod")
         #expect(access.userPlace == "Own place")
     }
@@ -132,7 +132,7 @@ struct ArchiveAngelFamilyFactsTests {
                                        durationSeconds: 60, score: 1, evidence: [], proposedName: "tape.mov",
                                        proposedDate: "1987-06")
         e.inheritedDate = .init(value: "1987-06", confidence: "known", fromRecordID: sibling.id, fromFilename: "copy.mov")
-        let lines = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling]).lines
+        let lines = ArchiveAngelFamilyFacts.stamp(entry: e, original: original, companions: [], family: [original, sibling], isDateReadOnly: { _ in false }).lines
         #expect(original.userDate == nil)
         #expect(lines.count == 1 && lines[0].contains("said 1987-06 at Prepare") && lines[0].contains("now say 1988"), "\(lines)")
     }
@@ -182,7 +182,7 @@ struct ArchiveAngelFamilyFactsTests {
         let sibling = rec("s.mov"); sibling.userDate = "1987"; sibling.userPlace = "Cape Cod"
         let e = ArchiveAngelPlan.Entry(id: a.id, sourcePath: a.fullPath, filename: "a.mov", sizeBytes: 1,
                                        durationSeconds: 60, score: 1, evidence: [], proposedName: "a.mov", proposedDate: nil)
-        let r = ArchiveAngelFamilyFacts.stamp(entry: e, original: a, companions: [b], family: [a, b, sibling])
+        let r = ArchiveAngelFamilyFacts.stamp(entry: e, original: a, companions: [b], family: [a, b, sibling], isDateReadOnly: { _ in false })
         #expect(a.userDate == "1987" && b.userDate == "1987" && a.userPlace == "Cape Cod")
         b.userDate = "1990"                                   // Rick edited the companion meanwhile
         let changed = ArchiveAngelFamilyFacts.restore(r.facts, record: { id in [a, b].first { $0.id == id } })

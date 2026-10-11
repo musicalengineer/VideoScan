@@ -213,7 +213,7 @@ struct ArchiveAngelFamilyInheritanceTests {
         let comp = MasterArchiveTestSupport.makeRecord(path: "/tmp/aa/tape_balanced.mov")
         comp.derivedFrom = orig.id; comp.derivationKind = BalanceAudioFix.derivationKind
         let e = ArchiveAngelPlan.Entry(id: orig.id, sourcePath: orig.fullPath, filename: "tape.mov", sizeBytes: 1, sourceContentHash: "", sourceModifiedAt: nil, durationSeconds: 1, score: 1, evidence: [], proposedName: "tape.mov", proposedDate: "1987-06", status: .ready)
-        _ = ArchiveAngelFamilyFacts.stamp(entry: e, original: orig, companions: [comp], family: [orig, comp])
+        _ = ArchiveAngelFamilyFacts.stamp(entry: e, original: orig, companions: [comp], family: [orig, comp], isDateReadOnly: { _ in false })
         #expect(comp.userDate == "1987-06")
     }
 

@@ -26381,6 +26381,32 @@
         "perVolumeCoverageLineDoesNotCallOtherVolumesOffline",
         "pipelinedZeroSceneArchivedRowIsNotFlagged"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivedDateReadOnlyTests.swift",
+      "stage": "integration",
+      "suites": [
+        "ArchivedDateReadOnlyTests"
+      ],
+      "tests": [
+        "angelStampSkipsArchivedDate",
+        "duplicateEnrichmentStillDatesACatalogedKeeper",
+        "everyBackgroundWriterLeavesAnArchivedStageRowsDates",
+        "humanMarkCarryLeavesAnArchivedKeepersDate",
+        "linkRepairedCopyKeepsAnArchivedRowsDate",
+        "liveReloadStillDatesACatalogedRow",
+        "reanchorSkipsArchivedStage",
+        "reapplyNeverRestoresOntoAnArchivedStageRow",
+        "repairOfAnArchivedOriginalStillTakesTheDate",
+        "scale100kArchivedRowsUntouched",
+        "seamFollowsTheStageAndStillCoversArchiveFiles",
+        "sensorEveryDateWriterIsReviewed",
+        "stageRuleIgnoresTheDesignation",
+        "unwindNeverClearsAnArchivedStageRow",
+        "updateStillWritesAnArchivedStageRecordsDate"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -29410,6 +29436,10 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FFmpegPreviewRendererE2ETests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchivedDateReadOnlyTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogScopeScanIntegrationTests.swift",

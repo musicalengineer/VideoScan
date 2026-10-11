@@ -290,7 +290,8 @@ final class ArchiveAngelPromoter: ObservableObject {
                                                                   fresh: freshFixity)
                 let companions = companionIDs.compactMap { model.record(forID: $0) }
                 let stamped = ArchiveAngelFamilyFacts.stamp(entry: entry, original: original,
-                                                            companions: companions, relatives: relatives)
+                                                            companions: companions, relatives: relatives,
+                                                            isDateReadOnly: { model.isDateReadOnly($0) })
                 if !stamped.facts.isEmpty {
                     plan.entries[i].stampedFacts = (plan.entries[i].stampedFacts ?? []) + stamped.facts
                 }

@@ -200,9 +200,10 @@ extension VideoScanModel {
             mem.ocrText           = fresh.ocrText
 
             // Inferred date — except on a Master Archive file (Rick
-            // 2026-09-27): an external merger's date never lands there; the
+            // 2026-09-27) or any Archived-stage row (Rick 2026-10-11, the
+            // date seam): an external merger's date never lands there; the
             // channels above are metadata notes and do.
-            if !isArchiveElement(mem) {
+            if !isDateReadOnly(mem) {
                 mem.inferredRecordDate     = fresh.inferredRecordDate
                 mem.inferredDateConfidence = fresh.inferredDateConfidence
                 mem.inferredDateSource     = fresh.inferredDateSource
