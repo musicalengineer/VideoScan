@@ -4,10 +4,10 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 416,
+ "entry_count": 410,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
-   "ccn": 28,
+   "ccn": 26,
    "nloc": 61
   },
   "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift::AnalyzeRowStateRule.state": {
@@ -271,8 +271,8 @@
    "nloc": 73
   },
   "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift::CatalogContent.catalogTableBase": {
-   "ccn": 34,
-   "nloc": 143
+   "ccn": 14,
+   "nloc": 94
   },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body": {
    "ccn": 12,
@@ -309,10 +309,6 @@
   "VideoScan/VideoScan/Catalog/CatalogView+ScanTargetsPane.swift::CatalogView.scanTargetsPane": {
    "ccn": 21,
    "nloc": 237
-  },
-  "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift::CatalogView.volumeContextCatalogSection": {
-   "ccn": 36,
-   "nloc": 182
   },
   "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift::CatalogView.volumeTable": {
    "ccn": 25,
@@ -982,10 +978,6 @@
    "ccn": 20,
    "nloc": 68
   },
-  "VideoScan/VideoScan/Hallie/Web/HallieWebPage.swift::HallieWebPage.html": {
-   "ccn": 49,
-   "nloc": 232
-  },
   "VideoScan/VideoScan/Media/AudioBalanceProbe.swift::AudioBalanceProbe.analyze": {
    "ccn": 16,
    "nloc": 102
@@ -1262,10 +1254,6 @@
    "ccn": 22,
    "nloc": 83
   },
-  "VideoScan/VideoScan/People/PersonEvaluationCLI.swift::PersonEvaluationCLI.parse": {
-   "ccn": 37,
-   "nloc": 72
-  },
   "VideoScan/VideoScan/People/PersonFinderCatalogFilter.swift::pfFindVideoFiles": {
    "ccn": 20,
    "nloc": 66
@@ -1357,10 +1345,6 @@
   "VideoScan/VideoScan/Steward/StewardCaseBuilder.swift::StewardCaseBuilder.reclaimGroupCases": {
    "ccn": 17,
    "nloc": 83
-  },
-  "VideoScan/VideoScan/Volumes/DriveHealth.swift::DriveHealthProbe.parseSmartctlJSON": {
-   "ccn": 42,
-   "nloc": 128
   },
   "VideoScan/VideoScan/Volumes/ScanEngine.swift::ScanEngine.extractMetadata probe : FFProbeOutput": {
    "ccn": 20,
@@ -1510,10 +1494,6 @@
    "ccn": 16,
    "nloc": 38
   },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph+Index.swift::TreeIndex.init graph : GedcomFamilyGraph": {
-   "ccn": 34,
-   "nloc": 179
-  },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomFamilyGraph+Merge.swift::GedcomFamilyGraph.merge": {
    "ccn": 26,
    "nloc": 132
@@ -1534,17 +1514,13 @@
    "ccn": 17,
    "nloc": 31
   },
-  "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomKinshipPath.swift::GedcomFamilyGraph.relatives": {
-   "ccn": 36,
-   "nloc": 85
-  },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/GedcomSyntheticPedigree.swift::GedcomSyntheticPedigree.gedcom": {
    "ccn": 18,
    "nloc": 64
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/LedgerNarrator.swift::LedgerNarrator.sentence": {
-   "ccn": 38,
-   "nloc": 88
+   "ccn": 16,
+   "nloc": 34
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/LifeAndTimes/LifeAndTimes.swift::LifeAndTimes.serviceScan subjects : [ Subject ] , warID : String? = nil , options : Options": {
    "ccn": 16,
@@ -1672,7 +1648,6 @@
   }
  },
  "swiftlint_disables": {
-  "VideoScan/VideoScan/Hallie/Web/HallieWebPage.swift|function_body_length": 1,
   "VideoScan/VideoScan/People/FindTagCLI.swift|function_body_length": 1
  }
 }

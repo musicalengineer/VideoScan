@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-10T10:52:53Z",
- "sha": "40912078",
+ "ts": "2026-10-11T11:07:01Z",
+ "sha": "b85b8adb",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 417,
- "baseline_before": 416,
- "baseline_after": 416,
+ "offenders": 411,
+ "baseline_before": 410,
+ "baseline_after": 410,
  "new": [
   {
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.prepareDuplicateDeletion",
