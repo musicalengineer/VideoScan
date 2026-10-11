@@ -509,10 +509,11 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
     /// never above a "/Volumes/<name>" root (reading "/Volumes" itself would
     /// answer with the BOOT disk for an unplugged drive's path), never
     /// above "/", at most `maxAncestorClimb` levels. nil when nothing on the
-    /// way resolves.
+    /// way resolves. Climbs the CANONICAL spelling, so "/volumes/X/…" and
+    /// "/System/Volumes/Data/Volumes/X/…" stop at the same ceiling (QA r1).
     static func nearestExistingAncestor(of path: String, identity: (String) -> MountIdentity?) -> ExistingAncestor? {
-        let ceiling = externalVolumeRoot(of: path)
-        var current = path
+        var current = canonical(path)
+        let ceiling = externalVolumeRoot(of: current)?.lowercased()
         var missing: [String] = []
         while missing.count <= maxAncestorClimb {
             if let id = identity(current) {
@@ -520,7 +521,7 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
                 return ExistingAncestor(identity: id, tail: tail, levels: missing.count)
             }
             let parent = (current as NSString).deletingLastPathComponent
-            guard current != ceiling, !parent.isEmpty, parent != current else { return nil }
+            guard current.lowercased() != ceiling, !parent.isEmpty, parent != current else { return nil }
             missing.append((current as NSString).lastPathComponent)
             current = parent
         }
@@ -538,18 +539,21 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
         let mount = Self.canonical(found.identity.mountPoint)
         let mountKey = mount.lowercased()
         if archiveRoots.contains(mountKey) || aliasRoots.contains(mountKey) { return .onArchiveVolume }
-        // A survivor above the gone file: ITS volume is the file's volume.
-        // Read through its realpath, so a symlinked survivor is not judged
-        // by the volume the link itself sits on.
-        if found.levels > 0, let survivorUUID = probe(found.identity.resolvedPath) {
-            return survivorUUID == uuid ? .onArchiveVolume : .clear
-        }
         if Self.isBootMountPoint(mount) {
             // The file or its folder on the boot disk is clear (as before).
-            // A deeper gone tree whose survivor is on the boot disk may be an
-            // unplugged custom mount's leftover directory: clear only when
-            // the archive is found mounted elsewhere.
+            // A deeper gone tree whose survivor is on the boot disk may hide
+            // a DANGLING symlink into the unplugged archive (a scan target
+            // like ~/ArchiveLink — realpath fails on it just as on a gone
+            // folder) or an unplugged custom mount's leftover directory, so
+            // the boot disk's UUID proves nothing (QA r1 on 680157026):
+            // clear only when the archive is found mounted elsewhere.
             return found.levels <= 1 || isResolved ? .clear : .unprovable
+        }
+        // A survivor on another drive, above the gone file: ITS volume is
+        // the file's volume. Read through its realpath, so a symlinked
+        // survivor is not judged by the volume the link itself sits on.
+        if found.levels > 0, let survivorUUID = probe(found.identity.resolvedPath) {
+            return survivorUUID == uuid ? .onArchiveVolume : .clear
         }
         if isResolved { return .clear }
         return Self.isNetworkMount(path) ? .clear : .unprovable

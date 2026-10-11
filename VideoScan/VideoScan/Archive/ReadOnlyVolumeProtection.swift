@@ -279,8 +279,14 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
         }
         let byIdentity = entries.filter { $0.volumeUUID != nil }
         guard !byIdentity.isEmpty else { return nil }
-        // Nothing below a surviving ancestor exists: its volume is the file's.
-        let survivorUUID = found.flatMap { $0.levels > 0 ? probe($0.identity.resolvedPath) : nil }
+        // Nothing below a surviving ancestor exists: its volume is the
+        // file's — unless the survivor is on the BOOT disk, where a missing
+        // component may be a dangling symlink into an unplugged marked drive
+        // (QA r1 on 680157026): never proof, the hold below decides.
+        let survivorUUID = found.flatMap { f -> String? in
+            guard f.levels > 0, !ArchiveVolumeProtection.isBootMountPoint(f.identity.mountPoint) else { return nil }
+            return probe(f.identity.resolvedPath)
+        }
         guard let own = probe(path) ?? survivorUUID else {
             // The file's own volume identity cannot be read (codex #258
             // r5-4): it may be a marked drive under a name nobody marked.

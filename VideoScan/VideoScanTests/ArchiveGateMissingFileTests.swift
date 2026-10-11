@@ -186,8 +186,10 @@ struct ArchiveGateMissingFileTests {
         let bootOnly: (String) -> String? = { _ in nil }    // no UUID read at all: only the mount speaks
         #expect(try protection(mounted).verdictAtRemoval(path: path, probe: bootOnly, identity: mounted.identity) == .clear)
         #expect(try protection(unplugged).verdictAtRemoval(path: path, probe: bootOnly, identity: unplugged.identity) == .unprovable)
-        // With the boot disk's UUID readable it is provably not the archive.
-        #expect(try protection(unplugged).verdictAtRemoval(path: path, probe: unplugged.probe, identity: unplugged.identity) == .clear)
+        // The boot disk's UUID does NOT prove it (QA r1 on 680157026): a
+        // missing component may be a DANGLING symlink into the unplugged
+        // archive, which realpath reports exactly like a gone folder.
+        #expect(try protection(unplugged).verdictAtRemoval(path: path, probe: unplugged.probe, identity: unplugged.identity) == .unprovable)
     }
 
     /// The climb is bounded: it never reads "/Volumes" or "/" for a
@@ -327,5 +329,43 @@ struct ArchiveGateMissingFileSensor {
             Issue.record("not held"); return
         }
         #expect(!why.contains("not connected") && why.contains("could not read"), Comment(rawValue: why))
+    }
+}
+
+/// QA round 1 on 680157026: a gone tree whose nearest survivor is on the
+/// BOOT disk (more than one level up) may hide a dangling symlink into an
+/// unplugged drive — a scan target such as ~/ArchiveLink → FamilyArchive.
+/// realpath fails on the link exactly as on a gone folder, so the boot
+/// disk's UUID proves nothing about the file.
+@Suite("Archive gate — boot-disk survivor of a gone tree proves nothing", .serialized)
+struct ArchiveGateBootSurvivorRedTests {
+
+    @Test func danglingSymlinkScanTargetIntoUnpluggedArchiveIsNotCleared() throws {
+        let disk = rickDisk(archiveMounted: false)
+        let p = try protection(disk)
+        let v = p.verdictAtRemoval(path: "/Users/test/ArchiveLink/30_Video/a.mov", probe: disk.probe, identity: disk.identity)
+        #expect(v != .clear, "a file behind a dangling link into the unplugged archive was cleared")
+    }
+
+    @Test func danglingSymlinkIntoUnpluggedReadOnlyDriveIsStillHeld() {
+        let disk = rickDisk()
+        let marks = [ReadOnlyVolumeProtection.Mark(searchPath: "/Volumes/TestSanDisk", volumeUUID: "TEST-RO")]
+        let readOnly = ReadOnlyVolumeProtection.make(marks: marks, mountedRoots: { ["/Volumes/TestProjects", "/Volumes/TestFamilyArchive"] },
+                                                     probe: disk.probe, identity: disk.identity, networkRoots: { [] })
+        #expect(readOnly.verdictAtRemoval(path: "/Users/test/SanLink/Clips/a.mov", probe: disk.probe, identity: disk.identity) != nil,
+                "a file behind a dangling link into the unplugged Read-only drive was cleared")
+    }
+
+    /// QA MINOR 2: the climb's ceiling holds under every spelling of a
+    /// /Volumes path — case-folded and the data-volume firmlink.
+    @Test func climbNeverReadsVolumesUnderAnySpelling() {
+        for path in ["/volumes/TestGhost/a/b/c.mov", "/System/Volumes/Data/Volumes/TestGhost/a/b/c.mov"] {
+            let disk = FakeDisk(existing: [], mounts: ["/": bootUUID])
+            #expect(ArchiveVolumeProtection.nearestExistingAncestor(of: path, identity: disk.identity) == nil)
+            let asked = Set(disk.asked.paths.map { $0.lowercased() })
+            for forbidden in ["/volumes", "/system/volumes/data/volumes", "/system/volumes/data", "/system/volumes", "/system", "/"] {
+                #expect(!asked.contains(forbidden), "\(path) read \(forbidden): \(disk.asked.paths)")
+            }
+        }
     }
 }

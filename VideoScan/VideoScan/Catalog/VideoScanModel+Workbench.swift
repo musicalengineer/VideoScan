@@ -81,12 +81,13 @@ extension VideoScanModel {
         for rec in recs {
             let url = URL(fileURLWithPath: rec.fullPath)
             // The last word for THIS file, now — row and file are left alone.
-            if let held = archiveRemovalCheck()?.bulkRefusal(forPath: rec.fullPath) {
+            let check = archiveRemovalCheck()
+            if let held = check?.bulkRefusal(forPath: rec.fullPath) {
                 switch held.refusal {
                 case .readOnlyVolume(let name), .readOnlyVolumeDifferentDrive(let name): readOnlyAtRemoval[name, default: 0] += 1
                 case .archiveVolumeUnprovable:
-                    // The snapshot the check used — says whether the archive was mounted.
-                    unprovableAtRemoval += 1; archiveLabel = held.volume; unprovableSnapshot = archiveVolumeProtection()
+                    // The snapshot this very check used — says whether the archive was mounted.
+                    unprovableAtRemoval += 1; archiveLabel = held.volume; unprovableSnapshot = check?.protection
                 case .archiveVolume, .archiveTree: archiveAtRemoval += 1; archiveLabel = held.volume
                 }
                 continue

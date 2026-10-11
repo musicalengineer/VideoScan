@@ -347,7 +347,11 @@ struct BulkVerbRemovalBoundaryTests {
         let discard = try SourceTree.appCode(named: "VideoScanModel+Workbench.swift")
         let loop = try #require(discard.range(of: "for rec in recs {"))
         let trash = try #require(discard.range(of: "if (try? trash(url)) != nil", range: loop.upperBound..<discard.endIndex))
-        #expect(String(discard[loop.upperBound..<trash.lowerBound]).contains("if let held = archiveRemovalCheck()?.bulkRefusal(forPath: rec.fullPath) {"),
+        // One check per file, read fresh at its turn; its own snapshot words
+        // the refusal (QA r1 on 680157026).
+        let perFile = String(discard[loop.upperBound..<trash.lowerBound])
+        #expect(perFile.contains("let check = archiveRemovalCheck()\n")
+                    && perFile.contains("if let held = check?.bulkRefusal(forPath: rec.fullPath) {"),
                 "Discard no longer asks the gate for each file before it trashes it")
         // Junk Delete's sheet and Prune Apply both move files ONLY through
         // deleteConfirmedJunk, whose loop re-reads the marks for every file.

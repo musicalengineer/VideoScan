@@ -4220,13 +4220,17 @@
       "stage": "unit",
       "suites": [
         "ArchiveGateMissingFileTests",
-        "ArchiveGateMissingFileSensor"
+        "ArchiveGateMissingFileSensor",
+        "ArchiveGateBootSurvivorRedTests"
       ],
       "tests": [
         "archiveMountedUnreadableDriveIsHeldWithoutNotConnected",
         "archiveUnpluggedAndDriveIdentityUnreadableStaysUnprovable",
         "archiveUnpluggedMissingDeepFileOnAProvenOtherDriveIsClear",
         "archiveUnpluggedUnreadableDriveIsHeldAsNotConnected",
+        "climbNeverReadsVolumesUnderAnySpelling",
+        "danglingSymlinkIntoUnpluggedReadOnlyDriveIsStillHeld",
+        "danglingSymlinkScanTargetIntoUnpluggedArchiveIsNotCleared",
         "deepMissingFileOnTheBootDiskDependsOnTheArchiveBeingFound",
         "missingDeepFileOnASwappedInArchiveIsRefused",
         "missingDeepFileOnTheArchiveVolumeIsRefused",
@@ -28839,7 +28843,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2293,
+      "expected_floor": 2296,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -28866,6 +28870,7 @@
         "VideoScanTests/ArchiveAuditStoreTests",
         "VideoScanTests/ArchiveAuditYearRulesTests",
         "VideoScanTests/ArchiveDateEntryTests",
+        "VideoScanTests/ArchiveGateBootSurvivorRedTests",
         "VideoScanTests/ArchiveGateMissingFileSensor",
         "VideoScanTests/ArchiveGateMissingFileTests",
         "VideoScanTests/ArchiveItemVersionsTests",
