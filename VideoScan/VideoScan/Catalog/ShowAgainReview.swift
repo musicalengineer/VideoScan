@@ -2,15 +2,23 @@
 // Where Rick finds "Show these files again": the TOTAL CATALOG footer's
 // caption ("+ 976 GB hidden by a “deleted” label — never removed, still on
 // disk") ends in a "Review…" link. The caption is exactly where those bytes
-// are disclosed, so the fix sits on the number it explains. (Repair… is the
-// one door for A/V repair of media files; this is a catalog-label repair,
-// and touches no file.)
+// are disclosed, so the fix sits on the number it explains.
 //
-// Review… opens the dry run: the same check the job runs (ledger + one stat
-// per labelled file), read-only, then "959 files, 976 GB will be shown
-// again", what stays labelled and why, and the files. "Show them again"
-// hands EXACTLY that plan to the Media File Operations job; Cancel changes
-// nothing.
+// Review… (redesigned 2026-10-11) answers ONE question — "is it safe to
+// delete these?" — with a short table of plain-language recommendations
+// (`DeleteReviewSummaryView`): copies that exist elsewhere, copies of each
+// other, junk you confirmed, only copies, and the unsure ones; each with its
+// file count, the space it frees and a checkbox where it may be ticked.
+//
+// The dry run behind it is read-only: the same check the job runs (ledger +
+// one stat per labelled file), then the classification from the catalog
+// (ShowAgainDeleteClassifier). The one Apply:
+//   * shows ALL the files that pass the check again (label only — the
+//     existing Show Again job, its snapshot, receipt and undo), and
+//   * hands the ticked rows' files to the existing Delete Duplicates engine
+//     (ShowAgainThenTrash), which proves the copy that stays byte for byte
+//     at each move and holds anything that fails. Trash only.
+// Cancel changes nothing. The primary button is never bound to Return.
 //
 // No `@EnvironmentObject` here: the model arrives as a plain reference from
 // the pane and the MFO center through the non-observing environment value,
@@ -28,35 +36,34 @@ struct ShowAgainReviewLink: View {
         Button("Review…") { showReview = true }
             .buttonStyle(.link)
             .font(.system(size: 11))
-            .help("See which hidden files are on disk, untouched, and show them again in the catalog. Label only — no file is moved or changed.")
+            .help("See which hidden files are safe to delete, show them all in the catalog again, and move the ones you tick to the Trash.")
             .accessibilityIdentifier("catalog.totalMediaFooter.showAgainReview")
             .sheet(isPresented: $showReview) {
-                ShowAgainReviewSheet(model: model) { plan in
+                ShowAgainReviewSheet(model: model) { plan, picks in
                     guard let center else {
                         model.showAgainNote("\(ShowAgainLines.prefix): refused — the Media File Operations window is not available here. Nothing was changed.")
                         return
                     }
-                    center.startedByUser { $0.startShowAgain(model: model, reviewed: plan) }
+                    center.startedByUser { $0.startShowAgainThenTrash(model: model, reviewed: plan, picks: picks) }
                 }
             }
     }
 }
 
-/// The dry run and the one confirmation.
+/// The dry run, the "is it safe?" table and the one confirmation.
 struct ShowAgainReviewSheet: View {
     let model: VideoScanModel
-    let onShowAgain: (ShowAgainPlan) -> Void
+    let onApply: (ShowAgainPlan, [ReviewedDuplicatePick]) -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var plan: ShowAgainPlan?
-
-    /// Files listed in the sheet (the job's detail and catalog.log list them all).
-    static let listCap = 300
+    @State private var summary: DeleteReviewSummary = .empty
+    @State private var checked: Set<DeleteReviewCategory> = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Files hidden by a “deleted” label")
                 .font(.headline)
-            Text("These files were never moved to the Trash. An old Migrate rule and a duplicate-cleanup bug (both fixed) put a “deleted” label on them, so the catalog hides them. Showing them again changes only that label: nothing is moved, renamed or opened for writing. A safety copy of the catalog is taken first, and the change can be undone from the job's row.")
+            Text("These files were never moved to the Trash. An old Migrate rule and a duplicate-cleanup bug (both fixed) put a “deleted” label on them, so the Catalog hides them. All of them will be shown in the Catalog again. Tick what you want moved to the Trash.")
                 .font(.system(size: 12))
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -64,7 +71,7 @@ struct ShowAgainReviewSheet: View {
             buttons
         }
         .padding(20)
-        .frame(width: 640, height: 520)
+        .frame(width: 720, height: 560)
         .task { await review() }
     }
 
@@ -73,76 +80,65 @@ struct ShowAgainReviewSheet: View {
             if let refusal = plan.refusal {
                 Text("Can't check safely: \(refusal). Nothing will change.")
                     .foregroundStyle(.red)
+                Spacer()
             } else {
-                Text(plan.headline + ".")
+                Text("\(plan.headline). Is it safe to delete them?")
                     .font(.system(size: 14, weight: .semibold))
                     .accessibilityIdentifier("showAgain.review.headline")
                 if let stay = plan.stayLine {
                     Text(stay + ".").font(.system(size: 12)).foregroundStyle(.secondary)
                 }
-                fileList(plan)
+                DeleteReviewSummaryView(summary: summary, checked: $checked)
             }
         } else {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
-                Text("Checking each labelled file on disk and in the ledger (read only)…")
+                Text("Checking each labelled file on disk, in the ledger and in the catalog (read only)…")
                     .font(.system(size: 12))
             }
             Spacer()
         }
     }
 
-    private func fileList(_ plan: ShowAgainPlan) -> some View {
-        List {
-            ForEach(plan.staying.prefix(Self.listCap)) { item in
-                line(item.candidate, note: stayWords(item.verdict), tint: .orange)
-            }
-            ForEach(plan.toShow.prefix(Self.listCap)) { item in
-                line(item.candidate, note: "on disk · \(MediaBytes.display(item.candidate.sizeBytes))", tint: .green)
-            }
-            if plan.items.count > Self.listCap * 2 {
-                Text("…the full list is written to catalog.log when it runs")
-                    .font(.system(size: 11)).foregroundStyle(.secondary)
-            }
-        }
-        .listStyle(.plain)
-    }
-
-    private func stayWords(_ v: ShowAgainVerdict) -> String {
-        if case .stays(let why) = v { return "stays labelled — " + why.words }
-        return ""
-    }
-
-    private func line(_ c: ShowAgainCandidate, note: String, tint: Color) -> some View {
-        VStack(alignment: .leading, spacing: 1) {
-            Text(c.fullPath).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
-            Text(note).font(.system(size: 11)).foregroundStyle(tint)
-        }
-    }
-
     private var buttons: some View {
         HStack {
+            Text("Moved files go to the Trash of their drive; each is checked byte for byte against the copy that stays first.")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
             Button("Cancel") { dismiss() }
                 .keyboardShortcut(.cancelAction)
-            Button(showTitle) {
-                if let plan { onShowAgain(plan) }
+            Button(applyTitle) {
+                if let plan { onApply(plan, summary.duplicatePicks(checked)) }
                 dismiss()
             }
-            // No Return-key shortcut: a catalog-wide change is a deliberate click.
-            .disabled(!(plan.map { $0.refusal == nil && $0.showCount > 0 } ?? false))
+            // No Return-key shortcut: moving files to the Trash is a deliberate click.
+            .disabled(!canApply)
             .accessibilityIdentifier("showAgain.review.confirm")
         }
     }
 
-    private var showTitle: String {
+    private var canApply: Bool {
+        guard let plan else { return false }
+        return plan.refusal == nil && plan.showCount > 0
+    }
+
+    /// "Move 701 to Trash" when rows are ticked; "Show 959 Again" when none are.
+    private var applyTitle: String {
+        let totals = summary.totals(checked)
+        if !totals.isEmpty { return totals.moveTitle }
         guard let n = plan?.showCount, n > 0 else { return "Show Them Again" }
         return "Show \(n.formatted()) Again"
     }
 
     private func review() async {
         let result = await model.showAgainReview()
+        let table = result.refusal == nil ? await model.showAgainDeleteReview(plan: result) : .empty
+        summary = table
+        checked = table.defaultSelection
         plan = result
-        model.showAgainNote("\(ShowAgainLines.prefix): review — \(result.refusal.map { "can't check safely: \($0)" } ?? result.headline)\(result.stayLine.map { "; \($0)" } ?? "") (dry run, nothing changed)")
+        let what = result.refusal.map { "can't check safely: \($0)" } ?? result.headline
+        model.showAgainNote("\(ShowAgainLines.prefix): review — \(what)\(result.stayLine.map { "; \($0)" } ?? "")\(table.logLine.isEmpty ? "" : " — \(table.logLine)") (dry run, nothing changed)")
     }
 }
