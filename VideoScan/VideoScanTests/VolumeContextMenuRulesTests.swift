@@ -33,13 +33,15 @@ final class VolumeContextMenuRulesTests: XCTestCase {
         XCTAssertEqual(VolumeContextMenuRules.captionableVideoCount(records: [], under: "/Volumes/A"), 0)
     }
 
-    func test_captionableVideoCount_isAPlainPrefixMatch_pinnedNotEndorsed() {
-        // "/Volumes/A" also matches "/Volumes/AB/…" — the menu always
-        // counted this way; a boundary-aware match would be a behaviour
-        // change for the bug-fix lane, not for a refactor.
-        let records = [record("/Volumes/AB/x.mov", .videoOnly)]
+    func test_captionableVideoCount_matchesWholePathComponentsOnly() {
+        // Was pinned-not-endorsed by the 2026-10-10 refactor as a plain
+        // prefix match; fixed 2026-10-11 (bug-fix lane): "/Volumes/A"
+        // must not take "/Volumes/AB/…", and an empty path takes nothing.
+        let records = [record("/Volumes/AB/x.mov", .videoOnly), record("/Volumes/A/y.mov", .videoOnly)]
         XCTAssertEqual(VolumeContextMenuRules.captionableVideoCount(records: records, under: "/Volumes/A"), 1)
-        XCTAssertEqual(VolumeContextMenuRules.captionableVideoCount(records: records, under: ""), 1, "an empty prefix matches everything")
+        XCTAssertEqual(VolumeContextMenuRules.captionableVideoCount(records: records, under: "/Volumes/A/"), 1, "trailing slash is the same root")
+        XCTAssertEqual(VolumeContextMenuRules.captionableVideoCount(records: records, under: "/Volumes/AB"), 1)
+        XCTAssertEqual(VolumeContextMenuRules.captionableVideoCount(records: records, under: ""), 0, "an empty path is not a match-everything scope")
     }
 
     func test_offersMigrationReport_forRetiredOrOfflineOnly() {

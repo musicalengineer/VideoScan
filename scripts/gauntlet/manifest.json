@@ -23465,7 +23465,7 @@
       ],
       "tests": [
         "test_captionableVideoCount_countsVideoStreamsUnderThePath",
-        "test_captionableVideoCount_isAPlainPrefixMatch_pinnedNotEndorsed",
+        "test_captionableVideoCount_matchesWholePathComponentsOnly",
         "test_offersMigrationReport_forRetiredOrOfflineOnly",
         "test_offersReset_whenAnyTargetHasFinished",
         "test_offersVolumeNameBackfill_severalVolumesOrOneWithUnnamedRecords"
@@ -26407,6 +26407,30 @@
         "unwindNeverClearsAnArchivedStageRow",
         "updateStillWritesAnArchivedStageRecordsDate"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VolumeMediaTallyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "VolumeMediaTallyInvariantTests",
+        "VolumeMediaTallyLogicTests",
+        "VolumeMediaTallySensorTests"
+      ],
+      "tests": [
+        "captionJobAndMenuCountShareOneScopeRule",
+        "emptyOrRootTargetMatchesNothing",
+        "errorsAndNegativeSizes",
+        "everyTargetGetsABucketEvenWhenEmpty",
+        "hundredThousandRecordsSumToTheFooterWithinBudget",
+        "migratedBytesCountWhereTheFileIsNow",
+        "onlyRecordsTheFooterCountsAreLive",
+        "siblingVolumeWithALongerNameIsNotSwallowed",
+        "smallMixedCatalog",
+        "thePaneUsesTheSharedTally",
+        "theTallyAsksTheFootersPredicate",
+        "trashingAFileLowersItsVolume"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -28811,7 +28835,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2276,
+      "expected_floor": 2288,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -29124,6 +29148,9 @@
         "VideoScanTests/VoicemailTests",
         "VideoScanTests/VolumeContextMenuRulesTests",
         "VideoScanTests/VolumeKeepaliveTests",
+        "VideoScanTests/VolumeMediaTallyInvariantTests",
+        "VideoScanTests/VolumeMediaTallyLogicTests",
+        "VideoScanTests/VolumeMediaTallySensorTests",
         "VideoScanTests/VolumeReachabilityDisplayLabelTests",
         "VideoScanTests/VolumeRelocatedIndicatorTests",
         "VideoScanTests/VolumeRoleTests",

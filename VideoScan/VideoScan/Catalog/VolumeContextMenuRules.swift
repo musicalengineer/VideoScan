@@ -15,14 +15,24 @@ import Foundation
 
 enum VolumeContextMenuRules {
 
-    /// Videos under `searchPath` the VLM captioner would visit: records
-    /// with a video stream (with or without sound). Plain prefix match on
-    /// the path, exactly as the menu always counted.
-    static func captionableVideoCount(records: [VideoRecord], under searchPath: String) -> Int {
-        records.filter { r in
-            r.fullPath.hasPrefix(searchPath) &&
+    /// Videos under `searchPath` the VLM captioner visits: records with a
+    /// video stream (with or without sound). The ONE scope rule — the
+    /// menu's count and `CaptionOrchestrator.startCaptioning`'s job both
+    /// read it, so the label cannot promise a different set than the job
+    /// runs. Component-boundary match (PathScope, 2026-10-11):
+    /// "/Volumes/A" no longer takes "/Volumes/AB/…", and an empty path
+    /// takes nothing.
+    static func captionableVideos(records: [VideoRecord], under searchPath: String) -> [VideoRecord] {
+        let root = PathScope.Root(searchPath)
+        return records.filter { r in
+            root.contains(r.fullPath) &&
             (r.streamType == .videoAndAudio || r.streamType == .videoOnly)
-        }.count
+        }
+    }
+
+    /// `captionableVideos(...).count` — the menu label's number.
+    static func captionableVideoCount(records: [VideoRecord], under searchPath: String) -> Int {
+        captionableVideos(records: records, under: searchPath).count
     }
 
     /// Show Migrated… applies only to a disk that is gone or parked: an
