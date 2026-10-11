@@ -1,0 +1,137 @@
+import Foundation
+import VideoScanCore
+
+// MARK: - The removal marker's one writer (GH #143)
+//
+// Catalog half of the one Trash engine
+// (docs/design/one_removal_marker_and_trash_engine.md §3). Every door that
+// makes a row "gone" — the Trash engine's outcomes (`deleteConfirmedJunk`),
+// Delete Duplicates' settle, Workbench discard, Remove from Catalog, the
+// Archive Angel companion settle, the analysis missing-file purge, Migrate's
+// Bucket B — stamps the row HERE, and Restore clears it here. Rows are never
+// deleted when a file leaves.
+//
+// The disk half (gates, proof hook, the move itself, outcomes) is
+// `deleteConfirmedJunk` in VideoScanModel+JunkDelete.swift.
+//
+// Legacy mirrors written here so the existing readers keep working:
+//   - `purgedAt`        — derived from the marker (VideoRecord), nothing to do;
+//   - `lifecycleStage`  — `.trashed` for inTrash (or the caller's explicit
+//                         stage: the test seam's outright removal writes
+//                         `.deletedPermanently`); other states leave it alone.
+// `archiveStage .manuallyDeleted` is never written here. Restore clears it
+// on a row whose marker came from that label, so a restored row is live.
+//
+// OneEngineSensorTests fails if a production file outside this one writes
+// `.removal =`, `.purgedAt =`, or `lifecycleStage = .trashed / .deletedPermanently`.
+
+extension VideoScanModel {
+
+    /// Mark `rec` gone with `marker`. Idempotent for an identical marker.
+    /// `stage` overrides the lifecycle mirror (nil = the marker's default).
+    /// Does not save or publish: the door batches those (one save per batch).
+    /// Static so a door with no model at hand (the caption orchestrator)
+    /// still writes through the one function.
+    nonisolated static func stampRemoval(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage? = nil) {
+        rec.removal = marker
+        if let mirror = stage ?? Self.lifecycleMirror(for: marker.state) {
+            rec.lifecycleStage = mirror
+        }
+    }
+
+    /// The lifecycle stage the legacy readers expect for a state; nil =
+    /// leave the stage as it is.
+    nonisolated static func lifecycleMirror(for state: RemovalMarker.State) -> LifecycleStage? {
+        switch state {
+        case .inTrash: return .trashed
+        case .removedFromCatalog, .missing: return nil
+        }
+    }
+
+    /// Restore: the row is live again. A post-delete stage (Trashed /
+    /// Deleted) goes back to `.cataloged` only when the file is back at
+    /// `fullPath` (B4, 2026-10-11) — a file still in the Trash, or gone,
+    /// keeps the stage so the row never claims to be live media. A row whose
+    /// marker came from the old "Manually Deleted" label loses the label too
+    /// (otherwise the label keeps hiding it). Returns a line to log when the
+    /// file is not back yet, nil otherwise.
+    @discardableResult
+    func clearRemoval(_ rec: VideoRecord) -> String? {
+        let reason = rec.removal?.reason
+        rec.removal = nil
+        if rec.archiveStage == .manuallyDeleted,
+           reason == .legacyDeletedLabel || reason == .missingAtMigrate {
+            rec.archiveStage = .none
+        }
+        guard rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently else { return nil }
+        if !rec.fullPath.isEmpty, FileManager.default.fileExists(atPath: rec.fullPath) {
+            rec.lifecycleStage = .cataloged
+            return nil
+        }
+        return "\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."
+    }
+
+    /// "Trash emptied": for each inTrash row whose Trash copy is no longer
+    /// at the path macOS returned, record the first sighting. One stat per
+    /// such row, nothing for any other row. Returns how many changed; the
+    /// caller saves. Offline drives: a Trash on an unmounted volume reads as
+    /// "not there", so a row whose Trash path is on an unreachable external
+    /// volume is skipped — an unplugged drive is not an emptied Trash.
+    @discardableResult
+    func noteEmptiedTrash(in recs: [VideoRecord], now: Date = Date()) -> Int {
+        var changed = 0
+        for rec in recs {
+            guard var marker = rec.removal, marker.state == .inTrash, !marker.isTrashEmptied,
+                  let trashPath = marker.trashPath else { continue }
+            if Self.isExternalVolumePath(trashPath), !VolumeReachability.isReachable(path: trashPath) { continue }
+            guard !FileManager.default.fileExists(atPath: trashPath) else { continue }
+            if marker.noteTrashEmptied(at: now) {
+                rec.removal = marker
+                changed += 1
+            }
+        }
+        return changed
+    }
+
+    /// The marker for one Trash-engine outcome (nil = the row is untouched:
+    /// held, failed, offline, cancelled). Pure.
+    nonisolated static func removalMarker(for outcome: JunkFileOutcome, outright: Bool,
+                                          reason: RemovalReason, at now: Date) -> RemovalMarker? {
+        switch outcome {
+        case .held, .failed, .offline, .cancelled:
+            return nil
+        case .missing:
+            return .missing(noticedAt: now, lastSeen: nil, reason: .missingAtTrashTurn)
+        case .moved(_, let trashPath):
+            // The test seam removes outright: there is no Trash copy, so the
+            // honest state is "missing" (the legacy mirror says Deleted).
+            return outright
+                ? .missing(noticedAt: now, lastSeen: now, reason: reason)
+                : .inTrash(movedAt: now, trashPath: trashPath, reason: reason)
+        }
+    }
+}
+
+/// A door that restored a row and then has to back out (Find Missing Audio's
+/// pairing undo) puts the row back EXACTLY: the marker, the lifecycle mirror
+/// and the archive label `clearRemoval` may have changed. Captured before
+/// the restore. (For Rick: a tiny memento object ≈ a saved C++ struct copy.)
+struct RemovalUndo {
+    private let record: VideoRecord
+    private let removal: RemovalMarker?
+    private let lifecycleStage: LifecycleStage
+    private let archiveStage: ArchiveStage
+
+    init(_ record: VideoRecord) {
+        self.record = record
+        removal = record.removal
+        lifecycleStage = record.lifecycleStage
+        archiveStage = record.archiveStage
+    }
+
+    func reinstate() {
+        record.removal = removal
+        record.lifecycleStage = lifecycleStage
+        record.archiveStage = archiveStage
+    }
+}

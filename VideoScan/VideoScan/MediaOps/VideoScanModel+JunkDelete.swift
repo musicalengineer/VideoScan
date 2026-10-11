@@ -103,8 +103,8 @@ extension VideoScanModel {
                 if case .moved(let bytes, _) = item.outcome { sum += bytes }
             }
         }
-        /// The file was already gone (its drive WAS reachable) — the catalog
-        /// was updated (purgedAt + lifecycleStage), no disk op.
+        /// The file was already gone (its drive WAS reachable) — the row is
+        /// marked missing (removal marker), no disk op.
         var alreadyMissing: Int { items.count { $0.outcome.kind == .missing } }
         /// Its drive isn't mounted. Untouched — retry after remounting.
         var skippedOffline: Int { items.count { $0.outcome.kind == .offline } }
@@ -237,6 +237,7 @@ extension VideoScanModel {
     func deleteConfirmedJunk(
         _ requested: [VideoRecord],
         mode: JunkDeletionMode,
+        reason: RemovalReason = .junk,
         guard fileGuard: JunkDeletionGuard? = nil
     ) async -> JunkDeletionResult {
         let (pending, finished) = junkDeletionPreflight(requested)
@@ -265,7 +266,7 @@ extension VideoScanModel {
             }
             if let last = outcomes.last { fileGuard?.settled?(rec, last) }
         }
-        return applyJunkOutcomes(requested, outcomes, mode: mode)
+        return applyJunkOutcomes(requested, outcomes, mode: mode, reason: reason)
     }
 
     /// One file's turn. The catalog half, here on the main actor, as late
@@ -306,29 +307,27 @@ extension VideoScanModel {
 
     /// Back on main: stamp the catalog for the files that left (or were
     /// already gone), persist once, write the ledger, log, and count.
+    /// The stamp is the one removal marker (GH #143, `stampRemoval`):
+    /// moved → inTrash with the Trash path macOS returned; already gone →
+    /// missing. Held / failed / offline / cancelled rows are untouched. The
+    /// legacy lifecycle mirror is unchanged from before the marker: Trashed
+    /// (Deleted through the test seam) for both moved and missing rows.
     private func applyJunkOutcomes(_ records: [VideoRecord], _ outcomes: [JunkFileOutcome],
-                                   mode: JunkDeletionMode) -> JunkDeletionResult {
+                                   mode: JunkDeletionMode, reason: RemovalReason) -> JunkDeletionResult {
         let now = Date()
         let stage: LifecycleStage = mode.isOutrightRemoval ? .deletedPermanently : .trashed
         var removedFromDisk: [VideoRecord] = []
 
         for (rec, outcome) in zip(records, outcomes) {
-            switch outcome {
-            case .offline, .held, .failed, .cancelled:
+            guard let marker = Self.removalMarker(for: outcome, outright: mode.isOutrightRemoval,
+                                                  reason: reason, at: now) else {
                 // Untouched: the file is still there (or is not what was
                 // verified, or its drive is away); the row stays active so
                 // the user can retry or inspect.
-                break
-            case .missing:
-                // Stamped so the row stops showing as active junk; the stage
-                // follows the requested mode even though no disk op ran.
-                rec.purgedAt = now
-                rec.lifecycleStage = stage
-            case .moved:
-                rec.lifecycleStage = stage
-                rec.purgedAt = now
-                removedFromDisk.append(rec)
+                continue
             }
+            Self.stampRemoval(rec, marker, stage: stage)
+            if outcome.isMoved { removedFromDisk.append(rec) }
         }
         let result = JunkDeletionResult(items: zip(records, outcomes).map { .init(record: $0, outcome: $1) })
 

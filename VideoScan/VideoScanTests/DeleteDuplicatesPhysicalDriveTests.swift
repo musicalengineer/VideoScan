@@ -364,9 +364,9 @@ struct BulkVerbRemovalBoundaryTests {
         // The sheet runs its FROZEN set (design R1, 2026-10-09).
         #expect(try SourceTree.appCode(named: "JunkDeleteAction.swift").contains("await model.trashFrozenJunk(snapshot)"))
         #expect(try SourceTree.appCode(named: "VideoScanModel+JunkTrashSnapshot.swift")
-                    .contains("await deleteConfirmedJunk(snapshot.items.map(\\.record), mode: .toTrash, guard: fileGuard)"))
+                    .contains("await deleteConfirmedJunk(snapshot.items.map(\\.record), mode: .toTrash, reason: .junk, guard: fileGuard)"))
         let prune = try SourceTree.appCode(named: "VideoScanModel+PruneApply.swift")
-        #expect(prune.contains("let result = await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)"))
+        #expect(prune.contains("let result = await deleteConfirmedJunk([rec], mode: mode, reason: .prune, guard: fileGuard)"))
         #expect(prune.contains("if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {"), "each copy is asked at its turn too")
         for file in ["JunkDeleteAction.swift", "VideoScanModel+JunkTrashSnapshot.swift", "VideoScanModel+PruneApply.swift", "VideoScanModel+Workbench.swift"] {
             let text = try SourceTree.appCode(named: file)

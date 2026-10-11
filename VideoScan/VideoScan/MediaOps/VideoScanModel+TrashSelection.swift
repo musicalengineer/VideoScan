@@ -201,7 +201,7 @@ extension VideoScanModel {
             beforeRemoval: { _ in nil },
             remove: fileOperation)
         fileGuard.settled = { rec, outcome in audit.record(JunkDeletionResult.auditRow(rec, outcome), id: rec.id) }
-        let routine = targets.isEmpty ? .empty : await deleteConfirmedJunk(targets, mode: .toTrash, guard: fileGuard)
+        let routine = targets.isEmpty ? .empty : await deleteConfirmedJunk(targets, mode: .toTrash, reason: .catalogTrash, guard: fileGuard)
         var result = mergedCatalogTrashResult(requested, plan: plan, routine: routine).trashFailuresHeld()
         // "I don't wanna see it again" (Rick 2026-09-20): the content of
         // every row that actually left the disk goes on the ignore list
