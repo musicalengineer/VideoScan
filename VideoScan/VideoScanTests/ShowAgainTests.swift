@@ -138,7 +138,7 @@ struct ShowAgainRulesTests {
         let byID = MediaLedgerEvent(event: .copyTrashed, recordID: c.id, contentKey: "", filename: "x", fullPath: "/elsewhere", by: .rick)
         let byPath = MediaLedgerEvent(event: .copyDeleted, recordID: UUID(), contentKey: "", filename: "b.mov", fullPath: other.fullPath, by: .rick)
         let notRemoval = MediaLedgerEvent(event: .setAside, recordID: UUID(), contentKey: "", filename: "q", fullPath: "/Volumes/LaCie/q.mov", by: .rick)
-        let text = String(decoding: try MediaLedgerEvent.encodeLines([byID, byPath, notRemoval]), as: UTF8.self)
+        let text = try #require(String(bytes: try MediaLedgerEvent.encodeLines([byID, byPath, notRemoval]), encoding: .utf8))
         let index = ShowAgainReceipts.index(ledgerText: text)
         #expect(index.covers(c), "receipt by record id")
         #expect(index.covers(other), "receipt by path")

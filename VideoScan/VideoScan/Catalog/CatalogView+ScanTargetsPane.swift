@@ -900,8 +900,7 @@ extension CatalogView {
             VolumeTableTotalsFooter(totals: storageTotals,
                                     columnFrames: volumeColumnFrames,
                                     archivedBytes: sizeTotals.isEmpty ? nil : sizeTotals.archivedBytes,
-                                    archivedHelp: sizeTotals.archivedTooltip,
-                                    showAgainModel: model)
+                                    archivedHelp: sizeTotals.archivedTooltip, showAgainModel: model)
         }
         // Shared coordinate space: the Media Size cell measures itself
         // in it, the footer positions itself in it. Both must name the
