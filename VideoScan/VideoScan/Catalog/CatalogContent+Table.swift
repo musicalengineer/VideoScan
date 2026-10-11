@@ -450,6 +450,11 @@ extension CatalogContent {
             }
             let cancel = alert.addButton(withTitle: "Cancel")
             cancel.keyEquivalent = "\u{1b}"                                    // Esc
+            if !confirmation.moveIsDefault {
+                // Space presses the focused button: start on Cancel (QA m4).
+                alert.layout()
+                alert.window.initialFirstResponder = cancel
+            }
             guard alert.runModal() == .alertFirstButtonReturn else {
                 model.log("Move to Trash: cancelled at the confirmation — nothing moved.")
                 return

@@ -104,6 +104,45 @@ struct CatalogTrashOnlyCopyTests {
         #expect(plan(model([unknown]), [unknown]).onlyCopy == [unknown.id], "no identity key = no known copy")
     }
 
+    @Test("QA M2: a copy superseded by a repair, or a skipped row, is not a surviving copy")
+    func supersededAndSkippedAreNotSurvivors() {
+        let target = rec("/Volumes/A/clip.mov", md5: "m1")
+        let superseded = rec("/Volumes/B/clip.mov", md5: "m1"); superseded.supersededByID = UUID()
+        let skipped = rec("/Volumes/C/clip.mov", md5: "m1")
+        skipped.notes = VideoScanModel.formatSafelyRedundantNote(stamp: "s", source: skipped.fullPath,
+                                                                 witnesses: ["/Volumes/D/x.mov"], totalWitnessCount: 1)
+        #expect(plan(model([target, superseded, skipped]), [target]).onlyCopy == [target.id])
+    }
+
+    @Test("QA M2: the same device + inode on both fixity stamps is the same file, not a copy")
+    func sameDeviceAndInodeIsTheSameFile() {
+        func stamped(_ path: String, inode: UInt64) -> VideoRecord {
+            let r = rec(path, md5: "m1")
+            let stamp = FileIdentityStamp(device: 7, inode: inode, size: 1_000, mtimeNs: 1, ctimeNs: 1)
+            r.contentFixity = ContentFixity(digest: "abc", byteCount: 1_000, stamp: stamp)
+            return r
+        }
+        let target = stamped("/Volumes/A/clip.mov", inode: 42)
+        let firmlink = stamped("/System/Volumes/Data/Volumes/A/clip.mov", inode: 42)
+        #expect(plan(model([target, firmlink]), [target]).onlyCopy == [target.id])
+        let realCopy = stamped("/Volumes/B/clip.mov", inode: 43)
+        #expect(plan(model([target, realCopy]), [target]).onlyCopy.isEmpty)
+    }
+
+    @Test("QA m3/m4 sensor: archive copies by link or digest only; Cancel starts focused when warned")
+    func archiveLegAndFocusSensor() throws {
+        let trash = try SourceTree.appCode(named: "VideoScanModel+TrashSelection.swift")
+        let start = try #require(trash.range(of: "func catalogOnlyCopyIDs("))
+        let end = try #require(trash.range(of: "nonisolated static func isKnownCopySurvivor(",
+                                           range: start.upperBound..<trash.endIndex))
+        let body = trash[start.upperBound..<end.lowerBound]
+        #expect(body.contains("masterArchiveCopy(of: rec)") && body.contains("identicalArchivedCopy(of: rec)"))
+        #expect(!body.replacingOccurrences(of: "identicalArchivedCopy(of:", with: "").contains("archivedCopy(of:"),
+                "no archivedCopy(of:) — its third leg is the promotion index's scored content match")
+        let table = try SourceTree.appCode(named: "CatalogContent+Table.swift")
+        #expect(table.contains("alert.window.initialFirstResponder = cancel"))
+    }
+
     @Test("rows the plan refuses never count toward the warning")
     func refusedRowsAreNotCounted() {
         let paired = rec("/Volumes/A/v.mxf", md5: "p"); paired.pairGroupID = UUID()

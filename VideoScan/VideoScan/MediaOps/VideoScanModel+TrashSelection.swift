@@ -112,19 +112,34 @@ extension VideoScanModel {
     }
 
     /// Of `ids` (rows about to move, in order), those with no surviving
-    /// copy the catalog knows of: no same-bytes row (`CatalogKnownCopies`)
-    /// outside the move, and no Master Archive copy (the promote link).
+    /// copy the catalog knows of: no same-bytes survivor
+    /// (`CatalogKnownCopies` with `isKnownCopySurvivor`) outside the move,
+    /// and no Master Archive copy — the promote link or the digest-proved
+    /// identical copy only, never the promotion index's scored content match
+    /// (QA round 1 m3).
     func catalogOnlyCopyIDs(_ ids: [UUID], among selection: [VideoRecord]) -> [UUID] {
         guard !ids.isEmpty else { return [] }
         let byID = Dictionary(selection.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let moving = ids.compactMap { byID[$0] }
         let leaving = Set(ids)
-        let unmatched = CatalogKnownCopies.onlyCopies(moving, in: self.records)
+        let retiredRoots = scanTargets.filter { $0.isRetired && !$0.searchPath.isEmpty }.map(\.searchPath)
+        let unmatched = CatalogKnownCopies.onlyCopies(moving, in: self.records) {
+            Self.isKnownCopySurvivor($0, retiredRoots: retiredRoots)
+        }
         return moving.filter { rec in
             guard unmatched.contains(rec.id) else { return false }
-            guard let master = archivedCopy(of: rec) else { return true }
-            return leaving.contains(master.id) || master.isPurged
+            let archive = [masterArchiveCopy(of: rec), identicalArchivedCopy(of: rec)].compactMap { $0 }
+            return !archive.contains { !leaving.contains($0.id) && !$0.isPurged }
         }.map(\.id)
+    }
+
+    /// Can `r` still hold the bytes after a Move to Trash? The Migrate
+    /// witness rule (not removed, trashed, labelled deleted or a skipped
+    /// row), and not superseded by a repair, set aside, or on a RETIRED
+    /// drive (physically gone for good). QA round 1 M2.
+    nonisolated static func isKnownCopySurvivor(_ r: VideoRecord, retiredRoots: [String]) -> Bool {
+        r.isLiveRelocateWitness && !r.isSuperseded && !r.isSetAside
+            && !retiredRoots.contains { PathScope.contains(r.fullPath, within: $0) }
     }
 
     /// The production offline predicate: an external /Volumes path whose
