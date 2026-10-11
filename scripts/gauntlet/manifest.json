@@ -26742,6 +26742,7 @@
         "OneRemovalShapeTests"
       ],
       "tests": [
+        "aCompleteRescanNeverPrunesARowThatCarriesTheMarker",
         "aDupTrashedRowCanBeRestored",
         "aTrashedDuplicateStaysInTheCatalogAsRemovedLikeEveryOtherTrashPath",
         "restoringAnOldDeletedLabelRowClearsTheLabel",

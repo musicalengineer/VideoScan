@@ -104,4 +104,32 @@ struct OneRemovalShapeTests {
         #expect(removed.removal?.state == .removedFromCatalog)
         #expect(m.noteEmptiedTrash(in: m.records) == 0, "recorded once")
     }
+
+    // #143 (b): a complete rescan used to hard-prune a removed row whose file
+    // is gone (it classified "genuinely gone"). Rows are never deleted: the
+    // marker row stays exactly as it was.
+    @Test func aCompleteRescanNeverPrunesARowThatCarriesTheMarker() async throws {
+        let root = try scratch("rescan"); defer { try? FileManager.default.removeItem(at: root) }
+        let m = model(in: root)
+        let vol = root.appendingPathComponent("Vol", isDirectory: true)
+        try FileManager.default.createDirectory(at: vol, withIntermediateDirectories: true)
+        let keepURL = vol.appendingPathComponent("keep.mov")
+        try Data(repeating: 3, count: 100).write(to: keepURL)
+        let keep = record(keepURL.path)
+        let trashed = record(vol.appendingPathComponent("gone.mov").path)      // file is in the Trash
+        trashed.removal = .inTrash(movedAt: Date(), trashPath: "/elsewhere/.Trash/gone.mov", reason: .junk)
+        trashed.lifecycleStage = .trashed
+        let missing = record(vol.appendingPathComponent("lost.mov").path)
+        missing.removal = .missing(noticedAt: Date(), lastSeen: nil, reason: .missingOnDisk)
+        m.records = [keep, trashed, missing]
+
+        let fresh = record(keepURL.path)
+        let outcome = await m.commitScanResults(root: vol.path, volName: "Vol",
+                                                targetRecords: [fresh], scanWasComplete: true)
+
+        #expect(outcome.pruned == 0, "\(outcome)")
+        #expect(m.records.contains { $0 === trashed } && trashed.removal?.state == .inTrash)
+        #expect(m.records.contains { $0 === missing } && missing.removal?.state == .missing)
+        #expect(m.records.count == 3)
+    }
 }
