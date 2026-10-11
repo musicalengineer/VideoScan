@@ -77,13 +77,17 @@ extension VideoScanModel {
         var readOnlyAtRemoval: [String: Int] = [:]
         var archiveAtRemoval = 0, unprovableAtRemoval = 0
         var archiveLabel = "the archive volume"
+        var unprovableSnapshot: ArchiveVolumeProtection?
         for rec in recs {
             let url = URL(fileURLWithPath: rec.fullPath)
             // The last word for THIS file, now — row and file are left alone.
-            if let held = archiveRemovalCheck()?.bulkRefusal(forPath: rec.fullPath) {
+            let check = archiveRemovalCheck()
+            if let held = check?.bulkRefusal(forPath: rec.fullPath) {
                 switch held.refusal {
                 case .readOnlyVolume(let name), .readOnlyVolumeDifferentDrive(let name): readOnlyAtRemoval[name, default: 0] += 1
-                case .archiveVolumeUnprovable: unprovableAtRemoval += 1; archiveLabel = held.volume
+                case .archiveVolumeUnprovable:
+                    // The snapshot this very check used — says whether the archive was mounted.
+                    unprovableAtRemoval += 1; archiveLabel = held.volume; unprovableSnapshot = check?.protection
                 case .archiveVolume, .archiveTree: archiveAtRemoval += 1; archiveLabel = held.volume
                 }
                 continue
@@ -100,7 +104,8 @@ extension VideoScanModel {
             log(Self.masterArchiveVolumeRefusalLine(verb: "Discard", count: archiveAtRemoval, volume: archiveLabel))
         }
         if unprovableAtRemoval > 0 {
-            log(Self.masterArchiveUnprovableRefusalLine(verb: "Discard", count: unprovableAtRemoval, volume: archiveLabel))
+            log(Self.masterArchiveUnprovableRefusalLine(verb: "Discard", count: unprovableAtRemoval, volume: archiveLabel,
+                                                        atRemoval: unprovableSnapshot))
         }
         if count > 0 {
             saveCatalogNow()
