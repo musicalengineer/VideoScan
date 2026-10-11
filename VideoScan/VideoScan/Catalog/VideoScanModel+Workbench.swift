@@ -17,16 +17,15 @@ extension VideoScanModel {
     //
     // Step 2C of [[project_archive_combine_pipeline_order]].
 
-    /// Promote workbench items to the Archive — moves them off the
-    /// Workbench tab and onto the Archive tab. Sets `archiveStage` to
-    /// `.healthy` so the archive lifecycle starts at the bottom rung
-    /// rather than jumping straight to "fully archived".
+    /// Under Construction's "Promote" — the same Promote as the Catalog's:
+    /// `requestPromote(records:)` → confirmation sheet → PromoteToArchiveJob
+    /// (copy + fixity + archive row). It used to stamp
+    /// `lifecycleStage = .archived` and copy nothing, so the file left
+    /// Triage, its dates froze, and the Archive tab never saw it
+    /// (tab-charter audit T2, 2026-10-11). The stage is now the engine's to
+    /// set, on the archive copy, after the copy is verified.
     func promoteWorkbenchToArchive(_ recs: [VideoRecord]) {
-        for rec in recs {
-            rec.lifecycleStage = .archived
-            if rec.archiveStage == .none { rec.archiveStage = .healthy }
-        }
-        saveCatalogNow()
+        requestPromote(records: recs)
     }
 
     /// Demote workbench items back to the Catalog — they're no longer
