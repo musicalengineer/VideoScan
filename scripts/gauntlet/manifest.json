@@ -26693,6 +26693,25 @@
         "theTallyAsksTheFootersPredicate",
         "trashingAFileLowersItsVolume"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/OneEngineDoorCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "OneEngineDoorCharacterizationTests"
+      ],
+      "tests": [
+        "catalogTrashHeldOnFailureLeavesFileAndRow",
+        "catalogTrashMovesToTheTrashAndKeepsTheRowAsRemoved",
+        "deleteJunkHeldOnFailureLeavesFileAndRow",
+        "deleteJunkMovesToTheTrashAndKeepsTheRow",
+        "everyBulkDoorHoldsAFileOnTheArchiveVolume",
+        "removeFromCatalogNeverTouchesTheDiskAndRestoreUndoesIt",
+        "workbenchDiscardHeldOnFailureLeavesFileAndRow",
+        "workbenchDiscardMovesToTheTrashAndKeepsTheRow"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -29139,6 +29158,10 @@
         {
           "name": "tools/poi-c02/test_tools.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineDoorCharacterizationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 2311,
