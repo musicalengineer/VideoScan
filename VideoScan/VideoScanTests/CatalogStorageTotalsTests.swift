@@ -459,12 +459,14 @@ struct CatalogStorageManuallyDeletedTests {
     @Test func captionHedgesUntilTheProbeReports() {
         var t = CatalogStorageTotalsCalculator.compute(records: [stRec("a.mov"), mdRec("g.mov", bytes: 1_300 * MediaBytes.GB)])
         #expect(t.manuallyDeletedOnDiskBytes == nil)
-        #expect(t.manuallyDeletedCaption == "+ 1.3 TB marked deleted (may still be on disk)")
+        #expect(t.manuallyDeletedCaption == "+ 1.3 TB hidden by a “deleted” label (checking the disk…)")
         #expect(t.breakdownTooltip.contains("on-disk check pending"))
 
         t.manuallyDeletedOnDiskBytes = 1_260 * MediaBytes.GB
         t.manuallyDeletedOnDiskFiles = 1
-        #expect(t.manuallyDeletedCaption == "+ 1.3 TB marked deleted, still on disk")
+        #expect(t.manuallyDeletedCaption == "+ 1.3 TB hidden by a “deleted” label — never removed, still on disk")
+        #expect(!(t.manuallyDeletedCaption ?? "").lowercased().contains("trash"),
+                "the caption must not read like the Trash — nothing here was moved there")
         #expect(t.breakdownTooltip.contains("still on disk"))
     }
 

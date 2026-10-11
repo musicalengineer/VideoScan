@@ -4,7 +4,7 @@
 //
 // The Volumes window used to compute retire readiness inside its body:
 // `retireStatus(for:)` made FOUR full-catalog sweeps per volume row
-// (totalRecordsOn / manuallyDeletedOn / originatedOnCount /
+// (totalRecordsOn / disposedOn / originatedOnCount /
 // aggregateRetiredWitnesses), each running PathScope normalization per
 // record. At 103k records × ~19 targets that's ~8M path comparisons per
 // body evaluation — and a keystroke in the notes field invalidates the
@@ -78,16 +78,44 @@ struct VolumeRetireStatus: Equatable {
 
 // MARK: - Sendable snapshots (main-actor reads → off-main compute)
 
-/// The five record fields the aggregator needs, captured as values on the
-/// main actor. `notes` is only kept for `.manuallyDeleted` records (the
-/// only ones whose witness lines are parsed) so the snapshot stays lean
-/// even on 100k+ catalogs.
+/// The record fields the aggregator needs, captured as values on the main
+/// actor. `notes` is only kept for `.manuallyDeleted` records (their legacy
+/// witness lines are parsed off-main); a skipped record's OWN witnesses are
+/// parsed on main (`ownSkipWitnesses` — only rows carrying the skip marker).
+/// Disposal is `VideoScanModel.isDisposedForRetire`, judged off-main against
+/// the set of live witnesses (QA round 1, 2026-10-11).
 struct VolumeStatusRecordSnap: Sendable {
     let fullPath: String
     let isManuallyDeleted: Bool
+    /// Witnesses named by the record's own skip note; nil = not skipped here.
+    var skipWitnesses: [String]?
+    /// May vouch for a skipped file (`isLiveRelocateWitness`).
+    var isLiveWitness: Bool = false
     let originVolume: String?
     let originalFullPath: String?
     let notes: String?
+}
+
+extension VolumeStatusRecordSnap {
+    /// This record's disposal on the drive at `rootKey`, off-main — the
+    /// snapshot twin of `VideoScanModel.isDisposedForRetire`. Returns the
+    /// witnesses it contributes when disposed, nil when it is not:
+    ///   * labelled `.manuallyDeleted` — disposed; every legacy witness line
+    ///     (parsed once per record, cached in `legacyParsed`);
+    ///   * skipped here — disposed only when one of its own witnesses is a
+    ///     live row off this drive, and only THOSE witnesses are returned
+    ///     (QA round 2: a dead witness on a safe drive must not make the
+    ///     drive "safe to retire").
+    func disposalWitnesses(onDriveAt rootKey: String, liveWitnesses: Set<String>,
+                           legacyParsed: inout [String]?) -> [String]? {
+        if isManuallyDeleted {
+            let parsed = legacyParsed ?? VideoScanModel.parseWitnessesFromNote(notes ?? "")
+            legacyParsed = parsed
+            return parsed
+        }
+        let held = (skipWitnesses ?? []).filter { liveWitnesses.contains($0) && !PathScope.contains($0, within: rootKey) }
+        return held.isEmpty ? nil : held
+    }
 }
 
 /// Scan-target identity + safety fields, captured as values.
@@ -130,12 +158,15 @@ extension VideoScanModel {
         let generation = volumeStatusGeneration
         // Value snapshot — cheap field reads on the main actor, O(records).
         let recordSnaps = records.map { r in
-            VolumeStatusRecordSnap(
+            let isMD = r.archiveStage == .manuallyDeleted
+            return VolumeStatusRecordSnap(
                 fullPath: r.fullPath,
-                isManuallyDeleted: r.archiveStage == .manuallyDeleted,
+                isManuallyDeleted: isMD,
+                skipWitnesses: isMD ? nil : Self.ownSkipWitnesses(notes: r.notes, fullPath: r.fullPath),
+                isLiveWitness: r.isLiveRelocateWitness,
                 originVolume: r.originVolume,
                 originalFullPath: r.originalFullPath,
-                notes: r.archiveStage == .manuallyDeleted ? r.notes : nil
+                notes: isMD ? r.notes : nil
             )
         }
         let targetSnaps = scanTargets
@@ -156,7 +187,7 @@ extension VideoScanModel {
 
     /// Compute every volume's retire status in ONE pass over the record
     /// snapshots. Semantics are identical to the four legacy per-volume
-    /// sweeps (totalRecordsOn / manuallyDeletedOn / originatedOnCount /
+    /// sweeps (totalRecordsOn / disposedOn / originatedOnCount /
     /// aggregateRetiredWitnesses + the safe-migrated-destination check) —
     /// VolumeStatusCacheTests pins the parity. Nested roots (a record
     /// under both `/Volumes/X` and a hypothetical broader target) count
@@ -212,6 +243,12 @@ extension VideoScanModel {
             resolve(path).isSafe
         }
 
+        // Rows that may vouch for a skipped file: live, not on a retired drive.
+        let retiredRoots = targets.filter(\.isRetired).map(\.searchPath)
+        let liveWitnesses = Set(records.lazy.filter { rec in
+            rec.isLiveWitness && !retiredRoots.contains { PathScope.contains(rec.fullPath, within: $0) }
+        }.map(\.fullPath))
+
         // Per-root accumulators, index-aligned with `roots`.
         var total = [Int](repeating: 0, count: roots.count)
         var disposed = [Int](repeating: 0, count: roots.count)
@@ -229,12 +266,10 @@ extension VideoScanModel {
                     && (p == root.key || p.hasPrefix(root.slashed))
                 if underRoot {
                     total[i] += 1
-                    if rec.isManuallyDeleted {
+                    if let held = rec.disposalWitnesses(onDriveAt: root.key, liveWitnesses: liveWitnesses,
+                                                        legacyParsed: &parsedWitnesses) {
                         disposed[i] += 1
-                        let parsed = parsedWitnesses
-                            ?? parseWitnessesFromNote(rec.notes ?? "")
-                        parsedWitnesses = parsed
-                        for w in parsed { witnesses[i].insert(w) }
+                        witnesses[i].formUnion(held)
                     }
                 }
                 // Origination — legacy predicate verbatim.

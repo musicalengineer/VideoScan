@@ -42,7 +42,7 @@ struct VolumesWindowRetireTests {
         let total = VideoScanModel.totalRecordsOn(
             volumeRootPath: volumePath, in: model.records
         )
-        let disposed = VideoScanModel.manuallyDeletedOn(
+        let disposed = VideoScanModel.disposedOn(
             volumeRootPath: volumePath, in: model.records
         )
         let allDisposed = total > 0 && disposed == total

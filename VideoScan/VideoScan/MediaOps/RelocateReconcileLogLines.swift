@@ -182,7 +182,7 @@ enum ReconcileLogLines {
             parts.append("\(plan.adopted.count) already at destination (adopt, no copy)")
         }
         if !plan.safelyRedundant.isEmpty {
-            parts.append("\(plan.safelyRedundant.count) redundant elsewhere (mark deleted)")
+            parts.append("\(plan.safelyRedundant.count) redundant elsewhere (skip, file untouched)")
         }
         if !plan.manuallyDeleted.isEmpty {
             parts.append("\(plan.manuallyDeleted.count) missing (mark deleted)")

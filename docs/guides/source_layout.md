@@ -114,6 +114,8 @@ adversarial passes for:
 - **ArchiveAngel/Promote/** — the Angel's hand-off into promote.
 - **Volumes/** — `VideoScanModel+RetireVolume` and `+DeleteScanTarget`
   (remove catalog records for a whole volume).
+- **Catalog/** — `ShowAgain*` (clears the false "deleted" label; label only,
+  but it puts rows back in the Delete Duplicates / Excess / Prune pools).
 
 Everything else (UI, Hallie answers, analysis, search) is covered by the
 in-house `qa` agent and Rick's spot test.

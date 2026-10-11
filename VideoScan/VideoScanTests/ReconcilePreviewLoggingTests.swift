@@ -137,7 +137,7 @@ struct ReconcilePreviewLoggingTests {
         // whole-scope 1.33 TB must NOT appear.
         #expect(label.hasPrefix("Migrate 7 record(s): 3 to copy (9.96 GB)"))
         #expect(label.contains("1 already at destination (adopt, no copy)"))
-        #expect(label.contains("1 redundant elsewhere (mark deleted)"))
+        #expect(label.contains("1 redundant elsewhere (skip, file untouched)"))
         #expect(label.contains("1 missing (mark deleted)"))
         #expect(label.contains("1 previously migrated (skip)"))
         #expect(!label.contains("TB"))

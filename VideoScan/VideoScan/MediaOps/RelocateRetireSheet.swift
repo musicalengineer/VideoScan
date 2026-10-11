@@ -11,7 +11,7 @@ import SwiftUI
 // Layout deliberately compact: headline + editable reason field +
 // (Retire / Skip) button bar. Witness count is shown but the list itself
 // isn't surfaced here — it's already in the relocate.log and the audit
-// trail notes on each `.manuallyDeleted` record.
+// trail notes on each accounted-for record (Bucket B label / Bucket E skip note).
 
 struct RelocateRetireSheet: View {
 
@@ -26,6 +26,8 @@ struct RelocateRetireSheet: View {
     /// Editable copy of the suggested reason. Pre-populated from the
     /// offer; user can keep, edit, or clear before hitting Retire.
     @State private var reason: String
+    /// Why Retire was refused (QA round 2): the sheet stays open and says so.
+    @State private var refusal: String?
 
     init(offer: PendingRetireOffer) {
         self.offer = offer
@@ -43,7 +45,7 @@ struct RelocateRetireSheet: View {
                     Text("Retire \(offer.volumeName)?")
                         .font(.headline)
                         .accessibilityIdentifier("retireSheet.title")
-                    Text("All \(offer.recordCount) catalogued record(s) on this volume are marked deleted.")
+                    Text("All \(offer.recordCount) catalogued record(s) on this volume are accounted for — missing, or skipped because a copy is on another drive.")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
@@ -80,6 +82,14 @@ struct RelocateRetireSheet: View {
                     .accessibilityIdentifier("retireSheet.witnessCount")
             }
 
+            if let refusal {
+                Text("Not retired: \(refusal). Nothing was changed.")
+                    .font(.callout)
+                    .foregroundColor(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("retireSheet.refusal")
+            }
+
             // Button bar
             HStack {
                 Spacer()
@@ -94,16 +104,23 @@ struct RelocateRetireSheet: View {
                 .accessibilityIdentifier("retireSheet.skip")
 
                 Button("Retire \(offer.volumeName)") {
-                    model.retireVolume(
+                    // Re-proved at the click; a refusal keeps the sheet open
+                    // with the reason (the same words retireVolume logs).
+                    let why = model.retireRefusal(at: offer.volumeRootPath)
+                    let retired = why == nil && model.retireVolume(
                         at: offer.volumeRootPath,
                         reason: reason.trimmingCharacters(in: .whitespacesAndNewlines),
                         witnesses: offer.witnesses
                     )
+                    guard retired else {
+                        refusal = why ?? "the drive could not be retired — see the console"
+                        return
+                    }
                     model.pendingRetireOffer = nil
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.return)
+                // No Return shortcut: retiring a drive is a deliberate click.
                 .accessibilityIdentifier("retireSheet.retire")
             }
         }

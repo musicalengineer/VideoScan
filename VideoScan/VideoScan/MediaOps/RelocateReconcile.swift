@@ -352,13 +352,16 @@ extension VideoRecord {
     /// May this row vouch for another copy of the same content? False once
     /// the catalog itself says the file is gone or going: purged (Trash,
     /// Delete Permanently, Remove from Catalog), a trashed/deleted
-    /// lifecycle, or `.manuallyDeleted` (an earlier relocate's Bucket B/E —
-    /// two drives must never vouch for each other).
+    /// lifecycle, or accounted for on its drive — labelled `.manuallyDeleted`
+    /// (Bucket B, or an old Bucket E) or skipped there by an earlier Migrate
+    /// (its own skip note; QA round 1, 2026-10-11 — since a skip no longer
+    /// labels the file, the label alone no longer stops two drives vouching
+    /// for each other).
     var isLiveRelocateWitness: Bool {
         purgedAt == nil
             && lifecycleStage != .trashed
             && lifecycleStage != .deletedPermanently
-            && archiveStage != .manuallyDeleted
+            && !VideoScanModel.isAccountedForRetire(archiveStage: archiveStage, notes: notes, fullPath: fullPath)
     }
 }
 

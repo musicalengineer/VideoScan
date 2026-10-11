@@ -490,6 +490,9 @@ struct MediaFileOperationDetail: View {
             PerceptualFingerprintBackfillDetailView(job: fingerprints)
         } else if let prune = job as? PruneApplyJob {
             PruneApplyDetailView(job: prune)
+        } else {
+            // Newer jobs describe their own detail (MediaFileOperationOwnDetail).
+            (job as? any MediaFileOperationOwnDetail)?.detailView
         }
     }
 }
