@@ -21150,6 +21150,26 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RetireLabelNeverVouchesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RetireLabelNeverVouchesTests"
+      ],
+      "tests": [
+        "hundredThousandRecords",
+        "labelledAndGoneRetires",
+        "labelledStillHereIsRefusedByName",
+        "labelledWithAHeldWitnessRetires",
+        "longListsAreCut",
+        "offlineDriveCannotProveAbsence",
+        "sameDeviceWitnessDoesNotHold",
+        "unreadableIsNotMissing",
+        "witnessAtTheWrongSizeDoesNotHold"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RetireQARound2Tests.swift",
       "stage": "unit",
       "suites": [
@@ -28515,6 +28535,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ResearchPersonTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/RetireLabelNeverVouchesTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

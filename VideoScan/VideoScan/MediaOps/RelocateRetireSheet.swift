@@ -83,11 +83,18 @@ struct RelocateRetireSheet: View {
             }
 
             if let refusal {
-                Text("Not retired: \(refusal). Nothing was changed.")
-                    .font(.callout)
-                    .foregroundColor(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("retireSheet.refusal")
+                // Names every file holding the drive back (up to ten per
+                // reason) — selectable so Rick can copy a path to Finder.
+                ScrollView {
+                    Text("Not retired: \(refusal). Nothing was changed.")
+                        .font(.callout)
+                        .foregroundColor(.red)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 160)
+                .accessibilityIdentifier("retireSheet.refusal")
             }
 
             // Button bar

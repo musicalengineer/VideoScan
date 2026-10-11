@@ -24,6 +24,50 @@ struct PendingRetireOffer: Identifiable, Equatable {
     let witnesses: [String]
 }
 
+// MARK: - RetireUnprovenFiles
+
+/// The files that hold a drive back from Retire, by why (full paths). A
+/// plain value: `retireRefusal` turns it into the sentence the retire sheet
+/// shows and `retireVolume` logs.
+struct RetireUnprovenFiles: Equatable {
+    /// Rest on a witness (own skip note, or a labelled row's witness note)
+    /// and none of them holds on disk on another physical drive now.
+    var witnessGone: [String] = []
+    /// Labelled deleted, yet the file is still on this drive (stat says it
+    /// is there, or can't say it is gone) and no witness holds.
+    var labelledStillHere: [String] = []
+    /// Labelled deleted, no witness holds, and the drive is not connected —
+    /// nothing can show the file is gone.
+    var labelledUnchecked: [String] = []
+
+    var all: [String] { witnessGone + labelledStillHere + labelledUnchecked }
+    var isEmpty: Bool { witnessGone.isEmpty && labelledStillHere.isEmpty && labelledUnchecked.isEmpty }
+
+    /// How many names each clause lists before "and N more".
+    static let namesShown = 10
+
+    /// One clause per non-empty bucket, each naming its files relative to
+    /// the drive: "2 file(s) labelled deleted are still on this drive, with
+    /// no copy on another drive: Tapes/a.mov, b.mov".
+    func refusalText(volumeRootPath: String) -> String {
+        let clauses: [(paths: [String], words: String)] = [
+            (witnessGone, "no longer have a copy on disk on another drive"),
+            (labelledStillHere, "labelled deleted are still on this drive, with no copy on another drive"),
+            (labelledUnchecked, "labelled deleted can't be checked (the drive isn't connected) and have no copy on another drive"),
+        ]
+        return clauses.filter { !$0.paths.isEmpty }
+            .map { "\($0.paths.count) file(s) \($0.words): \(Self.names($0.paths, under: volumeRootPath))" }
+            .joined(separator: "; ")
+    }
+
+    private static func names(_ paths: [String], under root: String) -> String {
+        let prefix = root.hasSuffix("/") ? root : root + "/"
+        let shown = paths.prefix(namesShown).map { $0.hasPrefix(prefix) ? String($0.dropFirst(prefix.count)) : $0 }
+        let more = paths.count - shown.count
+        return shown.joined(separator: ", ") + (more > 0 ? " and \(more) more" : "")
+    }
+}
+
 // MARK: - VideoScanModel+RetireVolume
 //
 // §1B Retire Volume — companion feature to Relocate. After a Relocate run
@@ -119,6 +163,10 @@ extension VideoScanModel {
     /// row (`liveWitnesses`) OFF this drive. A skip whose witnesses all left
     /// the catalog (Delete Duplicates trashed them), went to a retired drive
     /// or were themselves skipped is not disposed — it may be the only copy.
+    /// CATALOG FACTS ONLY — it decides whether Retire is offered. The label
+    /// half is not a proof (tab-charter audit T1: 959 false labels); the
+    /// retire gate itself (`retireRefusal` → `filesWithoutAWitnessOnDisk`)
+    /// re-proves every labelled row on disk before a drive is retired.
     nonisolated static func isDisposedForRetire(archiveStage: ArchiveStage, notes: String, fullPath: String,
                                                 volumeRootPath: String, liveWitnesses: Set<String>) -> Bool {
         if archiveStage == .manuallyDeleted { return true }
@@ -276,22 +324,26 @@ extension VideoScanModel {
     ///
     /// Returns true on success; false when the path doesn't match any scan
     /// target, or when `retireRefusal` says no (QA rounds 1–2, 2026-10-11):
-    /// a record on the drive nobody accounted for, or a file resting on a
-    /// witness that no longer holds on disk on another physical drive.
-    /// Nothing changes on a refusal; the reason is logged. `fileSize` is one
-    /// stat per witness tried; injectable for tests.
+    /// a record on the drive nobody accounted for, a file resting on a
+    /// witness that no longer holds on disk on another physical drive, or
+    /// a file labelled deleted that is still on the drive (tab-charter
+    /// audit T1 — a label never vouches). Nothing changes on a refusal; the
+    /// reason is logged with every file it names. `disk` is the stat +
+    /// volume-online seam (one stat per witness tried, one per labelled
+    /// file without a held witness); injectable for tests.
     @discardableResult
     func retireVolume(at volumeRootPath: String,
                       reason: String,
                       witnesses: [String],
-                      fileSize: (String) -> Int64? = VideoScanModel.statRegularFileSize) -> Bool {
+                      disk: ShowAgainDisk = .live) -> Bool {
         guard let target = scanTargets.first(where: { $0.searchPath == volumeRootPath }) else {
             log("Retire refused: no scan target matches \(volumeRootPath).")
             return false
         }
-        if let why = retireRefusal(at: volumeRootPath, fileSize: fileSize) {
+        if let why = retireRefusal(at: volumeRootPath, disk: disk) {
             log("Retire refused: \(volumeRootPath) — \(why); nothing was changed.")
-            for path in filesWithoutAWitnessOnDisk(volumeRootPath: volumeRootPath, fileSize: fileSize).prefix(20) {
+            let unproven = filesWithoutAWitnessOnDisk(volumeRootPath: volumeRootPath, disk: disk)
+            for path in unproven.all.prefix(20) {
                 log("  no surviving copy found for \(path)")
             }
             return false
@@ -315,18 +367,22 @@ extension VideoScanModel {
     ///      an empty drive has nothing to lose and may be retired;
     ///   2. every file that rests on a witness — a skipped file, or a
     ///      legacy labelled row carrying a witness note — has one that holds
-    ///      NOW (`filesWithoutAWitnessOnDisk`).
-    func retireRefusal(at volumeRootPath: String,
-                       fileSize: (String) -> Int64? = VideoScanModel.statRegularFileSize) -> String? {
+    ///      NOW, and every file LABELLED deleted (`.manuallyDeleted`) either
+    ///      has a witness that holds or is provably gone from a connected
+    ///      drive (`filesWithoutAWitnessOnDisk`). The label alone never
+    ///      vouches (tab-charter audit T1, 2026-10-11: 959 of Rick's labels
+    ///      were false — the file was still there).
+    /// The refusal names the files (relative to the drive), so the retire
+    /// sheet can show which ones hold it back.
+    func retireRefusal(at volumeRootPath: String, disk: ShowAgainDisk = .live) -> String? {
         let retired = otherRetiredRoots(than: volumeRootPath)
         let total = Self.totalRecordsOn(volumeRootPath: volumeRootPath, in: records)
         let disposed = Self.disposedOn(volumeRootPath: volumeRootPath, in: records, retiredRoots: retired)
         if disposed < total {
             return "\(total - disposed) file(s) on this drive are not accounted for — no proven copy elsewhere"
         }
-        let lost = filesWithoutAWitnessOnDisk(volumeRootPath: volumeRootPath, fileSize: fileSize)
-        guard let first = lost.first else { return nil }
-        return "\(lost.count) file(s) no longer have a copy on disk on another drive (first: \(first))"
+        let unproven = filesWithoutAWitnessOnDisk(volumeRootPath: volumeRootPath, disk: disk)
+        return unproven.isEmpty ? nil : unproven.refusalText(volumeRootPath: volumeRootPath)
     }
 
     private func otherRetiredRoots(than volumeRootPath: String) -> [String] {
@@ -334,26 +390,42 @@ extension VideoScanModel {
             .map(\.searchPath)
     }
 
-    /// The files on the drive that rest on a witness — skipped here (own
-    /// skip note), or a legacy `.manuallyDeleted` row with a witness note —
-    /// whose every witness fails NOW: not a live row off this drive, not on
-    /// another physical drive (`relocateWitnessIndependence`, the device +
-    /// inode rule), or not on disk at the file's size. A labelled row with
-    /// no witness note (Bucket B, source missing) rests on nothing.
-    func filesWithoutAWitnessOnDisk(volumeRootPath: String, fileSize: (String) -> Int64?) -> [String] {
+    /// The files on the drive whose absence nothing proves — retiring the
+    /// drive could take the only copy with it. A record is DISPOSED for
+    /// retire only when (b) one of its witnesses holds NOW — a live row off
+    /// this drive, on another physical drive (`relocateWitnessIndependence`,
+    /// the device + inode rule), on disk at the file's size — or, for a row
+    /// labelled deleted, (a) its file is not on disk on a CONNECTED drive.
+    /// A skipped record (own skip note) still needs (b): its file was on
+    /// the drive when Migrate skipped it.
+    /// Records that neither carry the label nor rest on a witness are step
+    /// 1's business (`disposedOn`) and are not looked at here.
+    func filesWithoutAWitnessOnDisk(volumeRootPath: String, disk: ShowAgainDisk) -> RetireUnprovenFiles {
         let live = Self.liveWitnessPaths(in: records, retiredRoots: otherRetiredRoots(than: volumeRootPath))
         let independent = relocateWitnessIndependence
-        var lost: [String] = []
+        // Asked once, and only if a labelled row needs it: "missing" on a
+        // drive that is not mounted proves nothing.
+        var driveOnline: Bool?
+        var out = RetireUnprovenFiles()
         for rec in Self.recordsScoped(to: volumeRootPath, in: records) {
+            let labelled = rec.archiveStage == .manuallyDeleted
             let witnesses = Self.restingWitnesses(of: rec)
-            guard !witnesses.isEmpty else { continue }
+            guard labelled || !witnesses.isEmpty else { continue }
             let held = witnesses.contains { w in
                 live.contains(w) && !PathScope.contains(w, within: volumeRootPath)
-                    && fileSize(w) == rec.sizeBytes && independent(w, rec.fullPath, volumeRootPath)
+                    && disk.stat(w) == .file(size: rec.sizeBytes) && independent(w, rec.fullPath, volumeRootPath)
             }
-            if !held { lost.append(rec.fullPath) }
+            if held { continue }
+            guard labelled else { out.witnessGone.append(rec.fullPath); continue }
+            let online = driveOnline ?? disk.volumeOnline(volumeRootPath)
+            driveOnline = online
+            if !online {
+                out.labelledUnchecked.append(rec.fullPath)
+            } else if disk.stat(rec.fullPath) != .missing {
+                out.labelledStillHere.append(rec.fullPath)
+            }
         }
-        return lost
+        return out
     }
 
     /// The witnesses a record's place on its drive rests on: every witness
@@ -361,12 +433,6 @@ extension VideoScanModel {
     nonisolated static func restingWitnesses(of rec: VideoRecord) -> [String] {
         if rec.archiveStage == .manuallyDeleted { return parseWitnessesFromNote(rec.notes) }
         return ownSkipWitnesses(notes: rec.notes, fullPath: rec.fullPath) ?? []
-    }
-
-    /// One stat: the size of the regular file at `path`, or nil.
-    nonisolated static func statRegularFileSize(_ path: String) -> Int64? {
-        if case .file(let size) = ShowAgainDisk.statPath(path) { return size }
-        return nil
     }
 
     /// Clear all three retire fields — volume returns to active status.
