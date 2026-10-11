@@ -4,13 +4,20 @@
 // spoken answers out via Safari's built-in speech APIs. Nothing external is
 // loaded — no CDN, no fonts, no tracking — so it works on a LAN with no
 // internet at all.
+//
+// Layout (2026-10-10): `html(archivistName:)` assembles the document from
+// one piece per concern, in document order — the <head> metadata, the
+// stylesheet, the body markup, then the script in five parts (shell,
+// reading aloud, rendering answers, browsing the archive, asking). The
+// JavaScript is JavaScript: the parts that need no name are constants, the
+// three that mention the archivist are functions of it. Each piece can be
+// read and reviewed on its own, the way `attachmentScript` already was.
 
 import Foundation
 
 enum HallieWebPage {
-    // This function is a single self-contained, offline HTML document. Its
-    // physical line count reflects the literal, not executable Swift logic.
-    // swiftlint:disable:next function_body_length
+    /// The whole page for one archivist name. The name is HTML-escaped once
+    /// here and every piece receives the escaped form.
     static func html(archivistName: String) -> String {
         let name = archivistName
             .replacingOccurrences(of: "&", with: "&amp;")
@@ -19,13 +26,45 @@ enum HallieWebPage {
         <!doctype html>
         <html lang="en">
         <head>
+        \(head(name: name))
+        <style>
+        \(styles)
+        </style>
+        </head>
+        <body>
+        \(markup(name: name))
+        <script>
+        (function () {
+        \(shellScript(name: name))
+        \(speechScript)
+        \(renderScript)
+        \(browseScript)
+
+        \(askScript(name: name))
+        })();
+        </script>
+        </body>
+        </html>
+        """
+    }
+
+    // MARK: - Document pieces, in page order
+
+    /// Viewport, home-screen title and colour, document title.
+    static func head(name: String) -> String {
+        """
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
         <meta name="apple-mobile-web-app-capable" content="yes">
         <meta name="apple-mobile-web-app-title" content="\(name)">
         <meta name="theme-color" content="#f5efe4">
         <title>\(name)</title>
-        <style>
+        """
+    }
+
+    /// The stylesheet: warm light palette with a dark-mode override, big
+    /// type throughout, the two tabs, the browse list and the chat log.
+    static let styles = """
           :root { --bg:#f5efe4; --ink:#2b2520; --muted:#7a6f63; --her:#fff8ea; --you:#e7eef7; --line:#d9cfbf; --accent:#8a5a2b; }
           @media (prefers-color-scheme: dark) { :root { --bg:#1d1a17; --ink:#f1e9dc; --muted:#a79a8a; --her:#2a2521; --you:#22303d; --line:#3a332c; --accent:#d9a064; } }
           * { box-sizing:border-box; }
@@ -82,9 +121,12 @@ enum HallieWebPage {
           form button.mic.on { border-color:#c0392b; color:#c0392b; }
           .thinking { color:var(--muted); font-style:italic; }
           .tiny { font-size:14px; color:var(--muted); }
-        </style>
-        </head>
-        <body>
+        """
+
+    /// Header (name, mode pill, read-aloud toggle, voice picker, who-is-
+    /// talking), the Ask / Browse tabs, the log, the browse pane, the form.
+    static func markup(name: String) -> String {
+        """
         <header>
           <h1>\(name)</h1>
           <span id="modePill" class="tiny" title="Which side of the archive she is on: the catalog or the family tree">Listening</span>
@@ -100,8 +142,16 @@ enum HallieWebPage {
           <input id="text" autocomplete="off" autocapitalize="sentences" placeholder="Ask \(name)…">
           <button type="submit">Ask</button>
         </form>
-        <script>
-        (function () {
+        """
+    }
+
+    // MARK: - Script pieces (inside one IIFE, in this order)
+
+    /// Element handles, the per-device store (session id, who is talking,
+    /// the passphrase, read-aloud on/off), the two prompts, the mode pill
+    /// and `add()` — the one way a message reaches the log.
+    static func shellScript(name: String) -> String {
+        """
           var log = document.getElementById('log');
           var input = document.getElementById('text');
           var form = document.getElementById('ask');
@@ -139,6 +189,12 @@ enum HallieWebPage {
             log.scrollTop = log.scrollHeight;
             return d;
           }
+        """
+    }
+
+    /// Reading aloud: voice ranking and choice, sentence splitting,
+    /// `sayAloud()`.
+    static let speechScript = """
           // ---- Reading aloud (Rick 2026-08-22: "slow it down and make it
           // sound more natural"): a slower rate, one sentence per utterance
           // with a breath between (iOS also clips very long utterances),
@@ -183,6 +239,12 @@ enum HallieWebPage {
               speechSynthesis.speak(u);
             });
           }
+        """
+
+    /// `render()` for an answer (prose, basis, citations, attachments,
+    /// chips, autoplay), the attachment cards, and `playInline()` with the
+    /// prepare-then-poll path for tapes Safari cannot decode.
+    static let renderScript = """
           function render(r) {
             if (r.mode) showMode(r.mode);
             var d = add('her', r.prose || '');
@@ -253,6 +315,11 @@ enum HallieWebPage {
               if (r.status === 200 || r.status === 206) { note.remove(); start(); } else { poll(); }
             }).catch(poll);
           }
+        """
+
+    /// Browse the archive: tab switching, the timeline fetch, search
+    /// matching, one row per item, decades → years → items.
+    static let browseScript = """
           // ---- Browse: the Archive Timeline, decades → years → items.
           var browse = document.getElementById('browse'), blist = document.getElementById('blist'), bsearch = document.getElementById('bsearch');
           var timelineData = null;
@@ -325,7 +392,12 @@ enum HallieWebPage {
           }
           bsearch.oninput = renderTimeline;
           if (store('hallie.tab') === 'browse') setTab('browse');
+        """
 
+    /// Asking: `send()` with the passphrase / home-network refusals, the
+    /// form, dictation, the greeting and the first-run who-are-you prompt.
+    static func askScript(name: String) -> String {
+        """
           var busy = false;
           function send(payload) {
             if (busy) return;
@@ -364,10 +436,6 @@ enum HallieWebPage {
           }
           add('her', 'Hello — I\\u2019m \(name), the family archivist. Ask me about the videos or the family, or say \\u201clet me tell you about\\u2026\\u201d and I\\u2019ll remember it.');
           if (!who) setTimeout(askWho, 300);
-        })();
-        </script>
-        </body>
-        </html>
         """
     }
 }

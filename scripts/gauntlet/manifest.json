@@ -15347,6 +15347,20 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/HallieWebPageTests.swift",
+      "stage": "hallie",
+      "suites": [
+        "HallieWebPageTests"
+      ],
+      "tests": [
+        "test_archivistNameIsEscapedAndUsedEverywhereTheFamilySeesIt",
+        "test_pageIsSelfContained_noExternalResources",
+        "test_scriptPiecesAreBalancedAndPlacedVerbatim",
+        "test_sectionsAppearInDocumentOrder"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/HallieWebProxyTests.swift",
@@ -29820,7 +29834,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1104,
+      "expected_floor": 1108,
       "modes": [
         {
           "name": "strict",
@@ -29991,6 +30005,7 @@
         "VideoScanTests/HallieVitalDatesLensTests",
         "VideoScanTests/HallieVitalDatesTests",
         "VideoScanTests/HallieVitalsRouteWiringTests",
+        "VideoScanTests/HallieWebPageTests",
         "VideoScanTests/HallieWebServerStartupTests",
         "VideoScanTests/HallieWhichOneReplyDiscriminatorTests"
       ]
