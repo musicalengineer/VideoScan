@@ -56,13 +56,12 @@ extension CaptionOrchestrator {
         // include videoAndAudio + videoOnly (the latter is correlated
         // / orphan media that often DOES carry video essence — and the
         // user may want captions there too). Audio-only and no-stream
-        // records are skipped — no video frames to caption.
-        let allRecords = model.records
+        // records are skipped — no video frames to caption. Same rule as
+        // the menu's "Caption Videos (N)" count, component-boundary path
+        // match (2026-10-11: was a plain hasPrefix).
         let targetPrefix = target.searchPath
-        let candidates: [VideoRecord] = allRecords.filter { r in
-            r.fullPath.hasPrefix(targetPrefix) &&
-            (r.streamType == .videoAndAudio || r.streamType == .videoOnly)
-        }
+        let candidates: [VideoRecord] = VolumeContextMenuRules.captionableVideos(
+            records: model.records, under: targetPrefix)
 
         captionOrchLog.info("CaptionOrchestrator starting: target=\(targetPrefix, privacy: .public), candidates=\(candidates.count), engine=\(runner.modelID, privacy: .public), force=\(force)")
         appLog.write("Analyzing volume: starting \(candidates.count) candidate(s) on \(VolumeReachability.displayLabel(forPath: targetPrefix)) with \(runner.modelID)")

@@ -243,7 +243,7 @@ struct CatalogStorageRow: CatalogStorageFacts, Sendable, Equatable {
     static func projectForStorageTotals(_ records: [VideoRecord]) -> [CatalogStorageRow] {
         var out: [CatalogStorageRow] = []
         out.reserveCapacity(records.count)
-        for r in records where !r.isPurged && !r.isSetAside && !r.isSuperseded {
+        for r in records where CatalogStorageTotalsCalculator.isActive(r) {
             out.append(CatalogStorageRow(r))
         }
         return out
@@ -462,10 +462,26 @@ enum CatalogStorageTotalsCalculator {
         var counted: [R] = []
         var deleted: [R] = []
         counted.reserveCapacity(records.count)
-        for rec in records where !rec.isPurged && !rec.isSetAside && !rec.isSuperseded {
+        for rec in records where isActive(rec) {
             if isManuallyDeleted(rec) { deleted.append(rec) } else { counted.append(rec) }
         }
         return (counted, deleted)
+    }
+
+    /// Not purged (trashed / removed from the catalog), not set aside,
+    /// not superseded — the first half of `partition`'s rule.
+    nonisolated static func isActive<R: CatalogStorageFacts>(_ rec: R) -> Bool {
+        !rec.isPurged && !rec.isSetAside && !rec.isSuperseded
+    }
+
+    /// THE per-record test behind TOTAL CATALOG: `partition` puts a record
+    /// in `counted` exactly when this is true. Anything else that sums
+    /// "bytes in the catalog" — the volume table's Media Size column
+    /// (VolumeMediaTally) — asks this, so a row can never count a file
+    /// the footer has already let go of (2026-10-11: the column counted
+    /// trashed rows and summed to ~13.4 TB against a 7.85 TB footer).
+    nonisolated static func isCounted<R: CatalogStorageFacts>(_ rec: R) -> Bool {
+        isActive(rec) && !isManuallyDeleted(rec)
     }
 
     static func compute(

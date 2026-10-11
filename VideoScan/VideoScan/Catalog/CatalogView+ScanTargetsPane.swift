@@ -74,19 +74,6 @@ extension CatalogView {
             : rows.sorted(using: volumeTableSortOrder)
     }
 
-    /// Walk the catalog once and bucket records into each volume's
-    /// aggregate. Replaces the per-row O(records) filters that used to
-    /// dominate `volumeTableRows`. Single pass over `model.records`,
-    /// per-record prefix check against every scan target — total work
-    /// O(records × targets), done once per records-changed trigger
-    /// rather than once per render.
-    ///
-    /// A record can belong to BOTH the volume it currently lives on AND
-    /// the volume it originated from (Bucket-A copy / Bucket-D adoption
-    /// rewrites `fullPath` but preserves `originalFullPath`). That
-    /// matches the historical filter semantics — the Volumes table
-    /// counted those records on the source volume even after migration
-    /// — so we preserve the double-count.
     /// Where the catalog-ops group starts: the Phase column's measured
     /// origin, minus this row's 16pt horizontal padding so the button's
     /// leading edge — not its container — lands on the column.
@@ -153,6 +140,15 @@ extension CatalogView {
         return (signed, missing, signed + missing)
     }
 
+    /// Walk the catalog once and bucket records into each volume's
+    /// aggregate (VolumeMediaTally) — O(records × targets), once per
+    /// coalesced catalog-revision trigger, never per render.
+    ///
+    /// Files / Media Size are LIVE: records the footer counts whose
+    /// CURRENT path is on the volume. A migrated record (Bucket-A copy /
+    /// Bucket-D adoption rewrites `fullPath`, keeps `originalFullPath`)
+    /// still belongs to its source volume's HISTORY — errors, ⌘I and
+    /// the Uncataloged filter — but its bytes count where they now are.
     private func recomputeVolumeAggregates() {
         // Toolbar badge counts ride the same triggers — one extra O(n)
         // pass here instead of two per render.
@@ -162,14 +158,10 @@ extension CatalogView {
         // .onChange set) so the two caches can never disagree about
         // which catalog revision they describe.
         //
-        // NOTE — deliberate divergence from the Media Size COLUMN: the
-        // per-volume aggregates below double-count a migrated record on
-        // both its current and its origin volume (see this function's
-        // doc comment). The footer counts each record ONCE, because it
-        // answers "how many bytes exist", not "what does each volume
-        // hold". So on a catalog with migrations the column can sum to
-        // slightly MORE than the footer's total. That is correct; the
-        // footer is the number to plan a drive purchase against.
+        // The Media Size COLUMN and this footer share one predicate
+        // (`CatalogStorageTotalsCalculator.isCounted`): with disjoint
+        // targets the rows sum to the footer's TOTAL CATALOG exactly
+        // (VolumeMediaTallyTests). Only nested targets count a file twice.
         //
         // Reachability comes from the scan targets' already-cached
         // `isReachable` flag — a @Published Bool, NOT a filesystem probe.
@@ -211,36 +203,22 @@ extension CatalogView {
             volumeAggregateCache = [:]
             return
         }
-        // Sort prefixes longest-first so nested target paths
-        // (e.g. /Volumes/MyBook AND /Volumes/MyBook/Sub) both match
-        // correctly — `hasPrefix` is greedy on this side anyway, but the
-        // sort keeps semantics explicit.
-        let entries: [(id: UUID, target: CatalogScanTarget, prefix: String)] = targets
-            .sorted { $0.searchPath.count > $1.searchPath.count }
-            .map { ($0.id, $0, $0.searchPath) }
-        var buckets: [UUID: [VideoRecord]] = [:]
-        buckets.reserveCapacity(entries.count)
-        for r in model.records {
-            for e in entries {
-                if r.fullPath.hasPrefix(e.prefix)
-                    || (r.originalFullPath?.hasPrefix(e.prefix) ?? false) {
-                    buckets[e.id, default: []].append(r)
-                }
-            }
-        }
+        // Files / Media Size count LIVE content only — the footer's own
+        // predicate, component-boundary path match (VolumeMediaTally,
+        // 2026-10-11). History (current OR origin path, any state) still
+        // feeds errors, ⌘I and the Uncataloged filter.
+        let buckets = VolumeMediaTally.compute(
+            model.records, targets: targets.map { ($0.id, $0.searchPath) })
         var built: [UUID: VolumeAggregate] = [:]
-        built.reserveCapacity(entries.count)
-        for e in entries {
-            let recs = buckets[e.id] ?? []
-            let errCount = recs.reduce(into: 0) { acc, r in
-                if r.streamType == .ffprobeFailed { acc += 1 }
-            }
-            let bytes = recs.reduce(into: Int64(0)) { $0 += $1.sizeBytes }
-            built[e.id] = VolumeAggregate(
-                files: recs.count,
-                errors: errCount,
-                mediaBytes: bytes,
-                catalogStatusText: Self.buildCatalogInfo(records: recs, target: e.target)
+        built.reserveCapacity(targets.count)
+        for target in targets {
+            let b = buckets[target.id] ?? VolumeMediaTally.Bucket()
+            built[target.id] = VolumeAggregate(
+                files: b.liveFiles,
+                catalogRecords: b.history.count,
+                errors: b.errors,
+                mediaBytes: b.liveBytes,
+                catalogStatusText: Self.buildCatalogInfo(records: b.history, target: target)
             )
         }
         volumeAggregateCache = built
@@ -454,12 +432,13 @@ extension CatalogView {
             // instead of re-scanning all ~16k records TWICE per target on every
             // render (~640K hasPrefix calls/render before this — the exact cost
             // volumeAggregateCache exists to kill, which had leaked back in
-            // here uncached). The cache counts records matching fullPath OR
-            // originalFullPath, so an emptied relocate-source volume correctly
-            // still "has records" via its origin provenance rather than flipping
-            // to "uncataloged". Perf fix 2026-06-20.
+            // here uncached). `catalogRecords` counts records matching fullPath
+            // OR originalFullPath in any state, so an emptied relocate-source
+            // volume correctly still "has records" via its origin provenance
+            // rather than flipping to "uncataloged" (`files` is live-only since
+            // 2026-10-11 and would flip it). Perf fix 2026-06-20.
             let agg = volumeAggregateCache[target.id]
-            let hasRecords = (agg?.files ?? 0) > 0
+            let hasRecords = (agg?.catalogRecords ?? 0) > 0
             let hasBadFiles = (agg?.errors ?? 0) > 0
             let isNetwork = VolumeReachability.isNetworkVolume(path: path)
 

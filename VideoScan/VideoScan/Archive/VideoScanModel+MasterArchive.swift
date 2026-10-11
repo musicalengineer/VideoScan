@@ -982,14 +982,36 @@ extension VideoScanModel {
     }
 
     /// …and for files whose drive cannot be told apart from it.
-    nonisolated static func masterArchiveUnprovableRefusalLine(verb: String, count: Int, volume: String) -> String {
-        "\(verb): left \(count) file(s) alone — \(volume), the Master Archive volume, is not connected, so VideoScan cannot prove their drive is not it."
+    /// `atRemoval` = the snapshot a removal-time check used: when it found
+    /// the archive mounted, the drive was unreadable — never "not connected".
+    nonisolated static func masterArchiveUnprovableRefusalLine(verb: String, count: Int, volume: String,
+                                                               atRemoval: ArchiveVolumeProtection? = nil) -> String {
+        if let atRemoval, atRemoval.isResolved || atRemoval.isProvisional {
+            return "\(verb): left \(count) file(s) alone — \(archiveVolumeUnprovableNote(atRemoval))."
+        }
+        return "\(verb): left \(count) file(s) alone — \(volume), the Master Archive volume, is not connected, so VideoScan cannot prove their drive is not it."
     }
 
     /// …and for a catalog removal asked while the drive list is being
     /// re-read (a mount, unmount or rename a moment ago). Transient.
     nonisolated static func masterArchiveIdentityPendingLine(verb: String, count: Int, volume: String) -> String {
         "\(verb): left \(count) file(s) alone for now — the drive list is refreshing, so VideoScan cannot yet tell whether their drive is \(volume), the Master Archive volume. Nothing was changed; try again in a moment."
+    }
+
+    /// Row wording for an `.unprovable` verdict at a file's REMOVAL
+    /// (`verdictAtRemoval`), which — unlike the string verdict — can be
+    /// unprovable while the archive volume IS mounted: the file's own drive
+    /// could not be read. "is not connected" only when the archive volume
+    /// really was not found mounted (Rick 2026-10-11: 38 junk files held as
+    /// "not connected" with FamilyArchive mounted).
+    nonisolated static func archiveVolumeUnprovableNote(_ p: ArchiveVolumeProtection) -> String {
+        if p.isProvisional && !p.isResolved {
+            return "VideoScan is re-reading the drive list, so it cannot yet tell whether this drive is \(p.label), the Master Archive volume"
+        }
+        if p.isResolved {
+            return "\(p.label), the Master Archive volume, is connected, but VideoScan could not read which drive this file is on — cannot prove it is not \(p.label)"
+        }
+        return bulkDeleteRefusalNote(.archiveVolumeUnprovable, volume: p.label)
     }
 
     /// Row/detail wording for one refused record (Delete Duplicates rows,

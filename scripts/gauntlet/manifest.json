@@ -4215,6 +4215,41 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchiveGateMissingFileTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ArchiveGateMissingFileTests",
+        "ArchiveGateMissingFileSensor",
+        "ArchiveGateBootSurvivorRedTests"
+      ],
+      "tests": [
+        "archiveMountedUnreadableDriveIsHeldWithoutNotConnected",
+        "archiveUnpluggedAndDriveIdentityUnreadableStaysUnprovable",
+        "archiveUnpluggedMissingDeepFileOnAProvenOtherDriveIsClear",
+        "archiveUnpluggedUnreadableDriveIsHeldAsNotConnected",
+        "climbNeverReadsVolumesUnderAnySpelling",
+        "danglingSymlinkIntoUnpluggedReadOnlyDriveIsStillHeld",
+        "danglingSymlinkOnAnotherDriveIntoUnpluggedArchiveIsNotCleared",
+        "danglingSymlinkOnAnotherDriveIntoUnpluggedReadOnlyDriveIsHeld",
+        "danglingSymlinkScanTargetIntoUnpluggedArchiveIsNotCleared",
+        "deepMissingFileOnTheBootDiskDependsOnTheArchiveBeingFound",
+        "junkTurnHoldsTheDanglingLinkFileAndStillReportsRicksShapeMissing",
+        "missingDeepFileOnASwappedInArchiveIsRefused",
+        "missingDeepFileOnTheArchiveVolumeIsRefused",
+        "missingDeepFileThroughASymlinkIntoTheArchiveIsRefused",
+        "r5DeepMissingFileAtAnUnreadableCustomMountStaysUnprovable",
+        "removalCheckUsesTheSameWording",
+        "rickShapeArchiveMountedMissingDeepFileIsClear",
+        "rickShapeEveryFileIsMissingNotHeld",
+        "rickShapeWithAReadOnlyMarkIsStillMissing",
+        "staleDesignationKeepsTheSpellingProtected",
+        "theClimbStopsAtTheVolumeRoot",
+        "theSameShapeOnTheArchiveVolumeStaysHeld",
+        "wordingSaysNotConnectedOnlyWhenTheArchiveIsNotMounted"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ArchiveHelperRetiredSensorTests.swift",
@@ -23572,7 +23607,7 @@
       ],
       "tests": [
         "test_captionableVideoCount_countsVideoStreamsUnderThePath",
-        "test_captionableVideoCount_isAPlainPrefixMatch_pinnedNotEndorsed",
+        "test_captionableVideoCount_matchesWholePathComponentsOnly",
         "test_offersMigrationReport_forRetiredOrOfflineOnly",
         "test_offersReset_whenAnyTargetHasFinished",
         "test_offersVolumeNameBackfill_severalVolumesOrOneWithUnnamedRecords"
@@ -26514,6 +26549,30 @@
         "unwindNeverClearsAnArchivedStageRow",
         "updateStillWritesAnArchivedStageRecordsDate"
       ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VolumeMediaTallyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "VolumeMediaTallyInvariantTests",
+        "VolumeMediaTallyLogicTests",
+        "VolumeMediaTallySensorTests"
+      ],
+      "tests": [
+        "captionJobAndMenuCountShareOneScopeRule",
+        "emptyOrRootTargetMatchesNothing",
+        "errorsAndNegativeSizes",
+        "everyTargetGetsABucketEvenWhenEmpty",
+        "hundredThousandRecordsSumToTheFooterWithinBudget",
+        "migratedBytesCountWhereTheFileIsNow",
+        "onlyRecordsTheFooterCountsAreLive",
+        "siblingVolumeWithALongerNameIsNotSwallowed",
+        "smallMixedCatalog",
+        "thePaneUsesTheSharedTally",
+        "theTallyAsksTheFootersPredicate",
+        "trashingAFileLowersItsVolume"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -28942,7 +29001,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2276,
+      "expected_floor": 2311,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -28969,6 +29028,9 @@
         "VideoScanTests/ArchiveAuditStoreTests",
         "VideoScanTests/ArchiveAuditYearRulesTests",
         "VideoScanTests/ArchiveDateEntryTests",
+        "VideoScanTests/ArchiveGateBootSurvivorRedTests",
+        "VideoScanTests/ArchiveGateMissingFileSensor",
+        "VideoScanTests/ArchiveGateMissingFileTests",
         "VideoScanTests/ArchiveItemVersionsTests",
         "VideoScanTests/ArchiveOccasionTagTests",
         "VideoScanTests/ArchiveProgressTests",
@@ -29255,6 +29317,9 @@
         "VideoScanTests/VoicemailTests",
         "VideoScanTests/VolumeContextMenuRulesTests",
         "VideoScanTests/VolumeKeepaliveTests",
+        "VideoScanTests/VolumeMediaTallyInvariantTests",
+        "VideoScanTests/VolumeMediaTallyLogicTests",
+        "VideoScanTests/VolumeMediaTallySensorTests",
         "VideoScanTests/VolumeReachabilityDisplayLabelTests",
         "VideoScanTests/VolumeRelocatedIndicatorTests",
         "VideoScanTests/VolumeRoleTests",

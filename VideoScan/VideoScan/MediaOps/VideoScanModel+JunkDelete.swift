@@ -454,7 +454,7 @@ struct JunkDiskTurn: Sendable {
             case .onArchiveVolume:
                 return VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: archiveVolume.label) + " — nothing moved"
             case .unprovable:
-                return VideoScanModel.bulkDeleteRefusalNote(.archiveVolumeUnprovable, volume: archiveVolume.label) + " — nothing moved"
+                return VideoScanModel.archiveVolumeUnprovableNote(archiveVolume) + " — nothing moved"
             }
         }
         if let verdict = protections.readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe) {
