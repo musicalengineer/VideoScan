@@ -7387,12 +7387,15 @@
       "tests": [
         "aCopyElsewhereIsNotWarned",
         "alertSensor",
+        "archiveLegAndFocusSensor",
         "bothCopiesLeaving",
         "fixityDigestIsACopy",
         "hundredThousand",
         "oneOfThree",
         "refusedRowsAreNotCounted",
+        "sameDeviceAndInodeIsTheSameFile",
         "soleFileIsWarned",
+        "supersededAndSkippedAreNotSurvivors",
         "thingsThatAreNotACopy"
       ]
     },
@@ -20107,6 +20110,22 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/QAReviewRedTests_2026_10_11.swift",
+      "stage": "unit",
+      "suites": [
+        "QAReviewRedTests20261011"
+      ],
+      "tests": [
+        "aCopyLabelledDeletedIsNotASurvivingCopy",
+        "aCopyOnARetiredDriveIsNotASurvivingCopy",
+        "retireRechecksTheDriveIsConnectedAfterTheStats",
+        "retireRefusesWhenALabelledFilesFolderIsGoneFromAConnectedDrive",
+        "theSameFileUnderACaseVariantPathIsNotACopy"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/RateTrackerTests.swift",
       "stage": "unit",
@@ -21190,12 +21209,20 @@
         "RetireLabelNeverVouchesTests"
       ],
       "tests": [
+        "anotherDiskAtTheSamePathIsNotProof",
+        "driveLeavingDuringTheLoopProvesNothing",
         "hundredThousandRecords",
         "labelledAndGoneRetires",
         "labelledStillHereIsRefusedByName",
         "labelledWithAHeldWitnessRetires",
+        "liveProbeUsesTheVolumeUUID",
         "longListsAreCut",
+        "missingParentFolderIsNotProof",
+        "missingRootIsNotProof",
+        "noRecordedUUIDIsNotProof",
+        "offMainCheckAndStaleCommit",
         "offlineDriveCannotProveAbsence",
+        "parentOnAnotherDeviceIsNotProof",
         "sameDeviceWitnessDoesNotHold",
         "unreadableIsNotMissing",
         "witnessAtTheWrongSizeDoesNotHold"
@@ -28479,6 +28506,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/QADossierAdmissionRedTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/QAReviewRedTests_2026_10_11.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
