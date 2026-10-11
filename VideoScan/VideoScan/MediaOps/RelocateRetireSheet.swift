@@ -28,6 +28,8 @@ struct RelocateRetireSheet: View {
     @State private var reason: String
     /// Why Retire was refused (QA round 2): the sheet stays open and says so.
     @State private var refusal: String?
+    /// The click's disk check is running (off the main actor).
+    @State private var checking = false
 
     init(offer: PendingRetireOffer) {
         self.offer = offer
@@ -83,11 +85,18 @@ struct RelocateRetireSheet: View {
             }
 
             if let refusal {
-                Text("Not retired: \(refusal). Nothing was changed.")
-                    .font(.callout)
-                    .foregroundColor(.red)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("retireSheet.refusal")
+                // Names every file holding the drive back (up to ten per
+                // reason) — selectable so Rick can copy a path to Finder.
+                ScrollView {
+                    Text("Not retired: \(refusal). Nothing was changed.")
+                        .font(.callout)
+                        .foregroundColor(.red)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 160)
+                .accessibilityIdentifier("retireSheet.refusal")
             }
 
             // Button bar
@@ -103,22 +112,15 @@ struct RelocateRetireSheet: View {
                 .keyboardShortcut(.escape)
                 .accessibilityIdentifier("retireSheet.skip")
 
-                Button("Retire \(offer.volumeName)") {
-                    // Re-proved at the click; a refusal keeps the sheet open
-                    // with the reason (the same words retireVolume logs).
-                    let why = model.retireRefusal(at: offer.volumeRootPath)
-                    let retired = why == nil && model.retireVolume(
-                        at: offer.volumeRootPath,
-                        reason: reason.trimmingCharacters(in: .whitespacesAndNewlines),
-                        witnesses: offer.witnesses
-                    )
-                    guard retired else {
-                        refusal = why ?? "the drive could not be retired — see the console"
-                        return
-                    }
-                    model.pendingRetireOffer = nil
-                    dismiss()
+                if checking {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityIdentifier("retireSheet.checking")
                 }
+                Button(checking ? "Checking the drive…" : "Retire \(offer.volumeName)") {
+                    Task { await retireClicked() }
+                }
+                .disabled(checking)
                 .buttonStyle(.borderedProminent)
                 // No Return shortcut: retiring a drive is a deliberate click.
                 .accessibilityIdentifier("retireSheet.retire")
@@ -126,5 +128,27 @@ struct RelocateRetireSheet: View {
         }
         .padding(20)
         .frame(minWidth: 520)
+    }
+
+    /// Re-proved at the click, ONCE (QA m2): the disk is read off the main
+    /// actor while the button shows "Checking the drive…"; the same check
+    /// gives the refusal shown here, the console lines and the commit. A
+    /// refusal keeps the sheet open with the reason.
+    @MainActor
+    private func retireClicked() async {
+        checking = true
+        defer { checking = false }
+        let check = await model.retireCheckOffMain(at: offer.volumeRootPath)
+        let retired = model.commitRetire(
+            at: offer.volumeRootPath,
+            reason: reason.trimmingCharacters(in: .whitespacesAndNewlines),
+            witnesses: offer.witnesses,
+            check: check)
+        guard retired else {
+            refusal = check.refusal ?? VideoScanModel.retireCatalogChangedReason
+            return
+        }
+        model.pendingRetireOffer = nil
+        dismiss()
     }
 }

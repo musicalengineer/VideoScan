@@ -18,6 +18,7 @@
 
 import Foundation
 import Testing
+import VideoScanCore
 @testable import VideoScan
 
 @Suite("A record an earlier Migrate skipped never vouches")
@@ -150,11 +151,17 @@ struct RetireAccountedForTests {
         let fx = try retireFixture("legacy"); defer { try? FileManager.default.removeItem(at: fx.root) }
         fx.model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let legacy = record(fx.driveA.appendingPathComponent("clip.mov").path, size: 100)
+        // Still on the drive (tab-charter audit T1): were it gone from a
+        // connected drive, its absence alone would let the drive retire.
+        try Data(repeating: 1, count: 100).write(to: URL(fileURLWithPath: legacy.fullPath))
         legacy.archiveStage = .manuallyDeleted
         legacy.notes = skipNote(source: nil, witness: fx.witnessFile.path)      // the old shape
         let witness = record(fx.witnessFile.path, size: 100)
         let missing = record(fx.driveA.appendingPathComponent("gone.mov").path)  // Bucket B, no note
         missing.archiveStage = .manuallyDeleted
+        // Absence is proof only on the drive the catalog scanned (QA M3):
+        // the row records the temp volume's own UUID, as a scan would.
+        missing.scanContext.volumeUUID = try #require(VolumeIdentity.uuid(forPath: fx.driveA.path))
         fx.model.records = [legacy, witness, missing]
         #expect(!fx.model.retireVolume(at: fx.driveA.path, reason: "t", witnesses: []),
                 "the legacy row's only copy is not on disk")

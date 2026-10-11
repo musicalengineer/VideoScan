@@ -594,8 +594,8 @@ struct TriageView: View {
             }
             .vsGlassButtonStyle()
             .tint(.green)
-            .disabled(selectedIDs.isEmpty)
-            .help("Promote selected to Archive vault")
+            .disabled(selectedIDs.isEmpty || model.isReadOnly)
+            .help("Promote to Archive: copy the selected file(s) into the Master Archive — verified byte for byte; the originals are never moved or changed")
 
             // Pass B — Import to Workspace. Sits left of the Analyze
             // menu (per spec) so the natural toolbar reading order is
@@ -708,16 +708,14 @@ struct TriageView: View {
     private var underConstructionButtons: some View {
         HStack(spacing: 6) {
             Button {
-                let recs = selectedRecords
-                model.promoteWorkbenchToArchive(recs)
-                selectedIDs = []
-                catalogEdited()
+                // The one Promote engine; its sheet confirms. Selection stays.
+                model.promoteWorkbenchToArchive(selectedRecords)
             } label: {
                 Label("Promote", systemImage: "archivebox.fill")
             }
             .vsGlassProminentButtonStyle()
-            .disabled(selectedIDs.isEmpty)
-            .help("Promote selected files to the Archive tab")
+            .disabled(selectedIDs.isEmpty || model.isReadOnly)
+            .help("Promote to Archive: copy the selected file(s) into the Master Archive — verified byte for byte")
 
             Button {
                 let recs = selectedRecords
@@ -927,12 +925,12 @@ struct TriageView: View {
         if !ucIDs.isEmpty {
             Section("Under Construction (\(ucIDs.count))") {
                 Button {
+                    // The one Promote engine; its sheet confirms.
                     model.promoteWorkbenchToArchive(underConstructionRecords(ucIDs))
-                    selectedIDs = []
-                    catalogEdited()
                 } label: {
                     Label("Promote to Archive", systemImage: "archivebox.fill")
                 }
+                .disabled(model.isReadOnly)
                 Button {
                     model.dropWorkbenchToCatalog(underConstructionRecords(ucIDs))
                     selectedIDs = []
@@ -1134,13 +1132,12 @@ struct TriageView: View {
         selectedTab = 1
     }
 
+    /// The toolbar's "Archive": the one Promote engine, exactly as the
+    /// Catalog's Promote to Archive (tab-charter audit T2 — this used to
+    /// stamp `.archived` and copy nothing). The selection stays: the
+    /// confirmation sheet may be cancelled.
     private func promoteSelectedToArchive() {
-        for rec in model.triageRecords(withIDs: selectedIDs) {
-            rec.lifecycleStage = .archived
-        }
-        selectedIDs = []
-        model.saveCatalogDebounced()
-        catalogEdited()
+        model.requestPromote(records: model.triageRecords(withIDs: selectedIDs))
     }
 
     // MARK: - Import to Workspace (Pass B)

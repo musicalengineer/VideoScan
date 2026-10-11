@@ -1,4 +1,5 @@
 import Foundation
+import VideoScanCore
 
 // MARK: - PendingRetireOffer
 
@@ -119,6 +120,10 @@ extension VideoScanModel {
     /// row (`liveWitnesses`) OFF this drive. A skip whose witnesses all left
     /// the catalog (Delete Duplicates trashed them), went to a retired drive
     /// or were themselves skipped is not disposed — it may be the only copy.
+    /// CATALOG FACTS ONLY — it decides whether Retire is offered. The label
+    /// half is not a proof (tab-charter audit T1: 959 false labels); the
+    /// retire gate itself (`retireCheck` → `RetireGate.evaluate`)
+    /// re-proves every labelled row on disk before a drive is retired.
     nonisolated static func isDisposedForRetire(archiveStage: ArchiveStage, notes: String, fullPath: String,
                                                 volumeRootPath: String, liveWitnesses: Set<String>) -> Bool {
         if archiveStage == .manuallyDeleted { return true }
@@ -275,25 +280,48 @@ extension VideoScanModel {
     /// via the existing `persistScanDates` path.
     ///
     /// Returns true on success; false when the path doesn't match any scan
-    /// target, or when `retireRefusal` says no (QA rounds 1–2, 2026-10-11):
-    /// a record on the drive nobody accounted for, or a file resting on a
-    /// witness that no longer holds on disk on another physical drive.
-    /// Nothing changes on a refusal; the reason is logged. `fileSize` is one
-    /// stat per witness tried; injectable for tests.
+    /// target, or when the gate (`retireCheck`, RetireGate.swift) says no:
+    /// a record on the drive nobody accounted for, a file resting on a
+    /// witness that no longer holds on disk on another physical drive, or
+    /// a file labelled deleted whose absence can't be proved (tab-charter
+    /// audit T1 + QA round 1 — a label never vouches). Nothing changes on a
+    /// refusal; the reason is logged with every file it names.
+    /// Synchronous: the stats run on the caller. The retire sheet uses
+    /// `retireCheckOffMain` + `commitRetire` instead (QA m2).
     @discardableResult
     func retireVolume(at volumeRootPath: String,
                       reason: String,
                       witnesses: [String],
-                      fileSize: (String) -> Int64? = VideoScanModel.statRegularFileSize) -> Bool {
+                      disk: ShowAgainDisk = .retireLive,
+                      drive: RetireDriveProbe = .live) -> Bool {
+        guard scanTargets.contains(where: { $0.searchPath == volumeRootPath }) else {
+            log("Retire refused: no scan target matches \(volumeRootPath).")
+            return false
+        }
+        return commitRetire(at: volumeRootPath, reason: reason, witnesses: witnesses,
+                            check: retireCheck(at: volumeRootPath, disk: disk, drive: drive))
+    }
+
+    /// Stamp the drive retired on the strength of ONE check made this click.
+    /// Refuses when the check refused (logging its reason and files), or
+    /// when the catalog no longer projects to what the check judged — a
+    /// scan or Show Again changed the drive's rows while the disk was read.
+    @discardableResult
+    func commitRetire(at volumeRootPath: String, reason: String, witnesses: [String],
+                      check: RetireCheck) -> Bool {
         guard let target = scanTargets.first(where: { $0.searchPath == volumeRootPath }) else {
             log("Retire refused: no scan target matches \(volumeRootPath).")
             return false
         }
-        if let why = retireRefusal(at: volumeRootPath, fileSize: fileSize) {
+        if let why = check.refusal {
             log("Retire refused: \(volumeRootPath) — \(why); nothing was changed.")
-            for path in filesWithoutAWitnessOnDisk(volumeRootPath: volumeRootPath, fileSize: fileSize).prefix(20) {
+            for path in check.unproven.all.prefix(20) {
                 log("  no surviving copy found for \(path)")
             }
+            return false
+        }
+        guard retireGateInput(at: volumeRootPath) == check.input else {
+            log("Retire refused: \(volumeRootPath) — \(Self.retireCatalogChangedReason); nothing was changed.")
             return false
         }
         let now = Date()
@@ -307,26 +335,36 @@ extension VideoScanModel {
         return true
     }
 
-    /// Why `volumeRootPath` must NOT be retired right now, or nil. Asked by
-    /// `retireVolume` before anything changes, and by the retire sheet so it
-    /// can show the reason (QA round 2):
-    ///   1. every record on the drive is disposed (`disposedOn`, catalog
-    ///      facts — a file nobody accounted for is never retired with it);
-    ///      an empty drive has nothing to lose and may be retired;
-    ///   2. every file that rests on a witness — a skipped file, or a
-    ///      legacy labelled row carrying a witness note — has one that holds
-    ///      NOW (`filesWithoutAWitnessOnDisk`).
-    func retireRefusal(at volumeRootPath: String,
-                       fileSize: (String) -> Int64? = VideoScanModel.statRegularFileSize) -> String? {
-        let retired = otherRetiredRoots(than: volumeRootPath)
-        let total = Self.totalRecordsOn(volumeRootPath: volumeRootPath, in: records)
-        let disposed = Self.disposedOn(volumeRootPath: volumeRootPath, in: records, retiredRoots: retired)
-        if disposed < total {
-            return "\(total - disposed) file(s) on this drive are not accounted for — no proven copy elsewhere"
-        }
-        let lost = filesWithoutAWitnessOnDisk(volumeRootPath: volumeRootPath, fileSize: fileSize)
-        guard let first = lost.first else { return nil }
-        return "\(lost.count) file(s) no longer have a copy on disk on another drive (first: \(first))"
+    static let retireCatalogChangedReason = "the catalog changed while the drive was being checked — try again"
+
+    /// Why `volumeRootPath` must NOT be retired right now, or nil — the
+    /// refusal half of `retireCheck` (synchronous; tests and the log).
+    func retireRefusal(at volumeRootPath: String, disk: ShowAgainDisk = .retireLive,
+                       drive: RetireDriveProbe = .live) -> String? {
+        retireCheck(at: volumeRootPath, disk: disk, drive: drive).refusal
+    }
+
+    /// The gate, synchronously on the caller:
+    ///   1. every record on the drive is disposed by catalog facts
+    ///      (`disposedOn`); an empty drive may be retired;
+    ///   2. every file resting on a witness has one that holds NOW, and
+    ///      every file LABELLED deleted has a witness that holds or is
+    ///      provably gone (RetireGate.swift has the whole rule).
+    func retireCheck(at volumeRootPath: String, disk: ShowAgainDisk = .retireLive,
+                     drive: RetireDriveProbe = .live) -> RetireCheck {
+        RetireGate.evaluate(retireGateInput(at: volumeRootPath), independence: relocateWitnessIndependence,
+                            disk: disk, drive: drive)
+    }
+
+    /// The same check with the stats OFF the main actor (QA m2): the
+    /// catalog is projected here, the disk is read on a background task.
+    func retireCheckOffMain(at volumeRootPath: String, disk: ShowAgainDisk = .retireLive,
+                            drive: RetireDriveProbe = .live) async -> RetireCheck {
+        let input = retireGateInput(at: volumeRootPath)
+        let independence = relocateWitnessIndependence
+        return await Task.detached(priority: .userInitiated) {
+            RetireGate.evaluate(input, independence: independence, disk: disk, drive: drive)
+        }.value
     }
 
     private func otherRetiredRoots(than volumeRootPath: String) -> [String] {
@@ -334,26 +372,41 @@ extension VideoScanModel {
             .map(\.searchPath)
     }
 
-    /// The files on the drive that rest on a witness — skipped here (own
-    /// skip note), or a legacy `.manuallyDeleted` row with a witness note —
-    /// whose every witness fails NOW: not a live row off this drive, not on
-    /// another physical drive (`relocateWitnessIndependence`, the device +
-    /// inode rule), or not on disk at the file's size. A labelled row with
-    /// no witness note (Bucket B, source missing) rests on nothing.
-    func filesWithoutAWitnessOnDisk(volumeRootPath: String, fileSize: (String) -> Int64?) -> [String] {
-        let live = Self.liveWitnessPaths(in: records, retiredRoots: otherRetiredRoots(than: volumeRootPath))
-        let independent = relocateWitnessIndependence
-        var lost: [String] = []
-        for rec in Self.recordsScoped(to: volumeRootPath, in: records) {
+    /// The catalog's side of the gate, on the main actor — catalog facts
+    /// only, O(records), no disk I/O: the step-1 counts, the rows the disk
+    /// decides (labelled, or resting on a witness) with their witnesses
+    /// that are live rows off this drive, and the drive's recorded UUID.
+    func retireGateInput(at volumeRootPath: String) -> RetireGateInput {
+        let retired = otherRetiredRoots(than: volumeRootPath)
+        let scoped = Self.recordsScoped(to: volumeRootPath, in: records)
+        let live = Self.liveWitnessPaths(in: records, retiredRoots: retired)
+        let rows: [RetireGateInput.Row] = scoped.compactMap { rec in
+            let labelled = rec.archiveStage == .manuallyDeleted
             let witnesses = Self.restingWitnesses(of: rec)
-            guard !witnesses.isEmpty else { continue }
-            let held = witnesses.contains { w in
-                live.contains(w) && !PathScope.contains(w, within: volumeRootPath)
-                    && fileSize(w) == rec.sizeBytes && independent(w, rec.fullPath, volumeRootPath)
-            }
-            if !held { lost.append(rec.fullPath) }
+            guard labelled || !witnesses.isEmpty else { return nil }
+            return .init(path: rec.fullPath, size: rec.sizeBytes, labelled: labelled,
+                         witnesses: witnesses.filter { live.contains($0) && !PathScope.contains($0, within: volumeRootPath) })
         }
-        return lost
+        return RetireGateInput(
+            volumeRootPath: volumeRootPath,
+            total: scoped.count,
+            disposed: Self.disposedOn(volumeRootPath: volumeRootPath, in: records, retiredRoots: retired),
+            rows: rows,
+            recordedVolumeUUID: Self.recordedVolumeUUID(of: scoped))
+    }
+
+    /// The one persistent volume UUID the catalog recorded for these rows at
+    /// scan time (`ScanContext.volumeUUID`). The scan target itself stores
+    /// none, so the rows are the record. nil when none recorded one, or
+    /// when they disagree — then no absence on the drive is proof.
+    nonisolated static func recordedVolumeUUID(of rows: [VideoRecord]) -> String? {
+        var found: String?
+        for rec in rows {
+            guard let u = VolumeIdentity.normalized(rec.scanContext.volumeUUID) else { continue }
+            if let f = found, f != u { return nil }
+            found = u
+        }
+        return found
     }
 
     /// The witnesses a record's place on its drive rests on: every witness
@@ -361,12 +414,6 @@ extension VideoScanModel {
     nonisolated static func restingWitnesses(of rec: VideoRecord) -> [String] {
         if rec.archiveStage == .manuallyDeleted { return parseWitnessesFromNote(rec.notes) }
         return ownSkipWitnesses(notes: rec.notes, fullPath: rec.fullPath) ?? []
-    }
-
-    /// One stat: the size of the regular file at `path`, or nil.
-    nonisolated static func statRegularFileSize(_ path: String) -> Int64? {
-        if case .file(let size) = ShowAgainDisk.statPath(path) { return size }
-        return nil
     }
 
     /// Clear all three retire fields — volume returns to active status.

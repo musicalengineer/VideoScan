@@ -7377,6 +7377,29 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashOnlyCopyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTrashOnlyCopyTests"
+      ],
+      "tests": [
+        "aCopyElsewhereIsNotWarned",
+        "alertSensor",
+        "archiveLegAndFocusSensor",
+        "bothCopiesLeaving",
+        "fixityDigestIsACopy",
+        "hundredThousand",
+        "oneOfThree",
+        "refusedRowsAreNotCounted",
+        "sameDeviceAndInodeIsTheSameFile",
+        "soleFileIsWarned",
+        "supersededAndSkippedAreNotSurvivors",
+        "thingsThatAreNotACopy"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogTrashShortcutTests.swift",
@@ -19840,6 +19863,20 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PromoteLabelOnlySensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PromoteLabelOnlySensorTests"
+      ],
+      "tests": [
+        "bothDoorsCallTheEngine",
+        "onlyTheEngineAndTheMigrationStampArchived",
+        "patternSelfTest"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/PromoteProgressLoggingTests.swift",
       "stage": "unit",
       "suites": [
@@ -20070,6 +20107,22 @@
         "replaceWithoutRenameExclNeverTrashesTheExistingFile",
         "whenNothingCanBeWrittenTheOutputIsPinnedInProcess",
         "withoutRenameExclAFreeNameIsPublishedByLink"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/QAReviewRedTests_2026_10_11.swift",
+      "stage": "unit",
+      "suites": [
+        "QAReviewRedTests20261011"
+      ],
+      "tests": [
+        "aCopyLabelledDeletedIsNotASurvivingCopy",
+        "aCopyOnARetiredDriveIsNotASurvivingCopy",
+        "retireRechecksTheDriveIsConnectedAfterTheStats",
+        "retireRefusesWhenALabelledFilesFolderIsGoneFromAConnectedDrive",
+        "theSameFileUnderACaseVariantPathIsNotACopy"
       ]
     },
     {
@@ -21145,6 +21198,34 @@
         "webSearchUnwrapsRedirectsAndSurvivesNoParse",
         "wikipediaAndWikidataHitsAreKeptButLabelledWhenUncheckable",
         "yearWindowIsBirthToDeathPlusTolerance"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RetireLabelNeverVouchesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RetireLabelNeverVouchesTests"
+      ],
+      "tests": [
+        "anotherDiskAtTheSamePathIsNotProof",
+        "driveLeavingDuringTheLoopProvesNothing",
+        "hundredThousandRecords",
+        "labelledAndGoneRetires",
+        "labelledStillHereIsRefusedByName",
+        "labelledWithAHeldWitnessRetires",
+        "liveProbeUsesTheVolumeUUID",
+        "longListsAreCut",
+        "missingParentFolderIsNotProof",
+        "missingRootIsNotProof",
+        "noRecordedUUIDIsNotProof",
+        "offMainCheckAndStaleCommit",
+        "offlineDriveCannotProveAbsence",
+        "parentOnAnotherDeviceIsNotProof",
+        "sameDeviceWitnessDoesNotHold",
+        "unreadableIsNotMissing",
+        "witnessAtTheWrongSizeDoesNotHold"
       ]
     },
     {
@@ -22449,6 +22530,20 @@
       ],
       "tests": [
         "t3vSurvivesLaterScansAndStaysSearchable"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/TabCharterAuditTests.swift",
+      "stage": "unit",
+      "suites": [
+        "TabCharterAuditTests"
+      ],
+      "tests": [
+        "catalogMoveToTrashWarnsWhenTheFileIsTheOnlyCopy",
+        "retireRefusesADriveWhoseFalselyLabelledFileIsStillOnIt",
+        "workbenchPromoteNeverStampsArchivedWithoutAnArchiveCopy"
       ]
     },
     {
@@ -24043,9 +24138,9 @@
         "discardGracefullyHandlesMissingFile",
         "discardSetsPurgedAtAndTrashedLifecycle",
         "dropSetsLifecycleToCatalogedAndPersists",
-        "promoteAppliesToAllRecords",
-        "promoteDoesNotDowngradeAlreadyAdvancedArchiveStage",
-        "promoteSetsArchivedLifecycleAndStartsArchiveStageAtHealthy"
+        "promoteOnAReadOnlyViewerDoesNothing",
+        "promoteWithAMasterArchiveOffersTheEnginesPlanAndStampsNothingYet",
+        "promoteWithoutAMasterArchiveRaisesTheEnginesAlertAndStampsNothing"
       ]
     },
     {
@@ -27510,6 +27605,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/CatalogTrashOnlyCopyTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/CatalogTrashShortcutTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
@@ -28374,6 +28473,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/PromoteLabelOnlySensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/PromoteProgressLoggingTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -28403,6 +28506,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/QADossierAdmissionRedTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/QAReviewRedTests_2026_10_11.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -28515,6 +28622,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ResearchPersonTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/RetireLabelNeverVouchesTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -28660,6 +28771,10 @@
         {
           "name": "VideoScan/VideoScanTests/T3VExtensionlessSurvivalTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/TabCharterAuditTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/TestEnvironmentGuardTests.swift",

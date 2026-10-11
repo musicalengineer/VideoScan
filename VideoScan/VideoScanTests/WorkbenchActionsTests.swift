@@ -55,58 +55,66 @@ struct WorkbenchActionsTests {
 
     // MARK: - Promote
 
-    @Test
-    func promoteSetsArchivedLifecycleAndStartsArchiveStageAtHealthy() throws {
-        let dir = scratchDir()
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let model = try makeModel(at: dir)
-        let rec = makeWorkbenchRecord("donna_rock_combined.mov")
-        #expect(rec.archiveStage == .none)
-        model.records = [rec]
-
-        model.promoteWorkbenchToArchive([rec])
-        #expect(rec.lifecycleStage == .archived)
-        #expect(rec.archiveStage == .healthy,
-                "promote from .none must start the archive lifecycle at .healthy — not skip straight to fully-archived")
-
-        // Persisted?
-        let reloaded = CatalogStore(directory: dir).load().first!
-        #expect(reloaded.lifecycleStage == .archived)
-        #expect(reloaded.archiveStage == .healthy)
-    }
+    //
+    // Tab-charter audit T2 (2026-10-11): Promote used to stamp
+    // `lifecycleStage = .archived` (+ archiveStage .healthy) and copy
+    // nothing. It is now the Catalog's Promote — `requestPromote` → the
+    // confirmation sheet → PromoteToArchiveJob. These pin the hand-off and
+    // that nothing is stamped before a verified copy exists.
 
     @Test
-    func promoteDoesNotDowngradeAlreadyAdvancedArchiveStage() throws {
-        let dir = scratchDir()
-        defer { try? FileManager.default.removeItem(at: dir) }
-
-        let model = try makeModel(at: dir)
-        let rec = makeWorkbenchRecord("x.mov")
-        rec.archiveStage = .backedUp  // already past healthy
-        model.records = [rec]
-
-        model.promoteWorkbenchToArchive([rec])
-        #expect(rec.archiveStage == .backedUp,
-                "promote must not clobber an already-advanced archiveStage")
-    }
-
-    @Test
-    func promoteAppliesToAllRecords() throws {
+    func promoteWithoutAMasterArchiveRaisesTheEnginesAlertAndStampsNothing() throws {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let model = try makeModel(at: dir)
         let recs = ["a.mov", "b.mov", "c.mov"].map { makeWorkbenchRecord($0) }
+        recs[2].archiveStage = .backedUp
         model.records = recs
 
         model.promoteWorkbenchToArchive(recs)
-        #expect(recs.allSatisfy { $0.lifecycleStage == .archived })
-        #expect(recs.allSatisfy { $0.archiveStage == .healthy })
+        #expect(model.pendingPromoteWithoutMaster?.recordIDs == recs.map(\.id),
+                "the Promote engine's 'designate a master archive' alert, for every selected file")
+        #expect(model.pendingPromoteRequest == nil)
+        #expect(recs.allSatisfy { $0.lifecycleStage == .workbench }, "no label-only promote")
+        #expect(recs.map(\.archiveStage) == [ArchiveStage.none, .none, .backedUp], "archive stage untouched")
+    }
 
-        let reloaded = CatalogStore(directory: dir).load()
-        #expect(reloaded.count == 3)
-        #expect(reloaded.allSatisfy { $0.lifecycleStage == .archived })
+    @Test
+    func promoteWithAMasterArchiveOffersTheEnginesPlanAndStampsNothingYet() throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("workbench_promote")
+        defer { sb.cleanup() }
+        let model = VideoScanModel()
+        let src = try MasterArchiveTestSupport.writeBlob(at: sb.sources.appendingPathComponent("combined.mov"),
+                                                         bytes: 1000, seed: 7)
+        let rec = MasterArchiveTestSupport.makeRecord(path: src.path)
+        rec.lifecycleStage = .workbench
+        model.records = [rec]
+        try MasterArchiveTestSupport.initialize(model, in: sb)
+
+        model.promoteWorkbenchToArchive([rec])
+        let plan = try #require(model.pendingPromoteRequest?.plan, "the confirmation sheet's plan")
+        #expect(plan.entries.map(\.recordID) == [rec.id])
+        #expect(rec.lifecycleStage == .workbench, "the stage changes only on the verified archive copy")
+        #expect(!model.isArchived(rec))
+    }
+
+    @Test
+    func promoteOnAReadOnlyViewerDoesNothing() throws {
+        let dir = scratchDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+
+        let model = try makeModel(at: dir)
+        model.isReadOnly = true
+        // On a mounted volume and missing — the looks-moved check would
+        // raise a relink notice; a viewer is refused BEFORE it (QA m6).
+        let rec = makeDiscardableRecord("x.mov", in: dir, create: false)
+        model.records = [rec]
+
+        model.promoteWorkbenchToArchive([rec])
+        #expect(model.pendingPromoteRequest == nil && model.pendingPromoteWithoutMaster == nil)
+        #expect(model.looksMovedNotice == nil, "no relink offer on a viewer")
+        #expect(rec.lifecycleStage == .workbench)
     }
 
     // MARK: - Drop

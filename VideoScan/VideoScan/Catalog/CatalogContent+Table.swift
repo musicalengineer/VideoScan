@@ -441,9 +441,20 @@ extension CatalogContent {
             alert.messageText = confirmation.title
             alert.informativeText = confirmation.detail
             alert.alertStyle = .warning
-            alert.addButton(withTitle: CatalogTrashConfirmation.moveButton)   // first button: Return
+            let move = alert.addButton(withTitle: CatalogTrashConfirmation.moveButton)   // first button: Return
+            if !confirmation.moveIsDefault {
+                // The only copy we know of (audit T3): no Return key, red —
+                // Move to Trash is a deliberate click.
+                move.keyEquivalent = ""
+                move.hasDestructiveAction = true
+            }
             let cancel = alert.addButton(withTitle: "Cancel")
             cancel.keyEquivalent = "\u{1b}"                                    // Esc
+            if !confirmation.moveIsDefault {
+                // Space presses the focused button: start on Cancel (QA m4).
+                alert.layout()
+                alert.window.initialFirstResponder = cancel
+            }
             guard alert.runModal() == .alertFirstButtonReturn else {
                 model.log("Move to Trash: cancelled at the confirmation — nothing moved.")
                 return
