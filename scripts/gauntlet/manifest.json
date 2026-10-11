@@ -16107,6 +16107,24 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/KeeperNeverInheritsRemovalStateTests.swift",
+      "stage": "unit",
+      "suites": [
+        "KeeperNeverInheritsRemovalStateTests"
+      ],
+      "tests": [
+        "archiveStageTableIsComplete",
+        "archiveStageTruthTable",
+        "confirmRepairKeepsRepairVisible",
+        "deleteDuplicatesKeeperStaysVisible",
+        "lifecycleStageTruthTable",
+        "marksStillCarryWithoutTheLabel",
+        "pruneFoldArchiveCopyStaysVisible"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/KinshipExplicitOverInferredTests.swift",
       "stage": "unit",
       "suites": [
@@ -20602,8 +20620,9 @@
       ],
       "tests": [
         "emptyHashRecord_neverClassifiedAsSafelyRedundant_endToEnd",
-        "safelyRedundantMutation_marksManuallyDeleted_andPersistsWitnessesInNote",
+        "safelyRedundantSkip_leavesLabelAlone_andPersistsWitnessesInNote",
         "skipDupsToggleOff_classifiesAsReady_andCopiesNormally",
+        "skippedWithWitnessCountsAsAccountedForRetire",
         "snapshotRollback_restoresSafelyRedundantRecordsExactly",
         "zeroSizeRecord_neverClassifiedAsSafelyRedundant_endToEnd"
       ]
@@ -21726,6 +21745,58 @@
         "pausedJobRestoresAsPausedNotDone",
         "pausedJobRestoresWithActualProgressNotFullyComplete",
         "resumeFromDiskPausedJobInvokesStartJobPath"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ShowAgainDeleteDuplicatesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ShowAgainDeleteDuplicatesTests"
+      ],
+      "tests": [
+        "soleCopyNeverRemoved"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ShowAgainScaleTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ShowAgainScaleTests"
+      ],
+      "tests": [
+        "hundredThousand"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ShowAgainTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ShowAgainRulesTests",
+        "ShowAgainApplyTests",
+        "ShowAgainSensorTests"
+      ],
+      "tests": [
+        "candidateRule",
+        "changedSinceReview",
+        "damagedLedgerLineHolds",
+        "emptyReviewRefuses",
+        "endToEnd",
+        "fileGoneSinceReview",
+        "jobFinishes",
+        "ledgerRead",
+        "noMediaFileOperations",
+        "onlyTheLabel",
+        "onlyTheReceiptIsWritten",
+        "poisonedLedgerRefuses",
+        "receiptIndex",
+        "sharedStoreRefuses",
+        "truthTable"
       ]
     },
     {
@@ -27855,6 +27926,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/KeeperNeverInheritsRemovalStateTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/KinshipExplicitOverInferredTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -28396,6 +28471,18 @@
         },
         {
           "name": "VideoScan/VideoScanTests/SessionRestorePauseStateTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ShowAgainDeleteDuplicatesTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ShowAgainScaleTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ShowAgainTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
