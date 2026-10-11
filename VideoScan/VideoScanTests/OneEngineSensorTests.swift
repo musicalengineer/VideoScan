@@ -65,7 +65,6 @@ struct OneEngineSensorTests {
     static let fileRemovalAllowlist: [String: String] = [
         // The engine and its doors.
         "MediaOps/VideoScanModel+JunkDelete.swift": "THE engine's disk turn (deleteConfirmedJunk)",
-        "Catalog/VideoScanModel+Workbench.swift": "Workbench discard's own turn — moves onto the engine next (design §4)",
         "MediaOps/DeleteDuplicatesJob.swift": "Delete Duplicates' one Trash step (moveToTrash) — the RemovalStep split is next (design §3)",
         "MediaOps/SignatureVerification.swift": "the quarantine's Trash step and its owner-only quarantine dir; .permanent only when named",
         "MediaOps/DerivativeOutputPublish.swift": "replace policy for an app-made output (E4) — onto the engine with the step split",
@@ -123,7 +122,6 @@ struct OneEngineSensorTests {
 
     static let trashItemAllowlist: [String: String] = [
         "MediaOps/VideoScanModel+JunkDelete.swift": "THE engine",
-        "Catalog/VideoScanModel+Workbench.swift": "Workbench discard, not yet on the engine (named)",
         "MediaOps/DeleteDuplicatesJob.swift": "Delete Duplicates' Trash step, not yet a RemovalStep (named)",
         "MediaOps/SignatureVerification.swift": "the quarantine's put-back-then-Trash step (named)",
         "MediaOps/DerivativeOutputPublish.swift": "E4 replace policy, app-made output (named)",

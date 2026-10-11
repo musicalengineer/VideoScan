@@ -307,17 +307,21 @@ struct BulkVerbRemovalBoundaryTests {
         }
         let onMarkedDrive = item("on-marked.mov"), free = item("free.mov")
         model.records = [onMarkedDrive, free]
-        var trashed: [String] = []
-        let count = MasterArchiveDesignation.$volumeUUIDProbe.withValue({ $0.hasSuffix("on-marked.mov") ? "TEST-U" : "TEST-FREE" }) {
-            ArchiveVolumeProtection.$mountIdentityProbe.withValue({ _ in nil }) {
-                model.discardWorkbench([onMarkedDrive, free]) { trashed.append($0.lastPathComponent) }
+        let trashed = TrashCallLog()
+        let count = await MasterArchiveDesignation.$volumeUUIDProbe.withValue({ $0.hasSuffix("on-marked.mov") ? "TEST-U" : "TEST-FREE" }) {
+            await ArchiveVolumeProtection.$mountIdentityProbe.withValue({ _ in nil }) {
+                await model.discardWorkbench([onMarkedDrive, free], trash: trashed.operation)
             }
         }
-        #expect(trashed == ["free.mov"], "a file on the Read-only drive went to the Trash: \(trashed)")
+        #expect(trashed.names == ["free.mov"], "a file on the Read-only drive went to the Trash: \(trashed.names)")
         #expect(count == 1 && !onMarkedDrive.isPurged && onMarkedDrive.lifecycleStage != .trashed && free.isPurged)
         try? await Task.sleep(nanoseconds: 400_000_000)   // console flush debounce
-        #expect(model.dashboard.consoleLines.joined(separator: "\n")
-            .contains("Discard: left 1 file(s) alone — they live on TestMarked, which you marked Read only."))
+        // GH #143: the engine asks the drive at the file's turn (by volume
+        // identity) and the audit names the held file and why; the old
+        // per-verb summary line went with Discard's private turn.
+        let console = model.dashboard.consoleLines.joined(separator: "\n")
+        #expect(console.contains("on-marked.mov") && console.contains("which you marked Read only"),
+                Comment(rawValue: console))
     }
 
     /// Transcode's Replace Existing: the publish itself asks the removal
@@ -343,22 +347,18 @@ struct BulkVerbRemovalBoundaryTests {
 
     /// Sensors: each bulk remove verb's removal site asks the gate there.
     @Test func everyBulkVerbAsksTheGateWhereTheFileGoes() throws {
-        // Workbench Discard: the removal-time check, per file, before the Trash.
+        // Workbench Discard (GH #143): no turn of its own any more — it is a
+        // door onto deleteConfirmedJunk, whose loop asks the gate per file
+        // (main actor) and again in the disk half by volume identity.
         let discard = try SourceTree.appCode(named: "VideoScanModel+Workbench.swift")
-        // Since B1 (2026-10-11) each file's turn is `discardTurn`, called
-        // from the loop; the gate is asked there, before either Trash call.
-        let loop = try #require(discard.range(of: "for rec in recs {"))
-        #expect(discard[loop.upperBound...].contains("let outcome = discardTurn(rec, trash: trash, holds: &holds)"),
-                "Discard's loop no longer gives each file its own turn")
-        let turn = try #require(discard.range(of: "private func discardTurn("))
-        let trash = try #require(discard.range(of: "try trash(url)", range: turn.upperBound..<discard.endIndex))
-        let realTrash = try #require(discard.range(of: "try FileManager.default.trashItem(", range: turn.upperBound..<discard.endIndex))
-        // One check per file, read fresh at its turn; its own snapshot words
-        // the refusal (QA r1 on 680157026).
-        let perFile = String(discard[turn.upperBound..<min(trash.lowerBound, realTrash.lowerBound)])
-        #expect(perFile.contains("let check = archiveRemovalCheck()\n")
-                    && perFile.contains("if let held = check?.bulkRefusal(forPath: path) {"),
-                "Discard no longer asks the gate for each file before it trashes it")
+        #expect(discard.contains("await deleteConfirmedJunk(requested, mode: .toTrash, reason: .workbench, guard: fileGuard)"),
+                "Discard no longer goes through the one Trash engine")
+        #expect(!discard.contains("trashItem(") && !discard.contains("FileManager"),
+                "Discard moves files on its own again")
+        let engine = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
+        #expect(engine.contains("if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {")
+                    && engine.contains("readOnlyVolumes: readOnlyVolumeProtection()"),
+                "the engine no longer asks the gate at each file's turn")
         // Junk Delete's sheet and Prune Apply both move files ONLY through
         // deleteConfirmedJunk, whose loop re-reads the marks for every file.
         // The sheet runs its FROZEN set (design R1, 2026-10-09).

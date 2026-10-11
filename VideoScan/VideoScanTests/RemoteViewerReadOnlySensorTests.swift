@@ -486,18 +486,18 @@ struct RemoteViewerReadOnlySensorTests {
 
     /// QA round 1 (C): Triage › Under Construction › Discard trashed files
     /// on a viewer.
-    @Test func qaRedViewerModeRefusesDiscardWorkbenchAndLeavesTheFileOnDisk() throws {
+    @Test func qaRedViewerModeRefusesDiscardWorkbenchAndLeavesTheFileOnDisk() async throws {
         let root = tmp("discard")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let (model, rec, file) = try Self.junkFixture(in: root)
         rec.lifecycleStage = .workbench
         model.isReadOnly = true
-        var trashed: [URL] = []
+        let trashed = TrashCallLog()
 
-        let n = model.discardWorkbench([rec], trash: { trashed.append($0) })
+        let n = await model.discardWorkbench([rec], trash: trashed.operation)
 
-        #expect(trashed.isEmpty, "nothing may be trashed on a viewer")
+        #expect(trashed.count == 0, "nothing may be trashed on a viewer")
         #expect(n == 0)
         #expect(rec.purgedAt == nil)
         #expect(rec.lifecycleStage == .workbench)
@@ -514,7 +514,8 @@ struct RemoteViewerReadOnlySensorTests {
         // 2 → 1 (codex delete-engines F1, 2026-10-09): the engine's own
         // removeItem is gone; trashItem is its one file operation.
         "MediaOps/VideoScanModel+JunkDelete.swift": (1, nil, "junkDeletionRefusedOnViewer("),
-        "Catalog/VideoScanModel+Workbench.swift": (1, nil, "workbenchDiscardRefusedOnViewer("),
+        // Workbench Discard: no removal of its own since GH #143 — it calls
+        // deleteConfirmedJunk (listed with the callers below).
         "People/FamilyGroup.swift": (2, nil, "ViewerWriteGuard.check(\"FamilyGroupStore.moveToTrash\")"),
         "People/PersonEditSheet.swift": (1, nil, "ViewerWriteGuard.refuse(\"PersonEditSheet.deleteReferencePhoto\")"),
         // Delete Duplicates' removal step (trash + quarantine removal, and
@@ -684,7 +685,8 @@ struct RemoteViewerReadOnlySensorTests {
             }
         }
         #expect(callers == ["VideoScanModel+TrashSelection.swift",
-                            "VideoScanModel+PruneApply.swift", "VideoScanModel+JunkTrashSnapshot.swift"],
+                            "VideoScanModel+PruneApply.swift", "VideoScanModel+JunkTrashSnapshot.swift",
+                            "VideoScanModel+Workbench.swift"],   // GH #143; also refuses first on its own
                 "a new deleteConfirmedJunk caller: confirm it relies on the model's viewer guard, then add it here")
     }
 }

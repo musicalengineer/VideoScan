@@ -210,11 +210,11 @@ extension VideoScanModel {
     /// silent drop (design R6). A non-nil `finished` is the whole answer;
     /// otherwise `pending[i]` is file i's outcome when it is already
     /// decided, nil when it goes on to its turn.
-    func junkDeletionPreflight(_ requested: [VideoRecord])
+    func junkDeletionPreflight(_ requested: [VideoRecord], verb: String = "Delete Confirmed Junk")
         -> (pending: [JunkFileOutcome?], finished: JunkDeletionResult?) {
         if let refused = junkDeletionRefusedOnViewer(requested) { return ([], refused) }
         guard !requested.isEmpty else { return ([], .empty) }
-        let mayGo = Set(excludingMasterArchiveFiles(requested, verb: "Delete Confirmed Junk").map(ObjectIdentifier.init))
+        let mayGo = Set(excludingMasterArchiveFiles(requested, verb: verb).map(ObjectIdentifier.init))
         var pending = [JunkFileOutcome?](repeating: nil, count: requested.count)
         guard mayGo.count < requested.count else { return (pending, nil) }
         let archiveVolume = archiveVolumeProtection()
@@ -240,7 +240,7 @@ extension VideoScanModel {
         reason: RemovalReason = .junk,
         guard fileGuard: JunkDeletionGuard? = nil
     ) async -> JunkDeletionResult {
-        let (pending, finished) = junkDeletionPreflight(requested)
+        let (pending, finished) = junkDeletionPreflight(requested, verb: reason.doorVerb)
         if let finished { return finished }
 
         // The disk half's fixed inputs — all Sendable, so they may cross to

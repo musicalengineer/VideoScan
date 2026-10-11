@@ -101,3 +101,16 @@ func junkTrashScanTarget(_ path: String) -> CatalogScanTarget {
     t.isReachable = true
     return t
 }
+
+/// Records each URL handed to a Trash seam, thread-safely (the engine calls
+/// the seam from its disk half, off the main actor). Moves nothing.
+/// (`@unchecked Sendable` + a lock ≈ a C++ class guarded by a std::mutex.)
+final class TrashCallLog: @unchecked Sendable {
+    private let lock = NSLock()
+    private var handed: [URL] = []
+    var urls: [URL] { lock.withLock { handed } }
+    var count: Int { urls.count }
+    var names: [String] { urls.map(\.lastPathComponent) }
+    func record(_ url: URL) { lock.withLock { handed.append(url) } }
+    var operation: @Sendable (URL) throws -> Void { { [self] url in record(url) } }
+}

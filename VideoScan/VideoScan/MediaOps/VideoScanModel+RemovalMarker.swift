@@ -150,3 +150,12 @@ extension DeletionTier {
         }
     }
 }
+
+extension RemovalReason {
+    /// The verb the engine's up-front gate writes in its console lines for
+    /// this door ("Discard: left 1 file(s) alone — …"). Every Trash door but
+    /// Discard has always spoken as Delete Confirmed Junk.
+    var doorVerb: String {
+        self == .workbench ? "Discard" : "Delete Confirmed Junk"
+    }
+}

@@ -103,7 +103,7 @@ struct OneEngineDoorCharacterizationTests {
 
     // MARK: Workbench discard
 
-    @Test func workbenchDiscardMovesToTheTrashAndKeepsTheRow() throws {
+    @Test func workbenchDiscardMovesToTheTrashAndKeepsTheRow() async throws {
         let sb = try JunkTrashSandbox("char_wb"); defer { sb.cleanup() }
         let model = sb.model()
         let url = try sb.write("test_out.mov")
@@ -111,7 +111,7 @@ struct OneEngineDoorCharacterizationTests {
         rec.lifecycleStage = .workbench
         model.records = [rec]
 
-        let n = model.discardWorkbench([rec], trash: sb.trash.operation)
+        let n = await model.discardWorkbench([rec], trash: sb.trash.operation)
 
         #expect(n == 1)
         #expect(!FileManager.default.fileExists(atPath: url.path))
@@ -120,7 +120,7 @@ struct OneEngineDoorCharacterizationTests {
         #expect(rec.isPurged && rec.lifecycleStage == .trashed)
     }
 
-    @Test func workbenchDiscardHeldOnFailureLeavesFileAndRow() throws {
+    @Test func workbenchDiscardHeldOnFailureLeavesFileAndRow() async throws {
         let sb = try JunkTrashSandbox("char_wb_fail"); defer { sb.cleanup() }
         let model = sb.model()
         let url = try sb.write("test_out.mov")
@@ -129,7 +129,7 @@ struct OneEngineDoorCharacterizationTests {
         model.records = [rec]
         sb.trash.failEverything(with: Boom())
 
-        let n = model.discardWorkbench([rec], trash: sb.trash.operation)
+        let n = await model.discardWorkbench([rec], trash: sb.trash.operation)
 
         #expect(n == 0)
         #expect(FileManager.default.fileExists(atPath: url.path))
@@ -179,7 +179,7 @@ struct OneEngineDoorCharacterizationTests {
         let junk = await model.trashFrozenJunk(snapshot, fileOperation: trash.operation)
         #expect(!junk.items.contains { $0.outcome.isMoved }, "Delete Junk: \(junk.items.map(\.outcome))")
 
-        #expect(model.discardWorkbench([rec], trash: trash.operation) == 0, "Discard")
+        #expect(await model.discardWorkbench([rec], trash: trash.operation) == 0, "Discard")
         #expect(model.purgeRecords(ids: [rec.id]) == 0, "Remove from Catalog on FamilyArchive")
 
         #expect(trash.attempts.isEmpty, "nothing was handed to the Trash")

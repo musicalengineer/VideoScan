@@ -220,14 +220,14 @@ struct ArchiveVolumeProtectionTests {
         #expect(plan.refused.map(\.reason) == [.masterArchive, .offlineVolume])
     }
 
-    @Test func discardUnderConstructionLeavesArchiveVolumeFilesAlone() {
+    @Test func discardUnderConstructionLeavesArchiveVolumeFilesAlone() async {
         // The path does not exist, so even a regression trashes nothing
         // real; the record's state is what tells.
         let model = isolatedModel()
         designateFamilyArchive(model)
         let r = record("/Volumes/FamilyArchive/MoviesExpansion/test_archvol_missing_\(UUID().uuidString).mov")
         model.records = [r]
-        #expect(model.discardWorkbench([r]) == 0)
+        #expect(await model.discardWorkbench([r]) == 0)
         #expect(r.purgedAt == nil, "the row stays active — nothing was discarded")
     }
 
@@ -603,7 +603,8 @@ struct ArchiveVolumeProtectionSourceSensor {
         // 2 → 1 (codex delete-engines F1, 2026-10-09): trashItem only — the
         // engine has no removeItem of its own.
         "VideoScan/MediaOps/VideoScanModel+JunkDelete.swift": 1,
-        "VideoScan/Media/VideoScanModel+ProbeEngine.swift": 1, "VideoScan/Catalog/VideoScanModel+Workbench.swift": 1,
+        // Workbench Discard 1 → 0 (GH #143): a door onto deleteConfirmedJunk.
+        "VideoScan/Media/VideoScanModel+ProbeEngine.swift": 1,
         "VideoScanCore/AtomicFilePublish.swift": 2,
         // CyberBrainWriter.swift → CyberBrainWriter+Persistence.swift (7b919780, 2026-10-07):
         // the same 3 calls moved verbatim with the writer split — the temp file after a
@@ -808,11 +809,16 @@ struct ArchiveVolumeProtectionSourceSensor {
         let junk = try SourceTree.appSource(named: "VideoScanModel+JunkDelete.swift")
         // 2026-10-09: the choke point's excluded files become named holds
         // (one outcome per requested file), so the call is wrapped.
-        #expect(junk.contains("let mayGo = Set(excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")"))
+        // GH #143: one engine for every Trash door; the gate speaks with the
+        // door's verb ("Delete Confirmed Junk", or "Discard" for Workbench).
+        #expect(junk.contains("let mayGo = Set(excludingMasterArchiveFiles(requested, verb: verb)"))
+        #expect(junk.contains("junkDeletionPreflight(requested, verb: reason.doorVerb)"))
         #expect(junk.contains("archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe)"),
                 "the removal-time re-check sits in the detached pass")
         let bench = try SourceTree.appSource(named: "VideoScanModel+Workbench.swift")
-        #expect(bench.contains("let recs = excludingMasterArchiveFiles(requested, verb: \"Discard\")"))
+        #expect(bench.contains("await deleteConfirmedJunk(requested, mode: .toTrash, reason: .workbench, guard: fileGuard)"))
+        #expect(try SourceTree.appSource(named: "VideoScanModel+RemovalMarker.swift")
+                    .contains("self == .workbench ? \"Discard\" : \"Delete Confirmed Junk\""))
         let dups = try SourceTree.appSource(named: "VideoScanModel+Duplicates.swift")
         #expect(dups.contains("switch bulkDeleteRefusal(rec, volume: archiveVolume)"),
                 "authorizeDuplicateDeletion asks the one rule live")
