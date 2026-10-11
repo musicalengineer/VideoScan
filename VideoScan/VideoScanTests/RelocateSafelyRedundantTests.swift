@@ -136,16 +136,21 @@ struct RelocateSafelyRedundantTests {
 
     @Test
     func skippedWithWitnessCountsAsAccountedForRetire() {
-        let note = VideoScanModel.formatSafelyRedundantNote(stamp: "2026-10-11T12:00:00Z",
+        let here = "/Volumes/SanDisk/a.mov"
+        let note = VideoScanModel.formatSafelyRedundantNote(stamp: "2026-10-11T12:00:00Z", source: here,
                                                              witnesses: ["/Volumes/LaCie/a.mov"],
                                                              totalWitnessCount: 1)
-        #expect(VideoScanModel.isAccountedForRetire(archiveStage: .none, notes: note),
+        #expect(VideoScanModel.isAccountedForRetire(archiveStage: .none, notes: note, fullPath: here),
                 "a Bucket E skip leaves nothing on the drive to copy")
-        #expect(VideoScanModel.isAccountedForRetire(archiveStage: .manuallyDeleted, notes: ""),
+        #expect(!VideoScanModel.isAccountedForRetire(archiveStage: .none, notes: note, fullPath: "/Volumes/Other/a.mov"),
+                "the note travelled with the record to another path — it says nothing about the file there")
+        #expect(VideoScanModel.isAccountedForRetire(archiveStage: .manuallyDeleted, notes: "", fullPath: here),
                 "Bucket B (source missing) is accounted for")
-        #expect(!VideoScanModel.isAccountedForRetire(archiveStage: .none, notes: "Reconcile x: source-side move detected"),
+        #expect(!VideoScanModel.isAccountedForRetire(archiveStage: .none, notes: "Reconcile x: source-side move detected",
+                                                     fullPath: here),
                 "an ordinary live record still needs copying")
         #expect(VideoScanModel.parseWitnessesFromNote(note) == ["/Volumes/LaCie/a.mov"])
+        #expect(VideoScanModel.ownSkipWitnesses(notes: note, fullPath: here) == ["/Volumes/LaCie/a.mov"])
     }
 
     // MARK: - Toggle OFF makes the rule a no-op

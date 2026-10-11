@@ -21795,6 +21795,7 @@
         "onlyTheReceiptIsWritten",
         "poisonedLedgerRefuses",
         "receiptIndex",
+        "reverseLeavesASurvivingKeeperVisible",
         "sharedStoreRefuses",
         "truthTable"
       ]
@@ -21862,6 +21863,23 @@
         "stampMatchesRequiresEveryField",
         "twoFileDigestMatchesTheArchiveSha256",
         "unreadableKeeperIsRefused"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/SkippedRecordNeverVouchesTests.swift",
+      "stage": "unit",
+      "suites": [
+        "SkippedRecordNeverVouchesTests",
+        "RetireAccountedForTests"
+      ],
+      "tests": [
+        "aCarriedWitnessNoteDoesNotMakeTheOnlyCopyAccountedFor",
+        "aRecordAnEarlierMigrateSkippedIsNotASurvivingCopy",
+        "aSkipWhoseWitnessLeftTheCatalogIsNotAccountedFor",
+        "aSkippedRecordIsNeverARelinkSource",
+        "retiringReprovesAWitnessOnDiskAndRefusesWhenItIsGone"
       ]
     },
     {
@@ -28487,6 +28505,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/SignatureVerificationOneSidedTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/SkippedRecordNeverVouchesTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

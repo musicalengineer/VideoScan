@@ -145,14 +145,26 @@ extension VideoScanModel {
     /// still grep-able. The witness list is the same capped sample carried
     /// on the `SafelyRedundantEntry`. Pure & nonisolated so tests can call
     /// without a VideoScanModel.
+    ///
+    /// `source` (2026-10-11, QA round 1): the path the skip was decided FOR.
+    /// The note travels with the record when a later Migrate copies or a
+    /// relink moves it; only a line whose source is the record's CURRENT
+    /// path means "this file, here, was skipped" (`ownSkipWitnesses`).
+    /// Older lines carry no source and never count.
     nonisolated static func formatSafelyRedundantNote(stamp: String,
+                                                       source: String? = nil,
                                                        witnesses: [String],
                                                        totalWitnessCount: Int) -> String {
         // Quote each witness path and join — avoids accidental field-break
         // on a literal comma in a filename. JSON-array shape, but inline.
-        let quoted = witnesses.map { "\"\($0.replacingOccurrences(of: "\"", with: "\\\""))\"" }
-                              .joined(separator: ", ")
-        return "Reconcile \(stamp): reason=dup-on-other-volume witnesses=[\(quoted)] totalWitnesses=\(totalWitnessCount)"
+        let quoted = witnesses.map(quoteNotePath).joined(separator: ", ")
+        // nil = the pre-2026-10-11 shape (tests describing legacy notes).
+        let sourceField = source.map { " source=\(quoteNotePath($0))" } ?? ""
+        return "Reconcile \(stamp): reason=dup-on-other-volume\(sourceField) witnesses=[\(quoted)] totalWitnesses=\(totalWitnessCount)"
+    }
+
+    nonisolated static func quoteNotePath(_ path: String) -> String {
+        "\"\(path.replacingOccurrences(of: "\"", with: "\\\""))\""
     }
 
     /// Build the `(source → witness)` sample list for the post-Apply
@@ -408,6 +420,7 @@ extension VideoScanModel {
                 let r = entry.rec
                 r.notes = appendNote(r.notes,
                     Self.formatSafelyRedundantNote(stamp: stamp(),
+                                                   source: r.fullPath,
                                                    witnesses: entry.witnesses,
                                                    totalWitnessCount: entry.totalWitnessCount))
                 relocateLog.write(ReconcileLogLines.safelyRedundantLine(path: r.fullPath,
@@ -784,7 +797,8 @@ extension VideoScanModel {
     /// Internal so tests can drive the same logic directly. See
     /// docs/design/relocate_volume_plan.md §1B.
     func maybeOfferRetire(for volumeRootPath: String) {
-        guard Self.shouldOfferRetire(volumeRootPath: volumeRootPath, in: records) else {
+        let retiredRoots = scanTargets.filter { $0.isRetired && !$0.searchPath.isEmpty }.map(\.searchPath)
+        guard Self.shouldOfferRetire(volumeRootPath: volumeRootPath, in: records, retiredRoots: retiredRoots) else {
             return
         }
         // Skip the offer when the volume is already retired (idempotency

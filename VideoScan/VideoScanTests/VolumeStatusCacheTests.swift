@@ -238,7 +238,7 @@ struct VolumeStatusCacheTests {
         let records: [VolumeStatusRecordSnap] = (0..<100_000).map { i in
             VolumeStatusRecordSnap(
                 fullPath: "\(volumes[i % volumes.count])/dir\(i % 37)/clip\(i).mov",
-                isDisposed: i % 5 == 0,
+                isManuallyDeleted: i % 5 == 0,
                 originVolume: nil,
                 originalFullPath: nil,
                 notes: nil)

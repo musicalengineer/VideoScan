@@ -31,7 +31,8 @@ import os
 //   * archive copies are app-managed: a record with derivationKind ==
 //     archivePromotion, any record under the Master Archive root, and any
 //     ADDED file under the Master Archive root never relink in either
-//     direction. Retire witnesses (archiveStage == .manuallyDeleted) and
+//     direction. Retire witnesses (`isAccountedForRetire`: labelled
+//     .manuallyDeleted, or skipped there by Migrate — its own skip note) and
 //     records under RETIRED targets are never candidates either — a shelf
 //     drive being offline is not evidence its file moved;
 //   * a relink stamps `originalFullPath` (first move only — historical
@@ -353,7 +354,11 @@ extension VideoScanModel {
     func isRelinkProtectedCandidate(_ rec: VideoRecord, protected: RelinkProtectedRoots) -> Bool {
         if rec.purgedAt != nil { return true }
         if rec.derivationKind == ArchivePromotion.derivationKind { return true }
-        if rec.archiveStage == .manuallyDeleted { return true }
+        // A retire witness: labelled missing, or skipped here by Migrate
+        // (the one predicate — a skip no longer labels the file).
+        if Self.isAccountedForRetire(archiveStage: rec.archiveStage, notes: rec.notes, fullPath: rec.fullPath) {
+            return true
+        }
         return protected.contains(rec.fullPath)
     }
 
