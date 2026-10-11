@@ -241,6 +241,35 @@ struct ShowAgainApplyTests {
                 "the reverse never touches media either")
     }
 
+    @Test("put back never re-hides a file that has since become its group's surviving keeper, nor relabels a removed row")
+    func reverseLeavesASurvivingKeeperVisible() async throws {
+        let sb = try ShowAgainSandbox.make("reverse_keeper"); defer { sb.cleanup() }
+        let keeper = try sb.record("keeper.mov", bytes: 900)
+        let extra = try sb.record("extra.mov", bytes: 900)
+        let removed = try sb.record("removed.mov", bytes: 901)
+        let reviewed = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
+        let run = await sb.model.applyShowAgain(reviewed: reviewed, disk: ShowAgainSandbox.onlineRealStat)
+        let receipt = try #require(run.receiptURL)
+        try #require(run.shown.count == 3)
+        // After the run: keeper + extra became a duplicate group; the extra
+        // was purged (trashed); another shown file was removed from the catalog.
+        let group = UUID()
+        keeper.duplicateGroupID = group; keeper.duplicateDisposition = .keep
+        extra.duplicateGroupID = group; extra.duplicateDisposition = .extraCopy
+        extra.purgedAt = Date()
+        removed.purgedAt = Date()
+
+        let rev = await sb.model.reverseShowAgain(receiptURL: receipt)
+
+        #expect(keeper.archiveStage == .none, "the surviving keeper was hidden again")
+        #expect(extra.archiveStage == .none, "a purged row was relabelled")
+        #expect(removed.archiveStage == .none, "a purged row was relabelled")
+        #expect(rev.restored == 0 && rev.skipped.count == 3, "\(rev)")
+        let log = sb.catalogLogText()
+        #expect(log.contains("label NOT put back: \(keeper.fullPath)") && log.contains("surviving copy"), "\(log)")
+        #expect(log.contains("label NOT put back: \(extra.fullPath)") && log.contains("removed from the catalog"))
+    }
+
     @Test("a record changed between the review and the run stays as it is")
     func changedSinceReview() async throws {
         let sb = try ShowAgainSandbox.make("changed"); defer { sb.cleanup() }

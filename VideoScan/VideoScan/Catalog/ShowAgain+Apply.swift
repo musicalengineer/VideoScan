@@ -247,13 +247,14 @@ extension VideoScanModel {
         }
         var out = ShowAgainReverseResult()
         var lines: [String] = []
+        let activeInGroup = showAgainActiveGroupCounts()
         for change in file.changes {
-            guard let rec = record(forID: change.id), rec.fullPath == change.path,
-                  rec.archiveStage.rawValue == change.to else {
+            if let why = showAgainReverseHold(change, activeInGroup: activeInGroup) {
                 out.skipped.append(change.path)
-                lines.append("[show-again] label NOT put back: \(change.path) id=\(change.id.uuidString) — the record changed since (left as it is)")
+                lines.append("[show-again] label NOT put back: \(change.path) id=\(change.id.uuidString) — \(why) (left as it is)")
                 continue
             }
+            guard let rec = record(forID: change.id) else { continue }
             rec.archiveStage = ShowAgainRules.falseLabel
             searchIndex.update(rec)
             out.restored += 1
@@ -265,6 +266,34 @@ extension VideoScanModel {
         if !saved { saveCatalogDebounced() }
         showAgainNote("\(p): put the labels back — OUTCOME — \(out.restored.formatted()) put back, \(out.skipped.count.formatted()) left as they are\(saved ? "" : " (catalog save not confirmed; it will be retried)"). Safety copy: \(snapshot).")
         return out
+    }
+
+    /// Why one change must NOT be reversed (QA round 1): the record changed
+    /// since; it left the catalog view (purged, set aside, superseded —
+    /// relabelling a removed row writes a label nobody sees and hides it from
+    /// Restore); or it is now the surviving copy of its duplicate group (its
+    /// group's other copies left after the run — hiding it again would hide
+    /// the footage). nil = put the label back.
+    func showAgainReverseHold(_ change: ShowAgainReceiptFile.Change, activeInGroup: [UUID: Int]) -> String? {
+        guard let rec = record(forID: change.id), rec.fullPath == change.path,
+              rec.archiveStage.rawValue == change.to else { return "the record changed since" }
+        if rec.isPurged || rec.isSetAside || rec.isSuperseded {
+            return "it was removed from the catalog view since"
+        }
+        if rec.duplicateDisposition == .keep, let group = rec.duplicateGroupID, (activeInGroup[group] ?? 0) <= 1 {
+            return "it is now the surviving copy of its duplicate group"
+        }
+        return nil
+    }
+
+    /// Active (not purged / set aside / superseded) records per duplicate
+    /// group — one O(records) pass per reverse.
+    func showAgainActiveGroupCounts() -> [UUID: Int] {
+        var counts: [UUID: Int] = [:]
+        for r in records where !r.isPurged && !r.isSetAside && !r.isSuperseded {
+            if let g = r.duplicateGroupID { counts[g, default: 0] += 1 }
+        }
+        return counts
     }
 
     private func showAgainReverseRefused(_ why: String) -> ShowAgainReverseResult {
