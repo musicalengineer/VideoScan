@@ -393,12 +393,12 @@ enum PersonEvaluationCLI {
 
     // MARK: Value parsers (each names the one thing it checks)
 
-    static func floatValue(_ raw: String, or message: String) throws -> Float {
+    private static func floatValue(_ raw: String, or message: String) throws -> Float {
         guard let number = Float(raw) else { throw CLIError(message) }
         return number
     }
 
-    static func positiveInt(_ raw: String, or message: String) throws -> Int {
+    private static func positiveInt(_ raw: String, or message: String) throws -> Int {
         // Int() rejects floats, NaN, hex, empty, and overflow — every
         // malformed spelling fails here rather than defaulting.
         guard let number = Int(raw), number > 0 else { throw CLIError(message) }
