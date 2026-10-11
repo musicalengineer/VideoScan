@@ -124,6 +124,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let combinedFromPairID: UUID?
     public let scanContext: ScanContext
     public let purgedAt: Date?
+    public let removal: RemovalMarker?   // GH #143 — purgedAt is derived from it
     public let embeddedCreationDate: Date?
     public let embeddedCreationSource: String?
     public let originMake: String?
@@ -258,6 +259,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         combinedFromPairID          = r.combinedFromPairID
         scanContext                 = r.scanContext
         purgedAt                    = r.purgedAt
+        removal                     = r.removal
         embeddedCreationDate        = r.embeddedCreationDate
         embeddedCreationSource      = r.embeddedCreationSource
         originMake                  = r.originMake
@@ -446,6 +448,10 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // for the (vast majority) of records that are never purged, and means
         // un-purging a record makes its JSON byte-identical to before purge.
         try c.encodeIfPresent(purgedAt, forKey: .purgedAt)
+        // GH #143: the removal marker, only when present. `purgedAt` above is
+        // still written (derived from it) so an older build keeps hiding the
+        // row; restoring a row drops both keys.
+        try c.encodeIfPresent(removal, forKey: .removal)
         // Embedded creation date + origin (2026-08-16): keys written only
         // when present — records without a container stamp (every legacy
         // record) round-trip byte-identical.

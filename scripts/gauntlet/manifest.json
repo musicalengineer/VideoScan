@@ -26712,6 +26712,26 @@
         "workbenchDiscardHeldOnFailureLeavesFileAndRow",
         "workbenchDiscardMovesToTheTrashAndKeepsTheRow"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RemovalMarkerMigrationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RemovalMarkerMigrationTests"
+      ],
+      "tests": [
+        "a100kCatalogMigratesOnLoadWithinBudget",
+        "aDamagedOrUnknownMarkerFallsBackToTheLegacyFields",
+        "aPoisonedCatalogFileStillLoadsEveryRow",
+        "aPreMarkerCatalogIsConvertedOnLoad",
+        "everyLegacyCombinationMapsToExactlyTheRuledState",
+        "everyStateRoundTripsAndPurgedAtStaysOnDiskForAnOlderBuild",
+        "purgedAtIsDerivedAndItsSetterIsAShim",
+        "theMigrationTableCellByCell",
+        "trashEmptiedIsRecordedOnceAndOnlyForAKnownTrashPath"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -29161,6 +29181,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/OneEngineDoorCharacterizationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/RemovalMarkerMigrationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],

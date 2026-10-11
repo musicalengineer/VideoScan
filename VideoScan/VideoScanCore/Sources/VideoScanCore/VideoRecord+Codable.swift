@@ -61,6 +61,7 @@ extension VideoRecord {
         case sourceHost
         case scanContext
         case purgedAt
+        case removal                 // GH #143, additive
         case setAsideReason
         case drmProtected
         case needsReformat
