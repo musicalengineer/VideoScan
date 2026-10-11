@@ -125,7 +125,7 @@ extension VideoScanModel {
     /// on a purged row when "Show removed" is on. Returns true on success.
     @discardableResult
     func restoreRecord(id: UUID) -> Bool {
-        guard let rec = records.first(where: { $0.id == id }),
+        guard let rec = record(forID: id),
               rec.purgedAt != nil else { return false }
         returnToLive(rec)
         CorrelationScorer.revalidateExistingPairs(in: records)
@@ -158,8 +158,11 @@ extension VideoScanModel {
         guard let snap = lastPurgedBatch else { return false }
         var restored = 0
         var restoredRecs: [VideoRecord] = []
+        // The id index, not a linear search per id: undoing a 10k-row
+        // Remove over a 100k catalog was O(n·m) — ~25 s on the M4 (GH #143
+        // scale test). (≈ a hash-map lookup instead of std::find per key.)
         for id in snap.ids {
-            if let rec = records.first(where: { $0.id == id }),
+            if let rec = record(forID: id),
                rec.purgedAt != nil {
                 returnToLive(rec)
                 restored += 1

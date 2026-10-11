@@ -26766,6 +26766,16 @@
         "onlyTheEngineWritesTheMarker",
         "quarantineAndDeleteIsGoneAndTheDefaultDisposalIsTheTrash"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/OneEngineMediaMatrixAndScaleTests.swift",
+      "stage": "unit",
+      "suites": [
+        "OneEngineMediaMatrixAndScaleTests"
+      ],
+      "tests": []
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -29227,6 +29237,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/OneEngineSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineMediaMatrixAndScaleTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
