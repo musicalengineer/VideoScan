@@ -176,7 +176,9 @@ extension VideoScanModel {
                 // Only ENOENT on a reachable volume retires a record.
                 unconfirmed.append((rec, root.batchID, why))
             case .absent:
-                rec.purgedAt = now
+                // ENOENT on a reachable volume: the file is gone — the one
+                // removal marker says so (GH #143), the row stays.
+                Self.stampRemoval(rec, .missing(noticedAt: now, lastSeen: nil, reason: .angelCompanion))
                 retired.append((rec, root.batchID))
             }
         }
