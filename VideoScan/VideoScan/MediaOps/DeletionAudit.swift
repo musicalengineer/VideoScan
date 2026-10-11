@@ -68,7 +68,8 @@ struct DeletionAuditRow: Sendable, Equatable {
 
 /// The per-run receipt file.
 final class DeletionReceipt: @unchecked Sendable {
-    enum Kind: String, Sendable { case junk, duplicates }
+    /// `workbench` = Triage › Under Construction › Discard (B1, 2026-10-11).
+    enum Kind: String, Sendable { case junk, duplicates, workbench }
 
     let url: URL
     private let lock = NSLock()

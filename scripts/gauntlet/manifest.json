@@ -23942,6 +23942,29 @@
     },
     {
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/WorkbenchDiscardTrashFailureTests.swift",
+      "stage": "regression",
+      "suites": [
+        "RestoreResetsTrashedStageTests",
+        "SwallowedTrashThenPurgeSensorTests",
+        "WorkbenchDiscardTrashFailureTests"
+      ],
+      "tests": [
+        "aFileWhoseDriveIsNotConnectedIsLeftAloneAsOffline",
+        "aSuccessfulTrashStillStampsTheRecordAndWritesTheReceipt",
+        "aTrashThatThrowsLeavesTheRecordUntouchedAndCountsFailed",
+        "anAlreadyMissingFileOnAConnectedDriveIsPurgedWithoutATrashCall",
+        "detectorCatchesTheOldDiscard",
+        "discardIsAudited",
+        "noAppSourceStampsAfterASwallowedTrash",
+        "oneFailureDoesNotStopTheBatchAndOnlyTheMovedFileIsStamped",
+        "restoreKeepsALiveStageItAlreadyHad",
+        "restoreRecordClearsTheTrashedStage",
+        "undoLastPurgeClearsTheTrashedStage"
+      ]
+    },
+    {
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/WorkerSlotCancellationTests.swift",
       "stage": "unit",
       "suites": [
@@ -29482,7 +29505,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 20,
+      "expected_floor": 31,
       "name": "regression",
       "selectors": [
         "VideoScanTests/AdvRollCallUndatedLivingParentTests",
@@ -29491,9 +29514,12 @@
         "VideoScanTests/CatalogSearchBudgetSensorTests",
         "VideoScanTests/JunkDeleteActionRegressionTests",
         "VideoScanTests/OriginTrailWestIndiesTests",
+        "VideoScanTests/RestoreResetsTrashedStageTests",
+        "VideoScanTests/SwallowedTrashThenPurgeSensorTests",
         "VideoScanTests/UnreadFamilyScopeSurnameShapeTests",
         "VideoScanTests/VerifyDateSensorReviewTests",
-        "VideoScanTests/ViewBuilderArityCrashProbeTests"
+        "VideoScanTests/ViewBuilderArityCrashProbeTests",
+        "VideoScanTests/WorkbenchDiscardTrashFailureTests"
       ]
     },
     {

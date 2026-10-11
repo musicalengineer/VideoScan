@@ -345,13 +345,19 @@ struct BulkVerbRemovalBoundaryTests {
     @Test func everyBulkVerbAsksTheGateWhereTheFileGoes() throws {
         // Workbench Discard: the removal-time check, per file, before the Trash.
         let discard = try SourceTree.appCode(named: "VideoScanModel+Workbench.swift")
+        // Since B1 (2026-10-11) each file's turn is `discardTurn`, called
+        // from the loop; the gate is asked there, before either Trash call.
         let loop = try #require(discard.range(of: "for rec in recs {"))
-        let trash = try #require(discard.range(of: "if (try? trash(url)) != nil", range: loop.upperBound..<discard.endIndex))
+        #expect(discard[loop.upperBound...].contains("let outcome = discardTurn(rec, trash: trash, holds: &holds)"),
+                "Discard's loop no longer gives each file its own turn")
+        let turn = try #require(discard.range(of: "private func discardTurn("))
+        let trash = try #require(discard.range(of: "try trash(url)", range: turn.upperBound..<discard.endIndex))
+        let realTrash = try #require(discard.range(of: "try FileManager.default.trashItem(", range: turn.upperBound..<discard.endIndex))
         // One check per file, read fresh at its turn; its own snapshot words
         // the refusal (QA r1 on 680157026).
-        let perFile = String(discard[loop.upperBound..<trash.lowerBound])
+        let perFile = String(discard[turn.upperBound..<min(trash.lowerBound, realTrash.lowerBound)])
         #expect(perFile.contains("let check = archiveRemovalCheck()\n")
-                    && perFile.contains("if let held = check?.bulkRefusal(forPath: rec.fullPath) {"),
+                    && perFile.contains("if let held = check?.bulkRefusal(forPath: path) {"),
                 "Discard no longer asks the gate for each file before it trashes it")
         // Junk Delete's sheet and Prune Apply both move files ONLY through
         // deleteConfirmedJunk, whose loop re-reads the marks for every file.

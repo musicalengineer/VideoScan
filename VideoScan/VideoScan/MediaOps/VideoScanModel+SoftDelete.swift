@@ -111,13 +111,24 @@ extension VideoScanModel {
         purgeRecords(ids: Set(Self.unreadableExtensionlessIDs(in: records)))
     }
 
+    /// A restored row is LIVE again (B4, 2026-10-11): `purgedAt` cleared,
+    /// and a post-delete stage (Trashed / Deleted) back to `.cataloged`.
+    /// Any other stage (Archived, Workbench, …) is one the purge never
+    /// changed, so it is kept.
+    private func returnToLive(_ rec: VideoRecord) {
+        rec.purgedAt = nil
+        if rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently {
+            rec.lifecycleStage = .cataloged
+        }
+    }
+
     /// Clear `purgedAt` on a single record. Used by the right-click menu
     /// on a purged row when "Show removed" is on. Returns true on success.
     @discardableResult
     func restoreRecord(id: UUID) -> Bool {
         guard let rec = records.first(where: { $0.id == id }),
               rec.purgedAt != nil else { return false }
-        rec.purgedAt = nil
+        returnToLive(rec)
         CorrelationScorer.revalidateExistingPairs(in: records)
         saveCatalogDebounced()
         ledgerRestored([rec], by: .rick)
@@ -151,7 +162,7 @@ extension VideoScanModel {
         for id in snap.ids {
             if let rec = records.first(where: { $0.id == id }),
                rec.purgedAt != nil {
-                rec.purgedAt = nil
+                returnToLive(rec)
                 restored += 1
                 restoredRecs.append(rec)
             }
