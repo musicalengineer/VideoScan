@@ -428,7 +428,13 @@ struct ShowAgainSensorTests {
         #expect(ShowAgainRules.falseLabel == .manuallyDeleted)
         #expect(ShowAgainRules.liveLabel == .none)
         let apply = try SourceTree.appSource(named: "ShowAgain+Apply.swift")
-        let assignments = apply.split(separator: "\n").filter { $0.contains("rec.") && $0.contains(" = ") && !$0.contains("==") }
+        // A property assignment on a record: `rec.<field> = …` (not `==`, not a binding).
+        let assignment = try NSRegularExpression(pattern: #"\brec\.[A-Za-z_.]+ = "#)
+        let assignments = apply.split(separator: "\n").filter {
+            let line = String($0)
+            return assignment.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil
+        }
+        #expect(!assignments.isEmpty, "the sensor must see the label assignments it pins")
         #expect(assignments.allSatisfy { $0.contains("rec.archiveStage = ShowAgainRules.") },
                 "the run and its reverse assign nothing but the label: \(assignments)")
     }
