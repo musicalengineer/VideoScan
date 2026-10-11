@@ -560,9 +560,11 @@ extension CatalogStorageTotals {
     var onlineDisplay: String { Self.displaySize(onlineBytes) }
     var uniqueDisplay: String { Self.displaySize(uniqueBytes) }
 
-    /// The honesty caption under the gross figure (Rick 2026-08-18):
+    /// The honesty caption under the gross figure (Rick 2026-08-18; worded
+    /// 2026-10-11 so it no longer reads like the Trash — none of these files
+    /// was ever moved there; the footer's "Review…" link shows them again):
     ///
-    ///     "+ 1.3 TB marked deleted, still on disk"
+    ///     "+ 1.3 TB hidden by a “deleted” label — never removed, still on disk"
     ///
     /// Present only when there is something to say. Once the off-main
     /// probe has reported, the figure is the bytes whose file EXISTS
@@ -573,10 +575,10 @@ extension CatalogStorageTotals {
     var manuallyDeletedCaption: String? {
         if let onDisk = manuallyDeletedOnDiskBytes {
             guard onDisk > 0 else { return nil }
-            return "+ \(Self.displaySize(onDisk)) marked deleted, still on disk"
+            return "+ \(Self.displaySize(onDisk)) hidden by a “deleted” label — never removed, still on disk"
         }
         guard manuallyDeletedBytes > 0 else { return nil }
-        return "+ \(Self.displaySize(manuallyDeletedBytes)) marked deleted (may still be on disk)"
+        return "+ \(Self.displaySize(manuallyDeletedBytes)) hidden by a “deleted” label (checking the disk…)"
     }
 
     /// The parenthetical beside the unique figure.
@@ -626,8 +628,8 @@ extension CatalogStorageTotals {
         ]
         if manuallyDeletedFiles > 0 {
             lines.append("")
-            lines.append("Not counted above: \(manuallyDeletedFiles) records marked")
-            lines.append("Manually Deleted (\(Self.displaySize(manuallyDeletedBytes)))"
+            lines.append("Not counted above: \(manuallyDeletedFiles) records hidden by a")
+            lines.append("“deleted” label (\(Self.displaySize(manuallyDeletedBytes)); none moved to the Trash)"
                          + (manuallyDeletedOnDiskBytes.map {
                              " — \(Self.displaySize($0)) still on disk (\(manuallyDeletedOnDiskFiles) files)"
                            } ?? " — on-disk check pending"))

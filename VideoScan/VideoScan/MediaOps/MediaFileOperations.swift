@@ -378,6 +378,16 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let fingerprintBackfill = Self("fingerprintBackfill", hasDetailView: true,
         style: .init(badge: "Fingerprint", logVerb: "fingerprint pictures", fill: .init(0.00, 0.00, 0.58)))
 
+    // Show Again (2026-10-11) — sage: a catalog-label repair, calm on
+    // purpose (it never touches a file). Δ ≥ 0.26 from every other fill
+    // (nearest: Rebuild's brown / Footage's graphite), contrast vs white ≈ 3.9.
+    /// "Show these files again" (Rick 2026-10-11): clears a false
+    /// `.manuallyDeleted` label from files that are on disk at the catalog's
+    /// size with no Trash receipt. Label only — no media is read or written.
+    /// ShowAgainJob.
+    static let showAgain = Self("showAgain", hasDetailView: true,
+        style: .init(badge: "Show Again", logVerb: "show again", fill: .init(0.40, 0.55, 0.30)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -386,6 +396,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .trim, .balanceAudio, .rebuildAudio, .verifyAudio, .verifyVideo, .checkMedia, .repair,
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
+        .showAgain,
     ]
 
     /// Badge text — rendered in small caps by the row view.
