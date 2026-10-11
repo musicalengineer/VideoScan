@@ -26748,6 +26748,24 @@
         "restoringAnOldDeletedLabelRowClearsTheLabel",
         "trashEmptiedIsRecordedFromAStat"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/OneEngineSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "OneEngineSensorTests"
+      ],
+      "tests": [
+        "aQuarantinedDuplicateWithNoDisposalNamedGoesToTheTrash",
+        "everyRemovalStateIsReachableFromADoor",
+        "noFileLeavesExceptThroughReviewedCode",
+        "noRowIsDeletedOutsideCatalogRepair",
+        "onlyTheEngineAndNamedDoorsUseTheFinderTrash",
+        "onlyTheEngineWritesTheMarker",
+        "quarantineAndDeleteIsGoneAndTheDefaultDisposalIsTheTrash"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -29205,6 +29223,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/OneRemovalShapeTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
