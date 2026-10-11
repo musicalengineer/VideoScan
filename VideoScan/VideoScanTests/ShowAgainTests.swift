@@ -270,6 +270,23 @@ struct ShowAgainApplyTests {
         #expect(log.contains("label NOT put back: \(extra.fullPath)") && log.contains("removed from the catalog"))
     }
 
+    @Test("put back holds a file that is now the only active member of its duplicate group, whatever its disposition")
+    func reverseHoldsTheSoleGroupMemberAnyDisposition() async throws {
+        let sb = try ShowAgainSandbox.make("reverse_sole"); defer { sb.cleanup() }
+        let a = try sb.record("a.mov", bytes: 700)
+        let b = try sb.record("b.mov", bytes: 701)
+        let reviewed = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
+        let run = await sb.model.applyShowAgain(reviewed: reviewed, disk: ShowAgainSandbox.onlineRealStat)
+        let receipt = try #require(run.receiptURL)
+        // a is marked an extra copy, but its keeper left the catalog after the run.
+        let group = UUID()
+        a.duplicateGroupID = group; a.duplicateDisposition = .extraCopy
+        let rev = await sb.model.reverseShowAgain(receiptURL: receipt)
+        #expect(a.archiveStage == .none, "the group's last active copy was hidden again")
+        #expect(b.archiveStage == .manuallyDeleted, "an ordinary file is put back")
+        #expect(rev.restored == 1 && rev.skipped == [a.fullPath], "\(rev)")
+    }
+
     @Test("a record changed between the review and the run stays as it is")
     func changedSinceReview() async throws {
         let sb = try ShowAgainSandbox.make("changed"); defer { sb.cleanup() }

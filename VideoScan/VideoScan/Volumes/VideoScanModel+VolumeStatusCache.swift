@@ -103,7 +103,9 @@ extension VolumeStatusRecordSnap {
     ///   * labelled `.manuallyDeleted` — disposed; every legacy witness line
     ///     (parsed once per record, cached in `legacyParsed`);
     ///   * skipped here — disposed only when one of its own witnesses is a
-    ///     live row off this drive.
+    ///     live row off this drive, and only THOSE witnesses are returned
+    ///     (QA round 2: a dead witness on a safe drive must not make the
+    ///     drive "safe to retire").
     func disposalWitnesses(onDriveAt rootKey: String, liveWitnesses: Set<String>,
                            legacyParsed: inout [String]?) -> [String]? {
         if isManuallyDeleted {
@@ -111,10 +113,8 @@ extension VolumeStatusRecordSnap {
             legacyParsed = parsed
             return parsed
         }
-        guard let own = skipWitnesses,
-              own.contains(where: { liveWitnesses.contains($0) && !PathScope.contains($0, within: rootKey) })
-        else { return nil }
-        return own
+        let held = (skipWitnesses ?? []).filter { liveWitnesses.contains($0) && !PathScope.contains($0, within: rootKey) }
+        return held.isEmpty ? nil : held
     }
 }
 

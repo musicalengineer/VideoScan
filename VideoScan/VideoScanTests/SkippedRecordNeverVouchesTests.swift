@@ -113,6 +113,9 @@ struct RetireAccountedForTests {
         let witnessFile = driveB.appendingPathComponent("clip.mov")
         let model = VideoScanModel(logDirectory: root.appendingPathComponent("logs"))
         model.catalogStore = CatalogStore(directory: root.appendingPathComponent("catalog"))
+        // Sibling temp folders share one disk: simulate separate drives
+        // (the device rule has its own test below).
+        model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
         let skipped = record(driveA.appendingPathComponent("clip.mov").path, size: 100)
         let witness = record(witnessFile.path, size: 100)
         skipped.notes = skipNote(source: skipped.fullPath, witness: witness.fullPath)
@@ -127,6 +130,51 @@ struct RetireAccountedForTests {
         try Data(repeating: 1, count: 100).write(to: witnessFile)
         #expect(model.retireVolume(at: driveA.path, reason: "test", witnesses: [witness.fullPath]))
         #expect(target.isRetired)
+    }
+
+    /// A two-drive temp fixture: a file on A, its witness on B (same device —
+    /// temp folders), a model whose catalog lives in the sandbox.
+    private func retireFixture(_ label: String) throws -> (root: URL, model: VideoScanModel, driveA: URL, witnessFile: URL) {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("test_retire_\(label)_\(UUID().uuidString)")
+        let driveA = root.appendingPathComponent("A"), driveB = root.appendingPathComponent("B")
+        for d in [driveA, driveB] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        let model = VideoScanModel(logDirectory: root.appendingPathComponent("logs"))
+        model.catalogStore = CatalogStore(directory: root.appendingPathComponent("catalog"))
+        model.scanTargets = [CatalogScanTarget(searchPath: driveA.path)]
+        return (root, model, driveA, driveB.appendingPathComponent("clip.mov"))
+    }
+
+    @Test("nit 6: a legacy labelled row with a witness note is re-proved on disk at retire time too")
+    func retireReprovesLegacyLabelledRowsWithAWitnessNote() throws {
+        let fx = try retireFixture("legacy"); defer { try? FileManager.default.removeItem(at: fx.root) }
+        fx.model.relocateWitnessIndependence = RelocateReconcile.witnessIsNotTheSourceFile
+        let legacy = record(fx.driveA.appendingPathComponent("clip.mov").path, size: 100)
+        legacy.archiveStage = .manuallyDeleted
+        legacy.notes = skipNote(source: nil, witness: fx.witnessFile.path)      // the old shape
+        let witness = record(fx.witnessFile.path, size: 100)
+        let missing = record(fx.driveA.appendingPathComponent("gone.mov").path)  // Bucket B, no note
+        missing.archiveStage = .manuallyDeleted
+        fx.model.records = [legacy, witness, missing]
+        #expect(!fx.model.retireVolume(at: fx.driveA.path, reason: "t", witnesses: []),
+                "the legacy row's only copy is not on disk")
+        try Data(repeating: 1, count: 100).write(to: fx.witnessFile)
+        #expect(fx.model.retireVolume(at: fx.driveA.path, reason: "t", witnesses: []),
+                "copy on disk; a plain missing row needs no witness")
+    }
+
+    @Test("nit 7: a witness on the same physical drive as the file is not a survivor at retire time")
+    func retireUsesTheDeviceRuleForWitnesses() throws {
+        let fx = try retireFixture("device"); defer { try? FileManager.default.removeItem(at: fx.root) }
+        // Production default: the device rule. Temp folders A and B share a device.
+        let skipped = record(fx.driveA.appendingPathComponent("clip.mov").path, size: 100)
+        try Data(repeating: 1, count: 100).write(to: fx.witnessFile)
+        let witness = record(fx.witnessFile.path, size: 100)
+        skipped.notes = skipNote(source: skipped.fullPath, witness: witness.fullPath)
+        fx.model.records = [skipped, witness]
+        #expect(!fx.model.retireVolume(at: fx.driveA.path, reason: "t", witnesses: [witness.fullPath]),
+                "the only witness is on the drive being retired's own device")
+        #expect(fx.model.retireRefusal(at: fx.driveA.path)?.contains("no longer have a copy") == true)
     }
 
     @Test func aSkippedRecordIsNeverARelinkSource() {

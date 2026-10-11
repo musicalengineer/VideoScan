@@ -280,7 +280,8 @@ extension VideoScanModel {
         if rec.isPurged || rec.isSetAside || rec.isSuperseded {
             return "it was removed from the catalog view since"
         }
-        if rec.duplicateDisposition == .keep, let group = rec.duplicateGroupID, (activeInGroup[group] ?? 0) <= 1 {
+        // Whatever its disposition (QA round 2): the group's last active copy.
+        if let group = rec.duplicateGroupID, (activeInGroup[group] ?? 0) <= 1 {
             return "it is now the surviving copy of its duplicate group"
         }
         return nil

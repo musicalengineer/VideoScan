@@ -702,7 +702,8 @@ struct VolumesWindow: View {
     private func presentRetireSheet(for target: CatalogScanTarget,
                                      status: VolumeRetireStatus) {
         let witnesses = VideoScanModel.aggregateRetiredWitnesses(
-            volumeRootPath: target.searchPath, in: model.records
+            volumeRootPath: target.searchPath, in: model.records,
+            retiredRoots: model.scanTargets.filter { $0.isRetired && !$0.searchPath.isEmpty }.map(\.searchPath)
         )
         retireOffer = PendingRetireOffer(
             volumeRootPath: target.searchPath,

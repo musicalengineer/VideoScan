@@ -163,8 +163,20 @@ extension VideoScanModel {
         return "Reconcile \(stamp): reason=dup-on-other-volume\(sourceField) witnesses=[\(quoted)] totalWitnesses=\(totalWitnessCount)"
     }
 
+    /// `"…"` with `\` → `\\`, `"` → `\"` and a newline → `\n`, so any path
+    /// (a backslash in a filename, a newline that would split the note line)
+    /// round-trips through `parseWitnessesFromNote` / `skipNoteSource`
+    /// (QA round 2).
     nonisolated static func quoteNotePath(_ path: String) -> String {
-        "\"\(path.replacingOccurrences(of: "\"", with: "\\\""))\""
+        let escaped = path.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+        return "\"\(escaped)\""
+    }
+
+    /// The inverse of `quoteNotePath`'s escapes for one escaped character.
+    nonisolated static func unescapedNoteChar(_ ch: Character) -> Character {
+        ch == "n" ? "\n" : ch
     }
 
     /// Build the `(source → witness)` sample list for the post-Apply
@@ -809,7 +821,8 @@ extension VideoScanModel {
             return
         }
         let total = Self.totalRecordsOn(volumeRootPath: volumeRootPath, in: records)
-        let witnesses = Self.aggregateRetiredWitnesses(volumeRootPath: volumeRootPath, in: records)
+        let witnesses = Self.aggregateRetiredWitnesses(volumeRootPath: volumeRootPath, in: records,
+                                                       retiredRoots: retiredRoots)
         let volumeName = (volumeRootPath as NSString).lastPathComponent
         pendingRetireOffer = PendingRetireOffer(
             volumeRootPath: volumeRootPath,
