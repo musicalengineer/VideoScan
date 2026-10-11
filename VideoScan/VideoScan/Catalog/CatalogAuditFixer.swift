@@ -20,11 +20,14 @@ enum CatalogAuditFixer {
         case .setPurgedStages(let ids):
             let want = Set(ids)
             var n = 0
-            for r in model.records where want.contains(r.id) && r.isPurged {
-                if r.lifecycleStage != .trashed && r.lifecycleStage != .deletedPermanently {
-                    r.lifecycleStage = .trashed
-                    n += 1
-                }
+            // Only a row whose file went to the Trash owes "Trashed" (GH #143):
+            // re-stamping its own marker writes the legacy mirror through the
+            // one engine. A row removed from the catalog keeps its stage.
+            for r in model.records where want.contains(r.id) {
+                guard let marker = r.removal, marker.state == .inTrash,
+                      r.lifecycleStage != .trashed && r.lifecycleStage != .deletedPermanently else { continue }
+                VideoScanModel.stampRemoval(r, marker)
+                n += 1
             }
             outcome = Outcome(changed: n, summary: "Set Trashed on \(n) purged record\(n == 1 ? "" : "s")")
 
