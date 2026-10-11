@@ -696,7 +696,7 @@ struct VolumesWindow: View {
     }
 
     /// Build the retire offer payload for the confirmation sheet. Pulls
-    /// the witness union from the volume's `.manuallyDeleted` records via
+    /// the witness union from the volume's accounted-for records via
     /// the existing aggregator, so the sheet shows exactly the same
     /// witnesses the post-Relocate flow would have shown.
     private func presentRetireSheet(for target: CatalogScanTarget,

@@ -11,7 +11,7 @@ import SwiftUI
 // Layout deliberately compact: headline + editable reason field +
 // (Retire / Skip) button bar. Witness count is shown but the list itself
 // isn't surfaced here — it's already in the relocate.log and the audit
-// trail notes on each `.manuallyDeleted` record.
+// trail notes on each accounted-for record (Bucket B label / Bucket E skip note).
 
 struct RelocateRetireSheet: View {
 

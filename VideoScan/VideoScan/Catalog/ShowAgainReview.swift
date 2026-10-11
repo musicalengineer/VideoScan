@@ -129,7 +129,7 @@ struct ShowAgainReviewSheet: View {
                 if let plan { onShowAgain(plan) }
                 dismiss()
             }
-            .keyboardShortcut(.defaultAction)
+            // No Return-key shortcut: a catalog-wide change is a deliberate click.
             .disabled(!(plan.map { $0.refusal == nil && $0.showCount > 0 } ?? false))
             .accessibilityIdentifier("showAgain.review.confirm")
         }

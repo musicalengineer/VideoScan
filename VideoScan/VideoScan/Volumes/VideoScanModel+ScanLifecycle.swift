@@ -26,7 +26,8 @@ extension VideoScanModel {
         }
         // §1B: retired volumes are off-limits for rescan. The destructive
         // bit is the scan-completion merge (commitScanResults) — it would
-        // wipe the Bucket-E `.manuallyDeleted` witness records that ARE the
+        // wipe the accounted-for records (Bucket B labels, Bucket E skip
+        // notes naming their witnesses) that ARE the
         // retire audit trail. The user has to Reinstate first via the
         // Volumes window if they really want to re-scan.
         guard !target.isRetired else {
