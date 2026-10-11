@@ -1,0 +1,212 @@
+// LedgerNarratorCharacterizationTests.swift
+// Golden sentences for LedgerNarrator.sentence, captured from the code as it
+// stood on 2026-10-10 BEFORE the per-kind template split (CCN 38). One row per
+// branch the narrator has: every event kind, every actor, and each detail
+// shape (missing key, empty value, known/unknown raw) that changes the words.
+// The date text is fixed so the table pins the template layer alone.
+//
+// If a sentence is meant to change, change the row here in the same commit —
+// this table is the contract the inspector's History section renders.
+
+import XCTest
+@testable import VideoScanCore
+
+final class LedgerNarratorCharacterizationTests: XCTestCase {
+
+    private typealias Kind = MediaLedgerEvent.Kind
+    private typealias Actor = MediaLedgerEvent.Actor
+
+    private static let eightFiles = (1...8).map { "f\($0).mov" }.joined(separator: "\n")
+
+    /// (kind, actor, detail, expected sentence for "Sep 12, 2026").
+    private static let golden: [(Kind, Actor, [String: String], String)] = [
+            (.cataloged, .app, [:],
+             "Cataloged on Sep 12, 2026."),
+            (.cataloged, .app, ["volume": "LaCie"],
+             "Cataloged from LaCie on Sep 12, 2026."),
+            (.cataloged, .rick, ["volume": ""],
+             "Cataloged on Sep 12, 2026."),
+            (.setAside, .tidy, ["reason": "still-image"],
+             "Tidy set it aside on Sep 12, 2026 — a photo, not a video."),
+            (.setAside, .rick, ["reason": "removed-from-catalog"],
+             "You removed it from the catalog on Sep 12, 2026 (file untouched)."),
+            (.setAside, .rick, ["reason": "removed-by-user"],
+             "You set it aside on Sep 12, 2026."),
+            (.setAside, .rick, ["reason": "weird"],
+             "You set it aside on Sep 12, 2026."),
+            (.setAside, .rick, [:],
+             "You set it aside on Sep 12, 2026."),
+            (.setAside, .tidy, ["reason": "music-format"],
+             "Tidy set it aside on Sep 12, 2026 — a music file."),
+            (.setAside, .tidy, ["reason": "unlinked-audio"],
+             "Tidy set it aside on Sep 12, 2026 — audio with no matching video."),
+            (.setAside, .app, ["reason": "live-photo-complement"],
+             "VideoScan set it aside on Sep 12, 2026 — a Live Photo movie half."),
+            (.putBack, .app, [:],
+             "VideoScan put it back in the catalog on Sep 12, 2026."),
+            (.putBack, .rick, [:],
+             "You put it back in the catalog on Sep 12, 2026."),
+            (.putBack, .tidy, [:],
+             "Tidy put it back in the catalog on Sep 12, 2026."),
+            (.putBack, .promote, [:],
+             "Promote put it back in the catalog on Sep 12, 2026."),
+            (.putBack, .angel, [:],
+             "Archive Angel put it back in the catalog on Sep 12, 2026."),
+            (.restored, .rick, [:],
+             "You restored it to the catalog on Sep 12, 2026."),
+            (.archived, .promote, ["archive": "FamilyArchive", "fixity": "abc", "verified": "true"],
+             "Archived to FamilyArchive on Sep 12, 2026, read back and verified."),
+            (.archived, .promote, ["verified": "false"],
+             "Archived to the Master Archive on Sep 12, 2026 (copy not yet verified)."),
+            (.archived, .angel, ["verified": "true"],
+             "Archived to the Master Archive on Sep 12, 2026, read back and verified. (Archive Angel)"),
+            (.archived, .angel, ["archive": "", "verified": "maybe"],
+             "Archived to the Master Archive on Sep 12, 2026 (copy not yet verified). (Archive Angel)"),
+            (.archived, .rick, [:],
+             "Archived to the Master Archive on Sep 12, 2026 (copy not yet verified)."),
+            (.copyTrashed, .rick, ["volume": "LaCie"],
+             "You moved this copy to the Trash on Sep 12, 2026 (the copy on LaCie)."),
+            (.copyTrashed, .rick, [:],
+             "You moved this copy to the Trash on Sep 12, 2026."),
+            (.copyDeleted, .rick, ["volume": "X"],
+             "You deleted this copy permanently on Sep 12, 2026 (the copy on X)."),
+            (.copyDeleted, .tidy, [:],
+             "Tidy deleted this copy permanently on Sep 12, 2026."),
+            (.placeSet, .rick, ["confidence": "estimated", "place": "Cape Cod"],
+             "You set the place to Cape Cod on Sep 12, 2026 (best guess)."),
+            (.placeSet, .rick, ["confidence": "known", "place": "Cape Cod"],
+             "You set the place to Cape Cod on Sep 12, 2026 (you're sure)."),
+            (.placeSet, .rick, ["place": "Cape Cod"],
+             "You set the place to Cape Cod on Sep 12, 2026."),
+            (.placeSet, .rick, ["place": ""],
+             "You cleared the place on Sep 12, 2026."),
+            (.placeSet, .rick, [:],
+             "You cleared the place on Sep 12, 2026."),
+            (.placeSet, .app, ["confidence": "odd", "place": "X"],
+             "VideoScan set the place to X on Sep 12, 2026."),
+            (.dateSet, .rick, ["confidence": "known", "date": "1992-07"],
+             "You set the date to 1992-07 on Sep 12, 2026 (you're sure)."),
+            (.dateSet, .rick, ["date": "1992"],
+             "You set the date to 1992 on Sep 12, 2026."),
+            (.dateSet, .rick, ["confidence": "known", "date": ""],
+             "You cleared the date on Sep 12, 2026."),
+            (.dateSet, .rick, [:],
+             "You cleared the date on Sep 12, 2026."),
+            (.attestation, .rick, ["answer": "yes", "kind": "cloud", "label": "iCloud"],
+             "You said there is a cloud copy (iCloud) on Sep 12, 2026."),
+            (.attestation, .rick, ["answer": "no", "kind": "offsite"],
+             "You said there is no off-site copy on Sep 12, 2026."),
+            (.attestation, .rick, ["answer": "n/a", "kind": "offsite"],
+             "You said an off-site copy does not apply on Sep 12, 2026."),
+            (.attestation, .rick, ["answer": "notApplicable", "kind": "drive", "label": "Backup 1"],
+             "You said a drive copy does not apply on Sep 12, 2026."),
+            (.attestation, .rick, ["answer": "yes", "kind": ""],
+             "You said there is a backup copy on Sep 12, 2026."),
+            (.attestation, .rick, ["answer": "maybe", "kind": "tape"],
+             "You answered about a tape copy on Sep 12, 2026."),
+            (.attestation, .rick, ["answer": "", "kind": "cloud"],
+             "You answered about a cloud copy on Sep 12, 2026."),
+            (.attestation, .rick, [:],
+             "You answered about a backup copy on Sep 12, 2026."),
+            (.attestation, .rick, ["answer": "yes", "kind": "offsite", "label": "Mark's house"],
+             "You said there is an off-site copy (Mark's house) on Sep 12, 2026."),
+            (.approval, .rick, ["count": "15", "files": "a.mov\nb.mov"],
+             "You approved 15 copies to the Trash on Sep 12, 2026: a.mov, b.mov."),
+            (.approval, .rick, ["count": "1"],
+             "You approved 1 copy to the Trash on Sep 12, 2026."),
+            (.approval, .rick, ["count": "0"],
+             "You approved 0 copies to the Trash on Sep 12, 2026."),
+            (.approval, .rick, [:],
+             "You approved 0 copies to the Trash on Sep 12, 2026."),
+            (.approval, .rick, ["action": "the Archive", "count": "8", "files": eightFiles],
+             "You approved 8 copies to the Archive on Sep 12, 2026: f1.mov, f2.mov, f3.mov, f4.mov, f5.mov and 3 more."),
+            (.approval, .rick, ["count": "2", "files": "a.mov\nb.mov", "override": "2 copies — ★★★ / Important — no cloud or off-site copy attested"],
+             "You approved 2 copies to the Trash on Sep 12, 2026: a.mov, b.mov — against the bar: 2 copies — ★★★ / Important — no cloud or off-site copy attested."),
+            (.approval, .rick, ["count": "2", "override": ""],
+             "You approved 2 copies to the Trash on Sep 12, 2026."),
+            (.approval, .rick, ["action": "", "count": "x", "files": "\n\n"],
+             "You approved 0 copies to the Trash on Sep 12, 2026."),
+            (.approval, .rick, ["count": "5", "files": "a\nb\nc\nd\ne"],
+             "You approved 5 copies to the Trash on Sep 12, 2026: a, b, c, d, e."),
+            (.approval, .rick, ["count": "6", "files": "a\nb\nc\nd\ne\nf"],
+             "You approved 6 copies to the Trash on Sep 12, 2026: a, b, c, d, e and 1 more."),
+            (.angelProposed, .angel, ["score": "87"],
+             "Archive Angel proposed it for the archive on Sep 12, 2026 (score 87)."),
+            (.angelProposed, .angel, [:],
+             "Archive Angel proposed it for the archive on Sep 12, 2026."),
+            (.angelProposed, .rick, ["score": ""],
+             "Archive Angel proposed it for the archive on Sep 12, 2026."),
+            (.angelSkipped, .rick, ["reason": "unchecked"],
+             "You left it unchecked when the batch was promoted on Sep 12, 2026."),
+            (.angelSkipped, .rick, ["reason": "other"],
+             "You passed on it (Archive Angel skip) on Sep 12, 2026."),
+            (.angelSkipped, .rick, [:],
+             "You passed on it (Archive Angel skip) on Sep 12, 2026."),
+            (.angelCleared, .rick, [:],
+             "You cleared the Archive Angel batch it was in on Sep 12, 2026, undecided."),
+            (.angelCleared, .angel, ["reason": "unchecked"],
+             "Archive Angel cleared the Archive Angel batch it was in on Sep 12, 2026, undecided."),
+            (.footageDecided, .rick, ["answer": "same", "label": "other.mov"],
+             "You said it is the same footage as other.mov on Sep 12, 2026."),
+            (.footageDecided, .rick, ["answer": "notSame", "label": "other.mov"],
+             "You said it is not the same footage as other.mov on Sep 12, 2026."),
+            (.footageDecided, .rick, ["answer": "retracted", "label": "other.mov"],
+             "You took back the footage answer about other.mov on Sep 12, 2026."),
+            (.footageDecided, .rick, ["answer": "same"],
+             "You said it is the same footage as another file on Sep 12, 2026."),
+            (.footageDecided, .rick, [:],
+             "You took back the footage answer about another file on Sep 12, 2026."),
+            (.familyMusic, .rick, ["action": "unmarked"],
+             "You took it off the Family Music shelf on Sep 12, 2026."),
+            (.familyMusic, .rick, ["action": "marked", "performer": "Dad", "title": "Danny Boy"],
+             "You marked it as family music on Sep 12, 2026 — “Danny Boy”, played by Dad."),
+            (.familyMusic, .rick, ["title": "Danny Boy"],
+             "You marked it as family music on Sep 12, 2026 — “Danny Boy”."),
+            (.familyMusic, .rick, ["performer": "Dad"],
+             "You marked it as family music on Sep 12, 2026 — played by Dad."),
+            (.familyMusic, .rick, [:],
+             "You marked it as family music on Sep 12, 2026."),
+            (.archiveUpdated, .rick, ["from": "30_Video/1884/a.mov", "reason": "Date: 1884 → 1984 (known)", "to": "30_Video/1984/a.mov"],
+             "You updated it in the archive on Sep 12, 2026 — Date: 1884 → 1984 (known): 30_Video/1884/a.mov → 30_Video/1984/a.mov."),
+            (.archiveUpdated, .rick, ["from": "a", "reason": "r", "to": "a"],
+             "You updated it in the archive on Sep 12, 2026 — r."),
+            (.archiveUpdated, .rick, ["reason": "r"],
+             "You updated it in the archive on Sep 12, 2026 — r."),
+            (.archiveUpdated, .rick, ["from": "a", "to": "b"],
+             "You updated it in the archive on Sep 12, 2026: a → b."),
+            (.archiveUpdated, .app, [:],
+             "VideoScan updated it in the archive on Sep 12, 2026."),
+            (.archiveUpdateRolledBack, .rick, ["from": "x/a.mov", "outcome": "rolledBack", "reason": "index could not be written"],
+             "An archive update on Sep 12, 2026 was undone — the file stayed at x/a.mov (index could not be written)."),
+            (.archiveUpdateRolledBack, .rick, ["outcome": "rolledBack"],
+             "An archive update on Sep 12, 2026 was undone — the file stayed at its folder."),
+            (.archiveUpdateRolledBack, .rick, ["from": "x/a.mov", "outcome": "incompleteRecovery"],
+             "An archive update on Sep 12, 2026 failed; the file was put back at x/a.mov, but the drive did not confirm it was saved."),
+            (.archiveUpdateRolledBack, .rick, ["from": "x/a.mov", "location": "y/a.mov", "outcome": "mixedState", "reason": "the move back was blocked", "to": "y/a.mov"],
+             "An archive update on Sep 12, 2026 failed and could not be fully undone — the file is at y/a.mov (the move back was blocked)."),
+            (.archiveUpdateRolledBack, .rick, ["location": "", "outcome": "mixedState"],
+             "An archive update on Sep 12, 2026 failed and could not be fully undone — where the file is could not be confirmed; see the log."),
+            (.archiveUpdateRolledBack, .rick, ["outcome": "weird", "reason": "r"],
+             "An archive update on Sep 12, 2026 failed and could not be fully undone — where the file is could not be confirmed; see the log (r)."),
+            (.archiveUpdateRolledBack, .rick, [:],
+             "An archive update on Sep 12, 2026 failed and could not be fully undone — where the file is could not be confirmed; see the log."),
+    ]
+
+    private func sentence(_ kind: Kind, _ by: Actor, _ detail: [String: String]) -> String {
+        let event = MediaLedgerEvent(at: Date(timeIntervalSince1970: 1_789_243_200), event: kind, recordID: UUID(),
+                                     contentKey: "h:x", filename: "A.mov", fullPath: "/V/A.mov", by: by, detail: detail)
+        return LedgerNarrator.sentence(for: event, dateText: "Sep 12, 2026")
+    }
+
+    func testEveryGoldenRowStillReadsTheSame() {
+        XCTAssertEqual(Self.golden.count, 85)
+        for (kind, by, detail, expected) in Self.golden {
+            XCTAssertEqual(sentence(kind, by, detail), expected, "\(kind) by \(by) with \(detail)")
+        }
+    }
+
+    func testEveryKindAndActorIsCovered() {
+        XCTAssertEqual(Set(Self.golden.map { $0.0 }), Set(Kind.allCases), "a new Kind needs golden rows here")
+        XCTAssertEqual(Set(Self.golden.map { $0.1 }), Set(Actor.allCases))
+    }
+}

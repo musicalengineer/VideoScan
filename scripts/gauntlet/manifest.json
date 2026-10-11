@@ -1465,6 +1465,19 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/LedgerNarratorCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "LedgerNarratorCharacterizationTests"
+      ],
+      "tests": [
+        "testEveryGoldenRowStillReadsTheSame",
+        "testEveryKindAndActorIsCovered"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/LedgerNarratorTests.swift",
       "stage": "unit",
       "suites": [
@@ -26546,6 +26559,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/HastingsParseProbeTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/LedgerNarratorCharacterizationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
