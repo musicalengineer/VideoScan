@@ -101,9 +101,10 @@ extension VideoScanModel {
         var purged = 0
         for rec in recs {
             let outcome = discardTurn(rec, trash: trash, holds: &holds)
-            if outcome.isMoved || outcome.kind == .missing {
-                rec.purgedAt = now
-                rec.lifecycleStage = .trashed
+            // The one removal marker (GH #143): moved → inTrash with the
+            // Trash path; already gone → missing. Legacy mirror: Trashed.
+            if let marker = Self.removalMarker(for: outcome, outright: false, reason: .workbench, at: now) {
+                Self.stampRemoval(rec, marker, stage: .trashed)
                 purged += 1
             }
             if outcome.isMoved { moved.append(rec) }
