@@ -26728,8 +26728,8 @@
         "aPreMarkerCatalogIsConvertedOnLoad",
         "everyLegacyCombinationMapsToExactlyTheRuledState",
         "everyStateRoundTripsAndPurgedAtStaysOnDiskForAnOlderBuild",
+        "m",
         "purgedAtIsDerivedAndItsSetterIsAShim",
-        "theMigrationTableCellByCell",
         "trashEmptiedIsRecordedOnceAndOnlyForAKnownTrashPath"
       ]
     },
@@ -26775,7 +26775,14 @@
       "suites": [
         "OneEngineMediaMatrixAndScaleTests"
       ],
-      "tests": []
+      "tests": [
+        "avi",
+        "mkv",
+        "mov",
+        "mp4",
+        "mxf",
+        "removeRestoreAndEmptiedPassAt100k"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
