@@ -106,7 +106,10 @@ struct DuplicateKeeperCarryOverTests {
         #expect(result.deleted == 1)
         #expect(!FileManager.default.fileExists(atPath: extraURL.path))
         #expect(FileManager.default.fileExists(atPath: keeperURL.path))
-        #expect(model.records.count == 3 && model.records.first === keeper, "keeper + its archive copy + the verified sibling")
+        // GH #143 (T4): the trashed extra stays as a row, In the Trash.
+        #expect(model.records.filter { !$0.isPurged }.count == 3 && model.records.first === keeper,
+                "keeper + its archive copy + the verified sibling")
+        #expect(model.records.contains { $0.fullPath == extraURL.path && $0.removal?.state == .inTrash })
 
         // Union rules.
         #expect(keeper.starRating == 3, "star rating = max")

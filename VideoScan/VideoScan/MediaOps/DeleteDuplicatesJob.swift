@@ -1732,7 +1732,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             rowLog("trashed", entry, Self.remainWords(facts: facts, decision: decision)
                    + " — \(DeletionTierText.inTheTrashOf(trashVolume))")
             settleRemoved(entry: entry, keeper: keeper, preAwait: preAwait, proof: proof, tier: .trash,
-                          decision: decision, trashVolume: trashVolume, model: model)
+                          decision: decision, trashVolume: trashVolume, trashPath: location, model: model)
             mutatePlan {
                 $0.set(entry.id, .trashed,
                        note: "verified identical to \(keeper.filename) — \(DeletionTierText.inTheTrashOf(trashVolume))",
@@ -1885,7 +1885,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
 
     private func settleRemoved(entry: DeleteDuplicatesPlan.Entry, keeper: VideoRecord, preAwait: VideoRecord,
                                proof: VerifiedDuplicate, tier: DeletionTier, decision: DeletionTierDecision?,
-                               trashVolume: String?, model: VideoScanModel) {
+                               trashVolume: String?, trashPath: String? = nil, model: VideoScanModel) {
         // The keeper was read in full for this pair: keep its
         // fixity so the next pair with this keeper only stats it.
         if proof.keeperReadInFull {
@@ -1899,7 +1899,7 @@ final class DeleteDuplicatesJob: @MainActor MediaFileOperationJob {
             isWorkingCopy: entry.isWorkingCopy, batchID: batchID,
             keeperMatchedByStoredFixity: !proof.keeperReadInFull,
             tier: tier, remainingVerifiedCopies: decision?.remainingVerifiedCopies,
-            trashVolume: trashVolume, tierReason: decision?.reason)
+            trashVolume: trashVolume, tierReason: decision?.reason, trashPath: trashPath)
         tally.catalogMutated = tally.catalogMutated || mutated
     }
 

@@ -135,3 +135,18 @@ struct RemovalUndo {
         record.archiveStage = archiveStage
     }
 }
+
+extension DeletionTier {
+    /// How a duplicate that left by this tier is marked (GH #143). `.trash`
+    /// → In the Trash, with the URL the Trash returned. `.permanent` is
+    /// history only (Trash only since 2026-10-09): the file is gone with no
+    /// Trash copy, so Missing, legacy stage Deleted. Pure.
+    func removal(at now: Date, trashPath: String?) -> (marker: RemovalMarker, stage: LifecycleStage) {
+        switch self {
+        case .trash:
+            return (.inTrash(movedAt: now, trashPath: trashPath, reason: .duplicate), .trashed)
+        case .permanent:
+            return (.missing(noticedAt: now, lastSeen: now, reason: .duplicate), .deletedPermanently)
+        }
+    }
+}
