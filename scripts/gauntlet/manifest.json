@@ -7377,6 +7377,26 @@
       ]
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogTrashOnlyCopyTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogTrashOnlyCopyTests"
+      ],
+      "tests": [
+        "aCopyElsewhereIsNotWarned",
+        "alertSensor",
+        "bothCopiesLeaving",
+        "fixityDigestIsACopy",
+        "hundredThousand",
+        "oneOfThree",
+        "refusedRowsAreNotCounted",
+        "soleFileIsWarned",
+        "thingsThatAreNotACopy"
+      ]
+    },
+    {
       "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogTrashShortcutTests.swift",
@@ -27541,6 +27561,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogTrashConfirmationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogTrashOnlyCopyTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

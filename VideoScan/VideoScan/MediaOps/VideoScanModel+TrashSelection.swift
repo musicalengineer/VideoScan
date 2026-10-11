@@ -48,6 +48,11 @@ extension VideoScanModel {
         }
         var toTrash: [UUID] = []
         var refused: [Refused] = []
+        /// Of `toTrash`, the files the catalog knows no other copy of
+        /// (`CatalogKnownCopies`) — the confirmation warns, and Move to
+        /// Trash becomes a deliberate click (tab-charter audit T3). Still
+        /// allowed: Rick decides. Filled by the model's `catalogTrashPlan`.
+        var onlyCopy: [UUID] = []
 
         func refusedCount(_ reason: Refusal) -> Int {
             refused.reduce(0) { $0 + ($1.reason == reason ? 1 : 0) }
@@ -92,13 +97,34 @@ extension VideoScanModel {
     /// `isOffline` is injectable so tests never depend on which drives
     /// the host has mounted (CLAUDE.md isolation dimension); production
     /// callers take the default.
+    /// Also marks the rows that are the only copy the catalog knows of
+    /// (`onlyCopy`): one pass over `self.records` — asked when the gesture
+    /// arrives, never from a view body.
     func catalogTrashPlan(for records: [VideoRecord],
                           isOffline: (VideoRecord) -> Bool = VideoScanModel.isRecordOnOfflineVolume) -> CatalogTrashPlan {
         let archiveVolume = archiveVolumeProtection()
-        return Self.catalogTrashPlan(
+        var plan = Self.catalogTrashPlan(
             for: records,
             isMasterArchive: { self.bulkDeleteRefusal($0, volume: archiveVolume) != nil },
             isOffline: isOffline)
+        plan.onlyCopy = catalogOnlyCopyIDs(plan.toTrash, among: records)
+        return plan
+    }
+
+    /// Of `ids` (rows about to move, in order), those with no surviving
+    /// copy the catalog knows of: no same-bytes row (`CatalogKnownCopies`)
+    /// outside the move, and no Master Archive copy (the promote link).
+    func catalogOnlyCopyIDs(_ ids: [UUID], among selection: [VideoRecord]) -> [UUID] {
+        guard !ids.isEmpty else { return [] }
+        let byID = Dictionary(selection.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let moving = ids.compactMap { byID[$0] }
+        let leaving = Set(ids)
+        let unmatched = CatalogKnownCopies.onlyCopies(moving, in: self.records)
+        return moving.filter { rec in
+            guard unmatched.contains(rec.id) else { return false }
+            guard let master = archivedCopy(of: rec) else { return true }
+            return leaving.contains(master.id) || master.isPurged
+        }.map(\.id)
     }
 
     /// The production offline predicate: an external /Volumes path whose
@@ -141,6 +167,9 @@ extension VideoScanModel {
         let inert = plan.refusedCount(.notActive)
         if inert > 0 {
             log("Move to Trash: \(inert) file(s) were already removed or set aside — nothing more to do for them.")
+        }
+        if !plan.onlyCopy.isEmpty {
+            log("Move to Trash: \(plan.onlyCopy.count) file(s) are the only copy the catalog knows of — moving them as you confirmed (recoverable from the Trash until it is emptied).")
         }
         let byID = Dictionary(requested.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let targets = plan.toTrash.compactMap { byID[$0] }
