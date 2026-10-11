@@ -238,85 +238,15 @@ extension CatalogContent {
     private var catalogTableBase: some View {
         Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
+                // The cell (glyph, name, selection outline, tooltip) and its
+                // state ladder live in CatalogFilenameCell.swift; this
+                // closure only decides what the cell cannot see for itself.
                 let offline = !VolumeReachability.isReachable(path: rec.fullPath)
-                let purged = rec.isPurged
-                let workspaceActive = rec.workspaceActive
-                let setAside = rec.isSetAside
-                let superseded = rec.isSuperseded
-                HStack(spacing: 4) {
-                    if purged {
-                        // Trash-slash icon makes the "removed" state obvious
-                        // at a glance — even if the user's row colors are
-                        // partially overridden by a high-contrast theme.
-                        Image(systemName: "trash.slash")
-                            .font(.system(size: 10))
-                            .foregroundColor(.orange)
-                    } else if setAside {
-                        // Archive-box = "set aside by catalog scope" (photo /
-                        // music / audio with no matching video). Purple to
-                        // stay distinct from purge-orange.
-                        Image(systemName: "archivebox")
-                            .font(.system(size: 10))
-                            .foregroundColor(.purple)
-                    } else if superseded {
-                        // Swap arrows = "a confirmed repair replaced this
-                        // original" (GH #132). Brown to stay distinct from
-                        // purge-orange and set-aside-purple.
-                        Image(systemName: "arrow.triangle.swap")
-                            .font(.system(size: 10))
-                            .foregroundColor(.brown)
-                    } else if rec.isLikelyUnanalyzable {
-                        // Red "!" — file's video / audio codec was
-                        // deprecated by AVFoundation (svq3, qdm2,
-                        // cinepak, etc.) so the analyzer can't decode
-                        // it. Right-click → Reformat and Analyze to
-                        // convert via ffmpeg. Rick 2026-06-14.
-                        Image(systemName: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(.red)
-                    } else if workspaceActive {
-                        // Hammer = "being worked on with external tools."
-                        // Turquoise (.mint adapts for dark mode) marks the
-                        // record as triage-active. Pass A — Rick 2026-06-14.
-                        Image(systemName: "hammer.fill")
-                            .font(.system(size: 10))
-                            .foregroundColor(.mint)
-                    } else if showPairsOnly && rec.pairedWith != nil {
-                        Image(systemName: rec.streamType == .videoOnly ? "film" : "waveform")
-                            .font(.system(size: 10))
-                            .foregroundColor(rec.streamType == .videoOnly ? .blue : .green)
-                    }
-                    Text(rec.filename)
-                        .font(.system(.body, design: .monospaced))
-                        // Italic when offline OR purged — both signal "not the
-                        // active default state". Purge color (orange) wins over
-                        // both offline-secondary and pair-blue/green when set.
-                        // Workspace tint (.mint / turquoise) sits between
-                        // purged-orange (highest priority) and the rest.
-                        .italic(offline || purged || setAside || superseded)
-                        .foregroundColor(Self.filenameColor(
-                            for: rec,
-                            selected: selectedIDs.contains(rec.id),
-                            offline: offline,
-                            pairTint: showPairsOnly && rec.pairedWith != nil))
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.vertical, 2)
-                // Rick 2026-10-05: "sometimes it's not clear which file I am
-                // right clicking on" — the system selection turns grey when
-                // the window isn't key (Hallie's window, the MFO window
-                // brought forward). A light-blue marker behind the selected
-                // file's name that does NOT depend on focus. O(1) per cell.
-                .background {
-                    if selectedIDs.contains(rec.id) {
-                        // Outline only (Rick 2026-10-10): a fill stacked
-                        // on the system highlight hid the filename.
-                        RoundedRectangle(cornerRadius: 5)
-                            .strokeBorder(Color.accentColor, lineWidth: 1.5)
-                            .padding(.horizontal, -4)
-                    }
-                }
-                .help(filenameTooltip(for: rec, offline: offline, purged: purged))
+                CatalogFilenameCell(record: rec,
+                                    isSelected: selectedIDs.contains(rec.id),
+                                    isOffline: offline,
+                                    pairTint: showPairsOnly && rec.pairedWith != nil,
+                                    tooltip: filenameTooltip(for: rec, offline: offline, purged: rec.isPurged))
             }
             .width(min: 180, ideal: 260)
 

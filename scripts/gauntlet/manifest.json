@@ -6759,6 +6759,20 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogRowStateIconTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogRowStateIconTests"
+      ],
+      "tests": [
+        "test_ladderPriority_highestWins",
+        "test_pairGlyph_followsTheStreamType",
+        "test_plainRowHasNoGlyph",
+        "test_symbolsAndColours"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogScopeExportTests.swift",
@@ -28771,7 +28785,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2272,
+      "expected_floor": 2276,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -28845,6 +28859,7 @@
         "VideoScanTests/CatalogRowMenuRulesTests",
         "VideoScanTests/CatalogRowMenuSelectionTests",
         "VideoScanTests/CatalogRowMenuTextTests",
+        "VideoScanTests/CatalogRowStateIconTests",
         "VideoScanTests/CatalogScopeClassificationTests",
         "VideoScanTests/CatalogScopeEvidenceTests",
         "VideoScanTests/CatalogScopePairInvariantTests",
