@@ -7,7 +7,9 @@ import Foundation
 // Locks down VideoScanModel's Workbench helpers:
 //   - promoteWorkbenchToArchive  → lifecycleStage = .archived + archiveStage starts at .healthy
 //   - dropWorkbenchToCatalog     → lifecycleStage = .cataloged (no archive metadata change)
-//   - discardWorkbench           → purgedAt set, lifecycleStage = .trashed
+//   - discardWorkbench           → purgedAt set, lifecycleStage = .trashed (only for a file
+//                                  the Trash took, or one already gone — see
+//                                  WorkbenchDiscardTrashFailureTests for failed / offline)
 //
 // All three must persist synchronously. The persistence half is critical
 // — three workbench mutations across an overnight Combine batch that
@@ -37,6 +39,17 @@ struct WorkbenchActionsTests {
         r.filename = name
         r.fullPath = "/Volumes/Workbench/\(name)"
         r.lifecycleStage = .workbench
+        return r
+    }
+
+    /// A Workbench record whose file lives in `dir` (a connected drive);
+    /// `create` = put a real file there.
+    private func makeDiscardableRecord(_ name: String, in dir: URL, create: Bool = true) -> VideoRecord {
+        let url = dir.appendingPathComponent(name)
+        if create { FileManager.default.createFile(atPath: url.path, contents: Data([1, 2, 3])) }
+        let r = makeWorkbenchRecord(name)
+        r.fullPath = url.path
+        r.directory = dir.path
         return r
     }
 
@@ -124,12 +137,18 @@ struct WorkbenchActionsTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let model = try makeModel(at: dir)
-        let rec = makeWorkbenchRecord("test_artifact.mov")
+        // A real file on a connected drive (the scratch dir). Before B1
+        // (2026-10-11) this test used /Volumes/Workbench/… — an unmounted
+        // path whose Trash call THREW — and passed only because a failed
+        // Trash still stamped the record. The Trash itself is a seam here.
+        let rec = makeDiscardableRecord("test_artifact.mov", in: dir)
         model.records = [rec]
+        var trashed: [URL] = []
 
         let revisionBefore = model.volumeAggregatesRevision
-        let n = model.discardWorkbench([rec])
+        let n = model.discardWorkbench([rec], trash: { trashed.append($0) })
         #expect(n == 1)
+        #expect(trashed.map(\.lastPathComponent) == ["test_artifact.mov"])
         #expect(model.volumeAggregatesRevision > revisionBefore,
                 "in-place purge must announce itself so cached table/aggregates recompute (#160)")
         #expect(rec.purgedAt != nil, "purgedAt must be stamped so soft-delete takes effect")
@@ -163,11 +182,15 @@ struct WorkbenchActionsTests {
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let model = try makeModel(at: dir)
-        let rec = makeWorkbenchRecord("ghost.mov")
+        // Missing on a CONNECTED drive (the scratch dir). A file on an
+        // unplugged /Volumes/… drive is "offline" and keeps its record.
+        let rec = makeDiscardableRecord("ghost.mov", in: dir, create: false)
         model.records = [rec]
+        var trashCalls = 0
 
-        let n = model.discardWorkbench([rec])
+        let n = model.discardWorkbench([rec], trash: { _ in trashCalls += 1 })
         #expect(n == 1)
+        #expect(trashCalls == 0, "nothing to Trash — the file is already gone")
         #expect(rec.purgedAt != nil)
     }
 }

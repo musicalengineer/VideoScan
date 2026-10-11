@@ -19,6 +19,14 @@ extension GedcomFamilyGraph {
     public enum KinshipSide: String, Sendable, Equatable, CaseIterable {
         case maternal
         case paternal
+
+        /// The parent the first hop climbs through.
+        public var parentRelation: Relation {
+            switch self {
+            case .maternal: return .mother
+            case .paternal: return .father
+            }
+        }
     }
 
     /// The closed multi-hop vocabulary. Raw values are the wire spellings the
@@ -59,6 +67,60 @@ extension GedcomFamilyGraph {
                 return false
             }
         }
+
+        /// The sex the word names — "M" for uncle, "F" for aunt — or nil
+        /// for a pair word ("aunts-and-uncles", "cousins", "grandparents").
+        public var relativeSex: String? {
+            switch self {
+            case .grandfather, .greatGrandfather, .greatGreatGrandfather,
+                 .uncle, .nephew, .fatherInLaw, .brotherInLaw, .sonInLaw:
+                return "M"
+            case .grandmother, .greatGrandmother, .greatGreatGrandmother,
+                 .aunt, .niece, .motherInLaw, .sisterInLaw, .daughterInLaw:
+                return "F"
+            case .grandparents, .greatGrandparents, .greatGreatGrandparents,
+                 .auntsAndUncles, .cousin, .cousins, .niecesAndNephews,
+                 .parentsInLaw:
+                return nil
+            }
+        }
+
+        /// How the relation is reached. `firstParent` is the parent hop the
+        /// caller's side chose (`.mother`, `.father`, or `.parents` for both).
+        /// (For Rick: the plan as data — one struct-like value per enum case
+        /// — so `relatives` is a single walk instead of a growing switch.)
+        func route(firstParent: Relation) -> KinshipRoute {
+            switch self {
+            case .grandfather, .grandmother, .grandparents:
+                return .chain([firstParent, .parents])
+            case .greatGrandfather, .greatGrandmother, .greatGrandparents:
+                return .chain([firstParent, .parents, .parents])
+            case .greatGreatGrandfather, .greatGreatGrandmother, .greatGreatGrandparents:
+                return .chain([firstParent, .parents, .parents, .parents])
+            case .uncle, .aunt, .auntsAndUncles:
+                return .chain([firstParent, .siblings])
+            case .cousin, .cousins:
+                return .chain([firstParent, .siblings, .children])
+            case .nephew, .niece, .niecesAndNephews:
+                return .chain([.siblings, .children])
+            case .fatherInLaw, .motherInLaw, .parentsInLaw:
+                return .chain([.spouse, .parents])
+            case .brotherInLaw:
+                return .siblingInLaw(sex: "M")
+            case .sisterInLaw:
+                return .siblingInLaw(sex: "F")
+            case .sonInLaw, .daughterInLaw:
+                return .chain([.children, .spouse])
+            }
+        }
+    }
+
+    /// The plan for one extended relation.
+    enum KinshipRoute: Sendable, Equatable {
+        /// One chain of hops from the subject; the last hop names the relative.
+        case chain([Relation])
+        /// A spouse's sibling OR a sibling's spouse — two routes, not one chain.
+        case siblingInLaw(sex: String)
     }
 
     /// One hop of a resolved path: the relation word used to get here plus
@@ -101,52 +163,29 @@ extension GedcomFamilyGraph {
         side: KinshipSide?,
         of subject: Person
     ) -> KinshipResolution {
-        var steps: [Relation] = []
-        var finalSex: String?
-
-        let firstParent: Relation
-        switch side {
-        case .maternal?: firstParent = .mother
-        case .paternal?: firstParent = .father
-        case nil: firstParent = .parents
+        switch relation.route(firstParent: side?.parentRelation ?? .parents) {
+        case .siblingInLaw(let sex):
+            return inLawSiblings(of: subject, sex: sex)
+        case .chain(let steps):
+            switch walk(steps, finalSex: relation.relativeSex, from: subject) {
+            case .stopped(let resolution):
+                return resolution
+            case .reached(let frontier):
+                return select(from: frontier, relation: relation, side: side, subject: subject)
+            }
         }
+    }
 
-        switch relation {
-        case .grandfather, .grandmother, .grandparents:
-            steps = [firstParent, .parents]
-            finalSex = relation == .grandfather ? "M"
-                : relation == .grandmother ? "F" : nil
-        case .greatGrandfather, .greatGrandmother, .greatGrandparents:
-            steps = [firstParent, .parents, .parents]
-            finalSex = relation == .greatGrandfather ? "M"
-                : relation == .greatGrandmother ? "F" : nil
-        case .greatGreatGrandfather, .greatGreatGrandmother,
-             .greatGreatGrandparents:
-            steps = [firstParent, .parents, .parents, .parents]
-            finalSex = relation == .greatGreatGrandfather ? "M"
-                : relation == .greatGreatGrandmother ? "F" : nil
-        case .uncle, .aunt, .auntsAndUncles:
-            steps = [firstParent, .siblings]
-            finalSex = relation == .uncle ? "M" : relation == .aunt ? "F" : nil
-        case .cousin, .cousins:
-            steps = [firstParent, .siblings, .children]
-        case .nephew, .niece, .niecesAndNephews:
-            steps = [.siblings, .children]
-            finalSex = relation == .nephew ? "M" : relation == .niece ? "F" : nil
-        case .fatherInLaw, .motherInLaw, .parentsInLaw:
-            steps = [.spouse, .parents]
-            finalSex = relation == .fatherInLaw ? "M"
-                : relation == .motherInLaw ? "F" : nil
-        case .brotherInLaw, .sisterInLaw:
-            return inLawSiblings(
-                of: subject, sex: relation == .brotherInLaw ? "M" : "F")
-        case .sonInLaw, .daughterInLaw:
-            steps = [.children, .spouse]
-            finalSex = relation == .sonInLaw ? "M" : "F"
-        }
+    private enum Walk {
+        /// Every hop existed; the partial paths that reached the end.
+        case reached(frontier: [[KinshipHop]])
+        /// A hop was not recorded; the missing-hop resolution, already phrased.
+        case stopped(KinshipResolution)
+    }
 
-        // Breadth-first over partial paths. A step that yields nothing for
-        // every path is the missing hop; the deepest partial path names it.
+    /// Breadth-first over partial paths. A step that yields nothing for
+    /// every path is the missing hop; the deepest partial path names it.
+    private func walk(_ steps: [Relation], finalSex: String?, from subject: Person) -> Walk {
         var frontier: [[KinshipHop]] = [[]]
         for (index, step) in steps.enumerated() {
             var next: [[KinshipHop]] = []
@@ -161,15 +200,22 @@ extension GedcomFamilyGraph {
             if next.isEmpty {
                 let reached = frontier.max { $0.count < $1.count } ?? []
                 let isLast = index == steps.count - 1
-                return .missingHop(
+                return .stopped(.missingHop(
                     reached: reached,
                     missingHop: Self.chain(
                         reached, then: step, subject: subject,
-                        finalSex: isLast ? finalSex : nil))
+                        finalSex: isLast ? finalSex : nil)))
             }
             frontier = next
         }
+        return .reached(frontier: frontier)
+    }
 
+    /// The people the word names among those reached: never the subject,
+    /// the right sex when the word has one, one path per person.
+    private func select(from frontier: [[KinshipHop]], relation: ExtendedRelation,
+                        side: KinshipSide?, subject: Person) -> KinshipResolution {
+        let finalSex = relation.relativeSex
         var paths = frontier
             .filter { !$0.isEmpty }
             .filter { $0.last.map { $0.person.id != subject.id } ?? false }

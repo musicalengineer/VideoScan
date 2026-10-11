@@ -243,7 +243,7 @@ struct CatalogStorageRow: CatalogStorageFacts, Sendable, Equatable {
     static func projectForStorageTotals(_ records: [VideoRecord]) -> [CatalogStorageRow] {
         var out: [CatalogStorageRow] = []
         out.reserveCapacity(records.count)
-        for r in records where !r.isPurged && !r.isSetAside && !r.isSuperseded {
+        for r in records where CatalogStorageTotalsCalculator.isActive(r) {
             out.append(CatalogStorageRow(r))
         }
         return out
@@ -462,10 +462,26 @@ enum CatalogStorageTotalsCalculator {
         var counted: [R] = []
         var deleted: [R] = []
         counted.reserveCapacity(records.count)
-        for rec in records where !rec.isPurged && !rec.isSetAside && !rec.isSuperseded {
+        for rec in records where isActive(rec) {
             if isManuallyDeleted(rec) { deleted.append(rec) } else { counted.append(rec) }
         }
         return (counted, deleted)
+    }
+
+    /// Not purged (trashed / removed from the catalog), not set aside,
+    /// not superseded — the first half of `partition`'s rule.
+    nonisolated static func isActive<R: CatalogStorageFacts>(_ rec: R) -> Bool {
+        !rec.isPurged && !rec.isSetAside && !rec.isSuperseded
+    }
+
+    /// THE per-record test behind TOTAL CATALOG: `partition` puts a record
+    /// in `counted` exactly when this is true. Anything else that sums
+    /// "bytes in the catalog" — the volume table's Media Size column
+    /// (VolumeMediaTally) — asks this, so a row can never count a file
+    /// the footer has already let go of (2026-10-11: the column counted
+    /// trashed rows and summed to ~13.4 TB against a 7.85 TB footer).
+    nonisolated static func isCounted<R: CatalogStorageFacts>(_ rec: R) -> Bool {
+        isActive(rec) && !isManuallyDeleted(rec)
     }
 
     static func compute(
@@ -560,9 +576,11 @@ extension CatalogStorageTotals {
     var onlineDisplay: String { Self.displaySize(onlineBytes) }
     var uniqueDisplay: String { Self.displaySize(uniqueBytes) }
 
-    /// The honesty caption under the gross figure (Rick 2026-08-18):
+    /// The honesty caption under the gross figure (Rick 2026-08-18; worded
+    /// 2026-10-11 so it no longer reads like the Trash — none of these files
+    /// was ever moved there; the footer's "Review…" link shows them again):
     ///
-    ///     "+ 1.3 TB marked deleted, still on disk"
+    ///     "+ 1.3 TB hidden by a “deleted” label — never removed, still on disk"
     ///
     /// Present only when there is something to say. Once the off-main
     /// probe has reported, the figure is the bytes whose file EXISTS
@@ -573,10 +591,10 @@ extension CatalogStorageTotals {
     var manuallyDeletedCaption: String? {
         if let onDisk = manuallyDeletedOnDiskBytes {
             guard onDisk > 0 else { return nil }
-            return "+ \(Self.displaySize(onDisk)) marked deleted, still on disk"
+            return "+ \(Self.displaySize(onDisk)) hidden by a “deleted” label — never removed, still on disk"
         }
         guard manuallyDeletedBytes > 0 else { return nil }
-        return "+ \(Self.displaySize(manuallyDeletedBytes)) marked deleted (may still be on disk)"
+        return "+ \(Self.displaySize(manuallyDeletedBytes)) hidden by a “deleted” label (checking the disk…)"
     }
 
     /// The parenthetical beside the unique figure.
@@ -626,8 +644,8 @@ extension CatalogStorageTotals {
         ]
         if manuallyDeletedFiles > 0 {
             lines.append("")
-            lines.append("Not counted above: \(manuallyDeletedFiles) records marked")
-            lines.append("Manually Deleted (\(Self.displaySize(manuallyDeletedBytes)))"
+            lines.append("Not counted above: \(manuallyDeletedFiles) records hidden by a")
+            lines.append("“deleted” label (\(Self.displaySize(manuallyDeletedBytes)); none moved to the Trash)"
                          + (manuallyDeletedOnDiskBytes.map {
                              " — \(Self.displaySize($0)) still on disk (\(manuallyDeletedOnDiskFiles) files)"
                            } ?? " — on-disk check pending"))

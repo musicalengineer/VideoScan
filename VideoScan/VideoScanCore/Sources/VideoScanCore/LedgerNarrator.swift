@@ -15,6 +15,9 @@
 
 import Foundation
 
+/// The ledger's detail-key namespace, spelled once for the templates below.
+private typealias Detail = MediaLedgerEvent.Detail
+
 public enum LedgerNarrator {
 
     /// The sentences for `events`, NEWEST FIRST by default (ties keep
@@ -75,105 +78,128 @@ public enum LedgerNarrator {
 
     /// One event → one sentence. `dateText` is already formatted so the
     /// template layer never touches a formatter.
+    ///
+    /// The switch is only the dispatch — a jump table over `Kind`, kept
+    /// exhaustive so a new kind is a compile error until it has words. Each
+    /// kind's words live in a template function below, named for the kind
+    /// (2026-10-10: the one-case-per-kind split that `familyMusicSentence`
+    /// and friends had started).
     public static func sentence(for e: MediaLedgerEvent, dateText d: String) -> String {
-        let d = d
         let who = who(e.by)
         let detail = e.detail
         switch e.event {
         case .cataloged:
-            let vol = detail[MediaLedgerEvent.Detail.volume] ?? ""
-            return vol.isEmpty ? "Cataloged on \(d)." : "Cataloged from \(vol) on \(d)."
-
+            return catalogedSentence(dateText: d, detail: detail)
         case .setAside:
-            let reason = detail[MediaLedgerEvent.Detail.reason] ?? ""
-            if reason == "removed-from-catalog" {
-                return "\(who) removed it from the catalog on \(d) (file untouched)."
-            }
-            if let phrase = reasonPhrase(reason) {
-                return "\(who) set it aside on \(d) — \(phrase)."
-            }
-            return "\(who) set it aside on \(d)."
-
+            return setAsideSentence(who: who, dateText: d, detail: detail)
         case .putBack:
             return "\(who) put it back in the catalog on \(d)."
-
         case .restored:
             return "\(who) restored it to the catalog on \(d)."
-
         case .archived:
-            let archive = detail[MediaLedgerEvent.Detail.archive].flatMap { $0.isEmpty ? nil : $0 } ?? "the Master Archive"
-            let verified = detail[MediaLedgerEvent.Detail.verified] == "true"
-            var s = verified
-                ? "Archived to \(archive) on \(d), read back and verified."
-                : "Archived to \(archive) on \(d) (copy not yet verified)."
-            if e.by == .angel { s += " (Archive Angel)" }
-            return s
-
+            return archivedSentence(by: e.by, dateText: d, detail: detail)
         case .copyTrashed, .copyDeleted:
             return copyRemovedSentence(e.event, who: who, dateText: d, detail: detail)
-
         case .placeSet:
-            let place = detail[MediaLedgerEvent.Detail.place] ?? ""
-            if place.isEmpty { return "\(who) cleared the place on \(d)." }
-            return "\(who) set the place to \(place) on \(d)\(confidenceSuffix(detail))."
-
+            return fieldSetSentence(field: "place", value: detail[Detail.place] ?? "", who: who, dateText: d, detail: detail)
         case .dateSet:
-            let date = detail[MediaLedgerEvent.Detail.date] ?? ""
-            if date.isEmpty { return "\(who) cleared the date on \(d)." }
-            return "\(who) set the date to \(date) on \(d)\(confidenceSuffix(detail))."
-
+            return fieldSetSentence(field: "date", value: detail[Detail.date] ?? "", who: who, dateText: d, detail: detail)
         case .attestation:
-            let kindRaw = detail[MediaLedgerEvent.Detail.kind] ?? ""
-            let kindName = BackupAttestation.Kind(rawValue: kindRaw)?.displayName ?? (kindRaw.isEmpty ? "backup" : kindRaw)
-            let answer = detail[MediaLedgerEvent.Detail.answer] ?? ""
-            let label = detail[MediaLedgerEvent.Detail.label] ?? ""
-            let labelText = label.isEmpty ? "" : " (\(label))"
-            let art = article(kindName)
-            switch answer {
-            case "yes":       return "\(who) said there is \(art) \(kindName) copy\(labelText) on \(d)."
-            case "no":        return "\(who) said there is no \(kindName) copy on \(d)."
-            case "n/a", "notApplicable":
-                              return "\(who) said \(art) \(kindName) copy does not apply on \(d)."
-            default:          return "\(who) answered about \(art) \(kindName) copy on \(d)."
-            }
-
+            return attestationSentence(who: who, dateText: d, detail: detail)
         case .approval:
-            let count = Int(detail[MediaLedgerEvent.Detail.count] ?? "") ?? 0
-            let action = detail[MediaLedgerEvent.Detail.action].flatMap { $0.isEmpty ? nil : $0 } ?? "the Trash"
-            let files = (detail[MediaLedgerEvent.Detail.files] ?? "")
-                .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
-            let noun = count == 1 ? "copy" : "copies"
-            var s = "\(who) approved \(count) \(noun) to \(action) on \(d)"
-            if !files.isEmpty {
-                let shown = files.prefix(5).joined(separator: ", ")
-                let more = files.count > 5 ? " and \(files.count - 5) more" : ""
-                s += ": \(shown)\(more)"
-            }
-            if let against = detail[MediaLedgerEvent.Detail.barOverride], !against.isEmpty {
-                s += " — against the bar: \(against)"
-            }
-            return s + "."
-
+            return approvalSentence(who: who, dateText: d, detail: detail)
         case .angelProposed, .angelSkipped, .angelCleared:
             return angelAttentionSentence(e.event, who: who, dateText: d, detail: detail)
-
         case .footageDecided:
-            let other = detail[MediaLedgerEvent.Detail.label] ?? ""
-            let otherText = other.isEmpty ? "another file" : other
-            switch detail[MediaLedgerEvent.Detail.answer] ?? "" {
-            case "same":
-                return "\(who) said it is the same footage as \(otherText) on \(d)."
-            case "notSame":
-                return "\(who) said it is not the same footage as \(otherText) on \(d)."
-            default:
-                return "\(who) took back the footage answer about \(otherText) on \(d)."
-            }
-
+            return footageDecidedSentence(who: who, dateText: d, detail: detail)
         case .familyMusic:
             return familyMusicSentence(who: who, dateText: d, detail: detail)
-
         case .archiveUpdated, .archiveUpdateRolledBack:
             return archiveUpdateSentence(e.event, who: who, dateText: d, detail: detail)
+        }
+    }
+
+    // MARK: Templates, one per kind (the words; `sentence` only dispatches)
+
+    static func catalogedSentence(dateText d: String, detail: [String: String]) -> String {
+        let vol = detail[Detail.volume] ?? ""
+        return vol.isEmpty ? "Cataloged on \(d)." : "Cataloged from \(vol) on \(d)."
+    }
+
+    static func setAsideSentence(who: String, dateText d: String, detail: [String: String]) -> String {
+        let reason = detail[Detail.reason] ?? ""
+        if reason == "removed-from-catalog" {
+            return "\(who) removed it from the catalog on \(d) (file untouched)."
+        }
+        if let phrase = reasonPhrase(reason) {
+            return "\(who) set it aside on \(d) — \(phrase)."
+        }
+        return "\(who) set it aside on \(d)."
+    }
+
+    static func archivedSentence(by actor: MediaLedgerEvent.Actor, dateText d: String,
+                                 detail: [String: String]) -> String {
+        let archive = detail[Detail.archive].flatMap { $0.isEmpty ? nil : $0 } ?? "the Master Archive"
+        let verified = detail[Detail.verified] == "true"
+        var s = verified
+            ? "Archived to \(archive) on \(d), read back and verified."
+            : "Archived to \(archive) on \(d) (copy not yet verified)."
+        if actor == .angel { s += " (Archive Angel)" }
+        return s
+    }
+
+    /// Place and date share one shape: "set the <field> to <value>" with the
+    /// confidence suffix, or "cleared the <field>" when the value is empty.
+    static func fieldSetSentence(field: String, value: String, who: String, dateText d: String,
+                                 detail: [String: String]) -> String {
+        if value.isEmpty { return "\(who) cleared the \(field) on \(d)." }
+        return "\(who) set the \(field) to \(value) on \(d)\(confidenceSuffix(detail))."
+    }
+
+    static func attestationSentence(who: String, dateText d: String, detail: [String: String]) -> String {
+        let kindRaw = detail[Detail.kind] ?? ""
+        let kindName = BackupAttestation.Kind(rawValue: kindRaw)?.displayName ?? (kindRaw.isEmpty ? "backup" : kindRaw)
+        let answer = detail[Detail.answer] ?? ""
+        let label = detail[Detail.label] ?? ""
+        let labelText = label.isEmpty ? "" : " (\(label))"
+        let art = article(kindName)
+        switch answer {
+        case "yes":       return "\(who) said there is \(art) \(kindName) copy\(labelText) on \(d)."
+        case "no":        return "\(who) said there is no \(kindName) copy on \(d)."
+        case "n/a", "notApplicable":
+                          return "\(who) said \(art) \(kindName) copy does not apply on \(d)."
+        default:          return "\(who) answered about \(art) \(kindName) copy on \(d)."
+        }
+    }
+
+    static func approvalSentence(who: String, dateText d: String, detail: [String: String]) -> String {
+        let count = Int(detail[Detail.count] ?? "") ?? 0
+        let action = detail[Detail.action].flatMap { $0.isEmpty ? nil : $0 } ?? "the Trash"
+        let files = (detail[Detail.files] ?? "")
+            .split(separator: "\n").map(String.init).filter { !$0.isEmpty }
+        let noun = count == 1 ? "copy" : "copies"
+        var s = "\(who) approved \(count) \(noun) to \(action) on \(d)"
+        if !files.isEmpty {
+            let shown = files.prefix(5).joined(separator: ", ")
+            let more = files.count > 5 ? " and \(files.count - 5) more" : ""
+            s += ": \(shown)\(more)"
+        }
+        if let against = detail[Detail.barOverride], !against.isEmpty {
+            s += " — against the bar: \(against)"
+        }
+        return s + "."
+    }
+
+    static func footageDecidedSentence(who: String, dateText d: String, detail: [String: String]) -> String {
+        let other = detail[Detail.label] ?? ""
+        let otherText = other.isEmpty ? "another file" : other
+        switch detail[Detail.answer] ?? "" {
+        case "same":
+            return "\(who) said it is the same footage as \(otherText) on \(d)."
+        case "notSame":
+            return "\(who) said it is not the same footage as \(otherText) on \(d)."
+        default:
+            return "\(who) took back the footage answer about \(otherText) on \(d)."
         }
     }
 

@@ -13,9 +13,9 @@ struct PendingRetireOffer: Identifiable, Equatable {
     let volumeRootPath: String
     /// Friendly volume name for headline display ("Maxtor500FW").
     let volumeName: String
-    /// Total catalogued records on the volume (all `.manuallyDeleted` —
-    /// that's what triggered the offer). Drives the "All N records…"
-    /// headline.
+    /// Total catalogued records on the volume (all accounted for —
+    /// `isAccountedForRetire` — that's what triggered the offer). Drives
+    /// the "All N records…" headline.
     let recordCount: Int
     /// Default reason text the modal pre-populates. User-editable.
     let suggestedReason: String
@@ -27,8 +27,9 @@ struct PendingRetireOffer: Identifiable, Equatable {
 // MARK: - VideoScanModel+RetireVolume
 //
 // §1B Retire Volume — companion feature to Relocate. After a Relocate run
-// (Bucket B + Bucket E) leaves 100% of catalogued records on the source
-// volume marked `.manuallyDeleted`, the volume itself can be retired:
+// leaves 100% of catalogued records on the source volume accounted for
+// (Bucket B: missing, labelled `.manuallyDeleted`; Bucket E: skipped because
+// a proven copy is elsewhere, witness note), the volume itself can be retired:
 // physically disconnected with no expectation of reconnection. Retired
 // volumes are excluded from scan suggestions, "missing volume" dashboard
 // nags, and reachability complaints, but their records remain in the
@@ -55,15 +56,85 @@ extension VideoScanModel {
         recordsScoped(to: volumeRootPath, in: all).count
     }
 
-    /// Subset of `totalRecordsOn` whose `archiveStage == .manuallyDeleted`.
-    /// Numerator for the 100% disposed check. Bucket B + Bucket E both
-    /// land in this state, so a Relocate run that retires the source has
-    /// `manuallyDeletedOn == totalRecordsOn`.
-    nonisolated static func manuallyDeletedOn(volumeRootPath: String,
-                                              in all: [VideoRecord]) -> Int {
-        recordsScoped(to: volumeRootPath, in: all)
-            .filter { $0.archiveStage == .manuallyDeleted }
-            .count
+    /// Is this record ACCOUNTED FOR on its drive — nothing here still needs
+    /// copying? Two Migrate outcomes leave a record behind under the source:
+    ///   * Bucket B — the source file was missing: labelled `.manuallyDeleted`;
+    ///   * Bucket E — skipped because a proven copy is on another drive: the
+    ///     label is untouched (2026-10-11 — a skip is not a delete) and the
+    ///     record carries a skip note whose `source` is ITS OWN CURRENT PATH
+    ///     (`ownSkipWitnesses`). A note carried to another path by a later
+    ///     copy or relink, or in the old sourceless shape, does not count.
+    /// Catalog facts only. Such a record is never a Migrate witness
+    /// (`isLiveRelocateWitness`) nor a relink source. Whether the drive may
+    /// be RETIRED also needs a witness that still holds — `isDisposedForRetire`.
+    nonisolated static func isAccountedForRetire(archiveStage: ArchiveStage, notes: String,
+                                                 fullPath: String) -> Bool {
+        archiveStage == .manuallyDeleted || ownSkipWitnesses(notes: notes, fullPath: fullPath) != nil
+    }
+
+    /// The marker `formatSafelyRedundantNote` writes (and
+    /// `parseWitnessesFromNote` reads).
+    nonisolated static let skippedWithWitnessMarker = "reason=dup-on-other-volume"
+
+    /// The witnesses named by this record's OWN skip lines — those whose
+    /// `source` is `fullPath`. nil = no such line (never skipped here).
+    nonisolated static func ownSkipWitnesses(notes: String, fullPath: String) -> [String]? {
+        guard !fullPath.isEmpty, notes.contains(skippedWithWitnessMarker) else { return nil }
+        var out: [String]?
+        for line in notes.split(separator: "\n") where line.contains(skippedWithWitnessMarker) {
+            guard skipNoteSource(line) == fullPath else { continue }
+            out = (out ?? []) + parseWitnessesFromNote(String(line))
+        }
+        return out
+    }
+
+    /// The `source="…"` field of one skip line; nil for the old shape.
+    nonisolated static func skipNoteSource(_ line: Substring) -> String? {
+        guard let start = line.range(of: " source=\"") else { return nil }
+        var path = ""
+        var escaped = false
+        for ch in line[start.upperBound...] {
+            if escaped { path.append(unescapedNoteChar(ch)); escaped = false; continue }
+            if ch == "\\" { escaped = true; continue }
+            if ch == "\"" { return path }
+            path.append(ch)
+        }
+        return nil
+    }
+
+    /// Paths of catalog rows that can vouch for a skipped file NOW: a live
+    /// witness (not purged, trashed, labelled deleted, nor itself accounted
+    /// for) on a drive that is not retired.
+    nonisolated static func liveWitnessPaths(in all: [VideoRecord], retiredRoots: [String]) -> Set<String> {
+        var out = Set<String>()
+        for r in all where r.isLiveRelocateWitness
+            && !retiredRoots.contains(where: { PathScope.contains(r.fullPath, within: $0) }) {
+            out.insert(r.fullPath)
+        }
+        return out
+    }
+
+    /// Disposed for the RETIRE check: labelled missing (Bucket B, as
+    /// before), or skipped here with at least one witness that is a live
+    /// row (`liveWitnesses`) OFF this drive. A skip whose witnesses all left
+    /// the catalog (Delete Duplicates trashed them), went to a retired drive
+    /// or were themselves skipped is not disposed — it may be the only copy.
+    nonisolated static func isDisposedForRetire(archiveStage: ArchiveStage, notes: String, fullPath: String,
+                                                volumeRootPath: String, liveWitnesses: Set<String>) -> Bool {
+        if archiveStage == .manuallyDeleted { return true }
+        guard let witnesses = ownSkipWitnesses(notes: notes, fullPath: fullPath) else { return false }
+        return witnesses.contains { liveWitnesses.contains($0) && !PathScope.contains($0, within: volumeRootPath) }
+    }
+
+    /// Subset of `totalRecordsOn` that is disposed (`isDisposedForRetire`).
+    /// Numerator for the 100% disposed check.
+    nonisolated static func disposedOn(volumeRootPath: String, in all: [VideoRecord],
+                                       retiredRoots: [String] = []) -> Int {
+        let live = liveWitnessPaths(in: all, retiredRoots: retiredRoots)
+        return recordsScoped(to: volumeRootPath, in: all).filter {
+            isDisposedForRetire(archiveStage: $0.archiveStage, notes: $0.notes, fullPath: $0.fullPath,
+                                volumeRootPath: volumeRootPath, liveWitnesses: live)
+        }.count
     }
 
     /// Count of records that originated on this volume — i.e. whose
@@ -86,34 +157,35 @@ extension VideoScanModel {
 
     /// Pure predicate: "should the retire prompt fire after the current
     /// Relocate run?" True iff the volume has at least one record (current
-    /// OR originated-here) AND no record currently under this volume's
-    /// path has a non-`.manuallyDeleted` archiveStage. That covers three
+    /// OR originated-here) AND every record currently under this volume's
+    /// path is accounted for (`isAccountedForRetire`). That covers three
     /// migration outcomes:
-    ///   - Bucket E (safely redundant): records stay under this path with
-    ///     `.manuallyDeleted` — gate passes when 100% are deleted
-    ///   - Bucket B (source not found): same as above
+    ///   - Bucket E (safely redundant): records stay under this path,
+    ///     skipped, with the witness note
+    ///   - Bucket B (source not found): records stay, labelled `.manuallyDeleted`
     ///   - Bucket D (adopted) / Bucket A (copied): records' `fullPath`
     ///     is rewritten away from this volume — gate passes because the
     ///     "currently under this volume" set becomes empty (0 == 0 trivially
     ///     satisfies "no non-deleted record here")
     /// Used by the post-Relocate hook AND directly by tests.
     nonisolated static func shouldOfferRetire(volumeRootPath: String,
-                                              in all: [VideoRecord]) -> Bool {
+                                              in all: [VideoRecord],
+                                              retiredRoots: [String] = []) -> Bool {
         let total = totalRecordsOn(volumeRootPath: volumeRootPath, in: all)
         let originated = originatedOnCount(volumeRootPath: volumeRootPath, in: all)
         // Volume must have been used at some point (currently has records
         // OR had records that moved away). Pure-empty volumes that were
         // never scanned shouldn't show as retire-eligible.
         guard total > 0 || originated > 0 else { return false }
-        // Every record currently under this path must be .manuallyDeleted.
+        // Every record currently under this path must be accounted for.
         // If total == 0 (all records moved via Bucket A/D), this is
         // trivially true.
-        return manuallyDeletedOn(volumeRootPath: volumeRootPath, in: all) == total
+        return disposedOn(volumeRootPath: volumeRootPath, in: all, retiredRoots: retiredRoots) == total
     }
 
     // MARK: - Witness aggregation
 
-    /// Walk every `.manuallyDeleted` record on the volume and pull out
+    /// Walk every accounted-for record on the volume and pull out
     /// the witness paths embedded in their Bucket E audit-trail notes.
     /// Returns a deduped sorted union. Records with non-Bucket-E disposal
     /// notes (plain Bucket B "source file not found") contribute nothing
@@ -125,13 +197,19 @@ extension VideoScanModel {
     /// in the low thousands of strings — trivial in-memory footprint.
     nonisolated static func aggregateRetiredWitnesses(
         volumeRootPath: String,
-        in all: [VideoRecord]
+        in all: [VideoRecord],
+        retiredRoots: [String] = []
     ) -> [String] {
         let scoped = recordsScoped(to: volumeRootPath, in: all)
+        let live = liveWitnessPaths(in: all, retiredRoots: retiredRoots)
         var seen = Set<String>()
-        for rec in scoped where rec.archiveStage == .manuallyDeleted {
-            for w in parseWitnessesFromNote(rec.notes) {
-                seen.insert(w)
+        for rec in scoped {
+            if rec.archiveStage == .manuallyDeleted {
+                // Legacy Bucket B/E rows: every witness line they carry.
+                seen.formUnion(parseWitnessesFromNote(rec.notes))
+            } else if let own = ownSkipWitnesses(notes: rec.notes, fullPath: rec.fullPath) {
+                // Only the witnesses that hold: a live row off this drive.
+                seen.formUnion(own.filter { live.contains($0) && !PathScope.contains($0, within: volumeRootPath) })
             }
         }
         return seen.sorted()
@@ -164,7 +242,7 @@ extension VideoScanModel {
             var prevWasEscape = false
             for ch in inner {
                 if prevWasEscape {
-                    current.append(ch)
+                    current.append(unescapedNoteChar(ch))
                     prevWasEscape = false
                     continue
                 }
@@ -196,14 +274,26 @@ extension VideoScanModel {
     /// to the relocate log + the in-app console. Persists immediately
     /// via the existing `persistScanDates` path.
     ///
-    /// Returns true on success, false when the path doesn't match any
-    /// scan target (defensive guard for stale UI state).
+    /// Returns true on success; false when the path doesn't match any scan
+    /// target, or when `retireRefusal` says no (QA rounds 1–2, 2026-10-11):
+    /// a record on the drive nobody accounted for, or a file resting on a
+    /// witness that no longer holds on disk on another physical drive.
+    /// Nothing changes on a refusal; the reason is logged. `fileSize` is one
+    /// stat per witness tried; injectable for tests.
     @discardableResult
     func retireVolume(at volumeRootPath: String,
                       reason: String,
-                      witnesses: [String]) -> Bool {
+                      witnesses: [String],
+                      fileSize: (String) -> Int64? = VideoScanModel.statRegularFileSize) -> Bool {
         guard let target = scanTargets.first(where: { $0.searchPath == volumeRootPath }) else {
             log("Retire refused: no scan target matches \(volumeRootPath).")
+            return false
+        }
+        if let why = retireRefusal(at: volumeRootPath, fileSize: fileSize) {
+            log("Retire refused: \(volumeRootPath) — \(why); nothing was changed.")
+            for path in filesWithoutAWitnessOnDisk(volumeRootPath: volumeRootPath, fileSize: fileSize).prefix(20) {
+                log("  no surviving copy found for \(path)")
+            }
             return false
         }
         let now = Date()
@@ -215,6 +305,68 @@ extension VideoScanModel {
         let stampStr = ISO8601DateFormatter().string(from: now)
         log("Retired volume \(volumeRootPath) at \(stampStr): \(reason)")
         return true
+    }
+
+    /// Why `volumeRootPath` must NOT be retired right now, or nil. Asked by
+    /// `retireVolume` before anything changes, and by the retire sheet so it
+    /// can show the reason (QA round 2):
+    ///   1. every record on the drive is disposed (`disposedOn`, catalog
+    ///      facts — a file nobody accounted for is never retired with it);
+    ///      an empty drive has nothing to lose and may be retired;
+    ///   2. every file that rests on a witness — a skipped file, or a
+    ///      legacy labelled row carrying a witness note — has one that holds
+    ///      NOW (`filesWithoutAWitnessOnDisk`).
+    func retireRefusal(at volumeRootPath: String,
+                       fileSize: (String) -> Int64? = VideoScanModel.statRegularFileSize) -> String? {
+        let retired = otherRetiredRoots(than: volumeRootPath)
+        let total = Self.totalRecordsOn(volumeRootPath: volumeRootPath, in: records)
+        let disposed = Self.disposedOn(volumeRootPath: volumeRootPath, in: records, retiredRoots: retired)
+        if disposed < total {
+            return "\(total - disposed) file(s) on this drive are not accounted for — no proven copy elsewhere"
+        }
+        let lost = filesWithoutAWitnessOnDisk(volumeRootPath: volumeRootPath, fileSize: fileSize)
+        guard let first = lost.first else { return nil }
+        return "\(lost.count) file(s) no longer have a copy on disk on another drive (first: \(first))"
+    }
+
+    private func otherRetiredRoots(than volumeRootPath: String) -> [String] {
+        scanTargets.filter { $0.isRetired && !$0.searchPath.isEmpty && $0.searchPath != volumeRootPath }
+            .map(\.searchPath)
+    }
+
+    /// The files on the drive that rest on a witness — skipped here (own
+    /// skip note), or a legacy `.manuallyDeleted` row with a witness note —
+    /// whose every witness fails NOW: not a live row off this drive, not on
+    /// another physical drive (`relocateWitnessIndependence`, the device +
+    /// inode rule), or not on disk at the file's size. A labelled row with
+    /// no witness note (Bucket B, source missing) rests on nothing.
+    func filesWithoutAWitnessOnDisk(volumeRootPath: String, fileSize: (String) -> Int64?) -> [String] {
+        let live = Self.liveWitnessPaths(in: records, retiredRoots: otherRetiredRoots(than: volumeRootPath))
+        let independent = relocateWitnessIndependence
+        var lost: [String] = []
+        for rec in Self.recordsScoped(to: volumeRootPath, in: records) {
+            let witnesses = Self.restingWitnesses(of: rec)
+            guard !witnesses.isEmpty else { continue }
+            let held = witnesses.contains { w in
+                live.contains(w) && !PathScope.contains(w, within: volumeRootPath)
+                    && fileSize(w) == rec.sizeBytes && independent(w, rec.fullPath, volumeRootPath)
+            }
+            if !held { lost.append(rec.fullPath) }
+        }
+        return lost
+    }
+
+    /// The witnesses a record's place on its drive rests on: every witness
+    /// line of a legacy labelled row, or the record's own skip witnesses.
+    nonisolated static func restingWitnesses(of rec: VideoRecord) -> [String] {
+        if rec.archiveStage == .manuallyDeleted { return parseWitnessesFromNote(rec.notes) }
+        return ownSkipWitnesses(notes: rec.notes, fullPath: rec.fullPath) ?? []
+    }
+
+    /// One stat: the size of the regular file at `path`, or nil.
+    nonisolated static func statRegularFileSize(_ path: String) -> Int64? {
+        if case .file(let size) = ShowAgainDisk.statPath(path) { return size }
+        return nil
     }
 
     /// Clear all three retire fields — volume returns to active status.

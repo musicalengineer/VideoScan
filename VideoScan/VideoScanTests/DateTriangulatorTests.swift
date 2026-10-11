@@ -879,7 +879,7 @@ struct DateTriangulatorQAReviewTests {
         #expect(orphan.inferredDateRange == nil)
         #expect(orphan.inferredDateReason?.hasPrefix("same bytes") != true, "\(orphan.inferredDateReason ?? "nil")")
         let sidecar = try #require(r.sidecar)
-        let restored = try VideoScanModel.reapplyUnwoundDates(from: sidecar, to: [orphan])
+        let restored = try VideoScanModel.reapplyUnwoundDates(from: sidecar, to: [orphan], isDateReadOnly: { _ in false })
         #expect(restored.count == 1)
         #expect(orphan.inferredDateRange == InferredDateRange(year: 2004))
         #expect(orphan.inferredDateReason?.hasPrefix("same bytes as gone.mov") == true)

@@ -52,8 +52,14 @@ struct VolumeRow: Identifiable {
 /// selection visuals behind hundreds of ms of recompute and producing
 /// the "highlight sometimes appears, sometimes doesn't" lag.
 struct VolumeAggregate {
+    /// Live files on the volume — the footer's counted population only
+    /// (VolumeMediaTally). Drives the Files column.
     let files: Int
+    /// Every record that ever touched the volume (current or origin
+    /// path, any state). Drives "has records" for the Uncataloged filter.
+    let catalogRecords: Int
     let errors: Int
+    /// Bytes of `files` — the Media Size column.
     let mediaBytes: Int64
     /// Pre-rendered Cmd+I popover text. Built once per cache refresh
     /// because the underlying provenance/summary/error tabulation also

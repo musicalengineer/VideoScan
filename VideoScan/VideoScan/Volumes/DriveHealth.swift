@@ -515,7 +515,9 @@ extension DriveHealthProbe {
 
     /// Parses smartctl's `-a -j` JSON output into a snapshot.
     /// Returns nil only if the input isn't valid JSON at all; partial
-    /// JSON (missing fields) still yields a snapshot.
+    /// JSON (missing fields) still yields a snapshot. The document model
+    /// and every per-field decision live in SmartctlReport.swift; this is
+    /// the one place that assembles them into the snapshot.
     nonisolated static func parseSmartctlJSON(
         _ jsonString: String,
         mountPath: String,
@@ -525,145 +527,31 @@ extension DriveHealthProbe {
         exitCode: Int32,
         priorWarnings: [String]
     ) -> DriveHealthSnapshot? {
-        guard let data = jsonString.data(using: .utf8),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return nil
-        }
-
-        var warnings = priorWarnings
-
-        let model = root["model_name"] as? String
-        let serial = root["serial_number"] as? String
-        let firmware = root["firmware_version"] as? String
-
-        let capacityBytes: Int64? = {
-            if let cap = root["user_capacity"] as? [String: Any],
-               let bytes = (cap["bytes"] as? NSNumber)?.int64Value {
-                return bytes
-            }
-            return nil
-        }()
-
-        // SMART overall pass/fail. NVMe smart_status has a "nvme" sub-
-        // dict where `value > 0` means failure; HDD/SATA just has
-        // "passed: bool".
-        let smartStatus: SmartOverall = {
-            guard let smart = root["smart_status"] as? [String: Any] else {
-                return .unknown
-            }
-            if let passed = smart["passed"] as? Bool {
-                return passed ? .passed : .failingNow
-            }
-            if let nvme = smart["nvme"] as? [String: Any],
-               let value = (nvme["value"] as? NSNumber)?.intValue {
-                return value == 0 ? .passed : .failingNow
-            }
-            return .unknown
-        }()
-
-        // Detected media tech — start with the caller's hint, refine if
-        // smartctl tells us more.
-        var mediaTech = mediaTechHint
-        if root["nvme_smart_health_information_log"] != nil {
-            mediaTech = .nvme
-        } else if let rotation = (root["rotation_rate"] as? NSNumber)?.intValue {
-            if rotation == 0 {
-                mediaTech = (mediaTech == .nvme) ? .nvme : .ssd
-            } else if rotation > 0 {
-                mediaTech = .hdd
-            }
-        }
-
-        let powerOnHours: Int? = {
-            if let pot = root["power_on_time"] as? [String: Any],
-               let hours = (pot["hours"] as? NSNumber)?.intValue {
-                return hours
-            }
-            // NVMe carries it inside the SMART log.
-            if let log = root["nvme_smart_health_information_log"] as? [String: Any],
-               let hours = (log["power_on_hours"] as? NSNumber)?.intValue {
-                return hours
-            }
-            return nil
-        }()
-
-        let temperature: Int? = {
-            if let t = root["temperature"] as? [String: Any],
-               let current = (t["current"] as? NSNumber)?.intValue {
-                return current
-            }
-            if let log = root["nvme_smart_health_information_log"] as? [String: Any],
-               let temp = (log["temperature"] as? NSNumber)?.intValue {
-                return temp
-            }
-            return nil
-        }()
-
-        // ATA SMART attribute table → look up by ID.
-        var realloc: Int?
-        var pending: Int?
-        var offlineUncorr: Int?
-        var reallocEvents: Int?
-        if let attrs = root["ata_smart_attributes"] as? [String: Any],
-           let table = attrs["table"] as? [[String: Any]] {
-            for entry in table {
-                guard let id = (entry["id"] as? NSNumber)?.intValue else { continue }
-                let raw = ((entry["raw"] as? [String: Any])?["value"] as? NSNumber)?.intValue
-                switch id {
-                case 5:   realloc = raw
-                case 196: reallocEvents = raw
-                case 197: pending = raw
-                case 198: offlineUncorr = raw
-                default:  break
-                }
-            }
-        }
-
-        var availableSpare: Int?
-        var percentageUsed: Int?
-        var mediaErrors: Int?
-        var dataUnitsWritten: Int64?
-        if let log = root["nvme_smart_health_information_log"] as? [String: Any] {
-            availableSpare = (log["available_spare"] as? NSNumber)?.intValue
-            percentageUsed = (log["percentage_used"] as? NSNumber)?.intValue
-            mediaErrors = (log["media_errors"] as? NSNumber)?.intValue
-            // data_units_written is in 512KB chunks per NVMe spec.
-            if let units = (log["data_units_written"] as? NSNumber)?.int64Value {
-                dataUnitsWritten = units &* 512_000
-            }
-        }
-
-        // Non-zero exit but parseable JSON: surface a soft warning so
-        // the UI can show "we had to work around something".
-        if exitCode != 0 {
-            // smartctl sets bit-flag exit codes; bit 6 (64) is "log
-            // entry error" which is benign on Apple's NVMe.
-            // We only flag if it's not just that bit.
-            if (exitCode & ~64) != 0 {
-                warnings.append("smartctl reported a non-fatal hiccup while reading this drive (exit \(exitCode)). Data below may be partial.")
-            }
-        }
+        guard let report = SmartctlReport(json: jsonString) else { return nil }
+        let attributes = report.ataSmartAttributes
+        let nvmeLog = report.nvmeSmartHealthInformationLog
+        let warnings = priorWarnings + [SmartctlReport.partialDataWarning(exitCode: exitCode)].compactMap { $0 }
 
         return DriveHealthSnapshot(
             mountPath: mountPath,
             devicePath: devicePath,
-            modelName: model,
-            serialNumber: serial,
-            firmware: firmware,
-            capacityBytes: capacityBytes,
+            modelName: report.modelName,
+            serialNumber: report.serialNumber,
+            firmware: report.firmwareVersion,
+            capacityBytes: report.userCapacity?.bytes,
             protocolKind: protocolKind,
-            mediaTech: mediaTech,
-            smartStatus: smartStatus,
-            powerOnHours: powerOnHours,
-            reallocatedSectors: realloc,
-            pendingSectors: pending,
-            offlineUncorrectable: offlineUncorr,
-            reallocatedEvents: reallocEvents,
-            temperatureCelsius: temperature,
-            ssdAvailableSpare: availableSpare,
-            ssdPercentageUsed: percentageUsed,
-            ssdMediaErrors: mediaErrors,
-            dataWrittenBytes: dataUnitsWritten,
+            mediaTech: report.mediaTech(refining: mediaTechHint),
+            smartStatus: report.overallStatus,
+            powerOnHours: report.powerOnHours,
+            reallocatedSectors: attributes?.rawValue(id: SmartctlReport.ATASmartAttributes.reallocatedSectorCount),
+            pendingSectors: attributes?.rawValue(id: SmartctlReport.ATASmartAttributes.currentPendingSectorCount),
+            offlineUncorrectable: attributes?.rawValue(id: SmartctlReport.ATASmartAttributes.offlineUncorrectableCount),
+            reallocatedEvents: attributes?.rawValue(id: SmartctlReport.ATASmartAttributes.reallocatedEventCount),
+            temperatureCelsius: report.temperatureCelsius,
+            ssdAvailableSpare: nvmeLog?.availableSpare,
+            ssdPercentageUsed: nvmeLog?.percentageUsed,
+            ssdMediaErrors: nvmeLog?.mediaErrors,
+            dataWrittenBytes: report.dataWrittenBytes,
             probedAt: Date(),
             probeWarnings: warnings
         )

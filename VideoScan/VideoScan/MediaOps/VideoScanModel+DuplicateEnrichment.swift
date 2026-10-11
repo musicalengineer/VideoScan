@@ -56,8 +56,9 @@ extension VideoScanModel {
             carried.append("detected people")
         }
         // Inferred date (+ confidence). Never onto a Master Archive file
-        // (Rick 2026-09-27): its date is the one it is filed under.
-        if master.inferredRecordDate == nil, extra.inferredRecordDate != nil, !isArchiveElement(master) {
+        // (Rick 2026-09-27) or an Archived-stage keeper (Rick 2026-10-11,
+        // the date seam): its date is the one it is filed under.
+        if master.inferredRecordDate == nil, extra.inferredRecordDate != nil, !isDateReadOnly(master) {
             master.inferredRecordDate = extra.inferredRecordDate
             master.inferredDateConfidence = extra.inferredDateConfidence
             master.inferredDateSource = extra.inferredDateSource

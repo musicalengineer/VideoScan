@@ -143,6 +143,16 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
     /// dangling symlink). DISK I/O. Task-local test seam.
     @TaskLocal static var mountIdentityProbe: @Sendable (String) -> MountIdentity? = { liveMountIdentity($0) }
 
+    /// lstat(2): is `path` itself a symbolic link (dangling or not)?
+    /// Task-local test seam.
+    @TaskLocal static var symlinkProbe: @Sendable (String) -> Bool = { liveIsSymlink($0) }
+
+    nonisolated static func liveIsSymlink(_ path: String) -> Bool {
+        var st = stat()
+        guard lstat(path, &st) == 0 else { return false }
+        return (st.st_mode & S_IFMT) == S_IFLNK
+    }
+
     /// Network mount points (in-memory mount table — no server round
     /// trip). Scan-target aliases on them are never resolved.
     @TaskLocal static var networkMountRootsProbe: @Sendable () -> [String] = {
@@ -439,11 +449,12 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
     /// fresh read of the file's OWN volume UUID (a volume mounted since
     /// the snapshot, a custom mount path whose text hides the volume).
     func verdictAtRemoval(path: String, probe: (String) -> String?,
-                          identity: (String) -> MountIdentity? = { ArchiveVolumeProtection.mountIdentityProbe($0) })
+                          identity: (String) -> MountIdentity? = { ArchiveVolumeProtection.mountIdentityProbe($0) },
+                          isSymlink: (String) -> Bool = { ArchiveVolumeProtection.symlinkProbe($0) })
         -> Verdict {
         let v = verdict(forPath: path)
         guard v == .clear else { return v }
-        if let real = Self.resolvedPath(of: path, identity: identity), real != path {
+        if let real = Self.resolvedPath(of: path, identity: identity, isSymlink: isSymlink), real != path {
             let v2 = verdict(forPath: real)
             if v2 != .clear { return v2 }
         }
@@ -455,17 +466,7 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
         case .externalVolume:
             guard let uuid = expectedUUID else { return .clear }
             guard let own = probe(path) else {
-                // The file's own volume identity cannot be read (codex #258
-                // r5-4): clear only what is PROVABLY another volume — the
-                // boot disk, a network share, or (the archive found mounted
-                // by its UUID) a mount that is not the archive's.
-                let parent = (path as NSString).deletingLastPathComponent
-                if let mount = (identity(path) ?? identity(parent))?.mountPoint {
-                    if Self.isBootMountPoint(mount) { return .clear }
-                    if archiveRoots.contains(Self.canonical(mount).lowercased()) { return .onArchiveVolume }
-                    if isResolved { return .clear }
-                }
-                return Self.isNetworkMount(path) ? .clear : .unprovable
+                return verdictWithoutOwnUUID(path: path, uuid: uuid, probe: probe, identity: identity, isSymlink: isSymlink)
             }
             return own == uuid ? .onArchiveVolume : .clear
         case .unknown:
@@ -477,12 +478,106 @@ struct ArchiveVolumeProtection: Sendable, Equatable {
     }
 
     /// The symlink-free, firmlink-canonical path of `path` (or, for a file
-    /// that does not exist, of its parent + name). nil when neither resolves.
-    private static func resolvedPath(of path: String, identity: (String) -> MountIdentity?) -> String? {
-        if let id = identity(path) { return canonical(id.resolvedPath) }
-        let parent = (path as NSString).deletingLastPathComponent
-        guard !parent.isEmpty, parent != path, let id = identity(parent) else { return nil }
-        return canonical((id.resolvedPath as NSString).appendingPathComponent((path as NSString).lastPathComponent))
+    /// that does not exist, of its nearest existing ancestor + the missing
+    /// tail). nil when nothing on the way up resolves.
+    private static func resolvedPath(of path: String, identity: (String) -> MountIdentity?,
+                                     isSymlink: (String) -> Bool) -> String? {
+        nearestExistingAncestor(of: path, identity: identity, isSymlink: isSymlink).map { canonical($0.pathIdentity.resolvedPath) }
+    }
+
+    // MARK: A file that is gone (Rick's junk run, 2026-10-11)
+    //
+    // A file that no longer exists has no volume UUID and no realpath, and
+    // often the folders above it are gone too (a whole browser cache
+    // folder deleted). Asking only the file and its parent then proved
+    // nothing, and 38 junk files on /Volumes/Projects were held as
+    // "FamilyArchive is not connected" while FamilyArchive was mounted.
+    // The nearest folder that DOES exist answers instead: nothing below it
+    // exists, so no other volume can be mounted in between — the gone file
+    // would live on that folder's volume.
+
+    /// The nearest existing path at or above a file (≈ realpath + statfs of
+    /// the first survivor on the way up), and the missing tail below it.
+    struct ExistingAncestor: Equatable, Sendable {
+        /// The survivor's own identity (its real path and mount point).
+        let identity: MountIdentity
+        /// The missing components below the survivor ("" when the path itself exists).
+        let tail: String
+        /// How many levels up the survivor is (0 = the path itself).
+        let levels: Int
+
+        /// Where the path itself would be: the survivor's real path plus the tail.
+        var pathIdentity: MountIdentity {
+            guard !tail.isEmpty else { return identity }
+            return MountIdentity(resolvedPath: (identity.resolvedPath as NSString).appendingPathComponent(tail),
+                                 mountPoint: identity.mountPoint)
+        }
+    }
+
+    /// Most levels the climb may go up — far deeper than any real media path.
+    static let maxAncestorClimb = 64
+
+    /// Climb from `path` to the first path `identity` resolves. Bounded:
+    /// never above a "/Volumes/<name>" root (reading "/Volumes" itself would
+    /// answer with the BOOT disk for an unplugged drive's path), never
+    /// above "/", at most `maxAncestorClimb` levels. nil when nothing on the
+    /// way resolves. Climbs the CANONICAL spelling, so "/volumes/X/…" and
+    /// "/System/Volumes/Data/Volumes/X/…" stop at the same ceiling (QA r1).
+    ///
+    /// "Missing" must mean ABSENT: a DANGLING symlink fails realpath just
+    /// like a gone folder, but the file behind it lives wherever the link
+    /// pointed — an unplugged FamilyArchive, say — not on the survivor's
+    /// drive. So when lstat sees a missing component as a symlink, the
+    /// climb proves nothing and returns nil (QA r2 on 92969b8da).
+    static func nearestExistingAncestor(of path: String, identity: (String) -> MountIdentity?,
+                                        isSymlink: (String) -> Bool = { symlinkProbe($0) }) -> ExistingAncestor? {
+        var current = canonical(path)
+        let ceiling = externalVolumeRoot(of: current)?.lowercased()
+        var missing: [String] = []
+        while missing.count <= maxAncestorClimb {
+            if let id = identity(current) {
+                let tail = missing.isEmpty ? "" : NSString.path(withComponents: Array(missing.reversed()))
+                return ExistingAncestor(identity: id, tail: tail, levels: missing.count)
+            }
+            if isSymlink(current) { return nil }
+            let parent = (current as NSString).deletingLastPathComponent
+            guard current.lowercased() != ceiling, !parent.isEmpty, parent != current else { return nil }
+            missing.append((current as NSString).lastPathComponent)
+            current = parent
+        }
+        return nil
+    }
+
+    /// The file's own volume UUID could not be read (codex #258 r5-4) —
+    /// usually because it is gone. Clear only what is PROVABLY another
+    /// volume; never clear something that could be the archive.
+    private func verdictWithoutOwnUUID(path: String, uuid: String, probe: (String) -> String?,
+                                       identity: (String) -> MountIdentity?, isSymlink: (String) -> Bool) -> Verdict {
+        // nil also when a missing component is a dangling symlink: no proof.
+        guard let found = Self.nearestExistingAncestor(of: path, identity: identity, isSymlink: isSymlink) else {
+            return Self.isNetworkMount(path) ? .clear : .unprovable
+        }
+        let mount = Self.canonical(found.identity.mountPoint)
+        let mountKey = mount.lowercased()
+        if archiveRoots.contains(mountKey) || aliasRoots.contains(mountKey) { return .onArchiveVolume }
+        if Self.isBootMountPoint(mount) {
+            // The file or its folder on the boot disk is clear (as before).
+            // A deeper gone tree whose survivor is on the boot disk may hide
+            // a DANGLING symlink into the unplugged archive (a scan target
+            // like ~/ArchiveLink — realpath fails on it just as on a gone
+            // folder) or an unplugged custom mount's leftover directory, so
+            // the boot disk's UUID proves nothing (QA r1 on 680157026):
+            // clear only when the archive is found mounted elsewhere.
+            return found.levels <= 1 || isResolved ? .clear : .unprovable
+        }
+        // A survivor on another drive, above the gone file: ITS volume is
+        // the file's volume. Read through its realpath, so a symlinked
+        // survivor is not judged by the volume the link itself sits on.
+        if found.levels > 0, let survivorUUID = probe(found.identity.resolvedPath) {
+            return survivorUUID == uuid ? .onArchiveVolume : .clear
+        }
+        if isResolved { return .clear }
+        return Self.isNetworkMount(path) ? .clear : .unprovable
     }
 
     // MARK: Path helpers (pure)
@@ -595,7 +690,13 @@ struct ArchiveRemovalCheck: Sendable {
     func refusal(forPath path: String) -> (note: String, transient: Bool, leavesAlone: Bool)? {
         guard let found = bulkRefusal(forPath: path) else { return nil }
         let transient = found.refusal == .archiveVolumeUnprovable && (isProvisional || protection?.isProvisional == true)
-        return (VideoScanModel.bulkDeleteRefusalNote(found.refusal, volume: found.volume), transient, found.refusal.leavesAlone)
+        // Unprovable at removal can mean "the archive is away" OR "this
+        // file's drive could not be read" — the snapshot says which.
+        var note = VideoScanModel.bulkDeleteRefusalNote(found.refusal, volume: found.volume)
+        if found.refusal == .archiveVolumeUnprovable, let protection {
+            note = VideoScanModel.archiveVolumeUnprovableNote(protection)
+        }
+        return (note, transient, found.refusal.leavesAlone)
     }
 
     /// The same answer as the gate's own value, for a verb that words its

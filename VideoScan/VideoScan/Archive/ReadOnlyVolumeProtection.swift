@@ -267,23 +267,35 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
     /// rename or remount protects it before any rebuild lands (codex #258
     /// F4).
     func verdictAtRemoval(path: String, probe: (String) -> String?,
-                          identity: (String) -> MountIdentity? = { ArchiveVolumeProtection.mountIdentityProbe($0) }) -> Verdict? {
+                          identity: (String) -> MountIdentity? = { ArchiveVolumeProtection.mountIdentityProbe($0) },
+                          isSymlink: (String) -> Bool = { ArchiveVolumeProtection.symlinkProbe($0) }) -> Verdict? {
         guard !entries.isEmpty else { return nil }
         if let v = verdict(forPath: path) { return v }
-        let parent = (path as NSString).deletingLastPathComponent
-        let resolved = identity(path)?.resolvedPath
-            ?? identity(parent).map { ($0.resolvedPath as NSString).appendingPathComponent((path as NSString).lastPathComponent) }
-        if let resolved {
+        // A file that is gone (and maybe folders above it): its nearest
+        // existing ancestor speaks for it (Rick's junk run, 2026-10-11) —
+        // none when a missing component is a dangling symlink (QA r2): then
+        // the "could not read" hold below decides.
+        let found = ArchiveVolumeProtection.nearestExistingAncestor(of: path, identity: identity, isSymlink: isSymlink)
+        if let resolved = found?.pathIdentity.resolvedPath {
             let real = ArchiveVolumeProtection.canonical(resolved)
             if real != path, let v = verdict(forPath: real) { return v }
         }
         let byIdentity = entries.filter { $0.volumeUUID != nil }
         guard !byIdentity.isEmpty else { return nil }
-        guard let own = probe(path) else {
+        // Nothing below a surviving ancestor exists: its volume is the
+        // file's — unless the survivor is on the BOOT disk, where a missing
+        // component may be a dangling symlink into an unplugged marked drive
+        // (QA r1 on 680157026): never proof, the hold below decides.
+        let survivorUUID = found.flatMap { f -> String? in
+            guard f.levels > 0, !ArchiveVolumeProtection.isBootMountPoint(f.identity.mountPoint) else { return nil }
+            return probe(f.identity.resolvedPath)
+        }
+        guard let own = probe(path) ?? survivorUUID else {
             // The file's own volume identity cannot be read (codex #258
             // r5-4): it may be a marked drive under a name nobody marked.
-            // Clear only the provably-other: the boot disk, a network share.
-            if let mount = (identity(path) ?? identity(parent))?.mountPoint, ArchiveVolumeProtection.isBootMountPoint(mount) { return nil }
+            // Clear only the provably-other: the boot disk (the file or its
+            // folder), a network share.
+            if let found, found.levels <= 1, ArchiveVolumeProtection.isBootMountPoint(found.identity.mountPoint) { return nil }
             if ArchiveVolumeProtection.isNetworkMount(path) { return nil }
             let names = byIdentity.map(\.label).joined(separator: " or ")
             return .readOnly("\(names) (VideoScan could not read this drive's identity, so it cannot rule that out)")
@@ -296,10 +308,7 @@ struct ReadOnlyVolumeProtection: Sendable, Equatable {
             if entry.subpath.isEmpty { return .readOnly(entry.label) }
             if !placed {
                 placed = true
-                let id = identity(path) ?? identity(parent).map {
-                    MountIdentity(resolvedPath: ($0.resolvedPath as NSString).appendingPathComponent((path as NSString).lastPathComponent),
-                                  mountPoint: $0.mountPoint)
-                }
+                let id = found?.pathIdentity
                 place = id.map { id in
                     let real = ArchiveVolumeProtection.canonical(id.resolvedPath).lowercased()
                     let mount = ArchiveVolumeProtection.canonical(id.mountPoint).lowercased()

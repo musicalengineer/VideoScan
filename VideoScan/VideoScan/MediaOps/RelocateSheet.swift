@@ -256,7 +256,7 @@ struct RelocateSheet: View {
                 Toggle("Skip duplicates already on other volumes",
                        isOn: $skipDupsOnOtherVolumes)
                     .accessibilityIdentifier("relocateSheet.skipDupsOnOtherVolumes")
-                    .help("When ON, files already present (same size + hash) on a volume other than source or destination are marked deleted in the catalog with a witness audit trail, instead of being copied. The source file is never touched.")
+                    .help("When ON, files already present (same size + hash) on a volume other than source or destination are skipped instead of being copied, with a note naming the copy that was found. The source file is never touched and stays in the catalog as it was.")
 
                 // Disclosure: populated only after a preview run.
                 if let preview = previewResult {
@@ -376,7 +376,7 @@ struct RelocateSheet: View {
             // committing.
             bucketRow("Safely redundant",
                       count: nRedundant,
-                      detail: "\(redundantBytesString) — will mark as deleted with audit trail",
+                      detail: "\(redundantBytesString) — will skip (copy elsewhere; file untouched)",
                       identifier: "relocateSheet.bucket.safelyRedundant",
                       emphasized: nRedundant > 0)
             bucketRow("Source-side moves", count: r.sourceSideMoves.count, detail: "paths rewritten")

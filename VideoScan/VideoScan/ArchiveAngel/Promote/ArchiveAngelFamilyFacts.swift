@@ -154,11 +154,14 @@ enum ArchiveAngelFamilyFacts {
 
     /// Promote time: stamp the LIVE identity relatives' facts onto
     /// `original`, and the original's facts onto its dateless / placeless
-    /// `companions`, never overwriting a record's own value. Returns the
-    /// log lines and what was replaced (for `restore`).
+    /// `companions`, never overwriting a record's own value. A record the
+    /// date seam freezes (`isDateReadOnly` — the model's
+    /// VideoScanModel.isDateReadOnly, Rick 2026-10-11) never takes a date;
+    /// its place and attestations still ride. Returns the log lines and
+    /// what was replaced (for `restore`).
     @MainActor
     static func stamp(entry: ArchiveAngelPlan.Entry, original: VideoRecord, companions: [VideoRecord],
-                      relatives: Relatives) -> StampResult {
+                      relatives: Relatives, isDateReadOnly: (VideoRecord) -> Bool) -> StampResult {
         var out = StampResult()
         let sources = relatives.identity.filter { $0.id != original.id }
         let typed = entry.proposedDate?.trimmingCharacters(in: .whitespaces) ?? ""
@@ -167,7 +170,7 @@ enum ArchiveAngelFamilyFacts {
         // inherited (a date typed in Review is the person's decision).
         if original.userDate == nil, let best = ArchiveAngelFamilyStamp.bestUserDateSource(among: sources) {
             if typed.isEmpty || typed == best.value {
-                if let f = stampDate(best.value, best.confidence, onto: original) {
+                if let f = stampDate(best.value, best.confidence, onto: original, isDateReadOnly: isDateReadOnly) {
                     out.facts.append(f)
                     out.lines.append("Archive Angel: \(original.filename) — date \(best.value) (\(best.confidence)) inherited from \(best.from.filename)")
                 }
@@ -197,7 +200,8 @@ enum ArchiveAngelFamilyFacts {
         for c in companions where c.id != original.id {
             var what: [String] = []
             if let d = original.userDate, typed.isEmpty || typed == d,
-               let f = stampDate(d, original.userDateConfidence ?? UserDateConfidence.estimated.rawValue, onto: c) {
+               let f = stampDate(d, original.userDateConfidence ?? UserDateConfidence.estimated.rawValue, onto: c,
+                                 isDateReadOnly: isDateReadOnly) {
                 out.facts.append(f); what.append("date \(d)")
             }
             if let p = original.userPlace,
@@ -219,15 +223,17 @@ enum ArchiveAngelFamilyFacts {
     /// companions) — for callers and tests that already established that.
     @MainActor
     static func stamp(entry: ArchiveAngelPlan.Entry, original: VideoRecord, companions: [VideoRecord],
-                      family: [VideoRecord]) -> StampResult {
+                      family: [VideoRecord], isDateReadOnly: (VideoRecord) -> Bool) -> StampResult {
         let targets = Set([original.id] + companions.map(\.id))
         let others = family.filter { !targets.contains($0.id) }
         return stamp(entry: entry, original: original, companions: companions,
-                     relatives: Relatives(identity: others, sameBytes: others))
+                     relatives: Relatives(identity: others, sameBytes: others), isDateReadOnly: isDateReadOnly)
     }
 
     @MainActor
-    private static func stampDate(_ value: String, _ confidence: String, onto r: VideoRecord) -> ArchiveAngelPlan.StampedFact? {
+    private static func stampDate(_ value: String, _ confidence: String, onto r: VideoRecord,
+                                  isDateReadOnly: (VideoRecord) -> Bool) -> ArchiveAngelPlan.StampedFact? {
+        guard !isDateReadOnly(r) else { return nil }   // archived: the filed date stands
         let before = (r.userDate, r.userDateConfidence)
         guard !ArchiveAngelFamilyStamp.stampDateIfMissing((value, confidence), onto: [r]).isEmpty else { return nil }
         return .init(recordID: r.id, field: .date, previousValue: before.0, previousConfidence: before.1,

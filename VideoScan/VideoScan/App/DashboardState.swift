@@ -396,9 +396,9 @@ final class DashboardState: ObservableObject {
     @Published var relocateSourceMoves: Int = 0
     @Published var relocateSkipped: Int = 0
     /// Records classified as "same content exists on a third volume" by the
-    /// new safelyRedundant rule. These are marked .manuallyDeleted with an
-    /// audit-trail note carrying the witness list; the source file is never
-    /// touched. See VideoScanModel+Relocate.swift §1A.
+    /// new safelyRedundant rule. These are SKIPPED (not copied, label left
+    /// as it was, 2026-10-11) with an audit-trail note carrying the source
+    /// path and the witness list; the source file is never touched. See VideoScanModel+Relocate.swift §1A.
     @Published var relocateSafelyRedundant: Int = 0
     /// Sum of sizeBytes across safelyRedundant records. Surfaced in the UI
     /// disclosure under the toggle and in the end-of-batch summary as the

@@ -348,7 +348,9 @@ struct RelocateRetireVolumeTests {
         defer { try? FileManager.default.removeItem(at: ws.root) }
 
         // One source file backed by one Bucket E witness → after Relocate,
-        // the source record is .manuallyDeleted, 100% disposed, offer fires.
+        // the source record is skipped (label untouched since 2026-10-11)
+        // with the witness note, so it is accounted for: 100% disposed,
+        // offer fires.
         let src = ws.source.appendingPathComponent("clip.bin")
         let (sx, hx) = try writeFile(at: src, bytes: 2048)
         let sourceRec = makeRecord(fullPath: src.path, size: sx, md5: hx)

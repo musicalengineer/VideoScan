@@ -46,7 +46,7 @@ struct VolumeStatusCacheTests {
                               model: VideoScanModel) -> VolumeRetireStatus {
         let total = VideoScanModel.totalRecordsOn(
             volumeRootPath: volumePath, in: model.records)
-        let disposed = VideoScanModel.manuallyDeletedOn(
+        let disposed = VideoScanModel.disposedOn(
             volumeRootPath: volumePath, in: model.records)
         let originated = VideoScanModel.originatedOnCount(
             volumeRootPath: volumePath, in: model.records)

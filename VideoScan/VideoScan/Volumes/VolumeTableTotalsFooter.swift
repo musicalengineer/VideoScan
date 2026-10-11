@@ -75,6 +75,11 @@ struct VolumeTableTotalsFooter: View {
     var archivedBytes: Int64? = nil
     var archivedHelp: String = ""
 
+    /// When set, the hidden-by-label caption ends in "Review…", which opens
+    /// the Show Again dry run (Rick 2026-10-11). A plain reference — the
+    /// footer never observes the model.
+    var showAgainModel: VideoScanModel? = nil
+
     // MARK: Derived geometry
 
     /// Content origin of a measured column, falling back to the
@@ -260,20 +265,26 @@ struct VolumeTableTotalsFooter: View {
             .accessibilityLabel(accessibilitySentence)
             .accessibilityIdentifier("catalog.totalMediaFooter")
 
-            // Honesty caption (Rick 2026-08-18): the gross figure now
-            // EXCLUDES records marked Manually Deleted, to agree with
-            // the catalog view — but Migrate's safely-redundant rule
-            // marks without touching the file, so those bytes are very
-            // often still occupying a drive. Say so, under the figure
-            // they were removed from, in the footer's caption register.
+            // Honesty caption (Rick 2026-08-18): the gross figure
+            // EXCLUDES records labelled Manually Deleted, to agree with
+            // the catalog view — but those labels were catalog-only (an
+            // old Migrate rule, a keeper-fold bug), so the bytes are
+            // still on a drive. Say so, under the figure they were
+            // removed from, in the footer's caption register, with the
+            // "Review…" link that shows them again (2026-10-11).
             // Absent entirely when there is nothing to disclose, so the
             // common case pays no height for it.
             if let caption = totals.manuallyDeletedCaption {
-                Text(caption)
-                    .font(Self.captionFont)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(caption)
+                        .font(Self.captionFont)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                    if let model = showAgainModel, totals.manuallyDeletedOnDiskBytes ?? 0 > 0 {
+                        ShowAgainReviewLink(model: model)
+                    }
+                }
                     .padding(.leading, mediaSizeX)
                     .padding(.bottom, 6)
                     .frame(maxWidth: .infinity, alignment: .leading)

@@ -696,13 +696,14 @@ struct VolumesWindow: View {
     }
 
     /// Build the retire offer payload for the confirmation sheet. Pulls
-    /// the witness union from the volume's `.manuallyDeleted` records via
+    /// the witness union from the volume's accounted-for records via
     /// the existing aggregator, so the sheet shows exactly the same
     /// witnesses the post-Relocate flow would have shown.
     private func presentRetireSheet(for target: CatalogScanTarget,
                                      status: VolumeRetireStatus) {
         let witnesses = VideoScanModel.aggregateRetiredWitnesses(
-            volumeRootPath: target.searchPath, in: model.records
+            volumeRootPath: target.searchPath, in: model.records,
+            retiredRoots: model.scanTargets.filter { $0.isRetired && !$0.searchPath.isEmpty }.map(\.searchPath)
         )
         retireOffer = PendingRetireOffer(
             volumeRootPath: target.searchPath,

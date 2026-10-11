@@ -122,9 +122,15 @@ extension VideoScanModel {
     ///                           checked, case-insensitive (finding 4)
     ///   starRating              max of the two
     ///   mediaDisposition        copy only while repair is unreviewed
-    ///   lifecycleStage          copy only while repair is cataloged
-    ///   archiveStage            copy only while repair is .none
-    ///   userDate(+confidence)   copy only when repair's is nil
+    ///   lifecycleStage          copy only while repair is cataloged, and
+    ///                           never Trashed / Deleted (B5)
+    ///   archiveStage            copy only while repair is .none, and never
+    ///                           Manually Deleted / Salvage Failed (B5) —
+    ///                           see `travelsWithFootage` below
+    ///   userDate(+confidence)   copy only when repair's is nil, and never
+    ///                           onto a record the date seam froze
+    ///                           (`isDateReadOnly`, judged on entry —
+    ///                           Rick 2026-10-11)
     ///
     /// Shared with duplicate deletion (2026-08-18): the same rules fold
     /// an extra copy's human metadata into its group keeper before the
@@ -134,6 +140,8 @@ extension VideoScanModel {
     @MainActor
     @discardableResult
     func applyHumanMetadataInheritance(from original: VideoRecord, to repair: VideoRecord) -> [String] {
+        // Judged BEFORE the stage carry below can change it.
+        let dateReadOnly = isDateReadOnly(repair)
         var carried: [String] = []
         let tagsBefore = repair.tags
         for tag in original.tags {
@@ -177,17 +185,22 @@ extension VideoScanModel {
             repair.mediaDisposition = original.mediaDisposition
             carried.append("disposition")
         }
-        if repair.lifecycleStage == .cataloged, original.lifecycleStage != .cataloged {
+        // Stages ride only when they describe the footage, never one file's
+        // fate (B5, 2026-10-11): the prune fold runs AFTER the Trash routine
+        // stamped the removed copy `.trashed`, and Migrate's `.manuallyDeleted`
+        // label once hid a keeper this way.
+        if repair.lifecycleStage == .cataloged, original.lifecycleStage != .cataloged,
+           original.lifecycleStage.travelsWithFootage {
             repair.lifecycleStage = original.lifecycleStage
             carried.append("lifecycle stage")
         }
-        if repair.archiveStage == .none, original.archiveStage != .none {
+        if repair.archiveStage == .none, original.archiveStage != .none,
+           original.archiveStage.travelsWithFootage {
             repair.archiveStage = original.archiveStage
             carried.append("archive stage")
         }
-        if repair.userDate == nil, original.userDate != nil {
-            repair.userDate = original.userDate
-            repair.userDateConfidence = original.userDateConfidence
+        if carryHandEnteredDate(from: original, to: repair, targetDateReadOnly: dateReadOnly,
+                                writer: "carry marks from \(original.filename)") {
             carried.append("date")
         }
         // Rick's hand-entered place rides exactly like his date (codex
@@ -406,17 +419,20 @@ extension VideoScanModel {
             adopted = probed
             records.append(probed)
         }
+        // The date seam, judged before the provenance below rewrites
+        // derivationKind (an archive copy would otherwise stop looking like
+        // one). Rick 2026-10-11.
+        let dateReadOnly = isDateReadOnly(adopted)
 
         // Same provenance shape as RebuildAudioJob.catalogRebuildOutput.
         adopted.derivedFrom = original.id
         adopted.derivationKind = ExternalRepairAdoption.derivationKind
         // The adopted copy is the same footage — Rick's hand-entered
         // date carries over with its confidence (GH #117 convention),
-        // but a date he already put on the adopted record itself wins.
-        if adopted.userDate == nil {
-            adopted.userDate = original.userDate
-            adopted.userDateConfidence = original.userDateConfidence
-        }
+        // but a date he already put on the adopted record itself wins, and
+        // an archived record keeps its filed date (the date seam).
+        carryHandEnteredDate(from: original, to: adopted, targetDateReadOnly: dateReadOnly,
+                             writer: "Link Repaired Copy")
         // Same rule for Rick's place (codex #1370 P0).
         if adopted.userPlace == nil {
             adopted.userPlace = original.userPlace
@@ -476,5 +492,48 @@ extension VideoScanModel {
         }
         lifecycleLog.info("unsupersede: \(rec.filename, privacy: .public) restored to the default view")
         return true
+    }
+}
+
+// MARK: - Which stages may follow the footage onto another copy (B5, 2026-10-11)
+//
+// The human-metadata merge folds a removed (or superseded) copy's marks into
+// the copy that stays. A stage may ride along only when it describes the
+// FOOTAGE — how far along the archive path these pictures are — because the
+// copy that stays holds the same footage. A stage that describes what
+// happened to ONE FILE never rides: the file that stays did not go to the
+// Trash, was not labelled deleted by Migrate, and did not fail salvage.
+// Before this rule a keeper took `.manuallyDeleted` from a trashed extra and
+// vanished from every view (6 files, two on FamilyArchive).
+//
+// Exhaustive switches with no `default` on purpose: a new case does not
+// compile until someone decides whether it is about the footage or about
+// one file. (For Rick: ≈ a C++ switch over an enum class with
+// -Werror=switch — the compiler is the checklist.)
+
+extension ArchiveStage {
+    /// True when this stage may be carried from one copy of the footage to
+    /// another (repair confirm, duplicate keeper fold, prune fold).
+    var travelsWithFootage: Bool {
+        switch self {
+        case .none, .healthy, .masterAssigned, .backedUp, .readyForArchive, .archived:
+            return true
+        case .manuallyDeleted, .salvageFailed:
+            return false
+        }
+    }
+}
+
+extension LifecycleStage {
+    /// True when this lifecycle stage may be carried to another copy.
+    /// Trashed / Deleted describe one file leaving the disk — never the copy
+    /// that stays.
+    var travelsWithFootage: Bool {
+        switch self {
+        case .cataloged, .reviewing, .workbench, .archived:
+            return true
+        case .trashed, .deletedPermanently:
+            return false
+        }
     }
 }

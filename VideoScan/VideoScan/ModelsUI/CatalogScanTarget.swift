@@ -81,9 +81,10 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     /// is excluded from scan suggestions, "missing volume" complaints, and
     /// dashboard nags. Reinstate by setting all three back to nil.
     ///
-    /// Set after a Relocate run that lands every catalogued record on the
-    /// source volume in `.manuallyDeleted` (Bucket B + Bucket E disposed
-    /// 100% of records). Two-button modal (`Retire` / `Skip for now`) —
+    /// Set after a Relocate run leaves every catalogued record on the
+    /// source volume accounted for (Bucket B labelled missing, Bucket E
+    /// skipped with a witness that still holds — isDisposedForRetire).
+    /// Two-button modal (`Retire` / `Skip for now`) —
     /// no typed confirmation; fully reversible via the Reinstate context
     /// action. See docs/design/relocate_volume_plan.md §1B.
     ///
@@ -97,7 +98,8 @@ final class CatalogScanTarget: ObservableObject, Identifiable {
     @Published var retiredReason: String?
 
     /// Union of Bucket E witness paths aggregated across every
-    /// `.manuallyDeleted` record on this volume. Lets the post-retire
+    /// accounted-for record on this volume (aggregateRetiredWitnesses).
+    /// Lets the post-retire
     /// audit trail answer "where does the content from this drive live now?"
     /// without re-querying every record. Deduped at retire time.
     @Published var retiredWitnesses: [String]?
