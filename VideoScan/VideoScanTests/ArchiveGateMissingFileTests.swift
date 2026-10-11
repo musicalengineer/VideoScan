@@ -40,9 +40,14 @@ private struct FakeDisk: Sendable {
     var existing: Set<String>
     var mounts: [String: String?]          // mount point → UUID (nil = unreadable)
     var links: [String: String] = [:]      // existing path → its real path
+    /// Symlinks whose target is gone: realpath fails, lstat sees a link.
+    var dangling: Set<String> = []
     /// Every path `identity` was asked about (to pin the climb's bounds).
     final class Asked: @unchecked Sendable { var paths: [String] = [] }
     let asked = Asked()
+
+    /// lstat(2) says "symbolic link" (≈ S_ISLNK).
+    func isSymlink(_ p: String) -> Bool { dangling.contains(p) || links[p] != nil }
 
     private func mountPoint(of real: String) -> String {
         mounts.keys.filter { $0 == "/" || real == $0 || real.hasPrefix($0 + "/") }.max { $0.count < $1.count } ?? "/"
@@ -260,7 +265,9 @@ struct ArchiveGateMissingFileSensor {
                              uuidProbe: { disk.probe($0) }, beforeRemoval: nil,
                              remove: { url in Issue.record("moved \(url.path)") })
         return ArchiveVolumeProtection.$mountIdentityProbe.withValue({ disk.identity($0) }) {
-            t.run(path: path, protections: protections, catalogBytes: 1)
+            ArchiveVolumeProtection.$symlinkProbe.withValue({ disk.isSymlink($0) }) {
+                t.run(path: path, protections: protections, catalogBytes: 1)
+            }
         }
     }
 
@@ -354,6 +361,59 @@ struct ArchiveGateBootSurvivorRedTests {
                                                      probe: disk.probe, identity: disk.identity, networkRoots: { [] })
         #expect(readOnly.verdictAtRemoval(path: "/Users/test/SanLink/Clips/a.mov", probe: disk.probe, identity: disk.identity) != nil,
                 "a file behind a dangling link into the unplugged Read-only drive was cleared")
+    }
+
+    /// Round 2: a DANGLING symlink on a drive that is not the boot disk.
+    /// /Volumes/TestProjects/link pointed into the archive, which is now
+    /// unplugged; realpath fails on it as on a gone folder, and the climb
+    /// used to reach TestProjects and clear the file by that drive's UUID.
+    @Test func danglingSymlinkOnAnotherDriveIntoUnpluggedArchiveIsNotCleared() throws {
+        var disk = rickDisk(archiveMounted: false)
+        disk.dangling.insert("/Volumes/TestProjects/link")
+        let p = try protection(disk)
+        let v = ArchiveVolumeProtection.$symlinkProbe.withValue({ disk.isSymlink($0) }) {
+            p.verdictAtRemoval(path: "/Volumes/TestProjects/link/x/a.mov", probe: disk.probe, identity: disk.identity)
+        }
+        #expect(v == .unprovable, "a file behind a dangling link into the unplugged archive: \(v)")
+        // Archive mounted, link dangling all the same: no proof either.
+        var mounted = rickDisk()
+        mounted.dangling.insert("/Volumes/TestProjects/link")
+        let pm = try protection(mounted)
+        let vm = ArchiveVolumeProtection.$symlinkProbe.withValue({ mounted.isSymlink($0) }) {
+            pm.verdictAtRemoval(path: "/Volumes/TestProjects/link/x/a.mov", probe: mounted.probe, identity: mounted.identity)
+        }
+        #expect(vm == .unprovable, "\(vm)")
+    }
+
+    @Test func danglingSymlinkOnAnotherDriveIntoUnpluggedReadOnlyDriveIsHeld() {
+        var disk = rickDisk()
+        disk.dangling.insert("/Volumes/TestProjects/sanlink")
+        let marks = [ReadOnlyVolumeProtection.Mark(searchPath: "/Volumes/TestSanDisk", volumeUUID: "TEST-RO")]
+        let readOnly = ReadOnlyVolumeProtection.make(marks: marks, mountedRoots: { ["/Volumes/TestProjects", "/Volumes/TestFamilyArchive"] },
+                                                     probe: disk.probe, identity: disk.identity, networkRoots: { [] })
+        let v = ArchiveVolumeProtection.$symlinkProbe.withValue({ disk.isSymlink($0) }) {
+            readOnly.verdictAtRemoval(path: "/Volumes/TestProjects/sanlink/Clips/a.mov", probe: disk.probe, identity: disk.identity)
+        }
+        #expect(v != nil, "a file behind a dangling link into the unplugged Read-only drive was cleared")
+    }
+
+    /// The junk lane end to end: the dangling-link file is HELD, never
+    /// stamped missing; Rick's link-free Chrome shape is still missing.
+    @Test func junkTurnHoldsTheDanglingLinkFileAndStillReportsRicksShapeMissing() throws {
+        var disk = rickDisk(archiveMounted: false)
+        disk.dangling.insert("/Volumes/TestProjects/link")
+        let protections = JunkTurnProtections(archiveVolume: try protection(disk), readOnlyVolumes: .none)
+        let t = JunkDiskTurn(mode: .removeThroughTestSeam({ url in Issue.record("moved \(url.path)") }),
+                             uuidProbe: { disk.probe($0) }, beforeRemoval: nil, remove: { url in Issue.record("moved \(url.path)") })
+        func run(_ path: String) -> VideoScanModel.JunkFileOutcome {
+            ArchiveVolumeProtection.$mountIdentityProbe.withValue({ disk.identity($0) }) {
+                ArchiveVolumeProtection.$symlinkProbe.withValue({ disk.isSymlink($0) }) {
+                    t.run(path: path, protections: protections, catalogBytes: 1)
+                }
+            }
+        }
+        #expect(run("/Volumes/TestProjects/link/x/a.mov").kind == .held)
+        #expect(run(cacheDir + "/f_0001ba").kind == .missing)
     }
 
     /// QA MINOR 2: the climb's ceiling holds under every spelling of a

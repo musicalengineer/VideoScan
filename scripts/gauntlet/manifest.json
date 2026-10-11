@@ -4230,8 +4230,11 @@
         "archiveUnpluggedUnreadableDriveIsHeldAsNotConnected",
         "climbNeverReadsVolumesUnderAnySpelling",
         "danglingSymlinkIntoUnpluggedReadOnlyDriveIsStillHeld",
+        "danglingSymlinkOnAnotherDriveIntoUnpluggedArchiveIsNotCleared",
+        "danglingSymlinkOnAnotherDriveIntoUnpluggedReadOnlyDriveIsHeld",
         "danglingSymlinkScanTargetIntoUnpluggedArchiveIsNotCleared",
         "deepMissingFileOnTheBootDiskDependsOnTheArchiveBeingFound",
+        "junkTurnHoldsTheDanglingLinkFileAndStillReportsRicksShapeMissing",
         "missingDeepFileOnASwappedInArchiveIsRefused",
         "missingDeepFileOnTheArchiveVolumeIsRefused",
         "missingDeepFileThroughASymlinkIntoTheArchiveIsRefused",
@@ -28843,7 +28846,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2296,
+      "expected_floor": 2299,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
