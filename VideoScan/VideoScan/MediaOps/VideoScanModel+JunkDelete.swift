@@ -471,12 +471,11 @@ struct JunkDiskTurn: Sendable {
         }
         switch mode {
         case .toTrash:
-            // trashItem moves to the volume's .Trashes; a volume with no
-            // Trash (some network mounts) throws — caught by the caller.
-            // Its resulting location is KEPT (G2: the receipt says where).
-            var resultURL: NSURL?
-            try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
-            return resultURL?.path
+            // THE one Trash call (GH #143): the volume's .Trashes; a volume
+            // with no Trash (some network mounts) throws — caught by the
+            // caller. Its resulting location is KEPT (G2: the receipt and
+            // the removal marker say where).
+            return try MediaTrash.move(url).path
         case .removeThroughTestSeam(let operation):
             // The caller's operation — never one of this routine's own.
             try operation(url)

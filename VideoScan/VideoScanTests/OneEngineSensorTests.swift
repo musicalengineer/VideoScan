@@ -8,8 +8,9 @@
 //      app-owned scratch / partial outputs; non-media files). A new file
 //      that calls trashItem/removeItem fails until it is reviewed here; an
 //      entry that no longer matches fails too, so the list stays honest.
-//   2. `trashItem(` — the Finder Trash itself — only in the engine and the
-//      named doors not yet moved.
+//   2. `trashItem(` — the Finder Trash itself — only in MediaTrash.move,
+//      THE one Trash call every door reaches (plus two People reference-
+//      photo deletes, which are not catalog media).
 //   3. No code deletes a VideoRecord row from `records` except the
 //      catalog-repair allowlist (none of them mean "gone").
 //   4. Only the engine writes the removal marker or its legacy mirrors.
@@ -63,11 +64,9 @@ struct OneEngineSensorTests {
     // MARK: 1. Files leave only through reviewed code
 
     static let fileRemovalAllowlist: [String: String] = [
-        // The engine and its doors.
-        "MediaOps/VideoScanModel+JunkDelete.swift": "THE engine's disk turn (deleteConfirmedJunk)",
-        "MediaOps/DeleteDuplicatesJob.swift": "Delete Duplicates' one Trash step (moveToTrash) — the RemovalStep split is next (design §3)",
-        "MediaOps/SignatureVerification.swift": "the quarantine's Trash step and its owner-only quarantine dir; .permanent only when named",
-        "MediaOps/DerivativeOutputPublish.swift": "replace policy for an app-made output (E4) — onto the engine with the step split",
+        // THE one Trash call, and the one other remover of media.
+        "MediaOps/MediaTrash.swift": "THE one Trash call (every Trash door reaches it)",
+        "MediaOps/SignatureVerification.swift": "Delete Duplicates' owner-only quarantine dir (rmdir) and the history-only .permanent, reachable only when named",
         // App-owned scratch, partial outputs, temp files.
         "ArchiveAngel/Prepare/ArchiveAngelJob.swift": "Angel prepare scratch",
         "ArchiveAngel/Prepare/ArchiveAngelPlan.swift": "Angel buffer batch dir, fenced to <buffer>/batch-…",
@@ -121,16 +120,21 @@ struct OneEngineSensorTests {
     // MARK: 2. The Finder Trash itself
 
     static let trashItemAllowlist: [String: String] = [
-        "MediaOps/VideoScanModel+JunkDelete.swift": "THE engine",
-        "MediaOps/DeleteDuplicatesJob.swift": "Delete Duplicates' Trash step, not yet a RemovalStep (named)",
-        "MediaOps/SignatureVerification.swift": "the quarantine's put-back-then-Trash step (named)",
-        "MediaOps/DerivativeOutputPublish.swift": "E4 replace policy, app-made output (named)",
+        "MediaOps/MediaTrash.swift": "THE one Trash call",
         "People/FamilyGroup.swift": "reference photos, not catalog media",
         "People/PersonEditSheet.swift": "reference photo, not catalog media",
     ]
 
-    @Test func onlyTheEngineAndNamedDoorsUseTheFinderTrash() {
+    @Test func onlyTheOneTrashCallUsesTheFinderTrash() {
         expectMatches(Self.hits([#"trashItem\("#]), allowlist: Self.trashItemAllowlist, "trashItem")
+        // Every media Trash door reaches it.
+        for (file, call) in [("VideoScanModel+JunkDelete.swift", "try MediaTrash.move(url).path"),
+                             ("DeleteDuplicatesJob.swift", "try MediaTrash.move(url)"),
+                             ("SignatureVerification.swift", "(hooks.trashItem ?? MediaTrash.move)(original)"),
+                             ("DerivativeOutputPublish.swift", "try MediaTrash.move(url)")] {
+            let code = (try? SourceTree.appCode(named: file)) ?? ""
+            #expect(code.contains(call), "\(file) no longer goes through MediaTrash.move")
+        }
     }
 
     // MARK: 3. Rows are never deleted when a file leaves

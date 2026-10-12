@@ -643,35 +643,11 @@ enum DeleteDuplicatesDiskWorker {
             + "nothing was deleted; it is back at \(path)"
     }
 
-    /// THE ONE live Trash step of this job (the verifier calls it through
-    /// `Hooks.trashItem`). Under a test host it moves the file into a
-    /// per-process scratch folder instead, so no fixture ever lands in
-    /// Rick's real Trash — whatever hooks a test passes (the plan store's
-    /// discipline, `DeleteDuplicatesPlanStore.defaultRoot`).
+    /// The job's Trash step as the verifier calls it (`Hooks.trashItem`):
+    /// THE one Trash call, `MediaTrash.move` (GH #143), which also keeps
+    /// test fixtures out of Rick's real Trash under a test host.
     nonisolated static func moveToTrash(_ url: URL) throws -> URL {
-        if TestEnvironment.isTestHost { return try moveToTestHostTrash(url) }
-        var resulting: NSURL?
-        try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
-        return (resulting as URL?) ?? url
-    }
-
-    nonisolated static let testHostTrash = URL(fileURLWithPath: NSTemporaryDirectory())
-        .appendingPathComponent("VideoScan-tests/trash-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
-
-    /// No-clobber move into `testHostTrash` ("a 2.mov" on a name clash).
-    nonisolated static func moveToTestHostTrash(_ url: URL) throws -> URL {
-        let fm = FileManager.default
-        try fm.createDirectory(at: testHostTrash, withIntermediateDirectories: true)
-        let stem = url.deletingPathExtension().lastPathComponent
-        let ext = url.pathExtension
-        var destination = testHostTrash.appendingPathComponent(url.lastPathComponent)
-        var n = 2
-        while fm.fileExists(atPath: destination.path) {
-            destination = testHostTrash.appendingPathComponent(ext.isEmpty ? "\(stem) \(n)" : "\(stem) \(n).\(ext)")
-            n += 1
-        }
-        try fm.moveItem(at: url, to: destination)
-        return destination
+        try MediaTrash.move(url)
     }
 
     /// Put a quarantined file back without deleting it (the plan could not

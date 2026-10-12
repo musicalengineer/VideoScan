@@ -73,11 +73,10 @@ enum DerivativeOutputPublish {
     }
 
     /// The Trash step. Task-local test seam so tests never fill the
-    /// user's real Trash; production = `FileManager.trashItem`.
+    /// user's real Trash; production = THE one Trash call, `MediaTrash.move`
+    /// (GH #143).
     @TaskLocal static var trashItem: @Sendable (URL) throws -> URL? = { url in
-        var resulting: NSURL?
-        try FileManager.default.trashItem(at: url, resultingItemURL: &resulting)
-        return resulting as URL?
+        try MediaTrash.move(url)
     }
 
     /// The marker every in-flight partial carries. FilesystemWalker skips

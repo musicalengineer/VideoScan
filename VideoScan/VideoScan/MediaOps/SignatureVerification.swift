@@ -787,13 +787,8 @@ enum SignatureVerification {
             removeQuarantineDirectoryQuietly(quarantineDirectory, hooks: hooks, after: "put back before the Trash")
             do {
                 let destination: URL
-                if let trash = hooks.trashItem {
-                    destination = try trash(original)
-                } else {
-                    var resulting: NSURL?
-                    try FileManager.default.trashItem(at: original, resultingItemURL: &resulting)
-                    destination = (resulting as URL?) ?? original
-                }
+                // A caller's seam, else THE one Trash call (GH #143).
+                destination = try (hooks.trashItem ?? MediaTrash.move)(original)
                 return .trashed(bytes: proof.duplicateSize, location: destination.path)
             } catch {
                 return .failed("the move to the Trash failed: \(error.localizedDescription) — the file is back at \(original.path), untouched")

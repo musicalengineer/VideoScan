@@ -513,7 +513,11 @@ struct RemoteViewerReadOnlySensorTests {
         // Media / family files — behind the viewer guard.
         // 2 → 1 (codex delete-engines F1, 2026-10-09): the engine's own
         // removeItem is gone; trashItem is its one file operation.
-        "MediaOps/VideoScanModel+JunkDelete.swift": (1, nil, "junkDeletionRefusedOnViewer("),
+        // THE one Trash call (GH #143). Its callers are the guarded doors:
+        // the engine (junkDeletionRefusedOnViewer — its preflight's first
+        // statement), Delete Duplicates (the job refuses on a read-only
+        // model) and DerivativeOutputPublish (MFO jobs only).
+        "MediaOps/MediaTrash.swift": (1, "MediaOps/VideoScanModel+JunkDelete.swift", "junkDeletionRefusedOnViewer("),
         // Workbench Discard: no removal of its own since GH #143 — it calls
         // deleteConfirmedJunk (listed with the callers below).
         "People/FamilyGroup.swift": (2, nil, "ViewerWriteGuard.check(\"FamilyGroupStore.moveToTrash\")"),
@@ -521,13 +525,10 @@ struct RemoteViewerReadOnlySensorTests {
         // Delete Duplicates' removal step (trash + quarantine removal, and
         // rmdir of its own quarantine folders); reached only from
         // DeleteDuplicatesJob.run, which refuses on a read-only model.
-        "MediaOps/SignatureVerification.swift": (4, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
-        // Its one live Trash step (Trash only, 2026-10-09): the same job, the
-        // same refusal on a read-only model.
-        "MediaOps/DeleteDuplicatesJob.swift": (1, nil, "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
-        // Reached only from MFO jobs (Transcode, Reformat);
-        // MediaFileOperationsCenter.add refuses every job on a viewer.
-        "MediaOps/DerivativeOutputPublish.swift": (1, "MediaOps/MediaFileOperations.swift", "ViewerWriteGuard.refuse(\"MediaFileOperationsCenter.add("),
+        // 4 → 3 (GH #143): its default Trash step is MediaTrash.move.
+        "MediaOps/SignatureVerification.swift": (3, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
+        // DeleteDuplicatesJob 1 → 0 and DerivativeOutputPublish 1 → 0
+        // (GH #143): both reach MediaTrash.move (above).
         // The app's own temp / partial / staging / cache / output files.
         "App/BundleExporter.swift": (1, nil, nil), "App/BundleImporter.swift": (2, nil, nil),
         "Archive/ArchiveIndexRename.swift": (3, nil, nil),
