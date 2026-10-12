@@ -74,20 +74,6 @@ extension CatalogView {
             : rows.sorted(using: volumeTableSortOrder)
     }
 
-    /// Where the catalog-ops group starts: the Phase column's measured
-    /// origin, minus this row's 16pt horizontal padding so the button's
-    /// leading edge — not its container — lands on the column.
-    ///
-    /// Falls back to a constant derived from the footer's own fallback
-    /// until the table publishes a measurement (first frame only).
-    var catalogGroupOriginX: CGFloat {
-        let phase = volumeColumnFrames[VolumeColumnID.phase] ?? .zero
-        let x = phase.width > 0
-            ? phase.minX
-            : VolumeTableMetrics.fallbackMediaSizeX + 210
-        return max(0, x - 16)
-    }
-
     /// Pick any folder or single file and compute file signatures
     /// for the catalog records under it.
     ///
@@ -617,7 +603,9 @@ extension CatalogView {
                 // controls live in the Realtime Scan window beside the
                 // progress they govern, matching the MFO window.
                 }
-                .frame(minWidth: catalogGroupOriginX, alignment: .leading)
+                // Slack-only reserve up to the Phase column — never a
+                // minimum width (VolumeColumnAnchors.swift, 2026-10-11).
+                .modifier(VolumeColumnLeadingReserve(anchors: volumeColumnAnchors))
 
                 // ── CATALOG OPS ────────────────────────────────
                 // Everything past the spacer acts on the CATALOG; everything
@@ -876,22 +864,19 @@ extension CatalogView {
             // filtered table is empty: the totals cover the whole
             // catalog, not the filtered view, so hiding them behind a
             // volume filter would be misleading.
-            VolumeTableTotalsFooter(totals: storageTotals,
-                                    columnFrames: volumeColumnFrames,
-                                    archivedBytes: sizeTotals.isEmpty ? nil : sizeTotals.archivedBytes,
-                                    archivedHelp: sizeTotals.archivedTooltip, showAgainModel: model)
+            AnchoredVolumeTableTotalsFooter(anchors: volumeColumnAnchors, totals: storageTotals,
+                                            archivedBytes: sizeTotals.isEmpty ? nil : sizeTotals.archivedBytes,
+                                            archivedHelp: sizeTotals.archivedTooltip, showAgainModel: model)
         }
         // Shared coordinate space: the Media Size cell measures itself
         // in it, the footer positions itself in it. Both must name the
         // SAME space or the footer's offsets are relative to nothing.
         .coordinateSpace(name: volumeTableCoordinateSpace)
         .onPreferenceChange(VolumeColumnFramesKey.self) { frames in
-            // Guard the assignment: SwiftUI republishes preferences on
-            // every layout pass, and an unconditional write would
-            // re-render the pane forever.
-            if !frames.isEmpty && frames != volumeColumnFrames {
-                volumeColumnFrames = frames
-            }
+            // Into the anchors object, NOT CatalogView state: only the
+            // footer and the ops reserve observe it, and it publishes only
+            // when the snapped frames change (VolumeColumnAnchors.swift).
+            volumeColumnAnchors.update(frames)
         }
         .background(Color(NSColor.controlBackgroundColor))
         // ⌘I is File ▸ Catalog Info now (CatalogInfoCommand.swift), fed by

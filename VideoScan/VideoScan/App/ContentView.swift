@@ -539,10 +539,11 @@ struct CatalogView: View {
     @State var sizeTotalsTask: Task<Void, Never>? = nil
     /// Measured frames of the volume table's Media Size / Scanned /
     /// Phase columns, reported by the cells themselves via
-    /// VolumeColumnFramesKey. The TOTAL MEDIA footer puts one figure on
-    /// each instead of assuming fixed column widths — see
-    /// VolumeTableMetrics for why measuring won.
-    @State var volumeColumnFrames: [String: CGRect] = [:]
+    /// VolumeColumnFramesKey. Held in an object this view does NOT
+    /// observe (a class in @State subscribes nothing): a new measurement
+    /// re-renders only the footer and the ops reserve that read it —
+    /// never this body (2026-10-11 resize crash, VolumeColumnAnchors.swift).
+    @State var volumeColumnAnchors = VolumeColumnAnchors()
     /// Sort order for the Scan Volumes table. Defaults to volume-name
     /// ascending, which matches the historical implicit ordering. Bound
     /// to the Table via `Table(_:selection:sortOrder:)` so column-header

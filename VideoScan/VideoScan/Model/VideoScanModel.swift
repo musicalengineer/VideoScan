@@ -1452,7 +1452,15 @@ final class VideoScanModel: ObservableObject {
         // Saved in-place edits reach the Triage tab's snapshot through
         // here (debounced; a no-op unless the tab is on screen).
         noteTriageCatalogChanged()
+        // Catalog toolbar counts (2026-10-11 resize-hang fix) — debounced,
+        // one pass per burst. Logic in VideoScanModel+CatalogChromeCounts.
+        noteCatalogChromeCountsStale()
     }
+
+    /// Cached catalog-wide toolbar counts (the 2026-10-11 resize beachball:
+    /// CatalogToolbar.body counted over every record on every publish).
+    /// Storage only — logic in VideoScanModel+CatalogChromeCounts.swift.
+    let catalogChromeCounts = CatalogChromeCountsCache()
 
     // MARK: - Soft-delete state (logic in VideoScanModel+SoftDelete.swift)
     //
