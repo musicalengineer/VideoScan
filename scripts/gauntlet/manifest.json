@@ -6743,6 +6743,37 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogResizeLoopSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogChromeCountsCacheTests",
+        "CatalogChromeCountsScaleTests",
+        "CatalogResizeLoopSourceSensors",
+        "VolumeColumnAnchorsTests",
+        "VolumeTableDateTextTests"
+      ],
+      "tests": [
+        "aBurstOfSavesCoalescesIntoOneRecompute",
+        "aChangedCountAnnouncesThroughTheModel",
+        "aRealColumnMovePublishesOnceAndEmptyIsIgnored",
+        "anUnchangedCountPublishesNothing",
+        "anchoredRowsOnlyTakeSlack",
+        "catalogGroupOriginFollowsPhaseWithFallback",
+        "columnFramesAreNotCatalogViewState",
+        "countMatchesTheIDSelectorOnAMixedCorpus",
+        "hundredThousandRecordsReadsAreFreeAndAPassFitsTheBudget",
+        "mfoRowSubtitleIsOneTruncatedLine",
+        "purgeRestoreAndAppendUpdateTheCount",
+        "readsNeverRecomputeAndOneMutationRecomputesOnce",
+        "sameYearDropsTheYearOtherYearKeepsIt",
+        "scrollingAndSubPixelJitterPublishNothing",
+        "tenThousandJitteringPassesConverge",
+        "toolbarBodyNeverWalksRecords",
+        "volumeTableBuildsNoFormatterPerCell"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogRowMenuLayoutSensorTests.swift",
@@ -29215,7 +29246,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2311,
+      "expected_floor": 2328,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -29286,9 +29317,12 @@
         "VideoScanTests/CatalogAuditFixerTests",
         "VideoScanTests/CatalogAuditTests",
         "VideoScanTests/CatalogCSVWriterTests",
+        "VideoScanTests/CatalogChromeCountsCacheTests",
+        "VideoScanTests/CatalogChromeCountsScaleTests",
         "VideoScanTests/CatalogCoverageExclusionTests",
         "VideoScanTests/CatalogDateColumnResolverTests",
         "VideoScanTests/CatalogDistributionOffMainTests",
+        "VideoScanTests/CatalogResizeLoopSourceSensors",
         "VideoScanTests/CatalogRowMenuRulesTests",
         "VideoScanTests/CatalogRowMenuSelectionTests",
         "VideoScanTests/CatalogRowMenuTextTests",
@@ -29529,6 +29563,7 @@
         "VideoScanTests/VideoRecordRelocatedVolumeNameTests",
         "VideoScanTests/VideoRecordSnapshotTests",
         "VideoScanTests/VoicemailTests",
+        "VideoScanTests/VolumeColumnAnchorsTests",
         "VideoScanTests/VolumeContextMenuRulesTests",
         "VideoScanTests/VolumeKeepaliveTests",
         "VideoScanTests/VolumeMediaTallyInvariantTests",
@@ -29539,6 +29574,7 @@
         "VideoScanTests/VolumeRoleTests",
         "VideoScanTests/VolumeShowFilterTests",
         "VideoScanTests/VolumeStatusCacheTests",
+        "VideoScanTests/VolumeTableDateTextTests",
         "VideoScanTests/VolumeUIStatusTests",
         "VideoScanTests/VolumesPendingSelectionTests",
         "VideoScanTests/VolumesWindowRetireTests",

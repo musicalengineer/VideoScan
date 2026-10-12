@@ -774,15 +774,9 @@ extension CatalogView {
         MediaBytes.display(bytes)
     }
 
+    /// Cached formatters — VolumeTableDateText.swift (2026-10-11).
     private static func shortDateStatic(_ date: Date) -> String {
-        let fmt = DateFormatter()
-        let cal = Calendar.current
-        if cal.component(.year, from: date) == cal.component(.year, from: Date()) {
-            fmt.dateFormat = "MMM d"
-        } else {
-            fmt.dateFormat = "MMM d, yyyy"
-        }
-        return fmt.string(from: date)
+        VolumeTableDateText.short(date)
     }
 
     /// Backup-status pill rendered in the scan-targets header. Color
@@ -865,11 +859,8 @@ extension CatalogView {
         guard let last = model.lastBackupAt else {
             return "No catalog backup yet. Click to back up now."
         }
-        let fmt = DateFormatter()
-        fmt.dateStyle = .medium
-        fmt.timeStyle = .short
         let where_ = model.lastBackupPath ?? "(unknown location)"
-        return "Last backed up \(fmt.string(from: last)) → \(where_)\n\nClick to back up now. Right-click to show the last backup in Finder."
+        return "Last backed up \(VolumeTableDateText.backupTooltip(last)) → \(where_)\n\nClick to back up now. Right-click to show the last backup in Finder."
     }
 
     /// Shorten a bundle path to its containing folder name + ".../leaf",
