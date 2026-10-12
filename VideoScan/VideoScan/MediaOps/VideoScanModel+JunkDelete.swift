@@ -245,10 +245,23 @@ extension VideoScanModel {
         let label = archiveVolume?.label ?? "the archive volume"
         for (i, rec) in requested.enumerated() where !mayGo.contains(ObjectIdentifier(rec)) {
             let note = bulkDeleteRefusal(rec, volume: archiveVolume)
-                .map { Self.bulkDeleteRefusalNote($0, volume: label) } ?? "is protected by the delete rules"
+                .map { heldNote(rec, refusal: $0, label: label, guard: fileGuard) } ?? "is protected by the delete rules"
             pending[i] = .held(note + " — nothing moved")
         }
         return (pending, nil)
+    }
+
+    /// The words a held file gets. A file on the tick box's list that stays
+    /// only because its drive is ALSO marked Read only is told THAT (the
+    /// gate answers the archive half first, which would otherwise hide the
+    /// mark); every other refusal keeps the gate's own words.
+    private func heldNote(_ rec: VideoRecord, refusal: BulkDeleteRefusal, label: String,
+                          guard fileGuard: JunkDeletionGuard?) -> String {
+        if fileGuard?.waives(refusal, for: rec) == true,
+           let readOnly = readOnlyVolumeRefusal(forPath: rec.fullPath, effect: .removesFiles) {
+            return Self.bulkDeleteRefusalNote(readOnly, volume: label)
+        }
+        return Self.bulkDeleteRefusalNote(refusal, volume: label)
     }
 
     /// The requested records whose ONLY batch-gate refusal is the one the
@@ -316,7 +329,7 @@ extension VideoScanModel {
             }
             // Reported on the record that still describes the file this
             // turn was about (codex round 2 P2), never a row relinked meanwhile.
-            if let last = outcomes.last { fileGuard?.settled?(reportedRecord(rec, turn: turns.last ?? nil), last) }
+            if let last = outcomes.last { fileGuard?.settled?(reportedRecord(rec, turn: turns.last.flatMap { $0 }), last) }
         }
         return applyJunkOutcomes(requested, outcomes, turns: turns, mode: mode, reason: reason)
     }
@@ -346,7 +359,7 @@ extension VideoScanModel {
         let refusal = bulkDeleteRefusal(rec, volume: archiveVolume)
         let waived = archiveJunkWaiverApplies(rec, refusal: refusal, guard: fileGuard)
         if let refusal, !waived {
-            return .held(Self.bulkDeleteRefusalNote(refusal, volume: archiveVolume?.label ?? "the archive volume")
+            return .held(heldNote(rec, refusal: refusal, label: archiveVolume?.label ?? "the archive volume", guard: fileGuard)
                          + " — nothing moved")
         }
         // The volumes the person marked Read only (2026-10-03), as the model

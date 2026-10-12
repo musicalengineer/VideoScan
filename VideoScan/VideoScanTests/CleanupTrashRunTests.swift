@@ -515,6 +515,42 @@ struct CleanupTrashRunTests {
         #expect(store.beginRun() == nil, "one run at a time")
     }
 
+    @Test("QA (c): FamilyArchive junk on a drive ALSO marked Read only — not listed for the tick box, and the engine's waiver holds it 'you marked Read only'")
+    func waiverVersusReadOnlyMark() async throws {
+        let sb = try S("waiverro")
+        defer {
+            MasterArchiveTestSupport.unlockTree(sb.root)
+            sb.cleanup()
+        }
+        let ma = MasterArchiveTestSupport.Sandbox(root: sb.root, sources: try sb.folder("Sources"),
+                                                  archiveVolume: try sb.folder("Archive"))
+        let model = sb.model(keepFirst: [])
+        model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
+        try MasterArchiveTestSupport.initialize(model, in: ma)
+        await model.refreshArchiveVolumeSnapshot(force: true)
+        let archiveTarget = try #require(model.scanTargets.first { VideoScanModel.samePath($0.searchPath, ma.archiveVolume.path) })
+        // Rick marks the drive Read only (the app's own mark: realpath + mount, no persistence).
+        archiveTarget.readOnlyMark = VideoScanModel.readOnlyMark(forPath: archiveTarget.searchPath, isReachable: true, now: Date())
+        let junk = try S.record(try sb.write("Archive/Loose/test_ro.mov", bytes(64, seed: 5)), junk: true)
+        model.records = [junk]
+        #expect(model.bulkDeleteRefusal(junk) == .archiveVolume, "fixture: the gate answers the archive half first")
+        #expect(model.readOnlyVolumeRefusal(forPath: junk.fullPath, effect: .removesFiles) != nil, "fixture: …and the Read-only half has its say")
+
+        // The page: never offered through the tick box; left alone with the Read-only words.
+        let plan = await model.buildCleanupPlan()
+        #expect(plan.archiveJunk.isEmpty && plan.junk.isEmpty)
+        let reasons = plan.leftAlone.keys.map(\.words)
+        #expect(reasons.contains { $0.contains("you marked Read only") }, "\(reasons)")
+
+        // The engine, even when a caller insists on the waiver: held, with the Read-only words.
+        var g = VideoScanModel.JunkDeletionGuard(authorize: { _ in nil }, beforeRemoval: { _ in nil })
+        g.archiveVolumeJunkWaiver = [junk.id]
+        let result = await model.deleteConfirmedJunk([junk], mode: .toTrash, reason: .junk, guard: g)
+        #expect(result.items.map(\.outcome.kind) == [.held])
+        #expect(result.refused.first?.reason.contains("you marked Read only") == true, "\(result.refused.map(\.reason))")
+        #expect(junk.removal == nil && FileManager.default.fileExists(atPath: junk.fullPath))
+    }
+
     @Test("the engine's waiver lifts ONLY .archiveVolume, ONLY for the listed rows")
     func engineWaiverIsNarrow() async throws {
         let sb = try S("waiver")
