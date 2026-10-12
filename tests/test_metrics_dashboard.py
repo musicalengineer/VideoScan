@@ -282,7 +282,7 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
         assert "toggle" in out["listeners"][f"area-{area}"], area
     tests_line = out["sections"]["sum-tests"]
     assert "Red <b>1 night running</b>" in tests_line and "2</b> tests fail on the M4" in tests_line
-    assert "1</b> test fail on the M5" in tests_line and "M1 <b>did not run</b> (build-timeout:5400s)" in tests_line
+    assert "1</b> test fails on the M5" in tests_line and "M1 <b>did not run</b> (build-timeout:5400s)" in tests_line
     assert "11,211 passed · 2 failed" in tests_line and "Logic coverage <b>75.0%</b>, up vs 7 days ago" in tests_line
     assert "28 over CCN 30" in out["sections"]["sum-size"] and "376,166" in out["sections"]["sum-size"]
     assert "435 over CCN 15" in out["sections"]["sum-debt"] and "2 new" in out["sections"]["sum-debt"]

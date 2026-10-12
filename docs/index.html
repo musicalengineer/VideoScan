@@ -655,7 +655,7 @@ const SUMMARY = {
     const state = reds.length ? "red" : (greens.length ? (skipped.length || none.length ? "watch" : "green") : "amber");
     const suite = Math.max(0, ...cells.map(([, c]) => c ? c.total : 0));
     const parts = [];
-    if (reds.length) parts.push(reds.map(([h, c]) => `<b>${n(c.failed)}</b> test${c.failed === 1 ? "" : "s"} fail on the ${esc(h)}`).join(" and ") + (suite ? ` (${n(suite)} in the suite)` : ""));
+    if (reds.length) parts.push(reds.map(([h, c]) => `<b>${n(c.failed)}</b> test${c.failed === 1 ? " fails" : "s fail"} on the ${esc(h)}`).join(" and ") + (suite ? ` (${n(suite)} in the suite)` : ""));
     if (greens.length) parts.push(greens.map(([h, c]) => `the ${esc(h)} is green (${n(c.passed)} passed)`).join(", "));
     if (skipped.length) parts.push(skipped.map(([h, c]) => `the ${esc(h)} <b>did not run</b>${cellReason(c) ? ` (${esc(cellReason(c))})` : ""}`).join(", "));
     if (none.length) parts.push(`no nightly on the ${none.map(([h]) => esc(h)).join(" or ")}`);
