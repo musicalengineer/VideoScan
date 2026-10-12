@@ -105,6 +105,14 @@ struct CleanupTrashSensorTests {
         #expect(!page.contains(".records."))
     }
 
+    @Test("QA P3: the confirm sheet cancels on Esc as well as Return")
+    func confirmSheetCancelsOnEscape() throws {
+        let page = try #require(Self.cleanupSources().first { $0.name == "Catalog/CleanupPane.swift" }?.code)
+        let sheet = try #require(page.range(of: "struct CleanupConfirmSheet").map { page[$0.lowerBound...] })
+        #expect(sheet.contains(".keyboardShortcut(.defaultAction)"), "Cancel stays the default (Return)")
+        #expect(sheet.contains(".onExitCommand(perform: onCancel)"), "Esc cancels")
+    }
+
     @Test("SENSOR at scale: 300 copies, 290 of them poisoned — every held row stays unstamped", .timeLimit(.minutes(2)))
     func heldRowsNeverStamped() async throws {
         let sb = try CleanupTrashSandbox("sensor")

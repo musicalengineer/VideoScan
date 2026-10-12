@@ -478,5 +478,6 @@ struct CleanupConfirmSheet: View {
         }
         .padding(20)
         .frame(minWidth: 560)
+        .onExitCommand(perform: onCancel)   // Esc cancels too (QA P3)
     }
 }
