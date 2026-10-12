@@ -525,8 +525,9 @@ struct RemoteViewerReadOnlySensorTests {
         // Delete Duplicates' removal step (trash + quarantine removal, and
         // rmdir of its own quarantine folders); reached only from
         // DeleteDuplicatesJob.run, which refuses on a read-only model.
-        // 4 → 3 (GH #143): its default Trash step is MediaTrash.move.
-        "MediaOps/SignatureVerification.swift": (3, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
+        // 4 → 3 (GH #143): its default Trash step is MediaTrash.move;
+        // 3 → 2 (codex round 1 F1): its unlink is gone — Trash only.
+        "MediaOps/SignatureVerification.swift": (2, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
         // DeleteDuplicatesJob 1 → 0 and DerivativeOutputPublish 1 → 0
         // (GH #143): both reach MediaTrash.move (above).
         // The app's own temp / partial / staging / cache / output files.

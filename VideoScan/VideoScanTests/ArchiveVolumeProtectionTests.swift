@@ -578,7 +578,7 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/People/FamilyGroup.swift": 2, "VideoScan/People/FamilyEditSheet.swift": 1,
         "VideoScan/MediaOps/RelocateEngine.swift": 1, "VideoScan/MediaOps/RescueFileCopier.swift": 3,
         "VideoScan/Media/ReviewThumbnailRenderer.swift": 1, "VideoScan/Volumes/ScanCheckpoint.swift": 1,
-        "VideoScan/Volumes/ScanJobsStorage.swift": 2, "VideoScan/MediaOps/SignatureVerification.swift": 1,
+        "VideoScan/Volumes/ScanJobsStorage.swift": 2,   // SignatureVerification 1 → 0: Trash only (codex r1 F1)
         // GH #143: THE one Trash call. Every media Trash door reaches it —
         // the engine's disk turn (Junk, ⌘⌫, Prune, Discard), Delete
         // Duplicates' quarantine step (DeleteDuplicatesJob.moveToTrash and
