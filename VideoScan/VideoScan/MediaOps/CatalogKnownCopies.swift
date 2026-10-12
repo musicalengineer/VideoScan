@@ -16,8 +16,14 @@
 //     on a retired drive;
 //   * not one of the rows being trashed;
 //   * not the SAME FILE: the same path ignoring case (macOS volumes are
-//     case-insensitive by default), or — when both rows' fixity stamps
-//     carry a device + inode — the same device + inode.
+//     case-insensitive by default), or the same inode on the same VOLUME
+//     by the stamps' persistent volume UUIDs (`mayBeSameFile`).
+//     These are STORED stamps, taken in different sessions: st_dev is
+//     handed out per mount (ContentFixity.swift header), so a device number
+//     is never consulted — after a remount it would make an alias of the
+//     target look like a different file and hide the warning. When either
+//     stamp has no volume UUID, a matching inode is taken as possibly the
+//     same file: the error is an extra warning, never a missing one.
 // A copy on a drive that is merely disconnected still counts.
 //
 // Cost: one pass over the catalog with three Set lookups per row; key
@@ -42,10 +48,21 @@ enum CatalogKnownCopies {
         return out
     }
 
-    /// "device:inode" from the row's fixity stamp, when it carries one.
-    nonisolated static func fileIdentity(_ r: VideoRecord) -> String? {
-        guard let s = r.contentFixity?.stamp, s.device != 0 || s.inode != 0 else { return nil }
-        return "\(s.device):\(s.inode)"
+    /// The row's stored fixity stamp, when it names an inode.
+    nonisolated static func fileStamp(_ r: VideoRecord) -> FileIdentityStamp? {
+        guard let s = r.contentFixity?.stamp, s.inode != 0 else { return nil }
+        return s
+    }
+
+    /// Could two STORED stamps name one file? Same inode, and not proven to
+    /// be on different volumes: both volume UUIDs known and different is the
+    /// only "different file" answer. A missing UUID cannot prove the volume,
+    /// so it answers "maybe" — counted as the same file (no copy). st_dev is
+    /// deliberately not read: it is not stable across remounts.
+    nonisolated static func mayBeSameFile(_ a: FileIdentityStamp, _ b: FileIdentityStamp) -> Bool {
+        guard a.inode == b.inode else { return false }
+        guard let va = a.volumeUUID, let vb = b.volumeUUID else { return true }
+        return va == vb
     }
 
     /// Of `moving`, the ids with no surviving copy in `all` by any key.
@@ -56,7 +73,7 @@ enum CatalogKnownCopies {
         guard !moving.isEmpty else { return [] }
         let leaving = Set(moving.map(\.id))
         let leavingPaths = Set(moving.map { $0.fullPath.lowercased() })
-        let leavingFiles = Set(moving.compactMap(fileIdentity))
+        let leavingFiles = Dictionary(grouping: moving.compactMap(fileStamp), by: \.inode)
         let md5s = Set(moving.map(\.partialMD5).filter { !$0.isEmpty })
         let sigs = Set(moving.map(\.contentHash).filter { !$0.isEmpty })
         let digests = Set(moving.flatMap { [$0.contentFixity?.digest, $0.archiveFixity?.digest] }
@@ -67,7 +84,9 @@ enum CatalogKnownCopies {
                     || digests.contains(r.contentFixity?.digest ?? "")
                     || digests.contains(r.archiveFixity?.digest ?? "") else { continue }
             guard isSurvivor(r), !leavingPaths.contains(r.fullPath.lowercased()) else { continue }
-            if let file = fileIdentity(r), leavingFiles.contains(file) { continue }
+            if let file = fileStamp(r), leavingFiles[file.inode]?.contains(where: { mayBeSameFile($0, file) }) == true {
+                continue
+            }
             surviving.formUnion(keys(r))
         }
         return Set(moving.filter { rec in !keys(rec).contains(where: surviving.contains) }.map(\.id))

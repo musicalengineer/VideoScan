@@ -21,6 +21,7 @@
 // The mismatch case is the heart: corrupt one byte → MUST flag, MUST NOT
 // restore fixity — the outcome this tool exists to surface.
 
+import AppKit
 import Foundation
 import Testing
 @testable import VideoScan
@@ -884,8 +885,35 @@ struct VerifyArchiveCopiesIsolationTests {
         let defaultsAfter = UserDefaults.standard.dictionaryRepresentation() as NSDictionary
         #expect(defaultsBefore.isEqual(to: defaultsAfter as! [AnyHashable: Any]),
                 "UserDefaults values changed: \(Self.diffKeys(defaultsBefore, defaultsAfter))")
-        #expect(Self.appSupportSnapshot() == appSupportBefore,
-                "real App Support tree changed — GH #167's victim was the REAL catalog")
+
+        // GH #167 through the SEAM: the model's catalog is the sandbox's,
+        // never the shared (real) one, and the run's saves landed there.
+        let realCatalog = CatalogStore.shared.fileLocation
+        let sandboxCatalog = model.catalogStore.fileLocation
+        #expect(sandboxCatalog != realCatalog)
+        #expect(sandboxCatalog.hasPrefix(sb.root.path) || sandboxCatalog.hasPrefix(sb.root.standardizedFileURL.path),
+                "catalog under test lives in the sandbox: \(sandboxCatalog)")
+        #expect(FileManager.default.fileExists(atPath: sandboxCatalog),
+                "the verify run's catalog saves landed in the sandbox")
+
+        // GH #167 through the TREE. Nightly 2026-10-12: Rick's live app (a
+        // different process) was saving the real catalog every minute, and
+        // its catalog-save family changed under the snapshot. With another
+        // VideoScan running, those files are its to write: they are left
+        // out of the byte comparison, and the real lock must not name THIS
+        // process (a test save would take it). Every other file, and any
+        // NEW file (e.g. a catalog backup), is still compared byte-for-byte.
+        // With no other VideoScan running, nothing is left out.
+        let liveApp = Self.anotherVideoScanIsRunning()
+        let skip: Set<String> = liveApp ? Self.liveAppCatalogFamily : []
+        let after = Self.appSupportSnapshot()
+        #expect(after.filter { !skip.contains($0.key) } == appSupportBefore.filter { !skip.contains($0.key) },
+                "real App Support tree changed — GH #167's victim was the REAL catalog: \(Self.changedKeys(appSupportBefore, after))")
+        if liveApp {
+            let lock = (realCatalog as NSString).deletingLastPathComponent + "/catalog.lock"
+            let owner = (try? String(contentsOfFile: lock, encoding: .utf8)) ?? ""
+            #expect(!owner.contains("\"pid\":\(getpid()),"), "the real catalog lock names the test process: \(owner)")
+        }
     }
 
     @Test("SENSOR: verify twice — the second run restores nothing, appends no manifest rows, invents no records (read-only-on-media pinned)")
@@ -926,6 +954,25 @@ struct VerifyArchiveCopiesIsolationTests {
             out[rel] = "\(size):\(mtime)"
         }
         return out
+    }
+
+    /// What a running VideoScan writes on every catalog save / sync
+    /// (CatalogStore, CatalogLock, CatalogGenerationSidecar, CatalogSync):
+    /// exactly the files that moved under the 2026-10-12 nightly.
+    private static let liveAppCatalogFamily: Set<String> = [
+        "catalog.json", "catalog.json.prev", "catalog.lock",
+        "catalog.generation.max", "manifest.sha256", "sync-sources.json",
+    ]
+
+    /// Another VideoScan process (Rick's live app), not this test host.
+    private static func anotherVideoScanIsRunning() -> Bool {
+        guard let id = Bundle.main.bundleIdentifier else { return false }
+        return NSRunningApplication.runningApplications(withBundleIdentifier: id)
+            .contains { $0.processIdentifier != getpid() }
+    }
+
+    private static func changedKeys(_ a: [String: String], _ b: [String: String]) -> [String] {
+        Set(a.keys).union(b.keys).filter { a[$0] != b[$0] }.sorted()
     }
 
     private static func diffKeys(_ a: NSDictionary, _ b: NSDictionary) -> [String] {
