@@ -169,6 +169,44 @@ struct CleanupTrashRunTests {
         #expect([keep, extra, junk].allSatisfy { $0.removal == nil && FileManager.default.fileExists(atPath: $0.fullPath) })
     }
 
+    @Test("batches: the run is cut into checkpointed batches, in order, none lost")
+    func chunks() {
+        let cut = CleanupTrashJob.chunks(Array(0..<45), of: 20)
+        #expect(cut.map(\.count) == [20, 20, 5])
+        #expect(cut.flatMap { Array($0) } == Array(0..<45))
+        #expect(CleanupTrashJob.chunks([Int](), of: 20).isEmpty)
+    }
+
+    @Test("ISOLATION: a catalog save that is not confirmed stops the run after its batch; the rest are cancelled, untouched")
+    func unconfirmedSaveStops() async throws {
+        let sb = try S("savefail")
+        defer { sb.cleanup() }
+        let model = sb.model(keepFirst: ["keep", "extra"])
+        var extras: [VideoRecord] = []
+        for i in 0..<30 {
+            let payload = Data("clip \(i) ".utf8) + bytes(512, seed: UInt8(i))
+            let k = try sb.write("keep/test_\(i).mov", payload)
+            let e = try sb.write("extra/test_\(i).mov", payload)
+            model.records.append(try S.record(k))
+            let rec = try S.record(e)
+            model.records.append(rec)
+            extras.append(rec)
+        }
+        let plan = await model.buildCleanupPlan()
+        #expect(plan.copies.count == 30)
+        let job = await runCleanupTrash(model, CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false)) {
+            $0.saveCatalogForTesting = { false }
+        }
+        #expect(job.totals[.moved] == CleanupTrashJob.copyChunk, "\(job.totals.line)")
+        #expect(job.totals[.cancelled] == 30 - CleanupTrashJob.copyChunk)
+        if case .failed = job.state {} else { Issue.record("an unconfirmed save ends Failed, not \(job.state)") }
+        let cancelled = Set(job.items.filter { $0.outcome == .cancelled }.map(\.id))
+        for rec in extras where cancelled.contains(rec.id) {
+            #expect(rec.removal == nil && FileManager.default.fileExists(atPath: rec.fullPath))
+        }
+        for rec in extras { if let t = rec.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) } }
+    }
+
     // MARK: Junk
 
     @Test("junk you marked moves and is marked In the Trash (reason junk)")

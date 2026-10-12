@@ -658,8 +658,8 @@ struct ReadOnlyVolumeSensorTests {
             // Triage ▸ Cleanup (2026-10-12): the plan asks the gate (and the
             // Read-only half on its own); the move is a door onto the engine.
             ("VideoScanModel+Cleanup.swift", ["gate.refusal(for: subject)", "gate.readOnly?.verdict(forPath: subject.path)"]),
-            ("CleanupTrashJob.swift", ["model.deleteConfirmedJunk(recs, mode: .toTrash, reason: .duplicate",
-                                       "model.deleteConfirmedJunk(recs, mode: .toTrash, reason: .junk"]),
+            ("CleanupTrashJob.swift", ["model.deleteConfirmedJunk(Array(chunk), mode: .toTrash, reason: .duplicate",
+                                       "model.deleteConfirmedJunk(Array(chunk), mode: .toTrash, reason: .junk"]),
         ]
         for verb in verbs {
             let src = try code(verb.file)

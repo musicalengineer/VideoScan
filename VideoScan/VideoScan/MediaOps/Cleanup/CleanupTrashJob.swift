@@ -30,8 +30,10 @@
 //   • Pause interrupts the file being read (it restarts from byte 0 on
 //     Resume). Stop ends the run: the file being checked and every file
 //     after it are "cancelled", nothing half-done.
-//   • The catalog is saved through an ACKNOWLEDGED save at the end; a save
-//     that is not confirmed is said loudly (🔴) and retried debounced.
+//   • DURABILITY: the engine stamps a batch when the batch ends, so the run
+//     goes in short batches (20 copies / 100 junk) and AWAITS an
+//     acknowledged catalog save after each. A save that is not confirmed
+//     stops the run, loudly (🔴); the rest are "cancelled".
 //
 // No volume gate is held: the reads happen inside the engine's synchronous
 // disk turn. A Fill In Full Hashes run on the same drive will contend; the
@@ -253,14 +255,54 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     private func runCopies(model: VideoScanModel) async {
         let recs = resolve(selection.copies.map(\.target), lane: .copy, model: model)
         guard !recs.isEmpty else { return }
-        _ = await model.deleteConfirmedJunk(recs, mode: .toTrash, reason: .duplicate, guard: copyGuard(model: model))
+        let g = copyGuard(model: model)
+        for chunk in Self.chunks(recs, of: Self.copyChunk) {
+            _ = await model.deleteConfirmedJunk(Array(chunk), mode: .toTrash, reason: .duplicate, guard: g)
+            await checkpoint(model: model)
+        }
     }
 
     private func runJunk(model: VideoScanModel) async {
         let files = selection.allJunk
         let recs = resolve(files, lane: .junk, model: model)
         guard !recs.isEmpty else { return }
-        _ = await model.deleteConfirmedJunk(recs, mode: .toTrash, reason: .junk, guard: junkGuard(files, records: recs, model: model))
+        let g = junkGuard(files, records: recs, model: model)
+        for chunk in Self.chunks(recs, of: Self.junkChunk) {
+            _ = await model.deleteConfirmedJunk(Array(chunk), mode: .toTrash, reason: .junk, guard: g)
+            await checkpoint(model: model)
+        }
+    }
+
+    // MARK: Checkpoints
+
+    /// The engine stamps a batch's rows when the batch ends, so the run
+    /// hands it short batches and AWAITS an acknowledged catalog save after
+    /// each: a crash loses at most one batch's "In the Trash" marks (the
+    /// files are in the Trash either way, and the receipt names them). A
+    /// copy batch is ~20 full read pairs; junk needs no reads.
+    static let copyChunk = 20
+    static let junkChunk = 100
+
+    /// `items` cut into runs of `size`, in order. Pure.
+    static func chunks<T>(_ items: [T], of size: Int) -> [ArraySlice<T>] {
+        stride(from: 0, to: items.count, by: max(size, 1)).map { items[$0..<min($0 + size, items.count)] }
+    }
+
+    private var saveFailed = false
+
+    /// One acknowledged save. A save that is not confirmed stops the run:
+    /// nothing more is moved while the catalog can't record it.
+    private func checkpoint(model: VideoScanModel) async {
+        guard !saveFailed else { return }
+        let ok: Bool
+        if let saveCatalogForTesting { ok = await saveCatalogForTesting() } else { ok = await model.saveCatalogAcknowledged() }
+        guard !ok else { return }
+        saveFailed = true
+        model.saveCatalogDebounced()
+        model.cleanupNote("🔴 a catalog save was NOT confirmed — stopping so nothing more moves unrecorded. "
+            + "The In-the-Trash marks so far are in memory and go out with the next save; the receipt names every file moved.")
+        control.requestStop()
+        task?.cancel()
     }
 
     /// The live records for `files`; a row gone from the catalog is held
@@ -402,21 +444,17 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
 
     // MARK: Finish
 
+    /// The end of the run (every batch already checkpointed): the receipt,
+    /// the one summary, the terminal state.
     private func conclude(model: VideoScanModel, audit: DeletionAudit) async {
-        let saved: Bool
-        if let saveCatalogForTesting { saved = await saveCatalogForTesting() } else { saved = await model.saveCatalogAcknowledged() }
-        if !saved {
-            model.saveCatalogDebounced()
-            model.cleanupNote("🔴 the catalog save after the run was NOT confirmed — the In-the-Trash marks are in memory and go out with the next save. The files that moved are in the Trash.")
-        }
         audit.finish()
         let line = totals.line
         onFinished?(line)
-        if stopRequested || state == .cancelling {
+        if saveFailed {
+            finish(failed: "Stopped — a catalog save was not confirmed. " + line)
+        } else if stopRequested || state == .cancelling {
             state = .cancelled
             subtitleText = "Stopped — " + line
-        } else if !saved {
-            finish(failed: "The catalog save was not confirmed — " + line)
         } else {
             state = .finished(summary: line)
             subtitleText = line

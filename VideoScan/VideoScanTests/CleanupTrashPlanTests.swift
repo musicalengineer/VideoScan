@@ -271,7 +271,8 @@ struct CleanupTrashPlanTests {
             for i in 0..<Int.random(in: 2...9, using: &rng) {
                 let drive = drives.randomElement(using: &rng) ?? "Other"
                 let path = "/Volumes/\(drive)/f\(i).mov"
-                let row = F.row(path, digest: ["d1", "d2", nil].randomElement(using: &rng) ?? nil,
+                let digests: [String?] = ["d1", "d2", nil]
+                let row = F.row(path, digest: digests[Int.random(in: 0..<digests.count, using: &rng)],
                                 junk: Int.random(in: 0..<5, using: &rng) == 0,
                                 protection: drive == "FamilyArchive" ? .archiveVolume : nil,
                                 marks: Int.random(in: 0..<3, using: &rng) == 0 ? 10 : 0)

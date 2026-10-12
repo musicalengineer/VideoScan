@@ -26946,6 +26946,7 @@
         "CleanupTrashRunTests"
       ],
       "tests": [
+        "chunks",
         "copyMoves",
         "engineWaiverIsNarrow",
         "familyArchiveJunkTickBox",
@@ -26959,6 +26960,7 @@
         "storeTickBoxResets",
         "targetDriveGone",
         "targetReplacedHeld",
+        "unconfirmedSaveStops",
         "untickedStays"
       ]
     },
