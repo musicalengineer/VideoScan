@@ -337,6 +337,36 @@ struct CleanupTrashRunTests {
         model.isReadOnly = false
     }
 
+    @Test("codex r1 P2-4: the page's 'Last run' is the run's OUTCOME line, never an earlier progress message; a failed save keeps its warning")
+    func lastRunIsTheOutcome() async throws {
+        let sb = try S("lastrun")
+        defer { sb.cleanup() }
+        let (model, _, _) = try copyPair(sb)
+        let store = CleanupStore()
+        await store.refresh(model: model)?.value
+        let sel = try #require(store.beginRun())
+        let job = CleanupTrashJob(model: model, selection: sel)
+        job.saveCatalogForTesting = { true }
+        store.watch(job, model: model)
+        job.start()
+        await job.task?.value
+        #expect(store.lastRun == job.totals.line, "\(String(describing: store.lastRun))")
+        #expect(store.lastRun?.hasPrefix("moved 1 ") == true)
+
+        let sb2 = try S("lastrunfail")
+        defer { sb2.cleanup() }
+        let (model2, _, _) = try copyPair(sb2)
+        let store2 = CleanupStore()
+        await store2.refresh(model: model2)?.value
+        let sel2 = try #require(store2.beginRun())
+        let job2 = CleanupTrashJob(model: model2, selection: sel2)
+        job2.saveCatalogForTesting = { false }
+        store2.watch(job2, model: model2)
+        job2.start()
+        await job2.task?.value
+        #expect(store2.lastRun?.contains("not confirmed") == true, "\(String(describing: store2.lastRun))")
+    }
+
     @Test("QA P2-2: checkpoint batches are bound by files AND by bytes to read, in order, none lost")
     func batches() {
         let gb: Int64 = 1 << 30

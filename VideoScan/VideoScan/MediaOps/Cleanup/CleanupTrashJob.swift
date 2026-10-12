@@ -211,8 +211,8 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     func refuseToStart(reason: String) {
         guard task == nil, state.isActive else { return }
         wasRefused = true
+        subtitleText = reason          // before the state: a state watcher reads it (P2-4)
         state = .failed(message: reason)
-        subtitleText = reason
         task = Task {}
     }
 
@@ -508,31 +508,34 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     // MARK: Finish
 
     /// The end of the run (every batch already checkpointed): the receipt,
-    /// the one summary, the terminal state.
+    /// the one summary, the terminal state. The summary is published BEFORE
+    /// the terminal state, here and in every other terminal path: a watcher
+    /// of `state` (the page's "Last run") reads the subtitle the moment the
+    /// state lands (codex r1 P2-4).
     private func conclude(model: VideoScanModel, audit: DeletionAudit) async {
         audit.finish()
         let line = totals.line
+        fractionValue = 1
+        isPausedValue = false
         if saveFailed {
             finish(failed: "Stopped — a catalog save was not confirmed. " + line)
         } else if stopRequested || state == .cancelling {
-            state = .cancelled
             subtitleText = "Stopped — " + line
+            state = .cancelled
         } else {
-            state = .finished(summary: line)
             subtitleText = line
+            state = .finished(summary: line)
         }
-        fractionValue = 1
-        isPausedValue = false
     }
 
     private func finish(failed message: String) {
+        subtitleText = message
+        isPausedValue = false
         if state.cancelWasRequested {
             state = .cancelled
         } else {
             state = .failed(message: message)
         }
-        subtitleText = message
-        isPausedValue = false
     }
 }
 
