@@ -153,6 +153,20 @@ extension VideoScanModel {
         /// Told each file's outcome the moment it is decided (G2: the audit
         /// writes its line and receipt row as the run goes).
         var settled: (@MainActor (VideoRecord, JunkFileOutcome) -> Void)? = nil
+        /// Rick's per-run tick box (2026-10-12, Cleanup design option b:
+        /// "Include these N marked-junk files from FamilyArchive"). The
+        /// records listed here may leave although they live ELSEWHERE ON the
+        /// Master Archive volume — that one refusal (`.archiveVolume`) is
+        /// waived, asked at every gate the same way. Nothing else is: the
+        /// archive TREE, an unprovable drive, a drive marked Read only and
+        /// every other check still hold. Empty (the default) for every door
+        /// but Cleanup's junk lane.
+        var archiveVolumeJunkWaiver: Set<UUID> = []
+
+        /// True when `refusal` is the one the waiver may lift for `rec`.
+        func waives(_ refusal: BulkDeleteRefusal?, for rec: VideoRecord) -> Bool {
+            refusal == .archiveVolume && archiveVolumeJunkWaiver.contains(rec.id)
+        }
     }
 
     /// One file's outcome — mutually exclusive by construction (one enum
@@ -210,11 +224,17 @@ extension VideoScanModel {
     /// silent drop (design R6). A non-nil `finished` is the whole answer;
     /// otherwise `pending[i]` is file i's outcome when it is already
     /// decided, nil when it goes on to its turn.
-    func junkDeletionPreflight(_ requested: [VideoRecord], verb: String = "Delete Confirmed Junk")
+    func junkDeletionPreflight(_ requested: [VideoRecord], verb: String = "Delete Confirmed Junk",
+                               guard fileGuard: JunkDeletionGuard? = nil)
         -> (pending: [JunkFileOutcome?], finished: JunkDeletionResult?) {
         if let refused = junkDeletionRefusedOnViewer(requested) { return ([], refused) }
         guard !requested.isEmpty else { return ([], .empty) }
-        let mayGo = Set(excludingMasterArchiveFiles(requested, verb: verb).map(ObjectIdentifier.init))
+        // The tick box's files skip the archive-volume half of the batch
+        // gate (and its console line); they still meet every other gate.
+        let waived = archiveVolumeJunkWaived(requested, guard: fileGuard)
+        var mayGo = Set(excludingMasterArchiveFiles(requested.filter { !waived.contains(ObjectIdentifier($0)) },
+                                                    verb: verb).map(ObjectIdentifier.init))
+        mayGo.formUnion(waived)
         var pending = [JunkFileOutcome?](repeating: nil, count: requested.count)
         guard mayGo.count < requested.count else { return (pending, nil) }
         let archiveVolume = archiveVolumeProtection()
@@ -225,6 +245,27 @@ extension VideoScanModel {
             pending[i] = .held(note + " — nothing moved")
         }
         return (pending, nil)
+    }
+
+    /// The requested records whose ONLY batch-gate refusal is the one the
+    /// guard's FamilyArchive-junk tick box lifts. Empty for every door but
+    /// Cleanup's junk lane (no waiver, no snapshot built).
+    private func archiveVolumeJunkWaived(_ requested: [VideoRecord],
+                                         guard fileGuard: JunkDeletionGuard?) -> Set<ObjectIdentifier> {
+        guard let fileGuard, !fileGuard.archiveVolumeJunkWaiver.isEmpty else { return [] }
+        let snapshot = archiveVolumeProtection()
+        return Set(requested.filter { archiveJunkWaiverApplies($0, refusal: bulkDeleteRefusal($0, volume: snapshot),
+                                                               guard: fileGuard) }
+            .map(ObjectIdentifier.init))
+    }
+
+    /// The waiver lifts `.archiveVolume` for a listed record — and only when
+    /// the gate's OTHER half (a drive marked Read only, which the archive
+    /// half's refusal would otherwise hide) has nothing to say.
+    private func archiveJunkWaiverApplies(_ rec: VideoRecord, refusal: BulkDeleteRefusal?,
+                                          guard fileGuard: JunkDeletionGuard?) -> Bool {
+        guard let fileGuard, fileGuard.waives(refusal, for: rec) else { return false }
+        return readOnlyVolumeRefusal(forPath: rec.fullPath, effect: .removesFiles) == nil
     }
 
     /// Trash every record in `records`, one file at a time, regardless of
@@ -240,7 +281,7 @@ extension VideoScanModel {
         reason: RemovalReason = .junk,
         guard fileGuard: JunkDeletionGuard? = nil
     ) async -> JunkDeletionResult {
-        let (pending, finished) = junkDeletionPreflight(requested, verb: reason.doorVerb)
+        let (pending, finished) = junkDeletionPreflight(requested, verb: reason.doorVerb, guard: fileGuard)
         if let finished { return finished }
 
         // The disk half's fixed inputs — all Sendable, so they may cross to
@@ -291,14 +332,17 @@ extension VideoScanModel {
         // protects every file not yet moved — its tree and its volume here,
         // the file's own volume UUID again in the disk half.
         let archiveVolume = archiveVolumeProtection()
-        if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {
+        let refusal = bulkDeleteRefusal(rec, volume: archiveVolume)
+        let waived = archiveJunkWaiverApplies(rec, refusal: refusal, guard: fileGuard)
+        if let refusal, !waived {
             return .held(Self.bulkDeleteRefusalNote(refusal, volume: archiveVolume?.label ?? "the archive volume")
                          + " — nothing moved")
         }
         // The volumes the person marked Read only (2026-10-03), as the model
         // is at THIS file's turn (codex #258 F5): a drive marked Read only
         // while the batch runs protects every file not yet moved.
-        let protections = JunkTurnProtections(archiveVolume: archiveVolume, readOnlyVolumes: readOnlyVolumeProtection())
+        let protections = JunkTurnProtections(archiveVolume: archiveVolume, readOnlyVolumes: readOnlyVolumeProtection(),
+                                              archiveVolumeWaived: waived)
         let catalogBytes = rec.sizeBytes
         return await Task.detached(priority: .userInitiated) {
             disk.run(path: path, protections: protections, catalogBytes: catalogBytes)
@@ -410,6 +454,11 @@ extension VideoScanModel {
 struct JunkTurnProtections: Sendable {
     let archiveVolume: ArchiveVolumeProtection?
     let readOnlyVolumes: ReadOnlyVolumeProtection
+    /// This file is on Rick's per-run FamilyArchive-junk list
+    /// (`JunkDeletionGuard.archiveVolumeJunkWaiver`): the disk half's
+    /// "on the archive volume" verdict does not hold it. "Unprovable" and
+    /// the Read-only marks still do.
+    var archiveVolumeWaived = false
 }
 
 /// Everything the off-main half of a turn needs, as one Sendable value
@@ -451,6 +500,7 @@ struct JunkDiskTurn: Sendable {
             switch archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe) {
             case .clear: break
             case .onArchiveVolume:
+                if protections.archiveVolumeWaived { break }
                 return VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: archiveVolume.label) + " — nothing moved"
             case .unprovable:
                 return VideoScanModel.archiveVolumeUnprovableNote(archiveVolume) + " — nothing moved"

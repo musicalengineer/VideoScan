@@ -408,6 +408,17 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let fillFullHashes = Self("fillFullHashes", hasDetailView: true,
         style: .init(badge: "Full Hashes", logVerb: "fill in full hashes", fill: .init(0.15, 0.30, 0.55)))
 
+    // Triage ▸ Cleanup (2026-10-12) — rust umber: a destructive verb that
+    // only ever reaches the Trash, warmer and browner than DELETE's red and
+    // TRASH's oxblood. Δ ≥ 0.15 from every other fill, contrast vs white ≈ 9.5.
+    /// "Move N files to the Trash" from Triage ▸ Cleanup
+    /// (docs/design/cleanup_kiss_2026_10_12.md): extra copies — each read in
+    /// full with the copy that stays, equal SHA-256 — and the junk Rick
+    /// marked, one frozen selection through the one Trash engine. CleanupTrashJob.
+    /// (Not `.cleanup`, which is the older "Clean Up Video" recipe verb.)
+    static let cleanupTrash = Self("cleanupTrash", hasDetailView: true,
+        style: .init(badge: "Cleanup", logVerb: "cleanup", fill: .init(0.45, 0.20, 0.10)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -416,7 +427,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .trim, .balanceAudio, .rebuildAudio, .verifyAudio, .verifyVideo, .checkMedia, .repair,
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
-        .showAgain, .checkCopies, .fillFullHashes,
+        .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash,
     ]
 
     /// Badge text — rendered in small caps by the row view.
