@@ -13,6 +13,13 @@ speech stay local (Hallie cloud ruling, 10/10). Do not publish it.
 
     python3 scripts/events_prototype.py            # writes + opens the page
     python3 scripts/events_prototype.py --no-open
+    python3 scripts/events_prototype.py --no-open --stats-json out.json
+
+--stats-json writes COUNTS ONLY (no names, paths, captions or speech) for the
+metrics page via tools/publish_metrics.py: active records, how many carry
+captions / transcripts, clips with evidence, candidate and strong events,
+events per category, and Rick's ✓/✗ marks (from the newest
+~/Downloads/events-v0-marks*.json, else nulls) overall and per category.
 """
 from __future__ import annotations
 
@@ -25,13 +32,15 @@ import re
 import subprocess
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 APP_SUPPORT = Path.home() / "Library" / "Application Support" / "VideoScan"
 CATALOG = APP_SUPPORT / "catalog.json"
 PREVIEWS = APP_SUPPORT / "preview-cache"
 OUT_DIR = APP_SUPPORT / "events-prototype"
+DOWNLOADS = Path.home() / "Downloads"          # where the page's "Export marks" lands
+MARKS_GLOB = "events-v0-marks*.json"
 
 # category -> (what's SEEN in scene captions, what's SAID in the transcript)
 CATEGORIES: dict[str, tuple[str, str]] = {
@@ -282,12 +291,63 @@ paint();
 </script></body></html>"""
 
 
-def main() -> int:
+def load_marks(downloads: Path | None = None) -> dict[str, str] | None:
+    """Rick's marks from the newest Downloads/events-v0-marks*.json
+    ("Category|contenthash" -> "yes" / "no"), or None when there is none."""
+    folder = downloads if downloads is not None else DOWNLOADS
+    try:
+        files = sorted(folder.glob(MARKS_GLOB), key=lambda p: p.stat().st_mtime)
+        if not files:
+            return None
+        data = json.loads(files[-1].read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {k: v for k, v in data.items() if isinstance(k, str) and v in ("yes", "no")}
+
+
+def compute_stats(records: list[dict], clips: list[dict], events: list[dict],
+                  marks: dict[str, str] | None, now: datetime | None = None) -> dict:
+    """The --stats-json object: counts only. Category names are the CATEGORIES
+    constants (a mark whose category is not one of them is ignored); no name,
+    path, caption or transcript text is ever carried."""
+    when = now or datetime.now(timezone.utc)
+    by_category = {cat: 0 for cat in CATEGORIES}
+    for e in events:
+        by_category[e["category"]] += 1
+    stats: dict = {
+        "ts": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "active_records": len(records),
+        "with_captions": sum(1 for r in records if r.get("sceneCaptions")),
+        "with_transcripts": sum(1 for r in records if str(r.get("audioTranscript") or "").strip()),
+        "clips_with_evidence": len(clips),
+        "candidate_events": len(events),
+        "strong_events": sum(1 for e in events if e["strength"] == "strong"),
+        "by_category": by_category,
+        "marks_yes": None, "marks_no": None, "precision_by_category": None,
+    }
+    if marks is not None:
+        per_cat = {cat: {"yes": 0, "no": 0} for cat in CATEGORIES}
+        for key, verdict in marks.items():
+            cat = key.split("|", 1)[0]
+            if cat in per_cat:
+                per_cat[cat][verdict] += 1
+        stats["marks_yes"] = sum(c["yes"] for c in per_cat.values())
+        stats["marks_no"] = sum(c["no"] for c in per_cat.values())
+        stats["precision_by_category"] = per_cat
+    return stats
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--no-open", action="store_true")
-    args = ap.parse_args()
+    ap.add_argument("--stats-json", metavar="PATH",
+                    help="also write counts only (no names, paths or text) to PATH for the metrics page")
+    args = ap.parse_args(argv)
+    records = load_records()
     clips = []
-    for r in collapse_copies(load_records()):
+    for r in collapse_copies(records):
         ev = evidence(r)
         if not ev:
             continue
@@ -310,6 +370,9 @@ def main() -> int:
     for k, v in sorted(by_cat.items(), key=lambda kv: -kv[1]):
         print(f"   {k:22} {v} event(s)")
     print(out)
+    if args.stats_json:
+        stats = compute_stats(records, clips, events, load_marks())
+        Path(args.stats_json).write_text(json.dumps(stats, indent=1, sort_keys=True) + "\n", encoding="utf-8")
     if not args.no_open:
         subprocess.run(["open", str(out)], check=False)
     return 0

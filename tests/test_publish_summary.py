@@ -121,6 +121,7 @@ GH_OK = {
         {"state": "CLOSED", "createdAt": "2026-10-08T01:00:00Z", "closedAt": "2026-10-11T01:00:00Z"},
         {"state": "CLOSED", "createdAt": "2026-08-08T01:00:00Z", "closedAt": "2026-09-11T01:00:00Z"},
     ],
+    "--label High Priority": [{"number": 7}, {"number": 19}, {"number": 311}],
     "commits/main": {"sha": "b07f9da43d14abcdef0123456789abcdef012345",
                      "commit": {"committer": {"date": "2026-10-12T14:00:00Z"}, "message": "SECRET Donna"}},
     "milestones": [{"title": "Week of Oct 12", "open_issues": 8, "closed_issues": 1, "due_on": "2026-10-18T00:00:00Z"},
@@ -130,7 +131,7 @@ GH_OK = {
 
 def test_github_numbers_from_gh():
     g = pm.github_summary(FakeGh(GH_OK), NOW)
-    assert g == {"open_issues": 82, "open_bugs": 2, "bugs_opened_7d": 2, "bugs_closed_7d": 1,
+    assert g == {"open_issues": 82, "open_bugs": 2, "bugs_opened_7d": 2, "bugs_closed_7d": 1, "high_priority_open": 3,
                  "main_sha": "b07f9da43d14", "main_date": "2026-10-12"}
     assert pm.sprint_summary(FakeGh(GH_OK)) == {"title": "Week of Oct 12", "open": 8, "closed": 1, "due": "2026-10-18"}
 
@@ -138,7 +139,7 @@ def test_github_numbers_from_gh():
 def test_gh_failure_means_nulls_not_an_exception():
     g = pm.github_summary(FakeGh(fail=True), NOW)
     assert g == {"open_issues": None, "open_bugs": None, "bugs_opened_7d": None, "bugs_closed_7d": None,
-                 "main_sha": None, "main_date": None}
+                 "high_priority_open": None, "main_sha": None, "main_date": None}
     assert pm.sprint_summary(FakeGh(fail=True)) is None
     # Garbage from gh is a failure too.
     assert pm.github_summary(FakeGh({"--label bug": "not json", "--state open": "[1,"}), NOW)["open_bugs"] is None
@@ -152,10 +153,10 @@ def test_github_daily_row_adds_the_one_day_counts_and_leaves_the_summary_keys_al
     assert nums["bugs_opened_1d"] == 1 and nums["bugs_closed_1d"] == 0
     row = pm.github_daily_row(nums, NOW)
     assert row == {"ts": "2026-10-12T09:00:00Z", "open_issues": 82, "open_bugs": 2, "bugs_opened_7d": 2,
-                   "bugs_closed_7d": 1, "bugs_opened_1d": 1, "bugs_closed_1d": 0}
+                   "bugs_closed_7d": 1, "bugs_opened_1d": 1, "bugs_closed_1d": 0, "high_priority_open": 3}
     pm.validate("github_daily.jsonl", row)
     assert set(pm.github_summary(FakeGh(GH_OK), NOW)) == {"open_issues", "open_bugs", "bugs_opened_7d",
-                                                            "bugs_closed_7d", "main_sha", "main_date"}
+                                                            "bugs_closed_7d", "high_priority_open", "main_sha", "main_date"}
 
 
 def test_github_daily_row_is_absent_not_null_when_gh_fails(tmp_path):
@@ -177,12 +178,47 @@ def test_github_daily_row_is_absent_not_null_when_gh_fails(tmp_path):
     lambda r: r.__setitem__("ts", "2026-10-12"),                  # a date is not a timestamp
     lambda r: r.__setitem__("main_sha", "b07f9da43d14"),          # no extra keys
     lambda r: r.pop("bugs_opened_1d"),
+    lambda r: r.__setitem__("high_priority_open", None),
+    lambda r: r.__setitem__("high_priority_open", "3"),
 ])
 def test_github_daily_gate_refuses_nulls_extras_and_bad_shapes(mutate):
     row = pm.github_daily_row(pm.github_numbers(FakeGh(GH_OK), NOW), NOW)
     mutate(row)
     with pytest.raises(pm.PrivacyError):
         pm.validate("github_daily.jsonl", row)
+
+
+def test_high_priority_open_is_counted_by_exact_label_null_on_failure_and_rides_the_daily_row(tmp_path):
+    # One extra gh call, open issues only, the exact label name "High Priority" (not a slug or a glob).
+    gh = FakeGh(GH_OK)
+    nums = pm.github_numbers(gh, NOW)
+    assert nums["high_priority_open"] == 3
+    high_calls = [c for c in gh.calls if "--label" in c and c[c.index("--label") + 1] == pm.HIGH_PRIORITY_LABEL]
+    assert len(high_calls) == 1 and pm.HIGH_PRIORITY_LABEL == "High Priority"
+    assert ("--state", "open") == tuple(high_calls[0][high_calls[0].index("--state"):][:2])
+    # The summary object carries it (int or null), validates either way, and keeps every existing key.
+    assert pm.github_summary(gh, NOW)["high_priority_open"] == 3
+    assert pm.validate("summary_latest.json", pm.summary_builder(gh=FakeGh(GH_OK), git=TagGit([]), now=NOW,
+                                                                 pbxproj=tmp_path / "missing")(tmp_path)) is None
+    # Only that call failing: the summary says null, every other number survives, and the day is skipped
+    # in the trend (never a null row) exactly like the other counts.
+    no_high = FakeGh({k: v for k, v in GH_OK.items() if k != "--label High Priority"})
+    g = pm.github_summary(no_high, NOW)
+    assert g["high_priority_open"] is None and g["open_bugs"] == 2 and g["open_issues"] == 82
+    assert pm.github_daily_row(pm.github_numbers(no_high, NOW), NOW) is None
+    assert pm.summary_builder(gh=no_high, git=TagGit([]), now=NOW, pbxproj=tmp_path / "missing").daily_rows() is None
+    # Garbage is a failure too, not a count.
+    assert pm.github_summary(FakeGh({"--label High Priority": "{not json"}), NOW)["high_priority_open"] is None
+    # The daily row carries it as an int and the gate accepts it.
+    row = pm.github_daily_row(nums, NOW)
+    assert row["high_priority_open"] == 3
+    pm.validate("github_daily.jsonl", row)
+    # Rows published before 2026-10-12 have no such key; the gate re-validates them on
+    # every publish, so absence stays legal (present-and-null does not: see the gate test).
+    old = {k: v for k, v in row.items() if k != "high_priority_open"}
+    pm.validate("github_daily.jsonl", old)
+    with pytest.raises(pm.PrivacyError):
+        pm.validate("github_daily.jsonl", {k: v for k, v in row.items() if k != "open_bugs"})
 
 
 def test_sprint_with_an_unprintable_title_is_skipped_not_published():
@@ -289,9 +325,10 @@ def test_summary_object_validates_and_leaks_nothing(metrics_dir, tmp_path):
     blob = " ".join(every_string(s))
     for secret in SECRETS:
         assert secret not in blob, secret
-    # GitHub is asked once per builder, however many times the nights are rebuilt.
+    # GitHub is asked once per builder, however many times the nights are rebuilt:
+    # open issues, bugs, High Priority, tip of main, milestones.
     build(metrics_dir)
-    assert len(gh.calls) == 4
+    assert len(gh.calls) == 5
 
 
 def test_summary_with_everything_failing_is_still_valid(tmp_path):
@@ -368,9 +405,10 @@ def test_publish_writes_one_daily_row_per_day_and_rewrites_the_same_day(tmp_path
                       summary=build, daily=build.daily_rows) == "pushed"
     rows = [json.loads(line) for line in git.remote["github_daily.jsonl"].splitlines()]
     assert [r["ts"] for r in rows] == ["2026-10-10T09:00:00Z", "2026-10-11T09:00:00Z", "2026-10-12T09:00:00Z"]
-    assert rows[:2] == published[:2]                                                 # earlier days kept verbatim
+    assert rows[:2] == published[:2]                            # earlier days kept verbatim (no high_priority_open)
     assert rows[2] == {"ts": "2026-10-12T09:00:00Z", "open_issues": 82, "open_bugs": 2, "bugs_opened_7d": 2,
-                       "bugs_closed_7d": 1, "bugs_opened_1d": 1, "bugs_closed_1d": 0}   # today rewritten, not appended
+                       "bugs_closed_7d": 1, "bugs_opened_1d": 1, "bugs_closed_1d": 0,
+                       "high_priority_open": 3}                                      # today rewritten, not appended
     assert "summary_latest.json" in git.remote and git.remote["history.jsonl"] == "{}\n"
     # gh failed: the stream is left exactly as published — no row, no nulls, nothing committed for it.
     before = git.remote["github_daily.jsonl"]

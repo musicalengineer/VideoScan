@@ -90,7 +90,7 @@ globalThis.console = { ...console, error: (...a) => errors.push(a.map(String).jo
 })().catch(e => { process.stderr.write(String(e && e.stack || e)); process.exit(1); });
 """
 
-AREAS = ["tests", "size", "debt", "san", "hallie", "person", "reviews", "speed"]
+AREAS = ["tests", "size", "debt", "san", "hallie", "events", "reviews", "speed"]
 SECRETS = ["SECRET-TITLE", "SECRET-REASON", "SECRET-TEST-NAME", "Secret.swift", "/Users/rickb", "SECRET-HOST"]
 
 
@@ -135,7 +135,7 @@ def summary_fixture(now):
         "schemaVersion": 1, "generated": iso(now),
         "version": {"marketing": "5.1", "build": "1"},
         "github": {"open_issues": 82, "open_bugs": 11, "bugs_opened_7d": 3, "bugs_closed_7d": 11,
-                   "main_sha": "b07f9da43d14", "main_date": today},
+                   "high_priority_open": 4, "main_sha": "b07f9da43d14", "main_date": today},
         "sprint": {"title": "Week of Oct 12", "open": 8, "closed": 1, "due": (now + timedelta(days=6)).strftime("%Y-%m-%d")},
         "tags": [{"date": (now - timedelta(days=2)).strftime("%Y-%m-%d"), "name": "demo-2026-10-10"}],
         "person": {"status": "not-configured", "readiness_pct": 0, "quality_score": None},
@@ -145,7 +145,33 @@ def summary_fixture(now):
 
 def daily_row(ts, open_bugs, opened=0, closed=0):
     return {"ts": iso(ts), "open_issues": 80, "open_bugs": open_bugs, "bugs_opened_7d": 3, "bugs_closed_7d": 11,
-            "bugs_opened_1d": opened, "bugs_closed_1d": closed}
+            "bugs_opened_1d": opened, "bugs_closed_1d": closed, "high_priority_open": 4}
+
+
+def events_fixture(now, marks=True):
+    """What the publisher's events_latest.json looks like (scripts/events_prototype.py --stats-json)."""
+    cats = ["Birthday", "Christmas", "Thanksgiving", "Easter", "Halloween", "Wedding", "Beach / vacation",
+            "Music / performance", "Graduation"]
+    by_cat = dict(zip(cats, [120, 88, 40, 12, 9, 7, 30, 2, 0]))
+    pbc = {c: {"yes": 0, "no": 0} for c in cats}
+    pbc["Birthday"] = {"yes": 30, "no": 5}
+    pbc["Christmas"] = {"yes": 8, "no": 4}
+    return {"schemaVersion": 1, "ts": iso(now - timedelta(hours=2)), "active_records": 9810, "with_captions": 6120,
+            "with_transcripts": 3310, "clips_with_evidence": 1274, "candidate_events": 308, "strong_events": 109,
+            "by_category": by_cat, "marks_yes": 38 if marks else None, "marks_no": 9 if marks else None,
+            "precision_by_category": pbc if marks else None}
+
+
+BUGS_URL = "https://github.com/musicalengineer/VideoScan/issues?q=is%3Aopen+label%3Abug"
+HIGH_URL = "https://github.com/musicalengineer/VideoScan/issues?q=is%3Aopen+label%3A%22High+Priority%22"
+OLD_BUG_WORDING = ["not available", "CI row", "issues open in all", "fixed this week"]
+
+
+def bug_tile(head):
+    """The Open-bugs tile's value line and words line, as rendered."""
+    m = re.search(r'<div class="label">Open bugs</div><div class="value">(.*?)</div>(?:<svg.*?</svg>)?<div class="words">(.*?)</div></div>', head)
+    assert m, head
+    return m.group(1), m.group(2)
 
 
 def daily_fixture(now):
@@ -212,6 +238,7 @@ def full_fixtures(now, with_summary=True):
                                        "passes": 2, "findings": 5, "closed_passes": 2}]),
         "summary_latest.json": summary_fixture(now) if with_summary else None,
         "github_daily.jsonl": jsonl(daily_fixture(now)) if with_summary else None,
+        "events_latest.json": events_fixture(now),
         "/actions/workflows/ci.yml/": {"workflow_runs": [
             {"head_branch": "feature", "status": "completed", "conclusion": "failure", "updated_at": iso(fresh)},
             {"head_branch": "main", "status": "in_progress", "conclusion": None, "updated_at": iso(fresh)},
@@ -339,7 +366,9 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "11,211" in head and "3 failing" in head
     assert "M1" in head and "did not run · build-timeout:5400s" in head and "failed of" in head
     assert "red 1 night running" in head and "days since a red night" in head
-    assert "11 <small>bugs" in head and "<b>11 open</b> · +3 new / −11 fixed this week" in head and "82 issues open" in head
+    value, words = bug_tile(head)
+    assert "Open bugs:</small> 11" in value and "High priority:</small> 4" in value
+    assert f'href="{BUGS_URL}"' in words and f'href="{HIGH_URL}"' in words
     # The Open-bugs tile carries the 30-day sparkline; the day gh failed breaks it into two runs.
     bug_spark = re.search(r'<svg\b[^>]*class="spark"[^>]*>.*?</svg>', head)
     assert bug_spark and len(re.findall(r"<polyline\b", bug_spark[0])) == 2
@@ -368,7 +397,7 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "435 over CCN 15" in out["sections"]["sum-debt"] and "2 new" in out["sections"]["sum-debt"]
     assert "sanitizers: no run" in out["sections"]["sum-san"] and "strict warnings 539 (815 a week ago)" in out["sections"]["sum-san"]
     assert "80.0%" in out["sections"]["sum-hallie"] and "8 of 10" in out["sections"]["sum-hallie"] and "incomplete" in out["sections"]["sum-hallie"]
-    assert "not configured" in out["sections"]["sum-person"]
+    assert "1,274 clips with evidence" in out["sections"]["sum-events"] and "308 candidate events" in out["sections"]["sum-events"]
     assert "Codex: 2 passes, 5 findings, 2 passes closed" in out["sections"]["sum-reviews"] and "no data yet" in out["sections"]["sum-reviews"]
     assert "No catalog-search benchmark" in out["sections"]["sum-speed"]
     # The twists carry the old charts and tables.
@@ -433,9 +462,97 @@ def test_without_the_daily_stream_the_bug_tile_is_the_snapshot_alone(tmp_path):
     out = run_page(tmp_path, fixtures, {"hash": "#all"})
     assert out["errors"] == []
     head = out["sections"]["head"]
-    assert "11 <small>bugs" in head and "<b>11 open</b> · +3 new / −11 fixed this week" in head
+    value, words = bug_tile(head)
+    assert "Open bugs:</small> 11" in value and "High priority:</small> 4" in value and "GitHub issues →" in words
     assert 'class="spark"' not in head, "no daily rows: no sparkline, no fabricated trend"
     assert "c-bugs" not in out["charts"] and "github_daily.jsonl" in out["notes"]["c-bugs-note"]
+
+
+@needs_node
+def test_event_recognition_line_and_twist_render_counts_only(tmp_path):
+    """The Event recognition area (replaces Person recognition, Rick 2026-10-12): the line is
+    evidence → candidates (strong) + marks; the dot is grey with no stream, watch under 30 marks,
+    green / watch by precision at 30+; the twist is the per-category table plus the coverage line."""
+    now = datetime.now(timezone.utc)
+    fixtures = full_fixtures(now)
+    out = run_page(tmp_path, fixtures, {"hash": "#all"})
+    assert out["errors"] == []
+    line = out["sections"]["sum-events"]
+    assert "Event recognition" in line and "dot watch" in line                      # 47 marks, 81 % < 90 %
+    assert "1,274 clips with evidence → <b>308 candidate events</b> (109 strong); 47 marks, <b>81% right</b>." in line
+    assert 'class="big">308 candidate events' in line and "snapshot" in line
+    assert "<polyline" not in line                                                   # single snapshot: no trend line drawn
+    body = out["sections"]["body-events"]
+    assert "captions on <b>6,120</b> (62%)" in body and "transcripts on <b>3,310</b> (34%)" in body and "<b>9,810</b> active records" in body
+    assert "<td>Birthday</td><td>120</td><td>30</td><td>5</td><td>86%</td>" in body        # per-category precision
+    assert "<td>Christmas</td><td>88</td><td>8</td><td>4</td><td>67%</td>" in body
+    assert "<td>Graduation</td><td>0</td><td>0</td><td>0</td><td>—</td>" in body            # no marks: no fake 0 %
+    assert body.index("<td>Birthday</td>") < body.index("<td>Christmas</td>") < body.index("<td>Graduation</td>")
+    # 30+ marks and 90 %+ right: green. Fewer than 30 marks: watch, whatever the ratio. No marks: watch, "no marks yet".
+    green = dict(fixtures, **{"events_latest.json": dict(events_fixture(now), marks_yes=45, marks_no=3)})
+    assert "dot green" in run_page(tmp_path, green, {"hash": "#all"})["sections"]["sum-events"]
+    few = dict(fixtures, **{"events_latest.json": dict(events_fixture(now), marks_yes=12, marks_no=0)})
+    few_line = run_page(tmp_path, few, {"hash": "#all"})["sections"]["sum-events"]
+    assert "dot watch" in few_line and "12 marks, <b>100% right</b>" in few_line
+    none = dict(fixtures, **{"events_latest.json": events_fixture(now, marks=False)})
+    none_out = run_page(tmp_path, none, {"hash": "#all"})
+    assert "dot watch" in none_out["sections"]["sum-events"] and "no marks yet" in none_out["sections"]["sum-events"]
+    assert "<td>Birthday</td><td>120</td><td>—</td><td>—</td><td>—</td>" in none_out["sections"]["body-events"]
+    # No stream: grey, "nothing published", no number; the twist says what is missing.
+    missing = dict(fixtures, **{"events_latest.json": None})
+    m_out = run_page(tmp_path, missing, {"hash": "#all"})
+    assert m_out["errors"] == []
+    assert "dot grey" in m_out["sections"]["sum-events"] and "nothing published yet" in m_out["sections"]["sum-events"]
+    assert "events_latest.json" in m_out["sections"]["body-events"] and ">0<" not in m_out["sections"]["sum-events"]
+    # Person recognition is gone from the page and its data is no longer read.
+    page = PAGE.read_text()
+    assert "Person recognition" not in page and "summary.person" not in page and "area-person" not in page
+    assert "Person recognition" not in json.dumps(out) and "sum-person" not in out["sections"]
+    for secret in SECRETS:
+        assert secret not in json.dumps(out), secret
+
+
+@needs_node
+def test_open_bugs_tile_is_two_counts_and_github_links(tmp_path):
+    """Rick's ask (2026-10-12): value line "Open bugs: XX  High priority: YY" on one line, words line
+    = links into GitHub; the "not available" / "(CI row)" / "issues open in all" sentences are gone."""
+    now = datetime.now(timezone.utc)
+    out = run_page(tmp_path, full_fixtures(now), {"hash": "#all"})
+    assert out["errors"] == []
+    head = out["sections"]["head"]
+    value, words = bug_tile(head)
+    assert re.fullmatch(r'<span class="duo"><span><small>Open bugs:</small> 11</span><span><small>High priority:</small> 4</span></span>', value)
+    assert words == (f'<a href="{BUGS_URL}" target="_blank" rel="noopener">GitHub issues →</a> · '
+                     f'<a href="{HIGH_URL}" target="_blank" rel="noopener">high priority →</a>')
+    for phrase in OLD_BUG_WORDING:
+        assert phrase not in head, phrase
+    assert 'class="spark"' in head                                  # the 30-day sparkline stays under the counts
+    # High Priority unknown (that one gh call failed): "—" for it, the bug link alone, no second link.
+    fixtures = full_fixtures(now)
+    fixtures["summary_latest.json"]["github"]["high_priority_open"] = None
+    out2 = run_page(tmp_path, fixtures, {"hash": "#all"})
+    assert out2["errors"] == []
+    value2, words2 = bug_tile(out2["sections"]["head"])
+    assert "Open bugs:</small> 11" in value2 and "High priority:</small> —" in value2
+    assert words2 == f'<a href="{BUGS_URL}" target="_blank" rel="noopener">GitHub issues →</a>'
+
+
+@needs_node
+def test_open_bugs_tile_without_a_summary_is_two_dashes_and_the_bug_link(tmp_path):
+    now = datetime.now(timezone.utc)
+    out = run_page(tmp_path, full_fixtures(now, with_summary=False))
+    assert out["errors"] == []
+    head = out["sections"]["head"]
+    value, words = bug_tile(head)
+    assert "Open bugs:</small> —" in value and "High priority:</small> —" in value
+    assert words == f'<a href="{BUGS_URL}" target="_blank" rel="noopener">GitHub issues →</a>'
+    assert 'class="spark"' not in head
+    for phrase in OLD_BUG_WORDING:
+        assert phrase not in head, phrase
+    # Nothing at all published: the same two dashes and the same single link, never a count.
+    out2 = run_page(tmp_path, {}, {"hash": "", "search": "?all"})
+    value2, words2 = bug_tile(out2["sections"]["head"])
+    assert value2.count("—") == 2 and words2 == words and not re.search(r"\d", value2)
 
 
 @needs_node
@@ -443,8 +560,10 @@ def test_without_a_summary_the_page_says_so_and_still_renders(tmp_path):
     out = run_page(tmp_path, full_fixtures(datetime.now(timezone.utc), with_summary=False))
     assert out["errors"] == []
     head = out["sections"]["head"]
-    assert "nightly summary not published yet" in head and head.count("—") >= 3
-    assert "81 issues open (CI row)" in head                       # history keeps open_issues as a fallback
+    assert "nightly summary not published yet" in head and head.count("—") >= 4
+    value, words = bug_tile(head)
+    assert value.count("—") == 2 and "81" not in value and "81" not in words   # history's open_issues is NOT a fallback
+    assert f'href="{BUGS_URL}"' in words and "High Priority" not in words
     assert "no data yet" in out["sections"]["tl"] and "summary_latest.json" in out["sections"]["tl"]
     assert "Nightly summary not published yet" in out["sections"]["sum-tests"]
     assert "summary_latest.json not published yet" in out["sections"]["status"]

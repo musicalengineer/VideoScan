@@ -13,7 +13,8 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   passes (parsed from docs/reviews/codex headers)
     metrics/summary_latest.json   ONE object for the page's summary-first view
                                   (GH #310): app version, GitHub counts (open
-                                  bugs, sprint milestone), demo tags, and the
+                                  bugs, open "High Priority" issues, sprint
+                                  milestone), demo tags, and the
                                   last 90 nights of the 2 AM run per Mac, each
                                   night classified green / red / did_not_run by
                                   classify_nightly_row(). Rebuilt on every run.
@@ -21,9 +22,17 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   bugs opened / closed in the last 7 days and
                                   in the last 1 day (the page sums the 1-day
                                   counts per ISO week for its opened-vs-closed
-                                  bars). A day that publishes twice keeps the
+                                  bars), open "High Priority" issues. A day
+                                  that publishes twice keeps the
                                   later row; a day on which `gh` failed gets
                                   NO row (never nulls in a trend).
+    metrics/events_latest.json    ONE object: the event-recognition prototype's
+                                  counts (scripts/events_prototype.py
+                                  --stats-json): records with captions /
+                                  transcripts, clips with evidence, candidate
+                                  and strong events per category, Rick's ✓/✗
+                                  marks. Any failure of the script = the
+                                  stream is left as published.
 
 It runs at the end of the 4 AM coverage job and of the adversarial confirm job.
 Both call it the same way; a run with nothing new commits nothing.
@@ -144,6 +153,7 @@ HOSTLABEL_RE = re.compile(r"^[A-Z][A-Za-z0-9]{0,5}$")     # "M4", "Ultra"; a hos
 VERS_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){0,3}$")
 TAGNAME_RE = re.compile(r"^demo[A-Za-z0-9._/-]{0,59}$")
 PUBTEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:'/#+()-]{0,59}$")
+EVENTCAT_RE = re.compile(r"^[A-Z][a-z]{1,19}(?: / [a-z]{1,19})?$")   # "Birthday", "Beach / vacation"; never a name
 NIGHT_STATES = ("green", "red", "did_not_run")
 SUMMARY_DAYS = 90
 _NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "total": "int",
@@ -260,7 +270,8 @@ SCHEMAS: Dict[str, dict] = {
         "generated": "ts",
         "version": ("opt", ("obj", {"marketing": "vers", "build": "vers"})),
         "github": ("obj", {"open_issues": "int?", "open_bugs": "int?", "bugs_opened_7d": "int?",
-                           "bugs_closed_7d": "int?", "main_sha": "sha?", "main_date": "date?"}),
+                           "bugs_closed_7d": "int?", "high_priority_open": "int?",
+                           "main_sha": "sha?", "main_date": "date?"}),
         "sprint": ("opt", ("obj", {"title": "pubtext", "open": "int", "closed": "int", "due": "date?"})),
         "tags": ("list", ("obj", {"date": "date", "name": "tagname"})),
         "person": ("opt", ("obj", {"status": "code", "readiness_pct": "num?", "quality_score": "num?"})),
@@ -275,18 +286,40 @@ SCHEMAS: Dict[str, dict] = {
         "open_issues": "int", "open_bugs": "int",
         "bugs_opened_7d": "int", "bugs_closed_7d": "int",
         "bugs_opened_1d": "int", "bugs_closed_1d": "int",
+        # Added 2026-10-12: every new row carries it (never null; the day is skipped
+        # instead). "maybe" = the key may be ABSENT on rows published before then,
+        # which the gate re-validates on every publish; present means a count.
+        "high_priority_open": ("maybe", "int"),
+    },
+    # Event recognition prototype v0 (scripts/events_prototype.py --stats-json):
+    # ONE object, rebuilt each publish. Counts only; category names are the
+    # script's CATEGORIES constants (EVENTCAT_RE), never a clip, a person or a word
+    # said. Marks are null until Rick has exported some.
+    "events_latest.json": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "active_records": "int", "with_captions": "int", "with_transcripts": "int",
+        "clips_with_evidence": "int", "candidate_events": "int", "strong_events": "int",
+        "by_category": ("map", "eventcat", "int"),
+        "marks_yes": "int?", "marks_no": "int?",
+        "precision_by_category": ("opt", ("map", "eventcat", ("obj", {"yes": "int", "no": "int"}))),
     },
 }
+EVENTS_KEYS = ("ts", "active_records", "with_captions", "with_transcripts", "clips_with_evidence",
+               "candidate_events", "strong_events", "by_category", "marks_yes", "marks_no", "precision_by_category")
+EVENTS_SCRIPT = REPO / "scripts" / "events_prototype.py"
 GITHUB_DAILY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d",
-                     "bugs_opened_1d", "bugs_closed_1d")
-GITHUB_SUMMARY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d", "main_sha", "main_date")
+                     "bugs_opened_1d", "bugs_closed_1d", "high_priority_open")
+GITHUB_SUMMARY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d", "high_priority_open",
+                       "main_sha", "main_date")
+HIGH_PRIORITY_LABEL = "High Priority"      # the exact GitHub label name
 
 # Streams whose existing rows were published by someone else (GitHub CI):
 # fresh rows are validated and appended (deduplicated by ts + sha); rows
 # already on the branch are kept exactly as they are.
 APPEND_ONLY = {"complexity.jsonl"}
 # Streams that are ONE JSON object, replaced whole on every publish.
-SINGLE_OBJECT = {"summary_latest.json"}
+SINGLE_OBJECT = {"summary_latest.json", "events_latest.json"}
 
 
 def source_folders() -> set:
@@ -331,6 +364,7 @@ _SCALARS = {
     "vers": (_matches(VERS_RE), "expected a dotted version number"),
     "tagname": (_matches(TAGNAME_RE), "expected a demo* git tag name"),
     "pubtext": (_matches(PUBTEXT_RE), "expected a short public milestone title"),
+    "eventcat": (_matches(EVENTCAT_RE), "expected an event category constant such as Birthday"),
 }
 
 
@@ -348,10 +382,14 @@ def _check_folder(value, where: str, folders: Optional[set]) -> None:
 def _check_obj(spec, value, where, folders) -> None:
     if not isinstance(value, dict):
         raise _bad(where, value, "expected an object")
-    if set(value) != set(spec[1]):
+    # ("maybe", spec): the key may be absent (added to the stream after rows were
+    # published); when present it must match spec. Every other key is required.
+    maybe = {k for k, sub in spec[1].items() if isinstance(sub, tuple) and sub and sub[0] == "maybe"}
+    if not (set(spec[1]) - maybe <= set(value) <= set(spec[1])):
         raise PrivacyError(f"{where}: keys {sorted(value)} != allowlist {sorted(spec[1])}")
     for key, sub in spec[1].items():
-        _check(sub, value[key], f"{where}.{key}", folders)
+        if key in value:
+            _check(sub[1] if key in maybe else sub, value[key], f"{where}.{key}", folders)
 
 
 def _check_either(spec, value, where, folders) -> None:
@@ -640,6 +678,33 @@ def build_streams(cov_dir: Path = COVERAGE_DIR, adv_dir: Path = ADV_DIR,
     }
 
 
+def events_object(raw) -> Optional[dict]:
+    """The events_latest.json object from the script's --stats-json output:
+    the allowlisted keys only (anything else the script may ever add is dropped
+    here, and the gate still has the last word), or None if it is not an object."""
+    if not isinstance(raw, dict):
+        return None
+    return dict({"schemaVersion": SCHEMA_VERSION}, **{k: raw.get(k) for k in EVENTS_KEYS})
+
+
+def events_stats(run: Callable = subprocess.run, script: Path = EVENTS_SCRIPT,
+                 python: str = sys.executable, timeout: int = 900) -> Optional[dict]:
+    """Run `scripts/events_prototype.py --no-open --stats-json <tmp>` and return
+    its counts, or None on ANY failure (script missing, non-zero exit, timeout,
+    unreadable or non-JSON output): the stream is then simply not written."""
+    import tempfile
+    try:
+        with tempfile.TemporaryDirectory(prefix="videoscan-events-") as tmp:
+            out = Path(tmp) / "events.json"
+            proc = run([python, str(script), "--no-open", "--stats-json", str(out)],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout)
+            if proc.returncode != 0:
+                return None
+            return events_object(json.loads(out.read_text(encoding="utf-8")))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
+
+
 # ---------------------------------------------------------------- summary (GH #310)
 
 def classify_nightly_row(row: dict) -> str:
@@ -765,13 +830,18 @@ def _gh_json(gh: Callable[..., Optional[str]], *args: str):
 
 
 def github_numbers(gh: Callable[..., Optional[str]], now: datetime, repo: str = GITHUB_REPO) -> dict:
-    """Every GitHub number both streams draw on, from three `gh` calls: open
+    """Every GitHub number both streams draw on, from four `gh` calls: open
     issues; open bugs and bugs opened / closed in the last 7 days and the last
-    1 day; the tip of main. Each field is null when its `gh` call fails."""
+    1 day; open issues labelled "High Priority"; the tip of main. Each field is
+    null when its `gh` call fails."""
     g: Dict[str, object] = {k: None for k in GITHUB_SUMMARY_KEYS + ("bugs_opened_1d", "bugs_closed_1d")}
     issues = _gh_json(gh, "issue", "list", "-R", repo, "--state", "open", "--limit", "1000", "--json", "number")
     if isinstance(issues, list):
         g["open_issues"] = len(issues)
+    high = _gh_json(gh, "issue", "list", "-R", repo, "--state", "open", "--label", HIGH_PRIORITY_LABEL,
+                    "--limit", "1000", "--json", "number")
+    if isinstance(high, list):
+        g["high_priority_open"] = len(high)
     bugs = _gh_json(gh, "issue", "list", "-R", repo, "--state", "all", "--label", "bug", "--limit", "1000",
                     "--json", "state,createdAt,closedAt")
     if isinstance(bugs, list):
@@ -792,7 +862,8 @@ def github_numbers(gh: Callable[..., Optional[str]], now: datetime, repo: str = 
 
 def github_summary(gh: Callable[..., Optional[str]], now: datetime, repo: str = GITHUB_REPO) -> dict:
     """The `github` object of summary_latest.json: open issues, open bugs, bugs
-    opened / closed in the last 7 days, and the tip of main (nulls on failure)."""
+    opened / closed in the last 7 days, open "High Priority" issues, and the tip
+    of main (nulls on failure)."""
     return summary_github(github_numbers(gh, now, repo))
 
 
@@ -1055,6 +1126,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--metrics-dir", help="with --dry-run / --out-dir: build the summary from the "
                                           "published streams in this directory (e.g. the publish "
                                           "worktree's metrics/); without it no summary is produced")
+    ap.add_argument("--no-events", action="store_true",
+                    help="do not run scripts/events_prototype.py for metrics/events_latest.json")
+    ap.add_argument("--events-script", default=str(EVENTS_SCRIPT),
+                    help="the script whose --stats-json output becomes metrics/events_latest.json")
     a = ap.parse_args(argv)
 
     if a.validate:
@@ -1065,6 +1140,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
                           Path(a.codex_dir).expanduser())
+    fresh["events_latest.json"] = None if a.no_events else events_stats(script=Path(a.events_script).expanduser())
     summary = None if a.no_summary else summary_builder()
     folders = source_folders()
     try:
