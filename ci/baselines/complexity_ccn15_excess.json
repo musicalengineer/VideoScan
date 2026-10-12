@@ -1,7 +1,7 @@
 {
  "note": "CCN 15 excess ratchet (Rick 2026-10-07): CI preflight (scripts/complexity_gate.py --all) fails when the tree's total excess, the sum of max(0, CCN - 15) over every function, is above `total_excess` (excess a recorded override let in is not counted). CCN is a signal, not the goal. `files` is a per-file snapshot for the error message only. `total_excess` only shrinks: the 2 AM nightly lowers it; regenerate deliberately with `scripts/complexity_metrics.py --update-ccn15-excess` and say why in the commit.",
  "threshold_ccn": 15,
- "total_excess": 2119,
+ "total_excess": 2116,
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": 11,
   "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift": 3,
@@ -17,12 +17,12 @@
   "VideoScan/VideoScan/Archive/ArchiveRefile.swift": 2,
   "VideoScan/VideoScan/Archive/ArchiveUpdateSheet.swift": 1,
   "VideoScan/VideoScan/Archive/ArchiveView+DetailSheet.swift": 1,
-  "VideoScan/VideoScan/Archive/ArchiveVolumeProtection.swift": 18,
+  "VideoScan/VideoScan/Archive/ArchiveVolumeProtection.swift": 16,
   "VideoScan/VideoScan/Archive/BindFixityToVolumeJob.swift": 1,
   "VideoScan/VideoScan/Archive/CopyFamilyAssessor.swift": 1,
   "VideoScan/VideoScan/Archive/PromoteDateChoice.swift": 2,
   "VideoScan/VideoScan/Archive/PromoteToArchiveJob+Steps.swift": 4,
-  "VideoScan/VideoScan/Archive/ReadOnlyVolumeProtection.swift": 5,
+  "VideoScan/VideoScan/Archive/ReadOnlyVolumeProtection.swift": 4,
   "VideoScan/VideoScan/Archive/VerifyArchiveCopiesJob.swift": 5,
   "VideoScan/VideoScan/Archive/VideoScanModel+ArchiveUpdate.swift": 7,
   "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift": 7,

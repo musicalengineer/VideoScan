@@ -548,6 +548,19 @@ struct FixityStampVolumeIdentityTests {
             // witness vs source file (dev+ino: not the file itself). Both
             // via DeviceID.from, never a stored stamp.
             "VideoScan/MediaOps/RelocateReconcile.swift": 2,
+            // Copies card: `disk.identity` holds stamps captured LIVE in one
+            // `CopiesAdviceDisk.gather` pass — two names for one file now.
+            "VideoScan/Catalog/CopiesAdvice.swift": 1,
+            // Reviewed Delete Duplicates holds: keeper-alias inodes from the
+            // `captureStamps` map taken LIVE at plan freeze / job start (both
+            // callers) — never the stored `keeperStamp` on the entry.
+            "VideoScan/MediaOps/DeleteDuplicatesReviewedPlan.swift": 1,
+            // Excess Copies survivor alias (codex F1, 10/8): survivor vs
+            // target / archive file, all from ONE `captureStamps` pass LIVE
+            // at the job's turn (`prepareExcess`) — never a stored stamp.
+            "VideoScan/MediaOps/VideoScanModel+ExcessCopies.swift": 1,
+            // (CatalogKnownCopies — STORED stamps — compares volume UUID +
+            // inode, never st_dev: nightly 2026-10-12.)
         ]
         let pattern = try NSRegularExpression(pattern:
             #"(\.device\s*[!=]=)|([!=]=\s*[\w.()]*\.device\b)|(st_dev\)?\s*[!=]=)|([!=]=\s*[\w.()]*st_dev\b)|(\\\(\w+\.device\))"#)

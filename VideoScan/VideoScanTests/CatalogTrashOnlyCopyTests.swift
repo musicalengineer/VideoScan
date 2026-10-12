@@ -114,7 +114,7 @@ struct CatalogTrashOnlyCopyTests {
         #expect(plan(model([target, superseded, skipped]), [target]).onlyCopy == [target.id])
     }
 
-    @Test("QA M2: the same device + inode on both fixity stamps is the same file, not a copy")
+    @Test("QA M2: the same inode on both fixity stamps (volume unproven) is the same file, not a copy")
     func sameDeviceAndInodeIsTheSameFile() {
         func stamped(_ path: String, inode: UInt64) -> VideoRecord {
             let r = rec(path, md5: "m1")
@@ -127,6 +127,36 @@ struct CatalogTrashOnlyCopyTests {
         #expect(plan(model([target, firmlink]), [target]).onlyCopy == [target.id])
         let realCopy = stamped("/Volumes/B/clip.mov", inode: 43)
         #expect(plan(model([target, realCopy]), [target]).onlyCopy.isEmpty)
+    }
+
+    /// Nightly 2026-10-12 (FixityStampVolumeIdentityTests sensor): the
+    /// stamps are STORED, and st_dev is handed out per mount. The same file
+    /// stamped before and after a remount differs only in device number —
+    /// it must still be the same file, so the only-copy warning fires.
+    @Test("REMOUNT: stored stamps differing only in device number are still the same file — warned")
+    func remountedStampsAreStillTheSameFile() {
+        func stamped(_ path: String, device: UInt64, inode: UInt64, volume: String?) -> VideoRecord {
+            let r = rec(path, md5: "m1")
+            let stamp = FileIdentityStamp(device: device, inode: inode, size: 1_000, mtimeNs: 1, ctimeNs: 1,
+                                          volumeUUID: volume)
+            r.contentFixity = ContentFixity(digest: "abc", byteCount: 1_000, stamp: stamp)
+            return r
+        }
+        let vol = "11111111-2222-3333-4444-555555555555"
+        let other = "AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+        // Same volume UUID + inode, new st_dev after a replug: one file, two spellings.
+        let target = stamped("/Volumes/A/clip.mov", device: 16_777_230, inode: 42, volume: vol)
+        let remounted = stamped("/System/Volumes/Data/Volumes/A/clip.mov", device: 16_777_252, inode: 42, volume: vol)
+        #expect(plan(model([target, remounted]), [target]).onlyCopy == [target.id])
+        // Pre-UUID stamps: the volume is unproven, so a matching inode is
+        // never counted as a copy, whatever the device numbers say.
+        let legacyTarget = stamped("/Volumes/A/clip.mov", device: 5, inode: 42, volume: nil)
+        let legacyAlias = stamped("/Volumes/A/Links/clip-hardlink.mov", device: 9, inode: 42, volume: nil)
+        #expect(plan(model([legacyTarget, legacyAlias]), [legacyTarget]).onlyCopy == [legacyTarget.id])
+        // Different volume UUIDs: a real copy, even when a reused st_dev
+        // and the inode both collide.
+        let copy = stamped("/Volumes/B/clip.mov", device: 16_777_230, inode: 42, volume: other)
+        #expect(plan(model([target, copy]), [target]).onlyCopy.isEmpty)
     }
 
     @Test("QA m3/m4 sensor: archive copies by link or digest only; Cancel starts focused when warned")

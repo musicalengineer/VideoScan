@@ -416,7 +416,10 @@ struct CatalogToolbar<Dashboard: View>: View {
                 // files ffprobe can't read (caches/previews/app data) that the
                 // "Scan Files With No Extension" pass can sweep in. Soft-delete —
                 // files on disk untouched, recoverable via Show Removed.
-                let junkCount = VideoScanModel.unreadableExtensionlessIDs(in: model.records).count
+                // The model's cached count — never a records pass here
+                // (2026-10-11 resize beachball: this line WAS one, run on
+                // every body evaluation). VideoScanModel+CatalogChromeCounts.
+                let junkCount = model.unreadableExtensionlessCount
                 if junkCount > 0 {
                     Divider()
                     Button("Remove \(junkCount) Unreadable Extensionless File\(junkCount == 1 ? "" : "s")") {

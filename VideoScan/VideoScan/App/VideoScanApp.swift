@@ -539,6 +539,9 @@ struct VideoScanApp: App {
     /// context menu, the operations window, and the quit guard all see
     /// the same instance — jobs survive the window closing.
     @StateObject private var fileOpsCenter = MediaFileOperationsCenter()
+    /// "Did the last Fill In Full Hashes run finish?" — drives the Catalog
+    /// menu title ("Resume Filling In Full Hashes…"). Read at launch below.
+    @StateObject private var fullHashResume = FullHashBackfillResumeMarker()
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -602,6 +605,15 @@ struct VideoScanApp: App {
                         if !TestEnvironment.isTestHost {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
                                 catalogModel?.checkForUnfinishedDeleteDuplicatesPlans()
+                            }
+                            // Fill In Full Hashes (2026-10-11): an
+                            // unfinished run is OFFERED (a log line + the
+                            // menu reads "Resume…"), never restarted.
+                            let resume = fullHashResume
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
+                                guard let model = catalogModel,
+                                      let open = resume.attach(catalogFile: model.catalogStore.fileLocation) else { return }
+                                model.fullHashBackfillNote(FullHashBackfillResumeMarker.launchLine(open))
                             }
                         }
                         // Archive Angel phase 2: the scoring sweep parks
@@ -809,6 +821,10 @@ struct VideoScanApp: App {
                 }
                 .disabled(catalogModel.isReadOnly || catalogModel.isRefreshingEmbeddedDates)
                 .help("Read the creation date and camera/app that each file carries inside it (survives copies; used to file the Master Archive). Only records missing one are probed.")
+                // Fill In Full Hashes (2026-10-11): whole-catalog SHA-256
+                // backfill as an MFO job; restart = resume.
+                FullHashBackfillMenuItem(model: catalogModel, center: fileOpsCenter,
+                                         marker: fullHashResume, isReadOnly: catalogModel.isReadOnly)
             }
         }
 
