@@ -816,8 +816,10 @@ struct ArchiveVolumeProtectionSourceSensor {
                 "the removal-time re-check sits in the detached pass")
         let bench = try SourceTree.appSource(named: "VideoScanModel+Workbench.swift")
         #expect(bench.contains("await deleteConfirmedJunk(requested, mode: .toTrash, reason: .workbench, guard: fileGuard)"))
+        // 2026-10-12: the door verb is a table (Discard, Cleanup); every
+        // other door still speaks as Delete Confirmed Junk.
         #expect(try SourceTree.appSource(named: "VideoScanModel+RemovalMarker.swift")
-                    .contains("self == .workbench ? \"Discard\" : \"Delete Confirmed Junk\""))
+                    .contains("var doorVerb: String { Self.doorVerbs[self] ?? \"Delete Confirmed Junk\" }"))
         let dups = try SourceTree.appSource(named: "VideoScanModel+Duplicates.swift")
         #expect(dups.contains("switch bulkDeleteRefusal(rec, volume: archiveVolume)"),
                 "authorizeDuplicateDeletion asks the one rule live")

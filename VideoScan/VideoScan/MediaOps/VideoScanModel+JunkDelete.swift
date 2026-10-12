@@ -398,7 +398,7 @@ extension VideoScanModel {
                           batchID: "junk-\(UUID().uuidString.prefix(8))")
 
         let refused = result.refused.count, cancelled = result.cancelled
-        log("Delete Confirmed Junk: attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode.isOutrightRemoval ? "permanent" : "trash")")
+        log("\(reason.doorVerb): attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode.isOutrightRemoval ? "permanent" : "trash")")
         return result
     }
 

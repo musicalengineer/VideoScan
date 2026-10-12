@@ -78,6 +78,16 @@ struct CleanupTrashSensorTests {
         #expect(proof.contains("FixityRebind.rehash(path: path, control: control)"), "the app's one fixity reader")
     }
 
+    @Test("QA P3: the copy lane speaks in Cleanup's voice, not Delete Junk's")
+    func copyLaneVoice() throws {
+        #expect(RemovalReason.duplicate.doorVerb == "Cleanup")
+        #expect(RemovalReason.junk.doorVerb == "Delete Confirmed Junk")
+        #expect(RemovalReason.workbench.doorVerb == "Discard")
+        let engine = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
+        #expect(engine.contains("log(\"\\(reason.doorVerb): attempted="), "the engine's summary line carries the door's verb")
+        #expect(!engine.contains("log(\"Delete Confirmed Junk: attempted="))
+    }
+
     @Test("SENSOR: only Cleanup's junk lane lifts the FamilyArchive waiver")
     func waiverOnlyFromCleanup() {
         let hits = SourceTree.appSources.compactMap { f -> String? in
