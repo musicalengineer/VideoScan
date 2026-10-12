@@ -39,8 +39,9 @@
 // keeper — by row OR by physical file — is ever in `copies` or `junk` or
 // `archiveJunk`.
 //
-// Memory: one `CleanupRow` (~200 bytes) per active record, one dictionary
-// entry per hashed row, and the plan's lists. ~40 MB worst case at 100k.
+// Memory: one `CleanupRow` (~200 bytes) per active record, one disk-facts
+// entry per active row (every row is stat'ed once, so an alias under any
+// name is seen), and the plan's lists. ~50 MB worst case at 100k.
 //
 // (For Rick: everything here is a `struct` — value semantics, copied like a
 // C++ POD — and `Sendable`, so the planner can run on a worker thread with
@@ -262,9 +263,11 @@ enum CleanupPlanner {
 
     /// Build the plan. Three passes:
     ///   1. sort rows into lanes (junk · hashed groups · not checked yet);
-    ///   2. ask `facts` once for every row that could matter (a junk row, or
-    ///      a member of a group of two or more) and index the physical files,
-    ///      so two rows naming one file are known BEFORE anything is chosen;
+    ///   2. ask `facts` once for EVERY active row — not only the candidates
+    ///      (codex r1 P2-3: an unhashed, set-aside or unique-content row can
+    ///      be another name for a candidate's file) — and index the physical
+    ///      files, so two rows naming one file are known BEFORE anything is
+    ///      chosen;
     ///   3. decide: groups first (that reserves every keeper), then junk.
     /// `rank` is the keeper election's volume rank for a path
     /// (`DuplicateKeeperPolicy.volumeRank(forPath:)`).
@@ -275,7 +278,7 @@ enum CleanupPlanner {
         let lanes = Lanes(rows, into: &plan)
         var disk: [UUID: CleanupDiskFacts] = [:]
         var index = PhysicalIndex()
-        for row in lanes.junk + lanes.groups.flatMap(\.members) {
+        for row in rows {
             let fact = facts(row.path)
             disk[row.id] = fact
             if case .file(let stamp) = fact { index.note(CleanupPhysicalID(stamp)) }

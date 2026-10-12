@@ -151,6 +151,23 @@ struct CleanupTrashPlanTests {
         #expect(plan.copies.isEmpty, "\(plan.copies.map(\.target.path))")
     }
 
+    @Test("codex r1 P2-3: a candidate sharing its physical file with ANY other active row is left alone — unhashed, singleton stale-hash, or set-aside")
+    func aliasAcrossAllActiveRows() {
+        let shared = F.stamp(inode: 88, size: 1_000)
+        let keep = F.row("/Volumes/LaCieWorkspace/a.mov", digest: "d1")
+        let extra = F.row("/Volumes/SanDiskWorkspace/a.mov", digest: "d1")
+        let cases: [(String, CleanupRow)] = [
+            ("unhashed", F.row("/Volumes/SanDiskWorkspace/other-name.mov", digest: nil)),
+            ("singleton stale hash", F.row("/Volumes/SanDiskWorkspace/stale.mov", digest: "stale-only")),
+            ("set aside", F.row("/Volumes/SanDiskWorkspace/aside.mov", digest: nil, setAside: true)),
+        ]
+        for (what, alias) in cases {
+            let plan = F.plan([keep, extra, alias], facts: [extra.path: .file(shared), alias.path: .file(shared)])
+            #expect(plan.copies.isEmpty, "\(what): the extra copy has another name in the catalog — \(plan.copies.map(\.target.path))")
+            #expect(F.reasons(plan)[CleanupExclusion.sameFileAsAnotherRow.key] == 1, "\(what): \(F.reasons(plan))")
+        }
+    }
+
     @Test("the best copy's drive is not connected: the keeper is elected among connected copies only")
     func offlineMemberNeverKeeper() {
         let offline = F.row("/Volumes/FamilyArchive/a.mov", protection: .archiveVolume)
