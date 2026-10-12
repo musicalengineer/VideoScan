@@ -23,17 +23,24 @@ const fs = require("fs");
 const html = fs.readFileSync(process.argv[1], "utf8");
 const fixtures = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 const loc = JSON.parse(process.argv[3] || "{}");
+const storage = JSON.parse(process.argv[4] || "{}");
+globalThis.localStorage = {
+  getItem(key) { return storage[key] ?? null; },
+  setItem(key, value) { storage[key] = String(value); },
+};
 let script = html.match(/<script>\n([\s\S]*?)<\/script>/)[1];
 script = script.replace(/\nloadData\(\);\s*$/, "\nglobalThis.__done = loadData();");
 const elements = new Map();
 function element(id = "") {
   const classes = new Set();
+  const attributes = new Map();
   const value = { id, children: [], innerHTML: "", textContent: "", style: {}, className: "", open: false, listeners: [],
     classList: { add: x => classes.add(x), remove: x => classes.delete(x), contains: x => classes.has(x), toArray: () => [...classes] },
     appendChild(child) { this.children.push(child); return child; },
     addEventListener(kind, fn) { this.listeners.push(kind); },
-    contains() { return false; }, getAttribute() { return null; },
-    setAttribute() {}, removeAttribute() {} };
+    contains() { return false; }, getAttribute(key) { return attributes.get(key) ?? null; },
+    setAttribute(key, value) { attributes.set(key, String(value)); },
+    removeAttribute(key) { attributes.delete(key); } };
   return value;
 }
 // Elements declared hidden in the HTML start hidden here too.
@@ -48,6 +55,8 @@ globalThis.document = {
   getElementById(id) { if (!elements.has(id)) elements.set(id, element(id)); return elements.get(id); },
   createElement() { return element(); },
 };
+const initialTheme = html.match(/<html\b[^>]*data-theme="([^"]+)"/);
+if (initialTheme) document.documentElement.setAttribute("data-theme", initialTheme[1]);
 if (loc.hash !== undefined) globalThis.location = { hash: loc.hash, search: loc.search || "" };
 const charts = [];
 globalThis.Chart = function(target, config) { charts.push({ id: target.id, config }); this.canvas = target; this.resize = () => {}; };
@@ -68,7 +77,8 @@ globalThis.console = { ...console, error: (...a) => errors.push(a.map(String).jo
   eval(script);
   await globalThis.__done;
   const text = el => [el.innerHTML, el.textContent, ...el.children.map(text)].join(" ");
-  const out = { charts: charts.map(c => c.id), errors, sections: {}, notes: {}, open: {}, listeners: {} };
+  const out = { charts: charts.map(c => c.id), errors, sections: {}, notes: {}, open: {}, listeners: {},
+    theme: document.documentElement.getAttribute("data-theme") };
   for (const [id, el] of elements) {
     if (id.endsWith("-error") && !el.classList.contains("hidden")) out.errors.push(`${id}: ${el.textContent}`);
     if (id.endsWith("-note") && !el.classList.contains("hidden")) out.notes[id] = el.textContent;
@@ -91,10 +101,10 @@ def jsonl(rows):
     return "".join(json.dumps(r) + "\n" for r in rows)
 
 
-def run_page(tmp_path, fixtures, location=None):
+def run_page(tmp_path, fixtures, location=None, storage=None):
     fx = tmp_path / "fixtures.json"
     fx.write_text(json.dumps(fixtures))
-    r = subprocess.run(["node", "-e", HARNESS, str(PAGE), str(fx), json.dumps(location or {})],
+    r = subprocess.run(["node", "-e", HARNESS, str(PAGE), str(fx), json.dumps(location or {}), json.dumps(storage or {})],
                        capture_output=True, text=True, timeout=30)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
@@ -247,6 +257,59 @@ def complexity_row(ts, offenders, new):
 
 
 needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="needs node")
+
+
+@needs_node
+@pytest.mark.parametrize("saved, expected", [(None, "dark"), ("invalid", "dark"), ("dark", "dark"),
+                                             ("light", "light"), ("auto", None)])
+def test_theme_defaults_dark_and_respects_saved_choice(tmp_path, saved, expected):
+    out = run_page(tmp_path, {}, storage={} if saved is None else {"vs-theme": saved})
+    assert out["errors"] == []
+    assert out["theme"] == expected
+    assert out["sections"]["theme-toggle"].strip() == f"Theme: {expected or 'auto'}"
+
+
+@needs_node
+def test_sprint_graphic_reports_actual_completion(tmp_path):
+    out = run_page(tmp_path, {"summary_latest.json": summary_fixture(datetime.now(timezone.utc))})
+    assert out["errors"] == []
+    ring = re.search(r'<svg\b[^>]*class="ring"[^>]*>.*?</svg>', out["sections"]["head"])
+    assert ring, "published sprint completion needs an accessible graphic"
+    assert 'role="img"' in ring[0]
+    assert 'aria-label="1 of 9 sprint items complete"' in ring[0]
+    assert ">11%</text>" in ring[0]
+    # Check the drawn proportion too: text alone cannot catch a full or empty arc.
+    arc = re.search(r'pathLength="100"\s+stroke-dasharray="([\d.]+) 100"', ring[0])
+    assert arc and float(arc[1]) == pytest.approx(100 / 9)
+
+
+@needs_node
+@pytest.mark.parametrize("sprint", [None, {}, {"open": 0, "closed": 0}, {"open": 8},
+                                   {"open": -1, "closed": 2}, {"open": 8, "closed": "1"},
+                                   {"open": 8, "closed": 0.5}])
+def test_sprint_without_valid_nonempty_counts_has_no_completion_graphic(tmp_path, sprint):
+    summary = summary_fixture(datetime.now(timezone.utc))
+    summary["sprint"] = sprint
+    out = run_page(tmp_path, {"summary_latest.json": summary})
+    assert out["errors"] == []
+    assert 'class="ring"' not in out["sections"]["head"]
+
+
+@needs_node
+def test_summary_sparkline_does_not_join_across_missing_sample(tmp_path):
+    now = datetime.now(timezone.utc)
+    rows = [{"ts": iso(now - timedelta(days=4 - i)), "strict_warning_total": value}
+            for i, value in enumerate([10, 20, None, 30, 40])]
+    out = run_page(tmp_path, {"static_analysis.jsonl": jsonl(rows)})
+    assert out["errors"] == []
+    spark = re.search(r'<svg\b[^>]*class="spark"[^>]*>.*?</svg>', out["sections"]["sum-san"])
+    assert spark
+    segments = re.findall(r'<polyline\b[^>]*points="([^"]+)"', spark[0])
+    assert len(segments) == 2, "missing measurement must separate the two observed runs"
+    runs = [[tuple(map(float, point.split(","))) for point in segment.split()] for segment in segments]
+    assert [len(run) for run in runs] == [2, 2]
+    assert runs[0][-1][0] < runs[1][0][0], "retain the missing sample's horizontal gap"
+    assert all(run[0][1] > run[1][1] for run in runs), "both observed runs increase"
 
 
 @needs_node

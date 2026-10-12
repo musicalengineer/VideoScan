@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
 <head>
 <meta charset="utf-8">
 <title>VideoScan Health</title>
@@ -32,46 +32,59 @@
   :root {
     --bg: #f6f8fa; --panel: #ffffff; --border: #d0d7de; --fg: #1f2328; --muted: #59636e;
     --accent: #0969da; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e; --amber: #bc4c00; --purple: #8250df;
-    --chip-bg: #eef1f4; --radius: 10px; --grid: #e7ebef; --cell-none: #e3e7eb;
+    --chip-bg: #eef1f4; --radius: 14px; --grid: #e7ebef; --cell-none: #e3e7eb;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
-      --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3; --muted: #8b949e;
+      --bg: #0b1220; --panel: #141f30; --border: #2c3c52; --fg: #edf3fb; --muted: #a7b4c5;
       --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; --amber: #e0823d; --purple: #bc8cff;
       --chip-bg: #21262d; --grid: #262c34; --cell-none: #262c34;
     }
   }
   :root[data-theme="dark"] {
-    --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3; --muted: #8b949e;
+    --bg: #0b1220; --panel: #141f30; --border: #2c3c52; --fg: #edf3fb; --muted: #a7b4c5;
     --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; --amber: #e0823d; --purple: #bc8cff;
     --chip-bg: #21262d; --grid: #262c34; --cell-none: #262c34;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--fg); padding: 20px 24px 40px;
+  body { background: var(--bg); color: var(--fg); padding: 30px 32px 48px; max-width: 1680px; margin: 0 auto;
          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; line-height: 1.4; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
   .top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 2px; }
-  .top h1 { font-size: 22px; font-weight: 700; }
-  .top .sub { color: var(--muted); font-size: 13px; }
+  .top h1 { font-size: 30px; letter-spacing: -.6px; font-weight: 700; }
+  .top .sub { color: var(--muted); font-size: 15px; }
   .top .spacer { flex: 1; }
   #theme-toggle { background: var(--panel); color: var(--fg); border: 1px solid var(--border);
-                  border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
-  #status { font-size: 12px; color: var(--muted); margin: 4px 0 10px; }
+                  border-radius: 8px; padding: 9px 14px; font-size: 15px; cursor: pointer; }
+  #status { font-size: 14px; color: var(--muted); margin: 4px 0 10px; }
   #status.error { color: var(--bad); }
   .hidden { display: none !important; }
   .section-error { color: var(--bad); font-size: 13px; margin: 6px 0; }
 
   /* ---- 1. headline strip ---- */
-  .head { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 10px 0 18px; }
-  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px 9px; min-width: 0; }
-  .tile .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
-  .tile .value { font-size: 22px; font-weight: 700; margin-top: 3px; letter-spacing: -0.2px; line-height: 1.15; }
-  .tile .value small { font-size: 13px; font-weight: 500; color: var(--muted); }
-  .tile .words { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .head { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; margin: 20px 0 24px; }
+  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; min-width: 0; border-top: 3px solid var(--accent); box-shadow: 0 6px 22px #0000000d; }
+  .tile .label { font-size: 15px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+  .tile .value { overflow-wrap: anywhere; font-size: 36px; font-weight: 700; margin-top: 10px; letter-spacing: -0.8px; font-variant-numeric: tabular-nums; line-height: 1.15; }
+  .tile .value small { font-size: 17px; letter-spacing: 0; font-weight: 500; color: var(--muted); }
+  .tile .words { font-size: 16px; color: var(--muted); margin-top: 12px; line-height: 1.55; overflow-wrap: anywhere; }
   .tile .words b { color: var(--fg); font-weight: 600; }
-  .hosts { display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap; }
-  .hosts span { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
+  .hosts { display: flex; gap: 7px; margin: 8px 0 12px; flex-wrap: wrap; }
+  .hosts > span { font-size: 15px; display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 7px; background: var(--chip-bg); border: 1px solid var(--border); min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
+  .hosts > .red { border-color: var(--bad); }
+  .hosts > .green { border-color: var(--good); }
+  .hosts > .amber { border-color: var(--amber); }
+  .tile[data-state="red"], .area[data-state="red"] { --status-accent: var(--bad); }
+  .tile[data-state="green"], .area[data-state="green"] { --status-accent: var(--good); }
+  .tile[data-state="amber"], .area[data-state="amber"] { --status-accent: var(--amber); }
+  .tile[data-state="watch"], .area[data-state="watch"] { --status-accent: var(--warn); }
+  .tile[data-state="grey"], .area[data-state="grey"] { --status-accent: var(--muted); }
+  .tile[data-state] { border-top-color: var(--status-accent); }
+  .sprint-value { display: flex; align-items: center; gap: 18px; }
+  .sprint-name { min-width: 0; font-size: 24px; line-height: 1.25; letter-spacing: -.3px; overflow-wrap: anywhere; }
+  .ring { width: 86px; height: 86px; flex: 0 0 86px; }
+  .ring text { fill: var(--fg); font-size: 23px; font-weight: 700; letter-spacing: 0; }
   .bar { height: 6px; background: var(--chip-bg); border-radius: 3px; margin-top: 7px; overflow: hidden; }
   .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
   .stale { display: inline-block; font-size: 11px; font-weight: 700; color: #fff; background: var(--bad);
@@ -84,43 +97,43 @@
   .word.amber { color: var(--amber); } .word.grey { color: var(--muted); }
 
   /* ---- 2. 90-night timeline ---- */
-  .block { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 18px; }
-  .block h2 { font-size: 14px; font-weight: 600; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-  .block h2 .note { font-size: 12px; color: var(--muted); font-weight: 400; }
-  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 6px 0 10px; }
+  .block { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px 22px; margin-bottom: 24px; }
+  .block h2 { font-size: 21px; font-weight: 600; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .block h2 .note { font-size: 15px; color: var(--muted); font-weight: 400; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 15px; color: var(--muted); margin: 12px 0 16px; }
   .legend span { display: inline-flex; align-items: center; gap: 5px; }
   .legend .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
   .tl { display: grid; grid-template-columns: 36px 1fr; gap: 3px 8px; align-items: center; }
-  .tl .host { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .tl .host { font-size: 15px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
   .cells { display: grid; grid-template-columns: repeat(90, minmax(0, 1fr)); gap: 2px; }
-  .cell { aspect-ratio: 1 / 1.4; border-radius: 2px; background: var(--cell-none); cursor: default; min-width: 0; }
+  .cell { height: 21px; border-radius: 2px; background: var(--cell-none); cursor: default; min-width: 0; }
   .cell.green { background: var(--good); } .cell.red { background: var(--bad); } .cell.did_not_run { background: var(--amber); }
   .cell:hover, .cell:focus { outline: 2px solid var(--fg); outline-offset: 1px; }
   .mark { position: relative; height: 10px; font-size: 10px; color: var(--muted); }
   .mark b { position: absolute; left: 0; top: -2px; width: 2px; height: 14px; background: var(--purple); display: block; }
   .months { display: grid; grid-template-columns: repeat(90, minmax(0, 1fr)); font-size: 11px; color: var(--muted); margin-top: 2px; }
   .months span { white-space: nowrap; overflow: visible; }
-  .readout { font-size: 12px; color: var(--muted); min-height: 18px; margin-top: 8px; }
+  .readout { font-size: 15px; color: var(--muted); min-height: 18px; margin-top: 8px; }
   .readout b { color: var(--fg); }
-  .stab { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; margin-top: 10px; }
+  .stab { display: flex; gap: 18px; flex-wrap: wrap; font-size: 16px; margin-top: 14px; }
   .stab b { font-weight: 600; }
   .ghost { color: var(--muted); font-size: 13px; padding: 8px 0; }
 
   /* ---- 3. area lines ---- */
-  details.area { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; }
+  details.area { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 12px; border-left: 4px solid var(--status-accent, var(--border)); overflow: hidden; }
   details.area summary { list-style: none; cursor: pointer; display: grid; align-items: center;
-                         grid-template-columns: 14px 10px minmax(150px, 190px) 72px 1fr auto; gap: 10px; padding: 10px 14px; }
+                         grid-template-columns: 14px 10px minmax(165px, 190px) 116px minmax(0, 1fr) minmax(125px, auto); gap: 16px; padding: 20px 22px; }
   details.area summary::-webkit-details-marker { display: none; }
   .chev { color: var(--muted); font-size: 12px; transition: transform .15s; }
   details[open] .chev { transform: rotate(90deg); }
-  .aname { font-weight: 600; font-size: 14px; }
-  .aname small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
-  .spark { width: 72px; height: 22px; display: block; }
-  .sent { font-size: 13px; color: var(--muted); min-width: 0; }
+  .aname { font-weight: 600; font-size: 20px; }
+  .aname small { display: block; margin-top: 4px; font-weight: 400; font-size: 14px; color: var(--muted); }
+  .spark { width: 116px; height: 44px; display: block; }
+  .sent { font-size: 17px; line-height: 1.5; color: var(--muted); min-width: 0; }
   .sent b { color: var(--fg); font-weight: 600; }
   .num { text-align: right; white-space: nowrap; }
-  .num .big { font-size: 17px; font-weight: 700; display: block; line-height: 1.1; }
-  .num .trend { font-size: 12px; color: var(--muted); }
+  .num .big { font-size: 32px; font-variant-numeric: tabular-nums; font-weight: 700; display: block; line-height: 1.1; }
+  .num .trend { display: block; margin-top: 7px; font-size: 14px; color: var(--muted); }
   .trend.good { color: var(--good); } .trend.bad { color: var(--bad); }
   .body { border-top: 1px solid var(--border); padding: 12px 14px 14px; }
   .body .moved { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
@@ -145,16 +158,32 @@
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
   .footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
 
+  :focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+  details.area summary:hover { background: var(--chip-bg); }
+  details.area summary:focus-visible { outline-offset: -4px; }
+  @media (max-width: 1150px) {
+    .head { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    details.area summary { grid-template-columns: 14px 10px minmax(0, 1fr) 160px; grid-template-areas: "c d n v" ". . s s" ". . sp sp"; row-gap: 12px; }
+    .chev { grid-area: c; } summary .dot { grid-area: d; } .aname { grid-area: n; } .num { grid-area: v; }
+    .sent { grid-area: s; } .spark { grid-area: sp; }
+    .num { white-space: normal; }
+  }
   @media (max-width: 720px) {
     body { padding: 12px 16px 32px; }
-    .head { grid-template-columns: repeat(2, 1fr); }
-    details.area summary { grid-template-columns: 14px 10px 1fr auto; grid-template-areas: "c d n v" "c d s s" "c d sp sp"; row-gap: 4px; }
-    .chev { grid-area: c; } summary .dot { grid-area: d; } .aname { grid-area: n; } .num { grid-area: v; }
-    .sent { grid-area: s; } .spark { grid-area: sp; width: 100%; }
-    .num { white-space: normal; } .num .big { font-size: 15px; }
-    .tl { grid-template-columns: 30px 1fr; }
-    .cell { aspect-ratio: 1 / 2.2; border-radius: 1px; }
+    .top h1 { font-size: 27px; }
+    .top .sub { flex-basis: 100%; order: 2; }
+    .head { grid-template-columns: minmax(0, 1fr); }
+    .tile, .block { padding: 18px; }
+    details.area summary { padding: 16px 14px; grid-template-columns: 12px 8px minmax(0, 1fr); grid-template-areas: "c d n" ". . v" ". . s" ". . sp"; column-gap: 9px; }
+    .num { text-align: left; }
+    .num .big { font-size: 32px; }
+    .tl { grid-template-columns: 30px 1fr; gap: 4px; }
+    .cells { gap: 1px; }
+    .cell { border-radius: 1px; }
     .months span:nth-child(even) { visibility: hidden; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition: none !important; animation: none !important; }
   }
 </style>
 </head>
@@ -164,7 +193,7 @@
   <h1>VideoScan health</h1>
   <span class="sub" id="asof"></span>
   <div class="spacer"></div>
-  <button id="theme-toggle" type="button" onclick="cycleTheme()">Theme: auto</button>
+  <button id="theme-toggle" type="button" onclick="cycleTheme()">Theme: dark</button>
 </div>
 <div id="status">Loading metrics&hellip;</div>
 
@@ -185,7 +214,7 @@
   <div class="tl" id="tl"></div>
   <div class="readout" id="readout">Hover a cell to read that night.</div>
   <div class="stab" id="stab"></div>
-  <details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px;color:var(--accent)">As a table: the nights that were not green</summary>
+  <details style="margin-top:8px"><summary style="cursor:pointer;font-size:15px;color:var(--accent)">As a table: the nights that were not green</summary>
     <div class="table-wrap" id="tl-table" style="margin-top:8px"></div></details>
   <div class="section-error hidden" id="timeline-error"></div>
 </div>
@@ -242,7 +271,9 @@ const $status = document.getElementById("status");
 
 // ---------------------------------------------------------------- theme
 const THEMES = ["auto", "dark", "light"];
+let currentTheme = null;
 function applyTheme(theme) {
+  currentTheme = theme;
   const root = typeof document.documentElement === "object" ? document.documentElement : null;
   if (root && root.setAttribute) {
     if (theme === "auto") root.removeAttribute("data-theme"); else root.setAttribute("data-theme", theme);
@@ -251,11 +282,13 @@ function applyTheme(theme) {
   if (btn) btn.textContent = `Theme: ${theme}`;
 }
 function savedTheme() {
-  try { return (typeof localStorage !== "undefined" && localStorage.getItem("vs-theme")) || "auto"; }
-  catch { return "auto"; }
+  try {
+    const saved = typeof localStorage !== "undefined" ? localStorage.getItem("vs-theme") : null;
+    return THEMES.includes(saved) ? saved : "dark";
+  } catch { return "dark"; }
 }
 function cycleTheme() {
-  const next = THEMES[(THEMES.indexOf(savedTheme()) + 1) % THEMES.length];
+  const next = THEMES[(THEMES.indexOf(currentTheme || savedTheme()) + 1) % THEMES.length];
   try { if (typeof localStorage !== "undefined") localStorage.setItem("vs-theme", next); } catch {}
   applyTheme(next);
 }
@@ -339,14 +372,38 @@ function trend(older, newer, lowerIsBetter, unit = "", vs = null) {
   const val = Number.isInteger(d) ? Math.abs(d).toLocaleString("en-US") : Math.abs(d).toFixed(1);
   return `<span class="trend ${good ? "good" : "bad"}">${d > 0 ? "▲" : "▼"} ${val}${unit}${since}</span>`;
 }
-// Sparkline: one thin line, no axes; the number beside it is the label.
+// Compact trend graphic. Missing observations break the line, never imply a measurement.
 function spark(values, color) {
   const vs = values.filter(isNum);
-  if (vs.length < 2) return `<svg class="spark" viewBox="0 0 72 22" aria-hidden="true"><line x1="2" y1="11" x2="70" y2="11" stroke="var(--border)" stroke-width="1"/></svg>`;
+  if (vs.length < 2) return `<svg class="spark" viewBox="0 0 116 44" aria-hidden="true"><line x1="4" y1="22" x2="112" y2="22" stroke="var(--border)" stroke-width="1" stroke-dasharray="3 4"/></svg>`;
   const min = Math.min(...vs), max = Math.max(...vs), span = max - min || 1;
-  const pts = values.map((v, i) => isNum(v) ? `${(2 + 68 * i / Math.max(1, values.length - 1)).toFixed(1)},${(19 - 16 * (v - min) / span).toFixed(1)}` : null).filter(Boolean);
-  const last = pts[pts.length - 1].split(",");
-  return `<svg class="spark" viewBox="0 0 72 22" aria-hidden="true"><polyline fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" points="${pts.join(" ")}"/><circle cx="${last[0]}" cy="${last[1]}" r="2" fill="${color}"/></svg>`;
+  const runs = [];
+  let run = [];
+  for (let i = 0; i < values.length; i++) {
+    if (isNum(values[i])) {
+      run.push([(4 + 108 * i / Math.max(1, values.length - 1)).toFixed(1),
+        (max === min ? 22 : 37 - 30 * (values[i] - min) / span).toFixed(1)]);
+    } else if (run.length) { runs.push(run); run = []; }
+  }
+  if (run.length) runs.push(run);
+  const paths = runs.map(points => {
+    const pts = points.map(p => p.join(",")).join(" ");
+    const first = points[0], last = points[points.length - 1];
+    return `<polygon points="${first[0]},42 ${pts} ${last[0]},42" fill="${color}" opacity=".13"/>` +
+      `<polyline fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" points="${pts}"/>` +
+      (points.length === 1 ? `<circle cx="${first[0]}" cy="${first[1]}" r="2" fill="${color}"/>` : "");
+  }).join("");
+  const lastRun = runs[runs.length - 1], last = lastRun[lastRun.length - 1];
+  return `<svg class="spark" viewBox="0 0 116 44" aria-hidden="true">${paths}<circle cx="${last[0]}" cy="${last[1]}" r="3" fill="${color}"/></svg>`;
+}
+function sprintRing(closed, total) {
+  // An empty milestone has no completion percentage.
+  if (!Number.isSafeInteger(closed) || !Number.isSafeInteger(total) || closed < 0 || total <= 0 || closed > total) return "";
+  const percent = Math.round(100 * closed / total);
+  return `<svg class="ring" viewBox="0 0 100 100" role="img" aria-label="${closed} of ${total} sprint items complete">` +
+    `<circle cx="50" cy="50" r="41" fill="none" stroke="var(--chip-bg)" stroke-width="8"/>` +
+    `<circle cx="50" cy="50" r="41" fill="none" stroke="var(--accent)" stroke-width="8" pathLength="100" stroke-dasharray="${100 * closed / total} 100" transform="rotate(-90 50 50)"/>` +
+    `<text x="50" y="57" text-anchor="middle">${percent}%</text></svg>`;
 }
 function deltaClass(older, newer, lowerIsBetter) {
   if (older == null || newer == null || older === newer) return "";
@@ -502,8 +559,8 @@ function stability(N) {
 }
 
 // ---------------------------------------------------------------- 1. headline strip
-function tile(label, value, words) {
-  return `<div class="tile"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="words">${words}</div></div>`;
+function tile(label, value, words, state = "") {
+  return `<div class="tile"${state ? ` data-state="${esc(state)}"` : ""}><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="words">${words}</div></div>`;
 }
 function renderHead(d) {
   const S = d.summary || {};
@@ -531,17 +588,17 @@ function renderHead(d) {
   // Last night's tests: one dot per Mac
   if (N && N.list.length) {
     const lastNight = N.list[N.list.length - 1];
-    const hosts = N.hosts.map(h => { const c = cellOf(lastNight, h); return `<span>${dot(c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey")}<b>${esc(h)}</b> ${esc(cellWords(c))}</span>`; }).join("");
+    const hosts = N.hosts.map(h => { const c = cellOf(lastNight, h); const state = c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey"; return `<span class="${esc(state)}">${dot(state)}<b>${esc(h)}</b> ${esc(cellWords(c))}</span>`; }).join("");
     const ran = N.hosts.map(h => cellOf(lastNight, h)).filter(c => c && c.state !== "did_not_run");
     const primary = ran[0];
     const failing = ran.reduce((a, c) => a + (c.failed || 0), 0);
     tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing</small>` : `<span class="word amber">did not run</span>`,
-      `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`));
+      `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`, N.hosts.some(h => cellOf(lastNight, h)?.state === "red") ? "red" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber" : N.hosts.length && N.hosts.every(h => cellOf(lastNight, h)?.state === "green") ? "green" : "grey"));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : word("amber", "did not run last night");
     tiles.push(tile("Stability", isNum(st.daysSinceRed) ? `${st.daysSinceRed} <small>days since a red night</small>` : `no red night <small>in 90</small>`,
-      `${streak} · last green night <b>${st.lastGreen ? day(st.lastGreen) : "none in 90"}</b> · ${st.last7} of the last 7 nights green`));
+      `${streak} · last green night <b>${st.lastGreen ? day(st.lastGreen) : "none in 90"}</b> · ${st.last7} of the last 7 nights green`, st.redStreak ? "red" : st.greenStreak ? "green" : "amber"));
   } else {
     tiles.push(tile("Last night's tests", `<span class="word grey">${DASH}</span>`, "nightly summary not published yet (tools/publish_metrics.py)"));
     tiles.push(tile("Stability", `<span class="word grey">${DASH}</span>`, "waits on the nightly summary"));
@@ -556,11 +613,10 @@ function renderHead(d) {
 
   // Sprint milestone
   const sp = S.sprint;
-  if (sp && isNum(sp.open) && isNum(sp.closed)) {
+  if (sp && Number.isSafeInteger(sp.open) && sp.open >= 0 && Number.isSafeInteger(sp.closed) && sp.closed >= 0 && Number.isSafeInteger(sp.open + sp.closed)) {
     const total = sp.open + sp.closed;
     const left = sp.due ? Math.round((toTime(sp.due) - Date.now()) / 86400000) : null;
-    tiles.push(tile("Sprint", esc(sp.title), `<b>${sp.closed} of ${total}</b> done${sp.due ? ` · due ${day(sp.due)}${isNum(left) ? ` · ${left < 0 ? "overdue" : left + " days left"}` : ""}` : ""}` +
-      `<div class="bar"><i style="width:${total ? Math.round(100 * sp.closed / total) : 0}%"></i></div>`));
+    tiles.push(tile("Sprint", `<span class="sprint-value">${sprintRing(sp.closed, total)}<span class="sprint-name">${esc(sp.title)}</span></span>`, `<b>${sp.closed} of ${total}</b> done${sp.due ? ` · due ${day(sp.due)}${isNum(left) ? ` · ${left < 0 ? "overdue" : left + " days left"}` : ""}` : ""}`));
   } else {
     tiles.push(tile("Sprint", `<span class="word grey">${DASH}</span>`, "no open milestone, or GitHub not reachable"));
   }
@@ -817,6 +873,7 @@ function hallieRows(d) {
 }
 
 function renderSummaryLine(area, s) {
+  document.getElementById(`area-${area.id}`).setAttribute("data-state", s.state);
   document.getElementById(`sum-${area.id}`).innerHTML =
     `<span class="chev">▶</span>${dot(s.state)}` +
     `<span class="aname">${esc(area.name)}<small>${esc(area.sub)}</small></span>` +
