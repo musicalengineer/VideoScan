@@ -68,8 +68,8 @@ struct CleanupTrashSensorTests {
     func throughTheEngine() throws {
         let job = try #require(Self.cleanupSources().first { $0.name.hasSuffix("CleanupTrashJob.swift") }?.code)
         #expect(job.components(separatedBy: "model.deleteConfirmedJunk(").count - 1 == 2, "copies + junk")
-        #expect(job.contains("deleteConfirmedJunk(Array(chunk), mode: .toTrash, reason: .duplicate, guard: g)"))
-        #expect(job.contains("deleteConfirmedJunk(Array(chunk), mode: .toTrash, reason: .junk, guard: g)"))
+        #expect(job.contains("deleteConfirmedJunk(batch, mode: .toTrash, reason: .duplicate, guard: g)"))
+        #expect(job.contains("deleteConfirmedJunk(batch, mode: .toTrash, reason: .junk, guard: g)"))
         #expect(job.contains("CleanupProof.verifyCopy(copy, control: control)"))
         #expect(job.contains("CleanupProof.verifyJunk(path: path, frozen: frozen, reserved: reserved)"))
         #expect(job.contains("model.frozenJunkCatalogProblem(rec, frozenPath:"), "the Delete Junk door's own re-check")

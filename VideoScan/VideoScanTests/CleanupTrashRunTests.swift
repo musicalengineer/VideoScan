@@ -198,12 +198,21 @@ struct CleanupTrashRunTests {
         model.isReadOnly = false
     }
 
-    @Test("batches: the run is cut into checkpointed batches, in order, none lost")
-    func chunks() {
-        let cut = CleanupTrashJob.chunks(Array(0..<45), of: 20)
-        #expect(cut.map(\.count) == [20, 20, 5])
-        #expect(cut.flatMap { Array($0) } == Array(0..<45))
-        #expect(CleanupTrashJob.chunks([Int](), of: 20).isEmpty)
+    @Test("QA P2-2: checkpoint batches are bound by files AND by bytes to read, in order, none lost")
+    func batches() {
+        let gb: Int64 = 1 << 30
+        // 45 small files: by count.
+        let small = CleanupTrashJob.batches(Array(0..<45), maxFiles: 20, maxBytes: 40 * gb) { _ in 2 * 1_000_000 }
+        #expect(small.map(\.count) == [20, 20, 5])
+        #expect(small.flatMap { $0 } == Array(0..<45))
+        // 50 GB files (100 GB to read each): one per batch, never zero.
+        let huge = CleanupTrashJob.batches(Array(0..<3), maxFiles: 20, maxBytes: 40 * gb) { _ in 100 * gb }
+        #expect(huge.map(\.count) == [1, 1, 1])
+        // Mixed: 15 GB each → 2 per batch (30 GB), the third would pass 40 GB.
+        let mixed = CleanupTrashJob.batches(Array(0..<5), maxFiles: 20, maxBytes: 40 * gb) { _ in 15 * gb }
+        #expect(mixed.map(\.count) == [2, 2, 1])
+        #expect(CleanupTrashJob.batches([Int](), maxFiles: 20, maxBytes: 40 * gb) { _ in 1 }.isEmpty)
+        #expect(CleanupTrashJob.checkpointBytes == 40 * gb && CleanupTrashJob.checkpointFiles == 20)
     }
 
     @Test("ISOLATION: a catalog save that is not confirmed stops the run after its batch; the rest are cancelled, untouched")
@@ -226,8 +235,8 @@ struct CleanupTrashRunTests {
         let job = await runCleanupTrash(model, CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false)) {
             $0.saveCatalogForTesting = { false }
         }
-        #expect(job.totals[.moved] == CleanupTrashJob.copyChunk, "\(job.totals.line)")
-        #expect(job.totals[.cancelled] == 30 - CleanupTrashJob.copyChunk)
+        #expect(job.totals[.moved] == CleanupTrashJob.checkpointFiles, "\(job.totals.line)")
+        #expect(job.totals[.cancelled] == 30 - CleanupTrashJob.checkpointFiles)
         if case .failed = job.state {} else { Issue.record("an unconfirmed save ends Failed, not \(job.state)") }
         let cancelled = Set(job.items.filter { $0.outcome == .cancelled }.map(\.id))
         for rec in extras where cancelled.contains(rec.id) {

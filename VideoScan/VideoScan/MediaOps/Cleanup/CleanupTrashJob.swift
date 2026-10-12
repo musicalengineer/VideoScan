@@ -31,8 +31,8 @@
 //     Resume). Stop ends the run: the file being checked and every file
 //     after it are "cancelled", nothing half-done.
 //   • DURABILITY: the engine stamps a batch when the batch ends, so the run
-//     goes in short batches (20 copies / 100 junk) and AWAITS an
-//     acknowledged catalog save after each. A save that is not confirmed
+//     goes in short batches (≤20 copies or ≤40 GB of reads; 100 junk) and
+//     AWAITS an acknowledged catalog save after each. A save that is not confirmed
 //     stops the run, loudly (🔴); the rest are "cancelled".
 //
 // No volume gate is held: the reads happen inside the engine's synchronous
@@ -254,8 +254,10 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         let recs = resolve(selection.copies.map(\.target), lane: .copy, model: model)
         guard !recs.isEmpty else { return }
         let g = copyGuard(model: model)
-        for chunk in Self.chunks(recs, of: Self.copyChunk) {
-            _ = await model.deleteConfirmedJunk(Array(chunk), mode: .toTrash, reason: .duplicate, guard: g)
+        // Each copy costs two full reads: it and the copy that stays.
+        let cost = Dictionary(selection.copies.map { ($0.target.id, 2 * $0.target.sizeBytes) }, uniquingKeysWith: { a, _ in a })
+        for batch in Self.batches(recs, maxFiles: Self.checkpointFiles, maxBytes: Self.checkpointBytes, bytes: { cost[$0.id] ?? 0 }) {
+            _ = await model.deleteConfirmedJunk(batch, mode: .toTrash, reason: .duplicate, guard: g)
             await checkpoint(model: model)
         }
     }
@@ -265,8 +267,8 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         let recs = resolve(files, lane: .junk, model: model)
         guard !recs.isEmpty else { return }
         let g = junkGuard(files, records: recs, model: model)
-        for chunk in Self.chunks(recs, of: Self.junkChunk) {
-            _ = await model.deleteConfirmedJunk(Array(chunk), mode: .toTrash, reason: .junk, guard: g)
+        for batch in Self.batches(recs, maxFiles: Self.junkCheckpointFiles, maxBytes: .max, bytes: { _ in 0 }) {
+            _ = await model.deleteConfirmedJunk(batch, mode: .toTrash, reason: .junk, guard: g)
             await checkpoint(model: model)
         }
     }
@@ -277,13 +279,33 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     /// hands it short batches and AWAITS an acknowledged catalog save after
     /// each: a crash loses at most one batch's "In the Trash" marks (the
     /// files are in the Trash either way, and the receipt names them). A
-    /// copy batch is ~20 full read pairs; junk needs no reads.
-    static let copyChunk = 20
-    static let junkChunk = 100
+    /// batch is bounded by FILES and by BYTES TO READ (QA P2-2: twenty
+    /// 50 GB copies would be hours of unstamped moves): at most 20 copies
+    /// or 40 GB of reads — a single copy above that is a batch of its own.
+    /// Junk needs no reads, so it is bounded by files alone.
+    static let checkpointFiles = 20
+    static let checkpointBytes: Int64 = 40 << 30
+    static let junkCheckpointFiles = 100
 
-    /// `items` cut into runs of `size`, in order. Pure.
-    static func chunks<T>(_ items: [T], of size: Int) -> [ArraySlice<T>] {
-        stride(from: 0, to: items.count, by: max(size, 1)).map { items[$0..<min($0 + size, items.count)] }
+    /// `items` cut into batches in order: a batch closes when the next item
+    /// would pass either limit; an item too big on its own is a batch of
+    /// one, never dropped. Pure.
+    static func batches<T>(_ items: [T], maxFiles: Int, maxBytes: Int64, bytes: (T) -> Int64) -> [[T]] {
+        var out: [[T]] = []
+        var batch: [T] = []
+        var batchBytes: Int64 = 0
+        for item in items {
+            let cost = bytes(item)
+            if !batch.isEmpty, batch.count >= maxFiles || batchBytes + cost > maxBytes {
+                out.append(batch)
+                batch = []
+                batchBytes = 0
+            }
+            batch.append(item)
+            batchBytes += cost
+        }
+        if !batch.isEmpty { out.append(batch) }
+        return out
     }
 
     private var saveFailed = false
