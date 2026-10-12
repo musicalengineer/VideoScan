@@ -14,12 +14,13 @@
   Static; everything is fetched at load from the `metrics` branch via
   raw.githubusercontent.com (public, no auth, CORS *) plus the public GitHub
   Actions API. tools/publish_metrics.py adds metrics/summary_latest.json
-  (app version, GitHub counts, sprint, demo tags, the last 90 nights per Mac
-  classified green / red / did_not_run) and metrics/github_daily.jsonl (one
-  row per UTC day of open issues / bugs and bugs opened / closed, for the
-  Open-bugs sparkline and the weekly opened-vs-fixed bars in the Reviews
-  twist); the page never classifies a night itself and never reads a row's
-  free text (names, reasons, paths).
+  (app version, GitHub counts incl. open bugs and open "High Priority" issues,
+  sprint, demo tags, the last 90 nights per Mac classified green / red /
+  did_not_run) and metrics/github_daily.jsonl (one row per UTC day of open
+  issues / bugs / high-priority and bugs opened / closed, for the Open-bugs
+  sparkline and the weekly opened-vs-fixed bars in the Reviews twist); the
+  page never classifies a night itself and never reads a row's free text
+  (names, reasons, paths).
 
   Layout, top to bottom:
     1. Headline strip: version · app source lines (app only) · last night's
@@ -71,6 +72,8 @@
   .tile .label { font-size: 15px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
   .tile .value { overflow-wrap: anywhere; font-size: 36px; font-weight: 700; margin-top: 10px; letter-spacing: -0.8px; font-variant-numeric: tabular-nums; line-height: 1.15; }
   .tile .value small { font-size: 17px; letter-spacing: 0; font-weight: 500; color: var(--muted); }
+  .tile .value .duo { display: flex; flex-wrap: nowrap; gap: 26px; white-space: nowrap; font-size: 30px; }
+  .tile .value .duo > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   .tile .words { font-size: 16px; color: var(--muted); margin-top: 12px; line-height: 1.55; overflow-wrap: anywhere; }
   .tile .words b { color: var(--fg); font-weight: 600; }
   .tile .spark { margin-top: 10px; }
@@ -654,13 +657,16 @@ function renderHead(d) {
     tiles.push(tile("Stability", `<span class="word grey">${DASH}</span>`, "waits on the nightly summary"));
   }
 
-  // Open bugs (gh via the publisher; null when gh failed) + the 30-day trend from github_daily.jsonl
-  const issues = isNum(g.open_issues) ? g.open_issues : (isNum(last.open_issues) ? last.open_issues : null);
+  // Open bugs + High Priority (gh via the publisher; "—" each when gh failed or no summary yet)
+  // + the 30-day open-bugs trend from github_daily.jsonl. The words are links into GitHub.
   const bugSpark = d.ghDaily.length ? spark(dailySeries(d.ghDaily, "open_bugs", 30), C.red) : "";
-  tiles.push(tile("Open bugs", isNum(g.open_bugs) ? `${g.open_bugs} <small>bugs</small>` : `<span class="word grey">${DASH}</span>`,
-    isNum(g.open_bugs)
-      ? `<b>${n(g.open_bugs)} open</b> · +${n(g.bugs_opened_7d)} new / −${n(g.bugs_closed_7d)} fixed this week · ${n(issues)} issues open in all`
-      : `GitHub counts not available${isNum(issues) ? ` · ${n(issues)} issues open (CI row)` : ""}`, "", bugSpark));
+  const bugsUrl = `https://github.com/${REPO}/issues?q=is%3Aopen+label%3Abug`;
+  const highUrl = `https://github.com/${REPO}/issues?q=is%3Aopen+label%3A%22High+Priority%22`;
+  const bugLinks = `<a href="${bugsUrl}" target="_blank" rel="noopener">GitHub issues →</a>`
+    + (isNum(g.high_priority_open) ? ` · <a href="${highUrl}" target="_blank" rel="noopener">high priority →</a>` : "");
+  tiles.push(tile("Open bugs",
+    `<span class="duo"><span><small>Open bugs:</small> ${n(g.open_bugs)}</span><span><small>High priority:</small> ${n(g.high_priority_open)}</span></span>`,
+    bugLinks, "", bugSpark));
 
   // Sprint milestone
   const sp = S.sprint;

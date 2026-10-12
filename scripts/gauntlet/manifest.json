@@ -25667,6 +25667,8 @@
       "tests": [
         "test_every_section_renders_with_honest_missing_and_stale_states",
         "test_everything_missing_renders_no_data_not_zero",
+        "test_open_bugs_tile_is_two_counts_and_github_links",
+        "test_open_bugs_tile_without_a_summary_is_two_dashes_and_the_bug_link",
         "test_page_data_comes_from_public_sources_only",
         "test_page_never_reads_free_text_fields",
         "test_weekly_bug_bars_sum_the_published_days_and_never_fabricate_a_week",
@@ -26073,6 +26075,7 @@
         "test_github_daily_row_adds_the_one_day_counts_and_leaves_the_summary_keys_alone",
         "test_github_daily_row_is_absent_not_null_when_gh_fails",
         "test_github_numbers_from_gh",
+        "test_high_priority_open_is_counted_by_exact_label_null_on_failure_and_rides_the_daily_row",
         "test_host_labels_and_reason_codes_are_sanitized",
         "test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins",
         "test_person_summary_is_codes_and_numbers_only",

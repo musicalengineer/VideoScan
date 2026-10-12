@@ -13,7 +13,8 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   passes (parsed from docs/reviews/codex headers)
     metrics/summary_latest.json   ONE object for the page's summary-first view
                                   (GH #310): app version, GitHub counts (open
-                                  bugs, sprint milestone), demo tags, and the
+                                  bugs, open "High Priority" issues, sprint
+                                  milestone), demo tags, and the
                                   last 90 nights of the 2 AM run per Mac, each
                                   night classified green / red / did_not_run by
                                   classify_nightly_row(). Rebuilt on every run.
@@ -21,7 +22,8 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   bugs opened / closed in the last 7 days and
                                   in the last 1 day (the page sums the 1-day
                                   counts per ISO week for its opened-vs-closed
-                                  bars). A day that publishes twice keeps the
+                                  bars), open "High Priority" issues. A day
+                                  that publishes twice keeps the
                                   later row; a day on which `gh` failed gets
                                   NO row (never nulls in a trend).
 
@@ -260,7 +262,8 @@ SCHEMAS: Dict[str, dict] = {
         "generated": "ts",
         "version": ("opt", ("obj", {"marketing": "vers", "build": "vers"})),
         "github": ("obj", {"open_issues": "int?", "open_bugs": "int?", "bugs_opened_7d": "int?",
-                           "bugs_closed_7d": "int?", "main_sha": "sha?", "main_date": "date?"}),
+                           "bugs_closed_7d": "int?", "high_priority_open": "int?",
+                           "main_sha": "sha?", "main_date": "date?"}),
         "sprint": ("opt", ("obj", {"title": "pubtext", "open": "int", "closed": "int", "due": "date?"})),
         "tags": ("list", ("obj", {"date": "date", "name": "tagname"})),
         "person": ("opt", ("obj", {"status": "code", "readiness_pct": "num?", "quality_score": "num?"})),
@@ -275,11 +278,17 @@ SCHEMAS: Dict[str, dict] = {
         "open_issues": "int", "open_bugs": "int",
         "bugs_opened_7d": "int", "bugs_closed_7d": "int",
         "bugs_opened_1d": "int", "bugs_closed_1d": "int",
+        # Added 2026-10-12: every new row carries it (never null; the day is skipped
+        # instead). "maybe" = the key may be ABSENT on rows published before then,
+        # which the gate re-validates on every publish; present means a count.
+        "high_priority_open": ("maybe", "int"),
     },
 }
 GITHUB_DAILY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d",
-                     "bugs_opened_1d", "bugs_closed_1d")
-GITHUB_SUMMARY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d", "main_sha", "main_date")
+                     "bugs_opened_1d", "bugs_closed_1d", "high_priority_open")
+GITHUB_SUMMARY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d", "high_priority_open",
+                       "main_sha", "main_date")
+HIGH_PRIORITY_LABEL = "High Priority"      # the exact GitHub label name
 
 # Streams whose existing rows were published by someone else (GitHub CI):
 # fresh rows are validated and appended (deduplicated by ts + sha); rows
@@ -348,10 +357,14 @@ def _check_folder(value, where: str, folders: Optional[set]) -> None:
 def _check_obj(spec, value, where, folders) -> None:
     if not isinstance(value, dict):
         raise _bad(where, value, "expected an object")
-    if set(value) != set(spec[1]):
+    # ("maybe", spec): the key may be absent (added to the stream after rows were
+    # published); when present it must match spec. Every other key is required.
+    maybe = {k for k, sub in spec[1].items() if isinstance(sub, tuple) and sub and sub[0] == "maybe"}
+    if not (set(spec[1]) - maybe <= set(value) <= set(spec[1])):
         raise PrivacyError(f"{where}: keys {sorted(value)} != allowlist {sorted(spec[1])}")
     for key, sub in spec[1].items():
-        _check(sub, value[key], f"{where}.{key}", folders)
+        if key in value:
+            _check(sub[1] if key in maybe else sub, value[key], f"{where}.{key}", folders)
 
 
 def _check_either(spec, value, where, folders) -> None:
@@ -765,13 +778,18 @@ def _gh_json(gh: Callable[..., Optional[str]], *args: str):
 
 
 def github_numbers(gh: Callable[..., Optional[str]], now: datetime, repo: str = GITHUB_REPO) -> dict:
-    """Every GitHub number both streams draw on, from three `gh` calls: open
+    """Every GitHub number both streams draw on, from four `gh` calls: open
     issues; open bugs and bugs opened / closed in the last 7 days and the last
-    1 day; the tip of main. Each field is null when its `gh` call fails."""
+    1 day; open issues labelled "High Priority"; the tip of main. Each field is
+    null when its `gh` call fails."""
     g: Dict[str, object] = {k: None for k in GITHUB_SUMMARY_KEYS + ("bugs_opened_1d", "bugs_closed_1d")}
     issues = _gh_json(gh, "issue", "list", "-R", repo, "--state", "open", "--limit", "1000", "--json", "number")
     if isinstance(issues, list):
         g["open_issues"] = len(issues)
+    high = _gh_json(gh, "issue", "list", "-R", repo, "--state", "open", "--label", HIGH_PRIORITY_LABEL,
+                    "--limit", "1000", "--json", "number")
+    if isinstance(high, list):
+        g["high_priority_open"] = len(high)
     bugs = _gh_json(gh, "issue", "list", "-R", repo, "--state", "all", "--label", "bug", "--limit", "1000",
                     "--json", "state,createdAt,closedAt")
     if isinstance(bugs, list):
@@ -792,7 +810,8 @@ def github_numbers(gh: Callable[..., Optional[str]], now: datetime, repo: str = 
 
 def github_summary(gh: Callable[..., Optional[str]], now: datetime, repo: str = GITHUB_REPO) -> dict:
     """The `github` object of summary_latest.json: open issues, open bugs, bugs
-    opened / closed in the last 7 days, and the tip of main (nulls on failure)."""
+    opened / closed in the last 7 days, open "High Priority" issues, and the tip
+    of main (nulls on failure)."""
     return summary_github(github_numbers(gh, now, repo))
 
 

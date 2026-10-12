@@ -135,7 +135,7 @@ def summary_fixture(now):
         "schemaVersion": 1, "generated": iso(now),
         "version": {"marketing": "5.1", "build": "1"},
         "github": {"open_issues": 82, "open_bugs": 11, "bugs_opened_7d": 3, "bugs_closed_7d": 11,
-                   "main_sha": "b07f9da43d14", "main_date": today},
+                   "high_priority_open": 4, "main_sha": "b07f9da43d14", "main_date": today},
         "sprint": {"title": "Week of Oct 12", "open": 8, "closed": 1, "due": (now + timedelta(days=6)).strftime("%Y-%m-%d")},
         "tags": [{"date": (now - timedelta(days=2)).strftime("%Y-%m-%d"), "name": "demo-2026-10-10"}],
         "person": {"status": "not-configured", "readiness_pct": 0, "quality_score": None},
@@ -145,7 +145,19 @@ def summary_fixture(now):
 
 def daily_row(ts, open_bugs, opened=0, closed=0):
     return {"ts": iso(ts), "open_issues": 80, "open_bugs": open_bugs, "bugs_opened_7d": 3, "bugs_closed_7d": 11,
-            "bugs_opened_1d": opened, "bugs_closed_1d": closed}
+            "bugs_opened_1d": opened, "bugs_closed_1d": closed, "high_priority_open": 4}
+
+
+BUGS_URL = "https://github.com/musicalengineer/VideoScan/issues?q=is%3Aopen+label%3Abug"
+HIGH_URL = "https://github.com/musicalengineer/VideoScan/issues?q=is%3Aopen+label%3A%22High+Priority%22"
+OLD_BUG_WORDING = ["not available", "CI row", "issues open in all", "fixed this week"]
+
+
+def bug_tile(head):
+    """The Open-bugs tile's value line and words line, as rendered."""
+    m = re.search(r'<div class="label">Open bugs</div><div class="value">(.*?)</div>(?:<svg.*?</svg>)?<div class="words">(.*?)</div></div>', head)
+    assert m, head
+    return m.group(1), m.group(2)
 
 
 def daily_fixture(now):
@@ -339,7 +351,9 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "11,211" in head and "3 failing" in head
     assert "M1" in head and "did not run · build-timeout:5400s" in head and "failed of" in head
     assert "red 1 night running" in head and "days since a red night" in head
-    assert "11 <small>bugs" in head and "<b>11 open</b> · +3 new / −11 fixed this week" in head and "82 issues open" in head
+    value, words = bug_tile(head)
+    assert "Open bugs:</small> 11" in value and "High priority:</small> 4" in value
+    assert f'href="{BUGS_URL}"' in words and f'href="{HIGH_URL}"' in words
     # The Open-bugs tile carries the 30-day sparkline; the day gh failed breaks it into two runs.
     bug_spark = re.search(r'<svg\b[^>]*class="spark"[^>]*>.*?</svg>', head)
     assert bug_spark and len(re.findall(r"<polyline\b", bug_spark[0])) == 2
@@ -433,9 +447,53 @@ def test_without_the_daily_stream_the_bug_tile_is_the_snapshot_alone(tmp_path):
     out = run_page(tmp_path, fixtures, {"hash": "#all"})
     assert out["errors"] == []
     head = out["sections"]["head"]
-    assert "11 <small>bugs" in head and "<b>11 open</b> · +3 new / −11 fixed this week" in head
+    value, words = bug_tile(head)
+    assert "Open bugs:</small> 11" in value and "High priority:</small> 4" in value and "GitHub issues →" in words
     assert 'class="spark"' not in head, "no daily rows: no sparkline, no fabricated trend"
     assert "c-bugs" not in out["charts"] and "github_daily.jsonl" in out["notes"]["c-bugs-note"]
+
+
+@needs_node
+def test_open_bugs_tile_is_two_counts_and_github_links(tmp_path):
+    """Rick's ask (2026-10-12): value line "Open bugs: XX  High priority: YY" on one line, words line
+    = links into GitHub; the "not available" / "(CI row)" / "issues open in all" sentences are gone."""
+    now = datetime.now(timezone.utc)
+    out = run_page(tmp_path, full_fixtures(now), {"hash": "#all"})
+    assert out["errors"] == []
+    head = out["sections"]["head"]
+    value, words = bug_tile(head)
+    assert re.fullmatch(r'<span class="duo"><span><small>Open bugs:</small> 11</span><span><small>High priority:</small> 4</span></span>', value)
+    assert words == (f'<a href="{BUGS_URL}" target="_blank" rel="noopener">GitHub issues →</a> · '
+                     f'<a href="{HIGH_URL}" target="_blank" rel="noopener">high priority →</a>')
+    for phrase in OLD_BUG_WORDING:
+        assert phrase not in head, phrase
+    assert 'class="spark"' in head                                  # the 30-day sparkline stays under the counts
+    # High Priority unknown (that one gh call failed): "—" for it, the bug link alone, no second link.
+    fixtures = full_fixtures(now)
+    fixtures["summary_latest.json"]["github"]["high_priority_open"] = None
+    out2 = run_page(tmp_path, fixtures, {"hash": "#all"})
+    assert out2["errors"] == []
+    value2, words2 = bug_tile(out2["sections"]["head"])
+    assert "Open bugs:</small> 11" in value2 and "High priority:</small> —" in value2
+    assert words2 == f'<a href="{BUGS_URL}" target="_blank" rel="noopener">GitHub issues →</a>'
+
+
+@needs_node
+def test_open_bugs_tile_without_a_summary_is_two_dashes_and_the_bug_link(tmp_path):
+    now = datetime.now(timezone.utc)
+    out = run_page(tmp_path, full_fixtures(now, with_summary=False))
+    assert out["errors"] == []
+    head = out["sections"]["head"]
+    value, words = bug_tile(head)
+    assert "Open bugs:</small> —" in value and "High priority:</small> —" in value
+    assert words == f'<a href="{BUGS_URL}" target="_blank" rel="noopener">GitHub issues →</a>'
+    assert 'class="spark"' not in head
+    for phrase in OLD_BUG_WORDING:
+        assert phrase not in head, phrase
+    # Nothing at all published: the same two dashes and the same single link, never a count.
+    out2 = run_page(tmp_path, {}, {"hash": "", "search": "?all"})
+    value2, words2 = bug_tile(out2["sections"]["head"])
+    assert value2.count("—") == 2 and words2 == words and not re.search(r"\d", value2)
 
 
 @needs_node
@@ -443,8 +501,10 @@ def test_without_a_summary_the_page_says_so_and_still_renders(tmp_path):
     out = run_page(tmp_path, full_fixtures(datetime.now(timezone.utc), with_summary=False))
     assert out["errors"] == []
     head = out["sections"]["head"]
-    assert "nightly summary not published yet" in head and head.count("—") >= 3
-    assert "81 issues open (CI row)" in head                       # history keeps open_issues as a fallback
+    assert "nightly summary not published yet" in head and head.count("—") >= 4
+    value, words = bug_tile(head)
+    assert value.count("—") == 2 and "81" not in value and "81" not in words   # history's open_issues is NOT a fallback
+    assert f'href="{BUGS_URL}"' in words and "High Priority" not in words
     assert "no data yet" in out["sections"]["tl"] and "summary_latest.json" in out["sections"]["tl"]
     assert "Nightly summary not published yet" in out["sections"]["sum-tests"]
     assert "summary_latest.json not published yet" in out["sections"]["status"]
