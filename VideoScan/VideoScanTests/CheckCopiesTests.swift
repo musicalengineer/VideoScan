@@ -1,9 +1,10 @@
 // CheckCopiesTests.swift
 // "Check these copies first" — the engine half (Rick 2026-10-11):
 //   LOGIC   — after the job, a twin with the same bytes is grouped by the
-//             catalog's own analysis and the delete classifier promotes the
-//             copy to "Copies exist elsewhere"; a twin whose sampled hash
-//             matches but whose bytes differ stays Unsure.
+//             catalog's own analysis (keeper + extra copy); a twin whose
+//             sampled hash matches but whose bytes differ carries a different
+//             full digest. (The delete-review classifier half of this test
+//             lives with the footer review sheet, not on this branch.)
 //   SCALE   — planning over 100k records inside a budget.
 //   SENSOR  — the job never moves, renames or rewrites a file (source scan +
 //             fingerprints); an offline twin is skipped, counted, and never
@@ -49,7 +50,7 @@ private func runJob(_ model: VideoScanModel, _ ids: Set<UUID>,
 @MainActor
 struct CheckCopiesLogicTests {
 
-    @Test("same bytes → grouped and 'Copies exist elsewhere'; same sampled hash, other bytes → Unsure")
+    @Test("same bytes → grouped keeper + extra copy; same sampled hash, other bytes → different full digest")
     func promotesOnlyProvenCopies() async throws {
         let sb = try ShowAgainSandbox.make("checkcopies"); defer { sb.cleanup() }
         let model = sb.model
@@ -64,10 +65,6 @@ struct CheckCopiesLogicTests {
         try Data(repeating: 0x5A, count: 7_000).write(to: URL(fileURLWithPath: lookalike.fullPath))
         twinReady(other, md5: "m2", stars: 3); twinReady(lookalike, md5: "m2")
 
-        let plan = await model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
-        let before = await model.showAgainDeleteReview(plan: plan, disk: ShowAgainSandbox.onlineRealStat)
-        #expect(before.row(.copiesElsewhere) == nil, "nothing is proven before the check: \(before.logLine)")
-
         let summary = await runJob(model, [copy.id, lookalike.id])
         #expect(summary.seeds == 2 && summary.twins == 2)
         #expect(summary.hashed == 4, Comment(rawValue: summary.line))
@@ -75,9 +72,9 @@ struct CheckCopiesLogicTests {
         #expect(keeper.duplicateDisposition == .keep && copy.duplicateDisposition == .extraCopy,
                 "the catalog's own analysis groups the pair")
 
-        let after = await model.showAgainDeleteReview(plan: plan, disk: ShowAgainSandbox.onlineRealStat)
-        #expect(after.row(.copiesElsewhere)?.items.map(\.id) == [copy.id], "\(after.logLine)")
-        #expect(after.row(.unsure)?.items.contains { $0.id == lookalike.id } == true, "\(after.logLine)")
+        #expect(keeper.contentFixity?.digest == copy.contentFixity?.digest, "same bytes, same full digest")
+        #expect(other.contentFixity?.digest != nil && other.contentFixity?.digest != lookalike.contentFixity?.digest,
+                "a sampled-hash lookalike is told apart by its full digest")
     }
 
     @Test("a record that already has a valid full hash is not read again; an archived one is left alone")
