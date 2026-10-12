@@ -27,8 +27,9 @@ values: `junk`, `catalogTrash`, `duplicate`, `prune`, `workbench`, `copiesAdvice
   for `inTrash` so the ~40 readers keep working. `missing` and `removedFromCatalog` leave the stage
   alone. Restore puts `.trashed` back to `.cataloged` only when the file is back at its path (the B4
   rule, kept).
-- `archiveStage .manuallyDeleted`: **legacy, read-only, never written again.** Load maps it to
-  `removedFromCatalog(.legacyDeletedLabel)`. Clearing the 959 labels needs Rick's sign-off (959
+- `archiveStage .manuallyDeleted`: **legacy.** Load maps it to
+  `removedFromCatalog(.legacyDeletedLabel)`. Only Migrate's Bucket B still writes it, beside its
+  `missing(.missingAtMigrate)` marker. Clearing the 959 labels needs Rick's sign-off (959
   classification, §Prerequisite), so the label stays put and Retire keeps reading it unchanged.
   Restore clears it on the rows the user restores.
 - `disposition`: unrelated. It is a verdict, not a "gone" state. It is untouched.
@@ -56,8 +57,18 @@ mirrors:
 - `stampRemoval(_:_:)` writes the marker and the legacy mirror.
 - `clearRemoval(_:)` is the Restore primitive. `returnToLive` calls it.
 
-The UI's "Restore" and "Show Removed" are unchanged: they read `isPurged`. The Show Removed row
-gains a state word ("In the Trash", "Removed from catalog", "Missing").
+The UI's "Restore" and "Show Removed" are unchanged: they read `isPurged`. The Show Removed row's
+tooltip now names the state from the marker ("in the Trash since …", "removed from the catalog on
+… — the file was not touched", "missing since …", "hidden by an old “deleted” label — the file was
+never moved"). Turning Show Removed on runs `refreshTrashEmptied`, which does its stats off the main
+actor.
+
+**The move: `MediaTrash.move`.** This is the one call to `FileManager.trashItem`. A test host
+routes it to a scratch Trash. Every Trash door reaches it:
+- E1's disk turn;
+- Delete Duplicates' `moveToTrash`;
+- the verifier's default;
+- `DerivativeOutputPublish`'s Replace.
 
 **Disk half: E1 `deleteConfirmedJunk(_:mode:guard:)`**, plus a new `reason:` parameter. I confirm
 the audit's pick. E1 already has, per file and at the file's turn:
@@ -83,9 +94,14 @@ trash it re-opens that window. So the engine's seam is a **removal step**:
 - `.trash`: `beforeRemoval`, then `trashItem`.
 - `.quarantinedTrash(proof)`: `SignatureVerification.quarantine` + `deleteQuarantined(.trash)`.
 
-DD keeps its resumable MFO job, its plan store and its copy-count facts. Its settle goes through
-`stampRemoval` (T4: the row is kept). Its move goes through the step. This shift lands the
-settle (T4). The step split is the next shift.
+DD keeps its resumable MFO job, its plan store and its copy-count facts. **Landed this shift:**
+- the settle goes through `stampRemoval` (T4: the row is kept);
+- the move goes through `MediaTrash.move`.
+
+**Not landed (the next shift, a choice for Rick):** DD's per-file turn running inside E1's loop as
+a `RemovalStep`. That moves the quarantine, the plan record between steps (crash recovery) and the
+copy-count final verdict into the engine. Each of those is codex-hardened. So it should be its own
+reviewed batch, not bolted on tonight.
 
 **MFO:** Delete Duplicates is already an MFO job. Delete Junk, ⌘⌫ and Discard stay sheet-driven,
 but they write the same START/row/OUTCOME DeletionAudit lines. An MFO wrapper for E1 batches over
@@ -99,13 +115,14 @@ about 1 minute is listed as a follow-up.
 | ⌘⌫ / Catalog Move to Trash | `MediaOps/VideoScanModel+TrashSelection.swift` → E1 | reason `.catalogTrash` |
 | Prune / Archived what-next / Excess copies | `MediaOps/VideoScanModel+PruneApply.swift:739` → E1 | reason `.prune` |
 | Delete Duplicates (Storage card, Steward, Copies & Advice) | `MediaOps/VideoScanModel+Duplicates.swift` `settleDeletedDuplicate` | `stampRemoval(.inTrash)`; **the row is no longer removed** (T4) |
-| Workbench discard | `Catalog/VideoScanModel+Workbench.swift` `discardWorkbench` | `stampRemoval` now. Its private `discardTurn` duplicates E1's disk turn; it moves onto E1 once the call site becomes async |
-| Archive Angel companion discard | `ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift:179` | `stampRemoval(.removedFromCatalog(.angelCompanion))` |
+| Workbench discard | `Catalog/VideoScanModel+Workbench.swift` `discardWorkbench` | **E1** (`reason: .workbench`, async). Its private disk turn is deleted; it keeps its viewer refusal and DeletionAudit |
+| Archive Angel companion discard | `ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift` `.absent` | `stampRemoval(.missing(.angelCompanion))`, because the file is gone (ENOENT) |
 | Caption orchestrator missing purge | `Media/CaptionOrchestrator+Activity.swift:143` | `stampRemoval(.missing(.missingOnDisk))` |
 | Remove from Catalog (row, Music Triage, extensionless, what-next missing rows) | `MediaOps/VideoScanModel+SoftDelete.swift` `purgeRecords` | `stampRemoval(.removedFromCatalog(.userRemoved))` |
-| Migrate skip / Bucket B | `MediaOps/VideoScanModel+Relocate.swift:390` | skip already writes nothing. Bucket B's `.manuallyDeleted` → `stampRemoval(.missing(.missingAtMigrate))` |
-| Retire's catalog cleanup (Forget volume records) | `Volumes/VideoScanModel+DeleteScanTarget.swift:317` | stays a row removal: catalog repair, with an explicit confirm (allowlist) |
-| Transcode/Reformat replace | `MediaOps/DerivativeOutputPublish.swift:79` | app-owned output. Allowlisted; noted for the step split |
+| Migrate skip / Bucket B | `MediaOps/VideoScanModel+Relocate.swift` `markSourceNotFound` | skip writes nothing. Bucket B → `stampRemoval(.missing(.missingAtMigrate))`, and it keeps the label for Retire |
+| Retire's catalog cleanup (Forget volume records) | `Volumes/VideoScanModel+DeleteScanTarget.swift` `removeCatalogRecords` | **open question for Rick.** It stays a row removal: catalog repair with a confirm and a snapshot. Marking those rows instead would keep a rescanned volume hidden, because a rescan carries the marker |
+| Transcode/Reformat replace | `MediaOps/DerivativeOutputPublish.swift` | an app-made output. The move is `MediaTrash.move` |
+| Catalog audit fixer | `Catalog/CatalogAuditFixer.swift` | re-stamps an inTrash row's own marker. A removed or missing row is never "fixed" to Trashed |
 
 Row-removal allowlist (catalog repair, never "gone"): forget volume, Purge Non-Video Media, Cover-art
 and Unrelated-audio purges, the MissingAudio probe-row rollback, scan-merge re-seen replacement,
