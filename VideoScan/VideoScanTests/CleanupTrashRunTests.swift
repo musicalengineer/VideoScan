@@ -257,6 +257,34 @@ struct CleanupTrashRunTests {
         if let t = inOrder[0].removal?.trashPath { try? FileManager.default.removeItem(atPath: t) }
     }
 
+    @Test("codex r1 P2-6: viewer protection switching on MID-RUN — the engine's preflight refusals still land in the totals and the receipt as held")
+    func engineRefusalMidRunIsCounted() async throws {
+        let sb = try S("refusal")
+        defer { sb.cleanup() }
+        let (model, extras) = try threeCopies(sb)
+        let plan = await model.buildCleanupPlan()
+        let selection = CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false)
+        let job = CleanupTrashJob(model: model, selection: selection)
+        job.saveCatalogForTesting = { true }
+        let first = selection.copies[0].target.path
+        job.proofStartedForTesting = { path in
+            guard path == first else { return }
+            Self.onMainAndWait { model.isReadOnly = true }   // the catalog becomes a viewer's mid-run
+        }
+        job.start()
+        await job.task?.value
+        model.isReadOnly = false
+        #expect(job.items.map(\.outcome) == [.moved, .held, .held], "\(job.items.map { "\($0.outcome): \($0.reason)" })")
+        #expect(job.items.dropFirst().allSatisfy { $0.reason.contains("read-only viewer") }, "\(job.items.map(\.reason))")
+        #expect(job.totals[.held] == 2 && job.totals.done == 3)
+        let receipt = try #require(job.receiptURL)
+        let rows = try String(contentsOf: receipt, encoding: .utf8).split(separator: "\n").dropFirst()
+        #expect(rows.count == 3, "one receipt row per requested file: \(rows)")
+        #expect(rows.filter { $0.hasPrefix("held,") }.count == 2)
+        #expect(extras.allSatisfy { $0.removal == nil || $0.removal?.state == .inTrash })
+        for rec in extras { if let t = rec.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) } }
+    }
+
     @Test("QA (b): Pause mid-read — the file being checked finishes, nothing else starts until Resume, bytes counted once")
     func pauseMidRead() async throws {
         let sb = try S("pausemid")

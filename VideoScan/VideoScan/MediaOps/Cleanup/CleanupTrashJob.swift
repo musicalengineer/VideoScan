@@ -177,6 +177,8 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     private let control = FixityRebind.Control()
     private let ledger = CleanupProofLedger()
     private var audit: DeletionAudit?
+    /// The run's CSV receipt (one row per file), once the run has started.
+    private(set) var receiptURL: URL?
     private var current: String?
     /// Bytes the proofs have actually read so far — each read reported once
     /// by the proof, partial reads included, nothing credited for a file
@@ -261,6 +263,7 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         let audit = DeletionAudit(kind: .cleanup, verb: "Cleanup", linePrefix: "[cleanup] ",
                                   sink: { [weak model] line in model?.cleanupNote(line) })
         self.audit = audit
+        receiptURL = audit.receipt.url
         audit.start(scope: scopeWords, requested: selection.count, bytes: selection.bytes)
         let ticker = startTicker()
         await runCopies(model: model)
@@ -299,7 +302,15 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
                 settle(rec, .cancelled, lane: lane)
                 continue
             }
-            _ = await model.deleteConfirmedJunk([rec], mode: .toTrash, reason: reason, guard: g)
+            let result = await model.deleteConfirmedJunk([rec], mode: .toTrash, reason: reason, guard: g)
+            // A file the engine decided BEFORE its turn — its preflight: the
+            // viewer refusal, a gate that closed mid-run — comes back only in
+            // the result, never through `settled`. Consume it exactly once
+            // (codex r1 P2-6), so no outcome ever vanishes from the totals
+            // and the receipt.
+            for item in result.items where !settledIDs.contains(item.record.id) {
+                settle(item.record, item.outcome, lane: lane)
+            }
         }
     }
 
@@ -457,7 +468,13 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         add(item, row: row)
     }
 
+    /// Every file with an outcome so far — one outcome per file, whichever
+    /// way it arrived (the guard's `settled`, the engine's returned result,
+    /// or the job's own cancelled/held).
+    private var settledIDs = Set<UUID>()
+
     private func add(_ item: CleanupTrashItem, row: DeletionAuditRow) {
+        guard settledIDs.insert(item.id).inserted else { return }
         totals.add(item)
         if items.count < Self.itemCap {
             items.append(item)
