@@ -47,10 +47,37 @@ enum CleanupProof {
     /// counts it as "cancelled", never as a held file.
     static let stoppedNote = "not reached — the run was stopped first"
 
+    // MARK: Ancestry, at the moment of the move
+
+    /// Rule 3 again, at execution, for BOTH files of BOTH lanes (codex r1
+    /// P1-1): after the plan, a folder on the way can be moved to a Trash,
+    /// or into the archive tree, and a symlink left at its old spelling —
+    /// the old path still resolves, to a file that is now inside a Trash or
+    /// the Master Archive. So the path must still name a plain file by its
+    /// own real name (no link anywhere on the way), nowhere in a Trash, and
+    /// — by that real spelling — not in an archive root folder or an Avid
+    /// MediaFiles folder. A path that is simply gone is nil here: the
+    /// callers decide what "missing" means.
+    static func ancestryProblem(path: String) -> String? {
+        var info = stat()
+        guard lstat(path, &info) == 0 else { return nil }
+        guard (info.st_mode & S_IFMT) == S_IFREG else { return "is not a plain file now (a link or a folder) — nothing moved" }
+        guard let real = CleanupDiskProbe.realPath(path) else { return "its real place could not be resolved — nothing moved" }
+        guard real == path else {
+            return "its folder was moved, or replaced by a link, since Cleanup planned (it is really at \(real)) — nothing moved"
+        }
+        if CleanupPathRules.isInTrash(path) { return "is in a Trash now — nothing moved" }
+        if CleanupPathRules.isInArchiveRootFolder(path) { return "is inside the Master Archive folder now — nothing moved" }
+        if CleanupPathRules.isAvidMediaFiles(path) { return "is in an Avid MediaFiles folder now — nothing moved" }
+        return nil
+    }
+
     // MARK: Copies
 
     /// Rule 1 for one extra copy. Blocking (two full reads).
     static func verifyCopy(_ copy: CleanupPlan.Copy, control: FixityRebind.Control) -> Verdict {
+        if let why = ancestryProblem(path: copy.keeper.path) { return .held("the copy that stays (\(copy.keeper.filename)) \(why)") }
+        if let why = ancestryProblem(path: copy.target.path) { return .held(why) }
         let keeper: ContentFixity
         switch read(copy.keeper.path, control: control) {
         case .failure(let why): return .held(why.prefixed("the copy that stays (\(copy.keeper.filename))"))
@@ -124,6 +151,7 @@ enum CleanupProof {
     /// kernel now; an unplugged drive is a HOLD, never a missing file.
     static func verifyJunk(path: String, frozen: FrozenJunkFiles, reserved: Set<CleanupPhysicalID>,
                            mountPresent: (String) -> Bool = CleanupDiskProbe.isMountPresent(forPath:)) -> String? {
+        if let why = ancestryProblem(path: path) { return why }
         if let why = frozen.diskProblem(at: path) { return why }
         guard let now = FileIdentityStamp.capture(path: path) else {
             if VideoScanModel.isExternalVolumePath(path), !mountPresent(path) {

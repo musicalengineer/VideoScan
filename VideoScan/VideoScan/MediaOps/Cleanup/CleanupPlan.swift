@@ -225,6 +225,14 @@ enum CleanupPathRules {
         return lower.contains("/avid mediafiles/") || lower.contains("/omfi mediafiles/")
     }
 
+    /// Inside a Finder Trash (a ".Trash" or ".Trashes" folder on the way),
+    /// case-insensitively. A file already in a Trash is never "the copy that
+    /// stays" and is never moved again.
+    static func isInTrash(_ path: String) -> Bool {
+        (path as NSString).pathComponents.contains { $0.caseInsensitiveCompare(".Trash") == .orderedSame
+            || $0.caseInsensitiveCompare(".Trashes") == .orderedSame }
+    }
+
     /// Runs through a folder named like the Master Archive's root, by NAME —
     /// a second net under the tree check for a path spelled differently
     /// from the designation. Case-insensitive, like the volumes it sits

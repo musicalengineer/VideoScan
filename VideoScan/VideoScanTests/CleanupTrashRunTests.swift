@@ -99,6 +99,52 @@ struct CleanupTrashRunTests {
         #expect(extra.removal == nil)
     }
 
+    @Test("codex r1 P1-1: the keeper's folder went to a Trash and a symlink took its place after the plan — held, the extra copy stays")
+    func keeperAncestryThroughTrashSymlinkHeld() async throws {
+        let sb = try S("ancestry")
+        defer { sb.cleanup() }
+        let (model, keep, extra) = try copyPair(sb)
+        let plan = await model.buildCleanupPlan()
+        #expect(plan.copies.count == 1)
+        // Finder-style: keep/ lands in a .Trashes folder; a link keeps the old spelling alive.
+        let trashed = sb.root.appendingPathComponent(".Trashes/501/keep", isDirectory: true)
+        try FileManager.default.createDirectory(at: trashed.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.moveItem(at: sb.root.appendingPathComponent("keep"), to: trashed)
+        try FileManager.default.createSymbolicLink(at: sb.root.appendingPathComponent("keep"), withDestinationURL: trashed)
+        #expect(FileManager.default.fileExists(atPath: keep.fullPath), "fixture: the keeper's old path still resolves, through the link")
+        let job = await runCleanupTrash(model, CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false))
+        #expect(job.items.map(\.outcome) == [.held], "\(job.items.map(\.reason))")
+        #expect(job.items.first?.reason.contains("link") == true || job.items.first?.reason.contains("Trash") == true, "\(job.items.map(\.reason))")
+        #expect(FileManager.default.fileExists(atPath: extra.fullPath) && extra.removal == nil)
+    }
+
+    @Test("codex r1 P1-1: ticked FamilyArchive junk whose folder moved INTO the archive tree (symlink left behind) — held")
+    func junkAncestryIntoArchiveTreeHeld() async throws {
+        let sb = try S("junkancestry")
+        defer {
+            MasterArchiveTestSupport.unlockTree(sb.root)
+            sb.cleanup()
+        }
+        let ma = MasterArchiveTestSupport.Sandbox(root: sb.root, sources: try sb.folder("Sources"),
+                                                  archiveVolume: try sb.folder("Archive"))
+        let model = sb.model(keepFirst: [])
+        model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
+        try MasterArchiveTestSupport.initialize(model, in: ma)
+        await model.refreshArchiveVolumeSnapshot(force: true)
+        let junk = try S.record(try sb.write("Archive/Loose/test_j.mov", bytes(64, seed: 6)), junk: true)
+        model.records = [junk]
+        let plan = await model.buildCleanupPlan()
+        #expect(plan.archiveJunk.map(\.id) == [junk.id], "fixture: listed for the tick box")
+        // Loose/ moves into the archive tree; a link keeps the old spelling alive.
+        let inTree = ma.archiveRoot.appendingPathComponent("Loose", isDirectory: true)
+        try FileManager.default.moveItem(at: sb.root.appendingPathComponent("Archive/Loose"), to: inTree)
+        try FileManager.default.createSymbolicLink(at: sb.root.appendingPathComponent("Archive/Loose"), withDestinationURL: inTree)
+        #expect(FileManager.default.fileExists(atPath: junk.fullPath), "fixture: the old path still resolves, through the link")
+        let job = await runCleanupTrash(model, CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: true))
+        #expect(job.items.map(\.outcome) == [.held], "\(job.items.map(\.reason))")
+        #expect(FileManager.default.fileExists(atPath: inTree.appendingPathComponent("test_j.mov").path) && junk.removal == nil)
+    }
+
     @Test("the extra copy replaced by an identical new file after the plan — held (not the file planned)")
     func targetReplacedHeld() async throws {
         let sb = try S("replaced")

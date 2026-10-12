@@ -49,12 +49,18 @@ enum CleanupDiskProbe {
         return (root.st_mode & S_IFMT) == S_IFDIR && root.st_dev != parent.st_dev
     }
 
+    /// Every link on the way resolved — the file's real name, or nil when
+    /// the path cannot be resolved (gone, or a dangling link).
+    nonisolated static func realPath(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
     /// True when resolving every link on the way gives back `path` itself,
     /// byte for byte. (Deliberately NOT `standardizingPath`, which rewrites
     /// "/private/var/…" to "/var/…" — itself a link — and would hide one.)
     nonisolated static func isOwnRealPath(_ path: String) -> Bool {
-        guard let resolved = realpath(path, nil) else { return false }
-        defer { free(resolved) }
-        return String(cString: resolved) == path
+        realPath(path) == path
     }
 }
