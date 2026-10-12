@@ -146,6 +146,45 @@ def test_gh_failure_means_nulls_not_an_exception():
     assert pm.Gh(binary="/nonexistent/gh")("issue", "list") is None
 
 
+def test_github_daily_row_adds_the_one_day_counts_and_leaves_the_summary_keys_alone():
+    nums = pm.github_numbers(FakeGh(GH_OK), NOW)
+    # Opened 10-12T01 is within a day of NOW (10-12T09); the 10-11T01 close is 32 h old.
+    assert nums["bugs_opened_1d"] == 1 and nums["bugs_closed_1d"] == 0
+    row = pm.github_daily_row(nums, NOW)
+    assert row == {"ts": "2026-10-12T09:00:00Z", "open_issues": 82, "open_bugs": 2, "bugs_opened_7d": 2,
+                   "bugs_closed_7d": 1, "bugs_opened_1d": 1, "bugs_closed_1d": 0}
+    pm.validate("github_daily.jsonl", row)
+    assert set(pm.github_summary(FakeGh(GH_OK), NOW)) == {"open_issues", "open_bugs", "bugs_opened_7d",
+                                                            "bugs_closed_7d", "main_sha", "main_date"}
+
+
+def test_github_daily_row_is_absent_not_null_when_gh_fails(tmp_path):
+    assert pm.github_daily_row(pm.github_numbers(FakeGh(fail=True), NOW), NOW) is None
+    # The bug list failing drops the day; the tip of main failing does not (the row carries no SHA).
+    no_bugs = FakeGh({k: v for k, v in GH_OK.items() if k != "--label bug"})
+    assert pm.github_daily_row(pm.github_numbers(no_bugs, NOW), NOW) is None
+    no_tip = FakeGh({k: v for k, v in GH_OK.items() if k != "commits/main"})
+    assert pm.github_daily_row(pm.github_numbers(no_tip, NOW), NOW)["open_bugs"] == 2
+    b = pm.summary_builder(gh=FakeGh(fail=True), git=TagGit([]), now=NOW, pbxproj=tmp_path / "missing")
+    assert b.daily_rows() is None
+    ok = pm.summary_builder(gh=FakeGh(GH_OK), git=TagGit([]), now=NOW, pbxproj=tmp_path / "missing")
+    assert ok.daily_rows() == [pm.github_daily_row(pm.github_numbers(FakeGh(GH_OK), NOW), NOW)]
+
+
+@pytest.mark.parametrize("mutate", [
+    lambda r: r.__setitem__("open_bugs", None),                   # a null never enters a trend
+    lambda r: r.__setitem__("bugs_closed_1d", -1),
+    lambda r: r.__setitem__("ts", "2026-10-12"),                  # a date is not a timestamp
+    lambda r: r.__setitem__("main_sha", "b07f9da43d14"),          # no extra keys
+    lambda r: r.pop("bugs_opened_1d"),
+])
+def test_github_daily_gate_refuses_nulls_extras_and_bad_shapes(mutate):
+    row = pm.github_daily_row(pm.github_numbers(FakeGh(GH_OK), NOW), NOW)
+    mutate(row)
+    with pytest.raises(pm.PrivacyError):
+        pm.validate("github_daily.jsonl", row)
+
+
 def test_sprint_with_an_unprintable_title_is_skipped_not_published():
     gh = FakeGh({"milestones": [{"title": "Donna's\nsecret", "open_issues": 1, "closed_issues": 0, "due_on": None},
                                 {"title": "Week of Oct 19", "open_issues": 3, "closed_issues": 2, "due_on": None}]})
@@ -308,6 +347,54 @@ def test_publish_writes_summary_latest_beside_the_other_streams(tmp_path):
                       say=lambda m: None, summary=build) == "unchanged"
 
 
+def daily_row(ts, open_bugs, **f):
+    row = {"ts": ts, "open_issues": 80, "open_bugs": open_bugs, "bugs_opened_7d": 1, "bugs_closed_7d": 1,
+           "bugs_opened_1d": 0, "bugs_closed_1d": 0}
+    row.update(f)
+    return row
+
+
+def test_publish_writes_one_daily_row_per_day_and_rewrites_the_same_day(tmp_path):
+    from test_publish_metrics import FakeGit, FOLDERS
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    wt = tmp_path / "wt"
+    published = [daily_row("2026-10-10T09:00:00Z", 5), daily_row("2026-10-11T09:00:00Z", 4),
+                 daily_row("2026-10-12T04:00:00Z", 3, bugs_opened_1d=2)]           # today's 4 AM row
+    git = FakeGit(repo, remote={"history.jsonl": "{}\n", "testdriver.jsonl": "",
+                                "github_daily.jsonl": pm.render(published)})
+    build = pm.summary_builder(gh=FakeGh(GH_OK), git=TagGit([]), now=NOW, pbxproj=tmp_path / "missing")
+    assert pm.publish({}, repo=repo, wt=wt, git=git, folders=FOLDERS, say=lambda m: None,
+                      summary=build, daily=build.daily_rows) == "pushed"
+    rows = [json.loads(line) for line in git.remote["github_daily.jsonl"].splitlines()]
+    assert [r["ts"] for r in rows] == ["2026-10-10T09:00:00Z", "2026-10-11T09:00:00Z", "2026-10-12T09:00:00Z"]
+    assert rows[:2] == published[:2]                                                 # earlier days kept verbatim
+    assert rows[2] == {"ts": "2026-10-12T09:00:00Z", "open_issues": 82, "open_bugs": 2, "bugs_opened_7d": 2,
+                       "bugs_closed_7d": 1, "bugs_opened_1d": 1, "bugs_closed_1d": 0}   # today rewritten, not appended
+    assert "summary_latest.json" in git.remote and git.remote["history.jsonl"] == "{}\n"
+    # gh failed: the stream is left exactly as published — no row, no nulls, nothing committed for it.
+    before = git.remote["github_daily.jsonl"]
+    failing = pm.summary_builder(gh=FakeGh(fail=True), git=TagGit([]),
+                                 now=NOW.replace(day=13), pbxproj=tmp_path / "missing")
+    pm.publish({}, repo=repo, wt=wt, git=git, folders=FOLDERS, say=lambda m: None,
+               summary=failing, daily=failing.daily_rows)
+    assert git.remote["github_daily.jsonl"] == before
+    assert json.loads(git.remote["summary_latest.json"])["github"]["open_bugs"] is None
+
+
+def test_daily_gate_refuses_a_published_null_before_anything_is_written(tmp_path):
+    from test_publish_metrics import FakeGit, FOLDERS
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    poisoned = pm.render([daily_row("2026-10-10T09:00:00Z", None)])
+    git = FakeGit(repo, remote={"history.jsonl": "{}\n", "testdriver.jsonl": "", "github_daily.jsonl": poisoned})
+    build = pm.summary_builder(gh=FakeGh(GH_OK), git=TagGit([]), now=NOW, pbxproj=tmp_path / "missing")
+    with pytest.raises(pm.PrivacyError):
+        pm.publish({}, repo=repo, wt=tmp_path / "wt", git=git, folders=FOLDERS, say=lambda m: None,
+                   summary=build, daily=build.daily_rows)
+    assert git.pushes == 0
+
+
 def run_cli(*args, env=None):
     e = dict(os.environ, **(env or {}))
     return subprocess.run(["python3", str(ROOT / "tools" / "publish_metrics.py"), *args],
@@ -325,6 +412,8 @@ def test_cli_out_dir_with_metrics_dir_writes_summary_with_nulls_when_gh_is_missi
     assert s["github"]["open_bugs"] is None and s["sprint"] is None
     assert s["nightly"]["nights"][-1]["hosts"]["M1"]["state"] == "did_not_run"
     assert s["version"] is not None                          # the repo's own pbxproj
+    assert not (out / "github_daily.jsonl").exists()         # gh failed: no daily row, never a null row
+    assert "github_daily" not in r.stdout
     for secret in SECRETS:
         assert secret not in (out / "summary_latest.json").read_text(), secret
 

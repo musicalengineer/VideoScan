@@ -78,7 +78,8 @@ globalThis.console = { ...console, error: (...a) => errors.push(a.map(String).jo
   await globalThis.__done;
   const text = el => [el.innerHTML, el.textContent, ...el.children.map(text)].join(" ");
   const out = { charts: charts.map(c => c.id), errors, sections: {}, notes: {}, open: {}, listeners: {},
-    theme: document.documentElement.getAttribute("data-theme") };
+    theme: document.documentElement.getAttribute("data-theme"),
+    chartData: Object.fromEntries(charts.map(c => [c.id, c.config && c.config.data])) };
   for (const [id, el] of elements) {
     if (id.endsWith("-error") && !el.classList.contains("hidden")) out.errors.push(`${id}: ${el.textContent}`);
     if (id.endsWith("-note") && !el.classList.contains("hidden")) out.notes[id] = el.textContent;
@@ -142,6 +143,18 @@ def summary_fixture(now):
     }
 
 
+def daily_row(ts, open_bugs, opened=0, closed=0):
+    return {"ts": iso(ts), "open_issues": 80, "open_bugs": open_bugs, "bugs_opened_7d": 3, "bugs_closed_7d": 11,
+            "bugs_opened_1d": opened, "bugs_closed_1d": closed}
+
+
+def daily_fixture(now):
+    """What the publisher's github_daily.jsonl looks like: 30 UTC days ending today,
+    one row each, except day 20 (gh failed that morning: no row, not a null)."""
+    return [daily_row(now - timedelta(days=29 - i), 20 - i // 3, opened=1, closed=i % 2)
+            for i in range(30) if i != 20]
+
+
 def full_fixtures(now, with_summary=True):
     fresh, old = now - timedelta(hours=3), now - timedelta(days=8)      # old: stale, and a 7-day comparison point
     nightly = [
@@ -198,6 +211,7 @@ def full_fixtures(now, with_summary=True):
         "codex_reviews.jsonl": jsonl([{"schemaVersion": 1, "date": "2026-09-27", "docs": 1, "unparsed_docs": 0,
                                        "passes": 2, "findings": 5, "closed_passes": 2}]),
         "summary_latest.json": summary_fixture(now) if with_summary else None,
+        "github_daily.jsonl": jsonl(daily_fixture(now)) if with_summary else None,
         "/actions/workflows/ci.yml/": {"workflow_runs": [
             {"head_branch": "feature", "status": "completed", "conclusion": "failure", "updated_at": iso(fresh)},
             {"head_branch": "main", "status": "in_progress", "conclusion": None, "updated_at": iso(fresh)},
@@ -325,7 +339,10 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "11,211" in head and "3 failing" in head
     assert "M1" in head and "did not run · build-timeout:5400s" in head and "failed of" in head
     assert "red 1 night running" in head and "days since a red night" in head
-    assert "11 <small>bugs" in head and "3 found" in head and "11 fixed" in head and "82 issues open" in head
+    assert "11 <small>bugs" in head and "<b>11 open</b> · +3 new / −11 fixed this week" in head and "82 issues open" in head
+    # The Open-bugs tile carries the 30-day sparkline; the day gh failed breaks it into two runs.
+    bug_spark = re.search(r'<svg\b[^>]*class="spark"[^>]*>.*?</svg>', head)
+    assert bug_spark and len(re.findall(r"<polyline\b", bug_spark[0])) == 2
     assert "Week of Oct 12" in head and "1 of 9" in head and re.search(r"[56] days left", head)   # due at local midnight
     # The timeline: one cell per night per Mac, the M1 amber (did_not_run), never red.
     tl = out["sections"]["tl"]
@@ -357,8 +374,11 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     # The twists carry the old charts and tables.
     for chart in ["c-tests-passed", "c-tests-failed", "c-cov-folders", "c-cov-trend", "c-sa-compiler", "c-sa-codeql",
                   "c-codex", "c-hallie", "c-size-folders", "c-size-trend", "c-cx-debt", "c-cx-folders",
-                  "c-ex-trend", "c-ex-folders"]:
+                  "c-ex-trend", "c-ex-folders", "c-bugs"]:
         assert chart in out["charts"], chart
+    bugs = out["chartData"]["c-bugs"]
+    assert len(bugs["labels"]) == 12 and [ds["label"] for ds in bugs["datasets"]] == ["opened", "fixed", "open bugs"]
+    assert bugs["datasets"][2]["data"][-1] == 11 and sum(v or 0 for v in bugs["datasets"][0]["data"]) == 29   # 29 published days, 1 opened each
     assert "c-sa-san" not in out["charts"] and out["notes"]["c-sa-san-note"] == "no data yet"      # TSan null, never a zero line
     assert "detectShape" in out["sections"]["cx-top"] and "plan_ticket" not in out["sections"]["cx-top"]
     assert "NewView.body" in out["sections"]["cx-new"] and "1 new, 0 worse, 1 fixed" in out["sections"]["cx-new-title"]
@@ -374,6 +394,48 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "999999" not in blob
     for secret in SECRETS:
         assert secret not in blob, secret
+
+
+@needs_node
+def test_weekly_bug_bars_sum_the_published_days_and_never_fabricate_a_week(tmp_path):
+    now = datetime.now(timezone.utc)
+    monday = datetime(now.year, now.month, now.day, 9, tzinfo=timezone.utc) - timedelta(days=now.weekday())
+    rows = [
+        daily_row(monday - timedelta(hours=5), 10, opened=5, closed=5),        # 04:00, same UTC day as the next row:
+        daily_row(monday, 10, opened=2, closed=1),                             # the later row wins, no double count
+        daily_row(monday + timedelta(days=1), 11, opened=1, closed=0),         # rest of this week unpublished
+        daily_row(monday - timedelta(days=4), 9, opened=3, closed=2),          # last week: one day only
+        daily_row(monday - timedelta(days=21), 8, opened=1, closed=4),         # three weeks ago
+    ]                                                                          # two weeks ago: nothing at all
+    summary = summary_fixture(now)
+    out = run_page(tmp_path, {"summary_latest.json": summary, "github_daily.jsonl": jsonl(rows)}, {"hash": "#all"})
+    assert out["errors"] == []
+    data = {ds["label"]: ds["data"] for ds in out["chartData"]["c-bugs"]["datasets"]}
+    assert len(out["chartData"]["c-bugs"]["labels"]) == 12
+    assert data["opened"][-4:] == [1, None, 3, 3] and data["fixed"][-4:] == [4, None, 2, 1]
+    assert data["open bugs"][-4:] == [8, None, 9, 11]
+    assert all(v is None for series in data.values() for v in series[:-4]), "weeks before the data are gaps, not zeros"
+    # The tile's 30-day sparkline: the published days only, in three runs (three weeks ago; last week's day;
+    # this week's days) — the unpublished days between them stay gaps.
+    bug_spark = re.search(r'<svg\b[^>]*class="spark"[^>]*>.*?</svg>', out["sections"]["head"])
+    assert bug_spark and len(re.findall(r"<polyline\b", bug_spark[0])) == 3
+    # A day that is not a timestamp is ignored, never a crash.
+    bad = rows + [{"ts": "2026-13-45T00:00:00Z", "open_bugs": 99}, {"ts": None, "open_bugs": 99}, {"open_bugs": 99}]
+    out2 = run_page(tmp_path, {"summary_latest.json": summary, "github_daily.jsonl": jsonl(bad)}, {"hash": "#all"})
+    assert out2["errors"] == [] and out2["chartData"]["c-bugs"] == out["chartData"]["c-bugs"]
+
+
+@needs_node
+def test_without_the_daily_stream_the_bug_tile_is_the_snapshot_alone(tmp_path):
+    now = datetime.now(timezone.utc)
+    fixtures = full_fixtures(now)
+    fixtures["github_daily.jsonl"] = None
+    out = run_page(tmp_path, fixtures, {"hash": "#all"})
+    assert out["errors"] == []
+    head = out["sections"]["head"]
+    assert "11 <small>bugs" in head and "<b>11 open</b> · +3 new / −11 fixed this week" in head
+    assert 'class="spark"' not in head, "no daily rows: no sparkline, no fabricated trend"
+    assert "c-bugs" not in out["charts"] and "github_daily.jsonl" in out["notes"]["c-bugs-note"]
 
 
 @needs_node

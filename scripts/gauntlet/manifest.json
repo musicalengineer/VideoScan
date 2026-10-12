@@ -25668,7 +25668,9 @@
         "test_every_section_renders_with_honest_missing_and_stale_states",
         "test_everything_missing_renders_no_data_not_zero",
         "test_page_data_comes_from_public_sources_only",
-        "test_page_never_reads_free_text_fields"
+        "test_page_never_reads_free_text_fields",
+        "test_weekly_bug_bars_sum_the_published_days_and_never_fabricate_a_week",
+        "test_without_the_daily_stream_the_bug_tile_is_the_snapshot_alone"
       ]
     },
     {
@@ -26063,13 +26065,18 @@
         "test_app_version_reads_the_app_target",
         "test_cli_no_summary_and_no_metrics_dir_produce_no_summary",
         "test_cli_out_dir_with_metrics_dir_writes_summary_with_nulls_when_gh_is_missing",
+        "test_daily_gate_refuses_a_published_null_before_anything_is_written",
         "test_demo_tags_keep_only_demo_names_with_dates",
         "test_did_not_run_rule",
         "test_gh_failure_means_nulls_not_an_exception",
+        "test_github_daily_gate_refuses_nulls_extras_and_bad_shapes",
+        "test_github_daily_row_adds_the_one_day_counts_and_leaves_the_summary_keys_alone",
+        "test_github_daily_row_is_absent_not_null_when_gh_fails",
         "test_github_numbers_from_gh",
         "test_host_labels_and_reason_codes_are_sanitized",
         "test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins",
         "test_person_summary_is_codes_and_numbers_only",
+        "test_publish_writes_one_daily_row_per_day_and_rewrites_the_same_day",
         "test_publish_writes_summary_latest_beside_the_other_streams",
         "test_sprint_with_an_unprintable_title_is_skipped_not_published",
         "test_summary_gate_refuses_anything_off_the_allowlist",
