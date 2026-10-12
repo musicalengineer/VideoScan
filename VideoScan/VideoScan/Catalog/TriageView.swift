@@ -183,6 +183,11 @@ struct TriageView: View {
     /// the pane observe it, so TriageView's body never re-runs for it.
     private let excessStore = ExcessCopiesStore.shared
     @State private var showingExcess = false
+    /// Triage ▸ Cleanup (2026-10-12): the page that answers "which files
+    /// are extra, and can go to the Trash?". Its plan lives in the store,
+    /// built off-main; TriageView's body never reads it.
+    private let cleanupStore = CleanupStore.shared
+    @State private var showingCleanup = false
 
     init(model: VideoScanModel) {
         self.model = model
@@ -225,7 +230,10 @@ struct TriageView: View {
         HSplitView {
             sidebar
                 .frame(minWidth: 180, idealWidth: 210, maxWidth: 260)
-            if curator && showingExcess {
+            if showingCleanup {
+                CleanupPane(model: model, store: cleanupStore)
+                    .frame(minWidth: 500)
+            } else if curator && showingExcess {
                 ExcessCopiesPane(model: model, store: excessStore)
                     .frame(minWidth: 500)
             } else {
@@ -300,10 +308,18 @@ struct TriageView: View {
                         filterRow(.confirmedJunk)
                     }
 
+                    Divider().padding(.vertical, 6)
+                    CleanupSidebarRow(isSelected: showingCleanup) {
+                        showingCleanup = true
+                        showingExcess = false
+                        cleanupStore.refresh(model: model)
+                    }
+
                     if curator {
                         Divider().padding(.vertical, 6)
                         CleanUpSidebarSection(store: excessStore, showingExcess: $showingExcess) {
                             showingExcess = true
+                            showingCleanup = false
                             excessStore.refresh(model: model)
                         }
                     }
@@ -339,6 +355,7 @@ struct TriageView: View {
             selectedFilter = filter
             selectedIDs = []
             showingExcess = false
+            showingCleanup = false
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: filter.icon)

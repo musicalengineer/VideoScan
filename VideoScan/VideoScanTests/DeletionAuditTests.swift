@@ -35,7 +35,8 @@ struct DeletionAuditSensorTests {
         // Every caller of the junk engine is an audited lane, or named here.
         let audited: Set<String> = ["VideoScanModel+JunkTrashSnapshot.swift", "VideoScanModel+TrashSelection.swift",
                                     "VideoScanModel+JunkDelete.swift",
-                                    "VideoScanModel+Workbench.swift"]   // GH #143: Discard, its own DeletionAudit
+                                    "VideoScanModel+Workbench.swift",   // GH #143: Discard, its own DeletionAudit
+                                    "CleanupTrashJob.swift"]            // Triage ▸ Cleanup: its own DeletionAudit (2026-10-12)
         // Per-copy callers with their own ledger + console lines; the run-level
         // receipt for them is a follow-up (they call the engine once per copy).
         let pending: Set<String> = ["VideoScanModel+PruneApply.swift"]

@@ -112,6 +112,39 @@ struct OneEngineCodexRound1Tests {
                 "the row now describing B was stamped removed: \(String(describing: rec.removal))")
     }
 
+    // MARK: round 2 P2 — the REPORTED item is about the file that left, too
+
+    /// Trash A; its row is repointed to B inside its turn (after the turn's
+    /// identity was frozen, before settlement). F3 keeps the live row (now
+    /// B) unstamped; this pins that the `settled` callback and the result
+    /// item name A — the audit and receipt must never associate B with A's
+    /// "moved" outcome (codex round 2 P2).
+    @Test func r2ARowRepointedMidTurnIsReportedUnderTheFrozenPath() async throws {
+        let sb = try JunkTrashSandbox("r2"); defer { sb.cleanup() }
+        let model = sb.model()
+        let a = try sb.write("test_A.mov")
+        let b = try sb.write("test_B.mov", fill: 0x33)
+        let rec = sb.junk(a)
+        model.records = [rec]
+        let repointTo = b.path
+        final class Seen: @unchecked Sendable { var path: String?; var isLive: Bool? }
+        let seen = Seen()
+        let fileGuard = VideoScanModel.JunkDeletionGuard(
+            authorize: { r in r.fullPath = repointTo; r.filename = "test_B.mov"; return nil },   // relinked mid-turn
+            beforeRemoval: { _ in nil }, remove: sb.trash.operation,
+            settled: { r, _ in seen.path = r.fullPath; seen.isLive = (r === rec) })
+
+        let result = await model.deleteConfirmedJunk([rec], mode: .toTrash, reason: .catalogTrash, guard: fileGuard)
+
+        #expect(result.items.map(\.outcome.kind) == [.moved], "fixture: A left")
+        #expect(!FileManager.default.fileExists(atPath: a.path) && FileManager.default.fileExists(atPath: b.path))
+        #expect(seen.path == a.path, "settled was told about \(seen.path ?? "nil"), not A")
+        #expect(seen.isLive == false, "the live row (now B) is not the reported record")
+        #expect(result.items.first?.record.fullPath == a.path, "the result item names A")
+        #expect(result.items.first?.record.removal?.state == .inTrash, "…and carries the stamp")
+        #expect(rec.removal == nil && rec.fullPath == b.path, "F3: the live row describing B is untouched")
+    }
+
     // MARK: F4 — a restored legacy row stays restored
 
     private func decodeLegacy(_ fields: String, path: String) throws -> VideoRecord {

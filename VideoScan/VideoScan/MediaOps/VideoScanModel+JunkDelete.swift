@@ -153,6 +153,24 @@ extension VideoScanModel {
         /// Told each file's outcome the moment it is decided (G2: the audit
         /// writes its line and receipt row as the run goes).
         var settled: (@MainActor (VideoRecord, JunkFileOutcome) -> Void)? = nil
+        /// Rick's per-run tick box (2026-10-12, Cleanup design option b:
+        /// "Include these N marked-junk files from FamilyArchive"). The
+        /// records listed here may leave although they live ELSEWHERE ON the
+        /// Master Archive volume — that one refusal (`.archiveVolume`) is
+        /// waived, asked at every gate the same way. Nothing else is: the
+        /// archive TREE, an unprovable drive, a drive marked Read only and
+        /// every other check still hold. Empty (the default) for every door
+        /// but Cleanup's junk lane.
+        var archiveVolumeJunkWaiver: Set<UUID> = []
+
+        /// True when `refusal` is the one the waiver may lift for `rec`.
+        /// Belt and braces: never for a path that runs through an archive
+        /// root folder by NAME, even if its spelling hid it from the tree
+        /// check ("/var/…" vs "/private/var/…").
+        func waives(_ refusal: BulkDeleteRefusal?, for rec: VideoRecord) -> Bool {
+            refusal == .archiveVolume && archiveVolumeJunkWaiver.contains(rec.id)
+                && !CleanupPathRules.isInArchiveRootFolder(rec.fullPath)
+        }
     }
 
     /// One file's outcome — mutually exclusive by construction (one enum
@@ -210,21 +228,61 @@ extension VideoScanModel {
     /// silent drop (design R6). A non-nil `finished` is the whole answer;
     /// otherwise `pending[i]` is file i's outcome when it is already
     /// decided, nil when it goes on to its turn.
-    func junkDeletionPreflight(_ requested: [VideoRecord], verb: String = "Delete Confirmed Junk")
+    func junkDeletionPreflight(_ requested: [VideoRecord], verb: String = "Delete Confirmed Junk",
+                               guard fileGuard: JunkDeletionGuard? = nil)
         -> (pending: [JunkFileOutcome?], finished: JunkDeletionResult?) {
         if let refused = junkDeletionRefusedOnViewer(requested) { return ([], refused) }
         guard !requested.isEmpty else { return ([], .empty) }
-        let mayGo = Set(excludingMasterArchiveFiles(requested, verb: verb).map(ObjectIdentifier.init))
+        // The tick box's files skip the archive-volume half of the batch
+        // gate (and its console line); they still meet every other gate.
+        let waived = archiveVolumeJunkWaived(requested, guard: fileGuard)
+        var mayGo = Set(excludingMasterArchiveFiles(requested.filter { !waived.contains(ObjectIdentifier($0)) },
+                                                    verb: verb).map(ObjectIdentifier.init))
+        mayGo.formUnion(waived)
         var pending = [JunkFileOutcome?](repeating: nil, count: requested.count)
         guard mayGo.count < requested.count else { return (pending, nil) }
         let archiveVolume = archiveVolumeProtection()
         let label = archiveVolume?.label ?? "the archive volume"
         for (i, rec) in requested.enumerated() where !mayGo.contains(ObjectIdentifier(rec)) {
             let note = bulkDeleteRefusal(rec, volume: archiveVolume)
-                .map { Self.bulkDeleteRefusalNote($0, volume: label) } ?? "is protected by the delete rules"
+                .map { heldNote(rec, refusal: $0, label: label, guard: fileGuard) } ?? "is protected by the delete rules"
             pending[i] = .held(note + " — nothing moved")
         }
         return (pending, nil)
+    }
+
+    /// The words a held file gets. A file on the tick box's list that stays
+    /// only because its drive is ALSO marked Read only is told THAT (the
+    /// gate answers the archive half first, which would otherwise hide the
+    /// mark); every other refusal keeps the gate's own words.
+    private func heldNote(_ rec: VideoRecord, refusal: BulkDeleteRefusal, label: String,
+                          guard fileGuard: JunkDeletionGuard?) -> String {
+        if fileGuard?.waives(refusal, for: rec) == true,
+           let readOnly = readOnlyVolumeRefusal(forPath: rec.fullPath, effect: .removesFiles) {
+            return Self.bulkDeleteRefusalNote(readOnly, volume: label)
+        }
+        return Self.bulkDeleteRefusalNote(refusal, volume: label)
+    }
+
+    /// The requested records whose ONLY batch-gate refusal is the one the
+    /// guard's FamilyArchive-junk tick box lifts. Empty for every door but
+    /// Cleanup's junk lane (no waiver, no snapshot built).
+    private func archiveVolumeJunkWaived(_ requested: [VideoRecord],
+                                         guard fileGuard: JunkDeletionGuard?) -> Set<ObjectIdentifier> {
+        guard let fileGuard, !fileGuard.archiveVolumeJunkWaiver.isEmpty else { return [] }
+        let snapshot = archiveVolumeProtection()
+        return Set(requested.filter { archiveJunkWaiverApplies($0, refusal: bulkDeleteRefusal($0, volume: snapshot),
+                                                               guard: fileGuard) }
+            .map(ObjectIdentifier.init))
+    }
+
+    /// The waiver lifts `.archiveVolume` for a listed record — and only when
+    /// the gate's OTHER half (a drive marked Read only, which the archive
+    /// half's refusal would otherwise hide) has nothing to say.
+    private func archiveJunkWaiverApplies(_ rec: VideoRecord, refusal: BulkDeleteRefusal?,
+                                          guard fileGuard: JunkDeletionGuard?) -> Bool {
+        guard let fileGuard, fileGuard.waives(refusal, for: rec) else { return false }
+        return readOnlyVolumeRefusal(forPath: rec.fullPath, effect: .removesFiles) == nil
     }
 
     /// Trash every record in `records`, one file at a time, regardless of
@@ -240,7 +298,7 @@ extension VideoScanModel {
         reason: RemovalReason = .junk,
         guard fileGuard: JunkDeletionGuard? = nil
     ) async -> JunkDeletionResult {
-        let (pending, finished) = junkDeletionPreflight(requested, verb: reason.doorVerb)
+        let (pending, finished) = junkDeletionPreflight(requested, verb: reason.doorVerb, guard: fileGuard)
         if let finished { return finished }
 
         // The disk half's fixed inputs — all Sendable, so they may cross to
@@ -269,7 +327,9 @@ extension VideoScanModel {
                 turns.append(JunkTurnIdentity(rec))
                 outcomes.append(await junkTurn(rec, guard: fileGuard, disk: disk))
             }
-            if let last = outcomes.last { fileGuard?.settled?(rec, last) }
+            // Reported on the record that still describes the file this
+            // turn was about (codex round 2 P2), never a row relinked meanwhile.
+            if let last = outcomes.last { fileGuard?.settled?(reportedRecord(rec, turn: turns.last.flatMap { $0 }), last) }
         }
         return applyJunkOutcomes(requested, outcomes, turns: turns, mode: mode, reason: reason)
     }
@@ -296,14 +356,17 @@ extension VideoScanModel {
         // protects every file not yet moved — its tree and its volume here,
         // the file's own volume UUID again in the disk half.
         let archiveVolume = archiveVolumeProtection()
-        if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {
-            return .held(Self.bulkDeleteRefusalNote(refusal, volume: archiveVolume?.label ?? "the archive volume")
+        let refusal = bulkDeleteRefusal(rec, volume: archiveVolume)
+        let waived = archiveJunkWaiverApplies(rec, refusal: refusal, guard: fileGuard)
+        if let refusal, !waived {
+            return .held(heldNote(rec, refusal: refusal, label: archiveVolume?.label ?? "the archive volume", guard: fileGuard)
                          + " — nothing moved")
         }
         // The volumes the person marked Read only (2026-10-03), as the model
         // is at THIS file's turn (codex #258 F5): a drive marked Read only
         // while the batch runs protects every file not yet moved.
-        let protections = JunkTurnProtections(archiveVolume: archiveVolume, readOnlyVolumes: readOnlyVolumeProtection())
+        let protections = JunkTurnProtections(archiveVolume: archiveVolume, readOnlyVolumes: readOnlyVolumeProtection(),
+                                              archiveVolumeWaived: waived)
         let catalogBytes = rec.sizeBytes
         return await Task.detached(priority: .userInitiated) {
             disk.run(path: path, protections: protections, catalogBytes: catalogBytes)
@@ -336,7 +399,11 @@ extension VideoScanModel {
             Self.stampRemoval(target, marker, stage: stage)
             if outcome.isMoved { removedFromDisk.append(target) }
         }
-        let result = JunkDeletionResult(items: zip(records, outcomes).map { .init(record: $0, outcome: $1) })
+        // The items name the file each outcome was about (codex round 2 P2):
+        // a row relinked mid-turn is reported through its frozen snapshot.
+        let result = JunkDeletionResult(items: zip(records, outcomes).enumerated().map { i, pair in
+            .init(record: reportedRecord(pair.0, turn: turns[i]), outcome: pair.1)
+        })
 
         // Single batched persist (a per-record save would saturate the
         // debouncer and could leave a half-written catalog on a crash).
@@ -350,7 +417,7 @@ extension VideoScanModel {
                           batchID: "junk-\(UUID().uuidString.prefix(8))")
 
         let refused = result.refused.count, cancelled = result.cancelled
-        log("Delete Confirmed Junk: attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode.isOutrightRemoval ? "permanent" : "trash")")
+        log("\(reason.doorVerb): attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode.isOutrightRemoval ? "permanent" : "trash")")
         return result
     }
 
@@ -362,11 +429,23 @@ extension VideoScanModel {
     /// ledger and receipt still say what left (the Delete Duplicates rule,
     /// codex 1593 #4).
     private func settlementTarget(_ rec: VideoRecord, turn: JunkTurnIdentity?) -> VideoRecord {
+        let target = reportedRecord(rec, turn: turn)
+        if let turn, target === turn.snapshot {
+            log("  Catalog changed while trashing \(turn.snapshot.filename); the current row is left as it is")
+        }
+        return target
+    }
+
+    /// The record an outcome is REPORTED on — the result item, the guard's
+    /// `settled` callback (every lane's audit and receipt read it), and the
+    /// stamp: the live row with the turn's id while it still describes the
+    /// path frozen at the turn, else the detached snapshot (codex round 2
+    /// P2: trash A, repoint the row to B before settlement → the report must
+    /// say A). No turn (decided before any disk work) → the row as given.
+    private func reportedRecord(_ rec: VideoRecord, turn: JunkTurnIdentity?) -> VideoRecord {
         guard let turn else { return rec }
         let live = record(forID: turn.id) ?? rec
-        guard live.fullPath != turn.path else { return live }
-        log("  Catalog changed while trashing \(turn.snapshot.filename); the current row is left as it is")
-        return turn.snapshot
+        return live.fullPath == turn.path ? live : turn.snapshot
     }
 
     /// Convenience filter: every active (non-purged) record currently
@@ -449,6 +528,11 @@ struct JunkTurnIdentity {
 struct JunkTurnProtections: Sendable {
     let archiveVolume: ArchiveVolumeProtection?
     let readOnlyVolumes: ReadOnlyVolumeProtection
+    /// This file is on Rick's per-run FamilyArchive-junk list
+    /// (`JunkDeletionGuard.archiveVolumeJunkWaiver`): the disk half's
+    /// "on the archive volume" verdict does not hold it. "Unprovable" and
+    /// the Read-only marks still do.
+    var archiveVolumeWaived = false
 }
 
 /// Everything the off-main half of a turn needs, as one Sendable value
@@ -490,6 +574,7 @@ struct JunkDiskTurn: Sendable {
             switch archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe) {
             case .clear: break
             case .onArchiveVolume:
+                if protections.archiveVolumeWaived { break }
                 return VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: archiveVolume.label) + " — nothing moved"
             case .unprovable:
                 return VideoScanModel.archiveVolumeUnprovableNote(archiveVolume) + " — nothing moved"

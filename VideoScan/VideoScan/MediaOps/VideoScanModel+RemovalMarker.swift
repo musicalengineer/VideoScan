@@ -209,10 +209,14 @@ extension DeletionTier {
 }
 
 extension RemovalReason {
-    /// The verb the engine's up-front gate writes in its console lines for
-    /// this door ("Discard: left 1 file(s) alone — …"). Every Trash door but
-    /// Discard has always spoken as Delete Confirmed Junk.
-    var doorVerb: String {
-        self == .workbench ? "Discard" : "Delete Confirmed Junk"
-    }
+    /// The verb the engine writes in its console lines for this door
+    /// ("Discard: left 1 file(s) alone — …", "Cleanup: attempted=…"). Data,
+    /// not a growing conditional: a door with its own voice adds one entry.
+    /// Every other door speaks as Delete Confirmed Junk, as it always has.
+    private static let doorVerbs: [RemovalReason: String] = [
+        .workbench: "Discard",     // Triage ▸ Under Construction ▸ Discard
+        .duplicate: "Cleanup",     // Triage ▸ Cleanup's copy lane (2026-10-12)
+    ]
+
+    var doorVerb: String { Self.doorVerbs[self] ?? "Delete Confirmed Junk" }
 }
