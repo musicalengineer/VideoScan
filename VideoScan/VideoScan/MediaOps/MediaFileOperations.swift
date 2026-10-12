@@ -398,6 +398,16 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let checkCopies = Self("checkCopies", hasDetailView: false,
         style: .init(badge: "Check Copies", logVerb: "check copies", fill: .init(0.05, 0.35, 0.30)))
 
+    // Fill In Full Hashes (2026-10-11) — slate blue: a whole-catalog reading
+    // verb whose only write is the catalog's full-hash field.
+    // Δ ≥ 0.15 from every other fill, contrast vs white ≈ 8.
+    /// "Fill in full hashes" (Rick 2026-10-11): every active record on a
+    /// connected drive without a valid stored full SHA-256 is read in full,
+    /// one reader per drive, drives in parallel. Read-only on media;
+    /// restart = resume. FullHashBackfillJob.
+    static let fillFullHashes = Self("fillFullHashes", hasDetailView: true,
+        style: .init(badge: "Full Hashes", logVerb: "fill in full hashes", fill: .init(0.15, 0.30, 0.55)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -406,7 +416,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .trim, .balanceAudio, .rebuildAudio, .verifyAudio, .verifyVideo, .checkMedia, .repair,
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
-        .showAgain, .checkCopies,
+        .showAgain, .checkCopies, .fillFullHashes,
     ]
 
     /// Badge text — rendered in small caps by the row view.
