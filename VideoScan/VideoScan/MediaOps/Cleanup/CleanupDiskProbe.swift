@@ -31,7 +31,9 @@ enum CleanupDiskProbe {
         var info = stat()
         guard lstat(path, &info) == 0 else { return .missing }
         guard (info.st_mode & S_IFMT) == S_IFREG else { return .notRegularFile }
-        guard isOwnRealPath(path) else { return .throughLink }
+        guard isOwnRealPath(path) else {
+            return .throughLink(realPath(path).flatMap { FileIdentityStamp.capture(path: $0) })
+        }
         guard let stamp = FileIdentityStamp.capture(path: path) else { return .missing }
         return .file(stamp)
     }

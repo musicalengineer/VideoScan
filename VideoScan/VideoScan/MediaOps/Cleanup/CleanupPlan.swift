@@ -137,7 +137,10 @@ enum CleanupDiskFacts: Sendable, Equatable {
     case notRegularFile
     /// The path runs through a symlinked folder: the file has another,
     /// real name (e.g. the 27 links from ~/Movies into the media drives).
-    case throughLink
+    /// The real file's identity (a stat of the resolved path) rides along
+    /// so the alias still names its file in the physical index (codex r2
+    /// F3); nil when the link dangles.
+    case throughLink(FileIdentityStamp?)
     /// A plain file at its own real path; its identity now.
     case file(FileIdentityStamp)
 }
@@ -330,7 +333,13 @@ enum CleanupPlanner {
         for row in rows {
             let fact = facts(row.path)
             disk[row.id] = fact
-            if case .file(let stamp) = fact { index.note(CleanupPhysicalID(stamp)) }
+            switch fact {
+            case .file(let stamp): index.note(CleanupPhysicalID(stamp))
+            // An alias through a linked folder is never selected, but it
+            // still NAMES its real file: that file is ambiguous (codex r2 F3).
+            case .throughLink(let real?): index.note(CleanupPhysicalID(real))
+            case .throughLink(nil), .driveNotConnected, .missing, .notRegularFile: break
+            }
         }
         for group in lanes.groups {
             planGroup(group.members, digest: group.key.digest, disk: disk, index: index, rank: rank, into: &plan)

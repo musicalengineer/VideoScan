@@ -564,11 +564,32 @@ struct CleanupTrashRunTests {
             recs.append(try S.record(caseVariant))
         }
         model.records = recs
-        #expect(CleanupDiskProbe.facts(for: viaLink.path) == .throughLink)
+        if case .throughLink(let real) = CleanupDiskProbe.facts(for: viaLink.path) {
+            #expect(real?.inode == FileIdentityStamp.capture(path: k.path)?.inode, "the alias carries its real file's identity (codex r2 F3)")
+        } else {
+            Issue.record("a path through a linked folder must read as throughLink")
+        }
         let plan = await model.buildCleanupPlan()
         let targets = Set(plan.copies.map(\.target.path))
         #expect(!targets.contains(hard.path) && !targets.contains(e.path), "the hard-linked pair is ambiguous: \(targets)")
         #expect(!targets.contains(viaLink.path) && !targets.contains(caseVariant.path) && !targets.contains(k.path))
+    }
+
+    @Test("codex r2 F3: an UNHASHED alias through a linked folder still makes the canonical file ambiguous")
+    func unhashedAliasThroughLinkedFolder() async throws {
+        let sb = try S("linkalias")
+        defer { sb.cleanup() }
+        let (model, keep, extra) = try copyPair(sb)
+        try FileManager.default.createSymbolicLink(at: sb.root.appendingPathComponent("linked"),
+                                                   withDestinationURL: sb.root.appendingPathComponent("extra"))
+        let alias = try S.record(sb.root.appendingPathComponent("linked/test_clip.mov"))
+        alias.contentFixity = nil   // never hashed: not a candidate, but another name for the extra copy
+        model.records.append(alias)
+        let plan = await model.buildCleanupPlan()
+        #expect(plan.copies.isEmpty, "the extra copy has another active name — \(plan.copies.map(\.target.path))")
+        #expect(plan.leftAlone[.sameFileAsAnotherRow]?.files == 1, "\(plan.leftAloneSorted.map(\.reason.words))")
+        #expect(plan.leftAlone[.throughLink] == nil, "the unhashed alias is not a candidate, so it is not 'left alone' either")
+        #expect(keep.removal == nil && extra.removal == nil)
     }
 
     // MARK: FamilyArchive junk — the per-run tick box (Rick 2026-10-12, option b)

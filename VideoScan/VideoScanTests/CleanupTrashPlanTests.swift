@@ -134,7 +134,7 @@ struct CleanupTrashPlanTests {
     func throughLink() {
         let keep = F.row("/Volumes/LaCieWorkspace/real/c.mov")
         let via = F.row("/Users/rickb/Movies/Link/c.mov")
-        let plan = F.plan([keep, via], facts: [via.path: .throughLink])
+        let plan = F.plan([keep, via], facts: [via.path: .throughLink(nil)])
         #expect(plan.copies.isEmpty)
         let r = F.reasons(plan)
         #expect(r[CleanupExclusion.throughLink.key] == 1)
@@ -173,6 +173,20 @@ struct CleanupTrashPlanTests {
         let staleKeep = F.row("/Volumes/LaCieWorkspace/other-name.mov", digest: "stale")
         let plan = F.plan([keep, extra, staleTwin, staleKeep], facts: [extra.path: .file(shared), staleTwin.path: .file(shared)])
         #expect(plan.copies.isEmpty, "\(plan.copies.map(\.target.path))")
+    }
+
+    @Test("codex r2 F3: an alias through a linked folder carries its REAL file's identity into the index — the canonical row is ambiguous, the alias is not a candidate")
+    func aliasThroughLinkIndexesItsRealFile() {
+        let shared = F.stamp(inode: 91, size: 1_000)
+        let keep = F.row("/Volumes/LaCieWorkspace/a.mov", digest: "d1")
+        let extra = F.row("/Volumes/SanDiskWorkspace/a.mov", digest: "d1")
+        let alias = F.row("/Users/rickb/Movies/Link/a.mov", digest: nil)
+        let plan = F.plan([keep, extra, alias], facts: [extra.path: .file(shared), alias.path: .throughLink(shared)])
+        #expect(plan.copies.isEmpty, "\(plan.copies.map(\.target.path))")
+        #expect(F.reasons(plan)[CleanupExclusion.sameFileAsAnotherRow.key] == 1)
+        // A dangling link names nothing.
+        let dangling = F.plan([keep, extra, alias], facts: [extra.path: .file(shared), alias.path: .throughLink(nil)])
+        #expect(dangling.copies.map(\.target.id) == [extra.id])
     }
 
     @Test("codex r1 P2-3: a candidate sharing its physical file with ANY other active row is left alone — unhashed, singleton stale-hash, or set-aside")
