@@ -26911,6 +26911,7 @@
         "CleanupTrashPlanTests"
       ],
       "tests": [
+        "aliasAcrossAllActiveRows",
         "aliasAcrossGroups",
         "archivedAndProtected",
         "caseVariantAlias",
@@ -26925,6 +26926,7 @@
         "junkLanes",
         "junkSameFile",
         "keeperNeverInRemovalSet",
+        "machineStampsAreNotMarks",
         "notCheckedYet",
         "offlineMemberNeverKeeper",
         "pairOnRankedDrives",
@@ -26949,15 +26951,21 @@
       "tests": [
         "batches",
         "copyMoves",
+        "engineRefusalMidRunIsCounted",
         "engineWaiverIsNarrow",
         "familyArchiveJunkTickBox",
-        "junkDriveUnpluggedIsHeld",
+        "handMarksFromARecord",
+        "junkAncestryIntoArchiveTreeHeld",
+        "junkDriveUnpluggedOrSwappedIsHeld",
         "junkMoves",
         "junkRechecked",
+        "keeperAncestryThroughTrashSymlinkHeld",
         "keeperGoneNeverReElected",
         "keeperRewrittenHeld",
+        "lastRunIsTheOutcome",
         "lyingDigestHeld",
         "pauseMidRead",
+        "plannedIdentityKeepsTheVolumeUUID",
         "realAliases",
         "stopBeforeFirstTurn",
         "stopMidBatch",
@@ -27003,6 +27011,21 @@
         "scanReadsTheSources",
         "throughTheEngine",
         "waiverOnlyFromCleanup"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CleanupTrashHardeningTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CleanupTrashHardeningTests"
+      ],
+      "tests": [
+        "blockedSaveOrdering",
+        "movedRowsSurviveReload",
+        "mutationBetweenReadsHeld",
+        "stopAfterProofIsReportedMoved"
       ]
     }
   ],
@@ -29497,6 +29520,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CleanupTrashSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashHardeningTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],

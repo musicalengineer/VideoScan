@@ -197,33 +197,8 @@ struct CleanupTrashRunTests {
         #expect(job.bytesRead == 64 * 1024, "codex r1 P2-5: an early hold is credited only the keeper's read — \(job.bytesRead)")
     }
 
-    /// Three same-size copy pairs in keep/ and extra/; the extras in path order.
-    private func threeCopies(_ sb: S, bytes n: Int = 256 * 1024) throws -> (model: VideoScanModel, extras: [VideoRecord]) {
-        let model = sb.model(keepFirst: ["keep", "extra"])
-        var extras: [VideoRecord] = []
-        for i in 0..<3 {
-            let payload = Data("clip \(i) ".utf8) + bytes(n, seed: UInt8(10 + i))
-            let k = try sb.write("keep/test_\(i).mov", payload)
-            let e = try sb.write("extra/test_\(i).mov", payload)
-            model.records.append(try S.record(k))
-            let rec = try S.record(e)
-            model.records.append(rec)
-            extras.append(rec)
-        }
-        return (model, extras)
-    }
-
-    /// Run `action` on the main actor from a worker thread and wait for it
-    /// (the proof hook runs off-main while the main actor is free: the job
-    /// is suspended in an `await`).
-    nonisolated private static func onMainAndWait(_ action: @escaping @MainActor () -> Void) {
-        let done = DispatchSemaphore(value: 0)
-        Task { @MainActor in
-            action()
-            done.signal()
-        }
-        done.wait()
-    }
+    private func threeCopies(_ sb: S) throws -> (model: VideoScanModel, extras: [VideoRecord]) { try cleanupThreeCopies(sb) }
+    nonisolated private static func onMainAndWait(_ action: @escaping @MainActor () -> Void) { cleanupOnMainAndWait(action) }
 
     @Test("QA (a): Stop mid-batch after one move — the moved row is stamped, the in-flight file and the rest are CANCELLED (not held), state Stopped; real catalog save")
     func stopMidBatch() async throws {

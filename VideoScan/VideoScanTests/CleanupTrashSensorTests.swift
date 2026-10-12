@@ -74,7 +74,7 @@ struct CleanupTrashSensorTests {
         #expect(job.contains("runFiles(batch, lane: .copy, reason: .duplicate, guard: g, model: model)"))
         #expect(job.contains("runFiles(batch, lane: .junk, reason: .junk, guard: g, model: model)"))
         #expect(!job.contains("Thread.sleep") && !job.contains("setPaused"), "nothing waits on a worker thread")
-        #expect(job.contains("CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.addBytes($0) })"))
+        #expect(job.contains("CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.addBytes($0) },"))
         #expect(job.contains("CleanupProof.verifyJunk(path: path, frozen: frozen, reserved: reserved)"))
         #expect(job.contains("model.frozenJunkCatalogProblem(rec, frozenPath:"), "the Delete Junk door's own re-check")
         let proof = try #require(Self.cleanupSources().first { $0.name.hasSuffix("CleanupProof.swift") }?.code)

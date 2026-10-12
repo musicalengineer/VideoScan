@@ -155,6 +155,12 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     /// about to start reading (its path) — so a test can Pause or Stop at
     /// a known point. nil in production.
     var proofStartedForTesting: (@Sendable (String) -> Void)?
+    /// TEST SEAM: told between the keeper's read and the extra copy's read.
+    var betweenReadsForTesting: (@Sendable (String) -> Void)?
+    /// TEST SEAM: told the moment a copy's proof has PASSED, just before the
+    /// engine moves it (a Stop landing here still moves the file — reported
+    /// honestly as moved).
+    var proofPassedForTesting: (@Sendable (String) -> Void)?
 
     /// Every file settled, in the order it settled (capped at `itemCap`).
     @Published private(set) var items: [CleanupTrashItem] = []
@@ -399,7 +405,8 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     private func copyGuard(model: VideoScanModel) -> VideoScanModel.JunkDeletionGuard {
         let byID = Dictionary(selection.copies.map { ($0.target.id, $0) }, uniquingKeysWith: { first, _ in first })
         let byPath = Dictionary(selection.copies.map { ($0.target.path, $0) }, uniquingKeysWith: { first, _ in first })
-        let control = control, ledger = ledger, started = proofStartedForTesting
+        let control = control, ledger = ledger
+        let started = proofStartedForTesting, between = betweenReadsForTesting, passed = proofPassedForTesting
         var g = VideoScanModel.JunkDeletionGuard(
             authorize: { [weak self, weak model] rec in
                 guard let self, let model, let copy = byID[rec.id] else { return "was not in the set you confirmed — nothing moved" }
@@ -409,10 +416,12 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             beforeRemoval: { path in
                 guard let copy = byPath[path] else { return "was not in the set you confirmed — nothing moved" }
                 started?(path)
-                switch CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.addBytes($0) }) {
+                switch CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.addBytes($0) },
+                                               betweenReads: { between?(path) }) {
                 case .held(let why): return why
                 case .proven(let words):
                     ledger.note(words, for: path)
+                    passed?(path)
                     return nil
                 }
             })

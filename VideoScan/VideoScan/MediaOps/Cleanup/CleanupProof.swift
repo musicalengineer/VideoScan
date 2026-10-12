@@ -79,7 +79,8 @@ enum CleanupProof {
     /// failure too), once per read — the job's progress sums those and
     /// nothing else (codex r1 P2-5).
     static func verifyCopy(_ copy: CleanupPlan.Copy, control: FixityRebind.Control,
-                           onRead: (Int64) -> Void = { _ in }) -> Verdict {
+                           onRead: (Int64) -> Void = { _ in },
+                           betweenReads: () -> Void = {}) -> Verdict {
         if let why = ancestryProblem(path: copy.keeper.path) { return .held("the copy that stays (\(copy.keeper.filename)) \(why)") }
         if let why = ancestryProblem(path: copy.target.path) { return .held(why) }
         let keeper: ContentFixity
@@ -90,6 +91,7 @@ enum CleanupProof {
         if let why = plannedFileProblem(planned: copy.keeper.identity, now: keeper.stamp) {
             return .held("the copy that stays \(why)")
         }
+        betweenReads()   // test seam: a mutation landing between the two reads
         let extra: ContentFixity
         switch read(copy.target.path, control: control, onRead: onRead) {
         case .failure(let why): return .held(why.prefixed("this file"))

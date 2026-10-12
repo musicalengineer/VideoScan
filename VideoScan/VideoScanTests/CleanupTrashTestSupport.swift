@@ -119,6 +119,36 @@ struct CleanupTrashSandbox {
     }
 }
 
+/// Run `action` on the main actor from a worker thread and wait for it
+/// (a proof seam runs off-main while the main actor is free: the job is
+/// suspended in an `await`).
+nonisolated func cleanupOnMainAndWait(_ action: @escaping @MainActor () -> Void) {
+    let done = DispatchSemaphore(value: 0)
+    Task { @MainActor in
+        action()
+        done.signal()
+    }
+    done.wait()
+}
+
+/// Three same-size copy pairs in keep/ and extra/ (keep/ outranks extra/);
+/// the extras in path order. The run takes them in the selection's order.
+@MainActor
+func cleanupThreeCopies(_ sb: CleanupTrashSandbox, bytes n: Int = 256 * 1024) throws -> (model: VideoScanModel, extras: [VideoRecord]) {
+    let model = sb.model(keepFirst: ["keep", "extra"])
+    var extras: [VideoRecord] = []
+    for i in 0..<3 {
+        let payload = Data("clip \(i) ".utf8) + Data((0..<n).map { UInt8(truncatingIfNeeded: $0 &* 31 &+ 10 + i) })
+        let k = try sb.write("keep/test_\(i).mov", payload)
+        let e = try sb.write("extra/test_\(i).mov", payload)
+        model.records.append(try CleanupTrashSandbox.record(k))
+        let rec = try CleanupTrashSandbox.record(e)
+        model.records.append(rec)
+        extras.append(rec)
+    }
+    return (model, extras)
+}
+
 /// Run one Cleanup job to its end over `selection` (no MFO centre). The
 /// acknowledged save is a seam that answers yes unless `productionSave`,
 /// which saves through the sandbox's real CatalogStore.
