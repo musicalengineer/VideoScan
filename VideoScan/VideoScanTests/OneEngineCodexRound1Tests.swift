@@ -89,4 +89,26 @@ struct OneEngineCodexRound1Tests {
         #expect(model.restoreRecord(id: rec.id), "Restore again after Put Back")
         #expect(rec.removal == nil && rec.lifecycleStage == .cataloged)
     }
+
+    // MARK: F3 — settlement stamps only the row the file left from
+
+    @Test func f3ARowRepointedMidBatchIsNotStamped() async throws {
+        let sb = try JunkTrashSandbox("f3"); defer { sb.cleanup() }
+        let model = sb.model()
+        let a = try sb.write("test_A.mov")
+        let b = try sb.write("test_B.mov", fill: 0x33)
+        let rec = sb.junk(a)
+        model.records = [rec]
+        let repointTo = b.path
+        let fileGuard = VideoScanModel.JunkDeletionGuard(
+            authorize: { _ in nil }, beforeRemoval: { _ in nil }, remove: sb.trash.operation,
+            settled: { r, _ in r.fullPath = repointTo; r.filename = "test_B.mov" })   // a relink lands mid-batch
+
+        let result = await model.deleteConfirmedJunk([rec], mode: .toTrash, reason: .catalogTrash, guard: fileGuard)
+
+        #expect(result.items.map(\.outcome.kind) == [.moved], "fixture: A left")
+        #expect(FileManager.default.fileExists(atPath: b.path), "fixture: B is still on disk")
+        #expect(rec.removal == nil && !rec.isPurged && rec.lifecycleStage != .trashed,
+                "the row now describing B was stamped removed: \(String(describing: rec.removal))")
+    }
 }
