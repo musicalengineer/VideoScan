@@ -25665,6 +25665,7 @@
         "test_metrics_dashboard.py"
       ],
       "tests": [
+        "test_event_recognition_line_and_twist_render_counts_only",
         "test_every_section_renders_with_honest_missing_and_stale_states",
         "test_everything_missing_renders_no_data_not_zero",
         "test_open_bugs_tile_is_two_counts_and_github_links",
@@ -26036,6 +26037,9 @@
         "test_cli_privacy_refusal_exits_3_and_writes_nothing",
         "test_codex_rows_count_contract_lines_and_flag_pre_contract_docs",
         "test_coverage_rows_keep_numbers_and_folder_names_only",
+        "test_events_gate_refuses_strings_names_and_bad_shapes",
+        "test_events_prototype_stats_json_is_counts_only",
+        "test_events_stream_is_the_prototypes_counts_and_absent_on_any_failure",
         "test_existing_published_rows_are_revalidated",
         "test_folder_names_must_be_plain_source_folders",
         "test_merge_keeps_branch_only_days_and_fresh_wins",

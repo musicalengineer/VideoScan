@@ -26,6 +26,13 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   that publishes twice keeps the
                                   later row; a day on which `gh` failed gets
                                   NO row (never nulls in a trend).
+    metrics/events_latest.json    ONE object: the event-recognition prototype's
+                                  counts (scripts/events_prototype.py
+                                  --stats-json): records with captions /
+                                  transcripts, clips with evidence, candidate
+                                  and strong events per category, Rick's ✓/✗
+                                  marks. Any failure of the script = the
+                                  stream is left as published.
 
 It runs at the end of the 4 AM coverage job and of the adversarial confirm job.
 Both call it the same way; a run with nothing new commits nothing.
@@ -146,6 +153,7 @@ HOSTLABEL_RE = re.compile(r"^[A-Z][A-Za-z0-9]{0,5}$")     # "M4", "Ultra"; a hos
 VERS_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){0,3}$")
 TAGNAME_RE = re.compile(r"^demo[A-Za-z0-9._/-]{0,59}$")
 PUBTEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:'/#+()-]{0,59}$")
+EVENTCAT_RE = re.compile(r"^[A-Z][a-z]{1,19}(?: / [a-z]{1,19})?$")   # "Birthday", "Beach / vacation"; never a name
 NIGHT_STATES = ("green", "red", "did_not_run")
 SUMMARY_DAYS = 90
 _NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "total": "int",
@@ -283,7 +291,23 @@ SCHEMAS: Dict[str, dict] = {
         # which the gate re-validates on every publish; present means a count.
         "high_priority_open": ("maybe", "int"),
     },
+    # Event recognition prototype v0 (scripts/events_prototype.py --stats-json):
+    # ONE object, rebuilt each publish. Counts only; category names are the
+    # script's CATEGORIES constants (EVENTCAT_RE), never a clip, a person or a word
+    # said. Marks are null until Rick has exported some.
+    "events_latest.json": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "active_records": "int", "with_captions": "int", "with_transcripts": "int",
+        "clips_with_evidence": "int", "candidate_events": "int", "strong_events": "int",
+        "by_category": ("map", "eventcat", "int"),
+        "marks_yes": "int?", "marks_no": "int?",
+        "precision_by_category": ("opt", ("map", "eventcat", ("obj", {"yes": "int", "no": "int"}))),
+    },
 }
+EVENTS_KEYS = ("ts", "active_records", "with_captions", "with_transcripts", "clips_with_evidence",
+               "candidate_events", "strong_events", "by_category", "marks_yes", "marks_no", "precision_by_category")
+EVENTS_SCRIPT = REPO / "scripts" / "events_prototype.py"
 GITHUB_DAILY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d",
                      "bugs_opened_1d", "bugs_closed_1d", "high_priority_open")
 GITHUB_SUMMARY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d", "high_priority_open",
@@ -295,7 +319,7 @@ HIGH_PRIORITY_LABEL = "High Priority"      # the exact GitHub label name
 # already on the branch are kept exactly as they are.
 APPEND_ONLY = {"complexity.jsonl"}
 # Streams that are ONE JSON object, replaced whole on every publish.
-SINGLE_OBJECT = {"summary_latest.json"}
+SINGLE_OBJECT = {"summary_latest.json", "events_latest.json"}
 
 
 def source_folders() -> set:
@@ -340,6 +364,7 @@ _SCALARS = {
     "vers": (_matches(VERS_RE), "expected a dotted version number"),
     "tagname": (_matches(TAGNAME_RE), "expected a demo* git tag name"),
     "pubtext": (_matches(PUBTEXT_RE), "expected a short public milestone title"),
+    "eventcat": (_matches(EVENTCAT_RE), "expected an event category constant such as Birthday"),
 }
 
 
@@ -651,6 +676,33 @@ def build_streams(cov_dir: Path = COVERAGE_DIR, adv_dir: Path = ADV_DIR,
         "adversarial.jsonl": adversarial_rows(adv_dir / "ledger.jsonl", adv_dir / "findings.json"),
         "codex_reviews.jsonl": codex_rows(codex_dir),
     }
+
+
+def events_object(raw) -> Optional[dict]:
+    """The events_latest.json object from the script's --stats-json output:
+    the allowlisted keys only (anything else the script may ever add is dropped
+    here, and the gate still has the last word), or None if it is not an object."""
+    if not isinstance(raw, dict):
+        return None
+    return dict({"schemaVersion": SCHEMA_VERSION}, **{k: raw.get(k) for k in EVENTS_KEYS})
+
+
+def events_stats(run: Callable = subprocess.run, script: Path = EVENTS_SCRIPT,
+                 python: str = sys.executable, timeout: int = 900) -> Optional[dict]:
+    """Run `scripts/events_prototype.py --no-open --stats-json <tmp>` and return
+    its counts, or None on ANY failure (script missing, non-zero exit, timeout,
+    unreadable or non-JSON output): the stream is then simply not written."""
+    import tempfile
+    try:
+        with tempfile.TemporaryDirectory(prefix="videoscan-events-") as tmp:
+            out = Path(tmp) / "events.json"
+            proc = run([python, str(script), "--no-open", "--stats-json", str(out)],
+                       capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=timeout)
+            if proc.returncode != 0:
+                return None
+            return events_object(json.loads(out.read_text(encoding="utf-8")))
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
 
 
 # ---------------------------------------------------------------- summary (GH #310)
@@ -1074,6 +1126,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--metrics-dir", help="with --dry-run / --out-dir: build the summary from the "
                                           "published streams in this directory (e.g. the publish "
                                           "worktree's metrics/); without it no summary is produced")
+    ap.add_argument("--no-events", action="store_true",
+                    help="do not run scripts/events_prototype.py for metrics/events_latest.json")
+    ap.add_argument("--events-script", default=str(EVENTS_SCRIPT),
+                    help="the script whose --stats-json output becomes metrics/events_latest.json")
     a = ap.parse_args(argv)
 
     if a.validate:
@@ -1084,6 +1140,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
                           Path(a.codex_dir).expanduser())
+    fresh["events_latest.json"] = None if a.no_events else events_stats(script=Path(a.events_script).expanduser())
     summary = None if a.no_summary else summary_builder()
     folders = source_folders()
     try:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -459,7 +460,9 @@ def test_real_git_round_trip_against_a_local_bare_origin(sources, tmp_path):
 def run_cli(*args, env=None):
     import os
     e = dict(os.environ, **(env or {}))
-    return subprocess.run(["python3", str(ROOT / "tools" / "publish_metrics.py"), *args],
+    # Never run the real events prototype (it reads this Mac's catalog) unless a test names a script.
+    events = [] if "--events-script" in args else ["--no-events"]
+    return subprocess.run(["python3", str(ROOT / "tools" / "publish_metrics.py"), *events, *args],
                           capture_output=True, text=True, env=e, timeout=60, stdin=subprocess.DEVNULL)
 
 
@@ -478,6 +481,144 @@ def test_cli_out_dir_writes_sanitized_files_without_git(sources, tmp_path):
     assert sorted(p.name for p in out.iterdir()) == ["adversarial.jsonl", "codex_reviews.jsonl", "coverage.jsonl"]
     blob = "".join(p.read_text() for p in out.iterdir())
     assert not any(s in blob for s in SECRETS)
+
+
+# ---------------------------------------------------------------- events_latest.json (event recognition v0)
+
+EVENTS_OK = {
+    "ts": "2026-10-12T15:00:00Z", "active_records": 9810, "with_captions": 6120, "with_transcripts": 3310,
+    "clips_with_evidence": 1274, "candidate_events": 308, "strong_events": 109,
+    "by_category": {"Birthday": 120, "Christmas": 88, "Beach / vacation": 30, "Graduation": 0},
+    "marks_yes": 38, "marks_no": 9,
+    "precision_by_category": {"Birthday": {"yes": 30, "no": 5}, "Christmas": {"yes": 8, "no": 4}},
+}
+
+
+class FakeRun:
+    """The subprocess.run seam of events_stats: writes `body` to the --stats-json path (or nothing)."""
+
+    def __init__(self, body=None, returncode=0, raise_timeout=False):
+        self.body, self.returncode, self.raise_timeout, self.calls = body, returncode, raise_timeout, []
+
+    def __call__(self, argv, **kw):
+        self.calls.append((argv, kw))
+        if self.raise_timeout:
+            raise subprocess.TimeoutExpired(argv, kw.get("timeout", 0))
+        if self.body is not None:
+            Path(argv[argv.index("--stats-json") + 1]).write_text(self.body)
+        return SimpleNamespace(returncode=self.returncode, stdout="", stderr="")
+
+
+def test_events_stream_is_the_prototypes_counts_and_absent_on_any_failure(tmp_path):
+    secret = dict(EVENTS_OK, worst_clip="/Users/rickb/Donna.mov", names=["Donna"])      # not in the allowlist
+    run = FakeRun(json.dumps(secret))
+    obj = pm.events_stats(run=run, script=Path("/x/events_prototype.py"), python="py3", timeout=7)
+    assert obj == dict({"schemaVersion": 1}, **EVENTS_OK)                                  # extras dropped
+    argv, kw = run.calls[0]
+    assert argv[:3] == ["py3", "/x/events_prototype.py", "--no-open"] and argv[3] == "--stats-json"
+    assert kw["timeout"] == 7 and kw["stdin"] == subprocess.DEVNULL
+    files = pm.sanitized_files({"events_latest.json": obj}, None, FOLDERS)
+    assert set(files) == {"events_latest.json"} and json.loads(files["events_latest.json"]) == obj
+    assert not any(s in files["events_latest.json"] for s in SECRETS)
+    # Marks not exported yet: nulls pass the gate.
+    pm.validate("events_latest.json", pm.events_object(dict(EVENTS_OK, marks_yes=None, marks_no=None,
+                                                                 precision_by_category=None)))
+    # Any failure of the script means no stream (None), never an exception and never a half object.
+    assert pm.events_stats(run=FakeRun(json.dumps(EVENTS_OK), returncode=1)) is None
+    assert pm.events_stats(run=FakeRun(None)) is None                                       # wrote nothing
+    assert pm.events_stats(run=FakeRun("{not json")) is None
+    assert pm.events_stats(run=FakeRun("[1, 2]")) is None                                   # not an object
+    assert pm.events_stats(run=FakeRun(json.dumps(EVENTS_OK), raise_timeout=True)) is None
+    assert pm.events_stats(script=tmp_path / "missing.py") is None                          # real run, no script
+    # The publisher's CLI: a fake script's counts land in the out dir beside the other streams; --no-events skips it.
+    fake = tmp_path / "fake_events.py"
+    fake.write_text("import json, sys\n"
+                    "json.dump(" + json.dumps(secret) + ", open(sys.argv[sys.argv.index('--stats-json') + 1], 'w'))\n")
+    out = tmp_path / "out"
+    r = run_cli("--out-dir", str(out), "--events-script", str(fake), "--coverage-dir", str(tmp_path / "none"),
+                "--adversarial-dir", str(tmp_path / "none"), "--codex-dir", str(tmp_path / "none"))
+    assert r.returncode == 0, r.stdout
+    assert sorted(p.name for p in out.iterdir()) == ["events_latest.json"]
+    assert json.loads((out / "events_latest.json").read_text()) == dict({"schemaVersion": 1}, **EVENTS_OK)
+    r2 = run_cli("--out-dir", str(tmp_path / "out2"), "--coverage-dir", str(tmp_path / "none"),
+                 "--adversarial-dir", str(tmp_path / "none"), "--codex-dir", str(tmp_path / "none"))
+    assert r2.returncode == 0 and list((tmp_path / "out2").iterdir()) == []
+
+
+@pytest.mark.parametrize("mutate, why", [
+    (lambda o: o["by_category"].__setitem__("Donna's party", 3), "a category that is not a constant"),
+    (lambda o: o["by_category"].__setitem__("Birthday", "120"), "a count as a string"),
+    (lambda o: o.__setitem__("marks_yes", "38"), "marks as a string"),
+    (lambda o: o["precision_by_category"].__setitem__("Birthday", {"yes": 30, "no": "five"}), "string in the pair"),
+    (lambda o: o["precision_by_category"].__setitem__("Birthday", {"yes": 30}), "half a pair"),
+    (lambda o: o["precision_by_category"].__setitem__("Matthew Rice", {"yes": 1, "no": 0}), "a name as a category"),
+    (lambda o: o.__setitem__("ts", "2026-10-12"), "a date is not a timestamp"),
+    (lambda o: o.__setitem__("candidate_events", None), "a null count"),
+    (lambda o: o.__setitem__("clips", 1274), "an extra key"),
+    (lambda o: o.pop("strong_events"), "a missing key"),
+    (lambda o: o.__setitem__("by_category", None), "no category map at all"),
+])
+def test_events_gate_refuses_strings_names_and_bad_shapes(mutate, why):
+    import copy
+    obj = pm.events_object(copy.deepcopy(EVENTS_OK))        # the maps are mutated below; keep the fixture pristine
+    pm.validate("events_latest.json", obj)
+    mutate(obj)
+    with pytest.raises(pm.PrivacyError):
+        pm.validate("events_latest.json", obj)
+
+
+def test_events_prototype_stats_json_is_counts_only(tmp_path, monkeypatch):
+    """scripts/events_prototype.py --stats-json: counts from a fake catalog and a fake marks export;
+    no path, caption, transcript or name reaches the file, and the publisher's gate accepts it."""
+    ep_spec = importlib.util.spec_from_file_location("events_prototype", ROOT / "scripts" / "events_prototype.py")
+    ep = importlib.util.module_from_spec(ep_spec)
+    ep_spec.loader.exec_module(ep)
+    sha = "a" * 64
+    tape = {"id": 1, "fullPath": "/Volumes/LaCie/1995/Donna/tape1.mov", "contentFixity": {"sha256": sha},
+            "userDate": "1995-06-05", "audioTranscript": "happy birthday Donna, make a wish",
+            "sceneCaptions": [{"timestamp": 95, "text": "a child blowing out the candles on a cake"}]}
+    records = [
+        tape,
+        dict(tape, id=2, fullPath="/Volumes/RAID/copies/tape1.mov"),                      # a copy: one witness
+        {"id": 3, "fullPath": "/Volumes/LaCie/1996/xmas.mov", "contentFixity": {"sha256": "b" * 64},
+         "userDate": "1996-12-25", "sceneCaptions": [{"timestamp": 3, "text": "santa hands out wrapped presents"}]},
+        {"id": 4, "fullPath": "/Volumes/LaCie/misc/lawn.mov", "sceneCaptions": [{"timestamp": 0, "text": "a lawn"}],
+         "audioTranscript": "   "},                                                       # evidence-free, blank transcript
+        {"id": 5, "fullPath": "/Volumes/LaCie/gone.mov", "purgedAt": "2026-10-01T00:00:00Z",
+         "sceneCaptions": [{"timestamp": 0, "text": "birthday"}]},                       # purged: not active
+    ]
+    (tmp_path / "catalog.json").write_text(json.dumps({"records": records}))
+    downloads = tmp_path / "Downloads"
+    downloads.mkdir()
+    (downloads / "events-v0-marks (1).json").write_text(json.dumps({f"Birthday|{sha}": "yes", "Birthday|zzz": "no",
+                                                                    "Christmas|bbb": "yes", "Donna|x": "yes",
+                                                                    f"Easter|{sha}": "maybe"}))
+    (downloads / "events-v0-marks.json").write_text("{}")                                 # older: ignored
+    os.utime(downloads / "events-v0-marks.json", (1_600_000_000, 1_600_000_000))
+    monkeypatch.setattr(ep, "CATALOG", tmp_path / "catalog.json")
+    monkeypatch.setattr(ep, "OUT_DIR", tmp_path / "events-prototype")
+    monkeypatch.setattr(ep, "PREVIEWS", tmp_path / "previews")
+    monkeypatch.setattr(ep, "DOWNLOADS", downloads)
+    stats_path = tmp_path / "stats.json"
+    assert ep.main(["--no-open", "--stats-json", str(stats_path)]) == 0
+    text = stats_path.read_text()
+    stats = json.loads(text)
+    assert stats["active_records"] == 4 and stats["with_captions"] == 4 and stats["with_transcripts"] == 2   # both copies
+    assert stats["clips_with_evidence"] == 2 and stats["candidate_events"] == 2 and stats["strong_events"] == 1
+    assert stats["by_category"]["Birthday"] == 1 and stats["by_category"]["Christmas"] == 1 and stats["by_category"]["Easter"] == 0
+    assert set(stats["by_category"]) == set(ep.CATEGORIES)
+    assert stats["marks_yes"] == 2 and stats["marks_no"] == 1                             # "Donna|x" and "maybe" ignored
+    assert stats["precision_by_category"]["Birthday"] == {"yes": 1, "no": 1}
+    assert stats["precision_by_category"]["Christmas"] == {"yes": 1, "no": 0}
+    for s in ["Donna", "/Volumes", "tape1", "candles", "santa", "make a wish", sha, "zzz"]:
+        assert s not in text, s
+    pm.validate("events_latest.json", pm.events_object(stats))
+    # No marks export at all: nulls, never zeros.
+    monkeypatch.setattr(ep, "DOWNLOADS", tmp_path / "empty")
+    assert ep.main(["--no-open", "--stats-json", str(stats_path)]) == 0
+    stats = json.loads(stats_path.read_text())
+    assert stats["marks_yes"] is None and stats["marks_no"] is None and stats["precision_by_category"] is None
+    pm.validate("events_latest.json", pm.events_object(stats))
 
 
 def test_cli_privacy_refusal_exits_3_and_writes_nothing(sources, tmp_path):
