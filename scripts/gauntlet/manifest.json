@@ -26790,6 +26790,98 @@
         "theTallyAsksTheFootersPredicate",
         "trashingAFileLowersItsVolume"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/OneEngineDoorCharacterizationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "OneEngineDoorCharacterizationTests"
+      ],
+      "tests": [
+        "catalogTrashHeldOnFailureLeavesFileAndRow",
+        "catalogTrashMovesToTheTrashAndKeepsTheRowAsRemoved",
+        "deleteJunkHeldOnFailureLeavesFileAndRow",
+        "deleteJunkMovesToTheTrashAndKeepsTheRow",
+        "everyBulkDoorHoldsAFileOnTheArchiveVolume",
+        "removeFromCatalogNeverTouchesTheDiskAndRestoreUndoesIt",
+        "workbenchDiscardHeldOnFailureLeavesFileAndRow",
+        "workbenchDiscardMovesToTheTrashAndKeepsTheRow"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/RemovalMarkerMigrationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RemovalMarkerMigrationTests"
+      ],
+      "tests": [
+        "a100kCatalogMigratesOnLoadWithinBudget",
+        "aDamagedOrUnknownMarkerFallsBackToTheLegacyFields",
+        "aPoisonedCatalogFileStillLoadsEveryRow",
+        "aPreMarkerCatalogIsConvertedOnLoad",
+        "everyLegacyCombinationMapsToExactlyTheRuledState",
+        "everyStateRoundTripsAndPurgedAtStaysOnDiskForAnOlderBuild",
+        "m",
+        "purgedAtIsDerivedAndItsSetterIsAShim",
+        "trashEmptiedIsRecordedOnceAndOnlyForAKnownTrashPath"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/OneRemovalShapeTests.swift",
+      "stage": "unit",
+      "suites": [
+        "OneRemovalShapeTests"
+      ],
+      "tests": [
+        "aCompleteRescanNeverPrunesARowThatCarriesTheMarker",
+        "aDupTrashedRowCanBeRestored",
+        "aTrashedDuplicateStaysInTheCatalogAsRemovedLikeEveryOtherTrashPath",
+        "restoringAnOldDeletedLabelRowClearsTheLabel",
+        "showRemovedNamesTheStateInFamilyWords",
+        "theShowRemovedPassRecordsTrashEmptiedOffMain",
+        "trashEmptiedIsRecordedFromAStat"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/OneEngineSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "OneEngineSensorTests"
+      ],
+      "tests": [
+        "aQuarantinedDuplicateWithNoDisposalNamedGoesToTheTrash",
+        "everyRemovalStateIsReachableFromADoor",
+        "noFileLeavesExceptThroughReviewedCode",
+        "noRowIsDeletedOutsideCatalogRepair",
+        "onlyTheEngineAndNamedDoorsUseTheFinderTrash",
+        "onlyTheEngineWritesTheMarker",
+        "quarantineAndDeleteIsGoneAndTheDefaultDisposalIsTheTrash"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/OneEngineMediaMatrixAndScaleTests.swift",
+      "stage": "unit",
+      "suites": [
+        "OneEngineMediaMatrixAndScaleTests"
+      ],
+      "tests": [
+        "avi",
+        "mkv",
+        "mov",
+        "mp4",
+        "mxf",
+        "removeRestoreAndEmptiedPassAt100k"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -29244,6 +29336,26 @@
         {
           "name": "tools/poi-c02/test_tools.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineDoorCharacterizationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/RemovalMarkerMigrationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneRemovalShapeTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineMediaMatrixAndScaleTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 2328,

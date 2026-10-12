@@ -140,7 +140,7 @@ struct WorkbenchActionsTests {
     // MARK: - Discard
 
     @Test
-    func discardSetsPurgedAtAndTrashedLifecycle() throws {
+    func discardSetsPurgedAtAndTrashedLifecycle() async throws {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
@@ -151,12 +151,12 @@ struct WorkbenchActionsTests {
         // Trash still stamped the record. The Trash itself is a seam here.
         let rec = makeDiscardableRecord("test_artifact.mov", in: dir)
         model.records = [rec]
-        var trashed: [URL] = []
+        let trashed = TrashCallLog()
 
         let revisionBefore = model.volumeAggregatesRevision
-        let n = model.discardWorkbench([rec], trash: { trashed.append($0) })
+        let n = await model.discardWorkbench([rec], trash: trashed.operation)
         #expect(n == 1)
-        #expect(trashed.map(\.lastPathComponent) == ["test_artifact.mov"])
+        #expect(trashed.names == ["test_artifact.mov"])
         #expect(model.volumeAggregatesRevision > revisionBefore,
                 "in-place purge must announce itself so cached table/aggregates recompute (#160)")
         #expect(rec.purgedAt != nil, "purgedAt must be stamped so soft-delete takes effect")
@@ -168,13 +168,13 @@ struct WorkbenchActionsTests {
     }
 
     @Test
-    func discardEmptyArrayIsNoOp() throws {
+    func discardEmptyArrayIsNoOp() async throws {
         let dir = scratchDir()
         defer { try? FileManager.default.removeItem(at: dir) }
 
         let model = try makeModel(at: dir)
         model.records = []
-        let n = model.discardWorkbench([])
+        let n = await model.discardWorkbench([])
         #expect(n == 0)
         // No catalog should have been written.
         let reloaded = CatalogStore(directory: dir).load()
@@ -182,7 +182,7 @@ struct WorkbenchActionsTests {
     }
 
     @Test
-    func discardGracefullyHandlesMissingFile() throws {
+    func discardGracefullyHandlesMissingFile() async throws {
         // The file at fullPath doesn't exist in the test fixture, but
         // discardWorkbench must still purge the record — leaving an
         // un-purgeable row would let bad records accumulate forever.
@@ -194,11 +194,11 @@ struct WorkbenchActionsTests {
         // unplugged /Volumes/… drive is "offline" and keeps its record.
         let rec = makeDiscardableRecord("ghost.mov", in: dir, create: false)
         model.records = [rec]
-        var trashCalls = 0
+        let trashCalls = TrashCallLog()
 
-        let n = model.discardWorkbench([rec], trash: { _ in trashCalls += 1 })
+        let n = await model.discardWorkbench([rec], trash: trashCalls.operation)
         #expect(n == 1)
-        #expect(trashCalls == 0, "nothing to Trash — the file is already gone")
+        #expect(trashCalls.count == 0, "nothing to Trash — the file is already gone")
         #expect(rec.purgedAt != nil)
     }
 }

@@ -202,7 +202,12 @@ struct DeleteDuplicatesJobTests {
         #expect(console.contains("Moved to the Trash of \(volume) (verified identical to keeper.mov): copy1.mov [keeper read in full, fixity stored]"))
         #expect(console.contains("Moved to the Trash of \(volume) (verified identical to keeper.mov): copy2.mov [keeper matched by stored fixity, not re-read]"))
         #expect(console.contains("REFUSED lookalike.mov: content differs from keeper keeper.mov — NOT a duplicate"))
-        #expect(rig.model.records.count == 4 && !rig.model.isDeletingDuplicates, "keeper + look-alike + archive copy + verified sibling")
+        // GH #143 (T4): the trashed copies STAY as rows, marked in the Trash.
+        let live = rig.model.records.filter { !$0.isPurged }
+        let trashedRows = rig.model.records.filter { $0.removal?.state == .inTrash && $0.removal?.reason == .duplicate }
+        #expect(live.count == 4 && !rig.model.isDeletingDuplicates, "keeper + look-alike + archive copy + verified sibling")
+        #expect(trashedRows.count == 2 && trashedRows.allSatisfy { $0.lifecycleStage == .trashed && $0.removal?.trashPath != nil },
+                "both trashed copies are kept as In the Trash, with where the Trash put them")
     }
 
     @Test func pauseHoldsBetweenPairsAndResumeContinues() async throws {

@@ -69,8 +69,18 @@ struct SignatureVerificationOneSidedTests {
         #expect(proof.fullHash == fixity.digest)
         #expect(proof.keeperFixity == fixity)
         #expect(proof.duplicateSize == Int64(size))
-        // The proof authorises the same quarantine-and-delete as the two-file one.
-        #expect(SignatureVerification.quarantineAndDelete(proof, hooks: counter.hooks) == .deleted(bytes: Int64(size)))
+        // The proof authorises the same quarantine-and-dispose as the two-file
+        // one — to the (sandbox) Trash: Trash only (GH #143 T5).
+        var trashHooks = counter.hooks
+        let fakeTrash = dir.appendingPathComponent("Trash", isDirectory: true)
+        try FileManager.default.createDirectory(at: fakeTrash, withIntermediateDirectories: true)
+        trashHooks.trashItem = { url in
+            let dest = fakeTrash.appendingPathComponent(url.lastPathComponent)
+            try FileManager.default.moveItem(at: url, to: dest)
+            return dest
+        }
+        let disposed = SignatureVerification.quarantineThenDispose(proof, disposal: .trash, hooks: trashHooks)
+        #expect(disposed == .trashed(bytes: Int64(size), location: fakeTrash.appendingPathComponent("copy.mov").path))
         #expect(!FileManager.default.fileExists(atPath: copy.path))
         #expect(FileManager.default.fileExists(atPath: keeper.path))
         #expect(counter.blocks("keeper") == 0, "deletion stats the keeper; it never reads it")
@@ -434,7 +444,7 @@ struct SignatureVerificationDeleteDuplicatesQATests {
         let hooks = SignatureVerification.Hooks(shouldCancel: { cancelled.value },
                                                 didQuarantine: { _ in cancelled.value = true })
 
-        let outcome = SignatureVerification.quarantineAndDelete(proof, hooks: hooks)
+        let outcome = SignatureVerification.quarantineThenDispose(proof, disposal: .permanent, hooks: hooks)
 
         #expect(FileManager.default.fileExists(atPath: copy.path), "the file is put back")
         #expect(outcome == .refused(.cancelled),

@@ -332,7 +332,7 @@ struct SignatureVerificationTests {
                     atPath: duplicate, contents: Data(replacementBytes))
             })
 
-        let result = SignatureVerification.quarantineAndDelete(proof, hooks: hooks)
+        let result = SignatureVerification.quarantineThenDispose(proof, disposal: .permanent, hooks: hooks)
 
         guard case .retainedQuarantine(let path, _) = result else {
             Issue.record("occupied original path must retain the quarantined inode")
@@ -359,7 +359,7 @@ struct SignatureVerificationTests {
             didQuarantine: { quarantinePath = $0 },
             removeQuarantineDirectory: { _ in throw InjectedCleanupFailure() })
 
-        let result = SignatureVerification.quarantineAndDelete(proof, hooks: hooks)
+        let result = SignatureVerification.quarantineThenDispose(proof, disposal: .permanent, hooks: hooks)
 
         #expect(result == .deleted(bytes: Int64(bytes.count)))
         #expect(!FileManager.default.fileExists(atPath: duplicate))

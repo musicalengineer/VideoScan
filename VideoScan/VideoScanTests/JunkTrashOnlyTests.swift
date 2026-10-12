@@ -78,8 +78,10 @@ struct JunkTrashOnlyTests {
     // MARK: Behaviour
 
     /// No seam: the real routine. The file must be FOUND in the Trash
-    /// afterwards — proof it was moved there, not unlinked. (The fixture's
-    /// name is unique; the test removes its own fixture from the Trash.)
+    /// afterwards — proof it was moved there, not unlinked. Under a test host
+    /// THE one Trash call (MediaTrash.move, GH #143) routes it to the
+    /// per-process test Trash, so no fixture lands in Rick's real Trash; the
+    /// test removes its own fixture from there.
     @Test("Delete Junk really moves the file to the Trash — it is found there, not unlinked")
     func reallyLandsInTheTrash() async throws {
         let sb = try JunkTrashSandbox("realtrash"); defer { sb.cleanup() }
@@ -90,8 +92,7 @@ struct JunkTrashOnlyTests {
         let snapshot = await model.freezeJunkSnapshot([a], isOffline: { _ in false })
 
         let result = await model.trashFrozenJunk(snapshot)
-        let trash = try #require(FileManager.default.urls(for: .trashDirectory, in: .userDomainMask).first)
-        let inTrash = trash.appendingPathComponent(name)
+        let inTrash = MediaTrash.testHostTrash.appendingPathComponent(name)
         defer { try? FileManager.default.removeItem(at: inTrash) }
         #expect(result.succeeded == 1)
         #expect(!FileManager.default.fileExists(atPath: a.fullPath))

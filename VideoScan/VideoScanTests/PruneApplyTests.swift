@@ -1480,7 +1480,7 @@ struct PruneApplyTests {
             try SourceTree.appSource(named: name)
         }
         let apply = try source("VideoScanModel+PruneApply.swift")
-        #expect(apply.contains("await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)"),
+        #expect(apply.contains("await deleteConfirmedJunk([rec], mode: mode, reason: .prune, guard: fileGuard)"),
                 "the ONE existing Trash routine, one file at a time — with the file's proof re-checked at the mutation (codex follow-up #3)")
         #expect(!apply.contains("trashItem("), "no file deletion of its own")
         #expect(!apply.contains("removeItem("), "no file deletion of its own")

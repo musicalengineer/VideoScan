@@ -129,7 +129,7 @@ extension VideoRecord {
         c.audioTranscriptDate = audioTranscriptDate
         c.combinedFromPairID = combinedFromPairID
         c.sourceHost = sourceHost
-        c.purgedAt = purgedAt
+        c.removal = removal          // GH #143 — purgedAt is derived from it
         c.embeddedCreationDate = embeddedCreationDate
         c.embeddedCreationSource = embeddedCreationSource
         c.originMake = originMake

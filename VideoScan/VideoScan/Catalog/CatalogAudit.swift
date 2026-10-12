@@ -36,6 +36,10 @@ struct CatalogAuditRecord: Sendable, Equatable {
     var duplicateGroupCount: Int
     var pairedWithID: UUID?
     var isPromotedCopy: Bool
+    /// The removal marker's state (GH #143). Only an inTrash row owes the
+    /// legacy "Trashed" stage; a row removed from the catalog (file on disk)
+    /// or missing keeps its stage. nil on a purged row = unknown (fixtures).
+    var removalState: RemovalMarker.State? = nil
 }
 
 struct CatalogAuditTarget: Sendable, Equatable {
@@ -220,7 +224,8 @@ enum CatalogAuditor {
                                duplicateGroupID: r.duplicateGroupID,
                                duplicateGroupCount: r.duplicateGroupCount,
                                pairedWithID: r.pairedWith?.id ?? r.pendingPairedWithID,
-                               isPromotedCopy: r.derivationKind == ArchivePromotion.derivationKind)
+                               isPromotedCopy: r.derivationKind == ArchivePromotion.derivationKind,
+                               removalState: r.removal?.state)
         }
         let targets = CatalogScanTarget.excludingScratch(model.scanTargets)
             .filter { !$0.searchPath.isEmpty }
@@ -268,7 +273,8 @@ enum CatalogAuditor {
         let purgedIDs = Set(inputs.records.filter(\.isPurged).map(\.id))
 
         for r in inputs.records {
-            if r.isPurged, ![LifecycleStage.trashed.rawValue, LifecycleStage.deletedPermanently.rawValue].contains(r.lifecycleRaw) {
+            if r.isPurged, r.removalState == nil || r.removalState == .inTrash,
+               ![LifecycleStage.trashed.rawValue, LifecycleStage.deletedPermanently.rawValue].contains(r.lifecycleRaw) {
                 t.purgedButStaged.append(r)
             }
             if let p = r.pairedWithID, !r.isPurged, (!ids.contains(p) || purgedIDs.contains(p)) {

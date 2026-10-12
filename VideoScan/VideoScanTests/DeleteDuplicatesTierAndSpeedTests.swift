@@ -349,7 +349,7 @@ struct SingleReadGateTests {
         #expect(ticket.hashedInQuarantine && !ticket.proof.keeperReadInFull)
         #expect(ticket.proof.fullHash == fixity.digest)
 
-        #expect(SignatureVerification.deleteQuarantined(ticket, hooks: probe.hooks) == .deleted(bytes: Int64(size)))
+        #expect(SignatureVerification.deleteQuarantined(ticket, disposal: .permanent, hooks: probe.hooks) == .deleted(bytes: Int64(size)))
         #expect(probe.blocks("quarantine") == 3, "the unlink step re-stats only — no second read")
         #expect(!FileManager.default.fileExists(atPath: copy.path))
         #expect(quarantineFolders(in: dir).isEmpty)
@@ -378,7 +378,7 @@ struct SingleReadGateTests {
         #expect(wrote == other.count)
         try FileManager.default.setAttributes([.modificationDate: wholeSecond], ofItemAtPath: ticket.quarantinedPath)
 
-        let result = SignatureVerification.deleteQuarantined(ticket)
+        let result = SignatureVerification.deleteQuarantined(ticket, disposal: .permanent)
         #expect(result == .refused(.changedSinceVerification(copy.path)), "\(result)")
         #expect((try? Data(contentsOf: copy)) == Data(other), "put back holding the new bytes")
         #expect(quarantineFolders(in: dir).isEmpty)

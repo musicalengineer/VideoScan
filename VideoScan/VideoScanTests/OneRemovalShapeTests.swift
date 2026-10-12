@@ -1,0 +1,167 @@
+// OneRemovalShapeTests.swift
+// GH #143 — the tab-charter audit's T4 (docs/reviews/tab_charter_audit_2026_10_11.md
+// §4), now green: every Trash door keeps the row, marked with the one
+// removal marker, so Show Removed → Restore can bring the file back.
+// Before GH #143, Delete Duplicates' settle deleted the row
+// (VideoScanModel+Duplicates.swift `records.remove(at:)`).
+//
+// Plus the engine's catalog half: Restore clears the marker (and an old
+// "deleted" label), and "Trash emptied" is recorded from a stat.
+//
+// Dimensions: logic; isolation (sandbox catalog + ledger; temp files only).
+
+import Foundation
+import Testing
+@testable import VideoScan
+import VideoScanCore
+
+@Suite("One removal shape — T4 and Restore (GH #143)", .serialized)
+@MainActor
+struct OneRemovalShapeTests {
+
+    private func scratch(_ label: String) throws -> URL {
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("test_charter_\(label)_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func model(in dir: URL) -> VideoScanModel {
+        let m = VideoScanModel(logDirectory: dir.appendingPathComponent("logs"))
+        m.catalogStore = CatalogStore(directory: dir.appendingPathComponent("catalog"))
+        m.mediaLedger = MediaLedger(directory: dir.appendingPathComponent("ledger", isDirectory: true))
+        return m
+    }
+
+    private func record(_ path: String, size: Int64 = 100) -> VideoRecord {
+        let r = VideoRecord(); r.fullPath = path; r.filename = (path as NSString).lastPathComponent
+        r.sizeBytes = size; r.partialMD5 = "h-\(UUID().uuidString)"; return r
+    }
+
+    // T4 — verbatim from the audit, plus the marker's Trash path.
+    @Test func aTrashedDuplicateStaysInTheCatalogAsRemovedLikeEveryOtherTrashPath() throws {
+        let root = try scratch("dup_row"); defer { try? FileManager.default.removeItem(at: root) }
+        let m = model(in: root)
+        let keeper = record(root.appendingPathComponent("keeper.mov").path)
+        let extra = record(root.appendingPathComponent("extra.mov").path)
+        m.records = [keeper, extra]
+        m.settleDeletedDuplicate(expectedID: extra.id, expectedPath: extra.fullPath, preAwait: extra,
+                                 keeperID: keeper.id, keeperPath: keeper.fullPath, keeperFilename: keeper.filename,
+                                 isWorkingCopy: false, batchID: "test", keeperMatchedByStoredFixity: true,
+                                 tier: .trash, trashVolume: "Test")
+        #expect(m.records.contains { $0.id == extra.id && $0.isPurged && $0.lifecycleStage == .trashed },
+                "the trashed duplicate left the catalog — Restore cannot bring it back")
+        #expect(extra.removal?.state == .inTrash && extra.removal?.reason == .duplicate)
+    }
+
+    @Test func aDupTrashedRowCanBeRestored() throws {
+        let root = try scratch("dup_restore"); defer { try? FileManager.default.removeItem(at: root) }
+        let m = model(in: root)
+        let keeper = record(root.appendingPathComponent("keeper.mov").path)
+        let extraURL = root.appendingPathComponent("extra.mov")
+        let extra = record(extraURL.path)
+        m.records = [keeper, extra]
+        m.settleDeletedDuplicate(expectedID: extra.id, expectedPath: extra.fullPath, preAwait: extra,
+                                 keeperID: keeper.id, keeperPath: keeper.fullPath, keeperFilename: keeper.filename,
+                                 isWorkingCopy: false, batchID: "test", keeperMatchedByStoredFixity: true,
+                                 tier: .trash, trashVolume: "Test", trashPath: "/nowhere/.Trash/extra.mov")
+        #expect(extra.removal?.trashPath == "/nowhere/.Trash/extra.mov")
+        // Rick puts it back in Finder, then Restores.
+        try Data(repeating: 1, count: 100).write(to: extraURL)
+        #expect(m.restoreRecord(id: extra.id))
+        #expect(extra.removal == nil && !extra.isPurged && extra.lifecycleStage == .cataloged)
+    }
+
+    @Test func restoringAnOldDeletedLabelRowClearsTheLabel() throws {
+        let root = try scratch("label_restore"); defer { try? FileManager.default.removeItem(at: root) }
+        let m = model(in: root)
+        let r = record(root.appendingPathComponent("camcorder.mts").path)
+        r.archiveStage = .manuallyDeleted
+        r.removal = RemovalMarker.migrated(stored: nil, purgedAt: nil, lifecycleStage: .cataloged,
+                                           archiveStage: .manuallyDeleted, loadedAt: Date())
+        m.records = [r]
+        #expect(r.isPurged)
+        #expect(m.restoreRecord(id: r.id))
+        #expect(!r.isPurged && r.archiveStage == .none, "a restored row is live — the old label no longer hides it")
+    }
+
+    @Test func trashEmptiedIsRecordedFromAStat() throws {
+        let root = try scratch("emptied"); defer { try? FileManager.default.removeItem(at: root) }
+        let m = model(in: root)
+        let inTrashFile = root.appendingPathComponent("Trash-a.mov")
+        try Data(repeating: 2, count: 10).write(to: inTrashFile)
+        let still = record(root.appendingPathComponent("a.mov").path)
+        still.removal = .inTrash(movedAt: Date(), trashPath: inTrashFile.path, reason: .junk)
+        let emptied = record(root.appendingPathComponent("b.mov").path)
+        emptied.removal = .inTrash(movedAt: Date(), trashPath: root.appendingPathComponent("Trash-b.mov").path, reason: .junk)
+        let removed = record(root.appendingPathComponent("c.mov").path)
+        removed.removal = .removedFromCatalog(at: Date(), reason: .userRemoved)
+        m.records = [still, emptied, removed]
+
+        #expect(m.noteEmptiedTrash(in: m.records) == 1)
+        #expect(still.removal?.isTrashEmptied == false)
+        #expect(emptied.removal?.isTrashEmptied == true && emptied.removal?.state == .inTrash)
+        #expect(removed.removal?.state == .removedFromCatalog)
+        #expect(m.noteEmptiedTrash(in: m.records) == 0, "recorded once")
+    }
+
+    // #143 (b): a complete rescan used to hard-prune a removed row whose file
+    // is gone (it classified "genuinely gone"). Rows are never deleted: the
+    // marker row stays exactly as it was.
+    @Test func aCompleteRescanNeverPrunesARowThatCarriesTheMarker() async throws {
+        let root = try scratch("rescan"); defer { try? FileManager.default.removeItem(at: root) }
+        let m = model(in: root)
+        let vol = root.appendingPathComponent("Vol", isDirectory: true)
+        try FileManager.default.createDirectory(at: vol, withIntermediateDirectories: true)
+        let keepURL = vol.appendingPathComponent("keep.mov")
+        try Data(repeating: 3, count: 100).write(to: keepURL)
+        let keep = record(keepURL.path)
+        let trashed = record(vol.appendingPathComponent("gone.mov").path)      // file is in the Trash
+        trashed.removal = .inTrash(movedAt: Date(), trashPath: "/elsewhere/.Trash/gone.mov", reason: .junk)
+        trashed.lifecycleStage = .trashed
+        let missing = record(vol.appendingPathComponent("lost.mov").path)
+        missing.removal = .missing(noticedAt: Date(), lastSeen: nil, reason: .missingOnDisk)
+        m.records = [keep, trashed, missing]
+
+        let fresh = record(keepURL.path)
+        let outcome = await m.commitScanResults(root: vol.path, volName: "Vol",
+                                                targetRecords: [fresh], scanWasComplete: true)
+
+        #expect(outcome.pruned == 0, "\(outcome)")
+        #expect(m.records.contains { $0 === trashed } && trashed.removal?.state == .inTrash)
+        #expect(m.records.contains { $0 === missing } && missing.removal?.state == .missing)
+        #expect(m.records.count == 3)
+    }
+
+    // What Show Removed says about a hidden row (pure words, fixed dates).
+    @Test func showRemovedNamesTheStateInFamilyWords() {
+        let day = Date(timeIntervalSince1970: 1_760_140_800)   // 11 Oct 2025, 00:00 UTC
+        let style = Date.FormatStyle(date: .numeric, time: .omitted, locale: Locale(identifier: "en_US_POSIX"),
+                                     timeZone: TimeZone(identifier: "UTC")!)
+        var trash = RemovalMarker.inTrash(movedAt: day, trashPath: "/T/a.mov", reason: .junk)
+        #expect(trash.stateWords == "In the Trash")
+        #expect(trash.sentence(dateStyle: style) == "in the Trash since 10/11/2025")
+        _ = trash.noteTrashEmptied(at: day)
+        #expect(trash.sentence(dateStyle: style).hasSuffix("— the Trash has since been emptied"))
+        let removed = RemovalMarker.removedFromCatalog(at: day, reason: .userRemoved)
+        #expect(removed.sentence(dateStyle: style) == "removed from the catalog on 10/11/2025 — the file was not touched")
+        let label = RemovalMarker.removedFromCatalog(at: day, reason: .legacyDeletedLabel)
+        #expect(label.sentence(dateStyle: style).contains("never moved"), "the old label never moved a file")
+        let missing = RemovalMarker.missing(noticedAt: day, lastSeen: nil, reason: .missingOnDisk)
+        #expect(missing.stateWords == "Missing" && missing.sentence(dateStyle: style) == "missing since 10/11/2025")
+    }
+
+    // The catalog-wide pass the Show Removed toggle runs: stats off-main,
+    // only In-the-Trash rows asked, saved when anything changed.
+    @Test func theShowRemovedPassRecordsTrashEmptiedOffMain() async throws {
+        let root = try scratch("emptied_async"); defer { try? FileManager.default.removeItem(at: root) }
+        let m = model(in: root)
+        let gone = record(root.appendingPathComponent("a.mov").path)
+        gone.removal = .inTrash(movedAt: Date(), trashPath: root.appendingPathComponent("Trash-a.mov").path, reason: .junk)
+        let live = record(root.appendingPathComponent("b.mov").path)
+        m.records = [gone, live]
+        #expect(await m.refreshTrashEmptied() == 1)
+        #expect(gone.removal?.isTrashEmptied == true && live.removal == nil)
+        #expect(await m.refreshTrashEmptied() == 0, "recorded once")
+    }
+}

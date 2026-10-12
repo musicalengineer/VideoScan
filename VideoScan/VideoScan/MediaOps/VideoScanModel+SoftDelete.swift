@@ -70,8 +70,8 @@ extension VideoScanModel {
         guard !ids.isEmpty else { return 0 }
         let now = Date()
         var changed: [UUID] = []
-        for rec in records where ids.contains(rec.id) && rec.purgedAt == nil {
-            rec.purgedAt = now
+        for rec in records where ids.contains(rec.id) && rec.removal == nil {
+            Self.stampRemoval(rec, .removedFromCatalog(at: now, reason: .userRemoved))   // GH #143: the one marker
             changed.append(rec.id)
         }
         guard !changed.isEmpty else { return 0 }
@@ -111,28 +111,21 @@ extension VideoScanModel {
         purgeRecords(ids: Set(Self.unreadableExtensionlessIDs(in: records)))
     }
 
-    /// A restored row is LIVE again (B4, 2026-10-11): `purgedAt` cleared,
-    /// and a post-delete stage (Trashed / Deleted) back to `.cataloged` —
-    /// but ONLY when the file is back at `fullPath` (Manager ruling, QA on
-    /// 3e8e14dbd). A file still in the Trash, or gone, keeps its stage so
-    /// the row never claims to be live media, and one line says what to
-    /// do. Any other stage (Archived, Workbench, …) is one the purge never
-    /// changed, so it is kept. One stat, and only for a post-delete stage.
+    /// A restored row is LIVE again (B4, 2026-10-11): the removal marker is
+    /// cleared through the engine (`clearRemoval`, GH #143), which puts a
+    /// post-delete stage back to `.cataloged` only when the file is back at
+    /// `fullPath`, and drops the old "Manually Deleted" label on a row whose
+    /// marker came from it. One line says what to do when the file is not
+    /// back yet.
     private func returnToLive(_ rec: VideoRecord) {
-        rec.purgedAt = nil
-        guard rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently else { return }
-        if !rec.fullPath.isEmpty, FileManager.default.fileExists(atPath: rec.fullPath) {
-            rec.lifecycleStage = .cataloged
-        } else {
-            log("\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live.")
-        }
+        if let line = clearRemoval(rec) { log(line) }
     }
 
     /// Clear `purgedAt` on a single record. Used by the right-click menu
     /// on a purged row when "Show removed" is on. Returns true on success.
     @discardableResult
     func restoreRecord(id: UUID) -> Bool {
-        guard let rec = records.first(where: { $0.id == id }),
+        guard let rec = record(forID: id),
               rec.purgedAt != nil else { return false }
         returnToLive(rec)
         CorrelationScorer.revalidateExistingPairs(in: records)
@@ -165,8 +158,11 @@ extension VideoScanModel {
         guard let snap = lastPurgedBatch else { return false }
         var restored = 0
         var restoredRecs: [VideoRecord] = []
+        // The id index, not a linear search per id: undoing a 10k-row
+        // Remove over a 100k catalog was O(n·m) — ~25 s on the M4 (GH #143
+        // scale test). (≈ a hash-map lookup instead of std::find per key.)
         for id in snap.ids {
-            if let rec = records.first(where: { $0.id == id }),
+            if let rec = record(forID: id),
                rec.purgedAt != nil {
                 returnToLive(rec)
                 restored += 1

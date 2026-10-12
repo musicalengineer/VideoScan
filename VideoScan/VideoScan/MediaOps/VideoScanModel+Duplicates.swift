@@ -727,7 +727,8 @@ extension VideoScanModel {
 
     /// The catalog side of ONE verified-and-removed pair, exactly as the
     /// old loop did it: fold the extra's human metadata and enrichment into
-    /// the live master, drop the extra's row (by id AND path — a row
+    /// the live master, mark the extra's row in the Trash (GH #143 — the row
+    /// stays; by id AND path — a row
     /// replaced during the disk work is left alone), write the ledger line,
     /// and say what happened. Returns whether the catalog changed.
     ///
@@ -752,7 +753,8 @@ extension VideoScanModel {
                                 isWorkingCopy: Bool, batchID: String,
                                 keeperMatchedByStoredFixity: Bool,
                                 tier: DeletionTier = .permanent, remainingVerifiedCopies: Int? = nil,
-                                trashVolume: String? = nil, tierReason: String? = nil) -> Bool {
+                                trashVolume: String? = nil, tierReason: String? = nil,
+                                trashPath: String? = nil) -> Bool {
         var catalogMutated = false
         let currentRecord = records.first { $0.id == expectedID && $0.fullPath == expectedPath }
         let liveInstances = Set(records.map(ObjectIdentifier.init))
@@ -804,27 +806,27 @@ extension VideoScanModel {
         } else {
             log("  master row gone — carry-over skipped for \(record.filename) (file already verified and removed)")
         }
-        if let index = records.firstIndex(where: {
-            $0.id == expectedID && $0.fullPath == expectedPath
-        }) {
-            records.remove(at: index)
+        // GH #143 (T4): the row STAYS in the catalog, marked with the one
+        // removal marker, like every other Trash door — so Show Removed →
+        // Restore can bring a dup-trashed file back. Only the live row (same
+        // id AND path after the await) is stamped; a row replaced during the
+        // disk work is retained untouched and the ledger line is written from
+        // the detached pre-await SNAPSHOT (codex 1593 #4).
+        let (marker, stage) = tier.removal(at: Date(), trashPath: trashPath)
+        let removed = currentRecord ?? snapshot
+        assert(!liveInstances.contains(ObjectIdentifier(removed)) || currentRecord != nil,
+               "a retained live row must never be stamped as deleted")
+        // The live row, or — when it was replaced — the detached snapshot
+        // the ledger line is written from (never a retained live row).
+        Self.stampRemoval(removed, marker, stage: stage)
+        if currentRecord != nil {
             catalogMutated = true
         } else {
             log("  Catalog changed while deleting \(record.filename); current row retained")
         }
         // Media Ledger: one copyDeleted line per file that left the disk,
-        // batch-keyed to the plan so the run reads as one decision. The
-        // removed row is stamped so the ledger line carries its final
-        // state; it is no longer in `records`, so nothing else sees it.
-        // When the live row was retained (id/path mismatch), the line is
-        // written from the pre-await SNAPSHOT — the retained row is never
-        // stamped deleted.
-        let removed = currentRecord ?? snapshot
-        assert(!liveInstances.contains(ObjectIdentifier(removed)) || currentRecord != nil,
-               "a retained live row must never be stamped as deleted")
+        // batch-keyed to the plan so the run reads as one decision.
         let permanent = tier == .permanent
-        removed.lifecycleStage = permanent ? .deletedPermanently : .trashed
-        removed.purgedAt = Date()
         var detail = [MediaLedgerEvent.Detail.tier: tier.rawValue]
         if let remainingVerifiedCopies {
             detail[MediaLedgerEvent.Detail.remainingVerifiedCopies] = String(remainingVerifiedCopies)

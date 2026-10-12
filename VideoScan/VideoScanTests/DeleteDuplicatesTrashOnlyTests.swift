@@ -238,8 +238,11 @@ struct DeleteDuplicatesTrashOnlyTests {
         for line in lines where line.contains(".proceed(") {
             #expect(line.contains(".proceed(.trash)"), "a final verdict that is not the Trash: \(line)")
         }
-        // The one live Trash step (a test host routes it to a scratch folder).
-        let trashCalls = lines.filter { $0.contains("trashItem(at:") }
+        // The one live Trash step is THE one Trash call (GH #143), which a
+        // test host routes to a scratch folder; the job makes no Trash call
+        // of its own.
+        let trashCalls = lines.filter { $0.contains("MediaTrash.move(") }
         #expect(trashCalls.count == 1, "exactly one live Trash call: \(trashCalls)")
+        #expect(!lines.contains { $0.contains("trashItem(at:") }, "the job calls the Finder Trash itself again")
     }
 }

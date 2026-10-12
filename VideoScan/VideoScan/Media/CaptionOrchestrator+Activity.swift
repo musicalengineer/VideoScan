@@ -139,8 +139,10 @@ extension CaptionOrchestrator {
     /// Rick 2026-06-13: "4228/5883 give the impression it is not done."
     /// Auto-purging missing-on-disk drops the denominator so it does.
     static func flagMissingOnDisk(_ record: VideoRecord) {
-        if record.purgedAt == nil {
-            record.purgedAt = Date()
+        if record.removal == nil {
+            // The one removal marker (GH #143): the file vanished outside
+            // the app while its volume was mounted → missing.
+            VideoScanModel.stampRemoval(record, .missing(noticedAt: Date(), lastSeen: nil, reason: .missingOnDisk))
         }
         if !record.junkReasons.contains(missingOnDiskReason) {
             record.junkReasons.append(missingOnDiskReason)

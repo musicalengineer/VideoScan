@@ -387,9 +387,7 @@ extension VideoScanModel {
         var safelyRedundantBytes: Int64 = 0
         if !options.dryRun {
             for r in reconcile.manuallyDeleted {
-                r.archiveStage = .manuallyDeleted
-                r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")
-                relocateLog.write(ReconcileLogLines.manuallyDeletedLine(path: r.fullPath))
+                markSourceNotFound(r)
                 dashboard.relocateManuallyDeleted += 1
                 dashboard.relocateCompleted += 1
             }
@@ -965,6 +963,21 @@ extension VideoScanModel {
     }
 
     private func stamp() -> String { ISO8601DateFormatter().string(from: Date()) }
+
+    /// Bucket B — Migrate could not find the source file. GH #143: the one
+    /// removal marker says Missing (through the engine). The legacy
+    /// `.manuallyDeleted` label is still written beside it because Retire's
+    /// "disposed" rule reads it; retiring the label waits on Rick's sign-off
+    /// for the 959 classification. Plus the audit note and the relocate log
+    /// line, as before.
+    private func markSourceNotFound(_ r: VideoRecord) {
+        if r.removal == nil {
+            Self.stampRemoval(r, .missing(noticedAt: Date(), lastSeen: nil, reason: .missingAtMigrate))
+        }
+        r.archiveStage = .manuallyDeleted
+        r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")
+        relocateLog.write(ReconcileLogLines.manuallyDeletedLine(path: r.fullPath))
+    }
 
     private func appendNote(_ existing: String, _ msg: String) -> String {
         existing.isEmpty ? msg : existing + "\n" + msg
