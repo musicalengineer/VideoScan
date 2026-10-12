@@ -239,7 +239,7 @@ def fail(cycle: dict, reason: str) -> int:
     return 1
 
 
-def run_review(title: str, rng: str, brief: str, doc: str | None, timeout: float) -> int:
+def run_review(title: str, rng: str, brief: str, doc: str | None, timeout: float, effort: str | None = None) -> int:
     brief_path = resolve(brief)
     try:
         brief_text = brief_path.read_text()
@@ -262,7 +262,10 @@ def run_review(title: str, rng: str, brief: str, doc: str | None, timeout: float
     stdout_file = out_dir / f"{cycle['id']}.stdout"
     stderr_file = out_dir / f"{cycle['id']}.stderr"
     command = [codex_bin(), "exec", "--sandbox", "read-only", "-C", str(REPO),
-               "--skip-git-repo-check", brief_text]
+               "--skip-git-repo-check"]
+    if effort:   # e.g. "xhigh" for design talks (Rick 2026-10-12: "highest mode to bounce ideas")
+        command += ["-c", f'model_reasoning_effort="{effort}"']
+    command.append(brief_text)
     with open(stdout_file, "w") as out, open(stderr_file, "w") as err:
         try:
             # stdin=DEVNULL is the point: an open stdin makes codex wait forever.
@@ -431,8 +434,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--brief", required=True)
     parser.add_argument("--doc")
     parser.add_argument("--timeout", type=float, default=1800)
+    parser.add_argument("--effort", choices=["low", "medium", "high", "xhigh"], default=None,
+                        help="model_reasoning_effort override (xhigh for design talks)")
     args = parser.parse_args(argv)
-    return run_review(args.title, args.rng, args.brief, args.doc, args.timeout)
+    return run_review(args.title, args.rng, args.brief, args.doc, args.timeout, args.effort)
 
 
 if __name__ == "__main__":

@@ -349,7 +349,7 @@ struct SingleReadGateTests {
         #expect(ticket.hashedInQuarantine && !ticket.proof.keeperReadInFull)
         #expect(ticket.proof.fullHash == fixity.digest)
 
-        #expect(SignatureVerification.deleteQuarantined(ticket, disposal: .permanent, hooks: probe.hooks) == .deleted(bytes: Int64(size)))
+        #expect(SignatureVerification.deleteQuarantined(ticket, disposal: .trash, hooks: probe.hooks).trashedBytes == Int64(size))
         #expect(probe.blocks("quarantine") == 3, "the unlink step re-stats only — no second read")
         #expect(!FileManager.default.fileExists(atPath: copy.path))
         #expect(quarantineFolders(in: dir).isEmpty)

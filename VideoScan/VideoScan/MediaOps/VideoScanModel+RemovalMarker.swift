@@ -48,35 +48,48 @@ extension VideoScanModel {
         }
     }
 
-    /// Restore: the row is live again. A post-delete stage (Trashed /
-    /// Deleted) goes back to `.cataloged` only when the file is back at
-    /// `fullPath` (B4, 2026-10-11) — a file still in the Trash, or gone,
-    /// keeps the stage so the row never claims to be live media. A row whose
-    /// marker came from the old "Manually Deleted" label loses the label too
-    /// (otherwise the label keeps hiding it). Returns a line to log when the
-    /// file is not back yet, nil otherwise.
-    @discardableResult
+    /// Restore: the row is live again — but ONLY when that is true. nil
+    /// means live, so a row whose file left the disk (In the Trash, Missing,
+    /// or a legacy Trashed / Deleted stage) is restored only once the file is
+    /// back at `fullPath` (codex round 1 F2: the marker used to be cleared
+    /// first, so a file still in the Trash read as live and "Restore again"
+    /// after Put Back found nothing to restore). Validate first; refuse with
+    /// the marker untouched. Returns the line to log on a refusal, nil when
+    /// the row went live. A row removed from the catalog (file untouched)
+    /// always restores. On success a post-delete stage goes back to
+    /// `.cataloged` (B4).
     func clearRemoval(_ rec: VideoRecord) -> String? {
-        let reason = rec.removal?.reason
+        let fileLeft = rec.removal.map { $0.state != .removedFromCatalog } ?? false
+            || rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently
+        if fileLeft, rec.fullPath.isEmpty || !FileManager.default.fileExists(atPath: rec.fullPath) {
+            return "\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."
+        }
         rec.removal = nil
-        if rec.archiveStage == .manuallyDeleted,
-           reason == .legacyDeletedLabel || reason == .missingAtMigrate {
-            rec.archiveStage = .none
-        }
-        guard rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently else { return nil }
-        if !rec.fullPath.isEmpty, FileManager.default.fileExists(atPath: rec.fullPath) {
+        // A successful, explicit Restore clears the old "Manually Deleted"
+        // label whichever legacy encoding won the migration (codex round 1
+        // F4): left in place, the label re-hides the row on the next load.
+        if rec.archiveStage == .manuallyDeleted { rec.archiveStage = .none }
+        if rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently {
             rec.lifecycleStage = .cataloged
-            return nil
         }
-        return "\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."
+        return nil
     }
 
     /// One row's "is its Trash copy still there?" question: the row's id and
     /// the Trash path macOS returned. Sendable, so the stats can run off the
     /// main actor.
-    struct TrashCopyProbe: Sendable {
+    /// Also the probed marker's identity — its Trash path and when it moved
+    /// (codex round 1 F5): a result is applied only to that same marker, never
+    /// to a newer one the row got while the stats ran.
+    struct TrashCopyProbe: Sendable, Equatable {
         let id: UUID
         let trashPath: String
+        let movedAt: Date
+
+        /// True when `marker` is still the one this probe asked about.
+        func describes(_ marker: RemovalMarker) -> Bool {
+            marker.state == .inTrash && marker.trashPath == trashPath && marker.since == movedAt
+        }
     }
 
     /// The rows worth asking: In the Trash, a known Trash path, not yet seen
@@ -88,23 +101,24 @@ extension VideoScanModel {
             guard let marker = rec.removal, marker.state == .inTrash, !marker.isTrashEmptied,
                   let trashPath = marker.trashPath else { return nil }
             if Self.isExternalVolumePath(trashPath), !VolumeReachability.isReachable(path: trashPath) { return nil }
-            return TrashCopyProbe(id: rec.id, trashPath: trashPath)
+            return TrashCopyProbe(id: rec.id, trashPath: trashPath, movedAt: marker.since)
         }
     }
 
     /// The probes whose Trash copy is gone. One stat each; pure apart from
     /// the stats, so it may run on any thread.
-    nonisolated static func emptiedTrashCopies(_ probes: [TrashCopyProbe]) -> [UUID] {
-        probes.filter { !FileManager.default.fileExists(atPath: $0.trashPath) }.map(\.id)
+    nonisolated static func emptiedTrashCopies(_ probes: [TrashCopyProbe]) -> [TrashCopyProbe] {
+        probes.filter { !FileManager.default.fileExists(atPath: $0.trashPath) }
     }
 
-    /// Record "Trash emptied" on those rows (first sighting wins). Returns
+    /// Record "Trash emptied" on those rows (first sighting wins) — only
+    /// where the row still carries the very marker that was probed. Returns
     /// how many changed; the caller saves.
-    func applyTrashEmptied(ids: [UUID], now: Date) -> Int {
+    func applyTrashEmptied(_ gone: [TrashCopyProbe], now: Date) -> Int {
         var changed = 0
-        for id in ids {
-            guard let rec = record(forID: id), var marker = rec.removal,
-                  marker.noteTrashEmptied(at: now) else { continue }
+        for probe in gone {
+            guard let rec = record(forID: probe.id), var marker = rec.removal,
+                  probe.describes(marker), marker.noteTrashEmptied(at: now) else { continue }
             rec.removal = marker
             changed += 1
         }
@@ -115,7 +129,7 @@ extension VideoScanModel {
     /// small batches). Returns how many changed; the caller saves.
     @discardableResult
     func noteEmptiedTrash(in recs: [VideoRecord], now: Date = Date()) -> Int {
-        applyTrashEmptied(ids: Self.emptiedTrashCopies(trashCopyProbes(in: recs)), now: now)
+        applyTrashEmptied(Self.emptiedTrashCopies(trashCopyProbes(in: recs)), now: now)
     }
 
     /// "Trash emptied" for the whole catalog, with the stats OFF the main
@@ -128,7 +142,7 @@ extension VideoScanModel {
         let probes = trashCopyProbes(in: records)
         guard !probes.isEmpty else { return 0 }
         let gone = await Task.detached(priority: .utility) { Self.emptiedTrashCopies(probes) }.value
-        let changed = applyTrashEmptied(ids: gone, now: now)
+        let changed = applyTrashEmptied(gone, now: now)
         if changed > 0 {
             saveCatalogDebounced()
             noteCatalogRecordsMutated()

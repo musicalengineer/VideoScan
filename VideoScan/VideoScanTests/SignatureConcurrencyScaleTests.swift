@@ -359,9 +359,10 @@ struct SignatureVerificationTests {
             didQuarantine: { quarantinePath = $0 },
             removeQuarantineDirectory: { _ in throw InjectedCleanupFailure() })
 
-        let result = SignatureVerification.quarantineThenDispose(proof, disposal: .permanent, hooks: hooks)
+        let result = SignatureVerification.quarantineThenDispose(proof, disposal: .trash, hooks: hooks)
 
-        #expect(result == .deleted(bytes: Int64(bytes.count)))
+        // Trash only (codex round 1 F1): the copy is in the (test-host) Trash.
+        #expect(result.trashedBytes == Int64(bytes.count), "\(result)")
         #expect(!FileManager.default.fileExists(atPath: duplicate))
         #expect(!FileManager.default.fileExists(atPath: quarantinePath))
         #expect(FileManager.default.fileExists(

@@ -64,9 +64,9 @@ struct OneEngineSensorTests {
     // MARK: 1. Files leave only through reviewed code
 
     static let fileRemovalAllowlist: [String: String] = [
-        // THE one Trash call, and the one other remover of media.
+        // THE one Trash call. No other production code removes media: the
+        // verifier's last unlink went in codex round 1 F1 (GH #143).
         "MediaOps/MediaTrash.swift": "THE one Trash call (every Trash door reaches it)",
-        "MediaOps/SignatureVerification.swift": "Delete Duplicates' owner-only quarantine dir (rmdir) and the history-only .permanent, reachable only when named",
         // App-owned scratch, partial outputs, temp files.
         "ArchiveAngel/Prepare/ArchiveAngelJob.swift": "Angel prepare scratch",
         "ArchiveAngel/Prepare/ArchiveAngelPlan.swift": "Angel buffer batch dir, fenced to <buffer>/batch-…",

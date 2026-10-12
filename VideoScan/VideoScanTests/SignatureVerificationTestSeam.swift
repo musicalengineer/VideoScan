@@ -23,3 +23,13 @@ extension SignatureVerification {
         }
     }
 }
+
+extension SignatureVerification.DeletionResult {
+    /// The bytes a `.trashed` result moved; nil for any other outcome. Since
+    /// codex round 1 F1 (GH #143) every disposal ends in the Trash, so the
+    /// verifier suites that pinned `.deleted(bytes:)` pin this instead.
+    var trashedBytes: Int64? {
+        if case .trashed(let bytes, _) = self { return bytes }
+        return nil
+    }
+}

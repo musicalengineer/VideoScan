@@ -155,3 +155,13 @@ design talk.
 4. The byte-identity golden (`CatalogStoreAsyncSaveTests`) changes for purged rows.
 5. DD's move is still its own Trash call until the step split. The sensor allowlists it, by name,
    for one shift.
+
+## 7. Codex round 1 closure (2026-10-12, `docs/reviews/codex/codex-review-2026-10-12-one-engine.md`)
+
+Each test is in `OneEngineCodexRound1Tests` and was red on `b71331f32`.
+
+- **F1 (P1)** The verifier can still unlink. Fixed: `deleteQuarantined` always ends in the Trash, whatever `disposal` or final verdict it is given. No production `removeItem` on media remains. Tests: `f1APermanentDisposalStillGoesToTheTrash`, `f1AFinalVerdictOfPermanentStillGoesToTheTrash`. Commit `f5335546c`.
+- **F2 (P1)** Restore cleared the marker while the file was still in the Trash. Fixed: Restore checks first and refuses with the marker untouched; "Restore again" after Put Back works. Test: `f2RestoreRefusesWhileTheFileIsInTheTrashAndWorksAfterPutBack`. Commit `90c101fe8`.
+- **F3 (P1)** Settlement could stamp a row that was relinked mid-batch. Fixed: each turn records the row's id, path and a snapshot; only a live row that still has that path is stamped, otherwise the snapshot is. Test: `f3ARowRepointedMidBatchIsNotStamped`. Commit `2558706d0`.
+- **F4 (P1)** A restored legacy row came back hidden after reload. Fixed: a successful Restore always clears the old "Manually Deleted" label. Tests: `f4APurgedRowWithTheOldLabelStaysRestoredAfterReload`, `f4ATrashedRowWithTheOldLabelStaysRestoredAfterPutBack`. Commit `f48838b1a`.
+- **F5 (P2)** A stale "Trash emptied" probe could mark a newer marker. Fixed: the probe carries the Trash path and the time the file was moved, and is applied only to that same marker. Test: `f5AStaleEmptiedProbeLeavesANewerMarkerAlone`. Commit `289ee97b8`.
