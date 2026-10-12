@@ -127,3 +127,7 @@ Verdict: fix — close the ancestry and volume-identity holes before Rick’s re
 **Evidence already run (Debug):** 173 tests in 21 suites green on the branch (4 Cleanup suites: plan 25+, run 16+, media matrix 5, sensors 6; plus 17 engine/Triage regression suites); media matrix moves real mp4/mov/mkv/mxf/avi to a test Trash and holds a one-byte-changed copy; a 2,000-catalog random sweep checks the keeper invariant; sensors: Cleanup code has no trashItem/removeItem/unlink/rename/moveItem/marker write/row delete.
 
 **Output:** P1 (could trash the last good copy / wrong stamp / unlink) · P2 (wrong result, count, or UX that misleads) · P3 (≤3, one line each). Each with file:line, scenario, smallest fix. End with `Verdict:`.
+
+## Closure (Manager, 2026-10-12)
+
+All 7 findings fixed red-green on the branch (94e59dad, 5ed941f8, fc83301e, 6d11f06a, 9e61c4e0, 28a4fa1d, bbdbdd4d) plus the dry-run P2 (2aa8e527, hand marks only) and the missing cases (c80cc264). Round 2 → codex-review-2026-10-12-cleanup-v1-r2.md.

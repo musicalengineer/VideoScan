@@ -1,6 +1,8 @@
 # Cleanup, from scratch (KISS)
 
-**Status:** v2. Revised after the codex design review (`docs/reviews/codex/codex-design-cleanup-kiss-2026-10-12.md`, verdict "fix", 7 findings, all accepted below). Rick's FamilyArchive-junk ruling recorded (option b). No code yet.
+**Status:** v2 — BUILT and merged to main 2026-10-12 (QA + codex 2 rounds). v1 notes: copies whose content already has an archive master are left to Archive ▸ Excess copies (246 GB on 10/12; fold into Cleanup later); the renamed "Avid MediaFiles_from_…" folder is intentionally not matched by the Avid rule. Dry run 10/12: 601 copies / 324 GB, 20 FamilyArchive junk.
+
+**Was:** v2. Revised after the codex design review (`docs/reviews/codex/codex-design-cleanup-kiss-2026-10-12.md`, verdict "fix", 7 findings, all accepted below). Rick's FamilyArchive-junk ruling recorded (option b). No code yet.
 **Premise (Rick 10/11):** back to basics. Every catalog file has a stored full SHA-256; nightly on 10/11, 9,738 were hashed. A file without one is never deleted. Cleanup only centralizes logic we already have.
 
 ## The one question
