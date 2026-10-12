@@ -286,13 +286,12 @@ struct CleanupPane: View {
 
     @ViewBuilder
     private func leftAlone(_ plan: CleanupPlan) -> some View {
-        let reasons = plan.leftAloneSorted
-        if !reasons.isEmpty {
-            let files = reasons.reduce(0) { $0 + $1.tally.files }
-            let bytes = reasons.reduce(Int64(0)) { $0 + $1.tally.bytes }
-            DisclosureGroup("Left alone: \(files.formatted()) files (\(MediaBytes.display(bytes)))") {
+        // Sorted and summed once, when the plan was built — nothing per render.
+        if !plan.leftAloneSorted.isEmpty {
+            let total = plan.leftAloneTotal
+            DisclosureGroup("Left alone: \(total.files.formatted()) files (\(MediaBytes.display(total.bytes)))") {
                 VStack(alignment: .leading, spacing: 3) {
-                    ForEach(reasons) { r in
+                    ForEach(plan.leftAloneSorted) { r in
                         Text("\(r.tally.files.formatted()) · \(MediaBytes.display(r.tally.bytes)) — \(r.reason.words)")
                             .font(.system(size: 11)).foregroundStyle(.secondary)
                     }

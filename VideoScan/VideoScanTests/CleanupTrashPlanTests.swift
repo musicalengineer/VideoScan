@@ -266,6 +266,10 @@ struct CleanupTrashPlanTests {
         let plan = F.plan([j1, jFA, jTree, jArch, jPair, jRO, jByName, jByNameLower])
         #expect(plan.junk.map(\.id) == [j1.id])
         #expect(plan.archiveJunk.map(\.id) == [jFA.id])
+        // codex r1 P3-7: the page's numbers are on the plan, summed once.
+        #expect(plan.junkBytes == j1.sizeBytes && plan.archiveJunkBytes == jFA.sizeBytes)
+        #expect(plan.leftAloneTotal.files == plan.leftAlone.values.reduce(0) { $0 + $1.files })
+        #expect(plan.leftAloneSorted.count == plan.leftAlone.count)
         let r = F.reasons(plan)
         #expect(r[CleanupExclusion.archived.key] == 4)
         #expect(r[CleanupExclusion.pairHalf.key] == 1)

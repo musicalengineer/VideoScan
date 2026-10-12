@@ -188,9 +188,14 @@ struct CleanupPlan: Sendable, Equatable {
 
     static let empty = CleanupPlan()
 
-    var copyBytes: Int64 { copies.reduce(Int64(0)) { $0 + $1.target.sizeBytes } }
-    var junkBytes: Int64 { junk.reduce(Int64(0)) { $0 + $1.sizeBytes } }
-    var archiveJunkBytes: Int64 { archiveJunk.reduce(Int64(0)) { $0 + $1.sizeBytes } }
+    // The page's numbers, summed ONCE when the plan is built (`finishTotals`)
+    // — never in a view body (codex r1 P3-7).
+    private(set) var copyBytes: Int64 = 0
+    private(set) var junkBytes: Int64 = 0
+    private(set) var archiveJunkBytes: Int64 = 0
+    private(set) var leftAloneTotal = Tally()
+    /// Left-alone reasons, biggest first (the page's compact explanation).
+    private(set) var leftAloneSorted: [LeftAloneLine] = []
 
     /// One left-alone reason with its files and bytes.
     struct LeftAloneLine: Sendable, Equatable, Identifiable {
@@ -199,10 +204,14 @@ struct CleanupPlan: Sendable, Equatable {
         var id: CleanupExclusion { reason }
     }
 
-    /// Left-alone reasons, biggest first (the page's compact explanation).
-    var leftAloneSorted: [LeftAloneLine] {
-        leftAlone.map { LeftAloneLine(reason: $0.key, tally: $0.value) }
+    /// Sum the page's numbers from the lists. The planner calls it last.
+    mutating func finishTotals() {
+        copyBytes = copies.reduce(Int64(0)) { $0 + $1.target.sizeBytes }
+        junkBytes = junk.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        archiveJunkBytes = archiveJunk.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        leftAloneSorted = leftAlone.map { LeftAloneLine(reason: $0.key, tally: $0.value) }
             .sorted { $0.tally.bytes != $1.tally.bytes ? $0.tally.bytes > $1.tally.bytes : $0.reason.words < $1.reason.words }
+        leftAloneTotal = leftAlone.values.reduce(into: Tally()) { $0.files += $1.files; $0.bytes += $1.bytes }
     }
 }
 
@@ -329,6 +338,7 @@ enum CleanupPlanner {
         for row in lanes.junk {
             planJunk(row, fact: disk[row.id] ?? .missing, index: index, into: &plan)
         }
+        plan.finishTotals()
         return plan
     }
 

@@ -107,6 +107,9 @@ struct CleanupTrashSensorTests {
         let page = try #require(Self.cleanupSources().first { $0.name == "Catalog/CleanupPane.swift" }?.code)
         #expect(!page.contains("model.records"), "the page reads CleanupStore only")
         #expect(!page.contains(".records."))
+        // codex r1 P3-7: the page's numbers are summed when the plan is
+        // built, never reduced per render.
+        #expect(!page.contains(".reduce("), "a per-render reduction crept into the page")
     }
 
     @Test("QA P3: the confirm sheet cancels on Esc as well as Return")
