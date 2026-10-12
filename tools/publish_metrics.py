@@ -11,9 +11,21 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   confirmed-red, kept / declined, precision, cost
     metrics/codex_reviews.jsonl   one row per day: codex passes, findings, closed
                                   passes (parsed from docs/reviews/codex headers)
+    metrics/summary_latest.json   ONE object for the page's summary-first view
+                                  (GH #310): app version, GitHub counts (open
+                                  bugs, sprint milestone), demo tags, and the
+                                  last 90 nights of the 2 AM run per Mac, each
+                                  night classified green / red / did_not_run by
+                                  classify_nightly_row(). Rebuilt on every run.
 
 It runs at the end of the 4 AM coverage job and of the adversarial confirm job.
 Both call it the same way; a run with nothing new commits nothing.
+
+SUMMARY INPUTS. The nights come from metrics/testdriver.jsonl as already
+published on the branch (read from the publisher's worktree after the fetch).
+GitHub numbers come from `gh`; every call is tolerant — on any failure the
+field is null and the page shows a grey "—". Nothing here can fail the publish
+except the privacy gate.
 
 PRIVACY GATE (mandatory). The repo and the page are public, and finding titles
 can name family-data code paths. Every row is checked against SCHEMAS before any
@@ -50,10 +62,13 @@ import os
 import re
 import subprocess
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 REPO = Path(__file__).resolve().parent.parent
+GITHUB_REPO = "musicalengineer/VideoScan"
+PBXPROJ = REPO / "VideoScan" / "VideoScan.xcodeproj" / "project.pbxproj"
 LOGS = Path.home() / "Library/Logs/VideoScan"
 COVERAGE_DIR = LOGS / "coverage"
 ADV_DIR = LOGS / "adversarial-review"
@@ -107,6 +122,25 @@ _SHA = ("either", "sha", ("enum", ("unknown",)))
 
 _COV_NUMS = {"lines": "int", "covered": "int", "pct": "num?",
              "logic_lines": "int", "logic_covered": "int", "logic_pct": "num?", "files": "int"}
+
+# Summary stream (GH #310). The strings it may carry:
+#   code      a machine reason/status code the nightly script prints
+#             ("build-timeout:5400s", "zero-tests-ran:test-rc=65",
+#             "quality-holdout-not-configured"); lowercase, no spaces, no path
+#   hostlabel the Mac, as a short label ("M4", "M5", "M1") — never the host name
+#   vers      MARKETING_VERSION / CURRENT_PROJECT_VERSION ("5.1", "1")
+#   tagname   a git tag starting with "demo" (Rick's demo-day markers)
+#   pubtext   a GitHub milestone title ("Week of Oct 12"): short, printable,
+#             and already public on github.com — the only free-ish text allowed
+CODE_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}(?:[:=][a-z0-9=.:-]{1,24})?$")
+HOSTLABEL_RE = re.compile(r"^[A-Z][A-Za-z0-9]{0,5}$")     # "M4", "Ultra"; a host NAME does not fit
+VERS_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){0,3}$")
+TAGNAME_RE = re.compile(r"^demo[A-Za-z0-9._/-]{0,59}$")
+PUBTEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:'/#+()-]{0,59}$")
+NIGHT_STATES = ("green", "red", "did_not_run")
+SUMMARY_DAYS = 90
+_NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "total": "int",
+          "reason": "code?"}
 
 # One spec per stream. Every row must have EXACTLY these keys (no extras, none
 # missing). Specs: "int" / "int?" non-negative int (or null); "num" / "num?"
@@ -213,12 +247,28 @@ SCHEMAS: Dict[str, dict] = {
                                   "could_be_private": "int", "widened_for_split": "int",
                                   "churn_7d": "int"})),
     },
+    # The page's summary-first view (GH #310). One object, rebuilt each run.
+    "summary_latest.json": {
+        "schemaVersion": "int",
+        "generated": "ts",
+        "version": ("opt", ("obj", {"marketing": "vers", "build": "vers"})),
+        "github": ("obj", {"open_issues": "int?", "open_bugs": "int?", "bugs_opened_7d": "int?",
+                           "bugs_closed_7d": "int?", "main_sha": "sha?", "main_date": "date?"}),
+        "sprint": ("opt", ("obj", {"title": "pubtext", "open": "int", "closed": "int", "due": "date?"})),
+        "tags": ("list", ("obj", {"date": "date", "name": "tagname"})),
+        "person": ("opt", ("obj", {"status": "code", "readiness_pct": "num?", "quality_score": "num?"})),
+        "nightly": ("obj", {"days": "int", "hosts": ("list", "hostlabel"),
+                            "nights": ("list", ("obj", {"date": "date",
+                                                        "hosts": ("map", "hostlabel", ("obj", _NIGHT))}))}),
+    },
 }
 
 # Streams whose existing rows were published by someone else (GitHub CI):
 # fresh rows are validated and appended (deduplicated by ts + sha); rows
 # already on the branch are kept exactly as they are.
 APPEND_ONLY = {"complexity.jsonl"}
+# Streams that are ONE JSON object, replaced whole on every publish.
+SINGLE_OBJECT = {"summary_latest.json"}
 
 
 def source_folders() -> set:
@@ -258,6 +308,11 @@ _SCALARS = {
     "declkey": (lambda v: isinstance(v, str) and v.count("::") == 1
                 and bool(SRCPATH_RE.match(v.split("::")[0])) and bool(IDENT_RE.match(v.split("::")[1]))
                 and len(v) <= 360, "expected file.swift::Type.name"),
+    "code": (_matches(CODE_RE), "expected a lowercase machine reason/status code"),
+    "hostlabel": (_matches(HOSTLABEL_RE), "expected a short Mac label such as M4"),
+    "vers": (_matches(VERS_RE), "expected a dotted version number"),
+    "tagname": (_matches(TAGNAME_RE), "expected a demo* git tag name"),
+    "pubtext": (_matches(PUBTEXT_RE), "expected a short public milestone title"),
 }
 
 
@@ -567,6 +622,213 @@ def build_streams(cov_dir: Path = COVERAGE_DIR, adv_dir: Path = ADV_DIR,
     }
 
 
+# ---------------------------------------------------------------- summary (GH #310)
+
+def classify_nightly_row(row: dict) -> str:
+    """THE rule for one 2 AM run (Rick, GH #310): a night where no test ran —
+    build timeout, build error, zero tests, dirty tree, skipped — DID NOT RUN.
+    It is amber on the page, never red. Red means tests ran and failed (or the
+    run was killed part-way: the exit code is evidence). Green: tests ran,
+    status ok, nothing failed."""
+    if _int(row.get("total")) == 0:
+        return "did_not_run"
+    if row.get("status") == "failed" or _int(row.get("failed")) > 0:
+        return "red"
+    return "green"
+
+
+def host_label(host) -> Optional[str]:
+    """"RicksM4" -> "M4". The host NAME never leaves the machine; only a short
+    label does, and a host whose label does not fit the allowlist is dropped."""
+    if not isinstance(host, str):
+        return None
+    label = re.sub(r"^ricks", "", host.strip(), flags=re.IGNORECASE)
+    return label if HOSTLABEL_RE.match(label) else None
+
+
+def reason_code(reason) -> Optional[str]:
+    """Keep the nightly's machine code ("build-timeout:5400s"); when the detail
+    part is not code-shaped ("dirty-tree:<paths>"), keep the kind alone."""
+    if not isinstance(reason, str) or not reason:
+        return None
+    if CODE_RE.match(reason):
+        return reason
+    kind = reason.split(":", 1)[0]
+    return kind if CODE_RE.match(kind) else None
+
+
+HOST_ORDER = ("M4", "M5", "M1")
+
+
+def nightly_summary(td_rows: List[dict], today: str, days: int = SUMMARY_DAYS) -> dict:
+    """The last `days` nights (ending `today`, a UTC date) of the 2 AM nightly,
+    one cell per Mac, from the published testdriver rows. The last row a host
+    published on a UTC date wins for that night (a rerun is newer evidence)."""
+    end = datetime.strptime(today, "%Y-%m-%d")
+    dates = [(end - timedelta(days=days - 1 - i)).strftime("%Y-%m-%d") for i in range(days)]
+    wanted = set(dates)
+    cells: Dict[str, Dict[str, dict]] = {}
+    seen_hosts = set()
+    for row in td_rows:
+        if row.get("source") != "nightly-local":
+            continue
+        ts = row.get("ts")
+        date = ts[:10] if isinstance(ts, str) and TS_RE.match(ts) else None
+        label = host_label(row.get("host"))
+        if date is None or date not in wanted or label is None:
+            continue
+        seen_hosts.add(label)
+        cells.setdefault(date, {})[label] = {
+            "state": classify_nightly_row(row), "passed": _int(row.get("passed")),
+            "failed": _int(row.get("failed")), "total": _int(row.get("total")),
+            "reason": reason_code(row.get("reason")),
+        }
+    hosts = [h for h in HOST_ORDER if h in seen_hosts] + sorted(seen_hosts - set(HOST_ORDER))
+    return {"days": days, "hosts": hosts,
+            "nights": [{"date": d, "hosts": cells.get(d, {})} for d in dates]}
+
+
+def person_summary(td_rows: List[dict]) -> Optional[dict]:
+    """Status code and two numbers from the newest nightly row that carries the
+    person-eval fields. Codes only; the page never reads the raw fields."""
+    for row in reversed(td_rows):
+        if row.get("source") != "nightly-local" or "person_eval_status" not in row:
+            continue
+        status = reason_code(row.get("person_eval_status")) or "other"
+        num = lambda v: v if _is_num(v) else None   # noqa: E731
+        return {"status": status, "readiness_pct": num(row.get("person_eval_readiness_pct")),
+                "quality_score": num(row.get("person_eval_quality_score"))}
+    return None
+
+
+def app_version(pbxproj: Path = PBXPROJ) -> Optional[dict]:
+    """MARKETING_VERSION / CURRENT_PROJECT_VERSION of the VideoScan app target
+    (the build configuration whose bundle identifier ends in .VideoScan)."""
+    try:
+        text = pbxproj.read_text(errors="ignore")
+    except OSError:
+        return None
+    for block in re.finditer(r"buildSettings = \{(.*?)\n\s*\};", text, re.S):
+        body = block.group(1)
+        if not re.search(r'PRODUCT_BUNDLE_IDENTIFIER = "?[A-Za-z0-9.-]*\.VideoScan"?;', body):
+            continue
+        mv = re.search(r"MARKETING_VERSION = ([0-9.]+);", body)
+        bv = re.search(r"CURRENT_PROJECT_VERSION = ([0-9.]+);", body)
+        if mv and bv and VERS_RE.match(mv.group(1)) and VERS_RE.match(bv.group(1)):
+            return {"marketing": mv.group(1), "build": bv.group(1)}
+    return None
+
+
+class Gh:
+    """`gh <args>` -> stdout, or None on ANY failure (not installed, not logged
+    in, offline, timeout, non-zero exit). The summary never fails on GitHub."""
+
+    def __init__(self, binary: Optional[str] = None, timeout: int = 60):
+        self.binary = binary or os.environ.get("VIDEOSCAN_GH_BIN") or "gh"
+        self.timeout = timeout
+
+    def __call__(self, *args: str) -> Optional[str]:
+        try:
+            proc = subprocess.run([self.binary, *args], capture_output=True, text=True,
+                                  stdin=subprocess.DEVNULL, timeout=self.timeout)
+        except (OSError, subprocess.SubprocessError):
+            return None
+        return proc.stdout if proc.returncode == 0 else None
+
+
+def _gh_json(gh: Callable[..., Optional[str]], *args: str):
+    out = gh(*args)
+    if out is None:
+        return None
+    try:
+        return json.loads(out)
+    except ValueError:
+        return None
+
+
+def github_summary(gh: Callable[..., Optional[str]], now: datetime, repo: str = GITHUB_REPO) -> dict:
+    """Open issues, open bugs, bugs opened / closed in the last 7 days, and the
+    tip of main. Each field is null when its `gh` call fails."""
+    g = {"open_issues": None, "open_bugs": None, "bugs_opened_7d": None, "bugs_closed_7d": None,
+         "main_sha": None, "main_date": None}
+    issues = _gh_json(gh, "issue", "list", "-R", repo, "--state", "open", "--limit", "1000", "--json", "number")
+    if isinstance(issues, list):
+        g["open_issues"] = len(issues)
+    bugs = _gh_json(gh, "issue", "list", "-R", repo, "--state", "all", "--label", "bug", "--limit", "1000",
+                    "--json", "state,createdAt,closedAt")
+    if isinstance(bugs, list):
+        since = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        g["open_bugs"] = sum(1 for b in bugs if isinstance(b, dict) and b.get("state") == "OPEN")
+        g["bugs_opened_7d"] = sum(1 for b in bugs if isinstance(b, dict) and str(b.get("createdAt") or "") >= since)
+        g["bugs_closed_7d"] = sum(1 for b in bugs if isinstance(b, dict) and str(b.get("closedAt") or "") >= since)
+    tip = _gh_json(gh, "api", f"repos/{repo}/commits/main")
+    if isinstance(tip, dict):
+        sha = tip.get("sha")
+        date = str(((tip.get("commit") or {}).get("committer") or {}).get("date") or "")[:10]
+        g["main_sha"] = sha[:12] if isinstance(sha, str) and SHA_RE.match(sha) else None
+        g["main_date"] = date if DATE_RE.match(date) else None
+    return g
+
+
+def sprint_summary(gh: Callable[..., Optional[str]], repo: str = GITHUB_REPO) -> Optional[dict]:
+    """The open milestone with the nearest due date ("Week of Oct 12"), or null."""
+    ms = _gh_json(gh, "api", f"repos/{repo}/milestones?state=open&sort=due_on&direction=asc&per_page=20")
+    if not isinstance(ms, list):
+        return None
+    for m in ms:
+        if not isinstance(m, dict) or not PUBTEXT_RE.match(str(m.get("title") or "")):
+            continue
+        due = str(m.get("due_on") or "")[:10]
+        return {"title": m["title"], "open": _int(m.get("open_issues")), "closed": _int(m.get("closed_issues")),
+                "due": due if DATE_RE.match(due) else None}
+    return None
+
+
+def demo_tags(git: Callable, wt: Path) -> List[dict]:
+    """Rick's demo-day markers: git tags named demo*, with the date each was
+    made. Tags are repo-wide refs, so the publisher's worktree sees them."""
+    try:
+        proc = git(wt, "tag", "-l", "demo*", "--format=%(creatordate:short)|%(refname:short)", check=False)
+    except (OSError, subprocess.SubprocessError, PublishError):
+        return []
+    tags = []
+    for line in (proc.stdout or "").splitlines() if proc.returncode == 0 else []:
+        date, _, name = line.strip().partition("|")
+        if DATE_RE.match(date) and TAGNAME_RE.match(name):
+            tags.append({"date": date, "name": name})
+    return sorted(tags, key=lambda t: (t["date"], t["name"]))
+
+
+def summary_builder(*, gh: Optional[Callable[..., Optional[str]]] = None, git: Optional[Callable] = None,
+                    now: Optional[datetime] = None, pbxproj: Path = PBXPROJ,
+                    repo: str = GITHUB_REPO) -> Callable[[Path], dict]:
+    """Returns build(metrics_dir) -> the summary_latest.json object. The GitHub
+    part is fetched once and reused across push retries; the nightly part is
+    re-read from metrics_dir each time (it is what the fetch just brought in)."""
+    gh = gh or Gh()
+    git = git or Git()
+    when = now or datetime.now(timezone.utc)
+    cached: Dict[str, object] = {}
+
+    def build(metrics_dir: Path) -> dict:
+        if not cached:
+            cached["github"] = github_summary(gh, when, repo)
+            cached["sprint"] = sprint_summary(gh, repo)
+            cached["version"] = app_version(pbxproj)
+        td_rows = _read_jsonl(Path(metrics_dir) / "testdriver.jsonl")
+        return {
+            "schemaVersion": SCHEMA_VERSION,
+            "generated": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "version": cached["version"],
+            "github": cached["github"],
+            "sprint": cached["sprint"],
+            "tags": demo_tags(git, Path(metrics_dir).parent),
+            "person": person_summary(td_rows),
+            "nightly": nightly_summary(td_rows, when.strftime("%Y-%m-%d")),
+        }
+    return build
+
+
 # ---------------------------------------------------------------- merge + render
 
 def merge_rows(existing: List[dict], fresh: List[dict]) -> List[dict]:
@@ -592,6 +854,10 @@ def sanitized_files(fresh: Dict[str, Optional[List[dict]]], existing_dir: Option
     out = {}
     for name, rows in fresh.items():
         if rows is None:
+            continue
+        if name in SINGLE_OBJECT:
+            validate(name, rows, folders)
+            out[name] = json.dumps(rows, sort_keys=True, separators=(",", ":")) + "\n"
             continue
         existing = _read_jsonl(existing_dir / name) if existing_dir is not None else []
         if name in APPEND_ONLY:
@@ -646,14 +912,19 @@ def ensure_worktree(repo: Path, wt: Path, git: Git) -> None:
 
 def publish(fresh: Dict[str, Optional[List[dict]]], *, repo: Path = REPO, wt: Path = DEFAULT_WT,
             git: Optional[Git] = None, folders: Optional[set] = None,
-            say: Callable[[str], None] = print) -> str:
-    """Merge, validate, commit and push. Returns "pushed" or "unchanged"."""
+            say: Callable[[str], None] = print,
+            summary: Optional[Callable[[Path], dict]] = None) -> str:
+    """Merge, validate, commit and push. Returns "pushed" or "unchanged".
+    `summary(metrics_dir)` (see summary_builder) runs after each fetch, so the
+    nights it summarizes are the ones just pulled from the branch."""
     git = git or Git()
     wt = wt.expanduser().resolve()
     ensure_worktree(repo, wt, git)
     for attempt in range(1, PUSH_ATTEMPTS + 1):
         git(wt, "fetch", "--quiet", "origin", FETCH_SPEC)
         git(wt, "reset", "--hard", "--quiet", REMOTE_REF)
+        if summary is not None:
+            fresh = dict(fresh, **{"summary_latest.json": summary(wt / "metrics")})
         files = sanitized_files(fresh, wt / "metrics", folders)   # PrivacyError stops here
         changed = []
         for name, text in files.items():
@@ -709,6 +980,11 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--validate", nargs=2, metavar=("STREAM", "FILE"),
                     help="privacy-gate one CI-produced file (JSON, or JSONL when STREAM ends in .jsonl) "
                          "against SCHEMAS[STREAM]; exit 0 if it may be published, 3 if not")
+    ap.add_argument("--no-summary", action="store_true",
+                    help="do not rebuild metrics/summary_latest.json (GH #310 summary view)")
+    ap.add_argument("--metrics-dir", help="with --dry-run / --out-dir: build the summary from the "
+                                          "published streams in this directory (e.g. the publish "
+                                          "worktree's metrics/); without it no summary is produced")
     a = ap.parse_args(argv)
 
     if a.validate:
@@ -719,10 +995,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 0
     fresh = build_streams(Path(a.coverage_dir).expanduser(), Path(a.adversarial_dir).expanduser(),
                           Path(a.codex_dir).expanduser())
-    available = sorted(k for k, v in fresh.items() if v is not None)
+    summary = None if a.no_summary else summary_builder()
     folders = source_folders()
     try:
         if a.dry_run or a.out_dir:
+            if summary is not None and a.metrics_dir:
+                fresh["summary_latest.json"] = summary(Path(a.metrics_dir).expanduser())
+            available = sorted(k for k, v in fresh.items() if v is not None)
             files = sanitized_files(fresh, None, folders)
             if a.out_dir:
                 out = Path(a.out_dir).expanduser()
@@ -735,7 +1014,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                     sys.stdout.write(text)
             print(f"OUTCOME ok: dry run, {len(files)} stream(s) validated: {', '.join(available) or 'none'}")
             return 0
-        result = publish(fresh, wt=Path(a.worktree), folders=folders)
+        result = publish(fresh, wt=Path(a.worktree), folders=folders, summary=summary)
+        available = sorted(k for k, v in fresh.items() if v is not None) + ([] if summary is None else ["summary_latest.json"])
     except PrivacyError as exc:
         print(f"OUTCOME failed: privacy gate refused the publish: {exc}")
         return 3

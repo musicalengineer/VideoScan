@@ -26054,6 +26054,32 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_publish_summary.py",
+      "stage": "unit",
+      "suites": [
+        "test_publish_summary.py"
+      ],
+      "tests": [
+        "test_app_version_reads_the_app_target",
+        "test_cli_no_summary_and_no_metrics_dir_produce_no_summary",
+        "test_cli_out_dir_with_metrics_dir_writes_summary_with_nulls_when_gh_is_missing",
+        "test_demo_tags_keep_only_demo_names_with_dates",
+        "test_did_not_run_rule",
+        "test_gh_failure_means_nulls_not_an_exception",
+        "test_github_numbers_from_gh",
+        "test_host_labels_and_reason_codes_are_sanitized",
+        "test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins",
+        "test_person_summary_is_codes_and_numbers_only",
+        "test_publish_writes_summary_latest_beside_the_other_streams",
+        "test_sprint_with_an_unprintable_title_is_skipped_not_published",
+        "test_summary_gate_refuses_anything_off_the_allowlist",
+        "test_summary_object_validates_and_leaks_nothing",
+        "test_summary_with_everything_failing_is_still_valid"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_qwen_bench.py",
       "stage": "unit",
       "suites": [
@@ -29301,6 +29327,10 @@
         },
         {
           "name": "tests/test_publish_metrics.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "tests/test_publish_summary.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
