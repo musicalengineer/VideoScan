@@ -71,24 +71,67 @@ extension VideoScanModel {
         return "\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."
     }
 
-    /// "Trash emptied": for each inTrash row whose Trash copy is no longer
-    /// at the path macOS returned, record the first sighting. One stat per
-    /// such row, nothing for any other row. Returns how many changed; the
-    /// caller saves. Offline drives: a Trash on an unmounted volume reads as
-    /// "not there", so a row whose Trash path is on an unreachable external
-    /// volume is skipped — an unplugged drive is not an emptied Trash.
+    /// One row's "is its Trash copy still there?" question: the row's id and
+    /// the Trash path macOS returned. Sendable, so the stats can run off the
+    /// main actor.
+    struct TrashCopyProbe: Sendable {
+        let id: UUID
+        let trashPath: String
+    }
+
+    /// The rows worth asking: In the Trash, a known Trash path, not yet seen
+    /// emptied, and — an unplugged drive is not an emptied Trash — the Trash
+    /// path's drive is reachable. One O(rows) pass on the main actor; the
+    /// reachability answer is VolumeReachability's 5 s cache.
+    func trashCopyProbes(in recs: [VideoRecord]) -> [TrashCopyProbe] {
+        recs.compactMap { rec in
+            guard let marker = rec.removal, marker.state == .inTrash, !marker.isTrashEmptied,
+                  let trashPath = marker.trashPath else { return nil }
+            if Self.isExternalVolumePath(trashPath), !VolumeReachability.isReachable(path: trashPath) { return nil }
+            return TrashCopyProbe(id: rec.id, trashPath: trashPath)
+        }
+    }
+
+    /// The probes whose Trash copy is gone. One stat each; pure apart from
+    /// the stats, so it may run on any thread.
+    nonisolated static func emptiedTrashCopies(_ probes: [TrashCopyProbe]) -> [UUID] {
+        probes.filter { !FileManager.default.fileExists(atPath: $0.trashPath) }.map(\.id)
+    }
+
+    /// Record "Trash emptied" on those rows (first sighting wins). Returns
+    /// how many changed; the caller saves.
+    func applyTrashEmptied(ids: [UUID], now: Date) -> Int {
+        var changed = 0
+        for id in ids {
+            guard let rec = record(forID: id), var marker = rec.removal,
+                  marker.noteTrashEmptied(at: now) else { continue }
+            rec.removal = marker
+            changed += 1
+        }
+        return changed
+    }
+
+    /// "Trash emptied", synchronously, for a known set of rows (tests and
+    /// small batches). Returns how many changed; the caller saves.
     @discardableResult
     func noteEmptiedTrash(in recs: [VideoRecord], now: Date = Date()) -> Int {
-        var changed = 0
-        for rec in recs {
-            guard var marker = rec.removal, marker.state == .inTrash, !marker.isTrashEmptied,
-                  let trashPath = marker.trashPath else { continue }
-            if Self.isExternalVolumePath(trashPath), !VolumeReachability.isReachable(path: trashPath) { continue }
-            guard !FileManager.default.fileExists(atPath: trashPath) else { continue }
-            if marker.noteTrashEmptied(at: now) {
-                rec.removal = marker
-                changed += 1
-            }
+        applyTrashEmptied(ids: Self.emptiedTrashCopies(trashCopyProbes(in: recs)), now: now)
+    }
+
+    /// "Trash emptied" for the whole catalog, with the stats OFF the main
+    /// actor (one per In-the-Trash row; nothing for any other row). Run when
+    /// the person turns Show Removed on, so the words they read are fresh.
+    /// Saves (debounced) and announces the in-place change when anything
+    /// changed. Returns how many rows changed.
+    @discardableResult
+    func refreshTrashEmptied(now: Date = Date()) async -> Int {
+        let probes = trashCopyProbes(in: records)
+        guard !probes.isEmpty else { return 0 }
+        let gone = await Task.detached(priority: .utility) { Self.emptiedTrashCopies(probes) }.value
+        let changed = applyTrashEmptied(ids: gone, now: now)
+        if changed > 0 {
+            saveCatalogDebounced()
+            noteCatalogRecordsMutated()
         }
         return changed
     }

@@ -826,7 +826,7 @@ public class VideoRecord: Identifiable, Decodable {
         // catalog test). Runs after lifecycleStage/archiveStage (above).
         let legacyPurgedAt          = try c.decodeIfPresent(Date.self, forKey: .purgedAt)
         removal = RemovalMarker.migrated(
-            stored: (try? c.decodeIfPresent(RemovalMarker.self, forKey: .removal)) ?? nil,
+            stored: try? c.decodeIfPresent(RemovalMarker.self, forKey: .removal),
             purgedAt: legacyPurgedAt, lifecycleStage: lifecycleStage,
             archiveStage: archiveStage, loadedAt: Self.migrationLoadDate)
         // decodeIfPresent so pre-feature catalogs (no setAsideReason key)

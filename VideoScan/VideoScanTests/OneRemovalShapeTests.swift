@@ -150,4 +150,18 @@ struct OneRemovalShapeTests {
         let missing = RemovalMarker.missing(noticedAt: day, lastSeen: nil, reason: .missingOnDisk)
         #expect(missing.stateWords == "Missing" && missing.sentence(dateStyle: style) == "missing since 10/11/2025")
     }
+
+    // The catalog-wide pass the Show Removed toggle runs: stats off-main,
+    // only In-the-Trash rows asked, saved when anything changed.
+    @Test func theShowRemovedPassRecordsTrashEmptiedOffMain() async throws {
+        let root = try scratch("emptied_async"); defer { try? FileManager.default.removeItem(at: root) }
+        let m = model(in: root)
+        let gone = record(root.appendingPathComponent("a.mov").path)
+        gone.removal = .inTrash(movedAt: Date(), trashPath: root.appendingPathComponent("Trash-a.mov").path, reason: .junk)
+        let live = record(root.appendingPathComponent("b.mov").path)
+        m.records = [gone, live]
+        #expect(await m.refreshTrashEmptied() == 1)
+        #expect(gone.removal?.isTrashEmptied == true && live.removal == nil)
+        #expect(await m.refreshTrashEmptied() == 0, "recorded once")
+    }
 }

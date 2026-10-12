@@ -26747,6 +26747,7 @@
         "aTrashedDuplicateStaysInTheCatalogAsRemovedLikeEveryOtherTrashPath",
         "restoringAnOldDeletedLabelRowClearsTheLabel",
         "showRemovedNamesTheStateInFamilyWords",
+        "theShowRemovedPassRecordsTrashEmptiedOffMain",
         "trashEmptiedIsRecordedFromAStat"
       ]
     },
