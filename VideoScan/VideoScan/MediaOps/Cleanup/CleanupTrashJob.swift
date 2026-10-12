@@ -151,7 +151,13 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
 
+    /// Every file settled, in the order it settled (capped at `itemCap`).
     @Published private(set) var items: [CleanupTrashItem] = []
+    /// The same files split as the detail shows them — files that stayed
+    /// (held, failed, missing, cancelled) and files that moved — kept here
+    /// as each settles, so the view never filters per render (QA P3).
+    @Published private(set) var stayed: [CleanupTrashItem] = []
+    @Published private(set) var moved: [CleanupTrashItem] = []
     @Published private(set) var totals = CleanupTrashTotals()
     @Published private(set) var state: MediaFileOperationState = .running {
         didSet { if !state.isActive, finishedAt == nil { finishedAt = Date() } }
@@ -419,7 +425,10 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
 
     private func add(_ item: CleanupTrashItem, row: DeletionAuditRow) {
         totals.add(item)
-        if items.count < Self.itemCap { items.append(item) }
+        if items.count < Self.itemCap {
+            items.append(item)
+            if item.outcome == .moved { moved.append(item) } else { stayed.append(item) }
+        }
         audit?.record(row, id: item.id)
         if item.outcome == .held || item.outcome == .failed {
             cleanupLog.notice("\(item.outcome.rawValue, privacy: .public) \(item.path, privacy: .public) — \(item.reason, privacy: .public)")

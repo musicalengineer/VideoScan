@@ -25,8 +25,10 @@ struct CleanupTrashJobDetailView: View {
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(job.items.filter { $0.outcome != .moved }) { row($0) }
-                        ForEach(job.items.filter { $0.outcome == .moved }) { row($0) }
+                        // Kept by the job as it settles each file — never
+                        // filtered in a body (QA P3).
+                        ForEach(job.stayed) { row($0) }
+                        ForEach(job.moved) { row($0) }
                     }
                 }
                 .frame(maxHeight: 300)
