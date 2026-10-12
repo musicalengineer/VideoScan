@@ -53,6 +53,38 @@ struct CleanupTrashHardeningTests {
         for rec in extras { if let t = rec.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) } }
     }
 
+    @Test("codex r2 F1: the keeper's PARENT moved into a Trash + a directory symlink at its old spot, BETWEEN the two reads — held")
+    func keeperAncestryChangedBetweenReadsHeld() async throws {
+        let sb = try S("betweenancestry")
+        defer { sb.cleanup() }
+        let (model, extras) = try cleanupThreeCopies(sb)
+        let plan = await model.buildCleanupPlan()
+        let selection = CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false)
+        let first = selection.copies[0]
+        let job = CleanupTrashJob(model: model, selection: selection)
+        job.saveCatalogForTesting = { true }
+        let keepDir = sb.root.appendingPathComponent("keep", isDirectory: true)
+        let trashed = sb.root.appendingPathComponent(".Trashes/501/keep", isDirectory: true)
+        job.betweenReadsForTesting = { path in
+            guard path == first.target.path else { return }
+            // inode / size / mtime / UUID of the keeper are all unchanged —
+            // only its ancestry is: it now lives in a Trash, reachable
+            // through a link at the old spelling.
+            try? FileManager.default.createDirectory(at: trashed.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? FileManager.default.moveItem(at: keepDir, to: trashed)
+            try? FileManager.default.createSymbolicLink(at: keepDir, withDestinationURL: trashed)
+        }
+        job.start()
+        await job.task?.value
+        let byID = Dictionary(uniqueKeysWithValues: job.items.map { ($0.id, $0) })
+        #expect(byID[first.target.id]?.outcome == .held, "\(job.items.map { "\($0.outcome): \($0.reason)" })")
+        #expect(byID[first.target.id]?.reason.contains("link") == true || byID[first.target.id]?.reason.contains("Trash") == true)
+        let target = try #require(extras.first { $0.id == first.target.id })
+        #expect(FileManager.default.fileExists(atPath: target.fullPath) && target.removal == nil,
+                "the last outside-Trash copy stays")
+        for rec in extras { if let t = rec.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) } }
+    }
+
     @Test("Stop landing AFTER a proof passed — that file moves and is reported MOVED (honestly); the rest are cancelled")
     func stopAfterProofIsReportedMoved() async throws {
         let sb = try S("postproof")

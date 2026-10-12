@@ -101,6 +101,11 @@ enum CleanupProof {
         guard let keeperNow = FileIdentityStamp.capture(path: copy.keeper.path), keeperNow == keeper.stamp else {
             return .held("the copy that stays changed while this file was read — nothing moved")
         }
+        // Ancestry AGAIN, after the reads (codex r2 F1): a folder on the way
+        // moved into a Trash with a link left behind keeps every identity
+        // field intact — only the real place changed.
+        if let why = ancestryProblem(path: copy.keeper.path) { return .held("the copy that stays (\(copy.keeper.filename)) \(why)") }
+        if let why = ancestryProblem(path: copy.target.path) { return .held(why) }
         return .proven("sha256:\(extra.digest.prefix(16))… — both copies read in full and equal")
     }
 
