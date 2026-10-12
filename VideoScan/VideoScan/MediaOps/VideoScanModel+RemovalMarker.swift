@@ -78,9 +78,18 @@ extension VideoScanModel {
     /// One row's "is its Trash copy still there?" question: the row's id and
     /// the Trash path macOS returned. Sendable, so the stats can run off the
     /// main actor.
-    struct TrashCopyProbe: Sendable {
+    /// Also the probed marker's identity — its Trash path and when it moved
+    /// (codex round 1 F5): a result is applied only to that same marker, never
+    /// to a newer one the row got while the stats ran.
+    struct TrashCopyProbe: Sendable, Equatable {
         let id: UUID
         let trashPath: String
+        let movedAt: Date
+
+        /// True when `marker` is still the one this probe asked about.
+        func describes(_ marker: RemovalMarker) -> Bool {
+            marker.state == .inTrash && marker.trashPath == trashPath && marker.since == movedAt
+        }
     }
 
     /// The rows worth asking: In the Trash, a known Trash path, not yet seen
@@ -92,23 +101,24 @@ extension VideoScanModel {
             guard let marker = rec.removal, marker.state == .inTrash, !marker.isTrashEmptied,
                   let trashPath = marker.trashPath else { return nil }
             if Self.isExternalVolumePath(trashPath), !VolumeReachability.isReachable(path: trashPath) { return nil }
-            return TrashCopyProbe(id: rec.id, trashPath: trashPath)
+            return TrashCopyProbe(id: rec.id, trashPath: trashPath, movedAt: marker.since)
         }
     }
 
     /// The probes whose Trash copy is gone. One stat each; pure apart from
     /// the stats, so it may run on any thread.
-    nonisolated static func emptiedTrashCopies(_ probes: [TrashCopyProbe]) -> [UUID] {
-        probes.filter { !FileManager.default.fileExists(atPath: $0.trashPath) }.map(\.id)
+    nonisolated static func emptiedTrashCopies(_ probes: [TrashCopyProbe]) -> [TrashCopyProbe] {
+        probes.filter { !FileManager.default.fileExists(atPath: $0.trashPath) }
     }
 
-    /// Record "Trash emptied" on those rows (first sighting wins). Returns
+    /// Record "Trash emptied" on those rows (first sighting wins) — only
+    /// where the row still carries the very marker that was probed. Returns
     /// how many changed; the caller saves.
-    func applyTrashEmptied(ids: [UUID], now: Date) -> Int {
+    func applyTrashEmptied(_ gone: [TrashCopyProbe], now: Date) -> Int {
         var changed = 0
-        for id in ids {
-            guard let rec = record(forID: id), var marker = rec.removal,
-                  marker.noteTrashEmptied(at: now) else { continue }
+        for probe in gone {
+            guard let rec = record(forID: probe.id), var marker = rec.removal,
+                  probe.describes(marker), marker.noteTrashEmptied(at: now) else { continue }
             rec.removal = marker
             changed += 1
         }
@@ -119,7 +129,7 @@ extension VideoScanModel {
     /// small batches). Returns how many changed; the caller saves.
     @discardableResult
     func noteEmptiedTrash(in recs: [VideoRecord], now: Date = Date()) -> Int {
-        applyTrashEmptied(ids: Self.emptiedTrashCopies(trashCopyProbes(in: recs)), now: now)
+        applyTrashEmptied(Self.emptiedTrashCopies(trashCopyProbes(in: recs)), now: now)
     }
 
     /// "Trash emptied" for the whole catalog, with the stats OFF the main
@@ -132,7 +142,7 @@ extension VideoScanModel {
         let probes = trashCopyProbes(in: records)
         guard !probes.isEmpty else { return 0 }
         let gone = await Task.detached(priority: .utility) { Self.emptiedTrashCopies(probes) }.value
-        let changed = applyTrashEmptied(ids: gone, now: now)
+        let changed = applyTrashEmptied(gone, now: now)
         if changed > 0 {
             saveCatalogDebounced()
             noteCatalogRecordsMutated()

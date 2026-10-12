@@ -26800,7 +26800,8 @@
         "f2RestoreRefusesWhileTheFileIsInTheTrashAndWorksAfterPutBack",
         "f3ARowRepointedMidBatchIsNotStamped",
         "f4APurgedRowWithTheOldLabelStaysRestoredAfterReload",
-        "f4ATrashedRowWithTheOldLabelStaysRestoredAfterPutBack"
+        "f4ATrashedRowWithTheOldLabelStaysRestoredAfterPutBack",
+        "f5AStaleEmptiedProbeLeavesANewerMarkerAlone"
       ]
     }
   ],

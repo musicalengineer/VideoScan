@@ -149,4 +149,25 @@ struct OneEngineCodexRound1Tests {
         let back = try #require(try restoreSaveReload(rec, in: dir))
         #expect(!back.isPurged && back.archiveStage != .manuallyDeleted && back.lifecycleStage == .cataloged)
     }
+
+    // MARK: F5 — a stale probe never marks a newer Trash marker
+
+    @Test func f5AStaleEmptiedProbeLeavesANewerMarkerAlone() throws {
+        let dir = try scratch("f5"); defer { try? FileManager.default.removeItem(at: dir) }
+        let m = VideoScanModel()
+        m.catalogStore = CatalogStore(directory: dir.appendingPathComponent("catalog", isDirectory: true))
+        let rec = VideoRecord(); rec.fullPath = dir.appendingPathComponent("a.mov").path; rec.filename = "a.mov"
+        rec.removal = .inTrash(movedAt: Date(timeIntervalSince1970: 1_000), trashPath: dir.appendingPathComponent("gone-A").path,
+                               reason: .junk)
+        m.records = [rec]
+        let probes = m.trashCopyProbes(in: m.records)
+        let gone = VideoScanModel.emptiedTrashCopies(probes)
+        // Meanwhile: restored, trashed again — a new marker, Trash copy B exists.
+        let b = dir.appendingPathComponent("present-B"); try Data([1]).write(to: b)
+        rec.removal = .inTrash(movedAt: Date(timeIntervalSince1970: 2_000), trashPath: b.path, reason: .junk)
+
+        _ = m.applyTrashEmptied(gone, now: Date())
+
+        #expect(rec.removal?.isTrashEmptied == false, "the old probe marked the new Trash copy emptied")
+    }
 }
