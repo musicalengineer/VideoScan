@@ -136,7 +136,8 @@ enum CleanupWords {
     }
 
     static func archiveJunkToggle(_ count: Int) -> String {
-        "Include these \(count.formatted()) marked-junk file\(count == 1 ? "" : "s") from FamilyArchive"
+        count == 1 ? "Include this marked-junk file from FamilyArchive"
+                   : "Include these \(count.formatted()) marked-junk files from FamilyArchive"
     }
 
     /// "about 1.5 hours" at a conservative 200 MB/s (the LaCie HDDs).
