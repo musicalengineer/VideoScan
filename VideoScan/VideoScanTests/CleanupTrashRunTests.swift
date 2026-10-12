@@ -169,6 +169,35 @@ struct CleanupTrashRunTests {
         #expect([keep, extra, junk].allSatisfy { $0.removal == nil && FileManager.default.fileExists(atPath: $0.fullPath) })
     }
 
+    @Test("QA P2-1: the page is released by the job's STATE — a refused job, an early failure, a cancel — never only by the happy path")
+    func storeReleasedOnEveryExit() async throws {
+        let sb = try S("release")
+        defer { sb.cleanup() }
+        let (model, _, _) = try copyPair(sb)
+        let store = CleanupStore()
+        await store.refresh(model: model)?.value
+        // Refused before any work (a second run was already going).
+        let sel = try #require(store.beginRun())
+        #expect(store.isRunning)
+        let refused = CleanupTrashJob(model: model, selection: sel)
+        refused.refuseToStart(reason: "Cleanup is already running — nothing moved.")
+        store.watch(refused, model: model)
+        #expect(!store.isRunning, "a refused job must release the page")
+        #expect(store.lastRun == "Cleanup is already running — nothing moved.")
+        // Watched BEFORE it ends, then an early failure inside run().
+        await store.refresh(model: model)?.value
+        let sel2 = try #require(store.beginRun())
+        model.isReadOnly = true
+        let early = CleanupTrashJob(model: model, selection: sel2)
+        store.watch(early, model: model)
+        #expect(store.isRunning)
+        early.start()
+        await early.task?.value
+        #expect(!store.isRunning, "an early finish(failed:) must release the page")
+        #expect(early.wasRefused)
+        model.isReadOnly = false
+    }
+
     @Test("batches: the run is cut into checkpointed batches, in order, none lost")
     func chunks() {
         let cut = CleanupTrashJob.chunks(Array(0..<45), of: 20)

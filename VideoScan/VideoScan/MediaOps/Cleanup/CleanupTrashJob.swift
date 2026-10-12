@@ -148,8 +148,6 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     let selection: CleanupSelection
     private weak var model: VideoScanModel?
 
-    /// Told the one-line summary when the run ends (the page keeps it).
-    var onFinished: (@MainActor (String) -> Void)?
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
 
@@ -449,7 +447,6 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     private func conclude(model: VideoScanModel, audit: DeletionAudit) async {
         audit.finish()
         let line = totals.line
-        onFinished?(line)
         if saveFailed {
             finish(failed: "Stopped — a catalog save was not confirmed. " + line)
         } else if stopRequested || state == .cancelling {
@@ -512,12 +509,15 @@ extension MediaFileOperationsCenter {
     /// Start one Cleanup run over a frozen selection. One run at a time —
     /// a second request is refused (nothing moved).
     @discardableResult
-    func startCleanup(selection: CleanupSelection, model: VideoScanModel,
-                      onFinished: (@MainActor (String) -> Void)? = nil) -> CleanupTrashJob {
+    func startCleanup(selection: CleanupSelection, model: VideoScanModel) -> CleanupTrashJob {
         let job = CleanupTrashJob(model: model, selection: selection)
-        job.onFinished = onFinished
         let busy = jobs.contains { $0.state.isActive && $0 is CleanupTrashJob }
-        guard add(job) else { return job }
+        guard add(job) else {
+            // The centre refuses on a viewer Mac: say so on the job, so a
+            // page watching its state is released (it never ran).
+            job.refuseToStart(reason: "this Mac is a read-only viewer of the catalog — nothing moved.")
+            return job
+        }
         if busy {
             job.refuseToStart(reason: "Cleanup is already running — wait for it to finish (or stop it). Nothing moved.")
             return job

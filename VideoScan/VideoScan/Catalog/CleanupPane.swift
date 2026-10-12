@@ -84,10 +84,23 @@ final class CleanupStore: ObservableObject {
     /// Start the one job over exactly what the page shows as selected.
     func start(model: VideoScanModel, center: MediaFileOperationsCenter) {
         guard let selection = beginRun() else { return }
-        _ = center.startedByUser { c in
-            c.startCleanup(selection: selection, model: model) { [weak self] line in
-                self?.runFinished(line, model: model)
-            }
+        let job = center.startedByUser { $0.startCleanup(selection: selection, model: model) }
+        watch(job, model: model)
+    }
+
+    private var jobWatch: AnyCancellable?
+
+    /// Release the page when the job reaches ANY terminal state — refused
+    /// before it started, failed early, stopped, or finished — by watching
+    /// its state, never by trusting one callback on the happy path (QA
+    /// P2-1). `$state` replays the current value on subscribe, so a job
+    /// that is already terminal releases at once. The row's subtitle is the
+    /// one-line summary in every terminal path.
+    func watch(_ job: CleanupTrashJob, model: VideoScanModel) {
+        jobWatch = job.$state.sink { [weak self, weak job] state in
+            guard !state.isActive, let self, let job else { return }
+            self.jobWatch = nil
+            self.runFinished(job.subtitle, model: model)
         }
     }
 
