@@ -314,7 +314,9 @@ extension VideoScanModel {
                 turns.append(JunkTurnIdentity(rec))
                 outcomes.append(await junkTurn(rec, guard: fileGuard, disk: disk))
             }
-            if let last = outcomes.last { fileGuard?.settled?(rec, last) }
+            // Reported on the record that still describes the file this
+            // turn was about (codex round 2 P2), never a row relinked meanwhile.
+            if let last = outcomes.last { fileGuard?.settled?(reportedRecord(rec, turn: turns.last ?? nil), last) }
         }
         return applyJunkOutcomes(requested, outcomes, turns: turns, mode: mode, reason: reason)
     }
@@ -384,7 +386,11 @@ extension VideoScanModel {
             Self.stampRemoval(target, marker, stage: stage)
             if outcome.isMoved { removedFromDisk.append(target) }
         }
-        let result = JunkDeletionResult(items: zip(records, outcomes).map { .init(record: $0, outcome: $1) })
+        // The items name the file each outcome was about (codex round 2 P2):
+        // a row relinked mid-turn is reported through its frozen snapshot.
+        let result = JunkDeletionResult(items: zip(records, outcomes).enumerated().map { i, pair in
+            .init(record: reportedRecord(pair.0, turn: turns[i]), outcome: pair.1)
+        })
 
         // Single batched persist (a per-record save would saturate the
         // debouncer and could leave a half-written catalog on a crash).
@@ -410,11 +416,23 @@ extension VideoScanModel {
     /// ledger and receipt still say what left (the Delete Duplicates rule,
     /// codex 1593 #4).
     private func settlementTarget(_ rec: VideoRecord, turn: JunkTurnIdentity?) -> VideoRecord {
+        let target = reportedRecord(rec, turn: turn)
+        if let turn, target === turn.snapshot {
+            log("  Catalog changed while trashing \(turn.snapshot.filename); the current row is left as it is")
+        }
+        return target
+    }
+
+    /// The record an outcome is REPORTED on — the result item, the guard's
+    /// `settled` callback (every lane's audit and receipt read it), and the
+    /// stamp: the live row with the turn's id while it still describes the
+    /// path frozen at the turn, else the detached snapshot (codex round 2
+    /// P2: trash A, repoint the row to B before settlement → the report must
+    /// say A). No turn (decided before any disk work) → the row as given.
+    private func reportedRecord(_ rec: VideoRecord, turn: JunkTurnIdentity?) -> VideoRecord {
         guard let turn else { return rec }
         let live = record(forID: turn.id) ?? rec
-        guard live.fullPath != turn.path else { return live }
-        log("  Catalog changed while trashing \(turn.snapshot.filename); the current row is left as it is")
-        return turn.snapshot
+        return live.fullPath == turn.path ? live : turn.snapshot
     }
 
     /// Convenience filter: every active (non-purged) record currently
