@@ -142,3 +142,7 @@ All 7 findings accepted into `docs/design/cleanup_kiss_2026_10_12.md` v2 (design
 5. Groups built from full SHA-256 + size, not sampled-hash groups (rule 2).
 6. Avid MediaFiles + A/V halves excluded at execution (rule 4).
 7. Ties excluded; persistent outcome report; "GB selected" wording (page + rule 4).
+
+## Closed
+
+Closed by `df114b7db` at 2026-10-12T15:54:24Z. all 7 folded into design v2

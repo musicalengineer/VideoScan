@@ -1,6 +1,6 @@
 # Cleanup, from scratch (KISS)
 
-**Status:** v2. Revised after the codex design review (`docs/reviews/codex/codex-design-cleanup-kiss-2026-10-12.md`, verdict "fix", 7 findings, all accepted below). One open question for Rick, at the end. No code yet.
+**Status:** v2. Revised after the codex design review (`docs/reviews/codex/codex-design-cleanup-kiss-2026-10-12.md`, verdict "fix", 7 findings, all accepted below). Rick's FamilyArchive-junk ruling recorded (option b). No code yet.
 **Premise (Rick 10/11):** back to basics. Every catalog file has a stored full SHA-256; nightly on 10/11, 9,738 were hashed. A file without one is never deleted. Cleanup only centralizes logic we already have.
 
 ## The one question
@@ -58,9 +58,13 @@ Under the table: **Move N files (X GB) to the Trash…** That starts one MFO job
 
 "Junk you marked" has no surviving copy, so it falls outside rule 1 by definition. On 10/09 we settled that the survivor proof applies to *duplicates only*. Codex's simplest v1 leaves junk out of Cleanup entirely. Junk stays where it is today, as Triage ▸ Delete Junk, except on FamilyArchive, where it is blocked.
 
-🔴 **Rick's one open question: FamilyArchive junk.**
-- **(a) Recommended for now:** keep FamilyArchive locked. The 20 junk files (0.65 GB, all Berklee "Sounds" folders) wait.
-- **(b)** Add a per-run tick box: "Include these 20 marked-junk files from FamilyArchive". It is off by default, lists the exact files, re-checks that each is still marked junk, and resets after the run. It never unlocks copy trimming.
+**Decided (Rick, 10/12): option (b), in v1.** A per-run tick box: "Include these N marked-junk files from FamilyArchive".
+- It is off by default and lists the exact files.
+- At the move, each file is re-checked: it must still be marked junk and unchanged.
+- The tick box resets after the run.
+- It never unlocks copy trimming on FamilyArchive.
+
+Junk from other drives also comes into Cleanup as a second row, "Junk you marked". It uses the same engine and the same outcome report. Junk has no survivor proof; the proof is that Rick marked it and it hasn't changed since.
 
 ## Build order (once Rick says go)
 
