@@ -73,8 +73,9 @@ extension VideoScanModel {
     /// class of codex #258). Master Archive files and drives marked Read only
     /// are left alone, row and file.
     ///
-    /// `trash` is the file operation, for tests; nil = FileManager's
-    /// trashItem, whose resulting location goes on the marker and receipt.
+    /// `trash` is the file operation, for tests; nil = THE one Trash call,
+    /// `MediaTrash.move`, whose resulting location goes on the marker and
+    /// the receipt.
     /// Explicit one-shot user action → a synchronous save afterwards (the
     /// header's persistence rule), on top of the engine's debounced one.
     @discardableResult
