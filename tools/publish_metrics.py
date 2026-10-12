@@ -17,6 +17,13 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   last 90 nights of the 2 AM run per Mac, each
                                   night classified green / red / did_not_run by
                                   classify_nightly_row(). Rebuilt on every run.
+    metrics/github_daily.jsonl    one row per UTC day: open issues, open bugs,
+                                  bugs opened / closed in the last 7 days and
+                                  in the last 1 day (the page sums the 1-day
+                                  counts per ISO week for its opened-vs-closed
+                                  bars). A day that publishes twice keeps the
+                                  later row; a day on which `gh` failed gets
+                                  NO row (never nulls in a trend).
 
 It runs at the end of the 4 AM coverage job and of the adversarial confirm job.
 Both call it the same way; a run with nothing new commits nothing.
@@ -261,7 +268,18 @@ SCHEMAS: Dict[str, dict] = {
                             "nights": ("list", ("obj", {"date": "date",
                                                         "hosts": ("map", "hostlabel", ("obj", _NIGHT))}))}),
     },
+    # The bug trend (GH #310 follow-up): one row per UTC day, numbers only, no
+    # nulls — a day gh failed on is absent, so the page's lines break there.
+    "github_daily.jsonl": {
+        "ts": "ts",
+        "open_issues": "int", "open_bugs": "int",
+        "bugs_opened_7d": "int", "bugs_closed_7d": "int",
+        "bugs_opened_1d": "int", "bugs_closed_1d": "int",
+    },
 }
+GITHUB_DAILY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d",
+                     "bugs_opened_1d", "bugs_closed_1d")
+GITHUB_SUMMARY_KEYS = ("open_issues", "open_bugs", "bugs_opened_7d", "bugs_closed_7d", "main_sha", "main_date")
 
 # Streams whose existing rows were published by someone else (GitHub CI):
 # fresh rows are validated and appended (deduplicated by ts + sha); rows
@@ -746,21 +764,23 @@ def _gh_json(gh: Callable[..., Optional[str]], *args: str):
         return None
 
 
-def github_summary(gh: Callable[..., Optional[str]], now: datetime, repo: str = GITHUB_REPO) -> dict:
-    """Open issues, open bugs, bugs opened / closed in the last 7 days, and the
-    tip of main. Each field is null when its `gh` call fails."""
-    g = {"open_issues": None, "open_bugs": None, "bugs_opened_7d": None, "bugs_closed_7d": None,
-         "main_sha": None, "main_date": None}
+def github_numbers(gh: Callable[..., Optional[str]], now: datetime, repo: str = GITHUB_REPO) -> dict:
+    """Every GitHub number both streams draw on, from three `gh` calls: open
+    issues; open bugs and bugs opened / closed in the last 7 days and the last
+    1 day; the tip of main. Each field is null when its `gh` call fails."""
+    g: Dict[str, object] = {k: None for k in GITHUB_SUMMARY_KEYS + ("bugs_opened_1d", "bugs_closed_1d")}
     issues = _gh_json(gh, "issue", "list", "-R", repo, "--state", "open", "--limit", "1000", "--json", "number")
     if isinstance(issues, list):
         g["open_issues"] = len(issues)
     bugs = _gh_json(gh, "issue", "list", "-R", repo, "--state", "all", "--label", "bug", "--limit", "1000",
                     "--json", "state,createdAt,closedAt")
     if isinstance(bugs, list):
-        since = (now - timedelta(days=7)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        g["open_bugs"] = sum(1 for b in bugs if isinstance(b, dict) and b.get("state") == "OPEN")
-        g["bugs_opened_7d"] = sum(1 for b in bugs if isinstance(b, dict) and str(b.get("createdAt") or "") >= since)
-        g["bugs_closed_7d"] = sum(1 for b in bugs if isinstance(b, dict) and str(b.get("closedAt") or "") >= since)
+        rows = [b for b in bugs if isinstance(b, dict)]
+        g["open_bugs"] = sum(1 for b in rows if b.get("state") == "OPEN")
+        for days, suffix in ((7, "7d"), (1, "1d")):
+            since = (now - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%SZ")
+            g["bugs_opened_" + suffix] = sum(1 for b in rows if str(b.get("createdAt") or "") >= since)
+            g["bugs_closed_" + suffix] = sum(1 for b in rows if str(b.get("closedAt") or "") >= since)
     tip = _gh_json(gh, "api", f"repos/{repo}/commits/main")
     if isinstance(tip, dict):
         sha = tip.get("sha")
@@ -768,6 +788,24 @@ def github_summary(gh: Callable[..., Optional[str]], now: datetime, repo: str = 
         g["main_sha"] = sha[:12] if isinstance(sha, str) and SHA_RE.match(sha) else None
         g["main_date"] = date if DATE_RE.match(date) else None
     return g
+
+
+def github_summary(gh: Callable[..., Optional[str]], now: datetime, repo: str = GITHUB_REPO) -> dict:
+    """The `github` object of summary_latest.json: open issues, open bugs, bugs
+    opened / closed in the last 7 days, and the tip of main (nulls on failure)."""
+    return summary_github(github_numbers(gh, now, repo))
+
+
+def summary_github(numbers: dict) -> dict:
+    return {k: numbers.get(k) for k in GITHUB_SUMMARY_KEYS}
+
+
+def github_daily_row(numbers: dict, now: datetime) -> Optional[dict]:
+    """Today's row of github_daily.jsonl, or None when any count is missing: a
+    trend never carries a null, the day is simply absent and the line breaks."""
+    if any(numbers.get(k) is None for k in GITHUB_DAILY_KEYS):
+        return None
+    return dict({"ts": now.strftime("%Y-%m-%dT%H:%M:%SZ")}, **{k: numbers[k] for k in GITHUB_DAILY_KEYS})
 
 
 def sprint_summary(gh: Callable[..., Optional[str]], repo: str = GITHUB_REPO) -> Optional[dict]:
@@ -799,48 +837,75 @@ def demo_tags(git: Callable, wt: Path) -> List[dict]:
     return sorted(tags, key=lambda t: (t["date"], t["name"]))
 
 
-def summary_builder(*, gh: Optional[Callable[..., Optional[str]]] = None, git: Optional[Callable] = None,
-                    now: Optional[datetime] = None, pbxproj: Path = PBXPROJ,
-                    repo: str = GITHUB_REPO) -> Callable[[Path], dict]:
-    """Returns build(metrics_dir) -> the summary_latest.json object. The GitHub
-    part is fetched once and reused across push retries; the nightly part is
-    re-read from metrics_dir each time (it is what the fetch just brought in)."""
-    gh = gh or Gh()
-    git = git or Git()
-    when = now or datetime.now(timezone.utc)
-    cached: Dict[str, object] = {}
+class SummaryBuilder:
+    """build(metrics_dir) -> the summary_latest.json object; daily_rows() ->
+    today's github_daily.jsonl row (a one-row list), or None when gh failed.
+    The GitHub part is fetched once and reused across push retries; the nightly
+    part is re-read from metrics_dir each time (it is what the fetch just
+    brought in)."""
 
-    def build(metrics_dir: Path) -> dict:
-        if not cached:
-            cached["github"] = github_summary(gh, when, repo)
-            cached["sprint"] = sprint_summary(gh, repo)
-            cached["version"] = app_version(pbxproj)
+    def __init__(self, *, gh: Optional[Callable[..., Optional[str]]] = None, git: Optional[Callable] = None,
+                 now: Optional[datetime] = None, pbxproj: Path = PBXPROJ, repo: str = GITHUB_REPO):
+        self.gh = gh or Gh()
+        self.git = git or Git()
+        self.when = now or datetime.now(timezone.utc)
+        self.pbxproj = pbxproj
+        self.repo = repo
+        self._cached: Dict[str, object] = {}
+
+    def _github(self) -> Dict[str, object]:
+        if not self._cached:
+            self._cached["numbers"] = github_numbers(self.gh, self.when, self.repo)
+            self._cached["sprint"] = sprint_summary(self.gh, self.repo)
+            self._cached["version"] = app_version(self.pbxproj)
+        return self._cached
+
+    def __call__(self, metrics_dir: Path) -> dict:
+        c = self._github()
         td_rows = _read_jsonl(Path(metrics_dir) / "testdriver.jsonl")
         return {
             "schemaVersion": SCHEMA_VERSION,
-            "generated": when.strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "version": cached["version"],
-            "github": cached["github"],
-            "sprint": cached["sprint"],
-            "tags": demo_tags(git, Path(metrics_dir).parent),
+            "generated": self.when.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "version": c["version"],
+            "github": summary_github(c["numbers"]),
+            "sprint": c["sprint"],
+            "tags": demo_tags(self.git, Path(metrics_dir).parent),
             "person": person_summary(td_rows),
-            "nightly": nightly_summary(td_rows, when.strftime("%Y-%m-%d")),
+            "nightly": nightly_summary(td_rows, self.when.strftime("%Y-%m-%d")),
         }
-    return build
+
+    def daily_rows(self) -> Optional[List[dict]]:
+        row = github_daily_row(self._github()["numbers"], self.when)
+        return None if row is None else [row]
+
+
+def summary_builder(**kwargs) -> SummaryBuilder:
+    """See SummaryBuilder; kept as the factory the CLI and tests call."""
+    return SummaryBuilder(**kwargs)
 
 
 # ---------------------------------------------------------------- merge + render
 
+def _day_key(row: dict) -> Optional[str]:
+    """The UTC day a row belongs to: its `date`, or the date part of its `ts`
+    (the github_daily stream carries a timestamp, one row per day)."""
+    if isinstance(row.get("date"), str):
+        return row["date"]
+    ts = row.get("ts")
+    return ts[:10] if isinstance(ts, str) and TS_RE.match(ts) else None
+
+
 def merge_rows(existing: List[dict], fresh: List[dict]) -> List[dict]:
-    """Union keyed by date; a fresh row replaces the published row for its date.
+    """Union keyed by day; a fresh row replaces the published row for its day.
     Days only on the branch (e.g. a coverage JSON since deleted locally) are kept."""
     by_date = {}
     for row in existing:
-        if isinstance(row.get("date"), str):
-            by_date[row["date"]] = row
+        key = _day_key(row)
+        if key is not None:
+            by_date[key] = row
     for row in fresh:
-        by_date[row["date"]] = row
-    return [by_date[d] for d in sorted(by_date)]
+        by_date[_day_key(row)] = row      # a key-less fresh row fails the gate right after
+    return [by_date[d] for d in sorted(by_date, key=str)]
 
 
 def render(rows: List[dict]) -> str:
@@ -913,10 +978,13 @@ def ensure_worktree(repo: Path, wt: Path, git: Git) -> None:
 def publish(fresh: Dict[str, Optional[List[dict]]], *, repo: Path = REPO, wt: Path = DEFAULT_WT,
             git: Optional[Git] = None, folders: Optional[set] = None,
             say: Callable[[str], None] = print,
-            summary: Optional[Callable[[Path], dict]] = None) -> str:
+            summary: Optional[Callable[[Path], dict]] = None,
+            daily: Optional[Callable[[], Optional[List[dict]]]] = None) -> str:
     """Merge, validate, commit and push. Returns "pushed" or "unchanged".
-    `summary(metrics_dir)` (see summary_builder) runs after each fetch, so the
-    nights it summarizes are the ones just pulled from the branch."""
+    `summary(metrics_dir)` (see SummaryBuilder) runs after each fetch, so the
+    nights it summarizes are the ones just pulled from the branch. `daily()`
+    (SummaryBuilder.daily_rows) is today's github_daily.jsonl row, or None to
+    leave that stream exactly as published."""
     git = git or Git()
     wt = wt.expanduser().resolve()
     ensure_worktree(repo, wt, git)
@@ -925,6 +993,8 @@ def publish(fresh: Dict[str, Optional[List[dict]]], *, repo: Path = REPO, wt: Pa
         git(wt, "reset", "--hard", "--quiet", REMOTE_REF)
         if summary is not None:
             fresh = dict(fresh, **{"summary_latest.json": summary(wt / "metrics")})
+        if daily is not None:
+            fresh = dict(fresh, **{"github_daily.jsonl": daily()})
         files = sanitized_files(fresh, wt / "metrics", folders)   # PrivacyError stops here
         changed = []
         for name, text in files.items():
@@ -1001,6 +1071,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         if a.dry_run or a.out_dir:
             if summary is not None and a.metrics_dir:
                 fresh["summary_latest.json"] = summary(Path(a.metrics_dir).expanduser())
+                fresh["github_daily.jsonl"] = summary.daily_rows()
             available = sorted(k for k, v in fresh.items() if v is not None)
             files = sanitized_files(fresh, None, folders)
             if a.out_dir:
@@ -1014,8 +1085,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     sys.stdout.write(text)
             print(f"OUTCOME ok: dry run, {len(files)} stream(s) validated: {', '.join(available) or 'none'}")
             return 0
-        result = publish(fresh, wt=Path(a.worktree), folders=folders, summary=summary)
+        result = publish(fresh, wt=Path(a.worktree), folders=folders, summary=summary,
+                         daily=None if summary is None else summary.daily_rows)
         available = sorted(k for k, v in fresh.items() if v is not None) + ([] if summary is None else ["summary_latest.json"])
+        if summary is not None and summary.daily_rows() is not None:
+            available.append("github_daily.jsonl")
     except PrivacyError as exc:
         print(f"OUTCOME failed: privacy gate refused the publish: {exc}")
         return 3

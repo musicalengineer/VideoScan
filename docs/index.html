@@ -15,8 +15,11 @@
   raw.githubusercontent.com (public, no auth, CORS *) plus the public GitHub
   Actions API. tools/publish_metrics.py adds metrics/summary_latest.json
   (app version, GitHub counts, sprint, demo tags, the last 90 nights per Mac
-  classified green / red / did_not_run); the page never classifies a night
-  itself and never reads a row's free text (names, reasons, paths).
+  classified green / red / did_not_run) and metrics/github_daily.jsonl (one
+  row per UTC day of open issues / bugs and bugs opened / closed, for the
+  Open-bugs sparkline and the weekly opened-vs-fixed bars in the Reviews
+  twist); the page never classifies a night itself and never reads a row's
+  free text (names, reasons, paths).
 
   Layout, top to bottom:
     1. Headline strip: version · app source lines (app only) · last night's
@@ -70,6 +73,7 @@
   .tile .value small { font-size: 17px; letter-spacing: 0; font-weight: 500; color: var(--muted); }
   .tile .words { font-size: 16px; color: var(--muted); margin-top: 12px; line-height: 1.55; overflow-wrap: anywhere; }
   .tile .words b { color: var(--fg); font-weight: 600; }
+  .tile .spark { margin-top: 10px; }
   .hosts { display: flex; gap: 7px; margin: 8px 0 12px; flex-wrap: wrap; }
   .hosts > span { font-size: 15px; display: inline-flex; align-items: center; gap: 7px; padding: 6px 9px; border-radius: 7px; background: var(--chip-bg); border: 1px solid var(--border); min-width: 0; max-width: 100%; flex-wrap: wrap; overflow-wrap: anywhere; }
   .hosts > .red { border-color: var(--bad); }
@@ -558,9 +562,55 @@ function stability(N) {
            redStreak, greenStreak, lastRed, lastGreen, daysSinceRed: daysSince(lastRed), last7 };
 }
 
+// ---------------------------------------------------------------- the bug trend (from github_daily.jsonl)
+// The publisher writes one row per UTC day; a day gh failed on has NO row. So a
+// missing day is a gap: the sparkline breaks there and a week with no rows has
+// no bar — never a zero the publisher did not measure.
+const utcDay = ts => String(ts || "").slice(0, 10);
+const utcDate = dayStr => new Date(`${dayStr}T00:00:00Z`);
+const isoDay = date => date.toISOString().slice(0, 10);
+const DAY_MS = 86400000;
+// The last row of each UTC day (the publisher keeps one; this keeps the page honest if it ever did not).
+function lastPerUtcDay(rows) {
+  const byDay = new Map();
+  for (const r of sortByTs(rows.slice())) byDay.set(utcDay(r.ts), r);
+  return byDay;
+}
+// `key` on each of the last `days` UTC days ending `today`; null where no row was published.
+function dailySeries(rows, key, days, today = new Date()) {
+  const byDay = lastPerUtcDay(rows);
+  const end = utcDate(isoDay(today)).getTime();
+  return Array.from({ length: days }, (_, i) => {
+    const r = byDay.get(isoDay(new Date(end - (days - 1 - i) * DAY_MS)));
+    return r && isNum(r[key]) ? r[key] : null;
+  });
+}
+// The Monday (UTC) that starts the ISO week holding `dayStr`.
+function isoWeekMonday(dayStr) {
+  const d = utcDate(dayStr);
+  d.setUTCDate(d.getUTCDate() - (d.getUTCDay() + 6) % 7);
+  return isoDay(d);
+}
+// Weekly bars for the last `weeks` ISO weeks ending with today's: opened / fixed
+// are the sum of the 1-day counts of the days that were published in that week
+// (no rows -> null, not 0); open is the week's last published open_bugs.
+function weeklyBugs(rows, weeks, today = new Date()) {
+  const out = new Map();
+  const last = utcDate(isoWeekMonday(isoDay(today))).getTime();
+  for (let i = weeks - 1; i >= 0; i--) out.set(isoDay(new Date(last - i * 7 * DAY_MS)), { opened: null, closed: null, open: null });
+  for (const [dayStr, r] of lastPerUtcDay(rows)) {
+    const w = out.get(isoWeekMonday(dayStr));
+    if (!w) continue;
+    if (isNum(r.bugs_opened_1d)) w.opened = (w.opened || 0) + r.bugs_opened_1d;
+    if (isNum(r.bugs_closed_1d)) w.closed = (w.closed || 0) + r.bugs_closed_1d;
+    if (isNum(r.open_bugs)) w.open = r.open_bugs;
+  }
+  return Array.from(out, ([monday, w]) => ({ monday, ...w }));
+}
+
 // ---------------------------------------------------------------- 1. headline strip
-function tile(label, value, words, state = "") {
-  return `<div class="tile"${state ? ` data-state="${esc(state)}"` : ""}><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="words">${words}</div></div>`;
+function tile(label, value, words, state = "", graphic = "") {
+  return `<div class="tile"${state ? ` data-state="${esc(state)}"` : ""}><div class="label">${esc(label)}</div><div class="value">${value}</div>${graphic}<div class="words">${words}</div></div>`;
 }
 function renderHead(d) {
   const S = d.summary || {};
@@ -604,12 +654,13 @@ function renderHead(d) {
     tiles.push(tile("Stability", `<span class="word grey">${DASH}</span>`, "waits on the nightly summary"));
   }
 
-  // Open bugs (gh via the publisher; null when gh failed)
+  // Open bugs (gh via the publisher; null when gh failed) + the 30-day trend from github_daily.jsonl
   const issues = isNum(g.open_issues) ? g.open_issues : (isNum(last.open_issues) ? last.open_issues : null);
+  const bugSpark = d.ghDaily.length ? spark(dailySeries(d.ghDaily, "open_bugs", 30), C.red) : "";
   tiles.push(tile("Open bugs", isNum(g.open_bugs) ? `${g.open_bugs} <small>bugs</small>` : `<span class="word grey">${DASH}</span>`,
     isNum(g.open_bugs)
-      ? `<b>${n(g.bugs_opened_7d)} found</b> this week · ${n(g.bugs_closed_7d)} fixed · ${n(issues)} issues open in all`
-      : `GitHub counts not available${isNum(issues) ? ` · ${n(issues)} issues open (CI row)` : ""}`));
+      ? `<b>${n(g.open_bugs)} open</b> · +${n(g.bugs_opened_7d)} new / −${n(g.bugs_closed_7d)} fixed this week · ${n(issues)} issues open in all`
+      : `GitHub counts not available${isNum(issues) ? ` · ${n(issues)} issues open (CI row)` : ""}`, "", bugSpark));
 
   // Sprint milestone
   const sp = S.sprint;
@@ -1236,10 +1287,17 @@ const BODIES = {
       cards.push(card("Codex findings", sum("findings"), null, null, false, ""));
       cards.push(card("Docs without a header", sum("unparsed_docs"), null, null, false, ""));
     }
-    body.innerHTML = moved("Moved here unchanged: the Adversarial review cards, chart and per-night table, and the Codex cards and chart.") +
+    body.innerHTML = moved("Moved here unchanged: the Adversarial review cards, chart and per-night table, and the Codex cards and chart. New: the bug trend — bugs opened and fixed per ISO week with the open-bug count, from the publisher's daily GitHub row.") +
       `<div class="cards">${cards.join("")}</div><div class="charts">` +
       chartBox("Adversarial findings by severity, per night", "c-adv") + chartBox("Codex passes and findings per day", "c-codex") +
-      tableBox("Adversarial, per night", "adv-table") + "</div>";
+      tableBox("Adversarial, per night", "adv-table") +
+      chartBox("Bugs opened and fixed per week, with open bugs (last 12 weeks)", "c-bugs", "wide") + "</div>";
+    const weeks = weeklyBugs(d.ghDaily, 12);
+    chartOrNote("c-bugs", "bar", weeks.map(w => `wk of ${day(w.monday)}`), [
+      { label: "opened", data: weeks.map(w => w.opened), backgroundColor: C.red },
+      { label: "fixed", data: weeks.map(w => w.closed), backgroundColor: C.green },
+      { type: "line", label: "open bugs", data: weeks.map(w => w.open), ...lineStyle(C.blue), spanGaps: false },
+    ], chartDefaults, "No daily GitHub rows published yet (metrics/github_daily.jsonl, tools/publish_metrics.py).");
     if (!last) { note("c-adv", NO_DATA); document.getElementById("adv-table").textContent = NO_DATA; }
     else {
       chartOrNote("c-adv", "bar", rows.map(r => r.date), [
@@ -1433,7 +1491,7 @@ async function loadData() {
   } catch {}
 
   METRICS_SHA = await resolveMetricsSha();
-  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, summaryText, searchText, ciRun, naRun] = await Promise.all([
+  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, summaryText, ghDailyText, searchText, ciRun, naRun] = await Promise.all([
     fetchText(rawUrl("history.jsonl"), local("history.jsonl")),
     fetchText(rawUrl("static_analysis.jsonl"), local("static_analysis.jsonl")),
     fetchText(rawUrl("testdriver.jsonl"), local("testdriver.jsonl")),
@@ -1446,6 +1504,7 @@ async function loadData() {
     fetchText(rawUrl("exposure.jsonl"), local("exposure.jsonl")),
     fetchText(rawUrl("problem_files_latest.json"), local("problem_files_latest.json")),
     fetchText(rawUrl("summary_latest.json"), local("summary_latest.json")),
+    fetchText(rawUrl("github_daily.jsonl"), local("github_daily.jsonl")),
     fetchText(rawUrl("search_benchmarks.jsonl"), SEARCH_BENCHMARKS_LOCAL),
     latestMainRun("ci.yml"),
     latestMainRun("nightly-analysis.yml"),
@@ -1467,6 +1526,8 @@ async function loadData() {
     exRows: sortByTs(parseJsonl(exText).filter(r => r.schemaVersion === 1 && r.ts && r.totals)),
     problemFiles: parseJson(pfText),
     summary: summary && summary.schemaVersion === 1 && typeof summary === "object" ? summary : null,
+    // One publisher row per UTC day; only well-formed timestamps are kept so day/week keys never throw.
+    ghDaily: sortByTs(parseJsonl(ghDailyText).filter(r => typeof r.ts === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(r.ts) && !Number.isNaN(toTime(r.ts)))),
     searchText, searchLatest: null,
     ciRun, naRun,
   };
