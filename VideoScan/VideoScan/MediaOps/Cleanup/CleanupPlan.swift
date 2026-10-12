@@ -227,9 +227,11 @@ enum CleanupPathRules {
 
     /// Runs through a folder named like the Master Archive's root, by NAME —
     /// a second net under the tree check for a path spelled differently
-    /// from the designation. Junk there is never offered.
+    /// from the designation. Case-insensitive, like the volumes it sits
+    /// on (QA P3). Junk there is never offered, and the engine's
+    /// FamilyArchive-junk waiver never lifts it.
     static func isInArchiveRootFolder(_ path: String) -> Bool {
-        path.contains("/\(MasterArchiveLayout.rootFolderName)/")
+        path.range(of: "/\(MasterArchiveLayout.rootFolderName)/", options: .caseInsensitive) != nil
     }
 
     /// Inside an application's library package, or an iMovie / Final Cut

@@ -169,7 +169,7 @@ extension VideoScanModel {
         /// check ("/var/…" vs "/private/var/…").
         func waives(_ refusal: BulkDeleteRefusal?, for rec: VideoRecord) -> Bool {
             refusal == .archiveVolume && archiveVolumeJunkWaiver.contains(rec.id)
-                && !rec.fullPath.contains("/\(MasterArchiveLayout.rootFolderName)/")
+                && !CleanupPathRules.isInArchiveRootFolder(rec.fullPath)
         }
     }
 

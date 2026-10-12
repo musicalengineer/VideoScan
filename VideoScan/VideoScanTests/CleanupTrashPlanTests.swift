@@ -217,11 +217,16 @@ struct CleanupTrashPlanTests {
         // volume (a spelling that hid it from the tree check): never.
         let jByName = F.row("/Volumes/FamilyArchive 1/Breen_Family_Archive/1990s/y.mov", digest: nil, junk: true,
                             protection: .archiveVolume)
-        let plan = F.plan([j1, jFA, jTree, jArch, jPair, jRO, jByName])
+        // …and the same net is case-insensitive, like the volumes (QA P3).
+        let jByNameLower = F.row("/Volumes/FamilyArchive 1/breen_family_archive/1990s/z.mov", digest: nil, junk: true,
+                                 protection: .archiveVolume)
+        #expect(CleanupPathRules.isInArchiveRootFolder(jByNameLower.path))
+        #expect(!CleanupPathRules.isInArchiveRootFolder("/Volumes/X/Breen_Family_Archive_old/a.mov"))
+        let plan = F.plan([j1, jFA, jTree, jArch, jPair, jRO, jByName, jByNameLower])
         #expect(plan.junk.map(\.id) == [j1.id])
         #expect(plan.archiveJunk.map(\.id) == [jFA.id])
         let r = F.reasons(plan)
-        #expect(r[CleanupExclusion.archived.key] == 3)
+        #expect(r[CleanupExclusion.archived.key] == 4)
         #expect(r[CleanupExclusion.pairHalf.key] == 1)
         #expect(plan.leftAlone[.protected("read only")]?.files == 1)
     }
