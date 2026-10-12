@@ -132,4 +132,22 @@ struct OneRemovalShapeTests {
         #expect(m.records.contains { $0 === missing } && missing.removal?.state == .missing)
         #expect(m.records.count == 3)
     }
+
+    // What Show Removed says about a hidden row (pure words, fixed dates).
+    @Test func showRemovedNamesTheStateInFamilyWords() {
+        let day = Date(timeIntervalSince1970: 1_760_140_800)   // 11 Oct 2025, 00:00 UTC
+        let style = Date.FormatStyle(date: .numeric, time: .omitted, locale: Locale(identifier: "en_US_POSIX"),
+                                     timeZone: TimeZone(identifier: "UTC")!)
+        var trash = RemovalMarker.inTrash(movedAt: day, trashPath: "/T/a.mov", reason: .junk)
+        #expect(trash.stateWords == "In the Trash")
+        #expect(trash.sentence(dateStyle: style) == "in the Trash since 10/11/2025")
+        _ = trash.noteTrashEmptied(at: day)
+        #expect(trash.sentence(dateStyle: style).hasSuffix("— the Trash has since been emptied"))
+        let removed = RemovalMarker.removedFromCatalog(at: day, reason: .userRemoved)
+        #expect(removed.sentence(dateStyle: style) == "removed from the catalog on 10/11/2025 — the file was not touched")
+        let label = RemovalMarker.removedFromCatalog(at: day, reason: .legacyDeletedLabel)
+        #expect(label.sentence(dateStyle: style).contains("never moved"), "the old label never moved a file")
+        let missing = RemovalMarker.missing(noticedAt: day, lastSeen: nil, reason: .missingOnDisk)
+        #expect(missing.stateWords == "Missing" && missing.sentence(dateStyle: style) == "missing since 10/11/2025")
+    }
 }

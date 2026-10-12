@@ -22,7 +22,8 @@ extension CatalogContent {
     private func filenameTooltip(for rec: VideoRecord, offline: Bool, purged: Bool) -> String {
         var tip: String
         if purged {
-            tip = "\(rec.directory) (removed from catalog)"
+            // GH #143: the one removal marker says which kind of "removed".
+            tip = "\(rec.directory) (\(rec.removal?.sentence() ?? "removed from catalog"))"
         } else if rec.isSetAside {
             let label = rec.setAsideReason
                 .flatMap { CatalogScopePolicy.SetAsideReason(rawValue: $0)?.friendlyLabel }
