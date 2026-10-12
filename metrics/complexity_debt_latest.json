@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-11T11:07:01Z",
- "sha": "b85b8adb",
+ "ts": "2026-10-12T12:35:48Z",
+ "sha": "a4afa199",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 411,
- "baseline_before": 410,
- "baseline_after": 410,
+ "offenders": 410,
+ "baseline_before": 409,
+ "baseline_after": 409,
  "new": [
   {
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.prepareDuplicateDeletion",
@@ -32,6 +32,16 @@
    "base_nloc": 30
   },
   {
+   "key": "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body",
+   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
+   "function": "VideoScanApp.body",
+   "ccn": 15,
+   "nloc": 249,
+   "lang": "swift",
+   "base_ccn": 14,
+   "base_nloc": 238
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::ProcessRunner.runProcess",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift",
    "function": "ProcessRunner.runProcess",
@@ -40,6 +50,16 @@
    "lang": "swift",
    "base_ccn": 8,
    "base_nloc": 90
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/TriageView.swift::TriageView.toolbar",
+   "file": "VideoScan/VideoScan/Catalog/TriageView.swift",
+   "function": "TriageView.toolbar",
+   "ccn": 8,
+   "nloc": 85,
+   "lang": "swift",
+   "base_ccn": 7,
+   "base_nloc": 85
   }
  ],
  "fixed": [],
