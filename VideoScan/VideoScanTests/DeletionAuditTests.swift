@@ -28,12 +28,14 @@ struct DeletionAuditSensorTests {
         #expect(job.contains("plan = p\n        // G2: every row that settled here gets its audit line + receipt row.\n        auditNewlySettledRows()")
                 || job.contains("plan = p\n        auditNewlySettledRows()"))
         #expect(job.components(separatedBy: "auditRemainingAndFinish(finalPlan)").count - 1 == 2, "both ends of a run")
-        // The junk engine keeps the Trash's resulting location.
+        // The junk engine keeps the Trash's resulting location — what THE
+        // one Trash call returns (GH #143).
         let engine = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
-        #expect(engine.contains("resultingItemURL: &resultURL") && engine.contains("return resultURL?.path"))
+        #expect(engine.contains("return try MediaTrash.move(url).path"))
         // Every caller of the junk engine is an audited lane, or named here.
         let audited: Set<String> = ["VideoScanModel+JunkTrashSnapshot.swift", "VideoScanModel+TrashSelection.swift",
-                                    "VideoScanModel+JunkDelete.swift"]
+                                    "VideoScanModel+JunkDelete.swift",
+                                    "VideoScanModel+Workbench.swift"]   // GH #143: Discard, its own DeletionAudit
         // Per-copy callers with their own ledger + console lines; the run-level
         // receipt for them is a follow-up (they call the engine once per copy).
         let pending: Set<String> = ["VideoScanModel+PruneApply.swift"]
@@ -100,8 +102,8 @@ struct DeletionAuditReceiptTests {
     }
 
     /// No seam: the real routine. The moved row names where the Trash put
-    /// the file (the fixture is then removed from the Trash, as
-    /// JunkTrashOnlyTests does).
+    /// the file — under a test host, THE one Trash call's scratch Trash
+    /// (MediaTrash.move, GH #143); the fixture is then removed from there.
     @Test func aMovedFilesRowNamesItsTrashLocation() async throws {
         let sb = try JunkTrashSandbox("g2_real"); defer { sb.cleanup() }
         let model = sb.model()
@@ -114,7 +116,7 @@ struct DeletionAuditReceiptTests {
         #expect(row[0] == "moved")
         let trashPath = row[2]
         #expect(!trashPath.isEmpty && FileManager.default.fileExists(atPath: trashPath), "trash_path = \(trashPath)")
-        #expect(trashPath.contains(".Trash"), Comment(rawValue: trashPath))
+        #expect(trashPath.hasPrefix(MediaTrash.testHostTrash.path), Comment(rawValue: trashPath))
         try? FileManager.default.removeItem(atPath: trashPath)   // our own synthetic fixture
     }
 
