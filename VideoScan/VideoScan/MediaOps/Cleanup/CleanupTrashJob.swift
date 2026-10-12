@@ -178,9 +178,10 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     private let ledger = CleanupProofLedger()
     private var audit: DeletionAudit?
     private var current: String?
-    /// Bytes the proofs have read so far, counted once per settled copy
-    /// (two reads each: it and the copy that stays).
-    private(set) var bytesRead: Int64 = 0
+    /// Bytes the proofs have actually read so far — each read reported once
+    /// by the proof, partial reads included, nothing credited for a file
+    /// that was never read (codex r1 P2-5).
+    var bytesRead: Int64 { ledger.bytesRead }
     private var stopRequested = false
 
     var title: String { "Cleanup — \(selection.count.formatted()) file(s), \(MediaBytes.display(selection.bytes))" }
@@ -397,7 +398,7 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             beforeRemoval: { path in
                 guard let copy = byPath[path] else { return "was not in the set you confirmed — nothing moved" }
                 started?(path)
-                switch CleanupProof.verifyCopy(copy, control: control) {
+                switch CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.addBytes($0) }) {
                 case .held(let why): return why
                 case .proven(let words):
                     ledger.note(words, for: path)
@@ -405,8 +406,7 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
                 }
             })
         g.settled = { [weak self] rec, outcome in
-            guard let self, let copy = byID[rec.id] else { return }
-            self.bytesRead += 2 * copy.target.sizeBytes
+            guard let self, byID[rec.id] != nil else { return }
             self.settle(rec, outcome, lane: .copy)
         }
         return g

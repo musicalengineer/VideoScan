@@ -74,12 +74,16 @@ enum CleanupProof {
 
     // MARK: Copies
 
-    /// Rule 1 for one extra copy. Blocking (two full reads).
-    static func verifyCopy(_ copy: CleanupPlan.Copy, control: FixityRebind.Control) -> Verdict {
+    /// Rule 1 for one extra copy. Blocking (two full reads). `onRead` is
+    /// told the bytes each read actually covered (a partial read on a
+    /// failure too), once per read — the job's progress sums those and
+    /// nothing else (codex r1 P2-5).
+    static func verifyCopy(_ copy: CleanupPlan.Copy, control: FixityRebind.Control,
+                           onRead: (Int64) -> Void = { _ in }) -> Verdict {
         if let why = ancestryProblem(path: copy.keeper.path) { return .held("the copy that stays (\(copy.keeper.filename)) \(why)") }
         if let why = ancestryProblem(path: copy.target.path) { return .held(why) }
         let keeper: ContentFixity
-        switch read(copy.keeper.path, control: control) {
+        switch read(copy.keeper.path, control: control, onRead: onRead) {
         case .failure(let why): return .held(why.prefixed("the copy that stays (\(copy.keeper.filename))"))
         case .success(let f): keeper = f
         }
@@ -87,7 +91,7 @@ enum CleanupProof {
             return .held("the copy that stays \(why)")
         }
         let extra: ContentFixity
-        switch read(copy.target.path, control: control) {
+        switch read(copy.target.path, control: control, onRead: onRead) {
         case .failure(let why): return .held(why.prefixed("this file"))
         case .success(let f): extra = f
         }
@@ -139,9 +143,17 @@ enum CleanupProof {
 
     /// One full read through the app's one fixity reader. Only Stop
     /// interrupts it (Pause is honoured by the job between files, so no
-    /// worker thread ever waits here — QA P3).
-    static func read(_ path: String, control: FixityRebind.Control) -> Result<ContentFixity, ReadProblem> {
-        switch FixityRebind.rehash(path: path, control: control) {
+    /// worker thread ever waits here — QA P3). The bytes this read covered
+    /// go to `onRead` exactly once, and the reader's in-flight counter is
+    /// reset right after, so a progress line never counts them twice.
+    static func read(_ path: String, control: FixityRebind.Control,
+                     onRead: (Int64) -> Void = { _ in }) -> Result<ContentFixity, ReadProblem> {
+        let outcome = FixityRebind.rehash(path: path, control: control)
+        let covered: Int64
+        if case .bound(let fixity) = outcome { covered = fixity.byteCount } else { covered = control.bytesRead }
+        control.resetBytes()
+        onRead(covered)
+        switch outcome {
         case .bound(let fixity): return .success(fixity)
         case .interrupted: return .failure(ReadProblem(words: stoppedNote))
         case .offline: return .failure(ReadProblem(words: "it is not there (or its drive went away)"))
@@ -196,13 +208,17 @@ enum CleanupProof {
     }
 }
 
-/// Proof words per path, written by the off-main hook and read by the main
-/// actor's `settled` callback for the receipt. (≈ a std::map behind a
-/// std::mutex.)
+/// Proof words per path, and the bytes the proofs actually read — written
+/// by the off-main hook, read by the main actor for the receipt and the
+/// progress line. (≈ a std::map and a counter behind a std::mutex.)
 final class CleanupProofLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var words: [String: String] = [:]
+    private var bytes: Int64 = 0
 
     func note(_ proof: String, for path: String) { lock.withLock { words[path] = proof } }
     func proof(for path: String) -> String? { lock.withLock { words[path] } }
+    /// One read's bytes (full or partial), added exactly once per read.
+    func addBytes(_ n: Int64) { lock.withLock { bytes += n } }
+    var bytesRead: Int64 { lock.withLock { bytes } }
 }

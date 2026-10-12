@@ -82,6 +82,7 @@ struct CleanupTrashRunTests {
         #expect(job.items.first?.reason.contains("bytes differ") == true, "\(job.items.map(\.reason))")
         #expect(FileManager.default.fileExists(atPath: e.path))
         #expect(extra.removal == nil && extra.lifecycleStage != .trashed, "a held file's row is never stamped")
+        #expect(job.bytesRead == 2 * 4_096, "codex r1 P2-5: both files were read in full, once each — \(job.bytesRead)")
     }
 
     @Test("the keeper rewritten after the plan (same size) — held")
@@ -193,6 +194,7 @@ struct CleanupTrashRunTests {
         let job = await runCleanupTrash(model, CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false))
         #expect(job.items.map(\.outcome) == [.held], "\(job.items.map(\.reason))")
         #expect(extra.removal == nil, "an unreachable file is never marked missing by Cleanup's proof")
+        #expect(job.bytesRead == 64 * 1024, "codex r1 P2-5: an early hold is credited only the keeper's read — \(job.bytesRead)")
     }
 
     /// Three same-size copy pairs in keep/ and extra/; the extras in path order.
