@@ -2,233 +2,212 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>VideoScan — Metrics</title>
+<title>VideoScan Health</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="color-scheme" content="light dark">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 <!--
-  ONE metrics page (Rick, 2026-10-02). Static; everything is fetched at load.
-  Data: the `metrics` branch via raw.githubusercontent.com (public, no auth,
-  CORS *), plus the public GitHub Actions API for CI / nightly-analysis run
-  results. Local-only data (coverage, adversarial ledger, codex review headers)
-  reaches the branch through tools/publish_metrics.py, which publishes numbers,
-  dates, folder names, tool names and severities only.
-  Honesty rule: a metric with no data says "no data yet"; never a fake zero.
+  ONE health page, summary first (Rick, GH #310, 2026-10-12): "each area gets
+  an overview line with a twist to see more detail, but the page shows a top
+  level summary that any manager can look at."
+
+  Static; everything is fetched at load from the `metrics` branch via
+  raw.githubusercontent.com (public, no auth, CORS *) plus the public GitHub
+  Actions API. tools/publish_metrics.py adds metrics/summary_latest.json
+  (app version, GitHub counts, sprint, demo tags, the last 90 nights per Mac
+  classified green / red / did_not_run); the page never classifies a night
+  itself and never reads a row's free text (names, reasons, paths).
+
+  Layout, top to bottom:
+    1. Headline strip: version · app source lines (app only) · last night's
+       tests, one dot per Mac · stability · open bugs · sprint.
+    2. "When did the app have difficulty?" — 90 nights × Macs, one cell per
+       night; purple marks are demo tags. A twist lists the nights not green.
+    3. One line per area (dot · sparkline · one sentence · one number · 7-day
+       arrow) with a ▸ twist holding the charts and tables that used to be the
+       section. ?all or #all opens every twist.
+  Honesty rule unchanged: no data says "no data yet" or "—"; never a fake zero.
 -->
 <style>
   :root {
     --bg: #f6f8fa; --panel: #ffffff; --border: #d0d7de; --fg: #1f2328; --muted: #59636e;
-    --accent: #0969da; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e; --purple: #8250df;
-    --chip-bg: #eef1f4; --radius: 10px;
+    --accent: #0969da; --good: #1a7f37; --warn: #9a6700; --bad: #cf222e; --amber: #bc4c00; --purple: #8250df;
+    --chip-bg: #eef1f4; --radius: 10px; --grid: #e7ebef; --cell-none: #e3e7eb;
   }
   @media (prefers-color-scheme: dark) {
     :root:not([data-theme="light"]) {
       --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3; --muted: #8b949e;
-      --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; --purple: #bc8cff;
-      --chip-bg: #21262d;
+      --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; --amber: #e0823d; --purple: #bc8cff;
+      --chip-bg: #21262d; --grid: #262c34; --cell-none: #262c34;
     }
   }
   :root[data-theme="dark"] {
     --bg: #0d1117; --panel: #161b22; --border: #30363d; --fg: #e6edf3; --muted: #8b949e;
-    --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; --purple: #bc8cff;
-    --chip-bg: #21262d;
+    --accent: #58a6ff; --good: #3fb950; --warn: #d29922; --bad: #f85149; --amber: #e0823d; --purple: #bc8cff;
+    --chip-bg: #21262d; --grid: #262c34; --cell-none: #262c34;
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { background: var(--bg); color: var(--fg); padding: 24px;
+  body { background: var(--bg); color: var(--fg); padding: 20px 24px 40px;
          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; line-height: 1.4; }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
-  .top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
-  .top h1 { font-size: 24px; font-weight: 700; }
+  .top { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 2px; }
+  .top h1 { font-size: 22px; font-weight: 700; }
+  .top .sub { color: var(--muted); font-size: 13px; }
   .top .spacer { flex: 1; }
   #theme-toggle { background: var(--panel); color: var(--fg); border: 1px solid var(--border);
-                  border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
-  .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
-  #status { font-size: 12px; color: var(--muted); margin-bottom: 12px; }
+                  border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; }
+  #status { font-size: 12px; color: var(--muted); margin: 4px 0 10px; }
   #status.error { color: var(--bad); }
-  h3.section { margin: 28px 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border);
-               font-size: 14px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; color: var(--muted); }
-  .section-note { color: var(--muted); font-size: 12px; margin: -4px 0 10px; }
+  .hidden { display: none !important; }
   .section-error { color: var(--bad); font-size: 13px; margin: 6px 0; }
 
-  .strip { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
-  .chip { background: var(--panel); border: 1px solid var(--border); border-left-width: 5px;
-          border-radius: var(--radius); padding: 10px 12px; min-height: 92px; }
-  .chip .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
-  .chip .value { font-size: 17px; font-weight: 700; margin-top: 4px; }
-  .chip .when { font-size: 12px; color: var(--muted); margin-top: 4px; }
-  .chip.good { border-left-color: var(--good); }
-  .chip.bad  { border-left-color: var(--bad); }
-  .chip.warn { border-left-color: var(--warn); }
-  .chip.none { border-left-color: var(--border); }
+  /* ---- 1. headline strip ---- */
+  .head { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin: 10px 0 18px; }
+  .tile { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px 9px; min-width: 0; }
+  .tile .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px; color: var(--muted); }
+  .tile .value { font-size: 22px; font-weight: 700; margin-top: 3px; letter-spacing: -0.2px; line-height: 1.15; }
+  .tile .value small { font-size: 13px; font-weight: 500; color: var(--muted); }
+  .tile .words { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .tile .words b { color: var(--fg); font-weight: 600; }
+  .hosts { display: flex; gap: 10px; margin-top: 5px; flex-wrap: wrap; }
+  .hosts span { font-size: 12px; display: inline-flex; align-items: center; gap: 5px; }
+  .bar { height: 6px; background: var(--chip-bg); border-radius: 3px; margin-top: 7px; overflow: hidden; }
+  .bar i { display: block; height: 100%; background: var(--accent); border-radius: 3px; }
   .stale { display: inline-block; font-size: 11px; font-weight: 700; color: #fff; background: var(--bad);
-           border-radius: 4px; padding: 1px 6px; margin-left: 6px; }
+           border-radius: 4px; padding: 1px 6px; margin-left: 6px; vertical-align: 2px; }
 
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
-  .card { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
-          padding: 12px 14px; position: relative; overflow: hidden; }
-  .card .indicator { position: absolute; top: 0; left: 0; width: 4px; height: 100%; }
-  .card .label { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.6px; margin-left: 6px; }
-  .card .value { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; margin-left: 6px; }
-  .card .delta { font-size: 12px; margin-top: 2px; color: var(--muted); margin-left: 6px; }
+  .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; flex: none; vertical-align: -1px; }
+  .dot.green { background: var(--good); } .dot.red { background: var(--bad); } .dot.amber { background: var(--amber); }
+  .dot.watch { background: var(--warn); } .dot.grey { background: var(--muted); opacity: .55; }
+  .word { font-weight: 600; } .word.red { color: var(--bad); } .word.green { color: var(--good); } .word.watch { color: var(--warn); }
+  .word.amber { color: var(--amber); } .word.grey { color: var(--muted); }
+
+  /* ---- 2. 90-night timeline ---- */
+  .block { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 18px; }
+  .block h2 { font-size: 14px; font-weight: 600; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .block h2 .note { font-size: 12px; color: var(--muted); font-weight: 400; }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; font-size: 12px; color: var(--muted); margin: 6px 0 10px; }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .tl { display: grid; grid-template-columns: 36px 1fr; gap: 3px 8px; align-items: center; }
+  .tl .host { font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .cells { display: grid; grid-template-columns: repeat(90, minmax(0, 1fr)); gap: 2px; }
+  .cell { aspect-ratio: 1 / 1.4; border-radius: 2px; background: var(--cell-none); cursor: default; min-width: 0; }
+  .cell.green { background: var(--good); } .cell.red { background: var(--bad); } .cell.did_not_run { background: var(--amber); }
+  .cell:hover, .cell:focus { outline: 2px solid var(--fg); outline-offset: 1px; }
+  .mark { position: relative; height: 10px; font-size: 10px; color: var(--muted); }
+  .mark b { position: absolute; left: 0; top: -2px; width: 2px; height: 14px; background: var(--purple); display: block; }
+  .months { display: grid; grid-template-columns: repeat(90, minmax(0, 1fr)); font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .months span { white-space: nowrap; overflow: visible; }
+  .readout { font-size: 12px; color: var(--muted); min-height: 18px; margin-top: 8px; }
+  .readout b { color: var(--fg); }
+  .stab { display: flex; gap: 18px; flex-wrap: wrap; font-size: 13px; margin-top: 10px; }
+  .stab b { font-weight: 600; }
+  .ghost { color: var(--muted); font-size: 13px; padding: 8px 0; }
+
+  /* ---- 3. area lines ---- */
+  details.area { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; }
+  details.area summary { list-style: none; cursor: pointer; display: grid; align-items: center;
+                         grid-template-columns: 14px 10px minmax(150px, 190px) 72px 1fr auto; gap: 10px; padding: 10px 14px; }
+  details.area summary::-webkit-details-marker { display: none; }
+  .chev { color: var(--muted); font-size: 12px; transition: transform .15s; }
+  details[open] .chev { transform: rotate(90deg); }
+  .aname { font-weight: 600; font-size: 14px; }
+  .aname small { display: block; font-weight: 400; font-size: 11px; color: var(--muted); }
+  .spark { width: 72px; height: 22px; display: block; }
+  .sent { font-size: 13px; color: var(--muted); min-width: 0; }
+  .sent b { color: var(--fg); font-weight: 600; }
+  .num { text-align: right; white-space: nowrap; }
+  .num .big { font-size: 17px; font-weight: 700; display: block; line-height: 1.1; }
+  .num .trend { font-size: 12px; color: var(--muted); }
+  .trend.good { color: var(--good); } .trend.bad { color: var(--bad); }
+  .body { border-top: 1px solid var(--border); padding: 12px 14px 14px; }
+  .body .moved { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; margin-bottom: 10px; }
+  .card { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .card .label { font-size: 11px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.5px; }
+  .card .value { font-size: 18px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+  .card .delta { font-size: 12px; color: var(--muted); }
   .delta.up-good, .delta.down-good { color: var(--good); }
   .delta.up-bad, .delta.down-bad { color: var(--bad); }
-
-  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 440px), 1fr)); gap: 12px; }
-  .chart-box { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px; min-width: 0; }
-  .chart-box h2 { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase;
-                  letter-spacing: 0.4px; margin-bottom: 8px; }
-  canvas { width: 100% !important; height: 240px !important; }
-  canvas.tall { height: 380px !important; }
-  .chart-note { min-height: 80px; display: flex; align-items: center; color: var(--muted); font-size: 14px; }
-  .hidden { display: none !important; }
+  .charts { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr)); gap: 10px; }
+  .chart-box { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; min-width: 0; }
+  .chart-box h3 { font-size: 12px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+  .chart-box canvas { width: 100% !important; height: 200px !important; }
+  .chart-box.tall canvas { height: 320px !important; }
+  .chart-box.wide { grid-column: 1 / -1; }
+  .chart-note { min-height: 40px; display: flex; align-items: center; color: var(--muted); font-size: 13px; }
   .table-wrap { overflow-x: auto; }
   table { border-collapse: collapse; width: 100%; font-size: 13px; font-variant-numeric: tabular-nums; }
-  th, td { padding: 5px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
-  th:first-child, td:first-child { text-align: left; }
+  th, td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; } th:nth-child(2), td:nth-child(2) { text-align: left; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
-  .footer { margin-top: 28px; padding-top: 12px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
-  @media (max-width: 560px) {
-    body { padding: 12px; }
-    .top h1 { font-size: 20px; }
-    .cards { grid-template-columns: repeat(2, 1fr); }
-    canvas { height: 210px !important; }
+  .footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
+
+  @media (max-width: 720px) {
+    body { padding: 12px 16px 32px; }
+    .head { grid-template-columns: repeat(2, 1fr); }
+    details.area summary { grid-template-columns: 14px 10px 1fr auto; grid-template-areas: "c d n v" "c d s s" "c d sp sp"; row-gap: 4px; }
+    .chev { grid-area: c; } summary .dot { grid-area: d; } .aname { grid-area: n; } .num { grid-area: v; }
+    .sent { grid-area: s; } .spark { grid-area: sp; width: 100%; }
+    .num { white-space: normal; } .num .big { font-size: 15px; }
+    .tl { grid-template-columns: 30px 1fr; }
+    .cell { aspect-ratio: 1 / 2.2; border-radius: 1px; }
+    .months span:nth-child(even) { visibility: hidden; }
   }
 </style>
 </head>
 <body>
 
 <div class="top">
-  <h1>VideoScan metrics</h1>
+  <h1>VideoScan health</h1>
+  <span class="sub" id="asof"></span>
   <div class="spacer"></div>
   <button id="theme-toggle" type="button" onclick="cycleTheme()">Theme: auto</button>
 </div>
-<div class="subtitle">
-  Tests, coverage, static analysis and reviews for
-  <a href="https://github.com/musicalengineer/VideoScan">musicalengineer/VideoScan</a>.
-  Anything older than 36 hours gets a red STALE tag. Missing data says so; it is never shown as zero.
-</div>
 <div id="status">Loading metrics&hellip;</div>
 
-<!-- 1 ============ STATUS STRIP ============ -->
-<h3 class="section">Status</h3>
-<div class="strip" id="status-strip"></div>
-<div class="section-error hidden" id="status-error"></div>
+<!-- 1 ============ HEADLINE STRIP ============ -->
+<div class="head" id="head"></div>
+<div class="section-error hidden" id="head-error"></div>
 
-<!-- 2 ============ TESTS ============ -->
-<h3 class="section">Tests &mdash; 2 AM nightly</h3>
-<div class="cards" id="tests-cards"></div>
-<div class="charts">
-  <div class="chart-box"><h2>Passed / failed per nightly run</h2><canvas id="c-tests"></canvas><div class="chart-note hidden" id="c-tests-note"></div></div>
-  <div class="chart-box"><h2>Nightly duration (minutes)</h2><canvas id="c-tests-duration"></canvas><div class="chart-note hidden" id="c-tests-duration-note"></div></div>
-</div>
-<div class="section-error hidden" id="tests-error"></div>
-
-<!-- 3 ============ COVERAGE ============ -->
-<h3 class="section">Coverage</h3>
-<p class="section-note" id="coverage-note">Per folder, from the 4 AM Debug coverage run on the M4. Logic % leaves out SwiftUI views.</p>
-<div class="cards" id="coverage-cards"></div>
-<div class="charts">
-  <div class="chart-box"><h2>By folder &mdash; latest run</h2><canvas id="c-cov-folders" class="tall"></canvas><div class="chart-note hidden" id="c-cov-folders-note"></div></div>
-  <div class="chart-box"><h2>Coverage trend (%)</h2><canvas id="c-cov-trend"></canvas><div class="chart-note hidden" id="c-cov-trend-note"></div></div>
-</div>
-<div class="section-error hidden" id="coverage-error"></div>
-
-<!-- 4 ============ STATIC ANALYSIS ============ -->
-<h3 class="section">Static analysis &mdash; GitHub nightly</h3>
-<div class="cards" id="static-cards"></div>
-<div class="charts">
-  <div class="chart-box"><h2>Compiler warnings</h2><canvas id="c-sa-compiler"></canvas><div class="chart-note hidden" id="c-sa-compiler-note"></div></div>
-  <div class="chart-box"><h2>CodeQL findings and extraction coverage</h2><canvas id="c-sa-codeql"></canvas><div class="chart-note hidden" id="c-sa-codeql-note"></div></div>
-  <div class="chart-box"><h2>Periphery dead code and SwiftLint --strict</h2><canvas id="c-sa-lint"></canvas><div class="chart-note hidden" id="c-sa-lint-note"></div></div>
-  <div class="chart-box"><h2>Sanitizer hits (UBSan / ASan / TSan)</h2><canvas id="c-sa-san"></canvas><div class="chart-note hidden" id="c-sa-san-note"></div></div>
-</div>
-<div class="chart-box" style="margin-top:12px"><h2 id="findings-title">Latest findings summary, by tool</h2><div class="table-wrap" id="findings-table"></div></div>
-<div class="section-error hidden" id="static-error"></div>
-
-<!-- 5 ============ ADVERSARIAL REVIEW ============ -->
-<h3 class="section">Adversarial review &mdash; nightly</h3>
-<div class="cards" id="adv-cards"></div>
-<div class="charts">
-  <div class="chart-box"><h2>Findings by severity, per night</h2><canvas id="c-adv"></canvas><div class="chart-note hidden" id="c-adv-note"></div></div>
-  <div class="chart-box"><h2>Per night</h2><div class="table-wrap" id="adv-table"></div></div>
-</div>
-<div class="section-error hidden" id="adv-error"></div>
-
-<!-- 6 ============ CODEX REVIEWS ============ -->
-<h3 class="section">Codex reviews</h3>
-<div class="cards" id="codex-cards"></div>
-<div class="charts">
-  <div class="chart-box"><h2>Passes and findings per day</h2><canvas id="c-codex"></canvas><div class="chart-note hidden" id="c-codex-note"></div></div>
-</div>
-<div class="section-error hidden" id="codex-error"></div>
-
-<!-- 7 ============ HALLIE TESTBED ============ -->
-<h3 class="section">Hallie testbed</h3>
-<div class="cards" id="hallie-cards"></div>
-<div class="charts">
-  <div class="chart-box"><h2>Pass rate per nightly replay (%)</h2><canvas id="c-hallie"></canvas><div class="chart-note hidden" id="c-hallie-note"></div></div>
-</div>
-<div class="section-error hidden" id="hallie-error"></div>
-
-<!-- 8 ============ CODE SIZE ============ -->
-<h3 class="section">Code size</h3>
-<p class="section-note">Raw lines (wc -l), incl. comments/blank. <b>App source</b> = app Swift (VideoScan/VideoScan, VideoScanCore/Sources, swift_cli) + the Python the app launches (cluster_faces, face_recognize, footage_spectrum, whisper_transcribe, whisper_worker). <b>Tests</b> = VideoScanTests + VideoScanCore/Tests + tests/*.py. <b>Tooling</b> = the rest of scripts/ and tools/ (.py .sh .swift .mjs .js; no venv, .build, node_modules).</p>
-<div class="cards" id="size-cards"></div>
-<div class="charts">
-  <div class="chart-box"><h2>Swift lines by folder &mdash; latest push</h2><canvas id="c-size-folders" class="tall"></canvas><div class="chart-note hidden" id="c-size-folders-note"></div></div>
-  <div class="chart-box"><h2>App source lines, total Swift lines (app + tests + CLI) and files over 1,000 lines</h2><canvas id="c-size-trend"></canvas><div class="chart-note hidden" id="c-size-trend-note"></div></div>
-</div>
-<div class="section-error hidden" id="size-error"></div>
-
-<!-- 8b ============ COMPLEXITY & TECH DEBT ============ -->
-<h3 class="section">Complexity &amp; tech debt &mdash; GitHub nightly</h3>
-<p class="section-note">lizard over the app's Swift code (app, VideoScanCore, swift_cli); test beds and support scripts are not measured. An offender is a function with cyclomatic complexity (CCN) over 15 or more than 80 lines of code. The nightly ratchet reports new offenders and known ones that got worse; the pre-commit hook and CI block anything new or worse over CCN 30 or 300 lines.</p>
-<div class="cards" id="cx-cards"></div>
-<div class="charts">
-  <div class="chart-box"><h2>Offenders per night</h2><canvas id="c-cx-debt"></canvas><div class="chart-note hidden" id="c-cx-debt-note"></div></div>
-  <div class="chart-box"><h2>Mean CCN, all code and by folder (largest folders)</h2><canvas id="c-cx-folders"></canvas><div class="chart-note hidden" id="c-cx-folders-note"></div></div>
-</div>
-<div class="chart-box" style="margin-top:12px"><h2 id="cx-top-title">Top 15 most complex functions</h2><div class="table-wrap" id="cx-top"></div></div>
-<div class="chart-box" style="margin-top:12px"><h2 id="cx-new-title">New and worse offenders, latest night</h2><div class="table-wrap" id="cx-new"></div></div>
-<div class="chart-box" style="margin-top:12px"><h2 id="cx-ovr-title">Gate overrides, last 48 hours</h2><div class="table-wrap" id="cx-ovr"></div></div>
-<div class="section-error hidden" id="cx-error"></div>
-
-<!-- 8c ============ OVER-EXPOSURE & PROBLEM FILES ============ -->
-<h3 class="section">Over-exposure &amp; problem files &mdash; GitHub nightly</h3>
-<p class="section-note">Internal declarations in the app's Swift code that need not be: <em>could be private</em> (used only in their own file) or <em>widened for a split</em> (used only from the type's own T+*.swift extension files). Report only; the nightly flags declarations new since the baseline, and the baseline only shrinks. The problem-files table joins every signal per file, worst first: complexity debt, length, exposure, and how often the file changed in the last 7 days.</p>
-<div class="cards" id="ex-cards"></div>
-<div class="charts">
-  <div class="chart-box"><h2>Over-exposed declarations per night</h2><canvas id="c-ex-trend"></canvas><div class="chart-note hidden" id="c-ex-trend-note"></div></div>
-  <div class="chart-box"><h2>Could be private, by folder (largest folders)</h2><canvas id="c-ex-folders"></canvas><div class="chart-note hidden" id="c-ex-folders-note"></div></div>
-</div>
-<div class="chart-box" style="margin-top:12px"><h2 id="ex-top-title">Top 20 files by could-be-private</h2><div class="table-wrap" id="ex-top"></div></div>
-<div class="chart-box" style="margin-top:12px"><h2 id="pf-title">Problem files, worst first</h2><div class="table-wrap" id="pf-table"></div></div>
-<div class="section-error hidden" id="ex-error"></div>
-
-<!-- 9 ============ BENCHMARKS (occasional runs) ============ -->
-<h3 class="section">Benchmarks &mdash; occasional runs</h3>
-<p class="section-note">Not nightly: these publish only when someone runs them, so their dates matter.</p>
-<div class="cards" id="search-benchmark-cards"></div>
-<div class="charts">
-  <div class="chart-box">
-    <h2>Catalog search, 100k synthetic records &mdash; comparable Release runs</h2>
-    <canvas id="chart-search-benchmarks"></canvas>
-    <div id="chart-search-benchmark-note" class="chart-note hidden">No validated catalog-search benchmarks have been published yet.</div>
-    <div id="search-benchmark-provenance" class="chart-note hidden"></div>
+<!-- 2 ============ WHEN DID THE APP HAVE DIFFICULTY? ============ -->
+<div class="block">
+  <h2>When did the app have difficulty? <span class="note">2 AM nightly on each Mac, last 90 nights · one cell per night</span></h2>
+  <div class="legend">
+    <span><i class="sw" style="background:var(--good)"></i> all tests passed</span>
+    <span><i class="sw" style="background:var(--bad)"></i> tests failed</span>
+    <span><i class="sw" style="background:var(--amber)"></i> did not run (build timeout, no tests ran)</span>
+    <span><i class="sw" style="background:var(--cell-none)"></i> no nightly that night</span>
+    <span><i class="sw" style="background:var(--purple); width:2px"></i> demo tag</span>
   </div>
+  <div class="tl" id="tl"></div>
+  <div class="readout" id="readout">Hover a cell to read that night.</div>
+  <div class="stab" id="stab"></div>
+  <details style="margin-top:8px"><summary style="cursor:pointer;font-size:13px;color:var(--accent)">As a table: the nights that were not green</summary>
+    <div class="table-wrap" id="tl-table" style="margin-top:8px"></div></details>
+  <div class="section-error hidden" id="timeline-error"></div>
 </div>
-<p class="subtitle" id="gauntlet-status" style="margin-top:12px">Release gauntlet: UI not run (phase 2). No gauntlet results published yet.</p>
-<div class="charts">
-  <div class="chart-box"><h2>Gauntlet &mdash; stage and total duration (s)</h2><canvas id="chart-gauntlet-duration"></canvas></div>
-  <div class="chart-box"><h2>Gauntlet &mdash; stage pass / fail / incomplete</h2><canvas id="chart-gauntlet-outcome"></canvas></div>
+
+<!-- 3 ============ ONE LINE PER AREA ============ -->
+<div class="legend" style="margin:0 0 8px"><span>One line per area: status · what is going on · the one number · trend vs 7 days ago. Open a line for the detail that used to be the section.</span><span><a href="#all" onclick="openAll(true);return false">Open all</a> · <a href="#" onclick="openAll(false);return false">Close all</a></span></div>
+<div id="areas">
+  <details class="area" id="area-tests"><summary id="sum-tests"></summary><div class="body" id="body-tests"></div><div class="section-error hidden" id="tests-error"></div></details>
+  <details class="area" id="area-size"><summary id="sum-size"></summary><div class="body" id="body-size"></div><div class="section-error hidden" id="size-error"></div></details>
+  <details class="area" id="area-debt"><summary id="sum-debt"></summary><div class="body" id="body-debt"></div><div class="section-error hidden" id="debt-error"></div></details>
+  <details class="area" id="area-san"><summary id="sum-san"></summary><div class="body" id="body-san"></div><div class="section-error hidden" id="san-error"></div></details>
+  <details class="area" id="area-hallie"><summary id="sum-hallie"></summary><div class="body" id="body-hallie"></div><div class="section-error hidden" id="hallie-error"></div></details>
+  <details class="area" id="area-person"><summary id="sum-person"></summary><div class="body" id="body-person"></div><div class="section-error hidden" id="person-error"></div></details>
+  <details class="area" id="area-reviews"><summary id="sum-reviews"></summary><div class="body" id="body-reviews"></div><div class="section-error hidden" id="reviews-error"></div></details>
+  <details class="area" id="area-speed"><summary id="sum-speed"></summary><div class="body" id="body-speed"></div><div class="section-error hidden" id="speed-error"></div></details>
 </div>
-<div class="section-error hidden" id="bench-error"></div>
 
 <div class="footer">
   Data: the <code>metrics</code> branch (CI on every push to <code>main</code>, the GitHub nightly analysis,
   the 2 AM nightly on the Macs, and <code>tools/publish_metrics.py</code> after the 4 AM coverage and
-  05:30 adversarial-confirm jobs) and the public GitHub Actions API.
+  05:30 adversarial-confirm jobs, which also writes <code>summary_latest.json</code>) and the public GitHub Actions API.
+  &bull; <a href="https://github.com/musicalengineer/VideoScan/issues/310">#310</a>
   &bull; <a href="https://github.com/musicalengineer/VideoScan/tree/metrics/metrics">Raw data</a>
   &bull; <a href="https://github.com/musicalengineer/VideoScan/actions">Actions</a>
 </div>
@@ -249,8 +228,14 @@ const EXPECTED_SEARCH_QUERIES = [
 const isTestRunRow = row => row.source !== "poi-cycle-metrics" && row.source !== "gauntlet";
 const STALE_HOURS = 36;
 const NO_DATA = "no data yet";
+const DASH = "—";
 const SEVERITIES = ["P0", "P1", "P2", "P3"];
 const SEV_COLORS = { P0: "#a40e26", P1: "#f85149", P2: "#d29922", P3: "#8b949e" };
+// Chart colours: fixed hex that reads on both themes (the page's own text uses CSS variables).
+const C = { blue: "#3987e5", orange: "#d95926", green: "#199e70", red: "#f85149", amber: "#e0823d",
+            purple: "#bc8cff", grey: "#8b949e", yellow: "#d29922", dark: "#a40e26" };
+const CX_COLORS = [C.blue, C.purple, C.green, C.yellow, C.orange, C.red, C.grey, C.dark];
+const HOST_ORDER = ["M4", "M5", "M1"];
 
 let METRICS_SHA = null;
 const $status = document.getElementById("status");
@@ -282,6 +267,9 @@ function esc(value) {
 const isNum = v => typeof v === "number" && Number.isFinite(v);
 const fmtNum = v => isNum(v) ? v.toLocaleString("en-US") : NO_DATA;
 const fmtPct = v => isNum(v) ? `${v.toFixed(1)}%` : NO_DATA;
+const n = v => isNum(v) ? v.toLocaleString("en-US") : DASH;
+const dot = s => `<span class="dot ${s}"></span>`;
+const word = (s, t) => `<span class="word ${s}">${esc(t)}</span>`;
 
 function parseJsonl(text) {
   return (text || "").split("\n")
@@ -300,17 +288,22 @@ function hoursSince(ts) {
   const t = toTime(ts);
   return Number.isNaN(t) ? Infinity : (Date.now() - t) / 3600000;
 }
+function day(ts) {
+  const t = toTime(String(ts || "").slice(0, 10));
+  return Number.isNaN(t) ? DASH : new Date(t).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
 function fmtWhen(ts) {
   const t = toTime(ts);
   if (Number.isNaN(t)) return NO_DATA;
   const d = new Date(t);
   const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(ts);
-  const day = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+  const dayStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
   const hrs = hoursSince(ts);
   const ago = hrs < 48 ? `${Math.max(0, Math.round(hrs))} h ago` : `${Math.round(hrs / 24)} days ago`;
-  return dateOnly ? `night of ${day} · ${ago}`
-    : `${day} ${d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · ${ago}`;
+  return dateOnly ? `night of ${dayStr} · ${ago}`
+    : `${dayStr} ${d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" })} · ${ago}`;
 }
+const stale = ts => ts && hoursSince(ts) > STALE_HOURS ? '<span class="stale">STALE</span>' : "";
 function dateLabels(rows) {
   return rows.map(r => {
     const t = toTime(r.ts || r.date);
@@ -324,7 +317,37 @@ function lastPerDay(rows) {
   return Array.from(byDay.values());
 }
 function sortByTs(rows) { return rows.sort((a, b) => String(a.ts || a.date || "").localeCompare(String(b.ts || b.date || ""))); }
+// The newest row at least `days` days older than the last row: the "7 days ago" comparison point.
+function daysBefore(rows, days) {
+  if (!rows.length) return null;
+  const last = toTime(rows[rows.length - 1].ts || rows[rows.length - 1].date);
+  for (let i = rows.length - 2; i >= 0; i--) {
+    const t = toTime(rows[i].ts || rows[i].date);
+    if (!Number.isNaN(t) && last - t >= days * 86400000) return rows[i];
+  }
+  return null;
+}
+const hostLabel = host => typeof host === "string" ? host.replace(/^ricks/i, "") : "";
 
+// Trend vs 7 days ago: arrow + delta, coloured by whether the move is good.
+function trend(older, newer, lowerIsBetter, unit = "", vs = null) {
+  if (!isNum(older) || !isNum(newer)) return `<span class="trend">no 7-day trend yet</span>`;
+  const d = newer - older;
+  const since = vs ? ` vs ${day(vs)}` : " vs 7 days ago";
+  if (d === 0) return `<span class="trend">→ unchanged${since}</span>`;
+  const good = lowerIsBetter ? d < 0 : d > 0;
+  const val = Number.isInteger(d) ? Math.abs(d).toLocaleString("en-US") : Math.abs(d).toFixed(1);
+  return `<span class="trend ${good ? "good" : "bad"}">${d > 0 ? "▲" : "▼"} ${val}${unit}${since}</span>`;
+}
+// Sparkline: one thin line, no axes; the number beside it is the label.
+function spark(values, color) {
+  const vs = values.filter(isNum);
+  if (vs.length < 2) return `<svg class="spark" viewBox="0 0 72 22" aria-hidden="true"><line x1="2" y1="11" x2="70" y2="11" stroke="var(--border)" stroke-width="1"/></svg>`;
+  const min = Math.min(...vs), max = Math.max(...vs), span = max - min || 1;
+  const pts = values.map((v, i) => isNum(v) ? `${(2 + 68 * i / Math.max(1, values.length - 1)).toFixed(1)},${(19 - 16 * (v - min) / span).toFixed(1)}` : null).filter(Boolean);
+  const last = pts[pts.length - 1].split(",");
+  return `<svg class="spark" viewBox="0 0 72 22" aria-hidden="true"><polyline fill="none" stroke="${color}" stroke-width="1.5" stroke-linejoin="round" points="${pts.join(" ")}"/><circle cx="${last[0]}" cy="${last[1]}" r="2" fill="${color}"/></svg>`;
+}
 function deltaClass(older, newer, lowerIsBetter) {
   if (older == null || newer == null || older === newer) return "";
   const rising = newer > older;
@@ -332,30 +355,28 @@ function deltaClass(older, newer, lowerIsBetter) {
   return rising ? "up-good" : "down-bad";
 }
 function fmtDelta(older, newer) {
-  if (older == null || newer == null) return "";
+  if (!isNum(older) || !isNum(newer)) return "";
   const d = newer - older;
   if (d === 0) return "unchanged";
   const sign = d > 0 ? "+" : "";
   const val = Number.isInteger(d) ? d : d.toFixed(2);
   return `${sign}${val} from previous`;
 }
-function card(label, value, older, newer, lowerIsBetter, indicatorColor) {
-  const el = document.createElement("div");
-  el.className = "card";
-  el.innerHTML = `
-    <div class="indicator" style="background: ${indicatorColor || 'var(--accent)'}"></div>
-    <div class="label">${esc(label)}</div>
-    <div class="value">${value == null ? NO_DATA : esc(value)}</div>
-    <div class="delta ${deltaClass(older, newer, lowerIsBetter)}">${esc(fmtDelta(older, newer))}</div>
-  `;
-  return el;
+// A detail card. `value` null reads "no data yet". `older`/`newer` draw the delta line, or pass text.
+function card(label, value, older, newer, lowerIsBetter, text) {
+  const delta = text != null ? esc(text) : esc(fmtDelta(older, newer));
+  return `<div class="card"><div class="label">${esc(label)}</div>` +
+    `<div class="value">${value == null ? NO_DATA : esc(value)}</div>` +
+    `<div class="delta ${deltaClass(older, newer, lowerIsBetter)}">${delta}</div></div>`;
 }
-function noDataCard(container, label, detail) {
-  container.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
-    <div class="indicator" style="background: var(--border)"></div>
-    <div class="label">${esc(label)}</div>
-    <div class="value" style="font-size: 14px;">${esc(detail)}</div></div>`;
+function table(cols, rows) {
+  return `<table><thead><tr>${cols.map(c => `<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>` +
+    rows.map(r => `<tr>${r.map(v => `<td>${v == null ? DASH : v}</td>`).join("")}</tr>`).join("") + "</tbody></table>";
 }
+const chartBox = (title, id, cls = "") => `<div class="chart-box ${cls}"><h3>${title}</h3><canvas id="${id}"></canvas><div class="chart-note hidden" id="${id}-note"></div></div>`;
+const tableBox = (title, id, cls = "wide") => `<div class="chart-box ${cls}"><h3 id="${id}-title">${title}</h3><div class="table-wrap" id="${id}"></div></div>`;
+const moved = text => `<div class="moved">${text}</div>`;
+
 const lineStyle = (color) => ({
   borderColor: color,
   backgroundColor: color + "22",
@@ -374,17 +395,18 @@ const chartDefaults = {
   },
   elements: { point: { radius: 2, hoverRadius: 5 }, line: { borderWidth: 2, tension: 0.25 } },
 };
+const CHARTS = {};
 function note(canvasId, text) {
   const canvas = document.getElementById(canvasId);
   if (canvas) canvas.classList.add("hidden");
-  const n = document.getElementById(`${canvasId}-note`);
-  if (n) { n.textContent = text; n.classList.remove("hidden"); }
+  const nt = document.getElementById(`${canvasId}-note`);
+  if (nt) { nt.textContent = text; nt.classList.remove("hidden"); }
 }
 // Draw a chart only if at least one dataset has a real value; otherwise say so.
 function chartOrNote(canvasId, type, labels, datasets, options, emptyText) {
   const hasData = datasets.some(d => (d.data || []).some(v => isNum(v)));
   if (!hasData) { note(canvasId, emptyText || NO_DATA); return; }
-  new Chart(document.getElementById(canvasId), { type, data: { labels, datasets }, options: options || chartDefaults });
+  CHARTS[canvasId] = new Chart(document.getElementById(canvasId), { type, data: { labels, datasets }, options: options || chartDefaults });
 }
 function withAxes(extra) {
   return { ...chartDefaults, scales: { ...chartDefaults.scales, ...extra } };
@@ -437,563 +459,773 @@ async function latestMainRun(workflowFile) {
   const done = runs.find(r => r.status === "completed") || null;
   return { done, running: runs[0].status !== "completed" ? runs[0] : null };
 }
+const parseJson = text => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
 
-// ---------------------------------------------------------------- 1. status strip
-function chip(container, { label, value, when, tone, detail }) {
-  const el = document.createElement("div");
-  const stale = when && hoursSince(when) > STALE_HOURS;
-  el.className = `chip ${stale ? "bad" : (tone || "none")}`;
-  el.innerHTML = `<div class="label">${esc(label)}</div>
-    <div class="value">${esc(value)}${stale ? '<span class="stale">STALE</span>' : ""}</div>
-    <div class="when">${esc(when ? fmtWhen(when) : NO_DATA)}${detail ? " · " + esc(detail) : ""}</div>`;
-  container.appendChild(el);
+// ---------------------------------------------------------------- the nights (from summary_latest.json)
+// The publisher classified each night: green / red / did_not_run. The page
+// only reads the result. Missing summary -> every helper returns "no data".
+function nights(d) {
+  const s = d.summary && d.summary.nightly;
+  if (!s || !Array.isArray(s.nights)) return null;
+  const hosts = Array.isArray(s.hosts) ? s.hosts.slice() : [];
+  return { hosts, list: s.nights.filter(x => x && typeof x.date === "string" && x.hosts && typeof x.hosts === "object") };
 }
-const conclusionTone = c => c === "success" ? "good" : (c === "failure" || c === "timed_out") ? "bad" : "warn";
-
-function renderStatus(d) {
-  const strip = document.getElementById("status-strip");
-
-  // CI on main
-  if (d.ciRun && d.ciRun.done) {
-    const r = d.ciRun.done;
-    chip(strip, { label: "CI on main", value: r.conclusion || r.status, when: r.updated_at,
-                  tone: conclusionTone(r.conclusion), detail: d.ciRun.running ? "newer run in progress" : (r.head_sha || "").slice(0, 8) });
-  } else if (d.history.length) {
-    const last = d.history[d.history.length - 1];
-    chip(strip, { label: "CI on main", value: "result unknown", when: last.ts, tone: "warn",
-                  detail: "Actions API unavailable; metrics row seen" });
-  } else {
-    chip(strip, { label: "CI on main", value: NO_DATA, when: null });
-  }
-
-  // 2 AM nightly (Macs)
-  const nightly = d.tdRows.filter(r => r.source === "nightly-local");
-  if (nightly.length) {
-    const n = nightly[nightly.length - 1];
-    const ok = n.status === "ok" && (n.total || 0) > 0;
-    const counts = (n.total || 0) > 0 ? `${fmtNum(n.passed)} passed · ${fmtNum(n.failed)} failed · ${fmtNum(n.skipped)} skipped` : "no tests ran";
-    chip(strip, { label: "2 AM nightly", value: ok && !n.failed ? "green" : (n.status || "unknown"), when: n.ts,
-                  tone: ok && !n.failed ? "good" : (n.status === "failed" || n.failed ? "bad" : "warn"),
-                  detail: `${counts}${n.host ? " · " + n.host : ""}` });
-  } else {
-    chip(strip, { label: "2 AM nightly", value: NO_DATA, when: null });
-  }
-
-  // GitHub nightly analysis
-  const sa = d.staticRows.length ? d.staticRows[d.staticRows.length - 1] : null;
-  if (d.naRun && d.naRun.done) {
-    const r = d.naRun.done;
-    chip(strip, { label: "GitHub nightly analysis", value: r.conclusion || r.status, when: r.updated_at,
-                  tone: conclusionTone(r.conclusion), detail: sa ? `row published ${fmtWhen(sa.ts)}` : "no row published" });
-  } else if (sa) {
-    chip(strip, { label: "GitHub nightly analysis", value: "row published", when: sa.ts, tone: "warn",
-                  detail: "Actions API unavailable; run result unknown" });
-  } else {
-    chip(strip, { label: "GitHub nightly analysis", value: NO_DATA, when: null });
-  }
-
-  // Adversarial review
-  const adv = d.advRows.length ? d.advRows[d.advRows.length - 1] : null;
-  if (adv) {
-    const total = adv.findings ? SEVERITIES.reduce((s, k) => s + (adv.findings[k] || 0), 0) : null;
-    const value = adv.status === "findings" ? `${total} finding${total === 1 ? "" : "s"}` : adv.status;
-    const red = isNum(adv.confirmed_red) ? `${adv.confirmed_red} confirmed red` : "confirm: no data";
-    chip(strip, { label: "Adversarial review", value, when: adv.date,
-                  tone: adv.status === "failed" ? "bad" : (adv.confirmed_red ? "warn" : "good"), detail: red });
-  } else {
-    chip(strip, { label: "Adversarial review", value: NO_DATA, when: null });
-  }
-
-  // Coverage run (M4, 4 AM)
-  const cov = d.covRows.length ? d.covRows[d.covRows.length - 1] : null;
-  if (cov) {
-    chip(strip, { label: "Coverage run", value: `${fmtPct(cov.total && cov.total.logic_pct)} logic`, when: cov.date,
-                  tone: cov.app_status === "failed" || cov.core_status === "failed" ? "warn" : "good",
-                  detail: `${fmtPct(cov.total && cov.total.pct)} all · app ${cov.app_status} · core ${cov.core_status}` });
-  } else {
-    chip(strip, { label: "Coverage run", value: NO_DATA, when: null });
-  }
+const cellOf = (night, h) => (night && night.hosts && night.hosts[h] && typeof night.hosts[h] === "object") ? night.hosts[h] : null;
+const nightStates = night => Object.values(night.hosts || {}).map(c => c && c.state).filter(Boolean);
+const anyRed = night => nightStates(night).includes("red");
+const ranGreen = night => { const ss = nightStates(night).filter(s => s !== "did_not_run"); return ss.length > 0 && ss.every(s => s === "green"); };
+const STATE_WORD = { green: "green", red: "red", did_not_run: "did not run" };
+// A sanitized machine code published with the night ("build-timeout:5400s"); never a row's free text.
+const cellReason = cell => cell && typeof cell["reason"] === "string" ? cell["reason"] : "";
+function cellWords(cell) {
+  if (!cell) return "no run";
+  if (cell.state === "green") return `green · ${n(cell.passed)} passed`;
+  if (cell.state === "red") return `${n(cell.failed)} failed of ${n(cell.total)}`;
+  return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
+}
+function stability(N) {
+  const L = N.list;
+  const ran = L.filter(t => nightStates(t).length);
+  const red = L.filter(anyRed);
+  const green = L.filter(ranGreen);
+  const allGreen = L.filter(t => N.hosts.length && N.hosts.every(h => cellOf(t, h) && cellOf(t, h).state === "green"));
+  let redStreak = 0;
+  for (let i = L.length - 1; i >= 0 && anyRed(L[i]); i--) redStreak++;
+  let greenStreak = 0;
+  for (let i = L.length - 1; i >= 0 && ranGreen(L[i]); i--) greenStreak++;
+  const lastRed = red.length ? red[red.length - 1].date : null;
+  const lastGreen = green.length ? green[green.length - 1].date : null;
+  const daysSince = date => date ? Math.round((toTime(L[L.length - 1].date) - toTime(date)) / 86400000) : null;
+  const last7 = L.slice(-7).filter(ranGreen).length;
+  return { nightsRan: ran.length, redNights: red.length, greenNights: green.length, allGreen: allGreen.length,
+           redStreak, greenStreak, lastRed, lastGreen, daysSinceRed: daysSince(lastRed), last7 };
 }
 
-// ---------------------------------------------------------------- 2. tests
-function renderTests(d) {
-  const nightly = d.tdRows.filter(r => r.source === "nightly-local");
-  const cards = document.getElementById("tests-cards");
-  if (!nightly.length) {
-    noDataCard(cards, "No nightly test rows", NO_DATA);
-    note("c-tests", NO_DATA); note("c-tests-duration", NO_DATA);
+// ---------------------------------------------------------------- 1. headline strip
+function tile(label, value, words) {
+  return `<div class="tile"><div class="label">${esc(label)}</div><div class="value">${value}</div><div class="words">${words}</div></div>`;
+}
+function renderHead(d) {
+  const S = d.summary || {};
+  const g = S.github || {};
+  const hist = d.history, last = hist.length ? hist[hist.length - 1] : {};
+  const N = nights(d);
+  const tiles = [];
+
+  // Version + tip of main + CI on main
+  const v = S.version;
+  const ci = d.ciRun && d.ciRun.done ? d.ciRun.done : null;
+  const ciWords = ci ? `CI on main ${word(ci.conclusion === "success" ? "green" : (ci.conclusion === "failure" || ci.conclusion === "timed_out") ? "red" : "watch", ci.conclusion || ci.status)}${stale(ci.updated_at)}${d.ciRun.running ? " · newer run in progress" : ""}`
+    : (hist.length ? `CI on main: result unknown (Actions API unavailable) · last metrics row ${fmtWhen(last.ts)}` : "CI on main: " + NO_DATA);
+  tiles.push(tile("Version", v ? `${esc(v.marketing)} <small>build ${esc(v.build)}</small>` : `<span class="word grey">${DASH}</span>`,
+    `${g.main_sha ? `main <b>${esc(String(g.main_sha).slice(0, 7))}</b> · ${day(g.main_date)}` : "main: " + DASH} · ${ciWords}`));
+
+  // App source lines: app only. total_swift_lines stays in the chart for continuity.
+  const first = hist.find(r => isNum(r.app_source_lines));
+  const growth = first && isNum(last.app_source_lines) ? ` · +${n(last.app_source_lines - first.app_source_lines)} since ${day(first.ts)} (new measure)` : "";
+  tiles.push(tile("App source", isNum(last.app_source_lines) ? `${n(last.app_source_lines)} <small>lines</small>` : `<span class="word grey">${NO_DATA}</span>`,
+    isNum(last.app_source_lines)
+      ? `Swift ${n(last.app_swift_lines)} · Python ${n(last.app_python_lines)} · <b>app only</b> (tests ${n(last.test_lines)} and tooling ${n(last.tooling_lines)} not counted)${growth}${stale(last.ts)}`
+      : "CI rows before 2026-10-11 did not split app from tests"));
+
+  // Last night's tests: one dot per Mac
+  if (N && N.list.length) {
+    const lastNight = N.list[N.list.length - 1];
+    const hosts = N.hosts.map(h => { const c = cellOf(lastNight, h); return `<span>${dot(c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey")}<b>${esc(h)}</b> ${esc(cellWords(c))}</span>`; }).join("");
+    const ran = N.hosts.map(h => cellOf(lastNight, h)).filter(c => c && c.state !== "did_not_run");
+    const primary = ran[0];
+    const failing = ran.reduce((a, c) => a + (c.failed || 0), 0);
+    tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing</small>` : `<span class="word amber">did not run</span>`,
+      `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`));
+    const st = stability(N);
+    const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
+      : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : word("amber", "did not run last night");
+    tiles.push(tile("Stability", isNum(st.daysSinceRed) ? `${st.daysSinceRed} <small>days since a red night</small>` : `no red night <small>in 90</small>`,
+      `${streak} · last green night <b>${st.lastGreen ? day(st.lastGreen) : "none in 90"}</b> · ${st.last7} of the last 7 nights green`));
+  } else {
+    tiles.push(tile("Last night's tests", `<span class="word grey">${DASH}</span>`, "nightly summary not published yet (tools/publish_metrics.py)"));
+    tiles.push(tile("Stability", `<span class="word grey">${DASH}</span>`, "waits on the nightly summary"));
+  }
+
+  // Open bugs (gh via the publisher; null when gh failed)
+  const issues = isNum(g.open_issues) ? g.open_issues : (isNum(last.open_issues) ? last.open_issues : null);
+  tiles.push(tile("Open bugs", isNum(g.open_bugs) ? `${g.open_bugs} <small>bugs</small>` : `<span class="word grey">${DASH}</span>`,
+    isNum(g.open_bugs)
+      ? `<b>${n(g.bugs_opened_7d)} found</b> this week · ${n(g.bugs_closed_7d)} fixed · ${n(issues)} issues open in all`
+      : `GitHub counts not available${isNum(issues) ? ` · ${n(issues)} issues open (CI row)` : ""}`));
+
+  // Sprint milestone
+  const sp = S.sprint;
+  if (sp && isNum(sp.open) && isNum(sp.closed)) {
+    const total = sp.open + sp.closed;
+    const left = sp.due ? Math.round((toTime(sp.due) - Date.now()) / 86400000) : null;
+    tiles.push(tile("Sprint", esc(sp.title), `<b>${sp.closed} of ${total}</b> done${sp.due ? ` · due ${day(sp.due)}${isNum(left) ? ` · ${left < 0 ? "overdue" : left + " days left"}` : ""}` : ""}` +
+      `<div class="bar"><i style="width:${total ? Math.round(100 * sp.closed / total) : 0}%"></i></div>`));
+  } else {
+    tiles.push(tile("Sprint", `<span class="word grey">${DASH}</span>`, "no open milestone, or GitHub not reachable"));
+  }
+  document.getElementById("head").innerHTML = tiles.join("");
+  document.getElementById("asof").textContent = S.generated ? `summary as of ${fmtWhen(S.generated)}` : "no summary published yet";
+}
+
+// ---------------------------------------------------------------- 2. timeline
+let TL_NIGHTS = null;
+function renderTimeline(d) {
+  const tl = document.getElementById("tl");
+  const N = nights(d);
+  if (!N || !N.list.length) {
+    tl.innerHTML = `<div class="ghost" style="grid-column:1 / -1">${NO_DATA}: the 90-night table is published by tools/publish_metrics.py (summary_latest.json).</div>`;
+    document.getElementById("tl-table").textContent = NO_DATA;
     return;
   }
-  const ran = nightly.filter(r => (r.total || 0) > 0);
-  const last = nightly[nightly.length - 1];
-  const prev = ran.length > 1 ? ran[ran.length - 2] : {};
-  const lastRan = ran.length ? ran[ran.length - 1] : {};
-  cards.appendChild(card("Passed", lastRan.passed ?? null, prev.passed, lastRan.passed, false, "var(--good)"));
-  cards.appendChild(card("Failed", lastRan.failed ?? null, prev.failed, lastRan.failed, true, "var(--bad)"));
-  cards.appendChild(card("Skipped", lastRan.skipped ?? null, prev.skipped, lastRan.skipped, true, "var(--warn)"));
-  cards.appendChild(card("Last status", `${last.status || "unknown"}${last.configuration ? " · " + last.configuration : ""}`, null, null, false, "var(--accent)"));
-  cards.appendChild(card("Host", last.host || "unknown", null, null, false, "var(--purple)"));
-
-  // A run where no test ran is a gap, not a zero.
-  const labels = dateLabels(nightly);
-  chartOrNote("c-tests", "line", labels, [
-    { label: "passed", data: nightly.map(r => (r.total || 0) > 0 ? r.passed : null), yAxisID: "y", spanGaps: false, ...lineStyle("#3fb950") },
-    { label: "failed", data: nightly.map(r => (r.total || 0) > 0 ? r.failed : null), yAxisID: "y1", spanGaps: false, ...lineStyle("#f85149") },
-  ], withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false, title: { display: true, text: "passed" } },
-                y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: "failed" } } }));
-  chartOrNote("c-tests-duration", "line", labels, [
-    { label: "minutes", data: nightly.map(r => isNum(r.elapsed_s) && (r.total || 0) > 0 ? +(r.elapsed_s / 60).toFixed(1) : null), ...lineStyle("#58a6ff") },
-  ]);
-}
-
-// ---------------------------------------------------------------- 3. coverage
-function renderCoverage(d) {
-  const cards = document.getElementById("coverage-cards");
-  const rows = d.covRows;
-  const last = rows.length ? rows[rows.length - 1] : null;
-  const prev = rows.length > 1 ? rows[rows.length - 2] : null;
-  if (last) {
-    cards.appendChild(card("Logic coverage", fmtPct(last.total.logic_pct), prev && prev.total.logic_pct, last.total.logic_pct, false, "var(--good)"));
-    cards.appendChild(card("All coverage", fmtPct(last.total.pct), prev && prev.total.pct, last.total.pct, false, "var(--accent)"));
-    cards.appendChild(card("Lines measured", fmtNum(last.total.lines), null, null, false, "var(--muted)"));
-    cards.appendChild(card("Folders", last.folders.length, null, null, false, "var(--purple)"));
-    const folders = last.folders.slice().sort((a, b) => (b.lines || 0) - (a.lines || 0));
-    chartOrNote("c-cov-folders", "bar", folders.map(f => f.folder), [
-      { label: "logic %", data: folders.map(f => f.logic_pct), backgroundColor: "#3fb950" },
-      { label: "all %", data: folders.map(f => f.pct), backgroundColor: "#58a6ff" },
-    ], { ...chartDefaults, indexAxis: "y", scales: { x: { ...chartDefaults.scales.y, max: 100 }, y: { ticks: { autoSkip: false, font: { size: 11 } }, grid: { display: false } } } });
-  } else {
-    noDataCard(cards, "No per-folder coverage published yet",
-      "Published by tools/publish_metrics.py after the 4 AM coverage run on the M4.");
-    note("c-cov-folders", NO_DATA);
+  TL_NIGHTS = N;
+  const T = N.list;
+  const tags = Array.isArray(d.summary.tags) ? d.summary.tags : [];
+  const tagFor = date => tags.filter(t => t && t.date === date).map(t => t.name).join(", ");
+  const cols = `grid-template-columns: repeat(${T.length}, minmax(0, 1fr))`;
+  let html = "";
+  for (const h of N.hosts) {
+    html += `<div class="host">${esc(h)}</div><div class="cells" style="${cols}">` + T.map((t, i) => {
+      const c = cellOf(t, h);
+      return `<div class="cell ${c ? c.state : ""}" tabindex="0" data-i="${i}" data-h="${esc(h)}" title="${esc(`${h} · ${t.date}: ${cellWords(c)}`)}"></div>`;
+    }).join("") + "</div>";
   }
-  // Trend: the per-folder run (one point per day) plus the 2 AM nightly's own
-  // logic-coverage number, which has months of history. They are different
-  // measurements (Debug + Core vs the Release nightly), so they are separate lines.
-  const nightly = d.tdRows.filter(r => r.source === "nightly-local" && isNum(r.coverage_logic_pct));
-  const days = Array.from(new Set([...rows.map(r => r.date), ...nightly.map(r => String(r.ts).slice(0, 10))])).sort();
-  const covByDay = new Map(rows.map(r => [r.date, r]));
-  const nightlyByDay = new Map(nightly.map(r => [String(r.ts).slice(0, 10), r]));
-  chartOrNote("c-cov-trend", "line", days.map(day => dateLabels([{ date: day }])[0]), [
-    { label: "logic % (4 AM per-folder run)", data: days.map(day => covByDay.has(day) ? covByDay.get(day).total.logic_pct : null), spanGaps: true, ...lineStyle("#3fb950") },
-    { label: "all % (4 AM per-folder run)", data: days.map(day => covByDay.has(day) ? covByDay.get(day).total.pct : null), spanGaps: true, ...lineStyle("#58a6ff") },
-    { label: "logic % (2 AM nightly)", data: days.map(day => nightlyByDay.has(day) ? nightlyByDay.get(day).coverage_logic_pct : null), spanGaps: true, ...lineStyle("#bc8cff") },
-  ], withAxes({ y: { ...chartDefaults.scales.y, max: 100 } }));
+  html += `<div class="host"></div><div class="cells" style="${cols}">` + T.map(t => { const tg = tagFor(t.date); return `<div class="mark" title="${esc(tg)}">${tg ? "<b></b>" : ""}</div>`; }).join("") + "</div>";
+  html += `<div class="host"></div><div class="months" style="${cols}">` + T.map((t, i) => {
+    const dt = new Date(`${t.date}T00:00:00`);
+    return `<span>${dt.getDate() === 1 || i === 0 ? dt.toLocaleDateString("en-US", { month: "short" }) : ""}</span>`;
+  }).join("") + "</div>";
+  tl.innerHTML = html;
+  if (tl.addEventListener) {
+    const show = e => {
+      const el = e.target;
+      if (!el || !el.getAttribute || !el.getAttribute("data-i")) return;
+      const t = T[+el.getAttribute("data-i")];
+      const tg = tagFor(t.date);
+      document.getElementById("readout").innerHTML = `<b>${day(t.date)}</b>${tg ? ` · ${esc(tg)}` : ""} — ` +
+        N.hosts.map(h => `${esc(h)} ${esc(cellWords(cellOf(t, h)))}`).join(" · ");
+    };
+    tl.addEventListener("mouseover", show);
+    tl.addEventListener("focusin", show);
+  }
+
+  const st = stability(N);
+  document.getElementById("stab").innerHTML =
+    `<span><b>${st.redNights}</b> of ${st.nightsRan} nights had a failing test on some Mac</span>` +
+    `<span><b>${st.greenNights}</b> nights every Mac that ran was green</span>` +
+    `<span><b>${st.allGreen}</b> nights all ${N.hosts.length} Macs ran and were green</span>` +
+    (tags.length ? `<span>demo tags: ${tags.map(t => `<b>${esc(t.name)}</b> ${day(t.date)}`).join(", ")}</span>` : "");
+  const bad = T.filter(t => nightStates(t).some(s => s !== "green")).reverse();
+  document.getElementById("tl-table").innerHTML = bad.length ? table(["Night", ...N.hosts, "Tag"],
+    bad.map(t => [day(t.date), ...N.hosts.map(h => { const c = cellOf(t, h); return c ? (c.state === "green" ? cellWords(c) : `<span class="word ${c.state === "red" ? "red" : "amber"}">${esc(cellWords(c))}</span>`) : null; }), esc(tagFor(t.date))]))
+    : "Every night in the window was green.";
 }
 
-// ---------------------------------------------------------------- 4. static analysis
-function renderStatic(d) {
-  const rows = d.staticRows;
-  const cards = document.getElementById("static-cards");
-  if (!rows.length) {
-    noDataCard(cards, "No nightly static-analysis rows", NO_DATA);
-    ["c-sa-compiler", "c-sa-codeql", "c-sa-lint", "c-sa-san"].forEach(id => note(id, NO_DATA));
-  } else {
-    const last = rows[rows.length - 1];
-    const prev = rows.length > 1 ? rows[rows.length - 2] : {};
-    const extraction = r => isNum(r.codeql_extracted_files) && isNum(r.codeql_in_scope_files) && r.codeql_in_scope_files > 0
-      ? +(100 * r.codeql_extracted_files / r.codeql_in_scope_files).toFixed(1) : null;
-    const spec = [
-      ["CodeQL findings", "codeql_findings", "var(--bad)"],
-      ["Strict-concurrency warnings", "concurrency_warnings", "var(--warn)"],
-      ["All strict warnings", "strict_warning_total", "var(--warn)"],
-      ["Memory-safety warnings", "memory_safety_warnings", "var(--warn)"],
-      ["Periphery dead code", "periphery_aggressive", "var(--accent)"],
-      ["SwiftLint --strict", "swiftlint_strict", "var(--accent)"],
-      ["UBSan hits", "ubsan_issues", "var(--bad)"],
-      ["ASan hits", "asan_issues", "var(--bad)"],
-      ["TSan hits", "tsan_issues", "var(--bad)"],
-    ];
-    for (const [label, key, color] of spec) {
-      cards.appendChild(card(label, isNum(last[key]) ? last[key] : null, prev[key], last[key], true, color));
+// ---------------------------------------------------------------- 3. area lines
+// Each area: state, one sentence, the one number, trend vs 7 days ago, sparkline, then the detail body.
+const AREAS = [
+  { id: "tests", name: "Tests & nightly", sub: "2 AM Release run on each Mac · coverage 4 AM" },
+  { id: "size", name: "Code size & complexity", sub: "lizard over app Swift · wc -l" },
+  { id: "debt", name: "Debt trend", sub: "CCN > 15 ratchet · over-exposure · problem files" },
+  { id: "san", name: "Sanitizers & static checks", sub: "GitHub nightly analysis" },
+  { id: "hallie", name: "Hallie eval", sub: "nightly replay of the frozen suite" },
+  { id: "person", name: "Person recognition", sub: "nightly quality holdout" },
+  { id: "reviews", name: "Reviews", sub: "adversarial nightly · codex" },
+  { id: "speed", name: "Speed & safety", sub: "catalog at 100k · gauntlet · safety sensors" },
+];
+const NO_LINE = { state: "grey", sentence: NO_DATA, number: DASH, trend: `<span class="trend">no data</span>`, spark: [], sparkColor: C.grey };
+
+// The "summary" of each area, computed from the loaded streams.
+const SUMMARY = {
+  tests(d) {
+    const N = nights(d);
+    const cov = d.covRows.length ? d.covRows[d.covRows.length - 1] : null;
+    const covWk = daysBefore(d.covRows, 7);
+    const covWords = cov ? ` Logic coverage <b>${fmtPct(cov.total.logic_pct)}</b>${covWk ? (cov.total.logic_pct === covWk.total.logic_pct ? ", flat" : cov.total.logic_pct > covWk.total.logic_pct ? ", up" : ", down") + " vs 7 days ago" : ""}.` : "";
+    if (!N || !N.list.length) {
+      const lastRow = d.tdRows.filter(r => r.source === "nightly-local").pop();
+      return { ...NO_LINE, sentence: `Nightly summary not published yet; last nightly row ${lastRow ? fmtWhen(lastRow.ts) : NO_DATA}.${covWords}` };
     }
-    const ex = extraction(last);
-    cards.appendChild(card("CodeQL extraction", ex == null ? null : `${ex}%`, null, null, false, "var(--good)"));
-    cards.appendChild(card("CodeQL extraction errors", isNum(last.codeql_extraction_errors) ? last.codeql_extraction_errors : null,
-      prev.codeql_extraction_errors, last.codeql_extraction_errors, true, "var(--bad)"));
+    const T = N.list, lastNight = T[T.length - 1], st = stability(N);
+    const cells = N.hosts.map(h => [h, cellOf(lastNight, h)]);
+    const reds = cells.filter(([, c]) => c && c.state === "red");
+    const greens = cells.filter(([, c]) => c && c.state === "green");
+    const skipped = cells.filter(([, c]) => c && c.state === "did_not_run");
+    const none = cells.filter(([, c]) => !c);
+    const state = reds.length ? "red" : (greens.length ? (skipped.length || none.length ? "watch" : "green") : "amber");
+    const suite = Math.max(0, ...cells.map(([, c]) => c ? c.total : 0));
+    const parts = [];
+    if (reds.length) parts.push(reds.map(([h, c]) => `<b>${n(c.failed)}</b> test${c.failed === 1 ? "" : "s"} fail on the ${esc(h)}`).join(" and ") + (suite ? ` (${n(suite)} in the suite)` : ""));
+    if (greens.length) parts.push(greens.map(([h, c]) => `the ${esc(h)} is green (${n(c.passed)} passed)`).join(", "));
+    if (skipped.length) parts.push(skipped.map(([h, c]) => `the ${esc(h)} <b>did not run</b>${cellReason(c) ? ` (${esc(cellReason(c))})` : ""}`).join(", "));
+    if (none.length) parts.push(`no nightly on the ${none.map(([h]) => esc(h)).join(" or ")}`);
+    const lead = st.redStreak ? `Red <b>${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running</b>: ` : st.greenStreak ? `Green <b>${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running</b>: ` : "";
+    const primary = (greens[0] || reds[0] || [null, null]);
+    const ph = primary[0], pc = primary[1];
+    const weekAgo = ph ? T.slice(0, -7).reverse().map(t => cellOf(t, ph)).find(c => c && c.state !== "did_not_run") : null;
+    const weekDate = ph ? T.slice(0, -7).reverse().find(t => cellOf(t, ph) && cellOf(t, ph).state !== "did_not_run") : null;
+    return {
+      state,
+      sentence: `${lead}${parts.join("; ")}.${covWords}`,
+      number: pc ? `${n(pc.passed)} passed · ${n(pc.failed)} failed` : "did not run",
+      trend: pc ? trend(weekAgo ? weekAgo.failed : null, pc.failed, true, " failing", weekDate ? weekDate.date : null) : `<span class="trend">no run last night</span>`,
+      spark: ph ? T.slice(-30).map(t => { const c = cellOf(t, ph); return c && c.state !== "did_not_run" ? c.failed : null; }) : [],
+      sparkColor: C.red,
+    };
+  },
+  size(d) {
+    const hist = d.history, last = hist.length ? hist[hist.length - 1] : null;
+    const cx = d.cxRows.length ? d.cxRows[d.cxRows.length - 1] : null;
+    const sw = cx && cx.totals && cx.totals.swift ? cx.totals.swift : {};
+    const cxWk = daysBefore(d.cxRows, 7), swWk = cxWk && cxWk.totals && cxWk.totals.swift ? cxWk.totals.swift : {};
+    const hWk = daysBefore(hist, 7) || {};
+    if (!last && !cx) return NO_LINE;
+    const lines = last && isNum(last.app_source_lines) ? `<b>${n(last.app_source_lines)}</b> app lines` : "app lines " + NO_DATA;
+    const files = isNum(sw.files) ? ` in ${n(sw.files)} files` : "";
+    const gate = isNum(sw.ccn_over_30) ? `<b>${sw.ccn_over_30}</b> function${sw.ccn_over_30 === 1 ? "" : "s"} over the CCN-30 gate${isNum(swWk.ccn_over_30) ? ` (${swWk.ccn_over_30} a week ago)` : ""}` : "CCN-30 count " + NO_DATA;
+    const fat = last && isNum(last.files_over_1000) ? ` and ${last.files_over_1000} files over 1,000 lines${isNum(hWk.files_over_1000) ? ` (${hWk.files_over_1000})` : ""}` : "";
+    return {
+      state: isNum(sw.ccn_over_30) ? (sw.ccn_over_30 > 0 ? "watch" : "green") : "grey",
+      sentence: `${lines}${files}; ${gate}${fat}.${isNum(sw.mean_ccn) ? ` Mean CCN ${sw.mean_ccn}.` : ""}`,
+      number: isNum(sw.ccn_over_30) ? `${sw.ccn_over_30} over CCN 30` : DASH,
+      trend: trend(swWk.ccn_over_30, sw.ccn_over_30, true, "", cxWk ? cxWk.ts : null),
+      spark: lastPerDay(d.cxRows).slice(-30).map(r => r.totals && r.totals.swift && isNum(r.totals.swift.ccn_over_30) ? r.totals.swift.ccn_over_30 : null),
+      sparkColor: C.blue,
+    };
+  },
+  debt(d) {
+    const cx = d.cxRows.length ? d.cxRows[d.cxRows.length - 1] : null;
+    const sw = cx && cx.totals && cx.totals.swift ? cx.totals.swift : {};
+    const cxWk = daysBefore(d.cxRows, 7), swWk = cxWk && cxWk.totals && cxWk.totals.swift ? cxWk.totals.swift : {};
+    const nightly = d.cxRows.filter(r => !r.backfill);
+    const ln = nightly.length ? nightly[nightly.length - 1] : {};
+    const ex = d.exRows.length ? d.exRows[d.exRows.length - 1] : null;
+    const exFirst = d.exRows.length ? d.exRows[0] : null;
+    if (!cx && !ex) return NO_LINE;
+    const over15 = isNum(sw.ccn_over_15) ? `<b>${sw.ccn_over_15}</b> functions over CCN 15${isNum(swWk.ccn_over_15) ? ` (${swWk.ccn_over_15} a week ago)` : ""}.` : "CCN-15 count " + NO_DATA + ".";
+    const night = isNum(ln.debt_new) ? ` Last night <b>${ln.debt_new} new</b>, <b>${n(ln.debt_worse)} worse</b>, ${n(ln.debt_fixed)} fixed${isNum(ln.gate_overrides_recent) ? `, ${ln.gate_overrides_recent} gate override${ln.gate_overrides_recent === 1 ? "" : "s"}` : ""}.` : "";
+    const expo = ex && ex.totals ? ` ${n(ex.totals.could_be_private)} declarations could be private${exFirst && exFirst !== ex ? ` (${n(exFirst.totals.could_be_private)} on ${day(exFirst.ts)})` : ""}; the baseline only shrinks${exFirst && isNum(exFirst.baseline_after) ? `, ${n(exFirst.baseline_after)} → ${n(ex.baseline_after)}` : ""}.` : "";
+    return {
+      state: isNum(ln.debt_new) || isNum(ln.debt_worse) ? ((ln.debt_new || 0) + (ln.debt_worse || 0) > 0 ? "watch" : "green") : "grey",
+      sentence: `${over15}${night}${expo}`,
+      number: isNum(sw.ccn_over_15) ? `${sw.ccn_over_15} over CCN 15` : DASH,
+      trend: trend(swWk.ccn_over_15, sw.ccn_over_15, true, "", cxWk ? cxWk.ts : null),
+      spark: lastPerDay(d.cxRows).slice(-30).map(r => r.totals && r.totals.swift && isNum(r.totals.swift.ccn_over_15) ? r.totals.swift.ccn_over_15 : null),
+      sparkColor: C.blue,
+    };
+  },
+  san(d) {
+    const rows = d.staticRows, last = rows.length ? rows[rows.length - 1] : null;
+    const wk = daysBefore(rows, 7) || {};
+    if (!last) return NO_LINE;
+    const hit = k => isNum(last[k]) ? last[k] : null;
+    const hits = ["ubsan_issues", "asan_issues", "tsan_issues"].map(hit);
+    const total = hits.some(isNum) ? hits.reduce((a, v) => a + (v || 0), 0) : null;
+    const state = !hits.some(isNum) ? "grey" : (hit("asan_issues") > 0 || hit("tsan_issues") > 0) ? "red" : hit("ubsan_issues") > 0 ? "watch" : "green";
+    const na = d.naRun && d.naRun.done ? d.naRun.done : null;
+    const naWords = na ? ` GitHub nightly analysis ${word(na.conclusion === "success" ? "green" : "red", na.conclusion || na.status)} ${day(na.updated_at)}.` : "";
+    const sanWords = `Sanitizer hits last night: UBSan ${isNum(hit("ubsan_issues")) ? hit("ubsan_issues") : "no run"} · ASan ${isNum(hit("asan_issues")) ? hit("asan_issues") : "no run"} · TSan ${isNum(hit("tsan_issues")) ? hit("tsan_issues") : "no run"}.`;
+    const cmp = (k, lab) => isNum(last[k]) ? `${lab} ${n(last[k])}${isNum(wk[k]) ? (last[k] === wk[k] ? " (flat)" : ` (${n(wk[k])} a week ago)`) : ""}` : `${lab} ${NO_DATA}`;
+    return {
+      state,
+      sentence: `<b>${isNum(total) ? `${total} sanitizer finding${total === 1 ? "" : "s"}` : "sanitizers: no run"}.</b> ${sanWords} ${cmp("codeql_findings", "CodeQL")}, ${cmp("strict_warning_total", "strict warnings")}, ${cmp("swiftlint_strict", "SwiftLint")}, ${cmp("periphery_aggressive", "Periphery")}.${naWords}`,
+      number: isNum(total) ? `${total} finding${total === 1 ? "" : "s"}` : DASH,
+      trend: trend(wk.strict_warning_total, last.strict_warning_total, true, " warnings", wk.ts || null),
+      spark: lastPerDay(rows).slice(-30).map(r => isNum(r.strict_warning_total) ? r.strict_warning_total : null),
+      sparkColor: C.blue,
+    };
+  },
+  hallie(d) {
+    const h = hallieRows(d);
+    if (!h.rows.length) return NO_LINE;
+    const g = h.graded.length ? h.graded[h.graded.length - 1] : null;
+    const byHost = {};
+    for (const r of h.rows) byHost[hostLabel(r.host) || "?"] = r;
+    const hostWords = Object.entries(byHost).map(([k, r]) => `${esc(k)} ${esc(r.hallie_replay_status || "unknown")}`).join(", ");
+    if (!g) return { ...NO_LINE, sentence: `No nightly Hallie replay has completed a case yet. Last replay: ${hostWords}.` };
+    const wk = daysBefore(h.graded, 7);
+    const sr = h.strictRate(g), wr = wk ? h.strictRate(wk) : null;
+    return {
+      state: sr >= 90 ? "green" : "watch",
+      sentence: `Strict <b>${g.hallie_strict_pass} of ${g.hallie_strict_completed}</b> (${fmtPct(sr)}) and advisory ${g.hallie_advisory_pass} of ${g.hallie_advisory_completed} (${fmtPct(h.advisoryRate(g))}) on the ${esc(hostLabel(g.host) || "?")}, ${day(g.ts)}${isNum(wr) ? `, ${sr === wr ? "flat vs" : sr > wr ? "up from" : "down from"} ${fmtPct(wr)} strict a week ago` : ""}. Last replay by Mac: ${hostWords}.`,
+      number: `${fmtPct(sr)} strict`,
+      trend: trend(wr, sr, false, " pts", wk ? wk.ts : null),
+      spark: h.graded.slice(-30).map(h.strictRate),
+      sparkColor: C.blue,
+    };
+  },
+  person(d) {
+    const p = d.summary && d.summary.person;
+    if (!p || typeof p.status !== "string") return { ...NO_LINE, sentence: "Quality holdout: nothing published." };
+    const words = { "not-configured": "Quality holdout <b>not configured</b> on any Mac; no score to show.",
+                    "collector-failed": "The nightly person-metrics collector <b>failed</b>; no score to show." };
+    const ok = isNum(p.quality_score);
+    return {
+      state: ok ? (p.quality_score >= 0.9 ? "green" : "watch") : "grey",
+      sentence: words[p.status] || `Status <b>${esc(p.status)}</b>${ok ? `: quality score ${p.quality_score}` : ""}${isNum(p.readiness_pct) ? `, readiness ${p.readiness_pct}%` : ""}.`,
+      number: ok ? `score ${p.quality_score}` : DASH,
+      trend: `<span class="trend">${ok ? "no trend published" : "no data"}</span>`,
+      spark: [], sparkColor: C.grey,
+    };
+  },
+  reviews(d) {
+    const a = d.advRows, last = a.length ? a[a.length - 1] : null;
+    const c = d.codexRows;
+    if (!last && !c.length) return NO_LINE;
+    const sum = (rows, key) => rows.reduce((s, r) => s + (r[key] || 0), 0);
+    const total = r => r && r.findings ? SEVERITIES.reduce((s, k) => s + (r.findings[k] || 0), 0) : null;
+    let redFree = 0;
+    for (let i = a.length - 1; i >= 0 && !(a[i].confirmed_red > 0); i--) redFree++;
+    const wk = daysBefore(a, 7);
+    const adv = last ? `Adversarial: ${isNum(total(last)) ? `${total(last)} finding${total(last) === 1 ? "" : "s"}` : last.status} last night${last.findings ? ` (${SEVERITIES.filter(k => last.findings[k]).map(k => `${last.findings[k]} ${k}`).join(", ") || "none"})` : ""}, ` +
+      (isNum(last.confirmed_red) ? `<b>${last.confirmed_red} confirmed red</b>${last.confirmed_red === 0 && redFree > 1 ? ` for ${redFree} nights running` : ""}` : "confirm: no data") + "." : "Adversarial review: " + NO_DATA + ".";
+    const codex = c.length ? ` Codex: ${sum(c, "passes")} passes, ${sum(c, "findings")} findings, ${sum(c, "closed_passes")} passes closed.` : " Codex: nothing published.";
+    return {
+      state: last ? (last.status === "failed" ? "red" : last.confirmed_red > 0 ? "watch" : "green") : "grey",
+      sentence: adv + codex,
+      number: last && isNum(last.confirmed_red) ? `${last.confirmed_red} confirmed red` : DASH,
+      trend: trend(wk ? total(wk) : null, total(last), true, " findings", wk ? wk.date : null),
+      spark: a.slice(-30).map(r => isNum(r.confirmed_red) ? r.confirmed_red : null),
+      sparkColor: C.blue,
+    };
+  },
+  speed(d) {
+    const s = d.searchLatest;
+    const g = d.allTdRows.filter(row => row.source === "gauntlet" && row.schemaVersion === 1).pop();
+    if (!s && !g) return { ...NO_LINE, sentence: "No catalog-search benchmark or gauntlet run published yet. Launch p95 and safety-sensor counts (#310) are not published yet." };
+    const age = s ? Math.round(hoursSince(s.ts) / 24) : null;
+    const bench = s ? `Catalog search at ${n(s.records)} records: <b>${s.donnaMedian.toFixed(1)} ms</b> median for “donna” (${esc(hostLabel(s.host) || "?")}, ${day(s.ts)}${age > 7 ? ` — ${age} days old` : ""}).` : "No catalog-search benchmark published.";
+    const gaunt = g ? ` Gauntlet: ${esc(g.status || "incomplete")} on the ${esc(String(g.machine || "?").toUpperCase())}, ${day(g.ts)}.` : "";
+    return {
+      state: "grey",
+      sentence: `${bench}${gaunt} Launch p95 and the delete/archive safety-sensor counts #310 asks for are not published yet.`,
+      number: s ? `${s.donnaMedian.toFixed(1)} ms` : DASH,
+      trend: `<span class="trend">${s ? (s.comparable > 1 ? `${s.comparable} comparable runs` : "one run; no trend") : "no data"}</span>`,
+      spark: [], sparkColor: C.grey,
+    };
+  },
+};
 
-    const daily = lastPerDay(rows);
-    const labels = dateLabels(daily);
-    const col = key => daily.map(r => isNum(r[key]) ? r[key] : null);
-    chartOrNote("c-sa-compiler", "line", labels, [
-      { label: "strict concurrency", data: col("concurrency_warnings"), ...lineStyle("#d29922") },
-      { label: "all strict warnings", data: col("strict_warning_total"), ...lineStyle("#db6d28") },
-      { label: "memory safety", data: col("memory_safety_warnings"), ...lineStyle("#bc8cff") },
-    ]);
-    chartOrNote("c-sa-codeql", "line", labels, [
-      { label: "findings", data: col("codeql_findings"), yAxisID: "y", ...lineStyle("#f85149") },
-      { label: "extraction %", data: daily.map(extraction), yAxisID: "y1", ...lineStyle("#3fb950") },
-    ], withAxes({ y1: { position: "right", min: 0, max: 100, grid: { drawOnChartArea: false } } }));
-    chartOrNote("c-sa-lint", "line", labels, [
-      { label: "Periphery", data: col("periphery_aggressive"), ...lineStyle("#58a6ff") },
-      { label: "SwiftLint --strict", data: col("swiftlint_strict"), ...lineStyle("#d29922") },
-    ]);
-    chartOrNote("c-sa-san", "line", labels, [
-      { label: "UBSan", data: col("ubsan_issues"), ...lineStyle("#d29922") },
-      { label: "ASan", data: col("asan_issues"), ...lineStyle("#f85149") },
-      { label: "TSan", data: col("tsan_issues"), ...lineStyle("#bc8cff") },
-    ]);
-  }
-
-  // Findings summary (metrics/nightly_findings_latest.json). Only counts,
-  // tool names and severities are read from it, never titles or paths.
-  const box = document.getElementById("findings-table");
-  const f = d.findings;
-  if (!f || typeof f.tools !== "object") { box.textContent = NO_DATA; return; }
-  document.getElementById("findings-title").textContent =
-    `Latest findings summary, by tool · ${f.date || "date unknown"}${f.dry_run ? " · dry run (no issues filed)" : ""}`;
-  const fresh = {};
-  for (const item of Array.isArray(f.new) ? f.new : []) {
-    const key = `${item.tool}|${item.severity}`;
-    fresh[key] = (fresh[key] || 0) + 1;
-  }
-  const sevs = ["high", "medium", "low"];
-  let html = `<table><thead><tr><th>Tool</th><th>Ran</th><th>Findings</th><th>Fingerprints</th>${sevs.map(s => `<th>New ${s}</th>`).join("")}</tr></thead><tbody>`;
-  for (const [tool, t] of Object.entries(f.tools)) {
-    const ran = t && t.input ? (t.complete ? "complete" : "incomplete") : "no input";
-    const n = v => t && t.input && isNum(v) ? fmtNum(v) : NO_DATA;
-    html += `<tr><td>${esc(tool)}</td><td>${esc(ran)}</td><td>${n(t.findings)}</td><td>${n(t.fingerprints)}</td>` +
-      sevs.map(s => `<td>${t && t.input ? (fresh[`${tool}|${s}`] || 0) : NO_DATA}</td>`).join("") + "</tr>";
-  }
-  const bs = f.by_severity || {};
-  html += `<tr><td><strong>All tools</strong></td><td></td><td></td><td>${isNum(f.fingerprints) ? fmtNum(f.fingerprints) : NO_DATA}</td>` +
-    sevs.map(s => `<td>${isNum(bs[s]) ? fmtNum(bs[s]) + " total" : NO_DATA}</td>`).join("") + "</tr></tbody></table>";
-  box.innerHTML = html;
-}
-
-// ---------------------------------------------------------------- 5. adversarial
-function renderAdversarial(d) {
-  const rows = d.advRows;
-  const cards = document.getElementById("adv-cards");
-  const table = document.getElementById("adv-table");
-  if (!rows.length) {
-    noDataCard(cards, "No adversarial review data published yet",
-      "Published by tools/publish_metrics.py after the 05:30 confirm job (counts only).");
-    note("c-adv", NO_DATA);
-    table.textContent = NO_DATA;
-    return;
-  }
-  const last = rows[rows.length - 1];
-  const kept = rows.reduce((s, r) => s + r.kept, 0);
-  const declined = rows.reduce((s, r) => s + r.declined, 0);
-  const cost = rows.reduce((s, r) => s + (isNum(r.cost_usd) ? r.cost_usd : 0), 0);
-  const anyCost = rows.some(r => isNum(r.cost_usd));
-  cards.appendChild(card("Nights", rows.length, null, null, false, "var(--accent)"));
-  cards.appendChild(card("Files reviewed (last)", isNum(last.files_reviewed) ? `${last.files_reviewed} of ${last.files_in_scope}` : null, null, null, false, "var(--muted)"));
-  cards.appendChild(card("Confirmed red (last)", isNum(last.confirmed_red) ? last.confirmed_red : null, null, null, true, "var(--bad)"));
-  cards.appendChild(card("Kept / declined (all)", `${kept} / ${declined}`, null, null, false, "var(--good)"));
-  cards.appendChild(card("Precision (all)", kept + declined ? `${(100 * kept / (kept + declined)).toFixed(0)}%` : null, null, null, false, "var(--purple)"));
-  cards.appendChild(card("Cost (all)", anyCost ? `$${cost.toFixed(2)}` : null, null, null, true, "var(--warn)"));
-
-  const labels = rows.map(r => r.date);
-  chartOrNote("c-adv", "bar", labels, [
-    ...SEVERITIES.map(s => ({ label: s, data: rows.map(r => r.findings ? r.findings[s] : null), backgroundColor: SEV_COLORS[s], stack: "f" })),
-    { type: "line", label: "confirmed red", data: rows.map(r => r.confirmed_red), ...lineStyle("#58a6ff") },
-  ], withAxes({ x: { ...chartDefaults.scales.x, stacked: true }, y: { ...chartDefaults.scales.y, stacked: true } }));
-
-  const cell = v => isNum(v) ? fmtNum(v) : "—";
-  let html = `<table><thead><tr><th>Night</th><th>Status</th><th>Files</th>${SEVERITIES.map(s => `<th>${s}</th>`).join("")}` +
-    `<th>Red</th><th>Kept</th><th>Declined</th><th>Precision</th><th>Cost</th></tr></thead><tbody>`;
-  for (const r of rows.slice().reverse()) {
-    html += `<tr><td>${esc(r.date)}</td><td>${esc(r.status)}${r.failed_runs ? ` (${r.failed_runs} failed)` : ""}</td>` +
-      `<td>${isNum(r.files_reviewed) ? `${r.files_reviewed}/${r.files_in_scope}` : "—"}</td>` +
-      SEVERITIES.map(s => `<td>${r.findings ? cell(r.findings[s]) : "—"}</td>`).join("") +
-      `<td>${cell(r.confirmed_red)}</td><td>${cell(r.kept)}</td><td>${cell(r.declined)}</td>` +
-      `<td>${isNum(r.precision) ? (100 * r.precision).toFixed(0) + "%" : "—"}</td>` +
-      `<td>${isNum(r.cost_usd) ? "$" + r.cost_usd.toFixed(2) : "—"}</td></tr>`;
-  }
-  table.innerHTML = html + "</tbody></table>";
-}
-
-// ---------------------------------------------------------------- 6. codex
-function renderCodex(d) {
-  const rows = d.codexRows;
-  const cards = document.getElementById("codex-cards");
-  if (!rows.length) {
-    noDataCard(cards, "No codex review counts published yet",
-      "Published by tools/publish_metrics.py from the docs/reviews/codex headers.");
-    note("c-codex", NO_DATA);
-    return;
-  }
-  const sum = key => rows.reduce((s, r) => s + (r[key] || 0), 0);
-  cards.appendChild(card("Passes", sum("passes"), null, null, false, "var(--accent)"));
-  cards.appendChild(card("Findings", sum("findings"), null, null, false, "var(--bad)"));
-  cards.appendChild(card("Passes closed", `${sum("closed_passes")} of ${sum("passes")}`, null, null, false, "var(--good)"));
-  cards.appendChild(card("Docs without a header", sum("unparsed_docs"), null, null, false, "var(--muted)"));
-  const parsed = rows.filter(r => r.passes > 0);
-  chartOrNote("c-codex", "bar", parsed.map(r => r.date), [
-    { label: "findings", data: parsed.map(r => r.findings), backgroundColor: "#f85149" },
-    { label: "passes", data: parsed.map(r => r.passes), backgroundColor: "#58a6ff" },
-    { label: "passes closed", data: parsed.map(r => r.closed_passes), backgroundColor: "#3fb950" },
-  ], chartDefaults, "No review doc has a parseable `Credits spent | Finding count` header yet.");
-}
-
-// ---------------------------------------------------------------- 7. hallie
-function renderHallie(d) {
-  const cards = document.getElementById("hallie-cards");
+function hallieRows(d) {
   // Pass rate over the cases that COMPLETED. A replay that completed nothing
   // (model missing, timed out) is a gap, never a 0 % pass rate.
   const rate = (pass, completed) => isNum(pass) && isNum(completed) && completed > 0 ? +(100 * pass / completed).toFixed(1) : null;
   const strictRate = r => rate(r.hallie_strict_pass, r.hallie_strict_completed);
   const advisoryRate = r => rate(r.hallie_advisory_pass, r.hallie_advisory_completed);
   const rows = d.tdRows.filter(r => r.source === "nightly-local" && r.hallie_strict_status !== undefined);
-  const graded = rows.filter(r => strictRate(r) != null || advisoryRate(r) != null);
-  const last = rows.length ? rows[rows.length - 1] : null;
-  if (last) {
-    cards.appendChild(card(`Last replay${last.host ? " · " + last.host : ""}`, last.hallie_replay_status || "unknown", null, null, false,
-      last.hallie_replay_status === "ok" ? "var(--good)" : "var(--bad)"));
-  }
-  if (!graded.length) {
-    if (!last) noDataCard(cards, "No Hallie replay rows", NO_DATA);
-    note("c-hallie", "No nightly Hallie replay has completed a case yet.");
-    return;
-  }
-  const g = graded[graded.length - 1];
-  const of = (pass, done, expected) => isNum(done) && done > 0 ? `${pass} of ${done}${isNum(expected) && expected !== done ? ` (${expected} expected)` : ""}` : NO_DATA;
-  cards.appendChild(card("Strict pass rate (last completed)", fmtPct(strictRate(g)), null, null, false, "var(--good)"));
-  cards.appendChild(card("Strict passed", of(g.hallie_strict_pass, g.hallie_strict_completed, g.hallie_strict_expected), null, null, false, "var(--good)"));
-  cards.appendChild(card("Advisory pass rate (last completed)", fmtPct(advisoryRate(g)), null, null, false, "var(--purple)"));
-  cards.appendChild(card("Last completed replay", `${fmtWhen(g.ts).split(" · ")[0]}${g.host ? " · " + g.host : ""}`, null, null, false, "var(--muted)"));
-  chartOrNote("c-hallie", "line", dateLabels(graded), [
-    { label: "strict %", data: graded.map(strictRate), ...lineStyle("#3fb950") },
-    { label: "advisory %", data: graded.map(advisoryRate), ...lineStyle("#bc8cff") },
-  ], withAxes({ y: { ...chartDefaults.scales.y, max: 100 } }));
+  return { rows, graded: rows.filter(r => strictRate(r) != null || advisoryRate(r) != null), strictRate, advisoryRate };
 }
 
-// ---------------------------------------------------------------- 8. code size
-function renderSize(d) {
-  const rows = d.history;
-  const cards = document.getElementById("size-cards");
-  if (!rows.length) {
-    noDataCard(cards, "No CI metrics rows", NO_DATA);
-    note("c-size-folders", NO_DATA); note("c-size-trend", NO_DATA);
-    return;
-  }
-  const last = rows[rows.length - 1];
-  const daily = lastPerDay(rows);
-  const prevDay = daily.length > 1 ? daily[daily.length - 2] : {};
-  // Headline = app source only. Rows before 2026-10-11 lack these keys and
-  // show no data; total_swift_lines (app + tests + CLI Swift) stays in the
-  // trend chart for continuity.
-  const lineCard = (label, key, tip, color) => {
-    const v = last[key];
-    const el = card(label, isNum(v) ? v.toLocaleString("en-US") : null, prevDay[key], v, false, color);
-    el.title = tip;
-    return el;
-  };
-  cards.appendChild(lineCard("App source (lines incl. comments/blank)", "app_source_lines",
-    "App Swift (VideoScan/VideoScan, VideoScanCore/Sources, swift_cli) + the Python scripts the app launches", "var(--accent)"));
-  cards.appendChild(lineCard("Tests", "test_lines",
-    "VideoScanTests + VideoScanCore/Tests (Swift) + tests/*.py", "var(--good)"));
-  cards.appendChild(lineCard("Tooling", "tooling_lines",
-    "The rest of scripts/ and tools/ (.py .sh .swift .mjs .js), excluding venv, .build, node_modules", "var(--muted)"));
-  cards.appendChild(card("Files over 1,000 lines", isNum(last.files_over_1000) ? last.files_over_1000 : null,
-    prevDay.files_over_1000, last.files_over_1000, true, "var(--bad)"));
-  cards.appendChild(card("Test functions in source", isNum(last.test_count) ? last.test_count : null,
-    prevDay.test_count, last.test_count, false, "var(--good)"));
-  cards.appendChild(card("Open issues", isNum(last.open_issues) ? last.open_issues : null,
-    prevDay.open_issues, last.open_issues, true, "var(--warn)"));
-
-  const withFolders = rows.filter(r => r.swift_by_folder && typeof r.swift_by_folder === "object");
-  if (withFolders.length) {
-    const f = withFolders[withFolders.length - 1].swift_by_folder;
-    const names = Object.keys(f).sort((a, b) => (f[b].lines || 0) - (f[a].lines || 0));
-    chartOrNote("c-size-folders", "bar", names, [
-      { label: "lines", data: names.map(n => f[n].lines), backgroundColor: "#58a6ff", xAxisID: "x" },
-      { label: "files", data: names.map(n => f[n].files), backgroundColor: "#bc8cff", xAxisID: "x1" },
-    ], { ...chartDefaults, indexAxis: "y",
-         scales: { x: { ...chartDefaults.scales.y, position: "bottom" }, x1: { beginAtZero: true, position: "top", grid: { drawOnChartArea: false } },
-                   y: { ticks: { autoSkip: false, font: { size: 11 } }, grid: { display: false } } } });
-  } else {
-    note("c-size-folders", "No per-folder breakdown yet: it starts with the first CI run after this page shipped.");
-  }
-  chartOrNote("c-size-trend", "line", dateLabels(daily), [
-    { label: "app source", data: daily.map(r => isNum(r.app_source_lines) ? r.app_source_lines : null), yAxisID: "y", ...lineStyle("#58a6ff") },
-    { label: "Swift lines (app + tests + CLI)", data: daily.map(r => isNum(r.total_swift_lines) ? r.total_swift_lines : null), yAxisID: "y", ...lineStyle("#8b949e") },
-    { label: "files > 1,000 lines", data: daily.map(r => isNum(r.files_over_1000) ? r.files_over_1000 : null), yAxisID: "y1", ...lineStyle("#f85149") },
-  ], withAxes({ y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false } } }));
+function renderSummaryLine(area, s) {
+  document.getElementById(`sum-${area.id}`).innerHTML =
+    `<span class="chev">▶</span>${dot(s.state)}` +
+    `<span class="aname">${esc(area.name)}<small>${esc(area.sub)}</small></span>` +
+    spark(s.spark, s.sparkColor) +
+    `<span class="sent">${s.sentence}</span>` +
+    `<span class="num"><span class="big">${s.number}</span>${s.trend}</span>`;
 }
 
-// ---------------------------------------------------------------- 8b. complexity
-const CX_COLORS = ["#58a6ff", "#bc8cff", "#3fb950", "#d29922", "#db6d28", "#f85149", "#8b949e", "#a40e26"];
-function renderComplexity(d) {
-  const rows = d.cxRows;
-  const cards = document.getElementById("cx-cards");
-  const top = document.getElementById("cx-top");
-  const fresh = document.getElementById("cx-new");
-  if (!rows.length) {
-    noDataCard(cards, "No complexity rows published yet",
-      "Published by the GitHub nightly analysis (complexity job) to metrics/complexity.jsonl.");
-    note("c-cx-debt", NO_DATA); note("c-cx-folders", NO_DATA);
-    top.textContent = NO_DATA; fresh.textContent = NO_DATA;
-    return;
-  }
-  const last = rows[rows.length - 1];
-  const prev = rows.length > 1 ? rows[rows.length - 2] : null;
-  // Backfilled history rows (scripts/complexity_backfill.py) carry totals and
-  // folders only; the top 15 and the ratchet come from the newest nightly row.
-  const nightlyRows = rows.filter(r => !r.backfill);
-  const lastNightly = nightlyRows.length ? nightlyRows[nightlyRows.length - 1] : {};
-  const t = r => (r && r.totals) || {};
-  const all = t(last).swift || {}, pAll = t(prev).swift || {};
-  const sw = t(last).swift || {}, pSw = t(prev).swift || {};
-  const num = v => isNum(v) ? v : null;
-  cards.appendChild(card("Offenders", num(all.offenders), pAll.offenders, all.offenders, true, "var(--bad)"));
-  cards.appendChild(card("CCN > 15", num(all.ccn_over_15), pAll.ccn_over_15, all.ccn_over_15, true, "var(--bad)"));
-  cards.appendChild(card("CCN > 30 (gate line)", num(all.ccn_over_30), pAll.ccn_over_30, all.ccn_over_30, true, "var(--bad)"));
-  cards.appendChild(card("Over 80 lines", num(all.nloc_over_80), pAll.nloc_over_80, all.nloc_over_80, true, "var(--warn)"));
-  cards.appendChild(card("Files over 800 lines", num(all.files_over_800), pAll.files_over_800, all.files_over_800, true, "var(--warn)"));
-  cards.appendChild(card("Mean CCN, Swift", num(sw.mean_ccn), pSw.mean_ccn, sw.mean_ccn, true, "var(--accent)"));
-  cards.appendChild(card("New offenders (last night)", num(lastNightly.debt_new), null, null, true, "var(--bad)"));
-  cards.appendChild(card("Got worse (last night)", num(lastNightly.debt_worse), null, null, true, "var(--warn)"));
-  cards.appendChild(card("Fixed (last night)", num(lastNightly.debt_fixed), null, null, false, "var(--good)"));
-  cards.appendChild(card("Duplicate code", isNum(lastNightly.duplicate_rate_pct) ? `${lastNightly.duplicate_rate_pct}%` : null,
-    null, null, true, "var(--muted)"));
-  cards.appendChild(card("Gate overrides (48 h)", num(lastNightly.gate_overrides_recent), null, null, true, "var(--warn)"));
-  cards.appendChild(card("Measured", fmtWhen(last.ts), null, null, false, "var(--muted)"));
-
-  const daily = lastPerDay(rows);
-  const labels = dateLabels(daily);
-  const tot = (r, k) => r.totals && r.totals.swift && isNum(r.totals.swift[k]) ? r.totals.swift[k] : null;
-  chartOrNote("c-cx-debt", "line", labels, [
-    { label: "offenders", data: daily.map(r => tot(r, "offenders")), yAxisID: "y", ...lineStyle("#f85149") },
-    { label: "CCN > 15", data: daily.map(r => tot(r, "ccn_over_15")), yAxisID: "y", ...lineStyle("#db6d28") },
-    { label: "CCN > 30", data: daily.map(r => tot(r, "ccn_over_30")), yAxisID: "y", ...lineStyle("#a40e26") },
-    { label: "over 80 lines", data: daily.map(r => tot(r, "nloc_over_80")), yAxisID: "y", ...lineStyle("#d29922") },
-    { label: "new + worse", data: daily.map(r => isNum(r.debt_new) || isNum(r.debt_worse) ? (r.debt_new || 0) + (r.debt_worse || 0) : null),
-      yAxisID: "y1", ...lineStyle("#bc8cff") },
-  ], withAxes({ y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: "new + worse" } } }));
-
-  // Folder keys are the same as swift_by_folder in history.jsonl; Python
-  // folders (scripts, tools) are prefixed so they read as Python.
-  const folderMap = r => {
-    const out = {};
-    for (const [k, v] of Object.entries(r.swift_by_folder || {})) out[k] = v;
-    return out;
-  };
-  const latestFolders = folderMap(last);
-  const names = Object.keys(latestFolders)
-    .sort((a, b) => (latestFolders[b].functions || 0) - (latestFolders[a].functions || 0)).slice(0, CX_COLORS.length);
-  chartOrNote("c-cx-folders", "line", labels, [
-    { label: "all app code", data: daily.map(r => tot(r, "mean_ccn")), borderWidth: 4, ...lineStyle("#8b949e") },
-    ...names.map((n, i) => ({
-      label: n, data: daily.map(r => { const f = folderMap(r)[n]; return f && isNum(f.mean_ccn) ? f.mean_ccn : null; }),
-      ...lineStyle(CX_COLORS[i]),
-    }))], withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false } }));
-
-  // App code only: rows published before 2026-10-06 also listed Python.
-  const list = (Array.isArray(lastNightly.top15) ? lastNightly.top15 : []).filter(f => (f.lang || "swift") === "swift");
-  document.getElementById("cx-top-title").textContent = `Top ${list.length || 15} most complex functions${lastNightly.ts ? " · " + fmtWhen(lastNightly.ts).split(" · ")[0] : ""}`;
-  const base = p => String(p || "").split("/").pop();
-  const fnTable = (items, withBase) => {
-    let html = `<table><thead><tr><th>Function</th><th>File</th><th>CCN</th><th>Lines</th>${withBase ? "<th>Was (CCN / lines)</th>" : ""}</tr></thead><tbody>`;
-    for (const f of items) {
-      html += `<tr><td>${esc(f.function)}</td><td title="${esc(f.file)}">${esc(base(f.file))}</td>` +
-        `<td>${isNum(f.ccn) ? f.ccn : "—"}</td><td>${isNum(f.nloc) ? f.nloc : "—"}</td>` +
-        (withBase ? `<td>${isNum(f.base_ccn) ? `${f.base_ccn} / ${f.base_nloc}` : "new"}</td>` : "") + "</tr>";
-    }
-    return html + "</tbody></table>";
-  };
-  top.innerHTML = list.length ? fnTable(list, false) : NO_DATA;
-
-  const debt = d.cxDebt;
-  // Overrides of the blocking gate (Rick's alone). Function, size, commit and
-  // author only: the free-text reason stays in the morning digest.
-  const ovrBox = document.getElementById("cx-ovr");
-  const ovr = debt && Array.isArray(debt.overrides_recent) ? debt.overrides_recent : null;
-  if (!ovr) ovrBox.textContent = NO_DATA;
-  else if (!ovr.length) ovrBox.textContent = "None: nothing was let past the gate.";
-  else {
-    let html = "<table><thead><tr><th>When</th><th>Function</th><th>CCN</th><th>Lines</th><th>Commit</th><th>Author</th></tr></thead><tbody>";
-    for (const o of ovr) {
-      const fns = Array.isArray(o.function_details) && o.function_details.length ? o.function_details : [{ function: "(swiftlint disable)" }];
-      for (const f of fns) {
-        html += `<tr><td>${esc(String(o.ts || "").slice(0, 16))}</td><td>${esc(f.function)}</td>` +
-          `<td>${isNum(f.ccn) ? f.ccn : "—"}</td><td>${isNum(f.nloc) ? f.nloc : "—"}</td>` +
-          `<td>${esc(o.commit || "—")}</td><td>${esc(o.author || "—")}</td></tr>`;
+// ---------------------------------------------------------------- detail bodies (the old sections, moved here)
+const BODIES = {
+  tests(d) {
+    const nightly = d.tdRows.filter(r => r.source === "nightly-local");
+    const body = document.getElementById("body-tests");
+    const N = nights(d);
+    const cards = [];
+    if (N && N.list.length) {
+      const lastNight = N.list[N.list.length - 1];
+      const weekNight = N.list[N.list.length - 8] || null;
+      for (const h of N.hosts) {
+        const c = cellOf(lastNight, h), w = weekNight ? cellOf(weekNight, h) : null;
+        cards.push(card(`${h} · passed`, c && c.state !== "did_not_run" ? n(c.passed) : (c ? "did not run" : "no run"), w && w.state !== "did_not_run" ? w.passed : null, c && c.state !== "did_not_run" ? c.passed : null, false));
+        cards.push(card(`${h} · failed`, c && c.state !== "did_not_run" ? n(c.failed) : DASH, w && w.state !== "did_not_run" ? w.failed : null, c && c.state !== "did_not_run" ? c.failed : null, true, c && c.state === "did_not_run" ? cellReason(c) : undefined));
       }
     }
-    ovrBox.innerHTML = html + "</tbody></table>";
-  }
-  if (!debt || !Array.isArray(debt.new)) { fresh.textContent = NO_DATA; return; }
-  const items = [...debt.new, ...(Array.isArray(debt.worse) ? debt.worse : [])];
-  document.getElementById("cx-new-title").textContent =
-    `New and worse offenders · ${fmtWhen(debt.ts).split(" · ")[0]} · ${debt.new.length} new, ${(debt.worse || []).length} worse, ${(debt.fixed || []).length} fixed`;
-  fresh.innerHTML = items.length ? fnTable(items.slice(0, 50), true) : "None: no new offender, and none of the known ones got worse.";
-}
+    const ran = nightly.filter(r => (r.total || 0) > 0);
+    const lastRan = ran.length ? ran[ran.length - 1] : null;
+    if (lastRan) {
+      cards.push(card(`Skipped · ${hostLabel(lastRan.host) || "?"}`, lastRan.skipped ?? null, null, null, true, `${lastRan.configuration || ""} ${day(lastRan.ts)}`.trim()));
+      cards.push(card(`Duration · ${hostLabel(lastRan.host) || "?"}`, isNum(lastRan.elapsed_s) ? `${(lastRan.elapsed_s / 60).toFixed(0)} min` : null, null, null, true, ""));
+    }
+    const cov = d.covRows.length ? d.covRows[d.covRows.length - 1] : null;
+    const prevCov = d.covRows.length > 1 ? d.covRows[d.covRows.length - 2] : null;
+    if (cov) {
+      cards.push(card("Logic coverage", fmtPct(cov.total.logic_pct), prevCov && prevCov.total.logic_pct, cov.total.logic_pct, false));
+      cards.push(card("All coverage", fmtPct(cov.total.pct), prevCov && prevCov.total.pct, cov.total.pct, false));
+      cards.push(card("Coverage run", `${day(cov.date)}`, null, null, false, `app ${cov.app_status} · core ${cov.core_status} · ${fmtNum(cov.total.lines)} lines in ${cov.folders.length} folders`));
+    } else {
+      cards.push(card("Coverage", null, null, null, false, "Published by tools/publish_metrics.py after the 4 AM coverage run on the M4."));
+    }
+    const hist = d.history, last = hist.length ? hist[hist.length - 1] : {};
+    cards.push(card("Test functions in source", isNum(last.test_count) ? n(last.test_count) : null, null, null, false, isNum(last.regression_count) ? `${n(last.regression_count)} regression markers` : ""));
+    body.innerHTML = moved("Moved here unchanged: the Tests cards and charts, and the whole Coverage section. The old passed/failed chart used two y-axes; it is two charts now.") +
+      `<div class="cards">${cards.join("")}</div><div class="charts">` +
+      chartBox("Passed per nightly run", "c-tests-passed") + chartBox("Failed per nightly run", "c-tests-failed") +
+      chartBox("Nightly duration (minutes)", "c-tests-duration") + chartBox("Coverage trend (%)", "c-cov-trend") +
+      chartBox("Coverage by folder, latest run (logic % · all %)", "c-cov-folders", "tall wide") + "</div>";
 
-// ---------------------------------------------------------------- 8c. over-exposure
-function renderExposure(d) {
-  const rows = d.exRows;
-  const cards = document.getElementById("ex-cards");
-  const top = document.getElementById("ex-top");
-  const pfBox = document.getElementById("pf-table");
-  const base = p => String(p || "").split("/").pop();
-  const pf = d.problemFiles;
-  if (pf && Array.isArray(pf.rows) && pf.rows.length) {
-    document.getElementById("pf-title").textContent =
-      `Problem files, worst first · ${fmtWhen(pf.ts).split(" · ")[0]} · ${pf.files_scored} files with any debt`;
-    let html = "<table><thead><tr><th>#</th><th>File</th><th>Score</th><th>Offenders</th><th>Worst CCN</th>" +
-      "<th>New / worse</th><th>Lines</th><th>Could be private</th><th>Widened</th><th>Commits (7 d)</th></tr></thead><tbody>";
-    pf.rows.forEach((r, i) => {
-      const n = v => isNum(v) ? v : "—";
-      html += `<tr><td>${i + 1}</td><td title="${esc(r.file)}">${esc(base(r.file))}</td><td>${n(r.score)}</td>` +
-        `<td>${n(r.offenders)}</td><td>${n(r.worst_ccn)}</td><td>${n(r.new_or_worse)}</td><td>${n(r.lines)}</td>` +
-        `<td>${n(r.could_be_private)}</td><td>${n(r.widened_for_split)}</td><td>${n(r.churn_7d)}</td></tr>`;
+    if (!nightly.length) { note("c-tests-passed", NO_DATA); note("c-tests-failed", NO_DATA); note("c-tests-duration", NO_DATA); }
+    else {
+      // A run where no test ran is a gap, not a zero.
+      const labels = dateLabels(nightly);
+      chartOrNote("c-tests-passed", "line", labels, [
+        { label: "passed", data: nightly.map(r => (r.total || 0) > 0 ? r.passed : null), spanGaps: false, ...lineStyle(C.green) },
+      ], withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false } }));
+      chartOrNote("c-tests-failed", "bar", labels, [
+        { label: "failed", data: nightly.map(r => (r.total || 0) > 0 ? r.failed : null), backgroundColor: C.red, maxBarThickness: 14 },
+      ]);
+      chartOrNote("c-tests-duration", "line", labels, [
+        { label: "minutes", data: nightly.map(r => isNum(r.elapsed_s) && (r.total || 0) > 0 ? +(r.elapsed_s / 60).toFixed(1) : null), ...lineStyle(C.blue) },
+      ]);
+    }
+    if (cov) {
+      const folders = cov.folders.slice().sort((a, b) => (b.lines || 0) - (a.lines || 0));
+      chartOrNote("c-cov-folders", "bar", folders.map(f => f.folder), [
+        { label: "logic %", data: folders.map(f => f.logic_pct), backgroundColor: C.green },
+        { label: "all %", data: folders.map(f => f.pct), backgroundColor: C.blue },
+      ], { ...chartDefaults, indexAxis: "y", scales: { x: { ...chartDefaults.scales.y, max: 100 }, y: { ticks: { autoSkip: false, font: { size: 11 } }, grid: { display: false } } } });
+    } else note("c-cov-folders", NO_DATA);
+    // Trend: the per-folder run (one point per day) plus the 2 AM nightly's own
+    // logic-coverage number, which has months of history. Different measurements, separate lines.
+    const covNightly = nightly.filter(r => isNum(r.coverage_logic_pct));
+    const days = Array.from(new Set([...d.covRows.map(r => r.date), ...covNightly.map(r => String(r.ts).slice(0, 10))])).sort();
+    const covByDay = new Map(d.covRows.map(r => [r.date, r]));
+    const nightlyByDay = new Map(covNightly.map(r => [String(r.ts).slice(0, 10), r]));
+    chartOrNote("c-cov-trend", "line", days.map(dd => dateLabels([{ date: dd }])[0]), [
+      { label: "logic % (4 AM per-folder run)", data: days.map(dd => covByDay.has(dd) ? covByDay.get(dd).total.logic_pct : null), spanGaps: true, ...lineStyle(C.green) },
+      { label: "all % (4 AM per-folder run)", data: days.map(dd => covByDay.has(dd) ? covByDay.get(dd).total.pct : null), spanGaps: true, ...lineStyle(C.blue) },
+      { label: "logic % (2 AM nightly)", data: days.map(dd => nightlyByDay.has(dd) ? nightlyByDay.get(dd).coverage_logic_pct : null), spanGaps: true, ...lineStyle(C.purple) },
+    ], withAxes({ y: { ...chartDefaults.scales.y, max: 100 } }));
+  },
+
+  size(d) {
+    const rows = d.history, body = document.getElementById("body-size");
+    const last = rows.length ? rows[rows.length - 1] : {};
+    const daily = lastPerDay(rows);
+    const prevDay = daily.length > 1 ? daily[daily.length - 2] : {};
+    const cx = d.cxRows.length ? d.cxRows[d.cxRows.length - 1] : null;
+    const prevCx = d.cxRows.length > 1 ? d.cxRows[d.cxRows.length - 2] : null;
+    const sw = cx && cx.totals && cx.totals.swift ? cx.totals.swift : {}, pSw = prevCx && prevCx.totals && prevCx.totals.swift ? prevCx.totals.swift : {};
+    const nightly = d.cxRows.filter(r => !r.backfill), lastNightly = nightly.length ? nightly[nightly.length - 1] : {};
+    const cards = [
+      card("App source (lines incl. comments/blank)", isNum(last.app_source_lines) ? n(last.app_source_lines) : null, prevDay.app_source_lines, last.app_source_lines, false),
+      card("Tests", isNum(last.test_lines) ? n(last.test_lines) : null, prevDay.test_lines, last.test_lines, false),
+      card("Tooling", isNum(last.tooling_lines) ? n(last.tooling_lines) : null, prevDay.tooling_lines, last.tooling_lines, false),
+      card("Files over 1,000 lines", isNum(last.files_over_1000) ? last.files_over_1000 : null, prevDay.files_over_1000, last.files_over_1000, true),
+      card("Longest file", last.worst_file ? String(last.worst_file).split(":")[0] : null, null, null, false, last.worst_file ? `${n(+String(last.worst_file).split(":")[1])} lines` : ""),
+      card("Functions (Swift)", isNum(sw.functions) ? n(sw.functions) : null, pSw.functions, sw.functions, false),
+      card("Mean CCN, Swift", isNum(sw.mean_ccn) ? sw.mean_ccn : null, pSw.mean_ccn, sw.mean_ccn, true),
+      card("CCN > 30 (gate line)", isNum(sw.ccn_over_30) ? sw.ccn_over_30 : null, pSw.ccn_over_30, sw.ccn_over_30, true),
+      card("Duplicate code", isNum(lastNightly.duplicate_rate_pct) ? `${lastNightly.duplicate_rate_pct}%` : null, null, null, true, ""),
+      card("Measured", cx ? fmtWhen(cx.ts) : null, null, null, false, ""),
+    ];
+    const top = (Array.isArray(lastNightly.top15) ? lastNightly.top15 : []).filter(f => (f.lang || "swift") === "swift");
+    body.innerHTML = moved("Moved here unchanged: the Code size cards and charts, the Complexity cards, the mean-CCN chart and the Top 15 table. App source = app Swift (VideoScan/VideoScan, VideoScanCore/Sources, swift_cli) + the Python the app launches; tests and tooling are counted apart. Dual-axis charts are split.") +
+      `<div class="cards">${cards.join("")}</div><div class="charts">` +
+      chartBox("Lines: app source vs all Swift (app + tests + CLI)", "c-size-trend") + chartBox("Files over 1,000 lines", "c-size-f1000") +
+      chartBox("Swift lines by folder, latest push", "c-size-folders", "tall") + chartBox("Swift files by folder, latest push", "c-size-files", "tall") +
+      chartBox("Mean CCN, all app code and by folder (largest folders)", "c-cx-folders", "wide") +
+      tableBox(`Top ${top.length || 15} most complex functions${lastNightly.ts ? " · " + day(lastNightly.ts) : ""}`, "cx-top") + "</div>";
+
+    if (!rows.length) { note("c-size-trend", NO_DATA); note("c-size-f1000", NO_DATA); note("c-size-folders", NO_DATA); note("c-size-files", NO_DATA); }
+    else {
+      // Headline = app source only. Rows before 2026-10-11 lack these keys and show
+      // no data; total_swift_lines (app + tests + CLI Swift) stays for continuity.
+      chartOrNote("c-size-trend", "line", dateLabels(daily), [
+        { label: "app source", data: daily.map(r => isNum(r.app_source_lines) ? r.app_source_lines : null), spanGaps: true, ...lineStyle(C.blue) },
+        { label: "Swift lines (app + tests + CLI)", data: daily.map(r => isNum(r.total_swift_lines) ? r.total_swift_lines : null), ...lineStyle(C.grey) },
+      ]);
+      chartOrNote("c-size-f1000", "line", dateLabels(daily), [
+        { label: "files > 1,000 lines", data: daily.map(r => isNum(r.files_over_1000) ? r.files_over_1000 : null), ...lineStyle(C.orange) },
+      ]);
+      const withFolders = rows.filter(r => r.swift_by_folder && typeof r.swift_by_folder === "object");
+      if (withFolders.length) {
+        const f = withFolders[withFolders.length - 1].swift_by_folder;
+        const names = Object.keys(f).sort((a, b) => (f[b].lines || 0) - (f[a].lines || 0));
+        const horizontal = { ...chartDefaults, indexAxis: "y", scales: { x: chartDefaults.scales.y, y: { ticks: { autoSkip: false, font: { size: 11 } }, grid: { display: false } } } };
+        chartOrNote("c-size-folders", "bar", names, [{ label: "lines", data: names.map(k => f[k].lines), backgroundColor: C.blue }], horizontal);
+        chartOrNote("c-size-files", "bar", names, [{ label: "files", data: names.map(k => f[k].files), backgroundColor: C.purple }], horizontal);
+      } else { note("c-size-folders", "No per-folder breakdown yet."); note("c-size-files", "No per-folder breakdown yet."); }
+    }
+    const cxDaily = lastPerDay(d.cxRows), labels = dateLabels(cxDaily);
+    const tot = (r, k) => r.totals && r.totals.swift && isNum(r.totals.swift[k]) ? r.totals.swift[k] : null;
+    const folderMap = r => r.swift_by_folder || {};
+    const latestFolders = cx ? folderMap(cx) : {};
+    const names = Object.keys(latestFolders).sort((a, b) => (latestFolders[b].functions || 0) - (latestFolders[a].functions || 0)).slice(0, CX_COLORS.length);
+    chartOrNote("c-cx-folders", "line", labels, [
+      { label: "all app code", data: cxDaily.map(r => tot(r, "mean_ccn")), borderWidth: 4, ...lineStyle(C.grey) },
+      ...names.map((nm, i) => ({ label: nm, data: cxDaily.map(r => { const f = folderMap(r)[nm]; return f && isNum(f.mean_ccn) ? f.mean_ccn : null; }), ...lineStyle(CX_COLORS[i]) })),
+    ], withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false } }));
+    document.getElementById("cx-top").innerHTML = top.length ? fnTable(top, false) : NO_DATA;
+  },
+
+  debt(d) {
+    const body = document.getElementById("body-debt");
+    const rows = d.cxRows, last = rows.length ? rows[rows.length - 1] : null;
+    const prev = rows.length > 1 ? rows[rows.length - 2] : null;
+    const sw = last && last.totals && last.totals.swift ? last.totals.swift : {}, pSw = prev && prev.totals && prev.totals.swift ? prev.totals.swift : {};
+    const nightly = rows.filter(r => !r.backfill), ln = nightly.length ? nightly[nightly.length - 1] : {};
+    const ex = d.exRows.length ? d.exRows[d.exRows.length - 1] : null;
+    const pEx = d.exRows.length > 1 ? d.exRows[d.exRows.length - 2] : null;
+    const t = ex && ex.totals ? ex.totals : {}, pt = pEx && pEx.totals ? pEx.totals : {};
+    const num = v => isNum(v) ? v : null;
+    const cards = [
+      card("Offenders", num(sw.offenders), pSw.offenders, sw.offenders, true),
+      card("CCN > 15", num(sw.ccn_over_15), pSw.ccn_over_15, sw.ccn_over_15, true),
+      card("Over 80 lines", num(sw.nloc_over_80), pSw.nloc_over_80, sw.nloc_over_80, true),
+      card("Files over 800 lines", num(sw.files_over_800), pSw.files_over_800, sw.files_over_800, true),
+      card("New offenders (last night)", num(ln.debt_new), null, null, true, ""),
+      card("Got worse (last night)", num(ln.debt_worse), null, null, true, ""),
+      card("Fixed (last night)", num(ln.debt_fixed), null, null, false, ""),
+      card("Gate overrides (48 h)", num(ln.gate_overrides_recent), null, null, true, ""),
+      card("Could be private", num(t.could_be_private), pt.could_be_private, t.could_be_private, true),
+      card("Widened for a split", num(t.widened_for_split), pt.widened_for_split, t.widened_for_split, true),
+      card("Internal declarations", num(t.decls), pt.decls, t.decls, false),
+      card("Exposure new / fixed (last night)", ex ? `${n(ex.new)} / ${n(ex.fixed)}` : null, null, null, true, ""),
+      card("Exposure baseline", ex ? num(ex.baseline_after) : null, null, null, true, ex ? `was ${n(ex.baseline_before)}` : ""),
+    ];
+    body.innerHTML = moved("Moved here unchanged: the Offenders chart, the New-and-worse table, Gate overrides, and the whole Over-exposure & problem files section. An offender is a function over CCN 15 or 80 lines; the pre-commit hook and CI block anything new or worse over CCN 30 or 300 lines. Over-exposure: internal declarations that could be private or were widened only for a split; the baseline only shrinks.") +
+      `<div class="cards">${cards.join("")}</div><div class="charts">` +
+      chartBox("Offenders per night (CCN > 15 · CCN > 30 · over 80 lines)", "c-cx-debt") + chartBox("New + worse offenders per night", "c-cx-nw") +
+      chartBox("Over-exposed declarations per night", "c-ex-trend") + chartBox("Newly over-exposed per night", "c-ex-new") +
+      chartBox("Could be private, by folder (largest folders)", "c-ex-folders", "wide") +
+      tableBox("New and worse offenders, latest night", "cx-new") + tableBox("Gate overrides, last 48 hours", "cx-ovr") +
+      tableBox("Top files by could-be-private", "ex-top") + tableBox("Problem files, worst first", "pf-table") + "</div>";
+
+    const daily = lastPerDay(rows), labels = dateLabels(daily);
+    const tot = (r, k) => r.totals && r.totals.swift && isNum(r.totals.swift[k]) ? r.totals.swift[k] : null;
+    chartOrNote("c-cx-debt", "line", labels, [
+      { label: "offenders", data: daily.map(r => tot(r, "offenders")), ...lineStyle(C.red) },
+      { label: "CCN > 15", data: daily.map(r => tot(r, "ccn_over_15")), ...lineStyle(C.orange) },
+      { label: "CCN > 30", data: daily.map(r => tot(r, "ccn_over_30")), ...lineStyle(C.dark) },
+      { label: "over 80 lines", data: daily.map(r => tot(r, "nloc_over_80")), ...lineStyle(C.yellow) },
+    ]);
+    chartOrNote("c-cx-nw", "bar", labels, [
+      { label: "new + worse", data: daily.map(r => isNum(r.debt_new) || isNum(r.debt_worse) ? (r.debt_new || 0) + (r.debt_worse || 0) : null), backgroundColor: C.purple, maxBarThickness: 14 },
+    ]);
+    const exDaily = lastPerDay(d.exRows), exLabels = dateLabels(exDaily);
+    const etot = (r, k) => r.totals && isNum(r.totals[k]) ? r.totals[k] : null;
+    chartOrNote("c-ex-trend", "line", exLabels, [
+      { label: "could be private", data: exDaily.map(r => etot(r, "could_be_private")), ...lineStyle(C.yellow) },
+      { label: "widened for a split", data: exDaily.map(r => etot(r, "widened_for_split")), ...lineStyle(C.purple) },
+      { label: "baseline", data: exDaily.map(r => isNum(r.baseline_after) ? r.baseline_after : null), ...lineStyle(C.grey) },
+    ], withAxes({ y: { ...chartDefaults.scales.y, beginAtZero: false } }));
+    chartOrNote("c-ex-new", "bar", exLabels, [
+      { label: "new", data: exDaily.map(r => isNum(r.new) ? r.new : null), backgroundColor: C.red, maxBarThickness: 14 },
+    ]);
+    const folders = ex && ex.by_folder ? ex.by_folder : {};
+    const fnames = Object.keys(folders).sort((a, b) => (folders[b].could_be_private || 0) - (folders[a].could_be_private || 0)).slice(0, CX_COLORS.length);
+    chartOrNote("c-ex-folders", "line", exLabels, fnames.map((nm, i) => ({
+      label: nm, data: exDaily.map(r => { const f = (r.by_folder || {})[nm]; return f && isNum(f.could_be_private) ? f.could_be_private : null; }), ...lineStyle(CX_COLORS[i]),
+    })));
+
+    // New / worse offenders and overrides come from complexity_debt_latest.json.
+    // Function, size, commit and author only: the free-text reason stays in the morning digest.
+    const debt = d.cxDebt, fresh = document.getElementById("cx-new"), ovrBox = document.getElementById("cx-ovr");
+    if (!debt || !Array.isArray(debt.new)) fresh.textContent = NO_DATA;
+    else {
+      const items = [...debt.new, ...(Array.isArray(debt.worse) ? debt.worse : [])];
+      document.getElementById("cx-new-title").textContent =
+        `New and worse offenders · ${day(debt.ts)} · ${debt.new.length} new, ${(debt.worse || []).length} worse, ${(debt.fixed || []).length} fixed`;
+      fresh.innerHTML = items.length ? fnTable(items.slice(0, 50), true) : "None: no new offender, and none of the known ones got worse.";
+    }
+    const ovr = debt && Array.isArray(debt.overrides_recent) ? debt.overrides_recent : null;
+    if (!ovr) ovrBox.textContent = NO_DATA;
+    else if (!ovr.length) ovrBox.textContent = "None: nothing was let past the gate.";
+    else {
+      ovrBox.innerHTML = table(["When", "Function", "CCN", "Lines", "Commit", "Author"], ovr.flatMap(o => {
+        const fns = Array.isArray(o.function_details) && o.function_details.length ? o.function_details : [{ function: "(swiftlint disable)" }];
+        return fns.map(f => [esc(String(o.ts || "").slice(0, 16)), esc(f.function), isNum(f.ccn) ? f.ccn : null, isNum(f.nloc) ? f.nloc : null, esc(o.commit || DASH), esc(o.author || DASH)]);
+      }));
+    }
+    const base = p => String(p || "").split("/").pop();
+    const top = document.getElementById("ex-top");
+    const list = ex && Array.isArray(ex.top20) ? ex.top20 : [];
+    document.getElementById("ex-top-title").textContent = `Top ${list.length || 20} files by could-be-private${ex ? " · " + day(ex.ts) : ""}`;
+    top.innerHTML = !ex ? NO_DATA : !list.length ? "None: every internal declaration is used outside its file."
+      : table(["File", "Could be private", "Widened", "Internal declarations"], list.map(f => [`<span title="${esc(f.file)}">${esc(base(f.file))}</span>`, isNum(f.could_be_private) ? f.could_be_private : null, isNum(f.widened_for_split) ? f.widened_for_split : null, isNum(f.decls) ? f.decls : null]));
+    const pf = d.problemFiles, pfBox = document.getElementById("pf-table");
+    if (pf && Array.isArray(pf.rows) && pf.rows.length) {
+      document.getElementById("pf-table-title").textContent = `Problem files, worst first · ${day(pf.ts)} · ${pf.files_scored} files with any debt`;
+      const nn = v => isNum(v) ? v : null;
+      pfBox.innerHTML = table(["#", "File", "Score", "Offenders", "Worst CCN", "New / worse", "Lines", "Could be private", "Widened", "Commits (7 d)"],
+        pf.rows.map((r, i) => [i + 1, `<span title="${esc(r.file)}">${esc(base(r.file))}</span>`, nn(r.score), nn(r.offenders), nn(r.worst_ccn), nn(r.new_or_worse), nn(r.lines), nn(r.could_be_private), nn(r.widened_for_split), nn(r.churn_7d)]));
+    } else pfBox.textContent = NO_DATA;
+  },
+
+  san(d) {
+    const body = document.getElementById("body-san");
+    const rows = d.staticRows, last = rows.length ? rows[rows.length - 1] : {};
+    const prev = rows.length > 1 ? rows[rows.length - 2] : {};
+    const extraction = r => isNum(r.codeql_extracted_files) && isNum(r.codeql_in_scope_files) && r.codeql_in_scope_files > 0
+      ? +(100 * r.codeql_extracted_files / r.codeql_in_scope_files).toFixed(1) : null;
+    const spec = [
+      ["CodeQL findings", "codeql_findings"], ["Strict-concurrency warnings", "concurrency_warnings"],
+      ["All strict warnings", "strict_warning_total"], ["Memory-safety warnings", "memory_safety_warnings"],
+      ["Periphery dead code", "periphery_aggressive"], ["SwiftLint --strict", "swiftlint_strict"],
+      ["UBSan hits", "ubsan_issues"], ["ASan hits", "asan_issues"], ["TSan hits", "tsan_issues"],
+    ];
+    const cards = rows.length ? spec.map(([label, key]) => card(label, isNum(last[key]) ? last[key] : null, prev[key], last[key], true)) : [card("Static analysis", null, null, null, false, "No nightly static-analysis rows published yet.")];
+    if (rows.length) {
+      const ex = extraction(last);
+      cards.push(card("CodeQL extraction", ex == null ? null : `${ex}%`, null, null, false, ""));
+      cards.push(card("CodeQL extraction errors", isNum(last.codeql_extraction_errors) ? last.codeql_extraction_errors : null, prev.codeql_extraction_errors, last.codeql_extraction_errors, true));
+    }
+    body.innerHTML = moved("Moved here unchanged: the Static analysis cards, its four charts (CodeQL findings and extraction are two charts now) and the findings-by-tool table. Only counts, tool names and severities are read, never titles or paths.") +
+      `<div class="cards">${cards.join("")}</div><div class="charts">` +
+      chartBox("Compiler warnings", "c-sa-compiler") + chartBox("CodeQL findings", "c-sa-codeql") + chartBox("CodeQL extraction coverage (%)", "c-sa-extraction") +
+      chartBox("Periphery dead code and SwiftLint --strict", "c-sa-lint") + chartBox("Sanitizer hits (UBSan / ASan / TSan)", "c-sa-san") +
+      tableBox("Latest findings summary, by tool", "findings-table") + "</div>";
+
+    if (!rows.length) ["c-sa-compiler", "c-sa-codeql", "c-sa-extraction", "c-sa-lint", "c-sa-san"].forEach(id => note(id, NO_DATA));
+    else {
+      const daily = lastPerDay(rows), labels = dateLabels(daily);
+      const col = key => daily.map(r => isNum(r[key]) ? r[key] : null);
+      chartOrNote("c-sa-compiler", "line", labels, [
+        { label: "strict concurrency", data: col("concurrency_warnings"), ...lineStyle(C.yellow) },
+        { label: "all strict warnings", data: col("strict_warning_total"), ...lineStyle(C.orange) },
+        { label: "memory safety", data: col("memory_safety_warnings"), ...lineStyle(C.purple) },
+      ]);
+      chartOrNote("c-sa-codeql", "line", labels, [{ label: "findings", data: col("codeql_findings"), ...lineStyle(C.red) }]);
+      chartOrNote("c-sa-extraction", "line", labels, [{ label: "extraction %", data: daily.map(extraction), ...lineStyle(C.green) }], withAxes({ y: { ...chartDefaults.scales.y, max: 100 } }));
+      chartOrNote("c-sa-lint", "line", labels, [
+        { label: "Periphery", data: col("periphery_aggressive"), ...lineStyle(C.blue) },
+        { label: "SwiftLint --strict", data: col("swiftlint_strict"), ...lineStyle(C.yellow) },
+      ]);
+      chartOrNote("c-sa-san", "line", labels, [
+        { label: "UBSan", data: col("ubsan_issues"), ...lineStyle(C.yellow) },
+        { label: "ASan", data: col("asan_issues"), ...lineStyle(C.red) },
+        { label: "TSan", data: col("tsan_issues"), ...lineStyle(C.purple) },
+      ]);
+    }
+    // Findings summary (metrics/nightly_findings_latest.json). Only counts,
+    // tool names and severities are read from it, never titles or paths.
+    const box = document.getElementById("findings-table"), f = d.findings;
+    if (!f || typeof f.tools !== "object") { box.textContent = NO_DATA; return; }
+    document.getElementById("findings-table-title").textContent =
+      `Latest findings summary, by tool · ${f.date || "date unknown"}${f.dry_run ? " · dry run (no issues filed)" : ""}`;
+    const fresh = {};
+    for (const item of Array.isArray(f.new) ? f.new : []) {
+      const key = `${item.tool}|${item.severity}`;
+      fresh[key] = (fresh[key] || 0) + 1;
+    }
+    const sevs = ["high", "medium", "low"];
+    const rowsOut = Object.entries(f.tools).map(([tool, t]) => {
+      const ran = t && t.input ? (t.complete ? "complete" : "incomplete") : "no input";
+      const nn = v => t && t.input && isNum(v) ? fmtNum(v) : NO_DATA;
+      return [esc(tool), esc(ran), nn(t.findings), nn(t.fingerprints), ...sevs.map(s => t && t.input ? (fresh[`${tool}|${s}`] || 0) : NO_DATA)];
     });
-    pfBox.innerHTML = html + "</tbody></table>";
-  } else {
-    pfBox.textContent = NO_DATA;
-  }
-  if (!rows.length) {
-    noDataCard(cards, "No over-exposure rows published yet",
-      "Published by the GitHub nightly analysis (complexity job) to metrics/exposure.jsonl.");
-    note("c-ex-trend", NO_DATA); note("c-ex-folders", NO_DATA);
-    top.textContent = NO_DATA;
-    return;
-  }
-  const last = rows[rows.length - 1];
-  const prev = rows.length > 1 ? rows[rows.length - 2] : null;
-  const t = (last && last.totals) || {}, pt = (prev && prev.totals) || {};
-  const num = v => isNum(v) ? v : null;
-  cards.appendChild(card("Could be private", num(t.could_be_private), pt.could_be_private, t.could_be_private, true, "var(--warn)"));
-  cards.appendChild(card("Widened for a split", num(t.widened_for_split), pt.widened_for_split, t.widened_for_split, true, "var(--warn)"));
-  cards.appendChild(card("Internal declarations", num(t.decls), pt.decls, t.decls, false, "var(--muted)"));
-  cards.appendChild(card("New (last night)", num(last.new), null, null, true, "var(--bad)"));
-  cards.appendChild(card("Fixed (last night)", num(last.fixed), null, null, false, "var(--good)"));
-  cards.appendChild(card("Baseline", num(last.baseline_after), null, null, true, "var(--muted)"));
-  cards.appendChild(card("Measured", fmtWhen(last.ts), null, null, false, "var(--muted)"));
+    const bs = f.by_severity || {};
+    rowsOut.push(["<strong>All tools</strong>", "", "", isNum(f.fingerprints) ? fmtNum(f.fingerprints) : NO_DATA, ...sevs.map(s => isNum(bs[s]) ? fmtNum(bs[s]) + " total" : NO_DATA)]);
+    box.innerHTML = table(["Tool", "Ran", "Findings", "Fingerprints", ...sevs.map(s => `New ${s}`)], rowsOut);
+  },
 
-  const daily = lastPerDay(rows);
-  const labels = dateLabels(daily);
-  const tot = (r, k) => r.totals && isNum(r.totals[k]) ? r.totals[k] : null;
-  chartOrNote("c-ex-trend", "line", labels, [
-    { label: "could be private", data: daily.map(r => tot(r, "could_be_private")), yAxisID: "y", ...lineStyle("#d29922") },
-    { label: "widened for a split", data: daily.map(r => tot(r, "widened_for_split")), yAxisID: "y", ...lineStyle("#bc8cff") },
-    { label: "new", data: daily.map(r => isNum(r.new) ? r.new : null), yAxisID: "y1", ...lineStyle("#f85149") },
-  ], withAxes({ y1: { position: "right", beginAtZero: true, grid: { drawOnChartArea: false }, title: { display: true, text: "new" } } }));
+  hallie(d) {
+    const body = document.getElementById("body-hallie");
+    const h = hallieRows(d);
+    const last = h.rows.length ? h.rows[h.rows.length - 1] : null;
+    const g = h.graded.length ? h.graded[h.graded.length - 1] : null;
+    const of = (pass, done, expected) => isNum(done) && done > 0 ? `${pass} of ${done}${isNum(expected) && expected !== done ? ` (${expected} expected)` : ""}` : NO_DATA;
+    const byHost = {};
+    for (const r of h.rows) byHost[hostLabel(r.host) || "?"] = r;
+    const cards = [];
+    if (!last) cards.push(card("Hallie replay", null, null, null, false, "No nightly Hallie replay rows yet."));
+    else {
+      for (const [k, r] of Object.entries(byHost)) cards.push(card(`Replay · ${k}`, r.hallie_replay_status || "unknown", null, null, false, `${day(r.ts)}${isNum(r.hallie_strict_completed) ? ` · ${r.hallie_strict_completed} strict cases completed` : ""}`));
+    }
+    if (g) {
+      cards.push(card("Strict pass rate (last completed)", fmtPct(h.strictRate(g)), null, null, false, ""));
+      cards.push(card("Strict passed", of(g.hallie_strict_pass, g.hallie_strict_completed, g.hallie_strict_expected), null, null, false, ""));
+      cards.push(card("Advisory pass rate (last completed)", fmtPct(h.advisoryRate(g)), null, null, false, ""));
+      cards.push(card("Advisory passed", of(g.hallie_advisory_pass, g.hallie_advisory_completed, g.hallie_advisory_expected), null, null, false, ""));
+      cards.push(card("Last completed replay", `${day(g.ts)} · ${hostLabel(g.host) || "?"}`, null, null, false, ""));
+    }
+    body.innerHTML = moved("Moved here unchanged: the Hallie testbed cards and pass-rate chart. The rate is over the cases that completed; a replay that completed nothing is a gap, never 0 %.") +
+      `<div class="cards">${cards.join("")}</div><div class="charts">` + chartBox("Pass rate per completed replay, % (strict · advisory)", "c-hallie", "wide") + "</div>";
+    if (!h.graded.length) { note("c-hallie", "No nightly Hallie replay has completed a case yet."); return; }
+    chartOrNote("c-hallie", "line", dateLabels(h.graded), [
+      { label: "strict %", data: h.graded.map(h.strictRate), ...lineStyle(C.green) },
+      { label: "advisory %", data: h.graded.map(h.advisoryRate), ...lineStyle(C.purple) },
+    ], withAxes({ y: { ...chartDefaults.scales.y, max: 100 } }));
+  },
 
-  const folders = last.by_folder || {};
-  const names = Object.keys(folders)
-    .sort((a, b) => (folders[b].could_be_private || 0) - (folders[a].could_be_private || 0)).slice(0, CX_COLORS.length);
-  chartOrNote("c-ex-folders", "line", labels, names.map((n, i) => ({
-    label: n, data: daily.map(r => { const f = (r.by_folder || {})[n]; return f && isNum(f.could_be_private) ? f.could_be_private : null; }),
-    ...lineStyle(CX_COLORS[i]),
-  })));
+  person(d) {
+    const p = d.summary && d.summary.person;
+    document.getElementById("body-person").innerHTML = moved("What will appear here once the quality holdout is configured: quality score and band, identity precision/recall, face recall, segment precision/recall, readiness %, one chart. Codes and numbers come through the publisher; the page never reads the raw nightly fields.") +
+      `<div class="cards">${card("Status", p && p.status ? p.status : null, null, null, false, p ? `summary ${day(d.summary.generated)}` : "nothing published")}` +
+      `${card("Readiness", p && isNum(p.readiness_pct) ? `${p.readiness_pct}%` : null, null, null, false, "")}${card("Quality score", p && isNum(p.quality_score) ? p.quality_score : null, null, null, false, "")}</div>`;
+  },
 
-  const list = Array.isArray(last.top20) ? last.top20 : [];
-  document.getElementById("ex-top-title").textContent = `Top ${list.length || 20} files by could-be-private · ${fmtWhen(last.ts).split(" · ")[0]}`;
-  if (!list.length) { top.textContent = "None: every internal declaration is used outside its file."; return; }
-  let html = "<table><thead><tr><th>File</th><th>Could be private</th><th>Widened</th><th>Internal declarations</th></tr></thead><tbody>";
-  for (const f of list) {
-    html += `<tr><td title="${esc(f.file)}">${esc(base(f.file))}</td><td>${isNum(f.could_be_private) ? f.could_be_private : "—"}</td>` +
-      `<td>${isNum(f.widened_for_split) ? f.widened_for_split : "—"}</td><td>${isNum(f.decls) ? f.decls : "—"}</td></tr>`;
-  }
-  top.innerHTML = html + "</tbody></table>";
-}
+  reviews(d) {
+    const body = document.getElementById("body-reviews");
+    const rows = d.advRows, last = rows.length ? rows[rows.length - 1] : null;
+    const codex = d.codexRows;
+    const cards = [];
+    if (!last) cards.push(card("Adversarial review", null, null, null, false, "Published by tools/publish_metrics.py after the 05:30 confirm job (counts only)."));
+    else {
+      const kept = rows.reduce((s, r) => s + r.kept, 0), declined = rows.reduce((s, r) => s + r.declined, 0);
+      const cost = rows.reduce((s, r) => s + (isNum(r.cost_usd) ? r.cost_usd : 0), 0), anyCost = rows.some(r => isNum(r.cost_usd));
+      cards.push(card("Nights", rows.length, null, null, false, `last ${day(last.date)}`));
+      cards.push(card("Files reviewed (last)", isNum(last.files_reviewed) ? `${last.files_reviewed} of ${last.files_in_scope}` : null, null, null, false, ""));
+      cards.push(card("Confirmed red (last)", isNum(last.confirmed_red) ? last.confirmed_red : null, null, null, true, ""));
+      cards.push(card("Kept / declined (all)", `${kept} / ${declined}`, null, null, false, ""));
+      cards.push(card("Precision (all)", kept + declined ? `${(100 * kept / (kept + declined)).toFixed(0)}%` : null, null, null, false, ""));
+      cards.push(card("Cost (all)", anyCost ? `$${cost.toFixed(2)}` : null, null, null, true, ""));
+    }
+    const sum = key => codex.reduce((s, r) => s + (r[key] || 0), 0);
+    if (!codex.length) cards.push(card("Codex reviews", null, null, null, false, "Published from the docs/reviews/codex headers."));
+    else {
+      cards.push(card("Codex passes", sum("passes"), null, null, false, `${sum("closed_passes")} closed`));
+      cards.push(card("Codex findings", sum("findings"), null, null, false, ""));
+      cards.push(card("Docs without a header", sum("unparsed_docs"), null, null, false, ""));
+    }
+    body.innerHTML = moved("Moved here unchanged: the Adversarial review cards, chart and per-night table, and the Codex cards and chart.") +
+      `<div class="cards">${cards.join("")}</div><div class="charts">` +
+      chartBox("Adversarial findings by severity, per night", "c-adv") + chartBox("Codex passes and findings per day", "c-codex") +
+      tableBox("Adversarial, per night", "adv-table") + "</div>";
+    if (!last) { note("c-adv", NO_DATA); document.getElementById("adv-table").textContent = NO_DATA; }
+    else {
+      chartOrNote("c-adv", "bar", rows.map(r => r.date), [
+        ...SEVERITIES.map(s => ({ label: s, data: rows.map(r => r.findings ? r.findings[s] : null), backgroundColor: SEV_COLORS[s], stack: "f" })),
+        { type: "line", label: "confirmed red", data: rows.map(r => r.confirmed_red), ...lineStyle(C.blue) },
+      ], withAxes({ x: { ...chartDefaults.scales.x, stacked: true }, y: { ...chartDefaults.scales.y, stacked: true } }));
+      const cell = v => isNum(v) ? fmtNum(v) : null;
+      document.getElementById("adv-table").innerHTML = table(["Night", "Status", "Files", ...SEVERITIES, "Red", "Kept", "Declined", "Precision", "Cost"],
+        rows.slice().reverse().map(r => [esc(r.date), `${esc(r.status)}${r.failed_runs ? ` (${r.failed_runs} failed)` : ""}`,
+          isNum(r.files_reviewed) ? `${r.files_reviewed}/${r.files_in_scope}` : null, ...SEVERITIES.map(s => r.findings ? cell(r.findings[s]) : null),
+          cell(r.confirmed_red), cell(r.kept), cell(r.declined), isNum(r.precision) ? (100 * r.precision).toFixed(0) + "%" : null,
+          isNum(r.cost_usd) ? "$" + r.cost_usd.toFixed(2) : null]));
+    }
+    const parsed = codex.filter(r => r.passes > 0);
+    chartOrNote("c-codex", "bar", parsed.map(r => r.date), [
+      { label: "findings", data: parsed.map(r => r.findings), backgroundColor: C.red },
+      { label: "passes", data: parsed.map(r => r.passes), backgroundColor: C.blue },
+      { label: "passes closed", data: parsed.map(r => r.closed_passes), backgroundColor: C.green },
+    ], chartDefaults, "No review doc has a parseable `Credits spent | Finding count` header yet.");
+  },
 
-// ---------------------------------------------------------------- 9. benchmarks
-async function renderBenchmarks(allTdRows) {
+  speed(d) {
+    document.getElementById("body-speed").innerHTML = moved("Moved here unchanged: the Benchmarks section (catalog search at 100k synthetic records, the Release gauntlet). Not nightly: these publish only when someone runs them, so their dates matter. Launch p95 and the delete/archive safety-sensor counts (#310) are not published yet.") +
+      `<div class="cards" id="search-benchmark-cards"></div><div class="charts">` +
+      `<div class="chart-box"><h3>Catalog search, 100k synthetic records — comparable Release runs</h3><canvas id="chart-search-benchmarks"></canvas>` +
+      `<div id="chart-search-benchmark-note" class="chart-note hidden">No validated catalog-search benchmarks have been published yet.</div>` +
+      `<div id="search-benchmark-provenance" class="chart-note hidden"></div></div></div>` +
+      `<p class="ghost" id="gauntlet-status">Release gauntlet: UI not run (phase 2). No gauntlet results published yet.</p><div class="charts">` +
+      `<div class="chart-box"><h3>Gauntlet — stage and total duration (s)</h3><canvas id="chart-gauntlet-duration"></canvas></div>` +
+      `<div class="chart-box"><h3>Gauntlet — stage pass / fail / incomplete</h3><canvas id="chart-gauntlet-outcome"></canvas></div></div>`;
+    renderBenchmarks(d.allTdRows, d.searchText, d);
+  },
+};
+
+const fnTable = (items, withBase) => {
+  const base = p => String(p || "").split("/").pop();
+  return table(["Function", "File", "CCN", "Lines", ...(withBase ? ["Was (CCN / lines)"] : [])], items.map(f => [
+    esc(f.function), `<span title="${esc(f.file)}">${esc(base(f.file))}</span>`, isNum(f.ccn) ? f.ccn : null, isNum(f.nloc) ? f.nloc : null,
+    ...(withBase ? [isNum(f.base_ccn) ? `${f.base_ccn} / ${f.base_nloc}` : "new"] : [])]));
+};
+
+// ---------------------------------------------------------------- benchmarks (the old section 9, verbatim where it can be)
+function renderBenchmarks(allTdRows, searchText, d) {
   // Gauntlet rows share transport, never nightly averages or freshness.
   const gauntletRows = allTdRows.filter(row => row.source === "gauntlet" && row.schemaVersion === 1);
   if (gauntletRows.length) {
@@ -1008,7 +1240,7 @@ async function renderBenchmarks(allTdRows) {
         return stage && stage.status !== "not_run" && Number(stage.elapsed_s) > 0 ? stage.elapsed_s : null;
       }), ...lineStyle(colors[index]), fill: false,
     }));
-    datasets.push({ label: "total (including build)", data: gauntletRows.map(row => row.elapsed_s), ...lineStyle("#e6edf3"), fill: false });
+    datasets.push({ label: "total (including build)", data: gauntletRows.map(row => row.elapsed_s), ...lineStyle("#8b949e"), fill: false });
     const gauntletOptions = { ...chartDefaults, plugins: { ...chartDefaults.plugins,
       legend: { display: true, labels: { color: "#8b949e" } } } };
     new Chart(document.getElementById("chart-gauntlet-duration"), {
@@ -1028,7 +1260,6 @@ async function renderBenchmarks(allTdRows) {
 
   // Dedicated catalog-search stream only. Never render the unrelated
   // generated-media benchmarks.jsonl rows in this section.
-  const searchText = await fetchText(rawUrl("search_benchmarks.jsonl"), SEARCH_BENCHMARKS_LOCAL);
   const searchRows = (searchText ? parseJsonl(searchText) : []).filter(row =>
     row.schemaVersion === 1 && row.benchmark === "catalog-search" &&
     row.configuration === "Release" && row.architecture === "arm64" &&
@@ -1072,18 +1303,21 @@ async function renderBenchmarks(allTdRows) {
       .reduce((a, b) => a.median >= b.median ? a : b);
     const worst = worstFor(latestSearch);
     const priorWorst = previous ? worstFor(previous) : null;
-    searchCards.appendChild(card("Donna median", `${donna.median.toFixed(1)} ms`, priorDonna?.median, donna.median, true, "var(--accent)"));
-    searchCards.appendChild(card("Donna p95", `${donna.p95.toFixed(1)} ms`, priorDonna?.p95, donna.p95, true, "var(--purple)"));
-    searchCards.appendChild(card("Worst query median", `${worst.median.toFixed(1)} ms`, priorWorst?.median, worst.median, true, "var(--bad)"));
-    searchCards.appendChild(card("Rebuild median", `${rebuild.median.toFixed(1)} ms`, priorRebuild?.median, rebuild.median, true, "var(--warn)"));
-    searchCards.appendChild(card("Donna hits", donna.resultCount.toLocaleString(), priorDonna?.resultCount, donna.resultCount, false, "var(--good)"));
-    searchCards.appendChild(card("Comparable runs", comparable.length, null, null, false, "var(--muted)"));
+    searchCards.innerHTML = [
+      card("Donna median", `${donna.median.toFixed(1)} ms`, priorDonna?.median, donna.median, true),
+      card("Donna p95", `${donna.p95.toFixed(1)} ms`, priorDonna?.p95, donna.p95, true),
+      card("Worst query median", `${worst.median.toFixed(1)} ms`, priorWorst?.median, worst.median, true),
+      card("Rebuild median", `${rebuild.median.toFixed(1)} ms`, priorRebuild?.median, rebuild.median, true),
+      card("Donna hits", donna.resultCount.toLocaleString(), priorDonna?.resultCount, donna.resultCount, false),
+      card("Comparable runs", comparable.length, null, null, false, ""),
+    ].join("");
     const mac = latestSearch.macOS ? `macOS ${latestSearch.macOS.version} (${latestSearch.macOS.build})` : "macOS unknown";
     searchProvenance.textContent =
       `Latest: ${latestSearch.host || "unknown host"} · ${latestSearch.machineClass} · ${mac} · ` +
       `${latestSearch.xcode?.version || "Xcode unknown"} · ${(latestSearch.commit || "unknown").slice(0, 8)} · ` +
       `${fmtWhen(latestSearch.ts)} · worst “${worst.query}” · ${donna.sampleCount} samples after ${donna.warmupCount} warmups.`;
     searchProvenance.classList.remove("hidden");
+    if (d) d.searchLatest = { ts: latestSearch.ts, host: latestSearch.host, donnaMedian: donna.median, records: latestSearch.corpus.recordCount, comparable: comparable.length };
     if (comparable.length > 1) {
       new Chart(searchCanvas, {
         type: "line",
@@ -1105,10 +1339,29 @@ async function renderBenchmarks(allTdRows) {
     searchCanvas.classList.add("hidden");
     searchNote.classList.remove("hidden");
     searchCards.innerHTML = `<div class="card" style="grid-column: 1 / -1;">
-      <div class="indicator" style="background: var(--muted)"></div>
       <div class="label">No catalog-search benchmark data</div>
       <div class="value" style="font-size: 14px;">Run the fixed 100k synthetic Release benchmark on an available M1 or M5.</div>
     </div>`;
+  }
+}
+
+// ---------------------------------------------------------------- twists
+function openAll(open) {
+  for (const a of AREAS) { const el = document.getElementById(`area-${a.id}`); if (el) el.open = open; }
+}
+function wantAll() {
+  try { return typeof location !== "undefined" && (location.hash === "#all" || /[?&]all(=|&|$)/.test(location.search || "")); }
+  catch { return false; }
+}
+// Charts drawn inside a closed <details> have no size; nudge them when it opens.
+function watchTwists() {
+  for (const a of AREAS) {
+    const el = document.getElementById(`area-${a.id}`);
+    if (!el || !el.addEventListener) continue;
+    el.addEventListener("toggle", () => {
+      if (!el.open) return;
+      for (const ch of Object.values(CHARTS)) { try { if (ch && ch.canvas && el.contains && el.contains(ch.canvas) && ch.resize) ch.resize(); } catch {} }
+    });
   }
 }
 
@@ -1123,7 +1376,7 @@ async function loadData() {
   } catch {}
 
   METRICS_SHA = await resolveMetricsSha();
-  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, ciRun, naRun] = await Promise.all([
+  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, summaryText, searchText, ciRun, naRun] = await Promise.all([
     fetchText(rawUrl("history.jsonl"), local("history.jsonl")),
     fetchText(rawUrl("static_analysis.jsonl"), local("static_analysis.jsonl")),
     fetchText(rawUrl("testdriver.jsonl"), local("testdriver.jsonl")),
@@ -1135,56 +1388,51 @@ async function loadData() {
     fetchText(rawUrl("complexity_debt_latest.json"), local("complexity_debt_latest.json")),
     fetchText(rawUrl("exposure.jsonl"), local("exposure.jsonl")),
     fetchText(rawUrl("problem_files_latest.json"), local("problem_files_latest.json")),
+    fetchText(rawUrl("summary_latest.json"), local("summary_latest.json")),
+    fetchText(rawUrl("search_benchmarks.jsonl"), SEARCH_BENCHMARKS_LOCAL),
     latestMainRun("ci.yml"),
     latestMainRun("nightly-analysis.yml"),
   ]);
 
   const allTdRows = sortByTs(parseJsonl(tdText));
   const tdRows = allTdRows.filter(isTestRunRow);
-  let findings = null;
-  try { findings = findingsText ? JSON.parse(findingsText) : null; } catch { findings = null; }
-  let cxDebt = null;
-  try { cxDebt = cxDebtText ? JSON.parse(cxDebtText) : null; } catch { cxDebt = null; }
-  let problemFiles = null;
-  try { problemFiles = pfText ? JSON.parse(pfText) : null; } catch { problemFiles = null; }
+  const summary = parseJson(summaryText);
   const d = {
     history: sortByTs(parseJsonl(historyText)),
     staticRows: sortByTs(parseJsonl(staticText)),
-    tdRows,
-    findings,
+    tdRows, allTdRows,
+    findings: parseJson(findingsText),
     covRows: sortByTs(parseJsonl(covText).filter(r => r.schemaVersion === 1 && r.total && Array.isArray(r.folders))),
     advRows: sortByTs(parseJsonl(advText).filter(r => r.schemaVersion === 1 && r.date)),
     codexRows: sortByTs(parseJsonl(codexText).filter(r => r.schemaVersion === 1 && r.date)),
     cxRows: sortByTs(parseJsonl(cxText).filter(r => r.ts && r.totals && r.totals.all)),
-    cxDebt,
+    cxDebt: parseJson(cxDebtText),
     exRows: sortByTs(parseJsonl(exText).filter(r => r.schemaVersion === 1 && r.ts && r.totals)),
-    problemFiles,
+    problemFiles: parseJson(pfText),
+    summary: summary && summary.schemaVersion === 1 && typeof summary === "object" ? summary : null,
+    searchText, searchLatest: null,
     ciRun, naRun,
   };
 
-  const sections = [
-    ["status", () => renderStatus(d)],
-    ["tests", () => renderTests(d)],
-    ["coverage", () => renderCoverage(d)],
-    ["static", () => renderStatic(d)],
-    ["adv", () => renderAdversarial(d)],
-    ["codex", () => renderCodex(d)],
-    ["hallie", () => renderHallie(d)],
-    ["size", () => renderSize(d)],
-    ["cx", () => renderComplexity(d)],
-    ["ex", () => renderExposure(d)],
-    ["bench", () => renderBenchmarks(allTdRows)],
-  ];
-  for (const [id, render] of sections) {
-    try { await render(); } catch (err) { showError(id, err); }
+  try { renderHead(d); } catch (err) { showError("head", err); }
+  try { renderTimeline(d); } catch (err) { showError("timeline", err); }
+  // Bodies first (the speed body computes d.searchLatest for its own summary line), then the lines.
+  for (const a of AREAS) {
+    try { BODIES[a.id](d); } catch (err) { showError(a.id, err); }
   }
+  for (const a of AREAS) {
+    try { renderSummaryLine(a, SUMMARY[a.id](d)); } catch (err) { renderSummaryLine(a, { ...NO_LINE, sentence: "This line failed to render." }); showError(a.id, err); }
+  }
+  watchTwists();
+  if (wantAll()) openAll(true);
 
   const sources = [historyText, staticText, tdText].filter(Boolean).length;
   if (!sources) {
     $status.classList.add("error");
     $status.textContent = "Could not load the metrics branch (offline, or GitHub unreachable).";
   } else {
-    $status.textContent = `Loaded ${new Date().toLocaleString("en-US")} · data ${METRICS_SHA ? "at metrics@" + METRICS_SHA.slice(0, 8) : "from the metrics branch (latest)"}`;
+    $status.textContent = `Loaded ${new Date().toLocaleString("en-US")} · data ${METRICS_SHA ? "at metrics@" + METRICS_SHA.slice(0, 8) : "from the metrics branch (latest)"}` +
+      (d.summary ? "" : " · summary_latest.json not published yet: headline and timeline wait on tools/publish_metrics.py");
   }
 }
 
