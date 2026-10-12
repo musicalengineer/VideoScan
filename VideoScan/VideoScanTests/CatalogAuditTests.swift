@@ -116,7 +116,9 @@ struct CatalogAuditFixerTests {
         let purged = vr("/Volumes/A/p.mov")
         let g = UUID()
         // purged but staged
-        purged.purgedAt = Date(); purged.lifecycleStage = .cataloged
+        // GH #143: the defect is a file in the Trash whose legacy stage still
+        // says Cataloged (a row merely removed from the catalog keeps its stage).
+        purged.removal = .inTrash(movedAt: Date(), trashPath: nil, reason: .junk); purged.lifecycleStage = .cataloged
         // dangling pair: a ↔ purged
         a.pairedWith = purged; purged.pairedWith = a
         // stale dup group: 3 members claim 4; d3 is purged → live members 2

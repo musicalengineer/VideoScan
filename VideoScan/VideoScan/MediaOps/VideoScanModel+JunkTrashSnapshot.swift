@@ -138,7 +138,7 @@ extension VideoScanModel {
             beforeRemoval: { path in frozen.diskProblem(at: path) },
             remove: fileOperation)
         fileGuard.settled = { rec, outcome in audit.record(JunkDeletionResult.auditRow(rec, outcome), id: rec.id) }
-        var result = await deleteConfirmedJunk(snapshot.items.map(\.record), mode: .toTrash, guard: fileGuard)
+        var result = await deleteConfirmedJunk(snapshot.items.map(\.record), mode: .toTrash, reason: .junk, guard: fileGuard)
             .trashFailuresHeld()
         logJunkLaneOutcome(result, verb: "Delete Confirmed Junk")
         audit.finish(result)

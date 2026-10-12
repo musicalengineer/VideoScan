@@ -486,18 +486,18 @@ struct RemoteViewerReadOnlySensorTests {
 
     /// QA round 1 (C): Triage › Under Construction › Discard trashed files
     /// on a viewer.
-    @Test func qaRedViewerModeRefusesDiscardWorkbenchAndLeavesTheFileOnDisk() throws {
+    @Test func qaRedViewerModeRefusesDiscardWorkbenchAndLeavesTheFileOnDisk() async throws {
         let root = tmp("discard")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let (model, rec, file) = try Self.junkFixture(in: root)
         rec.lifecycleStage = .workbench
         model.isReadOnly = true
-        var trashed: [URL] = []
+        let trashed = TrashCallLog()
 
-        let n = model.discardWorkbench([rec], trash: { trashed.append($0) })
+        let n = await model.discardWorkbench([rec], trash: trashed.operation)
 
-        #expect(trashed.isEmpty, "nothing may be trashed on a viewer")
+        #expect(trashed.count == 0, "nothing may be trashed on a viewer")
         #expect(n == 0)
         #expect(rec.purgedAt == nil)
         #expect(rec.lifecycleStage == .workbench)
@@ -513,20 +513,23 @@ struct RemoteViewerReadOnlySensorTests {
         // Media / family files — behind the viewer guard.
         // 2 → 1 (codex delete-engines F1, 2026-10-09): the engine's own
         // removeItem is gone; trashItem is its one file operation.
-        "MediaOps/VideoScanModel+JunkDelete.swift": (1, nil, "junkDeletionRefusedOnViewer("),
-        "Catalog/VideoScanModel+Workbench.swift": (1, nil, "workbenchDiscardRefusedOnViewer("),
+        // THE one Trash call (GH #143). Its callers are the guarded doors:
+        // the engine (junkDeletionRefusedOnViewer — its preflight's first
+        // statement), Delete Duplicates (the job refuses on a read-only
+        // model) and DerivativeOutputPublish (MFO jobs only).
+        "MediaOps/MediaTrash.swift": (1, "MediaOps/VideoScanModel+JunkDelete.swift", "junkDeletionRefusedOnViewer("),
+        // Workbench Discard: no removal of its own since GH #143 — it calls
+        // deleteConfirmedJunk (listed with the callers below).
         "People/FamilyGroup.swift": (2, nil, "ViewerWriteGuard.check(\"FamilyGroupStore.moveToTrash\")"),
         "People/PersonEditSheet.swift": (1, nil, "ViewerWriteGuard.refuse(\"PersonEditSheet.deleteReferencePhoto\")"),
         // Delete Duplicates' removal step (trash + quarantine removal, and
         // rmdir of its own quarantine folders); reached only from
         // DeleteDuplicatesJob.run, which refuses on a read-only model.
-        "MediaOps/SignatureVerification.swift": (4, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
-        // Its one live Trash step (Trash only, 2026-10-09): the same job, the
-        // same refusal on a read-only model.
-        "MediaOps/DeleteDuplicatesJob.swift": (1, nil, "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
-        // Reached only from MFO jobs (Transcode, Reformat);
-        // MediaFileOperationsCenter.add refuses every job on a viewer.
-        "MediaOps/DerivativeOutputPublish.swift": (1, "MediaOps/MediaFileOperations.swift", "ViewerWriteGuard.refuse(\"MediaFileOperationsCenter.add("),
+        // 4 → 3 (GH #143): its default Trash step is MediaTrash.move;
+        // 3 → 2 (codex round 1 F1): its unlink is gone — Trash only.
+        "MediaOps/SignatureVerification.swift": (2, "MediaOps/DeleteDuplicatesJob.swift", "model.duplicateStatus = \"Deletion unavailable in viewer mode\""),
+        // DeleteDuplicatesJob 1 → 0 and DerivativeOutputPublish 1 → 0
+        // (GH #143): both reach MediaTrash.move (above).
         // The app's own temp / partial / staging / cache / output files.
         "App/BundleExporter.swift": (1, nil, nil), "App/BundleImporter.swift": (2, nil, nil),
         "Archive/ArchiveIndexRename.swift": (3, nil, nil),
@@ -684,7 +687,8 @@ struct RemoteViewerReadOnlySensorTests {
             }
         }
         #expect(callers == ["VideoScanModel+TrashSelection.swift",
-                            "VideoScanModel+PruneApply.swift", "VideoScanModel+JunkTrashSnapshot.swift"],
+                            "VideoScanModel+PruneApply.swift", "VideoScanModel+JunkTrashSnapshot.swift",
+                            "VideoScanModel+Workbench.swift"],   // GH #143; also refuses first on its own
                 "a new deleteConfirmedJunk caller: confirm it relies on the model's viewer guard, then add it here")
     }
 }

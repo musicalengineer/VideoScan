@@ -70,7 +70,7 @@ struct WorkbenchDiscardTrashFailureTests {
         let rec = item(dir, "test_keep.mov")
         m.records = [rec]
 
-        let n = m.discardWorkbench([rec], trash: { _ in throw TrashRefused() })
+        let n = await m.discardWorkbench([rec], trash: { _ in throw TrashRefused() })
 
         #expect(n == 0, "a failed Trash is not a discard")
         #expect(rec.purgedAt == nil, "a failed Trash stamped purgedAt — the file is still on disk")
@@ -88,15 +88,15 @@ struct WorkbenchDiscardTrashFailureTests {
         let m = model(dir)
         let stuck = item(dir, "test_stuck.mov"), goes = item(dir, "test_goes.mov")
         m.records = [stuck, goes]
-        var moved: [String] = []
+        let moved = TrashCallLog()
 
-        let n = m.discardWorkbench([stuck, goes]) { url in
+        let n = await m.discardWorkbench([stuck, goes]) { url in
             if url.lastPathComponent == "test_stuck.mov" { throw TrashRefused() }
-            moved.append(url.lastPathComponent)
+            moved.record(url)
         }
 
         #expect(n == 1)
-        #expect(moved == ["test_goes.mov"])
+        #expect(moved.names == ["test_goes.mov"])
         #expect(stuck.purgedAt == nil && stuck.lifecycleStage == .workbench)
         #expect(goes.purgedAt != nil && goes.lifecycleStage == .trashed)
         let log = await console(m)
@@ -112,11 +112,11 @@ struct WorkbenchDiscardTrashFailureTests {
         let m = model(dir)
         let rec = item(dir, "test_ok.mov")
         m.records = [rec]
-        var calls = 0
+        let calls = TrashCallLog()
 
-        let n = m.discardWorkbench([rec], trash: { _ in calls += 1 })
+        let n = await m.discardWorkbench([rec], trash: calls.operation)
 
-        #expect(n == 1 && calls == 1)
+        #expect(n == 1 && calls.count == 1)
         #expect(rec.purgedAt != nil && rec.lifecycleStage == .trashed)
         let log = await console(m)
         #expect(log.contains("START Discard"), Comment(rawValue: log))
@@ -138,11 +138,11 @@ struct WorkbenchDiscardTrashFailureTests {
         rec.fullPath = "/Volumes/VS-test-NoSuchDrive-\(UUID().uuidString.prefix(8))/test_away.mov"
         rec.lifecycleStage = .workbench
         m.records = [rec]
-        var calls = 0
+        let calls = TrashCallLog()
 
-        let n = m.discardWorkbench([rec], trash: { _ in calls += 1 })
+        let n = await m.discardWorkbench([rec], trash: calls.operation)
 
-        #expect(n == 0 && calls == 0)
+        #expect(n == 0 && calls.count == 0)
         #expect(rec.purgedAt == nil && rec.lifecycleStage == .workbench,
                 "a file on an unplugged drive is not gone — the record must stay")
         #expect(await console(m).contains("· offline 1 ·"))
@@ -153,11 +153,11 @@ struct WorkbenchDiscardTrashFailureTests {
         let m = model(dir)
         let rec = item(dir, "test_ghost.mov", create: false)
         m.records = [rec]
-        var calls = 0
+        let calls = TrashCallLog()
 
-        let n = m.discardWorkbench([rec], trash: { _ in calls += 1 })
+        let n = await m.discardWorkbench([rec], trash: calls.operation)
 
-        #expect(n == 1 && calls == 0)
+        #expect(n == 1 && calls.count == 0)
         #expect(rec.purgedAt != nil, "a vanished workbench file must not leave an un-purgeable row")
         #expect(await console(m).contains("· missing 1 ·"))
     }
@@ -217,15 +217,17 @@ struct RestoreResetsTrashedStageTests {
         #expect(rec.lifecycleStage == .archived)
     }
 
-    /// Manager ruling (QA on 3e8e14dbd): the file is still in the Trash (or
-    /// gone), so the row must not claim to be live media. It is un-purged as
-    /// before, keeps its Trashed stage, and one line says what to do.
+    /// Manager ruling (QA on 3e8e14dbd), tightened by codex round 1 F2
+    /// (GH #143): the file is still in the Trash (or gone), so the row must
+    /// not claim to be live media. Restore REFUSES — the row stays removed,
+    /// keeps its Trashed stage — and one line says what to do; "Restore
+    /// again" after Put Back then works (OneEngineCodexRound1Tests F2).
     @Test func restoringATrashedRowWhoseFileIsNotOnDiskDoesNotClaimItIsCataloged() async throws {
         let (rec, dir) = try purged(.trashed, onDisk: false)
         defer { try? FileManager.default.removeItem(at: dir) }
         let m = model([rec], in: dir)
-        #expect(m.restoreRecord(id: rec.id))
-        #expect(rec.purgedAt == nil, "Restore still un-purges the row")
+        #expect(!m.restoreRecord(id: rec.id), "restored a row whose file is not back")
+        #expect(rec.purgedAt != nil, "the removal was cleared before the file came back")
         #expect(rec.lifecycleStage == .trashed, "a row whose file is not on disk was relabelled \(rec.lifecycleStage)")
         try? await Task.sleep(nanoseconds: 400_000_000)   // console flush debounce
         let log = m.dashboard.consoleLines.joined(separator: "\n")

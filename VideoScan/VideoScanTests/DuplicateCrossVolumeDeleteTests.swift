@@ -255,7 +255,9 @@ struct DuplicateCrossVolumeDeleteTests {
         #expect(keeper.starRating == 3)
         #expect(keeper.userNotes == "from the SSD")
         #expect(keeper.confirmedByUserPeople.map(\.name) == ["Donna"])
-        #expect(rig.model.records.count == 3, "keeper + its archive copy + the verified sibling")
+        // GH #143 (T4): the trashed extra stays as a row, In the Trash.
+        #expect(rig.model.records.filter { !$0.isPurged }.count == 3, "keeper + its archive copy + the verified sibling")
+        #expect(rig.model.records.contains { $0.fullPath == e.path && $0.removal?.state == .inTrash })
     }
 
     /// ON but the pair is NOT identical: refused, nothing deleted, nothing

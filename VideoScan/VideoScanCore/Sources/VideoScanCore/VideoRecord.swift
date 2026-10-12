@@ -45,6 +45,12 @@ public class VideoRecord: Identifiable, Decodable {
         identityGenerationLock.withLock { $0 &+= 1 }
     }
 
+    /// One timestamp per process for the load-time migration of a label-only
+    /// "deleted" row (it has no date of its own). Fixed per launch, so every
+    /// row migrated in one load shares it. (Swift's `static let` is lazily
+    /// initialised once, thread-safely ≈ a C++ function-local static.)
+    static let migrationLoadDate = Date()
+
     // `nonisolated let`: the identity is immutable and isolation-independent,
     // so it satisfies Identifiable without crossing the (future) MainActor
     // boundary. Injected at construction; decode sets it from JSON below.
@@ -338,21 +344,51 @@ public class VideoRecord: Identifiable, Decodable {
     /// machine's exported catalog so the UI can show "from <host>".
     public var sourceHost: String = ""
 
-    /// Soft-delete marker. `nil` = active (visible in default catalog view);
-    /// non-nil = "removed from catalog" — the file on disk is untouched but
-    /// the row is hidden unless the user toggles "Show removed".
+    /// The removal marker (GH #143): nil = live; otherwise the row's file
+    /// is in the Trash, removed from the catalog (file untouched), or
+    /// missing. THE one "gone" shape — see RemovalMarker.swift. Rows are
+    /// never deleted when a file leaves; they carry this.
     ///
-    /// Restore is just `purgedAt = nil`. There is no hard-delete path on the
-    /// catalog — the trash never auto-empties (matches POI soft-delete UX).
+    /// Written only by the removal engine (VideoScanModel+RemovalMarker.swift
+    /// `stampRemoval` / `clearRemoval`); OneEngineSensorTests fails on any
+    /// other production writer. A write is an identity write (it changes
+    /// which records a name resolves to), so it bumps `identityGeneration`.
     ///
-    /// Codable note: encoded only when non-nil and decoded via decodeIfPresent
-    /// so pre-feature catalog.json files (where the key is absent) come back
-    /// as active records, not as decode failures.
-    /// Swift's `Date?` ≈ C++ `std::optional<Date>` — nil/empty means "no value".
-    /// A purge / restore is an identity write too (it changes which
-    /// records a name resolves to), so it bumps `identityGeneration`.
+    /// Codable: encoded only when non-nil, decoded with `try?` so a damaged
+    /// marker falls back to the legacy fields, then `RemovalMarker.migrated`
+    /// maps a pre-#143 catalog's encodings onto a state at load.
+    public var removal: RemovalMarker? {
+        didSet {
+            removedSince = removal?.since
+            Self.bumpIdentityGeneration()
+        }
+    }
+
+    /// `removal?.since`, cached on every write of `removal` (and in the
+    /// decoder, where `didSet` does not run). `purgedAt` / `isPurged` are
+    /// read in O(records) loops all over the app; this keeps that read a
+    /// plain stored `Date?` load instead of copying the marker (its Strings
+    /// mean a retain/release per read in Debug) — the ArchiveAngel
+    /// "Clear all" 100k scale budget noticed. (≈ a C++ cached member kept
+    /// in sync by the only setter.)
+    private var removedSince: Date?
+
+    /// DERIVED (GH #143): when the row left — `removal?.since`. Kept, and
+    /// still encoded, so the ~150 readers and an older build reading the
+    /// file both keep hiding the row.
+    ///
+    /// The setter is a compatibility shim for tests and not-yet-moved
+    /// writers: nil clears the marker (Restore); a date on a row with no
+    /// marker becomes "removed from catalog" (reason `.unspecified`); a date
+    /// on a row that has one moves only its `since`. Production code goes
+    /// through the engine. (Swift's `Date?` ≈ C++ `std::optional<Date>`.)
     public var purgedAt: Date? {
-        didSet { Self.bumpIdentityGeneration() }
+        get { removedSince }
+        set {
+            guard let newValue else { removal = nil; return }
+            removal = removal?.withSince(newValue)
+                ?? .removedFromCatalog(at: newValue, reason: .unspecified)
+        }
     }
 
     /// Catalog-scope set-aside marker (video-only catalog, 2026-07-15).
@@ -796,7 +832,16 @@ public class VideoRecord: Identifiable, Decodable {
         // decodeIfPresent so legacy catalog.json files (no purgedAt key) round-
         // trip cleanly as active records rather than throwing. Regression
         // covered by CatalogPurgeTests.testDecodingLegacyCatalogJsonYieldsNilPurgedAt.
-        purgedAt                    = try c.decodeIfPresent(Date.self, forKey: .purgedAt)
+        // GH #143: the removal marker is the truth; `purgedAt` (derived) is
+        // read only to migrate a pre-marker catalog. `try?`: a damaged
+        // marker reads as absent and the legacy fields decide (poisoned-
+        // catalog test). Runs after lifecycleStage/archiveStage (above).
+        let legacyPurgedAt          = try c.decodeIfPresent(Date.self, forKey: .purgedAt)
+        removal = RemovalMarker.migrated(
+            stored: try? c.decodeIfPresent(RemovalMarker.self, forKey: .removal),
+            purgedAt: legacyPurgedAt, lifecycleStage: lifecycleStage,
+            archiveStage: archiveStage, loadedAt: Self.migrationLoadDate)
+        removedSince = removal?.since   // didSet does not run inside init
         // decodeIfPresent so pre-feature catalogs (no setAsideReason key)
         // round-trip cleanly as in-scope records (same shape as purgedAt).
         setAsideReason              = try c.decodeIfPresent(String.self, forKey: .setAsideReason)

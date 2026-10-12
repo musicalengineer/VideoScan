@@ -747,11 +747,16 @@ struct TriageView: View {
     }
 
     private func discardUnderConstruction(_ recs: [VideoRecord]) {
-        let n = model.discardWorkbench(recs)
         selectedIDs = []
-        catalogEdited()
-        if n > 0 {
-            model.log("Under Construction: discarded \(n) file\(n == 1 ? "" : "s") to Trash")
+        // The Trash engine runs each file's disk half off the main actor
+        // (GH #143); the view only waits for the count. (≈ posting the work
+        // and handling the completion on the UI thread.)
+        Task { @MainActor in
+            let n = await model.discardWorkbench(recs)
+            catalogEdited()
+            if n > 0 {
+                model.log("Under Construction: discarded \(n) file\(n == 1 ? "" : "s") to Trash")
+            }
         }
     }
 

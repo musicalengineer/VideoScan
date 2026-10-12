@@ -101,7 +101,7 @@ struct SignatureVerificationCodex1593Tests {
         let hooks = counter.hooks(didQuarantine: { quarantinedPath in
             rewriteThroughDescriptor(fd, path: quarantinedPath, bytes: b, restoreMtime: self.wholeSecond)
         })
-        let result = SignatureVerification.quarantineAndDelete(proof, hooks: hooks)
+        let result = SignatureVerification.quarantineThenDispose(proof, disposal: .permanent, hooks: hooks)
 
         if case .deleted = result {
             Issue.record("the rewritten (unique) bytes were deleted — codex 1593 blocker 1")
@@ -146,7 +146,7 @@ struct SignatureVerificationCodex1593Tests {
         #expect(now.ctimeNs != ticket.baseline.ctimeNs, "precondition: only the kernel ctime moved")
 
         let counter = Counter()
-        let result = SignatureVerification.deleteQuarantined(ticket, hooks: counter.hooks())
+        let result = SignatureVerification.deleteQuarantined(ticket, disposal: .permanent, hooks: counter.hooks())
         #expect(result == .refused(.changedSinceVerification(target.path)), "\(result)")
         #expect((try? Data(contentsOf: target)) == Data(other), "put back with the new bytes")
         #expect(!FileManager.default.fileExists(atPath: ticket.quarantineDirectory))
@@ -155,7 +155,7 @@ struct SignatureVerificationCodex1593Tests {
         let target2 = dir.appendingPathComponent("target2.bin"); write(target2, bytes)
         let proof2 = try SignatureVerification.verify(keeperPath: keeper.path, duplicatePath: target2.path).get()
         let counter2 = Counter()
-        #expect(SignatureVerification.quarantineAndDelete(proof2, hooks: counter2.hooks()) == .deleted(bytes: Int64(size)))
+        #expect(SignatureVerification.quarantineThenDispose(proof2, disposal: .trash, hooks: counter2.hooks()).trashedBytes == Int64(size))
         #expect(counter2.blocks("quarantine") == 1, "one 8 KiB block re-read in quarantine before the unlink")
         #expect(counter2.blocks("keeper") == 0 && counter2.opens(of: keeper.path) == 0)
         #expect(!FileManager.default.fileExists(atPath: target2.path))
@@ -174,7 +174,7 @@ struct SignatureVerificationCodex1593Tests {
         guard case .quarantined(let ticket1) = SignatureVerification.quarantine(p1) else { Issue.record("no ticket"); return }
         let stranger1 = URL(fileURLWithPath: ticket1.quarantineDirectory).appendingPathComponent("unrelated-unique.bin")
         write(stranger1, [9, 9, 9])
-        #expect(SignatureVerification.deleteQuarantined(ticket1) == .deleted(bytes: Int64(size)))
+        #expect(SignatureVerification.deleteQuarantined(ticket1, disposal: .trash).trashedBytes == Int64(size))
         #expect(!FileManager.default.fileExists(atPath: t1.path))
         #expect(FileManager.default.fileExists(atPath: stranger1.path), "the unrelated file survives the delete")
         #expect(FileManager.default.fileExists(atPath: ticket1.quarantineDirectory), "the non-empty folder is left in place")

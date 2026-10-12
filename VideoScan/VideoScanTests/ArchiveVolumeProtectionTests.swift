@@ -220,14 +220,14 @@ struct ArchiveVolumeProtectionTests {
         #expect(plan.refused.map(\.reason) == [.masterArchive, .offlineVolume])
     }
 
-    @Test func discardUnderConstructionLeavesArchiveVolumeFilesAlone() {
+    @Test func discardUnderConstructionLeavesArchiveVolumeFilesAlone() async {
         // The path does not exist, so even a regression trashes nothing
         // real; the record's state is what tells.
         let model = isolatedModel()
         designateFamilyArchive(model)
         let r = record("/Volumes/FamilyArchive/MoviesExpansion/test_archvol_missing_\(UUID().uuidString).mov")
         model.records = [r]
-        #expect(model.discardWorkbench([r]) == 0)
+        #expect(await model.discardWorkbench([r]) == 0)
         #expect(r.purgedAt == nil, "the row stays active — nothing was discarded")
     }
 
@@ -531,11 +531,8 @@ struct ArchiveVolumeProtectionSourceSensor {
         // ExclusivePublish (PartialFileNaming.swift) and removePartial
         // delegates to PartialFileNaming.remove.
         "VideoScan/FamilyTree/CouplePortrait.swift": 2,
-        // trashItem (Replace, the user's choice, never on the archive volume).
-        // 2 → 1 (fix/one-partial-registry, 2026-09-22): the stale-partial
-        // sweep's removeItem moved to the ONE shared sweep in
-        // PartialFileNaming.swift.
-        "VideoScan/MediaOps/DerivativeOutputPublish.swift": 1,
+        // DerivativeOutputPublish 1 → 0 (GH #143): its Replace now reaches
+        // the one Trash call, MediaTrash.move (below).
         "VideoScan/FamilyTree/FamilyAssetStore.swift": 2,
         "VideoScan/FamilyTree/FamilySearchPullCoordinator.swift": 6, "VideoScan/People/FindPersonJob.swift": 1,
         "VideoScan/Hallie/Voice/HallieNeuralSpeech.swift": 7, "VideoScan/Hallie/HalliePhotoImport.swift": 1,
@@ -581,14 +578,14 @@ struct ArchiveVolumeProtectionSourceSensor {
         "VideoScan/People/FamilyGroup.swift": 2, "VideoScan/People/FamilyEditSheet.swift": 1,
         "VideoScan/MediaOps/RelocateEngine.swift": 1, "VideoScan/MediaOps/RescueFileCopier.swift": 3,
         "VideoScan/Media/ReviewThumbnailRenderer.swift": 1, "VideoScan/Volumes/ScanCheckpoint.swift": 1,
-        "VideoScan/Volumes/ScanJobsStorage.swift": 2, "VideoScan/MediaOps/SignatureVerification.swift": 2,
-        // NEW 1 (Trash only, 2026-10-09 — unclassified until the codex
-        // delete-engines closure): DeleteDuplicatesJob.moveToTrash, the job's
-        // ONE live Trash step (FileManager.trashItem; a scratch folder under
-        // a test host). Reached only through SignatureVerification's `.trash`
-        // disposal, behind authorizeDuplicateDeletion + the removal-time
-        // volume re-check — the same gates as the two sites above.
-        "VideoScan/MediaOps/DeleteDuplicatesJob.swift": 1,
+        "VideoScan/Volumes/ScanJobsStorage.swift": 2,   // SignatureVerification 1 → 0: Trash only (codex r1 F1)
+        // GH #143: THE one Trash call. Every media Trash door reaches it —
+        // the engine's disk turn (Junk, ⌘⌫, Prune, Discard), Delete
+        // Duplicates' quarantine step (DeleteDuplicatesJob.moveToTrash and
+        // SignatureVerification's default — both 1 → 0 here), and
+        // DerivativeOutputPublish's Replace — each behind its own gates. A
+        // scratch folder under a test host.
+        "VideoScan/MediaOps/MediaTrash.swift": 1,
         // 7 → 4 (2026-09-22): no pre-delete of the output name or of a
         // fixed-name partial. 4 → 0 (fix/one-partial-registry, same day):
         // this run's own reserved partial is removed through
@@ -600,10 +597,10 @@ struct ArchiveVolumeProtectionSourceSensor {
         // CombineOutputPublish.removePartial); the one left removes this
         // pair's own freshly created `VS_<uuid>` staging dir.
         "VideoScan/MediaOps/VideoScanModel+Combine.swift": 1,
-        // 2 → 1 (codex delete-engines F1, 2026-10-09): trashItem only — the
-        // engine has no removeItem of its own.
-        "VideoScan/MediaOps/VideoScanModel+JunkDelete.swift": 1,
-        "VideoScan/Media/VideoScanModel+ProbeEngine.swift": 1, "VideoScan/Catalog/VideoScanModel+Workbench.swift": 1,
+        // 2 → 1 (codex delete-engines F1, 2026-10-09): trashItem only; 1 → 0
+        // (GH #143): the move is MediaTrash.move.
+        // Workbench Discard 1 → 0 (GH #143): a door onto deleteConfirmedJunk.
+        "VideoScan/Media/VideoScanModel+ProbeEngine.swift": 1,
         "VideoScanCore/AtomicFilePublish.swift": 2,
         // CyberBrainWriter.swift → CyberBrainWriter+Persistence.swift (7b919780, 2026-10-07):
         // the same 3 calls moved verbatim with the writer split — the temp file after a
@@ -808,11 +805,16 @@ struct ArchiveVolumeProtectionSourceSensor {
         let junk = try SourceTree.appSource(named: "VideoScanModel+JunkDelete.swift")
         // 2026-10-09: the choke point's excluded files become named holds
         // (one outcome per requested file), so the call is wrapped.
-        #expect(junk.contains("let mayGo = Set(excludingMasterArchiveFiles(requested, verb: \"Delete Confirmed Junk\")"))
+        // GH #143: one engine for every Trash door; the gate speaks with the
+        // door's verb ("Delete Confirmed Junk", or "Discard" for Workbench).
+        #expect(junk.contains("let mayGo = Set(excludingMasterArchiveFiles(requested, verb: verb)"))
+        #expect(junk.contains("junkDeletionPreflight(requested, verb: reason.doorVerb)"))
         #expect(junk.contains("archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe)"),
                 "the removal-time re-check sits in the detached pass")
         let bench = try SourceTree.appSource(named: "VideoScanModel+Workbench.swift")
-        #expect(bench.contains("let recs = excludingMasterArchiveFiles(requested, verb: \"Discard\")"))
+        #expect(bench.contains("await deleteConfirmedJunk(requested, mode: .toTrash, reason: .workbench, guard: fileGuard)"))
+        #expect(try SourceTree.appSource(named: "VideoScanModel+RemovalMarker.swift")
+                    .contains("self == .workbench ? \"Discard\" : \"Delete Confirmed Junk\""))
         let dups = try SourceTree.appSource(named: "VideoScanModel+Duplicates.swift")
         #expect(dups.contains("switch bulkDeleteRefusal(rec, volume: archiveVolume)"),
                 "authorizeDuplicateDeletion asks the one rule live")

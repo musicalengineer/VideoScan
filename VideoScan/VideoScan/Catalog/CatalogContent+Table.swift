@@ -22,7 +22,8 @@ extension CatalogContent {
     private func filenameTooltip(for rec: VideoRecord, offline: Bool, purged: Bool) -> String {
         var tip: String
         if purged {
-            tip = "\(rec.directory) (removed from catalog)"
+            // GH #143: the one removal marker says which kind of "removed".
+            tip = "\(rec.directory) (\(rec.removal?.sentence() ?? "removed from catalog"))"
         } else if rec.isSetAside {
             let label = rec.setAsideReason
                 .flatMap { CatalogScopePolicy.SetAsideReason(rawValue: $0)?.friendlyLabel }
@@ -134,7 +135,12 @@ extension CatalogContent {
             .onChange(of: showDisconnectedMedia) { refreshRows() }
             // Media-kind facet chip flip (GH #124).
             .onChange(of: kindFacet) { refreshRows() }
-            .onChange(of: showRemoved) { refreshRows() }
+            .onChange(of: showRemoved) {
+                refreshRows()
+                // GH #143: fresh "Trash emptied" words for the rows about to
+                // show; the stats run off the main actor.
+                if showRemoved { Task { await model.refreshTrashEmptied() } }
+            }
             .onChange(of: showSetAside) { refreshRows() }
             // Superseded reveal toggle (GH #132).
             .onChange(of: showSuperseded) { refreshRows() }

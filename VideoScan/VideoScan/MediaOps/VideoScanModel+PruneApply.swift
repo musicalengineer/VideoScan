@@ -736,7 +736,7 @@ extension VideoScanModel {
                     ?? laneGuard?.disk(path)
             },
             remove: hooks.removeFile)
-        let result = await deleteConfirmedJunk([rec], mode: mode, guard: fileGuard)
+        let result = await deleteConfirmedJunk([rec], mode: mode, reason: .prune, guard: fileGuard)
 
         // Carry the person's marks (note, tags, people, stars…) to the
         // family's archive copy — the same union rules as duplicate

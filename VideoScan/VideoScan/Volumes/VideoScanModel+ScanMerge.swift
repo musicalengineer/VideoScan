@@ -222,7 +222,8 @@ extension VideoScanModel {
         var genuinelyGone: [VideoRecord]
         var retainedInvisible: [VideoRecord]
         var moveMatch: ScanMergeMoveMatch
-        var refreshed: Int { existingUnderRoot.count - vanished.count }
+        /// Re-seen at the same path (a removed row's file re-seen counts).
+        var refreshed: Int { existingUnderRoot.count { newPaths.contains($0.fullPath) } }
         /// Genuine strangers: added paths that neither refreshed a record
         /// nor relinked one.
         func strangerCount(targetCount: Int) -> Int {
@@ -277,7 +278,7 @@ extension VideoScanModel {
         let newPaths = Set(targetRecords.map(\.fullPath))
         let vanished: [String] = records.compactMap { rec in
             guard PathScope.contains(rec.fullPath, within: root),
-                  !newPaths.contains(rec.fullPath) else { return nil }
+                  !newPaths.contains(rec.fullPath), rec.removal == nil else { return nil }
             return rec.fullPath
         }
         let moveCandidates = hoistOutsideRootMoveCandidatePaths(root: root, targetRecords: targetRecords)
@@ -325,7 +326,12 @@ extension VideoScanModel {
     ) -> ScanMergeDerivation {
         let newPaths = Set(targetRecords.map(\.fullPath))
         let existingUnderRoot = records.filter { PathScope.contains($0.fullPath, within: root) }
-        let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) }
+        // GH #143 (#143 b): a row that already carries the removal marker
+        // (In the Trash / Removed / Missing) is never pruned — rows are never
+        // deleted when a file leaves. It is not "vanished": the scan leaves it
+        // exactly as it is (the removeAll below only drops re-seen paths and
+        // the genuinely-gone set).
+        let vanished = existingUnderRoot.filter { !newPaths.contains($0.fullPath) && $0.removal == nil }
         var genuinelyGone: [VideoRecord] = []
         var retainedInvisible: [VideoRecord] = []
         if evidence.rootReachable {

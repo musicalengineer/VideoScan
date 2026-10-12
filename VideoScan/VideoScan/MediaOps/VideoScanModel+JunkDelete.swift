@@ -103,8 +103,8 @@ extension VideoScanModel {
                 if case .moved(let bytes, _) = item.outcome { sum += bytes }
             }
         }
-        /// The file was already gone (its drive WAS reachable) — the catalog
-        /// was updated (purgedAt + lifecycleStage), no disk op.
+        /// The file was already gone (its drive WAS reachable) — the row is
+        /// marked missing (removal marker), no disk op.
         var alreadyMissing: Int { items.count { $0.outcome.kind == .missing } }
         /// Its drive isn't mounted. Untouched — retry after remounting.
         var skippedOffline: Int { items.count { $0.outcome.kind == .offline } }
@@ -210,11 +210,11 @@ extension VideoScanModel {
     /// silent drop (design R6). A non-nil `finished` is the whole answer;
     /// otherwise `pending[i]` is file i's outcome when it is already
     /// decided, nil when it goes on to its turn.
-    func junkDeletionPreflight(_ requested: [VideoRecord])
+    func junkDeletionPreflight(_ requested: [VideoRecord], verb: String = "Delete Confirmed Junk")
         -> (pending: [JunkFileOutcome?], finished: JunkDeletionResult?) {
         if let refused = junkDeletionRefusedOnViewer(requested) { return ([], refused) }
         guard !requested.isEmpty else { return ([], .empty) }
-        let mayGo = Set(excludingMasterArchiveFiles(requested, verb: "Delete Confirmed Junk").map(ObjectIdentifier.init))
+        let mayGo = Set(excludingMasterArchiveFiles(requested, verb: verb).map(ObjectIdentifier.init))
         var pending = [JunkFileOutcome?](repeating: nil, count: requested.count)
         guard mayGo.count < requested.count else { return (pending, nil) }
         let archiveVolume = archiveVolumeProtection()
@@ -237,9 +237,10 @@ extension VideoScanModel {
     func deleteConfirmedJunk(
         _ requested: [VideoRecord],
         mode: JunkDeletionMode,
+        reason: RemovalReason = .junk,
         guard fileGuard: JunkDeletionGuard? = nil
     ) async -> JunkDeletionResult {
-        let (pending, finished) = junkDeletionPreflight(requested)
+        let (pending, finished) = junkDeletionPreflight(requested, verb: reason.doorVerb)
         if let finished { return finished }
 
         // The disk half's fixed inputs — all Sendable, so they may cross to
@@ -254,18 +255,23 @@ extension VideoScanModel {
             remove: fileGuard?.remove)
 
         var outcomes: [JunkFileOutcome] = []
+        var turns: [JunkTurnIdentity?] = []
         outcomes.reserveCapacity(requested.count)
+        turns.reserveCapacity(requested.count)
         for (rec, decided) in zip(requested, pending) {
             if let decided {
-                outcomes.append(decided)
+                outcomes.append(decided); turns.append(nil)
             } else if Task.isCancelled {
-                outcomes.append(.cancelled)
+                outcomes.append(.cancelled); turns.append(nil)
             } else {
+                // Who this turn is about, frozen before the disk work (codex
+                // round 1 F3): the row may be relinked while it runs.
+                turns.append(JunkTurnIdentity(rec))
                 outcomes.append(await junkTurn(rec, guard: fileGuard, disk: disk))
             }
             if let last = outcomes.last { fileGuard?.settled?(rec, last) }
         }
-        return applyJunkOutcomes(requested, outcomes, mode: mode)
+        return applyJunkOutcomes(requested, outcomes, turns: turns, mode: mode, reason: reason)
     }
 
     /// One file's turn. The catalog half, here on the main actor, as late
@@ -306,29 +312,29 @@ extension VideoScanModel {
 
     /// Back on main: stamp the catalog for the files that left (or were
     /// already gone), persist once, write the ledger, log, and count.
+    /// The stamp is the one removal marker (GH #143, `stampRemoval`):
+    /// moved → inTrash with the Trash path macOS returned; already gone →
+    /// missing. Held / failed / offline / cancelled rows are untouched. The
+    /// legacy lifecycle mirror is unchanged from before the marker: Trashed
+    /// (Deleted through the test seam) for both moved and missing rows.
     private func applyJunkOutcomes(_ records: [VideoRecord], _ outcomes: [JunkFileOutcome],
-                                   mode: JunkDeletionMode) -> JunkDeletionResult {
+                                   turns: [JunkTurnIdentity?],
+                                   mode: JunkDeletionMode, reason: RemovalReason) -> JunkDeletionResult {
         let now = Date()
         let stage: LifecycleStage = mode.isOutrightRemoval ? .deletedPermanently : .trashed
         var removedFromDisk: [VideoRecord] = []
 
-        for (rec, outcome) in zip(records, outcomes) {
-            switch outcome {
-            case .offline, .held, .failed, .cancelled:
+        for (i, (rec, outcome)) in zip(records, outcomes).enumerated() {
+            guard let marker = Self.removalMarker(for: outcome, outright: mode.isOutrightRemoval,
+                                                  reason: reason, at: now) else {
                 // Untouched: the file is still there (or is not what was
                 // verified, or its drive is away); the row stays active so
                 // the user can retry or inspect.
-                break
-            case .missing:
-                // Stamped so the row stops showing as active junk; the stage
-                // follows the requested mode even though no disk op ran.
-                rec.purgedAt = now
-                rec.lifecycleStage = stage
-            case .moved:
-                rec.lifecycleStage = stage
-                rec.purgedAt = now
-                removedFromDisk.append(rec)
+                continue
             }
+            let target = settlementTarget(rec, turn: turns[i])
+            Self.stampRemoval(target, marker, stage: stage)
+            if outcome.isMoved { removedFromDisk.append(target) }
         }
         let result = JunkDeletionResult(items: zip(records, outcomes).map { .init(record: $0, outcome: $1) })
 
@@ -346,6 +352,21 @@ extension VideoScanModel {
         let refused = result.refused.count, cancelled = result.cancelled
         log("Delete Confirmed Junk: attempted=\(result.attempted) succeeded=\(result.succeeded) missing=\(result.alreadyMissing) offline=\(result.skippedOffline) failed=\(result.failed.count)\(refused == 0 ? "" : " refused=\(refused)")\(cancelled == 0 ? "" : " cancelled=\(cancelled)") mode=\(mode.isOutrightRemoval ? "permanent" : "trash")")
         return result
+    }
+
+    /// The row a settled outcome is written to (codex round 1 F3). The
+    /// outcome is about the file at the path frozen at its turn: the live row
+    /// with that id gets the stamp only if it STILL describes that path.
+    /// Relinked or replaced while the disk work ran → the live row is left
+    /// exactly as it is and the detached snapshot carries the stamp, so the
+    /// ledger and receipt still say what left (the Delete Duplicates rule,
+    /// codex 1593 #4).
+    private func settlementTarget(_ rec: VideoRecord, turn: JunkTurnIdentity?) -> VideoRecord {
+        guard let turn else { return rec }
+        let live = record(forID: turn.id) ?? rec
+        guard live.fullPath != turn.path else { return live }
+        log("  Catalog changed while trashing \(turn.snapshot.filename); the current row is left as it is")
+        return turn.snapshot
     }
 
     /// Convenience filter: every active (non-purged) record currently
@@ -400,6 +421,23 @@ extension VideoScanModel {
         let comps = (path as NSString).pathComponents
         // ["/", "Volumes", "<name>", ...] → length ≥ 3, comps[1] == "Volumes".
         return comps.count >= 3 && comps[1] == "Volumes"
+    }
+}
+
+// MARK: - Who a turn is about
+
+/// The row's id, its path and a detached copy, frozen at the start of a
+/// file's turn — before any await (codex round 1 F3). Main actor only.
+struct JunkTurnIdentity {
+    let id: UUID
+    let path: String
+    let snapshot: VideoRecord
+
+    @MainActor
+    init(_ rec: VideoRecord) {
+        id = rec.id
+        path = rec.fullPath
+        snapshot = rec.snapshotClone()
     }
 }
 
@@ -472,12 +510,11 @@ struct JunkDiskTurn: Sendable {
         }
         switch mode {
         case .toTrash:
-            // trashItem moves to the volume's .Trashes; a volume with no
-            // Trash (some network mounts) throws — caught by the caller.
-            // Its resulting location is KEPT (G2: the receipt says where).
-            var resultURL: NSURL?
-            try FileManager.default.trashItem(at: url, resultingItemURL: &resultURL)
-            return resultURL?.path
+            // THE one Trash call (GH #143): the volume's .Trashes; a volume
+            // with no Trash (some network mounts) throws — caught by the
+            // caller. Its resulting location is KEPT (G2: the receipt and
+            // the removal marker say where).
+            return try MediaTrash.move(url).path
         case .removeThroughTestSeam(let operation):
             // The caller's operation — never one of this routine's own.
             try operation(url)
