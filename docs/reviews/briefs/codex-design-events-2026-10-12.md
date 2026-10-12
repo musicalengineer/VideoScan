@@ -2,7 +2,7 @@
 
 **Answer contract.** First line: `Credits spent: <amount> | Finding count: <N>`. A line `Verdict: <merge | fix | block> …` ("merge" = the design is sound enough to start the rapid-dev steps). Write no files; answer only. Up to ~2,000 words; this is a thinking session, so depth beats brevity where it earns it.
 
-**Rick's ask (10/12):** "We want the best we can do" for grouping the family videos into events — "AGI for Breen home videos", half joking. He explicitly asked for codex at highest reasoning to bounce ideas. You co-wrote the first draft (`docs/Auto_Discover_Events_in_Media.md`, 10/11); the Manager folded it with a layered grouping design into **one unified document**. Argue with it.
+**Rick's ask (10/12):** "We want the best we can do" for grouping the family videos into events — "AGI for Breen home videos", half joking. He explicitly asked for codex at highest reasoning to bounce ideas. You co-wrote the first draft (the Auto-Discover Events doc (10/11; since folded into events_design.md), 10/11); the Manager folded it with a layered grouping design into **one unified document**. Argue with it.
 
 **Read only these:**
 - `docs/design/events_design.md` — the unified design (the subject)

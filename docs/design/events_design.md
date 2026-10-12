@@ -1,6 +1,6 @@
 # Events: the design
 
-**Status:** unified design **v2**, 2026-10-12. v1 folded `docs/Auto_Discover_Events_in_Media.md` (Codex + Rick, 10/11) and the Manager's layered plan into one document. v2 takes in codex's highest-reasoning design talk (`docs/reviews/codex/codex-design-events-2026-10-12.md`, verdict "fix", 8 findings, all accepted). A v0 prototype exists (`scripts/events_prototype.py`). No app code yet.
+**Status:** unified design **v2**, 2026-10-12. v1 folded the 10/11 Auto-Discover Events doc (Codex + Rick; removed 10/12, in git history) (Codex + Rick, 10/11) and the Manager's layered plan into one document. v2 takes in codex's highest-reasoning design talk (`docs/reviews/codex/codex-design-events-2026-10-12.md`, verdict "fix", 8 findings, all accepted). A v0 prototype exists (`scripts/events_prototype.py`). No app code yet.
 
 **The one question (Triage ▸ Events):** *Which recordings belong to the same family memory?*
 

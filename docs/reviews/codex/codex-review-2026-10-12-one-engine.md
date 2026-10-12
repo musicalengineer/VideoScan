@@ -115,3 +115,7 @@ The five new suites and relevant direct regression tests were inspected. The sup
 - **P3:** at most three, one line each.
 
 For each finding, give the file:line, a concrete scenario, and the smallest fix.
+
+## Closed
+
+Closed by `HEAD` at 2026-10-12T18:38:19Z. 5 fixed, r2 merge

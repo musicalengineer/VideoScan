@@ -176,7 +176,7 @@ Verdict: fix — revise identity, session authority, and date propagation before
 
 **Answer contract.** First line: `Credits spent: <amount> | Finding count: <N>`. A line `Verdict: <merge | fix | block> …` ("merge" = the design is sound enough to start the rapid-dev steps). Write no files; answer only. Up to ~2,000 words; this is a thinking session, so depth beats brevity where it earns it.
 
-**Rick's ask (10/12):** "We want the best we can do" for grouping the family videos into events — "AGI for Breen home videos", half joking. He explicitly asked for codex at highest reasoning to bounce ideas. You co-wrote the first draft (`docs/Auto_Discover_Events_in_Media.md`, 10/11); the Manager folded it with a layered grouping design into **one unified document**. Argue with it.
+**Rick's ask (10/12):** "We want the best we can do" for grouping the family videos into events — "AGI for Breen home videos", half joking. He explicitly asked for codex at highest reasoning to bounce ideas. You co-wrote the first draft (the Auto-Discover Events doc (10/11; since folded into events_design.md), 10/11); the Manager folded it with a layered grouping design into **one unified document**. Argue with it.
 
 **Read only these:**
 - `docs/design/events_design.md` — the unified design (the subject)
@@ -209,3 +209,7 @@ All 8 findings accepted into `docs/design/events_design.md` v2 (design only; pin
 6. Two sets (development vs challenge), split by occasion; pilot gates table adopted verbatim (§8).
 7. Decisions keyed by durable event id + content range; "different occasions" survives regrouping; category rejection ≠ membership rejection (§3F, §6).
 8. Smallest honest v1 = review queue with persistent results; deferrals listed (§5). Ideas list adopted and ranked (§9).
+
+## Closed
+
+Closed by `HEAD` at 2026-10-12T17:40:06Z. all 8 folded into events_design.md v2
