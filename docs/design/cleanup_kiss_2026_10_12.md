@@ -1,60 +1,73 @@
-# Cleanup, from scratch (KISS) — draft for the 10/12 morning talk
+# Cleanup, from scratch (KISS)
 
-**Status:** draft for discussion. No code yet.
-**Premise (Rick 10/11):** go back to basics. Every catalog file gets a stored full SHA-256 first, from the overnight Fill In Full Hashes job. A file without one is never deleted. Cleanup only centralizes logic we already have.
+**Status:** v2. Revised after the codex design review (`docs/reviews/codex/codex-design-cleanup-kiss-2026-10-12.md`, verdict "fix", 7 findings, all accepted below). One open question for Rick, at the end. No code yet.
+**Premise (Rick 10/11):** back to basics. Every catalog file has a stored full SHA-256; nightly on 10/11, 9,738 were hashed. A file without one is never deleted. Cleanup only centralizes logic we already have.
 
 ## The one question
 
 Triage ▸ Cleanup answers: **"Which files are extra, and can go to the Trash?"**
 
-Only files that are *extra* appear in it. A file is extra when either:
+A file is *extra* when an identical copy stays somewhere else. Only copies, unsure files, A/V pair halves and Avid media are not extra, so they are not in Cleanup at all.
 
-- an identical copy stays on another file, or
-- you marked it junk.
+## The page: one table, one button
 
-Only copies, unsure files, and A/V pair halves are not extra, so they are not in Cleanup at all. They belong to Triage's other workflows or to the Catalog.
-
-## One table, three rows
-
-| | Files | GB | |
+| | Files | GB selected | |
 |---|---|---|---|
-| ☑ **Copies**: an identical copy stays (full SHA-256 match, both stored) | n | GB | See files… |
-| ☑ **Junk you marked** | n | GB | See files… |
-| **Not checked yet**: looks like a copy, but no full hash yet | n | GB | Fill In Full Hashes… |
+| ☑ **Copies**: identical full SHA-256, one copy stays | n | GB | See files… |
+| **Not checked yet**: no full hash yet (information only) | n | GB | Fill In Full Hashes… |
 
-Under the table there is one button: **Move N files (X GB) to the Trash.**
+Under the table: **Move N files (X GB) to the Trash…** That starts one MFO job. It shows progress, Pause/Stop, and a result that stays on screen: moved, held, failed, missing and cancelled, with a reason for each file. The GB figure is "selected", not "freed": nothing is freed until you empty the Trash yourself.
 
-That's the whole page. There are no grades, no "unsure" row and no only-copy row. "See files…" opens a plain list with the same filters as the Catalog. Unticking a file there leaves it out of this run.
+"See files…" lists the files. Unticking a file there leaves it out of this run.
 
-## Rules (all existing; nothing new is invented)
+## v1 rules (codex signed off on these five)
 
-- **Which copy stays:** the existing keeper rule. FamilyArchive first, then RAID › HDD › SSD, with the LaCie master preferred. An offline drive's copy is never chosen as the one that stays.
-- **FamilyArchive is never trimmed as a copy.** Your marked junk is the only exception (see question 2).
-- **Where files go:** everything goes through the one Trash engine (#143) to the Finder Trash. Every row gets the "In the Trash" marker. Nothing is permanently deleted, and the Trash is never emptied.
-- **At the moment of the move:** the copy that stays must be on a connected drive, its full hash must be stored, and its size, date and inode must be unchanged since it was hashed. The extra file passes the same check. If anything differs, the file is skipped and named.
+1. **Full hashes find the candidates; a fresh read of both files is the proof.**
+   - The page uses stored full hashes, so it opens instantly.
+   - At the moment of each move, the job reads the extra copy and the copy that stays, in full, and compares SHA-256 and length. It checks each file's identity (device and inode) before and after the read.
+   - If anything differs or can't be read, that file is held and named.
+   - This is Rick's standing rule: prove the surviving copy at delete time. For the 867-file set that's about 1.25 TB, roughly 1–1.5 h, so run it while away or overnight.
+   - No stat-only shortcut. Codex showed size, mtime and inode can all be unchanged while the bytes differ.
+2. **One reserved survivor per group, for the whole run.**
+   - Groups are built straight from full SHA-256 plus size, not from yesterday's sampled-hash groups.
+   - The selection is frozen when the job starts. Each group gets exactly one copy that stays, and it is never in the removal set, under any path.
+   - If the drive with the copy that stays goes away, that group's files are held. Another file is never promoted to stand in as the copy that stays.
+3. **Ambiguous identity means skip.** That covers:
+   - two catalog paths that are the same file: same device and inode, hardlinks, case-only differences;
+   - any path that runs through a symlinked folder (e.g. the 27 links from ~/Movies);
+   - changed or unreadable files;
+   - a drive that disconnects mid-run.
+   Space is counted per physical file, not per catalog row.
+4. **Never touched:**
+   - FamilyArchive, which is never trimmed as a copy;
+   - A/V pair halves;
+   - Avid MediaFiles folders, because their bins would go offline;
+   - keeper ties (about 587 GB, mostly copies inside FamilyArchive), which are left alone in v1.
+5. **One engine:**
+   - the frozen selection goes through the #143 Trash engine;
+   - Finder Trash only, and the Trash is never emptied;
+   - every row gets the "In the Trash" marker, and rows are never deleted.
 
 ## What this removes from today's code
 
 - The footer "hidden" caption, Show Again, and the review sheet.
 - The Storage card, Steward, and Copies & Advice delete doors. They become links to Cleanup.
-- CheckCopies' "unsure" machinery. The full hash makes a file either a copy or not.
+- CheckCopies' "unsure" tier.
 
-## Numbers today (dry run on 10/11, sampled hashes; tonight's job turns them into proofs)
+## Junk is a different question
 
-- Copies: 867 files, 629 GB, none of them on FamilyArchive.
-- Junk you marked: 21 files, 0.65 GB. 20 of them are on FamilyArchive.
-- Left out:
-  - "tie for which copy to keep": 642 files, 587 GB, mostly copies *inside* FamilyArchive (about 254 GB).
-  - A/V pair halves: 996 files, 309 GB.
-  - Avid MediaFiles MXF: 420 of the copies (58 GB) would need their bins relinked.
+"Junk you marked" has no surviving copy, so it falls outside rule 1 by definition. On 10/09 we settled that the survivor proof applies to *duplicates only*. Codex's simplest v1 leaves junk out of Cleanup entirely. Junk stays where it is today, as Triage ▸ Delete Junk, except on FamilyArchive, where it is blocked.
 
-## Questions for the morning, one at a time
+🔴 **Rick's one open question: FamilyArchive junk.**
+- **(a) Recommended for now:** keep FamilyArchive locked. The 20 junk files (0.65 GB, all Berklee "Sounds" folders) wait.
+- **(b)** Add a per-run tick box: "Include these 20 marked-junk files from FamilyArchive". It is off by default, lists the exact files, re-checks that each is still marked junk, and resets after the run. It never unlocks copy trimming.
 
-1. **What does "prove it" mean at delete time?** Is a stored full hash plus an unchanged size, date and inode enough (instant)? Or should the job re-read the copy that stays (tonight's script read 1.25 TB, about 1–1.5 h)? I recommend the stored hash plus the unchanged check, with a re-read only when anything differs.
-2. **FamilyArchive junk.** Should Cleanup show a one-line "Unlock FamilyArchive for this run" tick box, unticked by default, or never touch FamilyArchive?
-3. **Copies inside FamilyArchive** (about 254 GB). Leave them for now, or give them their own later pass?
-4. **Avid MediaFiles copies.** Include them, or leave them out?
+## Build order (once Rick says go)
 
-## Events (for the same talk)
+1. Merge #143 (one engine). It needs Rick's go on the codex pass first.
+2. Add the Cleanup job and page on top of it.
+3. QA, then the five-dimension tests.
+4. A dry run on the real catalog: the numbers, with no moves.
+5. Rick runs it.
 
-The tab charter's Events page groups recordings of the same occasion (Compare Footage lives there). `docs/Auto_Discover_Events_in_Media.md` is the research track behind it: a SigLIP 2 scene-search experiment on the M5 with 50–100 clips, first, then grouping. My proposal: build the Events page on the evidence we already have (dates, folders, and copies or edits of the same footage), and let the experiment feed suggestions into it later. The page doesn't wait on the models.
+Events moves to its own design talk (`docs/Auto_Discover_Events_in_Media.md`), separate from this.
