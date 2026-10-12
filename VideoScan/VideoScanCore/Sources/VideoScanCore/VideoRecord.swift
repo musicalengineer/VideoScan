@@ -358,8 +358,20 @@ public class VideoRecord: Identifiable, Decodable {
     /// marker falls back to the legacy fields, then `RemovalMarker.migrated`
     /// maps a pre-#143 catalog's encodings onto a state at load.
     public var removal: RemovalMarker? {
-        didSet { Self.bumpIdentityGeneration() }
+        didSet {
+            removedSince = removal?.since
+            Self.bumpIdentityGeneration()
+        }
     }
+
+    /// `removal?.since`, cached on every write of `removal` (and in the
+    /// decoder, where `didSet` does not run). `purgedAt` / `isPurged` are
+    /// read in O(records) loops all over the app; this keeps that read a
+    /// plain stored `Date?` load instead of copying the marker (its Strings
+    /// mean a retain/release per read in Debug) — the ArchiveAngel
+    /// "Clear all" 100k scale budget noticed. (≈ a C++ cached member kept
+    /// in sync by the only setter.)
+    private var removedSince: Date?
 
     /// DERIVED (GH #143): when the row left — `removal?.since`. Kept, and
     /// still encoded, so the ~150 readers and an older build reading the
@@ -371,7 +383,7 @@ public class VideoRecord: Identifiable, Decodable {
     /// on a row that has one moves only its `since`. Production code goes
     /// through the engine. (Swift's `Date?` ≈ C++ `std::optional<Date>`.)
     public var purgedAt: Date? {
-        get { removal?.since }
+        get { removedSince }
         set {
             guard let newValue else { removal = nil; return }
             removal = removal?.withSince(newValue)
@@ -829,6 +841,7 @@ public class VideoRecord: Identifiable, Decodable {
             stored: try? c.decodeIfPresent(RemovalMarker.self, forKey: .removal),
             purgedAt: legacyPurgedAt, lifecycleStage: lifecycleStage,
             archiveStage: archiveStage, loadedAt: Self.migrationLoadDate)
+        removedSince = removal?.since   // didSet does not run inside init
         // decodeIfPresent so pre-feature catalogs (no setAsideReason key)
         // round-trip cleanly as in-scope records (same shape as purgedAt).
         setAsideReason              = try c.decodeIfPresent(String.self, forKey: .setAsideReason)
