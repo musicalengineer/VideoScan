@@ -111,14 +111,14 @@ extension VideoScanModel {
         purgeRecords(ids: Set(Self.unreadableExtensionlessIDs(in: records)))
     }
 
-    /// A restored row is LIVE again (B4, 2026-10-11): the removal marker is
-    /// cleared through the engine (`clearRemoval`, GH #143), which puts a
-    /// post-delete stage back to `.cataloged` only when the file is back at
-    /// `fullPath`, and drops the old "Manually Deleted" label on a row whose
-    /// marker came from it. One line says what to do when the file is not
-    /// back yet.
-    private func returnToLive(_ rec: VideoRecord) {
-        if let line = clearRemoval(rec) { log(line) }
+    /// A restored row is LIVE again — through the engine (`clearRemoval`,
+    /// GH #143), which refuses while the file is still in the Trash (or
+    /// gone) and leaves the marker untouched (codex round 1 F2). Returns
+    /// whether the row went live; one line says what to do when it did not.
+    private func returnToLive(_ rec: VideoRecord) -> Bool {
+        guard let line = clearRemoval(rec) else { return true }
+        log(line)
+        return false
     }
 
     /// Clear `purgedAt` on a single record. Used by the right-click menu
@@ -126,8 +126,8 @@ extension VideoScanModel {
     @discardableResult
     func restoreRecord(id: UUID) -> Bool {
         guard let rec = record(forID: id),
-              rec.purgedAt != nil else { return false }
-        returnToLive(rec)
+              rec.purgedAt != nil,
+              returnToLive(rec) else { return false }   // no "restored" save or ledger line on a refusal
         CorrelationScorer.revalidateExistingPairs(in: records)
         saveCatalogDebounced()
         ledgerRestored([rec], by: .rick)
@@ -163,8 +163,8 @@ extension VideoScanModel {
         // scale test). (≈ a hash-map lookup instead of std::find per key.)
         for id in snap.ids {
             if let rec = record(forID: id),
-               rec.purgedAt != nil {
-                returnToLive(rec)
+               rec.purgedAt != nil,
+               returnToLive(rec) {
                 restored += 1
                 restoredRecs.append(rec)
             }

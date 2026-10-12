@@ -217,15 +217,17 @@ struct RestoreResetsTrashedStageTests {
         #expect(rec.lifecycleStage == .archived)
     }
 
-    /// Manager ruling (QA on 3e8e14dbd): the file is still in the Trash (or
-    /// gone), so the row must not claim to be live media. It is un-purged as
-    /// before, keeps its Trashed stage, and one line says what to do.
+    /// Manager ruling (QA on 3e8e14dbd), tightened by codex round 1 F2
+    /// (GH #143): the file is still in the Trash (or gone), so the row must
+    /// not claim to be live media. Restore REFUSES — the row stays removed,
+    /// keeps its Trashed stage — and one line says what to do; "Restore
+    /// again" after Put Back then works (OneEngineCodexRound1Tests F2).
     @Test func restoringATrashedRowWhoseFileIsNotOnDiskDoesNotClaimItIsCataloged() async throws {
         let (rec, dir) = try purged(.trashed, onDisk: false)
         defer { try? FileManager.default.removeItem(at: dir) }
         let m = model([rec], in: dir)
-        #expect(m.restoreRecord(id: rec.id))
-        #expect(rec.purgedAt == nil, "Restore still un-purges the row")
+        #expect(!m.restoreRecord(id: rec.id), "restored a row whose file is not back")
+        #expect(rec.purgedAt != nil, "the removal was cleared before the file came back")
         #expect(rec.lifecycleStage == .trashed, "a row whose file is not on disk was relabelled \(rec.lifecycleStage)")
         try? await Task.sleep(nanoseconds: 400_000_000)   // console flush debounce
         let log = m.dashboard.consoleLines.joined(separator: "\n")

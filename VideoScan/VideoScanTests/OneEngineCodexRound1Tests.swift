@@ -67,4 +67,26 @@ struct OneEngineCodexRound1Tests {
         #expect(result != .deleted(bytes: Int64(size)), "the final verdict raised it to an unlink")
         #expect(FileManager.default.fileExists(atPath: trash.appendingPathComponent("copy.mov").path))
     }
+
+    // MARK: F2 — Restore waits for the file to be back
+
+    @Test func f2RestoreRefusesWhileTheFileIsInTheTrashAndWorksAfterPutBack() async throws {
+        let sb = try JunkTrashSandbox("f2"); defer { sb.cleanup() }
+        let model = sb.model()
+        let url = try sb.write("test_f2.mov")
+        let rec = sb.junk(url)
+        model.records = [rec]
+        _ = await model.trashSelectedRecords([rec], fileOperation: sb.trash.operation)
+        let marker = try #require(rec.removal)
+        #expect(marker.state == .inTrash)
+
+        #expect(!model.restoreRecord(id: rec.id), "restored while the file is still in the Trash")
+        #expect(rec.removal == marker && rec.isPurged, "the marker was cleared before the file came back")
+
+        // Rick puts it back in Finder, then Restores again.
+        let inTrash = try #require(try FileManager.default.contentsOfDirectory(atPath: sb.trash.dir.path).first)
+        try FileManager.default.moveItem(at: sb.trash.dir.appendingPathComponent(inTrash), to: url)
+        #expect(model.restoreRecord(id: rec.id), "Restore again after Put Back")
+        #expect(rec.removal == nil && rec.lifecycleStage == .cataloged)
+    }
 }

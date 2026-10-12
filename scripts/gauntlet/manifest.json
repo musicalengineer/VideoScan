@@ -26796,7 +26796,8 @@
       ],
       "tests": [
         "f1AFinalVerdictOfPermanentStillGoesToTheTrash",
-        "f1APermanentDisposalStillGoesToTheTrash"
+        "f1APermanentDisposalStillGoesToTheTrash",
+        "f2RestoreRefusesWhileTheFileIsInTheTrashAndWorksAfterPutBack"
       ]
     }
   ],
