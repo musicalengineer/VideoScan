@@ -121,9 +121,22 @@ enum CleanupProof {
     /// The junk lane's disk re-check, immediately before the move: still
     /// the frozen file (the Delete Junk door's check), and not a reserved
     /// survivor. Blocking (one stat + one open).
-    static func verifyJunk(path: String, frozen: FrozenJunkFiles, reserved: Set<CleanupPhysicalID>) -> String? {
+    ///
+    /// A file that is not there is the engine's "already missing" — it
+    /// marks the row — UNLESS its whole drive is gone (QA P2-3): the
+    /// engine's reachability answer is a 5 s cache, so a drive unplugged a
+    /// moment ago still reads "connected" there. `mountPresent` asks the
+    /// kernel now; an unplugged drive is a HOLD, never a missing file.
+    static func verifyJunk(path: String, frozen: FrozenJunkFiles, reserved: Set<CleanupPhysicalID>,
+                           mountPresent: (String) -> Bool = CleanupDiskProbe.isMountPresent(forPath:)) -> String? {
         if let why = frozen.diskProblem(at: path) { return why }
-        if let now = FileIdentityStamp.capture(path: path), reserved.contains(CleanupPhysicalID(now)) {
+        guard let now = FileIdentityStamp.capture(path: path) else {
+            if VideoScanModel.isExternalVolumePath(path), !mountPresent(path) {
+                return "its drive (\(VolumeReachability.volumeName(forPath: path))) isn't connected — nothing moved"
+            }
+            return nil
+        }
+        if reserved.contains(CleanupPhysicalID(now)) {
             return "is the copy that stays for another file — nothing moved"
         }
         return nil

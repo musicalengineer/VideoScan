@@ -247,6 +247,34 @@ struct CleanupTrashRunTests {
 
     // MARK: Junk
 
+    @Test("QA P2-3: a junk file gone WITH its drive is held (never 'missing'); gone from a present drive is left to the engine")
+    func junkDriveUnpluggedIsHeld() throws {
+        let rec = VideoRecord()
+        rec.fullPath = "/Volumes/Gone/test_j.mov"
+        rec.filename = "test_j.mov"
+        rec.mediaDisposition = .confirmedJunk
+        rec.sizeBytes = 64
+        let identity = CleanupTrashFixture.stamp(inode: 5, size: 64)
+        let frozen = FrozenJunkFiles(VideoScanModel.JunkTrashSnapshot(items: [
+            .init(record: rec, path: rec.fullPath, identity: identity, bytes: 64, plan: .toMove),
+        ]))
+        // The file is not there and its mount is gone: HOLD, with the drive named.
+        let unplugged = CleanupProof.verifyJunk(path: rec.fullPath, frozen: frozen, reserved: [], mountPresent: { _ in false })
+        #expect(unplugged?.contains("isn't connected") == true, "\(String(describing: unplugged))")
+        // The mount is there and the file is not: nil — the engine's own "already missing".
+        #expect(CleanupProof.verifyJunk(path: rec.fullPath, frozen: frozen, reserved: [], mountPresent: { _ in true }) == nil)
+        // A boot-disk path never asks about a mount.
+        var asked = false
+        let internalRec = "/Users/rickb/Movies/test_gone.mov"
+        let frozen2 = FrozenJunkFiles(VideoScanModel.JunkTrashSnapshot(items: [
+            .init(record: rec, path: internalRec, identity: identity, bytes: 64, plan: .toMove),
+        ]))
+        #expect(CleanupProof.verifyJunk(path: internalRec, frozen: frozen2, reserved: [], mountPresent: { _ in asked = true; return false }) == nil)
+        #expect(!asked)
+        // The real probe: this Mac's boot disk is not a /Volumes mount; a made-up name is not mounted.
+        #expect(!CleanupDiskProbe.isMountPresent(forPath: "/Volumes/NoSuchDrive-\(UUID().uuidString.prefix(6))/x.mov"))
+    }
+
     @Test("junk you marked moves and is marked In the Trash (reason junk)")
     func junkMoves() async throws {
         let sb = try S("junk")

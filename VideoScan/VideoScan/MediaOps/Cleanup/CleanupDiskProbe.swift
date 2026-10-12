@@ -36,6 +36,19 @@ enum CleanupDiskProbe {
         return .file(stamp)
     }
 
+    /// Is the /Volumes mount holding `path` present RIGHT NOW — asked of the
+    /// kernel, no cache: "/Volumes/<name>" exists and is a mount point (its
+    /// device number differs from /Volumes's own, the classic ismount
+    /// test), so a stale folder of that name on the boot disk is not a
+    /// drive. False for a path not under /Volumes.
+    nonisolated static func isMountPresent(forPath path: String) -> Bool {
+        let comps = (path as NSString).pathComponents
+        guard comps.count >= 3, comps[1] == "Volumes" else { return false }
+        var root = stat(), parent = stat()
+        guard stat("/Volumes/\(comps[2])", &root) == 0, stat("/Volumes", &parent) == 0 else { return false }
+        return (root.st_mode & S_IFMT) == S_IFDIR && root.st_dev != parent.st_dev
+    }
+
     /// True when resolving every link on the way gives back `path` itself,
     /// byte for byte. (Deliberately NOT `standardizingPath`, which rewrites
     /// "/private/var/…" to "/var/…" — itself a link — and would hide one.)
