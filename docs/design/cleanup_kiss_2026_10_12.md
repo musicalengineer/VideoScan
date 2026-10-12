@@ -74,4 +74,4 @@ Junk from other drives also comes into Cleanup as a second row, "Junk you marked
 4. A dry run on the real catalog: the numbers, with no moves.
 5. Rick runs it.
 
-Events moves to its own design talk (`docs/Auto_Discover_Events_in_Media.md`), separate from this.
+Events moves to its own design talk (the Auto-Discover Events doc (folded into docs/design/events_design.md on 10/12)), separate from this.

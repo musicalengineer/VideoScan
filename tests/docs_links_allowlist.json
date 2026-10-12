@@ -208,6 +208,12 @@
   "docs/briefs/cloud/C03-python-run-and-review.md": {
     "docs/reviews/cloud/C03-python-run-and-review.md": "Report path a brief names before its session writes it; arrives on the session's branch and is merged with the findings. Remove this entry then."
   },
+  "docs/briefs/cloud/C07-angel-floors-plan.md": {
+    "docs/reviews/cloud/C07-angel-floors-plan.md": "cloud brief names the review doc the cloud run will write"
+  },
+  "docs/briefs/cloud/C08-av-sync-check-prototype.md": {
+    "docs/reviews/cloud/C08-av-sync-check-prototype.md": "cloud brief names the review doc the cloud run will write"
+  },
   "docs/design/analysis_ledger_design.md": {
     "docs/immich_ideas.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
@@ -372,8 +378,8 @@
     "docs/donna-recipe-v1.md": "Historical citation to a document already absent at the pre-reorganization HEAD; see docs/guides/documentation-map.md for retired-document recovery."
   },
   "tools/engineering-room/README.md": {
-    "docs/team-channel/": "tools/engineering-room's legacy Markdown-channel ingest/export directory (ENGINEERING_ROOM_TEAM_CHANNEL default). docs/team-channel/ was removed when the team channel was retired 2026-10-02; ingest tolerates the absent directory.",
-    "docs/team-channel": "tools/engineering-room's legacy Markdown-channel ingest/export directory (ENGINEERING_ROOM_TEAM_CHANNEL default). docs/team-channel/ was removed when the team channel was retired 2026-10-02; ingest tolerates the absent directory."
+    "docs/team-channel": "tools/engineering-room's legacy Markdown-channel ingest/export directory (ENGINEERING_ROOM_TEAM_CHANNEL default). docs/team-channel/ was removed when the team channel was retired 2026-10-02; ingest tolerates the absent directory.",
+    "docs/team-channel/": "tools/engineering-room's legacy Markdown-channel ingest/export directory (ENGINEERING_ROOM_TEAM_CHANNEL default). docs/team-channel/ was removed when the team channel was retired 2026-10-02; ingest tolerates the absent directory."
   },
   "tools/engineering-room/test/evidence/control-plane-acceptance-2026-07-17.md": {
     "docs/team-channel/": "The team channel was retired 2026-10-02 and docs/team-channel/ removed; historical citation, kept as written."
