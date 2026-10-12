@@ -225,6 +225,13 @@ enum CleanupPathRules {
         return lower.contains("/avid mediafiles/") || lower.contains("/omfi mediafiles/")
     }
 
+    /// Runs through a folder named like the Master Archive's root, by NAME —
+    /// a second net under the tree check for a path spelled differently
+    /// from the designation. Junk there is never offered.
+    static func isInArchiveRootFolder(_ path: String) -> Bool {
+        path.contains("/\(MasterArchiveLayout.rootFolderName)/")
+    }
+
     /// Inside an application's library package, or an iMovie / Final Cut
     /// path — the app owns those files (ported from the one-time script).
     static func isInAppLibrary(_ path: String) -> Bool {
@@ -443,7 +450,9 @@ enum CleanupPlanner {
     /// Where one junk row goes, or why it is left alone.
     static func junkLane(_ row: CleanupRow, fact: CleanupDiskFacts, index: PhysicalIndex,
                          reserved: Set<CleanupPhysicalID>) -> Result<PlacedJunk, CleanupExclusion> {
-        if row.isArchived || row.protection == .archiveTree { return .failure(.archived) }
+        if row.isArchived || row.protection == .archiveTree || CleanupPathRules.isInArchiveRootFolder(row.path) {
+            return .failure(.archived)
+        }
         if case .other(let why)? = row.protection { return .failure(.protected(why)) }
         if let why = contentExclusion(row) { return .failure(why) }
         let stamp: FileIdentityStamp

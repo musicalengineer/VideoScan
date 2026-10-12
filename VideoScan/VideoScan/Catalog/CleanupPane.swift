@@ -56,11 +56,13 @@ final class CleanupStore: ObservableObject {
     /// The frozen set a run would take now.
     private(set) var selection: CleanupSelection?
 
-    /// Rebuild the plan off the main actor; one build at a time.
-    func refresh(model: VideoScanModel) {
-        guard !isBuilding else { return }
+    /// Rebuild the plan off the main actor; one build at a time. Returns the
+    /// build's task (tests await it; the page does not).
+    @discardableResult
+    func refresh(model: VideoScanModel) -> Task<Void, Never>? {
+        guard !isBuilding else { return nil }
         isBuilding = true
-        Task { [weak self] in
+        return Task { [weak self] in
             let plan = await model.buildCleanupPlan()
             guard let self else { return }
             self.plan = plan
@@ -81,14 +83,22 @@ final class CleanupStore: ObservableObject {
 
     /// Start the one job over exactly what the page shows as selected.
     func start(model: VideoScanModel, center: MediaFileOperationsCenter) {
-        guard let selection, !selection.isEmpty, !isRunning else { return }
-        isRunning = true
-        includeArchiveJunk = false
+        guard let selection = beginRun() else { return }
         _ = center.startedByUser { c in
             c.startCleanup(selection: selection, model: model) { [weak self] line in
                 self?.runFinished(line, model: model)
             }
         }
+    }
+
+    /// Freeze what runs now and turn the FamilyArchive box back off (Rick:
+    /// "per run" — it never carries over to the next one). nil when there
+    /// is nothing to run or a run is already going.
+    func beginRun() -> CleanupSelection? {
+        guard let selection, !selection.isEmpty, !isRunning else { return nil }
+        isRunning = true
+        includeArchiveJunk = false
+        return selection
     }
 
     private func runFinished(_ line: String, model: VideoScanModel) {

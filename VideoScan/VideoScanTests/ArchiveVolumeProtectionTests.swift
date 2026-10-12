@@ -807,8 +807,11 @@ struct ArchiveVolumeProtectionSourceSensor {
         // (one outcome per requested file), so the call is wrapped.
         // GH #143: one engine for every Trash door; the gate speaks with the
         // door's verb ("Delete Confirmed Junk", or "Discard" for Workbench).
-        #expect(junk.contains("let mayGo = Set(excludingMasterArchiveFiles(requested, verb: verb)"))
-        #expect(junk.contains("junkDeletionPreflight(requested, verb: reason.doorVerb)"))
+        // 2026-10-12 (Cleanup, Rick's option b): only the per-run
+        // FamilyArchive-junk tick box's rows skip the batch gate's
+        // archive-volume half; every other row still goes through it.
+        #expect(junk.contains("var mayGo = Set(excludingMasterArchiveFiles(requested.filter { !waived.contains(ObjectIdentifier($0)) },"))
+        #expect(junk.contains("junkDeletionPreflight(requested, verb: reason.doorVerb, guard: fileGuard)"))
         #expect(junk.contains("archiveVolume.verdictAtRemoval(path: path, probe: uuidProbe)"),
                 "the removal-time re-check sits in the detached pass")
         let bench = try SourceTree.appSource(named: "VideoScanModel+Workbench.swift")

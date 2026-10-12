@@ -26882,6 +26882,100 @@
         "mxf",
         "removeRestoreAndEmptiedPassAt100k"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CleanupTrashPlanTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CleanupTrashPlanTests"
+      ],
+      "tests": [
+        "aliasAcrossGroups",
+        "archivedAndProtected",
+        "caseVariantAlias",
+        "contentExclusions",
+        "copyGroupWithJunkMember",
+        "diskAndCatalogStates",
+        "familyArchiveCopyNeverATarget",
+        "familyArchiveIsTheKeeper",
+        "groupsByDigestAndSize",
+        "humanMarksStay",
+        "junkAliasingAKeeper",
+        "junkLanes",
+        "junkSameFile",
+        "keeperNeverInRemovalSet",
+        "notCheckedYet",
+        "offlineMemberNeverKeeper",
+        "pairOnRankedDrives",
+        "sameInode",
+        "scale100k",
+        "selection",
+        "selectionRefusesKeeperTargets",
+        "throughLink",
+        "tieLeavesGroupAlone",
+        "twoFilesNamingEachOther",
+        "words"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CleanupTrashRunTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CleanupTrashRunTests"
+      ],
+      "tests": [
+        "copyMoves",
+        "engineWaiverIsNarrow",
+        "familyArchiveJunkTickBox",
+        "junkMoves",
+        "junkRechecked",
+        "keeperGoneNeverReElected",
+        "keeperRewrittenHeld",
+        "lyingDigestHeld",
+        "realAliases",
+        "stopBeforeFirstTurn",
+        "storeTickBoxResets",
+        "targetDriveGone",
+        "targetReplacedHeld",
+        "untickedStays"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CleanupTrashMediaMatrixTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CleanupTrashMediaMatrixTests"
+      ],
+      "tests": [
+        "avi",
+        "mkv",
+        "mov",
+        "mp4",
+        "mxf"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CleanupTrashSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CleanupTrashSensorTests"
+      ],
+      "tests": [
+        "heldRowsNeverStamped",
+        "noDiskOrRowWritesOfItsOwn",
+        "pageNeverReadsRecords",
+        "scanReadsTheSources",
+        "throughTheEngine",
+        "waiverOnlyFromCleanup"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -29355,6 +29449,22 @@
         },
         {
           "name": "VideoScan/VideoScanTests/OneEngineMediaMatrixAndScaleTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashPlanTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashRunTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashMediaMatrixTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],

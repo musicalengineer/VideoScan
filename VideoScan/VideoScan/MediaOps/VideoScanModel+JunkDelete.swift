@@ -164,8 +164,12 @@ extension VideoScanModel {
         var archiveVolumeJunkWaiver: Set<UUID> = []
 
         /// True when `refusal` is the one the waiver may lift for `rec`.
+        /// Belt and braces: never for a path that runs through an archive
+        /// root folder by NAME, even if its spelling hid it from the tree
+        /// check ("/var/…" vs "/private/var/…").
         func waives(_ refusal: BulkDeleteRefusal?, for rec: VideoRecord) -> Bool {
             refusal == .archiveVolume && archiveVolumeJunkWaiver.contains(rec.id)
+                && !rec.fullPath.contains("/\(MasterArchiveLayout.rootFolderName)/")
         }
     }
 

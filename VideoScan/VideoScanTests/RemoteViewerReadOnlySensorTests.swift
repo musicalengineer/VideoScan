@@ -687,7 +687,8 @@ struct RemoteViewerReadOnlySensorTests {
         }
         #expect(callers == ["VideoScanModel+TrashSelection.swift",
                             "VideoScanModel+PruneApply.swift", "VideoScanModel+JunkTrashSnapshot.swift",
-                            "VideoScanModel+Workbench.swift"],   // GH #143; also refuses first on its own
+                            "VideoScanModel+Workbench.swift",   // GH #143; also refuses first on its own
+                            "CleanupTrashJob.swift"],           // Triage ▸ Cleanup (2026-10-12); also refuses first on its own
                 "a new deleteConfirmedJunk caller: confirm it relies on the model's viewer guard, then add it here")
     }
 }

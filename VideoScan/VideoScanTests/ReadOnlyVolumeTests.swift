@@ -645,7 +645,7 @@ struct ReadOnlyVolumeSensorTests {
             ("DeleteDuplicatesJob.swift", ["archiveCheck: model.archiveRemovalCheck()", "check.refusal(forPath: item.path)",
                                            "archiveCheck?.refusal(forPath: ticket.quarantinedPath)"]),
             ("DeleteDuplicatesForecast.swift", ["bulkDeleteRefusal(r, volume: archiveVolume)"]),
-            ("VideoScanModel+JunkDelete.swift", ["excludingMasterArchiveFiles(requested, verb: verb)",
+            ("VideoScanModel+JunkDelete.swift", ["excludingMasterArchiveFiles(requested.filter",
                                                  "readOnlyVolumes.verdictAtRemoval(path: path, probe: uuidProbe)"]),
             ("VideoScanModel+JunkTrashSnapshot.swift", ["recordsBulkVerbsMayRemove(recs)"]),   // the frozen Delete Junk set (R1)
             ("VideoScanModel+TrashSelection.swift", ["self.bulkDeleteRefusal($0, volume: archiveVolume)"]),
@@ -655,6 +655,11 @@ struct ReadOnlyVolumeSensorTests {
             ("TranscodeJob.swift", ["model.bulkDeleteRefusal(forPath: path)", "archiveCheck: model?.archiveRemovalCheck()"]),
             ("CatalogRowContextMenu.swift", ["model.recordsBulkVerbsMayRemove(activeRecs)"]),   // row menu (R1: was CatalogContent+Table.swift)
             ("VideoScanModel+Steward.swift", ["self.bulkDeleteRefusal(r, volume: archiveDrive)"]),
+            // Triage ▸ Cleanup (2026-10-12): the plan asks the gate (and the
+            // Read-only half on its own); the move is a door onto the engine.
+            ("VideoScanModel+Cleanup.swift", ["gate.refusal(for: subject)", "gate.readOnly?.verdict(forPath: subject.path)"]),
+            ("CleanupTrashJob.swift", ["model.deleteConfirmedJunk(recs, mode: .toTrash, reason: .duplicate",
+                                       "model.deleteConfirmedJunk(recs, mode: .toTrash, reason: .junk"]),
         ]
         for verb in verbs {
             let src = try code(verb.file)

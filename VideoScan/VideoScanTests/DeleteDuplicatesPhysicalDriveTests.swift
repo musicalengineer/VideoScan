@@ -356,7 +356,10 @@ struct BulkVerbRemovalBoundaryTests {
         #expect(!discard.contains("trashItem(") && !discard.contains("FileManager"),
                 "Discard moves files on its own again")
         let engine = try SourceTree.appCode(named: "VideoScanModel+JunkDelete.swift")
-        #expect(engine.contains("if let refusal = bulkDeleteRefusal(rec, volume: archiveVolume) {")
+        // 2026-10-12: the refusal is asked once and may be lifted ONLY by
+        // Cleanup's per-run FamilyArchive-junk waiver (`!waived`).
+        #expect(engine.contains("let refusal = bulkDeleteRefusal(rec, volume: archiveVolume)")
+                    && engine.contains("if let refusal, !waived {")
                     && engine.contains("readOnlyVolumes: readOnlyVolumeProtection()"),
                 "the engine no longer asks the gate at each file's turn")
         // Junk Delete's sheet and Prune Apply both move files ONLY through
