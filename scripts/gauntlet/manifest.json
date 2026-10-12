@@ -26798,7 +26798,9 @@
         "f1AFinalVerdictOfPermanentStillGoesToTheTrash",
         "f1APermanentDisposalStillGoesToTheTrash",
         "f2RestoreRefusesWhileTheFileIsInTheTrashAndWorksAfterPutBack",
-        "f3ARowRepointedMidBatchIsNotStamped"
+        "f3ARowRepointedMidBatchIsNotStamped",
+        "f4APurgedRowWithTheOldLabelStaysRestoredAfterReload",
+        "f4ATrashedRowWithTheOldLabelStaysRestoredAfterPutBack"
       ]
     }
   ],

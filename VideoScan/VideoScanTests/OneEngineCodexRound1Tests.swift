@@ -111,4 +111,42 @@ struct OneEngineCodexRound1Tests {
         #expect(rec.removal == nil && !rec.isPurged && rec.lifecycleStage != .trashed,
                 "the row now describing B was stamped removed: \(String(describing: rec.removal))")
     }
+
+    // MARK: F4 — a restored legacy row stays restored
+
+    private func decodeLegacy(_ fields: String, path: String) throws -> VideoRecord {
+        let json = "{\"id\":\"\(UUID().uuidString)\",\"filename\":\"\((path as NSString).lastPathComponent)\",\"fullPath\":\"\(path)\"\(fields)}"
+        let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(VideoRecord.self, from: Data(json.utf8))
+    }
+
+    private func restoreSaveReload(_ rec: VideoRecord, in dir: URL) throws -> VideoRecord? {
+        let store = CatalogStore(directory: dir.appendingPathComponent("catalog", isDirectory: true))
+        let m = VideoScanModel()
+        m.catalogStore = store
+        m.mediaLedger = MediaLedger(directory: dir.appendingPathComponent("ledger", isDirectory: true))
+        m.records = [rec]
+        #expect(m.restoreRecord(id: rec.id))
+        #expect(store.saveNow(records: m.records))
+        return CatalogStore(directory: dir.appendingPathComponent("catalog", isDirectory: true)).load().first
+    }
+
+    @Test func f4APurgedRowWithTheOldLabelStaysRestoredAfterReload() throws {
+        let dir = try scratch("f4a"); defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("test_f4a.mov"); try Data([1]).write(to: file)
+        let rec = try decodeLegacy(",\"purgedAt\":\"2023-11-14T22:13:20Z\",\"archiveStage\":\"Manually Deleted\"", path: file.path)
+        #expect(rec.removal?.reason == .legacyPurged, "fixture: the purge won migration")
+        let back = try #require(try restoreSaveReload(rec, in: dir))
+        #expect(!back.isPurged && back.archiveStage != .manuallyDeleted, "hidden again after reload")
+    }
+
+    @Test func f4ATrashedRowWithTheOldLabelStaysRestoredAfterPutBack() throws {
+        let dir = try scratch("f4b"); defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("test_f4b.mov"); try Data([1]).write(to: file)   // already put back
+        let rec = try decodeLegacy(",\"purgedAt\":\"2023-11-14T22:13:20Z\",\"lifecycleStage\":\"Trashed\",\"archiveStage\":\"Manually Deleted\"",
+                                   path: file.path)
+        #expect(rec.removal?.state == .inTrash, "fixture")
+        let back = try #require(try restoreSaveReload(rec, in: dir))
+        #expect(!back.isPurged && back.archiveStage != .manuallyDeleted && back.lifecycleStage == .cataloged)
+    }
 }

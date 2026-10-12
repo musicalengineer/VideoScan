@@ -64,12 +64,11 @@ extension VideoScanModel {
         if fileLeft, rec.fullPath.isEmpty || !FileManager.default.fileExists(atPath: rec.fullPath) {
             return "\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."
         }
-        let reason = rec.removal?.reason
         rec.removal = nil
-        if rec.archiveStage == .manuallyDeleted,
-           reason == .legacyDeletedLabel || reason == .missingAtMigrate {
-            rec.archiveStage = .none
-        }
+        // A successful, explicit Restore clears the old "Manually Deleted"
+        // label whichever legacy encoding won the migration (codex round 1
+        // F4): left in place, the label re-hides the row on the next load.
+        if rec.archiveStage == .manuallyDeleted { rec.archiveStage = .none }
         if rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently {
             rec.lifecycleStage = .cataloged
         }
