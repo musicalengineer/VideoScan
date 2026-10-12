@@ -26939,6 +26939,7 @@
       "tests": [
         "aliasAcrossAllActiveRows",
         "aliasAcrossGroups",
+        "aliasThroughLinkIndexesItsRealFile",
         "archivedAndProtected",
         "caseVariantAlias",
         "contentExclusions",
@@ -27000,6 +27001,7 @@
         "targetDriveGone",
         "targetReplacedHeld",
         "unconfirmedSaveStops",
+        "unhashedAliasThroughLinkedFolder",
         "untickedStays",
         "waiverVersusReadOnlyMark"
       ]
@@ -27049,8 +27051,10 @@
       ],
       "tests": [
         "blockedSaveOrdering",
+        "keeperAncestryChangedBetweenReadsHeld",
         "movedRowsSurviveReload",
         "mutationBetweenReadsHeld",
+        "progressSnapshotIsAtomicWithTransfer",
         "stopAfterProofIsReportedMoved"
       ]
     }
