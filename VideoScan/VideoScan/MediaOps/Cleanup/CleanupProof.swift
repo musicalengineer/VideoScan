@@ -151,14 +151,13 @@ enum CleanupProof {
     /// One full read through the app's one fixity reader. Only Stop
     /// interrupts it (Pause is honoured by the job between files, so no
     /// worker thread ever waits here — QA P3). The bytes this read covered
-    /// go to `onRead` exactly once, and the reader's in-flight counter is
-    /// reset right after, so a progress line never counts them twice.
+    /// go to `onRead` exactly once; the job's ledger moves them from the
+    /// reader's in-flight counter to its total in ONE step (codex r2 F5).
     static func read(_ path: String, control: FixityRebind.Control,
                      onRead: (Int64) -> Void = { _ in }) -> Result<ContentFixity, ReadProblem> {
         let outcome = FixityRebind.rehash(path: path, control: control)
         let covered: Int64
         if case .bound(let fixity) = outcome { covered = fixity.byteCount } else { covered = control.bytesRead }
-        control.resetBytes()
         onRead(covered)
         switch outcome {
         case .bound(let fixity): return .success(fixity)
@@ -225,7 +224,25 @@ final class CleanupProofLedger: @unchecked Sendable {
 
     func note(_ proof: String, for path: String) { lock.withLock { words[path] = proof } }
     func proof(for path: String) -> String? { lock.withLock { words[path] } }
-    /// One read's bytes (full or partial), added exactly once per read.
-    func addBytes(_ n: Int64) { lock.withLock { bytes += n } }
+
+    /// One read's bytes (full or partial) moved from the reader's in-flight
+    /// counter to the total, in one step under this lock — so `progress`,
+    /// taken under the same lock, never sees them in both places or in
+    /// neither (codex r2 F5). (The reader's own lock nests inside this one
+    /// in both paths; the hasher's `noteBytes` never takes this one.)
+    func transfer(_ n: Int64, from control: FixityRebind.Control) {
+        lock.withLock {
+            bytes += n
+            control.resetBytes()
+        }
+    }
+
+    /// Bytes read so far, settled reads only.
     var bytesRead: Int64 { lock.withLock { bytes } }
+
+    /// Settled reads plus the read in flight — the progress line's number,
+    /// snapshotted atomically against `transfer`.
+    func progress(with control: FixityRebind.Control) -> Int64 {
+        lock.withLock { bytes + control.bytesRead }
+    }
 }

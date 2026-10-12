@@ -416,7 +416,7 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             beforeRemoval: { path in
                 guard let copy = byPath[path] else { return "was not in the set you confirmed — nothing moved" }
                 started?(path)
-                switch CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.addBytes($0) },
+                switch CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.transfer($0, from: control) },
                                                betweenReads: { between?(path) }) {
                 case .held(let why): return why
                 case .proven(let words):
@@ -507,13 +507,15 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     }
 
     private func refreshProgress() {
-        let inFlight = control.bytesRead
+        // Settled + in flight in ONE snapshot (codex r2 F5): never a read
+        // counted in both places.
+        let read = ledger.progress(with: control)
         let toRead = selection.bytesToRead
         let fileShare = Double(totals.done) / Double(max(totals.planned, 1))
-        fractionValue = toRead > 0 ? min(1, Double(bytesRead + inFlight) / Double(toRead)) : fileShare
+        fractionValue = toRead > 0 ? min(1, Double(read) / Double(toRead)) : fileShare
         guard state == .running, !isPausedValue else { return }
         subtitleText = Self.progressLine(done: totals.done, planned: totals.planned, current: current,
-                                         read: bytesRead + inFlight, toRead: toRead,
+                                         read: read, toRead: toRead,
                                          elapsed: Date().timeIntervalSince(startedAt))
     }
 

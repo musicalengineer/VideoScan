@@ -74,7 +74,11 @@ struct CleanupTrashSensorTests {
         #expect(job.contains("runFiles(batch, lane: .copy, reason: .duplicate, guard: g, model: model)"))
         #expect(job.contains("runFiles(batch, lane: .junk, reason: .junk, guard: g, model: model)"))
         #expect(!job.contains("Thread.sleep") && !job.contains("setPaused"), "nothing waits on a worker thread")
-        #expect(job.contains("CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.addBytes($0) },"))
+        #expect(job.contains("CleanupProof.verifyCopy(copy, control: control, onRead: { ledger.transfer($0, from: control) },"))
+        // codex r2 F5: the progress line reads one atomic snapshot, never
+        // the reader's counter on its own.
+        #expect(job.contains("let read = ledger.progress(with: control)") && !job.contains("control.bytesRead"),
+                "progress must come from the ledger's atomic snapshot")
         #expect(job.contains("CleanupProof.verifyJunk(path: path, frozen: frozen, reserved: reserved)"))
         #expect(job.contains("model.frozenJunkCatalogProblem(rec, frozenPath:"), "the Delete Junk door's own re-check")
         let proof = try #require(Self.cleanupSources().first { $0.name.hasSuffix("CleanupProof.swift") }?.code)

@@ -85,6 +85,40 @@ struct CleanupTrashHardeningTests {
         for rec in extras { if let t = rec.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) } }
     }
 
+    @Test("codex r2 F5: the progress number never counts a read twice — samples under a concurrent writer never decrease, and the total is exact", .timeLimit(.minutes(1)))
+    func progressSnapshotIsAtomicWithTransfer() async {
+        let ledger = CleanupProofLedger()
+        let control = FixityRebind.Control()
+        let cycles = 400, size: Int64 = 1_000
+        let writer = Task.detached(priority: .userInitiated) {
+            for _ in 0..<cycles {
+                var seen: Int64 = 0
+                while seen < size {           // the hasher's progress, in steps
+                    seen += 250
+                    control.noteBytes(seen)
+                }
+                ledger.transfer(size, from: control)   // settle: total += size, in flight → 0
+            }
+        }
+        let sampler = Task.detached(priority: .userInitiated) { () -> (decreases: Int, overs: Int, samples: Int) in
+            var last: Int64 = 0, decreases = 0, overs = 0, samples = 0
+            while ledger.bytesRead < Int64(cycles) * size {
+                let now = ledger.progress(with: control)
+                if now < last { decreases += 1 }
+                if now > Int64(cycles) * size { overs += 1 }
+                last = now
+                samples += 1
+            }
+            return (decreases, overs, samples)
+        }
+        await writer.value
+        let result = await sampler.value
+        #expect(result.decreases == 0, "a read was seen in both places, then in one: \(result.decreases) of \(result.samples) samples went backwards")
+        #expect(result.overs == 0, "a sample exceeded everything that will ever be read")
+        #expect(ledger.bytesRead == Int64(cycles) * size)
+        #expect(ledger.progress(with: control) == ledger.bytesRead, "nothing left in flight")
+    }
+
     @Test("Stop landing AFTER a proof passed — that file moves and is reported MOVED (honestly); the rest are cancelled")
     func stopAfterProofIsReportedMoved() async throws {
         let sb = try S("postproof")
