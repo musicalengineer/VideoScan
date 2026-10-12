@@ -73,8 +73,47 @@ struct CleanupRow: Sendable, Equatable {
     /// The bulk-verb gate's verdict for this row (nil = no protection).
     /// Filled off the main actor (`CleanupInputs.plan`).
     var protection: CleanupProtection?
-    /// `DuplicateKeeperPolicy.humanMetadataScore` — Rick's own marks.
-    let humanMarks: Int
+    /// Rick's own HAND marks on the row (`CleanupHandMarks`).
+    let marks: CleanupHandMarks
+}
+
+/// The marks a HAND put on a row — and nothing a machine stamped. The
+/// keeper election's `humanMetadataScore` also counts Migrate's
+/// `originalFullPath`, machine note lines and tags; on the real catalog
+/// (dry run 2026-10-12) that held 117 copies for "your marks" when ~4
+/// carried any. Cleanup asks only: stars, people Rick confirmed, a date or
+/// place he typed, and note lines a person could have written
+/// (`MachineNote` says which lines a machine wrote — the one classifier
+/// every notes writer signs through). Conservative on purpose: a copy with
+/// MORE of any of these than the copy that stays is left alone.
+struct CleanupHandMarks: Sendable, Equatable {
+    var stars = 0
+    var confirmedPeople = 0
+    var hasDate = false
+    var hasPlace = false
+    var noteLines = 0
+
+    static let none = CleanupHandMarks()
+
+    /// What `self` has that `keeper` lacks, in words ("stars, a date") —
+    /// nil when nothing. Pure.
+    func lacking(in keeper: CleanupHandMarks) -> String? {
+        var parts: [String] = []
+        if stars > keeper.stars { parts.append("stars") }
+        if confirmedPeople > keeper.confirmedPeople { parts.append("confirmed people") }
+        if hasDate && !keeper.hasDate { parts.append("a date") }
+        if hasPlace && !keeper.hasPlace { parts.append("a place") }
+        if noteLines > keeper.noteLines { parts.append("notes") }
+        return parts.isEmpty ? nil : parts.joined(separator: ", ")
+    }
+
+    /// The note lines a person could have written: every line of
+    /// `userNotes` that `MachineNote` does not attribute to a machine. Pure.
+    static func humanNoteLines(_ userNotes: String) -> Int {
+        userNotes.split(whereSeparator: { $0.isNewline })
+            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty && !MachineNote.isMachineLine($0) }
+            .count
+    }
 }
 
 /// Why the one bulk-verb gate (`bulkDeleteRefusal`) would leave a row alone,
@@ -208,7 +247,8 @@ struct CleanupExclusion: Error, Sendable, Hashable {
     static let pairHalf = Self("pairHalf", "half of an audio/video pair")
     static let avidMediaFiles = Self("avidMediaFiles", "in an Avid MediaFiles folder (its bins would go offline)")
     static let appLibrary = Self("appLibrary", "inside an app library (Photos, iMovie, Final Cut…)")
-    static let carriesYourMarks = Self("carriesYourMarks", "has your stars, notes or people — the copy that stays doesn't")
+    /// Says what it saw: "has stars, a date the kept copy lacks".
+    static func carriesYourMarks(_ what: String) -> Self { Self("carriesYourMarks", "has \(what) the kept copy lacks") }
     static let familyArchive = Self("familyArchive", "on FamilyArchive — never trimmed as a copy")
     static let survivorOfAnother = Self("survivorOfAnother", "is the copy that stays for another file")
     /// Any other protection, in the bulk gate's own words (a drive marked
@@ -418,7 +458,7 @@ enum CleanupPlanner {
         }
         if row.isArchived { return .archived }
         if let why = contentExclusion(row) { return why }
-        return row.humanMarks > keeper.humanMarks ? .carriesYourMarks : nil
+        return row.marks.lacking(in: keeper.marks).map { .carriesYourMarks($0) }
     }
 
     /// The exclusions both lanes share: A/V halves, Avid, app libraries.

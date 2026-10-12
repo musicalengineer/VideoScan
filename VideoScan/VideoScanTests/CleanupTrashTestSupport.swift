@@ -27,11 +27,11 @@ enum CleanupTrashFixture {
 
     static func row(_ path: String, size: Int64 = 1_000, digest: String? = "d1", junk: Bool = false,
                     archived: Bool = false, pair: Bool = false, setAside: Bool = false,
-                    protection: CleanupProtection? = nil, marks: Int = 0, id: UUID = UUID()) -> CleanupRow {
+                    protection: CleanupProtection? = nil, marks: CleanupHandMarks = .none, id: UUID = UUID()) -> CleanupRow {
         CleanupRow(id: id, path: path, filename: (path as NSString).lastPathComponent,
                    volumeName: DuplicateKeeperPolicy.volumeName(forPath: path) ?? "",
                    sizeBytes: size, fullDigest: digest, isJunk: junk, isArchived: archived, isPairHalf: pair,
-                   isSetAside: setAside, protection: protection, humanMarks: marks)
+                   isSetAside: setAside, protection: protection, marks: marks)
     }
 
     /// The plan with explicit facts for some paths; every other path is a

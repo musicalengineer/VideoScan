@@ -97,13 +97,37 @@ struct CleanupTrashPlanTests {
         #expect(plan.leftAlone[.protected("lives on X, which you marked Read only")]?.files == 1)
     }
 
-    @Test("a copy carrying more of Rick's marks than the keeper stays")
+    @Test("a copy carrying more of Rick's HAND marks than the keeper stays, and the reason says what it saw")
     func humanMarksStay() {
-        let keep = F.row("/Volumes/LaCieWorkspace/a.mov", marks: 0)
-        let starred = F.row("/Volumes/SanDiskWorkspace/a.mov", marks: 100)
+        let keep = F.row("/Volumes/LaCieWorkspace/a.mov")
+        let starred = F.row("/Volumes/SanDiskWorkspace/a.mov", marks: CleanupHandMarks(stars: 1))
         let plan = F.plan([keep, starred])
         #expect(plan.copies.isEmpty)
-        #expect(F.reasons(plan)[CleanupExclusion.carriesYourMarks.key] == 1)
+        #expect(plan.leftAlone[.carriesYourMarks("stars")]?.files == 1, "\(plan.leftAlone.keys.map(\.words))")
+        let dated = F.row("/Volumes/SanDiskWorkspace/b.mov", digest: "d2", marks: CleanupHandMarks(hasDate: true, noteLines: 1))
+        let keep2 = F.row("/Volumes/LaCieWorkspace/b.mov", digest: "d2", marks: CleanupHandMarks(stars: 3))
+        let plan2 = F.plan([keep2, dated])
+        #expect(plan2.leftAlone[.carriesYourMarks("a date, notes")]?.files == 1, "\(plan2.leftAlone.keys.map(\.words))")
+        #expect(CleanupExclusion.carriesYourMarks("stars").words == "has stars the kept copy lacks")
+    }
+
+    @Test("dry run 2026-10-12: machine stamps are not marks — a Reconcile line, ffprobe stderr, a recipe line, Migrate's originalFullPath")
+    func machineStampsAreNotMarks() {
+        let machine = """
+            Reconcile 2026-09-20T10:00:00Z: source file not found
+            ffprobe: Unsupported codec with id 98314 for input stream 1
+            [mov,mp4,m4a,3gp,3g2,mj2 @ 0x7e3018000] moov atom not found
+            FindPerson(Donna Recipe): detected Donna* at 00:12
+            """
+        #expect(CleanupHandMarks.humanNoteLines(machine) == 0)
+        #expect(CleanupHandMarks.humanNoteLines(machine + "\nDad's 50th, the porch") == 1)
+        #expect(CleanupHandMarks.humanNoteLines("") == 0)
+        // Only machine stamps on the copy: it is still a candidate.
+        let keep = F.row("/Volumes/LaCieWorkspace/a.mov")
+        let stamped = F.row("/Volumes/SanDiskWorkspace/a.mov",
+                            marks: CleanupHandMarks(noteLines: CleanupHandMarks.humanNoteLines(machine)))
+        #expect(F.plan([keep, stamped]).copies.map(\.target.id) == [stamped.id])
+        #expect(CleanupHandMarks.none.lacking(in: .none) == nil)
     }
 
     @Test("a path through a symlinked folder is never kept or removed")
@@ -297,7 +321,7 @@ struct CleanupTrashPlanTests {
                 let row = F.row(path, digest: digests[Int.random(in: 0..<digests.count, using: &rng)],
                                 junk: Int.random(in: 0..<5, using: &rng) == 0,
                                 protection: drive == "FamilyArchive" ? .archiveVolume : nil,
-                                marks: Int.random(in: 0..<3, using: &rng) == 0 ? 10 : 0)
+                                marks: Int.random(in: 0..<3, using: &rng) == 0 ? CleanupHandMarks(stars: 1) : .none)
                 rows.append(row)
                 // A few physical files shared between rows (aliases).
                 facts[path] = .file(F.stamp(inode: UInt64(Int.random(in: 0..<6, using: &rng)), size: 1_000))

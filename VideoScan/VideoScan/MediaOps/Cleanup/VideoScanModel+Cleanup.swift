@@ -81,12 +81,23 @@ extension VideoScanModel {
                 isPairHalf: CatalogScopePolicy.isPairProtected(r),
                 isSetAside: r.setAsideReason != nil,
                 protection: nil,
-                humanMarks: DuplicateKeeperPolicy.humanMetadataScore(r)))
+                marks: Self.handMarks(r)))
             subjects.append(bulkDeleteSubject(r))
         }
         return CleanupInputs(rows: rows, subjects: subjects, gate: gate,
                              archiveLabel: gate.volume?.label ?? "the archive volume",
                              policy: duplicateKeeperPolicy())
+    }
+
+    /// Rick's hand marks on `r` (see `CleanupHandMarks`): never Migrate's
+    /// `originalFullPath`, tags, attestations or a machine-written note
+    /// line. Pure.
+    nonisolated static func handMarks(_ r: VideoRecord) -> CleanupHandMarks {
+        CleanupHandMarks(stars: max(0, r.starRating),
+                         confirmedPeople: r.confirmedByUserPeople.count,
+                         hasDate: r.userDate != nil,
+                         hasPlace: r.userPlace != nil,
+                         noteLines: CleanupHandMarks.humanNoteLines(r.userNotes))
     }
 
     /// Build the plan: the projection here, everything else off-main.

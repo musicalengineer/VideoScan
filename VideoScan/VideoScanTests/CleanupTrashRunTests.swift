@@ -414,6 +414,22 @@ struct CleanupTrashRunTests {
         for rec in extras { if let t = rec.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) } }
     }
 
+    @Test("dry run 2026-10-12: a record's hand marks — a Reconcile note + originalFullPath count for nothing; a star, confirmed people, a typed date and a human note line count")
+    func handMarksFromARecord() {
+        let stamped = VideoRecord()
+        stamped.userNotes = "Reconcile 2026-09-20T10:00:00Z: source file not found\nffprobe: Unsupported codec with id 98314"
+        stamped.originalFullPath = "/Volumes/LaCieWorkspace/old/a.mov"
+        stamped.tags = ["donna"]
+        #expect(VideoScanModel.handMarks(stamped) == .none)
+        let hand = VideoRecord()
+        hand.starRating = 1
+        hand.confirmedByUserPeople = [ConfirmedTag(name: "Donna", confirmedAt: Date())]
+        hand.userDate = "1992"
+        hand.userNotes = "Cape Cod, the porch"
+        #expect(VideoScanModel.handMarks(hand) == CleanupHandMarks(stars: 1, confirmedPeople: 1, hasDate: true, noteLines: 1))
+        #expect(VideoScanModel.handMarks(hand).lacking(in: VideoScanModel.handMarks(stamped)) == "stars, confirmed people, a date, notes")
+    }
+
     // MARK: Junk
 
     @Test("QA P2-3 + codex r1 P1-2: a junk file gone is 'missing' ONLY once its ORIGINAL drive (by volume UUID) is proven mounted; a swapped or absent drive is a hold")
