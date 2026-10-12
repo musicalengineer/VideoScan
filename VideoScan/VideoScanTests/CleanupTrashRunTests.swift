@@ -149,6 +149,99 @@ struct CleanupTrashRunTests {
         #expect(extra.removal == nil, "an unreachable file is never marked missing by Cleanup's proof")
     }
 
+    /// Three same-size copy pairs in keep/ and extra/; the extras in path order.
+    private func threeCopies(_ sb: S, bytes n: Int = 256 * 1024) throws -> (model: VideoScanModel, extras: [VideoRecord]) {
+        let model = sb.model(keepFirst: ["keep", "extra"])
+        var extras: [VideoRecord] = []
+        for i in 0..<3 {
+            let payload = Data("clip \(i) ".utf8) + bytes(n, seed: UInt8(10 + i))
+            let k = try sb.write("keep/test_\(i).mov", payload)
+            let e = try sb.write("extra/test_\(i).mov", payload)
+            model.records.append(try S.record(k))
+            let rec = try S.record(e)
+            model.records.append(rec)
+            extras.append(rec)
+        }
+        return (model, extras)
+    }
+
+    /// Run `action` on the main actor from a worker thread and wait for it
+    /// (the proof hook runs off-main while the main actor is free: the job
+    /// is suspended in an `await`).
+    nonisolated private static func onMainAndWait(_ action: @escaping @MainActor () -> Void) {
+        let done = DispatchSemaphore(value: 0)
+        Task { @MainActor in
+            action()
+            done.signal()
+        }
+        done.wait()
+    }
+
+    @Test("QA (a): Stop mid-batch after one move — the moved row is stamped, the in-flight file and the rest are CANCELLED (not held), state Stopped; real catalog save")
+    func stopMidBatch() async throws {
+        let sb = try S("stopmid")
+        defer { sb.cleanup() }
+        let (model, extras) = try threeCopies(sb)
+        let plan = await model.buildCleanupPlan()
+        #expect(plan.copies.count == 3)
+        let selection = CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false)
+        // The run takes the copies in the selection's order (plan groups
+        // are sorted by digest, not by path).
+        let inOrder = selection.copies.compactMap { c in extras.first { $0.id == c.target.id } }
+        #expect(inOrder.count == 3)
+        let job = CleanupTrashJob(model: model, selection: selection)   // production save path
+        let second = inOrder[1].fullPath
+        job.proofStartedForTesting = { path in
+            // Stop lands while the second copy's proof is about to read.
+            guard path == second else { return }
+            Self.onMainAndWait { job.cancel() }
+        }
+        job.start()
+        await job.task?.value
+        #expect(job.items.map(\.outcome) == [.moved, .cancelled, .cancelled], "\(job.items.map { "\($0.outcome): \($0.reason)" })")
+        #expect(job.items.map(\.id) == inOrder.map(\.id))
+        #expect(job.state == .cancelled)
+        #expect(job.subtitle.hasPrefix("Stopped — "))
+        #expect(inOrder[0].removal?.state == .inTrash, "the file that moved is stamped")
+        #expect(inOrder[1].removal == nil && inOrder[2].removal == nil)
+        #expect(FileManager.default.fileExists(atPath: inOrder[1].fullPath) && FileManager.default.fileExists(atPath: inOrder[2].fullPath))
+        #expect(job.totals[.cancelled] == 2 && job.totals[.held] == 0)
+        if let t = inOrder[0].removal?.trashPath { try? FileManager.default.removeItem(atPath: t) }
+    }
+
+    @Test("QA (b): Pause mid-read — the file being checked finishes, nothing else starts until Resume, bytes counted once")
+    func pauseMidRead() async throws {
+        let sb = try S("pausemid")
+        defer { sb.cleanup() }
+        let (model, extras) = try threeCopies(sb)
+        let plan = await model.buildCleanupPlan()
+        let selection = CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false)
+        let job = CleanupTrashJob(model: model, selection: selection)
+        job.saveCatalogForTesting = { true }
+        let first = selection.copies[0].target.path   // the run's first file
+        job.proofStartedForTesting = { path in
+            guard path == first else { return }
+            Self.onMainAndWait { job.pause() }
+        }
+        job.start()
+        // The first file completes under Pause; the run then waits.
+        var waited = 0
+        while (job.items.count < 1 || !job.isPaused) && waited < 100 {
+            try await Task.sleep(for: .milliseconds(50))
+            waited += 1
+        }
+        #expect(job.items.map(\.outcome) == [.moved], "\(job.items.map(\.outcome))")
+        #expect(job.isPaused && job.state == .running)
+        try await Task.sleep(for: .milliseconds(500))
+        #expect(job.items.count == 1, "nothing starts while paused")
+        job.resume()
+        await job.task?.value
+        #expect(job.items.map(\.outcome) == [.moved, .moved, .moved])
+        #expect(job.bytesRead == selection.bytesToRead, "each copy's two reads counted exactly once")
+        #expect(job.fraction == 1 && job.state == .finished(summary: job.totals.line))
+        for rec in extras { if let t = rec.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) } }
+    }
+
     @Test("Stop before the first turn: every file is cancelled, nothing moves, nothing is stamped")
     func stopBeforeFirstTurn() async throws {
         let sb = try S("stop")

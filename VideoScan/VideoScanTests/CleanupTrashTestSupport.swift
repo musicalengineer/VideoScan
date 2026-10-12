@@ -119,13 +119,14 @@ struct CleanupTrashSandbox {
     }
 }
 
-/// Run one Cleanup job to its end over `selection` (no MFO centre; the
-/// acknowledged save is a seam that answers yes).
+/// Run one Cleanup job to its end over `selection` (no MFO centre). The
+/// acknowledged save is a seam that answers yes unless `productionSave`,
+/// which saves through the sandbox's real CatalogStore.
 @MainActor
-func runCleanupTrash(_ model: VideoScanModel, _ selection: CleanupSelection,
+func runCleanupTrash(_ model: VideoScanModel, _ selection: CleanupSelection, productionSave: Bool = false,
                      configure: (CleanupTrashJob) -> Void = { _ in }) async -> CleanupTrashJob {
     let job = CleanupTrashJob(model: model, selection: selection)
-    job.saveCatalogForTesting = { true }
+    if !productionSave { job.saveCatalogForTesting = { true } }
     configure(job)
     job.start()
     await job.task?.value

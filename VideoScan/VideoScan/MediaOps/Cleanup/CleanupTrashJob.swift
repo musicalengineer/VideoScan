@@ -27,9 +27,10 @@
 //     DeletionAudit lines (START / one per file / OUTCOME through the one
 //     sink, `cleanupNote`) and the CSV receipt under
 //     ~/Library/Logs/VideoScan/deletions/.
-//   • Pause interrupts the file being read (it restarts from byte 0 on
-//     Resume). Stop ends the run: the file being checked and every file
-//     after it are "cancelled", nothing half-done.
+//   • Pause takes effect between files: the file being checked finishes,
+//     then the run waits (nothing spins on a worker thread). Stop ends the
+//     run: the file being checked is interrupted inside its reads and it,
+//     with every file after it, is "cancelled" — nothing half-done.
 //   • DURABILITY: the engine stamps a batch when the batch ends, so the run
 //     goes in short batches (≤20 copies or ≤40 GB of reads; 100 junk) and
 //     AWAITS an acknowledged catalog save after each. A save that is not confirmed
@@ -150,6 +151,10 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
 
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
+    /// TEST SEAM: told, off the main actor, the moment a copy's proof is
+    /// about to start reading (its path) — so a test can Pause or Stop at
+    /// a known point. nil in production.
+    var proofStartedForTesting: (@Sendable (String) -> Void)?
 
     /// Every file settled, in the order it settled (capped at `itemCap`).
     @Published private(set) var items: [CleanupTrashItem] = []
@@ -173,7 +178,9 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     private let ledger = CleanupProofLedger()
     private var audit: DeletionAudit?
     private var current: String?
-    private var readDone: Int64 = 0
+    /// Bytes the proofs have read so far, counted once per settled copy
+    /// (two reads each: it and the copy that stays).
+    private(set) var bytesRead: Int64 = 0
     private var stopRequested = false
 
     var title: String { "Cleanup — \(selection.count.formatted()) file(s), \(MediaBytes.display(selection.bytes))" }
@@ -184,9 +191,13 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     var isPaused: Bool { isPausedValue }
     var detailView: AnyView { AnyView(CleanupTrashJobDetailView(job: self)) }
 
+    /// Target id → the path of the copy that stays (the receipt's keeper column).
+    private let keeperPaths: [UUID: String]
+
     init(model: VideoScanModel, selection: CleanupSelection) {
         self.model = model
         self.selection = selection
+        keeperPaths = Dictionary(selection.copies.map { ($0.target.id, $0.keeper.path) }, uniquingKeysWith: { a, _ in a })
         totals.planned = selection.count
     }
 
@@ -215,18 +226,25 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         task?.cancel()
     }
 
+    /// Pause takes effect BETWEEN files: the file being checked finishes
+    /// (its reads are never interrupted by Pause, only by Stop), then the
+    /// run waits. Nothing spins on a worker thread meanwhile (QA P3).
     func pause() {
         guard state == .running, !isPausedValue else { return }
         isPausedValue = true
-        control.setPaused(true)
-        subtitleText = "Paused — \(totals.done.formatted()) of \(totals.planned.formatted()) done; the file being read restarts on Resume"
+        subtitleText = "Paused — \(totals.done.formatted()) of \(totals.planned.formatted()) done; the file being checked finishes, then the run waits"
     }
 
     func resume() {
         guard isPausedValue else { return }
         isPausedValue = false
-        control.setPaused(false)
         subtitleText = "Resuming…"
+    }
+
+    private var stopped: Bool { stopRequested || !state.isActive }
+
+    private func waitOutPause() async {
+        while isPausedValue && !stopped { try? await Task.sleep(for: .milliseconds(200)) }
     }
 
     // MARK: Run
@@ -263,8 +281,24 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         // Each copy costs two full reads: it and the copy that stays.
         let cost = Dictionary(selection.copies.map { ($0.target.id, 2 * $0.target.sizeBytes) }, uniquingKeysWith: { a, _ in a })
         for batch in Self.batches(recs, maxFiles: Self.checkpointFiles, maxBytes: Self.checkpointBytes, bytes: { cost[$0.id] ?? 0 }) {
-            _ = await model.deleteConfirmedJunk(batch, mode: .toTrash, reason: .duplicate, guard: g)
+            await runFiles(batch, lane: .copy, reason: .duplicate, guard: g, model: model)
             await checkpoint(model: model)
+        }
+    }
+
+    /// One file at a time through the engine, so Pause is honoured between
+    /// files and Stop settles every file not reached as cancelled (the file
+    /// being checked is interrupted by Stop inside its proof and settles as
+    /// cancelled too). The engine's gates, move and stamp are unchanged.
+    private func runFiles(_ recs: [VideoRecord], lane: CleanupTrashItem.Lane, reason: RemovalReason,
+                          guard g: VideoScanModel.JunkDeletionGuard, model: VideoScanModel) async {
+        for rec in recs {
+            await waitOutPause()
+            if stopped {
+                settle(rec, .cancelled, lane: lane)
+                continue
+            }
+            _ = await model.deleteConfirmedJunk([rec], mode: .toTrash, reason: reason, guard: g)
         }
     }
 
@@ -274,7 +308,7 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         guard !recs.isEmpty else { return }
         let g = junkGuard(files, records: recs, model: model)
         for batch in Self.batches(recs, maxFiles: Self.junkCheckpointFiles, maxBytes: .max, bytes: { _ in 0 }) {
-            _ = await model.deleteConfirmedJunk(batch, mode: .toTrash, reason: .junk, guard: g)
+            await runFiles(batch, lane: .junk, reason: .junk, guard: g, model: model)
             await checkpoint(model: model)
         }
     }
@@ -353,7 +387,7 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     private func copyGuard(model: VideoScanModel) -> VideoScanModel.JunkDeletionGuard {
         let byID = Dictionary(selection.copies.map { ($0.target.id, $0) }, uniquingKeysWith: { first, _ in first })
         let byPath = Dictionary(selection.copies.map { ($0.target.path, $0) }, uniquingKeysWith: { first, _ in first })
-        let control = control, ledger = ledger
+        let control = control, ledger = ledger, started = proofStartedForTesting
         var g = VideoScanModel.JunkDeletionGuard(
             authorize: { [weak self, weak model] rec in
                 guard let self, let model, let copy = byID[rec.id] else { return "was not in the set you confirmed — nothing moved" }
@@ -362,6 +396,7 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             },
             beforeRemoval: { path in
                 guard let copy = byPath[path] else { return "was not in the set you confirmed — nothing moved" }
+                started?(path)
                 switch CleanupProof.verifyCopy(copy, control: control) {
                 case .held(let why): return why
                 case .proven(let words):
@@ -371,8 +406,8 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             })
         g.settled = { [weak self] rec, outcome in
             guard let self, let copy = byID[rec.id] else { return }
-            self.readDone += 2 * copy.target.sizeBytes
-            self.settle(rec, outcome, lane: .copy, keeperPath: copy.keeper.path)
+            self.bytesRead += 2 * copy.target.sizeBytes
+            self.settle(rec, outcome, lane: .copy)
         }
         return g
     }
@@ -397,19 +432,18 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
                 return model.frozenJunkCatalogProblem(rec, frozenPath: pathByID[rec.id])
             },
             beforeRemoval: { path in
-                while control.isPaused && !control.isStopped { Thread.sleep(forTimeInterval: 0.2) }
                 if control.isStopped { return CleanupProof.stoppedNote }
                 return CleanupProof.verifyJunk(path: path, frozen: frozen, reserved: reserved)
             })
         g.archiveVolumeJunkWaiver = Set(selection.archiveJunk.map(\.id))
-        g.settled = { [weak self] rec, outcome in self?.settle(rec, outcome, lane: .junk, keeperPath: nil) }
+        g.settled = { [weak self] rec, outcome in self?.settle(rec, outcome, lane: .junk) }
         return g
     }
 
     // MARK: Tally
 
-    private func settle(_ rec: VideoRecord, _ engine: VideoScanModel.JunkFileOutcome,
-                        lane: CleanupTrashItem.Lane, keeperPath: String?) {
+    private func settle(_ rec: VideoRecord, _ engine: VideoScanModel.JunkFileOutcome, lane: CleanupTrashItem.Lane) {
+        let keeperPath = lane == .copy ? keeperPaths[rec.id] : nil
         let (outcome, reason) = CleanupTrashItem.outcome(of: engine)
         var bytes = rec.sizeBytes
         if case .moved(let moved, _) = engine { bytes = moved }
@@ -450,10 +484,10 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         let inFlight = control.bytesRead
         let toRead = selection.bytesToRead
         let fileShare = Double(totals.done) / Double(max(totals.planned, 1))
-        fractionValue = toRead > 0 ? min(1, Double(readDone + inFlight) / Double(toRead)) : fileShare
+        fractionValue = toRead > 0 ? min(1, Double(bytesRead + inFlight) / Double(toRead)) : fileShare
         guard state == .running, !isPausedValue else { return }
         subtitleText = Self.progressLine(done: totals.done, planned: totals.planned, current: current,
-                                         read: readDone + inFlight, toRead: toRead,
+                                         read: bytesRead + inFlight, toRead: toRead,
                                          elapsed: Date().timeIntervalSince(startedAt))
     }
 

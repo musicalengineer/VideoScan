@@ -97,22 +97,17 @@ enum CleanupProof {
         }
     }
 
-    /// One full read through the app's one fixity reader, waiting out a
-    /// Pause (the file restarts from byte 0) and giving up on Stop.
-    /// The wait blocks this worker thread — the same thread the read
-    /// itself blocks for minutes; it is never the main thread.
+    /// One full read through the app's one fixity reader. Only Stop
+    /// interrupts it (Pause is honoured by the job between files, so no
+    /// worker thread ever waits here — QA P3).
     static func read(_ path: String, control: FixityRebind.Control) -> Result<ContentFixity, ReadProblem> {
-        while true {
-            switch FixityRebind.rehash(path: path, control: control) {
-            case .bound(let fixity): return .success(fixity)
-            case .interrupted:
-                if control.isStopped { return .failure(ReadProblem(words: stoppedNote)) }
-                while control.isPaused && !control.isStopped { Thread.sleep(forTimeInterval: 0.2) }
-            case .offline: return .failure(ReadProblem(words: "it is not there (or its drive went away)"))
-            case .unreadable(let why): return .failure(ReadProblem(words: why))
-            case .noVolumeIdentity: return .failure(ReadProblem(words: "its drive reports no volume identity"))
-            case .changedDuringRead(let why): return .failure(ReadProblem(words: why))
-            }
+        switch FixityRebind.rehash(path: path, control: control) {
+        case .bound(let fixity): return .success(fixity)
+        case .interrupted: return .failure(ReadProblem(words: stoppedNote))
+        case .offline: return .failure(ReadProblem(words: "it is not there (or its drive went away)"))
+        case .unreadable(let why): return .failure(ReadProblem(words: why))
+        case .noVolumeIdentity: return .failure(ReadProblem(words: "its drive reports no volume identity"))
+        case .changedDuringRead(let why): return .failure(ReadProblem(words: why))
         }
     }
 

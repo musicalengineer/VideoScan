@@ -67,9 +67,13 @@ struct CleanupTrashSensorTests {
     @Test("SENSOR: both lanes go through the one engine; copies through the two-file proof")
     func throughTheEngine() throws {
         let job = try #require(Self.cleanupSources().first { $0.name.hasSuffix("CleanupTrashJob.swift") }?.code)
-        #expect(job.components(separatedBy: "model.deleteConfirmedJunk(").count - 1 == 2, "copies + junk")
-        #expect(job.contains("deleteConfirmedJunk(batch, mode: .toTrash, reason: .duplicate, guard: g)"))
-        #expect(job.contains("deleteConfirmedJunk(batch, mode: .toTrash, reason: .junk, guard: g)"))
+        // One call site, one file at a time (Pause between files); both
+        // lanes reach it with their own reason.
+        #expect(job.components(separatedBy: "model.deleteConfirmedJunk(").count - 1 == 1, "the one engine call")
+        #expect(job.contains("model.deleteConfirmedJunk([rec], mode: .toTrash, reason: reason, guard: g)"))
+        #expect(job.contains("runFiles(batch, lane: .copy, reason: .duplicate, guard: g, model: model)"))
+        #expect(job.contains("runFiles(batch, lane: .junk, reason: .junk, guard: g, model: model)"))
+        #expect(!job.contains("Thread.sleep") && !job.contains("setPaused"), "nothing waits on a worker thread")
         #expect(job.contains("CleanupProof.verifyCopy(copy, control: control)"))
         #expect(job.contains("CleanupProof.verifyJunk(path: path, frozen: frozen, reserved: reserved)"))
         #expect(job.contains("model.frozenJunkCatalogProblem(rec, frozenPath:"), "the Delete Junk door's own re-check")
