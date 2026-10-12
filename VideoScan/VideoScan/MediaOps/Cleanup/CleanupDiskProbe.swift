@@ -49,6 +49,16 @@ enum CleanupDiskProbe {
         return (root.st_mode & S_IFMT) == S_IFDIR && root.st_dev != parent.st_dev
     }
 
+    /// The persistent UUID of the volume mounted at `path`'s /Volumes root
+    /// RIGHT NOW — nil when nothing is mounted there, or the volume reports
+    /// none. The answer to "is the drive this file was planned on the one
+    /// mounted here?" (codex r1 P1-2: a mount's presence is not its identity).
+    nonisolated static func mountVolumeUUID(forPath path: String) -> String? {
+        guard isMountPresent(forPath: path) else { return nil }
+        let comps = (path as NSString).pathComponents
+        return MasterArchiveDesignation.volumeUUID(forPath: "/Volumes/\(comps[2])").flatMap(VolumeIdentity.normalized)
+    }
+
     /// Every link on the way resolved — the file's real name, or nil when
     /// the path cannot be resolved (gone, or a dangling link).
     nonisolated static func realPath(_ path: String) -> String? {

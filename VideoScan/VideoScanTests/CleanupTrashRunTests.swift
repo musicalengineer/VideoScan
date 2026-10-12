@@ -386,32 +386,61 @@ struct CleanupTrashRunTests {
 
     // MARK: Junk
 
-    @Test("QA P2-3: a junk file gone WITH its drive is held (never 'missing'); gone from a present drive is left to the engine")
-    func junkDriveUnpluggedIsHeld() throws {
+    @Test("QA P2-3 + codex r1 P1-2: a junk file gone is 'missing' ONLY once its ORIGINAL drive (by volume UUID) is proven mounted; a swapped or absent drive is a hold")
+    func junkDriveUnpluggedOrSwappedIsHeld() throws {
         let rec = VideoRecord()
-        rec.fullPath = "/Volumes/Gone/test_j.mov"
+        rec.fullPath = "/Volumes/X/test_j.mov"
         rec.filename = "test_j.mov"
         rec.mediaDisposition = .confirmedJunk
         rec.sizeBytes = 64
-        let identity = CleanupTrashFixture.stamp(inode: 5, size: 64)
+        let identity = CleanupTrashFixture.stamp(inode: 5, size: 64)   // planned on volume "ABCD"
         let frozen = FrozenJunkFiles(VideoScanModel.JunkTrashSnapshot(items: [
             .init(record: rec, path: rec.fullPath, identity: identity, bytes: 64, plan: .toMove),
         ]))
-        // The file is not there and its mount is gone: HOLD, with the drive named.
-        let unplugged = CleanupProof.verifyJunk(path: rec.fullPath, frozen: frozen, reserved: [], mountPresent: { _ in false })
+        // No mount at X: HOLD, with the drive named.
+        let unplugged = CleanupProof.verifyJunk(path: rec.fullPath, frozen: frozen, reserved: [], volumeUUIDNow: { _ in nil })
         #expect(unplugged?.contains("isn't connected") == true, "\(String(describing: unplugged))")
-        // The mount is there and the file is not: nil — the engine's own "already missing".
-        #expect(CleanupProof.verifyJunk(path: rec.fullPath, frozen: frozen, reserved: [], mountPresent: { _ in true }) == nil)
+        // Another disk mounted as X (disk B): the file is not there — but this is not A. HOLD.
+        let swapped = CleanupProof.verifyJunk(path: rec.fullPath, frozen: frozen, reserved: [], volumeUUIDNow: { _ in "WXYZ" })
+        #expect(swapped?.contains("different drive") == true, "\(String(describing: swapped))")
+        // The original disk is mounted at X and the file is not there: nil — the engine's own "already missing".
+        #expect(CleanupProof.verifyJunk(path: rec.fullPath, frozen: frozen, reserved: [], volumeUUIDNow: { _ in "ABCD" }) == nil)
+        // A planned identity with no volume UUID can never prove the drive: hold.
+        let noUUID = FileIdentityStamp(device: 7, inode: 5, size: 64, mtimeNs: 1, ctimeNs: 2, volumeUUID: nil)
+        let frozenNoUUID = FrozenJunkFiles(VideoScanModel.JunkTrashSnapshot(items: [
+            .init(record: rec, path: rec.fullPath, identity: noUUID, bytes: 64, plan: .toMove),
+        ]))
+        #expect(CleanupProof.verifyJunk(path: rec.fullPath, frozen: frozenNoUUID, reserved: [], volumeUUIDNow: { _ in "ABCD" }) != nil)
         // A boot-disk path never asks about a mount.
         var asked = false
         let internalRec = "/Users/rickb/Movies/test_gone.mov"
         let frozen2 = FrozenJunkFiles(VideoScanModel.JunkTrashSnapshot(items: [
             .init(record: rec, path: internalRec, identity: identity, bytes: 64, plan: .toMove),
         ]))
-        #expect(CleanupProof.verifyJunk(path: internalRec, frozen: frozen2, reserved: [], mountPresent: { _ in asked = true; return false }) == nil)
+        #expect(CleanupProof.verifyJunk(path: internalRec, frozen: frozen2, reserved: [], volumeUUIDNow: { _ in asked = true; return nil }) == nil)
         #expect(!asked)
-        // The real probe: this Mac's boot disk is not a /Volumes mount; a made-up name is not mounted.
-        #expect(!CleanupDiskProbe.isMountPresent(forPath: "/Volumes/NoSuchDrive-\(UUID().uuidString.prefix(6))/x.mov"))
+        // The real probes: a made-up name is not mounted and has no UUID.
+        let madeUp = "/Volumes/NoSuchDrive-\(UUID().uuidString.prefix(6))/x.mov"
+        #expect(!CleanupDiskProbe.isMountPresent(forPath: madeUp))
+        #expect(CleanupDiskProbe.mountVolumeUUID(forPath: madeUp) == nil)
+    }
+
+    @Test("codex r1 P1-2: a planned identity is matched by volume UUID + inode at execution — device/inode reuse on another volume is held")
+    func plannedIdentityKeepsTheVolumeUUID() {
+        let planned = CleanupTrashFixture.stamp(device: 7, inode: 5, size: 64)   // volume "ABCD"
+        let sameDisk = FileIdentityStamp(device: 9, inode: 5, size: 64, mtimeNs: 1, ctimeNs: 2, volumeUUID: "ABCD")   // remounted: new st_dev
+        let otherDisk = FileIdentityStamp(device: 7, inode: 5, size: 64, mtimeNs: 1, ctimeNs: 2, volumeUUID: "WXYZ")  // dev/inode reused
+        let unknown = FileIdentityStamp(device: 7, inode: 5, size: 64, mtimeNs: 1, ctimeNs: 2, volumeUUID: nil)
+        #expect(CleanupProof.plannedFileProblem(planned: planned, now: sameDisk) == nil, "same volume, remounted")
+        #expect(CleanupProof.plannedFileProblem(planned: planned, now: otherDisk) != nil, "another volume reusing dev+inode")
+        #expect(CleanupProof.plannedFileProblem(planned: planned, now: unknown) != nil)
+        #expect(CleanupProof.plannedFileProblem(planned: unknown, now: unknown) != nil, "a plan with no volume identity never proves")
+        // …and the copy lane's byte comparison asks the same question.
+        let k = ContentFixity(digest: "d", byteCount: 64, stamp: CleanupTrashFixture.stamp(device: 7, inode: 1, size: 64))
+        let e = ContentFixity(digest: "d", byteCount: 64, stamp: otherDisk)
+        #expect(CleanupProof.sameBytes(extra: e, keeper: k, planned: planned) != nil)
+        let eSame = ContentFixity(digest: "d", byteCount: 64, stamp: sameDisk)
+        #expect(CleanupProof.sameBytes(extra: eSame, keeper: k, planned: planned) == nil)
     }
 
     @Test("junk you marked moves and is marked In the Trash (reason junk)")

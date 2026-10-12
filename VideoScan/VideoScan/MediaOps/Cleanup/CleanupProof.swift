@@ -83,8 +83,8 @@ enum CleanupProof {
         case .failure(let why): return .held(why.prefixed("the copy that stays (\(copy.keeper.filename))"))
         case .success(let f): keeper = f
         }
-        guard CleanupPhysicalID(keeper.stamp) == CleanupPhysicalID(copy.keeper.identity) else {
-            return .held("the copy that stays is not the file Cleanup chose (it was replaced, or its drive was reconnected) — refresh Cleanup — nothing moved")
+        if let why = plannedFileProblem(planned: copy.keeper.identity, now: keeper.stamp) {
+            return .held("the copy that stays \(why)")
         }
         let extra: ContentFixity
         switch read(copy.target.path, control: control) {
@@ -98,12 +98,25 @@ enum CleanupProof {
         return .proven("sha256:\(extra.digest.prefix(16))… — both copies read in full and equal")
     }
 
+    /// Is the file at hand STILL the one the plan froze? By the persistent
+    /// identity — volume UUID + inode + size + mtime — never by device
+    /// number, which a remount renumbers and another disk may reuse (codex
+    /// r1 P1-2). A plan with no volume UUID can never prove it. Pure.
+    static func plannedFileProblem(planned: FileIdentityStamp, now: FileIdentityStamp) -> String? {
+        guard planned.volumeUUID != nil else { return "was planned on a drive with no volume identity — nothing moved" }
+        guard now.volumeUUID == planned.volumeUUID else {
+            return "is on a different drive than Cleanup planned (the volume at its path was swapped) — refresh Cleanup — nothing moved"
+        }
+        guard planned.describesSameFile(now: now, changeTime: .ignored, volume: .persistentUUID) else {
+            return "is not the file Cleanup planned (it was replaced or rewritten since) — refresh Cleanup — nothing moved"
+        }
+        return nil
+    }
+
     /// Steps 2–3: the extra copy's fresh read against the keeper's. Pure.
     static func sameBytes(extra: ContentFixity, keeper: ContentFixity, planned: FileIdentityStamp) -> String? {
-        if CleanupPhysicalID(extra.stamp) != CleanupPhysicalID(planned) {
-            return "is not the file Cleanup planned (it was replaced, or its drive was reconnected) — refresh Cleanup — nothing moved"
-        }
-        if CleanupPhysicalID(extra.stamp) == CleanupPhysicalID(keeper.stamp) {
+        if let why = plannedFileProblem(planned: planned, now: extra.stamp) { return why }
+        if extra.stamp.volumeUUID == keeper.stamp.volumeUUID, extra.stamp.inode == keeper.stamp.inode {
             return "is the same file as the copy that stays — nothing moved"
         }
         if extra.byteCount != keeper.byteCount {
@@ -145,22 +158,39 @@ enum CleanupProof {
     /// survivor. Blocking (one stat + one open).
     ///
     /// A file that is not there is the engine's "already missing" — it
-    /// marks the row — UNLESS its whole drive is gone (QA P2-3): the
-    /// engine's reachability answer is a 5 s cache, so a drive unplugged a
-    /// moment ago still reads "connected" there. `mountPresent` asks the
-    /// kernel now; an unplugged drive is a HOLD, never a missing file.
+    /// marks the row — ONLY once the drive it was planned on is proven to
+    /// be the one mounted at its path now, by volume UUID (QA P2-3, codex
+    /// r1 P1-2): the engine's reachability answer is a 5 s cache, and a
+    /// different disk mounted under the same name is not "the file is
+    /// gone". Anything else is a HOLD. `volumeUUIDNow` asks the kernel.
     static func verifyJunk(path: String, frozen: FrozenJunkFiles, reserved: Set<CleanupPhysicalID>,
-                           mountPresent: (String) -> Bool = CleanupDiskProbe.isMountPresent(forPath:)) -> String? {
+                           volumeUUIDNow: (String) -> String? = CleanupDiskProbe.mountVolumeUUID(forPath:)) -> String? {
         if let why = ancestryProblem(path: path) { return why }
         if let why = frozen.diskProblem(at: path) { return why }
+        let planned = frozen.byPath[path]?.identity
         guard let now = FileIdentityStamp.capture(path: path) else {
-            if VideoScanModel.isExternalVolumePath(path), !mountPresent(path) {
-                return "its drive (\(VolumeReachability.volumeName(forPath: path))) isn't connected — nothing moved"
-            }
-            return nil
+            return missingJunkProblem(path: path, planned: planned, volumeUUIDNow: volumeUUIDNow)
         }
+        if let planned, let why = plannedFileProblem(planned: planned, now: now) { return why }
         if reserved.contains(CleanupPhysicalID(now)) {
             return "is the copy that stays for another file — nothing moved"
+        }
+        return nil
+    }
+
+    /// Why a junk file that is not at its path may NOT be called missing:
+    /// nil only when the planned volume is the one mounted there now. A
+    /// boot-disk path cannot be swapped and never asks.
+    static func missingJunkProblem(path: String, planned: FileIdentityStamp?,
+                                   volumeUUIDNow: (String) -> String?) -> String? {
+        guard VideoScanModel.isExternalVolumePath(path) else { return nil }
+        let drive = VolumeReachability.volumeName(forPath: path)
+        guard let plannedUUID = planned?.volumeUUID else {
+            return "was planned on \(drive) with no volume identity, so its absence proves nothing — nothing moved"
+        }
+        guard let mounted = volumeUUIDNow(path) else { return "its drive (\(drive)) isn't connected — nothing moved" }
+        guard mounted == plannedUUID else {
+            return "a different drive is mounted as \(drive) now, not the one it was planned on — nothing moved"
         }
         return nil
     }
