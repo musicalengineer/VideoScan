@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 409,
+ "entry_count": 407,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 26,
@@ -263,7 +263,7 @@
    "nloc": 78
   },
   "VideoScan/VideoScan/Catalog/CatalogAuditFixer.swift::CatalogAuditFixer.apply": {
-   "ccn": 24,
+   "ccn": 23,
    "nloc": 73
   },
   "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift::CatalogContent.catalogTableBase": {
@@ -303,8 +303,8 @@
    "nloc": 237
   },
   "VideoScan/VideoScan/Catalog/CatalogView+ScanTargetsPane.swift::CatalogView.scanTargetsPane": {
-   "ccn": 21,
-   "nloc": 237
+   "ccn": 19,
+   "nloc": 234
   },
   "VideoScan/VideoScan/Catalog/CatalogView+VolumeTable.swift::CatalogView.volumeTable": {
    "ccn": 25,
@@ -1126,10 +1126,6 @@
    "ccn": 24,
    "nloc": 95
   },
-  "VideoScan/VideoScan/MediaOps/SignatureVerification.swift::SignatureVerification.deleteQuarantined": {
-   "ccn": 20,
-   "nloc": 95
-  },
   "VideoScan/VideoScan/MediaOps/SignatureVerification.swift::SignatureVerification.verify": {
    "ccn": 20,
    "nloc": 54
@@ -1169,10 +1165,6 @@
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.deletionTierCandidates": {
    "ccn": 16,
    "nloc": 40
-  },
-  "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.settleDeletedDuplicate": {
-   "ccn": 17,
-   "nloc": 65
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift::VideoScanModel.preparePrune": {
    "ccn": 18,
