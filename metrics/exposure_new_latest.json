@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-12T12:36:11Z",
- "sha": "a4afa199",
+ "ts": "2026-10-13T12:21:52Z",
+ "sha": "6fe2b539",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
@@ -214,6 +214,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Catalog/CatalogAudit.swift::CatalogAuditRecord.removalState",
+   "file": "VideoScan/VideoScan/Catalog/CatalogAudit.swift",
+   "name": "CatalogAuditRecord.removalState",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Catalog/CatalogRowContextMenu+Actions.swift::CatalogContent.ReformatAlertChoice",
    "file": "VideoScan/VideoScan/Catalog/CatalogRowContextMenu+Actions.swift",
    "name": "CatalogContent.ReformatAlertChoice",
@@ -253,6 +260,34 @@
    "file": "VideoScan/VideoScan/Catalog/CatalogWideMetadataCandidates.swift",
    "name": "pfMetadataCandidateIsEligible",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CleanupPane.swift::CleanupStore.builtAt",
+   "file": "VideoScan/VideoScan/Catalog/CleanupPane.swift",
+   "name": "CleanupStore.builtAt",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CleanupPane.swift::CleanupStore.isTicked",
+   "file": "VideoScan/VideoScan/Catalog/CleanupPane.swift",
+   "name": "CleanupStore.isTicked",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CleanupPane.swift::CleanupStore.setTicked",
+   "file": "VideoScan/VideoScan/Catalog/CleanupPane.swift",
+   "name": "CleanupStore.setTicked",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CleanupPane.swift::CleanupWords.trashNote",
+   "file": "VideoScan/VideoScan/Catalog/CleanupPane.swift",
+   "name": "CleanupWords.trashNote",
+   "kind": "let",
    "classification": "could-be-private"
   },
   {
@@ -543,9 +578,37 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogChromeCounts.swift::CatalogChromeCountsCache.unreadableExtensionless",
+   "file": "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogChromeCounts.swift",
+   "name": "CatalogChromeCountsCache.unreadableExtensionless",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogChromeCounts.swift::VideoScanModel.noteCatalogChromeCountsStale",
+   "file": "VideoScan/VideoScan/Catalog/VideoScanModel+CatalogChromeCounts.swift",
+   "name": "VideoScanModel.noteCatalogChromeCountsStale",
+   "kind": "func",
+   "classification": "widened-for-split"
+  },
+  {
    "key": "VideoScan/VideoScan/Catalog/VideoScanModel+Workbench.swift::VideoScanModel.discardAuditRow",
    "file": "VideoScan/VideoScan/Catalog/VideoScanModel+Workbench.swift",
    "name": "VideoScanModel.discardAuditRow",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/VideoScanModel+Workbench.swift::VideoScanModel.workbenchDiscardRefusedOnViewer",
+   "file": "VideoScan/VideoScan/Catalog/VideoScanModel+Workbench.swift",
+   "name": "VideoScanModel.workbenchDiscardRefusedOnViewer",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/VolumeColumnAnchors.swift::VolumeColumnAnchors.isMeaningfulChange",
+   "file": "VideoScan/VideoScan/Catalog/VolumeColumnAnchors.swift",
+   "name": "VolumeColumnAnchors.isMeaningfulChange",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -760,9 +823,16 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift::CatalogKnownCopies.fileIdentity",
+   "key": "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift::CatalogKnownCopies.fileStamp",
    "file": "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift",
-   "name": "CatalogKnownCopies.fileIdentity",
+   "name": "CatalogKnownCopies.fileStamp",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift::CatalogKnownCopies.mayBeSameFile",
+   "file": "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift",
+   "name": "CatalogKnownCopies.mayBeSameFile",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -1278,6 +1348,146 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupDiskProbe.swift::CleanupDiskProbe.isOwnRealPath",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupDiskProbe.swift",
+   "name": "CleanupDiskProbe.isOwnRealPath",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPathRules.isInAppLibrary",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPathRules.isInAppLibrary",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlan.LeftAloneLine",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPlan.LeftAloneLine",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlan.finishTotals",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPlan.finishTotals",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlanner.PhysicalIndex",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPlanner.PhysicalIndex",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlanner.PhysicalIndex.rowsByFile",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPlanner.PhysicalIndex.rowsByFile",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlanner.PlacedJunk",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPlanner.PlacedJunk",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlanner.contentExclusion",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPlanner.contentExclusion",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlanner.copyExclusion",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPlanner.copyExclusion",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlanner.junkLane",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPlanner.junkLane",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlanner.usableStamp",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
+   "name": "CleanupPlanner.usableStamp",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupProof.swift::CleanupProof.ReadProblem",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupProof.swift",
+   "name": "CleanupProof.ReadProblem",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupProof.swift::CleanupProof.ancestryProblem",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupProof.swift",
+   "name": "CleanupProof.ancestryProblem",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupProof.swift::CleanupProof.missingJunkProblem",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupProof.swift",
+   "name": "CleanupProof.missingJunkProblem",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift::CleanupSelection.allJunk",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift",
+   "name": "CleanupSelection.allJunk",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift::CleanupTrashJob.itemCap",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift",
+   "name": "CleanupTrashJob.itemCap",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift::CleanupTrashJob.junkCheckpointFiles",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift",
+   "name": "CleanupTrashJob.junkCheckpointFiles",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift::VideoScanModel.cleanupCopyCatalogProblem",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift",
+   "name": "VideoScanModel.cleanupCopyCatalogProblem",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/VideoScanModel+Cleanup.swift::VideoScanModel.cleanupInputs",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/VideoScanModel+Cleanup.swift",
+   "name": "VideoScanModel.cleanupInputs",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/Cleanup/VideoScanModel+Cleanup.swift::VideoScanModel.storedFullDigest",
+   "file": "VideoScan/VideoScan/MediaOps/Cleanup/VideoScanModel+Cleanup.swift",
+   "name": "VideoScanModel.storedFullDigest",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesAudit.swift::DeleteDuplicatesJob.auditRefusedReviewedPlan",
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesAudit.swift",
    "name": "DeleteDuplicatesJob.auditRefusedReviewedPlan",
@@ -1295,20 +1505,6 @@
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesBatchRun.swift::DeleteDuplicatesBatchRun.notStartedNote",
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesBatchRun.swift",
    "name": "DeleteDuplicatesBatchRun.notStartedNote",
-   "kind": "let",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.moveToTestHostTrash",
-   "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
-   "name": "DeleteDuplicatesDiskWorker.moveToTestHostTrash",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift::DeleteDuplicatesDiskWorker.testHostTrash",
-   "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
-   "name": "DeleteDuplicatesDiskWorker.testHostTrash",
    "kind": "let",
    "classification": "could-be-private"
   },
@@ -1470,6 +1666,13 @@
    "key": "VideoScan/VideoScan/MediaOps/MediaFileOperations+Repair.swift::MediaFileOperationsCenter.activeRepairJob",
    "file": "VideoScan/VideoScan/MediaOps/MediaFileOperations+Repair.swift",
    "name": "MediaFileOperationsCenter.activeRepairJob",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/MediaTrash.swift::MediaTrash.moveToTestHostTrash",
+   "file": "VideoScan/VideoScan/MediaOps/MediaTrash.swift",
+   "name": "MediaTrash.moveToTestHostTrash",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -1866,6 +2069,20 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift::JunkTurnIdentity.init",
+   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift",
+   "name": "JunkTurnIdentity.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift::JunkTurnProtections.archiveVolumeWaived",
+   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift",
+   "name": "JunkTurnProtections.archiveVolumeWaived",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift::VideoScanModel.ConfirmedJunkSplit",
    "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift",
    "name": "VideoScanModel.ConfirmedJunkSplit",
@@ -1880,32 +2097,18 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift::VideoScanModel.JunkDeletionGuard.waives",
+   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift",
+   "name": "VideoScanModel.JunkDeletionGuard.waives",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift::VideoScanModel.JunkDeletionMode.isOutrightRemoval",
    "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift",
    "name": "VideoScanModel.JunkDeletionMode.isOutrightRemoval",
    "kind": "var",
    "classification": "widened-for-split"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift::VideoScanModel.JunkFileOutcome.isMoved",
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkDelete.swift",
-   "name": "VideoScanModel.JunkFileOutcome.isMoved",
-   "kind": "var",
-   "classification": "widened-for-split"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift::FrozenJunkFiles.diskProblem",
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift",
-   "name": "FrozenJunkFiles.diskProblem",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift::FrozenJunkFiles.init",
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift",
-   "name": "FrozenJunkFiles.init",
-   "kind": "init",
-   "classification": "could-be-private"
   },
   {
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift::VideoScanModel.JunkDeletionResult.trashFailureNote",
@@ -1922,24 +2125,10 @@
    "classification": "widened-for-split"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift::VideoScanModel.frozenJunkCatalogProblem",
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift",
-   "name": "VideoScanModel.frozenJunkCatalogProblem",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift::VideoScanModel.logJunkLaneOutcome",
    "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift",
    "name": "VideoScanModel.logJunkLaneOutcome",
    "kind": "func",
-   "classification": "widened-for-split"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift::VideoScanModel.pairMemberHeldNote",
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+JunkTrashSnapshot.swift",
-   "name": "VideoScanModel.pairMemberHeldNote",
-   "kind": "let",
    "classification": "widened-for-split"
   },
   {
@@ -1974,6 +2163,34 @@
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+Relocate.swift::VideoScanModel.unescapedNoteChar",
    "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+Relocate.swift",
    "name": "VideoScanModel.unescapedNoteChar",
+   "kind": "func",
+   "classification": "widened-for-split"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift::VideoScanModel.TrashCopyProbe",
+   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift",
+   "name": "VideoScanModel.TrashCopyProbe",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift::VideoScanModel.clearRemoval",
+   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift",
+   "name": "VideoScanModel.clearRemoval",
+   "kind": "func",
+   "classification": "widened-for-split"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift::VideoScanModel.lifecycleMirror",
+   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift",
+   "name": "VideoScanModel.lifecycleMirror",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift::VideoScanModel.removalMarker",
+   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift",
+   "name": "VideoScanModel.removalMarker",
    "kind": "func",
    "classification": "widened-for-split"
   },
@@ -2333,10 +2550,17 @@
    "name": "VideoRecord.inferredPrecisionUTC",
    "kind": "let",
    "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift::VideoRecord.migrationLoadDate",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift",
+   "name": "VideoRecord.migrationLoadDate",
+   "kind": "let",
+   "classification": "could-be-private"
   }
  ],
- "fixed": 50,
+ "fixed": 59,
  "baseline_before": 2520,
- "baseline_after": 2470,
+ "baseline_after": 2461,
  "shrink_skipped": false
 }
