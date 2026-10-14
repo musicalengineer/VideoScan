@@ -65,19 +65,39 @@ final class EventsStore: ObservableObject {
     /// O(1) lookups for the detail sheet, rebuilt once per plan.
     private(set) var suggestionByKey: [String: EventSuggestion] = [:]
     private(set) var confirmedByID: [UUID: ConfirmedEvent] = [:]
+    /// Every confirmed event, newest first — the sheet's Merge with… menu
+    /// (precomputed once per plan; the menu only greys out the event itself).
+    @Published private(set) var mergeCandidates: [ConfirmedEvent] = []
 
-    var readOnlyReason: String? { decisions.readOnlyReason }
+    /// What the page says at the top: the store's refusal, else its last
+    /// failed save (`EventsDecisionStore.problem`).
+    var readOnlyReason: String? { decisions.problem }
+    /// The cards' Confirm / Dismiss gate.
+    var isReadOnly: Bool { decisions.isReadOnly }
+
+    /// A refresh asked for while one was running (a "different occasions"
+    /// mark needs the runs rebuilt): run once more when this one lands.
+    private var refreshQueued = false
+    private var decisionsWatch: AnyCancellable?
 
     init(decisions: EventsDecisionStore = .shared) {
         self.decisions = decisions
+        // A failed save (or a recovery) changes what the page says without
+        // a new plan: carry the reason over on the store's one signal.
+        decisionsWatch = decisions.$revision.dropFirst().sink { [weak self] _ in self?.carryProblem() }
     }
 
     /// Rebuild the plan off the main actor; one build at a time. Returns
-    /// the build's task (tests await it; the page does not).
+    /// the build's task (tests await it; the page does not). A call while
+    /// a build runs is remembered and honoured when it lands.
     @discardableResult
     func refresh(model: VideoScanModel) -> Task<Void, Never>? {
-        guard !isBuilding else { return nil }
+        guard !isBuilding else {
+            refreshQueued = true
+            return nil
+        }
         isBuilding = true
+        decisions.note = { [weak model] line in model?.eventsNote(line) }
         return Task { [weak self] in
             guard let self else { return }
             if !self.decisions.hasLoaded, case .readOnly(let why) = await self.decisions.load() {
@@ -89,16 +109,29 @@ final class EventsStore: ObservableObject {
             self.isBuilding = false
             let stats = VideoScanModel.eventsStats(plan: plan, decisions: self.decisions.snapshot(), now: Date())
             _ = await EventsStats.write(stats, to: self.decisions.statsURL)
+            if self.refreshQueued {
+                self.refreshQueued = false
+                self.refresh(model: model)
+            }
         }
     }
 
     private func install(_ plan: EventsPlan) {
         var p = plan
-        p.readOnlyReason = decisions.readOnlyReason
+        p.readOnlyReason = decisions.problem
         self.plan = p
         suggestionByKey = Dictionary(p.suggestions.map { ($0.key, $0) }, uniquingKeysWith: { a, _ in a })
         confirmedByID = Dictionary(p.confirmed.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        mergeCandidates = p.confirmed
         refilter()
+    }
+
+    /// The store's problem line changed (a save failed or recovered):
+    /// re-publish the plan with the new words, nothing else.
+    private func carryProblem() {
+        guard var p = plan, p.readOnlyReason != decisions.problem else { return }
+        p.readOnlyReason = decisions.problem
+        plan = p
     }
 
     private func refilter() {
@@ -147,22 +180,25 @@ final class EventsStore: ObservableObject {
     /// "Not this one": the suggestion's categories are said no to for that
     /// recording (Q4 default: one button; the store keeps the distinction).
     func reject(_ m: EventMember, in s: EventSuggestion) {
-        for c in s.categories { decisions.record(.categoryRejected(range: m.range, category: c)) }
+        guard decisions.record(s.categories.map { .categoryRejected(range: m.range, category: $0) }) else { return }
         reapply()
     }
 
     /// "These are different occasions" on a suggestion spanning several
     /// folders: each folder's first recording is kept apart from the
-    /// others'. Needs a full rebuild (runs change), so the caller refreshes.
+    /// others' — one batch, one save. Needs a full rebuild (runs change):
+    /// refreshed now, or queued behind the build that is running.
     /// False when there is only one folder (nothing to tell apart).
     @discardableResult
     func markDifferentOccasions(in s: EventSuggestion, model: VideoScanModel) -> Bool {
         let reps = Dictionary(grouping: s.members, by: { ($0.path as NSString).deletingLastPathComponent })
             .values.compactMap { $0.first?.range }.sorted { $0.contentKey < $1.contentKey }
-        guard reps.count > 1, !decisions.isReadOnly else { return false }
+        guard reps.count > 1 else { return false }
+        var pairs: [EventDecision] = []
         for (i, a) in reps.enumerated() {
-            for b in reps[(i + 1)...] { decisions.record(.differentOccasions(a: a, b: b)) }
+            for b in reps[(i + 1)...] { pairs.append(.differentOccasions(a: a, b: b)) }
         }
+        guard decisions.record(pairs) else { return false }
         refresh(model: model)
         return true
     }
@@ -358,7 +394,7 @@ struct EventsPane: View {
     }
 
     private func questionsStrip(_ questions: [EventsQuestion]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
+        LazyVStack(alignment: .leading, spacing: 8) {
             Text(EventsWords.sameOccasion).font(.system(size: 13, weight: .semibold))
             ForEach(questions) { q in
                 HStack(spacing: 10) {
@@ -387,7 +423,7 @@ struct EventsPane: View {
         } else {
             LazyVStack(alignment: .leading, spacing: 8) {
                 ForEach(store.shownSuggestions) { s in
-                    EventCardRow(suggestion: s,
+                    EventCardRow(suggestion: s, isReadOnly: store.isReadOnly,
                                  onConfirm: { store.confirm(s) },
                                  onDismiss: { store.dismiss(s) },
                                  onDetails: { detail = .suggestion(s.key) })
@@ -433,6 +469,9 @@ struct EventsPane: View {
 
 struct EventCardRow: View {
     let suggestion: EventSuggestion
+    /// The store refuses writes (not loaded, a newer file…): the buttons
+    /// that would write say so by being disabled; Details… still opens.
+    let isReadOnly: Bool
     let onConfirm: () -> Void
     let onDismiss: () -> Void
     let onDetails: () -> Void
@@ -455,7 +494,9 @@ struct EventCardRow: View {
             }
             HStack {
                 Button(EventsWords.confirm, action: onConfirm).accessibilityIdentifier("events.confirm")
+                    .disabled(isReadOnly)
                 Button(EventsWords.dismiss, action: onDismiss).accessibilityIdentifier("events.dismiss")
+                    .disabled(isReadOnly)
                 Button(EventsWords.details, action: onDetails).accessibilityIdentifier("events.details")
             }
             .controlSize(.small)

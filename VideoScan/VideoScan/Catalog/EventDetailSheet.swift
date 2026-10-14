@@ -35,7 +35,9 @@ struct EventDetailSheet: View {
     @Environment(\.dismiss) private var dismiss
     @State private var name = ""
     @State private var renaming = false
-    @State private var mergeTarget: UUID?
+    /// The rename field takes focus the moment it appears (repo rule:
+    /// @FocusState + .defaultFocus, never a key on the container).
+    @FocusState private var nameFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -69,12 +71,11 @@ struct EventDetailSheet: View {
         }
         HStack {
             if renaming {
-                TextField("Name", text: $name).frame(maxWidth: 320)
-                    .onSubmit { confirmNamed(s) }
+                nameField { confirmNamed(s) }
                 Button(EventsWords.confirm) { confirmNamed(s) }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             } else {
                 Button(EventsWords.confirm) { store.confirm(s) }
-                Button(EventsWords.rename) { name = s.name; renaming = true }
+                Button(EventsWords.rename) { beginRename(s.name) }
             }
             Button(EventsWords.dismiss) { store.dismiss(s) }
             if s.folders.count > 1 {
@@ -100,11 +101,10 @@ struct EventDetailSheet: View {
         }
         HStack {
             if renaming {
-                TextField("Name", text: $name).frame(maxWidth: 320)
-                    .onSubmit { renameNow(e) }
+                nameField { renameNow(e) }
                 Button(EventsWords.rename) { renameNow(e) }.disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             } else {
-                Button(EventsWords.rename) { name = e.name; renaming = true }
+                Button(EventsWords.rename) { beginRename(e.name) }
             }
             Button(EventsWords.dismiss) { store.dismiss(e) }
             mergeMenu(e)
@@ -118,16 +118,32 @@ struct EventDetailSheet: View {
         renaming = false
     }
 
-    /// Every OTHER confirmed event, newest first (the store's list).
+    /// The store's precomputed list (newest first); the event itself is
+    /// greyed out rather than filtered per render.
     private func mergeMenu(_ e: ConfirmedEvent) -> some View {
-        let others = store.shownConfirmed.filter { $0.id != e.id }
-        return Menu(EventsWords.mergeWith) {
-            ForEach(others) { other in
+        Menu(EventsWords.mergeWith) {
+            ForEach(store.mergeCandidates) { other in
                 Button(other.name) { store.merge(e, into: other) }
+                    .disabled(other.id == e.id)
             }
         }
-        .disabled(others.isEmpty)
+        .disabled(store.mergeCandidates.count < 2)
         .frame(maxWidth: 200)
+    }
+
+    private func beginRename(_ current: String) {
+        name = current
+        renaming = true
+        nameFocused = true
+    }
+
+    /// The rename field: focused on appearance, Return submits.
+    private func nameField(onSubmit: @escaping () -> Void) -> some View {
+        TextField("Name", text: $name)
+            .frame(maxWidth: 320)
+            .focused($nameFocused)
+            .defaultFocus($nameFocused, true)
+            .onSubmit(onSubmit)
     }
 
     // MARK: Shared pieces
