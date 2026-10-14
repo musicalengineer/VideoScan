@@ -146,9 +146,10 @@ public struct EventCategory: Sendable, Hashable {
     /// occasion itself.
     static let screenCues = ["television", "tv screen", "on a screen", "on the screen", "on a tv", "poster",
                              "painting", "photograph", "framed photo", "a picture of", "computer screen"]
-    /// Speech from a set, or about another year's occasion.
+    /// Speech from a set, or about another time's occasion — a mention.
     static let broadcastCues = ["on tv", "on the tv", "television", "on the radio", "commercial", "the movie",
-                                "in the movie", "on screen"]
+                                "in the movie", "on screen", "remember", "years ago", "back when", "next week",
+                                "next month", "next year", "last year"]
 
     public static let birthday = EventCategory(
         "Birthday",
@@ -203,8 +204,9 @@ public struct EventCategory: Sendable, Hashable {
     public static let wedding = EventCategory(
         "Wedding",
         seen: ["wedding", "bride", "groom", "wedding dress", "bridal", "wedding cake", "bouquet"],
-        said: ["wedding", "the bride", "the groom", "you may kiss", "best man", "maid of honor", "maid of honour",
-               "newlyweds", "i now pronounce", "wedding day"],
+        said: ["the bride", "the groom", "you may kiss", "best man", "maid of honor", "maid of honour", "newlyweds",
+               "i now pronounce", "the wedding day", "getting married", "just got married", "here comes the bride",
+               "the happy couple", "the wedding party"],
         saidNot: broadcastCues + ["last wedding", "next wedding", "before the wedding", "after the wedding"],
         nameEvents: ["wedding"])
 
@@ -212,7 +214,8 @@ public struct EventCategory: Sendable, Hashable {
         "Beach / vacation",
         seen: ["beach", "seashore", "ocean waves", "sandcastle", "sand castle", "surfboard", "boardwalk", "snorkel",
                "beach umbrella", "beach towel", "sand dunes"],
-        said: ["vacation", "the beach", "at the beach", "on vacation", "road trip", "the ocean", "low tide", "high tide"],
+        said: ["on vacation", "on our vacation", "the beach", "at the beach", "road trip", "the ocean", "low tide",
+               "high tide", "in the sand", "look at the waves"],
         saidNot: broadcastCues + ["last vacation", "next vacation", "last summer at the beach"],
         nameEvents: ["vacation", "beach", "lake", "cape", "disney", "camp"])
 
@@ -221,16 +224,18 @@ public struct EventCategory: Sendable, Hashable {
         seen: EventCategory.instruments.flatMap { ["playing the \($0)", "playing a \($0)", "playing \($0)"] }
             + ["on stage", "concert", "recital", "band performing", "performing on", "singing into a microphone",
                "singing into the microphone", "at the piano", "at a piano", "behind a drum kit", "drum kit"],
-        said: ["recital", "concert", "take it from the top", "sound check", "encore", "jam session", "from the top",
-               "one more time", "let's play that again", "the next song", "this next one"],
+        said: ["the recital", "at the recital", "the concert", "at the concert", "take it from the top", "sound check",
+               "encore", "jam session", "from the top", "one more time", "let's play that again", "the next song",
+               "this next one", "give it up for"],
         saidNot: broadcastCues + ["last recital", "next recital", "last concert", "next concert"],
         nameEvents: ["recital"])
 
     public static let graduation = EventCategory(
         "Graduation",
         seen: ["graduation", "cap and gown", "caps and gowns", "diploma", "mortarboard", "graduates", "graduate"],
-        said: ["graduation", "diploma", "commencement", "class of", "congratulations graduate", "graduates",
-               "you graduated"],
+        said: ["graduation ceremony", "graduation day", "got my diploma", "got her diploma", "got his diploma",
+               "your diploma", "commencement", "class of", "congratulations graduate", "congratulations graduates",
+               "you graduated", "throw your caps", "pomp and circumstance"],
         saidNot: broadcastCues + ["last graduation", "next graduation", "before graduation", "after graduation"],
         nameEvents: ["graduation"])
 
