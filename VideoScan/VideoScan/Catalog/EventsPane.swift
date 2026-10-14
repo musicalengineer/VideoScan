@@ -108,9 +108,13 @@ final class EventsStore: ObservableObject {
             numbers = Numbers()
             return
         }
-        let category = filter.category
-        shownSuggestions = plan.suggestions.filter { category == nil || $0.categories.contains(category!) }
-        shownConfirmed = plan.confirmed.filter { category == nil || $0.categories.contains(category!) }
+        if let category = filter.category {
+            shownSuggestions = plan.suggestions.filter { $0.categories.contains(category) }
+            shownConfirmed = plan.confirmed.filter { $0.categories.contains(category) }
+        } else {
+            shownSuggestions = plan.suggestions
+            shownConfirmed = plan.confirmed
+        }
         var n = Numbers()
         n.toReview = plan.suggestions.count + plan.questions.count
         n.questions = plan.questions.count

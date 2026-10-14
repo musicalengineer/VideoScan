@@ -450,12 +450,13 @@ final class EventsDecisionStore: ObservableObject {
         }
     }
 
-    /// Save now (the pending coalesced save, awaited). false when read-only
-    /// or the write failed.
+    /// Save now: the pending save (every change schedules one), awaited;
+    /// a fresh one only when nothing is pending. false when read-only or
+    /// the write failed.
     @discardableResult
     func save() async -> Bool {
         guard !isReadOnly else { return false }
-        scheduleSave()
+        if pendingSave == nil { scheduleSave() }
         return await pendingSave?.value ?? false
     }
 

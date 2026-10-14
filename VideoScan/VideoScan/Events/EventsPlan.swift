@@ -182,8 +182,9 @@ struct EventsDate: Sendable, Hashable {
         case .none: source = .none
         }
         let trusted = r.source != .embedded || r.confidence >= RecordDateResolver.embeddedConfidenceUnknownOrigin
-        let month = r.precision <= .month ? r.month : nil
-        let day = r.precision == .day ? r.day : nil
+        // A folder year is a year: the catalog's July 1 placeholder is not a day.
+        let month = source != .folderYear && r.precision <= .month ? r.month : nil
+        let day = source != .folderYear && r.precision == .day ? r.day : nil
         return EventsDate(year: year, month: month, day: day, source: source, trusted: trusted)
     }
 }

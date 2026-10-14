@@ -149,6 +149,23 @@ struct EventsStats: Codable, Equatable, Sendable {
     static let keys = ["ts", "active_records", "with_captions", "with_transcripts", "clips_with_evidence",
                        "candidate_events", "strong_events", "by_category", "marks_yes", "marks_no", "precision_by_category"]
 
+    /// Every key is always present: the marks are written as JSON null
+    /// until Rick has decided something (JSONEncoder would omit them).
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(ts, forKey: .ts)
+        try c.encode(activeRecords, forKey: .activeRecords)
+        try c.encode(withCaptions, forKey: .withCaptions)
+        try c.encode(withTranscripts, forKey: .withTranscripts)
+        try c.encode(clipsWithEvidence, forKey: .clipsWithEvidence)
+        try c.encode(candidateEvents, forKey: .candidateEvents)
+        try c.encode(strongEvents, forKey: .strongEvents)
+        try c.encode(byCategory, forKey: .byCategory)
+        try c.encode(marksYes, forKey: .marksYes)
+        try c.encode(marksNo, forKey: .marksNo)
+        try c.encode(precisionByCategory, forKey: .precisionByCategory)
+    }
+
     init(plan: EventsPlan, decisions: EventsDecisionSnapshot, now: Date) {
         ts = EventsStats.timestamp.string(from: now)
         activeRecords = plan.rowCount
