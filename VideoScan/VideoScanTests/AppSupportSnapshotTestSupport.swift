@@ -28,7 +28,11 @@ import Testing
 enum AppSupportSnapshot {
     /// Top-level folders other processes write; matched as whole
     /// components, never as string prefixes.
-    static let excludedTopLevel: Set<String> = ["team-channel", "channel-watcher", "gh-codex", "review-cycles"]
+    /// `findtag-journal` is written by a live `--find-tag` run of Rick's app
+    /// (seen mid-suite 2026-10-14; a pre-existing sensor gap, not the
+    /// code under test).
+    static let excludedTopLevel: Set<String> = ["team-channel", "channel-watcher", "gh-codex", "review-cycles",
+                                                "findtag-journal"]
 
     static var realVideoScanRoot: URL? {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)
