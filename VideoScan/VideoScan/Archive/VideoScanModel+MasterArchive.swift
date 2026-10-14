@@ -964,8 +964,19 @@ extension VideoScanModel {
 
     /// The same sentence for files elsewhere on the archive's volume.
     nonisolated static func masterArchiveVolumeRefusalLine(verb: String, count: Int, volume: String) -> String {
-        "\(verb): left \(count) file(s) alone — they live on \(volume), the Master Archive volume, which only archive actions may change."
+        "\(verb): left \(count) file(s) alone — they live on \(volume), the Master Archive volume, which only archive actions may change. "
+            + Self.archiveJunkRouteSentence
     }
+
+    /// The route as its own sentence, for the console summary line.
+    nonisolated static let archiveJunkRouteSentence =
+        "Junk you marked there goes through Triage ▸ Cleanup — tick “Unlock FamilyArchive for this run”."
+
+    /// The one way junk leaves the Master Archive volume (Rick, 2026-10-14):
+    /// Triage ▸ Cleanup's per-run unlock. Every refusal elsewhere says so,
+    /// so the person is never left at a wall.
+    nonisolated static let archiveJunkRoute =
+        " (junk you marked there goes through Triage ▸ Cleanup — tick “Unlock FamilyArchive for this run”)"
 
     /// The same sentence for files on a volume the person marked Read
     /// only (2026-10-03) — the existing shape; the volume's name only.
@@ -1019,7 +1030,7 @@ extension VideoScanModel {
     nonisolated static func bulkDeleteRefusalNote(_ r: BulkDeleteRefusal, volume: String) -> String {
         switch r {
         case .archiveTree: return "lives in the Master Archive, which only archive actions may change"
-        case .archiveVolume: return "lives on \(volume), the Master Archive volume, which only archive actions may change"
+        case .archiveVolume: return "lives on \(volume), the Master Archive volume, which only archive actions may change" + Self.archiveJunkRoute
         case .archiveVolumeUnprovable: return "\(volume), the Master Archive volume, is not connected — cannot prove this drive is not it"
         case .readOnlyVolume(let name): return "lives on \(name), which you marked Read only"
         case .readOnlyVolumeDifferentDrive(let name):

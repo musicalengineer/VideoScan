@@ -5,8 +5,9 @@
 //   ☑ Copies           identical full SHA-256, one copy stays   n · GB selected · See files…
 //   ☑ Junk you marked  files you marked Confirmed Junk           n · GB selected · See files…
 //     Not checked yet  no full hash yet (information only)       n · GB
-//   ☐ Include these N marked-junk files from FamilyArchive (only when there are any;
-//     off by default, lists the files, resets after each run)
+//   ☐ Unlock FamilyArchive for this run — also move these N confirmed-junk files
+//     (only when there are any; off by default, lists the files, resets after each run;
+//     Rick 10/14: THE workflow for junk on FamilyArchive — every other door points here)
 //   Left alone: N files — with each reason (compact, folded)
 //   [ Move N files (X GB) to the Trash… ]   → confirm → ONE MFO job (CleanupTrashJob)
 //
@@ -149,8 +150,8 @@ enum CleanupWords {
     }
 
     static func archiveJunkToggle(_ count: Int) -> String {
-        count == 1 ? "Include this marked-junk file from FamilyArchive"
-                   : "Include these \(count.formatted()) marked-junk files from FamilyArchive"
+        count == 1 ? "Unlock FamilyArchive for this run — also move this 1 confirmed-junk file"
+                   : "Unlock FamilyArchive for this run — also move these \(count.formatted()) confirmed-junk files"
     }
 
     /// "about 1.5 hours" at a conservative 200 MB/s (the LaCie HDDs).
@@ -277,7 +278,7 @@ struct CleanupPane: View {
                 Text(MediaBytes.display(plan.archiveJunkBytes)).monospacedDigit().foregroundStyle(.secondary)
                 Button("See files…") { filesSheet = .archiveJunk }
             }
-            Text("For this run only — it turns itself off afterwards. Copies on FamilyArchive are never trimmed.")
+            Text("Files you marked Confirmed Junk on the Master Archive volume, outside the archive tree. The unlock is for this run only and turns itself off afterwards; each file is re-checked at the move. Copies on FamilyArchive are never trimmed.")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
         }
         .padding(10)

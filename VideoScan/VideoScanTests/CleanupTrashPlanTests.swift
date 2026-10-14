@@ -393,8 +393,8 @@ struct CleanupTrashPlanTests {
     func words() {
         #expect(CleanupWords.actionTitle(.init(files: 1, bytes: 1_000_000_000)).hasPrefix("Move 1 file ("))
         #expect(CleanupWords.actionTitle(.init(files: 2, bytes: 0)).hasPrefix("Move 2 files ("))
-        #expect(CleanupWords.archiveJunkToggle(3) == "Include these 3 marked-junk files from FamilyArchive")
-        #expect(CleanupWords.archiveJunkToggle(1) == "Include this marked-junk file from FamilyArchive")
+        #expect(CleanupWords.archiveJunkToggle(3) == "Unlock FamilyArchive for this run — also move these 3 confirmed-junk files")
+        #expect(CleanupWords.archiveJunkToggle(1) == "Unlock FamilyArchive for this run — also move this 1 confirmed-junk file")
         #expect(CleanupWords.readNote(0) == nil)
         #expect(CleanupWords.readTime(7_200 * 200_000_000) == "about 2.0 hours")
     }

@@ -151,7 +151,8 @@ struct CatalogRowMenuLayoutSensorTests {
         let one = CatalogDeleteFileItem.resolve(
             activeCount: 1, deletableCount: 0,
             refusalNote: VideoScanModel.bulkDeleteRefusalNote(.archiveVolume, volume: "FamilyArchive"))
-        #expect(one == .disabled(help: "Protected: this file lives on FamilyArchive, the Master Archive volume, which only archive actions may change."))
+        #expect(one == .disabled(help: "Protected: this file lives on FamilyArchive, the Master Archive volume, which only archive actions may change"
+                                       + VideoScanModel.archiveJunkRoute + "."))
         guard case .disabled(let many) = CatalogDeleteFileItem.resolve(activeCount: 4, deletableCount: 0, refusalNote: "x") else {
             Issue.record("4 protected rows must read disabled"); return
         }
