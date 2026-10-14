@@ -24,6 +24,8 @@ struct CleanupInputs: Sendable {
     let gate: VideoScanModel.BulkDeleteGate
     let archiveLabel: String
     let policy: DuplicateKeeperPolicy
+    /// Rows hidden by the old "deleted" label (see `CleanupPlan.hiddenByOldLabel`).
+    var hiddenByOldLabel = CleanupPlan.Tally()
 
     /// The plan. Blocking disk reads — off the main actor only.
     /// `driveOnline` is the reachability seam.
@@ -34,9 +36,11 @@ struct CleanupInputs: Sendable {
             rows[i].protection = protection(for: subjects[i])
         }
         let policy = policy
-        return CleanupPlanner.plan(rows: rows,
-                                   facts: { CleanupDiskProbe.facts(for: $0, driveOnline: driveOnline) },
-                                   rank: { policy.volumeRank(forPath: $0) })
+        var plan = CleanupPlanner.plan(rows: rows,
+                                       facts: { CleanupDiskProbe.facts(for: $0, driveOnline: driveOnline) },
+                                       rank: { policy.volumeRank(forPath: $0) })
+        plan.hiddenByOldLabel = hiddenByOldLabel
+        return plan
     }
 
     /// One row's protection. The gate answers the Master Archive half first,

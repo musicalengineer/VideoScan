@@ -401,6 +401,36 @@ struct CleanupTrashPlanTests {
 
     // MARK: Scale
 
+    // MARK: Hidden by the old "deleted" label (2026-10-14)
+
+    @Test("rows hidden by the old “deleted” label — label, or the GH #143 legacy marker — are counted (files + bytes) in the SAME inputs pass and never planned; a real removal is neither")
+    @MainActor
+    func hiddenByOldLabelCountedInTheInputsPass() throws {
+        let sb = try CleanupTrashSandbox("hiddenlabel"); defer { sb.cleanup() }
+        let model = sb.model(keepFirst: ["LaCie"])
+        let d = Date(timeIntervalSince1970: 1_760_000_000)
+        let live = try CleanupTrashSandbox.record(try sb.write("LaCie/live.mov", Data(repeating: 1, count: 1_000)))
+        let legacy = try CleanupTrashSandbox.record(try sb.write("LaCie/legacy.mov", Data(repeating: 2, count: 3_000)))
+        legacy.archiveStage = .manuallyDeleted
+        VideoScanModel.stampRemoval(legacy, .removedFromCatalog(at: d, reason: .legacyDeletedLabel))
+        let markerOnly = try CleanupTrashSandbox.record(try sb.write("LaCie/marker.mov", Data(repeating: 3, count: 500)))
+        VideoScanModel.stampRemoval(markerOnly, .removedFromCatalog(at: d, reason: .legacyDeletedLabel))
+        let trashed = try CleanupTrashSandbox.record(try sb.write("LaCie/trashed.mov", Data(repeating: 4, count: 7_000)))
+        trashed.archiveStage = .manuallyDeleted
+        VideoScanModel.stampRemoval(trashed, .inTrash(movedAt: d, trashPath: nil, reason: .junk))
+        model.records = [live, legacy, markerOnly, trashed]
+
+        let inputs = model.cleanupInputs()
+        #expect(inputs.hiddenByOldLabel == CleanupPlan.Tally(files: 2, bytes: 3_500), "\(inputs.hiddenByOldLabel)")
+        #expect(inputs.rows.map(\.id) == [live.id], "hidden and removed rows are never planned")
+        let plan = inputs.plan(driveOnline: { _ in true })
+        #expect(plan.hiddenByOldLabel == inputs.hiddenByOldLabel, "the plan carries the count the page reads (never computed in a body)")
+        #expect(plan.copies.isEmpty && plan.junk.isEmpty)
+        #expect(CleanupWords.hiddenByOldLabel(plan.hiddenByOldLabel)
+                == "2 files · \(MediaBytes.display(3_500)) are hidden by an old “deleted” label — the files were never moved.")
+        #expect(CleanupWords.hiddenByOldLabel(CleanupPlan.Tally(files: 1, bytes: 10)).hasPrefix("1 file · "))
+    }
+
     @Test("SCALE: a 100k-row catalog plans within budget", .timeLimit(.minutes(1)))
     func scale100k() {
         var rows: [CleanupRow] = []

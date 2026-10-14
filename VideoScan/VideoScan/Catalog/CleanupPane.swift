@@ -168,6 +168,13 @@ enum CleanupWords {
             + "\(MediaBytes.display(bytesToRead)) to read, \(readTime(bytesToRead)). Run it while you're away."
     }
 
+    /// The line above the lanes when rows are hidden by the old label.
+    static func hiddenByOldLabel(_ t: CleanupPlan.Tally) -> String {
+        "\(t.files.formatted()) file\(t.files == 1 ? "" : "s") · \(MediaBytes.display(t.bytes)) are hidden by an old “deleted” label — the files were never moved."
+    }
+
+    static let showAgainLink = "Show them again…"
+
     static let trashNote = "Files go to their own drive's Trash — Put Back restores them. Nothing is freed until you empty the Trash yourself, and VideoScan never empties it."
 }
 
