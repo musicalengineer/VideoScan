@@ -22,4 +22,14 @@ struct EventCategoryRulesReviewRedTests {
         #expect(evidence("she has her graduation in june, we should go")["Graduation"] == nil)
         #expect(evidence("there's a concert downtown next week")["Music / performance"] == nil)
     }
+
+    /// Round 2 — pins EventCategoryRules.swift `broadcastCues` after the
+    /// P2-d rework: "remember" joined the SHARED cue list, so a greeting
+    /// with "remember" within 48 characters is cancelled. "Remember to
+    /// make a wish" is party speech, not a mention of another year.
+    @Test("'happy birthday … remember to make a wish' is still a birthday")
+    func rememberInPartySpeechDoesNotCancelTheGreeting() {
+        #expect(evidence("happy birthday dear Timmy, remember to make a wish before you blow")["Birthday"]?.strength == .said)
+        #expect(evidence("merry christmas everyone, remember to open the big one last")["Christmas"]?.strength == .said)
+    }
 }

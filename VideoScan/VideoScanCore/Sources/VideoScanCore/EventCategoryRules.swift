@@ -147,9 +147,13 @@ public struct EventCategory: Sendable, Hashable {
     static let screenCues = ["television", "tv screen", "on a screen", "on the screen", "on a tv", "poster",
                              "painting", "photograph", "framed photo", "a picture of", "computer screen"]
     /// Speech from a set, or about another time's occasion — a mention.
+    /// Only cues that place the occasion ELSEWHERE in time or on a screen.
+    /// "remember" and "next week" are party speech too ("remember to make
+    /// a wish", "the party's next week") and cancelled real greetings —
+    /// QA round 2, 2026-10-14 — so they are not here.
     static let broadcastCues = ["on tv", "on the tv", "television", "on the radio", "commercial", "the movie",
-                                "in the movie", "on screen", "remember", "years ago", "back when", "next week",
-                                "next month", "next year", "last year"]
+                                "in the movie", "on screen", "years ago", "back when", "remember when",
+                                "next year", "last year"]
 
     public static let birthday = EventCategory(
         "Birthday",
