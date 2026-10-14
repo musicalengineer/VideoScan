@@ -559,6 +559,12 @@ struct FixityStampVolumeIdentityTests {
             // target / archive file, all from ONE `captureStamps` pass LIVE
             // at the job's turn (`prepareExcess`) — never a stored stamp.
             "VideoScan/MediaOps/VideoScanModel+ExcessCopies.swift": 1,
+            // Cleanup disk probe (Triage ▸ Cleanup v1, 10/12): the classic
+            // ismount test — "/Volumes/<name>" vs "/Volumes", two LIVE stats
+            // of the same instant, answering "is a drive mounted here NOW".
+            // Never a stored stamp; identity is then asked of the volume
+            // UUID (`mountVolumeUUID`), not st_dev.
+            "VideoScan/MediaOps/Cleanup/CleanupDiskProbe.swift": 1,
             // (CatalogKnownCopies — STORED stamps — compares volume UUID +
             // inode, never st_dev: nightly 2026-10-12.)
         ]

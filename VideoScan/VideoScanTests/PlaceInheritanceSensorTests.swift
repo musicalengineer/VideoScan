@@ -203,14 +203,17 @@ struct PlaceInheritanceSensorTests {
 
         let result = await model.deleteDuplicates(onVolume: dir.path)
         #expect(result.deleted == 1)
-        #expect(model.records.count == 3 && model.records.first === keeper)
+        // GH #143 (T4): the trashed extra stays as a row, In the Trash.
+        #expect(model.records.filter { !$0.isPurged }.count == 3 && model.records.first === keeper,
+                "keeper + its archive copy + the verified sibling")
+        #expect(model.records.contains { $0.fullPath == extraURL.path && $0.removal?.state == .inTrash })
         #expect(keeper.userPlace == "Cape Cod", "the deleted extra's place folds into the keeper")
         #expect(keeper.userPlaceConfidence == "known")
         #expect(keeper.backupAttestations == familyWord, "twin: the deleted extra's attestations fold into the keeper")
         // codex #1380 (3): indexed-vs-canonical agreement right after the fold.
         #expect(pfCatalogTokenMatches(.substring("cape"), keeper))
-        #expect(model.searchIndex.filter(records: model.records, query: "cape").map(\.id) == [keeper.id],
-                "the keeper's inherited place is searchable immediately")
+        #expect(model.searchIndex.filter(records: model.records.filter { !$0.isPurged }, query: "cape").map(\.id) == [keeper.id],
+                "the keeper's inherited place is searchable immediately (the trashed row is not a live result)")
     }
 
     // MARK: adoptExternalRepair
