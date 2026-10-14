@@ -7612,6 +7612,84 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsDecisionStoreTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventsDecisionStoreTests"
+      ],
+      "tests": [
+        "confirmSurvivesRegroupedSuggestionIDs",
+        "decisionsKeyedByContentSurviveRescanPathChange",
+        "differentOccasionsSurvivesRerun",
+        "dismissedComesBackOnlyWhenFactsChange",
+        "newerStoreVersionIsReadOnlyNotEmpty",
+        "rejectCategoryIsNotRejectMembership",
+        "unknownDecisionKindIsPreservedOnSave"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsIsolationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventsIsolationTests"
+      ],
+      "tests": [
+        "missingPeopleProfilesMeansNoBirthdaysNotACrash",
+        "poisonedDecisionsFileLoadsWhatItCanAndRefusesToOverwrite",
+        "storeUnderTestHostNeverTouchesRealAppSupport"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsPlanScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "EventsPlanScaleTests"
+      ],
+      "tests": [
+        "eventsInputsIsOneMainActorPass",
+        "plansOneHundredThousandRowsWithinBudget",
+        "reapplyDecisionsIsNotAFullRebuild"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsPlanTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventsPlanTests"
+      ],
+      "tests": [
+        "candlesIndoorsAndKidsOutsideCanBeOneParty",
+        "copiesCollapseToOneWitnessWithBothFolderLabels",
+        "folderLabelAndFolderDateAreOneSource",
+        "folderYearOnlyDatesNeverChain",
+        "lineageIsEvidenceNeverMembership",
+        "membershipNeverMarksCovered",
+        "pairHalvesAreOneWitness",
+        "sameOccasionQuestionAppearsForSameFolderDifferentYears",
+        "spanBoundStopsThreeHourGapChaining",
+        "twoBirthdaysOnSuccessiveWeekendsStayApart",
+        "yearsApartDateConflictBlocksMerge"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsSensorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventsSensorTests"
+      ],
+      "tests": [
+        "paneBodyReadsOnlyTheStore",
+        "sidebarCountMatchesPlanNumbers",
+        "statsObjectHasExactlyTheMetricsKeys",
+        "wordsArePinned"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/FullHashBackfillTests.swift",
@@ -29679,7 +29757,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2346,
+      "expected_floor": 2371,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -29818,6 +29896,10 @@
         "VideoScanTests/DuplicateLedgerTests",
         "VideoScanTests/EmbeddedDatePlacementTests",
         "VideoScanTests/EvalPresenceRuleTests",
+        "VideoScanTests/EventsDecisionStoreTests",
+        "VideoScanTests/EventsIsolationTests",
+        "VideoScanTests/EventsPlanTests",
+        "VideoScanTests/EventsSensorTests",
         "VideoScanTests/ExcessCopiesPlanTests",
         "VideoScanTests/ExcessCopiesSensorTests",
         "VideoScanTests/FamilyAssetIdentityDirectoryTests",
@@ -30495,7 +30577,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 65,
+      "expected_floor": 68,
       "name": "performance",
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",
@@ -30511,6 +30593,7 @@
         "VideoScanTests/CatalogOpenScaleTests",
         "VideoScanTests/CatalogPerfMemoTests",
         "VideoScanTests/ElapsedTimerPauseTests",
+        "VideoScanTests/EventsPlanScaleTests",
         "VideoScanTests/ExcessCopiesPlanScaleTests",
         "VideoScanTests/FamilyMapRenderSensorTests",
         "VideoScanTests/GeneratedMediaPerformanceTests",
