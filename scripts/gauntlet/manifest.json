@@ -7424,6 +7424,7 @@
         "hundredThousand",
         "oneOfThree",
         "refusedRowsAreNotCounted",
+        "remountedStampsAreStillTheSameFile",
         "sameDeviceAndInodeIsTheSameFile",
         "soleFileIsWarned",
         "supersededAndSkippedAreNotSurvivors",
@@ -14627,6 +14628,8 @@
         "biographyPhotoRejectsTraversalAbsoluteSymlinkAmbiguityAndNoCover",
         "biographyPrintsCyberBrainClaimAndRelativeSource",
         "biographyPrintsVerifiedPhotoButOpensOnlyOnExplicitCommand",
+        "bornYetRecogniserClaimsOnlyItsOwnShape",
+        "bornYetWithAStatedYearIsAPerPersonAnswerNotADecline",
         "cancelAbandonsPendingClarificationWithoutContinuation",
         "cancellationReachesInjectedTurnSeamAndPerformsNoMediaAction",
         "cancellingDuringSpeechDoesNotReadAnotherQuestion",
@@ -14906,6 +14909,7 @@
         "richardResolvesToTheOwnerThroughTheFamilySearchPin",
         "ricksAncestorsRankOnlyRicksAncestors",
         "thatIsDonnasLineRerunsTheRankingOverRicksAncestors",
+        "thatIsMyLineRanksTheSpeakersOwnAncestors",
         "theLiveUtterancesAreScopedToRicksAncestors",
         "theUnscopedSuperlativeStillRanksTheWholeTreeWordForWord",
         "unscopedAndSurnameShapesAreUntouched"
@@ -17063,6 +17067,7 @@
       "tests": [
         "activeStates",
         "adaptiveButtonFlagsFlipAcrossPauseAll",
+        "allPinsEveryKindInDeclarationOrder",
         "badgeFillsArePairwiseDistinct",
         "badgeFillsCarryWhiteTextLegibly",
         "badgeTextMapping",
@@ -17082,12 +17087,14 @@
         "compareJobStampsFinishedAtOnFailure",
         "comparePauseIsOffInPhaseOne",
         "errorMapsToFailed",
+        "everyDeclaredKindIsInAll",
         "failedJobDurationIsFrozen",
         "finishedJobReadsRunDurationNotWallClock",
         "finishedJobsAreCappedAtFifty",
         "formatMatchesCombineSectionShape",
         "freshJobIsRunning",
         "hddAllowsExactlyOneReader",
+        "identityIsTheRawValue",
         "internalPathIsUnrestricted",
         "jobsAreNewestFirst",
         "negativeIntervalsClampToZero",
@@ -17095,7 +17102,9 @@
         "pauseAllIsNoOpWithoutPausableJobs",
         "pauseAllReachesOnlyPausableUnpausedActiveJobs",
         "raidVariantsFallBackToTwo",
+        "rawValuesAndBadgesAreUnique",
         "reformatJobStampsFinishedAtOnFailure",
+        "repairKindStyle",
         "resumeAllIsNoOpWhenNothingPaused",
         "resumeAllReachesOnlyPausedActiveJobs",
         "runningCountCountsOnlyActiveStates",
@@ -24848,17 +24857,37 @@
       "tests": [
         "test_adding_a_small_namesake_does_not_rekey_the_untouched_offender",
         "test_blank_override_reason_does_not_override",
+        "test_ci_excess_at_baseline_passes_and_one_more_blocks",
+        "test_ci_excess_honors_a_recorded_override_at_its_size",
+        "test_ci_excess_lets_a_function_move_between_files",
+        "test_ci_excess_lets_an_honest_split_through",
+        "test_ci_excess_missing_baseline_fails_closed",
         "test_copying_an_offender_is_not_a_move",
         "test_functions_between_report_and_gate_limits_pass",
+        "test_growth_is_blocked_even_when_another_function_shrinks_more",
         "test_known_offender_may_not_grow_past_the_line_slack",
         "test_known_offender_that_got_worse_is_blocked",
         "test_moved_and_grown_is_still_blocked",
+        "test_new_ccn_17_function_with_nothing_lowered_blocks",
         "test_new_offender_over_the_gate_is_blocked",
         "test_new_swiftlint_disable_is_blocked_and_grandfathered_ones_pass",
         "test_offender_moved_and_made_smaller_passes",
         "test_offender_moved_unchanged_to_a_new_file_passes",
         "test_out_of_scope_files_are_ignored",
         "test_override_passes_and_is_logged_then_honored_by_ci",
+        "test_ratchet_existing_band_function_rising_blocks",
+        "test_ratchet_function_rising_into_the_band_blocks",
+        "test_ratchet_is_off_without_a_before_picture",
+        "test_ratchet_lowering_or_leaving_a_band_function_passes",
+        "test_ratchet_moved_and_grown_band_function_blocks",
+        "test_ratchet_moving_a_band_function_between_touched_files_passes",
+        "test_ratchet_new_function_over_15_in_a_new_file_blocks",
+        "test_ratchet_new_function_over_15_in_an_existing_file_blocks",
+        "test_ratchet_override_passes_and_is_recorded",
+        "test_ratchet_splitting_a_file_passes",
+        "test_split_52_into_a_40_and_a_20_passes",
+        "test_split_52_into_two_honest_26s_passes",
+        "test_split_that_raises_total_excess_blocks",
         "test_swiftlint_disable_moved_with_its_function_passes",
         "test_synthetic_function_has_the_ccn_we_think",
         "test_unchanged_known_offender_passes_so_its_file_can_be_edited",
@@ -24906,8 +24935,10 @@
         "test_every_new_or_worse_offender_is_red_for_ricks_decision",
         "test_gate_records_the_author",
         "test_nightly_commits_a_pure_shrink_and_pushes_without_force",
+        "test_nightly_commits_a_shrunk_ccn15_excess_even_when_the_debt_baseline_is_unchanged",
         "test_nightly_double_checks_the_written_file_against_origin_main",
         "test_nightly_never_touches_a_dirty_worktree",
+        "test_nightly_refuses_a_ccn15_excess_that_would_grow",
         "test_nightly_refuses_a_shrink_that_would_turn_ci_gate_red",
         "test_nightly_refuses_when_the_plan_is_not_removals_only",
         "test_nightly_retries_once_after_a_rejected_push_then_reports_red",
@@ -24927,6 +24958,10 @@
         "test_complexity_shrink_ci.py"
       ],
       "tests": [
+        "test_ccn15_excess_never_grows_by_shrinking",
+        "test_ccn15_excess_regenerate_command_writes_todays_total",
+        "test_ccn15_excess_shrink_refuses_an_empty_scan",
+        "test_ccn15_excess_shrinks_when_a_function_is_lowered_and_ci_stays_green",
         "test_nightly_shrink_after_a_move_keeps_the_whole_tree_gate_green"
       ]
     },
@@ -25694,13 +25729,19 @@
       ],
       "tests": [
         "test_event_recognition_line_and_twist_render_counts_only",
-        "test_every_section_renders_with_honest_missing_and_stale_states",
         "test_everything_missing_renders_no_data_not_zero",
         "test_open_bugs_tile_is_two_counts_and_github_links",
         "test_open_bugs_tile_without_a_summary_is_two_dashes_and_the_bug_link",
         "test_page_data_comes_from_public_sources_only",
         "test_page_never_reads_free_text_fields",
+        "test_page_structure_every_twist_has_a_summary_line",
+        "test_sprint_graphic_reports_actual_completion",
+        "test_sprint_without_valid_nonempty_counts_has_no_completion_graphic",
+        "test_summary_first_page_renders_every_line_and_twist",
+        "test_summary_sparkline_does_not_join_across_missing_sample",
+        "test_theme_defaults_dark_and_respects_saved_choice",
         "test_weekly_bug_bars_sum_the_published_days_and_never_fabricate_a_week",
+        "test_without_a_summary_the_page_says_so_and_still_renders",
         "test_without_the_daily_stream_the_bug_tile_is_the_snapshot_alone"
       ]
     },
@@ -26638,9 +26679,11 @@
         "DeleteDuplicatesReviewedStampTests"
       ],
       "tests": [
+        "anInPlaceRewriteWithRestoredMtimeIsHeldAtJobStart",
         "anUntouchedReviewedPairStillMoves",
         "rewritingBothFilesWithIdenticalNewContentHoldsThePick",
         "rewritingOnlyTheTargetHoldsThePick",
+        "theJobStartCheckRequiresAnUnchangedCtime",
         "theReviewedIdentityRule"
       ]
     },
@@ -26893,8 +26936,8 @@
         "aPreMarkerCatalogIsConvertedOnLoad",
         "everyLegacyCombinationMapsToExactlyTheRuledState",
         "everyStateRoundTripsAndPurgedAtStaysOnDiskForAnOlderBuild",
-        "m",
         "purgedAtIsDerivedAndItsSetterIsAShim",
+        "theMigrationTableCellByCell",
         "trashEmptiedIsRecordedOnceAndOnlyForAKnownTrashPath"
       ]
     },
@@ -26929,8 +26972,8 @@
         "everyRemovalStateIsReachableFromADoor",
         "noFileLeavesExceptThroughReviewedCode",
         "noRowIsDeletedOutsideCatalogRepair",
-        "onlyTheEngineAndNamedDoorsUseTheFinderTrash",
         "onlyTheEngineWritesTheMarker",
+        "onlyTheOneTrashCallUsesTheFinderTrash",
         "quarantineAndDeleteIsGoneAndTheDefaultDisposalIsTheTrash"
       ]
     },
@@ -28655,6 +28698,14 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
         {
+          "name": "VideoScan/VideoScanTests/MediaRepairEngineTests.swift",
+          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/MediaRepairJobTests.swift",
+          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
           "name": "VideoScan/VideoScanTests/MediaSignaturesTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -29523,6 +29574,10 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "tests/test_sprint_digest.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "tests/test_summarize_synthetic_identity_benchmark.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         },
@@ -29603,7 +29658,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2328,
+      "expected_floor": 2346,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -29726,6 +29781,7 @@
         "VideoScanTests/DateValidationTests",
         "VideoScanTests/DerivedFileNamingTests",
         "VideoScanTests/DetectResumableTargetTests",
+        "VideoScanTests/DiagnosticBannerNoSoundTests",
         "VideoScanTests/DispositionTests",
         "VideoScanTests/DispositionThresholdTests",
         "VideoScanTests/DossierCountsCacheTests",
@@ -29808,12 +29864,14 @@
         "VideoScanTests/MediaDispositionRawValueContractTests",
         "VideoScanTests/MediaFileOperationsWindowOpenerTests",
         "VideoScanTests/MediaOpenerPreferredPlayerTests",
+        "VideoScanTests/MediaRepairAddSoundPlanTests",
         "VideoScanTests/ModelPresentationTests",
         "VideoScanTests/ModelSchemaTests",
         "VideoScanTests/MusicTriageOffMainTests",
         "VideoScanTests/MusicTriagePrecisionTests",
         "VideoScanTests/MusicTriageScaleTests",
         "VideoScanTests/NLQueryStrictWireTests",
+        "VideoScanTests/NoSoundSummaryTests",
         "VideoScanTests/NotesRepairRuleTests",
         "VideoScanTests/OllamaDecodeFailureDetailTests",
         "VideoScanTests/OllamaLocalServerBootstrapTests",
@@ -30276,6 +30334,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/DiagnosticBannerMediaTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/DossierArchivedAdmissionScaleTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -30338,6 +30400,10 @@
         {
           "name": "VideoScan/VideoScanTests/VerifyVideoMediaMatrixTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "tests/test_av_sync.py",
+          "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 6,
@@ -30701,7 +30767,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 1108,
+      "expected_floor": 1109,
       "modes": [
         {
           "name": "strict",
