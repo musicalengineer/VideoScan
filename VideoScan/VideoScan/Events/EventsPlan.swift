@@ -553,12 +553,14 @@ enum EventsPlanner {
         var recent: [Int] = []           // runs whose last date may still be within reach
         let evidenced = witnesses.filter { !$0.evidence.isEmpty }.sorted(by: dateOrder)
         for w in evidenced {
-            var i = home(for: w, runs: runs, byFolder: byFolder, recent: &recent, blocked: blocked, needsBoth: false)
-            if i == nil {
+            let i: Int
+            if let found = home(for: w, runs: runs, byFolder: byFolder, recent: &recent, blocked: blocked, needsBoth: false) {
+                i = found
+            } else {
                 runs.append(Run())
                 i = runs.count - 1
             }
-            join(w, run: i!, runs: &runs, byFolder: &byFolder, recent: &recent)
+            join(w, run: i, runs: &runs, byFolder: &byFolder, recent: &recent)
         }
         // Pass 2 needs the folder AND the date, so the folder index alone
         // names its candidates: no date window to copy per witness.
