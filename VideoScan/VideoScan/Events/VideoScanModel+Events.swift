@@ -110,9 +110,10 @@ extension VideoScanModel {
 // MARK: - The metrics object (EVENTS_KEYS, exactly)
 
 /// `events_latest.json`: the keys `tools/publish_metrics.py` allowlists,
-/// and nothing else. Marks are Rick's in-app decisions (accepted members =
-/// yes; rejected members and rejected categories = no), null until he has
-/// made one — the prototype's contract.
+/// and nothing else. Marks are Rick's in-app decisions (members accepted
+/// into a live event = yes; a category said no to for a recording = no;
+/// a rejected membership is not a mark against the category), null until
+/// he has made one — the prototype's contract.
 struct EventsStats: Codable, Equatable, Sendable {
     struct Marks: Codable, Equatable, Sendable {
         var yes: Int
