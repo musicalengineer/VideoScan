@@ -35,6 +35,9 @@ let package = Package(
         // One-time family-tree ingest: parse N GEDCOM pulls → merge by FSID →
         // compile → verify → promote (2026-08-28, Rick: "pay a one-time price").
         .executable(name: "videoscan-tree-ingest", targets: ["videoscan-tree-ingest"]),
+        // Audio-fingerprint demo (2026-10-14): `fingerprint <file>` and
+        // `match <query> <master>`, read-only, for "same event?" questions.
+        .executable(name: "videoscan-audio-match", targets: ["videoscan-audio-match"]),
     ],
     targets: [
         .target(name: "VideoScanCore", swiftSettings: strictConcurrency),
@@ -45,6 +48,11 @@ let package = Package(
         ),
         .executableTarget(
             name: "videoscan-tree-ingest",
+            dependencies: ["VideoScanCore"],
+            swiftSettings: strictConcurrency
+        ),
+        .executableTarget(
+            name: "videoscan-audio-match",
             dependencies: ["VideoScanCore"],
             swiftSettings: strictConcurrency
         ),
