@@ -479,6 +479,18 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/EventCategoryRulesReviewRedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventCategoryRulesReviewRedTests"
+      ],
+      "tests": [
+        "bareNameInSpeechIsAMention"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/EventCategoryRulesTests.swift",
       "stage": "unit",
       "suites": [
@@ -7625,7 +7637,9 @@
         "dismissedComesBackOnlyWhenFactsChange",
         "newerStoreVersionIsReadOnlyNotEmpty",
         "rejectCategoryIsNotRejectMembership",
-        "unknownDecisionKindIsPreservedOnSave"
+        "savesAreCoalesced",
+        "unknownDecisionKindIsPreservedOnSave",
+        "writeBeforeLoadIsRefused"
       ]
     },
     {
@@ -7673,6 +7687,21 @@
         "spanBoundStopsThreeHourGapChaining",
         "twoBirthdaysOnSuccessiveWeekendsStayApart",
         "yearsApartDateConflictBlocksMerge"
+      ]
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/EventsReviewRedTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventsReviewRedTests"
+      ],
+      "tests": [
+        "cardButtonsDisabledWhenReadOnly",
+        "dismissAfterRejectStillDismisses",
+        "failedSaveIsSurfaced",
+        "oneFolderOfNameOnlyWitnessesIsNotQuadratic",
+        "writeBeforeLoadDoesNotClobberTheFile"
       ]
     },
     {
@@ -27321,6 +27350,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/EventCategoryRulesReviewRedTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/EventCategoryRulesTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -29757,7 +29790,7 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 2371,
+      "expected_floor": 2378,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -29899,6 +29932,7 @@
         "VideoScanTests/EventsDecisionStoreTests",
         "VideoScanTests/EventsIsolationTests",
         "VideoScanTests/EventsPlanTests",
+        "VideoScanTests/EventsReviewRedTests",
         "VideoScanTests/EventsSensorTests",
         "VideoScanTests/ExcessCopiesPlanTests",
         "VideoScanTests/ExcessCopiesSensorTests",

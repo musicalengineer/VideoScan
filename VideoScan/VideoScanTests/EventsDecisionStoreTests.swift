@@ -18,8 +18,61 @@ struct EventsDecisionStoreTests {
 
     private typealias F = EventsFixture
 
-    private func store(_ tag: String) throws -> EventsDecisionStore {
-        EventsDecisionStore(directory: try F.scratchDirectory(tag))
+    /// A store in a fresh temp folder, LOADED (missing file → empty,
+    /// writable): a write before load() is refused (QA P1-b).
+    private func store(_ tag: String, publisher: EventsDecisionPublisher = .atomic) async throws -> EventsDecisionStore {
+        let s = EventsDecisionStore(directory: try F.scratchDirectory(tag), publisher: publisher)
+        #expect(await s.load() == .missing)
+        return s
+    }
+
+    /// Counts publishes; the bytes go to the real file so a reload works.
+    private final class PublishCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        var count: Int { lock.withLock { n } }
+        func publisher() -> EventsDecisionPublisher {
+            EventsDecisionPublisher { [self] data, url, previous in
+                lock.withLock { n += 1 }
+                try EventsDecisionPublisher.atomic.publish(data, url, previous)
+            }
+        }
+    }
+
+    @Test("many changes before the save runs are ONE publish; a batch is one change; a change after it lands is the next publish")
+    func savesAreCoalesced() async throws {
+        let counter = PublishCounter()
+        let store = try await store("coalesce", publisher: counter.publisher())
+        // Twenty single decisions and one 45-pair batch, no await between them.
+        for i in 0..<20 { store.record(.categoryRejected(range: ContentRange(contentKey: "sha-\(i)"), category: "Birthday")) }
+        var pairs: [EventDecision] = []
+        for i in 0..<10 { for j in (i + 1)..<10 { pairs.append(.differentOccasions(a: ContentRange(contentKey: "p\(i)"), b: ContentRange(contentKey: "p\(j)"))) } }
+        #expect(store.record(pairs))
+        #expect(store.decisionCount == 65)
+        #expect(await store.save())
+        #expect(counter.count == 1, "one publish for the whole burst, got \(counter.count)")
+        // The file holds everything, in order.
+        let again = EventsDecisionStore(directory: store.directory)
+        #expect(await again.load() == .loaded && again.decisionCount == 65)
+        #expect(again.decisions == store.decisions)
+        // A change after the publish is the next one — exactly one more.
+        store.record(.categoryRejected(range: ContentRange(contentKey: "sha-late"), category: "Christmas"))
+        #expect(await store.save())
+        #expect(counter.count == 2)
+        #expect(store.record([]) == false, "an empty batch is not a change")
+        #expect(await store.save() && counter.count == 2, "nothing changed: nothing published")
+    }
+
+    @Test("a write before load() is refused with a reason, and the file is untouched")
+    func writeBeforeLoadIsRefused() async throws {
+        let store = EventsDecisionStore(directory: try F.scratchDirectory("preload-refuse"))
+        #expect(store.isReadOnly && store.writeRefusal == "decisions not loaded yet" && store.problem == "decisions not loaded yet")
+        #expect(!store.record(.categoryRejected(range: ContentRange(contentKey: "x"), category: "Birthday")))
+        #expect(store.confirm(name: "x", categories: [], members: []) == nil)
+        #expect(await store.save() == false)
+        #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
+        #expect(await store.load() == .missing)
+        #expect(store.isWritable && store.problem == nil)
     }
 
     /// Two captioned birthday clips, one folder, one day: one suggestion.
@@ -29,8 +82,8 @@ struct EventsDecisionStoreTests {
     }
 
     @Test("a confirmed event survives the suggestion being regrouped under another key")
-    func confirmSurvivesRegroupedSuggestionIDs() throws {
-        let store = try store("regroup")
+    func confirmSurvivesRegroupedSuggestionIDs() async throws {
+        let store = try await store("regroup")
         let first = F.plan(party)
         let s = try #require(first.suggestions.first)
         #expect(s.key == "Birthday|sha-cake")
@@ -50,8 +103,8 @@ struct EventsDecisionStoreTests {
     }
 
     @Test("'different occasions' survives a rerun that would otherwise merge the two")
-    func differentOccasionsSurvivesRerun() throws {
-        let store = try store("different")
+    func differentOccasionsSurvivesRerun() async throws {
+        let store = try await store("different")
         #expect(F.plan(party).suggestions.count == 1, "they merge on their own")
         store.record(.differentOccasions(a: ContentRange(contentKey: "sha-cake"), b: ContentRange(contentKey: "sha-song")))
         let plan = F.plan(party, decisions: store.snapshot())
@@ -60,8 +113,8 @@ struct EventsDecisionStoreTests {
     }
 
     @Test("rejecting a category for a recording is not rejecting its membership of a confirmed event")
-    func rejectCategoryIsNotRejectMembership() throws {
-        let store = try store("category")
+    func rejectCategoryIsNotRejectMembership() async throws {
+        let store = try await store("category")
         let s = try #require(F.plan(party).suggestions.first)
         let event = try #require(store.confirm(name: s.name, categories: s.categories, members: s.members.map(\.range)))
         store.record(.categoryRejected(range: ContentRange(contentKey: "sha-song"), category: "Birthday"))
@@ -77,8 +130,8 @@ struct EventsDecisionStoreTests {
     }
 
     @Test("a dismissed suggestion stays away on the same facts and returns when a member or evidence line changes")
-    func dismissedComesBackOnlyWhenFactsChange() throws {
-        let store = try store("dismiss")
+    func dismissedComesBackOnlyWhenFactsChange() async throws {
+        let store = try await store("dismiss")
         let s = try #require(F.plan(party).suggestions.first)
         store.record(.suggestionDismissed(key: s.key, facts: s.facts))
         let same = F.plan(party, decisions: store.snapshot())
@@ -92,8 +145,8 @@ struct EventsDecisionStoreTests {
     }
 
     @Test("decisions keyed by content survive a rescan that moved the drive")
-    func decisionsKeyedByContentSurviveRescanPathChange() throws {
-        let store = try store("rescan")
+    func decisionsKeyedByContentSurviveRescanPathChange() async throws {
+        let store = try await store("rescan")
         let s = try #require(F.plan(party).suggestions.first)
         let event = try #require(store.confirm(name: "Matt's 8th", categories: s.categories, members: s.members.map(\.range)))
         let moved = [F.row("/Volumes/NewDrive/1998/June/cake.mov", key: "sha-cake", caption: "A cake with lit candles.", userDate: F.iso(1998, 6, 5)),
@@ -109,7 +162,7 @@ struct EventsDecisionStoreTests {
 
     @Test("a file from a newer VideoScan loads what it holds and refuses every write — never treated as empty")
     func newerStoreVersionIsReadOnlyNotEmpty() async throws {
-        let store = try store("newer")
+        let store = try await store("newer")
         let eventID = UUID()
         let json = """
         {"storeVersion": 2, "savedAt": "2026-10-14T12:00:00Z",
@@ -135,7 +188,7 @@ struct EventsDecisionStoreTests {
 
     @Test("a decision kind this build cannot read is kept verbatim across a save; the previous file is kept as .prev")
     func unknownDecisionKindIsPreservedOnSave() async throws {
-        let store = try store("unknown")
+        let store = try await store("unknown")
         let json = """
         {"storeVersion": 1, "savedAt": "2026-10-14T12:00:00Z", "events": [],
          "decisions": [{"kind": "rangeAdjusted", "range": {"contentKey": "sha-1", "start": 10.5, "end": 20}, "by": "rick"}]}

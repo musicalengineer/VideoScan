@@ -33,7 +33,9 @@ struct EventsPlanScaleTests {
             let folder = (i / 40) % 25
             let year = 1985 + (i / 400) % 30
             let path = "/Volumes/Drive\(drive)/\(year)/folder\(folder)/clip\(i).mov"
-            let key = i % 5 == 0 ? "sha-\(i / 2)" : nil
+            // 20% copies: rows 0 and 5 of every ten share one digest (i/10) —
+            // true pairs, so witness folding is exercised at 100k (QA P3).
+            let key = i % 5 == 0 ? "sha-\(i / 10)" : nil
             let caption = i % 10 == 0 ? captions[i % captions.count] : nil
             let transcript = i % 20 == 0 ? speech[i % speech.count] : nil
             var user: String?
@@ -73,6 +75,7 @@ struct EventsPlanScaleTests {
         #expect(plan.witnessesWithEvidence > 5_000, "captions, speech and names found \(plan.witnessesWithEvidence)")
         #expect(plan.suggestions.count > 1_000 && plan.suggestions.count < plan.witnessesWithEvidence, "runs group, conservatively")
         #expect(plan.byCategory.count == 9)
+        #expect(plan.suggestions.contains { $0.members.contains { $0.copies == 2 } }, "copies folded into one witness")
         #expect(elapsed < PerformanceLane.debugCeiling(.seconds(10)), "100k plan took \(elapsed)")
     }
 
