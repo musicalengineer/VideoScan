@@ -61,7 +61,7 @@ struct EventsPlanScaleTests {
         let smallElapsed = clock.measure { smallPlan = F.plan(small, birthdays: F.birthdays) }
         print("EVENTS_PLAN_10K_MS=\(smallElapsed.components.seconds * 1000 + smallElapsed.components.attoseconds / 1_000_000_000_000_000) "
               + "suggestions=\(smallPlan.suggestions.count) witnesses=\(smallPlan.witnessesWithEvidence) \(PerformanceLane.configurationName)")
-        #expect(smallPlan.rowCount == 10_000 && smallPlan.suggestions.count > 0)
+        #expect(smallPlan.rowCount == 10_000 && !smallPlan.suggestions.isEmpty)
 
         let rows = Self.syntheticRows(100_000)
         var plan = EventsPlan.empty
@@ -100,7 +100,7 @@ struct EventsPlanScaleTests {
         #expect(body.contains("Task.detached(priority: .userInitiated)"), "the planner runs off the main actor")
         // And it really builds, with birthdays injected (no People tab read).
         let plan = await model.buildEventsPlan(decisions: .empty, birthdays: { F.birthdays })
-        #expect(plan.rowCount == 100_000 && plan.suggestions.count > 0)
+        #expect(plan.rowCount == 100_000 && !plan.suggestions.isEmpty)
     }
 
     @Test("reapplying decisions to a 100k plan is a fraction of the build, never a rebuild", .timeLimit(.minutes(3)))

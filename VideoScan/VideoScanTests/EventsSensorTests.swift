@@ -52,7 +52,7 @@ struct EventsSensorTests {
 
     @Test("the sidebar count is the plan's numbers: suggestions + questions to review")
     func sidebarCountMatchesPlanNumbers() async throws {
-        #expect(EventsWords.sidebarCount(nil) == "", "nothing until the first plan lands")
+        #expect(EventsWords.sidebarCount(nil).isEmpty, "nothing until the first plan lands")
         var n = EventsStore.Numbers()
         n.toReview = 1_234
         #expect(EventsWords.sidebarCount(n) == "1,234 to review")
@@ -139,7 +139,7 @@ struct EventsSensorTests {
         let decided = try #require(try JSONSerialization.jsonObject(with: enc.encode(EventsStats(plan: plan, decisions: d, now: Date()))) as? [String: Any])
         #expect(decided["marks_yes"] as? Int == 1 && decided["marks_no"] as? Int == 1)
         #expect((decided["precision_by_category"] as? [String: [String: Int]])?["Birthday"] == ["yes": 1, "no": 0])
-        let text = String(decoding: try enc.encode(EventsStats(plan: plan, decisions: d, now: Date())), as: UTF8.self)
+        let text = try #require(String(data: try enc.encode(EventsStats(plan: plan, decisions: d, now: Date())), encoding: .utf8))
         #expect(!text.contains("Matt") && !text.contains("cake") && !text.contains("/Volumes"), "counts only")
     }
 }
