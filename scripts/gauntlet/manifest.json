@@ -27266,6 +27266,44 @@
         "progressSnapshotIsAtomicWithTransfer",
         "stopAfterProofIsReportedMoved"
       ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintAcceptanceTests.swift",
+      "stage": "integration",
+      "suites": [
+        "AudioFingerprintAcceptanceTests"
+      ],
+      "tests": [
+        "deterministicAndEncodable",
+        "margin",
+        "mediaMatrix",
+        "negative",
+        "positive"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintEngineTests.swift",
+      "stage": "integration",
+      "suites": [
+        "AudioFingerprintEngineTests"
+      ],
+      "tests": [
+        "bogusFFmpegPathIsNamed",
+        "decodeWindowIsExact",
+        "decodedBytesAreTheWAVsBytes",
+        "decoderArgumentsAreReadOnlyPipeToStdout",
+        "engineSourcesNeverOpenAnInputForWrite",
+        "hashPackingRoundTrips",
+        "silenceHasNoLandmarks",
+        "sixtyMinuteMasterFingerprintsAndIndexesWithinBudget",
+        "verdictRules",
+        "videoOnlyFileIsNoAudioStream",
+        "zeroByteFileIsDecodeFailed"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -30434,6 +30472,14 @@
     },
     {
       "blocked": [
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintAcceptanceTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintEngineTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FFmpegPreviewRendererE2ETests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
