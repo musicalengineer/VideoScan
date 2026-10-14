@@ -8,7 +8,10 @@
 //   END TO END — a sandbox catalog with real files: exactly the right record
 //               changes, only its label changes, the snapshot and receipt are
 //               written first, the save lands, catalog.log has one line per
-//               file, and "Put the labels back" reverses exactly that.
+//               file, and "Put the labels back" reverses exactly that. Since
+//               2026-10-14: a row hidden by the GH #143 migration's legacy
+//               marker is shown again through the engine's Restore, lands in
+//               Cleanup's inputs, and the reverse puts the marker back too.
 //   ISOLATION — a poisoned (unreadable) ledger refuses everything; a damaged
 //               ledger line naming a file keeps it labelled; a model on the
 //               SHARED store (the real App Support catalog) refuses — no
@@ -299,6 +302,56 @@ struct ShowAgainApplyTests {
         #expect(row.removal == nil && row.purgedAt == nil && row.archiveStage == ArchiveStage.none)
     }
 
+    @Test("put back restores BOTH the legacy marker (same since) and the label; the receipt names the marker; label-only rows get the label only")
+    func reversePutsTheMarkerBack() async throws {
+        let sb = try ShowAgainSandbox.make("legacyreverse"); defer { sb.cleanup() }
+        let since = Date(timeIntervalSince1970: 1_760_300_000)
+        let hidden = try sb.record("Easter_1992.dv", bytes: 3_072)
+        VideoScanModel.stampRemoval(hidden, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
+        let labelOnly = try sb.record("label_only.mov", bytes: 2_048)
+        let reviewed = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
+        let result = await sb.model.applyShowAgain(reviewed: reviewed, disk: ShowAgainSandbox.onlineRealStat)
+        #expect(result.outcome == .shown && Set(result.shown.map(\.id)) == [hidden.id, labelOnly.id], "\(result)")
+        let receiptURL = try #require(result.receiptURL)
+        let receipt = try ShowAgainReceiptFile.decode(Data(contentsOf: receiptURL))
+        #expect(receipt.changes.first { $0.id == hidden.id }?.removalSince == since)
+        #expect(receipt.changes.first { $0.id == labelOnly.id }?.removalSince == nil)
+        #expect((String(data: try Data(contentsOf: receiptURL), encoding: .utf8) ?? "").contains("\"removalSince\""))
+        #expect(hidden.removal == nil && labelOnly.removal == nil)
+
+        let rev = await sb.model.reverseShowAgain(receiptURL: receiptURL)
+        #expect(rev.restored == 2 && rev.skipped.isEmpty && rev.refusal == nil, "\(rev)")
+        #expect(hidden.archiveStage == .manuallyDeleted)
+        #expect(hidden.removal == .removedFromCatalog(at: since, reason: .legacyDeletedLabel), "\(String(describing: hidden.removal))")
+        #expect(hidden.isPurged, "hidden again, exactly as the migration left it")
+        #expect(labelOnly.archiveStage == .manuallyDeleted && labelOnly.removal == nil)
+        let log = sb.catalogLogText()
+        #expect(log.contains("label put back: \(hidden.fullPath) id=\(hidden.id.uuidString) — None → Manually Deleted; removal marker (old deleted label) put back"), "\(log)")
+        #expect(log.contains("label put back: \(labelOnly.fullPath) id=\(labelOnly.id.uuidString) — None → Manually Deleted\n"), "\(log)")
+        // Both are candidates again: a second review offers them.
+        let again = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
+        #expect(Set(again.toShow.map(\.id)) == [hidden.id, labelOnly.id])
+    }
+
+    @Test("a receipt from the 2026-10-11 build (no removalSince key) still decodes and reverses the label only")
+    func oldReceiptShapeReversesLabelOnly() async throws {
+        let sb = try ShowAgainSandbox.make("oldreceipt"); defer { sb.cleanup() }
+        let shown = try sb.record("old.mov", bytes: 1_024, stage: .none)
+        let json = """
+        {"changes":[{"from":"Manually Deleted","id":"\(shown.id.uuidString)","path":"\(shown.fullPath)","to":"None"}],"runID":"show-again-old","snapshotPath":"/nowhere","writtenAt":"2026-10-11T12:00:00Z"}
+        """
+        let file = try ShowAgainReceiptFile.decode(Data(json.utf8))
+        #expect(file.changes == [.init(id: shown.id, path: shown.fullPath, from: "Manually Deleted", to: "None")])
+        #expect(file.changes.first?.removalSince == nil)
+        let dir = sb.model.showAgainReceiptsDirectory
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("show-again-old.json")
+        try Data(json.utf8).write(to: url)
+        let rev = await sb.model.reverseShowAgain(receiptURL: url)
+        #expect(rev.restored == 1 && rev.skipped.isEmpty, "\(rev)")
+        #expect(shown.archiveStage == .manuallyDeleted && shown.removal == nil && !shown.isPurged)
+    }
+
     @Test("put back never re-hides a file that has since become its group's surviving keeper, nor relabels a removed row")
     func reverseLeavesASurvivingKeeperVisible() async throws {
         let sb = try ShowAgainSandbox.make("reverse_keeper"); defer { sb.cleanup() }
@@ -481,11 +534,18 @@ struct ShowAgainSensorTests {
         #expect(apply.contains("let dir = showAgainReceiptsDirectory"))
     }
 
-    @Test("the label set is the live value and the label cleared is Manually Deleted — nothing else")
+    @Test("the only assignment is the label; the marker goes through the engine (clearRemoval / stampRemoval), never a `.removal =` here")
     func onlyTheLabel() throws {
         #expect(ShowAgainRules.falseLabel == .manuallyDeleted)
         #expect(ShowAgainRules.liveLabel == .none)
         let apply = try SourceTree.appSource(named: "ShowAgain+Apply.swift")
+        #expect(apply.contains("if let why = clearRemoval(rec)"), "the run clears the marker through the engine's Restore")
+        #expect(apply.contains("Self.stampRemoval(rec, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))"),
+                "the reverse re-marks through the engine's one writer")
+        for name in Self.files {
+            let src = try SourceTree.appSource(named: name)
+            #expect(!src.contains(".removal = ") && !src.contains(".purgedAt = "), "\(name) writes the marker itself")
+        }
         // A property assignment on a record: `rec.<field> = …` (not `==`, not a binding).
         let assignment = try NSRegularExpression(pattern: #"\brec\.[A-Za-z_.]+ = "#)
         let assignments = apply.split(separator: "\n").filter {

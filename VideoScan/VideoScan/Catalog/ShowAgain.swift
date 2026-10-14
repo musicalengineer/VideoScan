@@ -14,8 +14,13 @@
 //
 // CRITERIA, per record — all must hold, judged at the review AND again at
 // the job's turn (`verdict`, pure, truth-table tested):
-//   1. the label is `.manuallyDeleted` and the record is active (not purged,
-//      set aside or superseded) — the footer caption's own population;
+//   1. the record carries the old label in EITHER encoding — `archiveStage`
+//      `.manuallyDeleted`, or the removal marker the GH #143 load migration
+//      made of that label (`removedFromCatalog` / `.legacyDeletedLabel`;
+//      persisted on every such row since 2026-10-12) — its removal marker
+//      is nil or exactly that legacy one (any other marker — in the Trash,
+//      missing, Remove from Catalog… — is a real removal, never ours), and
+//      it is not set aside or superseded. The footer caption's population;
 //   2. no Trash / delete receipt for it in the Media Ledger (a `copyTrashed`
 //      or `copyDeleted` line naming its record id OR its path; a damaged
 //      ledger line mentioning either counts as a receipt — refuse over guess;
@@ -25,13 +30,16 @@
 // Anything else STAYS labelled, with its reason. The 9 records whose file
 // is missing stay labelled.
 //
-// THE CHANGE: `archiveStage` `.manuallyDeleted` → `.none`. Why `.none`: it is
-// the value every scanned record starts with and the one Migrate's own
-// recovery paths restore (`.salvageFailed` → `.none` on a verified copy or
-// adoption). The label overwrote whatever the record had; no surviving
-// field says what that was, so `.none` ("no archive progress claimed") is
-// the only value that asserts nothing. `lifecycleStage`, notes, dates, tags,
-// people — untouched. No File Journey stamp: label only.
+// THE CHANGE: `archiveStage` `.manuallyDeleted` → `.none`, and the legacy
+// removal marker cleared — through the one Trash engine's Restore
+// (`clearRemoval`, VideoScanModel+RemovalMarker.swift), the only writer of
+// the marker. Why `.none`: it is the value every scanned record starts with
+// and the one Migrate's own recovery paths restore (`.salvageFailed` →
+// `.none` on a verified copy or adoption). The label overwrote whatever the
+// record had; no surviving field says what that was, so `.none` ("no
+// archive progress claimed") is the only value that asserts nothing.
+// `lifecycleStage` (these rows are not Trashed), notes, dates, tags,
+// people — untouched. No File Journey stamp: label and marker only.
 //
 // NEVER TOUCHES MEDIA. This file and the job read `stat()` and the ledger,
 // and write only: a catalog safety snapshot, a receipt JSON beside the
@@ -42,10 +50,12 @@
 // REVERSIBLE: before the first label changes, (a) `catalog.pre-show-again.
 // <stamp>.json` — the whole catalog, from memory, through the store's
 // canonical encoder — and (b) `label-repairs/show-again-<stamp>.json`, the
-// exact list of changed ids with old → new. `reverseShowAgain(receiptURL:)`
-// puts `.manuallyDeleted` back on exactly those ids whose label is still the
-// value this run set (the detail view's "Put the labels back"). No snapshot
-// or no receipt → the run refuses before changing anything.
+// exact list of changed ids with old → new and, where the row carried the
+// legacy marker, its `since`. `reverseShowAgain(receiptURL:)` puts
+// `.manuallyDeleted` — and that marker, same `since` — back on exactly
+// those ids whose label is still the value this run set (the detail view's
+// "Put the labels back"). No snapshot or no receipt → the run refuses
+// before changing anything.
 //
 // OUTCOMES (named, none reads as success unless labels changed and the
 // catalog save was acknowledged): shown · stayed(reason) · refused(why) ·
@@ -73,6 +83,21 @@ struct ShowAgainCandidate: Sendable, Equatable, Identifiable, Codable {
     let fullPath: String
     let volumeName: String
     let sizeBytes: Int64
+    /// The legacy marker's `since` when the row carries one (the receipt
+    /// keeps it so the reverse puts the same marker back); nil = label only.
+    var removalSince: Date? = nil
+}
+
+extension RemovalMarker {
+    /// The marker the GH #143 load migration makes of the old "Manually
+    /// Deleted" label: the file was never touched, the row is merely hidden.
+    var isLegacyDeletedLabel: Bool { state == .removedFromCatalog && reason == .legacyDeletedLabel }
+}
+
+extension VideoRecord {
+    /// True when the row's removal marker is the migrated old label (and
+    /// nothing else — a real removal never reads true here).
+    var hasLegacyDeletedLabelMarker: Bool { removal?.isLegacyDeletedLabel ?? false }
 }
 
 /// What one `stat()` said about a path.
@@ -100,11 +125,15 @@ enum ShowAgainStayReason: Sendable, Equatable, Hashable {
     case couldNotCheck
     case sizeChanged
     /// The live record changed between the review and the run (label,
-    /// path, size or active state) — or left the catalog.
+    /// path, size, marker or active state) — or left the catalog.
     case changedSinceReview
+    /// The engine's Restore said no (its own words). Never expected for a
+    /// removed-from-catalog marker; kept so a refusal is a row, not a crash.
+    case restoreRefused(String)
 
     var words: String {
         switch self {
+        case .restoreRefused(let why): return "the catalog's Restore refused: \(why)"
         case .hasRemovalReceipt: return "the ledger says the app moved it to the Trash or deleted it"
         case .noCatalogSize: return "the catalog has no size for it to compare"
         case .driveNotConnected: return "its drive is not connected"
@@ -130,10 +159,22 @@ enum ShowAgainRules {
     static let falseLabel: ArchiveStage = .manuallyDeleted
     static let liveLabel: ArchiveStage = .none
 
-    /// Rule 1: labelled deleted AND active — the footer caption's population.
+    /// Rule 1: the old label in either encoding, no REAL removal marker,
+    /// not set aside or superseded — the footer caption's population.
+    /// `isPurged` first: it is a cached `Date?` load; the marker itself is
+    /// read only on the rows that have one (the 100k scale budget).
     @MainActor
     static func isCandidate(_ r: VideoRecord) -> Bool {
-        r.archiveStage == falseLabel && !r.isPurged && !r.isSetAside && !r.isSuperseded
+        guard !r.isSetAside, !r.isSuperseded else { return false }
+        guard r.isPurged else { return r.archiveStage == falseLabel }   // no marker: the label alone hides it
+        return r.hasLegacyDeletedLabelMarker                           // the migrated label; anything else is a real removal
+    }
+
+    /// The legacy marker's `since` for a candidate row; nil = label only.
+    @MainActor
+    static func legacyMarkerSince(_ r: VideoRecord) -> Date? {
+        guard let m = r.removal, m.isLegacyDeletedLabel else { return nil }
+        return m.since
     }
 
     /// Rules 2 and 3. Receipt first (the strongest stop), then the catalog's
@@ -325,6 +366,10 @@ struct ShowAgainReceiptFile: Codable, Equatable, Sendable {
         let path: String
         let from: String
         let to: String
+        /// The legacy removal marker's `since`, when the run cleared one.
+        /// Optional: a receipt written before 2026-10-14 has no such key and
+        /// still decodes (the reverse then puts back the label only).
+        var removalSince: Date? = nil
     }
     let runID: String
     let writtenAt: Date
@@ -351,15 +396,17 @@ enum ShowAgainLines {
     static let prefix = "Show again"
 
     static func shownLine(_ c: ShowAgainCandidate) -> String {
-        "[show-again] shown again: \(c.fullPath) id=\(c.id.uuidString) — label \(ShowAgainRules.falseLabel.rawValue) → \(ShowAgainRules.liveLabel.rawValue) (on disk at the catalog's size, \(c.sizeBytes) bytes; no Trash receipt)"
+        let marker = c.removalSince == nil ? "" : "; removal marker (old deleted label) cleared"
+        return "[show-again] shown again: \(c.fullPath) id=\(c.id.uuidString) — label \(ShowAgainRules.falseLabel.rawValue) → \(ShowAgainRules.liveLabel.rawValue)\(marker) (on disk at the catalog's size, \(c.sizeBytes) bytes; no Trash receipt)"
     }
 
     static func stayedLine(_ c: ShowAgainCandidate, _ why: ShowAgainStayReason) -> String {
         "[show-again] left labelled: \(c.fullPath) id=\(c.id.uuidString) — \(why.words)"
     }
 
-    static func revertedLine(path: String, id: UUID) -> String {
-        "[show-again] label put back: \(path) id=\(id.uuidString) — \(ShowAgainRules.liveLabel.rawValue) → \(ShowAgainRules.falseLabel.rawValue)"
+    static func revertedLine(path: String, id: UUID, markerPutBack: Bool) -> String {
+        let marker = markerPutBack ? "; removal marker (old deleted label) put back" : ""
+        return "[show-again] label put back: \(path) id=\(id.uuidString) — \(ShowAgainRules.liveLabel.rawValue) → \(ShowAgainRules.falseLabel.rawValue)\(marker)"
     }
 
     static func outcome(shown: Int, bytes: Int64, stayed: Int) -> String {
@@ -384,7 +431,8 @@ extension VideoScanModel {
         var out: [ShowAgainCandidate] = []
         for r in records where ShowAgainRules.isCandidate(r) {
             out.append(ShowAgainCandidate(id: r.id, filename: r.filename, fullPath: r.fullPath,
-                                          volumeName: r.volumeName, sizeBytes: r.sizeBytes))
+                                          volumeName: r.volumeName, sizeBytes: r.sizeBytes,
+                                          removalSince: ShowAgainRules.legacyMarkerSince(r)))
         }
         return out
     }
