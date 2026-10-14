@@ -188,6 +188,11 @@ struct TriageView: View {
     /// built off-main; TriageView's body never reads it.
     private let cleanupStore = CleanupStore.shared
     @State private var showingCleanup = false
+    /// Triage ▸ Events (2026-10-14): "which recordings belong to the same
+    /// family memory?". Its plan lives in the store, built off-main;
+    /// TriageView's body never reads it.
+    private let eventsStore = EventsStore.shared
+    @State private var showingEvents = false
 
     init(model: VideoScanModel) {
         self.model = model
@@ -232,6 +237,9 @@ struct TriageView: View {
                 .frame(minWidth: 180, idealWidth: 210, maxWidth: 260)
             if showingCleanup {
                 CleanupPane(model: model, store: cleanupStore)
+                    .frame(minWidth: 500)
+            } else if showingEvents {
+                EventsPane(model: model, store: eventsStore)
                     .frame(minWidth: 500)
             } else if curator && showingExcess {
                 ExcessCopiesPane(model: model, store: excessStore)
@@ -311,8 +319,15 @@ struct TriageView: View {
                     Divider().padding(.vertical, 6)
                     CleanupSidebarRow(isSelected: showingCleanup) {
                         showingCleanup = true
+                        showingEvents = false
                         showingExcess = false
                         cleanupStore.refresh(model: model)
+                    }
+                    EventsSidebarRow(isSelected: showingEvents) {
+                        showingEvents = true
+                        showingCleanup = false
+                        showingExcess = false
+                        eventsStore.refresh(model: model)
                     }
 
                     if curator {
@@ -320,6 +335,7 @@ struct TriageView: View {
                         CleanUpSidebarSection(store: excessStore, showingExcess: $showingExcess) {
                             showingExcess = true
                             showingCleanup = false
+                            showingEvents = false
                             excessStore.refresh(model: model)
                         }
                     }
@@ -356,6 +372,7 @@ struct TriageView: View {
             selectedIDs = []
             showingExcess = false
             showingCleanup = false
+            showingEvents = false
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: filter.icon)
