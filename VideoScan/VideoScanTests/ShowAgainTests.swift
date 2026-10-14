@@ -132,6 +132,33 @@ struct ShowAgainRulesTests {
         for r in [purged, aside, superseded] { #expect(!ShowAgainRules.isCandidate(r)) }
     }
 
+    @Test("candidates, both encodings of the old label (GH #143 migration): the legacy marker is ours; any real removal marker is not")
+    @MainActor
+    func candidateRuleWithTheLegacyMarker() {
+        let d = Date(timeIntervalSince1970: 1_760_000_000)
+        func rec(_ stage: ArchiveStage, _ marker: RemovalMarker?) -> VideoRecord {
+            let r = VideoRecord()
+            r.archiveStage = stage
+            if let marker { VideoScanModel.stampRemoval(r, marker) }
+            return r
+        }
+        let legacy = RemovalMarker.removedFromCatalog(at: d, reason: .legacyDeletedLabel)
+        #expect(ShowAgainRules.isCandidate(rec(.manuallyDeleted, legacy)),
+                "label + the load migration's marker — Rick's 993 rows")
+        #expect(ShowAgainRules.isCandidate(rec(.none, legacy)), "marker only")
+        #expect(!ShowAgainRules.isCandidate(rec(.manuallyDeleted, .inTrash(movedAt: d, trashPath: nil, reason: .junk))),
+                "in the Trash: a real removal")
+        #expect(!ShowAgainRules.isCandidate(rec(.manuallyDeleted, .removedFromCatalog(at: d, reason: .userRemoved))),
+                "Remove from Catalog: a real removal")
+        #expect(!ShowAgainRules.isCandidate(rec(.manuallyDeleted, .missing(noticedAt: d, lastSeen: nil, reason: .missingOnDisk))),
+                "missing: a real removal")
+        #expect(!ShowAgainRules.isCandidate(rec(.none, .removedFromCatalog(at: d, reason: .legacyPurged))),
+                "a legacy purgedAt: a real removal")
+        let aside = rec(.manuallyDeleted, legacy); aside.setAsideReason = "tidy"
+        let superseded = rec(.manuallyDeleted, legacy); superseded.supersededByID = UUID()
+        #expect(!ShowAgainRules.isCandidate(aside) && !ShowAgainRules.isCandidate(superseded))
+    }
+
     @Test("receipts: copyTrashed / copyDeleted by id or path count; other events do not; a damaged removal line naming the file counts")
     func receiptIndex() throws {
         let other = ShowAgainCandidate(id: UUID(), filename: "b.mov", fullPath: "/Volumes/LaCie/b.mov", volumeName: "LaCie", sizeBytes: 5)
@@ -239,6 +266,37 @@ struct ShowAgainApplyTests {
         #expect(again.restored == 0 && again.skipped == [shown.fullPath])
         #expect(try [shown, resized, trashed, live].map { try MediaFingerprint.of($0.fullPath) } == fingerprints,
                 "the reverse never touches media either")
+    }
+
+    @Test("THE goal (2026-10-14): a row hidden by the load migration's legacy marker is shown again — marker cleared, live, back in Cleanup's inputs; the log says the marker went")
+    func legacyMarkerRowShownAgain() async throws {
+        let sb = try ShowAgainSandbox.make("legacy"); defer { sb.cleanup() }
+        let since = Date(timeIntervalSince1970: 1_760_300_000)
+        let hidden = try sb.record("Thanksgiving_1994.dv", bytes: 4_096)
+        VideoScanModel.stampRemoval(hidden, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
+        let trashed = try sb.record("in_trash.mov", bytes: 2_048)
+        VideoScanModel.stampRemoval(trashed, .inTrash(movedAt: since, trashPath: nil, reason: .junk))
+        let live = try sb.record("live.mov", bytes: 1_200, stage: .none)
+        let stageBefore = hidden.lifecycleStage
+        #expect(hidden.isPurged, "fixture: the marker hides the row, as on Rick's catalog")
+        #expect(!sb.model.cleanupInputs().rows.contains { $0.id == hidden.id }, "fixture: Cleanup cannot see it")
+
+        let reviewed = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
+        #expect(reviewed.toShow.map(\.id) == [hidden.id], "\(reviewed.items)")
+        let result = await sb.model.applyShowAgain(reviewed: reviewed, disk: ShowAgainSandbox.onlineRealStat)
+        #expect(result.outcome == .shown, "\(result.outcome)")
+        #expect(hidden.removal == nil && !hidden.isPurged && hidden.archiveStage == .none)
+        #expect(hidden.lifecycleStage == stageBefore, "not a trashed row: the lifecycle stage is left alone")
+        #expect(trashed.removal?.state == .inTrash && trashed.archiveStage == .manuallyDeleted, "a real removal is never touched")
+        #expect(live.archiveStage == .none && live.removal == nil)
+        #expect(sb.model.cleanupInputs().rows.contains { $0.id == hidden.id }, "Cleanup can see it now")
+        let log = sb.catalogLogText()
+        #expect(log.contains("[show-again] shown again: \(hidden.fullPath)") && log.contains("removal marker"), "\(log)")
+        // Saved through the normal path: the catalog on disk carries no marker for it.
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .iso8601
+        let saved = try dec.decode(CatalogSnapshot.self, from: Data(contentsOf: URL(fileURLWithPath: sb.model.catalogStore.fileLocation)))
+        let row = try #require(saved.records.first { $0.id == hidden.id })
+        #expect(row.removal == nil && row.purgedAt == nil && row.archiveStage == ArchiveStage.none)
     }
 
     @Test("put back never re-hides a file that has since become its group's surviving keeper, nor relabels a removed row")
