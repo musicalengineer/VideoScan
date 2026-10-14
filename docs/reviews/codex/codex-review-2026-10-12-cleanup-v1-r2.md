@@ -69,3 +69,7 @@ Second and last round (Rick's rule). Round 1: `docs/reviews/codex/codex-review-2
 ## Closure (Manager, 2026-10-12)
 
 Final round. F1 re-check after reads (d8cf9b82), F3 resolved identity indexed (31a5006a), F5 ledger-owned snapshot (2c027d84); 189 tests in 22 suites green; merged to main 2026-10-12. Open: proof→Trash pathname window → #315 (engine RemovalStep / quarantine).
+
+## Closed
+
+Closed by `HEAD` at 2026-10-12T19:48:19Z. 3 fixed; merged

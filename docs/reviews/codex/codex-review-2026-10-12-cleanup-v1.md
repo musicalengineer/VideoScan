@@ -131,3 +131,7 @@ Verdict: fix — close the ancestry and volume-identity holes before Rick’s re
 ## Closure (Manager, 2026-10-12)
 
 All 7 findings fixed red-green on the branch (94e59dad, 5ed941f8, fc83301e, 6d11f06a, 9e61c4e0, 28a4fa1d, bbdbdd4d) plus the dry-run P2 (2aa8e527, hand marks only) and the missing cases (c80cc264). Round 2 → codex-review-2026-10-12-cleanup-v1-r2.md.
+
+## Closed
+
+Closed by `HEAD` at 2026-10-12T19:48:19Z. 7 fixed
