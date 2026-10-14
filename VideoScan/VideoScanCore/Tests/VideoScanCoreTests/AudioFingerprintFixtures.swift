@@ -326,7 +326,15 @@ enum AudioFixtureBuilder {
                         "-c:a", "pcm_s16le", "-y", out.path]
             if let why = await ffmpeg(args) { unavailable[name] = why } else { files[name] = out }
         }
-        // Silence, a 1 kHz tone, a 0-byte file, a video-only file.
+        await buildSynthetics(in: dir, files: &files, unavailable: &unavailable)
+
+        return AudioFixtures(directory: dir, a: a, b: b, c: c, d: d, e: e,
+                             files: files, unavailable: unavailable)
+    }
+
+    /// Silence, a 1 kHz tone, a 0-byte file, a video-only file.
+    private static func buildSynthetics(in dir: URL, files: inout [String: URL],
+                                        unavailable: inout [String: String]) async {
         let silence = dir.appendingPathComponent("test_silence.wav")
         if let why = await ffmpeg(["-nostdin", "-v", "error", "-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono",
                                    "-t", "180", "-c:a", "pcm_s16le", "-y", silence.path]) {
@@ -347,9 +355,6 @@ enum AudioFixtureBuilder {
                                    "-y", videoOnly.path]) {
             unavailable["video_only"] = why
         } else { files["video_only"] = videoOnly }
-
-        return AudioFixtures(directory: dir, a: a, b: b, c: c, d: d, e: e,
-                             files: files, unavailable: unavailable)
     }
 
     /// nil on success, otherwise the reason (ffmpeg's stderr tail).
