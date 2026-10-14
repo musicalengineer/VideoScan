@@ -485,7 +485,8 @@
         "EventCategoryRulesReviewRedTests"
       ],
       "tests": [
-        "bareNameInSpeechIsAMention"
+        "bareNameInSpeechIsAMention",
+        "rememberInPartySpeechDoesNotCancelTheGreeting"
       ]
     },
     {
@@ -7188,6 +7189,7 @@
         "fallbackMatchesMeasuredScreenshotOrigin",
         "ffprobeFailedCountsAsUnique",
         "fullCoverageGivesThePlainCaption",
+        "legacyMarkerRowIsHiddenByLabel",
         "manuallyDeletedLeavesGrossUniqueAndOnline",
         "manuallyDeletedNeverElectsAKeeper",
         "manuallyDeletedVolumeDoesNotCountAsAVolume",
@@ -22135,6 +22137,7 @@
       ],
       "tests": [
         "candidateRule",
+        "candidateRuleWithTheLegacyMarker",
         "changedSinceReview",
         "damagedLedgerLineHolds",
         "emptyReviewRefuses",
@@ -22142,13 +22145,18 @@
         "fileGoneSinceReview",
         "jobFinishes",
         "ledgerRead",
+        "legacyMarkerRowShownAgain",
+        "legacyTrashedStageBecomesCataloged",
         "noMediaFileOperations",
+        "oldReceiptShapeReversesLabelOnly",
         "onlyTheLabel",
         "onlyTheReceiptIsWritten",
         "poisonedLedgerRefuses",
         "receiptIndex",
         "reverseHoldsTheSoleGroupMemberAnyDisposition",
         "reverseLeavesASurvivingKeeperVisible",
+        "reverseOnMarkerOnlyRowIsExact",
+        "reversePutsTheMarkerBack",
         "sharedStoreRefuses",
         "truthTable"
       ]
@@ -27157,6 +27165,7 @@
         "familyArchiveCopyNeverATarget",
         "familyArchiveIsTheKeeper",
         "groupsByDigestAndSize",
+        "hiddenByOldLabelCountedInTheInputsPass",
         "humanMarksStay",
         "junkAliasingAKeeper",
         "junkLanes",
