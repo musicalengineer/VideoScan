@@ -427,7 +427,7 @@ struct CleanupTrashPlanTests {
         #expect(plan.hiddenByOldLabel == inputs.hiddenByOldLabel, "the plan carries the count the page reads (never computed in a body)")
         #expect(plan.copies.isEmpty && plan.junk.isEmpty)
         #expect(CleanupWords.hiddenByOldLabel(plan.hiddenByOldLabel)
-                == "2 files · \(MediaBytes.display(3_500)) are hidden by an old “deleted” label — the files were never moved.")
+                == "2 files · \(MediaBytes.display(3_500)) are hidden by an old “deleted” label — the app never moved them; the review checks each one is still on disk.")
         #expect(CleanupWords.hiddenByOldLabel(CleanupPlan.Tally(files: 1, bytes: 10)).hasPrefix("1 file · "))
     }
 

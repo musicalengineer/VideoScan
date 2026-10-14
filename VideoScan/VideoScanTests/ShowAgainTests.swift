@@ -157,6 +157,8 @@ struct ShowAgainRulesTests {
                 "missing: a real removal")
         #expect(!ShowAgainRules.isCandidate(rec(.none, .removedFromCatalog(at: d, reason: .legacyPurged))),
                 "a legacy purgedAt: a real removal")
+        #expect(!ShowAgainRules.isCandidate(rec(.manuallyDeleted, .removedFromCatalog(at: d, reason: .unspecified))),
+                "the nearest sibling reason (a bare purgedAt write): a real removal, not ours")
         let aside = rec(.manuallyDeleted, legacy); aside.setAsideReason = "tidy"
         let superseded = rec(.manuallyDeleted, legacy); superseded.supersededByID = UUID()
         #expect(!ShowAgainRules.isCandidate(aside) && !ShowAgainRules.isCandidate(superseded))
@@ -331,6 +333,43 @@ struct ShowAgainApplyTests {
         // Both are candidates again: a second review offers them.
         let again = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
         #expect(Set(again.toShow.map(\.id)) == [hidden.id, labelOnly.id])
+    }
+
+    @Test("QA P3-1: put back on a marker-only row restores the marker and NO label — the receipt's `from` is the stage the row really had")
+    func reverseOnMarkerOnlyRowIsExact() async throws {
+        let sb = try ShowAgainSandbox.make("markeronly"); defer { sb.cleanup() }
+        let since = Date(timeIntervalSince1970: 1_760_300_000)
+        let r = try sb.record("marker_only.mov", bytes: 2_048, stage: .none)
+        VideoScanModel.stampRemoval(r, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
+        let reviewed = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
+        let result = await sb.model.applyShowAgain(reviewed: reviewed, disk: ShowAgainSandbox.onlineRealStat)
+        #expect(result.outcome == .shown && r.removal == nil, "\(result.outcome)")
+        let url = try #require(result.receiptURL)
+        let receipt = try ShowAgainReceiptFile.decode(Data(contentsOf: url))
+        #expect(receipt.changes.first?.from == ArchiveStage.none.rawValue, "\(receipt.changes)")
+        let rev = await sb.model.reverseShowAgain(receiptURL: url)
+        #expect(rev.restored == 1 && rev.skipped.isEmpty, "\(rev)")
+        #expect(r.removal == .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
+        #expect(r.archiveStage == .none, "the run cleared no label")
+        #expect(sb.catalogLogText().contains("[show-again] put back: \(r.fullPath) id=\(r.id.uuidString) — removal marker (old deleted label) put back; no label to put back"))
+    }
+
+    @Test("QA P3-2: a label-hidden row with a legacy Trashed stage (file proven on disk) goes to Cataloged on the run; put back restores marker + label, not the stage")
+    func legacyTrashedStageBecomesCataloged() async throws {
+        let sb = try ShowAgainSandbox.make("trashedstage"); defer { sb.cleanup() }
+        let since = Date(timeIntervalSince1970: 1_760_300_000)
+        let r = try sb.record("once_trashed.mov", bytes: 2_048)
+        r.lifecycleStage = .trashed                     // the pre-#143 mirror, with no purgedAt: migrated to the legacy marker
+        VideoScanModel.stampRemoval(r, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
+        let reviewed = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
+        let result = await sb.model.applyShowAgain(reviewed: reviewed, disk: ShowAgainSandbox.onlineRealStat)
+        #expect(result.outcome == .shown, "\(result.outcome)")
+        #expect(r.removal == nil && r.archiveStage == .none && r.lifecycleStage == .cataloged,
+                "the engine's Restore rule: a proven-on-disk row is Cataloged")
+        let rev = await sb.model.reverseShowAgain(receiptURL: try #require(result.receiptURL))
+        #expect(rev.restored == 1, "\(rev)")
+        #expect(r.removal == .removedFromCatalog(at: since, reason: .legacyDeletedLabel) && r.archiveStage == .manuallyDeleted)
+        #expect(r.lifecycleStage == .cataloged, "the stage is not put back — it was the truer value")
     }
 
     @Test("a receipt from the 2026-10-11 build (no removalSince key) still decodes and reverses the label only")
