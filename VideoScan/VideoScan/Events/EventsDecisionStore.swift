@@ -26,6 +26,7 @@
 
 import Combine
 import Foundation
+import os
 import VideoScanCore
 
 // MARK: - Values
@@ -325,16 +326,44 @@ final class EventsDecisionStore: ObservableObject {
     private(set) var events: [UUID: EventRecord] = [:]
     private(set) var decisions: [EventDecision] = []
     private(set) var hasLoaded = false
-    /// Why saving is refused — a newer build's file, a file not fully
-    /// readable — nil when writable. The page says it.
+    /// Why saving is refused by the FILE — a newer build's, not fully
+    /// readable — nil when it was read whole. The page says it.
     private(set) var readOnlyReason: String?
-    var isReadOnly: Bool { readOnlyReason != nil }
+    /// The last save that failed ("not saved: …"), cleared by the next
+    /// one that succeeds. Not a refusal — the next change tries again —
+    /// but the page shows it (QA P2-a).
+    private(set) var lastSaveFailure: String?
 
-    private let writer = EventsDecisionWriter()
+    /// Writes are refused until `load()` has run (a write before the load
+    /// would publish an empty store over Rick's file — QA P1-b), and while
+    /// the file is read-only.
+    var isReadOnly: Bool { writeRefusal != nil }
+    var isWritable: Bool { writeRefusal == nil }
+    /// Why a write is refused right now, nil when writable.
+    var writeRefusal: String? {
+        guard hasLoaded else { return "decisions not loaded yet" }
+        return readOnlyReason
+    }
+    /// What the page should say: a refusal, else the last failed save.
+    var problem: String? { writeRefusal ?? lastSaveFailure }
+
+    /// Where a problem is said: the Events log sink once the page has one
+    /// (`EventsStore.refresh` points it at `VideoScanModel.eventsNote`);
+    /// the app log and the unified log until then.
+    var note: (String) -> Void = { line in
+        appLog.write("[events] " + line)
+        eventsStoreLog.notice("\(line, privacy: .public)")
+    }
+
+    private let writer: EventsDecisionWriter
     private var pendingSave: Task<Bool, Never>?
+    /// A change already has a save queued that has not started encoding:
+    /// further changes before it runs fold into it (QA P2-c).
+    private var saveScheduled = false
 
-    init(directory: URL = EventsDecisionStore.defaultDirectory) {
+    init(directory: URL = EventsDecisionStore.defaultDirectory, publisher: EventsDecisionPublisher = .atomic) {
         self.directory = directory
+        writer = EventsDecisionWriter(publisher: publisher)
     }
 
     // MARK: Reads
@@ -353,7 +382,7 @@ final class EventsDecisionStore: ObservableObject {
     /// A new confirmed event with these members. nil when read-only.
     @discardableResult
     func confirm(name: String, categories: [String], members: [ContentRange], now: Date = Date()) -> EventRecord? {
-        guard !isReadOnly else { return nil }
+        guard isWritable else { return nil }
         let e = EventRecord(name: name, categories: categories, createdAt: now)
         events[e.id] = e
         decisions += members.map { .member(eventID: e.id, range: $0, verdict: .accepted) }
@@ -363,7 +392,7 @@ final class EventsDecisionStore: ObservableObject {
 
     @discardableResult
     func rename(_ id: UUID, to name: String, now: Date = Date()) -> Bool {
-        guard !isReadOnly, var e = events[id] else { return false }
+        guard isWritable, var e = events[id] else { return false }
         e.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         e.updatedAt = now
         events[id] = e
@@ -373,7 +402,7 @@ final class EventsDecisionStore: ObservableObject {
 
     @discardableResult
     func setState(_ id: UUID, _ state: EventRecord.State, now: Date = Date()) -> Bool {
-        guard !isReadOnly, var e = events[id] else { return false }
+        guard isWritable, var e = events[id] else { return false }
         e.state = state
         e.updatedAt = now
         events[id] = e
@@ -384,15 +413,23 @@ final class EventsDecisionStore: ObservableObject {
     /// Append one decision. false when read-only.
     @discardableResult
     func record(_ decision: EventDecision) -> Bool {
-        guard !isReadOnly else { return false }
-        decisions.append(decision)
+        record([decision])
+    }
+
+    /// Append several decisions as ONE change — one revision, one save
+    /// (the k·(k−1)/2 "different occasions" pairs, a batch of rejections).
+    /// false when read-only or empty.
+    @discardableResult
+    func record(_ batch: [EventDecision]) -> Bool {
+        guard isWritable, !batch.isEmpty else { return false }
+        decisions += batch
         changed()
         return true
     }
 
     @discardableResult
     func setMember(event id: UUID, range: ContentRange, verdict: EventDecision.Verdict, now: Date = Date()) -> Bool {
-        guard !isReadOnly, var e = events[id] else { return false }
+        guard isWritable, var e = events[id] else { return false }
         e.updatedAt = now
         events[id] = e
         return record(.member(eventID: id, range: range, verdict: verdict))
@@ -401,7 +438,7 @@ final class EventsDecisionStore: ObservableObject {
     /// `from` folds into `into`; `from` is marked dismissed with a note.
     @discardableResult
     func merge(_ from: UUID, into: UUID, now: Date = Date()) -> Bool {
-        guard !isReadOnly, from != into, var a = events[from], events[into] != nil else { return false }
+        guard isWritable, from != into, var a = events[from], events[into] != nil else { return false }
         a.state = .dismissed
         a.note = "merged into \(events[into]?.name ?? into.uuidString)"
         a.updatedAt = now
@@ -412,7 +449,7 @@ final class EventsDecisionStore: ObservableObject {
     /// Move `ranges` out of `from` into a new event. nil when read-only.
     @discardableResult
     func split(_ from: UUID, ranges: [ContentRange], name: String, now: Date = Date()) -> EventRecord? {
-        guard !isReadOnly, let source = events[from], !ranges.isEmpty else { return nil }
+        guard isWritable, let source = events[from], !ranges.isEmpty else { return nil }
         let e = EventRecord(name: name, categories: source.categories, createdAt: now)
         events[e.id] = e
         for r in ranges {
@@ -455,22 +492,48 @@ final class EventsDecisionStore: ObservableObject {
     /// the write failed.
     @discardableResult
     func save() async -> Bool {
-        guard !isReadOnly else { return false }
+        guard isWritable else { return false }
         if pendingSave == nil { scheduleSave() }
         return await pendingSave?.value ?? false
     }
 
-    /// One save in flight at a time, the newest content wins: the file
-    /// value is encoded here (cheap) and the bytes handed to the writer.
+    /// The coalescing contract (QA P2-c): a change marks a save as
+    /// scheduled and queues ONE task; every change before that task runs
+    /// folds into it, because the task encodes the store's state when it
+    /// STARTS (on the main actor, after the changes), not when queued. A
+    /// change that lands after it started schedules the next one. The
+    /// writer actor serialises the publishes, and each later publish
+    /// carries a later state, so the file always ends at the newest.
     private func scheduleSave() {
-        guard !isReadOnly else { return }
-        let file = EventsDecisionFile(events: events.values.sorted { $0.createdAt != $1.createdAt ? $0.createdAt < $1.createdAt : $0.id.uuidString < $1.id.uuidString },
-                                      decisions: decisions)
-        let target = fileURL
-        let previous = previousURL
-        let writer = writer
-        pendingSave = Task {
-            await writer.write(file, to: target, previous: previous)
+        guard isWritable, !saveScheduled else { return }
+        saveScheduled = true
+        pendingSave = Task { [weak self] in
+            guard let self else { return false }
+            self.saveScheduled = false
+            let file = self.currentFile()
+            let why = await self.writer.write(file, to: self.fileURL, previous: self.previousURL)
+            self.noteSaveResult(why)
+            return why == nil
+        }
+    }
+
+    /// The file value, newest events last by creation.
+    private func currentFile() -> EventsDecisionFile {
+        EventsDecisionFile(events: events.values.sorted { $0.createdAt != $1.createdAt ? $0.createdAt < $1.createdAt : $0.id.uuidString < $1.id.uuidString },
+                           decisions: decisions)
+    }
+
+    /// A failed save is said out loud and kept for the page; a later
+    /// success clears it. Never swallowed (QA P2-a).
+    private func noteSaveResult(_ failure: String?) {
+        if let failure {
+            lastSaveFailure = "not saved: \(failure)"
+            note("🔴 decisions were not saved to \(fileURL.path): \(failure) — the decision is kept in memory and the next change tries again")
+            revision &+= 1
+        } else if lastSaveFailure != nil {
+            lastSaveFailure = nil
+            note("decisions saved again after an earlier failure")
+            revision &+= 1
         }
     }
 
@@ -498,31 +561,51 @@ final class EventsDecisionStore: ObservableObject {
         if version > EventsDecisionFile.currentVersion {
             return .read(file, readOnly: "written by a newer VideoScan (store version \(version)) — read, never rewritten by this one")
         }
-        if read.skipped > 0 || read.storeVersion == nil {
+        if read.storeVersion == nil {
+            return .read(file, readOnly: "the file has no store version — nothing will be written over it")
+        }
+        if read.skipped > 0 {
             return .read(file, readOnly: "\(read.skipped) entr\(read.skipped == 1 ? "y" : "ies") could not be read — nothing will be written over it")
         }
         return .read(file, readOnly: nil)
     }
 }
 
-/// Serialises saves: the previous file is kept as `.prev`, then the new
-/// bytes are published atomically with a full fsync. (For Rick: an
-/// `actor` ≈ a class whose members are guarded by one implicit mutex —
-/// two saves never interleave.)
+private let eventsStoreLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "events")
+
+/// How the bytes reach the disk. Production keeps the previous file as
+/// `.prev` and publishes atomically with a full fsync; a test counts.
+/// (For Rick: a function object — `std::function` — handed in at init.)
+struct EventsDecisionPublisher: Sendable {
+    let publish: @Sendable (_ data: Data, _ to: URL, _ previous: URL) throws -> Void
+
+    static let atomic = EventsDecisionPublisher { data, url, previous in
+        if let old = try? Data(contentsOf: url) {
+            try AtomicFilePublish.write(old, to: previous)
+        }
+        try AtomicFilePublish.write(data, to: url, durability: .fullFsync)
+    }
+}
+
+/// Serialises saves through the publisher. (For Rick: an `actor` ≈ a
+/// class whose members are guarded by one implicit mutex — two saves
+/// never interleave.) Returns nil on success, else why it failed.
 actor EventsDecisionWriter {
-    func write(_ file: EventsDecisionFile, to url: URL, previous: URL) -> Bool {
+    private let publisher: EventsDecisionPublisher
+
+    init(publisher: EventsDecisionPublisher) {
+        self.publisher = publisher
+    }
+
+    func write(_ file: EventsDecisionFile, to url: URL, previous: URL) -> String? {
         do {
             let enc = JSONEncoder()
             enc.dateEncodingStrategy = .iso8601
             enc.outputFormatting = [.sortedKeys, .prettyPrinted]
-            let data = try enc.encode(file)
-            if let old = try? Data(contentsOf: url) {
-                try AtomicFilePublish.write(old, to: previous)
-            }
-            try AtomicFilePublish.write(data, to: url, durability: .fullFsync)
-            return true
+            try publisher.publish(try enc.encode(file), url, previous)
+            return nil
         } catch {
-            return false
+            return error.localizedDescription
         }
     }
 }
