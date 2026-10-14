@@ -468,7 +468,12 @@ final class GedcomScaleSensorTests: XCTestCase {
         #if DEBUG
         let budget = PerformanceLane.debugCeiling(.seconds(2))
         #else
-        let budget = Duration.milliseconds(250)
+        // Release: the M4 nightly measured this turn at 228–262 ms (10/11–
+        // 10/14, SCALE[Release] "surname p50"), so a 250 ms budget had no
+        // headroom and tripped at 264 ms on a loaded box (10/14 12:31 run).
+        // 400 ms keeps the regression sensor (2× = 500 ms would still be
+        // a real regression) without failing on ordinary load.
+        let budget = Duration.milliseconds(400)
         #endif
 
         XCTAssertEqual(result.outcome, .needsClarification, result.prose)
