@@ -158,11 +158,15 @@ struct AudioFingerprintEngineTests {
     // MARK: Scale
 
     /// 60 minutes of synthetic audio → fingerprint + index, then a 30-s
-    /// slice at 1234 s must be found at 1234 s. Budget set after measuring
-    /// (see the acceptance report); `VIDEOSCAN_SKIP_SCALE=1` skips it.
+    /// slice at 1234 s must be found at 1234 s. `VIDEOSCAN_SKIP_SCALE=1`
+    /// skips it (the render alone is ~6 s in Debug).
+    ///
+    /// Measured 2026-10-14, M4 Max, Debug, load ~6/16: fingerprint 2.54 s,
+    /// index 0.03 s, match ≈ 0.03 s → 2.6 s total; 99 734 landmarks,
+    /// 798 KB (13.3 KB/min); PCM 57.6 MB in RAM. Budget ≈ 2×.
     @Test(.tags(.scale), .enabled(if: ProcessInfo.processInfo.environment["VIDEOSCAN_SKIP_SCALE"] != "1"))
     func sixtyMinuteMasterFingerprintsAndIndexesWithinBudget() throws {
-        let budget: Duration = .seconds(60)   // placeholder until measured (red phase)
+        let budget: Duration = .seconds(6)
         let sampleRate = 8_000
         let render = SyntheticSpeech.toInt16(SyntheticSpeech.render(seconds: 3_600, seed: 0x60_60, sampleRate: sampleRate))
         let master = AudioPCM(sampleRate: sampleRate, samples: render)
