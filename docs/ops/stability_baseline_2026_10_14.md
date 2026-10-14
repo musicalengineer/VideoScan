@@ -11,7 +11,7 @@ This file is the record. Each later baseline supersedes it; keep the shape.
 | RicksM5 (M5 Pro, Release) | db00fed4 | **GREEN** | 11,346 pass · 0 fail · 67 skip | 1,281 s | testdriver 2026-10-14T17:03Z |
 | RicksM4 (M4 Max, Release) | **7972a47e** | **GREEN** | 11,355 pass · 0 fail · 62 skip | 1,497 s | testdriver 2026-10-14T18:35Z |
 | RicksM4, first run | da66ab27 (pre-fix) | 3 fail, all explained below | 11,348 pass · 3 fail · 62 skip | 1,535 s | testdriver 2026-10-14T17:24Z |
-| RicksM1 (M1 Max, Release) | db00fed4 | see "M1" | — | — | pending |
+| RicksM1 (M1 Max, Release) | db00fed4 | no verdict: built in 5,221 s, then package resolution failed (two runs sharing one DerivedData) | 0 | 5,233 s | testdriver 2026-10-14T18:07Z (zero-tests-ran) |
 
 The suite is green on a current tree on both the M4 and the M5 (status=ok rows). Every red seen this week traced to one
 of the five causes below; none was a product defect.
@@ -54,10 +54,14 @@ of the five causes below; none was a product defect.
   `Package.resolved`; the nightly does not pull, nobody had synced it since
   10/4. Synced to main 12:46. **Disk 97% full (36 GB free)**, mostly outside
   Xcode caches (DerivedData 5.6 GB, ~/Library/Caches 14 GB) — Rick's data,
-  not touched. **GH #319:** the 04:30 nightly's Release compile has been
-  running 8+ hours; the build-timeout watchdog published FATAL but its
-  `killpg` never reached SWBBuildService / swift-frontend (own process
-  groups). Stale processes left for Rick (never pkill).
+  not touched. **GH #319:** a clean Release whole-module build takes
+  5,221 s on the M1, right at the 5,400 s build timeout, so every
+  "build-timeout" night was a slow clean build on a stale tree. The timeout
+  watchdog published FATAL but its `killpg` never reached SWBBuildService /
+  swift-frontend (own process groups): the 04:30 run was still alive at
+  14:40 on its clean-retry build. Nothing killed (never pkill). The M1 is
+  not a trustworthy nightly host until #319 lands (pull first, lock the
+  DerivedData dir, a timeout that fits a clean build or a warm cache).
 
 ## Metrics snapshot (nightly 2026-10-14, commit 6fe2b539)
 
