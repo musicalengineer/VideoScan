@@ -24547,6 +24547,29 @@
     {
       "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
       "kind": "python",
+      "path": "tests/test_av_sync.py",
+      "stage": "integration",
+      "suites": [
+        "test_av_sync.py"
+      ],
+      "tests": [
+        "test_a_picture_shift_is_caught_only_by_the_picture_check",
+        "test_a_sound_shift_is_not_mistaken_for_a_trim",
+        "test_atempo_drift_is_measured_but_atempo_itself_shifts_the_start",
+        "test_audio_only_check_still_reports_the_raw_lag",
+        "test_cli_prints_json",
+        "test_fixture_verdict_offset_and_drift",
+        "test_near_silent_original_is_unsure",
+        "test_no_audio_track_is_unsure",
+        "test_runtime_10min",
+        "test_runtime_60s",
+        "test_trim_is_told_apart_from_a_sync_error",
+        "test_unrelated_sound_is_unsure_not_a_confident_lag"
+      ]
+    },
+    {
+      "blocked_reason": "python adapter needs separate component build/count extraction and confinement audit",
+      "kind": "python",
       "path": "tests/test_sprint_digest.py",
       "stage": "unit",
       "suites": [
