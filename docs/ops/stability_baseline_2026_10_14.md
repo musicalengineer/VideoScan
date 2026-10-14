@@ -104,6 +104,17 @@ fixing tests.
 - Person-recognition readiness 0% (quality holdout not configured) — known.
 - Problem files top 3: DeleteDuplicatesJob.swift (132.6), HallieLineageQuestion.swift (41.8), TriageView.swift (41.0).
 
+## Afternoon (Rick's 14:15 ruling)
+
+- Branches purged (32 merged + the control branch); cloud C08 merged; main is
+  the only home. Kept unmerged by name: feat/167-catalog-versioning,
+  wip/r4-untested, parked/show-again-review-2026-10-11.
+- Cleanup: the FamilyArchive box reads as the unlock it is; the three other
+  doors point to it (ecb5827f). Engine unchanged.
+- Events v1 merged (QA 2 rounds; 48 tests; post-merge 119 tests / 11 suites
+  green in Debug): Triage ▸ Events, rules, planner, decisions sidecar, page.
+  Rick's five open questions: docs/design/events_v1_plan_2026_10_14.md §8.
+
 ## Open for Rick
 
 - Purge the ten fully-merged branches (local + origin) and triage the three
