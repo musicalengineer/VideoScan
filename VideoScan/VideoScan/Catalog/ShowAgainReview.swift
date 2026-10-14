@@ -18,18 +18,22 @@
 
 import SwiftUI
 
-/// The footer link. Holds only its own sheet flag.
+/// The footer link — and, since 2026-10-14, Triage ▸ Cleanup's "Show them
+/// again…" line (the same sheet, the same job). Holds only its own sheet
+/// flag.
 struct ShowAgainReviewLink: View {
     let model: VideoScanModel
+    var title = "Review…"
+    var accessibilityID = "catalog.totalMediaFooter.showAgainReview"
     @Environment(\.mediaFileOperationsCenterReference) private var center
     @State private var showReview = false
 
     var body: some View {
-        Button("Review…") { showReview = true }
+        Button(title) { showReview = true }
             .buttonStyle(.link)
             .font(.system(size: 11))
             .help("See which hidden files are on disk, untouched, and show them again in the catalog. Label only — no file is moved or changed.")
-            .accessibilityIdentifier("catalog.totalMediaFooter.showAgainReview")
+            .accessibilityIdentifier(accessibilityID)
             .sheet(isPresented: $showReview) {
                 ShowAgainReviewSheet(model: model) { plan in
                     guard let center else {

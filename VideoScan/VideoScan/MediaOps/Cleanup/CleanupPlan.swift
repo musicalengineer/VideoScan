@@ -183,6 +183,12 @@ struct CleanupPlan: Sendable, Equatable {
     var archiveJunk: [CleanupFile] = []
     /// Active rows with no stored full hash (information only).
     var notChecked = Tally()
+    /// Rows hidden by the old "deleted" label — `archiveStage`
+    /// `.manuallyDeleted` or the GH #143 migration's legacy marker (the files
+    /// were never moved; ShowAgainRules.isCandidate). Not planned: the page
+    /// points at "Show files hidden by a 'deleted' label" so they become
+    /// live rows Cleanup can see. Counted in `cleanupInputs()`'s one pass.
+    var hiddenByOldLabel = Tally()
     /// Everything else the plan looked at and left alone, by reason.
     var leftAlone: [CleanupExclusion: Tally] = [:]
     /// Every keeper's physical identity (device, inode) — reserved for the

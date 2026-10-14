@@ -13,7 +13,8 @@
 //      none written → refuse, nothing changed;
 //   5. on the main actor, with no await until the labels are set: the live
 //      record re-checked once more, the receipt written (none → refuse),
-//      the labels set, the search index told;
+//      each row restored through the engine (`clearRemoval`: marker and
+//      label cleared together), the search index told;
 //   6. one per-file line to catalog.log (one fsync), the acknowledged save,
 //      the OUTCOME line with where the snapshot and the receipt are and how
 //      to put the labels back.
@@ -136,16 +137,29 @@ extension VideoScanModel {
         } catch {
             return showAgainRefused("the change list (receipt) could not be written (\(error.localizedDescription)), so no label was changed")
         }
+        // The engine's Restore clears the marker AND the old label in one
+        // step, and leaves the lifecycle stage of a not-Trashed row alone.
+        // It never refuses a removed-from-catalog marker; a refusal (its
+        // words) is a row that stays, never a crash.
+        var shown: [ShowAgainCandidate] = []
+        shown.reserveCapacity(final.count)
         for c in final {
             guard let rec = record(forID: c.id) else { continue }
-            rec.archiveStage = ShowAgainRules.liveLabel
+            if let why = clearRemoval(rec) {
+                stayed.append(ShowAgainStayed(candidate: c, reason: .restoreRefused(why)))
+                continue
+            }
+            shown.append(c)
             searchIndex.update(rec)
         }
         noteCatalogRecordsMutated()
-        dashboard.catalogLog.writeBatch(final.map(ShowAgainLines.shownLine)
+        dashboard.catalogLog.writeBatch(shown.map(ShowAgainLines.shownLine)
                                         + stayed.map { ShowAgainLines.stayedLine($0.candidate, $0.reason) })
+        guard !shown.isEmpty else {
+            return showAgainFinish(.nothingToDo, shown: [], stayed: stayed, snapshot: snapshot, receipt: receipt)
+        }
         // Committed, not yet saved — the caller awaits the save.
-        return ShowAgainRunResult(outcome: .saveUnconfirmed, shown: final, stayed: stayed,
+        return ShowAgainRunResult(outcome: .saveUnconfirmed, shown: shown, stayed: stayed,
                                   snapshotPath: snapshot, receiptURL: receipt)
     }
 
@@ -161,10 +175,11 @@ extension VideoScanModel {
     }
 
     /// The live record is still the one the review showed: same path and
-    /// size, still labelled deleted, still active.
+    /// size, still a candidate, the same (or still no) legacy marker.
     func showAgainLiveMatches(_ c: ShowAgainCandidate) -> Bool {
         guard let rec = record(forID: c.id) else { return false }
         return ShowAgainRules.isCandidate(rec) && rec.fullPath == c.fullPath && rec.sizeBytes == c.sizeBytes
+            && ShowAgainRules.legacyMarkerSince(rec) == c.removalSince
     }
 
     func writeShowAgainReceipt(_ changes: [ShowAgainCandidate], snapshot: String) throws -> URL {
@@ -180,8 +195,12 @@ extension VideoScanModel {
         let file = ShowAgainReceiptFile(
             runID: "show-again-\(stamp)", writtenAt: Date(), snapshotPath: snapshot,
             changes: changes.map {
-                .init(id: $0.id, path: $0.fullPath, from: ShowAgainRules.falseLabel.rawValue,
-                      to: ShowAgainRules.liveLabel.rawValue)
+                // The stage the row really has (a marker-only row is `.none`
+                // already — QA P3-1): the reverse puts a label back only
+                // where the run cleared one.
+                .init(id: $0.id, path: $0.fullPath,
+                      from: (record(forID: $0.id)?.archiveStage ?? ShowAgainRules.falseLabel).rawValue,
+                      to: ShowAgainRules.liveLabel.rawValue, removalSince: $0.removalSince)
             })
         try ShowAgainReceiptFile.encode(file).write(to: url, options: .atomic)
         return url
@@ -227,9 +246,15 @@ extension VideoScanModel {
         var refusal: String?
     }
 
-    /// Put `.manuallyDeleted` back on exactly the records a run changed —
-    /// only where the label is still the value the run set and the path is
-    /// the same. Takes its own safety snapshot first. Label-only.
+    /// Put `.manuallyDeleted` (only where the receipt's `from` says the run
+    /// cleared it) — and, where the receipt says the run cleared one, the
+    /// legacy removal marker with its original `since` — back on exactly
+    /// the records a run changed, only where the label is still the value
+    /// the run set and the path is the same. The lifecycle stage is not put
+    /// back (see the ShowAgain.swift header). Takes its own safety
+    /// snapshot first. Catalog-only: the marker goes through the engine's
+    /// one writer (`stampRemoval`), which leaves the lifecycle stage of a
+    /// removed-from-catalog row alone.
     func reverseShowAgain(receiptURL: URL) async -> ShowAgainReverseResult {
         let p = ShowAgainLines.prefix
         if isReadOnly || ViewerWriteGuard.refuse("VideoScanModel.reverseShowAgain") {
@@ -255,10 +280,15 @@ extension VideoScanModel {
                 continue
             }
             guard let rec = record(forID: change.id) else { continue }
-            rec.archiveStage = ShowAgainRules.falseLabel
+            if let since = change.removalSince {
+                Self.stampRemoval(rec, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
+            }
+            let labelPutBack = change.from == ShowAgainRules.falseLabel.rawValue
+            if labelPutBack { rec.archiveStage = ShowAgainRules.falseLabel }
             searchIndex.update(rec)
             out.restored += 1
-            lines.append(ShowAgainLines.revertedLine(path: change.path, id: change.id))
+            lines.append(ShowAgainLines.revertedLine(path: change.path, id: change.id, labelPutBack: labelPutBack,
+                                                     markerPutBack: change.removalSince != nil))
         }
         noteCatalogRecordsMutated()
         dashboard.catalogLog.writeBatch(lines)

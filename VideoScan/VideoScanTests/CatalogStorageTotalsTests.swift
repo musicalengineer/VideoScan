@@ -446,6 +446,32 @@ struct CatalogStorageManuallyDeletedTests {
         #expect(t.manuallyDeletedCaption != nil)
     }
 
+    /// GH #143's load migration turns the label into a `removedFromCatalog /
+    /// legacyDeletedLabel` marker on every such row (persisted since
+    /// 2026-10-12). That row is the SAME hidden-by-label row — in the
+    /// caption's tally, out of every headline number. A real removal (in the
+    /// Trash) is in neither.
+    @Test @MainActor func legacyMarkerRowIsHiddenByLabel() {
+        let d = Date(timeIntervalSince1970: 1_760_000_000)
+        let live = stRec("a.mov", bytes: 4 * GB, md5: "a")
+        let legacy = mdRec("hidden.mov", bytes: 3 * GB)
+        VideoScanModel.stampRemoval(legacy, .removedFromCatalog(at: d, reason: .legacyDeletedLabel))
+        let trashed = mdRec("trashed.mov", bytes: 2 * GB)
+        VideoScanModel.stampRemoval(trashed, .inTrash(movedAt: d, trashPath: nil, reason: .junk))
+        let online: Set<String> = ["LaCie8TB", "SanDiskWorkspace"]
+        let t = CatalogStorageTotalsCalculator.compute(records: [live, legacy, trashed], onlineVolumes: online)
+        #expect(t.grossBytes == 4 * GB && t.fileCount == 1 && t.uniqueBytes == 4 * GB && t.onlineBytes == 4 * GB)
+        #expect(t.manuallyDeletedBytes == 3 * GB && t.manuallyDeletedFiles == 1)
+        #expect(t.waterfallBalances)
+        #expect(CatalogStorageTotalsCalculator.isManuallyDeleted(legacy))
+        #expect(!CatalogStorageTotalsCalculator.isCounted(legacy) && !CatalogStorageTotalsCalculator.isCounted(trashed))
+        let probes = CatalogStorageTotalsCalculator.manuallyDeletedProbes(records: [live, legacy, trashed])
+        #expect(probes.map(\.fullPath) == [legacy.fullPath])
+        let rows = CatalogStorageRow.projectForStorageTotals([live, legacy, trashed])
+        #expect(CatalogStorageTotalsCalculator.compute(facts: rows, onlineVolumes: online) == t,
+                "the off-main projection carries the legacy-marker row")
+    }
+
     // MARK: Caption
 
     @Test func captionAbsentWhenNothingIsMarkedDeleted() {

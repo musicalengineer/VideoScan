@@ -24,6 +24,8 @@ struct CleanupInputs: Sendable {
     let gate: VideoScanModel.BulkDeleteGate
     let archiveLabel: String
     let policy: DuplicateKeeperPolicy
+    /// Rows hidden by the old "deleted" label (see `CleanupPlan.hiddenByOldLabel`).
+    var hiddenByOldLabel = CleanupPlan.Tally()
 
     /// The plan. Blocking disk reads — off the main actor only.
     /// `driveOnline` is the reachability seam.
@@ -34,9 +36,11 @@ struct CleanupInputs: Sendable {
             rows[i].protection = protection(for: subjects[i])
         }
         let policy = policy
-        return CleanupPlanner.plan(rows: rows,
-                                   facts: { CleanupDiskProbe.facts(for: $0, driveOnline: driveOnline) },
-                                   rank: { policy.volumeRank(forPath: $0) })
+        var plan = CleanupPlanner.plan(rows: rows,
+                                       facts: { CleanupDiskProbe.facts(for: $0, driveOnline: driveOnline) },
+                                       rank: { policy.volumeRank(forPath: $0) })
+        plan.hiddenByOldLabel = hiddenByOldLabel
+        return plan
     }
 
     /// One row's protection. The gate answers the Master Archive half first,
@@ -65,14 +69,22 @@ struct CleanupInputs: Sendable {
 extension VideoScanModel {
 
     /// The one O(records) pass (main actor). Active rows only: not removed,
-    /// not superseded, pointing at a file.
+    /// not superseded, pointing at a file. Rows hidden by the old "deleted"
+    /// label are tallied here, in the same pass, so the page can point at
+    /// the repair that makes them live.
     func cleanupInputs() -> CleanupInputs {
         let gate = bulkDeleteGate(effect: .removesFiles)
         var rows: [CleanupRow] = []
         var subjects: [BulkDeleteSubject] = []
+        var hidden = CleanupPlan.Tally()
         rows.reserveCapacity(records.count)
         subjects.reserveCapacity(records.count)
-        for r in records where FullHashBackfillPlanner.isActive(r) {
+        for r in records {
+            if ShowAgainRules.isCandidate(r) {
+                hidden.add(max(0, r.sizeBytes))
+                continue
+            }
+            guard FullHashBackfillPlanner.isActive(r) else { continue }
             rows.append(CleanupRow(
                 id: r.id, path: r.fullPath, filename: r.filename, volumeName: r.volumeName,
                 sizeBytes: r.sizeBytes, fullDigest: Self.storedFullDigest(r),
@@ -86,7 +98,7 @@ extension VideoScanModel {
         }
         return CleanupInputs(rows: rows, subjects: subjects, gate: gate,
                              archiveLabel: gate.volume?.label ?? "the archive volume",
-                             policy: duplicateKeeperPolicy())
+                             policy: duplicateKeeperPolicy(), hiddenByOldLabel: hidden)
     }
 
     /// Rick's hand marks on `r` (see `CleanupHandMarks`): never Migrate's

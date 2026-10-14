@@ -2,6 +2,7 @@
 // Triage ▸ Cleanup — the page (docs/design/cleanup_kiss_2026_10_12.md).
 // One question: "Which files are extra, and can go to the Trash?"
 //
+//   (N files · X GB are hidden by an old “deleted” label — the app never moved them… Show them again…)
 //   ☑ Copies           identical full SHA-256, one copy stays   n · GB selected · See files…
 //   ☑ Junk you marked  files you marked Confirmed Junk           n · GB selected · See files…
 //     Not checked yet  no full hash yet (information only)       n · GB
@@ -168,6 +169,13 @@ enum CleanupWords {
             + "\(MediaBytes.display(bytesToRead)) to read, \(readTime(bytesToRead)). Run it while you're away."
     }
 
+    /// The line above the lanes when rows are hidden by the old label.
+    static func hiddenByOldLabel(_ t: CleanupPlan.Tally) -> String {
+        "\(t.files.formatted()) file\(t.files == 1 ? "" : "s") · \(MediaBytes.display(t.bytes)) are hidden by an old “deleted” label — the app never moved them; the review checks each one is still on disk."
+    }
+
+    static let showAgainLink = "Show them again…"
+
     static let trashNote = "Files go to their own drive's Trash — Put Back restores them. Nothing is freed until you empty the Trash yourself, and VideoScan never empties it."
 }
 
@@ -223,6 +231,7 @@ struct CleanupPane: View {
     @ViewBuilder
     private func content(_ plan: CleanupPlan) -> some View {
         VStack(alignment: .leading, spacing: 14) {
+            if plan.hiddenByOldLabel.files > 0 { hiddenByOldLabel(plan.hiddenByOldLabel) }
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
                 GridRow {
                     Text("").gridColumnAlignment(.leading)
@@ -267,6 +276,19 @@ struct CleanupPane: View {
                 .disabled(listed == 0)
                 .accessibilityIdentifier("cleanup.seeFiles.\(lane.rawValue)")
         }
+    }
+
+    /// Rows Cleanup cannot see because an old label (or its migrated marker)
+    /// hides them: one line, counted when the plan was built, and the one
+    /// door that makes them live — the Show Again review sheet (label only;
+    /// no file is touched).
+    private func hiddenByOldLabel(_ tally: CleanupPlan.Tally) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "eye.slash").foregroundStyle(.orange).font(.system(size: 11))
+            Text(CleanupWords.hiddenByOldLabel(tally)).font(.system(size: 11)).foregroundStyle(.secondary)
+            ShowAgainReviewLink(model: model, title: CleanupWords.showAgainLink, accessibilityID: "cleanup.showAgainReview")
+        }
+        .accessibilityIdentifier("cleanup.hiddenByOldLabel")
     }
 
     private func archiveJunkBox(_ plan: CleanupPlan) -> some View {

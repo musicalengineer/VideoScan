@@ -170,6 +170,9 @@ protocol CatalogStorageFacts {
     var isPurged: Bool { get }
     var isSetAside: Bool { get }
     var isSuperseded: Bool { get }
+    /// The removal marker is the GH #143 migration's copy of the old
+    /// "Manually Deleted" label (`VideoRecord.hasLegacyDeletedLabelMarker`).
+    var hasLegacyDeletedLabelMarker: Bool { get }
     /// `streamType == .audioOnly`.
     var storageIsAudioOnly: Bool { get }
     /// `streamType == .noStreams`.
@@ -204,6 +207,7 @@ struct CatalogStorageRow: CatalogStorageFacts, Sendable, Equatable {
     let isPurged: Bool
     let isSetAside: Bool
     let isSuperseded: Bool
+    let hasLegacyDeletedLabelMarker: Bool
     let storageIsAudioOnly: Bool
     let storageHasNoStreams: Bool
     let storageHasPairPartner: Bool
@@ -224,6 +228,7 @@ struct CatalogStorageRow: CatalogStorageFacts, Sendable, Equatable {
         isPurged = r.isPurged
         isSetAside = r.isSetAside
         isSuperseded = r.isSuperseded
+        hasLegacyDeletedLabelMarker = r.hasLegacyDeletedLabelMarker
         storageIsAudioOnly = r.storageIsAudioOnly
         storageHasNoStreams = r.storageHasNoStreams
         storageHasPairPartner = r.storageHasPairPartner
@@ -237,13 +242,14 @@ struct CatalogStorageRow: CatalogStorageFacts, Sendable, Equatable {
     }
 
     /// Only the rows `CatalogStorageTotalsCalculator.compute` can see —
-    /// its own `partition` drops purged / set-aside / superseded first,
-    /// so leaving them out here changes nothing and saves the copies.
+    /// its own `partition` drops purged / set-aside / superseded first
+    /// (keeping the legacy-marker rows for the caption), so leaving the
+    /// rest out here changes nothing and saves the copies.
     @MainActor
     static func projectForStorageTotals(_ records: [VideoRecord]) -> [CatalogStorageRow] {
         var out: [CatalogStorageRow] = []
         out.reserveCapacity(records.count)
-        for r in records where CatalogStorageTotalsCalculator.isActive(r) {
+        for r in records where CatalogStorageTotalsCalculator.isActive(r) || r.hasLegacyDeletedLabelMarker {
             out.append(CatalogStorageRow(r))
         }
         return out
@@ -379,9 +385,20 @@ enum CatalogStorageTotalsCalculator {
     // MARK: Manually deleted
 
     /// The catalog view's own exclusion, mirrored here so the footer and
-    /// the table can never disagree about what "in the catalog" means.
+    /// the table can never disagree about what "in the catalog" means. The
+    /// old label in either encoding — the stage, or the removal marker the
+    /// GH #143 load migration made of it (2026-10-14: that marker alone had
+    /// emptied the caption and its Review… link).
     static func isManuallyDeleted<R: CatalogStorageFacts>(_ rec: R) -> Bool {
-        rec.archiveStage == .manuallyDeleted
+        rec.archiveStage == .manuallyDeleted || rec.hasLegacyDeletedLabelMarker
+    }
+
+    /// THE caption's population: hidden by the old label and by nothing
+    /// else — a row that is also in the Trash, missing or removed by hand
+    /// is a real removal, in neither tally. Not set aside or superseded.
+    nonisolated static func isHiddenByDeletedLabel<R: CatalogStorageFacts>(_ rec: R) -> Bool {
+        guard !rec.isSetAside, !rec.isSuperseded else { return false }
+        return rec.isPurged ? rec.hasLegacyDeletedLabelMarker : rec.archiveStage == .manuallyDeleted
     }
 
     /// One manually-deleted record's identity for the off-main existence
@@ -403,7 +420,7 @@ enum CatalogStorageTotalsCalculator {
         onlineVolumes: Set<String>? = nil
     ) -> [ManuallyDeletedProbe] {
         var out: [ManuallyDeletedProbe] = []
-        for rec in pfActiveRecords(records) where isManuallyDeleted(rec) && rec.sizeBytes > 0 {
+        for rec in records where isHiddenByDeletedLabel(rec) && rec.sizeBytes > 0 {
             if let online = onlineVolumes,
                !online.contains(VolumeReachability.volumeName(forPath: rec.fullPath)) {
                 continue
@@ -456,14 +473,16 @@ enum CatalogStorageTotalsCalculator {
     /// predicate, one place (codex #725: Hallie's footage and year span
     /// used `pfActiveRecords` alone while file count and bytes used this,
     /// so two answers in one sentence described two catalogs). The
-    /// deleted rows come back separately for the honesty caption.
+    /// hidden-by-label rows come back separately for the honesty caption —
+    /// including those whose only "gone" is the migrated legacy marker
+    /// (not active, but never removed either).
     nonisolated static func partition<R: CatalogStorageFacts>(_ records: [R])
         -> (counted: [R], manuallyDeleted: [R]) {
         var counted: [R] = []
         var deleted: [R] = []
         counted.reserveCapacity(records.count)
-        for rec in records where isActive(rec) {
-            if isManuallyDeleted(rec) { deleted.append(rec) } else { counted.append(rec) }
+        for rec in records {
+            if isHiddenByDeletedLabel(rec) { deleted.append(rec) } else if isActive(rec) { counted.append(rec) }
         }
         return (counted, deleted)
     }
