@@ -45,6 +45,28 @@ of the five causes below; none was a product defect.
    skip under a sanitizer with their reasons; the cache-counter assertions
    moved to an always-on test. Merge 85e86073. Confirm on the next weekly.
 
+
+## Release gauntlet (M4, 15:00, commit 19a0f172)
+
+Run 2026-10-14T18-55-17Z-11199DFC, all phase-1 stages, Release, inventory
+errors 0 after the manifest resync (19a0f172). Build 619 s; 817 s total.
+
+| Stage | Passed | Failed |
+|---|---|---|
+| unit | 3,329 | 0 |
+| regression | 32 | 0 |
+| integration | 6 | 0 |
+| performance | 65 | 0 |
+| hallie | 1,743 | 0 |
+| stress | 9 | 0 |
+| ui | not run (phase 2) | — |
+
+5,184 executed, 0 failed. The script's verdict is INCOMPLETE/BLOCKED by
+design: every stage still carries deliberate gaps (VideoScanCore package
+tests need the package adapter; isolation audits pending) and UI is
+phase 2. Next step for an all-passed gauntlet is closing those gaps, not
+fixing tests.
+
 ## Fleet state
 
 - **M4** — rebooted 12:16; power assertions work again (`pmset -g assertions`).
