@@ -92,3 +92,20 @@ matchedLandmarks ≥ 3. The 0.5 % speed-change case is marked expected-but-allow
 Media matrix (exact copy as mov/pcm, mkv/flac, mxf/pcm, avi/pcm), scale (60-min synthetic master with a
 measured budget), isolation (bogus ffmpeg path, 0-byte file, video-only file), sensor (engine sources never
 open an input for write). Bars are not loosened to go green; misses are reported with the numbers.
+
+## Results (2026-10-14, M4 Max, Debug)
+
+Synthetic matrix: 16 tests / 35 cases green; every positive at the expected verdict with |offset error|
+≤ 0.014 s; 15/15 negatives `.different` (max 5 matched landmarks); margin 7.6× (weakest positive = the 5-s
+PCM clip, 38 of 129); 0.5 % speed change → `.overlap(0.07 s, 31 s)` (expected-but-allowed fail, reported).
+Two things had to be added beyond the brief to get there: RMS normalisation before analysis (a −6 dB copy
+lost 60 % of its landmarks on an absolute floor) and a `dt ± 1` probe in the matcher (clips cut off the
+master's 512-sample frame grid matched at density 0.09; with the probe 0.28–0.37). Scale: a 60-minute
+master fingerprints in 2.5 s, indexes in 0.03 s, 99 734 landmarks = 798 KB (13.3 KB/min); budget 6 s.
+Real files (read-only): a 16-min 2006 DVD-sourced master vs its derived clips — the DVD VOB itself is
+`SAME RECORDING` (density 0.987, offset 0.000); three edited exports are `CLIP OF MASTER` at 6.9 / 376.1 /
+490.2 s (density 0.18–0.49); two re-cut clips are `OVERLAP` 12–23 s (coverage 0.30–0.45, under the 0.5
+bar — they appear to be re-edits, not straight cuts); a video-only MPEG-2 export is the named
+`noAudioStream`; two unrelated 1980s tapes are `DIFFERENT` (4 and 6 matched of 6 327 / 14 784). The
+master is 19.7 landmarks/s = 151 KB; decode is the cost (0.7 s cached, 6–27 s cold from disk), the
+fingerprint 0.7 s, index + match < 40 ms.
