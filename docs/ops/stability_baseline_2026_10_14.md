@@ -9,10 +9,11 @@ This file is the record. Each later baseline supersedes it; keep the shape.
 | Host | Commit | Result | Tests | Elapsed | Row |
 |---|---|---|---|---|---|
 | RicksM5 (M5 Pro, Release) | db00fed4 | **GREEN** | 11,346 pass · 0 fail · 67 skip | 1,281 s | testdriver 2026-10-14T17:03Z |
-| RicksM4 (M4 Max, Release) | da66ab27 (pre-fix) | 3 fail, all explained below | 11,348 pass · 3 fail · 62 skip | 1,535 s | testdriver 2026-10-14T17:24Z |
+| RicksM4 (M4 Max, Release) | **7972a47e** | **GREEN** | 11,355 pass · 0 fail · 62 skip | 1,497 s | testdriver 2026-10-14T18:35Z |
+| RicksM4, first run | da66ab27 (pre-fix) | 3 fail, all explained below | 11,348 pass · 3 fail · 62 skip | 1,535 s | testdriver 2026-10-14T17:24Z |
 | RicksM1 (M1 Max, Release) | db00fed4 | see "M1" | — | — | pending |
 
-The suite is green on a current tree. Every red seen this week traced to one
+The suite is green on a current tree on both the M4 and the M5 (status=ok rows). Every red seen this week traced to one
 of the five causes below; none was a product defect.
 
 ## What was red, and why
