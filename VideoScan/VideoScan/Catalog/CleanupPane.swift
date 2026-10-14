@@ -2,6 +2,7 @@
 // Triage ▸ Cleanup — the page (docs/design/cleanup_kiss_2026_10_12.md).
 // One question: "Which files are extra, and can go to the Trash?"
 //
+//   (N files · X GB are hidden by an old “deleted” label — never moved. Show them again…)
 //   ☑ Copies           identical full SHA-256, one copy stays   n · GB selected · See files…
 //   ☑ Junk you marked  files you marked Confirmed Junk           n · GB selected · See files…
 //     Not checked yet  no full hash yet (information only)       n · GB
@@ -230,6 +231,7 @@ struct CleanupPane: View {
     @ViewBuilder
     private func content(_ plan: CleanupPlan) -> some View {
         VStack(alignment: .leading, spacing: 14) {
+            if plan.hiddenByOldLabel.files > 0 { hiddenByOldLabel(plan.hiddenByOldLabel) }
             Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 10) {
                 GridRow {
                     Text("").gridColumnAlignment(.leading)
@@ -274,6 +276,19 @@ struct CleanupPane: View {
                 .disabled(listed == 0)
                 .accessibilityIdentifier("cleanup.seeFiles.\(lane.rawValue)")
         }
+    }
+
+    /// Rows Cleanup cannot see because an old label (or its migrated marker)
+    /// hides them: one line, counted when the plan was built, and the one
+    /// door that makes them live — the Show Again review sheet (label only;
+    /// no file is touched).
+    private func hiddenByOldLabel(_ tally: CleanupPlan.Tally) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "eye.slash").foregroundStyle(.orange).font(.system(size: 11))
+            Text(CleanupWords.hiddenByOldLabel(tally)).font(.system(size: 11)).foregroundStyle(.secondary)
+            ShowAgainReviewLink(model: model, title: CleanupWords.showAgainLink, accessibilityID: "cleanup.showAgainReview")
+        }
+        .accessibilityIdentifier("cleanup.hiddenByOldLabel")
     }
 
     private func archiveJunkBox(_ plan: CleanupPlan) -> some View {
