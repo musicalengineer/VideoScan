@@ -118,6 +118,23 @@ struct EventsDate: Sendable, Hashable {
     /// A camera stamp with no camera behind it dates the COPY: it keys no
     /// day and settles no conflict (the Archive Angel's rule, v14).
     let trusted: Bool
+    /// Noon UTC of the day, for "within 4 days" arithmetic. Day-precise,
+    /// never a folder year. Computed ONCE here: the run walk reads it per
+    /// candidate, and a Calendar lookup per read was most of its cost.
+    let dayInstant: Date?
+
+    init(year: Int?, month: Int?, day: Int?, source: Source, trusted: Bool) {
+        self.year = year
+        self.month = month
+        self.day = day
+        self.source = source
+        self.trusted = trusted
+        if source != .folderYear, let year, let month, let day {
+            dayInstant = Self.utc.date(from: DateComponents(year: year, month: month, day: day, hour: 12))
+        } else {
+            dayInstant = nil
+        }
+    }
 
     static let none = EventsDate(year: nil, month: nil, day: nil, source: .none, trusted: false)
 
@@ -125,13 +142,6 @@ struct EventsDate: Sendable, Hashable {
     var eventDay: EventDay? {
         guard trusted, let year, let month, let day else { return nil }
         return EventDay(year: year, month: month, day: day)
-    }
-
-    /// Noon UTC of the day, for "within 4 days" arithmetic. Day-precise,
-    /// never a folder year (the only source that has no day anyway).
-    var dayInstant: Date? {
-        guard source != .folderYear, let year, let month, let day else { return nil }
-        return Self.utc.date(from: DateComponents(year: year, month: month, day: day, hour: 12))
     }
 
     /// The year that can BLOCK a merge: Rick's or a trusted camera's.
@@ -285,10 +295,14 @@ struct EventSuggestion: Sendable, Equatable, Identifiable {
     let isStrong: Bool
     /// A caveat the card says out loud (an untimed transcript on a long tape).
     let note: String?
+    /// What the planner found — the member and evidence-line counts BEFORE
+    /// any decision filters the card. A dismissal records these and holds
+    /// while they hold; a member Rick rejects or another event settles
+    /// does not change them (QA P1-a), a new member joining does.
+    let facts: SuggestionFacts
 
     var id: String { key }
     var primaryCategory: String { categories.first ?? "" }
-    var facts: SuggestionFacts { SuggestionFacts(members: members.count, evidence: members.reduce(0) { $0 + $1.evidence.count }) }
 }
 
 /// An event Rick confirmed, listed from his decisions alone.
@@ -426,13 +440,24 @@ struct EventWitness: Sendable, Identifiable {
     /// Every copy, by path; the first is the representative.
     let rows: [EventsRow]
     let date: EventsDate
-    var evidence: [EventCategoryEvidence]
+    let evidence: [EventCategoryEvidence]
     let lineage: String?
+    /// Stored, not derived: the run walk reads both per candidate.
+    let folders: Set<String>
+    let categories: [String]
+
+    init(contentKey: String, rows: [EventsRow], date: EventsDate, evidence: [EventCategoryEvidence], lineage: String?) {
+        self.contentKey = contentKey
+        self.rows = rows
+        self.date = date
+        self.evidence = evidence
+        self.lineage = lineage
+        folders = Set(rows.map(\.folder))
+        categories = evidence.map(\.category)
+    }
 
     var id: UUID { rows[0].id }
     var representative: EventsRow { rows[0] }
-    var folders: Set<String> { Set(rows.map(\.folder)) }
-    var categories: [String] { evidence.map(\.category) }
     var people: [String] { Array(Set(rows.flatMap(\.confirmedPeople))).sorted() }
     var bestStrength: EventEvidenceStrength? { evidence.map(\.strength).max() }
     var dayInstant: Date? { date.dayInstant }
@@ -523,6 +548,9 @@ enum EventsPlanner {
     /// A run under construction.
     struct Run {
         var members: [EventWitness] = []
+        /// The members' content keys, for the different-occasions check
+        /// (O(1) per lookup; never rebuilt per candidate — QA P2-b).
+        var keys: Set<String> = []
         var categories: [String: Int] = [:]
         var folders: Set<String> = []
         var first: Date?
@@ -533,6 +561,7 @@ enum EventsPlanner {
 
         mutating func add(_ w: EventWitness) {
             members.append(w)
+            keys.insert(w.contentKey)
             for c in w.categories { categories[c, default: 0] += 1 }
             folders.formUnion(w.folders)
             if let d = w.dayInstant {
@@ -552,6 +581,7 @@ enum EventsPlanner {
         var runs: [Run] = []
         var byFolder: [String: [Int]] = [:]
         var recent: [Int] = []           // runs whose last date may still be within reach
+        let blocked = blockedPartners(blocked)
         let evidenced = witnesses.filter { !$0.evidence.isEmpty }.sorted(by: dateOrder)
         for w in evidenced {
             let i: Int
@@ -572,6 +602,17 @@ enum EventsPlanner {
             }
         }
         return runs
+    }
+
+    /// "Different occasions" as a lookup: content key → the keys it must
+    /// never share a run with. Built once per walk.
+    static func blockedPartners(_ pairs: Set<EventsPair>) -> [String: [String]] {
+        var out: [String: [String]] = [:]
+        for p in pairs {
+            out[p.a, default: []].append(p.b)
+            out[p.b, default: []].append(p.a)
+        }
+        return out
     }
 
     private static func dateOrder(_ a: EventWitness, _ b: EventWitness) -> Bool {
@@ -595,7 +636,7 @@ enum EventsPlanner {
     /// The first run `w` may join: by folder (index), then by date
     /// (recent runs; those out of reach are dropped from the window).
     private static func home(for w: EventWitness, runs: [Run], byFolder: [String: [Int]], recent: inout [Int],
-                             blocked: Set<EventsPair>, needsBoth: Bool) -> Int? {
+                             blocked: [String: [String]], needsBoth: Bool) -> Int? {
         var candidates: [Int] = []
         for f in w.folders { candidates += byFolder[f] ?? [] }
         if let d = w.dayInstant, !needsBoth {
@@ -626,12 +667,13 @@ enum EventsPlanner {
             $0.representative.durationSeconds >= Rules.longTapeSeconds && $0.evidence.contains { $0.lines.contains { $0.source == .transcript } }
         }
         return EventSuggestion(
-            key: primary + "|" + (run.members.map(\.contentKey).min() ?? ""),
+            key: primary + "|" + (run.keys.min() ?? ""),
             name: EventsNaming.suggestionName(category: primary, dateWords: dateWords),
             categories: categories, members: members, dateWords: dateWords, start: run.first, end: run.last,
             folders: run.folders.sorted(), strength: strength,
             isStrong: strength == .seenAndSaid || run.members.count >= Rules.strongMemberCount,
-            note: longTape ? EventsNaming.untimedTranscriptNote : nil)
+            note: longTape ? EventsNaming.untimedTranscriptNote : nil,
+            facts: SuggestionFacts(members: members.count, evidence: members.reduce(0) { $0 + $1.evidence.count }))
     }
 
     static func member(_ w: EventWitness, categories: [String]) -> EventMember {
@@ -648,17 +690,22 @@ enum EventsPlanner {
 
     /// Consecutive suggestions (by date) in one category sharing a folder,
     /// dated more than the span apart or undated.
+    /// One category in one folder — the question's neighbourhood.
+    struct CategoryFolder: Hashable {
+        let category: String
+        let folder: String
+    }
+
     static func questions(_ suggestions: [EventSuggestion]) -> [EventsQuestion] {
-        var byCategoryFolder: [String: [EventSuggestion]] = [:]
+        var byCategoryFolder: [CategoryFolder: [EventSuggestion]] = [:]
         for s in suggestions {
-            for f in s.folders { byCategoryFolder[s.primaryCategory + "\u{1F}" + f, default: []].append(s) }
+            for f in s.folders { byCategoryFolder[CategoryFolder(category: s.primaryCategory, folder: f), default: []].append(s) }
         }
         var out: [EventsQuestion] = []
         for (key, group) in byCategoryFolder where group.count > 1 {
             let sorted = group.sorted { ($0.start ?? .distantFuture, $0.key) < ($1.start ?? .distantFuture, $1.key) }
-            let folder = String(key.split(separator: "\u{1F}", maxSplits: 1)[1])
             for (a, b) in zip(sorted, sorted.dropFirst()) where asksSameOccasion(a, b) {
-                out.append(EventsQuestion(a: a.key, b: b.key, category: a.primaryCategory, folder: folder,
+                out.append(EventsQuestion(a: a.key, b: b.key, category: key.category, folder: key.folder,
                                           aRange: a.members[0].range, bRange: b.members[0].range,
                                           aWords: a.name, bWords: b.name))
             }
@@ -718,7 +765,8 @@ struct EventsLink {
     let compatible: Bool
     let runHasEvidence: Bool
     let contentKey: String
-    let runKeys: [String]
+    /// The run's own set — shared storage, O(1) to hold (QA P2-b).
+    let runKeys: Set<String>
 
     init(_ w: EventWitness, _ run: EventsPlanner.Run) {
         sharesFolder = !w.folders.isDisjoint(with: run.folders)
@@ -735,7 +783,7 @@ struct EventsLink {
         compatible = w.categories.allSatisfy { c in run.categories.keys.allSatisfy { EventCategory.compatible(c, $0) } }
         runHasEvidence = run.hasEvidence
         contentKey = w.contentKey
-        runKeys = run.members.map(\.contentKey)
+        runKeys = run.keys
     }
 
     /// Folder OR date (with evidence); folder AND date (without). A folder
@@ -745,8 +793,11 @@ struct EventsLink {
         return datedWithin || (sharesFolder && !datedApart)
     }
 
-    func isBlocked(_ pairs: Set<EventsPair>) -> Bool {
-        !pairs.isEmpty && runKeys.contains { pairs.contains(EventsPair(contentKey, $0)) }
+    /// Rick said this content and one of the run's are different
+    /// occasions. Walks the (few) partners of THIS key, never the run.
+    func isBlocked(_ partners: [String: [String]]) -> Bool {
+        guard let mine = partners[contentKey] else { return false }
+        return mine.contains { runKeys.contains($0) }
     }
 }
 
