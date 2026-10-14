@@ -2,7 +2,7 @@
 // Triage ▸ Cleanup — the page (docs/design/cleanup_kiss_2026_10_12.md).
 // One question: "Which files are extra, and can go to the Trash?"
 //
-//   (N files · X GB are hidden by an old “deleted” label — never moved. Show them again…)
+//   (N files · X GB are hidden by an old “deleted” label — the app never moved them… Show them again…)
 //   ☑ Copies           identical full SHA-256, one copy stays   n · GB selected · See files…
 //   ☑ Junk you marked  files you marked Confirmed Junk           n · GB selected · See files…
 //     Not checked yet  no full hash yet (information only)       n · GB
@@ -171,7 +171,7 @@ enum CleanupWords {
 
     /// The line above the lanes when rows are hidden by the old label.
     static func hiddenByOldLabel(_ t: CleanupPlan.Tally) -> String {
-        "\(t.files.formatted()) file\(t.files == 1 ? "" : "s") · \(MediaBytes.display(t.bytes)) are hidden by an old “deleted” label — the files were never moved."
+        "\(t.files.formatted()) file\(t.files == 1 ? "" : "s") · \(MediaBytes.display(t.bytes)) are hidden by an old “deleted” label — the app never moved them; the review checks each one is still on disk."
     }
 
     static let showAgainLink = "Show them again…"

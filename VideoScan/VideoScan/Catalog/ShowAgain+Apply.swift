@@ -195,7 +195,11 @@ extension VideoScanModel {
         let file = ShowAgainReceiptFile(
             runID: "show-again-\(stamp)", writtenAt: Date(), snapshotPath: snapshot,
             changes: changes.map {
-                .init(id: $0.id, path: $0.fullPath, from: ShowAgainRules.falseLabel.rawValue,
+                // The stage the row really has (a marker-only row is `.none`
+                // already — QA P3-1): the reverse puts a label back only
+                // where the run cleared one.
+                .init(id: $0.id, path: $0.fullPath,
+                      from: (record(forID: $0.id)?.archiveStage ?? ShowAgainRules.falseLabel).rawValue,
                       to: ShowAgainRules.liveLabel.rawValue, removalSince: $0.removalSince)
             })
         try ShowAgainReceiptFile.encode(file).write(to: url, options: .atomic)
@@ -242,10 +246,12 @@ extension VideoScanModel {
         var refusal: String?
     }
 
-    /// Put `.manuallyDeleted` — and, where the receipt says the run cleared
-    /// one, the legacy removal marker with its original `since` — back on
-    /// exactly the records a run changed, only where the label is still the
-    /// value the run set and the path is the same. Takes its own safety
+    /// Put `.manuallyDeleted` (only where the receipt's `from` says the run
+    /// cleared it) — and, where the receipt says the run cleared one, the
+    /// legacy removal marker with its original `since` — back on exactly
+    /// the records a run changed, only where the label is still the value
+    /// the run set and the path is the same. The lifecycle stage is not put
+    /// back (see the ShowAgain.swift header). Takes its own safety
     /// snapshot first. Catalog-only: the marker goes through the engine's
     /// one writer (`stampRemoval`), which leaves the lifecycle stage of a
     /// removed-from-catalog row alone.
@@ -277,10 +283,11 @@ extension VideoScanModel {
             if let since = change.removalSince {
                 Self.stampRemoval(rec, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
             }
-            rec.archiveStage = ShowAgainRules.falseLabel
+            let labelPutBack = change.from == ShowAgainRules.falseLabel.rawValue
+            if labelPutBack { rec.archiveStage = ShowAgainRules.falseLabel }
             searchIndex.update(rec)
             out.restored += 1
-            lines.append(ShowAgainLines.revertedLine(path: change.path, id: change.id,
+            lines.append(ShowAgainLines.revertedLine(path: change.path, id: change.id, labelPutBack: labelPutBack,
                                                      markerPutBack: change.removalSince != nil))
         }
         noteCatalogRecordsMutated()

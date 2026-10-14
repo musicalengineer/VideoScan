@@ -38,8 +38,13 @@
 // `.none` on a verified copy or adoption). The label overwrote whatever the
 // record had; no surviving field says what that was, so `.none` ("no
 // archive progress claimed") is the only value that asserts nothing.
-// `lifecycleStage` (these rows are not Trashed), notes, dates, tags,
-// people — untouched. No File Journey stamp: label and marker only.
+// Notes, dates, tags, people — untouched. `lifecycleStage` is left alone
+// EXCEPT by the engine's own Restore rule: a row still carrying the
+// pre-#143 `.trashed` / `.deletedPermanently` mirror (no purgedAt, so the
+// migration made it the legacy marker) becomes `.cataloged` — the truer
+// value for a file just proven on disk at its size. The reverse puts the
+// marker and the label back, never that stage (QA P3-2, 2026-10-14). No
+// File Journey stamp: label and marker only.
 //
 // NEVER TOUCHES MEDIA. This file and the job read `stat()` and the ledger,
 // and write only: a catalog safety snapshot, a receipt JSON beside the
@@ -50,11 +55,12 @@
 // REVERSIBLE: before the first label changes, (a) `catalog.pre-show-again.
 // <stamp>.json` — the whole catalog, from memory, through the store's
 // canonical encoder — and (b) `label-repairs/show-again-<stamp>.json`, the
-// exact list of changed ids with old → new and, where the row carried the
-// legacy marker, its `since`. `reverseShowAgain(receiptURL:)` puts
-// `.manuallyDeleted` — and that marker, same `since` — back on exactly
-// those ids whose label is still the value this run set (the detail view's
-// "Put the labels back"). No snapshot or no receipt → the run refuses
+// exact list of changed ids with the stage each row really had → new and,
+// where the row carried the legacy marker, its `since`.
+// `reverseShowAgain(receiptURL:)` puts `.manuallyDeleted` (only where the
+// run cleared it — a marker-only row gets no label) and that marker, same
+// `since`, back on exactly those ids whose label is still the value this
+// run set (the detail view's "Put the labels back"). No snapshot or no receipt → the run refuses
 // before changing anything.
 //
 // OUTCOMES (named, none reads as success unless labels changed and the
@@ -404,8 +410,11 @@ enum ShowAgainLines {
         "[show-again] left labelled: \(c.fullPath) id=\(c.id.uuidString) — \(why.words)"
     }
 
-    static func revertedLine(path: String, id: UUID, markerPutBack: Bool) -> String {
+    static func revertedLine(path: String, id: UUID, labelPutBack: Bool, markerPutBack: Bool) -> String {
         let marker = markerPutBack ? "; removal marker (old deleted label) put back" : ""
+        guard labelPutBack else {
+            return "[show-again] put back: \(path) id=\(id.uuidString) — removal marker (old deleted label) put back; no label to put back"
+        }
         return "[show-again] label put back: \(path) id=\(id.uuidString) — \(ShowAgainRules.liveLabel.rawValue) → \(ShowAgainRules.falseLabel.rawValue)\(marker)"
     }
 
