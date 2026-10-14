@@ -16362,6 +16362,7 @@
         "KinshipPerformanceGateTests"
       ],
       "tests": [
+        "cacheCountersStayUnderBudgetAndDropCachesEmptiesThem",
         "cacheStaysUnderBudgetAndRSSSettlesOnSecondChurn",
         "centerInvalidatesOnGraphReplacementAndKinshipEditsOnly",
         "engineBuildsUnder20ms",
@@ -18662,9 +18663,11 @@
       "suites": [
         "PerformanceLaneTests",
         "PerformanceLaneHostedRunnerTests",
+        "PerformanceLaneSanitizerTests",
         "PerformanceLaneLoadTests"
       ],
       "tests": [
+        "ceilingWidensBySanitizerFactor",
         "coverageEnabledPredicate",
         "debugHeadroomOnlyWhenBusy",
         "degenerateInputs",
@@ -18674,8 +18677,10 @@
         "hostedCeilingIsTripled",
         "liveCeilingIsOneOfTwo",
         "liveCeilingMatchesEnvironment",
+        "livePredicateMatchesEnvironment",
         "localCeilingIsTheBudget",
         "otherConditionsStillRequired",
+        "predicateFollowsTheVariable",
         "realPathIsCoverageOn",
         "releaseIsStrict"
       ]
@@ -30380,7 +30385,7 @@
         "VIDEOSCAN_PERF_RESULTS": "{run_dir}/generated-media-perf.txt",
         "VIDEOSCAN_PERF_TIME_LIMIT_MIN": "10"
       },
-      "expected_floor": 64,
+      "expected_floor": 65,
       "name": "performance",
       "requires_tools": [
         "/opt/homebrew/bin/ffmpeg",

@@ -293,7 +293,16 @@ struct CheckMediaSoundContinuityTests {
     }
 
     /// SCALE: 10 minutes of stereo, streamed in 64 KB chunks, in budget.
-    @Test(.timeLimit(.minutes(2)))
+    ///
+    /// Not run under a sanitizer (2026-10-14): the analyzer touches every
+    /// one of the 230 MB of samples, and instrumented per-sample work is
+    /// not 4–15× slower but 66× (ASan, 45.7 s on 10/10) to 163× (TSan,
+    /// 112 s on 10/11, 8 s short of the 2-minute limit) against 0.69 s in
+    /// plain Debug. No honest factor covers that, and the 3-second cases
+    /// above already exercise the same code under the sanitizer.
+    @Test(.timeLimit(.minutes(2)),
+          .disabled(if: PerformanceLane.isSanitizerRun,
+                    "10-minute PCM stream is 66–163× slower under a sanitizer (45.7 s ASan, 112 s TSan vs 0.69 s plain); the 3 s cases cover the analyzer there"))
     func tenMinutesStreamInBudget() {
         let minute = PCM.s32le(PCM.tone(seconds: 60))
         var a = SoundContinuityAnalyzer(channels: 2, sampleRate: PCM.rate)
@@ -312,7 +321,11 @@ struct CheckMediaSoundContinuityTests {
         #expect(abs(r.seconds - 600) < 0.01)
         // Seams between the repeated minutes are continuous enough not to click.
         #expect(r.dropouts.occurrences < 1)
-        #expect(elapsed < .seconds(60), "10 min of stereo took \(elapsed) (Debug build)")
+        // Through the shared lane rule like every other Debug budget; a
+        // sanitizer never reaches this line (trait above), and the 2-minute
+        // trait still caps the run regardless of any widening.
+        #expect(elapsed < PerformanceLane.debugCeiling(.seconds(60)),
+                "10 min of stereo took \(elapsed) (\(PerformanceLane.loadDescription()))")
     }
 
     // MARK: Through the real ffmpeg pass (synthetic WAVs)

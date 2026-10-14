@@ -137,6 +137,59 @@ struct PerformanceLaneHostedRunnerTests {
     }
 }
 
+/// 2026-10-14: the weekly sanitizer runs were red only on perf budgets.
+/// Two ASan failures went through `debugCeiling` and still missed (the ×4
+/// was smaller than the measured 4.8–5.7×); two more compared raw numbers
+/// a sanitizer cannot honour (a 60 s stream budget at 112 s, an RSS delta
+/// under shadow memory). These pin the rules that fixed it: the lane's
+/// sanitizer predicate, the widened factor, and that NOTHING changes when
+/// the variable is absent.
+@Suite("PerformanceLane — sanitizer runs")
+struct PerformanceLaneSanitizerTests {
+
+    private static let key = TimingBudget.sanitizerEnvironmentKey
+
+    @Test("isSanitizerRun is true for address/thread only — unset, empty and unknown values are not a sanitizer")
+    func predicateFollowsTheVariable() {
+        #expect(PerformanceLane.isSanitizerRun(environment: [Self.key: "address"]))
+        #expect(PerformanceLane.isSanitizerRun(environment: [Self.key: "thread"]))
+        #expect(!PerformanceLane.isSanitizerRun(environment: [:]))
+        #expect(!PerformanceLane.isSanitizerRun(environment: [Self.key: ""]))
+        #expect(!PerformanceLane.isSanitizerRun(environment: [Self.key: "bogus"]))
+        #expect(!PerformanceLane.isSanitizerRun(environment: ["CI": "1", "GITHUB_ACTIONS": "true"]),
+                "CI and hosted runners are not sanitizer runs")
+    }
+
+    @Test("the lane widens ×8 under ASan and ×15 under TSan; the budget is exact without one")
+    func ceilingWidensBySanitizerFactor() {
+        let budget = Duration.milliseconds(50)
+        #expect(PerformanceLane.debugCeiling(budget, environment: [Self.key: "address"]) == .milliseconds(400))
+        #expect(PerformanceLane.debugCeiling(budget, environment: [Self.key: "thread"]) == .milliseconds(750))
+        #expect(PerformanceLane.debugCeiling(budget, environment: [Self.key: "bogus"]) == budget)
+        #expect(PerformanceLane.debugCeiling(budget, environment: [:]) == budget)
+        // Compounds with the hosted-runner factor, as the live sensor assumes.
+        #expect(PerformanceLane.debugCeiling(budget, environment: [Self.key: "address", "GITHUB_ACTIONS": "true"])
+                == .milliseconds(1_200))
+    }
+
+    /// Sensor on the LIVE process: the skip predicate and the widening
+    /// must agree with each other and with the variable the weekly script
+    /// sets. A plain Debug/Release run must see neither.
+    @Test("sensor: this process's predicate matches its environment and its widening")
+    func livePredicateMatchesEnvironment() {
+        let value = ProcessInfo.processInfo.environment[Self.key]
+        let expected = value == "address" || value == "thread"
+        #expect(PerformanceLane.isSanitizerRun == expected, "\(Self.key)=\(value ?? "<unset>")")
+        // The only two things that widen a Debug ceiling are a sanitizer and
+        // a GitHub-hosted runner; a plain local run is exact.
+        let widened = PerformanceLane.debugCeiling(.seconds(1)) != .seconds(1)
+        let onGitHub = ProcessInfo.processInfo.environment["GITHUB_ACTIONS"] == "true"
+        #expect(widened == (PerformanceLane.isSanitizerRun || onGitHub),
+                "widened=\(widened) sanitizer=\(PerformanceLane.isSanitizerRun) GITHUB_ACTIONS=\(onGitHub)")
+        #expect((PerformanceLane.sanitizerDescription == "no sanitizer") == !expected)
+    }
+}
+
 @Suite("PerformanceLane — load-aware Debug ceiling")
 struct PerformanceLaneLoadTests {
 

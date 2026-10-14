@@ -108,6 +108,33 @@ enum PerformanceLane {
         debugCeiling(seconds: budget)
     }
 
+    /// True inside the weekly Address/Thread Sanitizer run
+    /// (scripts/weekly_sanitizer.py sets TEST_RUNNER_VIDEOSCAN_SANITIZER,
+    /// which xcodebuild forwards as VIDEOSCAN_SANITIZER). For the few
+    /// tests no factor can make honest there — RSS deltas (shadow memory
+    /// and quarantine dwarf the thing being measured) and per-sample loops
+    /// over hundreds of MB (measured 66–163× slower, not 4–15×) — use it
+    /// in a `.disabled(if:)` trait whose reason says why. Every other
+    /// budget goes through `debugCeiling` and keeps running.
+    static var isSanitizerRun: Bool {
+        isSanitizerRun(environment: ProcessInfo.processInfo.environment)
+    }
+
+    /// Pure form, for tests of the rule itself. Same predicate as the
+    /// widening: a value TimingBudget does not widen for is not a sanitizer.
+    static func isSanitizerRun(environment: [String: String]) -> Bool {
+        TimingBudget.sanitizerFactor(environment: environment) > 1
+    }
+
+    /// "Address Sanitizer" / "Thread Sanitizer", for skip and failure messages.
+    static var sanitizerDescription: String {
+        switch ProcessInfo.processInfo.environment[TimingBudget.sanitizerEnvironmentKey] {
+        case "address": return "Address Sanitizer"
+        case "thread": return "Thread Sanitizer"
+        default: return "no sanitizer"
+        }
+    }
+
     /// A Debug ceiling that also allows for a machine that is measurably
     /// busy — the full Debug battery runs suites in parallel on every core,
     /// and a pure-CPU 100k pass then takes longer than it does alone.

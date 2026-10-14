@@ -39,13 +39,23 @@ public enum TimingBudget {
     /// which xcodebuild forwards) to "address" or "thread" (2026-10-04).
     public static let sanitizerEnvironmentKey = "VIDEOSCAN_SANITIZER"
 
-    /// How much slower instrumented code runs: Address Sanitizer ~2–3×
-    /// (×4 here), Thread Sanitizer ~5–15× (×15). 1 when no sanitizer.
-    /// A sanitizer run is about memory and races, not speed — but a hang
+    /// How much slower instrumented code runs. 1 when no sanitizer. A
+    /// sanitizer run is about memory and races, not speed — but a hang
     /// beyond this headroom still fails.
+    ///
+    ///   - Address Sanitizer ×8 (was ×4, 2026-10-14). The textbook figure
+    ///     is ~2–3×, but Swift code that allocates a lot of small objects
+    ///     pays more: the weekly ASan runs of 10/04 and 10/10 measured the
+    ///     5,000-person pedigree layout at 2.16 s and 2.58 s against a
+    ///     plain-Debug 0.45 s (4.8–5.7×), the 500×5 kinship overlay build
+    ///     at > 4× its 50 ms, and the SCALE #10 Clear-all verb at 5.5×
+    ///     (2 193 ms vs 400 ms). ×8 covers the worst observed 5.7× with
+    ///     the same ~40% headroom the old "~2–3× → ×4" carried.
+    ///   - Thread Sanitizer ×15 (~5–15× documented; the same two tests
+    ///     measured 4.6–5× on 10/11).
     public static func sanitizerFactor(environment: [String: String]) -> Int {
         switch environment[sanitizerEnvironmentKey] {
-        case "address": return 4
+        case "address": return 8
         case "thread": return 15
         default: return 1
         }
