@@ -901,8 +901,11 @@ struct FamilyTreeScaleTests {
         // battery on the M4 Max this measured 512–651 ms while the same suite
         // alone stays under 500 — the ×1.5 headroom applies only when the
         // machine is measurably busy; a quiet run is still held to 500 ms.
+        // Under the weekly ASan run this measured 2.16 s and 2.58 s (10/04,
+        // 10/10) against the old ×4 = 2 s ceiling — the sanitizer factor is
+        // ×8 since 2026-10-14 (see TimingBudget.sanitizerFactor); TSan ×15.
         #expect(elapsed < PerformanceLane.loadAwareDebugCeiling(.milliseconds(500)),
-                "layout + install took \(elapsed) (\(PerformanceLane.loadDescription()))")
+                "layout + install took \(elapsed) (\(PerformanceLane.loadDescription()), \(PerformanceLane.sanitizerDescription))")
 
         // Deep in the chain every ancestor slot is filled on the paternal
         // side and the cap still holds.

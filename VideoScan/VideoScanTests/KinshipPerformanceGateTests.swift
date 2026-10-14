@@ -182,7 +182,34 @@ struct KinshipPerformanceGateTests {
         #expect(answered > 0)
     }
 
-    @Test func cacheStaysUnderBudgetAndRSSSettlesOnSecondChurn() {
+    /// The cache's OWN accounting after a 10k-query churn, and that
+    /// dropCaches empties it. Split out of the RSS test (2026-10-14) so the
+    /// counters stay asserted on the weekly sanitizer run, where the RSS
+    /// deltas below are skipped.
+    @Test func cacheCountersStayUnderBudgetAndDropCachesEmptiesThem() {
+        warmFixtures()
+        let inf = FamilyKinshipInference(profiles: Self.profiles, graph: Self.graph)
+        var rng = KinshipInferenceTests.SplitMix(seed: 11)
+        let nodes = (0..<100).map { node($0, in: inf) }
+        for _ in 0..<10_000 {
+            _ = inf.relation(from: nodes[Int(rng.next() % 100)], to: nodes[Int(rng.next() % 100)])
+        }
+        let c1 = inf.counters
+        #expect(c1.cachedBytes <= 8 * 1_024 * 1_024 && c1.cachedEntries <= 4_096, "\(c1)")
+        #expect(c1.cachedEntries > 0, "the churn must have populated the cache for the budget to mean anything")
+        inf.dropCaches()
+        let c2 = inf.counters
+        #expect(c2.cachedEntries == 0 && c2.cachedBytes == 0)
+    }
+
+    /// Process RSS deltas are only meaningful without a sanitizer: ASan's
+    /// redzones and quarantine and TSan's shadow memory grow the resident
+    /// set by their own rules (TSan 10/11: the second churn "grew" RSS past
+    /// 8 MiB with the cache itself empty). The cache counters are asserted
+    /// in the test above, which does run there.
+    @Test(.disabled(if: PerformanceLane.isSanitizerRun,
+                    "RSS deltas are meaningless under a sanitizer: shadow memory / quarantine dominate resident size; cache counters are covered by cacheCountersStayUnderBudgetAndDropCachesEmptiesThem"))
+    func cacheStaysUnderBudgetAndRSSSettlesOnSecondChurn() {
         warmFixtures()
         let inf = FamilyKinshipInference(profiles: Self.profiles, graph: Self.graph)
         var rng = KinshipInferenceTests.SplitMix(seed: 11)

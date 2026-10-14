@@ -209,7 +209,9 @@ struct TimingBudgetSanitizerTests {
 
     @Test func factorsFollowTheSanitizer() {
         #expect(TimingBudget.sanitizerFactor(environment: [:]) == 1)
-        #expect(TimingBudget.sanitizerFactor(environment: ["VIDEOSCAN_SANITIZER": "address"]) == 4)
+        // ×8 for ASan since 2026-10-14: the weekly runs measured up to 5.7×
+        // on allocation-heavy tests (evidence in TimingBudget.sanitizerFactor).
+        #expect(TimingBudget.sanitizerFactor(environment: ["VIDEOSCAN_SANITIZER": "address"]) == 8)
         #expect(TimingBudget.sanitizerFactor(environment: ["VIDEOSCAN_SANITIZER": "thread"]) == 15)
         #expect(TimingBudget.sanitizerFactor(environment: ["VIDEOSCAN_SANITIZER": "bogus"]) == 1)
     }
@@ -217,7 +219,9 @@ struct TimingBudgetSanitizerTests {
     @Test func debugCeilingWidensOnlyUnderASanitizer() {
         #expect(TimingBudget.debugCeiling(.milliseconds(100), environment: [:]) == .milliseconds(100))
         #expect(TimingBudget.debugCeiling(.milliseconds(100), environment: ["VIDEOSCAN_SANITIZER": "address"])
-                == .milliseconds(400))
+                == .milliseconds(800))
+        #expect(TimingBudget.debugCeiling(.milliseconds(100), environment: ["VIDEOSCAN_SANITIZER": "thread"])
+                == .milliseconds(1_500))
     }
 
     @Test func aSanitizerRunPassesInstrumentedSlownessButStillFailsAHang() {
