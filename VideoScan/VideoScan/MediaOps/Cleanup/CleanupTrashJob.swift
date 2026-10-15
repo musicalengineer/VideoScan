@@ -55,6 +55,9 @@ private let cleanupLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "cl
 /// Exactly what one run may move, frozen when Rick confirms.
 struct CleanupSelection: Sendable, Equatable {
     let copies: [CleanupPlan.Copy]
+    /// Copies of a file the Master Archive holds (their keeper is the
+    /// archived file). Their own tick box; the same lane and proof in the run.
+    let archiveCovered: [CleanupPlan.Copy]
     let junk: [CleanupFile]
     /// FamilyArchive junk — non-empty only when the tick box was on.
     let archiveJunk: [CleanupFile]
@@ -64,26 +67,33 @@ struct CleanupSelection: Sendable, Equatable {
     /// group's keeper, and no file that is a reserved survivor, can be in
     /// it — whatever the plan or the ticks say.
     init(plan: CleanupPlan, unticked: Set<UUID>, includeArchiveJunk: Bool,
-         includeCopies: Bool = true, includeJunk: Bool = true) {
+         includeCopies: Bool = true, includeJunk: Bool = true, includeArchiveCovered: Bool = true) {
         let reserved = plan.reservedSurvivors
-        let keeperIDs = Set(plan.copies.map(\.keeper.id))
+        let keeperIDs = Set((plan.copies + plan.archiveCovered).map(\.keeper.id))
         func mayGo(_ f: CleanupFile) -> Bool {
             !unticked.contains(f.id) && !keeperIDs.contains(f.id) && !reserved.contains(CleanupPhysicalID(f.identity))
         }
         copies = includeCopies ? plan.copies.filter { mayGo($0.target) } : []
+        // Belt and braces: a covered copy's keeper is the archive's file, or
+        // the copy is not in the run.
+        archiveCovered = includeArchiveCovered ? plan.archiveCovered.filter { mayGo($0.target) && $0.keeperIsArchiveFile } : []
         junk = includeJunk ? plan.junk.filter(mayGo) : []
         archiveJunk = includeArchiveJunk ? plan.archiveJunk.filter(mayGo) : []
         reservedSurvivors = reserved
     }
 
+    /// Every copy the run takes — plain copies, then archive-covered ones.
+    /// The run treats both alike: one lane, one proof (target and keeper
+    /// read in full).
+    var allCopies: [CleanupPlan.Copy] { copies + archiveCovered }
     var allJunk: [CleanupFile] { junk + archiveJunk }
-    var count: Int { copies.count + junk.count + archiveJunk.count }
-    var isEmpty: Bool { copies.isEmpty && junk.isEmpty && archiveJunk.isEmpty }
+    var count: Int { allCopies.count + junk.count + archiveJunk.count }
+    var isEmpty: Bool { allCopies.isEmpty && junk.isEmpty && archiveJunk.isEmpty }
     var bytes: Int64 {
-        copies.reduce(Int64(0)) { $0 + $1.target.sizeBytes } + allJunk.reduce(Int64(0)) { $0 + $1.sizeBytes }
+        allCopies.reduce(Int64(0)) { $0 + $1.target.sizeBytes } + allJunk.reduce(Int64(0)) { $0 + $1.sizeBytes }
     }
     /// Bytes the proofs read: each extra copy AND its keeper, in full.
-    var bytesToRead: Int64 { copies.reduce(Int64(0)) { $0 + 2 * $1.target.sizeBytes } }
+    var bytesToRead: Int64 { allCopies.reduce(Int64(0)) { $0 + 2 * $1.target.sizeBytes } }
 }
 
 // MARK: - Per-file outcome
@@ -206,7 +216,7 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     init(model: VideoScanModel, selection: CleanupSelection) {
         self.model = model
         self.selection = selection
-        keeperPaths = Dictionary(selection.copies.map { ($0.target.id, $0.keeper.path) }, uniquingKeysWith: { a, _ in a })
+        keeperPaths = Dictionary(selection.allCopies.map { ($0.target.id, $0.keeper.path) }, uniquingKeysWith: { a, _ in a })
         totals.planned = selection.count
     }
 
@@ -279,17 +289,20 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     }
 
     private var scopeWords: String {
-        var s = "\(selection.copies.count) extra cop\(selection.copies.count == 1 ? "y" : "ies") (each read in full with the copy that stays), \(selection.junk.count) junk you marked"
+        var s = "\(selection.allCopies.count) extra cop\(selection.allCopies.count == 1 ? "y" : "ies") (each read in full with the copy that stays), \(selection.junk.count) junk you marked"
+        if !selection.archiveCovered.isEmpty {
+            s += " — \(selection.archiveCovered.count) of the copies are of a file the archive holds (the archived file stays)"
+        }
         if !selection.archiveJunk.isEmpty { s += ", \(selection.archiveJunk.count) junk on FamilyArchive (ticked for this run)" }
         return s + " — Finder Trash only"
     }
 
     private func runCopies(model: VideoScanModel) async {
-        let recs = resolve(selection.copies.map(\.target), lane: .copy, model: model)
+        let recs = resolve(selection.allCopies.map(\.target), lane: .copy, model: model)
         guard !recs.isEmpty else { return }
         let g = copyGuard(model: model)
         // Each copy costs two full reads: it and the copy that stays.
-        let cost = Dictionary(selection.copies.map { ($0.target.id, 2 * $0.target.sizeBytes) }, uniquingKeysWith: { a, _ in a })
+        let cost = Dictionary(selection.allCopies.map { ($0.target.id, 2 * $0.target.sizeBytes) }, uniquingKeysWith: { a, _ in a })
         for batch in Self.batches(recs, maxFiles: Self.checkpointFiles, maxBytes: Self.checkpointBytes, bytes: { cost[$0.id] ?? 0 }) {
             await runFiles(batch, lane: .copy, reason: .duplicate, guard: g, model: model)
             await checkpoint(model: model)
@@ -403,8 +416,8 @@ final class CleanupTrashJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     // MARK: Guards
 
     private func copyGuard(model: VideoScanModel) -> VideoScanModel.JunkDeletionGuard {
-        let byID = Dictionary(selection.copies.map { ($0.target.id, $0) }, uniquingKeysWith: { first, _ in first })
-        let byPath = Dictionary(selection.copies.map { ($0.target.path, $0) }, uniquingKeysWith: { first, _ in first })
+        let byID = Dictionary(selection.allCopies.map { ($0.target.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let byPath = Dictionary(selection.allCopies.map { ($0.target.path, $0) }, uniquingKeysWith: { first, _ in first })
         let control = control, ledger = ledger
         let started = proofStartedForTesting, between = betweenReadsForTesting, passed = proofPassedForTesting
         var g = VideoScanModel.JunkDeletionGuard(
@@ -590,6 +603,11 @@ extension VideoScanModel {
         if CatalogScopePolicy.isPairProtected(rec) { return Self.pairMemberHeldNote }
         guard let keeper = record(forID: copy.keeper.id), !keeper.isPurged, keeper.fullPath == copy.keeper.path else {
             return "the copy that stays is no longer in the catalog at \(copy.keeper.path) — nothing moved"
+        }
+        // An archive-covered copy: the plan chose the archive's own file to
+        // stay; it must still be one (the catalog's own predicate, at the move).
+        if copy.keeperIsArchiveFile, !(isArchiveCopy(keeper) || isInsideMasterArchive(path: keeper.fullPath)) {
+            return "the copy that stays is no longer a file of the Master Archive — refresh Cleanup — nothing moved"
         }
         if Self.isExternalVolumePath(keeper.fullPath), !VolumeReachability.isReachable(path: keeper.fullPath) {
             let drive = copy.keeper.volumeName.isEmpty ? VolumeReachability.volumeName(forPath: keeper.fullPath) : copy.keeper.volumeName

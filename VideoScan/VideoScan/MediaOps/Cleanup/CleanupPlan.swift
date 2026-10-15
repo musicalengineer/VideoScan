@@ -28,6 +28,14 @@
 //           of an A/V pair, inside Avid MediaFiles or an app library, or
 //           carries more of Rick's own marks (stars, notes, people…) than
 //           the copy that stays.
+//           A group with a file OF the Master Archive in it (a promoted copy
+//           or anything inside the archive root) has its keeper decided:
+//           that file stays, whatever the volume rank says (Rick 10/14: one
+//           master archive; the extra copies can go). Its other members are
+//           ARCHIVE-COVERED copies — the same exclusions, their own lane and
+//           tick box on the page, the same proof at the move (both files
+//           read in full). A second archive file of the same content is
+//           left alone: an archive file is never a target.
 //   JUNK    rows Rick marked Confirmed Junk: same disk checks, never
 //           archived / A/V halves / Avid / app libraries, never a physical
 //           file that is some group's keeper. On the FamilyArchive volume
@@ -64,9 +72,11 @@ struct CleanupRow: Sendable, Equatable {
     /// only when it covers exactly `sizeBytes`. nil = "not checked yet".
     let fullDigest: String?
     let isJunk: Bool
-    /// An archive copy, inside the archive tree, or a source whose content
-    /// already has a master copy (the Excess copies lane owns those).
-    let isArchived: Bool
+    /// A file OF the Master Archive: a promoted copy, or anything inside the
+    /// archive root. It is the copy that stays for its content and is never
+    /// a target. (A source elsewhere whose content the archive holds is NOT
+    /// this — it is an archive-covered copy, `CleanupPlan.archiveCovered`.)
+    let isArchiveFile: Bool
     let isPairHalf: Bool
     /// Set aside (hidden) in the catalog — neither kept nor removed here.
     let isSetAside: Bool
@@ -166,6 +176,11 @@ struct CleanupPlan: Sendable, Equatable {
         let keeper: CleanupFile
         /// The stored full SHA-256 both rows carry (the fresh reads decide).
         let digest: String
+        /// The keeper is a file OF the Master Archive (the archive-covered
+        /// lane). The proof then expects it inside the archive tree instead
+        /// of refusing it there, and the catalog half requires it to still
+        /// be the archive's file at the move.
+        var keeperIsArchiveFile = false
         var id: UUID { target.id }
     }
 
@@ -177,6 +192,11 @@ struct CleanupPlan: Sendable, Equatable {
     }
 
     var copies: [Copy] = []
+    /// Copies, outside the archive, of a file the Master Archive holds —
+    /// the archived file is the keeper. (Archive ▸ Excess copies folded
+    /// into Cleanup, 2026-10-15: the promoted VHS captures and exports
+    /// Rick asked to shed, ~1.1 TB.)
+    var archiveCovered: [Copy] = []
     /// Junk you marked, not on FamilyArchive.
     var junk: [CleanupFile] = []
     /// Junk you marked on FamilyArchive — only with the per-run tick box.
@@ -200,6 +220,7 @@ struct CleanupPlan: Sendable, Equatable {
     // The page's numbers, summed ONCE when the plan is built (`finishTotals`)
     // — never in a view body (codex r1 P3-7).
     private(set) var copyBytes: Int64 = 0
+    private(set) var archiveCoveredBytes: Int64 = 0
     private(set) var junkBytes: Int64 = 0
     private(set) var archiveJunkBytes: Int64 = 0
     private(set) var leftAloneTotal = Tally()
@@ -216,6 +237,7 @@ struct CleanupPlan: Sendable, Equatable {
     /// Sum the page's numbers from the lists. The planner calls it last.
     mutating func finishTotals() {
         copyBytes = copies.reduce(Int64(0)) { $0 + $1.target.sizeBytes }
+        archiveCoveredBytes = archiveCovered.reduce(Int64(0)) { $0 + $1.target.sizeBytes }
         junkBytes = junk.reduce(Int64(0)) { $0 + $1.sizeBytes }
         archiveJunkBytes = archiveJunk.reduce(Int64(0)) { $0 + $1.sizeBytes }
         leftAloneSorted = leftAlone.map { LeftAloneLine(reason: $0.key, tally: $0.value) }
@@ -261,7 +283,7 @@ struct CleanupExclusion: Error, Sendable, Hashable {
     static let keeperTie = Self("keeperTie", "no clear copy to keep (a tie) — left alone")
     static let copyIsJunk = Self("copyIsJunk", "a copy of it is marked junk — left for you")
     static let setAside = Self("setAside", "set aside in the catalog")
-    static let archived = Self("archived", "already archived — Archive's own lane handles it")
+    static let archived = Self("archived", "a file of the Master Archive — it stays, never moved from here")
     static let pairHalf = Self("pairHalf", "half of an audio/video pair")
     static let avidMediaFiles = Self("avidMediaFiles", "in an Avid MediaFiles folder (its bins would go offline)")
     static let appLibrary = Self("appLibrary", "inside an app library (Photos, iMovie, Final Cut…)")
@@ -452,6 +474,21 @@ enum CleanupPlanner {
             for m in physical { plan.leftAlone[.onlyUsableCopy, default: .init()].add(m.row.sizeBytes) }
             return
         }
+        // A file of the Master Archive in the group decides the keeper: it
+        // stays, whatever the volume rank says; every other usable member is
+        // an archive-covered copy (its own lane). No tie is possible here.
+        if let master = physical.filter({ $0.row.isArchiveFile }).min(by: { $0.row.path < $1.row.path }) {
+            plan.reservedSurvivors.insert(master.physical)
+            for m in physical where m.physical != master.physical {
+                if let why = copyExclusion(m.row, keeper: master.row, aliased: index.isShared(m.physical)) {
+                    plan.leftAlone[why, default: .init()].add(m.row.sizeBytes)
+                } else {
+                    plan.archiveCovered.append(CleanupPlan.Copy(target: m.file, keeper: master.file, digest: digest,
+                                                                keeperIsArchiveFile: true))
+                }
+            }
+            return
+        }
         let ranked = physical.sorted { lhs, rhs in
             let l = rank(lhs.row.path), r = rank(rhs.row.path)
             return ties(l, r) ? lhs.row.path < rhs.row.path : r < l
@@ -481,7 +518,7 @@ enum CleanupPlanner {
         case .other(let why)?: return .protected(why)
         case nil: break
         }
-        if row.isArchived { return .archived }
+        if row.isArchiveFile { return .archived }
         if let why = contentExclusion(row) { return why }
         return row.marks.lacking(in: keeper.marks).map { .carriesYourMarks($0) }
     }
@@ -528,7 +565,7 @@ enum CleanupPlanner {
     /// Where one junk row goes, or why it is left alone.
     static func junkLane(_ row: CleanupRow, fact: CleanupDiskFacts, index: PhysicalIndex,
                          reserved: Set<CleanupPhysicalID>) -> Result<PlacedJunk, CleanupExclusion> {
-        if row.isArchived || row.protection == .archiveTree || CleanupPathRules.isInArchiveRootFolder(row.path) {
+        if row.isArchiveFile || row.protection == .archiveTree || CleanupPathRules.isInArchiveRootFolder(row.path) {
             return .failure(.archived)
         }
         if case .other(let why)? = row.protection { return .failure(.protected(why)) }

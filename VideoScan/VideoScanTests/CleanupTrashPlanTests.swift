@@ -27,6 +27,7 @@ struct CleanupTrashPlanTests {
         #expect(plan.copies.map(\.target.id) == [extra.id])
         #expect(plan.copies.first?.keeper.id == keep.id)
         #expect(plan.copies.first?.digest == "d1")
+        #expect(plan.copies.first?.keeperIsArchiveFile == false)
         #expect(plan.reservedSurvivors.count == 1)
     }
 
@@ -86,15 +87,95 @@ struct CleanupTrashPlanTests {
         #expect(r[CleanupExclusion.appLibrary.key] == 1)
     }
 
-    @Test("archived rows and Read-only drives are never copies")
-    func archivedAndProtected() {
-        let keep = F.row("/Volumes/LaCieWorkspace/a.mov")
-        let archived = F.row("/Volumes/SanDiskWorkspace/x/a.mov", archived: true)
+    @Test("a file of the archive is the copy that stays wherever it sits; a Read-only drive's copy is never a target")
+    func archiveFileAndProtected() {
+        let lacie = F.row("/Volumes/LaCieWorkspace/a.mov")
+        let archiveFile = F.row("/Volumes/SanDiskWorkspace/x/a.mov", archiveFile: true)
         let ro = F.row("/Volumes/SanDiskWorkspace/y/a.mov", protection: .other("lives on X, which you marked Read only"))
-        let plan = F.plan([keep, archived, ro])
+        let plan = F.plan([lacie, archiveFile, ro])
         #expect(plan.copies.isEmpty)
-        #expect(F.reasons(plan)[CleanupExclusion.archived.key] == 1)
+        #expect(plan.archiveCovered.map(\.target.id) == [lacie.id])
+        #expect(plan.archiveCovered.first?.keeper.id == archiveFile.id)
         #expect(plan.leftAlone[.protected("lives on X, which you marked Read only")]?.files == 1)
+    }
+
+    // MARK: Copies the archive already holds (Archive ▸ Excess copies folded in, 2026-10-15)
+
+    @Test("a copy of a file the archive holds: the archive file stays even when its volume is outranked; the copies go in their own lane")
+    func archiveFileIsTheKeeper() {
+        let odd = DuplicateKeeperPolicy(precedence: ["LaCieWorkspace", "FamilyArchive"])
+        let master = F.row("/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/1990-1999/a.mov",
+                           archiveFile: true, protection: .archiveTree)
+        let lacie = F.row("/Volumes/LaCieWorkspace/x/a.mov")
+        let ssd = F.row("/Volumes/SanDiskWorkspace/y/a.mov")
+        let plan = F.plan([ssd, master, lacie], policy: odd)
+        #expect(plan.copies.isEmpty, "an archive-covered copy is never in the plain Copies lane")
+        #expect(plan.archiveCovered.map(\.target.id) == [lacie.id, ssd.id])
+        #expect(plan.archiveCovered.allSatisfy { $0.keeper.id == master.id && $0.digest == "d1" && $0.keeperIsArchiveFile })
+        #expect(plan.reservedSurvivors == [CleanupPhysicalID(plan.archiveCovered[0].keeper.identity)])
+        #expect(plan.archiveCoveredBytes == 2_000 && plan.copyBytes == 0)
+        #expect(plan.leftAlone.isEmpty)
+    }
+
+    @Test("two archive files of one content: one stays, the other is left alone as an archive file — never a target")
+    func secondArchiveFileNeverATarget() {
+        let a = F.row("/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/a.mov", archiveFile: true, protection: .archiveTree)
+        let b = F.row("/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/b.mov", archiveFile: true, protection: .archiveTree)
+        let ssd = F.row("/Volumes/SanDiskWorkspace/a.mov")
+        let plan = F.plan([ssd, b, a])
+        #expect(plan.archiveCovered.map(\.target.id) == [ssd.id])
+        #expect(plan.archiveCovered.first?.keeper.id == a.id)
+        #expect(F.reasons(plan)[CleanupExclusion.archived.key] == 1)
+        #expect(plan.copies.isEmpty)
+    }
+
+    @Test("archive-covered copies keep every copy exclusion: FamilyArchive volume, A/V half, app library, your marks, a linked folder, an alias")
+    func archiveCoveredKeepsTheExclusions() {
+        let master = F.row("/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/a.mov", archiveFile: true, protection: .archiveTree)
+        let fa = F.row("/Volumes/FamilyArchive/Movies/a.mov", protection: .archiveVolume)
+        let pair = F.row("/Volumes/SanDiskWorkspace/a.mxf", pair: true)
+        let lib = F.row("/Volumes/SanDiskWorkspace/Lib.fcpbundle/a.mov")
+        let marked = F.row("/Volumes/SanDiskWorkspace/m/a.mov", marks: CleanupHandMarks(stars: 3))
+        let linked = F.row("/Volumes/SanDiskWorkspace/l/a.mov")
+        let alias = F.row("/Volumes/SanDiskWorkspace/alias/a.mov")
+        let other = F.row("/Volumes/SanDiskWorkspace/alias/other.mov", digest: nil)
+        let plain = F.row("/Volumes/SanDiskWorkspace/p/a.mov")
+        let shared = F.stamp(inode: 77, size: 1_000)
+        let plan = F.plan([master, fa, pair, lib, marked, linked, alias, other, plain],
+                          facts: [linked.path: .throughLink(nil), alias.path: .file(shared), other.path: .file(shared)])
+        #expect(plan.archiveCovered.map(\.target.id) == [plain.id])
+        let r = F.reasons(plan)
+        #expect(r[CleanupExclusion.familyArchive.key] == 1 && r[CleanupExclusion.pairHalf.key] == 1
+                && r[CleanupExclusion.appLibrary.key] == 1 && r[CleanupExclusion.throughLink.key] == 1
+                && r[CleanupExclusion.sameFileAsAnotherRow.key] == 1, "\(r)")
+        #expect(plan.leftAlone[.carriesYourMarks("stars")]?.files == 1)
+    }
+
+    @Test("the frozen selection: the archive-covered lane has its own tick box, counts in the run, and never carries a keeper")
+    func archiveCoveredSelection() {
+        let master = F.row("/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/a.mov", archiveFile: true, protection: .archiveTree)
+        let ssd = F.row("/Volumes/SanDiskWorkspace/a.mov")
+        let plan = F.plan([master, ssd])
+        let on = CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false)
+        #expect(on.archiveCovered.map(\.target.id) == [ssd.id] && on.copies.isEmpty && on.allCopies.count == 1)
+        #expect(on.count == 1 && on.bytes == 1_000 && on.bytesToRead == 2_000, "the copy AND the archived file are read")
+        let off = CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false, includeArchiveCovered: false)
+        #expect(off.isEmpty)
+        #expect(CleanupSelection(plan: plan, unticked: [ssd.id], includeArchiveJunk: false).isEmpty)
+        // Belt and braces: a corrupted plan naming the archive file as a
+        // target — the keeper never goes, the real copy still does…
+        let archived = plan.archiveCovered[0].keeper, copy = plan.archiveCovered[0].target
+        var bad = plan
+        bad.archiveCovered.append(CleanupPlan.Copy(target: archived, keeper: archived, digest: "d1"))
+        #expect(CleanupSelection(plan: bad, unticked: [], includeArchiveJunk: false).archiveCovered.map(\.target.id) == [ssd.id])
+        // …and one that swaps the two makes BOTH some copy's keeper: nothing goes.
+        var swapped = plan
+        swapped.archiveCovered.append(CleanupPlan.Copy(target: archived, keeper: copy, digest: "d1"))
+        #expect(CleanupSelection(plan: swapped, unticked: [], includeArchiveJunk: false).isEmpty)
+        // …and a covered copy whose keeper is NOT flagged as the archive's file is dropped.
+        var unflagged = CleanupPlan()
+        unflagged.archiveCovered = [CleanupPlan.Copy(target: copy, keeper: archived, digest: "d1")]
+        #expect(CleanupSelection(plan: unflagged, unticked: [], includeArchiveJunk: false).isEmpty)
     }
 
     @Test("a copy carrying more of Rick's HAND marks than the keeper stays, and the reason says what it saw")
@@ -265,7 +346,7 @@ struct CleanupTrashPlanTests {
         let j1 = F.row("/Volumes/SanDiskWorkspace/j1.mov", digest: nil, junk: true)
         let jFA = F.row("/Volumes/FamilyArchive/Jams/loop.aif", digest: nil, junk: true, protection: .archiveVolume)
         let jTree = F.row("/Volumes/FamilyArchive/Breen_Family_Archive/x.mov", digest: nil, junk: true, protection: .archiveTree)
-        let jArch = F.row("/Volumes/SanDiskWorkspace/promoted.mov", digest: nil, junk: true, archived: true)
+        let jArch = F.row("/Volumes/SanDiskWorkspace/promoted.mov", digest: nil, junk: true, archiveFile: true)
         let jPair = F.row("/Volumes/SanDiskWorkspace/v.mxf", digest: nil, junk: true, pair: true)
         let jRO = F.row("/Volumes/RO/x.mov", digest: nil, junk: true, protection: .other("read only"))
         // In the archive root folder by NAME, though the gate called it the
@@ -336,22 +417,26 @@ struct CleanupTrashPlanTests {
                 let drive = drives.randomElement(using: &rng) ?? "Other"
                 let path = "/Volumes/\(drive)/f\(i).mov"
                 let digests: [String?] = ["d1", "d2", nil]
+                let archiveFile = drive == "FamilyArchive" && Int.random(in: 0..<3, using: &rng) == 0
                 let row = F.row(path, digest: digests[Int.random(in: 0..<digests.count, using: &rng)],
-                                junk: Int.random(in: 0..<5, using: &rng) == 0,
-                                protection: drive == "FamilyArchive" ? .archiveVolume : nil,
+                                junk: Int.random(in: 0..<5, using: &rng) == 0, archiveFile: archiveFile,
+                                protection: drive == "FamilyArchive" ? (archiveFile ? .archiveTree : .archiveVolume) : nil,
                                 marks: Int.random(in: 0..<3, using: &rng) == 0 ? CleanupHandMarks(stars: 1) : .none)
                 rows.append(row)
                 // A few physical files shared between rows (aliases).
                 facts[path] = .file(F.stamp(inode: UInt64(Int.random(in: 0..<6, using: &rng)), size: 1_000))
             }
             let plan = F.plan(rows, facts: facts)
-            let keeperIDs = Set(plan.copies.map(\.keeper.id))
-            let removal = plan.copies.map(\.target) + plan.junk + plan.archiveJunk
+            let keeperIDs = Set((plan.copies + plan.archiveCovered).map(\.keeper.id))
+            let removal = (plan.copies + plan.archiveCovered).map(\.target) + plan.junk + plan.archiveJunk
+            #expect(plan.archiveCovered.allSatisfy { $0.keeper.volumeName == "FamilyArchive" }, "the keeper of a covered copy is the archive file")
+            let archiveFileIDs = Set(rows.filter { $0.isArchiveFile }.map { $0.id })
+            #expect(removal.allSatisfy { !archiveFileIDs.contains($0.id) }, "an archive file is never a target")
             #expect(removal.allSatisfy { !keeperIDs.contains($0.id) })
             #expect(removal.allSatisfy { !plan.reservedSurvivors.contains(CleanupPhysicalID($0.identity)) })
             #expect(Set(removal.map { CleanupPhysicalID($0.identity) }).count == removal.count, "one physical file, at most one removal")
             let selection = CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: true)
-            #expect(selection.copies.allSatisfy { !keeperIDs.contains($0.target.id) })
+            #expect(selection.allCopies.allSatisfy { !keeperIDs.contains($0.target.id) })
         }
     }
 

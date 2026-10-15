@@ -66,6 +66,80 @@ struct CleanupTrashRunTests {
         #expect(model.records.count == 2, "rows are never deleted")
     }
 
+    @Test("a copy of a file the archive holds: proven against the archived file, moved; the archived file is untouched and was never a target")
+    func archiveCoveredCopyMoves() async throws {
+        let sb = try S("archivecovered")
+        defer {
+            MasterArchiveTestSupport.unlockTree(sb.root)
+            sb.cleanup()
+        }
+        let ma = MasterArchiveTestSupport.Sandbox(root: sb.root, sources: try sb.folder("Sources"),
+                                                  archiveVolume: try sb.folder("Archive"))
+        // Sources/ outranks everything in the precedence list: the archive
+        // file must still be the copy that stays.
+        let model = sb.model(keepFirst: ["Sources"])
+        model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
+        try MasterArchiveTestSupport.initialize(model, in: ma)
+        await model.refreshArchiveVolumeSnapshot(force: true)
+        let payload = bytes(96 * 1024, seed: 11)
+        let archived = try sb.write("Archive/\(ma.archiveRoot.lastPathComponent)/30_Video/test_master.mov", payload)
+        let source = try sb.write("Sources/VHS/test_master.mov", payload)
+        let ra = try S.record(archived), rs = try S.record(source)
+        ra.derivationKind = ArchivePromotion.derivationKind   // a promoted copy (see junkOnArchiveVolume's note)
+        model.records = [rs, ra]
+        #expect(model.bulkDeleteRefusal(ra) == .archiveTree, "fixture: the archive file is inside the tree")
+        let digest = try #require(S.sha256(path: archived.path))
+
+        let plan = await model.buildCleanupPlan()
+        #expect(plan.copies.isEmpty, "\(plan.leftAloneSorted.map(\.reason.words))")
+        #expect(plan.archiveCovered.map(\.target.id) == [rs.id])
+        #expect(plan.archiveCovered.first?.keeper.path == ra.fullPath)
+        #expect(plan.leftAlone.isEmpty)
+
+        // The lane's tick box off: nothing runs.
+        #expect(CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false, includeArchiveCovered: false).isEmpty)
+
+        let job = await runCleanupTrash(model, CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false))
+        #expect(job.items.map(\.outcome) == [.moved], "\(job.items.map(\.reason))")
+        #expect(job.items.map(\.id) == [rs.id])
+        #expect(rs.removal?.state == .inTrash && rs.removal?.reason == .duplicate)
+        #expect(!FileManager.default.fileExists(atPath: source.path))
+        #expect(S.sha256(path: archived.path) == digest, "the archived file is byte for byte what it was")
+        #expect(ra.removal == nil && ra.lifecycleStage != .trashed)
+        if let t = rs.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) }
+    }
+
+    @Test("an archive-covered copy whose keeper stopped being the archive's file after the plan — held, by name")
+    func archiveCoveredKeeperNoLongerArchived() async throws {
+        let sb = try S("archivecoveredheld")
+        defer {
+            MasterArchiveTestSupport.unlockTree(sb.root)
+            sb.cleanup()
+        }
+        let ma = MasterArchiveTestSupport.Sandbox(root: sb.root, sources: try sb.folder("Sources"),
+                                                  archiveVolume: try sb.folder("Archive"))
+        let model = sb.model(keepFirst: ["Sources"])
+        model.mediaLedger = MediaLedger(directory: sb.root.appendingPathComponent("ledger", isDirectory: true))
+        try MasterArchiveTestSupport.initialize(model, in: ma)
+        await model.refreshArchiveVolumeSnapshot(force: true)
+        let payload = bytes(8_192, seed: 12)
+        let archived = try sb.write("Archive/\(ma.archiveRoot.lastPathComponent)/30_Video/test_m.mov", payload)
+        let source = try sb.write("Sources/VHS/test_m.mov", payload)
+        let ra = try S.record(archived), rs = try S.record(source)
+        ra.derivationKind = ArchivePromotion.derivationKind
+        model.records = [rs, ra]
+        let plan = await model.buildCleanupPlan()
+        #expect(plan.archiveCovered.map(\.target.id) == [rs.id], "fixture")
+        // After the plan the keeper is no longer the archive's file (the
+        // sandbox's designation is spelled /var/…, its files /private/var/…,
+        // so the promoted-copy stamp was what named it).
+        ra.derivationKind = nil
+        let job = await runCleanupTrash(model, CleanupSelection(plan: plan, unticked: [], includeArchiveJunk: false))
+        #expect(job.items.map(\.outcome) == [.held], "\(job.items.map(\.reason))")
+        #expect(job.items.first?.reason.contains("no longer a file of the Master Archive") == true, "\(job.items.map(\.reason))")
+        #expect(rs.removal == nil && FileManager.default.fileExists(atPath: source.path))
+    }
+
     @Test("POISON: a stored digest that lies — the fresh reads differ, the file is held and its row never stamped")
     func lyingDigestHeld() async throws {
         let sb = try S("lie")

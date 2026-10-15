@@ -4,6 +4,7 @@
 //
 //   (N files · X GB are hidden by an old “deleted” label — the app never moved them… Show them again…)
 //   ☑ Copies           identical full SHA-256, one copy stays   n · GB selected · See files…
+//   ☑ Copies the archive already holds  identical to a file in the Master Archive — the archived file stays
 //   ☑ Junk you marked  files you marked Confirmed Junk           n · GB selected · See files…
 //     Not checked yet  no full hash yet (information only)       n · GB
 //   ☐ Unlock FamilyArchive for this run — also move these N confirmed-junk files
@@ -33,12 +34,13 @@ final class CleanupStore: ObservableObject {
     /// changes (never recomputed in a body).
     struct Numbers: Equatable {
         var copies = CleanupPlan.Tally()
+        var archiveCovered = CleanupPlan.Tally()
         var junk = CleanupPlan.Tally()
         var archiveJunk = CleanupPlan.Tally()
         var bytesToRead: Int64 = 0
         var total: CleanupPlan.Tally {
-            CleanupPlan.Tally(files: copies.files + junk.files + archiveJunk.files,
-                              bytes: copies.bytes + junk.bytes + archiveJunk.bytes)
+            CleanupPlan.Tally(files: copies.files + archiveCovered.files + junk.files + archiveJunk.files,
+                              bytes: copies.bytes + archiveCovered.bytes + junk.bytes + archiveJunk.bytes)
         }
     }
 
@@ -50,6 +52,7 @@ final class CleanupStore: ObservableObject {
     @Published private(set) var unticked: Set<UUID> = []
     @Published private(set) var numbers = Numbers()
     @Published var includeCopies = true { didSet { reselect() } }
+    @Published var includeArchiveCovered = true { didSet { reselect() } }
     @Published var includeJunk = true { didSet { reselect() } }
     /// Rick's per-run tick box (option b): OFF by default, and back off the
     /// moment a run starts with it.
@@ -69,7 +72,7 @@ final class CleanupStore: ObservableObject {
             guard let self else { return }
             self.plan = plan
             self.builtAt = Date()
-            let listed = Set(plan.copies.map(\.id) + plan.junk.map(\.id) + plan.archiveJunk.map(\.id))
+            let listed = Set(plan.copies.map(\.id) + plan.archiveCovered.map(\.id) + plan.junk.map(\.id) + plan.archiveJunk.map(\.id))
             self.unticked.formIntersection(listed)
             self.isBuilding = false
             self.reselect()
@@ -130,10 +133,12 @@ final class CleanupStore: ObservableObject {
             return
         }
         let s = CleanupSelection(plan: plan, unticked: unticked, includeArchiveJunk: includeArchiveJunk,
-                                 includeCopies: includeCopies, includeJunk: includeJunk)
+                                 includeCopies: includeCopies, includeJunk: includeJunk,
+                                 includeArchiveCovered: includeArchiveCovered)
         selection = s
         var n = Numbers()
         for c in s.copies { n.copies.add(c.target.sizeBytes) }
+        for c in s.archiveCovered { n.archiveCovered.add(c.target.sizeBytes) }
         for j in s.junk { n.junk.add(j.sizeBytes) }
         for j in s.archiveJunk { n.archiveJunk.add(j.sizeBytes) }
         n.bytesToRead = s.bytesToRead
@@ -241,6 +246,9 @@ struct CleanupPane: View {
                 }
                 laneRow(isOn: $store.includeCopies, title: "Copies", detail: "identical full SHA-256 — one copy stays",
                         tally: store.numbers.copies, listed: plan.copies.count, lane: .copies)
+                laneRow(isOn: $store.includeArchiveCovered, title: "Copies the archive already holds",
+                        detail: "identical to a file in the Master Archive — the archived file stays",
+                        tally: store.numbers.archiveCovered, listed: plan.archiveCovered.count, lane: .archiveCovered)
                 laneRow(isOn: $store.includeJunk, title: "Junk you marked", detail: "files you marked Confirmed Junk",
                         tally: store.numbers.junk, listed: plan.junk.count, lane: .junk)
                 GridRow {
@@ -393,11 +401,12 @@ struct CleanupSidebarRow: View {
 
 struct CleanupFilesSheet: View {
     enum Lane: String, Identifiable {
-        case copies, junk, archiveJunk
+        case copies, archiveCovered, junk, archiveJunk
         var id: String { rawValue }
         var title: String {
             switch self {
             case .copies: return "Copies — one copy stays"
+            case .archiveCovered: return "Copies the archive already holds — the archived file stays"
             case .junk: return "Junk you marked"
             case .archiveJunk: return "Junk you marked on FamilyArchive"
             }
@@ -416,6 +425,7 @@ struct CleanupFilesSheet: View {
                 LazyVStack(alignment: .leading, spacing: 6) {
                     switch lane {
                     case .copies: ForEach(store.plan?.copies ?? []) { copyRow($0) }
+                    case .archiveCovered: ForEach(store.plan?.archiveCovered ?? []) { copyRow($0) }
                     case .junk: ForEach(store.plan?.junk ?? []) { fileRow($0) }
                     case .archiveJunk: ForEach(store.plan?.archiveJunk ?? []) { fileRow($0) }
                     }
@@ -473,6 +483,9 @@ struct CleanupConfirmSheet: View {
             VStack(alignment: .leading, spacing: 4) {
                 if numbers.copies.files > 0 {
                     Text("Copies: \(numbers.copies.files.formatted()) (\(MediaBytes.display(numbers.copies.bytes)))")
+                }
+                if numbers.archiveCovered.files > 0 {
+                    Text("Copies the archive already holds: \(numbers.archiveCovered.files.formatted()) (\(MediaBytes.display(numbers.archiveCovered.bytes)))")
                 }
                 if numbers.junk.files > 0 {
                     Text("Junk you marked: \(numbers.junk.files.formatted()) (\(MediaBytes.display(numbers.junk.bytes)))")
