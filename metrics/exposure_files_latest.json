@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-15T09:31:43Z",
- "sha": "baca9854",
+ "ts": "2026-10-15T17:31:43Z",
+ "sha": "bb3007d7",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": {
    "lines": 398,
@@ -1832,7 +1832,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogStorageTotals.swift": {
-   "lines": 682,
+   "lines": 685,
    "decls": 48,
    "could_be_private": [
     "CatalogStorageTotalsCalculator.isNonVideoMedia",
@@ -1949,8 +1949,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CleanupPane.swift": {
-   "lines": 505,
-   "decls": 39,
+   "lines": 518,
+   "decls": 41,
    "could_be_private": [
     "CleanupStore.isTicked",
     "CleanupStore.setTicked",
@@ -2560,7 +2560,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Events/VideoScanModel+Events.swift": {
-   "lines": 222,
+   "lines": 225,
    "decls": 28,
    "could_be_private": [
     "EventsInputs.projectionNanos",
@@ -5962,8 +5962,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift": {
-   "lines": 549,
-   "decls": 85,
+   "lines": 586,
+   "decls": 88,
    "could_be_private": [
     "CleanupPlan.LeftAloneLine",
     "CleanupPathRules.isInAppLibrary",
@@ -5978,7 +5978,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Cleanup/CleanupProof.swift": {
-   "lines": 248,
+   "lines": 262,
    "decls": 17,
    "could_be_private": [
     "CleanupProof.ancestryProblem",
@@ -5988,8 +5988,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift": {
-   "lines": 626,
-   "decls": 47,
+   "lines": 644,
+   "decls": 49,
    "could_be_private": [
     "CleanupSelection.allJunk",
     "CleanupTrashJob.itemCap",
