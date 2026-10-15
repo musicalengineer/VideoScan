@@ -89,7 +89,7 @@ extension VideoScanModel {
                 id: r.id, path: r.fullPath, filename: r.filename, volumeName: r.volumeName,
                 sizeBytes: r.sizeBytes, fullDigest: Self.storedFullDigest(r),
                 isJunk: r.mediaDisposition == .confirmedJunk,
-                isArchived: isArchived(r),
+                isArchiveFile: isArchiveCopy(r) || isInsideMasterArchive(path: r.fullPath),
                 isPairHalf: CatalogScopePolicy.isPairProtected(r),
                 isSetAside: r.setAsideReason != nil,
                 protection: nil,

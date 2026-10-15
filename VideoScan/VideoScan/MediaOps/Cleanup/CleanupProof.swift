@@ -58,7 +58,15 @@ enum CleanupProof {
     /// — by that real spelling — not in an archive root folder or an Avid
     /// MediaFiles folder. A path that is simply gone is nil here: the
     /// callers decide what "missing" means.
-    static func ancestryProblem(path: String) -> String? {
+    ///
+    /// `archiveFileExpected`: the path is the keeper of an archive-covered
+    /// copy — the plan chose the archive's own file to stay, so "inside the
+    /// Master Archive folder" is the expected place, not a refusal. The
+    /// planned path string carries the root folder's name either way; what
+    /// changes after the plan is caught by the real-place check above and
+    /// by the catalog half (`cleanupCopyCatalogProblem`: still the archive's
+    /// file). Every target, and every plain copy's keeper, keeps the refusal.
+    static func ancestryProblem(path: String, archiveFileExpected: Bool = false) -> String? {
         var info = stat()
         guard lstat(path, &info) == 0 else { return nil }
         guard (info.st_mode & S_IFMT) == S_IFREG else { return "is not a plain file now (a link or a folder) — nothing moved" }
@@ -67,7 +75,9 @@ enum CleanupProof {
             return "its folder was moved, or replaced by a link, since Cleanup planned (it is really at \(real)) — nothing moved"
         }
         if CleanupPathRules.isInTrash(path) { return "is in a Trash now — nothing moved" }
-        if CleanupPathRules.isInArchiveRootFolder(path) { return "is inside the Master Archive folder now — nothing moved" }
+        if !archiveFileExpected, CleanupPathRules.isInArchiveRootFolder(path) {
+            return "is inside the Master Archive folder now — nothing moved"
+        }
         if CleanupPathRules.isAvidMediaFiles(path) { return "is in an Avid MediaFiles folder now — nothing moved" }
         return nil
     }
@@ -81,7 +91,9 @@ enum CleanupProof {
     static func verifyCopy(_ copy: CleanupPlan.Copy, control: FixityRebind.Control,
                            onRead: (Int64) -> Void = { _ in },
                            betweenReads: () -> Void = {}) -> Verdict {
-        if let why = ancestryProblem(path: copy.keeper.path) { return .held("the copy that stays (\(copy.keeper.filename)) \(why)") }
+        if let why = ancestryProblem(path: copy.keeper.path, archiveFileExpected: copy.keeperIsArchiveFile) {
+            return .held("the copy that stays (\(copy.keeper.filename)) \(why)")
+        }
         if let why = ancestryProblem(path: copy.target.path) { return .held(why) }
         let keeper: ContentFixity
         switch read(copy.keeper.path, control: control, onRead: onRead) {
@@ -104,7 +116,9 @@ enum CleanupProof {
         // Ancestry AGAIN, after the reads (codex r2 F1): a folder on the way
         // moved into a Trash with a link left behind keeps every identity
         // field intact — only the real place changed.
-        if let why = ancestryProblem(path: copy.keeper.path) { return .held("the copy that stays (\(copy.keeper.filename)) \(why)") }
+        if let why = ancestryProblem(path: copy.keeper.path, archiveFileExpected: copy.keeperIsArchiveFile) {
+            return .held("the copy that stays (\(copy.keeper.filename)) \(why)")
+        }
         if let why = ancestryProblem(path: copy.target.path) { return .held(why) }
         return .proven("sha256:\(extra.digest.prefix(16))… — both copies read in full and equal")
     }
