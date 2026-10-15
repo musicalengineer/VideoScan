@@ -27159,7 +27159,10 @@
         "aliasAcrossAllActiveRows",
         "aliasAcrossGroups",
         "aliasThroughLinkIndexesItsRealFile",
-        "archivedAndProtected",
+        "archiveCoveredKeepsTheExclusions",
+        "archiveCoveredSelection",
+        "archiveFileAndProtected",
+        "archiveFileIsTheKeeper",
         "caseVariantAlias",
         "contentExclusions",
         "copyGroupWithJunkMember",
@@ -27179,6 +27182,7 @@
         "pairOnRankedDrives",
         "sameInode",
         "scale100k",
+        "secondArchiveFileNeverATarget",
         "selection",
         "selectionRefusesKeeperTargets",
         "throughLink",
@@ -27196,6 +27200,8 @@
         "CleanupTrashRunTests"
       ],
       "tests": [
+        "archiveCoveredCopyMoves",
+        "archiveCoveredKeeperNoLongerArchived",
         "batches",
         "copyMoves",
         "engineRefusalMidRunIsCounted",
