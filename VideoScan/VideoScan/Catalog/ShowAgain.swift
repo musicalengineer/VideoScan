@@ -382,17 +382,49 @@ struct ShowAgainReceiptFile: Codable, Equatable, Sendable {
     let snapshotPath: String
     let changes: [Change]
 
+    /// Dates as ISO 8601 WITH fractional seconds (codex r1 P3): a marker
+    /// stamped at load time has a fractional `since`; `.iso8601` dropped it,
+    /// so the reverse stamped a different marker. Millisecond precision —
+    /// the formatter's limit; `Date` equality after a round trip holds for
+    /// any value on a millisecond, and the migration's `loadedAt` is what
+    /// the reverse puts back to within that.
     static func encode(_ r: ShowAgainReceiptFile) throws -> Data {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        enc.dateEncodingStrategy = .iso8601
+        enc.dateEncodingStrategy = .custom { date, encoder in
+            var c = encoder.singleValueContainer()
+            try c.encode(Self.fractionalFormatter().string(from: date))
+        }
         return try enc.encode(r)
     }
 
+    /// Reads both shapes: with fractional seconds (this build) and without
+    /// (receipts written before 2026-10-14).
     static func decode(_ data: Data) throws -> ShowAgainReceiptFile {
         let dec = JSONDecoder()
-        dec.dateDecodingStrategy = .iso8601
+        dec.dateDecodingStrategy = .custom { decoder in
+            let c = try decoder.singleValueContainer()
+            let text = try c.decode(String.self)
+            if let d = Self.fractionalFormatter().date(from: text) ?? Self.wholeSecondFormatter().date(from: text) {
+                return d
+            }
+            throw DecodingError.dataCorruptedError(in: c, debugDescription: "not an ISO 8601 date: \(text)")
+        }
         return try dec.decode(ShowAgainReceiptFile.self, from: data)
+    }
+
+    /// Fresh formatters per call: `ISO8601DateFormatter` is not Sendable and
+    /// the strategies' closures are; a receipt has a handful of dates.
+    private static func fractionalFormatter() -> ISO8601DateFormatter {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }
+
+    private static func wholeSecondFormatter() -> ISO8601DateFormatter {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime]
+        return f
     }
 }
 
