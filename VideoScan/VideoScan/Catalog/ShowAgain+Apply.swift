@@ -165,10 +165,16 @@ extension VideoScanModel {
 
     // MARK: Pieces
 
+    /// Why the run cannot start. The scan check (codex r1 P2-2): a rescan
+    /// carries a row's removal marker across the scan (the allowlisted
+    /// RescanPreservation carry-over) — fields captured before this run and
+    /// applied after it would re-hide the row while the receipt says it was
+    /// shown. Same flag the Analyze cyclers refuse on.
     func showAgainPreflightRefusal(_ reviewed: ShowAgainPlan) -> String? {
         if isReadOnly || ViewerWriteGuard.refuse("VideoScanModel.applyShowAgain") {
             return "this Mac is a read-only viewer of the catalog"
         }
+        if isScanning { return Self.scanRunningRefusal }
         if let why = reviewed.refusal { return why }
         if reviewed.toShow.isEmpty { return "the review offered nothing to show again" }
         return nil
@@ -181,6 +187,8 @@ extension VideoScanModel {
         return ShowAgainRules.isCandidate(rec) && rec.fullPath == c.fullPath && rec.sizeBytes == c.sizeBytes
             && ShowAgainRules.legacyMarkerSince(rec) == c.removalSince
     }
+
+    static let scanRunningRefusal = "a scan is running — let it finish, then show the files again"
 
     func writeShowAgainReceipt(_ changes: [ShowAgainCandidate], snapshot: String) throws -> URL {
         let dir = showAgainReceiptsDirectory
@@ -196,11 +204,16 @@ extension VideoScanModel {
             runID: "show-again-\(stamp)", writtenAt: Date(), snapshotPath: snapshot,
             changes: changes.map {
                 // The stage the row really has (a marker-only row is `.none`
-                // already — QA P3-1): the reverse puts a label back only
-                // where the run cleared one.
-                .init(id: $0.id, path: $0.fullPath,
-                      from: (record(forID: $0.id)?.archiveStage ?? ShowAgainRules.falseLabel).rawValue,
-                      to: ShowAgainRules.liveLabel.rawValue, removalSince: $0.removalSince)
+                // already — QA P3-1) and the stage the engine's Restore will
+                // leave it with: `.manuallyDeleted` → `.none`, any other
+                // label stays (codex r1 P2-1: a Backed Up row with the
+                // legacy marker is `from == to`). The reverse puts a label
+                // back only where the run cleared one, and holds against
+                // the real `to`.
+                let from = record(forID: $0.id)?.archiveStage ?? ShowAgainRules.falseLabel
+                let to = from == ShowAgainRules.falseLabel ? ShowAgainRules.liveLabel : from
+                return .init(id: $0.id, path: $0.fullPath, from: from.rawValue, to: to.rawValue,
+                             removalSince: $0.removalSince)
             })
         try ShowAgainReceiptFile.encode(file).write(to: url, options: .atomic)
         return url
@@ -260,6 +273,7 @@ extension VideoScanModel {
         if isReadOnly || ViewerWriteGuard.refuse("VideoScanModel.reverseShowAgain") {
             return showAgainReverseRefused("this Mac is a read-only viewer of the catalog")
         }
+        if isScanning { return showAgainReverseRefused(Self.scanRunningRefusal) }
         let file: ShowAgainReceiptFile
         do {
             file = try ShowAgainReceiptFile.decode(Data(contentsOf: receiptURL))
