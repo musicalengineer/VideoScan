@@ -409,9 +409,9 @@ struct VolumesWindow: View {
                             .foregroundColor(.accentColor)
                             .frame(width: 18)
                         VStack(alignment: .leading, spacing: 1) {
-                            Text("Catalog")
+                            Text("Media allocation")
                                 .font(.system(size: 13 * sidebarScale, weight: .semibold))
-                            Text("where it all lives")
+                            Text("where the media lives, by drive")
                                 .font(.system(size: 11 * sidebarScale))
                                 .foregroundColor(.secondary)
                         }

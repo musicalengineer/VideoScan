@@ -101,6 +101,9 @@ struct CatalogDistributionStats: Sendable, Equatable {
     var totalFiles: Int = 0
     var driveCount: Int = 0
     var computedAt: Date = Date(timeIntervalSince1970: 0)
+    /// Per volume label: type, physical unit, capacity, free (the disk's
+    /// answers; "—" on the page where it had none). Rick 2026-10-15.
+    var factsByDrive: [String: DriveAllocationFacts] = [:]
 
     func tier(of slice: MediaDistributionSlice) -> StorageTier? {
         slice.isOther ? nil : (tierByDrive[slice.name] ?? .atRisk)
@@ -124,6 +127,8 @@ enum CatalogDistributionCalculator {
         /// perf — the filter used to run in `recompute()`, reading two
         /// @Published getters per record per target on the main thread).
         var dashboardRetiredPrefixes: [String] = []
+        /// The disk's per-volume facts, probed off-main before `compute`.
+        var factsByDrive: [String: DriveAllocationFacts] = [:]
     }
 
     /// Same scope as the donut: present records on non-retired drives.
@@ -146,6 +151,7 @@ enum CatalogDistributionCalculator {
             maxSlices: 12,
             now: now)
         s.tierByDrive = inputs.tierByDrive
+        s.factsByDrive = inputs.factsByDrive
         s.totalBytes = s.byDrive.totalBytes
         s.totalFiles = s.byDrive.totalFiles
         s.driveCount = s.byDrive.slices.reduce(0) { $0 + $1.foldedVolumeCount }
@@ -299,9 +305,9 @@ struct CatalogDistributionPane: View {
                 .foregroundColor(.accentColor)
                 .frame(width: 44)
             VStack(alignment: .leading, spacing: 3) {
-                Text("Where the catalog lives")
+                Text("Media Allocation by Drive")
                     .font(.title.bold())
-                Text("\(s.totalFiles.formatted()) files · \(CatalogStorageTotals.displaySize(s.totalBytes)) across \(s.driveCount) drive\(s.driveCount == 1 ? "" : "s")")
+                Text("\(s.totalFiles.formatted()) files · \(CatalogStorageTotals.displaySize(s.totalBytes)) across \(s.driveCount) volume\(s.driveCount == 1 ? "" : "s")")
                     .font(.callout)
                     .foregroundColor(.secondary)
                     .monospacedDigit()
@@ -427,26 +433,58 @@ struct CatalogDistributionPane: View {
     }
 
     /// Drive · tier chip · size · % · files — one row per slice, largest first.
+    /// Column widths of the allocation table — one place (Rick 2026-10-15:
+    /// "Volume, Type, Reliability, Capacity, % Catalog, % Free, Files";
+    /// Media — the bytes catalogued on the volume — kept beside % Catalog
+    /// because it is the number that moves when copies go).
+    private enum Col {
+        static let type: CGFloat = 82, reliability: CGFloat = 118, media: CGFloat = 78, share: CGFloat = 72
+        static let capacity: CGFloat = 82, free: CGFloat = 66, files: CGFloat = 64
+        static let headerFont: Font = .system(size: 14, weight: .semibold)
+    }
+
+    /// The row's name: the volume, and in parentheses the physical unit it
+    /// sits on when the disk told us ("FamilyArchive (Promise Pegasus3 R4)",
+    /// "Projects (Promise Pegasus3 R4)" — two volumes, one box). The home
+    /// folder's catch-all label reads as this Mac.
+    static func rowName(_ slice: MediaDistributionSlice, facts: DriveAllocationFacts?, host: String) -> String {
+        let base = slice.name == MediaDistributionCalculator.homeName ? "\(host) (system)" : slice.name
+        guard !slice.isOther, let unit = facts?.unitName else { return base }
+        return "\(base) (\(unit))"
+    }
+
+    /// This Mac's name for the home-folder row ("RicksM4" from "RicksM4.local").
+    static var hostDisplayName: String {
+        let raw = ProcessInfo.processInfo.hostName
+        let short = raw.split(separator: ".").first.map(String.init) ?? raw
+        return short.isEmpty ? "This Mac" : short
+    }
+
     private func driveLegend(_ s: CatalogDistributionStats) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
+        let host = Self.hostDisplayName
+        return VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 10) {
                 Color.clear.frame(width: 14, height: 14)
-                Text("Drive").frame(maxWidth: .infinity, alignment: .leading)
-                Text("Tier").frame(width: 110, alignment: .leading)
-                Text("Size").frame(width: 76, alignment: .trailing)
-                Text("%").frame(width: 48, alignment: .trailing)
-                Text("Files").frame(width: 64, alignment: .trailing)
+                Text("Volume").frame(maxWidth: .infinity, alignment: .leading)
+                Text("Type").frame(width: Col.type, alignment: .leading)
+                Text("Reliability").frame(width: Col.reliability, alignment: .leading)
+                Text("Media").frame(width: Col.media, alignment: .trailing)
+                Text("% Catalog").frame(width: Col.share, alignment: .trailing)
+                Text("Capacity").frame(width: Col.capacity, alignment: .trailing)
+                Text("% Free").frame(width: Col.free, alignment: .trailing)
+                Text("Files").frame(width: Col.files, alignment: .trailing)
             }
-            .font(.caption.weight(.medium))
+            .font(Col.headerFont)
             .foregroundColor(.secondary)
             Divider().padding(.vertical, 5)
             ForEach(s.byDrive.slices) { slice in
+                let facts = slice.isOther ? nil : s.factsByDrive[slice.name]
                 HStack(spacing: 10) {
                     RoundedRectangle(cornerRadius: 3)
                         .fill(sliceColor(slice, in: s))
                         .frame(width: 14, height: 14)
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(slice.name)
+                        Text(Self.rowName(slice, facts: facts, host: host))
                             .font(VolumeDashboardView.legendFont)
                             .lineLimit(1).truncationMode(.middle)
                         if slice.isOther {
@@ -457,6 +495,11 @@ struct CatalogDistributionPane: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
+                    Text(slice.isOther ? "mixed" : (facts?.typeLabel ?? "—"))
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundColor(slice.isOther ? .secondary : .primary)
+                        .lineLimit(1)
+                        .frame(width: Col.type, alignment: .leading)
                     Group {
                         if let t = s.tier(of: slice) {
                             Label(t.label, systemImage: t.icon)
@@ -467,22 +510,37 @@ struct CatalogDistributionPane: View {
                             Text("mixed").font(.system(size: 11)).foregroundColor(.secondary)
                         }
                     }
-                    .frame(width: 110, alignment: .leading)
+                    .frame(width: Col.reliability, alignment: .leading)
                     Text(CatalogStorageTotals.displaySize(slice.bytes))
                         .font(VolumeDashboardView.legendFont.monospacedDigit())
-                        .frame(width: 76, alignment: .trailing)
+                        .frame(width: Col.media, alignment: .trailing)
                     Text(MediaDistributionFormat.percentString(s.byDrive.percent(of: slice, by: measure)))
                         .font(VolumeDashboardView.legendFont.monospacedDigit())
                         .foregroundColor(.secondary)
-                        .frame(width: 48, alignment: .trailing)
+                        .frame(width: Col.share, alignment: .trailing)
+                    Text(facts?.capacityBytes.map { CatalogStorageTotals.displaySize($0) } ?? "—")
+                        .font(VolumeDashboardView.legendFont.monospacedDigit())
+                        .frame(width: Col.capacity, alignment: .trailing)
+                    Text(facts?.freePercent.map { MediaDistributionFormat.percentString($0) } ?? "—")
+                        .font(VolumeDashboardView.legendFont.monospacedDigit())
+                        .foregroundColor(freeColor(facts?.freePercent))
+                        .frame(width: Col.free, alignment: .trailing)
                     Text(slice.files.formatted())
                         .font(VolumeDashboardView.legendFont.monospacedDigit())
-                        .frame(width: 64, alignment: .trailing)
+                        .frame(width: Col.files, alignment: .trailing)
                 }
                 .padding(.vertical, 5)
                 if slice.id != s.byDrive.slices.last?.id { Divider().opacity(0.4) }
             }
         }
+    }
+
+    /// Free space in words of colour: under 10 % red, under 20 % orange.
+    private func freeColor(_ percent: Double?) -> Color {
+        guard let p = percent else { return .secondary }
+        if p < 10 { return .red }
+        if p < 20 { return .orange }
+        return .primary
     }
 
     /// Tier totals as one stacked strip with a four-swatch legend — the
@@ -616,9 +674,18 @@ struct CatalogDistributionPane: View {
             dashboard: VolumeDashboardCalculator.project(records, under: "/"),
             tierByDrive: tiers,
             dashboardRetiredPrefixes: retiredPrefixes)
+        // The disk's per-volume facts (type, unit, capacity, free): one
+        // request per live target, answered off-main before the aggregation.
+        let requests = live.map {
+            DriveAllocationProbe.Request(label: MediaDistributionCalculator.volumeLabel(forPath: $0.searchPath),
+                                         path: $0.searchPath, mediaTech: $0.mediaTech,
+                                         isReachable: $0.isReachable, capacityTB: $0.capacityTB)
+        }
         computeTask = Task {
-            let result = await Task.detached(priority: .userInitiated) {
-                CatalogDistributionCalculator.compute(inputs)
+            let result = await Task.detached(priority: .userInitiated) { () -> CatalogDistributionStats in
+                var inputs = inputs
+                inputs.factsByDrive = await DriveAllocationProbe.facts(for: requests)
+                return CatalogDistributionCalculator.compute(inputs)
             }.value
             if Task.isCancelled { return }
             stats = result
