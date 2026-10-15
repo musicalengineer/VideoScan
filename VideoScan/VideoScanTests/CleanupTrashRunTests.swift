@@ -109,6 +109,35 @@ struct CleanupTrashRunTests {
         if let t = rs.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) }
     }
 
+    @Test("codex 10/15 P1: a promoted archive file named as a TARGET by a corrupted plan is held even with no archive designated")
+    func promotedFileAsTargetHeld() async throws {
+        let sb = try S("promotedtarget")
+        defer { sb.cleanup() }
+        // No MasterArchiveTestSupport.initialize: the bulk gate has no archive to protect.
+        let model = sb.model(keepFirst: ["Sources"])
+        let payload = bytes(8_192, seed: 13)
+        let k = try sb.write("Sources/k/test_p.mov", payload)
+        let t = try sb.write("Sources/t/test_p.mov", payload)
+        let rk = try S.record(k), rt = try S.record(t)
+        rk.derivationKind = ArchivePromotion.derivationKind
+        rt.derivationKind = ArchivePromotion.derivationKind
+        model.records = [rk, rt]
+        #expect(model.bulkDeleteRefusal(rt) == nil, "fixture: the gate alone would let it through")
+        let plan = await model.buildCleanupPlan()
+        #expect(plan.copies.isEmpty && plan.archiveCovered.isEmpty, "the planner never offers it: \(plan.leftAloneSorted.map(\.reason.words))")
+        // A corrupted plan that does.
+        let sk = try #require(FileIdentityStamp.capture(path: k.path)), st = try #require(FileIdentityStamp.capture(path: t.path))
+        let keeper = CleanupFile(id: rk.id, path: rk.fullPath, filename: rk.filename, volumeName: "", sizeBytes: rk.sizeBytes, identity: sk)
+        let target = CleanupFile(id: rt.id, path: rt.fullPath, filename: rt.filename, volumeName: "", sizeBytes: rt.sizeBytes, identity: st)
+        var bad = CleanupPlan()
+        bad.archiveCovered = [CleanupPlan.Copy(target: target, keeper: keeper, digest: S.sha256(payload), keeperIsArchiveFile: true)]
+        bad.reservedSurvivors = [CleanupPhysicalID(sk)]
+        let job = await runCleanupTrash(model, CleanupSelection(plan: bad, unticked: [], includeArchiveJunk: false))
+        #expect(job.items.map(\.outcome) == [.held], "\(job.items.map(\.reason))")
+        #expect(job.items.first?.reason.contains("a file of the Master Archive") == true, "\(job.items.map(\.reason))")
+        #expect(rt.removal == nil && FileManager.default.fileExists(atPath: t.path))
+    }
+
     @Test("an archive-covered copy whose keeper stopped being the archive's file after the plan — held, by name")
     func archiveCoveredKeeperNoLongerArchived() async throws {
         let sb = try S("archivecoveredheld")

@@ -284,6 +284,11 @@ struct CleanupExclusion: Error, Sendable, Hashable {
     static let copyIsJunk = Self("copyIsJunk", "a copy of it is marked junk — left for you")
     static let setAside = Self("setAside", "set aside in the catalog")
     static let archived = Self("archived", "a file of the Master Archive — it stays, never moved from here")
+    /// The group has an archive file that cannot be read now (its drive not
+    /// connected, missing, changed, a link): no copy of it goes, and no
+    /// other copy is elected to stay in its place (codex 10/15 P2).
+    static let archiveCopyUnavailable = Self("archiveCopyUnavailable",
+                                             "its archived copy can't be read now (drive not connected, or changed) — left alone")
     static let pairHalf = Self("pairHalf", "half of an audio/video pair")
     static let avidMediaFiles = Self("avidMediaFiles", "in an Avid MediaFiles folder (its bins would go offline)")
     static let appLibrary = Self("appLibrary", "inside an app library (Photos, iMovie, Final Cut…)")
@@ -454,8 +459,43 @@ enum CleanupPlanner {
     private static func planGroup(_ rows: [CleanupRow], digest: String, disk: [UUID: CleanupDiskFacts],
                                   index: PhysicalIndex, rank: (String) -> DuplicateKeeperPolicy.VolumeRank,
                                   into plan: inout CleanupPlan) {
-        // One member per physical file, in path order; every other name of
-        // a file already met — and every unusable row — is left alone.
+        let physical = usableMembers(rows, disk: disk, into: &plan)
+        // An archive file in the group that is NOT usable now: the group is
+        // left alone — its archived copy cannot be read, and a non-archive
+        // keeper is never elected over the archive (codex 10/15 P2).
+        if rows.contains(where: { $0.isArchiveFile }), !physical.contains(where: { $0.row.isArchiveFile }) {
+            for m in physical { plan.leftAlone[.archiveCopyUnavailable, default: .init()].add(m.row.sizeBytes) }
+            return
+        }
+        guard physical.count > 1 else {
+            for m in physical { plan.leftAlone[.onlyUsableCopy, default: .init()].add(m.row.sizeBytes) }
+            return
+        }
+        // A file of the Master Archive in the group decides the keeper: it
+        // stays, whatever the volume rank says; every other usable member is
+        // an archive-covered copy (its own lane). No tie is possible here.
+        if let master = physical.filter({ $0.row.isArchiveFile }).min(by: { $0.row.path < $1.row.path }) {
+            placeCopies(physical, keeper: master, digest: digest, index: index, into: &plan.archiveCovered,
+                        leftAlone: &plan.leftAlone, reserved: &plan.reservedSurvivors, keeperIsArchiveFile: true)
+            return
+        }
+        let ranked = physical.sorted { lhs, rhs in
+            let l = rank(lhs.row.path), r = rank(rhs.row.path)
+            return ties(l, r) ? lhs.row.path < rhs.row.path : r < l
+        }
+        guard !ties(rank(ranked[0].row.path), rank(ranked[1].row.path)) else {
+            for m in ranked { plan.leftAlone[.keeperTie, default: .init()].add(m.row.sizeBytes) }
+            return
+        }
+        placeCopies(ranked, keeper: ranked[0], digest: digest, index: index, into: &plan.copies,
+                    leftAlone: &plan.leftAlone, reserved: &plan.reservedSurvivors, keeperIsArchiveFile: false)
+    }
+
+    /// One member per physical file, in path order; every other name of a
+    /// file already met — and every unusable row — is left alone with its
+    /// reason.
+    private static func usableMembers(_ rows: [CleanupRow], disk: [UUID: CleanupDiskFacts],
+                                      into plan: inout CleanupPlan) -> [Member] {
         var physical: [Member] = []
         for row in rows.sorted(by: { $0.path < $1.path }) {
             switch usableStamp(row, fact: disk[row.id] ?? .missing) {
@@ -470,40 +510,24 @@ enum CleanupPlanner {
                 }
             }
         }
-        guard physical.count > 1 else {
-            for m in physical { plan.leftAlone[.onlyUsableCopy, default: .init()].add(m.row.sizeBytes) }
-            return
-        }
-        // A file of the Master Archive in the group decides the keeper: it
-        // stays, whatever the volume rank says; every other usable member is
-        // an archive-covered copy (its own lane). No tie is possible here.
-        if let master = physical.filter({ $0.row.isArchiveFile }).min(by: { $0.row.path < $1.row.path }) {
-            plan.reservedSurvivors.insert(master.physical)
-            for m in physical where m.physical != master.physical {
-                if let why = copyExclusion(m.row, keeper: master.row, aliased: index.isShared(m.physical)) {
-                    plan.leftAlone[why, default: .init()].add(m.row.sizeBytes)
-                } else {
-                    plan.archiveCovered.append(CleanupPlan.Copy(target: m.file, keeper: master.file, digest: digest,
-                                                                keeperIsArchiveFile: true))
-                }
-            }
-            return
-        }
-        let ranked = physical.sorted { lhs, rhs in
-            let l = rank(lhs.row.path), r = rank(rhs.row.path)
-            return ties(l, r) ? lhs.row.path < rhs.row.path : r < l
-        }
-        guard !ties(rank(ranked[0].row.path), rank(ranked[1].row.path)) else {
-            for m in ranked { plan.leftAlone[.keeperTie, default: .init()].add(m.row.sizeBytes) }
-            return
-        }
-        let keeper = ranked[0]
-        plan.reservedSurvivors.insert(keeper.physical)
-        for m in ranked.dropFirst() {
+        return physical
+    }
+
+    /// The copies of one keeper: the keeper's physical file is reserved for
+    /// the run, and every other member is either a copy in `lane` or left
+    /// alone with its reason (`copyExclusion`). Shared by the archive branch
+    /// (the archived file stays) and the ranked election.
+    private static func placeCopies(_ members: [Member], keeper: Member, digest: String, index: PhysicalIndex,
+                                    into lane: inout [CleanupPlan.Copy],
+                                    leftAlone: inout [CleanupExclusion: CleanupPlan.Tally],
+                                    reserved: inout Set<CleanupPhysicalID>, keeperIsArchiveFile: Bool) {
+        reserved.insert(keeper.physical)
+        for m in members where m.physical != keeper.physical {
             if let why = copyExclusion(m.row, keeper: keeper.row, aliased: index.isShared(m.physical)) {
-                plan.leftAlone[why, default: .init()].add(m.row.sizeBytes)
+                leftAlone[why, default: .init()].add(m.row.sizeBytes)
             } else {
-                plan.copies.append(CleanupPlan.Copy(target: m.file, keeper: keeper.file, digest: digest))
+                lane.append(CleanupPlan.Copy(target: m.file, keeper: keeper.file, digest: digest,
+                                             keeperIsArchiveFile: keeperIsArchiveFile))
             }
         }
     }

@@ -600,6 +600,13 @@ extension VideoScanModel {
             return "is no longer in the catalog (or was already removed) — nothing moved"
         }
         guard rec.fullPath == copy.target.path else { return "was moved in the catalog after you confirmed — nothing moved" }
+        // A file of the Master Archive is never a target, whatever the plan
+        // says and whether or not an archive is designated right now (codex
+        // 10/15 P1: the bulk gate protects promoted copies only while
+        // `masterArchive` is set).
+        if isArchiveCopy(rec) || isInsideMasterArchive(path: rec.fullPath) || CleanupPathRules.isInArchiveRootFolder(rec.fullPath) {
+            return "is a file of the Master Archive — nothing moved"
+        }
         if CatalogScopePolicy.isPairProtected(rec) { return Self.pairMemberHeldNote }
         guard let keeper = record(forID: copy.keeper.id), !keeper.isPurged, keeper.fullPath == copy.keeper.path else {
             return "the copy that stays is no longer in the catalog at \(copy.keeper.path) — nothing moved"

@@ -117,6 +117,20 @@ struct CleanupTrashPlanTests {
         #expect(plan.leftAlone.isEmpty)
     }
 
+    @Test("codex 10/15 P2: the archive file can't be read now (drive off, missing, changed) — the whole group is left alone, no other copy is elected to stay")
+    func archiveFileUnusableLeavesGroupAlone() {
+        let master = F.row("/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/a.mov", archiveFile: true, protection: .archiveTree)
+        let lacie = F.row("/Volumes/LaCieWorkspace/a.mov")
+        let ssd = F.row("/Volumes/SanDiskWorkspace/a.mov")
+        for fact in [CleanupDiskFacts.driveNotConnected, .missing, .throughLink(nil),
+                     .file(F.stamp(inode: 9, size: 999))] {
+            let plan = F.plan([master, lacie, ssd], facts: [master.path: fact])
+            #expect(plan.copies.isEmpty && plan.archiveCovered.isEmpty, "\(fact)")
+            #expect(F.reasons(plan)[CleanupExclusion.archiveCopyUnavailable.key] == 2, "\(fact): \(F.reasons(plan))")
+            #expect(plan.reservedSurvivors.isEmpty)
+        }
+    }
+
     @Test("two archive files of one content: one stays, the other is left alone as an archive file — never a target")
     func secondArchiveFileNeverATarget() {
         let a = F.row("/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/a.mov", archiveFile: true, protection: .archiveTree)
