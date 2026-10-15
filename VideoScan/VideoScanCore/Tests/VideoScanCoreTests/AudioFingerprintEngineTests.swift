@@ -232,7 +232,7 @@ struct AudioFingerprintEngineTests {
     /// that must be a decision, not an accident. Value computed
     /// independently (Python FNV-1a over the same words).
     @Test func defaultRecipeIDIsPinned() {
-        #expect(AudioFingerprintParameters.default.recipeID == 0xA470_4CC0)
+        #expect(AudioFingerprintParameters.default.recipeID == 0x4000_0ADE)
         var p = AudioFingerprintParameters()
         p.maxDeltaBins = 64
         #expect(p.recipeID != AudioFingerprintParameters.default.recipeID)
@@ -266,10 +266,10 @@ struct AudioFingerprintEngineTests {
     // MARK: Matcher — the pure verdict
 
     private func evidence(matched: Int = 500, coverage: Double = 0.9, overlap: Double, span: Double,
-                          offset: Double, query: Double, master: Double) -> AudioMatchEvidence {
+                          offset: Double, query: Double, master: Double, gap: Double = 0) -> AudioMatchEvidence {
         AudioMatchEvidence(matchedLandmarks: matched, coverage: coverage, overlapSeconds: overlap,
                            spanSeconds: span, offsetSeconds: offset, queryDurationSeconds: query,
-                           masterDurationSeconds: master)
+                           masterDurationSeconds: master, unmatchedGapSeconds: gap)
     }
 
     @Test func verdictRules() {
@@ -320,6 +320,78 @@ struct AudioFingerprintEngineTests {
         var o = evidence(overlap: 100, span: 100, offset: 80, query: 180, master: 180)
         o.queryComplete = false; o.masterComplete = false
         #expect(o.verdict() == .overlap(offsetSeconds: 80, seconds: 100))
+    }
+
+    // MARK: Matcher — distributed evidence (codex F1)
+
+    /// 120 s of A followed by 60 s of C, against A: two thirds of the
+    /// timeline match and the files are the same length, but a minute of
+    /// audible, unmatched audio is a contradiction — "overlap", never
+    /// "same recording".
+    @Test func partialMatchIsNeverAWholeRecordingClaim() {
+        let sr = 8_000
+        let a = SyntheticSpeech.toInt16(SyntheticSpeech.render(seconds: 180, seed: AudioFixtures.seedA, sampleRate: sr))
+        let c = SyntheticSpeech.toInt16(SyntheticSpeech.render(seconds: 180, seed: AudioFixtures.seedC, sampleRate: sr))
+        let spliced = Array(a[0..<(120 * sr)]) + Array(c[(120 * sr)...])
+        let m = AudioFingerprintMatcher.match(query: AudioFingerprint.compute(AudioPCM(sampleRate: sr, samples: spliced)),
+                                              master: AudioFingerprint.compute(AudioPCM(sampleRate: sr, samples: a)))
+        print(audioMatchLine("A120+C60 vs A", m))
+        #expect(m.verdict != .sameRecording)
+        guard case .overlap(let offset, let seconds) = m.verdict else {
+            Issue.record("expected overlap, got \(m.verdict)"); return
+        }
+        #expect(abs(offset) <= audioOffsetTolerance)
+        #expect((114...126).contains(seconds), "the matched run is the first 120 s, got \(seconds)")
+    }
+
+    /// Four seconds of query with two matched seconds against a four-hour
+    /// master is noise, not a clip of the master: `minOverlapSeconds`
+    /// applies on every branch.
+    @Test func tinyQueryWithTwoMatchedSecondsIsNotContained() {
+        let e = evidence(matched: 20, coverage: 0.5, overlap: 4, span: 2, offset: 100, query: 4, master: 14_400)
+        #expect(e.verdict() == .different, "\(e.verdict())")
+    }
+
+    /// The pure rule for distribution (row 3): codex's 120-of-180 case at
+    /// coverage 2/3 with a 60-s unmatched gap is overlap, never same; the
+    /// same coverage with the misses scattered (gap ≤ 10 s) is same.
+    @Test func verdictRequiresDistributedEvidence() {
+        let clustered = evidence(coverage: 2.0 / 3.0, overlap: 180, span: 120, offset: 0, query: 180, master: 180, gap: 60)
+        #expect(clustered.verdict() == .overlap(offsetSeconds: 0, seconds: 120))
+        let scattered = evidence(coverage: 2.0 / 3.0, overlap: 180, span: 180, offset: 0, query: 180, master: 180, gap: 3)
+        #expect(scattered.verdict() == .sameRecording)
+        let clip = evidence(coverage: 0.9, overlap: 60, span: 40, offset: 10, query: 60, master: 180, gap: 20)
+        #expect(clip.verdict() == .overlap(offsetSeconds: 10, seconds: 40), "a 20-s unmatched stretch is not 'contained'")
+        let shortRun = evidence(coverage: 1, overlap: 180, span: 4, offset: 0, query: 180, master: 180)
+        #expect(shortRun.verdict() == .different, "row 2 beats everything below it")
+    }
+
+    /// The audible bitmap rides in VSAF and `estimatedBytes` stays exact.
+    @Test func audibleSecondsRoundTripInVSAF() {
+        let sr = 8_000
+        let quiet = tenSecondTone() + [Int16](repeating: 0, count: 5 * sr) + tenSecondTone().prefix(sr / 2)
+        let f = AudioFingerprint.compute(AudioPCM(sampleRate: sr, samples: Array(quiet)))
+        #expect(f.activeSeconds.count == 16, "\(f.activeSeconds.count) flags for 15.5 s")
+        #expect(f.activeSecondCount == 11, "10 s tone + a half-second tail = 11 audible: \(f.activeSeconds)")
+        #expect(f.activeSeconds[0] && !f.activeSeconds[12] && f.activeSeconds[15])
+        let data = f.encoded()
+        #expect(data.count == f.estimatedBytes)
+        #expect(AudioFingerprint(decoding: data) == f)
+        #expect(AudioFingerprint(decoding: data)?.activeSeconds == f.activeSeconds)
+    }
+
+    /// An exact copy whose last 90 s are digital silence: silence is not
+    /// evidence either way, so it leaves the coverage denominator and the
+    /// copy is the same recording.
+    @Test func digitalSilenceIsExcludedFromCoverage() {
+        let sr = 8_000
+        let a = SyntheticSpeech.toInt16(SyntheticSpeech.render(seconds: 180, seed: AudioFixtures.seedA, sampleRate: sr))
+        let quiet = Array(a[0..<(30 * sr)]) + [Int16](repeating: 0, count: 90 * sr)
+        let f = AudioFingerprint.compute(AudioPCM(sampleRate: sr, samples: quiet))
+        let m = AudioFingerprintMatcher.match(query: f, master: f)
+        print(audioMatchLine("30 s A + 90 s silence vs itself", m))
+        #expect(m.verdict == .sameRecording, "\(m.verdict)")
+        #expect(m.coverage >= 0.9, "silent seconds must not dilute coverage: \(m.coverage)")
     }
 
     // MARK: Sensor — the engine never writes beside an input

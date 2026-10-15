@@ -98,9 +98,10 @@ public enum AudioFingerprintCLI {
         lines.append(String(format: "offset    %.3f s (query start in master)", result.offsetSeconds))
         lines.append(String(format: "matched   %d of %d query landmarks (density %.3f)",
                             result.matchedLandmarks, result.queryLandmarks, result.density))
-        lines.append(String(format: "coverage  %.2f of the overlap (%.1f s); longest run %.0f s at %.1f–%.1f s of master",
+        lines.append(String(format: "coverage  %.2f of the audible overlap (%.1f s); longest run %.0f s at %.1f–%.1f s of master; longest unmatched audible gap %.0f s",
                             result.coverage, result.evidence.overlapSeconds, result.spanSeconds,
-                            result.spanStartInMasterSeconds, result.spanEndInMasterSeconds))
+                            result.spanStartInMasterSeconds, result.spanEndInMasterSeconds,
+                            result.evidence.unmatchedGapSeconds))
         lines.append(String(format: "timing    index %.3f s, match %.3f s", indexSeconds, matchSeconds))
         return lines.joined(separator: "\n")
     }

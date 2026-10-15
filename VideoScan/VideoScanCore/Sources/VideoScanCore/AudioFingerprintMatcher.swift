@@ -14,9 +14,11 @@
 // From the winning offset the match reports, in seconds:
 //   offset    — the query's start inside the master (negative: the query
 //               starts before the master does), centroid of the winning bins;
-//   coverage  — of the 1-s buckets of the query that lie inside the master
-//               at that offset, the fraction with at least one matched
-//               landmark (a clip is "found" when most of it is found);
+//   coverage  — of the AUDIBLE 1-s buckets of the query that lie inside the
+//               master at that offset, the fraction with at least one
+//               matched landmark (silence is evidence for nothing);
+//   gap       — the longest stretch of audible, unmatched query seconds in
+//               the overlap (a minute of other audio is a different edit);
 //   density   — matched ÷ query landmarks (a raw score, for the report);
 //   span      — the longest run of matched seconds, gaps ≤ bucketGapSeconds
 //               bridged (what "overlap" means for a partial match).
@@ -32,17 +34,52 @@
 import Foundation
 
 /// Every threshold of the verdict, in one place.
+///
+/// DECISION TABLE (`AudioMatchEvidence.verdict`; read top to bottom, the
+/// first row that applies wins — every evidence tuple lands on exactly
+/// one row):
+///
+///   1. matchedLandmarks < minMatchedLandmarks           → .different
+///   2. spanSeconds < minOverlapSeconds                   → .different
+///      (a demonstrated matched run shorter than this is noise on EVERY
+///      branch — a 4-s query with 2 matched seconds is not "contained")
+///   3. coverage < minCoverage
+///      OR unmatchedGapSeconds > maxUnmatchedGapSeconds   → .overlap(offset, span)
+///      (the match is real but not DISTRIBUTED over the audible query:
+///      a stretch of audible, unmatched audio contradicts "same"/"contained")
+///   4. geometry × completeness, with
+///      queryInside  = overlap ≥ queryDuration − edgeTolerance
+///      masterInside = overlap ≥ masterDuration − edgeTolerance:
+///        inside both, both complete                      → .sameRecording
+///        inside both, only master incomplete             → .containedInMaster
+///        inside both, only query incomplete              → .masterContainedInQuery
+///        inside both, both incomplete                    → .inconclusive(.bothIncomplete)
+///        query inside, query complete                    → .containedInMaster
+///        query inside, query incomplete                  → .inconclusive(.queryIncomplete)
+///        master inside, master complete                  → .masterContainedInQuery
+///        master inside, master incomplete                → .inconclusive(.masterIncomplete)
+///        neither inside                                  → .overlap(offset, span)
+///
+/// `coverage` and `unmatchedGapSeconds` are measured over the query's
+/// AUDIBLE seconds inside the overlap (`AudioFingerprint.activeSeconds`);
+/// silent seconds are evidence for nothing and sit in neither numerator
+/// nor denominator.
 public struct AudioMatchPolicy: Sendable, Equatable {
     /// Fewer matched landmarks than this is noise, whatever the shape.
     public var minMatchedLandmarks: Int = 20
-    /// Coverage at or above this makes the overlap a confirmed copy.
+    /// Coverage (matched ÷ audible seconds of the overlap) at or above
+    /// this is one condition for a confirmed copy; see the table.
     public var minCoverage: Double = 0.5
     /// A file "lies inside" the overlap when it hangs out by at most this.
     public var edgeToleranceSeconds: Double = 1.5
-    /// A matched run shorter than this is not called an overlap.
+    /// A matched run shorter than this is not called anything (row 2).
     public var minOverlapSeconds: Double = 5
-    /// Unmatched seconds inside a run that do not break it.
+    /// Unmatched audible seconds inside a run that do not break it (span).
     public var bucketGapSeconds: Double = 2
+    /// The longest stretch of audible, unmatched query seconds inside the
+    /// overlap that "same" / "contained" tolerate (row 3). Longer = a
+    /// different edit, not a lossy copy.
+    public var maxUnmatchedGapSeconds: Double = 10
     /// ± frames merged into the winning offset bin (64 ms each).
     public var offsetToleranceFrames: Int = 1
     /// A landmark's `dt` is also probed at ± this many frames: a clip cut
@@ -61,7 +98,7 @@ public enum AudioMatchVerdict: Sendable, Equatable {
     case containedInMaster(offsetSeconds: Double)
     /// The master is a clip of the query, starting `offsetSeconds` in.
     case masterContainedInQuery(offsetSeconds: Double)
-    /// They share `seconds` of recording; the query starts at
+    /// They share a matched run of `seconds`; the query starts at
     /// `offsetSeconds` in the master's timeline (may be negative).
     case overlap(offsetSeconds: Double, seconds: Double)
     case different
@@ -86,6 +123,7 @@ public enum AudioMatchInconclusiveReason: Sendable, Equatable {
 /// the rule is testable without a fingerprint.
 public struct AudioMatchEvidence: Sendable, Equatable {
     public var matchedLandmarks: Int
+    /// Matched ÷ audible seconds of the query inside the overlap.
     public var coverage: Double
     /// Seconds of the query that lie inside the master at the offset.
     public var overlapSeconds: Double
@@ -98,10 +136,13 @@ public struct AudioMatchEvidence: Sendable, Equatable {
     /// is the analysed part, not the recording.
     public var queryComplete: Bool
     public var masterComplete: Bool
+    /// Longest stretch of audible, UNMATCHED query seconds inside the
+    /// overlap (silent seconds skipped, not counted). 0 = none.
+    public var unmatchedGapSeconds: Double
 
     public init(matchedLandmarks: Int, coverage: Double, overlapSeconds: Double, spanSeconds: Double,
                 offsetSeconds: Double, queryDurationSeconds: Double, masterDurationSeconds: Double,
-                queryComplete: Bool = true, masterComplete: Bool = true) {
+                queryComplete: Bool = true, masterComplete: Bool = true, unmatchedGapSeconds: Double = 0) {
         self.matchedLandmarks = matchedLandmarks
         self.coverage = coverage
         self.overlapSeconds = overlapSeconds
@@ -111,34 +152,31 @@ public struct AudioMatchEvidence: Sendable, Equatable {
         self.masterDurationSeconds = masterDurationSeconds
         self.queryComplete = queryComplete
         self.masterComplete = masterComplete
+        self.unmatchedGapSeconds = unmatchedGapSeconds
     }
 
-    /// The pure rule. (For Rick: a decision table — read top to bottom,
-    /// first row that applies wins.)
+    /// The pure rule — the decision table in `AudioMatchPolicy`'s header.
     public func verdict(policy: AudioMatchPolicy = .default) -> AudioMatchVerdict {
-        guard matchedLandmarks >= policy.minMatchedLandmarks else { return .different }
-        if coverage >= policy.minCoverage {
-            let queryInside = overlapSeconds >= queryDurationSeconds - policy.edgeToleranceSeconds
-            let masterInside = overlapSeconds >= masterDurationSeconds - policy.edgeToleranceSeconds
-            // A side that was only partly analysed can be CONTAINED (its
-            // analysed part lies inside the other) but can never be
-            // "the same" or "containing" — the unseen rest might differ.
-            switch (queryInside, masterInside, queryComplete, masterComplete) {
-            case (true, true, true, true): return .sameRecording
-            case (true, true, true, false): return .containedInMaster(offsetSeconds: offsetSeconds)
-            case (true, true, false, true): return .masterContainedInQuery(offsetSeconds: -offsetSeconds)
-            case (true, true, false, false): return .inconclusive(reason: .bothIncomplete)
-            case (true, false, true, _): return .containedInMaster(offsetSeconds: offsetSeconds)
-            case (true, false, false, _): return .inconclusive(reason: .queryIncomplete)
-            case (false, true, _, true): return .masterContainedInQuery(offsetSeconds: -offsetSeconds)
-            case (false, true, _, false): return .inconclusive(reason: .masterIncomplete)
-            case (false, false, _, _): return .overlap(offsetSeconds: offsetSeconds, seconds: overlapSeconds)
-            }
+        guard matchedLandmarks >= policy.minMatchedLandmarks else { return .different }          // row 1
+        guard spanSeconds >= policy.minOverlapSeconds else { return .different }                // row 2
+        let distributed = coverage >= policy.minCoverage && unmatchedGapSeconds <= policy.maxUnmatchedGapSeconds
+        guard distributed else { return .overlap(offsetSeconds: offsetSeconds, seconds: spanSeconds) }  // row 3
+        let queryInside = overlapSeconds >= queryDurationSeconds - policy.edgeToleranceSeconds
+        let masterInside = overlapSeconds >= masterDurationSeconds - policy.edgeToleranceSeconds
+        // Row 4. A side that was only partly analysed can be CONTAINED (its
+        // analysed part lies inside the other) but can never be "the same"
+        // or "containing" — the unseen rest might differ.
+        switch (queryInside, masterInside, queryComplete, masterComplete) {
+        case (true, true, true, true): return .sameRecording
+        case (true, true, true, false): return .containedInMaster(offsetSeconds: offsetSeconds)
+        case (true, true, false, true): return .masterContainedInQuery(offsetSeconds: -offsetSeconds)
+        case (true, true, false, false): return .inconclusive(reason: .bothIncomplete)
+        case (true, false, true, _): return .containedInMaster(offsetSeconds: offsetSeconds)
+        case (true, false, false, _): return .inconclusive(reason: .queryIncomplete)
+        case (false, true, _, true): return .masterContainedInQuery(offsetSeconds: -offsetSeconds)
+        case (false, true, _, false): return .inconclusive(reason: .masterIncomplete)
+        case (false, false, _, _): return .overlap(offsetSeconds: offsetSeconds, seconds: spanSeconds)
         }
-        if spanSeconds >= policy.minOverlapSeconds {
-            return .overlap(offsetSeconds: offsetSeconds, seconds: spanSeconds)
-        }
-        return .different
     }
 }
 
@@ -227,14 +265,19 @@ public struct AudioFingerprintIndex: Sendable {
         }
         let overlap = Self.overlapRange(offsetSeconds: offsetSeconds, queryDuration: query.durationSeconds,
                                         masterDuration: master.durationSeconds)
-        let coverage = Self.coverage(covered, overlap: overlap)
-        let run = Self.longestRun(covered, overlap: overlap, gap: Int(policy.bucketGapSeconds))
+        // Audible seconds of the query; unknown (empty) = every second counts.
+        let active = query.activeSeconds.isEmpty
+            ? [Bool](repeating: true, count: bucketCount)
+            : query.activeSeconds + [Bool](repeating: false, count: max(0, bucketCount - query.activeSeconds.count))
+        let coverage = Self.coverage(covered, active: active, overlap: overlap)
+        let gap = Self.longestUnmatchedGap(covered, active: active, overlap: overlap)
+        let run = Self.longestRun(covered, active: active, overlap: overlap, gap: Int(policy.bucketGapSeconds))
         let evidence = AudioMatchEvidence(
             matchedLandmarks: matched, coverage: coverage,
             overlapSeconds: max(0, overlap.upperBound - overlap.lowerBound), spanSeconds: Double(run.length),
             offsetSeconds: offsetSeconds, queryDurationSeconds: query.durationSeconds,
             masterDurationSeconds: master.durationSeconds,
-            queryComplete: query.complete, masterComplete: master.complete)
+            queryComplete: query.complete, masterComplete: master.complete, unmatchedGapSeconds: Double(gap))
         return AudioMatch(evidence: evidence, verdict: evidence.verdict(policy: policy),
                           queryLandmarks: query.landmarkCount, masterLandmarks: master.landmarkCount,
                           spanStartInMasterSeconds: Double(run.start) + offsetSeconds,
@@ -294,27 +337,50 @@ public struct AudioFingerprintIndex: Sendable {
         return upper > lower ? lower..<upper : lower..<lower
     }
 
-    static func coverage(_ covered: [Bool], overlap: Range<Double>) -> Double {
+    /// Matched ÷ audible buckets inside the overlap (0 when none audible).
+    static func coverage(_ covered: [Bool], active: [Bool], overlap: Range<Double>) -> Double {
         let buckets = bucketRange(covered, overlap: overlap)
-        guard !buckets.isEmpty else { return 0 }
-        let hits = covered[buckets].reduce(0) { $0 + ($1 ? 1 : 0) }
-        return Double(hits) / Double(buckets.count)
+        var audible = 0, hits = 0
+        for bucket in buckets where active[bucket] {
+            audible += 1
+            if covered[bucket] { hits += 1 }
+        }
+        return audible > 0 ? Double(hits) / Double(audible) : 0
+    }
+
+    /// Longest stretch of audible, unmatched buckets inside the overlap.
+    /// Silent buckets neither break nor lengthen a stretch.
+    static func longestUnmatchedGap(_ covered: [Bool], active: [Bool], overlap: Range<Double>) -> Int {
+        var best = 0, run = 0
+        for bucket in bucketRange(covered, overlap: overlap) where active[bucket] {
+            run = covered[bucket] ? 0 : run + 1
+            best = max(best, run)
+        }
+        return best
     }
 
     /// Longest run of covered buckets inside the overlap, bridging up to
-    /// `gap` uncovered buckets. Returns (start bucket, length in buckets).
-    static func longestRun(_ covered: [Bool], overlap: Range<Double>, gap: Int) -> (start: Int, length: Int) {
+    /// `gap` audible uncovered buckets (silent ones are transparent).
+    /// Returns (start bucket, length in buckets on the real timeline).
+    static func longestRun(_ covered: [Bool], active: [Bool], overlap: Range<Double>,
+                           gap: Int) -> (start: Int, length: Int) {
         let buckets = bucketRange(covered, overlap: overlap)
         var best = (start: 0, length: 0)
         var runStart: Int?
         var lastHit = 0
+        var missed = 0
         for bucket in buckets {
             if covered[bucket] {
                 if runStart == nil { runStart = bucket }
                 lastHit = bucket
-            } else if let start = runStart, bucket - lastHit > gap {
-                if lastHit - start + 1 > best.length { best = (start, lastHit - start + 1) }
-                runStart = nil
+                missed = 0
+            } else if active[bucket], runStart != nil {
+                missed += 1
+                if missed > gap, let start = runStart {
+                    if lastHit - start + 1 > best.length { best = (start, lastHit - start + 1) }
+                    runStart = nil
+                    missed = 0
+                }
             }
         }
         if let start = runStart, lastHit - start + 1 > best.length { best = (start, lastHit - start + 1) }

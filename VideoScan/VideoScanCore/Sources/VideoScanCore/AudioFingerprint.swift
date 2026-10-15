@@ -68,6 +68,12 @@ public struct AudioFingerprintParameters: Sendable, Equatable {
     public var floorDB: Float = -60
     /// A peak must also stand this far above its frame's mean level.
     public var aboveFrameMeanDB: Float = 6
+    /// A second of audio is AUDIBLE (counts as evidence for or against a
+    /// match) when its RMS, after normalisation, is above this (dBFS).
+    /// −60 dBFS is 40 dB under programme level: digital silence and the
+    /// blank tail of a tape are out; room tone and hiss are in (they are
+    /// recorded, so a true copy matches them too).
+    public var activeFloorDB: Float = -60
     /// Targets paired with each anchor, and the target zone.
     public var fanOut: Int = 5
     public var minDeltaFrames: Int = 1
@@ -161,7 +167,7 @@ public struct AudioFingerprintParameters: Sendable, Equatable {
         for value in [sampleRate, frameSize, hopSamples, timeRadius, frequencyRadius, maxPeaksPerFrame] {
             mix(UInt32(truncatingIfNeeded: value))
         }
-        for value in [targetRMS, maxGain, floorDB, aboveFrameMeanDB] { mix(value.bitPattern) }
+        for value in [targetRMS, maxGain, floorDB, aboveFrameMeanDB, activeFloorDB] { mix(value.bitPattern) }
         for value in [fanOut, minDeltaFrames, maxDeltaFrames, maxDeltaBins] {
             mix(UInt32(truncatingIfNeeded: value))
         }
@@ -170,18 +176,20 @@ public struct AudioFingerprintParameters: Sendable, Equatable {
 }
 
 public struct AudioFingerprint: Sendable, Equatable {
-    /// On-disk FORMAT version (the header layout below). 2 = recipeID and
-    /// completeness flag added (codex F3/F2, 2026-10-14). Nothing was
-    /// persisted at version 1.
+    /// On-disk FORMAT version (the header layout below). 2 = recipeID,
+    /// completeness flag and audible-seconds bitmap added (codex F3/F2/F1,
+    /// 2026-10-14). Nothing was persisted at version 1.
     public static let currentVersion: UInt16 = 2
     /// First four bytes of the binary encoding.
     public static let magic: [UInt8] = Array("VSAF".utf8)
     /// Header layout (little-endian):
     ///   magic 4 | version u16 | recipeID u32 | flags u8 | sampleRate u32 |
-    ///   hop u32 | frameSize u32 | analyzedSeconds f64 | landmarkCount u32
-    /// then `hashes` (u32 × count) and `times` (u32 × count).
+    ///   hop u32 | frameSize u32 | analyzedSeconds f64 | landmarkCount u32 |
+    ///   activeSecondCount u32
+    /// then `hashes` (u32 × count), `times` (u32 × count), and the audible
+    /// bitmap (`activeSecondCount` bits, LSB first, zero-padded to a byte).
     /// flags bit 0 = `complete`.
-    static let headerBytes = 35
+    static let headerBytes = 39
     static let recipeFieldOffset = 6
     static let flagsFieldOffset = 10
     static let sampleRateFieldOffset = 11
@@ -203,6 +211,12 @@ public struct AudioFingerprint: Sendable, Equatable {
     /// the landmarks describe a part of the recording, and no verdict may
     /// treat them as the whole (see `AudioMatchEvidence.verdict`).
     public let complete: Bool
+    /// One flag per second of audio (second `i` = samples `i·rate ..<
+    /// (i+1)·rate`; the last may be partial): true when that second is
+    /// audible (RMS above `activeFloorDB`). The matcher judges coverage
+    /// over audible seconds only — silence is evidence for nothing. Empty
+    /// = unknown, and every second then counts (the conservative side).
+    public let activeSeconds: [Bool]
     /// Parallel arrays: `hashes[i]` was anchored at frame `times[i]`.
     public let hashes: [UInt32]
     public let times: [UInt32]
@@ -212,7 +226,7 @@ public struct AudioFingerprint: Sendable, Equatable {
     public init(version: UInt16 = AudioFingerprint.currentVersion,
                 recipeID: UInt32 = AudioFingerprintParameters.default.recipeID,
                 sampleRate: Int, hopSamples: Int, frameSize: Int, durationSeconds: Double,
-                complete: Bool = true, hashes: [UInt32], times: [UInt32]) {
+                complete: Bool = true, activeSeconds: [Bool] = [], hashes: [UInt32], times: [UInt32]) {
         precondition(sampleRate > 0 && hopSamples > 0 && frameSize > 0,
                      "AudioFingerprint: sampleRate, hopSamples and frameSize must be positive")
         precondition(hashes.count == times.count, "AudioFingerprint: hashes and times must be parallel")
@@ -223,15 +237,17 @@ public struct AudioFingerprint: Sendable, Equatable {
         self.frameSize = frameSize
         self.durationSeconds = durationSeconds
         self.complete = complete
+        self.activeSeconds = activeSeconds
         self.hashes = hashes
         self.times = times
     }
 
     public var landmarkCount: Int { hashes.count }
     public var analyzedSeconds: Double { durationSeconds }
+    public var activeSecondCount: Int { activeSeconds.reduce(0) { $0 + ($1 ? 1 : 0) } }
     public var hopSeconds: Double { Double(hopSamples) / Double(sampleRate) }
     /// Exactly `encoded().count`.
-    public var estimatedBytes: Int { Self.headerBytes + 8 * hashes.count }
+    public var estimatedBytes: Int { Self.headerBytes + 8 * hashes.count + (activeSeconds.count + 7) / 8 }
 
     /// True when `other` was made by the same recipe on the same grid, so
     /// the two may be matched.
@@ -263,8 +279,15 @@ public struct AudioFingerprint: Sendable, Equatable {
         Self.append(UInt32(frameSize), to: &data)
         Self.append(durationSeconds.bitPattern, to: &data)
         Self.append(UInt32(hashes.count), to: &data)
+        Self.append(UInt32(activeSeconds.count), to: &data)
         for h in hashes { Self.append(h, to: &data) }
         for t in times { Self.append(t, to: &data) }
+        var byte: UInt8 = 0
+        for (i, active) in activeSeconds.enumerated() {
+            if active { byte |= 1 << UInt8(i % 8) }
+            if i % 8 == 7 { data.append(byte); byte = 0 }
+        }
+        if activeSeconds.count % 8 != 0 { data.append(byte) }
         return data
     }
 
@@ -290,9 +313,10 @@ public struct AudioFingerprint: Sendable, Equatable {
               let flags: UInt8 = reader.read(),
               let sampleRate: UInt32 = reader.read(), let hop: UInt32 = reader.read(),
               let frameSize: UInt32 = reader.read(), let durationBits: UInt64 = reader.read(),
-              let count: UInt32 = reader.read() else { throw DecodingError.tooShort(bytes: data.count) }
+              let count: UInt32 = reader.read(), let secondCount: UInt32 = reader.read()
+        else { throw DecodingError.tooShort(bytes: data.count) }
         guard version == Self.currentVersion else { throw DecodingError.unsupportedVersion(version) }
-        let expected = Self.headerBytes + 8 * Int(count)
+        let expected = Self.headerBytes + 8 * Int(count) + (Int(secondCount) + 7) / 8
         guard data.count == expected else { throw DecodingError.sizeMismatch(expected: expected, actual: data.count) }
         do {
             try AudioFingerprintParameters.validateFrame(sampleRate: Int(sampleRate), frameSize: Int(frameSize),
@@ -310,10 +334,20 @@ public struct AudioFingerprint: Sendable, Equatable {
             guard let t: UInt32 = reader.read() else { throw DecodingError.tooShort(bytes: data.count) }
             times.append(t)
         }
+        var active = [Bool](); active.reserveCapacity(Int(secondCount))
+        var byte: UInt8 = 0
+        for i in 0..<Int(secondCount) {
+            if i % 8 == 0 {
+                guard let next: UInt8 = reader.read() else { throw DecodingError.tooShort(bytes: data.count) }
+                byte = next
+            }
+            active.append(byte & (1 << UInt8(i % 8)) != 0)
+        }
         return AudioFingerprint(version: version, recipeID: recipeID, sampleRate: Int(sampleRate),
                                 hopSamples: Int(hop), frameSize: Int(frameSize),
                                 durationSeconds: Double(bitPattern: durationBits),
-                                complete: flags & Self.completeFlag != 0, hashes: hashes, times: times)
+                                complete: flags & Self.completeFlag != 0, activeSeconds: active,
+                                hashes: hashes, times: times)
     }
 
     /// nil when the bytes are not a current-version fingerprint; `decode`
@@ -341,12 +375,37 @@ public struct AudioFingerprint: Sendable, Equatable {
         precondition(pcm.sampleRate == parameters.sampleRate,
                      "AudioFingerprint.compute: PCM is \(pcm.sampleRate) Hz, recipe expects \(parameters.sampleRate)")
         let gain = normalisingGain(pcm.samples, parameters: parameters)
+        let active = activeSeconds(pcm.samples, sampleRate: pcm.sampleRate, gain: gain, parameters: parameters)
         let peaks = SpectralPeakPicker(parameters: parameters)?.peaks(in: pcm.samples, gain: gain) ?? []
         let landmarks = LandmarkPairer.pair(peaks, parameters: parameters)
         return AudioFingerprint(recipeID: parameters.recipeID, sampleRate: pcm.sampleRate,
                                 hopSamples: parameters.hopSamples, frameSize: parameters.frameSize,
                                 durationSeconds: pcm.durationSeconds, complete: !pcm.reachedCap,
-                                hashes: landmarks.hashes, times: landmarks.times)
+                                activeSeconds: active, hashes: landmarks.hashes, times: landmarks.times)
+    }
+
+    /// Per-second audibility: RMS of each one-second block (× `gain`,
+    /// re full scale) in dBFS against `activeFloorDB`. One reusable
+    /// Float scratch of one second; the last block may be partial.
+    static func activeSeconds(_ samples: [Int16], sampleRate: Int, gain: Float,
+                              parameters: AudioFingerprintParameters) -> [Bool] {
+        guard !samples.isEmpty, sampleRate > 0 else { return [] }
+        let seconds = (samples.count + sampleRate - 1) / sampleRate
+        var active = [Bool](repeating: false, count: seconds)
+        var scratch = [Float](repeating: 0, count: sampleRate)
+        let floorRMS = powf(10, parameters.activeFloorDB / 20) * 32_768 / gain
+        samples.withUnsafeBufferPointer { src in
+            guard let base = src.baseAddress else { return }
+            for second in 0..<seconds {
+                let offset = second * sampleRate
+                let count = min(sampleRate, samples.count - offset)
+                vDSP_vflt16(base + offset, 1, &scratch, 1, vDSP_Length(count))
+                var rms: Float = 0
+                vDSP_rmsqv(scratch, 1, &rms, vDSP_Length(count))
+                active[second] = rms > floorRMS
+            }
+        }
+        return active
     }
 
     /// Linear gain that brings the signal's RMS to `targetRMS` (1 for
