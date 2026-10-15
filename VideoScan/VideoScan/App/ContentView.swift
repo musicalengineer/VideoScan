@@ -1113,6 +1113,12 @@ struct CatalogView: View {
             NonVideoMediaPurgeSheet(preselectedVolumeKey: nil)
                 .environmentObject(model)
         }
+        // Fingerprint Sound (2026-10-14): Catalog ▸ Fingerprint Sound… opens
+        // this confirm sheet; Start there runs the MFO job.
+        .sheet(isPresented: $model.showFingerprintSoundSheet) {
+            AudioFingerprintBackfillSheet()
+                .environmentObject(model)
+        }
         // Update Catalog (2026-08-17): the ONE door for "files were moved /
         // renamed outside the app". Opened from the Catalog menu, the
         // volume-rename badge, the "looks moved" banner and the target

@@ -17,6 +17,8 @@ import os
 // MARK: - Video Record
 
 public class VideoRecord: Identifiable, Decodable {
+    /// One line when an additive field cannot be decoded (the record still loads).
+    static let decodeLog = Logger(subsystem: "Rick-Breen.VideoScan", category: "catalogDecode")
     // MARK: Identity generation (2026-09-02, codex #987 item 1)
     //
     // A process-wide, monotonic count of IDENTITY writes — every set of
@@ -688,6 +690,14 @@ public class VideoRecord: Identifiable, Decodable {
     /// its recipe and file size still match (`isCurrent`).
     public var perceptualFingerprint: StoredPerceptualFingerprint?
 
+    /// Fingerprint Sound (2026-10-14): the small stamp saying this content's
+    /// audio fingerprint is in the sidecar (AudioFingerprintStamp.swift) —
+    /// or that the file has no sound. The landmark bytes never live here.
+    /// Additive optional — legacy catalogs decode nil, the DTO writes the
+    /// key only when present. Trusted only while size + digest + engine
+    /// version still match (`describes`).
+    public var audioFingerprint: AudioFingerprintStamp?
+
     /// Check Media (2026-10-07): the latest report card — headline plus one
     /// row per check (MediaReportCard.swift). Additive optional — legacy
     /// catalogs decode nil, the DTO writes the key only when present. The
@@ -908,6 +918,15 @@ public class VideoRecord: Identifiable, Decodable {
         // Perceptual fingerprint (GH #293) — additive optional; legacy → nil.
         // Its own decoder never fails on a damaged hex (reads as absent).
         perceptualFingerprint       = try c.decodeIfPresent(StoredPerceptualFingerprint.self, forKey: .perceptualFingerprint)
+        // Audio fingerprint stamp (2026-10-14) — additive optional. A stamp
+        // this build can't read (a future outcome word) reads as absent
+        // rather than failing the whole catalog load; the next run redoes it.
+        do {
+            audioFingerprint        = try c.decodeIfPresent(AudioFingerprintStamp.self, forKey: .audioFingerprint)
+        } catch {
+            audioFingerprint        = nil
+            Self.decodeLog.notice("audio fingerprint stamp unreadable on \(self.filename, privacy: .public) — will be redone: \(String(describing: error), privacy: .public)")
+        }
         // Check Media report card (2026-10-07) — additive optional. A card
         // this build can't read (a future check kind) reads as absent
         // rather than failing the whole catalog load.

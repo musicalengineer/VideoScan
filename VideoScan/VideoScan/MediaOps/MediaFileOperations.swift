@@ -419,6 +419,19 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let cleanupTrash = Self("cleanupTrash", hasDetailView: true,
         style: .init(badge: "Cleanup", logVerb: "cleanup", fill: .init(0.45, 0.20, 0.10)))
 
+    // Fingerprint Sound (2026-10-14) — deep violet: a reading verb whose
+    // only writes are the catalog stamp and the fingerprint sidecar.
+    // Δ ≥ 0.22 from every other fill, contrast vs white ≈ 16. The chip
+    // reads "Sound Print" because badges must be unique and "Fingerprint"
+    // is the pictures job's (rawValuesAndBadgesAreUnique).
+    /// "Fingerprint Sound…" (Rick 2026-10-14): computes the audio landmark
+    /// fingerprint of every catalog file without a current one, archived
+    /// files first, and keeps the bytes in audio-fingerprints.sqlite with a
+    /// small stamp on the record. Read-only on media; restart = resume.
+    /// AudioFingerprintBackfillJob.
+    static let fingerprintSound = Self("fingerprintSound", hasDetailView: true,
+        style: .init(badge: "Sound Print", logVerb: "fingerprint sound", fill: .init(0.20, 0.00, 0.35)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -427,7 +440,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .trim, .balanceAudio, .rebuildAudio, .verifyAudio, .verifyVideo, .checkMedia, .repair,
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
-        .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash,
+        .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound,
     ]
 
     /// Badge text — rendered in small caps by the row view.

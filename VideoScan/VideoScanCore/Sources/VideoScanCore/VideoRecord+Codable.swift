@@ -96,5 +96,6 @@ extension VideoRecord {
         case familyMusic
         case perceptualFingerprint   // GH #293, additive
         case mediaReportCard         // Check Media 2026-10-07, additive
+        case audioFingerprint        // Fingerprint Sound 2026-10-14, additive
     }
 }

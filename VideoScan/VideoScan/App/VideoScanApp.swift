@@ -825,6 +825,10 @@ struct VideoScanApp: App {
                 // backfill as an MFO job; restart = resume.
                 FullHashBackfillMenuItem(model: catalogModel, center: fileOpsCenter,
                                          marker: fullHashResume, isReadOnly: catalogModel.isReadOnly)
+                // Fingerprint Sound (2026-10-14): whole-catalog audio
+                // fingerprint backfill as an MFO job; confirm sheet first;
+                // restart = resume.
+                AudioFingerprintBackfillMenuItem(model: catalogModel)
             }
         }
 
