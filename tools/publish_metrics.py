@@ -16,7 +16,7 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   bugs, open "High Priority" issues, sprint
                                   milestone), demo tags, and the
                                   last 90 nights of the 2 AM run per Mac, each
-                                  night classified green / red / did_not_run by
+                                  night classified green / watch / red / did_not_run by
                                   classify_nightly_row(). Rebuilt on every run.
     metrics/github_daily.jsonl    one row per UTC day: open issues, open bugs,
                                   bugs opened / closed in the last 7 days and
@@ -154,7 +154,11 @@ VERS_RE = re.compile(r"^[0-9]+(?:\.[0-9]+){0,3}$")
 TAGNAME_RE = re.compile(r"^demo[A-Za-z0-9._/-]{0,59}$")
 PUBTEXT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 .,:'/#+()-]{0,59}$")
 EVENTCAT_RE = re.compile(r"^[A-Z][a-z]{1,19}(?: / [a-z]{1,19})?$")   # "Birthday", "Beach / vacation"; never a name
-NIGHT_STATES = ("green", "red", "did_not_run")
+NIGHT_STATES = ("green", "watch", "red", "did_not_run")
+# Rick, 2026-10-15: "if fail < 10 make it orange or yellow, but red means
+# broken." Fewer than this many failed tests, with the suite otherwise
+# intact, is WATCH (yellow on the page); red is reserved for a broken run.
+WATCH_MAX_FAILED = 10
 SUMMARY_DAYS = 90
 _NIGHT = {"state": ("enum", NIGHT_STATES), "passed": "int", "failed": "int", "total": "int",
           "reason": "code?"}
@@ -710,12 +714,21 @@ def events_stats(run: Callable = subprocess.run, script: Path = EVENTS_SCRIPT,
 def classify_nightly_row(row: dict) -> str:
     """THE rule for one 2 AM run (Rick, GH #310): a night where no test ran —
     build timeout, build error, zero tests, dirty tree, skipped — DID NOT RUN.
-    It is amber on the page, never red. Red means tests ran and failed (or the
-    run was killed part-way: the exit code is evidence). Green: tests ran,
-    status ok, nothing failed."""
+    It is amber on the page, never red. WATCH (Rick 2026-10-15, yellow): the
+    suite ran to the end and fewer than WATCH_MAX_FAILED tests failed, no
+    test host died. RED means broken: that many or more failed, a crashed
+    test host, or a run killed part-way (a reason other than the plain
+    failed-tests count: the exit code is evidence). Green: tests ran, status
+    ok, nothing failed."""
     if _int(row.get("total")) == 0:
         return "did_not_run"
-    if row.get("status") == "failed" or _int(row.get("failed")) > 0:
+    failed = _int(row.get("failed"))
+    crashed = row.get("crashed_names")
+    reason = row.get("reason")
+    ran_to_the_end = row.get("status") == "ok" or (isinstance(reason, str) and reason.startswith("failed-tests:"))
+    if 0 < failed < WATCH_MAX_FAILED and ran_to_the_end and not (isinstance(crashed, list) and crashed):
+        return "watch"
+    if row.get("status") == "failed" or failed > 0:
         return "red"
     return "green"
 

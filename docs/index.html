@@ -84,6 +84,7 @@
   .hosts > .red { border-color: var(--bad); }
   .hosts > .green { border-color: var(--good); }
   .hosts > .amber { border-color: var(--amber); }
+  .hosts > .watch { border-color: var(--warn); }
   .tile[data-state="red"], .area[data-state="red"] { --status-accent: var(--bad); }
   .tile[data-state="green"], .area[data-state="green"] { --status-accent: var(--good); }
   .tile[data-state="amber"], .area[data-state="amber"] { --status-accent: var(--amber); }
@@ -116,7 +117,7 @@
   .tl .host { font-size: 15px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
   .cells { display: grid; grid-template-columns: repeat(90, minmax(0, 1fr)); gap: 2px; }
   .cell { height: 21px; border-radius: 2px; background: var(--cell-none); cursor: default; min-width: 0; }
-  .cell.green { background: var(--good); } .cell.red { background: var(--bad); } .cell.did_not_run { background: var(--amber); }
+  .cell.green { background: var(--good); } .cell.watch { background: var(--warn); } .cell.red { background: var(--bad); } .cell.did_not_run { background: var(--amber); }
   .cell:hover, .cell:focus { outline: 2px solid var(--fg); outline-offset: 1px; }
   .mark { position: relative; height: 10px; font-size: 10px; color: var(--muted); }
   .mark b { position: absolute; left: 0; top: -2px; width: 2px; height: 14px; background: var(--purple); display: block; }
@@ -217,7 +218,8 @@
   <h2>When did the app have difficulty? <span class="note">2 AM nightly on each Mac, last 90 nights · one cell per night</span></h2>
   <div class="legend">
     <span><i class="sw" style="background:var(--good)"></i> all tests passed</span>
-    <span><i class="sw" style="background:var(--bad)"></i> tests failed</span>
+    <span><i class="sw" style="background:var(--warn)"></i> a few tests failed (fewer than 10)</span>
+    <span><i class="sw" style="background:var(--bad)"></i> broken: 10 or more failed, a crashed test host, or a run killed part-way</span>
     <span><i class="sw" style="background:var(--amber)"></i> did not run (build timeout, no tests ran)</span>
     <span><i class="sw" style="background:var(--cell-none)"></i> no nightly that night</span>
     <span><i class="sw" style="background:var(--purple); width:2px"></i> demo tag</span>
@@ -530,7 +532,7 @@ async function latestMainRun(workflowFile) {
 const parseJson = text => { try { return text ? JSON.parse(text) : null; } catch { return null; } };
 
 // ---------------------------------------------------------------- the nights (from summary_latest.json)
-// The publisher classified each night: green / red / did_not_run. The page
+// The publisher classified each night: green / watch / red / did_not_run. The page
 // only reads the result. Missing summary -> every helper returns "no data".
 function nights(d) {
   const s = d.summary && d.summary.nightly;
@@ -541,20 +543,24 @@ function nights(d) {
 const cellOf = (night, h) => (night && night.hosts && night.hosts[h] && typeof night.hosts[h] === "object") ? night.hosts[h] : null;
 const nightStates = night => Object.values(night.hosts || {}).map(c => c && c.state).filter(Boolean);
 const anyRed = night => nightStates(night).includes("red");
+const anyWatch = night => nightStates(night).includes("watch");
+// A failing test on some Mac: watch (a few) or red (broken).
+const anyFailing = night => nightStates(night).some(s => s === "red" || s === "watch");
 const ranGreen = night => { const ss = nightStates(night).filter(s => s !== "did_not_run"); return ss.length > 0 && ss.every(s => s === "green"); };
-const STATE_WORD = { green: "green", red: "red", did_not_run: "did not run" };
+const STATE_WORD = { green: "green", watch: "a few failed", red: "red", did_not_run: "did not run" };
 // A sanitized machine code published with the night ("build-timeout:5400s"); never a row's free text.
 const cellReason = cell => cell && typeof cell["reason"] === "string" ? cell["reason"] : "";
 function cellWords(cell) {
   if (!cell) return "no run";
   if (cell.state === "green") return `green · ${n(cell.passed)} passed`;
   if (cell.state === "red") return `${n(cell.failed)} failed of ${n(cell.total)}`;
+  if (cell.state === "watch") return `${n(cell.failed)} failed of ${n(cell.total)} (a few)`;
   return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
 }
 function stability(N) {
   const L = N.list;
   const ran = L.filter(t => nightStates(t).length);
-  const red = L.filter(anyRed);
+  const red = L.filter(anyFailing);
   const green = L.filter(ranGreen);
   const allGreen = L.filter(t => N.hosts.length && N.hosts.every(h => cellOf(t, h) && cellOf(t, h).state === "green"));
   let redStreak = 0;
@@ -646,16 +652,17 @@ function renderHead(d) {
   if (N && N.list.length) {
     const lastNight = N.list[N.list.length - 1];
     const hosts = N.hosts.map(h => { const c = cellOf(lastNight, h); const state = c ? (c.state === "did_not_run" ? "amber" : c.state) : "grey"; return `<span class="${esc(state)}">${dot(state)}<b>${esc(h)}</b> ${esc(cellWords(c))}</span>`; }).join("");
+    const lastWatch = anyWatch(lastNight);
     const ran = N.hosts.map(h => cellOf(lastNight, h)).filter(c => c && c.state !== "did_not_run");
     const primary = ran[0];
     const failing = ran.reduce((a, c) => a + (c.failed || 0), 0);
     tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing</small>` : `<span class="word amber">did not run</span>`,
-      `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`, N.hosts.some(h => cellOf(lastNight, h)?.state === "red") ? "red" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber" : N.hosts.length && N.hosts.every(h => cellOf(lastNight, h)?.state === "green") ? "green" : "grey"));
+      `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`, N.hosts.some(h => cellOf(lastNight, h)?.state === "red") ? "red" : lastWatch ? "watch" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber" : N.hosts.length && N.hosts.every(h => cellOf(lastNight, h)?.state === "green") ? "green" : "grey"));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
-      : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : word("amber", "did not run last night");
+      : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
     tiles.push(tile("Stability", isNum(st.daysSinceRed) ? `${st.daysSinceRed} <small>days since a red night</small>` : `no red night <small>in 90</small>`,
-      `${streak} · last green night <b>${st.lastGreen ? day(st.lastGreen) : "none in 90"}</b> · ${st.last7} of the last 7 nights green`, st.redStreak ? "red" : st.greenStreak ? "green" : "amber"));
+      `${streak} · last green night <b>${st.lastGreen ? day(st.lastGreen) : "none in 90"}</b> · ${st.last7} of the last 7 nights green`, st.redStreak ? "red" : st.greenStreak ? "green" : lastWatch ? "watch" : "amber"));
   } else {
     tiles.push(tile("Last night's tests", `<span class="word grey">${DASH}</span>`, "nightly summary not published yet (tools/publish_metrics.py)"));
     tiles.push(tile("Stability", `<span class="word grey">${DASH}</span>`, "waits on the nightly summary"));
@@ -734,7 +741,7 @@ function renderTimeline(d) {
     (tags.length ? `<span>demo tags: ${tags.map(t => `<b>${esc(t.name)}</b> ${day(t.date)}`).join(", ")}</span>` : "");
   const bad = T.filter(t => nightStates(t).some(s => s !== "green")).reverse();
   document.getElementById("tl-table").innerHTML = bad.length ? table(["Night", ...N.hosts, "Tag"],
-    bad.map(t => [day(t.date), ...N.hosts.map(h => { const c = cellOf(t, h); return c ? (c.state === "green" ? cellWords(c) : `<span class="word ${c.state === "red" ? "red" : "amber"}">${esc(cellWords(c))}</span>`) : null; }), esc(tagFor(t.date))]))
+    bad.map(t => [day(t.date), ...N.hosts.map(h => { const c = cellOf(t, h); return c ? (c.state === "green" ? cellWords(c) : `<span class="word ${c.state === "red" ? "red" : c.state === "watch" ? "watch" : "amber"}">${esc(cellWords(c))}</span>`) : null; }), esc(tagFor(t.date))]))
     : "Every night in the window was green.";
 }
 
@@ -772,18 +779,20 @@ const SUMMARY = {
     const T = N.list, lastNight = T[T.length - 1], st = stability(N);
     const cells = N.hosts.map(h => [h, cellOf(lastNight, h)]);
     const reds = cells.filter(([, c]) => c && c.state === "red");
+    const watches = cells.filter(([, c]) => c && c.state === "watch");
     const greens = cells.filter(([, c]) => c && c.state === "green");
     const skipped = cells.filter(([, c]) => c && c.state === "did_not_run");
     const none = cells.filter(([, c]) => !c);
-    const state = reds.length ? "red" : (greens.length ? (skipped.length || none.length ? "watch" : "green") : "amber");
+    const state = reds.length ? "red" : watches.length ? "watch" : (greens.length ? (skipped.length || none.length ? "watch" : "green") : "amber");
     const suite = Math.max(0, ...cells.map(([, c]) => c ? c.total : 0));
     const parts = [];
     if (reds.length) parts.push(reds.map(([h, c]) => `<b>${n(c.failed)}</b> test${c.failed === 1 ? " fails" : "s fail"} on the ${esc(h)}`).join(" and ") + (suite ? ` (${n(suite)} in the suite)` : ""));
+    if (watches.length) parts.push(watches.map(([h, c]) => `a few fail on the ${esc(h)} (<b>${n(c.failed)}</b> of ${n(c.total)})`).join(" and "));
     if (greens.length) parts.push(greens.map(([h, c]) => `the ${esc(h)} is green (${n(c.passed)} passed)`).join(", "));
     if (skipped.length) parts.push(skipped.map(([h, c]) => `the ${esc(h)} <b>did not run</b>${cellReason(c) ? ` (${esc(cellReason(c))})` : ""}`).join(", "));
     if (none.length) parts.push(`no nightly on the ${none.map(([h]) => esc(h)).join(" or ")}`);
     const lead = st.redStreak ? `Red <b>${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running</b>: ` : st.greenStreak ? `Green <b>${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running</b>: ` : "";
-    const primary = (greens[0] || reds[0] || [null, null]);
+    const primary = (greens[0] || watches[0] || reds[0] || [null, null]);
     const ph = primary[0], pc = primary[1];
     const weekAgo = ph ? T.slice(0, -7).reverse().map(t => cellOf(t, ph)).find(c => c && c.state !== "did_not_run") : null;
     const weekDate = ph ? T.slice(0, -7).reverse().find(t => cellOf(t, ph) && cellOf(t, ph).state !== "did_not_run") : null;

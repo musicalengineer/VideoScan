@@ -38,10 +38,15 @@ def night(host, date, hour="07", **f):
     (night("RicksM4", "2026-10-12", status="failed", reason="build-rc:65"), "did_not_run"),
     (night("RicksM4", "2026-10-12", status="failed", reason="zero-tests-ran:test-rc=65"), "did_not_run"),
     (night("RicksM4", "2026-10-12", status="skipped", reason="dirty-tree:VideoScan.xcscheme"), "did_not_run"),
-    # Tests ran and some failed; or the run was killed part-way (exit code is evidence).
-    (night("RicksM4", "2026-10-12", status="failed", reason="failed-tests:2", passed=11211, failed=2, total=11275), "red"),
+    # A few failed (fewer than WATCH_MAX_FAILED), the suite ran to the end: watch (Rick 2026-10-15).
+    (night("RicksM4", "2026-10-12", status="failed", reason="failed-tests:2", passed=11211, failed=2, total=11275), "watch"),
+    (night("RicksM5", "2026-10-12", status="ok", passed=2089, failed=1, total=2092), "watch"),
+    (night("RicksM4", "2026-10-15", status="failed", reason="failed-tests:9", passed=11425, failed=9, total=11496, crashed_names=[]), "watch"),
+    # Broken: that many failed, a crashed test host, or a run killed part-way (exit code is evidence).
+    (night("RicksM4", "2026-10-15", status="failed", reason="failed-tests:10", passed=11424, failed=10, total=11496), "red"),
+    (night("RicksM4", "2026-10-15", status="failed", reason="failed-tests:4", passed=11430, failed=4, total=11496, crashed_names=["SECRET-CRASH"]), "red"),
     (night("RicksM5", "2026-10-12", status="failed", reason="test-timeout:7200s", passed=2089, failed=0, total=2092), "red"),
-    (night("RicksM5", "2026-10-12", status="ok", passed=2089, failed=1, total=2092), "red"),
+    (night("RicksM5", "2026-10-12", status="failed", reason="test-timeout:7200s", passed=2089, failed=3, total=2092), "red"),
     # Tests ran, nothing failed.
     (night("RicksM4", "2026-10-12", status="ok", passed=2631, failed=0, total=2678), "green"),
     (night("RicksM4", "2026-10-12", status="ok", reason="ui-runner-hung", passed=2631, failed=0, total=2678), "green"),
@@ -84,7 +89,7 @@ def test_nightly_summary_is_90_nights_ending_today_last_row_per_host_wins():
     last = n["nights"][-1]["hosts"]
     assert set(last) == {"M5", "M1"}
     assert last["M1"] == {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0, "reason": "build-timeout:5400s"}
-    assert last["M5"]["state"] == "red" and last["M5"]["failed"] == 1
+    assert last["M5"]["state"] == "watch" and last["M5"]["failed"] == 1
     # Nights with no row are present and empty, never invented.
     assert n["nights"][1]["hosts"] == {}
 
@@ -320,7 +325,7 @@ def test_summary_object_validates_and_leaks_nothing(metrics_dir, tmp_path):
     assert s["person"]["status"] == "not-configured"
     assert s["nightly"]["hosts"] == ["M4", "M1"]
     assert s["nightly"]["nights"][-1]["hosts"]["M1"]["state"] == "did_not_run"
-    assert s["nightly"]["nights"][-1]["hosts"]["M4"]["state"] == "red"
+    assert s["nightly"]["nights"][-1]["hosts"]["M4"]["state"] == "watch"   # 2 failed of 11,275: a few
     assert s["nightly"]["nights"][-2]["hosts"]["M4"]["state"] == "green"
     blob = " ".join(every_string(s))
     for secret in SECRETS:
@@ -448,7 +453,10 @@ def test_cli_out_dir_with_metrics_dir_writes_summary_with_nulls_when_gh_is_missi
     assert "summary_latest.json" in r.stdout
     s = json.loads((out / "summary_latest.json").read_text())
     assert s["github"]["open_bugs"] is None and s["sprint"] is None
-    assert s["nightly"]["nights"][-1]["hosts"]["M1"]["state"] == "did_not_run"
+    # The CLI uses the real clock; the fixture's rows are dated 2026-10-12, so
+    # find that night by date (the last cell is "today", empty after 10/12).
+    night_1012 = next(x for x in s["nightly"]["nights"] if x["date"] == "2026-10-12")
+    assert night_1012["hosts"]["M1"]["state"] == "did_not_run"
     assert s["version"] is not None                          # the repo's own pbxproj
     assert not (out / "github_daily.jsonl").exists()         # gh failed: no daily row, never a null row
     assert "github_daily" not in r.stdout

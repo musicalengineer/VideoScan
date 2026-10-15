@@ -123,6 +123,8 @@ def summary_fixture(now):
             hosts["M5"] = {"state": "green", "passed": 9000 + i, "failed": 0, "total": 9060 + i, "reason": None}
         if i in (40, 41):
             hosts["M4"] = {"state": "red", "passed": 9000, "failed": 3, "total": 9060, "reason": "failed-tests:3"}
+        if i == 45:
+            hosts["M4"] = {"state": "watch", "passed": 9004, "failed": 4, "total": 9060, "reason": "failed-tests:4"}
         if i == 50:
             hosts["M4"] = {"state": "did_not_run", "passed": 0, "failed": 0, "total": 0, "reason": "zero-tests-ran:test-rc=65"}
         if i >= 60:
@@ -376,7 +378,8 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     # The timeline: one cell per night per Mac, the M1 amber (did_not_run), never red.
     tl = out["sections"]["tl"]
     assert tl.count('class="cell ') == 3 * 90
-    assert tl.count("cell did_not_run") == 31 and tl.count("cell red") == 4
+    assert tl.count("cell did_not_run") == 31 and tl.count("cell red") == 4 and tl.count("cell watch") == 1
+    assert "4 failed of 9,060 (a few)" in tl
     assert 'title="M1 · ' in tl and "did not run · build-timeout:5400s" in tl and "demo-2026-10-10" in tl
     assert "1 of 90 nights" not in out["sections"]["stab"]
     assert "nights had a failing test on some Mac" in out["sections"]["stab"] and "demo-2026-10-10" in out["sections"]["stab"]
