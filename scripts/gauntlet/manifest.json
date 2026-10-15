@@ -630,6 +630,27 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/EventRecommendationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "EventRecommendationTests"
+      ],
+      "tests": [
+        "eraRule",
+        "identicalEdges",
+        "r1",
+        "r2",
+        "r3",
+        "r4",
+        "r5",
+        "r6Transfers",
+        "r7r8",
+        "table"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/FFmpegPreviewRendererE2ETests.swift",
       "stage": "integration",
       "suites": [
@@ -2210,6 +2231,30 @@
         "spellingVariantsStayConservative",
         "tellingTheSameResearchPassageTwiceIsIdempotent",
         "theTwoStaleIrishHostsAreGone"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/RelatedLadderTests.swift",
+      "stage": "unit",
+      "suites": [
+        "RelatedLadderTests"
+      ],
+      "tests": [
+        "betterTransferOrder",
+        "clipOfMaster",
+        "differentIsAnAnswer",
+        "identicalCopy",
+        "masterContainsClip",
+        "notEnoughEvidence",
+        "overlapTooShort",
+        "relatedAndNone",
+        "sameMoment",
+        "sameOccasion",
+        "sameRecordingOtherTransfer",
+        "silentFootageByFrames",
+        "words"
       ]
     },
     {
@@ -27456,6 +27501,10 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintStoreTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BackupAttestationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -27525,6 +27574,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/EventLabelerTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/EventRecommendationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -27805,6 +27858,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/RecordFinderLinkTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/RelatedLadderTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
@@ -28168,6 +28225,10 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
+          "name": "VideoScan/VideoScanTests/AudioFingerprintBackfillTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/AudioScanTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -28380,10 +28441,6 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanTests/FullHashBackfillTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanTests/CheckMediaTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -28398,6 +28455,26 @@
         {
           "name": "VideoScan/VideoScanTests/CleanupTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashHardeningTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashMediaMatrixTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashPlanTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashRunTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CleanupTrashSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/CombineMuxStallTests.swift",
@@ -28836,6 +28913,10 @@
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         },
         {
+          "name": "VideoScan/VideoScanTests/FullHashBackfillTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
           "name": "VideoScan/VideoScanTests/HiddenPersonLeavesFamilyRecordsBehindTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -29049,6 +29130,26 @@
         },
         {
           "name": "VideoScan/VideoScanTests/OllamaStructuredOutputFallbackTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineCodexRound1Tests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineDoorCharacterizationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineMediaMatrixAndScaleTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneEngineSensorTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/OneRemovalShapeTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -29366,6 +29467,10 @@
         {
           "name": "VideoScan/VideoScanTests/RemoteViewerSyncScopeTests.swift",
           "reason": "positive gate or machine/real-data dependency requires fixture adapter"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/RemovalMarkerMigrationTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanTests/RepairLifecycleAdoptionTests.swift",
@@ -29910,58 +30015,6 @@
         {
           "name": "tools/poi-c02/test_tools.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/OneEngineDoorCharacterizationTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/RemovalMarkerMigrationTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/OneRemovalShapeTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/OneEngineSensorTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/OneEngineMediaMatrixAndScaleTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/OneEngineCodexRound1Tests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CleanupTrashPlanTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CleanupTrashRunTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CleanupTrashMediaMatrixTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CleanupTrashSensorTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CleanupTrashHardeningTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintStoreTests.swift",
-          "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/AudioFingerprintBackfillTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 2383,
