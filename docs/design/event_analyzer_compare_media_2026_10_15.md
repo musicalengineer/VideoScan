@@ -138,7 +138,17 @@ leader-prefixed variants. Isolation: no sidecar / no fingerprint / no hash → "
 evidence", never a wrong word. Sensor: nothing in the view body decodes media or walks
 records; the verdict and the frames come from caches and the one compare job.
 
-## 8. Open questions for Rick (one at a time)
+## 8. Rulings
 
-1. R3 removes an older transfer of a recording whose master is archived. The DVD's menu
-   and chapters go with it. Fine, or keep DVD rips as a "second transfer" exception?
+1. **No DVD-rip exception (Rick, 2026-10-15).** A DVD rip is a transfer like any other;
+   the physical disc in the box is the backup ("I still have the actual DVD … a box of
+   DVDs, tapes, CDs, DATs"). R3 applies when the archived master covers the rip end to end
+   (sound coverage at one offset over the whole length); minutes only the rip holds turn
+   the verdict yellow (R5, keep both) and are named in the band. Example: a 2026 FFV1
+   ClearClick capture of Christmas 1995 against its 2006 DVD rip → SAME EVENT, R3, the
+   4.2 GB rip goes, the disc stays in the box.
+2. **Older generations first.** The archive's centre of gravity is the 1940s–1990s, where a
+   capture may be the only copy of an afternoon that exists; post-2010 footage has copies
+   to spare. So for content dated before 2000, R4 ("this transfer is better — promote it")
+   is offered before any removal rule, and R3 never removes the only transfer of a
+   recording that is not yet archived (that is R6).
