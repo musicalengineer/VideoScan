@@ -78,4 +78,4 @@ On main, straight after the merge (983896fee); Debug: 85 tests in the five Clean
 
 ## Closed
 
-Closed by `cf19e16f3` at 2026-10-15T18:18:34Z. P1 fixed (archive file never a target, designation or not), P2 unusable-archive-member fixed (group left alone), P2 post-authorize catalog race declined with reason; 85 Cleanup tests
+Closed by `e006fc804` at 2026-10-15T18:18:34Z. P1 fixed (archive file never a target, designation or not), P2 unusable-archive-member fixed (group left alone), P2 post-authorize catalog race declined with reason; 85 Cleanup tests
