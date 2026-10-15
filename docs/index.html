@@ -117,7 +117,14 @@
   .tl .host { font-size: 15px; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
   .cells { display: grid; grid-template-columns: repeat(90, minmax(0, 1fr)); gap: 2px; }
   .cell { height: 21px; border-radius: 2px; background: var(--cell-none); cursor: default; min-width: 0; }
-  .cell.green { background: var(--good); } .cell.watch { background: var(--warn); } .cell.red { background: var(--bad); } .cell.did_not_run { background: var(--amber); }
+  .cell.green { background: var(--good); } .cell.watch { background: var(--warn); } .cell.red { background: var(--bad); }
+  /* Not a test result (Rick 2026-10-15): the build hung, the machine or the
+     automation glitched. A neutral cell with a white "?", never a colour
+     that reads as pass or fail. */
+  .cell.did_not_run { background: var(--muted); position: relative; }
+  .cell.did_not_run::after { content: "?"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 11px; font-weight: 700; line-height: 1; }
+  .legend .sw.q { background: var(--muted); color: #fff; font-size: 9px; font-weight: 700; line-height: 10px; text-align: center; width: 12px; height: 12px; }
   .cell:hover, .cell:focus { outline: 2px solid var(--fg); outline-offset: 1px; }
   .mark { position: relative; height: 10px; font-size: 10px; color: var(--muted); }
   .mark b { position: absolute; left: 0; top: -2px; width: 2px; height: 14px; background: var(--purple); display: block; }
@@ -220,7 +227,7 @@
     <span><i class="sw" style="background:var(--good)"></i> all tests passed</span>
     <span><i class="sw" style="background:var(--warn)"></i> a few tests failed (fewer than 10)</span>
     <span><i class="sw" style="background:var(--bad)"></i> broken: 10 or more failed, a crashed test host, or a run killed part-way</span>
-    <span><i class="sw" style="background:var(--amber)"></i> did not run (build timeout, no tests ran)</span>
+    <span><i class="sw q">?</i> did not run: the build hung, or the machine or automation glitched — not a test result</span>
     <span><i class="sw" style="background:var(--cell-none)"></i> no nightly that night</span>
     <span><i class="sw" style="background:var(--purple); width:2px"></i> demo tag</span>
   </div>
