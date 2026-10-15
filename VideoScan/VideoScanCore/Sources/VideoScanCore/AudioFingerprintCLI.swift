@@ -112,6 +112,7 @@ public enum AudioFingerprintCLI {
         case .masterContainedInQuery(let o): return String(format: "MASTER IS A CLIP OF QUERY (starts at %.1f s)", o)
         case .overlap(let o, let s): return String(format: "OVERLAP %.0f s (query starts at %.1f s in master)", s, o)
         case .different: return "DIFFERENT"
+        case .inconclusive(let reason): return "INCONCLUSIVE (\(reason))"
         }
     }
 

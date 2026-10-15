@@ -65,6 +65,15 @@ public enum AudioMatchVerdict: Sendable, Equatable {
     /// `offsetSeconds` in the master's timeline (may be negative).
     case overlap(offsetSeconds: Double, seconds: Double)
     case different
+    /// No verdict can honestly be given; `reason` says why. Never a claim
+    /// about the recordings.
+    case inconclusive(reason: AudioMatchInconclusiveReason)
+}
+
+public enum AudioMatchInconclusiveReason: Sendable, Equatable {
+    /// The two fingerprints were made by different recipes (or grids) and
+    /// their hashes do not mean the same thing. Re-fingerprint one side.
+    case incompatibleRecipe(query: UInt32, master: UInt32)
 }
 
 /// The numbers a verdict is judged on — kept separate from the verdict so
@@ -147,6 +156,11 @@ public struct AudioFingerprintIndex: Sendable {
     public var distinctHashes: Int { postings.count }
 
     public func match(_ query: AudioFingerprint, policy: AudioMatchPolicy = .default) -> AudioMatch {
+        guard query.recipeMatches(master) else {
+            return Self.noMatch(query: query, master: master, policy: policy,
+                                verdict: .inconclusive(reason: .incompatibleRecipe(query: query.recipeID,
+                                                                                   master: master.recipeID)))
+        }
         let hop = query.hopSeconds
         let queryFrames = Int(query.durationSeconds / hop) + 1
         let masterFrames = Int(master.durationSeconds / hop) + 1
@@ -218,11 +232,11 @@ public struct AudioFingerprintIndex: Sendable {
     }
 
     private static func noMatch(query: AudioFingerprint, master: AudioFingerprint,
-                                policy: AudioMatchPolicy) -> AudioMatch {
+                                policy: AudioMatchPolicy, verdict: AudioMatchVerdict = .different) -> AudioMatch {
         let evidence = AudioMatchEvidence(matchedLandmarks: 0, coverage: 0, overlapSeconds: 0, spanSeconds: 0,
                                           offsetSeconds: 0, queryDurationSeconds: query.durationSeconds,
                                           masterDurationSeconds: master.durationSeconds)
-        return AudioMatch(evidence: evidence, verdict: .different, queryLandmarks: query.landmarkCount,
+        return AudioMatch(evidence: evidence, verdict: verdict, queryLandmarks: query.landmarkCount,
                           masterLandmarks: master.landmarkCount, spanStartInMasterSeconds: 0,
                           spanEndInMasterSeconds: 0)
     }

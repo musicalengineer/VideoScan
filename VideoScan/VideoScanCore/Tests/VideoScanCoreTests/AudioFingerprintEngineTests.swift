@@ -112,6 +112,113 @@ struct AudioFingerprintEngineTests {
         #expect(AudioFingerprint.compute(pcm).landmarkCount == 0)
     }
 
+    // MARK: Fingerprint — invariants (codex F3)
+
+    /// A VSAF blob whose header says hop 0 (or sample rate 0, or a frame
+    /// size that is not a power of two) must be refused at decode time, not
+    /// trap later in the matcher's `duration / hopSeconds`.
+    @Test func vsafWithHopZeroIsRefused() throws {
+        let pcm = AudioPCM(sampleRate: 8_000, samples: tenSecondTone())
+        let sound = AudioFingerprint.compute(pcm).encoded()
+        #expect(AudioFingerprint(decoding: sound) != nil, "a sound blob decodes")
+        func patched(_ offset: Int, _ value: UInt32) -> Data {
+            var data = sound
+            withUnsafeBytes(of: value.littleEndian) { data.replaceSubrange(offset..<(offset + 4), with: $0) }
+            return data
+        }
+        let hopZero = patched(AudioFingerprint.hopFieldOffset, 0)
+        #expect(AudioFingerprint(decoding: hopZero) == nil, "hop 0 must not decode")
+        #expect(throws: AudioFingerprint.DecodingError.invalidHeader(.hopOutOfRange(hop: 0, frameSize: 1_024))) {
+            try AudioFingerprint.decode(hopZero)
+        }
+        #expect(throws: AudioFingerprint.DecodingError.invalidHeader(.sampleRateNotPositive(0))) {
+            try AudioFingerprint.decode(patched(AudioFingerprint.sampleRateFieldOffset, 0))
+        }
+        #expect(throws: AudioFingerprint.DecodingError.invalidHeader(.frameSizeNotPowerOfTwo(1_000))) {
+            try AudioFingerprint.decode(patched(AudioFingerprint.frameSizeFieldOffset, 1_000))
+        }
+        #expect(throws: AudioFingerprint.DecodingError.invalidHeader(.hopOutOfRange(hop: 512, frameSize: 256))) {
+            try AudioFingerprint.decode(patched(AudioFingerprint.frameSizeFieldOffset, 256))
+        }
+        #expect(throws: AudioFingerprint.DecodingError.badMagic) {
+            try AudioFingerprint.decode(Data("VSAX".utf8) + sound.dropFirst(4))
+        }
+        var versionOne = sound
+        versionOne[4] = 1; versionOne[5] = 0
+        #expect(throws: AudioFingerprint.DecodingError.unsupportedVersion(1)) {
+            try AudioFingerprint.decode(versionOne)
+        }
+        #expect(throws: AudioFingerprint.DecodingError.sizeMismatch(expected: sound.count, actual: sound.count - 4)) {
+            try AudioFingerprint.decode(sound.dropLast(4))
+        }
+        #expect(throws: AudioFingerprint.DecodingError.tooShort(bytes: 10)) {
+            try AudioFingerprint.decode(sound.prefix(10))
+        }
+    }
+
+    @Test func parametersOutsideTheHashFieldsAreRejected() {
+        var p = AudioFingerprintParameters()
+        #expect(p.isValid)
+        p.maxDeltaFrames = 65
+        #expect(throws: AudioFingerprintParameters.ValidationError.deltaFramesOutOfRange(min: 1, max: 65, limit: 63)) {
+            try p.validate()
+        }
+        p = .default; p.frameSize = 2_048; p.hopSamples = 1_024
+        #expect(throws: AudioFingerprintParameters.ValidationError.frameSizeExceedsHashField(frameSize: 2_048, limit: 1_024)) {
+            try p.validate()
+        }
+        p = .default; p.hopSamples = 0
+        #expect(throws: AudioFingerprintParameters.ValidationError.hopOutOfRange(hop: 0, frameSize: 1_024)) {
+            try p.validate()
+        }
+        p = .default; p.hopSamples = 2_000
+        #expect(throws: AudioFingerprintParameters.ValidationError.hopOutOfRange(hop: 2_000, frameSize: 1_024)) {
+            try p.validate()
+        }
+        p = .default; p.frameSize = 1_000; p.hopSamples = 500
+        #expect(throws: AudioFingerprintParameters.ValidationError.frameSizeNotPowerOfTwo(1_000)) { try p.validate() }
+        p = .default; p.sampleRate = 0
+        #expect(throws: AudioFingerprintParameters.ValidationError.sampleRateNotPositive(0)) { try p.validate() }
+        p = .default; p.minDeltaFrames = 0
+        #expect(!p.isValid)
+    }
+
+    /// Sensor: the default recipe's identity. If this changes, a knob (or
+    /// `algorithmRevision`) changed and every stored fingerprint is stale —
+    /// that must be a decision, not an accident. Value computed
+    /// independently (Python FNV-1a over the same words).
+    @Test func defaultRecipeIDIsPinned() {
+        #expect(AudioFingerprintParameters.default.recipeID == 0xA470_4CC0)
+        var p = AudioFingerprintParameters()
+        p.maxDeltaBins = 64
+        #expect(p.recipeID != AudioFingerprintParameters.default.recipeID)
+        let pcm = AudioPCM(sampleRate: 8_000, samples: tenSecondTone())
+        let f = AudioFingerprint.compute(pcm)
+        #expect(f.recipeID == AudioFingerprintParameters.default.recipeID)
+        #expect(f.version == 2)
+        #expect(AudioFingerprint(decoding: f.encoded())?.recipeID == f.recipeID)
+    }
+
+    /// A fingerprint made by another recipe is refused by the index with a
+    /// named reason — its hashes do not mean the same thing.
+    @Test func indexRefusesAFingerprintFromAnotherRecipe() {
+        let pcm = AudioPCM(sampleRate: 8_000, samples: tenSecondTone())
+        let master = AudioFingerprint.compute(pcm)
+        var other = AudioFingerprintParameters()
+        other.maxDeltaBins = 64
+        let foreign = AudioFingerprint.compute(pcm, parameters: other)
+        let index = AudioFingerprintIndex(master: master)
+        #expect(index.match(foreign).verdict
+                == .inconclusive(reason: .incompatibleRecipe(query: other.recipeID, master: master.recipeID)))
+        #expect(index.match(foreign).matchedLandmarks == 0)
+        #expect(index.match(master).verdict != .inconclusive(reason: .incompatibleRecipe(query: master.recipeID,
+                                                                                         master: master.recipeID)))
+    }
+
+    private func tenSecondTone() -> [Int16] {
+        (0..<(8_000 * 10)).map { Int16(sin(Double($0) * 2 * .pi * 440 / 8_000) * 12_000) }
+    }
+
     // MARK: Matcher — the pure verdict
 
     private func evidence(matched: Int = 500, coverage: Double = 0.9, overlap: Double, span: Double,

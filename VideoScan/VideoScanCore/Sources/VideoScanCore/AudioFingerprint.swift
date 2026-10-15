@@ -34,11 +34,22 @@ import Accelerate
 import Foundation
 
 /// Every knob of the fingerprint, in one place. The defaults ARE the
-/// fingerprint's version-1 recipe; change them and bump `currentVersion`.
+/// version-1 recipe. The recipe (algorithm revision + every knob) has its
+/// own identity, `recipeID`, written into each fingerprint: two
+/// fingerprints can only be compared when their recipes agree. That is
+/// separate from `AudioFingerprint.currentVersion` (the on-disk FORMAT) and
+/// from `AudioMatchPolicy` (how evidence is READ).
+///
+/// The knobs are plain `var`s so a caller can tune them, and `validate()`
+/// is the gate: `AudioFingerprint.compute` refuses invalid parameters
+/// loudly (a programmer error, like an out-of-range subscript), never by
+/// silently aliasing bits. (For Rick: validate() is the throwing
+/// front door for the backfill job to call once at start-up; the
+/// precondition in compute is the assert behind it.)
 public struct AudioFingerprintParameters: Sendable, Equatable {
     /// Expected PCM rate (the decoder's default).
     public var sampleRate: Int = 8_000
-    /// STFT size (power of two) and hop in samples.
+    /// STFT size (power of two, ≤ `maxFrameSize`) and hop in samples.
     public var frameSize: Int = 1_024
     public var hopSamples: Int = 512
     /// Peak neighbourhood: ± frames and ± bins.
@@ -68,16 +79,116 @@ public struct AudioFingerprintParameters: Sendable, Equatable {
 
     public var hopSeconds: Double { Double(hopSamples) / Double(sampleRate) }
     var binCount: Int { frameSize / 2 }
+
+    // MARK: Invariants
+
+    /// `dt` is packed in 6 bits: 1…63.
+    public static let deltaFramesLimit = 63
+    /// `f1`/`f2` are packed in 9 bits: bins 0…511, so frameSize/2 ≤ 512.
+    public static let maxFrameSize = 1_024
+    /// Bumped when the ALGORITHM changes with the knobs unchanged (a new
+    /// peak picker, say) so old fingerprints are not compared to new ones.
+    public static let algorithmRevision: UInt32 = 1
+
+    public enum ValidationError: Error, Equatable, Sendable {
+        case sampleRateNotPositive(Int)
+        /// Not a power of two, or below 8.
+        case frameSizeNotPowerOfTwo(Int)
+        /// More bins than the 9-bit hash field can name.
+        case frameSizeExceedsHashField(frameSize: Int, limit: Int)
+        /// hop must be 1…frameSize.
+        case hopOutOfRange(hop: Int, frameSize: Int)
+        /// Need 1 ≤ min ≤ max ≤ 63 (the 6-bit dt field).
+        case deltaFramesOutOfRange(min: Int, max: Int, limit: Int)
+        case deltaBinsNegative(Int)
+        case radiusNotPositive(time: Int, frequency: Int)
+        case countNotPositive(name: String, value: Int)
+        case gainOutOfRange(targetRMS: Float, maxGain: Float)
+    }
+
+    /// Every invariant the hash packing and the STFT rely on. Throws the
+    /// FIRST violation found (top to bottom).
+    public func validate() throws {
+        guard sampleRate > 0 else { throw ValidationError.sampleRateNotPositive(sampleRate) }
+        try Self.validateFrame(sampleRate: sampleRate, frameSize: frameSize, hopSamples: hopSamples)
+        guard minDeltaFrames >= 1, minDeltaFrames <= maxDeltaFrames, maxDeltaFrames <= Self.deltaFramesLimit else {
+            throw ValidationError.deltaFramesOutOfRange(min: minDeltaFrames, max: maxDeltaFrames,
+                                                        limit: Self.deltaFramesLimit)
+        }
+        guard maxDeltaBins >= 0 else { throw ValidationError.deltaBinsNegative(maxDeltaBins) }
+        guard timeRadius >= 1, frequencyRadius >= 1 else {
+            throw ValidationError.radiusNotPositive(time: timeRadius, frequency: frequencyRadius)
+        }
+        guard maxPeaksPerFrame >= 1 else {
+            throw ValidationError.countNotPositive(name: "maxPeaksPerFrame", value: maxPeaksPerFrame)
+        }
+        guard fanOut >= 1 else { throw ValidationError.countNotPositive(name: "fanOut", value: fanOut) }
+        guard targetRMS > 0, targetRMS <= 1, maxGain >= 1 else {
+            throw ValidationError.gainOutOfRange(targetRMS: targetRMS, maxGain: maxGain)
+        }
+    }
+
+    /// The part of `validate()` a decoded VSAF header is held to as well.
+    static func validateFrame(sampleRate: Int, frameSize: Int, hopSamples: Int) throws {
+        guard sampleRate > 0 else { throw ValidationError.sampleRateNotPositive(sampleRate) }
+        guard frameSize >= 8, frameSize & (frameSize - 1) == 0 else {
+            throw ValidationError.frameSizeNotPowerOfTwo(frameSize)
+        }
+        guard frameSize <= Self.maxFrameSize else {
+            throw ValidationError.frameSizeExceedsHashField(frameSize: frameSize, limit: Self.maxFrameSize)
+        }
+        guard hopSamples >= 1, hopSamples <= frameSize else {
+            throw ValidationError.hopOutOfRange(hop: hopSamples, frameSize: frameSize)
+        }
+    }
+
+    public var isValid: Bool {
+        do { try validate(); return true } catch { return false }
+    }
+
+    /// Identity of the recipe: FNV-1a (32-bit) over the algorithm revision
+    /// and every knob, in declaration order, as little-endian 32-bit words
+    /// (floats by bit pattern). Deterministic across machines.
+    public var recipeID: UInt32 {
+        var hash: UInt32 = 0x811C_9DC5
+        func mix(_ word: UInt32) {
+            for shift in stride(from: 0, to: 32, by: 8) {
+                hash ^= (word >> UInt32(shift)) & 0xFF
+                hash = hash &* 0x0100_0193
+            }
+        }
+        mix(Self.algorithmRevision)
+        for value in [sampleRate, frameSize, hopSamples, timeRadius, frequencyRadius, maxPeaksPerFrame] {
+            mix(UInt32(truncatingIfNeeded: value))
+        }
+        for value in [targetRMS, maxGain, floorDB, aboveFrameMeanDB] { mix(value.bitPattern) }
+        for value in [fanOut, minDeltaFrames, maxDeltaFrames, maxDeltaBins] {
+            mix(UInt32(truncatingIfNeeded: value))
+        }
+        return hash
+    }
 }
 
 public struct AudioFingerprint: Sendable, Equatable {
-    public static let currentVersion: UInt16 = 1
+    /// On-disk FORMAT version (the header layout below). 2 = recipeID added
+    /// (codex F3, 2026-10-14). Nothing persisted at version 1.
+    public static let currentVersion: UInt16 = 2
     /// First four bytes of the binary encoding.
     public static let magic: [UInt8] = Array("VSAF".utf8)
-    /// magic 4 + version 2 + sampleRate 4 + hop 4 + frameSize 4 + duration 8 + count 4.
-    static let headerBytes = 30
+    /// Header layout (little-endian):
+    ///   magic 4 | version u16 | recipeID u32 | sampleRate u32 | hop u32 |
+    ///   frameSize u32 | durationSeconds f64 | landmarkCount u32
+    /// then `hashes` (u32 × count) and `times` (u32 × count).
+    static let headerBytes = 34
+    static let recipeFieldOffset = 6
+    static let sampleRateFieldOffset = 10
+    /// Byte offset of the hop field in the header (tests patch it).
+    static let hopFieldOffset = 14
+    static let frameSizeFieldOffset = 18
 
     public let version: UInt16
+    /// `AudioFingerprintParameters.recipeID` of the recipe that made this.
+    public let recipeID: UInt32
     public let sampleRate: Int
     public let hopSamples: Int
     public let frameSize: Int
@@ -86,9 +197,17 @@ public struct AudioFingerprint: Sendable, Equatable {
     public let hashes: [UInt32]
     public let times: [UInt32]
 
-    public init(version: UInt16 = AudioFingerprint.currentVersion, sampleRate: Int, hopSamples: Int,
-                frameSize: Int, durationSeconds: Double, hashes: [UInt32], times: [UInt32]) {
+    /// Memberwise; `sampleRate`, `hopSamples` and `frameSize` must be
+    /// positive (decode and compute validate before they get here).
+    public init(version: UInt16 = AudioFingerprint.currentVersion,
+                recipeID: UInt32 = AudioFingerprintParameters.default.recipeID,
+                sampleRate: Int, hopSamples: Int, frameSize: Int, durationSeconds: Double,
+                hashes: [UInt32], times: [UInt32]) {
+        precondition(sampleRate > 0 && hopSamples > 0 && frameSize > 0,
+                     "AudioFingerprint: sampleRate, hopSamples and frameSize must be positive")
+        precondition(hashes.count == times.count, "AudioFingerprint: hashes and times must be parallel")
         self.version = version
+        self.recipeID = recipeID
         self.sampleRate = sampleRate
         self.hopSamples = hopSamples
         self.frameSize = frameSize
@@ -101,6 +220,13 @@ public struct AudioFingerprint: Sendable, Equatable {
     public var hopSeconds: Double { Double(hopSamples) / Double(sampleRate) }
     /// Exactly `encoded().count`.
     public var estimatedBytes: Int { Self.headerBytes + 8 * hashes.count }
+
+    /// True when `other` was made by the same recipe on the same grid, so
+    /// the two may be matched.
+    public func recipeMatches(_ other: AudioFingerprint) -> Bool {
+        recipeID == other.recipeID && sampleRate == other.sampleRate
+            && hopSamples == other.hopSamples && frameSize == other.frameSize
+    }
 
     // MARK: Hash packing — f1: 9 bits, f2: 9 bits, dt: 6 bits (24 used)
 
@@ -118,6 +244,7 @@ public struct AudioFingerprint: Sendable, Equatable {
         var data = Data(capacity: estimatedBytes)
         data.append(contentsOf: Self.magic)
         Self.append(version, to: &data)
+        Self.append(recipeID, to: &data)
         Self.append(UInt32(sampleRate), to: &data)
         Self.append(UInt32(hopSamples), to: &data)
         Self.append(UInt32(frameSize), to: &data)
@@ -128,21 +255,56 @@ public struct AudioFingerprint: Sendable, Equatable {
         return data
     }
 
-    /// nil when the bytes are not a version-1 fingerprint of the stated size.
-    public init?(decoding data: Data) {
-        guard data.count >= Self.headerBytes, Array(data.prefix(4)) == Self.magic else { return nil }
+    /// Why a blob was refused. Every case is a fact about the bytes.
+    public enum DecodingError: Error, Equatable, Sendable {
+        case tooShort(bytes: Int)
+        case badMagic
+        case unsupportedVersion(UInt16)
+        /// The landmark count in the header does not match the byte count.
+        case sizeMismatch(expected: Int, actual: Int)
+        /// hop 0, sample rate 0, frame size not a power of two, hop > frame…
+        case invalidHeader(AudioFingerprintParameters.ValidationError)
+    }
+
+    /// The bytes, or a named reason they are not a current-version
+    /// fingerprint. A header the matcher could trap on (hop 0, sample
+    /// rate 0, a frame size that is not a power of two) is refused HERE.
+    public static func decode(_ data: Data) throws -> AudioFingerprint {
+        guard data.count >= Self.headerBytes else { throw DecodingError.tooShort(bytes: data.count) }
+        guard Array(data.prefix(4)) == Self.magic else { throw DecodingError.badMagic }
         var reader = LittleEndianReader(data: data, offset: 4)
-        guard let version: UInt16 = reader.read(), version == Self.currentVersion,
+        guard let version: UInt16 = reader.read(), let recipeID: UInt32 = reader.read(),
               let sampleRate: UInt32 = reader.read(), let hop: UInt32 = reader.read(),
               let frameSize: UInt32 = reader.read(), let durationBits: UInt64 = reader.read(),
-              let count: UInt32 = reader.read(),
-              data.count == Self.headerBytes + 8 * Int(count) else { return nil }
+              let count: UInt32 = reader.read() else { throw DecodingError.tooShort(bytes: data.count) }
+        guard version == Self.currentVersion else { throw DecodingError.unsupportedVersion(version) }
+        let expected = Self.headerBytes + 8 * Int(count)
+        guard data.count == expected else { throw DecodingError.sizeMismatch(expected: expected, actual: data.count) }
+        do {
+            try AudioFingerprintParameters.validateFrame(sampleRate: Int(sampleRate), frameSize: Int(frameSize),
+                                                         hopSamples: Int(hop))
+        } catch let error as AudioFingerprintParameters.ValidationError {
+            throw DecodingError.invalidHeader(error)
+        }
         var hashes = [UInt32](), times = [UInt32]()
         hashes.reserveCapacity(Int(count)); times.reserveCapacity(Int(count))
-        for _ in 0..<count { guard let h: UInt32 = reader.read() else { return nil }; hashes.append(h) }
-        for _ in 0..<count { guard let t: UInt32 = reader.read() else { return nil }; times.append(t) }
-        self.init(version: version, sampleRate: Int(sampleRate), hopSamples: Int(hop), frameSize: Int(frameSize),
-                  durationSeconds: Double(bitPattern: durationBits), hashes: hashes, times: times)
+        for _ in 0..<count {
+            guard let h: UInt32 = reader.read() else { throw DecodingError.tooShort(bytes: data.count) }
+            hashes.append(h)
+        }
+        for _ in 0..<count {
+            guard let t: UInt32 = reader.read() else { throw DecodingError.tooShort(bytes: data.count) }
+            times.append(t)
+        }
+        return AudioFingerprint(version: version, recipeID: recipeID, sampleRate: Int(sampleRate),
+                                hopSamples: Int(hop), frameSize: Int(frameSize),
+                                durationSeconds: Double(bitPattern: durationBits), hashes: hashes, times: times)
+    }
+
+    /// nil when the bytes are not a current-version fingerprint; `decode`
+    /// says why.
+    public init?(decoding data: Data) {
+        do { self = try Self.decode(data) } catch { return nil }
     }
 
     private static func append<T: FixedWidthInteger>(_ value: T, to data: inout Data) {
@@ -152,14 +314,23 @@ public struct AudioFingerprint: Sendable, Equatable {
     // MARK: Compute
 
     /// The fingerprint of `pcm`. Pure and deterministic: equal samples give
-    /// equal landmarks on every run and every Mac.
+    /// equal landmarks on every run and every Mac. Invalid `parameters`, or
+    /// PCM at a rate other than the recipe's, are programmer errors and
+    /// trap with the reason (call `parameters.validate()` first to get it
+    /// as a thrown value).
     public static func compute(_ pcm: AudioPCM,
                                parameters: AudioFingerprintParameters = .default) -> AudioFingerprint {
+        do { try parameters.validate() } catch {
+            preconditionFailure("AudioFingerprint.compute: invalid parameters — \(error)")
+        }
+        precondition(pcm.sampleRate == parameters.sampleRate,
+                     "AudioFingerprint.compute: PCM is \(pcm.sampleRate) Hz, recipe expects \(parameters.sampleRate)")
         let gain = normalisingGain(pcm.samples, parameters: parameters)
         let peaks = SpectralPeakPicker(parameters: parameters)?.peaks(in: pcm.samples, gain: gain) ?? []
         let landmarks = LandmarkPairer.pair(peaks, parameters: parameters)
-        return AudioFingerprint(sampleRate: pcm.sampleRate, hopSamples: parameters.hopSamples,
-                                frameSize: parameters.frameSize, durationSeconds: pcm.durationSeconds,
+        return AudioFingerprint(recipeID: parameters.recipeID, sampleRate: pcm.sampleRate,
+                                hopSamples: parameters.hopSamples, frameSize: parameters.frameSize,
+                                durationSeconds: pcm.durationSeconds,
                                 hashes: landmarks.hashes, times: landmarks.times)
     }
 
