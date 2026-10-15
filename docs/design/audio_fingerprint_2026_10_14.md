@@ -33,8 +33,11 @@ Swift package `VideoScan/VideoScanCore`, three new source files plus one CLI tar
 pipe is drained continuously, the deadline escalates SIGTERM → SIGKILL → abandon, and no new `Process()` site
 appears. No temp file, no output path other than `-`. The result is `AudioPCM { sampleRate, samples: [Int16] }`.
 
-- Hard cap: `-t` is always passed (default 4 h = 14 400 s) AND the sink drops bytes past the cap. Worst case
-  in RAM: 4 h × 8 000 × 2 B = 230 MB of Int16; a 16-minute file is 15 MB.
+- Hard cap: `-t` is always passed (default 4 h = 14 400 s) AND the sink drops samples past the cap. Worst case
+  in RAM: 4 h × 8 000 × 2 B = 230 MB of Int16; a 16-minute file is 15 MB. Bytes are converted to Int16 chunk
+  by chunk (one `[Int16]`, capacity reserved for the cap — virtual until written), so the peak is the PCM plus
+  one chunk, measured 52 MB for an hour (codex F5). A decode that fills the cap (or a window) says so:
+  `AudioPCM.reachedCap` (codex F2) — the fingerprint made from it is `complete == false`.
 - Named outcomes (`AudioPCMDecoder.Failure`): `.ffmpegMissing(path)`, `.noAudioStream` (ffmpeg's "does not
   contain any stream", or exit 0 with zero bytes), `.decodeFailed(exitCode, stderrTail)` (0-byte or damaged
   input), `.timedOut`. A video-only file is a named outcome, never a crash.
@@ -53,26 +56,53 @@ Landmarks: each peak is an **anchor**; its targets are the next `fanOut` peaks i
 the anchor frame is the `UInt32` time. All knobs live in `AudioFingerprintParameters` (one struct, defaults).
 
 Value type, `Sendable`, deterministic for equal input bytes:
-`AudioFingerprint { version, sampleRate, hopSamples, frameSize, durationSeconds, hashes: [UInt32], times: [UInt32] }`,
-with `encoded() -> Data` (magic `VSAF`, little-endian, versioned) and `init(decoding:)`, and `estimatedBytes`.
-The spectrogram is never held whole: a ring of 2×3+1 frames feeds peak picking and a sliding peak window feeds
-pairing, so memory is O(seconds), not O(file). The PCM itself is the only O(file) buffer.
+`AudioFingerprint { version, recipeID, sampleRate, hopSamples, frameSize, durationSeconds (= analyzedSeconds),
+complete, activeSeconds: [Bool], hashes: [UInt32], times: [UInt32] }`, with `encoded() -> Data` and
+`init?(decoding:)` / `decode(_:) throws DecodingError`, and `estimatedBytes` (exactly `encoded().count`).
+
+**VSAF version 2** (codex r1, 2026-10-14; nothing was persisted at v1), little-endian, header 39 B:
+`magic "VSAF" | version u16 | recipeID u32 | flags u8 (bit 0 = complete) | sampleRate u32 | hop u32 |
+frameSize u32 | analyzedSeconds f64 | landmarkCount u32 | activeSecondCount u32`, then `hashes` (u32 × n),
+`times` (u32 × n), then the audible-seconds bitmap (one bit per second, LSB first, byte-padded).
+`decode` refuses, by name, a bad magic, another version, a size that disagrees with the counts, and any header
+the matcher could trap on (hop 0, sample rate 0, frame size not a power of two or above 1024, hop > frame).
+
+- `recipeID` = FNV-1a over `AudioFingerprintParameters.algorithmRevision` and every knob (codex F3). The
+  default recipe is pinned at `0x40000ADE` by a test; the matcher refuses to compare two recipes
+  (`.inconclusive(.incompatibleRecipe)`). `AudioFingerprintParameters.validate()` throws the first violated
+  invariant (dt 1…63, frame size power of two ≤ 1024, 1 ≤ hop ≤ frame, …); `compute` preconditions on it.
+- `activeSeconds` (codex F1): second *i* is **audible** when its RMS after normalisation is above
+  `activeFloorDB` (−60 dBFS). The matcher's coverage and gap are measured over audible seconds only; silence
+  is evidence for nothing.
+
+The spectrogram is never held whole: the picker allocates its rings (2×3+1 level and dilated frames), FFT
+buffers and candidate list once per `compute` and writes every frame in place (codex F5: no per-frame arrays).
+Memory is O(seconds), not O(file); fingerprinting an hour grows the process by ≈ 0 MB measured. The PCM
+itself is the only O(file) buffer.
 
 ## 3. Match — `AudioFingerprintMatcher`
 
-`AudioFingerprintIndex(master:)` builds `[UInt32: [UInt32]]` (hash → anchor frames). `match(query:)` votes
-`tMaster − tQuery` into an offset histogram (an array over the possible frame deltas, negative deltas allowed);
-the best bin with ±1-frame tolerance wins. (For Rick: a Hough transform on one parameter, the time offset.)
+`AudioFingerprintIndex(master:)` builds `[UInt32: [UInt32]]` (hash → anchor frames; ≈ 7 MB measured for an
+hour). `match(query:)` votes `tMaster − tQuery` into an offset histogram (an array over the possible frame
+deltas, negative deltas allowed); the best bin with ±1-frame tolerance wins. (For Rick: a Hough transform on
+one parameter, the time offset.) A hash the master holds more than `policy.maxPostingsPerHash` (64) times is
+skipped in both passes — it says nothing about *where* the query is — and the second pass stops at the first
+hit, so work per query landmark is bounded (codex F4: 100k × 100k same-hash landmarks match in 0.35 s).
 From the winning offset: `matchedLandmarks` (distinct query landmarks in the winning bins), `offsetSeconds`
-(centroid of the three bins × hop), `coverage` (fraction of the query's 1-s buckets, within the part of the
-query that lies inside the master at that offset, that had a match), `density` (matched ÷ query landmarks),
-`span` (the longest run of matched seconds, gaps ≤ 2 s bridged).
+(centroid of the three bins × hop), `coverage` (matched ÷ **audible** 1-s buckets of the query inside the
+master at that offset), `unmatchedGapSeconds` (longest stretch of audible, unmatched query seconds in the
+overlap), `density` (matched ÷ query landmarks), `span` (the longest run of matched seconds, ≤ 2 audible gaps
+bridged, silence transparent).
 
-`AudioMatchVerdict` is a pure function of those numbers and `AudioMatchPolicy` (one struct of named thresholds):
-`.sameRecording` (coverage ≥ bar and both files lie inside the overlap within the edge tolerance),
-`.containedInMaster(offset)` (query lies inside the master), `.masterContainedInQuery(offset)` (roles reversed;
-offset = where the master starts in the query), `.overlap(offset, seconds)` (coverage below the bar or a
-partial overlap, but a matched run ≥ the minimum), `.different` (too few landmarks or no run).
+`AudioMatchVerdict` is a pure, total function of that evidence and `AudioMatchPolicy` (one struct of named
+thresholds; the decision table is in its header comment). Rows, first match wins:
+1. too few landmarks → `.different`; 2. span < `minOverlapSeconds` (5 s) → `.different` on every branch;
+3. coverage < 0.5 **or** gap > `maxUnmatchedGapSeconds` (10 s) → `.overlap(offset, span)` (real but not
+distributed: codex F1); 4. geometry × completeness: both inside and both complete → `.sameRecording`; query
+inside → `.containedInMaster(offset)`; master inside → `.masterContainedInQuery(offset)`; neither →
+`.overlap`. An **incomplete** side (capped or windowed decode, codex F2) can be contained but never "same"
+or containing: those rows become `.inconclusive(.queryIncomplete | .masterIncomplete | .bothIncomplete)`,
+evidence still reported. `.inconclusive(.incompatibleRecipe)` when the recipes differ.
 
 ## 4. Out of scope (deliberately)
 
@@ -84,7 +114,8 @@ by content identity). That is an architectural decision for Rick, after the numb
 ## Tests (frozen before results)
 
 `Tests/VideoScanCoreTests/AudioFingerprintAcceptanceTests.swift` (+ `AudioFingerprintFixtures.swift`,
-`AudioFingerprintEngineTests.swift`). Synthetic "speech-like" audio from a seeded PRNG, written as 8 kHz WAV,
+`AudioFingerprintEngineTests.swift`; the codex r1 pins live in the engine tests — see
+`docs/reviews/codex/codex-review-2026-10-14-audio-fingerprint-engine.md` § Closure). Synthetic "speech-like" audio from a seeded PRNG, written as 8 kHz WAV,
 variants made with ffmpeg at test time in a `test_`-prefixed temp dir. Masters A, B, C (180 s), D = [B 0–30 |
 A | C 0–30] (240 s), E = A with its last 120 s replaced by C. Positive pairs must give the expected verdict with
 |offset error| ≤ 0.1 s; negatives must be `.different`; min positive matchedLandmarks ÷ max negative
