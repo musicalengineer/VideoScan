@@ -276,7 +276,7 @@ struct ShowAgainApplyTests {
     @Test("THE goal (2026-10-14): a row hidden by the load migration's legacy marker is shown again — marker cleared, live, back in Cleanup's inputs; the log says the marker went")
     func legacyMarkerRowShownAgain() async throws {
         let sb = try ShowAgainSandbox.make("legacy"); defer { sb.cleanup() }
-        let since = Date(timeIntervalSince1970: 1_760_300_000)
+        let since = Date(timeIntervalSince1970: 1_760_300_000.25)
         let hidden = try sb.record("Thanksgiving_1994.dv", bytes: 4_096)
         VideoScanModel.stampRemoval(hidden, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
         let trashed = try sb.record("in_trash.mov", bytes: 2_048)
@@ -307,7 +307,7 @@ struct ShowAgainApplyTests {
     @Test("put back restores BOTH the legacy marker (same since) and the label; the receipt names the marker; label-only rows get the label only")
     func reversePutsTheMarkerBack() async throws {
         let sb = try ShowAgainSandbox.make("legacyreverse"); defer { sb.cleanup() }
-        let since = Date(timeIntervalSince1970: 1_760_300_000)
+        let since = Date(timeIntervalSince1970: 1_760_300_000.25)
         let hidden = try sb.record("Easter_1992.dv", bytes: 3_072)
         VideoScanModel.stampRemoval(hidden, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
         let labelOnly = try sb.record("label_only.mov", bytes: 2_048)
@@ -338,7 +338,7 @@ struct ShowAgainApplyTests {
     @Test("QA P3-1: put back on a marker-only row restores the marker and NO label — the receipt's `from` is the stage the row really had")
     func reverseOnMarkerOnlyRowIsExact() async throws {
         let sb = try ShowAgainSandbox.make("markeronly"); defer { sb.cleanup() }
-        let since = Date(timeIntervalSince1970: 1_760_300_000)
+        let since = Date(timeIntervalSince1970: 1_760_300_000.25)
         let r = try sb.record("marker_only.mov", bytes: 2_048, stage: .none)
         VideoScanModel.stampRemoval(r, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
         let reviewed = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
@@ -357,7 +357,7 @@ struct ShowAgainApplyTests {
     @Test("QA P3-2: a label-hidden row with a legacy Trashed stage (file proven on disk) goes to Cataloged on the run; put back restores marker + label, not the stage")
     func legacyTrashedStageBecomesCataloged() async throws {
         let sb = try ShowAgainSandbox.make("trashedstage"); defer { sb.cleanup() }
-        let since = Date(timeIntervalSince1970: 1_760_300_000)
+        let since = Date(timeIntervalSince1970: 1_760_300_000.25)
         let r = try sb.record("once_trashed.mov", bytes: 2_048)
         r.lifecycleStage = .trashed                     // the pre-#143 mirror, with no purgedAt: migrated to the legacy marker
         VideoScanModel.stampRemoval(r, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
@@ -370,6 +370,49 @@ struct ShowAgainApplyTests {
         #expect(rev.restored == 1, "\(rev)")
         #expect(r.removal == .removedFromCatalog(at: since, reason: .legacyDeletedLabel) && r.archiveStage == .manuallyDeleted)
         #expect(r.lifecycleStage == .cataloged, "the stage is not put back — it was the truer value")
+    }
+
+    @Test("codex r1 P2-1: a legacy-marker row with another label (Backed Up) — receipt says from == to == Backed Up; put back restores the marker and leaves the label alone")
+    func otherLabelRowReceiptIsExact() async throws {
+        let sb = try ShowAgainSandbox.make("otherlabel"); defer { sb.cleanup() }
+        let since = Date(timeIntervalSince1970: 1_760_300_000.25)
+        let r = try sb.record("backed_up.mov", bytes: 2_048, stage: .backedUp)
+        VideoScanModel.stampRemoval(r, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
+        let reviewed = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
+        let result = await sb.model.applyShowAgain(reviewed: reviewed, disk: ShowAgainSandbox.onlineRealStat)
+        #expect(result.outcome == .shown && r.removal == nil && r.archiveStage == .backedUp, "\(result.outcome)")
+        let url = try #require(result.receiptURL)
+        let change = try #require(ShowAgainReceiptFile.decode(Data(contentsOf: url)).changes.first)
+        #expect(change.from == ArchiveStage.backedUp.rawValue && change.to == ArchiveStage.backedUp.rawValue, "\(change)")
+        let rev = await sb.model.reverseShowAgain(receiptURL: url)
+        #expect(rev.restored == 1 && rev.skipped.isEmpty, "\(rev)")
+        #expect(r.removal == .removedFromCatalog(at: since, reason: .legacyDeletedLabel), "\(String(describing: r.removal))")
+        #expect(r.archiveStage == .backedUp, "the run cleared no label, so none goes back")
+    }
+
+    @Test("codex r1 P2-2: while a scan runs, the run and the reverse both refuse before anything changes (a rescan's carry-over could re-stamp the marker outside the engine)")
+    func refusesWhileScanning() async throws {
+        let sb = try ShowAgainSandbox.make("scanning"); defer { sb.cleanup() }
+        let since = Date(timeIntervalSince1970: 1_760_300_000.25)
+        let r = try sb.record("mid_scan.mov", bytes: 2_048)
+        VideoScanModel.stampRemoval(r, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
+        let reviewed = await sb.model.showAgainReview(disk: ShowAgainSandbox.onlineRealStat)
+        #expect(reviewed.showCount == 1)
+        sb.model.isScanning = true
+        let why = "a scan is running — let it finish, then show the files again"
+        let result = await sb.model.applyShowAgain(reviewed: reviewed, disk: ShowAgainSandbox.onlineRealStat)
+        #expect(result.outcome == .refused(why), "\(result.outcome)")
+        #expect(r.removal != nil && r.archiveStage == .manuallyDeleted && result.receiptURL == nil, "nothing changed")
+        #expect(sb.model.showAgainPreflightRefusal(reviewed) == why)
+        // The reverse too: a receipt from an earlier run must wait as well.
+        sb.model.isScanning = false
+        let shown = await sb.model.applyShowAgain(reviewed: reviewed, disk: ShowAgainSandbox.onlineRealStat)
+        let url = try #require(shown.receiptURL)
+        sb.model.isScanning = true
+        let rev = await sb.model.reverseShowAgain(receiptURL: url)
+        #expect(rev.refusal == why && rev.restored == 0, "\(rev)")
+        #expect(r.removal == nil && r.archiveStage == .none, "the reverse changed nothing")
+        #expect(sb.catalogLogText().contains("refused — \(why)"))
     }
 
     @Test("a receipt from the 2026-10-11 build (no removalSince key) still decodes and reverses the label only")
