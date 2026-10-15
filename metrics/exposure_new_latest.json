@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-14T09:50:53Z",
- "sha": "6fe2b539",
+ "ts": "2026-10-15T09:31:43Z",
+ "sha": "baca9854",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
@@ -207,6 +207,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift::VideoScanModel.archiveJunkRouteSentence",
+   "file": "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift",
+   "name": "VideoScanModel.archiveJunkRouteSentence",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift::VideoScanModel.fingerprintStillNamesFile",
    "file": "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift",
    "name": "VideoScanModel.fingerprintStillNamesFile",
@@ -242,6 +249,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Catalog/CatalogStorageTotals.swift::CatalogStorageTotalsCalculator.isHiddenByDeletedLabel",
+   "file": "VideoScan/VideoScan/Catalog/CatalogStorageTotals.swift",
+   "name": "CatalogStorageTotalsCalculator.isHiddenByDeletedLabel",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Catalog/CatalogTrashConfirmation.swift::CatalogTrashConfirmation.onlyCopyCount",
    "file": "VideoScan/VideoScan/Catalog/CatalogTrashConfirmation.swift",
    "name": "CatalogTrashConfirmation.onlyCopyCount",
@@ -263,13 +277,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/Catalog/CleanupPane.swift::CleanupStore.builtAt",
-   "file": "VideoScan/VideoScan/Catalog/CleanupPane.swift",
-   "name": "CleanupStore.builtAt",
-   "kind": "var",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/Catalog/CleanupPane.swift::CleanupStore.isTicked",
    "file": "VideoScan/VideoScan/Catalog/CleanupPane.swift",
    "name": "CleanupStore.isTicked",
@@ -281,6 +288,13 @@
    "file": "VideoScan/VideoScan/Catalog/CleanupPane.swift",
    "name": "CleanupStore.setTicked",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CleanupPane.swift::CleanupWords.showAgainLink",
+   "file": "VideoScan/VideoScan/Catalog/CleanupPane.swift",
+   "name": "CleanupWords.showAgainLink",
+   "kind": "let",
    "classification": "could-be-private"
   },
   {
@@ -452,6 +466,55 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Catalog/EventDetailSheet.swift::EventMemberRow.onOpen",
+   "file": "VideoScan/VideoScan/Catalog/EventDetailSheet.swift",
+   "name": "EventMemberRow.onOpen",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/EventsPane.swift::ConfirmedCardRow.onDetails",
+   "file": "VideoScan/VideoScan/Catalog/EventsPane.swift",
+   "name": "ConfirmedCardRow.onDetails",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/EventsPane.swift::EventCardRow.onDetails",
+   "file": "VideoScan/VideoScan/Catalog/EventsPane.swift",
+   "name": "EventCardRow.onDetails",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/EventsPane.swift::EventsStore.shownConfirmed",
+   "file": "VideoScan/VideoScan/Catalog/EventsPane.swift",
+   "name": "EventsStore.shownConfirmed",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/EventsPane.swift::EventsStore.shownSuggestions",
+   "file": "VideoScan/VideoScan/Catalog/EventsPane.swift",
+   "name": "EventsStore.shownSuggestions",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/EventsPane.swift::EventsWords.noWordsYet",
+   "file": "VideoScan/VideoScan/Catalog/EventsPane.swift",
+   "name": "EventsWords.noWordsYet",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/EventsPane.swift::EventsWords.nothingConfirmed",
+   "file": "VideoScan/VideoScan/Catalog/EventsPane.swift",
+   "name": "EventsWords.nothingConfirmed",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Catalog/ExcessCopiesPane.swift::CleanUpSidebarSection.onSelectExcess",
    "file": "VideoScan/VideoScan/Catalog/ExcessCopiesPane.swift",
    "name": "CleanUpSidebarSection.onSelectExcess",
@@ -487,6 +550,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Catalog/ShowAgain+Apply.swift::VideoScanModel.scanRunningRefusal",
+   "file": "VideoScan/VideoScan/Catalog/ShowAgain+Apply.swift",
+   "name": "VideoScanModel.scanRunningRefusal",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Catalog/ShowAgain+Apply.swift::VideoScanModel.showAgainActiveGroupCounts",
    "file": "VideoScan/VideoScan/Catalog/ShowAgain+Apply.swift",
    "name": "VideoScanModel.showAgainActiveGroupCounts",
@@ -497,13 +567,6 @@
    "key": "VideoScan/VideoScan/Catalog/ShowAgain+Apply.swift::VideoScanModel.showAgainLiveMatches",
    "file": "VideoScan/VideoScan/Catalog/ShowAgain+Apply.swift",
    "name": "VideoScanModel.showAgainLiveMatches",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/Catalog/ShowAgain+Apply.swift::VideoScanModel.showAgainPreflightRefusal",
-   "file": "VideoScan/VideoScan/Catalog/ShowAgain+Apply.swift",
-   "name": "VideoScanModel.showAgainPreflightRefusal",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -519,6 +582,13 @@
    "file": "VideoScan/VideoScan/Catalog/ShowAgain+Apply.swift",
    "name": "VideoScanModel.writeShowAgainReceipt",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/ShowAgain.swift::RemovalMarker.isLegacyDeletedLabel",
+   "file": "VideoScan/VideoScan/Catalog/ShowAgain.swift",
+   "name": "RemovalMarker.isLegacyDeletedLabel",
+   "kind": "var",
    "classification": "could-be-private"
   },
   {
@@ -609,6 +679,300 @@
    "key": "VideoScan/VideoScan/Catalog/VolumeColumnAnchors.swift::VolumeColumnAnchors.isMeaningfulChange",
    "file": "VideoScan/VideoScan/Catalog/VolumeColumnAnchors.swift",
    "name": "VolumeColumnAnchors.isMeaningfulChange",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsDecisionStore.swift::EventsDecisionFile.init",
+   "file": "VideoScan/VideoScan/Events/EventsDecisionStore.swift",
+   "name": "EventsDecisionFile.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsDecisionStore.swift::EventsDecisionSnapshot.effectiveEvent",
+   "file": "VideoScan/VideoScan/Events/EventsDecisionStore.swift",
+   "name": "EventsDecisionSnapshot.effectiveEvent",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsDecisionStore.swift::EventsDecisionSnapshot.mergedInto",
+   "file": "VideoScan/VideoScan/Events/EventsDecisionStore.swift",
+   "name": "EventsDecisionSnapshot.mergedInto",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsDecisionStore.swift::EventsDecisionStore.lastSaveFailure",
+   "file": "VideoScan/VideoScan/Events/EventsDecisionStore.swift",
+   "name": "EventsDecisionStore.lastSaveFailure",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsDecisionStore.swift::EventsDecisionStore.statsFilename",
+   "file": "VideoScan/VideoScan/Events/EventsDecisionStore.swift",
+   "name": "EventsDecisionStore.statsFilename",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsDecisionStore.swift::EventsDecisionWriter.init",
+   "file": "VideoScan/VideoScan/Events/EventsDecisionStore.swift",
+   "name": "EventsDecisionWriter.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventWitness.bestStrength",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventWitness.bestStrength",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventWitness.dayInstant",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventWitness.dayInstant",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventWitness.init",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventWitness.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsDate.dayInstant",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsDate.dayInstant",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsDate.eventDay",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsDate.eventDay",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsDate.reliableYear",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsDate.reliableYear",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsLink.datedApart",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsLink.datedApart",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsLink.datedWithin",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsLink.datedWithin",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsLink.init",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsLink.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsLink.isBlocked",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsLink.isBlocked",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsLink.runHasEvidence",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsLink.runHasEvidence",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsLink.runKeys",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsLink.runKeys",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsLink.sharesFolder",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsLink.sharesFolder",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsLink.yearConflict",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsLink.yearConflict",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.CategoryFolder",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.CategoryFolder",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.Rules.adjacencyDays",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.Rules.adjacencyDays",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.Rules.longTapeSeconds",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.Rules.longTapeSeconds",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.Rules.spanDays",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.Rules.spanDays",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.Rules.strongMemberCount",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.Rules.strongMemberCount",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.Run.reliableYear",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.Run.reliableYear",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.asksSameOccasion",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.asksSameOccasion",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.blockedPartners",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.blockedPartners",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.confirmedEvents",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.confirmedEvents",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.lineageWords",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.lineageWords",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/EventsPlan.swift::EventsPlanner.memberIndex",
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "name": "EventsPlanner.memberIndex",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::EventsInputs.projectionNanos",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "EventsInputs.projectionNanos",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::EventsStats.Marks",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "EventsStats.Marks",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::EventsStats.candidateEvents",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "EventsStats.candidateEvents",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::EventsStats.clipsWithEvidence",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "EventsStats.clipsWithEvidence",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::EventsStats.marksNo",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "EventsStats.marksNo",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::EventsStats.marksYes",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "EventsStats.marksYes",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::EventsStats.precisionByCategory",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "EventsStats.precisionByCategory",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::EventsStats.strongEvents",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "EventsStats.strongEvents",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::VideoScanModel.eventsContentKey",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "VideoScanModel.eventsContentKey",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::VideoScanModel.eventsRow",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "VideoScanModel.eventsRow",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift::VideoScanModel.isInEventsScope",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+Events.swift",
+   "name": "VideoScanModel.isInEventsScope",
    "kind": "func",
    "classification": "could-be-private"
   },
@@ -820,6 +1184,34 @@
    "file": "VideoScan/VideoScan/Media/VideoScanModel+PerceptualFingerprints.swift",
    "name": "VideoScanModel.needsPerceptualFingerprint",
    "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/AudioFingerprintBackfill.swift::AudioDecodeBudget.bytesPerHour",
+   "file": "VideoScan/VideoScan/MediaOps/AudioFingerprintBackfill.swift",
+   "name": "AudioDecodeBudget.bytesPerHour",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/AudioFingerprintBackfill.swift::AudioFingerprintBackfillTotals.landmarksWord",
+   "file": "VideoScan/VideoScan/MediaOps/AudioFingerprintBackfill.swift",
+   "name": "AudioFingerprintBackfillTotals.landmarksWord",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/AudioFingerprintBackfillJob.swift::AudioFingerprintBackfillJob.fingerprintOffMain",
+   "file": "VideoScan/VideoScan/MediaOps/AudioFingerprintBackfillJob.swift",
+   "name": "AudioFingerprintBackfillJob.fingerprintOffMain",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/AudioFingerprintBackfillJob.swift::AudioFingerprintBackfillJob.progressLogFiles",
+   "file": "VideoScan/VideoScan/MediaOps/AudioFingerprintBackfillJob.swift",
+   "name": "AudioFingerprintBackfillJob.progressLogFiles",
+   "kind": "var",
    "classification": "could-be-private"
   },
   {
@@ -1369,13 +1761,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlan.finishTotals",
-   "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
-   "name": "CleanupPlan.finishTotals",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift::CleanupPlanner.PhysicalIndex",
    "file": "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift",
    "name": "CleanupPlanner.PhysicalIndex",
@@ -1474,18 +1859,11 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/Cleanup/VideoScanModel+Cleanup.swift::VideoScanModel.cleanupInputs",
-   "file": "VideoScan/VideoScan/MediaOps/Cleanup/VideoScanModel+Cleanup.swift",
-   "name": "VideoScanModel.cleanupInputs",
-   "kind": "func",
-   "classification": "could-be-private"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/Cleanup/VideoScanModel+Cleanup.swift::VideoScanModel.storedFullDigest",
    "file": "VideoScan/VideoScan/MediaOps/Cleanup/VideoScanModel+Cleanup.swift",
    "name": "VideoScanModel.storedFullDigest",
    "kind": "func",
-   "classification": "could-be-private"
+   "classification": "widened-for-split"
   },
   {
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesAudit.swift::DeleteDuplicatesJob.auditRefusedReviewedPlan",
@@ -1639,20 +2017,6 @@
    "file": "VideoScan/VideoScan/MediaOps/DeletionAudit.swift",
    "name": "DeletionReceipt.init",
    "kind": "init",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/FullHashBackfillJob.swift::FullHashBackfillJob.problemCap",
-   "file": "VideoScan/VideoScan/MediaOps/FullHashBackfillJob.swift",
-   "name": "FullHashBackfillJob.problemCap",
-   "kind": "let",
-   "classification": "could-be-private"
-  },
-  {
-   "key": "VideoScan/VideoScan/MediaOps/FullHashBackfillJob.swift::FullHashBackfillJob.progressLogSeconds",
-   "file": "VideoScan/VideoScan/MediaOps/FullHashBackfillJob.swift",
-   "name": "FullHashBackfillJob.progressLogSeconds",
-   "kind": "var",
    "classification": "could-be-private"
   },
   {
@@ -2174,13 +2538,6 @@
    "classification": "could-be-private"
   },
   {
-   "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift::VideoScanModel.clearRemoval",
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift",
-   "name": "VideoScanModel.clearRemoval",
-   "kind": "func",
-   "classification": "widened-for-split"
-  },
-  {
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift::VideoScanModel.lifecycleMirror",
    "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+RemovalMarker.swift",
    "name": "VideoScanModel.lifecycleMirror",
@@ -2433,6 +2790,195 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift::AudioFingerprint.completeFlag",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift",
+   "name": "AudioFingerprint.completeFlag",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift::AudioFingerprint.flagsFieldOffset",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift",
+   "name": "AudioFingerprint.flagsFieldOffset",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift::AudioFingerprint.headerBytes",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift",
+   "name": "AudioFingerprint.headerBytes",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift::AudioFingerprint.normalisingGain",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift",
+   "name": "AudioFingerprint.normalisingGain",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift::AudioFingerprint.recipeFieldOffset",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift",
+   "name": "AudioFingerprint.recipeFieldOffset",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift::AudioFingerprintParameters.validateFrame",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift",
+   "name": "AudioFingerprintParameters.validateFrame",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift::SpectralPeakPicker.init",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift",
+   "name": "SpectralPeakPicker.init",
+   "kind": "init",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift::SpectralPeakPicker.peaks",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprint.swift",
+   "name": "SpectralPeakPicker.peaks",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintCLI.swift::AudioFingerprintCLI.Timed",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintCLI.swift",
+   "name": "AudioFingerprintCLI.Timed",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintCLI.swift::AudioFingerprintCLI.Timed.decodeSeconds",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintCLI.swift",
+   "name": "AudioFingerprintCLI.Timed.decodeSeconds",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintCLI.swift::AudioFingerprintCLI.Timed.fingerprintSeconds",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintCLI.swift",
+   "name": "AudioFingerprintCLI.Timed.fingerprintSeconds",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintMatcher.swift::AudioFingerprintIndex.bestWindow",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintMatcher.swift",
+   "name": "AudioFingerprintIndex.bestWindow",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintMatcher.swift::AudioFingerprintIndex.longestRun",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintMatcher.swift",
+   "name": "AudioFingerprintIndex.longestRun",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintMatcher.swift::AudioFingerprintIndex.longestUnmatchedGap",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintMatcher.swift",
+   "name": "AudioFingerprintIndex.longestUnmatchedGap",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintMatcher.swift::AudioFingerprintIndex.overlapRange",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioFingerprintMatcher.swift",
+   "name": "AudioFingerprintIndex.overlapRange",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioPCMDecoder.swift::AudioPCMDecoder.stderrTailLength",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/AudioPCMDecoder.swift",
+   "name": "AudioPCMDecoder.stderrTailLength",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::EventCategory.broadcastCues",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "EventCategory.broadcastCues",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::EventCategory.instruments",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "EventCategory.instruments",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::EventCategory.performancePartners",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "EventCategory.performancePartners",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::EventCategory.screenCues",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "EventCategory.screenCues",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::EventCategoryRules.dateLines",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "EventCategoryRules.dateLines",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::EventCategoryRules.nameLines",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "EventCategoryRules.nameLines",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::EventCategoryRules.saidLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "EventCategoryRules.saidLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::EventCategoryRules.seenLine",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "EventCategoryRules.seenLine",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::PhraseMatch.firstHit",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "PhraseMatch.firstHit",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::PhraseMatch.hasCue",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "PhraseMatch.hasCue",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift::PhraseMatch.snippet",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventCategoryRules.swift",
+   "name": "PhraseMatch.snippet",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ExcessCopiesPlan.swift::ArchiveIndex.init",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/ExcessCopiesPlan.swift",
    "name": "ArchiveIndex.init",
@@ -2552,6 +3098,13 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift::VideoRecord.decodeLog",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift",
+   "name": "VideoRecord.decodeLog",
+   "kind": "let",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift::VideoRecord.migrationLoadDate",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift",
    "name": "VideoRecord.migrationLoadDate",
@@ -2559,8 +3112,8 @@
    "classification": "could-be-private"
   }
  ],
- "fixed": 59,
- "baseline_before": 2520,
- "baseline_after": 2461,
+ "fixed": 4,
+ "baseline_before": 2461,
+ "baseline_after": 2457,
  "shrink_skipped": false
 }
