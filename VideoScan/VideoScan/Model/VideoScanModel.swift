@@ -1517,6 +1517,10 @@ final class VideoScanModel: ObservableObject {
     /// pre-select that one volume. Replaces showCoverArtMusicPurgeSheet /
     /// showUnrelatedAudioPurgeSheet as the live purge surface.
     @Published var showNonVideoMediaPurgeSheet: Bool = false
+    /// Catalog ▸ "Fingerprint Sound…" (2026-10-14) opens its confirm sheet
+    /// through this flag (bound in ContentView), the same door the purge
+    /// dialog uses — the menu lives at app level, the sheet in the window.
+    @Published var showFingerprintSoundSheet: Bool = false
 
     // MARK: - Update Catalog (VideoScanModel+UpdateCatalog.swift)
     //

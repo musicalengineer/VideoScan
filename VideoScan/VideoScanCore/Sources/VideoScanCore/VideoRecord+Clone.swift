@@ -166,6 +166,7 @@ extension VideoRecord {
         c.familyMusic = familyMusic
         c.perceptualFingerprint = perceptualFingerprint
         c.mediaReportCard = mediaReportCard
+        c.audioFingerprint = audioFingerprint
         c.scanContext = scanContext
         return c
     }

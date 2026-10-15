@@ -27313,6 +27313,77 @@
         "videoOnlyFileIsNoAudioStream",
         "zeroByteFileIsDecodeFailed"
       ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintStoreTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AudioFingerprintStoreLogicTests",
+        "AudioFingerprintStampTests",
+        "AudioFingerprintStoreIsolationTests",
+        "AudioFingerprintStoreScaleTests"
+      ],
+      "tests": [
+        "additiveCodable",
+        "batchIsAtomic",
+        "completeness",
+        "defaultDirectoryIsSandboxed",
+        "describesRule",
+        "digestSpelling",
+        "engineVersionIsPartOfTheKey",
+        "newerSchemaRefused",
+        "poisonedFileRefused",
+        "readOnlyFolderRefused",
+        "roundTrip",
+        "schemaVersion",
+        "sharedRow",
+        "twoThousandRows",
+        "unreadableStampIsAbsent"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/AudioFingerprintBackfillTests.swift",
+      "stage": "unit",
+      "suites": [
+        "AudioFingerprintBackfillLogicTests",
+        "AudioFingerprintBackfillScaleTests",
+        "AudioFingerprintBackfillIsolationTests",
+        "AudioFingerprintBackfillSensorTests",
+        "AudioFingerprintBackfillMediaMatrixTests"
+      ],
+      "tests": [
+        "budgetHonouredAtRunTime",
+        "decodeBudget",
+        "driveLeavingMidRun",
+        "failedDecodeNamedAndSkipped",
+        "failedSaveUndoes",
+        "filesUntouched",
+        "matrix",
+        "missingFile",
+        "noSoundStamps",
+        "offlineDriveSkipped",
+        "oneStartOneOutcome",
+        "paceOnTenMinuteFiles",
+        "partialStamp",
+        "planSelection",
+        "planningAt100k",
+        "poisonedSidecarRefuses",
+        "quitCutsAndSaves",
+        "readOnlySidecarFolderRefuses",
+        "rec",
+        "refusals",
+        "saveCadence",
+        "sharedCopiesAndResume",
+        "sharedStoreRefuses",
+        "sourceIsReadOnly",
+        "stampsSurviveAReload",
+        "stopAndPause",
+        "words"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
