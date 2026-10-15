@@ -751,7 +751,11 @@ jobs:
             ${{ matrix.xcflag }} YES \
             CODE_SIGNING_ALLOWED=NO \
             MACOSX_DEPLOYMENT_TARGET=15.0 \
-            2>&1 | tee build-${{ matrix.tool }}.txt | tail -200
+            2>&1 | tee build-${{ matrix.tool }}.txt | tail -200 || true
+          # The pipeline's own status is decided below, from the log: with
+          # pipefail alone xcodebuild's 65 ended the step BEFORE the grep,
+          # so a failed build (2026-10-15, 27 SwiftCompile failures) left no
+          # diagnostic in the job log or the artifact.
           if grep -q "BUILD FAILED" build-${{ matrix.tool }}.txt; then
             echo "::error::${{ matrix.label }} build failed (pipeline, not a finding)"
             grep 'error:' build-${{ matrix.tool }}.txt | head -20
@@ -884,6 +888,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
+            build-${{ matrix.tool }}.txt
             sanitizer-${{ matrix.tool }}.log
             core-sanitizer-${{ matrix.tool }}.log
             sanitizer-findings.txt
