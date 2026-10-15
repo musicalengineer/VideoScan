@@ -1026,6 +1026,9 @@ struct PairCompareDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            // Compare Media (2026-10-15): the ladder's verdict, the
+            // recommendation and the sound spools, above the tiers.
+            CompareMediaView(recordA: job.recordA, recordB: job.recordB)
             if let verdict = job.comparator.verdict {
                 verdictBanner(verdict)
             }
