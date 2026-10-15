@@ -19,11 +19,16 @@
 //      do not move peaks; a lossy codec or added noise removes some peaks
 //      and adds a few, and the survivors still vote (AudioFingerprintMatcher).
 //
-// MEMORY: the spectrogram is never held whole. A ring of 2×timeRadius+1
-// level frames and the same number of frequency-dilated frames (7 × 512
-// floats each) feeds peak picking; pairing runs over the finished peak list
-// (≈ 3 peaks/frame × 16 B). For a 60-minute file: peaks ≈ 2.7 MB, the
-// landmarks ≈ 8 B each. The PCM passed in is the only O(file) buffer.
+// MEMORY: the spectrogram is never held whole. `SpectralPeakPicker`
+// allocates its scratch ONCE per `compute` — FFT buffers, a ring of
+// 2×timeRadius+1 level frames and the same number of frequency-dilated
+// frames (two flat blocks of 7 × 512 floats), the neighbourhood max and a
+// reusable candidate list — and no array is created per frame. Pairing
+// runs over the finished peak list (≈ 3 peaks/frame × 16 B): for a
+// 60-minute file peaks ≈ 2.7 MB, landmarks ≈ 8 B each (≈ 0.8 MB), the
+// audible-seconds bitmap one bit per second. Measured (the scale test):
+// fingerprinting an hour grows the process by ≈ 1.5 MB. The PCM passed
+// in is the only O(file) buffer.
 //
 // (For Rick: `vDSP_DFT_zrop` is Accelerate's real-to-complex FFT — the
 // same half-spectrum trick as FFTW's r2c; the setup object is reused across
@@ -458,46 +463,59 @@ struct SpectralPeak: Equatable {
 }
 
 /// Streaming STFT → level frames → neighbourhood-max peak picking. One
-/// instance per `compute` call; its scratch buffers are allocated once and
-/// reused for every frame (no per-frame allocation, no pointer escapes).
+/// instance per `compute` call; every buffer is allocated in `init` and
+/// reused for every frame (no per-frame allocation, no copy-on-write, no
+/// pointer escapes). The `DSPSplitComplex` views are built over these
+/// explicitly allocated buffers, never over `&array` temporaries.
 final class SpectralPeakPicker {
     private let p: AudioFingerprintParameters
     private let dft: vDSP_DFT_Setup
     private let bins: Int
     private let size: Int
-    private let window: UnsafeMutablePointer<Float>      // size
-    private let frame: UnsafeMutablePointer<Float>       // size: windowed samples
-    private let inReal: UnsafeMutablePointer<Float>      // bins
+    private let ringSize: Int
+    private let window: UnsafeMutablePointer<Float>        // size
+    private let frame: UnsafeMutablePointer<Float>         // size: windowed samples
+    private let inReal: UnsafeMutablePointer<Float>        // bins
     private let inImag: UnsafeMutablePointer<Float>
     private let outReal: UnsafeMutablePointer<Float>
     private let outImag: UnsafeMutablePointer<Float>
     private let power: UnsafeMutablePointer<Float>
     private let scratchA: UnsafeMutablePointer<Float>
     private let scratchB: UnsafeMutablePointer<Float>
+    private let levelRing: UnsafeMutablePointer<Float>     // ringSize × bins
+    private let dilatedRing: UnsafeMutablePointer<Float>   // ringSize × bins
+    private let neighbourhood: UnsafeMutablePointer<Float> // bins
+    private var candidates: [SpectralPeak] = []            // reused per frame
     /// dB at or below this is silence (and never ties a real peak).
     private static let silentDB: Float = -200
 
     init?(parameters: AudioFingerprintParameters) {
         let size = parameters.frameSize
-        guard size >= 8, size & (size - 1) == 0, parameters.hopSamples > 0,
+        guard size >= 8, size & (size - 1) == 0, parameters.hopSamples > 0, parameters.timeRadius >= 1,
               let dft = vDSP_DFT_zrop_CreateSetup(nil, vDSP_Length(size), .FORWARD)
         else { return nil }
         self.p = parameters
         self.dft = dft
         self.size = size
         self.bins = parameters.binCount
+        self.ringSize = 2 * parameters.timeRadius + 1
         window = .allocate(capacity: size)
         frame = .allocate(capacity: size)
         inReal = .allocate(capacity: bins); inImag = .allocate(capacity: bins)
         outReal = .allocate(capacity: bins); outImag = .allocate(capacity: bins)
         power = .allocate(capacity: bins)
         scratchA = .allocate(capacity: bins); scratchB = .allocate(capacity: bins)
+        levelRing = .allocate(capacity: ringSize * bins)
+        dilatedRing = .allocate(capacity: ringSize * bins)
+        neighbourhood = .allocate(capacity: bins)
         vDSP_hann_window(window, vDSP_Length(size), Int32(vDSP_HANN_DENORM))
+        candidates.reserveCapacity(64)
     }
 
     deinit {
         vDSP_DFT_DestroySetup(dft)
-        for buffer in [window, frame, inReal, inImag, outReal, outImag, power, scratchA, scratchB] {
+        for buffer in [window, frame, inReal, inImag, outReal, outImag, power, scratchA, scratchB,
+                       levelRing, dilatedRing, neighbourhood] {
             buffer.deallocate()
         }
     }
@@ -506,32 +524,29 @@ final class SpectralPeakPicker {
         let n = samples.count
         guard n >= size else { return [] }
         let frameCount = (n - size) / p.hopSamples + 1
-        let ringSize = 2 * p.timeRadius + 1
-        var levelRing = [[Float]](repeating: [], count: ringSize)
-        var dilatedRing = [[Float]](repeating: [], count: ringSize)
-        var neighbourhood = [Float](repeating: 0, count: bins)
         var peaks: [SpectralPeak] = []
         peaks.reserveCapacity(frameCount * 3)
 
         samples.withUnsafeBufferPointer { src in
             guard let base = src.baseAddress else { return }
             for index in 0..<frameCount {
-                let level = levelFrame(base + index * p.hopSamples, gain: gain)
-                levelRing[index % ringSize] = level
-                dilatedRing[index % ringSize] = frequencyDilated(level)
+                let slot = levelRing + (index % ringSize) * bins
+                levelFrame(base + index * p.hopSamples, gain: gain, into: slot)
+                frequencyDilate(slot, into: dilatedRing + (index % ringSize) * bins)
                 // The frame `timeRadius` back now has all its neighbours.
                 let centre = index - p.timeRadius
                 guard centre >= p.timeRadius else { continue }
-                timeMax(dilatedRing, into: &neighbourhood)
-                pick(frame: centre, level: levelRing[centre % ringSize], neighbourhood: neighbourhood,
+                timeMax(into: neighbourhood)
+                pick(frame: centre, level: levelRing + (centre % ringSize) * bins, neighbourhood: neighbourhood,
                      into: &peaks)
             }
         }
         return peaks
     }
 
-    /// Level (dB re full-scale sine) per bin for one Hann-windowed frame.
-    private func levelFrame(_ start: UnsafePointer<Int16>, gain: Float) -> [Float] {
+    /// Level (dB re full-scale sine) per bin for one Hann-windowed frame,
+    /// written into `out` (bins floats).
+    private func levelFrame(_ start: UnsafePointer<Int16>, gain: Float, into out: UnsafeMutablePointer<Float>) {
         let length = vDSP_Length(size)
         vDSP_vflt16(start, 1, frame, 1, length)
         var scale = gain / 32_768
@@ -550,17 +565,14 @@ final class SpectralPeakPicker {
         var reference = Float(size / 2) * Float(size / 2)
         var floor: Float = reference * powf(10, Self.silentDB / 10)
         vDSP_vsadd(power, 1, &floor, power, 1, vDSP_Length(bins))
-        vDSP_vdbcon(power, 1, &reference, scratchA, 1, vDSP_Length(bins), 1)   // 10·log10(power/ref)
-        scratchA[0] = Self.silentDB   // DC + Nyquist share bin 0; never a peak
-        return Array(UnsafeBufferPointer(start: scratchA, count: bins))
+        vDSP_vdbcon(power, 1, &reference, out, 1, vDSP_Length(bins), 1)   // 10·log10(power/ref)
+        out[0] = Self.silentDB   // DC + Nyquist share bin 0; never a peak
     }
 
-    /// max over ±frequencyRadius bins, by doubling steps (1, 2, 4, …, rest).
-    private func frequencyDilated(_ level: [Float]) -> [Float] {
-        level.withUnsafeBufferPointer { src in
-            guard let base = src.baseAddress else { return }
-            scratchA.update(from: base, count: bins)
-        }
+    /// `out` = max over ±frequencyRadius bins of `level`, by doubling
+    /// steps (1, 2, 4, …, rest) in the two scratch buffers.
+    private func frequencyDilate(_ level: UnsafePointer<Float>, into out: UnsafeMutablePointer<Float>) {
+        scratchA.update(from: level, count: bins)
         var covered = 0
         var step = 1
         while covered < p.frequencyRadius {
@@ -575,28 +587,26 @@ final class SpectralPeakPicker {
             covered += s
             step *= 2
         }
-        return Array(UnsafeBufferPointer(start: scratchA, count: bins))
+        out.update(from: scratchA, count: bins)
     }
 
-    /// Elementwise max over every frame in the ring.
-    private func timeMax(_ ring: [[Float]], into out: inout [Float]) {
-        out = ring[0]
-        for i in 1..<ring.count {
-            vDSP_vmax(ring[i], 1, out, 1, &out, 1, vDSP_Length(bins))
+    /// Elementwise max over every dilated frame in the ring (order is
+    /// irrelevant: max commutes).
+    private func timeMax(into out: UnsafeMutablePointer<Float>) {
+        out.update(from: dilatedRing, count: bins)
+        for i in 1..<ringSize {
+            vDSP_vmax(dilatedRing + i * bins, 1, out, 1, out, 1, vDSP_Length(bins))
         }
     }
 
-    private func pick(frame: Int, level: [Float], neighbourhood: [Float], into peaks: inout [SpectralPeak]) {
+    private func pick(frame: Int, level: UnsafePointer<Float>, neighbourhood: UnsafePointer<Float>,
+                      into peaks: inout [SpectralPeak]) {
         var mean: Float = 0
         vDSP_meanv(level, 1, &mean, vDSP_Length(bins))
         let threshold = max(p.floorDB, mean + p.aboveFrameMeanDB)
-        var candidates: [SpectralPeak] = []
-        level.withUnsafeBufferPointer { lv in
-            neighbourhood.withUnsafeBufferPointer { nb in
-                for bin in 1..<bins where lv[bin] > threshold && lv[bin] == nb[bin] {
-                    candidates.append(SpectralPeak(frame: frame, bin: bin, level: lv[bin]))
-                }
-            }
+        candidates.removeAll(keepingCapacity: true)
+        for bin in 1..<bins where level[bin] > threshold && level[bin] == neighbourhood[bin] {
+            candidates.append(SpectralPeak(frame: frame, bin: bin, level: level[bin]))
         }
         if candidates.count > p.maxPeaksPerFrame {
             candidates.sort { $0.level != $1.level ? $0.level > $1.level : $0.bin < $1.bin }

@@ -12,6 +12,22 @@ import Foundation
 import Testing
 @testable import VideoScanCore
 
+/// Resident size of this process, MB: `current` now, `peak` the high-water
+/// mark since launch (`resident_size_max`).
+enum ResidentSize {
+    static func now() -> (current: Double, peak: Double) {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        let result = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return (-1, -1) }
+        return (Double(info.resident_size) / 1_048_576, Double(info.resident_size_max) / 1_048_576)
+    }
+}
+
 @Suite("AudioFingerprint engine")
 struct AudioFingerprintEngineTests {
 
@@ -138,6 +154,46 @@ struct AudioFingerprintEngineTests {
         let window = try await AudioPCMDecoder().decode(path: try fixtures.url("A").path,
                                                         window: .init(startSeconds: 60, durationSeconds: 20))
         #expect(window.reachedCap && !AudioFingerprint.compute(window).complete)
+    }
+
+    // MARK: Decoder — the sample sink (codex F5)
+
+    /// The sink converts bytes to Int16 as chunks arrive: a sample split
+    /// across two chunks is reassembled, the cap is honoured mid-chunk, a
+    /// trailing unpaired byte is dropped, and an hour of 64 KB chunks is
+    /// a few milliseconds (it was 2.6 s with a per-element append).
+    @Test func sinkReassemblesSamplesAcrossChunkBoundaries() {
+        let expected: [Int16] = (0..<1_000).map { Int16(truncatingIfNeeded: $0 &* 7_919 &- 30_000) }
+        var bytes = Data()
+        for s in expected { withUnsafeBytes(of: s.littleEndian) { bytes.append(contentsOf: $0) } }
+        for chunkSize in [1, 2, 3, 7, 64, 1_999] {
+            let sink = PCMSink(capSamples: 10_000)
+            var offset = 0
+            while offset < bytes.count {
+                let end = min(bytes.count, offset + chunkSize)
+                sink.append(bytes[offset..<end])
+                offset = end
+            }
+            #expect(sink.takeSamples() == expected, "chunk size \(chunkSize)")
+        }
+        let capped = PCMSink(capSamples: 10)
+        capped.append(bytes[0..<25])          // 12 whole samples + 1 odd byte, cap 10
+        capped.append(bytes[25..<40])
+        #expect(capped.takeSamples() == Array(expected[0..<10]))
+        let odd = PCMSink(capSamples: 10_000)
+        odd.append(bytes[0..<7])
+        #expect(odd.takeSamples() == Array(expected[0..<3]), "an unpaired trailing byte is dropped")
+
+        let hour = PCMSink(capSamples: 4 * 3_600 * 8_000)
+        let chunk = Data(repeating: 0x12, count: 65_536)
+        let clock = ContinuousClock()
+        let start = clock.now
+        var fed = 0
+        while fed < 3_600 * 8_000 * 2 { hour.append(chunk); fed += chunk.count }
+        let elapsed = clock.now - start
+        #expect(hour.takeSamples().count == fed / 2)
+        print("[audio-fp] sink: an hour of 64 KB chunks in \(elapsed)")
+        #expect(elapsed < .seconds(1), "\(elapsed)")
     }
 
     // MARK: Fingerprint — logic
@@ -466,13 +522,18 @@ struct AudioFingerprintEngineTests {
 
     /// 60 minutes of synthetic audio → fingerprint + index, then a 30-s
     /// slice at 1234 s must be found at 1234 s. `VIDEOSCAN_SKIP_SCALE=1`
-    /// skips it (the render alone is ~6 s in Debug).
+    /// skips it (the render alone is ~6 s in Debug). Resident size is
+    /// printed at each stage (`mach_task_basic_info`), and the decoder's
+    /// peak growth while decoding the hour is bounded at the PCM's size
+    /// plus 32 MB (codex F5: Data and [Int16] must not both be held).
     ///
     /// Measured 2026-10-14, M4 Max, Debug, load ~6/16: fingerprint 2.54 s,
     /// index 0.03 s, match ≈ 0.03 s → 2.6 s total; 99 734 landmarks,
     /// 798 KB (13.3 KB/min); PCM 57.6 MB in RAM. Budget ≈ 2×.
+    /// Re-measured after codex F5 (buffer reuse, incremental sink): see the
+    /// review doc's Closure section for the before/after numbers.
     @Test(.tags(.scale), .enabled(if: ProcessInfo.processInfo.environment["VIDEOSCAN_SKIP_SCALE"] != "1"))
-    func sixtyMinuteMasterFingerprintsAndIndexesWithinBudget() throws {
+    func sixtyMinuteMasterFingerprintsAndIndexesWithinBudget() async throws {
         let budget: Duration = .seconds(6)
         let sampleRate = 8_000
         let render = SyntheticSpeech.toInt16(SyntheticSpeech.render(seconds: 3_600, seed: 0x60_60, sampleRate: sampleRate))
@@ -480,19 +541,47 @@ struct AudioFingerprintEngineTests {
         let slice = AudioPCM(sampleRate: sampleRate, samples: Array(render[(1_234 * sampleRate)..<(1_264 * sampleRate)]))
 
         let loadBefore = TimingBudget.sampleLoad()
+        let rssStart = ResidentSize.now()
         let clock = ContinuousClock()
         let start = clock.now
         let fingerprint = AudioFingerprint.compute(master)
         let afterFingerprint = clock.now
+        let rssAfterFingerprint = ResidentSize.now()
         let index = AudioFingerprintIndex(master: fingerprint)
         let afterIndex = clock.now
+        let rssAfterIndex = ResidentSize.now()
         let match = index.match(AudioFingerprint.compute(slice))
         let elapsed = clock.now - start
 
         print("[audio-fp scale] 60 min: fingerprint \(afterFingerprint - start), index \(afterIndex - afterFingerprint), "
               + "total \(elapsed); \(fingerprint.landmarkCount) landmarks, \(fingerprint.estimatedBytes) bytes "
               + "(\(fingerprint.estimatedBytes / 60) B/min); PCM \(render.count * 2) B in RAM (\(TimingBudget.loadDescription()))")
+        print(String(format: "[audio-fp scale] resident MB: start %.1f (peak so far %.1f) → after fingerprint %.1f (peak %.1f) → after index %.1f (peak %.1f)",
+                     rssStart.current, rssStart.peak, rssAfterFingerprint.current, rssAfterFingerprint.peak,
+                     rssAfterIndex.current, rssAfterIndex.peak))
         print(audioMatchLine("slice@1234 vs 60-min", match))
+
+        // Decoder peak (codex F5): the hour as a WAV through ffmpeg; the
+        // process may grow by the PCM plus a chunk, not by the PCM twice.
+        if FFmpegLocator.ffmpegIsAvailable() {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("test_audiofp_scale_\(UUID().uuidString.prefix(8))", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let wav = dir.appendingPathComponent("test_hour.wav")
+            try WAVWriter.write(render, sampleRate: sampleRate, to: wav)
+            let pcmBytes = Double(render.count * 2) / 1_048_576
+            let before = ResidentSize.now()
+            let decodeStart = clock.now
+            let decoded = try await AudioPCMDecoder().decode(path: wav.path)
+            let decodeElapsed = clock.now - decodeStart
+            let after = ResidentSize.now()
+            let growth = after.peak - before.current
+            print(String(format: "[audio-fp scale] decode 60-min WAV: %@; PCM %.1f MB; resident %.1f → %.1f MB (peak %.1f): peak growth %.1f MB",
+                         "\(decodeElapsed)", pcmBytes, before.current, after.current, after.peak, growth))
+            #expect(decoded.samples.count == render.count)
+            #expect(growth <= pcmBytes + 32, "decode peak growth \(growth) MB for \(pcmBytes) MB of PCM: Data and [Int16] held together?")
+        }
         #expect(match.verdict == .containedInMaster(offsetSeconds: match.offsetSeconds))
         #expect(abs(match.offsetSeconds - 1_234) <= audioOffsetTolerance)
 

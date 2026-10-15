@@ -27,9 +27,11 @@
 // `AudioMatchPolicy` — every threshold has a name and lives in that one
 // struct, so tuning is data. No I/O here; everything is a value.
 //
-// MEMORY: the index is one dictionary of ≈ 8 B per landmark plus overhead
-// (a 60-min master ≈ 1 M landmarks ≈ 40 MB); the histogram is one Int per
-// possible frame offset (query + master frames, ≈ 8 B each).
+// MEMORY: the index is one dictionary hash → [anchor frame]: per landmark
+// 4 B of payload plus a per-hash array object and dictionary slot, ≈ 60–70 B
+// all in. Measured (the scale test): a 60-min master, 99 734 landmarks,
+// grows the process by ≈ 7 MB. The histogram is one Int per possible frame
+// offset (query + master frames, 8 B each: an hour ≈ 450 KB).
 
 import Foundation
 
