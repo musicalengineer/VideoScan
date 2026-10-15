@@ -22,7 +22,9 @@
 // Table `fingerprints`, PRIMARY KEY (content_digest, size_bytes,
 // engine_version): two copies of the same bytes share one row; a new engine
 // version writes a new row and leaves the old one (an old build can still
-// read its own). `blob` is `AudioFingerprint.encoded()` ("VSAF").
+// read its own). `blob` is `AudioFingerprint.encoded()` ("VSAF");
+// `recipe_id`, `analyzed_seconds` and `complete` sit beside it so a
+// "shared" stamp can be honest without decoding the blob.
 //
 // MEMORY: a lookup returns one summary (a few words) or one fingerprint
 // (8 B per landmark: ~150 KB for a 16-minute tape, ~2.3 MB for 4 h). A
@@ -39,8 +41,11 @@ import SQLite3
 public final class AudioFingerprintStore: @unchecked Sendable {
 
     public static let fileName = "audio-fingerprints.sqlite"
-    /// The schema this build writes and understands.
-    public static let schemaVersion = 1
+    /// The schema this build writes and understands. 2 = `recipe_id` and
+    /// `complete` beside the blob (2026-10-14, engine codex round 1). A
+    /// pre-release schema-1 file is dropped and re-created — nothing was
+    /// ever persisted under it outside tests.
+    public static let schemaVersion = 2
 
     public enum Failure: Error, Equatable, Sendable, CustomStringConvertible {
         /// The folder could not be created or is not writable.
@@ -80,18 +85,24 @@ public final class AudioFingerprintStore: @unchecked Sendable {
     /// What a row says without decoding its blob.
     public struct Summary: Equatable, Sendable {
         public let engineVersion: Int
+        /// `AudioFingerprintParameters.recipeID` the blob was made with.
+        public let recipeID: UInt32
         public let computedAt: Date
         public let sourcePath: String
         public let analyzedSeconds: Double
+        /// `AudioFingerprint.complete`: the whole recording, not a prefix.
+        public let complete: Bool
         public let landmarks: Int
         public let bytes: Int
 
-        public init(engineVersion: Int, computedAt: Date, sourcePath: String, analyzedSeconds: Double,
-                    landmarks: Int, bytes: Int) {
+        public init(engineVersion: Int, recipeID: UInt32, computedAt: Date, sourcePath: String,
+                    analyzedSeconds: Double, complete: Bool, landmarks: Int, bytes: Int) {
             self.engineVersion = engineVersion
+            self.recipeID = recipeID
             self.computedAt = computedAt
             self.sourcePath = sourcePath
             self.analyzedSeconds = analyzedSeconds
+            self.complete = complete
             self.landmarks = landmarks
             self.bytes = bytes
         }
@@ -167,6 +178,11 @@ public final class AudioFingerprintStore: @unchecked Sendable {
         let found = try scalarInt("SELECT version FROM schema LIMIT 1")
         if let found {
             guard found <= Self.schemaVersion else { throw Failure.schemaNewer(found: found, supported: Self.schemaVersion) }
+            if found < Self.schemaVersion {
+                // Pre-release schema: nothing to carry forward (see schemaVersion).
+                try exec("DROP TABLE IF EXISTS fingerprints")
+                try exec("UPDATE schema SET version = \(Self.schemaVersion)")
+            }
         } else {
             try exec("INSERT INTO schema (version) VALUES (\(Self.schemaVersion))")
         }
@@ -175,9 +191,11 @@ public final class AudioFingerprintStore: @unchecked Sendable {
                 content_digest   TEXT    NOT NULL,
                 size_bytes       INTEGER NOT NULL,
                 engine_version   INTEGER NOT NULL,
+                recipe_id        INTEGER NOT NULL,
                 computed_at      REAL    NOT NULL,
                 source_path      TEXT    NOT NULL,
                 analyzed_seconds REAL    NOT NULL,
+                complete         INTEGER NOT NULL,
                 landmarks        INTEGER NOT NULL,
                 blob             BLOB    NOT NULL,
                 PRIMARY KEY (content_digest, size_bytes, engine_version)
@@ -196,7 +214,7 @@ public final class AudioFingerprintStore: @unchecked Sendable {
     public func summary(for key: Key, engineVersion: Int = Int(AudioFingerprint.currentVersion)) throws -> Summary? {
         try lock.withLock {
             let sql = """
-                SELECT engine_version, computed_at, source_path, analyzed_seconds, landmarks, length(blob)
+                SELECT engine_version, recipe_id, computed_at, source_path, analyzed_seconds, complete, landmarks, length(blob)
                 FROM fingerprints WHERE content_digest = ? AND size_bytes = ? AND engine_version = ?
             """
             let stmt = try prepare(sql)
@@ -204,11 +222,13 @@ public final class AudioFingerprintStore: @unchecked Sendable {
             try bind(stmt, key: key, engineVersion: engineVersion)
             guard try step(stmt) else { return nil }
             return Summary(engineVersion: Int(sqlite3_column_int64(stmt, 0)),
-                           computedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 1)),
-                           sourcePath: text(stmt, 2),
-                           analyzedSeconds: sqlite3_column_double(stmt, 3),
-                           landmarks: Int(sqlite3_column_int64(stmt, 4)),
-                           bytes: Int(sqlite3_column_int64(stmt, 5)))
+                           recipeID: UInt32(truncatingIfNeeded: sqlite3_column_int64(stmt, 1)),
+                           computedAt: Date(timeIntervalSince1970: sqlite3_column_double(stmt, 2)),
+                           sourcePath: text(stmt, 3),
+                           analyzedSeconds: sqlite3_column_double(stmt, 4),
+                           complete: sqlite3_column_int64(stmt, 5) != 0,
+                           landmarks: Int(sqlite3_column_int64(stmt, 6)),
+                           bytes: Int(sqlite3_column_int64(stmt, 7)))
         }
     }
 
@@ -246,8 +266,8 @@ public final class AudioFingerprintStore: @unchecked Sendable {
             do {
                 let sql = """
                     INSERT OR REPLACE INTO fingerprints
-                    (content_digest, size_bytes, engine_version, computed_at, source_path, analyzed_seconds, landmarks, blob)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (content_digest, size_bytes, engine_version, recipe_id, computed_at, source_path, analyzed_seconds, complete, landmarks, blob)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """
                 let stmt = try prepare(sql)
                 defer { sqlite3_finalize(stmt) }
@@ -255,13 +275,15 @@ public final class AudioFingerprintStore: @unchecked Sendable {
                     sqlite3_reset(stmt)
                     sqlite3_clear_bindings(stmt)
                     try bind(stmt, key: entry.key, engineVersion: Int(entry.fingerprint.version))
-                    sqlite3_bind_double(stmt, 4, entry.computedAt.timeIntervalSince1970)
-                    try bindText(stmt, 5, entry.sourcePath)
-                    sqlite3_bind_double(stmt, 6, entry.fingerprint.durationSeconds)
-                    sqlite3_bind_int64(stmt, 7, Int64(entry.fingerprint.landmarkCount))
+                    sqlite3_bind_int64(stmt, 4, Int64(entry.fingerprint.recipeID))
+                    sqlite3_bind_double(stmt, 5, entry.computedAt.timeIntervalSince1970)
+                    try bindText(stmt, 6, entry.sourcePath)
+                    sqlite3_bind_double(stmt, 7, entry.fingerprint.analyzedSeconds)
+                    sqlite3_bind_int64(stmt, 8, entry.fingerprint.complete ? 1 : 0)
+                    sqlite3_bind_int64(stmt, 9, Int64(entry.fingerprint.landmarkCount))
                     let blob = entry.fingerprint.encoded()
                     let rc = blob.withUnsafeBytes { raw in
-                        sqlite3_bind_blob(stmt, 8, raw.baseAddress, Int32(raw.count), Self.transient)
+                        sqlite3_bind_blob(stmt, 10, raw.baseAddress, Int32(raw.count), Self.transient)
                     }
                     guard rc == SQLITE_OK else { throw Failure.sql(message()) }
                     _ = try step(stmt)

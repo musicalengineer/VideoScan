@@ -56,8 +56,8 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
     public var outcome: Outcome
     /// Seconds of audio actually analysed (PCM samples ÷ sample rate).
     public var analyzedSeconds: Double
-    /// True when the analysed span covers the whole recording (within 1 s
-    /// of the catalog duration, or the duration is unknown).
+    /// True when the engine analysed the whole recording (the decoder did
+    /// not hit its cap) — `AudioFingerprint.complete`.
     public var complete: Bool
     public var landmarks: Int
     /// Encoded size of the sidecar blob (0 for `.noAudio`).
@@ -77,28 +77,21 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
         self.bytes = bytes
     }
 
-    /// Stamp for a stored fingerprint of `fingerprint` covering
-    /// `analyzedSeconds` of a recording the catalog says lasts
-    /// `durationSeconds` (0 = unknown).
+    /// Stamp for a stored fingerprint. `analyzedSeconds` and `complete`
+    /// come FROM the engine (`AudioFingerprint.analyzedSeconds` /
+    /// `.complete` — false when the decoder hit its cap), never recomputed.
     public static func fingerprinted(_ fingerprint: AudioFingerprint, contentDigest: String, sizeBytes: Int64,
-                                     durationSeconds: Double, computedAt: Date = Date()) -> AudioFingerprintStamp {
-        let analysed = fingerprint.durationSeconds
-        return AudioFingerprintStamp(computedAt: computedAt, contentDigest: contentDigest, sizeBytes: sizeBytes,
-                                     outcome: .fingerprinted, analyzedSeconds: analysed,
-                                     complete: isComplete(analyzedSeconds: analysed, durationSeconds: durationSeconds),
-                                     landmarks: fingerprint.landmarkCount, bytes: fingerprint.estimatedBytes)
+                                     computedAt: Date = Date()) -> AudioFingerprintStamp {
+        AudioFingerprintStamp(computedAt: computedAt, engineVersion: Int(AudioFingerprint.currentVersion),
+                              contentDigest: contentDigest, sizeBytes: sizeBytes, outcome: .fingerprinted,
+                              analyzedSeconds: fingerprint.analyzedSeconds, complete: fingerprint.complete,
+                              landmarks: fingerprint.landmarkCount, bytes: fingerprint.estimatedBytes)
     }
 
     /// Stamp for a file ffmpeg found no audio in.
     public static func noAudio(contentDigest: String, sizeBytes: Int64, computedAt: Date = Date()) -> AudioFingerprintStamp {
         AudioFingerprintStamp(computedAt: computedAt, contentDigest: contentDigest, sizeBytes: sizeBytes,
                               outcome: .noAudio, analyzedSeconds: 0, complete: true, landmarks: 0, bytes: 0)
-    }
-
-    /// The whole recording was analysed: within `tolerance` of the catalog
-    /// duration, or the duration is unknown (≤ 0).
-    public static func isComplete(analyzedSeconds: Double, durationSeconds: Double, tolerance: Double = 1.0) -> Bool {
-        durationSeconds <= 0 || analyzedSeconds >= durationSeconds - tolerance
     }
 
     /// Does this stamp describe a file of `sizeBytes` whose PREFERRED

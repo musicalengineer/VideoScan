@@ -102,6 +102,9 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     /// TEST SEAM: replaces the sidecar batch write. nil in production.
     var sidecarPutForTesting: (@MainActor ([AudioFingerprintStore.Entry]) throws -> Void)?
     var ffmpegPath = ToolLocator.ffmpegPath
+    /// The fingerprint recipe; validated once at start (a bad recipe is a
+    /// named refusal, never a trap inside a lane).
+    var parameters = AudioFingerprintParameters.default
     /// Where the sidecar lives (default: the catalog's folder).
     var storeDirectory: URL?
     /// The decoder's cap (the 4-hour default); tests shrink it to prove
@@ -249,6 +252,9 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         guard FileManager.default.isExecutableFile(atPath: ffmpegPath) else {
             return "ffmpeg was not found at \(ffmpegPath) — install it with Homebrew (brew install ffmpeg) or set \(FFmpegLocator.ffmpegEnvVar)"
         }
+        do { try parameters.validate() } catch {
+            return "the fingerprint recipe is invalid (\(error)) — this build cannot fingerprint anything"
+        }
         do {
             store = try AudioFingerprintStore(directory: storeDirectory ?? model.audioFingerprintSidecarDirectory)
         } catch let failure as AudioFingerprintStore.Failure {
@@ -358,8 +364,9 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         for digest in item.digests where AudioFingerprintStamp.isFullDigest(digest) {
             let key = AudioFingerprintStore.Key(contentDigest: digest, sizeBytes: item.sizeBytes)
             if let pending = pendingEntries[key] {
-                return (key, AudioFingerprintStore.Summary(engineVersion: Int(pending.fingerprint.version), computedAt: pending.computedAt,
-                                                           sourcePath: pending.sourcePath, analyzedSeconds: pending.fingerprint.durationSeconds,
+                return (key, AudioFingerprintStore.Summary(engineVersion: Int(pending.fingerprint.version), recipeID: pending.fingerprint.recipeID,
+                                                           computedAt: pending.computedAt, sourcePath: pending.sourcePath,
+                                                           analyzedSeconds: pending.fingerprint.analyzedSeconds, complete: pending.fingerprint.complete,
                                                            landmarks: pending.fingerprint.landmarkCount, bytes: pending.fingerprint.estimatedBytes))
             }
             if let found = try? store?.summary(for: key) { return (key, found) }
@@ -391,7 +398,8 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     /// AudioFingerprint), or the test seam.
     private func runPass(_ item: AudioFingerprintBackfillItem) async throws -> AudioFingerprint {
         if let passForTesting { return try await passForTesting(item) }
-        return try await Self.fingerprintOffMain(path: item.path, ffmpegPath: ffmpegPath, maxSeconds: decoderMaxSeconds,
+        return try await Self.fingerprintOffMain(path: item.path, ffmpegPath: ffmpegPath, parameters: parameters,
+                                                 maxSeconds: decoderMaxSeconds,
                                                  deadlineSeconds: Self.decodeDeadline(sizeBytes: item.sizeBytes))
     }
 
@@ -406,12 +414,13 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated static func fingerprintOffMain(path: String, ffmpegPath: String, maxSeconds: Double,
-                                               deadlineSeconds: Double) async throws -> AudioFingerprint {
-        let decoder = AudioPCMDecoder(ffmpegPath: ffmpegPath, maxSeconds: maxSeconds, deadlineSeconds: deadlineSeconds)
+    nonisolated static func fingerprintOffMain(path: String, ffmpegPath: String, parameters: AudioFingerprintParameters,
+                                               maxSeconds: Double, deadlineSeconds: Double) async throws -> AudioFingerprint {
+        let decoder = AudioPCMDecoder(ffmpegPath: ffmpegPath, sampleRate: parameters.sampleRate,
+                                      maxSeconds: maxSeconds, deadlineSeconds: deadlineSeconds)
         let pcm = try await decoder.decode(path: path)
         try Task.checkCancellation()
-        return AudioFingerprint.compute(pcm)
+        return AudioFingerprint.compute(pcm, parameters: parameters)
     }
 
     // MARK: Pause / budget / gates
@@ -479,8 +488,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         bumpLane(lane.root, by: 1)
         switch outcome {
         case .fingerprint(let fingerprint):
-            let stamp = AudioFingerprintStamp.fingerprinted(fingerprint, contentDigest: item.key.contentDigest,
-                                                            sizeBytes: item.sizeBytes, durationSeconds: item.durationSeconds)
+            let stamp = AudioFingerprintStamp.fingerprinted(fingerprint, contentDigest: item.key.contentDigest, sizeBytes: item.sizeBytes)
             totals.readBytes += item.sizeBytes
             guard stamped(stamp, item, lane: lane, model: model) else { return }
             pendingEntries[item.key] = AudioFingerprintStore.Entry(key: item.key, fingerprint: fingerprint, sourcePath: item.path,
@@ -499,9 +507,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         case .shared(let key, let summary):
             let stamp = AudioFingerprintStamp(computedAt: summary.computedAt, engineVersion: summary.engineVersion,
                                               contentDigest: key.contentDigest, sizeBytes: key.sizeBytes, outcome: .fingerprinted,
-                                              analyzedSeconds: summary.analyzedSeconds,
-                                              complete: AudioFingerprintStamp.isComplete(analyzedSeconds: summary.analyzedSeconds,
-                                                                                        durationSeconds: item.durationSeconds),
+                                              analyzedSeconds: summary.analyzedSeconds, complete: summary.complete,
                                               landmarks: summary.landmarks, bytes: summary.bytes)
             guard stamped(stamp, item, lane: lane, model: model) else { return }
             totals.add(.shared, bytes: item.sizeBytes)

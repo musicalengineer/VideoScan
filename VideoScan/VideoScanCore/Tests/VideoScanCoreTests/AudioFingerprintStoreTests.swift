@@ -24,8 +24,8 @@ private func scratch(_ label: String) throws -> URL {
     return dir
 }
 
-private func fingerprint(seed: UInt32, count: Int = 100, seconds: Double = 12.5) -> AudioFingerprint {
-    AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: seconds,
+private func fingerprint(seed: UInt32, count: Int = 100, seconds: Double = 12.5, complete: Bool = true) -> AudioFingerprint {
+    AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: seconds, complete: complete,
                      hashes: (0..<count).map { UInt32($0) &* 2_654_435_761 &+ seed },
                      times: (0..<count).map { UInt32($0 * 3) })
 }
@@ -46,10 +46,14 @@ struct AudioFingerprintStoreLogicTests {
         let s = try #require(try store.summary(for: key))
         #expect(s.landmarks == 100 && s.analyzedSeconds == 12.5 && s.sourcePath == "/Volumes/V/a.mov")
         #expect(s.bytes == fp.estimatedBytes && s.engineVersion == Int(AudioFingerprint.currentVersion))
+        #expect(s.recipeID == fp.recipeID && s.recipeID == AudioFingerprintParameters.default.recipeID && s.complete)
+        let partialKey = AudioFingerprintStore.Key(contentDigest: "sha256:partial", sizeBytes: 9)
+        try store.put([.init(key: partialKey, fingerprint: fingerprint(seed: 8, seconds: 14_400, complete: false), sourcePath: "/p")])
+        #expect(try store.summary(for: partialKey)?.complete == false, "complete is stored beside the blob, from the engine")
         #expect(abs(s.computedAt.timeIntervalSince(when)) < 0.001)
         #expect(try store.summary(for: .init(contentDigest: "sha256:abc", sizeBytes: 1)) == nil, "size is part of the key")
         #expect(try store.fingerprint(for: .init(contentDigest: "v1:abc", sizeBytes: 1_234)) == nil, "digest kind is part of the key")
-        #expect(try store.count() == 1)
+        #expect(try store.count() == 2)
         #expect(store.fileURL.lastPathComponent == "audio-fingerprints.sqlite")
     }
 
@@ -89,7 +93,22 @@ struct AudioFingerprintStoreLogicTests {
         }
         let again = try AudioFingerprintStore(directory: dir)
         #expect(try again.count() == 1)
-        #expect(try again.schemaVersionOnDisk() == 1)
+        #expect(try again.schemaVersionOnDisk() == AudioFingerprintStore.schemaVersion)
+    }
+
+    @Test("a pre-release schema-1 file is dropped and re-created at the current schema (nothing was ever persisted under it)")
+    func olderSchemaIsRecreated() throws {
+        let dir = try scratch("older"); defer { try? FileManager.default.removeItem(at: dir) }
+        do {
+            let store = try AudioFingerprintStore(directory: dir)
+            try store.put([.init(key: .init(contentDigest: "v1:o", sizeBytes: 1), fingerprint: fingerprint(seed: 6), sourcePath: "/o")])
+        }
+        #expect(try AudioFingerprintStoreTestHook.setSchemaVersion(1, in: dir))
+        let reopened = try AudioFingerprintStore(directory: dir)
+        #expect(try reopened.schemaVersionOnDisk() == AudioFingerprintStore.schemaVersion)
+        #expect(try reopened.count() == 0, "the old table is gone; rows are recomputed by the next run")
+        try reopened.put([.init(key: .init(contentDigest: "v1:o", sizeBytes: 1), fingerprint: fingerprint(seed: 6), sourcePath: "/o")])
+        #expect(try reopened.count() == 1)
     }
 
     @Test("a batch is one transaction: a damaged entry rolls the whole batch back")
@@ -112,11 +131,11 @@ struct AudioFingerprintStampTests {
     @Test("describes: same size + a digest the record still carries (either kind) + this engine version")
     func describesRule() {
         let fp = fingerprint(seed: 9, seconds: 600)
-        let stamp = AudioFingerprintStamp.fingerprinted(fp, contentDigest: "v1:sampled", sizeBytes: 1_000, durationSeconds: 600)
+        let stamp = AudioFingerprintStamp.fingerprinted(fp, contentDigest: "v1:sampled", sizeBytes: 1_000)
         #expect(!stamp.describes(sizeBytes: 1_000, digests: ["sha256:full", "v1:sampled"]),
                 "gained a full hash later — the v1 key is not an identity (10 of 836 v1-equal pairs differed on 10/11); redone once under sha256")
         #expect(stamp.describes(sizeBytes: 1_000, digests: ["v1:sampled"]))
-        let full = AudioFingerprintStamp.fingerprinted(fp, contentDigest: "sha256:full", sizeBytes: 1_000, durationSeconds: 600)
+        let full = AudioFingerprintStamp.fingerprinted(fp, contentDigest: "sha256:full", sizeBytes: 1_000)
         #expect(full.describes(sizeBytes: 1_000, digests: ["sha256:full", "v1:sampled"]))
         #expect(!full.describes(sizeBytes: 1_000, digests: ["v1:sampled"]), "the full hash it was keyed on is gone")
         #expect(AudioFingerprintStamp.isFullDigest("sha256:full") && !AudioFingerprintStamp.isFullDigest("v1:sampled"))
@@ -129,14 +148,13 @@ struct AudioFingerprintStampTests {
         #expect(stamp.engineVersion == Int(AudioFingerprint.currentVersion), "never hard-coded")
     }
 
-    @Test("complete when the analysed span reaches the catalog duration (−1 s) or the duration is unknown; partial otherwise")
+    @Test("analyzedSeconds and complete come from the engine's fingerprint, never recomputed")
     func completeness() {
-        let short = AudioFingerprintStamp.fingerprinted(fingerprint(seed: 1, seconds: 599.2), contentDigest: "v1:a", sizeBytes: 1, durationSeconds: 600)
-        #expect(short.complete && short.analyzedSeconds == 599.2)
-        let partial = AudioFingerprintStamp.fingerprinted(fingerprint(seed: 1, seconds: 14_400), contentDigest: "v1:a", sizeBytes: 1, durationSeconds: 18_000)
-        #expect(!partial.complete && partial.outcome == .fingerprinted)
-        let unknown = AudioFingerprintStamp.fingerprinted(fingerprint(seed: 1, seconds: 30), contentDigest: "v1:a", sizeBytes: 1, durationSeconds: 0)
-        #expect(unknown.complete, "no catalog duration → nothing to compare against")
+        let whole = AudioFingerprintStamp.fingerprinted(fingerprint(seed: 1, seconds: 599.2), contentDigest: "v1:a", sizeBytes: 1)
+        #expect(whole.complete && whole.analyzedSeconds == 599.2)
+        let partial = AudioFingerprintStamp.fingerprinted(fingerprint(seed: 1, seconds: 14_400, complete: false), contentDigest: "v1:a", sizeBytes: 1)
+        #expect(!partial.complete && partial.analyzedSeconds == 14_400 && partial.outcome == .fingerprinted)
+        #expect(whole.engineVersion == Int(AudioFingerprint.currentVersion) && whole.engineVersion == 2, "format version 2 after the engine codex round")
         let silent = AudioFingerprintStamp.noAudio(contentDigest: "v1:a", sizeBytes: 1)
         #expect(silent.outcome == .noAudio && silent.complete && silent.landmarks == 0 && silent.bytes == 0)
     }
@@ -160,7 +178,7 @@ struct AudioFingerprintStampTests {
         let r = VideoRecord()
         r.fullPath = "/Volumes/V/b.mov"; r.filename = "b.mov"; r.sizeBytes = 20
         r.audioFingerprint = AudioFingerprintStamp.fingerprinted(fingerprint(seed: 4, seconds: 42), contentDigest: "sha256:bb", sizeBytes: 20,
-                                                                 durationSeconds: 42, computedAt: Date(timeIntervalSince1970: 1_790_000_000))
+                                                                 computedAt: Date(timeIntervalSince1970: 1_790_000_000))
         let encoder = JSONEncoder(); encoder.dateEncodingStrategy = .iso8601
         let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601
         let round = try decoder.decode(VideoRecord.self, from: try encoder.encode(VideoRecordDTO(r)))

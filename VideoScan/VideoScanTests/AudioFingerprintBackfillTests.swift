@@ -35,8 +35,8 @@ import VideoScanCore
 
 // MARK: - Helpers
 
-private func fingerprint(seed: UInt32, count: Int = 120, seconds: Double) -> AudioFingerprint {
-    AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: seconds,
+private func fingerprint(seed: UInt32, count: Int = 120, seconds: Double, complete: Bool = true) -> AudioFingerprint {
+    AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024, durationSeconds: seconds, complete: complete,
                      hashes: (0..<count).map { UInt32($0) &* 2_654_435_761 &+ seed },
                      times: (0..<count).map { UInt32($0 * 2) })
 }
@@ -100,21 +100,21 @@ struct AudioFingerprintBackfillLogicTests {
         let sb = try ShowAgainSandbox.make("afb_plan"); defer { sb.cleanup() }
         let needs = try sb.sound("needs.mov")
         let done = try sb.sound("done.mov")
-        done.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 60), contentDigest: "v1:done.mov", sizeBytes: 2_000, durationSeconds: 60)
+        done.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 60), contentDigest: "v1:done.mov", sizeBytes: 2_000)
         let silent = try sb.sound("silent.mov")
         silent.audioFingerprint = .noAudio(contentDigest: "v1:silent.mov", sizeBytes: 2_000)
         let partial = try sb.sound("partial.mov", seconds: 20_000)
-        partial.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 14_400), contentDigest: "v1:partial.mov", sizeBytes: 2_000, durationSeconds: 20_000)
+        partial.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 14_400, complete: false), contentDigest: "v1:partial.mov", sizeBytes: 2_000)
         let grew = try sb.sound("grew.mov", bytes: 3_000)
-        grew.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 60), contentDigest: "v1:grew.mov", sizeBytes: 2_000, durationSeconds: 60)
+        grew.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 60), contentDigest: "v1:grew.mov", sizeBytes: 2_000)
         let rehashed = try sb.sound("rehashed.mov")
-        rehashed.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 60), contentDigest: "v1:old-bytes", sizeBytes: 2_000, durationSeconds: 60)
+        rehashed.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 60), contentDigest: "v1:old-bytes", sizeBytes: 2_000)
         let oldEngine = try sb.sound("oldengine.mov")
         oldEngine.audioFingerprint = AudioFingerprintStamp(engineVersion: Int(AudioFingerprint.currentVersion) + 1, contentDigest: "v1:oldengine.mov",
                                                            sizeBytes: 2_000, outcome: .fingerprinted, analyzedSeconds: 60, complete: true, landmarks: 1, bytes: 8)
         let gainedFullHash = try sb.sound("full.mov")
         gainedFullHash.contentFixity = ContentFixity.captured(path: gainedFullHash.fullPath, digest: String(repeating: "f", count: 64), byteCount: 2_000)
-        gainedFullHash.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 60), contentDigest: "v1:full.mov", sizeBytes: 2_000, durationSeconds: 60)
+        gainedFullHash.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 60), contentDigest: "v1:full.mov", sizeBytes: 2_000)
         let unhashed = try sb.sound("unhashed.mov", digest: "")
         let purged = try sb.sound("purged.mov"); purged.purgedAt = Date()
         let superseded = try sb.sound("superseded.mov"); superseded.supersededByID = UUID()
@@ -457,6 +457,28 @@ struct AudioFingerprintBackfillQARound1Tests {
         #expect(sb.catalogLogText().contains("fingerprint file could not be written"))
     }
 
+    @Test("engine API: a fingerprint the engine marks incomplete is a PARTIAL stamp without any catalog-duration arithmetic")
+    func partialComesFromTheEngine() async throws {
+        let sb = try ShowAgainSandbox.make("afb_enginepartial"); defer { sb.cleanup() }
+        let long = try sb.sound("long.mov", seconds: 0)   // unknown catalog duration: the engine still decides
+        let job = await runJob(sb.model, pass: { item in fingerprint(seed: 3, seconds: 14_400, complete: false) })
+        #expect(job.totals[.partial] == 1 && job.totals[.fingerprinted] == 0, Comment(rawValue: job.totals.line))
+        let stamp = try #require(long.audioFingerprint)
+        #expect(!stamp.complete && stamp.analyzedSeconds == 14_400)
+        #expect(try sb.store().summary(for: .init(contentDigest: stamp.contentDigest, sizeBytes: 2_000))?.complete == false)
+    }
+
+    @Test("engine API: an invalid fingerprint recipe is refused by name before any read")
+    func invalidRecipeRefused() async throws {
+        let sb = try ShowAgainSandbox.make("afb_recipe"); defer { sb.cleanup() }
+        try sb.sound("a.mov")
+        let calls = PassLog()
+        let job = await runJob(sb.model, pass: { await calls.append($0.path); return try await stubPass($0) }) { $0.parameters.hopSamples = 0 }
+        #expect(job.wasRefused)
+        if case .failed(let msg) = job.state { #expect(msg.contains("fingerprint recipe is invalid"), Comment(rawValue: msg)) } else { Issue.record("\(job.state)") }
+        #expect(await calls.paths.isEmpty)
+    }
+
     @Test("gap 4: an engine version bump redoes a no-sound stamp too")
     func engineBumpRedoesNoAudio() throws {
         let sb = try ShowAgainSandbox.make("afb_bump"); defer { sb.cleanup() }
@@ -495,7 +517,7 @@ struct AudioFingerprintBackfillScaleTests {
             r.contentHash = "v1:\(i)"
             r.durationSeconds = 120
             if i % 4 == 0 {
-                r.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 120), contentDigest: "v1:\(i)", sizeBytes: r.sizeBytes, durationSeconds: 120)
+                r.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 120), contentDigest: "v1:\(i)", sizeBytes: r.sizeBytes)
             }
             if i % 10 == 1 { r.derivationKind = ArchivePromotion.derivationKind }
             records.append(r)
