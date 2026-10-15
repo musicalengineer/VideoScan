@@ -17,15 +17,20 @@
 // crash, never a misread as "silence".
 //
 // MEMORY: `-t` always caps the decode at `maxSeconds` (default 4 h) AND the
-// sink drops bytes past the cap, so the worst case in RAM is
-// 4 h × 8 000 Hz × 2 B = 230 MB of Int16; a 16-minute file is 15 MB, a
-// 3-minute clip 2.9 MB. The Data buffer grows amortised as chunks arrive
-// (≤ 64 KB each), then is copied once into `[Int16]`.
+// sink drops samples past the cap. Each pipe chunk (≤ 64 KB) is converted
+// to Int16 as it arrives and appended to ONE `[Int16]` whose capacity is
+// reserved up front for the cap (virtual only — macOS commits a page when
+// it is first written), so the resident cost is the audio actually
+// decoded plus one chunk, with no second copy and no reallocation:
+// 4 h = 230 MB, a 16-minute file 15 MB, a 3-minute clip 2.9 MB. Measured
+// (AudioFingerprintEngineTests, 60-min WAV): peak growth ≈ the PCM size
+// (55 MB), down from 2× before 2026-10-14 (codex F5). A decode that fills
+// the cap says so (`AudioPCM.reachedCap`).
 //
 // (For Rick: `Failure` is a tagged union — an enum with payloads — thrown
 // and matched by case; `throws` is a checked error channel, not a C++
 // exception with unwinding cost on the happy path. The sink is a small
-// mutex-guarded byte buffer the pipe-reader thread appends to.)
+// mutex-guarded sample buffer the pipe-reader thread appends to.)
 
 import Foundation
 
@@ -33,15 +38,25 @@ import Foundation
 public struct AudioPCM: Sendable, Equatable {
     public let sampleRate: Int
     public let samples: [Int16]
+    /// True when the decode filled the limit it was given (`maxSeconds`,
+    /// or a `Window.durationSeconds`): `samples` are then a PREFIX of the
+    /// recording (or a window of it), not the whole. A fingerprint made
+    /// from such PCM is `complete == false` and can never be called
+    /// "the same recording" as anything. (A file EXACTLY as long as the
+    /// cap also reads as capped — the honest, conservative side.)
+    public let reachedCap: Bool
 
-    public init(sampleRate: Int, samples: [Int16]) {
+    public init(sampleRate: Int, samples: [Int16], reachedCap: Bool = false) {
         self.sampleRate = sampleRate
         self.samples = samples
+        self.reachedCap = reachedCap
     }
 
+    /// Seconds of audio actually analysed (= `samples.count / sampleRate`).
     public var durationSeconds: Double {
         sampleRate > 0 ? Double(samples.count) / Double(sampleRate) : 0
     }
+    public var analyzedSeconds: Double { durationSeconds }
 }
 
 public struct AudioPCMDecoder: Sendable {
@@ -115,8 +130,8 @@ public struct AudioPCMDecoder: Sendable {
         guard FileManager.default.isExecutableFile(atPath: ffmpegPath) else {
             throw Failure.ffmpegMissing(path: ffmpegPath)
         }
-        let capBytes = Int(min(window.durationSeconds ?? maxSeconds, maxSeconds) * Double(sampleRate)) * 2
-        let sink = PCMSink(capBytes: capBytes)
+        let capSamples = Int(min(window.durationSeconds ?? maxSeconds, maxSeconds) * Double(sampleRate))
+        let sink = PCMSink(capSamples: capSamples)
         let result = await ProcessRunner.runProcess(
             executable: ffmpegPath,
             arguments: Self.arguments(path: path, window: window, sampleRate: sampleRate, maxSeconds: maxSeconds),
@@ -134,44 +149,91 @@ public struct AudioPCMDecoder: Sendable {
         }
         let samples = sink.takeSamples()
         guard !samples.isEmpty else { throw Failure.noAudioStream }
-        return AudioPCM(sampleRate: sampleRate, samples: samples)
+        // Exactly the cap's worth of samples means ffmpeg was stopped by
+        // `-t` (or the sink dropped the rest): the file goes on past what
+        // was analysed, as far as anyone can tell.
+        return AudioPCM(sampleRate: sampleRate, samples: samples, reachedCap: samples.count >= capSamples)
     }
 }
 
-/// The byte sink the pipe-reader thread appends to. Bounded by `capBytes`.
-private final class PCMSink: @unchecked Sendable {
+/// The sample sink the pipe-reader thread appends to. Bounded by
+/// `capSamples`; converts s16le bytes to Int16 chunk by chunk so the raw
+/// bytes are never held alongside the samples.
+final class PCMSink: @unchecked Sendable {
     private let lock = NSLock()
-    private var bytes = Data()
-    private let capBytes: Int
+    private var samples: [Int16] = []
+    /// A chunk may end mid-sample; its last byte waits here for the next.
+    private var carry: UInt8?
+    private let capSamples: Int
+    /// Aligned staging for one chunk (grown if a chunk is ever larger):
+    /// bytes are copied here, then appended as Int16 in one contiguous
+    /// copy — a Data chunk's bytes can sit at any alignment.
+    private var staging: UnsafeMutablePointer<Int16>
+    private var stagingCapacity: Int
 
-    init(capBytes: Int) {
-        self.capBytes = capBytes
+    init(capSamples: Int) {
+        self.capSamples = capSamples
+        stagingCapacity = 32_768 + 1
+        staging = .allocate(capacity: stagingCapacity)
+        // Virtual reservation: pages turn resident only as they are
+        // written, so a 3-minute clip costs 2.9 MB however large the cap.
+        samples.reserveCapacity(capSamples)
+    }
+
+    deinit { staging.deallocate() }
+
+    /// Samples held so far (tests).
+    var count: Int {
+        lock.lock(); defer { lock.unlock() }
+        return samples.count
     }
 
     func append(_ chunk: Data) {
         lock.lock()
         defer { lock.unlock() }
-        let room = capBytes - bytes.count
-        guard room > 0 else { return }
-        bytes.append(chunk.count <= room ? chunk : chunk.prefix(room))
+        let room = capSamples - samples.count
+        guard room > 0, !chunk.isEmpty else { return }
+        let needed = (chunk.count + 1) / 2 + 1
+        if needed > stagingCapacity {
+            staging.deallocate()
+            stagingCapacity = needed
+            staging = .allocate(capacity: stagingCapacity)
+        }
+        let whole = chunk.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Int in
+            guard let base = raw.baseAddress else { return 0 }
+            let bytes = UnsafeMutableRawPointer(staging)
+            var length = 0
+            if let low = carry {
+                bytes.storeBytes(of: low, as: UInt8.self)
+                length = 1
+                carry = nil
+            }
+            bytes.advanced(by: length).copyMemory(from: base, byteCount: raw.count)
+            length += raw.count
+            if length % 2 == 1 {
+                carry = bytes.load(fromByteOffset: length - 1, as: UInt8.self)
+            }
+            return length / 2
+        }
+        let take = min(whole, room)
+        if take > 0 {
+            samples.append(contentsOf: UnsafeBufferPointer(start: staging, count: take))
+        }
+        if samples.count >= capSamples { carry = nil }
     }
 
-    /// s16le bytes → host Int16. Apple silicon and Intel are little-endian,
-    /// so this is one memcpy; an odd trailing byte (a truncated last
-    /// sample) is dropped.
+    /// The samples, host-endian (Apple silicon and Intel are little-endian,
+    /// so the copy above IS the conversion); a trailing unpaired byte is
+    /// dropped. The sink is empty afterwards.
     func takeSamples() -> [Int16] {
         lock.lock()
         defer { lock.unlock() }
-        let count = bytes.count / 2
-        guard count > 0 else { return [] }
-        var samples = [Int16](repeating: 0, count: count)
-        _ = samples.withUnsafeMutableBytes { dst in
-            bytes.copyBytes(to: dst, count: count * 2)
-        }
+        var out = samples
+        samples = []
+        carry = nil
         if Int16(1).littleEndian != 1 {
-            samples = samples.map { Int16(littleEndian: $0) }
+            out = out.map { Int16(littleEndian: $0) }
         }
-        bytes = Data()
-        return samples
+        return out
     }
 }
