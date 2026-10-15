@@ -8492,6 +8492,23 @@
       ]
     },
     {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CompareMediaTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CompareMediaTests"
+      ],
+      "tests": [
+        "codecGeneration",
+        "durationWords",
+        "factRows",
+        "folderLabel",
+        "namesSaid",
+        "sideFromRecord",
+        "sizes"
+      ]
+    },
+    {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ConfirmVerbTests.swift",
@@ -30017,7 +30034,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2383,
+      "expected_floor": 2390,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -30113,6 +30130,7 @@
         "VideoScanTests/CombineBatchPlanTests",
         "VideoScanTests/CombineEngineArgsTests",
         "VideoScanTests/CombineTestCapTests",
+        "VideoScanTests/CompareMediaTests",
         "VideoScanTests/CompareTests",
         "VideoScanTests/ConfirmJourneyStampTests",
         "VideoScanTests/ConfirmedRejectedTagSchemaTests",

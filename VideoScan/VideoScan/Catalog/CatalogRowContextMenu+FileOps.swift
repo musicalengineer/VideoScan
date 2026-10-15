@@ -22,7 +22,7 @@ extension CatalogContent {
         transcodeAndCleanupMenus(rec: rec, transcodeRunning: transcodeRunning)
     }
 
-    /// Combine This Pair… and Compare These Two Files….
+    /// Combine This Pair… and Compare Media… (was Compare These Two Files…, 2026-10-15).
     @ViewBuilder
     private func pairItems(rec: VideoRecord, selectedRecs: [VideoRecord], pureActive: Bool) -> some View {
         // File operations — every verb that runs as a job
@@ -44,7 +44,7 @@ extension CatalogContent {
             // different? Only with exactly two rows
             // selected. Distinct from the volume-level
             // Compare & Rescue feature.
-            Button("Compare These Two Files…") {
+            Button("Compare Media…") {
                 _ = fileOpsCenter.startedByUser {
                     // GH #293: a fingerprint the visual tier computes is
                     // kept on the record and saved with the catalog.
