@@ -394,6 +394,58 @@ struct AudioFingerprintEngineTests {
         #expect(m.coverage >= 0.9, "silent seconds must not dilute coverage: \(m.coverage)")
     }
 
+    // MARK: Matcher — repeated hashes (codex F4)
+
+    /// One hash repeated 100 000 times on both sides: a naive posting walk
+    /// is 10^10 visits per pass. A hash that appears everywhere in the
+    /// master says nothing about WHERE the query is, so it is skipped —
+    /// the match is bounded and the verdict is "different", not a claim.
+    @Test(.timeLimit(.minutes(1)))
+    func repeatedHashMatchesInBoundedTime() {
+        let n = 100_000
+        let hashes = [UInt32](repeating: AudioFingerprint.packHash(f1: 100, f2: 200, dt: 10), count: n)
+        let times = (0..<n).map { UInt32($0) }
+        let f = AudioFingerprint(sampleRate: 8_000, hopSamples: 512, frameSize: 1_024,
+                                 durationSeconds: Double(n) * 0.064, hashes: hashes, times: times)
+        let clock = ContinuousClock()
+        let start = clock.now
+        let m = AudioFingerprintIndex(master: f).match(f)
+        let elapsed = clock.now - start
+        print("[audio-fp] repeated hash 100k × 100k: \(elapsed), \(m.verdict)")
+        #expect(elapsed < .seconds(2), "\(elapsed)")
+        #expect(m.verdict == .different)
+    }
+
+    /// Repetitive AUDIO (a metronome: identical clicks every 0.5 s) — the
+    /// real-file shape of the case above. 30 s of clicks against 10 min
+    /// of clicks is bounded and makes no containment claim (every offset
+    /// fits equally well: self-similar audio is not placeable).
+    @Test(.timeLimit(.minutes(1)))
+    func metronomeAgainstMetronomeIsBoundedAndNotAClaim() {
+        let master = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: metronome(seconds: 600)))
+        let query = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: metronome(seconds: 30)))
+        let clock = ContinuousClock()
+        let start = clock.now
+        let m = AudioFingerprintIndex(master: master).match(query)
+        let elapsed = clock.now - start
+        print("[audio-fp] metronome 30 s vs 10 min: \(elapsed); master \(master.landmarkCount) landmarks, "
+              + "query \(query.landmarkCount); \(m.verdict)")
+        #expect(master.landmarkCount > 1_000, "clicks do produce landmarks (so the cap is what bounds this)")
+        #expect(elapsed < .seconds(2), "\(elapsed)")
+        #expect(m.verdict == .different, "\(m.verdict)")
+    }
+
+    /// Identical 2 kHz clicks (8 ms, decaying) every 0.5 s.
+    func metronome(seconds: Int) -> [Int16] {
+        let sr = 8_000
+        var out = [Int16](repeating: 0, count: seconds * sr)
+        let click = (0..<64).map { i in Int16(sin(Double(i) * 2 * .pi * 2_000 / Double(sr)) * 20_000 * exp(-Double(i) / 20)) }
+        for start in stride(from: 0, to: out.count - click.count, by: sr / 2) {
+            for (i, v) in click.enumerated() { out[start + i] = v }
+        }
+        return out
+    }
+
     // MARK: Sensor — the engine never writes beside an input
 
     @Test func engineSourcesNeverOpenAnInputForWrite() throws {
@@ -443,6 +495,14 @@ struct AudioFingerprintEngineTests {
         print(audioMatchLine("slice@1234 vs 60-min", match))
         #expect(match.verdict == .containedInMaster(offsetSeconds: match.offsetSeconds))
         #expect(abs(match.offsetSeconds - 1_234) <= audioOffsetTolerance)
+
+        // Repetitive-audio negative (codex F4): a minute of metronome clicks
+        // against the hour of speech is "different", in bounded time.
+        let metronomeStart = clock.now
+        let clicks = index.match(AudioFingerprint.compute(AudioPCM(sampleRate: sampleRate, samples: metronome(seconds: 60))))
+        print(audioMatchLine("metronome 60 s vs 60-min (\(clock.now - metronomeStart))", clicks))
+        #expect(clicks.verdict == .different)
+        #expect(clock.now - metronomeStart < .seconds(2))
         expectWithinTimingBudget("60-min fingerprint + index + match", measured: elapsed, budget: budget,
                                  loadBefore: loadBefore)
     }

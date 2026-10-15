@@ -86,6 +86,11 @@ public struct AudioMatchPolicy: Sendable, Equatable {
     /// off the master's frame grid sees a peak that straddles a frame
     /// boundary land one frame early or late. 0 = exact hashes only.
     public var deltaFrameTolerance: Int = 1
+    /// A hash the master holds more than this many times (a metronome
+    /// click, a hum, a repeated jingle) is skipped: it says nothing about
+    /// WHERE the query is, and walking it is the quadratic case. Bounds
+    /// the work per query landmark at (2·deltaFrameTolerance + 1) × this.
+    public var maxPostingsPerHash: Int = 64
 
     public init() {}
     public static let `default` = AudioMatchPolicy()
@@ -228,9 +233,10 @@ public struct AudioFingerprintIndex: Sendable {
         let binCount = queryFrames + masterFrames + 1
         var histogram = [Int](repeating: 0, count: binCount)
         for (hash, time) in zip(query.hashes, query.times) {
-            forEachPosting(of: hash, deltaTolerance: policy.deltaFrameTolerance) { t in
+            forEachPosting(of: hash, policy: policy) { t in
                 let bin = Int(t) - Int(time) + queryFrames
                 if bin >= 0, bin < binCount { histogram[bin] += 1 }
+                return true
             }
         }
         let tolerance = policy.offsetToleranceFrames
@@ -254,8 +260,9 @@ public struct AudioFingerprintIndex: Sendable {
         var matched = 0
         for (hash, time) in zip(query.hashes, query.times) {
             var hit = false
-            forEachPosting(of: hash, deltaTolerance: policy.deltaFrameTolerance) { t in
-                if abs(Int(t) - Int(time) + queryFrames - best.centre) <= tolerance { hit = true }
+            forEachPosting(of: hash, policy: policy) { t in
+                hit = abs(Int(t) - Int(time) + queryFrames - best.centre) <= tolerance
+                return !hit   // one hit is enough; stop walking
             }
             if hit {
                 matched += 1
@@ -285,14 +292,17 @@ public struct AudioFingerprintIndex: Sendable {
     }
 
     /// The master's anchor frames for `hash`, and for the hashes whose
-    /// `dt` differs by up to `deltaTolerance` (dt is the low 6 bits, so
-    /// hash ± k is dt ± k while it stays inside 1…63).
-    private func forEachPosting(of hash: UInt32, deltaTolerance: Int, _ body: (UInt32) -> Void) {
+    /// `dt` differs by up to `policy.deltaFrameTolerance` (dt is the low
+    /// 6 bits, so hash ± k is dt ± k while it stays inside 1…63). Lists
+    /// longer than `policy.maxPostingsPerHash` are skipped (see the
+    /// policy); `body` returns false to stop the walk.
+    private func forEachPosting(of hash: UInt32, policy: AudioMatchPolicy, _ body: (UInt32) -> Bool) {
         let dt = Int(hash & 0x3F)
-        for delta in -deltaTolerance...deltaTolerance {
+        for delta in -policy.deltaFrameTolerance...policy.deltaFrameTolerance {
             let probedDT = dt + delta
-            guard probedDT >= 1, probedDT <= 63, let times = postings[UInt32(Int(hash) + delta)] else { continue }
-            for t in times { body(t) }
+            guard probedDT >= 1, probedDT <= 63, let times = postings[UInt32(Int(hash) + delta)],
+                  times.count <= policy.maxPostingsPerHash else { continue }
+            for t in times where !body(t) { return }
         }
     }
 
