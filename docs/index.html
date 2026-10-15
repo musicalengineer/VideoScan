@@ -666,8 +666,14 @@ function renderHead(d) {
     const primary = ran[0];
     // The same failing tests show up on every Mac that ran: the worst Mac's count, never a sum.
     const failing = Math.max(0, ...ran.map(c => c.failed || 0));
+    // Two passing Macs are enough when another is offline; each host keeps its own status.
+    // Actual test failures still take precedence over the passing quorum.
+    const greenHosts = ran.filter(c => c.state === "green").length;
+    const testState = N.hosts.some(h => cellOf(lastNight, h)?.state === "red") ? "red" : lastWatch ? "watch"
+      : greenHosts >= 2 ? "green" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber"
+      : N.hosts.length && greenHosts === N.hosts.length ? "green" : "grey";
     tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing${ran.length > 1 ? " on the worst Mac" : ""}</small>` : `<span class="word amber">did not run</span>`,
-      `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`, N.hosts.some(h => cellOf(lastNight, h)?.state === "red") ? "red" : lastWatch ? "watch" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber" : N.hosts.length && N.hosts.every(h => cellOf(lastNight, h)?.state === "green") ? "green" : "grey"));
+      `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`, testState));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
       : st.greenStreak ? word("green", `green ${st.greenStreak} night${st.greenStreak === 1 ? "" : "s"} running`) : lastWatch ? word("watch", "a few tests failed last night") : word("amber", "did not run last night");
