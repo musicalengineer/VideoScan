@@ -715,18 +715,19 @@ def classify_nightly_row(row: dict) -> str:
     """THE rule for one 2 AM run (Rick, GH #310): a night where no test ran —
     build timeout, build error, zero tests, dirty tree, skipped — DID NOT RUN.
     It is amber on the page, never red. WATCH (Rick 2026-10-15, yellow): the
-    suite ran to the end and fewer than WATCH_MAX_FAILED tests failed, no
-    test host died. RED means broken: that many or more failed, a crashed
-    test host, or a run killed part-way (a reason other than the plain
-    failed-tests count: the exit code is evidence). Green: tests ran, status
-    ok, nothing failed."""
+    suite ran to the end and fewer than WATCH_MAX_FAILED tests failed. RED
+    means broken: that many or more failed, or a run killed part-way (a
+    reason other than the plain failed-tests count: the exit code is
+    evidence). Green: tests ran, status ok, nothing failed. The row's
+    `crashed_names` never decides the colour: the nightly's "host died"
+    detection is a log heuristic that also lists a NAMED Swift Testing test
+    that merely failed (10/15: the Angel boundary ratchet)."""
     if _int(row.get("total")) == 0:
         return "did_not_run"
     failed = _int(row.get("failed"))
-    crashed = row.get("crashed_names")
     reason = row.get("reason")
     ran_to_the_end = row.get("status") == "ok" or (isinstance(reason, str) and reason.startswith("failed-tests:"))
-    if 0 < failed < WATCH_MAX_FAILED and ran_to_the_end and not (isinstance(crashed, list) and crashed):
+    if 0 < failed < WATCH_MAX_FAILED and ran_to_the_end:
         return "watch"
     if row.get("status") == "failed" or failed > 0:
         return "red"

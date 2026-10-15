@@ -27,7 +27,7 @@
   Layout, top to bottom:
     1. Headline strip: version · app source lines (app only) · last night's
        tests, one dot per Mac · stability · open bugs · sprint.
-    2. "When did the app have difficulty?" — 90 nights × Macs, one cell per
+    2. "Test pass/fail trend" — 90 nights × Macs, one cell per
        night; purple marks are demo tags. A twist lists the nights not green.
     3. One line per area (dot · sparkline · one sentence · one number · 7-day
        arrow) with a ▸ twist holding the charts and tables that used to be the
@@ -215,7 +215,7 @@
 
 <!-- 2 ============ WHEN DID THE APP HAVE DIFFICULTY? ============ -->
 <div class="block">
-  <h2>When did the app have difficulty? <span class="note">2 AM nightly on each Mac, last 90 nights · one cell per night</span></h2>
+  <h2>Test pass/fail trend <span class="note">2 AM nightly on each Mac, last 90 nights · one cell per night: green every test passed, yellow a few failed, red broken</span></h2>
   <div class="legend">
     <span><i class="sw" style="background:var(--good)"></i> all tests passed</span>
     <span><i class="sw" style="background:var(--warn)"></i> a few tests failed (fewer than 10)</span>
@@ -552,16 +552,18 @@ const STATE_WORD = { green: "green", watch: "a few failed", red: "red", did_not_
 const cellReason = cell => cell && typeof cell["reason"] === "string" ? cell["reason"] : "";
 function cellWords(cell) {
   if (!cell) return "no run";
-  if (cell.state === "green") return `green · ${n(cell.passed)} passed`;
-  if (cell.state === "red") return `${n(cell.failed)} failed of ${n(cell.total)}`;
-  if (cell.state === "watch") return `${n(cell.failed)} failed of ${n(cell.total)} (a few)`;
+  if (cell.state === "green") return `all ${n(cell.passed)} passed`;
+  if (cell.state === "red") return `${n(cell.passed)} passed · ${n(cell.failed)} failed — broken`;
+  if (cell.state === "watch") return `${n(cell.passed)} passed · ${n(cell.failed)} failed (a few)`;
   return `did not run${cellReason(cell) ? " · " + cellReason(cell) : ""}`;
 }
 function stability(N) {
   const L = N.list;
   const ran = L.filter(t => nightStates(t).length);
-  const red = L.filter(anyFailing);
+  const red = L.filter(anyRed);
+  const few = L.filter(t => anyWatch(t) && !anyRed(t));
   const green = L.filter(ranGreen);
+  const notRun = L.filter(t => nightStates(t).length && nightStates(t).every(s => s === "did_not_run"));
   const allGreen = L.filter(t => N.hosts.length && N.hosts.every(h => cellOf(t, h) && cellOf(t, h).state === "green"));
   let redStreak = 0;
   for (let i = L.length - 1; i >= 0 && anyRed(L[i]); i--) redStreak++;
@@ -571,7 +573,7 @@ function stability(N) {
   const lastGreen = green.length ? green[green.length - 1].date : null;
   const daysSince = date => date ? Math.round((toTime(L[L.length - 1].date) - toTime(date)) / 86400000) : null;
   const last7 = L.slice(-7).filter(ranGreen).length;
-  return { nightsRan: ran.length, redNights: red.length, greenNights: green.length, allGreen: allGreen.length,
+  return { nightsRan: ran.length, redNights: red.length, fewNights: few.length, greenNights: green.length, notRunNights: notRun.length, allGreen: allGreen.length,
            redStreak, greenStreak, lastRed, lastGreen, daysSinceRed: daysSince(lastRed), last7 };
 }
 
@@ -655,8 +657,9 @@ function renderHead(d) {
     const lastWatch = anyWatch(lastNight);
     const ran = N.hosts.map(h => cellOf(lastNight, h)).filter(c => c && c.state !== "did_not_run");
     const primary = ran[0];
-    const failing = ran.reduce((a, c) => a + (c.failed || 0), 0);
-    tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing</small>` : `<span class="word amber">did not run</span>`,
+    // The same failing tests show up on every Mac that ran: the worst Mac's count, never a sum.
+    const failing = Math.max(0, ...ran.map(c => c.failed || 0));
+    tiles.push(tile("Last night's tests", primary ? `${n(primary.passed)} <small>passed · ${failing} failing${ran.length > 1 ? " on the worst Mac" : ""}</small>` : `<span class="word amber">did not run</span>`,
       `<div class="hosts">${hosts}</div>night of ${day(lastNight.date)}${stale(lastNight.date)}`, N.hosts.some(h => cellOf(lastNight, h)?.state === "red") ? "red" : lastWatch ? "watch" : N.hosts.some(h => cellOf(lastNight, h)?.state === "did_not_run") ? "amber" : N.hosts.length && N.hosts.every(h => cellOf(lastNight, h)?.state === "green") ? "green" : "grey"));
     const st = stability(N);
     const streak = st.redStreak ? word("red", `red ${st.redStreak} night${st.redStreak === 1 ? "" : "s"} running`)
@@ -735,9 +738,10 @@ function renderTimeline(d) {
 
   const st = stability(N);
   document.getElementById("stab").innerHTML =
-    `<span><b>${st.redNights}</b> of ${st.nightsRan} nights had a failing test on some Mac</span>` +
-    `<span><b>${st.greenNights}</b> nights every Mac that ran was green</span>` +
-    `<span><b>${st.allGreen}</b> nights all ${N.hosts.length} Macs ran and were green</span>` +
+    `<span><b>${st.greenNights}</b> of ${st.nightsRan} nights every test passed on every Mac that ran</span>` +
+    `<span><b>${st.fewNights}</b> nights a few tests failed</span>` +
+    `<span><b>${st.redNights}</b> nights broken</span>` +
+    `<span><b>${st.notRunNights}</b> nights no Mac ran</span>` +
     (tags.length ? `<span>demo tags: ${tags.map(t => `<b>${esc(t.name)}</b> ${day(t.date)}`).join(", ")}</span>` : "");
   const bad = T.filter(t => nightStates(t).some(s => s !== "green")).reverse();
   document.getElementById("tl-table").innerHTML = bad.length ? table(["Night", ...N.hosts, "Tag"],

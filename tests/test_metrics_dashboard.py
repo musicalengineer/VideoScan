@@ -365,8 +365,8 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "5.1" in head and "build 1" in head and "b07f9da" in head and "CI on main" in head and "success" in head
     assert "376,166" in head and "app only" in head and "+1,958 since" in head        # app_source_lines, never total_swift_lines
     assert "546,428" not in head
-    assert "11,211" in head and "3 failing" in head
-    assert "M1" in head and "did not run · build-timeout:5400s" in head and "failed of" in head
+    assert "11,211" in head and "2 failing on the worst Mac" in head and "3 failing" not in head, "the worst Mac's count, never a sum across Macs"
+    assert "M1" in head and "did not run · build-timeout:5400s" in head and "11,207 passed · 1 failed" in head
     assert "red 1 night running" in head and "days since a red night" in head
     value, words = bug_tile(head)
     assert "Open bugs:</small> 11" in value and "High priority:</small> 4" in value
@@ -379,10 +379,12 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     tl = out["sections"]["tl"]
     assert tl.count('class="cell ') == 3 * 90
     assert tl.count("cell did_not_run") == 31 and tl.count("cell red") == 4 and tl.count("cell watch") == 1
-    assert "4 failed of 9,060 (a few)" in tl
+    assert "9,004 passed · 4 failed (a few)" in tl
     assert 'title="M1 · ' in tl and "did not run · build-timeout:5400s" in tl and "demo-2026-10-10" in tl
     assert "1 of 90 nights" not in out["sections"]["stab"]
-    assert "nights had a failing test on some Mac" in out["sections"]["stab"] and "demo-2026-10-10" in out["sections"]["stab"]
+    stab = out["sections"]["stab"]
+    assert "nights every test passed on every Mac that ran" in stab and "nights a few tests failed" in stab and "nights broken" in stab
+    assert "demo-2026-10-10" in stab and "Macs ran and were green" not in stab
     table = out["sections"]["tl-table"]
     assert "did not run" in table and "failed" in table and ">failed<" not in table
     # Every area has a summary line (dot, name, sentence, number) and an opened twist with its body.

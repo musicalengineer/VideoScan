@@ -42,9 +42,10 @@ def night(host, date, hour="07", **f):
     (night("RicksM4", "2026-10-12", status="failed", reason="failed-tests:2", passed=11211, failed=2, total=11275), "watch"),
     (night("RicksM5", "2026-10-12", status="ok", passed=2089, failed=1, total=2092), "watch"),
     (night("RicksM4", "2026-10-15", status="failed", reason="failed-tests:9", passed=11425, failed=9, total=11496, crashed_names=[]), "watch"),
-    # Broken: that many failed, a crashed test host, or a run killed part-way (exit code is evidence).
+    # crashed_names is the nightly's log heuristic (a named Swift Testing test that merely failed lands there): never the colour.
+    (night("RicksM4", "2026-10-15", status="failed", reason="failed-tests:4", passed=11430, failed=4, total=11496, crashed_names=["SECRET-CRASH"]), "watch"),
+    # Broken: that many failed, or a run killed part-way (exit code is evidence).
     (night("RicksM4", "2026-10-15", status="failed", reason="failed-tests:10", passed=11424, failed=10, total=11496), "red"),
-    (night("RicksM4", "2026-10-15", status="failed", reason="failed-tests:4", passed=11430, failed=4, total=11496, crashed_names=["SECRET-CRASH"]), "red"),
     (night("RicksM5", "2026-10-12", status="failed", reason="test-timeout:7200s", passed=2089, failed=0, total=2092), "red"),
     (night("RicksM5", "2026-10-12", status="failed", reason="test-timeout:7200s", passed=2089, failed=3, total=2092), "red"),
     # Tests ran, nothing failed.
