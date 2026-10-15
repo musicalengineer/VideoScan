@@ -22151,8 +22151,10 @@
         "oldReceiptShapeReversesLabelOnly",
         "onlyTheLabel",
         "onlyTheReceiptIsWritten",
+        "otherLabelRowReceiptIsExact",
         "poisonedLedgerRefuses",
         "receiptIndex",
+        "refusesWhileScanning",
         "reverseHoldsTheSoleGroupMemberAnyDisposition",
         "reverseLeavesASurvivingKeeperVisible",
         "reverseOnMarkerOnlyRowIsExact",
@@ -27301,16 +27303,30 @@
         "AudioFingerprintEngineTests"
       ],
       "tests": [
+        "audibleSecondsRoundTripInVSAF",
         "bogusFFmpegPathIsNamed",
+        "cappedDecodeNeverYieldsAWholeRecordingClaim",
         "decodeWindowIsExact",
         "decodedBytesAreTheWAVsBytes",
         "decoderArgumentsAreReadOnlyPipeToStdout",
+        "defaultRecipeIDIsPinned",
+        "digitalSilenceIsExcludedFromCoverage",
         "engineSourcesNeverOpenAnInputForWrite",
         "hashPackingRoundTrips",
+        "indexRefusesAFingerprintFromAnotherRecipe",
+        "metronomeAgainstMetronomeIsBoundedAndNotAClaim",
+        "parametersOutsideTheHashFieldsAreRejected",
+        "partialMatchIsNeverAWholeRecordingClaim",
+        "repeatedHashMatchesInBoundedTime",
         "silenceHasNoLandmarks",
+        "sinkReassemblesSamplesAcrossChunkBoundaries",
         "sixtyMinuteMasterFingerprintsAndIndexesWithinBudget",
+        "tinyQueryWithTwoMatchedSecondsIsNotContained",
+        "verdictRefusesWholeRecordingClaimsOnIncompleteSides",
+        "verdictRequiresDistributedEvidence",
         "verdictRules",
         "videoOnlyFileIsNoAudioStream",
+        "vsafWithHopZeroIsRefused",
         "zeroByteFileIsDecodeFailed"
       ]
     },
@@ -29914,6 +29930,14 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CleanupTrashHardeningTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/AudioFingerprintStoreTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/AudioFingerprintBackfillTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
