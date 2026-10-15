@@ -52,6 +52,14 @@ Top to bottom:
 A slider sets frames per minute (10 s to 120 s a frame); scrolling down scrolls through
 time on both spools together.
 
+**Next face.** A button pair (and ↓ / ↑, with the mouse wheel for continuous scrolling)
+jumps both spools to the next section where a face was found, on either spool, and names
+the person when the People tab knows them. Rick: "the mouse wheel or a button will scroll
+down the filmstrips to the next person's face." The jump keeps the two spools aligned on
+the shared axis, so landing on Timmy at 19:40 in the master shows what the other camera
+had at that moment. A pair with no faces on either side says so in the band ("no faces
+found") rather than offering a dead button.
+
 ## 3. The filmstrip: significant frames, never leaders
 
 Rick: "fast forward to a significant frame, avoiding leaders." For each section of the
