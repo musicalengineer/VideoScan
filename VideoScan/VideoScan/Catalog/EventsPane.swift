@@ -217,8 +217,8 @@ final class EventsStore: ObservableObject {
 
     // MARK: Decisions on confirmed events
 
-    func rename(_ e: ConfirmedEvent, to name: String) {
-        guard decisions.rename(e.id, to: name) else { return }
+    func renameEvent(_ e: ConfirmedEvent, to name: String) {
+        guard decisions.renameEvent(e.id, to: name) else { return }
         reapply()
     }
 

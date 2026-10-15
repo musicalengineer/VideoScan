@@ -391,7 +391,7 @@ final class EventsDecisionStore: ObservableObject {
     }
 
     @discardableResult
-    func rename(_ id: UUID, to name: String, now: Date = Date()) -> Bool {
+    func renameEvent(_ id: UUID, to name: String, now: Date = Date()) -> Bool {
         guard isWritable, var e = events[id] else { return false }
         e.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         e.updatedAt = now

@@ -481,8 +481,11 @@ enum CatalogStorageTotalsCalculator {
         var counted: [R] = []
         var deleted: [R] = []
         counted.reserveCapacity(records.count)
-        for rec in records {
-            if isHiddenByDeletedLabel(rec) { deleted.append(rec) } else if isActive(rec) { counted.append(rec) }
+        for rec in records where isActive(rec) {
+            if isHiddenByDeletedLabel(rec) { deleted.append(rec) } else { counted.append(rec) }
+        }
+        for rec in records where !isActive(rec) && isHiddenByDeletedLabel(rec) {
+            deleted.append(rec)
         }
         return (counted, deleted)
     }

@@ -77,11 +77,14 @@ extension VideoScanModel {
     }
 
     /// Build the plan: the projection here, everything else off-main.
-    /// `birthdays` is the People-tab reader (disk; none under a test host).
+    /// `birthdays` is the People-tab reader; by default the Angel façade's
+    /// copy (`archiveAngel.familyBirthdays`, read off-main at launch and
+    /// before every sweep; empty under a test host), so Events never
+    /// reaches past the Angel's public surface (boundary sensor, INBOUND).
     func buildEventsPlan(decisions: EventsDecisionSnapshot,
-                         birthdays: @escaping @Sendable () -> [FamilyBirthday]
-                            = AngelEnvironment.familyBirthdaysReader(isTestHost: TestEnvironment.isTestHost))
+                         birthdays: (@Sendable () -> [FamilyBirthday])? = nil)
     async -> EventsPlan {
+        let birthdays = birthdays ?? { [list = archiveAngel.familyBirthdays] in list }
         let inputs = eventsInputs()
         let t0 = DispatchTime.now().uptimeNanoseconds
         let plan = await Task.detached(priority: .userInitiated) {

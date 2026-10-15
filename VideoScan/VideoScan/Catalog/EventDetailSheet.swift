@@ -114,7 +114,7 @@ struct EventDetailSheet: View {
     }
 
     private func renameNow(_ e: ConfirmedEvent) {
-        store.rename(e, to: name)
+        store.renameEvent(e, to: name)
         renaming = false
     }
 

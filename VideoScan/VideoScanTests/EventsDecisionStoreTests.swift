@@ -180,7 +180,7 @@ struct EventsDecisionStoreTests {
         #expect(store.snapshot().members(of: eventID).map(\.contentKey) == ["sha-1"])
         #expect(store.confirm(name: "x", categories: ["Birthday"], members: []) == nil)
         #expect(!store.record(.differentOccasions(a: ContentRange(contentKey: "a"), b: ContentRange(contentKey: "b"))))
-        #expect(!store.rename(eventID, to: "y") && !store.setState(eventID, .dismissed))
+        #expect(!store.renameEvent(eventID, to: "y") && !store.setState(eventID, .dismissed))
         #expect(await store.save() == false)
         #expect(try Data(contentsOf: store.fileURL) == before, "the bytes are untouched")
         #expect(!FileManager.default.fileExists(atPath: store.previousURL.path), "no .prev either — nothing was written")
