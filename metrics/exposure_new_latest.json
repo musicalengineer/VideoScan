@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-15T17:34:35Z",
- "sha": "83f13351",
+ "ts": "2026-10-15T19:11:34Z",
+ "sha": "72d8dbf0",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
@@ -224,6 +224,20 @@
    "key": "VideoScan/VideoScan/Catalog/CatalogAudit.swift::CatalogAuditRecord.removalState",
    "file": "VideoScan/VideoScan/Catalog/CatalogAudit.swift",
    "name": "CatalogAuditRecord.removalState",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CatalogDistributionPane.swift::CatalogDistributionCalculator.Inputs.factsByDrive",
+   "file": "VideoScan/VideoScan/Catalog/CatalogDistributionPane.swift",
+   "name": "CatalogDistributionCalculator.Inputs.factsByDrive",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CatalogDistributionPane.swift::CatalogDistributionStats.factsByDrive",
+   "file": "VideoScan/VideoScan/Catalog/CatalogDistributionPane.swift",
+   "name": "CatalogDistributionStats.factsByDrive",
    "kind": "var",
    "classification": "could-be-private"
   },
@@ -3112,8 +3126,8 @@
    "classification": "could-be-private"
   }
  ],
- "fixed": 4,
+ "fixed": 5,
  "baseline_before": 2461,
- "baseline_after": 2457,
+ "baseline_after": 2456,
  "shrink_skipped": false
 }

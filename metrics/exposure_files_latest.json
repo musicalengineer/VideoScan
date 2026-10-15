@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-15T17:34:35Z",
- "sha": "83f13351",
+ "ts": "2026-10-15T19:11:34Z",
+ "sha": "72d8dbf0",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": {
    "lines": 398,
@@ -1631,10 +1631,12 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogDistributionPane.swift": {
-   "lines": 627,
-   "decls": 31,
+   "lines": 694,
+   "decls": 35,
    "could_be_private": [
     "CatalogDistributionStats.tierFiles",
+    "CatalogDistributionStats.factsByDrive",
+    "CatalogDistributionCalculator.Inputs.factsByDrive",
     "CatalogVerdict.safetyTier",
     "CatalogDistributionPane.bigDonut"
    ],
@@ -5414,7 +5416,6 @@
    "lines": 441,
    "decls": 41,
    "could_be_private": [
-    "MediaDistributionCalculator.homeName",
     "MediaDistributionCalculator.lightPalette",
     "MediaDistributionCalculator.darkPalette"
    ],
@@ -5962,8 +5963,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Cleanup/CleanupPlan.swift": {
-   "lines": 586,
-   "decls": 88,
+   "lines": 610,
+   "decls": 89,
    "could_be_private": [
     "CleanupPlan.LeftAloneLine",
     "CleanupPathRules.isInAppLibrary",
@@ -5988,7 +5989,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/Cleanup/CleanupTrashJob.swift": {
-   "lines": 644,
+   "lines": 651,
    "decls": 49,
    "could_be_private": [
     "CleanupSelection.allJunk",
@@ -8508,6 +8509,12 @@
     "DiscoveryAudit.pathListsTruncated",
     "DiscoveryAuditCollector.maxRecordedPaths"
    ],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScan/Volumes/DriveAllocationProbe.swift": {
+   "lines": 152,
+   "decls": 16,
+   "could_be_private": [],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Volumes/DriveHealth.swift": {
