@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-15T17:31:43Z",
- "sha": "bb3007d7",
+ "ts": "2026-10-15T17:34:35Z",
+ "sha": "83f13351",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": {
    "lines": 398,
