@@ -74,9 +74,12 @@ private extension ShowAgainSandbox {
     /// A record with a sampled digest (the scan's "v1:" hash) and a duration.
     @discardableResult
     func sound(_ name: String, bytes: Int = 2_000, seconds: Double = 60, onDisk: Bool = true,
-               digest: String? = nil, archived: Bool = false) throws -> VideoRecord {
+               digest: String? = nil, fullHash: String? = nil, archived: Bool = false) throws -> VideoRecord {
         let r = try record(name, bytes: bytes, onDisk: onDisk, stage: .none)
         r.contentHash = digest ?? "v1:" + name
+        if let fullHash {
+            r.contentFixity = ContentFixity.captured(path: r.fullPath, digest: String(repeating: fullHash, count: 64), byteCount: Int64(bytes))
+        }
         r.durationSeconds = seconds
         r.streamTypeRaw = StreamType.videoAndAudio.rawValue
         if archived { r.derivationKind = ArchivePromotion.derivationKind }
@@ -119,10 +122,10 @@ struct AudioFingerprintBackfillLogicTests {
 
         let plan = sb.model.audioFingerprintBackfillPlan()
         #expect(plan.lanes.count == 1)
-        #expect(plan.lanes.first?.items.map(\.filename) == ["aside.mov", "grew.mov", "needs.mov", "oldengine.mov", "rehashed.mov"],
+        #expect(plan.lanes.first?.items.map(\.filename) == ["aside.mov", "full.mov", "grew.mov", "needs.mov", "oldengine.mov", "rehashed.mov"],
                 Comment(rawValue: "\(plan.lanes.first?.items.map(\.filename) ?? [])"))
-        #expect(plan.alreadyFingerprinted == 2 && plan.noSoundStamped == 1 && plan.partialStamped == 1, "done, full (sampled key still carried), silent, partial")
-        #expect(plan.noDigest == 1 && plan.fileCount == 5 && plan.bytes == 11_000)
+        #expect(plan.alreadyFingerprinted == 1 && plan.noSoundStamped == 1 && plan.partialStamped == 1, "done, silent, partial; full.mov's v1-keyed stamp is redone now that it has a full hash")
+        #expect(plan.noDigest == 1 && plan.fileCount == 6 && plan.bytes == 13_000)
         _ = needs; _ = unhashed
         // The preferred digest is the full hash when the record has one.
         let full = AudioFingerprintBackfillPlanner.digests(of: gainedFullHash)
@@ -149,9 +152,10 @@ struct AudioFingerprintBackfillLogicTests {
     @Test("two copies of the same bytes: one decode, one sidecar row, both stamped (the second 'shared'); a second run decodes nothing")
     func sharedCopiesAndResume() async throws {
         let sb = try ShowAgainSandbox.make("afb_shared"); defer { sb.cleanup() }
-        let master = try sb.sound("a_master.mov", digest: "v1:same")
-        let copy = try sb.sound("b_copy.mov", digest: "v1:same")
-        let other = try sb.sound("c_other.mov")
+        let master = try sb.sound("a_master.mov", fullHash: "a")
+        let copy = try sb.sound("b_copy.mov", fullHash: "a")
+        let other = try sb.sound("c_other.mov", fullHash: "c")
+        let sameKey = AudioFingerprintStamp.fullDigest(String(repeating: "a", count: 64))
         let calls = PassLog()
         let first = await runJob(sb.model, pass: { item in await calls.append(item.path); return try await stubPass(item) })
         #expect(first.state == .finished(summary: first.totals.line), Comment(rawValue: first.subtitle))
@@ -159,10 +163,10 @@ struct AudioFingerprintBackfillLogicTests {
         #expect(first.totals[.fingerprinted] == 2 && first.totals[.shared] == 1, Comment(rawValue: first.totals.line))
         #expect(first.storedCount == 3)
         #expect(master.audioFingerprint?.outcome == .fingerprinted && copy.audioFingerprint?.landmarks == master.audioFingerprint?.landmarks)
-        #expect(copy.audioFingerprint?.contentDigest == "v1:same" && other.audioFingerprint != nil)
+        #expect(copy.audioFingerprint?.contentDigest == sameKey && other.audioFingerprint != nil)
         let store = try sb.store()
         #expect(try store.count() == 2, "one row for the shared bytes, one for the other file")
-        #expect(try store.fingerprint(for: .init(contentDigest: "v1:same", sizeBytes: 2_000))?.landmarkCount == 120)
+        #expect(try store.fingerprint(for: .init(contentDigest: sameKey, sizeBytes: 2_000))?.landmarkCount == 120)
 
         let second = await runJob(sb.model, pass: { item in await calls.append(item.path); return try await stubPass(item) })
         #expect(second.totals.planned == 0 && second.totals.alreadyStamped == 3, Comment(rawValue: second.totals.line))
@@ -206,7 +210,7 @@ struct AudioFingerprintBackfillLogicTests {
         })
         #expect(job.totals[.failed] == 2 && job.totals[.fingerprinted] == 1, Comment(rawValue: job.totals.line))
         #expect(job.problems.first { $0.path == broken.fullPath }?.detail.contains("Invalid data found") == true)
-        #expect(job.problems.first { $0.path == slow.fullPath }?.detail.contains("no answer from the drive") == true)
+        #expect(job.problems.first { $0.path == slow.fullPath }?.detail.contains("will try again next run") == true)
         #expect(broken.audioFingerprint == nil && slow.audioFingerprint == nil && next.audioFingerprint != nil)
         #expect(sb.catalogLogText().contains("FAILED \(broken.fullPath)"))
         if case .finished = job.state {} else { Issue.record("expected finished, got \(job.state)") }
@@ -368,6 +372,99 @@ struct AudioFingerprintBackfillLogicTests {
         #expect(AudioFingerprintBackfillSheet.headline(plan) == "2 files need a sound fingerprint — about 2.4 TB to read. 6,940 are already done.")
         #expect(AudioFingerprintBackfillSheet.archiveLine(plan) == "1 archived file goes first, then the other 1 — drive by drive, one reader per drive."
                 || AudioFingerprintBackfillSheet.archiveLine(plan) == "1 archived file go first, then the other 1 — drive by drive, one reader per drive.")
+    }
+}
+
+@Suite("Fingerprint sound — QA round 1 (sharing identity, checkpoint race, budget across the gate)", .serialized)
+@MainActor
+struct AudioFingerprintBackfillQARound1Tests {
+
+    @Test("P1-a/b: a sampled digest never shares; a shared stamp's key is in the sidecar")
+    func sampledDigestNeverShares() async throws {
+        let sb = try ShowAgainSandbox.make("afb_v1share"); defer { sb.cleanup() }
+        try sb.sound("a_first.mov", digest: "v1:same")
+        let b = try sb.sound("b_second.mov", digest: "v1:same")
+        b.contentFixity = ContentFixity.captured(path: b.fullPath, digest: String(repeating: "b", count: 64), byteCount: 2_000)
+        let calls = PassLog()
+        let job = await runJob(sb.model, pass: { await calls.append($0.path); return try await stubPass($0) })
+        let decoded = await calls.paths.count
+        #expect(decoded == 2, "v1 must not share")
+        #expect(job.totals[.shared] == 0)
+        let stamp = try #require(b.audioFingerprint)
+        #expect(stamp.contentDigest.hasPrefix("sha256:"))
+        #expect(try sb.store().fingerprint(for: .init(contentDigest: stamp.contentDigest, sizeBytes: 2_000)) != nil)
+        // A sha256 copy of b IS shared, and its stamp names the key the row was found under.
+        let c = try sb.sound("c_copy.mov", digest: "v1:other", fullHash: "b")
+        let second = await runJob(sb.model, pass: { await calls.append($0.path); return try await stubPass($0) })
+        #expect(second.totals[.shared] == 1, Comment(rawValue: second.totals.line))
+        let cStamp = try #require(c.audioFingerprint)
+        #expect(cStamp.contentDigest == stamp.contentDigest)
+        #expect(try sb.store().has(.init(contentDigest: cStamp.contentDigest, sizeBytes: 2_000)))
+    }
+
+    @Test("P1-c: a file stamped while a checkpoint save is in flight still reaches the sidecar")
+    func checkpointRaceKeepsSidecarBytes() async throws {
+        let sb = try ShowAgainSandbox.make("afb_race"); defer { sb.cleanup() }
+        func record(_ root: String) -> VideoRecord {
+            let r = VideoRecord(); r.fullPath = "/Volumes/\(root)/t.mov"; r.filename = "t.mov"; r.sizeBytes = 1_000
+            r.contentHash = "v1:\(root)"; r.durationSeconds = 60; r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            sb.model.records.append(r); return r
+        }
+        let slow = record("AFBR_B_\(UUID().uuidString.prefix(4))"); _ = record("AFBR_A_\(UUID().uuidString.prefix(4))")
+        let job = await runJob(sb.model, pass: { item in
+            if item.path.contains("AFBR_B") { try await Task.sleep(nanoseconds: 100_000_000) }
+            return try await stubPass(item)
+        }) { j in
+            j.fileExists = { _ in true }; j.checkpointFiles = 1
+            j.saveCatalogForTesting = { try? await Task.sleep(nanoseconds: 300_000_000); return true }
+        }
+        let stamp = try #require(slow.audioFingerprint)
+        #expect(try sb.store().has(.init(contentDigest: stamp.contentDigest, sizeBytes: 1_000)), "stamped but never put")
+        #expect(job.storedCount == 2)
+    }
+
+    @Test("P2: the budget holds when the gate acquire suspends")
+    func budgetHoldsAcrossGateHop() async throws {
+        let sb = try ShowAgainSandbox.make("afb_budgetgate"); defer { sb.cleanup() }
+        for i in 0..<6 {
+            let r = VideoRecord(); r.fullPath = "/Volumes/AFBG\(i)_\(UUID().uuidString.prefix(4))/tape.mov"; r.filename = "tape\(i).mov"
+            r.sizeBytes = 1_000; r.contentHash = "v1:g\(i)"; r.durationSeconds = 4 * 3_600; r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+            sb.model.records.append(r)
+        }
+        let gauge = ConcurrencyGauge()
+        _ = await runJob(sb.model, pass: { item in
+            await gauge.enter(); try await Task.sleep(nanoseconds: 60_000_000); await gauge.leave(); return try await stubPass(item)
+        }) { j in
+            j.fileExists = { _ in true }
+            j.gatesFor = { path in [MediaVolumeGate(root: MediaVolumeGatePolicy.volumeRoot(forPath: path), label: "g", semaphore: AsyncSemaphore(limit: 1))] }
+        }
+        let peak = await gauge.peak
+        #expect(peak == 3, "peak was \(peak)")
+    }
+
+    @Test("gap 3: a failed sidecar write reverts the unsaved stamps and stops with a named outcome")
+    func failedSidecarPutUndoes() async throws {
+        let sb = try ShowAgainSandbox.make("afb_putfail"); defer { sb.cleanup() }
+        let recs = try (0..<3).map { try sb.sound("p\($0).mov") }
+        let job = await runJob(sb.model) { j in
+            j.checkpointFiles = 1
+            j.sidecarPutForTesting = { _ in throw AudioFingerprintStore.Failure.sql("disk full") }
+        }
+        #expect(job.saveFailed && job.storedCount == 0)
+        if case .failed(let msg) = job.state { #expect(msg.contains("could not be saved"), Comment(rawValue: msg)) } else { Issue.record("\(job.state)") }
+        #expect(recs.allSatisfy { $0.audioFingerprint == nil }, "every stamp undone")
+        #expect(try sb.store().count() == 0)
+        #expect(sb.catalogLogText().contains("fingerprint file could not be written"))
+    }
+
+    @Test("gap 4: an engine version bump redoes a no-sound stamp too")
+    func engineBumpRedoesNoAudio() throws {
+        let sb = try ShowAgainSandbox.make("afb_bump"); defer { sb.cleanup() }
+        let r = try sb.sound("s.mov")
+        r.audioFingerprint = AudioFingerprintStamp(engineVersion: Int(AudioFingerprint.currentVersion) - 1, contentDigest: "v1:s.mov",
+                                                   sizeBytes: 2_000, outcome: .noAudio, analyzedSeconds: 0, complete: true, landmarks: 0, bytes: 0)
+        let plan = sb.model.audioFingerprintBackfillPlan()
+        #expect(plan.fileCount == 1 && plan.noSoundStamped == 0)
     }
 }
 

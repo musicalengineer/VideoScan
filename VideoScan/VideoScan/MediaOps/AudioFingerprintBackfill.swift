@@ -10,8 +10,10 @@
 //     records that need a look into LANES, one per volume root; inside a
 //     lane the archived files come first, then the rest, each in path
 //     order. The need rule is the stamp's: `AudioFingerprintStamp.describes`
-//     (same size, a digest the record still carries, this engine version)
-//     → skip, whatever its outcome — fingerprinted, no sound, or partial.
+//     (same size, keyed on the record's PREFERRED digest, this engine
+//     version) → skip, whatever its outcome — fingerprinted, no sound, or
+//     partial. Only a full "sha256:" digest is an identity; a sampled "v1:"
+//     key is good enough for the record's OWN stamp but never for sharing.
 //     Because a stamped record is skipped, running again after a stop, quit
 //     or crash IS the resume: no resume file exists for this job.
 //   • RUN (AudioFingerprintBackfillJob.swift): lanes in parallel, one decode

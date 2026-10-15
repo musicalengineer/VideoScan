@@ -113,8 +113,13 @@ struct AudioFingerprintStampTests {
     func describesRule() {
         let fp = fingerprint(seed: 9, seconds: 600)
         let stamp = AudioFingerprintStamp.fingerprinted(fp, contentDigest: "v1:sampled", sizeBytes: 1_000, durationSeconds: 600)
-        #expect(stamp.describes(sizeBytes: 1_000, digests: ["sha256:full", "v1:sampled"]), "gained a full hash later — still the same bytes")
+        #expect(!stamp.describes(sizeBytes: 1_000, digests: ["sha256:full", "v1:sampled"]),
+                "gained a full hash later — the v1 key is not an identity (10 of 836 v1-equal pairs differed on 10/11); redone once under sha256")
         #expect(stamp.describes(sizeBytes: 1_000, digests: ["v1:sampled"]))
+        let full = AudioFingerprintStamp.fingerprinted(fp, contentDigest: "sha256:full", sizeBytes: 1_000, durationSeconds: 600)
+        #expect(full.describes(sizeBytes: 1_000, digests: ["sha256:full", "v1:sampled"]))
+        #expect(!full.describes(sizeBytes: 1_000, digests: ["v1:sampled"]), "the full hash it was keyed on is gone")
+        #expect(AudioFingerprintStamp.isFullDigest("sha256:full") && !AudioFingerprintStamp.isFullDigest("v1:sampled"))
         #expect(!stamp.describes(sizeBytes: 1_001, digests: ["v1:sampled"]), "size changed")
         #expect(!stamp.describes(sizeBytes: 1_000, digests: ["v1:other"]), "content changed")
         #expect(!stamp.describes(sizeBytes: 1_000, digests: []), "no digest at all")

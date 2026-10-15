@@ -74,7 +74,8 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     /// What one file's pass produced (pure value; `record` interprets it).
     enum Outcome: Equatable, Sendable {
         case fingerprint(AudioFingerprint)
-        case shared(AudioFingerprintStore.Summary)
+        /// Found under `key` — the stamp names THAT key, never another digest.
+        case shared(key: AudioFingerprintStore.Key, AudioFingerprintStore.Summary)
         case noAudio(fromCatalog: Bool)
         case missing
         case failed(String)
@@ -98,6 +99,8 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     var passForTesting: Pass?
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
+    /// TEST SEAM: replaces the sidecar batch write. nil in production.
+    var sidecarPutForTesting: (@MainActor ([AudioFingerprintStore.Entry]) throws -> Void)?
     var ffmpegPath = ToolLocator.ffmpegPath
     /// Where the sidecar lives (default: the catalog's folder).
     var storeDirectory: URL?
@@ -331,28 +334,35 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     private func lookAtOne(_ item: AudioFingerprintBackfillItem, root: String) async -> Outcome? {
         guard fileExists(item.path) else { return .missing }
         if item.isVideoOnly { return .noAudio(fromCatalog: true) }
-        if let shared = sharedFingerprint(for: item) { return .shared(shared) }
-        guard await waitForBudget(item), let held = await acquireGates(for: item.path) else { return nil }
-        inFlight[item.id] = item.durationSeconds
+        if let (key, summary) = sharedFingerprint(for: item) { return .shared(key: key, summary) }
+        // The budget slot is RESERVED by waitForBudget before any await
+        // (codex QA P2: the gate acquire suspends, and every lane used to
+        // pass the budget check with nothing in flight yet).
+        guard await waitForBudget(item) else { return nil }
+        defer { inFlight[item.id] = nil }
+        guard let held = await acquireGates(for: item.path) else { return nil }
         reading[root] = item.filename
         let outcome = await decodeOne(item)
         reading[root] = nil
-        inFlight[item.id] = nil
         await releaseGates(held)
         return outcome
     }
 
     /// A copy's fingerprint already kept — in this run's pending batch or
-    /// in the sidecar — under any digest the record carries.
-    private func sharedFingerprint(for item: AudioFingerprintBackfillItem) -> AudioFingerprintStore.Summary? {
-        for digest in item.digests {
+    /// in the sidecar — under the record's FULL digest only. A sampled
+    /// "v1:" hash is never an identity (QA P1-a: 10 of 836 v1-equal pairs
+    /// had different bytes), so a row with only a sampled digest is always
+    /// decoded itself. Returns the key the row was found under.
+    private func sharedFingerprint(for item: AudioFingerprintBackfillItem)
+        -> (AudioFingerprintStore.Key, AudioFingerprintStore.Summary)? {
+        for digest in item.digests where AudioFingerprintStamp.isFullDigest(digest) {
             let key = AudioFingerprintStore.Key(contentDigest: digest, sizeBytes: item.sizeBytes)
             if let pending = pendingEntries[key] {
-                return AudioFingerprintStore.Summary(engineVersion: Int(pending.fingerprint.version), computedAt: pending.computedAt,
-                                                     sourcePath: pending.sourcePath, analyzedSeconds: pending.fingerprint.durationSeconds,
-                                                     landmarks: pending.fingerprint.landmarkCount, bytes: pending.fingerprint.estimatedBytes)
+                return (key, AudioFingerprintStore.Summary(engineVersion: Int(pending.fingerprint.version), computedAt: pending.computedAt,
+                                                           sourcePath: pending.sourcePath, analyzedSeconds: pending.fingerprint.durationSeconds,
+                                                           landmarks: pending.fingerprint.landmarkCount, bytes: pending.fingerprint.estimatedBytes))
             }
-            if let found = try? store?.summary(for: key) { return found }
+            if let found = try? store?.summary(for: key) { return (key, found) }
         }
         return nil
     }
@@ -366,7 +376,8 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         } catch AudioPCMDecoder.Failure.decodeFailed(let code, let tail) {
             return .failed("ffmpeg could not decode it (exit \(code)): \(tail.trimmingCharacters(in: .whitespacesAndNewlines))")
         } catch AudioPCMDecoder.Failure.timedOut {
-            return .failed("no answer from the drive within \(Int(Self.decodeDeadline(sizeBytes: item.sizeBytes))) s — skipped; the next run tries again")
+            return .failed("no answer from the drive within \(Int(Self.decodeDeadline(sizeBytes: item.sizeBytes))) s — skipped; "
+                + "will try again next run; if it keeps failing, the drive may be too slow for a file this size")
         } catch AudioPCMDecoder.Failure.ffmpegMissing(let path) {
             return .failed("ffmpeg disappeared at \(path)")
         } catch is CancellationError {
@@ -410,14 +421,18 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         return !stopped
     }
 
-    /// Wait until the memory budget admits this decode. False when stopped.
+    /// Wait until the memory budget admits this decode, then RESERVE its
+    /// slot in `inFlight` with no await in between (main-actor atomic).
+    /// False when stopped (nothing reserved).
     private func waitForBudget(_ item: AudioFingerprintBackfillItem) async -> Bool {
         while !AudioDecodeBudget.canStart(durationSeconds: item.durationSeconds, inFlight: Array(inFlight.values)) {
             if stopped { return false }
             if !isPausedValue { subtitleText = "Waiting for memory — \(inFlight.count) file(s) being read…" }
             try? await Task.sleep(for: .milliseconds(200))
         }
-        return !stopped
+        guard !stopped else { return false }
+        inFlight[item.id] = item.durationSeconds
+        return true
     }
 
     private func acquireGates(for path: String) async -> [(MediaVolumeGate, PausableGatePermit)]? {
@@ -481,9 +496,9 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
                 addProblem(filename: item.filename, path: item.path, drive: lane.label, archived: item.isArchived, .partial,
                            "only the first \(Self.seconds(stamp.analyzedSeconds)) of \(Self.seconds(item.durationSeconds)) were fingerprinted (the decoder's cap) — kept as partial; not retried")
             }
-        case .shared(let summary):
+        case .shared(let key, let summary):
             let stamp = AudioFingerprintStamp(computedAt: summary.computedAt, engineVersion: summary.engineVersion,
-                                              contentDigest: item.key.contentDigest, sizeBytes: item.sizeBytes, outcome: .fingerprinted,
+                                              contentDigest: key.contentDigest, sizeBytes: key.sizeBytes, outcome: .fingerprinted,
                                               analyzedSeconds: summary.analyzedSeconds,
                                               complete: AudioFingerprintStamp.isComplete(analyzedSeconds: summary.analyzedSeconds,
                                                                                         durationSeconds: item.durationSeconds),
@@ -600,29 +615,36 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
 
     /// Sidecar batch in one transaction, THEN an acknowledged catalog
     /// save. True when there was nothing to save or both are on disk. A
-    /// failure stops the job and undoes the unsaved stamps.
+    /// failure stops the job and undoes the stamps of THIS batch.
+    ///
+    /// The batch is taken and the queues cleared BEFORE the first await
+    /// (QA P1-c): lanes keep stamping while the catalog save is in flight,
+    /// and those newer stamps must stay queued for the next checkpoint —
+    /// never dropped with this one's `removeAll`.
     @discardableResult
     private func persist(model: VideoScanModel) async -> Bool {
         guard !unsavedStamps.isEmpty, !saving, !saveFailed else { return !saveFailed }
         saving = true
         defer { saving = false }
-        let n = unsavedStamps.count
+        let batch = Array(pendingEntries.values)
+        let stamps = unsavedStamps
+        pendingEntries.removeAll()
+        unsavedStamps.removeAll()
+        let n = stamps.count
         subtitleText = "Saving \(n) fingerprint\(n == 1 ? "" : "s")…"
         do {
-            try store?.put(Array(pendingEntries.values))
+            if let sidecarPutForTesting { try sidecarPutForTesting(batch) } else { try store?.put(batch) }
         } catch {
-            failSave(model: model, why: "the fingerprint file could not be written (\(error))")
+            failSave(model: model, why: "the fingerprint file could not be written (\(error))", undo: stamps)
             return false
         }
         let ok: Bool
         if let saveCatalogForTesting { ok = await saveCatalogForTesting() } else { ok = await model.saveCatalogAcknowledged() }
         guard ok else {
             model.saveCatalogDebounced()
-            failSave(model: model, why: "the catalog save was NOT confirmed")
+            failSave(model: model, why: "the catalog save was NOT confirmed", undo: stamps)
             return false
         }
-        pendingEntries.removeAll()
-        unsavedStamps.removeAll()
         storedCount += n
         saveCount += 1
         lastSave = Date()
@@ -631,11 +653,10 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
 
     /// Undo the stamps the failed save would have carried (compare-and-set)
     /// and stop: nothing more is put at risk. Media was never touched.
-    private func failSave(model: VideoScanModel, why: String) {
+    private func failSave(model: VideoScanModel, why: String,
+                          undo: [(item: AudioFingerprintBackfillItem, stamp: AudioFingerprintStamp)]) {
         var undone = 0
-        for p in unsavedStamps where model.revertAudioFingerprintStamp(p.item, written: p.stamp) { undone += 1 }
-        unsavedStamps.removeAll()
-        pendingEntries.removeAll()
+        for p in undo where model.revertAudioFingerprintStamp(p.item, written: p.stamp) { undone += 1 }
         saveFailed = true
         stopRequested = true
         model.audioFingerprintNote("\(why) — stopping so no more work is at risk; \(undone.formatted()) stamp(s) undone, "
@@ -646,6 +667,13 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
 
     private func conclude(model: VideoScanModel) async {
         await persist(model: model)
+        if saveFailed, !unsavedStamps.isEmpty {
+            // Files finished after the failed save: their bytes never reached
+            // the sidecar, so their stamps come off too (the next run redoes them).
+            for p in unsavedStamps { _ = model.revertAudioFingerprintStamp(p.item, written: p.stamp) }
+            unsavedStamps.removeAll()
+            pendingEntries.removeAll()
+        }
         let line = totals.line
         if saveFailed {
             let message = "Stopped — the fingerprints could not be saved. \(storedCount.formatted()) saved earlier are kept; no media was changed. " + line

@@ -101,19 +101,27 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
         durationSeconds <= 0 || analyzedSeconds >= durationSeconds - tolerance
     }
 
-    /// Does this stamp describe a file of `sizeBytes` whose digests (any
-    /// kind the record carries) include the one it was keyed on, at the
-    /// engine version this build writes? False → the file is (re)done.
+    /// Does this stamp describe a file of `sizeBytes` whose PREFERRED
+    /// digest (`digests.first`: the full hash when the record has one, else
+    /// the sampled one) is the key it was written under, at the engine
+    /// version this build writes? False → the file is (re)done. A stamp
+    /// keyed on a sampled "v1:" hash is redone once the record gains a full
+    /// hash — one extra decode, and from then on a real identity (QA P1-a).
     public func describes(sizeBytes: Int64, digests: [String],
                           engineVersion: Int = Int(AudioFingerprint.currentVersion)) -> Bool {
         self.engineVersion == engineVersion && self.sizeBytes == sizeBytes && sizeBytes > 0
-            && digests.contains(contentDigest)
+            && digests.first == contentDigest
     }
 
     // MARK: Digest spelling
 
     /// "sha256:<hex>" for a stored full digest.
     public static func fullDigest(_ hex: String) -> String { "sha256:" + hex.lowercased() }
+
+    /// Only a full digest is an identity: the sampled "v1:" hash can agree
+    /// between two different recordings (10 of 836 v1-equal pairs had
+    /// different bytes on 10/11), so only "sha256:" keys may be SHARED.
+    public static func isFullDigest(_ digest: String) -> Bool { digest.hasPrefix("sha256:") }
 
     /// The sampled contentHash is its own key (the scan writes "v1:<hex>");
     /// nil when the record has none.
