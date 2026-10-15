@@ -105,3 +105,7 @@ pre-existing allowed-to-fail 0.5 % speed case). Debug, M4 Max.
 - A clip taken from past the 4-h cap of a master is unsearchable (codex noted; by design of the cap).
 - Self-similar audio (a metronome, a hum) is not placeable: with the postings cap it is `.different`, never a claim.
 - A genuine copy with a > 10 s stretch of audible audio that yields no matching landmarks (heavily damaged passage) will read `.overlap`, not `.sameRecording` — the conservative side.
+
+## Closed
+
+Closed by `13874ab5` at 2026-10-15T00:45:48Z. All five findings closed on fix/audio-fingerprint-codex-r1 and merged to main 13874ab5 (see Closure above). Frozen bars unchanged, margin 7.6×.
