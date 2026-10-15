@@ -74,6 +74,12 @@ public enum AudioMatchInconclusiveReason: Sendable, Equatable {
     /// The two fingerprints were made by different recipes (or grids) and
     /// their hashes do not mean the same thing. Re-fingerprint one side.
     case incompatibleRecipe(query: UInt32, master: UInt32)
+    /// The evidence says "contained" or "same", but the side(s) named were
+    /// only partly analysed (decoder cap or window), so the unseen rest
+    /// could contradict it. The evidence (offset, span) is still reported.
+    case queryIncomplete
+    case masterIncomplete
+    case bothIncomplete
 }
 
 /// The numbers a verdict is judged on — kept separate from the verdict so
@@ -88,9 +94,14 @@ public struct AudioMatchEvidence: Sendable, Equatable {
     public var offsetSeconds: Double
     public var queryDurationSeconds: Double
     public var masterDurationSeconds: Double
+    /// `AudioFingerprint.complete` of each side: false = the duration above
+    /// is the analysed part, not the recording.
+    public var queryComplete: Bool
+    public var masterComplete: Bool
 
     public init(matchedLandmarks: Int, coverage: Double, overlapSeconds: Double, spanSeconds: Double,
-                offsetSeconds: Double, queryDurationSeconds: Double, masterDurationSeconds: Double) {
+                offsetSeconds: Double, queryDurationSeconds: Double, masterDurationSeconds: Double,
+                queryComplete: Bool = true, masterComplete: Bool = true) {
         self.matchedLandmarks = matchedLandmarks
         self.coverage = coverage
         self.overlapSeconds = overlapSeconds
@@ -98,6 +109,8 @@ public struct AudioMatchEvidence: Sendable, Equatable {
         self.offsetSeconds = offsetSeconds
         self.queryDurationSeconds = queryDurationSeconds
         self.masterDurationSeconds = masterDurationSeconds
+        self.queryComplete = queryComplete
+        self.masterComplete = masterComplete
     }
 
     /// The pure rule. (For Rick: a decision table — read top to bottom,
@@ -107,11 +120,19 @@ public struct AudioMatchEvidence: Sendable, Equatable {
         if coverage >= policy.minCoverage {
             let queryInside = overlapSeconds >= queryDurationSeconds - policy.edgeToleranceSeconds
             let masterInside = overlapSeconds >= masterDurationSeconds - policy.edgeToleranceSeconds
-            switch (queryInside, masterInside) {
-            case (true, true): return .sameRecording
-            case (true, false): return .containedInMaster(offsetSeconds: offsetSeconds)
-            case (false, true): return .masterContainedInQuery(offsetSeconds: -offsetSeconds)
-            case (false, false): return .overlap(offsetSeconds: offsetSeconds, seconds: overlapSeconds)
+            // A side that was only partly analysed can be CONTAINED (its
+            // analysed part lies inside the other) but can never be
+            // "the same" or "containing" — the unseen rest might differ.
+            switch (queryInside, masterInside, queryComplete, masterComplete) {
+            case (true, true, true, true): return .sameRecording
+            case (true, true, true, false): return .containedInMaster(offsetSeconds: offsetSeconds)
+            case (true, true, false, true): return .masterContainedInQuery(offsetSeconds: -offsetSeconds)
+            case (true, true, false, false): return .inconclusive(reason: .bothIncomplete)
+            case (true, false, true, _): return .containedInMaster(offsetSeconds: offsetSeconds)
+            case (true, false, false, _): return .inconclusive(reason: .queryIncomplete)
+            case (false, true, _, true): return .masterContainedInQuery(offsetSeconds: -offsetSeconds)
+            case (false, true, _, false): return .inconclusive(reason: .masterIncomplete)
+            case (false, false, _, _): return .overlap(offsetSeconds: offsetSeconds, seconds: overlapSeconds)
             }
         }
         if spanSeconds >= policy.minOverlapSeconds {
@@ -212,7 +233,8 @@ public struct AudioFingerprintIndex: Sendable {
             matchedLandmarks: matched, coverage: coverage,
             overlapSeconds: max(0, overlap.upperBound - overlap.lowerBound), spanSeconds: Double(run.length),
             offsetSeconds: offsetSeconds, queryDurationSeconds: query.durationSeconds,
-            masterDurationSeconds: master.durationSeconds)
+            masterDurationSeconds: master.durationSeconds,
+            queryComplete: query.complete, masterComplete: master.complete)
         return AudioMatch(evidence: evidence, verdict: evidence.verdict(policy: policy),
                           queryLandmarks: query.landmarkCount, masterLandmarks: master.landmarkCount,
                           spanStartInMasterSeconds: Double(run.start) + offsetSeconds,
@@ -235,7 +257,8 @@ public struct AudioFingerprintIndex: Sendable {
                                 policy: AudioMatchPolicy, verdict: AudioMatchVerdict = .different) -> AudioMatch {
         let evidence = AudioMatchEvidence(matchedLandmarks: 0, coverage: 0, overlapSeconds: 0, spanSeconds: 0,
                                           offsetSeconds: 0, queryDurationSeconds: query.durationSeconds,
-                                          masterDurationSeconds: master.durationSeconds)
+                                          masterDurationSeconds: master.durationSeconds,
+                                          queryComplete: query.complete, masterComplete: master.complete)
         return AudioMatch(evidence: evidence, verdict: verdict, queryLandmarks: query.landmarkCount,
                           masterLandmarks: master.landmarkCount, spanStartInMasterSeconds: 0,
                           spanEndInMasterSeconds: 0)

@@ -170,21 +170,25 @@ public struct AudioFingerprintParameters: Sendable, Equatable {
 }
 
 public struct AudioFingerprint: Sendable, Equatable {
-    /// On-disk FORMAT version (the header layout below). 2 = recipeID added
-    /// (codex F3, 2026-10-14). Nothing persisted at version 1.
+    /// On-disk FORMAT version (the header layout below). 2 = recipeID and
+    /// completeness flag added (codex F3/F2, 2026-10-14). Nothing was
+    /// persisted at version 1.
     public static let currentVersion: UInt16 = 2
     /// First four bytes of the binary encoding.
     public static let magic: [UInt8] = Array("VSAF".utf8)
     /// Header layout (little-endian):
-    ///   magic 4 | version u16 | recipeID u32 | sampleRate u32 | hop u32 |
-    ///   frameSize u32 | durationSeconds f64 | landmarkCount u32
+    ///   magic 4 | version u16 | recipeID u32 | flags u8 | sampleRate u32 |
+    ///   hop u32 | frameSize u32 | analyzedSeconds f64 | landmarkCount u32
     /// then `hashes` (u32 × count) and `times` (u32 × count).
-    static let headerBytes = 34
+    /// flags bit 0 = `complete`.
+    static let headerBytes = 35
     static let recipeFieldOffset = 6
-    static let sampleRateFieldOffset = 10
+    static let flagsFieldOffset = 10
+    static let sampleRateFieldOffset = 11
     /// Byte offset of the hop field in the header (tests patch it).
-    static let hopFieldOffset = 14
-    static let frameSizeFieldOffset = 18
+    static let hopFieldOffset = 15
+    static let frameSizeFieldOffset = 19
+    static let completeFlag: UInt8 = 0x01
 
     public let version: UInt16
     /// `AudioFingerprintParameters.recipeID` of the recipe that made this.
@@ -192,7 +196,13 @@ public struct AudioFingerprint: Sendable, Equatable {
     public let sampleRate: Int
     public let hopSamples: Int
     public let frameSize: Int
+    /// Seconds of audio the landmarks were taken from — the whole
+    /// recording when `complete`, else a prefix (or a window) of it.
     public let durationSeconds: Double
+    /// False when the PCM hit the decoder's cap or came from a window:
+    /// the landmarks describe a part of the recording, and no verdict may
+    /// treat them as the whole (see `AudioMatchEvidence.verdict`).
+    public let complete: Bool
     /// Parallel arrays: `hashes[i]` was anchored at frame `times[i]`.
     public let hashes: [UInt32]
     public let times: [UInt32]
@@ -202,7 +212,7 @@ public struct AudioFingerprint: Sendable, Equatable {
     public init(version: UInt16 = AudioFingerprint.currentVersion,
                 recipeID: UInt32 = AudioFingerprintParameters.default.recipeID,
                 sampleRate: Int, hopSamples: Int, frameSize: Int, durationSeconds: Double,
-                hashes: [UInt32], times: [UInt32]) {
+                complete: Bool = true, hashes: [UInt32], times: [UInt32]) {
         precondition(sampleRate > 0 && hopSamples > 0 && frameSize > 0,
                      "AudioFingerprint: sampleRate, hopSamples and frameSize must be positive")
         precondition(hashes.count == times.count, "AudioFingerprint: hashes and times must be parallel")
@@ -212,11 +222,13 @@ public struct AudioFingerprint: Sendable, Equatable {
         self.hopSamples = hopSamples
         self.frameSize = frameSize
         self.durationSeconds = durationSeconds
+        self.complete = complete
         self.hashes = hashes
         self.times = times
     }
 
     public var landmarkCount: Int { hashes.count }
+    public var analyzedSeconds: Double { durationSeconds }
     public var hopSeconds: Double { Double(hopSamples) / Double(sampleRate) }
     /// Exactly `encoded().count`.
     public var estimatedBytes: Int { Self.headerBytes + 8 * hashes.count }
@@ -245,6 +257,7 @@ public struct AudioFingerprint: Sendable, Equatable {
         data.append(contentsOf: Self.magic)
         Self.append(version, to: &data)
         Self.append(recipeID, to: &data)
+        data.append(complete ? Self.completeFlag : 0)
         Self.append(UInt32(sampleRate), to: &data)
         Self.append(UInt32(hopSamples), to: &data)
         Self.append(UInt32(frameSize), to: &data)
@@ -274,6 +287,7 @@ public struct AudioFingerprint: Sendable, Equatable {
         guard Array(data.prefix(4)) == Self.magic else { throw DecodingError.badMagic }
         var reader = LittleEndianReader(data: data, offset: 4)
         guard let version: UInt16 = reader.read(), let recipeID: UInt32 = reader.read(),
+              let flags: UInt8 = reader.read(),
               let sampleRate: UInt32 = reader.read(), let hop: UInt32 = reader.read(),
               let frameSize: UInt32 = reader.read(), let durationBits: UInt64 = reader.read(),
               let count: UInt32 = reader.read() else { throw DecodingError.tooShort(bytes: data.count) }
@@ -298,7 +312,8 @@ public struct AudioFingerprint: Sendable, Equatable {
         }
         return AudioFingerprint(version: version, recipeID: recipeID, sampleRate: Int(sampleRate),
                                 hopSamples: Int(hop), frameSize: Int(frameSize),
-                                durationSeconds: Double(bitPattern: durationBits), hashes: hashes, times: times)
+                                durationSeconds: Double(bitPattern: durationBits),
+                                complete: flags & Self.completeFlag != 0, hashes: hashes, times: times)
     }
 
     /// nil when the bytes are not a current-version fingerprint; `decode`
@@ -330,7 +345,7 @@ public struct AudioFingerprint: Sendable, Equatable {
         let landmarks = LandmarkPairer.pair(peaks, parameters: parameters)
         return AudioFingerprint(recipeID: parameters.recipeID, sampleRate: pcm.sampleRate,
                                 hopSamples: parameters.hopSamples, frameSize: parameters.frameSize,
-                                durationSeconds: pcm.durationSeconds,
+                                durationSeconds: pcm.durationSeconds, complete: !pcm.reachedCap,
                                 hashes: landmarks.hashes, times: landmarks.times)
     }
 

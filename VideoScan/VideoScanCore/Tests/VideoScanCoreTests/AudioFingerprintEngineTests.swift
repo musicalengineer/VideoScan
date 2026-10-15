@@ -96,6 +96,50 @@ struct AudioFingerprintEngineTests {
         #expect(pcm.samples == Array(fixtures.a[(60 * 8_000)..<(80 * 8_000)]))
     }
 
+    // MARK: Decoder + verdict — completeness (codex F2)
+
+    /// A decode that hit the cap is a PREFIX, not the recording. Two 180-s
+    /// files decoded with a 10-s cap must not be called the same recording,
+    /// and a capped A against a genuine 10-s file is "the 10-s file lies
+    /// inside A", never "same".
+    @Test(.enabled(if: FFmpegLocator.ffmpegIsAvailable()))
+    func cappedDecodeNeverYieldsAWholeRecordingClaim() async throws {
+        let fixtures = try await AudioFixtureStore.shared.fixtures()
+        let capped = AudioPCMDecoder(maxSeconds: 10)
+        let a = try await capped.decode(path: try fixtures.url("A").path)
+        let aCopy = try await capped.decode(path: try fixtures.url("A_copy").path)
+        #expect(a.samples.count == 10 * 8_000)
+        let whole = try await AudioPCMDecoder().decode(path: try fixtures.url("A").path)
+        #expect(whole.samples.count == 180 * 8_000)
+
+        #expect(a.reachedCap && aCopy.reachedCap, "a decode that filled the cap says so")
+        #expect(!whole.reachedCap, "a decode that ended before the cap is complete")
+        #expect(a.analyzedSeconds == 10)
+
+        let fa = AudioFingerprint.compute(a), fCopy = AudioFingerprint.compute(aCopy)
+        #expect(!fa.complete && AudioFingerprint.compute(whole).complete)
+        #expect(AudioFingerprint(decoding: fa.encoded())?.complete == false, "completeness is in VSAF")
+        #expect(AudioFingerprint(decoding: AudioFingerprint.compute(whole).encoded())?.complete == true)
+        let both = AudioFingerprintMatcher.match(query: fa, master: fCopy)
+        #expect(both.verdict != .sameRecording, "two capped prefixes: \(both.verdict)")
+        #expect(both.verdict == .inconclusive(reason: .bothIncomplete))
+        #expect(both.evidence.queryComplete == false && both.evidence.masterComplete == false)
+        #expect(both.matchedLandmarks > 100 && abs(both.offsetSeconds) < 0.1, "the evidence is still reported")
+
+        let tenSeconds = AudioFingerprint.compute(AudioPCM(sampleRate: 8_000, samples: Array(fixtures.a[0..<(10 * 8_000)])))
+        let cappedVsShort = AudioFingerprintMatcher.match(query: fa, master: tenSeconds)
+        #expect(cappedVsShort.verdict != .sameRecording, "capped A vs 10-s file: \(cappedVsShort.verdict)")
+        #expect(cappedVsShort.verdict == .masterContainedInQuery(offsetSeconds: 0),
+                "the complete 10-s file lies inside the capped A — a true, provable claim")
+        let shortVsCapped = AudioFingerprintMatcher.match(query: tenSeconds, master: fa)
+        #expect(shortVsCapped.verdict == .containedInMaster(offsetSeconds: 0))
+
+        // A window is a part too: not complete, never "same".
+        let window = try await AudioPCMDecoder().decode(path: try fixtures.url("A").path,
+                                                        window: .init(startSeconds: 60, durationSeconds: 20))
+        #expect(window.reachedCap && !AudioFingerprint.compute(window).complete)
+    }
+
     // MARK: Fingerprint — logic
 
     @Test func hashPackingRoundTrips() {
@@ -244,6 +288,38 @@ struct AudioFingerprintEngineTests {
                 == .different)
         #expect(evidence(coverage: 0.1, overlap: 180, span: 2, offset: 0, query: 180, master: 180).verdict()
                 == .different)
+    }
+
+    /// Completeness (codex F2): an incomplete side can be contained, never
+    /// "same" or containing. Every (inside, inside, complete, complete)
+    /// tuple maps to exactly one case.
+    @Test func verdictRefusesWholeRecordingClaimsOnIncompleteSides() {
+        var e = evidence(overlap: 180, span: 180, offset: 0, query: 180, master: 180)
+        e.queryComplete = false; e.masterComplete = false
+        #expect(e.verdict() == .inconclusive(reason: .bothIncomplete))
+        e.masterComplete = true
+        #expect(e.verdict() == .masterContainedInQuery(offsetSeconds: 0), "complete master inside the query's analysed part")
+        e.queryComplete = true; e.masterComplete = false
+        #expect(e.verdict() == .containedInMaster(offsetSeconds: 0), "complete query inside the master's analysed part")
+
+        // Query geometrically inside the master, but the query was capped.
+        var c = evidence(overlap: 20, span: 20, offset: 60, query: 20, master: 180)
+        c.queryComplete = false
+        #expect(c.verdict() == .inconclusive(reason: .queryIncomplete))
+        c.queryComplete = true; c.masterComplete = false
+        #expect(c.verdict() == .containedInMaster(offsetSeconds: 60), "a capped master still contains the clip")
+
+        // Master geometrically inside the query, but the master was capped.
+        var m = evidence(overlap: 180, span: 180, offset: -30, query: 240, master: 180)
+        m.masterComplete = false
+        #expect(m.verdict() == .inconclusive(reason: .masterIncomplete))
+        m.masterComplete = true; m.queryComplete = false
+        #expect(m.verdict() == .masterContainedInQuery(offsetSeconds: 30))
+
+        // Partial overlap needs no completeness.
+        var o = evidence(overlap: 100, span: 100, offset: 80, query: 180, master: 180)
+        o.queryComplete = false; o.masterComplete = false
+        #expect(o.verdict() == .overlap(offsetSeconds: 80, seconds: 100))
     }
 
     // MARK: Sensor — the engine never writes beside an input

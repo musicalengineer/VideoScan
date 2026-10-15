@@ -33,15 +33,25 @@ import Foundation
 public struct AudioPCM: Sendable, Equatable {
     public let sampleRate: Int
     public let samples: [Int16]
+    /// True when the decode filled the limit it was given (`maxSeconds`,
+    /// or a `Window.durationSeconds`): `samples` are then a PREFIX of the
+    /// recording (or a window of it), not the whole. A fingerprint made
+    /// from such PCM is `complete == false` and can never be called
+    /// "the same recording" as anything. (A file EXACTLY as long as the
+    /// cap also reads as capped — the honest, conservative side.)
+    public let reachedCap: Bool
 
-    public init(sampleRate: Int, samples: [Int16]) {
+    public init(sampleRate: Int, samples: [Int16], reachedCap: Bool = false) {
         self.sampleRate = sampleRate
         self.samples = samples
+        self.reachedCap = reachedCap
     }
 
+    /// Seconds of audio actually analysed (= `samples.count / sampleRate`).
     public var durationSeconds: Double {
         sampleRate > 0 ? Double(samples.count) / Double(sampleRate) : 0
     }
+    public var analyzedSeconds: Double { durationSeconds }
 }
 
 public struct AudioPCMDecoder: Sendable {
@@ -134,7 +144,10 @@ public struct AudioPCMDecoder: Sendable {
         }
         let samples = sink.takeSamples()
         guard !samples.isEmpty else { throw Failure.noAudioStream }
-        return AudioPCM(sampleRate: sampleRate, samples: samples)
+        // Exactly the cap's worth of samples means ffmpeg was stopped by
+        // `-t` (or the sink dropped the rest): the file goes on past what
+        // was analysed, as far as anyone can tell.
+        return AudioPCM(sampleRate: sampleRate, samples: samples, reachedCap: samples.count * 2 >= capBytes)
     }
 }
 
