@@ -209,7 +209,9 @@ struct SoundStripBins: Equatable {
     private let matched: Range<Int>?
 
     init(active: [Bool], matched: Range<Int>?, durationSeconds: Double) {
-        seconds = max(active.count, Int(durationSeconds.rounded(.up)), 1)
+        // A non-finite or negative duration falls back to the map (round 2 F3).
+        let fromDuration = durationSeconds.isFinite ? Int(max(0, durationSeconds).rounded(.up)) : 0
+        seconds = max(active.count, fromDuration, 1)
         var prefix = [Int](repeating: 0, count: active.count + 1)
         for (i, on) in active.enumerated() { prefix[i + 1] = prefix[i] + (on ? 1 : 0) }
         audiblePrefix = prefix

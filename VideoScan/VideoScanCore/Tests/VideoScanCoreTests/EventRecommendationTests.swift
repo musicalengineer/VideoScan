@@ -111,6 +111,32 @@ struct EventRecommendationTests {
         #expect(y.rule == .r5, "\(y.rule)")
     }
 
+    @Test("codex r2 F1: mixed eras never recommend a removal — reliable 1988 vs 2015, or unreliable 1988 vs 2006")
+    func mixedErasDoNotRecommendRemoval() {
+        for reliable in [true, false] {
+            var a = side(archived: false, year: 1988, digest: "x"), b = side(archived: true, year: reliable ? 2015 : 2006, digest: "y")
+            a.dayIsReliable = reliable; b.dayIsReliable = reliable
+            let r = reco(RelatedEvidence(a: a, b: b, audio: .sameRecording, audioCoverage: 0.99))
+            #expect(r.rule != .r3 && r.rule == .r5, "\(reliable): \(r.rule)")
+        }
+    }
+
+    @Test("codex r2 F2: an archived clip whose master is NOT archived → promote the master; the clip stays")
+    func archivedClipStillNeedsItsMasterArchived() {
+        var clip = side(archived: true, digest: "c"); clip.durationSeconds = 78; clip.audibleSeconds = 76
+        let r = reco(RelatedEvidence(a: clip, b: side(archived: false, digest: "m"), audio: .containedInMaster(offsetSeconds: 376), audioCoverage: 0.96))
+        #expect(r.rule == .r6 && r.subject == .b && r.door == .recommendMaster && !r.words.contains("Both are in the archive"))
+    }
+
+    @Test("codex r2 F4: a corrected day updates the era year; a year-only hint stays the fallback")
+    func correctedDayUpdatesEraYear() {
+        var a = side(archived: false, year: 2015, digest: "x")
+        a.day = day(1988, 4, 22)
+        #expect(a.year == 1988)
+        a.day = nil; a.year = 1977
+        #expect(a.year == 1977)
+    }
+
     @Test("every rule names a door; the subject is the side the door acts on")
     func table() {
         #expect(EventRule.allCases.count == 8)

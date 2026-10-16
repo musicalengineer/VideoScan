@@ -58,22 +58,35 @@ public struct EventRecommendation: Sendable, Equatable {
             return .init(rule: .r5, words: "Keep both. Different footage of one event — group them under one event.",
                          why: "Nothing in either is covered by the other.", door: .groupAsEvent, subject: nil)
         case .clipFromSameEvent(let clip, let seconds, _):
-            let master = other(clip)
-            let clipSide = side(e, clip)
-            if clipSide.isArchiveFile || clipSide.isArchived {
-                // The clip itself is the archive's (codex 10/15 F1): never a removal subject.
-                return .init(rule: .r7, words: "Both are in the archive. Nothing to do here.",
-                             why: "The clip is an archive file (or its content is archived); the archive's own lanes decide.", door: .none, subject: nil)
-            }
-            if side(e, master).isArchived {
-                return .init(rule: .r2, words: "Master is archived. Remove the clip; cut a fresh one from the master when you want it.",
-                             why: "The \(RelatedLadder.mmss(seconds)) clip holds nothing the master lacks.", door: .cleanupClips, subject: clip)
-            }
-            return .init(rule: .r6, words: "Nothing is archived. Promote the master, then revisit the clip.",
-                         why: "The longer recording is the one to keep; the clip is cut from it.", door: .recommendMaster, subject: master)
+            return clipRule(clip: clip, seconds: seconds, e)
         case .sameEvent:
             return sameEvent(verdict, e)
         }
+    }
+
+
+    /// Rung 5, one side cut from the other: R2 when the master is archived
+    /// and the clip is not; R6 when nothing is; an archived clip is never a
+    /// removal subject (round 1 F1) and, with an unarchived master, asks for
+    /// the master to be promoted (round 2 F2).
+    static func clipRule(clip: PairSide, seconds: Double, _ e: RelatedEvidence) -> EventRecommendation {
+        let master = other(clip)
+        let clipSide = side(e, clip), masterSide = side(e, master)
+        if clipSide.isArchiveFile || clipSide.isArchived {
+            if masterSide.isArchived {
+                return .init(rule: .r7, words: "Both are in the archive. Nothing to do here.",
+                             why: "The clip is an archive file (or its content is archived); the archive's own lanes decide.", door: .none, subject: nil)
+            }
+            return .init(rule: .r6, words: "The clip is archived but its master is not. Promote the master; the clip stays.",
+                         why: "The longer recording holds \(RelatedLadder.mmss(seconds)) the archive has and \(RelatedLadder.mmss(masterSide.durationSeconds - seconds)) it does not.",
+                         door: .recommendMaster, subject: master)
+        }
+        if masterSide.isArchived {
+            return .init(rule: .r2, words: "Master is archived. Remove the clip; cut a fresh one from the master when you want it.",
+                         why: "The \(RelatedLadder.mmss(seconds)) clip holds nothing the master lacks.", door: .cleanupClips, subject: clip)
+        }
+        return .init(rule: .r6, words: "Nothing is archived. Promote the master, then revisit the clip.",
+                     why: "The longer recording is the one to keep; the clip is cut from it.", door: .recommendMaster, subject: master)
     }
 
     /// Rung 6 and rung 5 whole: which side is archived decides.
@@ -116,10 +129,14 @@ public struct EventRecommendation: Sendable, Equatable {
     /// Reliable years decide; when neither side has a reliable day, any
     /// year counts. An unreliable newer date (a 2006 rip of a 1988 tape)
     /// never defeats the protection (codex 10/15 F2).
+    /// ANY pre-2000 reading protects (round 2 F1): reliable 1988 against
+    /// reliable 2015 is a date conflict to resolve first, not a removal;
+    /// unreliable 1988 against unreliable 2006 keeps both until a date is
+    /// corrected, after which R3 can apply.
     static func isOlderGeneration(_ e: RelatedEvidence) -> Bool {
         let reliable = [e.a, e.b].filter { $0.dayIsReliable }.compactMap(\.year)
         let years = reliable.isEmpty ? [e.a.year, e.b.year].compactMap { $0 } : reliable
-        return !years.isEmpty && years.allSatisfy { $0 < olderGenerationsBefore }
+        return years.contains { $0 < olderGenerationsBefore }
     }
     static func side(_ e: RelatedEvidence, _ s: PairSide) -> RelatedEvidence.Side { s == .a ? e.a : e.b }
     static func other(_ s: PairSide) -> PairSide { s == .a ? .b : .a }
