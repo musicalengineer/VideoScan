@@ -83,3 +83,7 @@ All four closed RED FIRST (13 issues red against main in `CatalogAuditProveAtThe
 Declared limits (accepted): a wholesale-deleted folder under "/" is a person's decision (Fix Links); a stale stub folder under /Volumes makes that lane unprovable until the drive mounts.
 
 Round 3 brief: `docs/reviews/briefs/codex-brief-audit-catalog-tier0-r3-2026-10-16.md`.
+
+## Closed
+
+Closed by `b9d1f144a` at 2026-10-16T20:46:32Z. 4/4 closed red-first; r3 running

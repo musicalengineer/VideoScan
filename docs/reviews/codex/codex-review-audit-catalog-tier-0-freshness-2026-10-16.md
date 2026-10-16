@@ -88,3 +88,7 @@ Principle adopted for all four P1s: **prove at the mark** — a row is marked go
 Invariant 7 note (GUI launched after a headless audit) → GH #323, before the nightly wiring. MOPS-14 rewritten. Sensor `expectProofAtTheMark` pins the order (second stat before the one mark; no `await` in the model half; live `isArchived`; by-value revert).
 
 Round 2 brief: `docs/reviews/briefs/codex-brief-audit-catalog-tier0-r2-2026-10-16.md`.
+
+## Closed
+
+Closed by `ef4f1be69` at 2026-10-16T17:53:03Z. 5/5 closed with red-first pins (prove at the mark); r2 running

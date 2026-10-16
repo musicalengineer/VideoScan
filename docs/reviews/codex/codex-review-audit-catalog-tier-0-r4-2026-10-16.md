@@ -80,3 +80,7 @@ Both P1s closed RED FIRST (5 main-compatible pins red, 15 issues; then 146 tests
 Noted for QA, not touched: `DeleteDuplicatesSiblingProof.swift` and Check Copies open by pathname and trust the fd for the FILE (a different contract) — the intermediate-link blind spot of `O_NOFOLLOW` deserves a look there (GH issue filed).
 
 Round 5 brief: `docs/reviews/briefs/codex-brief-audit-catalog-tier0-r5-2026-10-16.md`.
+
+## Closed
+
+Closed by `a8feb5787` at 2026-10-16T21:58:53Z. 2 P1 + D10 closed red-first; r5 running

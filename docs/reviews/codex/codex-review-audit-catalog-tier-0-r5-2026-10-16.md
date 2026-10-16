@@ -67,3 +67,7 @@ The remaining attack checks:
 Confirmed by codex, no change: keyed stamps vs a DMG / a different device path; the post-open binding orderings; decoding loads path and stamp independently with no in-scope producer of a mismatch.
 
 106 tests in 8 suites green on main (Debug). Round 6 brief: `docs/reviews/briefs/codex-brief-audit-catalog-tier0-r6-2026-10-16.md`.
+
+## Closed
+
+Closed by `4bf224de3` at 2026-10-16T22:05:44Z. P1 + P2 closed; r6 (delta) running

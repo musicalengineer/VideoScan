@@ -79,3 +79,7 @@ All three closed RED FIRST (main-compatible probes red, then 149 tests in 14 sui
 Accepted, no change: an identical re-stamp leaves the revision unchanged, so a failed-save rollback clears that identical marker (the audit's own value). Declared residuals: a file arriving after the observation; a folder replaced and replaced back between two syscalls. Consequence for the first real run: it marks NOTHING — it stamps every present row and lists the gone rows as "never seen by an audit" for Fix Links; the second run can mark.
 
 Round 4 brief: `docs/reviews/briefs/codex-brief-audit-catalog-tier0-r4-2026-10-16.md`.
+
+## Closed
+
+Closed by `572d74bb0` at 2026-10-16T21:34:10Z. 3/3 closed red-first; one rule (last seen on); r4 running
