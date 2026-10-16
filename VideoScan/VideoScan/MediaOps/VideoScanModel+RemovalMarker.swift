@@ -48,6 +48,24 @@ extension VideoScanModel {
         }
     }
 
+    /// Undo one marker write BY VALUE, on whatever instance `rec` is now
+    /// (codex 2026-10-16 F4; the audit's unsaved-batch rollback). Only when
+    /// the row still carries exactly `wrote` is its marker put back to
+    /// `previous`; each legacy mirror goes back only if it still holds the
+    /// value the write itself left (so a newer lifecycle or archive-stage
+    /// edit survives). No other field is touched. False = the row was
+    /// changed by another door since; there is nothing of ours to undo.
+    /// (For Rick: a compare-and-swap on the marker, then on each mirror.)
+    @discardableResult
+    nonisolated static func revertRemoval(_ rec: VideoRecord, wrote: RemovalMarker?, previous: RemovalMarker?,
+                                          mirrorsBefore: RemovalMirrors, mirrorsAfter: RemovalMirrors) -> Bool {
+        guard rec.removal == wrote else { return false }
+        rec.removal = previous
+        if rec.lifecycleStage == mirrorsAfter.lifecycleStage { rec.lifecycleStage = mirrorsBefore.lifecycleStage }
+        if rec.archiveStage == mirrorsAfter.archiveStage { rec.archiveStage = mirrorsBefore.archiveStage }
+        return true
+    }
+
     /// Restore: the row is live again — but ONLY when that is true. nil
     /// means live, so a row whose file left the disk (In the Trash, Missing,
     /// or a legacy Trashed / Deleted stage) is restored only once the file is
@@ -169,10 +187,24 @@ extension VideoScanModel {
     }
 }
 
+/// The legacy mirrors a marker write may move — the lifecycle stage and
+/// the archive label. A value, captured before and after a write, so
+/// `revertRemoval` puts back only what the write itself moved.
+struct RemovalMirrors: Sendable, Equatable {
+    let lifecycleStage: LifecycleStage
+    let archiveStage: ArchiveStage
+
+    static func of(_ r: VideoRecord) -> RemovalMirrors {
+        RemovalMirrors(lifecycleStage: r.lifecycleStage, archiveStage: r.archiveStage)
+    }
+}
+
 /// A door that restored a row and then has to back out (Find Missing Audio's
 /// pairing undo) puts the row back EXACTLY: the marker, the lifecycle mirror
 /// and the archive label `clearRemoval` may have changed. Captured before
 /// the restore. (For Rick: a tiny memento object ≈ a saved C++ struct copy.)
+/// Holds the INSTANCE it was taken from: not for a rollback that may run
+/// after a reload replaced the object — that is `revertRemoval`.
 struct RemovalUndo {
     private let record: VideoRecord
     private let removal: RemovalMarker?
