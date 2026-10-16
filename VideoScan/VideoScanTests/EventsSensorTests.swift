@@ -83,7 +83,10 @@ struct EventsSensorTests {
         // A decision moves the numbers without a rebuild: confirm one.
         let before = store.builtAt
         store.confirm(plan.suggestions[0])
-        #expect(store.numbers.toReview == 3 - 1 + (store.plan?.questions.count ?? 0))
+        // Arithmetic + optional chaining inside #expect is what CI's Xcode 26.3 cannot type-check; compute first.
+        let questionsLeft = store.plan?.questions.count ?? 0
+        let expectedToReview = 3 - 1 + questionsLeft
+        #expect(store.numbers.toReview == expectedToReview)
         #expect(store.numbers.confirmed == 1)
         #expect(store.builtAt == before, "a decision never rebuilds")
         #expect(FileManager.default.fileExists(atPath: store.decisions.statsURL.path), "the counts-only object was written")
