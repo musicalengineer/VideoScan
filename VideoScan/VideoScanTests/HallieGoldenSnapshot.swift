@@ -56,11 +56,14 @@ enum HallieGoldenSnapshot {
                      sourceLocation: sourceLocation)
     }
 
-    /// UUIDs (continuation tokens, generated ids) differ every run.
+    /// UUIDs (continuation tokens, generated ids) differ every run, and the
+    /// home directory differs per machine (CI 2026-10-16: a scenario with no
+    /// --catalog printed "/Users/runner/…" where the golden said "/Users/rickb/…").
     static func masked(_ text: String) -> String {
         text.replacingOccurrences(
             of: "[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}",
             with: "<uuid>", options: .regularExpression)
+            .replacingOccurrences(of: NSHomeDirectory(), with: "<home>")
     }
 
     /// Every field of a turn result a reader can see or a client can act on.
