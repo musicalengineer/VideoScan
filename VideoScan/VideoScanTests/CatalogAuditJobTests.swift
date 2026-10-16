@@ -60,34 +60,37 @@ private final class CallCounter: @unchecked Sendable {
 @MainActor
 extension ShowAgainSandbox {
     /// A live row (no label) for a file written with `bytes` bytes, or
-    /// not written at all.
+    /// not written at all. `seen` = an earlier audit saw the file on this
+    /// sandbox's volume (D5: without that, a gone row is "never seen by an
+    /// audit" and never marked).
     @discardableResult
-    func live(_ name: String, bytes: Int = 2_000, onDisk: Bool = true) throws -> VideoRecord {
-        try record(name, bytes: bytes, onDisk: onDisk, stage: .none)
+    func live(_ name: String, bytes: Int = 2_000, onDisk: Bool = true, seen: Bool = false) throws -> VideoRecord {
+        let r = try record(name, bytes: bytes, onDisk: onDisk, stage: .none)
+        if seen { r.auditSeenOn = stamp }
+        return r
     }
 
     /// A row already marked Missing by an earlier door.
     @discardableResult
-    func missingRow(_ name: String, bytes: Int = 2_000, onDisk: Bool) throws -> VideoRecord {
-        let r = try live(name, bytes: bytes, onDisk: onDisk)
+    func missingRow(_ name: String, bytes: Int = 2_000, onDisk: Bool, seen: Bool = false) throws -> VideoRecord {
+        let r = try live(name, bytes: bytes, onDisk: onDisk, seen: seen)
         VideoScanModel.stampRemoval(r, .missing(noticedAt: Date(timeIntervalSinceNow: -3_600), lastSeen: nil, reason: .missingOnDisk))
         return r
     }
 
     func auditMarkerFile() -> URL { catalogDir.appendingPathComponent(CatalogAuditRunMarker.fileName) }
 
-    /// What the job's lane does before its first stat: the item with the
-    /// identity of its LANE ROOT's filesystem (the real one).
-    func anchored(_ item: CatalogAuditItem) -> CatalogAuditItem {
-        var it = item
-        it.expectedMount = CatalogAuditMountIdentity.ofLaneRoot(item.root)
-        return it
-    }
+    /// The persistent UUID of the volume the sandbox is on (the Data
+    /// volume) — what the audit's handle reads through `fgetattrlist`.
+    var volumeUUID: String { VolumeIdentity.uuid(forPath: files.path) ?? "NO-VOLUME-UUID" }
+
+    /// The stamp an earlier audit would have left on a row it found here.
+    var stamp: AuditSeenOn { AuditSeenOn(volumeUUID: volumeUUID, mountFrom: "sandbox", seenAt: Date(timeIntervalSinceNow: -86_400)) }
 
     /// The sandbox's `files` folder as a lane root of its own (the way a
-    /// mounted /Volumes root is): under it a missing parent folder is proof
-    /// and the "/" stub rule does not apply. Paths elsewhere keep the
-    /// production rule.
+    /// mounted /Volumes root is). Under D5 the lane root decides nothing
+    /// about proof — only which rows share a lane and the "not asked"
+    /// mount check. Paths elsewhere keep the production rule.
     var laneRoot: @Sendable (String) -> String {
         let root = files.path
         return { $0.hasPrefix(root + "/") ? root : CatalogAuditPlanner.productionLaneRoot($0) }
@@ -106,11 +109,11 @@ struct CatalogAuditJobLogicTests {
         let present = try sb.live("present.mov")
         let changed = try sb.live("changed.mov", bytes: 2_000)
         changed.sizeBytes = 1_500                                    // the catalog remembers another size
-        let gone = try sb.live("gone.mov", onDisk: false)
+        let gone = try sb.live("gone.mov", onDisk: false, seen: true)
         gone.contentHashAt = Date(timeIntervalSince1970: 1_700_000_000)
         let back = try sb.missingRow("back.mov", onDisk: true)
-        let still = try sb.missingRow("still.mov", onDisk: false)
-        let archivedGone = try sb.live("arch_gone.mov", onDisk: false)
+        let still = try sb.missingRow("still.mov", onDisk: false, seen: true)
+        let archivedGone = try sb.live("arch_gone.mov", onDisk: false, seen: true)
         archivedGone.archiveFixity = ArchiveFixity(digest: "ab", verifiedAt: Date(), sizeBytes: 2_000)
         let trash = try sb.live("trash.mov", onDisk: false)
         VideoScanModel.stampRemoval(trash, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))
@@ -139,6 +142,10 @@ struct CatalogAuditJobLogicTests {
         #expect(still.removal?.reason == .missingOnDisk, "an existing Missing marker is left exactly as it was")
         #expect(trash.removal?.state == .inTrash && removed.removal?.state == .removedFromCatalog)
         #expect(job.storedCount == 2 && job.saveCount >= 1 && !job.saveFailed)
+        // Every file found got the where-seen stamp (D5), the others none.
+        #expect(present.auditSeenOn?.volumeUUID == sb.volumeUUID && changed.auditSeenOn != nil && back.auditSeenOn != nil)
+        #expect(gone.auditSeenOn?.volumeUUID == sb.volumeUUID && trash.auditSeenOn == nil && removed.auditSeenOn == nil)
+        #expect(job.stampedCount == 3, "present, changed and came back were stamped (got \(job.stampedCount))")
         // The detail rows carry the reasons.
         #expect(job.problems.first { $0.path == changed.fullPath }?.detail.contains("the catalog says") == true)
         #expect(job.problems.first { $0.path == archivedGone.fullPath }?.detail.contains("Verify Archive") == true)
@@ -156,6 +163,10 @@ struct CatalogAuditJobLogicTests {
         let reloaded = CatalogStore(directory: sb.catalogDir).load()
         #expect(reloaded.first { $0.id == gone.id }?.removal?.reason == .missingAtAudit)
         #expect(reloaded.first { $0.id == back.id }?.removal == nil)
+        let onDisk = reloaded.first { $0.id == present.id }?.auditSeenOn
+        #expect(onDisk?.volumeUUID == present.auditSeenOn?.volumeUUID && onDisk?.mountFrom == present.auditSeenOn?.mountFrom
+                && abs((onDisk?.seenAt.timeIntervalSince1970 ?? 0) - (present.auditSeenOn?.seenAt.timeIntervalSince1970 ?? 1)) < 1,
+                "the stamp went to disk with the marks (catalog.json keeps whole seconds): \(String(describing: onDisk))")
     }
 
     @Test("a catalog size of 0 is unknown: the file is present, never 'changed'")
@@ -253,7 +264,7 @@ struct CatalogAuditJobLogicTests {
     @Test("an acknowledged save every N marks and at the end; the clock alone saves too")
     func saveCadence() async throws {
         let sb = try ShowAgainSandbox.make("ca_saveN"); defer { sb.cleanup() }
-        for i in 0..<5 { try sb.live("g\(i).mov", onDisk: false) }
+        for i in 0..<5 { try sb.live("g\(i).mov", onDisk: false, seen: true) }
         let job = await runAudit(sb.model, laneRoot: sb.laneRoot) { j in
             j.checkpointRows = 2
             j.checkpointSeconds = 3_600
@@ -264,7 +275,7 @@ struct CatalogAuditJobLogicTests {
         #expect(job.saveCount == 3, "after 2, after 4, and the final one for the 5th (got \(job.saveCount))")
 
         let sb2 = try ShowAgainSandbox.make("ca_saveT"); defer { sb2.cleanup() }
-        for i in 0..<3 { try sb2.live("t\(i).mov", onDisk: false) }
+        for i in 0..<3 { try sb2.live("t\(i).mov", onDisk: false, seen: true) }
         let clock = await runAudit(sb2.model, laneRoot: sb2.laneRoot) { j in
             j.checkpointRows = 10_000
             j.checkpointSeconds = 0
@@ -278,9 +289,9 @@ struct CatalogAuditJobLogicTests {
     @Test("a save that is not acknowledged undoes the unsaved marks (compare-and-set) and fails the run")
     func failedSaveUndoesMarks() async throws {
         let sb = try ShowAgainSandbox.make("ca_savefail"); defer { sb.cleanup() }
-        let gone = try (0..<3).map { try sb.live("s\($0).mov", onDisk: false) }
+        let gone = try (0..<3).map { try sb.live("s\($0).mov", onDisk: false, seen: true) }
         let back = try sb.missingRow("back.mov", onDisk: true)
-        let kept = try sb.live("kept.mov", onDisk: false)
+        let kept = try sb.live("kept.mov", onDisk: false, seen: true)
         let marker = CatalogAuditRunMarker()
         let job = await runAudit(sb.model, marker: marker) { j in
             j.chunkSize = 1
@@ -296,7 +307,7 @@ struct CatalogAuditJobLogicTests {
         #expect(text.contains("NOT confirmed") && text.contains("OUTCOME failed (partial)"))
         // The undo is compare-and-set: a row that moved on keeps what it has now.
         let plan = sb.model.catalogAuditPlan()
-        let item = sb.anchored(plan.lanes.flatMap(\.items).first { $0.id == kept.id }!)
+        let item = plan.lanes.flatMap(\.items).first { $0.id == kept.id }!
         let (_, mark) = sb.model.applyCatalogAudit(.gone, to: item)
         VideoScanModel.stampRemoval(kept, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))
         let reverted = sb.model.revertCatalogAuditMark(try #require(mark))
@@ -307,7 +318,7 @@ struct CatalogAuditJobLogicTests {
     @Test("Stop finishes the chunk in flight, saves the marks so far, and says partial", .timeLimit(.minutes(1)))
     func stopIsPartialAndSaved() async throws {
         let sb = try ShowAgainSandbox.make("ca_stop"); defer { sb.cleanup() }
-        let rows = try (0..<12).map { try sb.live("stop\($0).mov", onDisk: false) }
+        let rows = try (0..<12).map { try sb.live("stop\($0).mov", onDisk: false, seen: true) }
         let marker = CatalogAuditRunMarker()
         let job = CatalogAuditJob(model: sb.model, marker: marker)
         job.volumeOnline = { _ in true }
@@ -403,6 +414,7 @@ struct CatalogAuditJobScaleTests {
             r.fullPath = sb.files.appendingPathComponent("d\(i % 100)/clip_\(i).mov").path
             r.filename = "clip_\(i).mov"
             r.sizeBytes = Int64(10_000 + i)
+            if i % 10_000 == 0 { r.auditSeenOn = sb.stamp }                    // the gone ones were seen by an earlier audit
             records.append(r)
         }
         sb.model.records = records
@@ -548,8 +560,8 @@ struct CatalogAuditJobSensorTests {
         #expect(half.components(separatedBy: "clearRemoval(").count == 2, "exactly one clearRemoval call")
         #expect(half.contains("reason: .missingAtAudit"))
         let job = try Self.code("CatalogAuditJob.swift")
-        #expect(job.contains("model.applyCatalogAudit(stat, to: item)") && job.contains("model.revertCatalogAuditMark(mark)"))
-        #expect(job.contains("if stats.contains(.gone), !volumeOnline(lane.root)"), "the fresh mount check before any gone answer lands")
+        #expect(job.contains("model.applyCatalogAudit(observation.stat, seenOn: observation.seenOn, to: item)") && job.contains("model.revertCatalogAuditMark(mark)"))
+        #expect(job.contains("if observations.contains(where: { $0.stat == .gone }), !volumeOnline(lane.root)"), "the fresh mount check before any gone answer lands")
         #expect(job.contains("saveCatalogAcknowledged()"), "marks land only after an acknowledged save")
         let plan = try Self.code("CatalogAuditPlan.swift")
         #expect(plan.contains("(e == ENOENT || e == ENOTDIR) ? .gone : .unreadable(errno: e)"), "only ENOENT / ENOTDIR mean gone")
@@ -563,15 +575,20 @@ struct CatalogAuditJobSensorTests {
         #expect(run.contains("AtomicFilePublish.write(data, to: fileURL"))
     }
 
-    /// PROVE AT THE MARK (codex 2026-10-16; r2): the apply path walks the
-    /// path again synchronously, through a directory handle bound to the
-    /// lane root's identity, before the one `stampRemoval`; the guard
-    /// compares the whole planned snapshot (supersession included);
-    /// "archived" is read from the live record; rollback is by value AND
-    /// revision (no object memento); a failed save ends failed even after
-    /// Stop.
+    /// PROVE AT THE MARK (codex 2026-10-16; r2; r3): the apply path walks
+    /// the path again synchronously, through a directory handle, before the
+    /// one `stampRemoval`, under THE ONE RULE (D5: the handle's volume UUID
+    /// equals the stamp read from the LIVE record; no stamp → never seen,
+    /// never marked) with the D6 checks (lstat for a link anywhere in the
+    /// existing path; after the ENOENT the handle still names its path);
+    /// the guard compares the whole planned snapshot (supersession and the
+    /// stamp included); "archived" is read from the live record; rollback
+    /// is by value AND revision (no object memento); a failed save ends
+    /// failed even after Stop; the superseded lane-root identity and "/"
+    /// stub heuristics are gone.
     static func expectProofAtTheMark(half: String, plan: String, job: String) throws {
-        let proof = try #require(half.range(of: "CatalogAuditProof.atTheMark(item)"), "the second look is taken in the model half")
+        let proof = try #require(half.range(of: "CatalogAuditProof.atTheMark(item, lastSeenOn: rec.auditSeenOn"),
+                                 "the second look is taken in the model half, against the LIVE record's stamp")
         let mark = try #require(half.range(of: "stampRemoval("))
         #expect(proof.lowerBound < mark.lowerBound, "the second look comes before the one stampRemoval call")
         #expect(!half.contains("await "), "the proof and the mark are one synchronous step on the main actor")
@@ -581,32 +598,41 @@ struct CatalogAuditJobSensorTests {
         #expect(half.contains("Self.revertRemoval(rec, wrote: mark.wrote, previous: mark.previous, revision: mark.revision"),
                 "rollback is by value AND revision, on the current instance (r2 F4)")
         #expect(half.contains("revision: rec.removalRevision"), "the mark records the revision its write produced")
+        #expect(half.components(separatedBy: "rec.auditSeenOn = seenOn").count == 2, "the stamp is written in exactly one place, in the model half")
         // The walk (r2 F2): every open is a read-only DIRECTORY handle with the link not followed; the name is read through it.
         #expect(plan.contains("static let directoryFlags: Int32 = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC"))
-        #expect(plan.components(separatedBy: "open(pathOf(root, folders[..<k]), directoryFlags)").count == 2, "one open, with the directory flags")
+        #expect(plan.components(separatedBy: "open(path, directoryFlags)").count == 2, "one open, with the directory flags")
         #expect(plan.components(separatedBy: "openat(fd, name, directoryFlags)").count == 2, "one openat, with the directory flags")
-        #expect(plan.contains("CatalogAuditMountIdentity.of(fd: fd)"), "the identity is the handle's (fstatfs), never a pathname's")
-        for pathname in ["realpath(", "lstat(", "statfs(item", "CatalogAuditStat.of(item.path)"] {
-            #expect(!plan.contains(pathname), "the proof resolves no pathname (\(pathname))")
+        #expect(plan.contains("CatalogAuditMountIdentity.of(fd: fd)"), "the identity is the handle's (fstatfs + the volume UUID), never a pathname's")
+        #expect(plan.contains("VolumeIdentity.uuid(forDescriptor: fd, path: nil)"), "the volume UUID is read through the handle")
+        for pathname in ["realpath(", "statfs(item", "CatalogAuditStat.of(item.path)", "ofLaneRoot", "stubRule", "hasEntries", "expectedMount"] {
+            #expect(!plan.contains(pathname), "the proof resolves no pathname and keeps no superseded rule (\(pathname))")
         }
-        // The lane rule (r2 F1): bound to the lane root's identity; "/" has the stub rule.
-        #expect(plan.contains("guard let expected = item.expectedMount, on == expected else { return .driveNotConnected(expected: item.expectedMount, now: on) }"))
+        // D6 (r3 F2): every existing component looked at with the link not followed; after the ENOENT the handle still names its path.
+        #expect(plan.contains("if let refusal = linkInTheExistingPath(root: root, folders: folders) { return refusal }"))
+        #expect(plan.contains("lstat(pathOf(root, folders[..<k]), &sb)") && plan.contains("if (sb.st_mode & S_IFMT) == S_IFLNK { return .link }"))
+        #expect(plan.contains("guard stillNames(path, fd) else { return .changedUnderTheAudit }"))
+        #expect(plan.contains("guard fstat(fd, &held) == 0, lstat(path, &named) == 0 else { return false }"))
         #expect(plan.components(separatedBy: "fstatat(fd, name, &sb, AT_SYMLINK_NOFOLLOW)").count == 3,
                 "the name AND a folder that would not open are both looked at through the handle, link not followed")
-        #expect(plan.contains("item.root == \"/\" ? stubRule(missingFolders: missingFolders, parentHasEntries: parentHasEntries) : .gone"))
-        #expect(plan.contains("supersededByID: r.supersededByID"), "the snapshot carries supersession (r2 F3)")
+        // THE ONE RULE (r3 F1, D5): no stamp → never seen; the handle's volume UUID must equal the stamp's.
+        #expect(plan.contains("guard let lastSeenOn else { return .neverSeenByAnAudit }"))
+        #expect(plan.contains("guard uuid == lastSeenOn.volumeUUID else {"))
+        #expect(plan.contains("auditSeenOn: r.auditSeenOn") && plan.contains("supersededByID: r.supersededByID"),
+                "the snapshot carries the stamp (r3 D5) and supersession (r2 F3)")
         #expect(!plan.contains("isArchived: Bool"), "the item carries no planned 'archived' flag to trust")
-        #expect(job.contains("CatalogAuditMountIdentity.ofLaneRoot(root)"), "the anchor is the LANE ROOT's identity")
+        #expect(!job.contains("CatalogAuditMountIdentity"), "the job anchors nothing: the lane root is only the mount check")
         #expect(job.contains("finish(failedSave: message)") && !job.contains("finish(failed: message)"),
                 "a save that is not acknowledged ends failed, Stop or not (failed > stopped > completed)")
     }
 
     /// MOPS-14's one declared exception to "nothing opened": a DIRECTORY
     /// handle, read-only, in CatalogAuditPlan.swift and nowhere else in the
-    /// audit; no audit source opens anything for writing or moves a thing.
+    /// audit (with `lstat` / `fstat` for the D6 checks there too); no audit
+    /// source opens anything for writing or moves a thing.
     @Test("the directory-handle calls live in CatalogAuditPlan.swift only; no audit source writes, renames, unlinks or opens for writing")
     func directoryHandleIsTheOnlyOpenAndOnlyInThePlan() throws {
-        let handleCalls = ["open(", "openat(", "fstatat(", "fstatfs(", "fdopendir(", "readdir("]
+        let handleCalls = ["open(", "openat(", "fstatat(", "fstatfs(", "lstat(", "fstat("]
         let writes = ["O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "FileHandle(forWritingTo", "FileHandle(forUpdating",
                       "unlink(", "unlinkat(", "rename(", "renameat(", "rmdir(", "mkdir(", "mkdirat(", "truncate(", "ftruncate(",
                       "symlink(", "link(", "chmod(", "fchmod(", "utimes(", "futimes("]
@@ -620,6 +646,9 @@ struct CatalogAuditJobSensorTests {
         for call in handleCalls { #expect(plan.contains(call), "the walk uses \(call)") }
         #expect(plan.components(separatedBy: "open(").count == 2 && plan.components(separatedBy: "openat(").count == 2,
                 "exactly one open and one openat")
+        #expect(plan.components(separatedBy: "lstat(").count == 3 && plan.components(separatedBy: "fstat(").count == 2,
+                "two lstat (the link pre-check, the post-ENOENT check) and one fstat (the post-ENOENT check)")
+        for gone in ["fdopendir(", "readdir(", "dup("] { #expect(!plan.contains(gone), "the stub rule's listing is gone (\(gone))") }
     }
 
     @Test("every file is still at its path with the same bytes, inode and mtime after a run; nothing appeared beside the media")
@@ -733,6 +762,7 @@ struct CatalogAuditProveAtTheMarkTests {
         let job = await runAudit(sb.model) { j in j.statPaths = { paths in paths.map { _ in .gone } } }
         #expect(job.totals[.present] == 1 && job.totals[.gone] == 0, Comment(rawValue: job.totals.line))
         #expect(r.removal == nil && job.storedCount == 0, "present at the mark → not marked")
+        #expect(r.auditSeenOn?.volumeUUID == sb.volumeUUID && job.stampedCount == 1, "the second look stamps where it found the file")
     }
 
     @Test("F2: an errno other than ENOENT/ENOTDIR at the mark is 'could not check', never gone")
@@ -756,7 +786,7 @@ struct CatalogAuditProveAtTheMarkTests {
     @Test("F3: any planned field changed meanwhile — size, hash time, mtime, lifecycle, archive stage, archive fixity — drops the result as 'record changed'")
     func snapshotFieldsChangedMeanwhileDropTheResult() throws {
         let sb = try ShowAgainSandbox.make("ca_snapshot"); defer { sb.cleanup() }
-        let rows = try (0..<6).map { try sb.live("snap\($0).mov", onDisk: false) }
+        let rows = try (0..<7).map { try sb.live("snap\($0).mov", onDisk: false, seen: true) }
         let plan = sb.model.catalogAuditPlan()
         let items = try rows.map { r in try #require(plan.lanes.flatMap(\.items).first { $0.id == r.id }) }
         rows[0].sizeBytes = 9_999
@@ -765,6 +795,7 @@ struct CatalogAuditProveAtTheMarkTests {
         rows[3].lifecycleStage = .reviewing
         rows[4].archiveStage = .readyForArchive
         rows[5].archiveFixity = ArchiveFixity(digest: "cd", verifiedAt: Date(), sizeBytes: 2_000)   // archived meanwhile
+        rows[6].auditSeenOn = nil                                                                   // the stamp is in the key too (D5)
         for (r, it) in zip(rows, items) {
             let (apply, mark) = sb.model.applyCatalogAudit(.gone, to: it)
             #expect(apply.result == .recordChanged && mark == nil, "\(r.filename): \(apply.result)")
@@ -795,7 +826,7 @@ struct CatalogAuditProveAtTheMarkTests {
     @Test("F4: rollback clears the mark on the CURRENT record instance (same id, path and marker), not a detached one")
     func rollbackClearsTheMarkOnTheCurrentInstance() async throws {
         let sb = try ShowAgainSandbox.make("ca_replace"); defer { sb.cleanup() }
-        let original = try sb.live("swap.mov", onDisk: false)
+        let original = try sb.live("swap.mov", onDisk: false, seen: true)
         var replacement: VideoRecord?
         let model = sb.model
         let job = await runAudit(sb.model, laneRoot: sb.laneRoot) { j in
@@ -821,7 +852,7 @@ struct CatalogAuditProveAtTheMarkTests {
     @Test("F4: a newer lifecycle / archive-stage edit survives the rollback; only the marker is put back")
     func rollbackLeavesANewerLifecycleEditAlone() async throws {
         let sb = try ShowAgainSandbox.make("ca_newer_edit"); defer { sb.cleanup() }
-        let r = try sb.live("edited.mov", onDisk: false)
+        let r = try sb.live("edited.mov", onDisk: false, seen: true)
         let job = await runAudit(sb.model, laneRoot: sb.laneRoot) { j in
             j.chunkSize = 1; j.checkpointRows = 100
             j.saveCatalogForTesting = {
@@ -839,7 +870,7 @@ struct CatalogAuditProveAtTheMarkTests {
     @Test("F4: a newer marker from another door is left alone and the undo says so")
     func rollbackLeavesANewerMarkerAlone() async throws {
         let sb = try ShowAgainSandbox.make("ca_newer_marker"); defer { sb.cleanup() }
-        let r = try sb.live("door.mov", onDisk: false)
+        let r = try sb.live("door.mov", onDisk: false, seen: true)
         let job = await runAudit(sb.model, laneRoot: sb.laneRoot) { j in
             j.chunkSize = 1; j.checkpointRows = 100
             j.saveCatalogForTesting = {
@@ -857,7 +888,7 @@ struct CatalogAuditProveAtTheMarkTests {
     @Test("F5: Stop followed by a save that is not acknowledged is FAILED (exit 1, run marker failed, row 'marks undone') — never 'stopped'")
     func stopThenUnacknowledgedSaveIsFailed() async throws {
         let sb = try ShowAgainSandbox.make("ca_stop_fail"); defer { sb.cleanup() }
-        let rows = try (0..<5).map { try sb.live("sf\($0).mov", onDisk: false) }
+        let rows = try (0..<5).map { try sb.live("sf\($0).mov", onDisk: false, seen: true) }
         let marker = CatalogAuditRunMarker()
         let job = CatalogAuditJob(model: sb.model, marker: marker)
         job.volumeOnline = { _ in true }

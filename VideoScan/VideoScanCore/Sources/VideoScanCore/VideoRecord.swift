@@ -378,6 +378,16 @@ public class VideoRecord: Identifiable, Decodable {
     /// the CAS tag that defeats ABA.)
     public var removalRevision: Int = 0
 
+    /// Where Audit Catalog LAST SAW this file (codex r3 2026-10-16 F1,
+    /// D5): the persistent UUID of the volume its folder was on when an
+    /// audit found it, read through the directory handle that found it.
+    /// The audit's one proof rule: ENOENT is proof only in a folder on
+    /// THIS volume; a row with no stamp has never been seen by an audit and
+    /// is never marked. Written only by the audit; carried by clone, rescan
+    /// preservation and the catalog file (key absent until stamped, so an
+    /// older catalog decodes to nil and round-trips byte-identical).
+    public var auditSeenOn: AuditSeenOn?
+
     /// `removal?.since`, cached on every write of `removal` (and in the
     /// decoder, where `didSet` does not run). `purgedAt` / `isPurged` are
     /// read in O(records) loops all over the app; this keeps that read a
@@ -865,6 +875,7 @@ public class VideoRecord: Identifiable, Decodable {
             archiveStage: archiveStage, loadedAt: Self.migrationLoadDate)
         removedSince = removal?.since   // didSet does not run inside init
         removalRevision = try c.decodeIfPresent(Int.self, forKey: .removalRevision) ?? 0
+        auditSeenOn = try c.decodeIfPresent(AuditSeenOn.self, forKey: .auditSeenOn)
         // decodeIfPresent so pre-feature catalogs (no setAsideReason key)
         // round-trip cleanly as in-scope records (same shape as purgedAt).
         setAsideReason              = try c.decodeIfPresent(String.self, forKey: .setAsideReason)

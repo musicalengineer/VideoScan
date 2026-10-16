@@ -115,6 +115,7 @@ struct CatalogAuditPresenceFacts: Sendable, Equatable {
             f.outcome = .ok
             f.needsDecision = (r.counts[CatalogAuditResult.gone.rawValue] ?? 0)
                 + (r.counts[CatalogAuditResult.changed.rawValue] ?? 0)
+                + (r.counts[CatalogAuditResult.neverSeenByAnAudit.rawValue] ?? 0)   // the Fix Links bucket (codex r3 D5)
         case .stopped:
             f.outcome = .partial
         case .failed, .running:

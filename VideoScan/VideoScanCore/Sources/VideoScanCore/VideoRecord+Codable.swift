@@ -63,6 +63,7 @@ extension VideoRecord {
         case purgedAt
         case removal                 // GH #143, additive
         case removalRevision         // codex r2 2026-10-16 F4, additive
+        case auditSeenOn             // codex r3 2026-10-16 F1 (D5), additive
         case setAsideReason
         case drmProtected
         case needsReformat

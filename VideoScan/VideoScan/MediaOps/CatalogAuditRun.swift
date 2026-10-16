@@ -114,9 +114,11 @@ final class CatalogAuditRunMarker: ObservableObject {
         case .completed:
             let gone = r.counts[CatalogAuditResult.gone.rawValue] ?? 0
             let archived = r.counts[CatalogAuditResult.goneArchived.rawValue] ?? 0
-            guard gone + archived > 0 else { return nil }
+            let unseen = r.counts[CatalogAuditResult.neverSeenByAnAudit.rawValue] ?? 0
+            guard gone + archived + unseen > 0 else { return nil }
             return "Audit catalog: the run of \(started) found \(gone.formatted()) file(s) gone (marked Missing)"
                 + (archived > 0 ? " and \(archived.formatted()) archive copy(ies) not at their path" : "")
+                + (unseen > 0 ? " and \(unseen.formatted()) file(s) not at their path that no audit had seen before (not marked — Fix Links decides)" : "")
                 + " — the Catalog Status panel lists them."
         case .running:
             return "Audit catalog: the run started \(started) did not finish (quit or crash) — marks saved before that are kept; run Catalog ▸ Audit Catalog… again."

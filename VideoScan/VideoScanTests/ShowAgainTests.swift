@@ -40,7 +40,11 @@ struct ShowAgainSandbox {
     var catalogDir: URL { root.appendingPathComponent("catalog", isDirectory: true) }
 
     static func make(_ label: String) throws -> ShowAgainSandbox {
-        let root = FileManager.default.temporaryDirectory
+        // realpath'd (codex r3 D6): the audit refuses a symlink ANYWHERE in a
+        // path, and `/var` → `/private/var` is one; every sandbox path must
+        // be the physical path, as Rick's catalog paths are. `realpath(3)`,
+        // not Foundation's resolvingSymlinksInPath, which strips "/private".
+        let root = physical(FileManager.default.temporaryDirectory)
             .appendingPathComponent("test_showagain_\(label)_\(UUID().uuidString.prefix(8))", isDirectory: true)
         let files = root.appendingPathComponent("files", isDirectory: true)
         try FileManager.default.createDirectory(at: files, withIntermediateDirectories: true)
@@ -48,6 +52,15 @@ struct ShowAgainSandbox {
         model.catalogStore = CatalogStore(directory: root.appendingPathComponent("catalog", isDirectory: true))
         model.mediaLedger = MediaLedger(directory: root.appendingPathComponent("ledger", isDirectory: true))
         return ShowAgainSandbox(root: root, model: model)
+    }
+
+    /// The physical path of an existing folder (`realpath(3)`): no symlink
+    /// in any component. (For Rick: the C call; Foundation's own resolver
+    /// hides the `/private` prefix, which is the one link that matters here.)
+    static func physical(_ url: URL) -> URL {
+        guard let resolved = realpath(url.path, nil) else { return url }
+        defer { free(resolved) }
+        return URL(fileURLWithPath: String(cString: resolved), isDirectory: true)
     }
 
     func cleanup() { try? FileManager.default.removeItem(at: root) }

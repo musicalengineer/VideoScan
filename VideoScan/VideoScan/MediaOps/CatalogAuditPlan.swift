@@ -13,53 +13,61 @@
 //     rows and rows with no path are SKIPPED and counted. Each item carries
 //     a SNAPSHOT of the row's fields that matter (path, size, marker,
 //     lifecycle, archive stage and fixity, derivation, supersession, hash
-//     time, mtime): the apply step is compare-and-set on the whole
-//     snapshot, so a row rescanned, edited, restored, marked or superseded
-//     by another door while the stats ran is left alone.
-//   • ANCHOR (CatalogAuditMountIdentity, below; the job does it per lane,
-//     off the main actor, before the lane's first stat): the identity of
-//     the LANE ROOT's filesystem — `statfs` of "/Volumes/X", or for "/"
-//     this Mac's data volume (codex r2 2026-10-16 F1). Never "where the
-//     parent is now": a gone proof must be read on THAT filesystem. nil
-//     when it cannot be established → the lane's rows are never marked.
+//     time, mtime, the where-seen stamp): the apply step is compare-and-set
+//     on the whole snapshot, so a row rescanned, edited, restored, marked
+//     or superseded by another door while the stats ran is left alone.
 //   • STAT (CatalogAuditStat, below): one `stat(2)` per row, off the main
 //     actor; the file is never opened. ENOENT / ENOTDIR → gone; any other
 //     errno → could not check (never marked); a path that is no longer a
 //     regular file → could not check (a person decides). This is the cheap
-//     FIRST PASS; it decides nothing.
+//     FIRST PASS; it decides nothing. For every row it finds PRESENT the
+//     same pass reads WHERE the file is (CatalogAuditDirectoryWalk.seenOn):
+//     the file's folder is opened as a DIRECTORY handle, the identity of
+//     the volume it is on is read through that handle (`fstatfs` + the
+//     volume's persistent UUID, `fgetattrlist`), and the name is read
+//     through the same handle; a file found that way is STAMPED
+//     (`VideoRecord.auditSeenOn`) at apply time.
+//   • THE ONE PROOF RULE (codex r3 2026-10-16 F1, D5): a file is provably
+//     gone ONLY when the folder it is not in is on the volume the file was
+//     LAST SEEN on — the handle's volume UUID equals the row's stamp. No
+//     stamp → "never seen by an audit" (never marked; Fix Links decides).
+//     A different volume → could not check ("drive not connected?"): an
+//     unmounted drive's stub folder, a nested volume that left, a relocated
+//     home all read ENOENT on SOME volume, never on the one the file was
+//     seen on. Nothing is inferred from the lane root or from what a
+//     folder holds: the lane root's mount check is only the cheap "not
+//     asked" skip for a drive that is not connected.
 //   • PROVE AT THE MARK (CatalogAuditProof + CatalogAuditDirectoryWalk,
-//     below; codex 2026-10-16 F1/F2, r2 F1/F2): for every gone answer —
+//     below; codex 2026-10-16 F1/F2, r2 F2, r3 F2): for every gone answer —
 //     and only those, they are few — the apply step walks the path again
 //     SYNCHRONOUSLY on the main actor just before marking, BOUND TO A
-//     DIRECTORY HANDLE: the nearest existing ancestor folder is opened
-//     read-only (O_DIRECTORY | O_NOFOLLOW), its identity read with
-//     `fstatfs(fd)`, the remaining folders walked one `openat` at a time
-//     and the name itself read with `fstatat(…, AT_SYMLINK_NOFOLLOW)`.
-//     ENOENT / ENOTDIR through that handle, on the lane root's filesystem,
-//     is gone. Present now → present; a symlink anywhere on the way
-//     (O_NOFOLLOW refuses it; a folder that would not open is looked at
-//     with `fstatat` link-not-followed before it counts as gone) → could
-//     not check, "a link in the path"; any other errno → could not check;
-//     another filesystem (the
-//     drive left, the path fell through to the system disk) → could not
-//     check, "drive not connected". Under lane "/" the STUB RULE (r2 F1):
-//     gone is provable only when the file's own folder is there and holds
-//     something else — an unmounted custom mount point is an empty folder
-//     on this Mac's disk and looks exactly like a deleted folder; a deleted
-//     subfolder under "/" is a declared limit (refuse over guess). Under a
-//     mounted /Volumes root a missing parent folder IS proof, bound to the
-//     root's identity. This directory handle is the ONE declared exception
-//     to "nothing opened" (MOPS-14): a folder, read-only, never a media
-//     file; CatalogAuditJobSensorTests pins the calls to this file.
+//     DIRECTORY HANDLE. First every EXISTING component of the path is
+//     looked at lexically with `lstat`: a symlink ANYWHERE (an
+//     intermediate one too — `/var` → `/private/var`) → could not check,
+//     "a link in the path" (D6). Then the nearest existing ancestor folder
+//     is opened read-only (O_DIRECTORY | O_NOFOLLOW), the remaining folders
+//     walked one `openat` at a time, the name read with `fstatat(…,
+//     AT_SYMLINK_NOFOLLOW)`; after an ENOENT the handle must STILL be the
+//     directory its pathname names (`fstat(fd)` dev+ino == `lstat(path)`
+//     dev+ino) — a folder renamed away and replaced between the open and
+//     the lookup → could not check, "the folder changed under the audit".
+//     The declared residual: a file arriving after the observation, or a
+//     folder replaced and replaced BACK between two syscalls (two renames
+//     by an outside actor inside that window) — the next run restores it.
+//     This directory handle is the ONE declared exception to "nothing
+//     opened" (MOPS-14): a folder, read-only, never a media file;
+//     CatalogAuditJobSensorTests pins the calls to this file.
 //   • APPLY (VideoScanModel+CatalogAudit.swift): the one engine —
 //     `stampRemoval(.missing(reason: .missingAtAudit))` for a proven-gone
-//     file, `clearRemoval` (validates first) for one that came back.
+//     file, `clearRemoval` (validates first) for one that came back — and
+//     the stamp for a present one.
 //   • RUN (CatalogAuditJob.swift): lanes in parallel, chunks of stats,
-//     batched acknowledged saves, undo of the unsaved marks on a save that
-//     is not acknowledged.
+//     batched acknowledged saves (marks every 25 rows or 60 s; stamps on
+//     the clock, at lane end and run end — never per row), undo of the
+//     unsaved marks on a save that is not acknowledged.
 //
-// Memory: one `CatalogAuditItem` (~270 bytes with its snapshot) per live
-// record — ~27 MB at 100k — plus the per-folder tally of gone rows (one
+// Memory: one `CatalogAuditItem` (~300 bytes with its snapshot) per live
+// record — ~30 MB at 100k — plus the per-folder tally of gone rows (one
 // entry per folder that lost a file; ≤ the number of gone rows).
 
 import Foundation
@@ -68,12 +76,12 @@ import VideoScanCore
 // MARK: - Plan (values)
 
 /// The fields of a row the apply step compares, planned against live
-/// (codex 2026-10-16 F3; r2 F3 adds supersession). Any difference means
-/// another door touched the row while the stats ran, and the result is
-/// dropped as "record changed". Id and path alone are not enough: Trash →
-/// Put Back → Restore returns the marker to nil; archive fixity set
-/// meanwhile makes the row an archive copy; Repair supersedes a row the
-/// plan skipped only if it was superseded when planned.
+/// (codex 2026-10-16 F3; r2 F3 adds supersession; r3 D5 the stamp). Any
+/// difference means another door touched the row while the stats ran, and
+/// the result is dropped as "record changed". Id and path alone are not
+/// enough: Trash → Put Back → Restore returns the marker to nil; archive
+/// fixity set meanwhile makes the row an archive copy; Repair supersedes a
+/// row the plan skipped only if it was superseded when planned.
 struct CatalogAuditRowSnapshot: Sendable, Equatable {
     let path: String
     let sizeBytes: Int64
@@ -85,6 +93,7 @@ struct CatalogAuditRowSnapshot: Sendable, Equatable {
     let supersededByID: UUID?
     let contentHashAt: Date?
     let dateModified: String
+    let auditSeenOn: AuditSeenOn?
 
     /// (For Rick: a value copy of the fields, taken at plan time and again
     /// at apply time; `==` is the whole compare-and-set key.)
@@ -93,25 +102,22 @@ struct CatalogAuditRowSnapshot: Sendable, Equatable {
                                 lifecycleStage: r.lifecycleStage, archiveStage: r.archiveStage,
                                 hasArchiveFixity: r.archiveFixity != nil, derivationKind: r.derivationKind,
                                 supersededByID: r.supersededByID,
-                                contentHashAt: r.contentHashAt, dateModified: r.dateModified)
+                                contentHashAt: r.contentHashAt, dateModified: r.dateModified,
+                                auditSeenOn: r.auditSeenOn)
     }
 }
 
 /// One row's question: "is the file still at this path?" together with
 /// everything the apply step needs to answer it only for THIS row.
 /// Carries nothing the apply step must not trust: whether the row is an
-/// archive copy is read from the LIVE record at apply time.
+/// archive copy, and where the file was last seen, are read from the LIVE
+/// record at apply time.
 struct CatalogAuditItem: Sendable, Equatable, Identifiable {
     let id: UUID
     /// The lane's volume root — the lexical rule ("/Volumes/X" or "/").
     let root: String
     /// The row as planned: the compare-and-set key.
     let planned: CatalogAuditRowSnapshot
-    /// The filesystem the LANE ROOT is on, anchored before the lane's first
-    /// stat — the identity every gone proof in the lane must be read on.
-    /// nil = could not be established (the root is not a mount point; its
-    /// statfs failed) — the row is then never marked.
-    var expectedMount: CatalogAuditMountIdentity?
 
     var path: String { planned.path }
     /// The catalog's size — "changed" means the size on disk differs.
@@ -214,73 +220,52 @@ enum CatalogAuditPlanner {
     }
 }
 
-// MARK: - Mount identity (which filesystem a path is really on)
+// MARK: - Mount identity (which volume an open folder is really on)
 
-/// What `statfs(2)` says a path is on: the filesystem id, where it is
-/// mounted and what is mounted there. Two reads are the same filesystem
-/// when all three agree. (For Rick: `f_fsid` ≈ a device id; `f_mntonname`
-/// is the mount point; `f_mntfromname` is the device or share.)
+/// What the kernel says an OPEN directory handle is on: the filesystem id,
+/// where it is mounted, what is mounted there (`fstatfs`) and the volume's
+/// PERSISTENT UUID (`fgetattrlist ATTR_VOL_UUID`, through `VolumeIdentity`
+/// — the same value Finder, `diskutil` and the fixity stamps use; survives
+/// a remount, unlike `f_fsid` / `st_dev`). The UUID is the key the proof
+/// compares; the rest is for the words. (For Rick: `f_mntonname` is the
+/// mount point; `f_mntfromname` is the device or share.)
 struct CatalogAuditMountIdentity: Sendable, Equatable {
     let fsid0: Int32
     let fsid1: Int32
     let mountOn: String
     let mountFrom: String
+    /// nil = the filesystem reports no UUID (some network shares): nothing
+    /// on it can be stamped, so nothing on it is ever provably gone.
+    let volumeUUID: String?
 
-    /// This Mac's data volume: every file a person writes lives here
-    /// (/Users, /private, /opt… are firmlinks onto it); the sealed system
-    /// snapshot mounted at "/" holds none.
-    static let bootDataVolume = "/System/Volumes/Data"
+    var words: String { "\(mountFrom) on \(mountOn)" + (volumeUUID.map { " [\($0)]" } ?? " [no volume UUID]") }
 
-    var words: String { "\(mountFrom) on \(mountOn)" }
-
-    /// `statfs` of an existing path (nil when it is not there or cannot be
-    /// read). No disk I/O beyond the kernel's mount table.
-    static func of(_ path: String) -> CatalogAuditMountIdentity? {
-        var fs = statfs()
-        guard statfs(path, &fs) == 0 else { return nil }
-        return decode(&fs)
-    }
-
-    /// `fstatfs` of an open directory handle: the filesystem the handle is
-    /// bound to, whatever the path says now (codex r2 F2).
+    /// `fstatfs` + the volume UUID of an open directory handle: the volume
+    /// the handle is bound to, whatever the path says now (codex r2 F2).
     static func of(fd: Int32) -> CatalogAuditMountIdentity? {
         var fs = statfs()
         guard fstatfs(fd, &fs) == 0 else { return nil }
-        return decode(&fs)
-    }
-
-    /// The identity a LANE's gone proofs must be read on (codex r2 F1):
-    /// the lane root's own filesystem, never where a parent folder leads
-    /// now. "/Volumes/X" must BE a mount point (an unmounted root's stub
-    /// folder is on the system disk — nil, never provable). "/" means this
-    /// Mac's data volume when it is a mount of its own (every Mac since
-    /// Catalina), else "/" itself. Any other root (a test sandbox) is
-    /// whatever it is on.
-    static func ofLaneRoot(_ root: String) -> CatalogAuditMountIdentity? {
-        if root == "/" {
-            if let data = of(bootDataVolume), data.mountOn == bootDataVolume { return data }
-            return of("/")
-        }
-        guard let identity = of(root) else { return nil }
-        if root.hasPrefix("/Volumes/") && identity.mountOn != root { return nil }
-        return identity
-    }
-
-    private static func decode(_ fs: inout statfs) -> CatalogAuditMountIdentity {
         let on = withUnsafePointer(to: &fs.f_mntonname) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
         }
         let from = withUnsafePointer(to: &fs.f_mntfromname) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
         }
-        return CatalogAuditMountIdentity(fsid0: fs.f_fsid.val.0, fsid1: fs.f_fsid.val.1, mountOn: on, mountFrom: from)
+        return CatalogAuditMountIdentity(fsid0: fs.f_fsid.val.0, fsid1: fs.f_fsid.val.1, mountOn: on, mountFrom: from,
+                                         volumeUUID: VolumeIdentity.uuid(forDescriptor: fd, path: nil))
+    }
+
+    /// The stamp a file found through this handle gets; nil when the
+    /// volume has no UUID (no stamp — D5).
+    func seenOn(at now: Date) -> AuditSeenOn? {
+        volumeUUID.map { AuditSeenOn(volumeUUID: $0, mountFrom: mountFrom, seenAt: now) }
     }
 }
 
 // MARK: - Stat (one syscall, no open)
 
 /// What `stat(2)` said about one path. Pure value; the stat itself is the
-/// only I/O the first pass does.
+/// only I/O the first pass does on the file's own path.
 enum CatalogAuditStat: Sendable, Equatable {
     case file(size: Int64)
     /// ENOENT or ENOTDIR: nothing is at the path (the drive is still asked
@@ -306,20 +291,30 @@ enum CatalogAuditStat: Sendable, Equatable {
     }
 }
 
-// MARK: - The directory-handle walk (the second look, bound to an fd)
+/// The first pass's answer for one row: the stat, and — for a file the
+/// directory handle found — where it is (the stamp to write). Pure value.
+struct CatalogAuditObservation: Sendable, Equatable {
+    let stat: CatalogAuditStat
+    let seenOn: AuditSeenOn?
+}
+
+// MARK: - The directory-handle walk (bound to an fd)
 
 /// What the fd-bound walk found. Pure value.
 enum CatalogAuditWalk: Sendable, Equatable {
-    /// The name is there: a regular file (with its size), or something else.
-    case found(CatalogAuditStat)
+    /// The name is there: a regular file (with its size), or something
+    /// else — with the identity of the volume the handle is on (nil when
+    /// it could not be read).
+    case found(CatalogAuditStat, on: CatalogAuditMountIdentity?)
     /// ENOENT / ENOTDIR read THROUGH the handle, bound to the identity of
-    /// the folder the handle is open on. `missingFolders` = how many
-    /// folders of the file's directory were not there (0 = only the file
-    /// itself); `parentHasEntries` is read only when asked (the "/" stub
-    /// rule) and only when the file's own folder is the handle.
-    case gone(on: CatalogAuditMountIdentity, missingFolders: Int, parentHasEntries: Bool?)
-    /// A symlink on the way — O_NOFOLLOW refused it (ELOOP). Not provable.
+    /// the volume the handle is open on, the handle still naming its path.
+    case gone(on: CatalogAuditMountIdentity)
+    /// A symlink anywhere in the path (D6). Not provable.
     case link
+    /// After the ENOENT the handle no longer IS the directory its pathname
+    /// names (renamed away and replaced between the open and the lookup).
+    /// Not provable (D6).
+    case changedUnderTheAudit
     /// The lane root itself could not be opened (ENOENT: the drive left).
     case rootNotThere
     /// Any other errno, or the handle's identity could not be read.
@@ -336,30 +331,60 @@ enum CatalogAuditDirectoryWalk {
 
     static let directoryFlags: Int32 = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC
 
-    private enum Opened { case opened(fd: Int32, depth: Int), failed(CatalogAuditWalk) }
-    private enum Descent { case reached, gone(missingFolders: Int), failed(CatalogAuditWalk) }
+    /// TEST SEAM (D6) — task-local, never process-global: runs between the
+    /// handle reaching the file's folder and the name being read, so a
+    /// test can rename the folder away and put another at its path. nil in
+    /// production.
+    @TaskLocal static var beforeTheNameIsReadForTesting: (@Sendable () -> Void)?
+
+    private enum Opened { case opened(fd: Int32, path: String, depth: Int), failed(CatalogAuditWalk) }
+    private enum Descent { case reached, gone, failed(CatalogAuditWalk) }
     private enum Named { case found(CatalogAuditStat), gone, failed(CatalogAuditWalk) }
 
-    /// Walk `root`/…/`directory`/`filename` through directory handles. Every
-    /// handle is closed before returning, on every path.
-    static func prove(directory: String, filename: String, root: String, readParentEntries: Bool) -> CatalogAuditWalk {
+    /// THE SECOND LOOK: walk `root`/…/`directory`/`filename` through
+    /// directory handles. Every handle is closed before returning, on every
+    /// path.
+    static func prove(directory: String, filename: String, root: String) -> CatalogAuditWalk {
         guard let folders = folders(of: directory, below: root) else { return .unreadable(errno: EINVAL) }
+        if let refusal = linkInTheExistingPath(root: root, folders: folders) { return refusal }
         var fd: Int32 = -1
         defer { if fd >= 0 { close(fd) } }
-        let depth: Int
+        var handlePath: String
         switch openNearestExistingAncestor(root: root, folders: folders) {
-        case .opened(let opened, let d): fd = opened; depth = d
+        case .opened(let opened, let path, let depth):
+            fd = opened
+            handlePath = path
+            switch descend(&fd, &handlePath, through: folders[depth...]) {
+            case .reached: break
+            case .gone: return goneThrough(fd, named: handlePath)
+            case .failed(let walk): return walk
+            }
         case .failed(let walk): return walk
         }
-        switch descend(&fd, through: folders[depth...]) {
-        case .reached: break
-        case .gone(let missing): return goneThrough(fd, missingFolders: missing, readParentEntries: false)
-        case .failed(let walk): return walk
-        }
+        beforeTheNameIsReadForTesting?()
         switch statName(filename, in: fd) {
-        case .found(let stat): return .found(stat)
-        case .gone: return goneThrough(fd, missingFolders: 0, readParentEntries: readParentEntries)
+        case .found(let stat): return .found(stat, on: CatalogAuditMountIdentity.of(fd: fd))
+        case .gone: return goneThrough(fd, named: handlePath)
         case .failed(let walk): return walk
+        }
+    }
+
+    /// THE FIRST PASS'S "where is it": one handle on `directory`, the
+    /// volume identity read through it, each name read through it. The
+    /// stamp for every name found as a regular file that way; nil for the
+    /// others (no stamp: a link in the path, a folder that is not there, a
+    /// name that is not a regular file through the handle, a volume with
+    /// no UUID). Off the main actor; no pathname is trusted twice.
+    static func seenOn(directory: String, filenames: [String], root: String, now: Date) -> [AuditSeenOn?] {
+        let none = [AuditSeenOn?](repeating: nil, count: filenames.count)
+        guard let folders = folders(of: directory, below: root),
+              linkInTheExistingPath(root: root, folders: folders) == nil,
+              case .opened(let fd, _, let depth) = openNearestExistingAncestor(root: root, folders: folders) else { return none }
+        defer { close(fd) }
+        guard depth == folders.count, let stamp = CatalogAuditMountIdentity.of(fd: fd)?.seenOn(at: now) else { return none }
+        return filenames.map { name in
+            if case .found(.file) = statName(name, in: fd) { return stamp }
+            return nil
         }
     }
 
@@ -375,15 +400,33 @@ enum CatalogAuditDirectoryWalk {
         return parts.contains { $0 == "." || $0 == ".." } ? nil : parts
     }
 
+    /// D6 (codex r3 F2): every EXISTING component of `root/folders`, in
+    /// order, looked at with the link NOT followed — a symlink anywhere
+    /// (`/var` → `/private/var` included) is "a link in the path", not
+    /// provable. Stops at the first component that is not there (the
+    /// remainder is the handle walk's). Any other errno → unreadable.
+    private static func linkInTheExistingPath(root: String, folders: [String]) -> CatalogAuditWalk? {
+        for k in 0...folders.count {
+            var sb = stat()
+            guard lstat(pathOf(root, folders[..<k]), &sb) == 0 else {
+                let e = errno
+                return (e == ENOENT || e == ENOTDIR) ? nil : .unreadable(errno: e)
+            }
+            if (sb.st_mode & S_IFMT) == S_IFLNK { return .link }
+        }
+        return nil
+    }
+
     /// Opens the deepest `root/folders[0..<k]` that is there, trying the
     /// whole directory first and walking up. Each open is O_NOFOLLOW on
     /// its last component: landing on a symlink is refused (ELOOP).
     private static func openNearestExistingAncestor(root: String, folders: [String]) -> Opened {
         var k = folders.count
         while k >= 0 {
-            let fd = open(pathOf(root, folders[..<k]), directoryFlags)
+            let path = pathOf(root, folders[..<k])
+            let fd = open(path, directoryFlags)
             let e = errno
-            if fd >= 0 { return .opened(fd: fd, depth: k) }
+            if fd >= 0 { return .opened(fd: fd, path: path, depth: k) }
             switch e {
             case ENOENT, ENOTDIR: k -= 1
             case ELOOP: return .failed(.link)
@@ -399,20 +442,25 @@ enum CatalogAuditDirectoryWalk {
     }
 
     /// From an open ancestor, one `openat` per remaining folder; the
-    /// previous handle is closed as the walk moves down. A folder that
-    /// will not open as a directory (ENOENT / ENOTDIR — on Darwin a
-    /// symlink refused by O_NOFOLLOW | O_DIRECTORY reads ENOTDIR, not
-    /// ELOOP) is looked at through the handle, link not followed, before
-    /// it counts as gone.
-    private static func descend(_ fd: inout Int32, through folders: ArraySlice<String>) -> Descent {
-        for (i, name) in folders.enumerated() {
+    /// previous handle is closed as the walk moves down and `handlePath`
+    /// follows it. A folder that will not open as a directory (ENOENT /
+    /// ENOTDIR — on Darwin a symlink refused by O_NOFOLLOW | O_DIRECTORY
+    /// reads ENOTDIR, not ELOOP) is looked at through the handle, link
+    /// not followed, before it counts as gone.
+    private static func descend(_ fd: inout Int32, _ handlePath: inout String, through folders: ArraySlice<String>) -> Descent {
+        for name in folders {
             let next = openat(fd, name, directoryFlags)
             let e = errno
-            if next >= 0 { close(fd); fd = next; continue }
+            if next >= 0 {
+                close(fd)
+                fd = next
+                handlePath = (handlePath.hasSuffix("/") ? handlePath : handlePath + "/") + name
+                continue
+            }
             switch e {
             case ENOENT, ENOTDIR:
                 if let failure = whatIsThere(name, in: fd) { return .failed(failure) }
-                return .gone(missingFolders: folders.count - i)
+                return .gone
             case ELOOP: return .failed(.link)
             default: return .failed(.unreadable(errno: e))
             }
@@ -444,93 +492,93 @@ enum CatalogAuditDirectoryWalk {
         return .found(.file(size: Int64(sb.st_size)))
     }
 
-    /// ENOENT through `fd`: bound to the handle's identity, read now.
-    private static func goneThrough(_ fd: Int32, missingFolders: Int, readParentEntries: Bool) -> CatalogAuditWalk {
+    /// ENOENT through `fd`: bound to the handle's identity, read now — and
+    /// only while the handle still IS the directory `path` names (D6).
+    private static func goneThrough(_ fd: Int32, named path: String) -> CatalogAuditWalk {
         guard let on = CatalogAuditMountIdentity.of(fd: fd) else { return .unreadable(errno: errno) }
-        return .gone(on: on, missingFolders: missingFolders, parentHasEntries: readParentEntries ? hasEntries(fd) : nil)
+        guard stillNames(path, fd) else { return .changedUnderTheAudit }
+        return .gone(on: on)
     }
 
-    /// Does the folder behind `fd` hold anything but "." and ".."? nil when
-    /// it cannot be read. A duplicate of the handle is listed so `fd`
-    /// itself stays untouched.
-    private static func hasEntries(_ fd: Int32) -> Bool? {
-        let dupFd = dup(fd)
-        guard dupFd >= 0 else { return nil }
-        guard let dir = fdopendir(dupFd) else { close(dupFd); return nil }
-        defer { closedir(dir) }
-        while let entry = readdir(dir) {
-            var d = entry.pointee
-            let name = withUnsafePointer(to: &d.d_name) {
-                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
-            }
-            if name != "." && name != ".." { return true }
-        }
-        return false
+    /// `fstat(fd)` and `lstat(path)` agree on device and inode, and the
+    /// path is a directory (not a link put there since).
+    private static func stillNames(_ path: String, _ fd: Int32) -> Bool {
+        var held = stat()
+        var named = stat()
+        guard fstat(fd, &held) == 0, lstat(path, &named) == 0 else { return false }
+        return (named.st_mode & S_IFMT) == S_IFDIR && held.st_dev == named.st_dev && held.st_ino == named.st_ino
     }
 }
 
 // MARK: - Proof at the mark (the second look)
 
 /// The second look, taken SYNCHRONOUSLY at the moment of marking (codex
-/// 2026-10-16 F1/F2; r2 F1/F2). The chunk's stat was the cheap first pass;
-/// this decides — through a directory handle (CatalogAuditDirectoryWalk),
-/// bound to the lane root's filesystem, under the lane's rule.
+/// 2026-10-16 F1/F2; r2 F2; r3 F1/F2). The chunk's stat was the cheap first
+/// pass; this decides — through a directory handle
+/// (CatalogAuditDirectoryWalk), under THE ONE RULE: ENOENT is proof only in
+/// a folder on the volume the file was last seen on.
 enum CatalogAuditProof: Sendable, Equatable {
-    /// ENOENT / ENOTDIR through the handle, on the lane root's filesystem,
-    /// and the lane's rule accepts it.
+    /// ENOENT / ENOTDIR through the handle, on the volume the row's stamp
+    /// names, the handle still naming its path.
     case gone
     /// The name is there (any size), not a regular file, or an errno —
-    /// whatever the handle said stands.
-    case notGone(CatalogAuditStat)
-    /// ENOENT, but not on the expected filesystem (or none was anchored):
-    /// the drive is not connected, the path fell through to another disk.
-    case driveNotConnected(expected: CatalogAuditMountIdentity?, now: CatalogAuditMountIdentity?)
-    /// ENOENT on the expected filesystem, but the lane's rule says that is
-    /// not proof here; the words say why.
+    /// whatever the handle said stands; with the stamp a found file gets.
+    case notGone(CatalogAuditStat, seenOn: AuditSeenOn?)
+    /// ENOENT, but the row carries no stamp: no audit has ever seen this
+    /// file, so nothing says which volume to believe. Never marked.
+    case neverSeenByAnAudit
+    /// ENOENT, but not proof here; the words say why (a link in the path,
+    /// the folder changed under the audit, the drive is not connected,
+    /// another volume than the one the file was last seen on).
     case notProvable(String)
 
-    /// The walk first — a file that is there is present whatever was
-    /// anchored; only an ENOENT read through the handle is held against the
-    /// lane root's identity.
-    static func atTheMark(_ item: CatalogAuditItem) -> CatalogAuditProof {
-        let walk = CatalogAuditDirectoryWalk.prove(directory: item.directory, filename: item.filename,
-                                                   root: item.root, readParentEntries: item.root == "/")
-        switch walk {
-        case .found(let stat):
-            return .notGone(stat)
+    /// The walk first — a file that is there is present whatever the stamp
+    /// says; only an ENOENT read through the handle is held against the
+    /// volume the file was last seen on (`lastSeenOn`, read from the LIVE
+    /// record).
+    static func atTheMark(_ item: CatalogAuditItem, lastSeenOn: AuditSeenOn?, now: Date = Date()) -> CatalogAuditProof {
+        switch CatalogAuditDirectoryWalk.prove(directory: item.directory, filename: item.filename, root: item.root) {
+        case .found(let stat, let on):
+            return .notGone(stat, seenOn: on?.seenOn(at: now))
         case .link:
             return .notProvable("a link in the path — not provable")
+        case .changedUnderTheAudit:
+            return .notProvable("the folder changed under the audit — not provable")
         case .rootNotThere:
-            return .driveNotConnected(expected: item.expectedMount, now: nil)
+            return .notProvable("the drive is not connected (its root is not there)")
         case .unreadable(let e):
-            return .notGone(.unreadable(errno: e))
-        case .gone(let on, let missingFolders, let parentHasEntries):
-            guard let expected = item.expectedMount, on == expected else { return .driveNotConnected(expected: item.expectedMount, now: on) }
-            return item.root == "/" ? stubRule(missingFolders: missingFolders, parentHasEntries: parentHasEntries) : .gone
+            return .notGone(.unreadable(errno: e), seenOn: nil)
+        case .gone(let on):
+            return onTheVolumeLastSeen(on, lastSeenOn: lastSeenOn)
         }
     }
 
-    /// Lane "/" (rows outside /Volumes): an unmounted custom mount point is
-    /// an empty folder on this Mac's disk and looks exactly like a deleted
-    /// folder — refuse over guess. Gone is provable only when the file's
-    /// own folder is there and holds something else.
-    private static func stubRule(missingFolders: Int, parentHasEntries: Bool?) -> CatalogAuditProof {
-        if missingFolders > 0 {
-            return .notProvable("its folder is not there — on this Mac's disk a deleted folder and an unmounted mount point look the same")
+    /// THE ONE RULE (D5): the folder the file is not in must be on the
+    /// volume the file was last seen on.
+    private static func onTheVolumeLastSeen(_ on: CatalogAuditMountIdentity, lastSeenOn: AuditSeenOn?) -> CatalogAuditProof {
+        guard let lastSeenOn else { return .neverSeenByAnAudit }
+        guard let uuid = on.volumeUUID else {
+            return .notProvable("the volume the folder is on reports no UUID (\(on.words)), so it cannot be the one the file was last seen on")
         }
-        guard let has = parentHasEntries else { return .notProvable("its folder could not be listed") }
-        return has ? .gone : .notProvable("the folder is empty (an unmounted mount point looks the same)")
+        guard uuid == lastSeenOn.volumeUUID else {
+            let seen = lastSeenOn.seenAt.formatted(date: .abbreviated, time: .shortened)
+            return .notProvable("the folder is on a different volume (\(on.words)) than the file was last seen on "
+                + "(\(lastSeenOn.mountFrom ?? "?") [\(lastSeenOn.volumeUUID)], \(seen)) — drive not connected?")
+        }
+        return .gone
     }
 }
 
 // MARK: - Results (values)
 
 /// What happened to one row — the detail list's row and the tally's key.
-/// The §6 outcomes, plus three the run needs to be honest about:
+/// The §6 outcomes, plus four the run needs to be honest about:
 /// `stillMissing` (a Missing row whose file is still gone — no new mark),
-/// `goneArchived` (an archive copy's file is gone — reported, never marked)
-/// and `recordChanged` (the row moved or changed while the stat ran — the
-/// result is dropped).
+/// `goneArchived` (an archive copy's file is gone — reported, never
+/// marked), `neverSeenByAnAudit` (not at its path, and no audit has ever
+/// seen it, so nothing says which volume to believe — never marked; the
+/// Fix Links bucket) and `recordChanged` (the row moved or changed while
+/// the stat ran — the result is dropped).
 enum CatalogAuditResult: String, Sendable, Equatable, CaseIterable {
     case present
     case changed
@@ -538,6 +586,7 @@ enum CatalogAuditResult: String, Sendable, Equatable, CaseIterable {
     case cameBack
     case stillMissing
     case goneArchived
+    case neverSeenByAnAudit
     case notAsked
     case couldNotCheck
     case recordChanged
@@ -551,18 +600,19 @@ enum CatalogAuditResult: String, Sendable, Equatable, CaseIterable {
         case .cameBack: return "came back — live again"
         case .stillMissing: return "still missing"
         case .goneArchived: return "archived copy gone (reported, not marked)"
+        case .neverSeenByAnAudit: return "not at its path, never seen by an audit (not marked — Fix Links decides)"
         case .notAsked: return "not asked (drive not connected)"
         case .couldNotCheck: return "could not check"
         case .recordChanged: return "changed in the catalog meanwhile"
         }
     }
 
-    /// Results that change a catalog row (through the one engine).
+    /// Results that change a catalog row's marker (through the one engine).
     var isMark: Bool { self == .gone || self == .cameBack }
     /// Results that need a person to look — the Catalog Status band's red.
     var needsAPerson: Bool {
         switch self {
-        case .gone, .goneArchived, .changed, .couldNotCheck: return true
+        case .gone, .goneArchived, .neverSeenByAnAudit, .changed, .couldNotCheck: return true
         case .present, .cameBack, .stillMissing, .notAsked, .recordChanged: return false
         }
     }
@@ -595,8 +645,9 @@ struct CatalogAuditTotals: Sendable, Equatable {
     /// Rows resolved, whatever the outcome (the "N" of "N of M").
     var done = 0
     var counts: [CatalogAuditResult: Int] = [:]
-    /// Folder → how many of its files were found gone (for the OUTCOME's
-    /// "3 gone under …"). Archived copies count here too.
+    /// Folder → how many of its files were found not at their path (for
+    /// the OUTCOME's "3 gone under …"). Archived copies and never-seen
+    /// rows count here too.
     var goneFolders: [String: Int] = [:]
 
     subscript(_ r: CatalogAuditResult) -> Int { counts[r] ?? 0 }

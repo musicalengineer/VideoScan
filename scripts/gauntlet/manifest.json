@@ -6552,19 +6552,23 @@
         "CatalogAuditRound2Tests"
       ],
       "tests": [
-        "deletedSubfolderUnderRootIsNotProvable",
         "directoryWalkValues",
-        "emptyMountPointStubUnderRootIsNeverGone",
-        "missingParentUnderAMountedLaneRootIsGone",
+        "folderReplacedUnderTheAuditIsNeverProvable",
+        "linkInTheExistingPartOfThePathIsNeverProvable",
+        "nestedVolumeUnmountedUnderALaneRootIsNeverGone",
         "ordinaryRollbackStillWorks",
+        "presentRowsAreStampedAndTheStampRoundTrips",
         "removalRevisionIsTheEngineWriteCounter",
+        "rescanKeepsTheRevision",
         "rollbackLeavesANewerEqualNilMarkerAlone",
         "rollbackLeavesAnIdenticalMarkerReinstatedByAnotherDoorAlone",
-        "singleDeletedFileInANonEmptyFolderUnderRootIsGone",
+        "stampedGoneRowOnTheSameVolumeIsGone",
+        "stampsFlushOnTheClockNotPerRow",
         "supersededAfterPlanningIsDropped",
         "symlinkInTheRemainderIsNotProvable",
         "symlinkedParentRetargetedIsNeverGone",
-        "volumesStubRootAnchorsToNothing"
+        "theSecondRunMarksWhatTheFirstCouldNot",
+        "unstampedGoneRowIsNeverSeenByAnAudit"
       ]
     },
     {
