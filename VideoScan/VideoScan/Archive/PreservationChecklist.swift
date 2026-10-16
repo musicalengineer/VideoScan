@@ -28,8 +28,15 @@
 // archive steps trustworthy. Copying a file you cannot verify afterwards
 // is how silent corruption gets promoted to "backed up".
 //
-// Pure over a VideoRecord, no I/O — so the sheet can render it and tests
-// can pin the truth table.
+// THE SECOND RULE (integrity_first §2, codex 2026-10-16): a tick comes
+// from evidence, never from a row field standing in for a check. The
+// archived copy proves "Archived locally" only when it is ON DISK (the
+// caller probes it) AND known by a whole-file SHA-256 — the same proof
+// Signed demands. An MD5, an absent fixity, or a copy whose file is not
+// at its path leaves the box open and names the next door.
+//
+// Pure over a VideoRecord plus the probe's answer, no I/O — so the sheet
+// can render it and tests can pin the truth table.
 
 import Foundation
 import SwiftUI
@@ -67,21 +74,27 @@ struct PreservationStep: Identifiable, Equatable {
 
 enum PreservationChecklist {
 
+    /// One step's verdict with its evidence date and its next door.
+    struct Verdict: Equatable {
+        let done: Bool
+        let date: Date?
+        let todo: String
+    }
+
     /// Score one record — for the CONTENT it stands for (Rick 2026-10-16).
     /// `archivedCopy` is the row's promoted archive copy when it has one
-    /// (`VideoScanModel.archivedCopy(of:)`): its recorded fixity signs the
-    /// content and proves the local archive copy, so a promotion source
-    /// whose own file moved still reads 3 of 4, not "compute a signature".
-    static func steps(for rec: VideoRecord, archivedCopy: VideoRecord? = nil) -> [PreservationStep] {
-        let local = rec.backupDestinations.first { $0.kind == .local }
+    /// (`VideoScanModel.archivedCopy(of:)`); `archivedCopyPresence` is what
+    /// the disk said about that copy (`JourneyPresence.probe`) — nil means
+    /// nobody looked, which is not the same as "there".
+    static func steps(for rec: VideoRecord, archivedCopy: VideoRecord? = nil,
+                      archivedCopyPresence: JourneyPresence? = nil) -> [PreservationStep] {
         // Cloud and offsite both satisfy "not in this building", which
         // is the only property that matters against fire and theft.
         let away = rec.backupDestinations.first {
             $0.kind == .cloud || $0.kind == .offsite
         }
         let signature = contentSignature(of: rec, archivedCopy: archivedCopy)
-        // The promotion's read-back SHA-256 is the proof the copy landed.
-        let promoted = archivedCopy?.archiveFixity
+        let local = localArchive(of: rec, archivedCopy: archivedCopy, presence: archivedCopyPresence)
 
         return [
             PreservationStep(
@@ -97,9 +110,9 @@ enum PreservationChecklist {
                     + "and duplicates found."),
             PreservationStep(
                 kind: .archivedLocally,
-                done: local != nil || rec.archiveStage == .archived || promoted != nil,
-                date: local?.date ?? promoted?.verifiedAt,
-                todo: "Copy to archival storage — the master RAID."),
+                done: local.done,
+                date: local.date,
+                todo: local.todo),
             PreservationStep(
                 kind: .archivedOffsite,
                 done: away != nil,
@@ -121,16 +134,59 @@ enum PreservationChecklist {
         return (false, nil)
     }
 
+    /// "Archived locally" answers for a copy that is ON DISK and known by
+    /// a whole-file SHA-256 (`ArchivePromotionIndex.verifiedDigest`). A
+    /// recorded local BackupEntry or the archived stage still count —
+    /// older bookkeeping, not a promise about a copy record. When the box
+    /// stays open, the todo names why: the fixity, or the copy's absence.
+    static func localArchive(of rec: VideoRecord, archivedCopy: VideoRecord?,
+                             presence: JourneyPresence?) -> Verdict {
+        if let local = rec.backupDestinations.first(where: { $0.kind == .local }) {
+            return Verdict(done: true, date: local.date, todo: "")
+        }
+        if rec.archiveStage == .archived { return Verdict(done: true, date: nil, todo: "") }
+        guard let archivedCopy else {
+            return Verdict(done: false, date: nil, todo: "Copy to archival storage — the master RAID.")
+        }
+        guard let presence, presence.isPresent else {
+            return Verdict(done: false, date: nil, todo: copyNotOnDiskTodo(presence))
+        }
+        guard ArchivePromotionIndex.verifiedDigest(of: archivedCopy) != nil else {
+            return Verdict(done: false, date: nil, todo: "Verify Archive (record a SHA-256 fixity).")
+        }
+        return Verdict(done: true,
+                       date: archivedCopy.archiveFixity?.verifiedAt ?? archivedCopy.contentFixity?.computedAt,
+                       todo: "")
+    }
+
+    /// The next door when the copy record exists but its file was not
+    /// seen: unplugged, unreadable, unchecked, or simply not there.
+    private static func copyNotOnDiskTodo(_ presence: JourneyPresence?) -> String {
+        switch presence {
+        case .volumeOffline(let volume)?:
+            return "Connect \(volume) — the archived copy could not be checked."
+        case .unknown(let reason)?, .linkTargetUnknown(_, let reason)?:
+            return "The archived copy could not be checked (\(reason)) — then run Verify Archive."
+        case nil:
+            return "Run Verify Archive — the archived copy has not been checked on disk."
+        default:
+            return "Run Verify Archive — the archived copy is not at its path."
+        }
+    }
+
     /// How far along, 0…1. Drives the summary line.
-    static func completion(for rec: VideoRecord, archivedCopy: VideoRecord? = nil) -> Double {
-        let all = steps(for: rec, archivedCopy: archivedCopy)
+    static func completion(for rec: VideoRecord, archivedCopy: VideoRecord? = nil,
+                           archivedCopyPresence: JourneyPresence? = nil) -> Double {
+        let all = steps(for: rec, archivedCopy: archivedCopy, archivedCopyPresence: archivedCopyPresence)
         guard !all.isEmpty else { return 0 }
         return Double(all.filter(\.done).count) / Double(all.count)
     }
 
     /// The next thing worth doing, or nil when the file is safe.
-    static func nextAction(for rec: VideoRecord, archivedCopy: VideoRecord? = nil) -> String? {
-        steps(for: rec, archivedCopy: archivedCopy).first { !$0.done }?.todo
+    static func nextAction(for rec: VideoRecord, archivedCopy: VideoRecord? = nil,
+                           archivedCopyPresence: JourneyPresence? = nil) -> String? {
+        steps(for: rec, archivedCopy: archivedCopy, archivedCopyPresence: archivedCopyPresence)
+            .first { !$0.done }?.todo
     }
 }
 

@@ -467,7 +467,11 @@ extension VideoScanModel {
         //    (JourneyPresence): the path is stat'ed, a link is called a
         //    link, a gone file is "Not at …" with the archived copy's path.
         let isMarkedDeleted = rec.archiveStage == .manuallyDeleted
-        ordered.append(currentStateEvent(for: rec, archivedCopy: copy,
+        // The archived copy is probed ONCE; its answer feeds both the last
+        // event's words and the ladder's "Archived locally" — a copy record
+        // alone, however it is stamped, proves nothing (codex 2026-10-16).
+        let archived = copy.map { JourneyPresence.ArchivedCopy(path: $0.fullPath, presence: probe($0.fullPath)) }
+        ordered.append(currentStateEvent(for: rec, archivedCopy: archived,
                                          isMarkedDeleted: isMarkedDeleted, probe: probe))
 
         // 4. Other known copies — every duplicate-group sibling AND every
@@ -481,7 +485,8 @@ extension VideoScanModel {
             isMarkedDeleted: isMarkedDeleted,
             events: ordered,
             otherKnownCopies: copies,
-            preservation: PreservationChecklist.steps(for: rec, archivedCopy: copy)
+            preservation: PreservationChecklist.steps(for: rec, archivedCopy: copy,
+                                                      archivedCopyPresence: archived?.presence)
         )
     }
 
@@ -587,7 +592,7 @@ extension VideoScanModel {
 
     /// The last event: marked deleted (as before), else what the disk says
     /// is at the path right now — and where the archived copy is.
-    @MainActor private static func currentStateEvent(for rec: VideoRecord, archivedCopy: VideoRecord?,
+    @MainActor private static func currentStateEvent(for rec: VideoRecord, archivedCopy: JourneyPresence.ArchivedCopy?,
                                                      isMarkedDeleted: Bool,
                                                      probe: (String) -> JourneyPresence) -> JourneyEvent {
         let now = Date()
@@ -600,9 +605,10 @@ extension VideoScanModel {
                                 icon: JourneyEventKind.retire.defaultIcon, kind: .currentState, sentence: sentence)
         }
         let presence = probe(rec.fullPath)
-        let copy = archivedCopy.map { JourneyPresence.ArchivedCopy(path: $0.fullPath, presence: probe($0.fullPath)) }
-        let kind: JourneyEventKind = presence.isPresent ? .currentState : .notAtPath
-        let sentence = JourneyPresence.currentSentence(path: rec.fullPath, presence: presence, archivedCopy: copy)
+        // Unknown is drawn as a question, never as "gone" (codex 2026-10-16).
+        let kind: JourneyEventKind = presence.isPresent ? .currentState
+            : presence.isUnknown ? .presenceUnknown : .notAtPath
+        let sentence = JourneyPresence.currentSentence(path: rec.fullPath, presence: presence, archivedCopy: archivedCopy)
         return JourneyEvent(timestamp: now, displayStamp: friendlyStamp(now),
                             icon: kind.defaultIcon, kind: kind, sentence: sentence)
     }

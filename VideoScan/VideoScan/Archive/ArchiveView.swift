@@ -135,7 +135,8 @@ struct ArchiveView: View {
             // The file facts follow the same door as play / reveal
             // (one stat, at sheet open — never in body).
             ArchiveDetailSheet(record: rec, allRecords: model.records,
-                               playable: model.archivePlayableRecord(for: rec))
+                               playable: model.archivePlayableRecord(for: rec),
+                               rowPresence: JourneyPresence.probe(rec.fullPath))
         }
         .sheet(item: $updatePreview) { preview in
             ArchiveUpdateSheet(preview: preview)
