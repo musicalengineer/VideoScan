@@ -399,6 +399,7 @@ struct GedcomParentFamilyTests {
         let graph = GedcomFamilyGraph(gedcomText: text)
         #expect(graph.people.count == 100_000 + duplicated.count)
 
+        let loadBefore = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
         var parentTotal = 0, twoMothers = 0, notes = 0
         let elapsed = clock.measure {
@@ -413,7 +414,8 @@ struct GedcomParentFamilyTests {
         #expect(twoMothers == 0)
         #expect(notes == duplicated.count)
         #expect(parentTotal > 100_000)
-        #expect(elapsed < .seconds(2), "parents-of for \(graph.people.count) people took \(elapsed)")
+        expectWithinTimingBudget("parents-of for \(graph.people.count) people", measured: elapsed, budget: .seconds(2),
+                                 loadBefore: loadBefore)
 
         // The compiled table agrees: one mother per person, no fork.
         let index = graph.index

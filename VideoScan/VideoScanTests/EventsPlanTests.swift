@@ -167,9 +167,11 @@ struct EventsPlanTests {
         let files = SourceTree.appSources.filter {
             $0.relative.hasPrefix("Events/") || $0.relative == "Catalog/EventsPane.swift" || $0.relative == "Catalog/EventDetailSheet.swift"
         }
+        // Reviewed 2026-10-16: VideoScanModel+RelatedEvidence builds Compare Media's evidence (values + the sidecar
+        // audio match); it reads records and never changes one.
         #expect(Set(files.map(\.relative)) == ["Events/EventsPlan.swift", "Events/EventsDecisionStore.swift",
-                                               "Events/VideoScanModel+Events.swift", "Catalog/EventsPane.swift",
-                                               "Catalog/EventDetailSheet.swift"],
+                                               "Events/VideoScanModel+Events.swift", "Events/VideoScanModel+RelatedEvidence.swift",
+                                               "Catalog/EventsPane.swift", "Catalog/EventDetailSheet.swift"],
                 "a new Events file must be added here (and reviewed): \(files.map(\.relative).sorted())")
         let forbidden = ["deleteConfirmedJunk", "MediaTrash", "trashItem(", "removeItem(", "unlink(", "moveItem(", ".removal =",
                          "purgedAt =", "stampRemoval(", "records.remove", "mediaDisposition =", "duplicateDisposition =",

@@ -89,7 +89,10 @@ script = script.replace(/\nloadData\(\);\s*$/, "\nglobalThis.__dashboardDone = l
 const elements = new Map();
 function element(id = "") {
   const classes = new Set();
+  const attrs = new Map();
   const value = { id, children: [], innerHTML: "", textContent: "", style: {},
+    setAttribute: (k, v) => attrs.set(k, String(v)), removeAttribute: k => attrs.delete(k),
+    getAttribute: k => (attrs.has(k) ? attrs.get(k) : null),
     classList: { add: x => classes.add(x), remove: x => classes.delete(x), contains: x => classes.has(x) },
     appendChild(child) { this.children.push(child); return child; },
     querySelector() { const child = element(); this.children.push(child); return child; } };

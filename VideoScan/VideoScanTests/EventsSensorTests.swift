@@ -21,7 +21,9 @@ struct EventsSensorTests {
     func paneBodyReadsOnlyTheStore() throws {
         let pane = try SourceTree.appCode(named: "EventsPane.swift")
         let sheet = try SourceTree.appCode(named: "EventDetailSheet.swift")
-        #expect(pane.count > 5_000 && sheet.count > 3_000, "the scan is reading nothing")
+        // One condition per #expect: CI's Xcode 26.3 cannot type-check an && chain inside the macro "in reasonable time".
+        #expect(pane.count > 5_000, "the scan is reading nothing")
+        #expect(sheet.count > 3_000, "the scan is reading nothing")
         for (name, code) in [("EventsPane", pane), ("EventDetailSheet", sheet)] {
             for token in ["model.records", ".records.", "records.filter", "records.map", "EventsPlanner.", "eventsInputs()",
                           "for r in records", "first(where:"] {
@@ -38,7 +40,8 @@ struct EventsSensorTests {
         #expect(sheet.contains("store.confirmedByID[id]"))
         #expect(sheet.contains("CatalogOpenAction.open(ids: [rec.id], rows: [rec], gesture: \"Events\", model: model)"))
         #expect(sheet.contains("disk.lookup(path: path, mtime: sig.mtime, size: sig.size)"), "thumbnails from the preview cache only")
-        #expect(!sheet.contains("AVAsset") && !sheet.contains("renderThumbnail"), "the sheet never decodes video")
+        #expect(!sheet.contains("AVAsset"), "the sheet never decodes video")
+        #expect(!sheet.contains("renderThumbnail"), "the sheet never decodes video")
         // TriageView: a plain reference to the store, the row under Cleanup, the pane beside Cleanup's.
         let triage = try SourceTree.appCode(named: "TriageView.swift")
         #expect(triage.contains("private let eventsStore = EventsStore.shared"))
@@ -46,8 +49,9 @@ struct EventsSensorTests {
         #expect(triage.contains("EventsSidebarRow(isSelected: showingEvents) {"))
         #expect(triage.contains("} else if showingEvents {"))
         #expect(triage.contains("EventsPane(model: model, store: eventsStore)"))
-        #expect(!triage.contains("@ObservedObject private var eventsStore") && !triage.contains("@ObservedObject var eventsStore"),
-                "TriageView must not observe the Events store (its body would redraw for every plan)")
+        for observed in ["@ObservedObject private var eventsStore", "@ObservedObject var eventsStore"] {
+            #expect(!triage.contains(observed), "TriageView must not observe the Events store (its body would redraw for every plan)")
+        }
         #expect(triage.components(separatedBy: "showingEvents = false").count - 1 == 4,
                 "the declaration, then Cleanup, Clean Up and every filter row leave the page")
     }
@@ -130,8 +134,9 @@ struct EventsSensorTests {
         #expect(object["candidate_events"] as? Int == 1)
         #expect(object["strong_events"] as? Int == 0)
         #expect((object["by_category"] as? [String: Int])?.count == 9)
-        #expect(object["marks_yes"] is NSNull && object["marks_no"] is NSNull && object["precision_by_category"] is NSNull,
-                "null until Rick has decided something — the prototype's contract")
+        for key in ["marks_yes", "marks_no", "precision_by_category"] {
+            #expect(object[key] is NSNull, "\(key): null until Rick has decided something — the prototype's contract")
+        }
 
         // The publisher's allowlist, read from tools/publish_metrics.py itself.
         let repo = SourceTree.appSourceRoot.deletingLastPathComponent().deletingLastPathComponent()
@@ -152,6 +157,8 @@ struct EventsSensorTests {
         #expect(decided["marks_no"] as? Int == 1)
         #expect((decided["precision_by_category"] as? [String: [String: Int]])?["Birthday"] == ["yes": 1, "no": 0])
         let text = try #require(String(data: try enc.encode(EventsStats(plan: plan, decisions: d, now: Date())), encoding: .utf8))
-        #expect(!text.contains("Matt") && !text.contains("cake") && !text.contains("/Volumes"), "counts only")
+        for leak in ["Matt", "cake", "/Volumes"] {
+            #expect(!text.contains(leak), "counts only — no \(leak)")
+        }
     }
 }

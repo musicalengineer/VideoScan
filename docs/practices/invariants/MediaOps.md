@@ -21,6 +21,9 @@ paths:
   - VideoScan/VideoScan/MediaOps/DerivedFileNaming.swift
   - VideoScan/VideoScan/MediaOps/DerivativeOutputPublish.swift
   - VideoScan/VideoScan/MediaOps/CombineOutputPublish.swift
+  - VideoScan/VideoScan/MediaOps/MediaTrash.swift
+  - VideoScan/VideoScan/MediaOps/DeletionAudit.swift
+  - VideoScan/VideoScan/MediaOps/FullHashBackfillResume.swift
   - VideoScan/VideoScan/MediaOps/CombineEngine.swift
   - VideoScan/VideoScan/MediaOps/CombineVerifier.swift
   - VideoScan/VideoScan/MediaOps/VideoScanModel+Combine*.swift
@@ -49,6 +52,9 @@ paths:
 8. **MOPS-8** A path used for a destructive call comes from the catalog record and stays inside its volume root; symlinks are not followed onto another volume; a renamed or replaced file (identity changed since planning) is refused.
 9. **MOPS-9** Every destructive lane logs START, a result line per item and OUTCOME through the one sink (console, catalog.log, videoscan.log) and shows as an MFO row; nothing destructive runs silently.
 10. **MOPS-10** Compare Footage (Footage Spectrum) only READS media: it writes nothing but its own run folder and extraction cache under `~/Library/Caches/VideoScan/spectrum`, and its one deletion is the 14-day prune of UUID-named run folders directly under `<root>/runs` (canonical parent re-checked) — never the cache, never anything else.
+11. **MOPS-11** `MediaTrash.move` is THE one call that hands a catalog media file to the Trash (GH #143): it calls `FileManager.trashItem` and returns where macOS put the file; a volume with no usable Trash throws and the file stays where it was — no fallback to any other kind of removal. Under the test host it moves into a per-process temp Trash with no-clobber naming; nothing else in it writes.
+12. **MOPS-12** The deletion receipt (`DeletionAudit`) writes ONLY its own per-run CSV under its receipts folder: created exclusively (a name clash gets `_2`, never an overwrite), rows appended as they happen, the final rewrite atomic. It never touches media, the catalog or the ledger, and a receipt that cannot be written never stops or changes a removal.
+13. **MOPS-13** The full-hash backfill marker (`FullHashBackfillResume`) writes ONLY `fullhash-backfill.json` beside catalog.json, through `AtomicFilePublish`; it records that a run started or finished and nothing else. A missing, damaged or unfinished marker changes a menu title and a log line — it never starts work and never alters a record.
 
 ## Known and accepted (do not report)
 - A crash can leave a partial-named output behind; partial-file naming and cleanup find it later.
