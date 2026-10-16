@@ -303,9 +303,27 @@ enum DuplicateDrives {
     /// written. DISK I/O; one call per volume per removal.
     nonisolated static func liveIdentityFresh(forPath path: String, device: UInt64) -> Identity {
         guard let mount = mount(of: path) else { return Identity(device: device, kind: .unknown) }
-        // A network share: one drive per server + share.
-        guard mount.isLocal else { return Identity(device: device, kind: .network, physicalDevice: "net:" + mount.node) }
-        return lookupOverride?(mount.node, device) ?? describe(node: mount.node, device: device)
+        return liveIdentityFresh(mountFrom: mount.node, isLocal: mount.isLocal, device: device)
+    }
+
+    /// FRESH, from a mount already read — the `fstatfs` of an open
+    /// directory handle (Audit Catalog's where-seen stamp, codex r4
+    /// 2026-10-16 D8): the same question as above without the statfs. A
+    /// network share: one drive per server + share.
+    nonisolated static func liveIdentityFresh(mountFrom node: String, isLocal: Bool, device: UInt64) -> Identity {
+        guard isLocal else { return Identity(device: device, kind: .network, physicalDevice: "net:" + node) }
+        return lookupOverride?(node, device) ?? describe(node: node, device: device)
+    }
+
+    /// THE PHYSICAL DEVICE KEY a where-seen stamp carries (Audit Catalog,
+    /// codex r4 D8): `key(for:)` of a PHYSICAL volume — nil for a share, a
+    /// disk image, or a device DiskArbitration cannot describe (refuse
+    /// over guess: such a stamp is held to its volume UUID alone). FRESH:
+    /// the cache is neither read nor written. DISK I/O (one DiskArbitration
+    /// description); the audit asks once per folder, never per row.
+    nonisolated static func physicalDeviceKey(mountFrom node: String, isLocal: Bool, device: UInt64) -> String? {
+        let identity = liveIdentityFresh(mountFrom: node, isLocal: isLocal, device: device)
+        return identity.kind == .physical ? key(for: identity) : nil
     }
 
     /// CACHED — advisory uses only (the per-turn gather, the forecast, the

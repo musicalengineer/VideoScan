@@ -615,9 +615,23 @@ struct CatalogAuditJobSensorTests {
         #expect(plan.contains("guard fstat(fd, &held) == 0, lstat(path, &named) == 0 else { return false }"))
         #expect(plan.components(separatedBy: "fstatat(fd, name, &sb, AT_SYMLINK_NOFOLLOW)").count == 3,
                 "the name AND a folder that would not open are both looked at through the handle, link not followed")
+        // D9 (r4 F2): after the open — O_NOFOLLOW guards only the last component — the lexical walk again and the handle
+        // must name its path, in the proof AND in the first pass's stamp acquisition, before anything is read through it.
+        #expect(plan.contains("if let refusal = boundToItsPath(root: root, folders: folders, path: path, fd: fd) { return refusal }"),
+                "the proof binds the opened handle to its pathname before the descent")
+        #expect(plan.contains("boundToItsPath(root: root, folders: folders, path: path, fd: fd) == nil,"),
+                "seenOn binds the opened handle to its pathname before the identity and the names are read")
+        #expect(plan.contains("return stillNames(path, fd) ? nil : .changedUnderTheAudit"), "the binding is the walk again, then stillNames")
         // THE ONE RULE (r3 F1, D5): no stamp → never seen; the handle's volume UUID must equal the stamp's.
         #expect(plan.contains("guard let lastSeenOn else { return .neverSeenByAnAudit }"))
         #expect(plan.contains("guard uuid == lastSeenOn.volumeUUID else {"))
+        // D8 (r4 F1): the physical device, asked for the handle's own mount through Delete Duplicates' one DiskArbitration
+        // helper; a stamp that names a drive is held to it, one without proves by volume UUID alone.
+        #expect(plan.contains("deviceKey: DuplicateDrives.physicalDeviceKey(mountFrom: from, isLocal: isLocal,"),
+                "the device key is asked for the handle's f_mntfromname, in the one identity read")
+        #expect(plan.contains("guard let stampedDrive = lastSeenOn.deviceKey else { return .gone }")
+                && plan.contains("guard let drive = on.deviceKey else {") && plan.contains("guard drive == stampedDrive else {"))
+        #expect(plan.contains("AuditSeenOn(volumeUUID: $0, mountFrom: mountFrom, seenAt: now, deviceKey: deviceKey)"), "the stamp carries the drive")
         #expect(plan.contains("auditSeenOn: r.auditSeenOn") && plan.contains("supersededByID: r.supersededByID"),
                 "the snapshot carries the stamp (r3 D5) and supersession (r2 F3)")
         #expect(!plan.contains("isArchived: Bool"), "the item carries no planned 'archived' flag to trust")
@@ -639,6 +653,9 @@ struct CatalogAuditJobSensorTests {
         for name in Self.sources {
             let code = try Self.code(name)
             for call in writes { #expect(!code.contains(call), "\(name) contains \(call)") }
+            for da in ["DiskArbitration", "DASession", "DADisk"] {
+                #expect(!code.contains(da), "\(name) talks to DiskArbitration (\(da)) — only DuplicateDrives.physicalDeviceKey may (D8)")
+            }
             if name == "CatalogAuditPlan.swift" { continue }
             for call in handleCalls { #expect(!code.contains(call), "\(name) opens a handle (\(call)) — only CatalogAuditPlan.swift may") }
         }
