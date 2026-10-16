@@ -49,6 +49,19 @@ stating a fact it had not checked.
 | 5 | Do the relations hold? | lineage targets exist; copy groups re-validated by full hash; supersession consistent; no row path contains a link (GH #326); every promotion source has its archived copy on disk with fixity | Catalog "Check Totals"; the audit's link refusal; Cleanup's proofs at the move | nightly (no I/O beyond tier 0) |
 | 6 | Does the UI tell the truth? | every fact-bearing surface reads verified evidence or says "unknown"; sensors pin it | partly (Compare Media's `isOnDisk` veto; Catalog Status) | every build (tests), every night (gauntlet) |
 
+## 3a. The standard checklist, mapped (Rick, 2026-10-16: "is this overkill?" — no)
+
+| Standard check | VideoScan equivalent | Status |
+|---|---|---|
+| Declarative constraints (PK / FK / check / not-null) | **Catalog constraints pass** on load and every save: unique ids; one live row per path; `derivedFrom` / `supersededByID` / `duplicateGroupID` / event memberships point at rows that exist; enums known; required fields present; removal marker ⇔ lifecycle stage. In memory, no I/O. Count in the report. | tier 5, to build (Check Totals covers part) |
+| Storage checksums (ZFS/Btrfs) | APFS checksums metadata only; the RAID guards against a dead disk, not a flipped bit. **Fixity re-read against SHA-256 is our data checksum.** | tier 2 |
+| Native DB diagnostic (DBCC CHECKDB) | The catalog file's own SHA-256 recorded in the report and verified at load; generation + atomic publish + `.prev` / `.pre-*` snapshots already exist. | to add (small) |
+| Input validation | ffprobe at scan; the constraints pass at save. | exists / tier 5 |
+| ETL reconciliation (counts before/after) | **Every catalog writer's OUTCOME line ends with rows before · rows after · where the difference went** (scan merge, promote, cleanup, audit, show-again). Deletes already reconcile through receipts + the ledger. | rule, to apply to every writer |
+| Audit trails | Ledger, receipts, console / catalog.log / videoscan.log through one sink. | exists |
+| Backups + restore tests | Backup Catalog exists. **Weekly restore test:** load the latest backup read-only in a sandbox, compare row and byte counts to live, report the delta. | to add |
+| "How and when was it verified?" | **Per tier: last verified at · by which run · result**, in the report file, in Catalog Status, in the nightly metrics row. Verified is a dated stamp per tier, never the absence of a complaint. | §4 |
+
 ## 4. The report
 
 One dated `integrity-<date>.json` beside catalog.json plus the human report in Catalog Status:
