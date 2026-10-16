@@ -6493,6 +6493,41 @@
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending"
     },
     {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogAuditJobTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogAuditJobLogicTests",
+        "CatalogAuditJobScaleTests",
+        "CatalogAuditJobIsolationTests",
+        "CatalogAuditJobSensorTests"
+      ],
+      "tests": [
+        "failedSaveUndoesMarks",
+        "filesUntouched",
+        "neverMarksOnEACCES",
+        "neverMarksWhenRootUnmounted",
+        "notAFileIsNotGone",
+        "oneStartOneOutcome",
+        "onlyOneMarkPath",
+        "perRowOutcomes",
+        "planAndRunAt100k",
+        "planShape",
+        "poisonedMarkerIsNoise",
+        "readOnlyRefusesBeforeAnyStat",
+        "reasonDecodesFromOldJSON",
+        "resultDroppedWhenRowChangedMeanwhile",
+        "saveCadence",
+        "secondRunRefused",
+        "sharedStoreRefusesUnderTestHost",
+        "sourcesTouchNoFileAndNoRow",
+        "stopIsPartialAndSaved",
+        "words",
+        "zeroCatalogSizeIsNotCompared"
+      ]
+    },
+    {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogAuditTests.swift",
       "stage": "unit",
@@ -28405,6 +28440,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogAuditGuardTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogAuditJobTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

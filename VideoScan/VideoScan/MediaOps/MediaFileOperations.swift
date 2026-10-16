@@ -432,6 +432,16 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let fingerprintSound = Self("fingerprintSound", hasDetailView: true,
         style: .init(badge: "Sound Print", logVerb: "fingerprint sound", fill: .init(0.20, 0.00, 0.35)))
 
+    // Audit Catalog (2026-10-16) — petrol teal: a stat-only verb whose only
+    // catalog write is the removal marker (Missing / live again) through
+    // the one engine. Δ ≥ 0.18 from every other fill, contrast vs white ≈ 4.6.
+    /// "Audit Catalog…" (Rick 2026-10-15, tier 0): every live row on a
+    /// mounted drive is stat'ed; a row whose file is gone is marked Missing,
+    /// a Missing row whose file is back goes live. Nothing on media is
+    /// opened. CatalogAuditJob.
+    static let auditCatalog = Self("auditCatalog", hasDetailView: true,
+        style: .init(badge: "Audit", logVerb: "audit catalog", fill: .init(0.20, 0.50, 0.55)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -440,7 +450,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .trim, .balanceAudio, .rebuildAudio, .verifyAudio, .verifyVideo, .checkMedia, .repair,
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
-        .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound,
+        .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
     ]
 
     /// Badge text — rendered in small caps by the row view.

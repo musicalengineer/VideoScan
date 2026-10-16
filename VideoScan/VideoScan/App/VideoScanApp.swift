@@ -542,6 +542,10 @@ struct VideoScanApp: App {
     /// "Did the last Fill In Full Hashes run finish?" — drives the Catalog
     /// menu title ("Resume Filling In Full Hashes…"). Read at launch below.
     @StateObject private var fullHashResume = FullHashBackfillResumeMarker()
+    /// "When did the catalog's presence last get checked?" — the Audit
+    /// Catalog run marker (catalog-audit.json beside catalog.json). Read at
+    /// launch below; the Catalog Status panel's File Presence row reads it.
+    @StateObject private var catalogAuditMarker = CatalogAuditRunMarker()
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -614,6 +618,14 @@ struct VideoScanApp: App {
                                 guard let model = catalogModel,
                                       let open = resume.attach(catalogFile: model.catalogStore.fileLocation) else { return }
                                 model.fullHashBackfillNote(FullHashBackfillResumeMarker.launchLine(open))
+                            }
+                            // Audit Catalog (2026-10-16): the last run's
+                            // marker is read (one small JSON); a run that
+                            // found files gone, or did not finish, is one
+                            // console/log line. Nothing starts.
+                            let audit = catalogAuditMarker
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
+                                audit.announceLastRun(to: catalogModel)
                             }
                         }
                         // Archive Angel phase 2: the scoring sweep parks
@@ -829,6 +841,12 @@ struct VideoScanApp: App {
                 // fingerprint backfill as an MFO job; confirm sheet first;
                 // restart = resume.
                 AudioFingerprintBackfillMenuItem(model: catalogModel)
+                Divider()
+                // Audit Catalog (2026-10-16, tier 0): every live row on a
+                // connected drive is stat'ed; gone → Missing, back → live.
+                // The same job the nightly runs through --audit-catalog.
+                CatalogAuditMenuItem(model: catalogModel, center: fileOpsCenter,
+                                     marker: catalogAuditMarker, isReadOnly: catalogModel.isReadOnly)
             }
         }
 

@@ -24,6 +24,9 @@ paths:
   - VideoScan/VideoScan/MediaOps/MediaTrash.swift
   - VideoScan/VideoScan/MediaOps/DeletionAudit.swift
   - VideoScan/VideoScan/MediaOps/FullHashBackfillResume.swift
+  - VideoScan/VideoScan/MediaOps/CatalogAudit*.swift
+  - VideoScan/VideoScan/MediaOps/VideoScanModel+CatalogAudit.swift
+  - VideoScan/VideoScan/App/CatalogAuditCLI.swift
   - VideoScan/VideoScan/MediaOps/CombineEngine.swift
   - VideoScan/VideoScan/MediaOps/CombineVerifier.swift
   - VideoScan/VideoScan/MediaOps/VideoScanModel+Combine*.swift
@@ -55,6 +58,7 @@ paths:
 11. **MOPS-11** `MediaTrash.move` is THE one call that hands a catalog media file to the Trash (GH #143): it calls `FileManager.trashItem` and returns where macOS put the file; a volume with no usable Trash throws and the file stays where it was — no fallback to any other kind of removal. Under the test host it moves into a per-process temp Trash with no-clobber naming; nothing else in it writes.
 12. **MOPS-12** The deletion receipt (`DeletionAudit`) writes ONLY its own per-run CSV under its receipts folder: created exclusively (a name clash gets `_2`, never an overwrite), rows appended as they happen, the final rewrite atomic. It never touches media, the catalog or the ledger, and a receipt that cannot be written never stops or changes a removal.
 13. **MOPS-13** The full-hash backfill marker (`FullHashBackfillResume`) writes ONLY `fullhash-backfill.json` beside catalog.json, through `AtomicFilePublish`; it records that a run started or finished and nothing else. A missing, damaged or unfinished marker changes a menu title and a log line — it never starts work and never alters a record.
+14. **MOPS-14** Audit Catalog tier 0 (`CatalogAuditJob`, design: docs/design/catalog_status_freshness_2026_10_16.md §6) only STATS: the one syscall against a media path is `stat(2)`; nothing on media is opened, moved, renamed, deleted or written, and the archive volume is never touched. WHAT IT WRITES: the removal marker of a catalog row — `stampRemoval(.missing, reason .missingAtAudit)` for a live, non-archived row whose stat says ENOENT / ENOTDIR while its volume root is in the kernel mount table (read fresh, no cache, after the stat), and `clearRemoval` (which validates the file is back first) for a Missing row whose file is at its path — both through `VideoScanModel.applyCatalogAudit`, which is compare-and-set on the row's id, path AND the marker it carried when planned; catalog saves; log lines through one sink; and `catalog-audit.json` beside catalog.json through `AtomicFilePublish`. WHAT IT NEVER DOES: mark a row whose root is not mounted (not asked); mark on any errno but ENOENT / ENOTDIR or on a path that is no longer a regular file (could not check); mark a "changed" row (size differs — reported) or an archived copy whose file is gone (reported); write a per-record stamp; delete a row; leave an unsaved mark — a save that is not acknowledged undoes that batch's marks (compare-and-set) and fails the run, and a stopped run says "partial". The headless `--audit-catalog` refuses when the VideoScan app is open (one catalog writer) and on a viewer-role Mac. `CatalogAuditJobSensorTests` reads the sources.
 
 ## Known and accepted (do not report)
 - A crash can leave a partial-named output behind; partial-file naming and cleanup find it later.

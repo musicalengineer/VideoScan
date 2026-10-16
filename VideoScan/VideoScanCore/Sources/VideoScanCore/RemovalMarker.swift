@@ -50,6 +50,7 @@ public struct RemovalReason: RawRepresentable, Hashable, Codable, Sendable, Cust
     public static let missingOnDisk = RemovalReason(rawValue: "missingOnDisk")     // analysis found the file gone
     public static let missingAtTrashTurn = RemovalReason(rawValue: "missingAtTrashTurn") // gone when its Trash turn came
     public static let missingAtMigrate = RemovalReason(rawValue: "missingAtMigrate")     // Migrate Bucket B: source not found
+    public static let missingAtAudit = RemovalReason(rawValue: "missingAtAudit")         // Audit Catalog tier 0: stat found the file gone
     // Load-time migration of the old encodings.
     public static let legacyPurged = RemovalReason(rawValue: "legacyPurged")
     public static let legacyTrashed = RemovalReason(rawValue: "legacyTrashed")

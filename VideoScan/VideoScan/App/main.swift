@@ -18,6 +18,7 @@ let isTestHost: Bool = TestEnvironment.isUnitTestProcess
 let isPersonEvaluation = CommandLine.arguments.contains("--person-eval")
 let isRecipeCalibration = CommandLine.arguments.contains("--recipe-calibrate")
 let isFindTagDaemon = CommandLine.arguments.contains("--find-tag")
+let isCatalogAudit = CommandLine.arguments.contains("--audit-catalog")
 let isHallieShell = CommandLine.arguments.contains("--hallie")
 
 if isHallieShell {
@@ -49,6 +50,20 @@ if isHallieShell {
     daemonApp.setActivationPolicy(.prohibited)
     Task {
         let code = await FindTagCLI.run(arguments: Array(CommandLine.arguments.dropFirst()))
+        fflush(stdout)
+        fflush(stderr)
+        exit(code)
+    }
+    RunLoop.main.run()
+} else if isCatalogAudit {
+    // Headless Audit Catalog (CatalogAuditCLI, 2026-10-16): the nightly's
+    // door to the same job as Catalog ▸ Audit Catalog…. Same headless-Aqua
+    // arrangement; the model needs an application context for its
+    // lifecycle observers. Refuses when the app itself is open.
+    let auditApp = NSApplication.shared
+    auditApp.setActivationPolicy(.prohibited)
+    Task { @MainActor in
+        let code = await CatalogAuditCLI.run(arguments: Array(CommandLine.arguments.dropFirst()))
         fflush(stdout)
         fflush(stderr)
         exit(code)
