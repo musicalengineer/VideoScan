@@ -6501,10 +6501,15 @@
         "CatalogAuditJobLogicTests",
         "CatalogAuditJobScaleTests",
         "CatalogAuditJobIsolationTests",
-        "CatalogAuditJobSensorTests"
+        "CatalogAuditJobSensorTests",
+        "CatalogAuditProveAtTheMarkTests"
       ],
       "tests": [
+        "danglingSymlinkParentIsNeverGone",
+        "directoryHandleIsTheOnlyOpenAndOnlyInThePlan",
+        "errnoAtTheMarkIsCouldNotCheck",
         "failedSaveUndoesMarks",
+        "fileBackAtTheMarkIsPresentNotMarked",
         "filesUntouched",
         "neverMarksOnEACCES",
         "neverMarksWhenRootUnmounted",
@@ -6518,13 +6523,44 @@
         "readOnlyRefusesBeforeAnyStat",
         "reasonDecodesFromOldJSON",
         "resultDroppedWhenRowChangedMeanwhile",
+        "rollbackClearsTheMarkOnTheCurrentInstance",
+        "rollbackLeavesANewerLifecycleEditAlone",
+        "rollbackLeavesANewerMarkerAlone",
         "saveCadence",
         "secondRunRefused",
         "sharedStoreRefusesUnderTestHost",
+        "snapshotFieldsChangedMeanwhileDropTheResult",
         "sourcesTouchNoFileAndNoRow",
         "stopIsPartialAndSaved",
+        "stopThenUnacknowledgedSaveIsFailed",
+        "symlinkRetargetedToAnotherFilesystemIsNeverGone",
+        "trashPutBackRestoreMeanwhileIsNotMarked",
         "words",
         "zeroCatalogSizeIsNotCompared"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogAuditRound2Tests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogAuditRound2Tests"
+      ],
+      "tests": [
+        "deletedSubfolderUnderRootIsNotProvable",
+        "directoryWalkValues",
+        "emptyMountPointStubUnderRootIsNeverGone",
+        "missingParentUnderAMountedLaneRootIsGone",
+        "ordinaryRollbackStillWorks",
+        "removalRevisionIsTheEngineWriteCounter",
+        "rollbackLeavesANewerEqualNilMarkerAlone",
+        "rollbackLeavesAnIdenticalMarkerReinstatedByAnotherDoorAlone",
+        "singleDeletedFileInANonEmptyFolderUnderRootIsGone",
+        "supersededAfterPlanningIsDropped",
+        "symlinkInTheRemainderIsNotProvable",
+        "symlinkedParentRetargetedIsNeverGone",
+        "volumesStubRootAnchorsToNothing"
       ]
     },
     {
@@ -19053,6 +19089,7 @@
         "everyRemovalStateIsReachableFromADoor",
         "noFileLeavesExceptThroughReviewedCode",
         "noRowIsDeletedOutsideCatalogRepair",
+        "onlyTheEngineBumpsTheRemovalRevision",
         "onlyTheEngineWritesTheMarker",
         "onlyTheOneTrashCallUsesTheFinderTrash",
         "quarantineAndDeleteIsGoneAndTheDefaultDisposalIsTheTrash"
@@ -28444,6 +28481,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogAuditJobTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogAuditRound2Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

@@ -31,13 +31,16 @@ import VideoScanCore
 
 // MARK: - Helpers
 
+/// Shared with CatalogAuditRound2Tests.swift.
 @MainActor
-private func runAudit(_ model: VideoScanModel,
+func runAudit(_ model: VideoScanModel,
                       marker: CatalogAuditRunMarker? = nil,
                       online: @escaping @Sendable (String) -> Bool = { _ in true },
+                      laneRoot: @escaping @Sendable (String) -> String = CatalogAuditPlanner.productionLaneRoot,
                       configure: (CatalogAuditJob) -> Void = { _ in }) async -> CatalogAuditJob {
     let job = CatalogAuditJob(model: model, marker: marker)
     job.volumeOnline = online
+    job.laneRoot = laneRoot
     job.tickMilliseconds = 20
     configure(job)
     job.start()
@@ -53,8 +56,9 @@ private final class CallCounter: @unchecked Sendable {
     var value: Int { lock.withLock { n } }
 }
 
+/// Shared with CatalogAuditRound2Tests.swift.
 @MainActor
-private extension ShowAgainSandbox {
+extension ShowAgainSandbox {
     /// A live row (no label) for a file written with `bytes` bytes, or
     /// not written at all.
     @discardableResult
@@ -73,11 +77,20 @@ private extension ShowAgainSandbox {
     func auditMarkerFile() -> URL { catalogDir.appendingPathComponent(CatalogAuditRunMarker.fileName) }
 
     /// What the job's lane does before its first stat: the item with the
-    /// identity of the filesystem its file is expected on (the real one).
+    /// identity of its LANE ROOT's filesystem (the real one).
     func anchored(_ item: CatalogAuditItem) -> CatalogAuditItem {
         var it = item
-        it.expectedMount = CatalogAuditMountIdentity.expected(forDirectory: item.directory, root: item.root)
+        it.expectedMount = CatalogAuditMountIdentity.ofLaneRoot(item.root)
         return it
+    }
+
+    /// The sandbox's `files` folder as a lane root of its own (the way a
+    /// mounted /Volumes root is): under it a missing parent folder is proof
+    /// and the "/" stub rule does not apply. Paths elsewhere keep the
+    /// production rule.
+    var laneRoot: @Sendable (String) -> String {
+        let root = files.path
+        return { $0.hasPrefix(root + "/") ? root : CatalogAuditPlanner.productionLaneRoot($0) }
     }
 }
 
@@ -241,7 +254,7 @@ struct CatalogAuditJobLogicTests {
     func saveCadence() async throws {
         let sb = try ShowAgainSandbox.make("ca_saveN"); defer { sb.cleanup() }
         for i in 0..<5 { try sb.live("g\(i).mov", onDisk: false) }
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, laneRoot: sb.laneRoot) { j in
             j.checkpointRows = 2
             j.checkpointSeconds = 3_600
             j.chunkSize = 1
@@ -252,7 +265,7 @@ struct CatalogAuditJobLogicTests {
 
         let sb2 = try ShowAgainSandbox.make("ca_saveT"); defer { sb2.cleanup() }
         for i in 0..<3 { try sb2.live("t\(i).mov", onDisk: false) }
-        let clock = await runAudit(sb2.model) { j in
+        let clock = await runAudit(sb2.model, laneRoot: sb2.laneRoot) { j in
             j.checkpointRows = 10_000
             j.checkpointSeconds = 0
             j.chunkSize = 1
@@ -298,6 +311,7 @@ struct CatalogAuditJobLogicTests {
         let marker = CatalogAuditRunMarker()
         let job = CatalogAuditJob(model: sb.model, marker: marker)
         job.volumeOnline = { _ in true }
+        job.laneRoot = sb.laneRoot
         job.tickMilliseconds = 20
         job.chunkSize = 1
         job.statPaths = { paths in Thread.sleep(forTimeInterval: 0.04); return paths.map { _ in .gone } }
@@ -401,7 +415,7 @@ struct CatalogAuditJobScaleTests {
                                  budget: PerformanceLane.debugCeiling(.seconds(2)), loadBefore: load)
 
         let start = clock.now
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, laneRoot: sb.laneRoot) { j in
             j.statPaths = { paths in
                 paths.map { p in
                     let n = Int(p.split(separator: "_").last!.dropLast(4)) ?? -1
@@ -549,26 +563,63 @@ struct CatalogAuditJobSensorTests {
         #expect(run.contains("AtomicFilePublish.write(data, to: fileURL"))
     }
 
-    /// PROVE AT THE MARK (codex 2026-10-16): the apply path re-stats
-    /// synchronously, then reads the mount, before the one `stampRemoval`;
-    /// the guard compares the whole planned snapshot; "archived" is read
-    /// from the live record; rollback is by value (no object memento); a
-    /// failed save ends failed even after Stop.
+    /// PROVE AT THE MARK (codex 2026-10-16; r2): the apply path walks the
+    /// path again synchronously, through a directory handle bound to the
+    /// lane root's identity, before the one `stampRemoval`; the guard
+    /// compares the whole planned snapshot (supersession included);
+    /// "archived" is read from the live record; rollback is by value AND
+    /// revision (no object memento); a failed save ends failed even after
+    /// Stop.
     static func expectProofAtTheMark(half: String, plan: String, job: String) throws {
         let proof = try #require(half.range(of: "CatalogAuditProof.atTheMark(item)"), "the second look is taken in the model half")
         let mark = try #require(half.range(of: "stampRemoval("))
-        #expect(proof.lowerBound < mark.lowerBound, "the re-stat comes before the one stampRemoval call")
+        #expect(proof.lowerBound < mark.lowerBound, "the second look comes before the one stampRemoval call")
         #expect(!half.contains("await "), "the proof and the mark are one synchronous step on the main actor")
         #expect(half.contains("CatalogAuditRowSnapshot.of(rec) == item.planned"), "the guard compares the planned snapshot")
         #expect(half.contains("CatalogAuditPlanner.isArchived(rec)"), "archived is read from the LIVE record")
         for memento in ["RemovalUndo", ".reinstate("] { #expect(!half.contains(memento), "rollback holds no object memento (\(memento))") }
-        #expect(half.contains("Self.revertRemoval(rec, wrote: mark.wrote, previous: mark.previous"), "rollback is by value, on the current instance")
-        let stat = try #require(plan.range(of: "let second = CatalogAuditStat.of(item.path)"))
-        let mount = try #require(plan.range(of: "CatalogAuditMountIdentity.expected(forDirectory: item.directory, root: item.root)"))
-        #expect(stat.lowerBound < mount.lowerBound, "stat first, the mount only after an ENOENT")
+        #expect(half.contains("Self.revertRemoval(rec, wrote: mark.wrote, previous: mark.previous, revision: mark.revision"),
+                "rollback is by value AND revision, on the current instance (r2 F4)")
+        #expect(half.contains("revision: rec.removalRevision"), "the mark records the revision its write produced")
+        // The walk (r2 F2): every open is a read-only DIRECTORY handle with the link not followed; the name is read through it.
+        #expect(plan.contains("static let directoryFlags: Int32 = O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC"))
+        #expect(plan.components(separatedBy: "open(pathOf(root, folders[..<k]), directoryFlags)").count == 2, "one open, with the directory flags")
+        #expect(plan.components(separatedBy: "openat(fd, name, directoryFlags)").count == 2, "one openat, with the directory flags")
+        #expect(plan.contains("CatalogAuditMountIdentity.of(fd: fd)"), "the identity is the handle's (fstatfs), never a pathname's")
+        for pathname in ["realpath(", "lstat(", "statfs(item", "CatalogAuditStat.of(item.path)"] {
+            #expect(!plan.contains(pathname), "the proof resolves no pathname (\(pathname))")
+        }
+        // The lane rule (r2 F1): bound to the lane root's identity; "/" has the stub rule.
+        #expect(plan.contains("guard let expected = item.expectedMount, on == expected else { return .driveNotConnected(expected: item.expectedMount, now: on) }"))
+        #expect(plan.components(separatedBy: "fstatat(fd, name, &sb, AT_SYMLINK_NOFOLLOW)").count == 3,
+                "the name AND a folder that would not open are both looked at through the handle, link not followed")
+        #expect(plan.contains("item.root == \"/\" ? stubRule(missingFolders: missingFolders, parentHasEntries: parentHasEntries) : .gone"))
+        #expect(plan.contains("supersededByID: r.supersededByID"), "the snapshot carries supersession (r2 F3)")
         #expect(!plan.contains("isArchived: Bool"), "the item carries no planned 'archived' flag to trust")
+        #expect(job.contains("CatalogAuditMountIdentity.ofLaneRoot(root)"), "the anchor is the LANE ROOT's identity")
         #expect(job.contains("finish(failedSave: message)") && !job.contains("finish(failed: message)"),
                 "a save that is not acknowledged ends failed, Stop or not (failed > stopped > completed)")
+    }
+
+    /// MOPS-14's one declared exception to "nothing opened": a DIRECTORY
+    /// handle, read-only, in CatalogAuditPlan.swift and nowhere else in the
+    /// audit; no audit source opens anything for writing or moves a thing.
+    @Test("the directory-handle calls live in CatalogAuditPlan.swift only; no audit source writes, renames, unlinks or opens for writing")
+    func directoryHandleIsTheOnlyOpenAndOnlyInThePlan() throws {
+        let handleCalls = ["open(", "openat(", "fstatat(", "fstatfs(", "fdopendir(", "readdir("]
+        let writes = ["O_WRONLY", "O_RDWR", "O_CREAT", "O_TRUNC", "O_APPEND", "FileHandle(forWritingTo", "FileHandle(forUpdating",
+                      "unlink(", "unlinkat(", "rename(", "renameat(", "rmdir(", "mkdir(", "mkdirat(", "truncate(", "ftruncate(",
+                      "symlink(", "link(", "chmod(", "fchmod(", "utimes(", "futimes("]
+        for name in Self.sources {
+            let code = try Self.code(name)
+            for call in writes { #expect(!code.contains(call), "\(name) contains \(call)") }
+            if name == "CatalogAuditPlan.swift" { continue }
+            for call in handleCalls { #expect(!code.contains(call), "\(name) opens a handle (\(call)) — only CatalogAuditPlan.swift may") }
+        }
+        let plan = try Self.code("CatalogAuditPlan.swift")
+        for call in handleCalls { #expect(plan.contains(call), "the walk uses \(call)") }
+        #expect(plan.components(separatedBy: "open(").count == 2 && plan.components(separatedBy: "openat(").count == 2,
+                "exactly one open and one openat")
     }
 
     @Test("every file is still at its path with the same bytes, inode and mtime after a run; nothing appeared beside the media")
@@ -612,7 +663,7 @@ struct CatalogAuditJobSensorTests {
 /// job (or the real apply) against the real filesystem; the only seam used
 /// is the chunk's first-pass stat, and only to feed it a stale answer.
 @MainActor
-private extension ShowAgainSandbox {
+extension ShowAgainSandbox {
     /// A live row at an arbitrary path (the file may or may not be there).
     @discardableResult
     func row(at path: String, bytes: Int64 = 2_000) -> VideoRecord {
@@ -639,7 +690,7 @@ struct CatalogAuditProveAtTheMarkTests {
 
     // F1 — the filesystem the file was expected on, not the lexical root.
 
-    @Test("F1: a path through a dangling symlink is 'could not check — drive not connected', never gone (the lexical root '/' is still mounted)")
+    @Test("F1: a path through a dangling symlink is 'could not check' (r2: a link in the path is not provable), never gone (the lexical root '/' is still mounted)")
     func danglingSymlinkParentIsNeverGone() async throws {
         let sb = try ShowAgainSandbox.make("ca_dangling"); defer { sb.cleanup() }
         let link = try sb.link("media", to: sb.root.appendingPathComponent("unplugged_drive"))
@@ -647,7 +698,7 @@ struct CatalogAuditProveAtTheMarkTests {
         let job = await runAudit(sb.model)
         #expect(job.totals[.gone] == 0 && job.totals[.couldNotCheck] == 1, Comment(rawValue: job.totals.line))
         #expect(r.removal == nil, "a file beyond a dangling link is not proven gone")
-        #expect(job.problems.first { $0.path == r.fullPath }?.detail.contains("not connected") == true,
+        #expect(job.problems.first { $0.path == r.fullPath }?.detail.contains("a link in the path") == true,
                 Comment(rawValue: job.problems.first { $0.path == r.fullPath }?.detail ?? "no detail row"))
         #expect(job.storedCount == 0)
     }
@@ -747,7 +798,7 @@ struct CatalogAuditProveAtTheMarkTests {
         let original = try sb.live("swap.mov", onDisk: false)
         var replacement: VideoRecord?
         let model = sb.model
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, laneRoot: sb.laneRoot) { j in
             j.chunkSize = 1; j.checkpointRows = 100
             j.saveCatalogForTesting = {
                 // A reload / rescan replaced the object while the save was in flight.
@@ -771,7 +822,7 @@ struct CatalogAuditProveAtTheMarkTests {
     func rollbackLeavesANewerLifecycleEditAlone() async throws {
         let sb = try ShowAgainSandbox.make("ca_newer_edit"); defer { sb.cleanup() }
         let r = try sb.live("edited.mov", onDisk: false)
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, laneRoot: sb.laneRoot) { j in
             j.chunkSize = 1; j.checkpointRows = 100
             j.saveCatalogForTesting = {
                 r.lifecycleStage = .reviewing          // Triage moved it meanwhile
@@ -789,7 +840,7 @@ struct CatalogAuditProveAtTheMarkTests {
     func rollbackLeavesANewerMarkerAlone() async throws {
         let sb = try ShowAgainSandbox.make("ca_newer_marker"); defer { sb.cleanup() }
         let r = try sb.live("door.mov", onDisk: false)
-        let job = await runAudit(sb.model) { j in
+        let job = await runAudit(sb.model, laneRoot: sb.laneRoot) { j in
             j.chunkSize = 1; j.checkpointRows = 100
             j.saveCatalogForTesting = {
                 VideoScanModel.stampRemoval(r, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))
@@ -810,6 +861,7 @@ struct CatalogAuditProveAtTheMarkTests {
         let marker = CatalogAuditRunMarker()
         let job = CatalogAuditJob(model: sb.model, marker: marker)
         job.volumeOnline = { _ in true }
+        job.laneRoot = sb.laneRoot
         job.tickMilliseconds = 20
         job.chunkSize = 1
         job.checkpointRows = 2

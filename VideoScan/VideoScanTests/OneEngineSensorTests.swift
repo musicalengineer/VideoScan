@@ -172,6 +172,26 @@ struct OneEngineSensorTests {
                       allowlist: Self.markerWriterAllowlist, "a removal-marker / purgedAt / Trashed write")
     }
 
+    /// The marker's write counter (codex r2 2026-10-16 F4): ONLY the engine
+    /// bumps it (`+= 1`, on a change of the marker); the rescan carry copies
+    /// it with the marker, nothing else assigns it.
+    static let revisionBumpAllowlist: [String: String] = [
+        "MediaOps/VideoScanModel+RemovalMarker.swift": "THE engine bumps it on every change of the marker",
+    ]
+    static let revisionCarryAllowlist: [String: String] = [
+        "Catalog/VideoScanModel+RescanPreservation.swift": "carries the revision with the marker across a rescan (no bump)",
+    ]
+
+    @Test func onlyTheEngineBumpsTheRemovalRevision() {
+        expectMatches(Self.hits([#"\bremovalRevision\s*(\+=|-=|\+\+|--)"#]), allowlist: Self.revisionBumpAllowlist, "a removalRevision bump")
+        expectMatches(Self.hits([#"\bremovalRevision\s*=[^=]"#]), allowlist: Self.revisionCarryAllowlist, "a removalRevision assignment")
+        let engine = (try? SourceTree.appCode(named: "VideoScanModel+RemovalMarker.swift")) ?? ""
+        #expect(engine.components(separatedBy: "removalRevision += 1").count == 4, "stamp (on change), clear (on change), revert — three bumps")
+        #expect(engine.contains("if rec.removal != marker { rec.removalRevision += 1 }"), "an identical re-stamp is not a change")
+        #expect(engine.contains("if rec.removal != nil { rec.removalRevision += 1 }"), "Restore of a live row is not a change")
+        #expect(engine.contains("guard rec.removal == wrote, rec.removalRevision == revision else { return false }"), "revert is value AND revision")
+    }
+
     // MARK: 5. Every state is reachable from a door
 
     @Test func everyRemovalStateIsReachableFromADoor() async throws {

@@ -366,6 +366,18 @@ public class VideoRecord: Identifiable, Decodable {
         }
     }
 
+    /// How many times the removal engine has CHANGED `removal` on this row
+    /// (codex r2 2026-10-16 F4). Bumped only by `stampRemoval` /
+    /// `clearRemoval` / `revertRemoval` when the marker's value changes;
+    /// carried by clone, rescan preservation and the catalog file. A door
+    /// that undoes its own write compares value AND revision, so an equal
+    /// value written since by another door (nil → Trash → Put Back →
+    /// Restore → nil) is recognised as newer and left alone. Codable:
+    /// written only when non-zero, so an older catalog decodes to 0 and
+    /// round-trips byte-identical. (For Rick: a per-field version counter,
+    /// the CAS tag that defeats ABA.)
+    public var removalRevision: Int = 0
+
     /// `removal?.since`, cached on every write of `removal` (and in the
     /// decoder, where `didSet` does not run). `purgedAt` / `isPurged` are
     /// read in O(records) loops all over the app; this keeps that read a
@@ -852,6 +864,7 @@ public class VideoRecord: Identifiable, Decodable {
             purgedAt: legacyPurgedAt, lifecycleStage: lifecycleStage,
             archiveStage: archiveStage, loadedAt: Self.migrationLoadDate)
         removedSince = removal?.since   // didSet does not run inside init
+        removalRevision = try c.decodeIfPresent(Int.self, forKey: .removalRevision) ?? 0
         // decodeIfPresent so pre-feature catalogs (no setAsideReason key)
         // round-trip cleanly as in-scope records (same shape as purgedAt).
         setAsideReason              = try c.decodeIfPresent(String.self, forKey: .setAsideReason)
