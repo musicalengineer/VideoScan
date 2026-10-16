@@ -1,7 +1,13 @@
 // AnalyzeRunner.swift
 // "Run now" / Pause / Resume / Stop for every cycler, wired to the entry
-// points that EXIST today (Phase A trial, 2026-10-02 — no engine changes):
+// points that EXIST today (Phase A trial, 2026-10-02 — no engine changes;
+// the three integrity rows added 2026-10-16, Catalog Status §2):
 //
+//   File Presence         MediaFileOperationsCenter.startCatalogAudit
+//   Full Hashes           MediaFileOperationsCenter.startFullHashBackfill
+//   Sound Prints          MediaFileOperationsCenter.startAudioFingerprintBackfill
+//                         — the three MFO jobs; pause / resume / cancel act
+//                         on the job the center holds (the band mirrors it)
 //   Detect Duplicates     VideoScanModel.analyzeDuplicates(selectedIDs:)
 //   Find Similar Footage  MediaFileOperationsCenter.startFindSimilarFootage
 //                         (still an MFO job in Phase A — see the Phase C note
@@ -23,8 +29,9 @@
 // returns. The backfills and the MFO/dossier engines already write their
 // own outcome lines; nothing is duplicated for them. No new log files.
 //
-// Used by the Analyze panel (all controls) and by the Catalog toolbar's
-// Analyze menu (Update now rows) through ContentView.
+// Used by the Analyze panel (all controls), the Catalog toolbar's Analyze
+// menu (Update now rows) through ContentView, and the Catalog Status
+// band / update queue.
 //
 // (For Rick: a `struct` of three references + methods ≈ a small C++ helper
 // object holding pointers; `Task { await … }` ≈ fire-and-forget on the
@@ -51,6 +58,9 @@ struct AnalyzeRunner {
         start(cycler, "START — \(scopeText) (\(source))")
 
         switch cycler {
+        case .filePresence, .fullHashes, .soundPrints:
+            startIntegrityJob(cycler)
+
         case .duplicates:
             // No volume scope in the engine today: a volume Run now passes
             // that volume's record ids — the existing "redo these" path,
@@ -65,11 +75,7 @@ struct AnalyzeRunner {
             }
 
         case .footage:
-            guard let center else { return refuse(cycler, "Media File Operations is not available in this window") }
-            let scope: FootageScope = volume.map {
-                .volume(prefix: $0, label: VolumeReachability.displayLabel(forPath: $0))
-            } ?? .catalog
-            _ = center.startedByUser { $0.startFindSimilarFootage(scope: scope, model: model) }
+            startFootageJob(volume: volume)
 
         case .sceneCaptions, .ocr, .transcribe:
             guard let orchestrator else { return refuse(cycler, "the analysis pipeline is not available in this window") }
@@ -115,6 +121,35 @@ struct AnalyzeRunner {
         }
     }
 
+    /// Find Similar Footage — still an MFO job in Phase A; a volume scopes it.
+    private func startFootageJob(volume: String?) {
+        guard let center else { return refuse(.footage, "Media File Operations is not available in this window") }
+        let scope: FootageScope = volume.map {
+            .volume(prefix: $0, label: VolumeReachability.displayLabel(forPath: $0))
+        } ?? .catalog
+        _ = center.startedByUser { $0.startFindSimilarFootage(scope: scope, model: model) }
+    }
+
+    /// The three integrity jobs — the SAME starts the Catalog menu items
+    /// use, with the model-owned run markers, through `startedByUser` so
+    /// the MFO window comes forward. The center refuses a second run of
+    /// the same kind on its own (nothing is started twice).
+    private func startIntegrityJob(_ cycler: AnalyzeCycler) {
+        guard let center else { return refuse(cycler, "Media File Operations is not available in this window") }
+        center.startedByUser { c in
+            switch cycler {
+            case .filePresence:
+                _ = c.startCatalogAudit(model: model, marker: model.catalogAuditRunMarker)
+            case .fullHashes:
+                _ = c.startFullHashBackfill(model: model, marker: model.fullHashResumeMarker)
+            case .soundPrints:
+                _ = c.startAudioFingerprintBackfill(model: model)
+            default:
+                break
+            }
+        }
+    }
+
     // MARK: Correlate extras (the row's disclosure)
 
     func findPairsAcrossVolumes(source: String) {
@@ -143,8 +178,9 @@ struct AnalyzeRunner {
     /// surface would run concurrently and its `defer` would clear the first
     /// pass's flag. Refuse — out loud — while the engine is busy, and while
     /// a scan runs (both old toolbar menus were disabled during a scan).
-    /// The other engines guard themselves (backfills) or queue (dossier,
-    /// footage). False = refused and logged.
+    /// The other engines guard themselves (backfills, the integrity jobs
+    /// through the center) or queue (dossier, footage). False = refused
+    /// and logged.
     func engineIsFree(for cycler: AnalyzeCycler) -> Bool {
         switch cycler {
         case .duplicates:
@@ -153,16 +189,45 @@ struct AnalyzeRunner {
         case .correlate:
             if model.isCorrelating { refuse(cycler, "already running"); return false }
             if model.isScanning { refuse(cycler, "a scan is running — try again when it finishes"); return false }
+        case .filePresence, .fullHashes, .soundPrints:
+            if activeIntegrityJob(for: cycler) != nil { refuse(cycler, "already running"); return false }
         default:
             break
         }
         return true
     }
 
+    // MARK: Is it running? (the queue's and the band's question)
+
+    /// Whether a pass of this kind is in flight right now — the same
+    /// engine flags the panel samples on its tick, in one place.
+    func isRunning(_ cycler: AnalyzeCycler) -> Bool {
+        switch cycler {
+        case .filePresence, .fullHashes, .soundPrints:
+            return activeIntegrityJob(for: cycler) != nil
+        case .duplicates:
+            return model.isAnalyzingDuplicates
+        case .footage:
+            return activeFootageJob() != nil
+        case .sceneCaptions, .ocr, .transcribe:
+            return orchestrator?.dashboardSnapshot.state.statusIsActive ?? false
+        case .correlate:
+            return model.isCorrelating
+        case .fileSignatures:
+            return model.isComputingSignatures
+        case .embeddedDates:
+            return model.isRefreshingEmbeddedDates
+        case .dateInference:
+            return false   // synchronous on the main actor; never "running" between frames
+        }
+    }
+
     // MARK: Pause / Resume / Stop (only where the engine has them)
 
     func pause(_ cycler: AnalyzeCycler) {
         switch cycler {
+        case .filePresence, .fullHashes, .soundPrints:
+            activeIntegrityJob(for: cycler)?.pause()
         case .sceneCaptions, .ocr, .transcribe:
             orchestrator?.pause()
         case .footage:
@@ -175,6 +240,8 @@ struct AnalyzeRunner {
 
     func resume(_ cycler: AnalyzeCycler) {
         switch cycler {
+        case .filePresence, .fullHashes, .soundPrints:
+            activeIntegrityJob(for: cycler)?.resume()
         case .sceneCaptions, .ocr, .transcribe:
             guard let orchestrator else { return }
             if orchestrator.queuePaused { orchestrator.resumeQueue(model: model) }
@@ -189,6 +256,8 @@ struct AnalyzeRunner {
 
     func stop(_ cycler: AnalyzeCycler) {
         switch cycler {
+        case .filePresence, .fullHashes, .soundPrints:
+            activeIntegrityJob(for: cycler)?.cancel()
         case .sceneCaptions, .ocr, .transcribe:
             orchestrator?.cancel()
         case .footage:
@@ -202,6 +271,21 @@ struct AnalyzeRunner {
     /// The newest active Find Similar Footage run, if any.
     func activeFootageJob() -> FindSimilarFootageJob? {
         center?.jobs.first { $0.state.isActive && $0 is FindSimilarFootageJob } as? FindSimilarFootageJob
+    }
+
+    /// The active MFO job behind an integrity row, if any — the object the
+    /// MFO row observes, so the band can observe the same one. O(jobs).
+    func activeIntegrityJob(for cycler: AnalyzeCycler) -> (any MediaFileOperationJob)? {
+        guard let center else { return nil }
+        return center.jobs.first { job in
+            guard job.state.isActive else { return false }
+            switch cycler {
+            case .filePresence: return job is CatalogAuditJob
+            case .fullHashes: return job is FullHashBackfillJob
+            case .soundPrints: return job is AudioFingerprintBackfillJob
+            default: return false
+            }
+        }
     }
 
     // MARK: Log lines

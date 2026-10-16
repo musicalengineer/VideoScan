@@ -539,13 +539,11 @@ struct VideoScanApp: App {
     /// context menu, the operations window, and the quit guard all see
     /// the same instance — jobs survive the window closing.
     @StateObject private var fileOpsCenter = MediaFileOperationsCenter()
-    /// "Did the last Fill In Full Hashes run finish?" — drives the Catalog
-    /// menu title ("Resume Filling In Full Hashes…"). Read at launch below.
-    @StateObject private var fullHashResume = FullHashBackfillResumeMarker()
-    /// "When did the catalog's presence last get checked?" — the Audit
-    /// Catalog run marker (catalog-audit.json beside catalog.json). Read at
-    /// launch below; the Catalog Status panel's File Presence row reads it.
-    @StateObject private var catalogAuditMarker = CatalogAuditRunMarker()
+    // The two run markers (fullhash-backfill.json, catalog-audit.json) are
+    // MODEL-OWNED since 2026-10-16 (`catalogModel.fullHashResumeMarker`,
+    // `catalogModel.catalogAuditRunMarker`) so the Catalog menu, the
+    // Analyze panel and the Catalog Status band all hand the SAME marker
+    // to the job they start. Read at launch below.
 
     var body: some Scene {
         WindowGroup(id: "main") {
@@ -613,21 +611,26 @@ struct VideoScanApp: App {
                             // Fill In Full Hashes (2026-10-11): an
                             // unfinished run is OFFERED (a log line + the
                             // menu reads "Resume…"), never restarted.
-                            let resume = fullHashResume
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
                                 guard let model = catalogModel,
-                                      let open = resume.attach(catalogFile: model.catalogStore.fileLocation) else { return }
+                                      let open = model.fullHashResumeMarker.attach(catalogFile: model.catalogStore.fileLocation) else { return }
                                 model.fullHashBackfillNote(FullHashBackfillResumeMarker.launchLine(open))
                             }
                             // Audit Catalog (2026-10-16): the last run's
                             // marker is read (one small JSON); a run that
                             // found files gone, or did not finish, is one
                             // console/log line. Nothing starts.
-                            let audit = catalogAuditMarker
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
-                                audit.announceLastRun(to: catalogModel)
+                                catalogModel?.catalogAuditRunMarker.announceLastRun(to: catalogModel)
                             }
                         }
+                        // Catalog Status (2026-10-16, §4): the freshness
+                        // snapshot follows the MFO center for "running" and
+                        // re-judges its relative words once a minute. The red
+                        // launch line is written by the snapshot itself on its
+                        // first computed state (announceAtLaunch).
+                        catalogModel.catalogFreshness.observeRunning(in: fileOpsCenter)
+                        catalogModel.catalogFreshness.startClock()
                         // Archive Angel phase 2: the scoring sweep parks
                         // while an Angel or Promote job is active
                         // (AngelJobRunner.isBusy; the façade holds the
@@ -836,7 +839,7 @@ struct VideoScanApp: App {
                 // Fill In Full Hashes (2026-10-11): whole-catalog SHA-256
                 // backfill as an MFO job; restart = resume.
                 FullHashBackfillMenuItem(model: catalogModel, center: fileOpsCenter,
-                                         marker: fullHashResume, isReadOnly: catalogModel.isReadOnly)
+                                         marker: catalogModel.fullHashResumeMarker, isReadOnly: catalogModel.isReadOnly)
                 // Fingerprint Sound (2026-10-14): whole-catalog audio
                 // fingerprint backfill as an MFO job; confirm sheet first;
                 // restart = resume.
@@ -846,7 +849,11 @@ struct VideoScanApp: App {
                 // connected drive is stat'ed; gone → Missing, back → live.
                 // The same job the nightly runs through --audit-catalog.
                 CatalogAuditMenuItem(model: catalogModel, center: fileOpsCenter,
-                                     marker: catalogAuditMarker, isReadOnly: catalogModel.isReadOnly)
+                                     marker: catalogModel.catalogAuditRunMarker, isReadOnly: catalogModel.isReadOnly)
+                Divider()
+                // Catalog Status (2026-10-16): opens Content Analysis with
+                // the summary band; the title carries the colour word.
+                CatalogStatusMenuItem(freshness: catalogModel.catalogFreshness)
             }
         }
 

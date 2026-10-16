@@ -18,6 +18,14 @@
 //                   never be "covered"; the row says so
 //   Date Inference  inferredRecordDate present, over records with no user date
 //
+// INTEGRITY ROWS (Catalog Status, 2026-10-16) ride the same pass:
+//   File Presence   no per-record stamp — eligible/offline are tallied
+//                   here (live rows by drive); "covered" comes from the
+//                   last audit's catalog-audit.json (CatalogFreshnessRows)
+//   Full Hashes     a stored whole-file SHA-256 (VideoScanModel
+//                   .storedFullDigest) — a sampled `v1:` hash does NOT count
+//   Sound Prints    audioFingerprint stamp present (fingerprinted or noAudio)
+//
 // DENOMINATOR = eligible AND reachable (design §5.5 revision): a record on
 // a drive that is not connected is counted as "offline", a DRM / photo /
 // out-of-scope / junk record as "not applicable", so 100% is reachable and
@@ -69,6 +77,12 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
     var hasEmbeddedDate: Bool
     var hasInferredDate: Bool
     var hasUserDate: Bool
+    /// A stored whole-file SHA-256 covering exactly the catalog's size.
+    var hasFullDigest: Bool
+    var fullDigestAt: Date?
+    /// Fingerprint Sound's stamp (fingerprinted or "no sound").
+    var hasSoundStamp: Bool
+    var soundStampAt: Date?
 
     init(fullPath: String, filename: String = "", streamTypeRaw: String = StreamType.videoAndAudio.rawValue,
          sizeBytes: Int64 = 1, isHidden: Bool = false, lifecycleOK: Bool = true,
@@ -76,7 +90,9 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
          drmProtected: Bool = false, dupStamped: Bool = false, footageScannedAt: Date? = nil,
          dossierStamped: Bool = false, hasCaptions: Bool = false, hasOCRText: Bool = false,
          hasTranscript: Bool = false, isPaired: Bool = false, hasHash: Bool = false,
-         hasEmbeddedDate: Bool = false, hasInferredDate: Bool = false, hasUserDate: Bool = false) {
+         hasEmbeddedDate: Bool = false, hasInferredDate: Bool = false, hasUserDate: Bool = false,
+         hasFullDigest: Bool = false, fullDigestAt: Date? = nil,
+         hasSoundStamp: Bool = false, soundStampAt: Date? = nil) {
         self.fullPath = fullPath
         self.filename = filename.isEmpty ? (fullPath as NSString).lastPathComponent : filename
         self.streamTypeRaw = streamTypeRaw
@@ -97,12 +113,20 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
         self.hasEmbeddedDate = hasEmbeddedDate
         self.hasInferredDate = hasInferredDate
         self.hasUserDate = hasUserDate
+        self.hasFullDigest = hasFullDigest
+        self.fullDigestAt = fullDigestAt
+        self.hasSoundStamp = hasSoundStamp
+        self.soundStampAt = soundStampAt
     }
 
     /// The dossier pool's gate, minus the Analysis Scope (applied by the
     /// calculator): admitted by stage, not awaiting reformat, not junk,
     /// not DRM.
     var inDossierPool: Bool { lifecycleOK && !awaitingReformat && !isJunk && !drmProtected }
+
+    /// A file with bytes at a path — what Signatures, Full Hashes and
+    /// Sound Prints can read at all.
+    var hasBytes: Bool { sizeBytes > 0 && !fullPath.isEmpty }
 
     /// Project one live record. Main actor (the record lives there).
     @MainActor
@@ -127,7 +151,11 @@ struct AnalyzeCoverageInput: Sendable, Equatable {
                   hasHash: !r.contentHash.isEmpty,
                   hasEmbeddedDate: r.embeddedCreationDate != nil,
                   hasInferredDate: r.inferredRecordDate != nil,
-                  hasUserDate: !(r.userDate ?? "").isEmpty)
+                  hasUserDate: !(r.userDate ?? "").isEmpty,
+                  hasFullDigest: VideoScanModel.storedFullDigest(r) != nil,
+                  fullDigestAt: VideoScanModel.storedFullDigest(r) == nil ? nil : r.contentFixity?.computedAt,
+                  hasSoundStamp: r.audioFingerprint != nil,
+                  soundStampAt: r.audioFingerprint?.computedAt)
     }
 }
 
@@ -231,8 +259,10 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     var computedAt: Date = Date(timeIntervalSince1970: 0)
 
     /// Cyclers whose per-record stamp does not exist today, so the
-    /// "x of y" line would be a guess. Footage (singletons carry nothing).
-    static let coverageUnknown: Set<AnalyzeCycler> = [.footage]
+    /// "x of y" line would be a guess. Footage (singletons carry nothing);
+    /// File Presence (the audit keeps one run marker, not a stamp per row —
+    /// its "covered" is supplied by CatalogFreshnessRows from that marker).
+    static let coverageUnknown: Set<AnalyzeCycler> = [.footage, .filePresence]
 
     func counts(_ c: AnalyzeCycler) -> AnalyzeCoverageCounts { byCycler[c] ?? AnalyzeCoverageCounts() }
 
@@ -345,6 +375,16 @@ enum AnalyzeCoverageCalculator {
             let hasVideo = stream == .videoAndAudio || stream == .videoOnly
             let hasAudio = stream == .videoAndAudio || stream == .audioOnly
 
+            // Integrity (Catalog Status, 2026-10-16). Presence: every live
+            // row is asked, by drive; nothing per row records the answer
+            // (covered comes from the audit marker). Hashes and sound
+            // prints: anything with bytes, like Signatures.
+            tally(.filePresence, root: root, reachable: reachable, applies: true, covered: false)
+            tally(.fullHashes, root: root, reachable: reachable, applies: r.hasBytes,
+                  covered: r.hasFullDigest, stamp: r.fullDigestAt)
+            tally(.soundPrints, root: root, reachable: reachable, applies: r.hasBytes,
+                  covered: r.hasSoundStamp, stamp: r.soundStampAt)
+
             // Duplicates: every active record is a candidate.
             tally(.duplicates, root: root, reachable: reachable, applies: true, covered: r.dupStamped)
 
@@ -377,8 +417,7 @@ enum AnalyzeCoverageCalculator {
             }
 
             // Signatures: anything with bytes.
-            tally(.fileSignatures, root: root, reachable: reachable,
-                  applies: r.sizeBytes > 0 && !r.fullPath.isEmpty, covered: r.hasHash)
+            tally(.fileSignatures, root: root, reachable: reachable, applies: r.hasBytes, covered: r.hasHash)
 
             // Embedded dates: ffprobe-failed rows can't be probed.
             tally(.embeddedDates, root: root, reachable: reachable,

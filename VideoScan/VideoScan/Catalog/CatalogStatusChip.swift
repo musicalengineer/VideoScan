@@ -5,38 +5,32 @@
 // one short sentence; click opens Content Analysis, where the summary
 // band at the top says the same thing with the items behind it.
 //
-//   ● Catalog Status: current · checked 02:14      (green: quiet secondary text)
-//   ● Catalog Status: 2 things need attention      (yellow: a run fixes it)
-//   ● Catalog Status: needs a decision — 3 rows point at nothing (red: a person must look)
+//   ● Catalog Status: current · checked today at 02:14   (green: quiet secondary text)
+//   ● Catalog Status: 2 things need attention             (yellow: a run fixes it)
+//   ● Catalog Status: needs a decision — 3 files pointing at nothing… (red)
 //
 // Format (Rick 2026-10-16): "Catalog Status: <briefly what it needs>", at
 // the totals strip's own 15pt mono register so it reads as one of the
-// figures, not as chrome.
+// figures, not as chrome. The words are CatalogStatusWords.chipWords over
+// the summary — the same sentence the band's headline carries.
 //
-// MOCK (2026-10-16): the words and colour are fixed until the freshness
-// model (VideoScanCore.CatalogFreshness) and the integrity rows land;
-// the chip's shape, place and door are what Rick is judging by eye.
-// Pure layout — nothing here observes the model.
+// OBSERVATION: the chip observes the model's CatalogFreshnessSnapshot and
+// nothing else (equality-gated, published once per debounced catalog
+// change / job start / minute). Pure layout over that one value — nothing
+// here touches the model or records (CatalogStatusSensorTests pins it).
 
 import SwiftUI
+import VideoScanCore
 
 struct CatalogStatusChip: View {
 
-    enum Colour { case green, yellow, red, grey }
-
-    var colour: Colour = .yellow
-    var words: String = "2 things need attention"
+    @ObservedObject var freshness: CatalogFreshnessSnapshot
 
     @Environment(\.openWindow) private var openWindow
 
-    private var tint: Color {
-        switch colour {
-        case .green: return .green
-        case .yellow: return .yellow
-        case .red: return .red
-        case .grey: return .secondary
-        }
-    }
+    private var colour: FreshnessColour { freshness.state.isComputed ? freshness.state.summary.colour : .grey }
+    private var words: String { CatalogStatusWords.chipWords(freshness.state) }
+    private var tint: Color { colour.tint }
 
     /// Green stays calm: secondary text, no tinted pill. Yellow and red
     /// earn the pill so the eye lands on them before the figures.
@@ -49,7 +43,7 @@ struct CatalogStatusChip: View {
                     .fill(tint)
                     .frame(width: 10, height: 10)
                     .padding(.trailing, 8)
-                Text("Catalog Status: ")
+                Text(CatalogStatusWords.chipPrefix)
                     .font(.system(size: 15, weight: .medium, design: .monospaced))
                     .foregroundColor(.secondary)
                     .fixedSize()
@@ -70,7 +64,7 @@ struct CatalogStatusChip: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .help("Catalog status (mock while the freshness model is built). Click to open Content Analysis.")
+        .help("Is what the catalog knows current? \(freshness.state.summary.headline). Click to open Content Analysis — the band at the top lists what needs what.")
         .accessibilityIdentifier("catalog.statusChip")
         .accessibilityLabel("Catalog status: \(words)")
     }

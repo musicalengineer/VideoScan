@@ -291,6 +291,18 @@ final class VideoScanModel: ObservableObject {
     /// because extensions cannot add stored properties.
     let analyzeCoverageSnapshot = AnalyzeCoverageSnapshot()
     var analyzeCoverageTask: Task<Void, Never>?
+    /// Catalog Status (2026-10-16): the ONE freshness snapshot every
+    /// attention surface observes (chip, toolbar dot, menu row, band),
+    /// published from the same pass. Logic in Analyze/CatalogFreshnessSnapshot.swift.
+    let catalogFreshness = CatalogFreshnessSnapshot()
+    /// "Update everything stale": one kind at a time through the runner.
+    let catalogStatusUpdateQueue = CatalogStatusUpdateQueue()
+    /// The two run markers beside catalog.json (fullhash-backfill.json,
+    /// catalog-audit.json). Model-owned since 2026-10-16 so every surface
+    /// that starts the job (Catalog menu, Analyze panel, the band) hands
+    /// the SAME marker to it; VideoScanApp attaches them at launch.
+    let fullHashResumeMarker = FullHashBackfillResumeMarker()
+    let catalogAuditRunMarker = CatalogAuditRunMarker()
     /// The dossier Analysis Scope the coverage math uses (decides which
     /// audio-only files are "eligible"). The Analyze panel mirrors the
     /// orchestrator's live scope into this; default = the app default.

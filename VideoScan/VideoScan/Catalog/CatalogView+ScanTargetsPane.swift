@@ -824,7 +824,7 @@ extension CatalogView {
                 // order Rick uses them: understand it, prune it, protect
                 // it. Analyze now renders as a bordered button like the
                 // other two rather than a ring chip.
-                DossierToolbarChip(model: model)
+                DossierToolbarChip(model: model, freshness: model.catalogFreshness)
 
                 Button {
                     showTidySheet = true
@@ -866,7 +866,8 @@ extension CatalogView {
             // volume filter would be misleading.
             AnchoredVolumeTableTotalsFooter(anchors: volumeColumnAnchors, totals: storageTotals,
                                             archivedBytes: sizeTotals.isEmpty ? nil : sizeTotals.archivedBytes,
-                                            archivedHelp: sizeTotals.archivedTooltip, showAgainModel: model)
+                                            archivedHelp: sizeTotals.archivedTooltip, showAgainModel: model,
+                                            freshness: model.catalogFreshness)
         }
         // Shared coordinate space: the Media Size cell measures itself
         // in it, the footer positions itself in it. Both must name the

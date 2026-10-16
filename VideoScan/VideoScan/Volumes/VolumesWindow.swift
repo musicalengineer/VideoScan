@@ -66,8 +66,10 @@ struct VolumesWindow: View {
     @State private var mediaDistributionSheet: MediaDistributionSheetToken?
     private struct MediaDistributionSheetToken: Identifiable { let id = 0 }
 
-    /// "Audit Catalog…" — does everything add up (2026-08-19). Right-click
-    /// on the pinned Catalog row. Same token pattern.
+    /// "Check Totals…" — does everything add up (2026-08-19, retitled
+    /// 2026-10-16 so it no longer collides with the Catalog menu's Audit
+    /// Catalog… presence job). Right-click on the pinned Catalog row.
+    /// Same token pattern.
     @State private var auditSheet: AuditSheetToken?
     private struct AuditSheetToken: Identifiable { let id = 0 }
 
@@ -259,7 +261,7 @@ struct VolumesWindow: View {
             DuplicateKeeperPrecedenceSheet()
                 .environmentObject(model)
         }
-        // Audit Catalog (2026-08-19).
+        // Check Totals (2026-08-19; retitled 2026-10-16).
         .sheet(item: $auditSheet) { _ in
             CatalogAuditSheet()
                 .environmentObject(model)
@@ -426,7 +428,7 @@ struct VolumesWindow: View {
                     Button {
                         auditSheet = AuditSheetToken()
                     } label: {
-                        Label("Audit Catalog…", systemImage: "list.bullet.clipboard")
+                        Label("Check Totals…", systemImage: "list.bullet.clipboard")
                     }
                     .help("Check that the catalog adds up: per-drive totals, unplaced records, nested targets, duplicate-group counts, pair links, archive index.")
                     .accessibilityIdentifier("volumeRow.catalog.audit")
