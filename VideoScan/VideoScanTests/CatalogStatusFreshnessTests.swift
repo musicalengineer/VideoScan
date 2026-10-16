@@ -257,6 +257,49 @@ struct CatalogFreshnessFactsTests {
         let problem = try #require(CatalogFreshnessFactsReader.soundStoreProblem(in: dir))
         #expect(problem.contains("not a database"))
     }
+
+    /// Codex cycle #80, P2: a run that stopped part way is yellow "run it
+    /// again"; the gone/changed it counted so far never become a red
+    /// decision — only a COMPLETED, non-partial run may claim one.
+    @Test func aPartialRunContributesNoDecision() {
+        let partial = auditRecord(outcome: .completed, partial: true, counts: ["present": 1, "gone": 3, "planned": 4])
+        let facts = CatalogAuditPresenceFacts.from(partial)
+        #expect(facts.outcome == .partial)
+        #expect(facts.needsDecision == 0, "a partial run claims no decision (got \(facts.needsDecision))")
+        #expect(facts.checked == 4, "what it did check still counts")
+        let stopped = auditRecord(outcome: .stopped, partial: true, counts: ["gone": 2, "planned": 4])
+        #expect(CatalogAuditPresenceFacts.from(stopped).needsDecision == 0)
+        let whole = auditRecord(outcome: .completed, partial: false, counts: ["present": 1, "gone": 3, "planned": 4])
+        #expect(CatalogAuditPresenceFacts.from(whole).needsDecision == 3, "a whole run keeps its decision")
+
+        let report = compute([.init(fullPath: "/Volumes/LaCie/a.mov")])
+        let presence = row(.filePresence, in: rows(report, facts: .init(audit: partial)))
+        let verdict = FreshnessPolicy.judge(presence, now: now, wording: wording)
+        #expect(verdict.colour == .yellow)
+        #expect(verdict.words == "the last run stopped part way — run it again")
+        #expect(CatalogStatusDoor.door(for: verdict.reason, cycler: .filePresence) == .runNow)
+    }
+
+    /// Codex cycle #80, P2: the red "store unavailable" fires only when the
+    /// sidecar FILE exists and cannot be opened. Before the first run there
+    /// is no file, so a read-only catalog folder is not a fault here (the
+    /// backfill job refuses the folder itself when it runs).
+    @Test func anAbsentSidecarInAReadOnlyFolderIsNotAProblem() throws {
+        let dir = try scratch()
+        let fm = FileManager.default
+        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+        defer { try? fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
+        try #require(!fm.isWritableFile(atPath: dir.path), "the scratch folder could not be made read-only here")
+        #expect(CatalogFreshnessFactsReader.soundStoreProblem(in: dir) == nil,
+                "an absent sidecar reads as never ran, not red (got \(CatalogFreshnessFactsReader.soundStoreProblem(in: dir) ?? "nil"))")
+        let catalog = dir.appendingPathComponent("catalog.json").path
+        #expect(CatalogFreshnessFactsReader.read(catalogFile: catalog).soundStoreProblem == nil)
+        // Present but unopenable stays red, writable folder or not.
+        try fm.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path)
+        try Data("this is not sqlite".utf8).write(to: dir.appendingPathComponent(AudioFingerprintStore.fileName))
+        try fm.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+        #expect(CatalogFreshnessFactsReader.soundStoreProblem(in: dir) != nil, "garbage in a read-only folder is still red")
+    }
 }
 
 // MARK: - Words: chip, menu, door, launch line
@@ -431,6 +474,85 @@ struct CatalogFreshnessSnapshotTests {
         #expect(model.catalogFreshness.state.isComputed)
         #expect(model.catalogFreshness.state.rows.count == AnalyzeCycler.allCases.count)
     }
+
+    /// Codex cycle #80, P2: a running METADATA engine (here Duplicates —
+    /// the model's own flag, the one AnalyzeRunner.isRunning reads) lands
+    /// in the SAME snapshot as the MFO jobs: "running" on its row and out
+    /// of "Update everything stale". The path is not under /Volumes so the
+    /// record is reachable without a mount.
+    @Test func aRunningMetadataEngineIsNotStale() async throws {
+        let model = VideoScanModel()
+        let r = VideoRecord()
+        r.fullPath = "/Users/Shared/catalog-status-test/a.mov"; r.filename = "a.mov"; r.sizeBytes = 10
+        r.streamTypeRaw = StreamType.videoAndAudio.rawValue
+        model.records = [r]
+        let snapshot = model.catalogFreshness
+        for _ in 0..<40 where !snapshot.state.isComputed || model.analyzeCoverageSnapshot.report.activeRecords == 0 {
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        #expect(snapshot.state.staleCyclers.contains(.duplicates), "one unstamped file: Duplicates is stale")
+
+        model.isAnalyzingDuplicates = true
+        for _ in 0..<20 where !snapshot.state.isRunning(.duplicates) { try await Task.sleep(nanoseconds: 50_000_000) }
+        #expect(snapshot.state.isRunning(.duplicates), "the model's own engine flag feeds its snapshot")
+        #expect(snapshot.state.verdict(.duplicates)?.words == "running")
+        #expect(!snapshot.state.staleCyclers.contains(.duplicates), "a running kind is not queued")
+
+        model.isAnalyzingDuplicates = false
+        for _ in 0..<20 where snapshot.state.isRunning(.duplicates) { try await Task.sleep(nanoseconds: 50_000_000) }
+        #expect(!snapshot.state.isRunning(.duplicates))
+        #expect(snapshot.state.staleCyclers.contains(.duplicates), "stale again once the pass ends")
+    }
+
+    /// Codex cycle #80, P2, the OCR case named in the finding: the dossier
+    /// engine's snapshot (Captions / OCR / Transcribe share it) feeds the
+    /// same freshness snapshot — a running OCR pass reads "running" and is
+    /// not queued by "Update everything stale".
+    @Test func aRunningDossierStageIsNotStale() async throws {
+        let snapshot = CatalogFreshnessSnapshot()
+        let dossier = DossierDashboardSnapshot()
+        snapshot.observeDossier(dossier)
+        snapshot.publish(report: compute([.init(fullPath: "/Volumes/LaCie/a.mov", sizeBytes: 10)]), facts: .init())
+        #expect(snapshot.state.staleCyclers.contains(.ocr) && snapshot.state.staleCyclers.contains(.transcribe))
+
+        var active = DossierDashboardState()
+        active.statusIsActive = true
+        dossier.publish(active)
+        for _ in 0..<20 where !snapshot.state.isRunning(.ocr) { try await Task.sleep(nanoseconds: 50_000_000) }
+        for stage in [AnalyzeCycler.sceneCaptions, .ocr, .transcribe] {
+            #expect(snapshot.state.isRunning(stage), "\(stage) shares the dossier engine")
+            #expect(snapshot.state.verdict(stage)?.words == "running")
+            #expect(!snapshot.state.staleCyclers.contains(stage), "\(stage) is running, not stale")
+        }
+        #expect(!snapshot.state.isRunning(.duplicates), "only the dossier stages")
+
+        dossier.publish(DossierDashboardState())
+        for _ in 0..<20 where snapshot.state.isRunning(.ocr) { try await Task.sleep(nanoseconds: 50_000_000) }
+        #expect(snapshot.state.staleCyclers.contains(.ocr), "stale again once the batch ends")
+    }
+
+    /// Codex cycle #80, P2: the coverage snapshot the Analyze menu and the
+    /// panel ALSO observe must not republish identical counts because the
+    /// clock moved — `computedAt` is a caption, not a change.
+    @Test func identicalCoverageAtALaterTimePublishesOnce() {
+        let inputs = [AnalyzeCoverageInput(fullPath: "/Volumes/LaCie/a.mov", sizeBytes: 10)]
+        func report(_ inputs: [AnalyzeCoverageInput], at: Date) -> AnalyzeCoverageReport {
+            AnalyzeCoverageCalculator.compute(inputs: inputs, volumes: [laCie, x9], mountedRoots: ["/", "/Volumes/LaCie"],
+                                              scope: AnalysisScope(), now: at)
+        }
+        let first = report(inputs, at: now)
+        let again = report(inputs, at: now.addingTimeInterval(60))
+        #expect(first == again, "equality ignores computedAt")
+        let snapshot = AnalyzeCoverageSnapshot()
+        snapshot.publish(first)
+        snapshot.publish(again)
+        #expect(snapshot.publishCount == 1, "identical coverage at a later time publishes once (got \(snapshot.publishCount))")
+        #expect(snapshot.report.computedAt == now, "the caption keeps the time of the last real change")
+        let changed = report(inputs + [.init(fullPath: "/Volumes/LaCie/b.mov", sizeBytes: 10)], at: now.addingTimeInterval(120))
+        snapshot.publish(changed)
+        #expect(snapshot.publishCount == 2 && snapshot.report.computedAt == now.addingTimeInterval(120),
+                "a real change still publishes, and brings its time")
+    }
 }
 
 // MARK: - The update queue
@@ -558,6 +680,10 @@ struct CatalogStatusSensorTests {
         #expect(!runner.contains("CatalogAuditJob("), "never a second engine")
         let app = code(try source("VideoScanApp.swift"))
         #expect(app.contains("catalogModel.catalogFreshness.observeRunning(in: fileOpsCenter)"))
+        // Codex cycle #80: the metadata engines feed the SAME snapshot —
+        // the dossier engine from the app, the model's flags from its init.
+        #expect(app.contains("catalogModel.catalogFreshness.observeDossier(captionOrchestrator.dashboardSnapshot)"))
+        #expect(code(try source("VideoScanModel.swift")).contains("catalogFreshness.observeEngines(of: self)"))
         #expect(app.contains("CatalogStatusMenuItem(freshness: catalogModel.catalogFreshness)"))
         #expect(app.contains("marker: catalogModel.catalogAuditRunMarker"))
         #expect(app.contains("marker: catalogModel.fullHashResumeMarker"))

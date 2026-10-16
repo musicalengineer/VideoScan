@@ -256,7 +256,22 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     var correlate = AnalyzeCorrelateCounts()
     /// Active (non-hidden) records seen.
     var activeRecords = 0
+    /// When these counts were computed — a CAPTION ("counts as of …"),
+    /// deliberately outside `==` below.
     var computedAt: Date = Date(timeIntervalSince1970: 0)
+
+    /// Equality is the publish gate (AnalyzeCoverageSnapshot, and the
+    /// freshness snapshot behind it): identical counts recomputed later
+    /// are NOT a change, or every debounced pass would invalidate the
+    /// Analyze menu and panel (codex cycle #80, P2). The caption keeps the
+    /// time of the last real change. (For Rick: a hand-written operator==
+    /// instead of the compiler's memberwise one.)
+    static func == (lhs: AnalyzeCoverageReport, rhs: AnalyzeCoverageReport) -> Bool {
+        lhs.byCycler == rhs.byCycler
+            && lhs.byVolume == rhs.byVolume
+            && lhs.correlate == rhs.correlate
+            && lhs.activeRecords == rhs.activeRecords
+    }
 
     /// Cyclers whose per-record stamp does not exist today, so the
     /// "x of y" line would be a guess. Footage (singletons carry nothing);

@@ -14,8 +14,13 @@
 // Three things move the snapshot:
 //   1. the coverage pass (catalog mutation; the audit / hash / sound jobs
 //      save the catalog, so their stamps land here) — report + facts;
-//   2. the MFO center's job list (a 4 Hz-throttled change signal): which
-//      integrity kinds are running right now, re-judged only when the SET
+//   2. what is RUNNING, from the same three sources AnalyzeRunner.isRunning
+//      reads (codex cycle #80: a running OCR pass must read "running" here
+//      too, not only on the panel's tick): the MFO center's job list (the
+//      three integrity jobs + Similar Footage; a 4 Hz-throttled signal),
+//      the model's four engine flags (Duplicates, Correlate, Signatures,
+//      Embedded Dates) and the dossier snapshot (Captions / OCR /
+//      Transcribe share one engine). Re-judged only when the union SET
 //      changes. A kind that just STOPPED also re-reads the two facts off
 //      the main actor — an audit that found every file present marks
 //      nothing, so no catalog save (and no coverage pass) would follow,
@@ -208,11 +213,19 @@ final class CatalogFreshnessSnapshot: ObservableObject {
 
     private var report = AnalyzeCoverageReport()
     private var facts = CatalogFreshnessFacts()
+    /// What the rows read: the union of the three sources below.
     private var running: Set<AnalyzeCycler> = []
+    /// Kept apart so one source's signal never erases another's answer
+    /// (≈ three bitfields OR-ed together on every change).
+    private var jobRunning: Set<AnalyzeCycler> = []
+    private var engineRunning: Set<AnalyzeCycler> = []
+    private var dossierRunning: Set<AnalyzeCycler> = []
     /// The catalog.json path the facts were read beside (for the re-read).
     private var catalogFile: String?
     private var factsTask: Task<Void, Never>?
     private var centerSubscription: AnyCancellable?
+    private var engineSubscription: AnyCancellable?
+    private var dossierSubscription: AnyCancellable?
     private var clock: AnyCancellable?
     private var announced = false
 
@@ -250,29 +263,78 @@ final class CatalogFreshnessSnapshot: ObservableObject {
         }
     }
 
-    /// Follow the MFO center: the three integrity jobs are MFO jobs, so
-    /// "running" is whether one of them is active in the list. The center
-    /// already throttles its change signal to 4 Hz; the set comparison
-    /// above makes a progress beat a no-op.
+    /// Follow the MFO center: the three integrity jobs and Similar Footage
+    /// are MFO jobs, so "running" is whether one of them is active in the
+    /// list. The center already throttles its change signal to 4 Hz; the
+    /// set comparison above makes a progress beat a no-op.
     func observeRunning(in center: MediaFileOperationsCenter) {
         centerSubscription = center.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self, weak center] _ in
                 guard let self, let center else { return }
-                self.setRunning(Self.integrityRunning(in: center))
+                self.jobRunning = Self.jobRunning(in: center)
+                self.mergeRunning()
             }
-        setRunning(Self.integrityRunning(in: center))
+        jobRunning = Self.jobRunning(in: center)
+        mergeRunning()
     }
 
-    /// The integrity kinds with an active job in the center. O(jobs).
-    static func integrityRunning(in center: MediaFileOperationsCenter) -> Set<AnalyzeCycler> {
+    /// Follow the model's own engine flags — the ones AnalyzeRunner.isRunning
+    /// reads for Duplicates, Correlate, Signatures and Embedded Dates. Each
+    /// is `@Published`, so a flip is one event, not a tick. (For Rick:
+    /// CombineLatest4 ≈ a 4-input latch that re-emits the tuple whenever
+    /// any input changes.)
+    func observeEngines(of model: VideoScanModel) {
+        engineSubscription = Publishers.CombineLatest4(model.$isAnalyzingDuplicates, model.$isCorrelating,
+                                                       model.$isComputingSignatures, model.$isRefreshingEmbeddedDates)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] duplicates, correlate, signatures, embeddedDates in
+                guard let self else { return }
+                var s: Set<AnalyzeCycler> = []
+                if duplicates { s.insert(.duplicates) }
+                if correlate { s.insert(.correlate) }
+                if signatures { s.insert(.fileSignatures) }
+                if embeddedDates { s.insert(.embeddedDates) }
+                self.engineRunning = s
+                self.mergeRunning()
+            }
+    }
+
+    /// Follow the dossier engine: Captions, OCR and Transcribe share one
+    /// orchestrator and one queue, so all three read "running" together
+    /// (the same answer AnalyzeRunner.isRunning gives). The snapshot is
+    /// already equality-gated at ≤2 Hz.
+    func observeDossier(_ dossier: DossierDashboardSnapshot) {
+        dossierSubscription = dossier.$state
+            .map(\.statusIsActive)
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] active in
+                guard let self else { return }
+                self.dossierRunning = active ? [.sceneCaptions, .ocr, .transcribe] : []
+                self.mergeRunning()
+            }
+    }
+
+    private func mergeRunning() {
+        setRunning(jobRunning.union(engineRunning).union(dossierRunning))
+    }
+
+    /// The kinds with an active MFO job in the center. O(jobs).
+    static func jobRunning(in center: MediaFileOperationsCenter) -> Set<AnalyzeCycler> {
         var s: Set<AnalyzeCycler> = []
         for job in center.jobs where job.state.isActive {
             if job is CatalogAuditJob { s.insert(.filePresence) }
             else if job is FullHashBackfillJob { s.insert(.fullHashes) }
             else if job is AudioFingerprintBackfillJob { s.insert(.soundPrints) }
+            else if job is FindSimilarFootageJob { s.insert(.footage) }
         }
         return s
+    }
+
+    /// The integrity kinds with an active job in the center.
+    static func integrityRunning(in center: MediaFileOperationsCenter) -> Set<AnalyzeCycler> {
+        jobRunning(in: center).intersection(AnalyzeCycler.integrity)
     }
 
     /// Keep the relative words honest ("12 minutes ago" → "13 …") — one

@@ -66,16 +66,15 @@ enum CatalogFreshnessFactsReader {
 
     // MARK: Sound sidecar
 
-    /// Try to open the sidecar the way the fingerprint job will. A file
-    /// that does not exist yet is not a problem (the first run creates
-    /// it) — unless its folder is not writable, which is exactly the
-    /// refusal the job would give. Any `Failure` becomes the row's words.
+    /// Try to open the sidecar the way the fingerprint job will. Red only
+    /// when the file EXISTS and cannot be opened (design §3: "a sidecar
+    /// that cannot be opened"). A file that does not exist yet is never a
+    /// problem here — before the first run the row is yellow "never ran",
+    /// and an unwritable folder is the backfill job's own refusal when it
+    /// runs (codex cycle #80, P2). Any `Failure` becomes the row's words.
     nonisolated static func soundStoreProblem(in folder: URL) -> String? {
         let file = folder.appendingPathComponent(AudioFingerprintStore.fileName)
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: file.path) else {
-            return fm.isWritableFile(atPath: folder.path) ? nil : "the fingerprint folder is not writable: \(folder.path)"
-        }
+        guard FileManager.default.fileExists(atPath: file.path) else { return nil }
         do {
             _ = try AudioFingerprintStore(directory: folder)
             return nil
@@ -93,7 +92,9 @@ enum CatalogFreshnessFactsReader {
 struct CatalogAuditPresenceFacts: Sendable, Equatable {
     /// Rows the run actually asked (every result but "not asked").
     var checked = 0
-    /// gone + changed of the last completed run — a person decides.
+    /// gone + changed of the last COMPLETED, non-partial run — a person
+    /// decides. A run that stopped part way claims nothing: its count is
+    /// of the rows it reached, not of the catalog (codex cycle #80, P2).
     var needsDecision = 0
     var lastCompleted: Date?
     var outcome: FreshnessRow.Outcome = .neverRan
@@ -108,8 +109,10 @@ struct CatalogAuditPresenceFacts: Sendable, Equatable {
             .reduce(0) { $0 + (r.counts[$1.rawValue] ?? 0) }
         f.lastCompleted = r.finishedAt
         switch r.outcome {
+        case .completed where r.partial:
+            f.outcome = .partial
         case .completed:
-            f.outcome = r.partial ? .partial : .ok
+            f.outcome = .ok
             f.needsDecision = (r.counts[CatalogAuditResult.gone.rawValue] ?? 0)
                 + (r.counts[CatalogAuditResult.changed.rawValue] ?? 0)
         case .stopped:
