@@ -27715,17 +27715,22 @@
         "FootageFoldersScaleTests",
         "FootageFoldersIsolationTests",
         "FootageFoldersSensorTests",
-        "FootageFoldersStructureTests"
+        "FootageFoldersStructureTests",
+        "FootageFoldersSelectionTests"
       ],
       "tests": [
+        "aByteCopyOfADerivativeInheritsTheDerivativesPlace",
+        "anUnassignedCopyFollowsItsOwnCopyGroupsEvent",
         "confirmedEventBecomesAFolderAndTheRestStaysLoose",
         "copiesByWholeFileDigestAndSizeReadGreyUnderTheRecording",
         "copyOutsideAnyEventFollowsItsOriginalIntoTheFolder",
         "damagedEventsFileMakesNoFoldersAndDoesNotCrash",
+        "derivativeFromAnotherEventLandsUnselectedWhileScopedElsewhere",
         "duplicateGroupMakesACopyWhenThereIsNoDigest",
         "eventScopeShowsOneFolderOpenAndFamilyScopeShowsOneFamily",
         "eventsComeStraightFromTheDecisions",
         "everyDerivativeAppendGoesThroughTheOneDoor",
+        "everyRowActionGoesThroughTheDisplayedSelection",
         "familyOrderIsRecordingThenMadeFromThenCopies",
         "folderKeysUseTheMonitorNotATableKeyHandler",
         "folderRowsObserveOnlyTheSnapshot",
@@ -27740,10 +27745,15 @@
         "looseFamilyCarriesItsRelativesUnderItsFirstVisibleMember",
         "membersInsideAFolderFollowFamilyOrderThenTheSort",
         "noEventsAndNoCopiesIsTodaysRowsInTodaysOrder",
+        "onlyAPlistBooleanReadsAsOn",
+        "optionOffStillPrunesAgainstTheLinearRows",
         "poisonedShowSettingReadsAsOff",
+        "pruningAfterAScopeChangeDropsHiddenIDs",
         "relationGlyphsAndWordsAreTheDesignsFour",
+        "revealPlanSelectsOnlyWhatTheListCanShow",
         "rowMenuItemsOnlyWhileOn",
         "sampledV1HashIsNeverACopy",
+        "scopedBulkActionNeverSeesMembersOutsideTheScope",
         "selectionPruneIsUnchangedAndAFolderIdSurvivesThroughRefreshRows",
         "showOptionExistsAndDefaultsOff",
         "showingPillOnlyWhileOn",
@@ -27751,6 +27761,7 @@
         "sortMappingRoundTripsEveryColumn",
         "supersededRowStaysWithItsFamilyWhenShown",
         "theArchiveCopyOfARecordingCarriesTheFamily",
+        "theRevealChecksTheDisplayBeforeSelecting",
         "versionOutsideAnyEventFollowsItsSourceToo"
       ]
     }

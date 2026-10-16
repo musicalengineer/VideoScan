@@ -243,12 +243,19 @@ struct CatalogOpenShortcutTests {
         let table = try productionSource("CatalogContent+Table.swift")
 
         // Double-click / Return: the primaryAction body is a call into
-        // openRows, nothing else.
+        // tablePrimaryAction (a folder row scopes the list; rows go to
+        // openRows over the rows on screen — Footage folders 2026-10-16),
+        // nothing else.
         let primaryRange = try #require(table.range(of: "} primaryAction: { ids in"))
         let primaryBody = String(table[primaryRange.upperBound...].prefix(400))
-        #expect(primaryBody.contains("openRows(ids: ids, gesture: \"double-click\")"), "double-click → openRows")
+        #expect(primaryBody.contains("tablePrimaryAction(ids: ids)"), "double-click → tablePrimaryAction")
         #expect(!primaryBody.contains("MediaOpener"), "no launch of its own in primaryAction")
         #expect(!primaryBody.contains("noteMissingFileForUserAction"), "no looks-moved loop of its own in primaryAction")
+        let folder = try productionSource("CatalogContent+FolderTable.swift")
+        let actionRange = try #require(folder.range(of: "func tablePrimaryAction(ids: Set<UUID>)"))
+        let actionBody = String(folder[actionRange.upperBound...].prefix(400))
+        #expect(actionBody.contains("openRows(ids: displayedIDs(among: ids), gesture: \"double-click\")"), "rows → the same openRows, over the rows on screen")
+        #expect(!actionBody.contains("MediaOpener"), "no launch of its own in tablePrimaryAction")
 
         // ⌘O: the table publishes a FOCUSED value (never scene-scoped, or
         // a search field's ⌘O would open rows) whose perform is openSelectedRows.
@@ -257,12 +264,12 @@ struct CatalogOpenShortcutTests {
         #expect(table.contains("perform: openSelectedRows"), "the menu ends in the table's handler")
         let selectedRange = try #require(table.range(of: "private func openSelectedRows()"))
         let selectedBody = String(table[selectedRange.upperBound...].prefix(200))
-        #expect(selectedBody.contains("openRows(ids: selectedIDs, gesture: \"\\u{2318}O\")"), "⌘O → the same openRows")
+        #expect(selectedBody.contains("openRows(ids: displayedSelection, gesture: \"\\u{2318}O\")"), "⌘O → the same openRows, over the rows on screen")
 
         // The single function: exactly one CatalogOpenAction.open call in
         // the table file, inside openRows, over tableData (one O(n) pass).
         #expect(occurrences(of: "CatalogOpenAction.open(", in: table) == 1, "one call site — both gestures share it")
-        let rowsRange = try #require(table.range(of: "private func openRows(ids: Set<UUID>, gesture: String)"))
+        let rowsRange = try #require(table.range(of: "func openRows(ids: Set<UUID>, gesture: String)"))
         let rowsBody = String(table[rowsRange.upperBound...].prefix(200))
         #expect(rowsBody.contains("CatalogOpenAction.open(ids: ids, rows: tableData, gesture: gesture, model: model)"))
         #expect(occurrences(of: "MediaOpener.open(", in: table) == 0, "the table no longer calls the smart launcher directly")

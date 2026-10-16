@@ -99,7 +99,11 @@ extension CatalogContent {
     /// is gone with it.
     @ViewBuilder
     func rowContextMenu(ids: Set<UUID>) -> some View {
-        let selectedRecs = ids.compactMap { id in records.first { $0.id == id } }
+        // Only rows on screen (codex 2026-10-16 P1): a selected row the
+        // filter or the folder scope hides must never reach Transcode,
+        // Verify, Analyze, Promote or Move to Trash through this menu.
+        let shown = displayedIDs(among: ids)
+        let selectedRecs = shown.compactMap { id in records.first { $0.id == id } }
         // Mixed-selection split (CatalogRowMenuPlan.swift). Each subset is
         // computed once so the Restore / Remove menu items use the same
         // record set their actions operate on (label counts ==
@@ -111,7 +115,7 @@ extension CatalogContent {
         // snapshot per menu open (right-click time, O(selection)); the
         // engine re-checks at the moment of the move regardless.
         let deletableRecs = model.recordsBulkVerbsMayRemove(activeRecs)
-        if let id = ids.first,
+        if let id = shown.first,
            let rec = records.first(where: { $0.id == id }) {
             // Pure-purged selection: minimal menu (Restore + Reveal).
             // Pure set-aside selection: minimal menu (Put Back + Reveal).

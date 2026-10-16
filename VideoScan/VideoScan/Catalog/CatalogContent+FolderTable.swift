@@ -272,13 +272,14 @@ extension CatalogContent {
         Button(FootageFolderWords.showOnlyThisEvent) { setFolderScope(.event(eventID)) }
     }
 
-    /// Double-click / Return: a folder scopes the list; rows open as always.
+    /// Double-click / Return: a folder scopes the list; rows open as always
+    /// — only the rows on screen (Return carries the whole selection).
     func tablePrimaryAction(ids: Set<UUID>) {
         if showFootageFolders, let folderID = ids.first(where: { tableState.folderIDs.contains($0) }) {
             setFolderScope(.event(folderID))
             return
         }
-        openRows(ids: ids, gesture: "double-click")
+        openRows(ids: displayedIDs(among: ids), gesture: "double-click")
     }
 
     /// The row menu's two folder items (the `find` group), only while the
@@ -339,12 +340,15 @@ extension CatalogContent {
     }
 
     /// The display landed: one pass turns it into table rows (record
-    /// lookups are O(1) through the model's id index). Event handler, never body.
+    /// lookups are O(1) through the model's id index) and publishes the
+    /// displayed record ids; then the selection is pruned to what shows.
+    /// Event handler, never body.
     func rebuildFolderRows(_ display: FootageFolders.Display) {
         let keysOf = model.footageFolders.index.keysOf
         var rows: [FootageFolderTableRow] = []
         rows.reserveCapacity(display.rows.count)
         var folderIDs = Set<UUID>()
+        var recordIDs = Set<UUID>()
         for d in display.rows {
             if let e = d.eventID {
                 folderIDs.insert(e)
@@ -353,12 +357,19 @@ extension CatalogContent {
             } else if let id = d.recordID, let rec = model.record(forID: id) {
                 // A row the index has not seen yet (a derivative that just
                 // landed) still needs its sort facts: one projection.
+                recordIDs.insert(id)
                 rows.append(FootageFolderTableRow(display: d, record: rec,
                                                   keys: keysOf[id] ?? model.footageFolderRow(rec).keys))
             }
         }
         tableState.folderRows = rows
         tableState.folderIDs = folderIDs
+        tableState.folderRecordIDs = recordIDs
+        // The empty display is also what `stop()` and a fresh subscription
+        // deliver (the pane re-appearing with the option on): nothing is
+        // shown yet, so nothing is pruned yet — every action intersects
+        // with this (empty) set regardless.
+        if tableState.folderKeyMirror.isOn, !display.rows.isEmpty { pruneSelectionToDisplay() }
     }
 
     /// The option flipped (or the pane appeared / left): tell the model
@@ -372,6 +383,7 @@ extension CatalogContent {
             tableState.folderScope = nil
             tableState.folderRows = []
             tableState.folderIDs = []
+            tableState.folderRecordIDs = []
         }
     }
 
@@ -434,17 +446,46 @@ extension CatalogContent {
     /// catalog took the new row (`VideoScanModel.adoptDerivative`). With
     /// the option on, the source's folder opens and the new row is
     /// selected under it; off, the row is selected in the linear table.
-    /// Either way the selection is scrolled into view.
+    /// Either way the selection is scrolled into view — but ONLY when the
+    /// list can show the row (codex 2026-10-16 P1): a row the filter hides,
+    /// or a scope on another event hides, is never selected; the one
+    /// console line says where it went. Scoped to the source's own event or
+    /// family, the scope is cleared so the row can be shown and selected.
     func revealDerivative(_ landing: DerivativeLanding) {
         refreshRows()
-        if showFootageFolders, let eventID = model.footageFolders.index.folderOf[landing.sourceID] {
-            tableState.openFolderIDs.insert(eventID)
-            refreshFolderDisplay()
-        }
-        selectedIDs = [landing.id]
         let name = model.record(forID: landing.id)?.filename ?? landing.id.uuidString
         let source = model.record(forID: landing.sourceID)?.filename ?? landing.sourceID.uuidString
-        model.log("Catalog: \(name) is in the catalog (made from \(source)) — selected.")
+        let plan = DerivativeReveal.plan(landing: landing,
+                                         inTable: tableData.contains { $0.id == landing.id },
+                                         foldersOn: showFootageFolders,
+                                         scope: tableState.folderScope,
+                                         index: model.footageFolders.index)
+        switch plan {
+        case .select:
+            selectDerivative(landing)
+            model.log(FootageFolderWords.landedSelected(name, source: source))
+        case .openScopeAndSelect:
+            let scope = tableState.folderScope.map(folderScopeTitle) ?? ""
+            setFolderScope(nil)
+            selectDerivative(landing)
+            model.log(FootageFolderWords.landedScopeCleared(name, source: source, scope: scope))
+        case .hiddenByFilter:
+            model.log(FootageFolderWords.landedHiddenByFilter(name, source: source))
+        case .outsideScope:
+            let scope = tableState.folderScope.map(folderScopeTitle) ?? ""
+            let place = model.footageFolders.index.folder(containing: landing.sourceID)?.title
+            model.log(FootageFolderWords.landedOutsideScope(name, source: source, scope: scope, place: place))
+        }
+    }
+
+    /// The row can be shown: open the source's folder (option on), select
+    /// the new row, scroll to it.
+    private func selectDerivative(_ landing: DerivativeLanding) {
+        if showFootageFolders, let eventID = model.footageFolders.index.folderOf[landing.sourceID] {
+            tableState.openFolderIDs.insert(eventID)
+        }
+        refreshFolderDisplay()
+        selectedIDs = [landing.id]
         CatalogTableReveal.scrollSelectionIntoView()
     }
 }

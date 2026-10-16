@@ -145,17 +145,61 @@ enum FootageFolderSort {
 // MARK: - The remembered Show option
 
 /// Show ▸ Events & Copies as Folders, remembered per user like the other
-/// Show options (UserDefaults). Read strictly: anything but a Bool under
-/// the key — a poisoned or older value — reads as OFF, never as on.
+/// Show options (UserDefaults). Read strictly: anything but a plist
+/// BOOLEAN under the key — a poisoned or older value — reads as OFF, never
+/// as on. `as? Bool` alone is not strict: a stored number 1 bridges to
+/// `true` through NSNumber (codex 2026-10-16 P2), so the type is checked
+/// first. (For Rick: CFGetTypeID ≈ a runtime typeid() on the plist value.)
 enum CatalogFootageFoldersSetting {
     static let key = FootageFolderWords.settingKey
 
     static func isOn(_ defaults: UserDefaults = .standard) -> Bool {
-        (defaults.object(forKey: key) as? Bool) ?? false
+        guard let stored = defaults.object(forKey: key) else { return false }
+        guard CFGetTypeID(stored as AnyObject) == CFBooleanGetTypeID() else { return false }
+        return (stored as? Bool) ?? false
     }
 
     static func set(_ on: Bool, _ defaults: UserDefaults = .standard) {
         defaults.set(on, forKey: key)
+    }
+}
+
+// MARK: - A derivative landed: what the Catalog may select
+
+/// What the Catalog pane does when a job's derivative lands (codex
+/// 2026-10-16 P1). A row the current filter or scope would not show is
+/// NEVER selected — a hidden selection was the ⌘⌫ / Promote trap. Pure:
+/// the pane acts on the answer; tests pin the four cases.
+/// (For Rick: a plain enum returned by a static function — a strategy
+/// value, like returning an enum class from a planner in C++.)
+enum DerivativeReveal: Equatable {
+    /// On screen under the current filter and scope: select and scroll to it.
+    case select
+    /// Scoped to the SOURCE's own event or family: the row belongs here but
+    /// the join has not placed it yet — clear the scope, open the folder, select.
+    case openScopeAndSelect
+    /// The filter or search hides it: say where it went, select nothing.
+    case hiddenByFilter
+    /// Scoped to ANOTHER event or family: say where it went, select nothing.
+    case outsideScope
+
+    /// `inTable`: the filter's survivors hold the new row. `foldersOn` and
+    /// `scope`: the folder view's state. `index`: the join as published
+    /// (it may not know the new row yet — that is the openScopeAndSelect case).
+    static func plan(landing: DerivativeLanding, inTable: Bool, foldersOn: Bool,
+                     scope: FootageFolders.Scope?, index: FootageFolders.Index) -> DerivativeReveal {
+        guard inTable else { return .hiddenByFilter }
+        guard foldersOn, let scope else { return .select }
+        switch scope {
+        case .event(let eventID):
+            if index.folderOf[landing.id] == eventID { return .select }
+            return index.folderOf[landing.sourceID] == eventID ? .openScopeAndSelect : .outsideScope
+        case .family(let memberID):
+            let family = index.familyOf[memberID]
+            if let family, index.familyOf[landing.id] == family { return .select }
+            let sameFamily = landing.sourceID == memberID || (family != nil && index.familyOf[landing.sourceID] == family)
+            return sameFamily ? .openScopeAndSelect : .outsideScope
+        }
     }
 }
 

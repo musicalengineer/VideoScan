@@ -24,7 +24,7 @@
 // Suites (filter by SUITE — method-level -only-testing runs zero tests):
 //   FootageFoldersLogicTests · FootageFoldersScaleTests ·
 //   FootageFoldersIsolationTests · FootageFoldersSensorTests ·
-//   FootageFoldersStructureTests
+//   FootageFoldersStructureTests · FootageFoldersSelectionTests
 
 import Foundation
 import Testing
@@ -176,6 +176,46 @@ struct FootageFoldersLogicTests {
         let d = FootageFolders.build(rows: [src, promoted], events: [])
         #expect(d.ids == [promoted.id, src.id])
         #expect(d.relation(of: src.id)?.isCopy == true, "the original reads as the copy of the archive's file")
+    }
+
+    /// codex 2026-10-16 P2: A → transcode B → promoted byte-copy C of B.
+    /// C shares B's copy group, so it used to enter the roots, win the
+    /// keeper (archived) and turn B into "copy" and A into "same event".
+    /// Roots are ORIGINALS: a byte-copy of a derivative inherits the
+    /// derivative's place — "= copy" of B, which is "↳ made from" A.
+    @Test func aByteCopyOfADerivativeInheritsTheDerivativesPlace() {
+        let a = row("tape.dv", digest: "a", size: 9, codec: .original)
+        let b = row("tape.mkv", digest: "b", size: 5, from: a.id, kind: "transcode")
+        let c = row("tape.mkv", digest: "b", size: 5, from: b.id, kind: "promote", volume: "Archive", archived: true, archiveFile: true)
+        let d = FootageFolders.build(rows: [a, b, c], events: [])
+        #expect(d.ids == [a.id, b.id, c.id], "the original A keeps the family; the archive's copy of a derivative does not")
+        #expect(d.relation(of: b.id) == .madeFrom("made from it · transcode"), "B is made from A")
+        #expect(d.relation(of: c.id) == .copy("copy · byte for byte with tape.mkv, Archive"), "C is a copy of B, not a second version of A")
+        let e = event("Easter", [a])
+        let folded = FootageFolders.build(rows: [c, b, a], events: [e])
+        #expect(folded.ids == [e.id, a.id, b.id, c.id], "the same in a folder, whatever the input order")
+        #expect(folded.summaries[e.id]?.copies == 1)
+    }
+
+    /// codex 2026-10-16 P2: A in E1, its derivative B in E2, an unassigned
+    /// C in A's duplicate group. The family vote (1 : 1, UUID tie) could
+    /// send C to E2; a copy follows ITS OWN copy group's assigned member
+    /// first — C's group is A's, so C is in E1.
+    @Test func anUnassignedCopyFollowsItsOwnCopyGroupsEvent() throws {
+        let g = UUID()
+        let a = row("a.mov", dup: g), b = row("a.mkv", digest: "b", from: a.id, kind: "transcode"), c = row("a.mov", dup: g, volume: "Backup")
+        // E2's id sorts first, so a tied vote would pick E2 under the old rule.
+        let e1 = event("One", [a], id: try #require(UUID(uuidString: "FFFFFFFF-0000-0000-0000-000000000001")))
+        let e2 = event("Two", [b], id: try #require(UUID(uuidString: "00000000-0000-0000-0000-000000000002")))
+        let index = FootageFolders.index(rows: [a, b, c], events: [e1, e2])
+        #expect(index.folderOf[a.id] == e1.id && index.folderOf[b.id] == e2.id, "own events are kept")
+        #expect(index.folderOf[c.id] == e1.id, "C follows its copy group (A's) into E1, never the tie-break")
+        #expect(index.family(of: c.id)?.keeper == a.id)
+        // A member whose copy group has NO assigned member still follows the family's vote.
+        let d = row("a.vs.edit.mov", digest: "d", from: a.id, kind: "editing")
+        let a2 = row("a2.mov", digest: "a2", from: a.id, kind: "trim")
+        let majority = FootageFolders.index(rows: [a, b, c, d, a2], events: [event("One", [a, a2], id: e1.id), e2])
+        #expect(majority.folderOf[d.id] == e1.id, "no copy-group mate with an event: the family's majority (E1, 2 : 1)")
     }
 
     @Test func supersededRowStaysWithItsFamilyWhenShown() {
@@ -384,6 +424,27 @@ struct FootageFoldersIsolationTests {
         #expect(CatalogFootageFoldersSetting.isOn(defaults) == true, "a real Bool round-trips")
     }
 
+    /// codex 2026-10-16 P2: a stored NUMBER bridges to Bool through NSNumber
+    /// (`1 as? Bool == true`), so a poisoned 1 turned the folders on. Only
+    /// a plist boolean reads as on; 1, 1.0, "true" and [true] read as off.
+    @Test func onlyAPlistBooleanReadsAsOn() throws {
+        let suite = "FootageFoldersTests-strict-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(1, forKey: CatalogFootageFoldersSetting.key)
+        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "the integer 1 → off")
+        defaults.set("true", forKey: CatalogFootageFoldersSetting.key)
+        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "the string \"true\" → off")
+        defaults.set(1.0, forKey: CatalogFootageFoldersSetting.key)
+        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "the double 1.0 → off")
+        defaults.set([true], forKey: CatalogFootageFoldersSetting.key)
+        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "an array holding true → off")
+        defaults.set(true, forKey: CatalogFootageFoldersSetting.key)
+        #expect(CatalogFootageFoldersSetting.isOn(defaults) == true, "a plist boolean true → on")
+        defaults.set(false, forKey: CatalogFootageFoldersSetting.key)
+        #expect(CatalogFootageFoldersSetting.isOn(defaults) == false, "a plist boolean false → off")
+    }
+
     @MainActor
     @Test func snapshotPublishesOnlyOnChange() async {
         let s = FootageFoldersSnapshot()
@@ -537,3 +598,144 @@ struct FootageFoldersStructureTests {
         #expect(FootageFolderWords.crumb("Thanksgiving 2009") == "‹ All · Thanksgiving 2009")
     }
 }
+
+// MARK: - Selection (codex 2026-10-16 P1: a hidden selection must never reach a row action)
+
+@Suite("Footage folders — a hidden selection never reaches ⌘⌫, Promote or the row menu")
+struct FootageFoldersSelectionTests {
+
+    /// Every row action takes `selection ∩ displayed` through ONE accessor —
+    /// never the raw selection, never `tableData` alone (which is pre-scope).
+    @Test func everyRowActionGoesThroughTheDisplayedSelection() throws {
+        let table = try code("CatalogContent+Table.swift")
+        #expect(!table.contains("tableData.filter { selectedIDs.contains($0.id) }"), "⌘⌫ no longer filters the raw selection")
+        #expect(table.contains("let targets = displayedSelectedRecords"), "⌘⌫ trashes the displayed selection")
+        #expect(!table.contains("CatalogPromoteScope.recordIDs(selection: selectedIDs"), "Promote no longer reads the raw selection")
+        #expect(table.contains("CatalogPromoteScope.recordIDs(selection: displayedSelection, visibleRows: tableData)"))
+        #expect(!table.contains("openRows(ids: selectedIDs"), "⌘O no longer opens the raw selection")
+        #expect(table.contains("openRows(ids: displayedSelection"))
+        let menu = try code("CatalogRowContextMenu.swift")
+        #expect(menu.contains("let shown = displayedIDs(among: ids)"), "the row menu (Transcode, Verify, Analyze, Move to Trash…) sees only rows on screen")
+        let folder = try code("CatalogContent+FolderTable.swift")
+        #expect(folder.contains("openRows(ids: displayedIDs(among: ids)"), "Return / double-click opens only rows on screen")
+    }
+
+    /// The reveal asks the display before it selects; a row the filter or
+    /// the scope would not show is never selected.
+    @Test func theRevealChecksTheDisplayBeforeSelecting() throws {
+        let folder = try code("CatalogContent+FolderTable.swift")
+        let reveal = try #require(folder.range(of: "func revealDerivative(_ landing: DerivativeLanding)"))
+        let select = try #require(folder.range(of: "selectedIDs = [landing.id]"))
+        let between = folder[reveal.upperBound..<select.lowerBound]
+        #expect(between.contains("DerivativeReveal.plan("), "the plan comes before any selection")
+        #expect(folder.contains("tableState.folderRecordIDs = "), "the folder rows publish the displayed record ids")
+        #expect(folder.contains("pruneSelectionToDisplay()"), "every display change prunes the selection against what it shows")
+    }
+
+    // Two events, one file each, plus a derivative of A that just landed
+    // (the index does not know it yet — exactly the reveal's moment).
+    private struct Stage {
+        let a = VideoRecord(), b = VideoRecord(), d = VideoRecord()
+        let rowA: Row, rowB: Row
+        let eventA: FootageFolders.Event, eventB: FootageFolders.Event
+        let index: FootageFolders.Index
+        var tableData: [VideoRecord] { [a, b, d] }
+
+        init() {
+            rowA = row("a.mov", digest: "a", id: a.id)
+            rowB = row("b.mov", digest: "b", id: b.id)
+            eventA = event("A", [rowA])
+            eventB = event("B", [rowB])
+            index = FootageFolders.index(rows: [rowA, rowB], events: [eventA, eventB])
+        }
+
+        /// What the folder table shows under `scope` (all folders open).
+        func displayed(scope: FootageFolders.Scope?) -> Set<UUID> {
+            let d = FootageFolders.compose(index: index, visible: tableData.map(\.id), sort: .byName,
+                                           open: [eventA.id, eventB.id], scope: scope)
+            return Set(d.rows.compactMap(\.recordID))
+        }
+
+        func landing() -> DerivativeLanding {
+            DerivativeLanding(id: d.id, sourceID: a.id, kind: "transcode", at: Date())
+        }
+    }
+
+    /// The codex scenario: scoped to event B while a transcode from event A
+    /// runs; its derivative lands → NOT selected, and ⌘⌫'s target set is empty.
+    @Test func derivativeFromAnotherEventLandsUnselectedWhileScopedElsewhere() {
+        let s = Stage()
+        let scope = FootageFolders.Scope.event(s.eventB.id)
+        let plan = DerivativeReveal.plan(landing: s.landing(), inTable: true, foldersOn: true, scope: scope, index: s.index)
+        #expect(plan == .outsideScope, "the reveal leaves the selection alone and only logs")
+        // Even if something DID select it, no row action can reach it.
+        let shown = CatalogSelectionPrune.displayed([s.d.id], foldersOn: true,
+                                                    folderRecordIDs: s.displayed(scope: scope), rows: s.tableData)
+        #expect(shown.isEmpty, "the derivative is not on screen under scope B")
+        #expect(s.tableData.filter { shown.contains($0.id) }.isEmpty, "⌘⌫'s target set is empty")
+        #expect(CatalogPromoteScope.recordIDs(selection: shown, visibleRows: s.tableData).isEmpty, "Promote sees nothing")
+    }
+
+    /// A scoped view's bulk action never sees members outside the scope.
+    @Test func scopedBulkActionNeverSeesMembersOutsideTheScope() {
+        let s = Stage()
+        let selection: Set<UUID> = [s.a.id, s.b.id]
+        let inA = CatalogSelectionPrune.displayed(selection, foldersOn: true,
+                                                  folderRecordIDs: s.displayed(scope: .event(s.eventA.id)), rows: s.tableData)
+        #expect(inA == [s.a.id], "scoped to A: only A, although B is selected too")
+        let unscoped = CatalogSelectionPrune.displayed(selection, foldersOn: true,
+                                                       folderRecordIDs: s.displayed(scope: nil), rows: s.tableData)
+        #expect(unscoped == selection, "no scope: both")
+        let family = CatalogSelectionPrune.displayed(selection, foldersOn: true,
+                                                     folderRecordIDs: s.displayed(scope: .family(s.b.id)), rows: s.tableData)
+        #expect(family == [s.b.id], "Show Copies & Related… on B: only B")
+    }
+
+    /// Pruning after a scope change drops the ids the scope hid; a selected
+    /// folder row survives (it is not a record).
+    @Test func pruningAfterAScopeChangeDropsHiddenIDs() {
+        let s = Stage()
+        let selection: Set<UUID> = [s.a.id, s.b.id, s.eventB.id]
+        let kept = CatalogSelectionPrune.displayed(selection, foldersOn: true,
+                                                   folderRecordIDs: s.displayed(scope: .event(s.eventB.id)), rows: s.tableData)
+            .union(selection.intersection([s.eventA.id, s.eventB.id]))
+        #expect(kept == [s.b.id, s.eventB.id], "A is hidden by the scope and dropped; B and the folder row stay")
+    }
+
+    /// The option OFF path still prunes against the linear rows, and the
+    /// folder set — stale or not — is ignored.
+    @Test func optionOffStillPrunesAgainstTheLinearRows() {
+        let s = Stage()
+        let stray = UUID()
+        let kept = CatalogSelectionPrune.displayed([s.a.id, stray], foldersOn: false,
+                                                   folderRecordIDs: [stray], rows: [s.a])
+        #expect(kept == [s.a.id], "off: a row is a row; an id that is not a row is dropped even if a stale folder set lists it")
+        #expect(CatalogSelectionPrune.displayed([], foldersOn: false, folderRecordIDs: [], rows: s.tableData).isEmpty)
+        // On, the folder set and the rows both have to agree (the compose is asynchronous).
+        let lagging = CatalogSelectionPrune.displayed([s.a.id, s.b.id], foldersOn: true,
+                                                      folderRecordIDs: [s.a.id, s.b.id], rows: [s.a])
+        #expect(lagging == [s.a.id], "on: a display that lags the rows can never widen the set")
+    }
+
+    /// The reveal's four answers.
+    @Test func revealPlanSelectsOnlyWhatTheListCanShow() {
+        let s = Stage()
+        let landing = s.landing()
+        #expect(DerivativeReveal.plan(landing: landing, inTable: false, foldersOn: false, scope: nil, index: s.index) == .hiddenByFilter)
+        #expect(DerivativeReveal.plan(landing: landing, inTable: false, foldersOn: true, scope: .event(s.eventA.id), index: s.index) == .hiddenByFilter,
+                "a filter that hides it wins over any scope")
+        #expect(DerivativeReveal.plan(landing: landing, inTable: true, foldersOn: false, scope: nil, index: s.index) == .select, "option off: the linear table shows it")
+        #expect(DerivativeReveal.plan(landing: landing, inTable: true, foldersOn: true, scope: nil, index: s.index) == .select, "no scope: loose until the join places it")
+        #expect(DerivativeReveal.plan(landing: landing, inTable: true, foldersOn: true, scope: .event(s.eventA.id), index: s.index) == .openScopeAndSelect,
+                "scoped to the source's own event: clear the scope, open the folder, select")
+        #expect(DerivativeReveal.plan(landing: landing, inTable: true, foldersOn: true, scope: .event(s.eventB.id), index: s.index) == .outsideScope)
+        #expect(DerivativeReveal.plan(landing: landing, inTable: true, foldersOn: true, scope: .family(s.a.id), index: s.index) == .openScopeAndSelect,
+                "Show Copies & Related… on the source: the same")
+        #expect(DerivativeReveal.plan(landing: landing, inTable: true, foldersOn: true, scope: .family(s.b.id), index: s.index) == .outsideScope)
+        // Once the join has placed the row in the scoped event, it is simply selected.
+        let rowD = row("a.mkv", digest: "d", from: s.a.id, kind: "transcode", id: s.d.id)
+        let placed = FootageFolders.index(rows: [s.rowA, s.rowB, rowD], events: [s.eventA, s.eventB])
+        #expect(DerivativeReveal.plan(landing: landing, inTable: true, foldersOn: true, scope: .event(s.eventA.id), index: placed) == .select)
+    }
+}
+

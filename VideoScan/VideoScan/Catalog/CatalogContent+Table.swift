@@ -224,17 +224,19 @@ extension CatalogContent {
             // claims first. See CatalogOpenCommand.swift.
             .focusedValue(\.catalogOpenSelection,
                           CatalogOpenSelection(count: selectedIDs.count, perform: openSelectedRows))
-            // Archive ▸ Promote Selected (2026-10-06): visible ∩ selected,
-            // only while this table has the keyboard. CatalogPromoteCommand.swift.
+            // Archive ▸ Promote Selected (2026-10-06): displayed ∩ selected
+            // (the folder view's scope counts — codex 2026-10-16 P1), only
+            // while this table has the keyboard. CatalogPromoteCommand.swift.
             .focusedValue(\.catalogPromoteSelection,
                           CatalogPromoteSelection(count: selectedIDs.count, visibleRecordIDs: {
-                              CatalogPromoteScope.recordIDs(selection: selectedIDs, visibleRows: tableData)
+                              CatalogPromoteScope.recordIDs(selection: displayedSelection, visibleRows: tableData)
                           }))
             // File ▸ Get Media Info ⌘I (2026-10-07): one highlighted file
-            // while this table has the keyboard. CatalogInfoCommand.swift.
+            // ON SCREEN while this table has the keyboard. CatalogInfoCommand.swift.
             .focusedValue(\.catalogFileInfo,
                           CatalogFileInfo(isAvailable: selectedIDs.count == 1, perform: {
-                              guard selectedIDs.count == 1, let id = selectedIDs.first,
+                              let shown = displayedSelection
+                              guard shown.count == 1, let id = shown.first,
                                     let rec = model.record(forID: id) else { return }
                               presentMediaInfo(for: rec)
                           }))
@@ -479,11 +481,13 @@ extension CatalogContent {
     /// success is silent, matching Finder's behavior on trash/delete.
     /// Called from the row context menu's Delete File submenu after the
     /// detached FileManager pass completes.
-    /// ⌘⌫ handler: the highlighted rows, in table order, through the ONE
-    /// existing Trash routine (VideoScanModel+TrashSelection.swift → the
-    /// same `deleteConfirmedJunk(_:mode: .toTrash)` the row menu's "Move
-    /// to Trash" calls). No selection → nothing happens. Refusals are
-    /// console lines; the result is reported as the row menu reports it.
+    /// ⌘⌫ handler: the highlighted rows ON SCREEN, in table order, through
+    /// the ONE existing Trash routine (VideoScanModel+TrashSelection.swift →
+    /// the same `deleteConfirmedJunk(_:mode: .toTrash)` the row menu's "Move
+    /// to Trash" calls). No selection → nothing happens. A selected row the
+    /// filter or the folder scope hides is never a target (codex 2026-10-16
+    /// P1). Refusals are console lines; the result is reported as the row
+    /// menu reports it.
     private func trashSelectedRows() {
         // BEGIN LINE. Every refusal below this point already writes a
         // console line; the two guards did not, so an empty selection or a
@@ -495,17 +499,17 @@ extension CatalogContent {
             model.log("Move to Trash: nothing is selected — click a row first.")
             return
         }
-        let targets = tableData.filter { selectedIDs.contains($0.id) }
+        let targets = displayedSelectedRecords
         guard !targets.isEmpty else {
-            model.log("Move to Trash: the \(selectedIDs.count) selected row(s) are no longer in the table — nothing to do.")
+            model.log("Move to Trash: the \(selectedIDs.count) selected row(s) are not in the list on screen — nothing to do.")
             return
         }
         confirmThenTrash(targets)
     }
 
-    /// ⌘O route (File ▸ Open): the highlighted rows, through `openRows`.
+    /// ⌘O route (File ▸ Open): the highlighted rows on screen, through `openRows`.
     private func openSelectedRows() {
-        openRows(ids: selectedIDs, gesture: "\u{2318}O")
+        openRows(ids: displayedSelection, gesture: "\u{2318}O")
     }
 
     /// The ONE open path for the table. Double-click / Return
