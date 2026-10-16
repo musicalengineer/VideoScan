@@ -78,6 +78,6 @@ One test per fall, named after it, each driving the REAL surface model (not the 
 
 ## Deliverable
 One commit on a branch `test/p0-truth-regression` with: the fixture, the suite, the manifest entry,
-and `docs/reviews/p0-regression-2026-10-16.md` containing, per case: the red run's quoted failure
+and a NEW report file under docs/reviews/ named p0-regression-<date>.md containing, per case: the red run's quoted failure
 (with the worktree SHA), the green run, and the evidence source the test asserts. Do not merge; do
 not push to main. Say plainly which cases could not be shown red and why.
