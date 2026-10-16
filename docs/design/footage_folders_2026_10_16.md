@@ -84,6 +84,27 @@ three options Rick named (archive the original alongside · retire the original 
 other copies) through the Cleanup lanes already built, scoped to this family — never a new
 deleter. Separate cut, safety-critical.
 
+## 5a. Second cut — making and fixing folders by hand (Rick, 2026-10-16 evening)
+
+> "as I am perusing media files I can right click → Add to <Event Folder> … the list of
+> folders could get long … like Apple Photos, right-clicking several media files → Create New
+> Event … <name>" — and, later, drag and drop onto a folder.
+
+- **No submenus in the Catalog** (Rick 2026-09-22: a macOS submenu closes whenever the window
+  updates, and the Catalog window updates many times a second). So the gestures are ONE item
+  each, opening a small picker, never a nested menu of folders.
+- **Right-click ▸ Add to Event…** (one or many files): a picker with a type-ahead search over
+  event names and, under it, the nearest events first by the files' dates; pick → the files
+  join that folder. **Right-click ▸ New Event from Selection…**: name prefilled from the date
+  + category guess ("Thanksgiving 2009"), editable, confirm → a folder. **Right-click ▸ Remove
+  from Event** on a member.
+- **Hand decisions are decisions**: stored in the Events decisions sidecar beside confirm /
+  dismiss (`EventsDecisionStore`); the Events rules never undo a hand decision (the ingest
+  ruling: returning content inherits its verdict). A hand-made event is a folder like any
+  other — the join in §4 does not change.
+- **Drag and drop onto a folder row** = the same decision, a later gesture, after the view
+  and the picker have been used for a while.
+
 ## 6. Tests (five dimensions)
 
 Logic: grouping by event / copies / lineage / loose; keeper choice; family order; a copy
