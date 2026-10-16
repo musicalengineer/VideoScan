@@ -10,45 +10,101 @@
 //     row — no removal marker, or a `.missing` marker that is re-checked
 //     for "came back" — grouped into LANES, one per volume root, each lane
 //     in path order. Rows In the Trash or Removed from Catalog, superseded
-//     rows and rows with no path are SKIPPED and counted. The plan carries
-//     the marker each row had when planned: the apply step is compare-and-
-//     set on (id, path, marker), so a row rescanned, edited, restored or
-//     marked by another door while the stats ran is left alone.
+//     rows and rows with no path are SKIPPED and counted. Each item carries
+//     a SNAPSHOT of the row's fields that matter (path, size, marker,
+//     lifecycle, archive stage and fixity, hash time, mtime): the apply
+//     step is compare-and-set on the whole snapshot, so a row rescanned,
+//     edited, restored or marked by another door while the stats ran is
+//     left alone.
+//   • ANCHOR (CatalogAuditMountIdentity, below; the job does it per lane,
+//     off the main actor, before the lane's first stat): for each item the
+//     identity of the filesystem the file is EXPECTED on — `statfs` of the
+//     nearest existing ancestor after resolving symlinks in the parent.
+//     Not the lexical root: a path through a symlink onto an external
+//     drive, or a mount outside /Volumes, lives on another filesystem than
+//     "/". nil when it cannot be established → the row can never be marked.
 //   • STAT (CatalogAuditStat, below): one `stat(2)` per row, off the main
 //     actor; the file is never opened. ENOENT / ENOTDIR → gone; any other
 //     errno → could not check (never marked); a path that is no longer a
-//     regular file → could not check (a person decides).
+//     regular file → could not check (a person decides). This is the cheap
+//     FIRST PASS; it decides nothing.
+//   • PROVE AT THE MARK (CatalogAuditProof, below; codex 2026-10-16 F1/F2):
+//     for every gone answer — and only those, they are few — the apply
+//     step re-stats the file SYNCHRONOUSLY on the main actor just before
+//     marking, and accepts ENOENT only if the nearest existing ancestor
+//     still resolves onto the SAME filesystem the plan anchored (same
+//     fsid, same mount-on name). Present now → present; any other errno →
+//     could not check; another filesystem (the drive left and the path
+//     fell through to "/", the link's target moved) → could not check,
+//     "drive not connected". A row is marked gone only on evidence read at
+//     the moment of marking, on the filesystem the file was expected on.
 //   • APPLY (VideoScanModel+CatalogAudit.swift): the one engine —
-//     `stampRemoval(.missing(reason: .missingAtAudit))` for a gone file,
-//     `clearRemoval` (validates first) for one that came back.
+//     `stampRemoval(.missing(reason: .missingAtAudit))` for a proven-gone
+//     file, `clearRemoval` (validates first) for one that came back.
 //   • RUN (CatalogAuditJob.swift): lanes in parallel, chunks of stats,
 //     batched acknowledged saves, undo of the unsaved marks on a save that
 //     is not acknowledged.
 //
-// Memory: one `CatalogAuditItem` (~150 bytes) per live record — ~15 MB at
-// 100k — plus the per-folder tally of gone rows (one entry per folder that
-// lost a file; ≤ the number of gone rows).
+// Memory: one `CatalogAuditItem` (~250 bytes with its snapshot) per live
+// record — ~25 MB at 100k — plus the per-folder tally of gone rows (one
+// entry per folder that lost a file; ≤ the number of gone rows).
 
 import Foundation
 import VideoScanCore
 
 // MARK: - Plan (values)
 
+/// The fields of a row the apply step compares, planned against live
+/// (codex 2026-10-16 F3). Any difference means another door touched the
+/// row while the stats ran, and the result is dropped as "record changed".
+/// Id and path alone are not enough: Trash → Put Back → Restore returns
+/// the marker to nil; archive fixity set meanwhile makes the row an
+/// archive copy.
+struct CatalogAuditRowSnapshot: Sendable, Equatable {
+    let path: String
+    let sizeBytes: Int64
+    let removal: RemovalMarker?
+    let lifecycleStage: LifecycleStage
+    let archiveStage: ArchiveStage
+    let hasArchiveFixity: Bool
+    let derivationKind: String?
+    let contentHashAt: Date?
+    let dateModified: String
+
+    /// (For Rick: a value copy of the fields, taken at plan time and again
+    /// at apply time; `==` is the whole compare-and-set key.)
+    static func of(_ r: VideoRecord) -> CatalogAuditRowSnapshot {
+        CatalogAuditRowSnapshot(path: r.fullPath, sizeBytes: r.sizeBytes, removal: r.removal,
+                                lifecycleStage: r.lifecycleStage, archiveStage: r.archiveStage,
+                                hasArchiveFixity: r.archiveFixity != nil, derivationKind: r.derivationKind,
+                                contentHashAt: r.contentHashAt, dateModified: r.dateModified)
+    }
+}
+
 /// One row's question: "is the file still at this path?" together with
 /// everything the apply step needs to answer it only for THIS row.
+/// Carries nothing the apply step must not trust: whether the row is an
+/// archive copy is read from the LIVE record at apply time.
 struct CatalogAuditItem: Sendable, Equatable, Identifiable {
     let id: UUID
-    let path: String
-    /// The catalog's size — "changed" means the size on disk differs.
-    let sizeBytes: Int64
-    /// The marker the row carried when planned: nil = live; a `.missing`
-    /// marker = re-checked for "came back". The compare-and-set key.
-    let plannedMarker: RemovalMarker?
-    /// An archived row (Master Archive copy) is stat'ed and REPORTED, never
-    /// marked: Verify Archive owns the archive's own integrity.
-    let isArchived: Bool
+    /// The lane's volume root — the lexical rule ("/Volumes/X" or "/").
+    let root: String
+    /// The row as planned: the compare-and-set key.
+    let planned: CatalogAuditRowSnapshot
+    /// The filesystem the file is expected on, anchored before the lane's
+    /// first stat. nil = could not be established (a dangling link in the
+    /// parent chain, a parent folder that is not there under "/", an
+    /// ancestor off the lane's root) — the row is then never marked.
+    var expectedMount: CatalogAuditMountIdentity?
 
+    var path: String { planned.path }
+    /// The catalog's size — "changed" means the size on disk differs.
+    var sizeBytes: Int64 { planned.sizeBytes }
+    /// The marker the row carried when planned: nil = live; a `.missing`
+    /// marker = re-checked for "came back".
+    var plannedMarker: RemovalMarker? { planned.removal }
     var filename: String { (path as NSString).lastPathComponent }
+    var directory: String { (path as NSString).deletingLastPathComponent }
     var wasMissing: Bool { plannedMarker?.state == .missing }
 }
 
@@ -104,8 +160,7 @@ enum CatalogAuditPlanner {
             if r.removal?.state == .missing { plan.missingRecheck += 1 }
             let root = MediaVolumeGatePolicy.volumeRoot(forPath: r.fullPath)
             byRoot[root, default: CatalogAuditLane(root: root)].items.append(
-                CatalogAuditItem(id: r.id, path: r.fullPath, sizeBytes: r.sizeBytes,
-                                 plannedMarker: r.removal, isArchived: isArchived(r)))
+                CatalogAuditItem(id: r.id, root: root, planned: .of(r)))
         }
         plan.lanes = byRoot.values
             .map { lane in
@@ -131,9 +186,90 @@ enum CatalogAuditPlanner {
     }
 
     /// CheckCopies' "left alone" rule: an archive copy carries its archive
-    /// fixity or the promoted derivation kind.
+    /// fixity or the promoted derivation kind. Read from the LIVE record at
+    /// apply time, never from the plan.
     static func isArchived(_ r: VideoRecord) -> Bool {
         r.archiveFixity != nil || r.derivationKind == ArchivePromotion.derivationKind
+    }
+}
+
+// MARK: - Mount identity (which filesystem a path is really on)
+
+/// What `statfs(2)` says a path is on: the filesystem id, where it is
+/// mounted and what is mounted there. Two reads are the same filesystem
+/// when all three agree. (For Rick: `f_fsid` ≈ a device id; `f_mntonname`
+/// is the mount point; `f_mntfromname` is the device or share.)
+struct CatalogAuditMountIdentity: Sendable, Equatable {
+    let fsid0: Int32
+    let fsid1: Int32
+    let mountOn: String
+    let mountFrom: String
+
+    var words: String { "\(mountFrom) on \(mountOn)" }
+
+    /// True when this filesystem is mounted at `root` or below it.
+    func isMounted(atOrUnder root: String) -> Bool {
+        root == "/" || mountOn == root || mountOn.hasPrefix(root + "/")
+    }
+
+    /// `statfs` of an existing path (nil when it is not there or cannot be
+    /// read). No disk I/O beyond the kernel's mount table.
+    static func of(_ path: String) -> CatalogAuditMountIdentity? {
+        var fs = statfs()
+        guard statfs(path, &fs) == 0 else { return nil }
+        let on = withUnsafePointer(to: &fs.f_mntonname) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+        let from = withUnsafePointer(to: &fs.f_mntfromname) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+        return CatalogAuditMountIdentity(fsid0: fs.f_fsid.val.0, fsid1: fs.f_fsid.val.1, mountOn: on, mountFrom: from)
+    }
+
+    /// The filesystem a file in `directory` is EXPECTED on (codex 2026-10-16
+    /// F1): `statfs` of the nearest existing ancestor after resolving the
+    /// symlinks in the parent chain. nil — "cannot be established; never
+    /// mark" — when:
+    ///   • a dangling symlink sits in the chain (the drive behind the link
+    ///     is not connected; what is beyond it is unknown);
+    ///   • the lane root is "/" and the parent folder itself is not there
+    ///     (an unmounted mount point outside /Volumes looks exactly like a
+    ///     deleted folder — refuse over guess);
+    ///   • the lane root is a /Volumes root and the ancestor is not on a
+    ///     filesystem mounted at or under it (the drive left and the path
+    ///     fell through to the system disk).
+    /// Under a mounted /Volumes root a missing parent folder IS provable:
+    /// the ancestor is on that drive, so the folder is gone from it.
+    static func expected(forDirectory directory: String, root: String) -> CatalogAuditMountIdentity? {
+        guard let ancestor = nearestExistingAncestor(of: directory), let identity = of(ancestor.resolved) else { return nil }
+        if root == "/" { return ancestor.isTheFolder ? identity : nil }
+        return identity.isMounted(atOrUnder: root) ? identity : nil
+    }
+
+    /// Walks up from `directory` until `realpath` succeeds. nil when a
+    /// component on the way is a symlink that leads nowhere.
+    private static func nearestExistingAncestor(of directory: String) -> (resolved: String, isTheFolder: Bool)? {
+        var dir = directory.isEmpty ? "/" : directory
+        var isTheFolder = true
+        while true {
+            if let resolved = realpathString(dir) { return (resolved, isTheFolder) }
+            if dir == "/" || isSymlink(dir) { return nil }
+            let parent = (dir as NSString).deletingLastPathComponent
+            dir = parent.isEmpty ? "/" : parent
+            isTheFolder = false
+        }
+    }
+
+    private static func realpathString(_ path: String) -> String? {
+        guard let resolved = realpath(path, nil) else { return nil }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    /// `lstat`: the link itself, not what it names.
+    private static func isSymlink(_ path: String) -> Bool {
+        var sb = stat()
+        return lstat(path, &sb) == 0 && (sb.st_mode & S_IFMT) == S_IFLNK
     }
 }
 
@@ -163,6 +299,34 @@ enum CatalogAuditStat: Sendable, Equatable {
         }
         guard (sb.st_mode & S_IFMT) == S_IFREG else { return .notAFile }
         return .file(size: Int64(sb.st_size))
+    }
+}
+
+// MARK: - Proof at the mark (the second look)
+
+/// The second look, taken SYNCHRONOUSLY at the moment of marking (codex
+/// 2026-10-16 F1/F2). The chunk's stat was the cheap first pass; this
+/// decides. Order matters: the file is stat'ed FIRST, and only an ENOENT
+/// read now is followed by the mount read — a drive that leaves between
+/// the two reads as a different filesystem, which is the safe side.
+enum CatalogAuditProof: Sendable, Equatable {
+    /// ENOENT / ENOTDIR again, on the filesystem the plan anchored.
+    case gone
+    /// The second stat did not say ENOENT: present (any size), not a
+    /// regular file, or an errno — whatever it said stands.
+    case notGone(CatalogAuditStat)
+    /// ENOENT, but the path no longer leads to the expected filesystem (or
+    /// none was anchored): the drive is not connected, the link moved.
+    case driveNotConnected(expected: CatalogAuditMountIdentity?, now: CatalogAuditMountIdentity?)
+
+    static func atTheMark(_ item: CatalogAuditItem) -> CatalogAuditProof {
+        let second = CatalogAuditStat.of(item.path)
+        guard second == .gone else { return .notGone(second) }
+        let now = CatalogAuditMountIdentity.expected(forDirectory: item.directory, root: item.root)
+        guard let expected = item.expectedMount, now == expected else {
+            return .driveNotConnected(expected: item.expectedMount, now: now)
+        }
+        return .gone
     }
 }
 

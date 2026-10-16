@@ -8,14 +8,22 @@
 // Shape (FullHashBackfillJob's lanes, AudioFingerprintBackfillJob's
 // save/undo contract):
 //   • One LANE per volume root, all lanes in parallel (a TaskGroup). A lane
-//     stats its rows in CHUNKS (`chunkSize`) off the main actor, then
-//     applies the chunk's answers on the main actor — each to the row it
-//     asked about only (same id, same path, same marker: invariant 4).
+//     first ANCHORS its rows (off the main actor): the identity of the
+//     filesystem each file is expected on (CatalogAuditMountIdentity — the
+//     real mount, not the lexical root). Then it stats its rows in CHUNKS
+//     (`chunkSize`) off the main actor, and applies the chunk's answers on
+//     the main actor — each to the row it asked about only (same id, same
+//     snapshot of the fields that matter: invariant 4).
 //   • MOUNT RULE (invariant 1): a root that is not mounted at the start is
 //     "not asked" — its rows are counted, never stat'ed. A chunk that found
 //     anything gone re-asks the KERNEL MOUNT TABLE (no disk I/O, no cache)
 //     before applying: a drive that left mid-run makes every path look gone,
 //     so that lane stops and its remaining rows are "not asked".
+//   • PROVE AT THE MARK (codex 2026-10-16 F1/F2): the chunk's ENOENT is the
+//     cheap first pass and decides nothing. The apply step re-stats every
+//     gone row SYNCHRONOUSLY just before the mark and accepts ENOENT only
+//     on the SAME filesystem the lane anchored — a drive that left, a link
+//     whose target moved, a file that is back, an errno: never a mark.
 //   • ERRNO RULE (invariant 2): only ENOENT / ENOTDIR mean gone. Permission,
 //     I/O, timeout — anything else — is "could not check", never a mark.
 //   • ONE WRITER (invariant 3): marks go through `applyCatalogAudit`
@@ -23,27 +31,29 @@
 //   • DURABILITY (invariants 3, 6): every `checkpointRows` (25) marks or
 //     `checkpointSeconds` (60 s), on Stop and at the end, the job AWAITS an
 //     acknowledged catalog save. A save that is not acknowledged UNDOES the
-//     marks of that batch (compare-and-set, through the memento each mark
-//     carries), stops the job, and the run is "failed". A crash between a
-//     mark and its save loses only in-memory marks: the catalog on disk
-//     never holds a half-applied batch.
+//     marks of that batch (compare-and-set by value, on the current row
+//     instance), stops the job, and the run is "failed" — even if Stop was
+//     pressed meanwhile (codex F5: failed > stopped > completed). A crash
+//     between a mark and its save loses only in-memory marks: the catalog
+//     on disk never holds a half-applied batch.
 //   • STOP finishes the chunk in flight (its stats are honest), saves, and
 //     the OUTCOME says "partial". Pause takes effect between chunks.
 //   • Refused before any stat: read-only catalog; the shared catalog from a
 //     test host.
 //
-// NOTHING ON MEDIA: the only syscall against a media path is `stat(2)`.
-// The only writes are the catalog's removal markers (through the engine),
-// catalog saves, log lines and `catalog-audit.json` (CatalogAuditRun.swift)
-// in the catalog's folder. CatalogAuditSensorTests reads these sources.
+// NOTHING ON MEDIA: the syscalls against a media path are `stat(2)` and,
+// for the anchor, `realpath` / `lstat` / `statfs` on its FOLDER. The only
+// writes are the catalog's removal markers (through the engine), catalog
+// saves, log lines and `catalog-audit.json` (CatalogAuditRun.swift) in the
+// catalog's folder. CatalogAuditSensorTests reads these sources.
 //
-// Memory: the plan (~150 bytes per live row), at most `problemCap` detail
+// Memory: the plan (~250 bytes per live row), at most `problemCap` detail
 // rows and `sampleCap` present rows, the pending batch of marks (≤ 25 + one
 // chunk) and the per-folder gone tally. Nothing grows with file size.
 //
 // (For Rick: `withTaskGroup` ≈ spawning N worker threads and joining them —
 // except every lane's bookkeeping runs on the main actor, so the counters
-// and the marks need no mutex; only the stat batches hop off it.)
+// and the marks need no mutex; only the anchor and stat batches hop off it.)
 
 import Combine
 import Foundation
@@ -72,7 +82,8 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     /// "still mounted" is exactly what would let an unmounted drive's rows
     /// be marked gone.
     var volumeOnline: @Sendable (String) -> Bool = { CatalogAuditJob.isMounted($0) }
-    /// One stat per path, in order. The default is the real `stat(2)`.
+    /// One stat per path, in order — the FIRST PASS only. The default is
+    /// the real `stat(2)`. The second look at the mark is never a seam.
     var statPaths: @Sendable ([String]) -> [CatalogAuditStat] = { $0.map(CatalogAuditStat.of) }
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
@@ -114,7 +125,7 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     private var lastProgressLog = Date()
     private var lastProgressLogDone = 0
     private var runStart = Date()
-    /// Volume root → the lane is inside a stat chunk now.
+    /// Volume root → the lane is inside an anchor or stat batch now.
     private var checking: Set<String> = []
     private var laneIndex: [String: Int] = [:]
     private var rowID = 0
@@ -255,8 +266,9 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
 
     // MARK: Lanes
 
-    private func runLane(_ lane: CatalogAuditLane, model: VideoScanModel) async {
-        setPhase(lane.root, .checking)
+    private func runLane(_ planned: CatalogAuditLane, model: VideoScanModel) async {
+        setPhase(planned.root, .checking)
+        let lane = await anchor(planned)
         var i = 0
         while i < lane.items.count {
             guard await waitOutPause() else { setPhase(lane.root, .stopped); return }
@@ -274,6 +286,38 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             await checkpointIfDue(model: model)
         }
         setPhase(lane.root, .finished)
+    }
+
+    /// Before the lane's first stat: which filesystem each row's file is
+    /// expected on, read while the drive is (by the mount table) here. Off
+    /// the main actor — a sleeping drive answers its first `realpath` slowly.
+    private func anchor(_ lane: CatalogAuditLane) async -> CatalogAuditLane {
+        checking.insert(lane.root)
+        defer { checking.remove(lane.root) }
+        var anchored = lane
+        anchored.items = await Self.anchorOffMain(lane.items)
+        return anchored
+    }
+
+    /// One `realpath` + `statfs` per distinct FOLDER (rows share folders;
+    /// the cache is one entry per folder in the lane).
+    #if compiler(>=6.2)
+    @concurrent
+    #endif
+    nonisolated static func anchorOffMain(_ items: [CatalogAuditItem]) async -> [CatalogAuditItem] {
+        var byFolder: [String: CatalogAuditMountIdentity?] = [:]
+        return items.map { item in
+            var anchored = item
+            let folder = item.directory
+            if let known = byFolder[folder] {
+                anchored.expectedMount = known
+            } else {
+                let identity = CatalogAuditMountIdentity.expected(forDirectory: folder, root: item.root)
+                byFolder.updateValue(identity, forKey: folder)
+                anchored.expectedMount = identity
+            }
+            return anchored
+        }
     }
 
     private func statChunk(_ chunk: [CatalogAuditItem], root: String) async -> [CatalogAuditStat] {
@@ -429,8 +473,9 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         return true
     }
 
-    /// Undo the marks the failed save would have carried (compare-and-set)
-    /// and stop: nothing more is put at risk. Media was never touched.
+    /// Undo the marks the failed save would have carried (compare-and-set,
+    /// by value, on the current row instances) and stop: nothing more is
+    /// put at risk. Media was never touched.
     private func failSave(model: VideoScanModel, undo: [CatalogAuditMark]) {
         var undone = 0
         for mark in undo where model.revertCatalogAuditMark(mark) { undone += 1 }
@@ -442,6 +487,9 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
 
     // MARK: Finish
 
+    /// Outcome precedence: failed > stopped > completed (codex F5). A save
+    /// that was not acknowledged is reported as failed even when Stop was
+    /// pressed meanwhile — marks were undone and the person must know.
     private func conclude(model: VideoScanModel) async {
         await persist(model: model)
         if saveFailed, !unsavedMarks.isEmpty {
@@ -454,10 +502,11 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         let folders = totals.goneFoldersClause
         if !folders.isEmpty { line += " — " + folders }
         if saveFailed {
-            let message = "Failed — the catalog could not be saved; the unsaved marks were undone. \(storedCount.formatted()) mark(s) saved earlier are kept; nothing on media was changed. " + line
+            let message = "Failed — marks undone: the catalog could not be saved, so the marks made since the last confirmed save were taken back. "
+                + "\(storedCount.formatted()) mark(s) saved earlier are kept; nothing on media was changed. " + line
             model.catalogAuditNote("OUTCOME failed (partial) — " + message)
             marker?.noteFinished(.failed, totals: totals, marked: storedCount, partial: true)
-            finish(failed: message)
+            finish(failedSave: message)
         } else if stopped {
             model.catalogAuditNote("OUTCOME stopped (partial) at \(totals.done.formatted()) of \(totals.planned.formatted()) — " + line)
             marker?.noteFinished(.stopped, totals: totals, marked: storedCount, partial: true)
@@ -476,12 +525,24 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         isPausedValue = false
     }
 
+    /// A refusal or a lost model: Stop, if requested, still wins here
+    /// (Rick 2026-08-26 — a requested Stop is never repainted as Failed).
     private func finish(failed: String) {
         if state.cancelWasRequested { finish(cancelled: ()); return }
         state = .failed(message: failed)
         subtitleText = failed
         isPausedValue = false
         catalogAuditJobLog.warning("audit catalog failed: \(failed, privacy: .public)")
+    }
+
+    /// The one failure Stop does not soften: a save that was not
+    /// acknowledged. The row, the run marker and the CLI exit all say
+    /// failed, because marks were undone.
+    private func finish(failedSave message: String) {
+        state = .failed(message: message)
+        subtitleText = message
+        isPausedValue = false
+        catalogAuditJobLog.warning("audit catalog failed: \(message, privacy: .public)")
     }
 
     private func finish(cancelled: Void) {

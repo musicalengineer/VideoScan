@@ -71,6 +71,14 @@ private extension ShowAgainSandbox {
     }
 
     func auditMarkerFile() -> URL { catalogDir.appendingPathComponent(CatalogAuditRunMarker.fileName) }
+
+    /// What the job's lane does before its first stat: the item with the
+    /// identity of the filesystem its file is expected on (the real one).
+    func anchored(_ item: CatalogAuditItem) -> CatalogAuditItem {
+        var it = item
+        it.expectedMount = CatalogAuditMountIdentity.expected(forDirectory: item.directory, root: item.root)
+        return it
+    }
 }
 
 // MARK: - Logic
@@ -275,7 +283,7 @@ struct CatalogAuditJobLogicTests {
         #expect(text.contains("NOT confirmed") && text.contains("OUTCOME failed (partial)"))
         // The undo is compare-and-set: a row that moved on keeps what it has now.
         let plan = sb.model.catalogAuditPlan()
-        let item = plan.lanes.flatMap(\.items).first { $0.id == kept.id }!
+        let item = sb.anchored(plan.lanes.flatMap(\.items).first { $0.id == kept.id }!)
         let (_, mark) = sb.model.applyCatalogAudit(.gone, to: item)
         VideoScanModel.stampRemoval(kept, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))
         let reverted = sb.model.revertCatalogAuditMark(try #require(mark))
@@ -363,17 +371,22 @@ struct CatalogAuditJobLogicTests {
 @MainActor
 struct CatalogAuditJobScaleTests {
 
-    /// 100k rows on 10 drives, 1 in 10,000 gone, applied through the real
-    /// job with a stubbed stat and an acknowledged-save seam.
+    /// 100k rows in 100 real folders of the sandbox (the 10 gone ones must
+    /// be PROVEN gone at the mark, on a real filesystem — a fake /Volumes
+    /// root can never be), 1 in 10,000 gone, applied through the real job
+    /// with a stubbed first-pass stat and an acknowledged-save seam.
     /// Budget (Debug, M4 Max, headroom ×3+): plan < 2 s; plan + run < 10 s.
     @Test(.timeLimit(.minutes(2)))
     func planAndRunAt100k() async throws {
         let sb = try ShowAgainSandbox.make("ca_scale"); defer { sb.cleanup() }
+        for d in 0..<100 {
+            try FileManager.default.createDirectory(at: sb.files.appendingPathComponent("d\(d)"), withIntermediateDirectories: true)
+        }
         var records: [VideoRecord] = []
         records.reserveCapacity(100_000)
         for i in 0..<100_000 {
             let r = VideoRecord()
-            r.fullPath = "/Volumes/CAScale\(i % 10)/\(i / 1000)/clip_\(i).mov"
+            r.fullPath = sb.files.appendingPathComponent("d\(i % 100)/clip_\(i).mov").path
             r.filename = "clip_\(i).mov"
             r.sizeBytes = Int64(10_000 + i)
             records.append(r)
@@ -383,7 +396,7 @@ struct CatalogAuditJobScaleTests {
         let clock = ContinuousClock()
         var plan = CatalogAuditPlan()
         let planned = clock.measure { plan = sb.model.catalogAuditPlan() }
-        #expect(plan.lanes.count == 10 && plan.rowCount == 100_000)
+        #expect(plan.lanes.count == 1 && plan.rowCount == 100_000)
         expectWithinTimingBudget("audit plan over 100k rows", measured: planned,
                                  budget: PerformanceLane.debugCeiling(.seconds(2)), loadBefore: load)
 
@@ -526,6 +539,7 @@ struct CatalogAuditJobSensorTests {
         #expect(job.contains("saveCatalogAcknowledged()"), "marks land only after an acknowledged save")
         let plan = try Self.code("CatalogAuditPlan.swift")
         #expect(plan.contains("(e == ENOENT || e == ENOTDIR) ? .gone : .unreadable(errno: e)"), "only ENOENT / ENOTDIR mean gone")
+        try Self.expectProofAtTheMark(half: half, plan: plan, job: job)
         // The only file written: catalog-audit.json, through AtomicFilePublish, in the run marker.
         for name in Self.sources where name != "CatalogAuditRun.swift" {
             let other = try Self.code(name)
@@ -533,6 +547,28 @@ struct CatalogAuditJobSensorTests {
         }
         let run = try Self.code("CatalogAuditRun.swift")
         #expect(run.contains("AtomicFilePublish.write(data, to: fileURL"))
+    }
+
+    /// PROVE AT THE MARK (codex 2026-10-16): the apply path re-stats
+    /// synchronously, then reads the mount, before the one `stampRemoval`;
+    /// the guard compares the whole planned snapshot; "archived" is read
+    /// from the live record; rollback is by value (no object memento); a
+    /// failed save ends failed even after Stop.
+    static func expectProofAtTheMark(half: String, plan: String, job: String) throws {
+        let proof = try #require(half.range(of: "CatalogAuditProof.atTheMark(item)"), "the second look is taken in the model half")
+        let mark = try #require(half.range(of: "stampRemoval("))
+        #expect(proof.lowerBound < mark.lowerBound, "the re-stat comes before the one stampRemoval call")
+        #expect(!half.contains("await "), "the proof and the mark are one synchronous step on the main actor")
+        #expect(half.contains("CatalogAuditRowSnapshot.of(rec) == item.planned"), "the guard compares the planned snapshot")
+        #expect(half.contains("CatalogAuditPlanner.isArchived(rec)"), "archived is read from the LIVE record")
+        for memento in ["RemovalUndo", ".reinstate("] { #expect(!half.contains(memento), "rollback holds no object memento (\(memento))") }
+        #expect(half.contains("Self.revertRemoval(rec, wrote: mark.wrote, previous: mark.previous"), "rollback is by value, on the current instance")
+        let stat = try #require(plan.range(of: "let second = CatalogAuditStat.of(item.path)"))
+        let mount = try #require(plan.range(of: "CatalogAuditMountIdentity.expected(forDirectory: item.directory, root: item.root)"))
+        #expect(stat.lowerBound < mount.lowerBound, "stat first, the mount only after an ENOENT")
+        #expect(!plan.contains("isArchived: Bool"), "the item carries no planned 'archived' flag to trust")
+        #expect(job.contains("finish(failedSave: message)") && !job.contains("finish(failed: message)"),
+                "a save that is not acknowledged ends failed, Stop or not (failed > stopped > completed)")
     }
 
     @Test("every file is still at its path with the same bytes, inode and mtime after a run; nothing appeared beside the media")
@@ -566,5 +602,230 @@ struct CatalogAuditJobSensorTests {
         text = sb.catalogLogText()
         #expect(text.components(separatedBy: "Audit catalog: START").count == 3)
         #expect(text.components(separatedBy: "Audit catalog: OUTCOME").count == 3)
+    }
+}
+
+// MARK: - Prove at the mark (codex review 2026-10-16, F1–F5)
+
+/// A row is marked gone only on evidence read AT THE MOMENT OF MARKING, on
+/// the filesystem the file was expected on. Every test here runs the real
+/// job (or the real apply) against the real filesystem; the only seam used
+/// is the chunk's first-pass stat, and only to feed it a stale answer.
+@MainActor
+private extension ShowAgainSandbox {
+    /// A live row at an arbitrary path (the file may or may not be there).
+    @discardableResult
+    func row(at path: String, bytes: Int64 = 2_000) -> VideoRecord {
+        let r = VideoRecord()
+        r.fullPath = path
+        r.filename = (path as NSString).lastPathComponent
+        r.directory = (path as NSString).deletingLastPathComponent
+        r.sizeBytes = bytes
+        model.records.append(r)
+        return r
+    }
+
+    func link(_ name: String, to target: URL) throws -> URL {
+        let link = root.appendingPathComponent(name)
+        try? FileManager.default.removeItem(at: link)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: target)
+        return link
+    }
+}
+
+@Suite("Audit catalog — prove at the mark (codex 2026-10-16)", .serialized)
+@MainActor
+struct CatalogAuditProveAtTheMarkTests {
+
+    // F1 — the filesystem the file was expected on, not the lexical root.
+
+    @Test("F1: a path through a dangling symlink is 'could not check — drive not connected', never gone (the lexical root '/' is still mounted)")
+    func danglingSymlinkParentIsNeverGone() async throws {
+        let sb = try ShowAgainSandbox.make("ca_dangling"); defer { sb.cleanup() }
+        let link = try sb.link("media", to: sb.root.appendingPathComponent("unplugged_drive"))
+        let r = sb.row(at: link.appendingPathComponent("clip.mov").path)
+        let job = await runAudit(sb.model)
+        #expect(job.totals[.gone] == 0 && job.totals[.couldNotCheck] == 1, Comment(rawValue: job.totals.line))
+        #expect(r.removal == nil, "a file beyond a dangling link is not proven gone")
+        #expect(job.problems.first { $0.path == r.fullPath }?.detail.contains("not connected") == true,
+                Comment(rawValue: job.problems.first { $0.path == r.fullPath }?.detail ?? "no detail row"))
+        #expect(job.storedCount == 0)
+    }
+
+    @Test("F1: the symlink's target moved to another filesystem between the stat and the mark — never gone")
+    func symlinkRetargetedToAnotherFilesystemIsNeverGone() async throws {
+        let sb = try ShowAgainSandbox.make("ca_retarget"); defer { sb.cleanup() }
+        // Planned through a link onto devfs (another filesystem than the sandbox).
+        let link = try sb.link("drive", to: URL(fileURLWithPath: "/dev"))
+        let r = sb.row(at: link.appendingPathComponent("clip.mov").path)
+        let files = sb.files
+        let job = await runAudit(sb.model) { j in
+            let real = j.statPaths
+            j.statPaths = { paths in
+                let stats = real(paths)                                           // ENOENT on devfs
+                try? FileManager.default.removeItem(at: link)                     // …then the link points elsewhere
+                try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: files)
+                return stats
+            }
+        }
+        #expect(job.totals[.gone] == 0 && job.totals[.couldNotCheck] == 1, Comment(rawValue: job.totals.line))
+        #expect(r.removal == nil, "ENOENT on a different filesystem than the one planned is not proof")
+        #expect(job.storedCount == 0)
+    }
+
+    // F2 — the mark is decided by a second, synchronous stat at the mark.
+
+    @Test("F2: a file that is back at the mark is present, not marked (the chunk's ENOENT was transient)")
+    func fileBackAtTheMarkIsPresentNotMarked() async throws {
+        let sb = try ShowAgainSandbox.make("ca_transient"); defer { sb.cleanup() }
+        let r = try sb.live("flicker.mov")
+        let job = await runAudit(sb.model) { j in j.statPaths = { paths in paths.map { _ in .gone } } }
+        #expect(job.totals[.present] == 1 && job.totals[.gone] == 0, Comment(rawValue: job.totals.line))
+        #expect(r.removal == nil && job.storedCount == 0, "present at the mark → not marked")
+    }
+
+    @Test("F2: an errno other than ENOENT/ENOTDIR at the mark is 'could not check', never gone")
+    func errnoAtTheMarkIsCouldNotCheck() async throws {
+        let sb = try ShowAgainSandbox.make("ca_eacces_mark"); defer { sb.cleanup() }
+        let locked = sb.files.appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: locked, withIntermediateDirectories: true)
+        let r = sb.row(at: locked.appendingPathComponent("clip.mov").path)
+        try Data(repeating: 7, count: 2_000).write(to: URL(fileURLWithPath: r.fullPath))
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: locked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: locked.path) }
+        let job = await runAudit(sb.model) { j in j.statPaths = { paths in paths.map { _ in .gone } } }
+        #expect(job.totals[.couldNotCheck] == 1 && job.totals[.gone] == 0, Comment(rawValue: job.totals.line))
+        #expect(r.removal == nil)
+        #expect(job.problems.first { $0.path == r.fullPath }?.detail.contains("EACCES") == true,
+                Comment(rawValue: job.problems.first { $0.path == r.fullPath }?.detail ?? "no detail row"))
+    }
+
+    // F3 — the apply guard compares a snapshot of the fields that matter.
+
+    @Test("F3: any planned field changed meanwhile — size, hash time, mtime, lifecycle, archive stage, archive fixity — drops the result as 'record changed'")
+    func snapshotFieldsChangedMeanwhileDropTheResult() throws {
+        let sb = try ShowAgainSandbox.make("ca_snapshot"); defer { sb.cleanup() }
+        let rows = try (0..<6).map { try sb.live("snap\($0).mov", onDisk: false) }
+        let plan = sb.model.catalogAuditPlan()
+        let items = try rows.map { r in try #require(plan.lanes.flatMap(\.items).first { $0.id == r.id }) }
+        rows[0].sizeBytes = 9_999
+        rows[1].contentHashAt = Date()
+        rows[2].dateModified = "2026-10-16 12:00"
+        rows[3].lifecycleStage = .reviewing
+        rows[4].archiveStage = .readyForArchive
+        rows[5].archiveFixity = ArchiveFixity(digest: "cd", verifiedAt: Date(), sizeBytes: 2_000)   // archived meanwhile
+        for (r, it) in zip(rows, items) {
+            let (apply, mark) = sb.model.applyCatalogAudit(.gone, to: it)
+            #expect(apply.result == .recordChanged && mark == nil, "\(r.filename): \(apply.result)")
+            #expect(r.removal == nil, "\(r.filename) was marked")
+        }
+    }
+
+    @Test("F3: Trash → Put Back → Restore between plan and apply returns the marker to nil; the stale ENOENT must not mark the returned file")
+    func trashPutBackRestoreMeanwhileIsNotMarked() throws {
+        let sb = try ShowAgainSandbox.make("ca_putback"); defer { sb.cleanup() }
+        let r = try sb.live("putback.mov")
+        let plan = sb.model.catalogAuditPlan()
+        let item = try #require(plan.lanes.flatMap(\.items).first { $0.id == r.id })
+        let url = URL(fileURLWithPath: r.fullPath)
+        let bytes = try Data(contentsOf: url)
+        VideoScanModel.stampRemoval(r, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))   // another door: Trash
+        try FileManager.default.removeItem(at: url)
+        try bytes.write(to: url)                                                                           // Finder: Put Back
+        #expect(sb.model.clearRemoval(r) == nil)                                                           // Restore
+        #expect(r.removal == nil)
+        let (apply, mark) = sb.model.applyCatalogAudit(.gone, to: item)                                    // the stale answer
+        #expect(apply.result == .present && mark == nil, "\(apply.result): \(apply.detail)")
+        #expect(r.removal == nil, "a returned file was marked Missing")
+    }
+
+    // F4 — rollback by value, on the current instance, marker only.
+
+    @Test("F4: rollback clears the mark on the CURRENT record instance (same id, path and marker), not a detached one")
+    func rollbackClearsTheMarkOnTheCurrentInstance() async throws {
+        let sb = try ShowAgainSandbox.make("ca_replace"); defer { sb.cleanup() }
+        let original = try sb.live("swap.mov", onDisk: false)
+        var replacement: VideoRecord?
+        let model = sb.model
+        let job = await runAudit(sb.model) { j in
+            j.chunkSize = 1; j.checkpointRows = 100
+            j.saveCatalogForTesting = {
+                // A reload / rescan replaced the object while the save was in flight.
+                let twin = VideoRecord(id: original.id)
+                twin.fullPath = original.fullPath; twin.filename = original.filename
+                twin.directory = original.directory; twin.sizeBytes = original.sizeBytes
+                if let marker = original.removal { VideoScanModel.stampRemoval(twin, marker) }
+                if let i = model.records.firstIndex(where: { $0.id == original.id }) { model.records[i] = twin }
+                replacement = twin
+                return false
+            }
+        }
+        #expect(job.saveFailed)
+        let twin = try #require(replacement)
+        #expect(model.record(forID: original.id) === twin)
+        #expect(twin.removal == nil, "the current instance still carries the undone mark: \(String(describing: twin.removal))")
+        #expect(sb.catalogLogText().contains("1 of 1 mark(s) undone"))
+    }
+
+    @Test("F4: a newer lifecycle / archive-stage edit survives the rollback; only the marker is put back")
+    func rollbackLeavesANewerLifecycleEditAlone() async throws {
+        let sb = try ShowAgainSandbox.make("ca_newer_edit"); defer { sb.cleanup() }
+        let r = try sb.live("edited.mov", onDisk: false)
+        let job = await runAudit(sb.model) { j in
+            j.chunkSize = 1; j.checkpointRows = 100
+            j.saveCatalogForTesting = {
+                r.lifecycleStage = .reviewing          // Triage moved it meanwhile
+                r.archiveStage = .readyForArchive
+                return false
+            }
+        }
+        #expect(job.saveFailed)
+        #expect(r.removal == nil, "the mark is undone")
+        #expect(r.lifecycleStage == .reviewing && r.archiveStage == .readyForArchive,
+                "the newer edit was overwritten: \(r.lifecycleStage) / \(r.archiveStage)")
+    }
+
+    @Test("F4: a newer marker from another door is left alone and the undo says so")
+    func rollbackLeavesANewerMarkerAlone() async throws {
+        let sb = try ShowAgainSandbox.make("ca_newer_marker"); defer { sb.cleanup() }
+        let r = try sb.live("door.mov", onDisk: false)
+        let job = await runAudit(sb.model) { j in
+            j.chunkSize = 1; j.checkpointRows = 100
+            j.saveCatalogForTesting = {
+                VideoScanModel.stampRemoval(r, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))
+                return false
+            }
+        }
+        #expect(job.saveFailed)
+        #expect(r.removal?.state == .inTrash, "the other door's marker stands")
+        #expect(sb.catalogLogText().contains("0 of 1 mark(s) undone"))
+    }
+
+    // F5 — outcome precedence: failed > stopped > completed.
+
+    @Test("F5: Stop followed by a save that is not acknowledged is FAILED (exit 1, run marker failed, row 'marks undone') — never 'stopped'")
+    func stopThenUnacknowledgedSaveIsFailed() async throws {
+        let sb = try ShowAgainSandbox.make("ca_stop_fail"); defer { sb.cleanup() }
+        let rows = try (0..<5).map { try sb.live("sf\($0).mov", onDisk: false) }
+        let marker = CatalogAuditRunMarker()
+        let job = CatalogAuditJob(model: sb.model, marker: marker)
+        job.volumeOnline = { _ in true }
+        job.tickMilliseconds = 20
+        job.chunkSize = 1
+        job.checkpointRows = 2
+        job.saveCatalogForTesting = { [job] in
+            job.cancel()            // Stop lands while the checkpoint save is in flight…
+            return false            // …and the save is not acknowledged.
+        }
+        job.start()
+        await job.task?.value
+        if case .failed(let msg) = job.state {
+            #expect(msg.hasPrefix("Failed — marks undone"), Comment(rawValue: msg))
+        } else { Issue.record("expected failed, got \(job.state)") }
+        #expect(CatalogAuditCLI.exitCode(for: job) == 1, "exit \(CatalogAuditCLI.exitCode(for: job))")
+        #expect(marker.lastRun?.outcome == .failed && marker.lastRun?.partial == true)
+        #expect(rows.allSatisfy { $0.removal == nil } && job.storedCount == 0, "every unsaved mark is undone")
+        #expect(job.subtitle.hasPrefix("Failed — marks undone"), Comment(rawValue: job.subtitle))
+        #expect(sb.catalogLogText().contains("OUTCOME failed (partial)"))
     }
 }
