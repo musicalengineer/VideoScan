@@ -86,13 +86,18 @@ enum PreservationChecklist {
     /// (`VideoScanModel.archivedCopy(of:)`); `archivedCopyPresence` is what
     /// the disk said about that copy (`JourneyPresence.probe`) — nil means
     /// nobody looked, which is not the same as "there".
+    /// Cloud and offsite both satisfy "not in this building". A named
+    /// predicate, not an inline `||` in a closure: CI's Xcode 26.3 cannot
+    /// type-check that shape "in reasonable time" (2026-10-16).
+    private static func isAway(_ entry: BackupEntry) -> Bool {
+        entry.kind == .cloud || entry.kind == .offsite
+    }
+
     static func steps(for rec: VideoRecord, archivedCopy: VideoRecord? = nil,
                       archivedCopyPresence: JourneyPresence? = nil) -> [PreservationStep] {
         // Cloud and offsite both satisfy "not in this building", which
         // is the only property that matters against fire and theft.
-        let away = rec.backupDestinations.first {
-            $0.kind == .cloud || $0.kind == .offsite
-        }
+        let away = rec.backupDestinations.first { Self.isAway($0) }
         let signature = contentSignature(of: rec, archivedCopy: archivedCopy)
         let local = localArchive(of: rec, archivedCopy: archivedCopy, presence: archivedCopyPresence)
 

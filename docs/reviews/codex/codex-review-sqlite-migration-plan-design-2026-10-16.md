@@ -75,3 +75,7 @@ Verdict: revise — SQLite fits the project, but the plan at `f7ba6b29d` leaves 
 ## Closure (Manager, 2026-10-16 evening)
 
 All 14 folded into the plan's §9 (v2) — none declined. The largest changes of direction: one cutover instead of two (C6); certifying sidecars move BEFORE cutover (C10); the sync artefact is a `VACUUM INTO` snapshot published as one sealed generation, never checkpoint+copy (C9); evidence fields leave `extra` and the DTO gets a validator (C2/C3); no `ON DELETE SET NULL`, tombstones only; row-level saving needs a dirty-tracking design first (C14), so the estimate is prototype-only through D. The TRUTH regression suite (C13) is `docs/briefs/cloud/P0_REGRESSION_SUITE.md`, built before the port.
+
+## Closed
+
+Closed by `253822916` at 2026-10-16T23:26:18Z. 14/14 folded into plan v2 §9
