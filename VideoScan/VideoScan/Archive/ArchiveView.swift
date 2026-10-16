@@ -74,6 +74,9 @@ struct ArchiveView: View {
     @State var updatePreview: ArchiveUpdatePreview?
     /// Why Update… did not open (e.g. already being edited in another sheet).
     @State var updateRefusal: String?
+    /// A door found neither the row's file nor its archived copy on disk
+    /// (ArchiveView+Doors) — the words name the archive path.
+    @State var playRefusal: String?
     /// Year header ▸ Audit <year>… (Rick 2026-10-07) — the sheet driver.
     @State var auditYearRequest: ArchiveAuditRequest?
 
@@ -129,7 +132,10 @@ struct ArchiveView: View {
             FileJourneySheet(journey: payload)
         }
         .sheet(item: $archiveDetailRecord) { rec in
-            ArchiveDetailSheet(record: rec, allRecords: model.records)
+            // The file facts follow the same door as play / reveal
+            // (one stat, at sheet open — never in body).
+            ArchiveDetailSheet(record: rec, allRecords: model.records,
+                               playable: model.archivePlayableRecord(for: rec))
         }
         .sheet(item: $updatePreview) { preview in
             ArchiveUpdateSheet(preview: preview)
@@ -149,6 +155,11 @@ struct ArchiveView: View {
             Button("OK", role: .cancel) { updateRefusal = nil }
         } message: {
             Text(updateRefusal ?? "")
+        }
+        .alert("Not at its path", isPresented: Binding(get: { playRefusal != nil }, set: { if !$0 { playRefusal = nil } })) {
+            Button("OK", role: .cancel) { playRefusal = nil }
+        } message: {
+            Text(playRefusal ?? "")
         }
         // Archive Angel batches are read from the buffer OUTSIDE body (disk
         // I/O) — refreshed on entry and when the MFO job list changes (the

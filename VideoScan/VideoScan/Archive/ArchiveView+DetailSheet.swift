@@ -10,6 +10,10 @@ import SwiftUI
 struct ArchiveDetailSheet: View {
     let record: VideoRecord
     let allRecords: [VideoRecord]
+    /// The door's answer for this row (ArchivePlayable): the archived
+    /// copy's path for a promotion source, or the "not at its path" words
+    /// when neither file is on disk. nil = show the row's own path.
+    var playable: ArchivePlayable? = nil
     @Environment(\.dismiss) private var dismiss
 
     private var duplicates: [VideoRecord] {
@@ -27,9 +31,9 @@ struct ArchiveDetailSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(record.filename)
                         .font(.headline)
-                    Text(record.fullPath)
+                    Text(headerPathLine)
                         .font(.system(size: 14, design: .monospaced))
-                        .foregroundColor(.secondary)
+                        .foregroundColor(headerPathColor)
                         .lineLimit(1)
                         .truncationMode(.middle)
                 }
@@ -120,6 +124,21 @@ struct ArchiveDetailSheet: View {
             }
         }
         .frame(width: 480, height: 520)
+    }
+
+    /// Orange when the header carries the "not at its path" words.
+    private var headerPathColor: Color {
+        playable?.message == nil ? .secondary : .orange
+    }
+
+    /// The file facts' path: the record the doors open — its archived
+    /// copy for a promotion source — or the words when neither is on disk.
+    private var headerPathLine: String {
+        switch playable {
+        case .record(let target)?: return target.fullPath
+        case .missing(_, let message)?: return message
+        case nil: return record.fullPath
+        }
     }
 
     /// This record's archive date, or its promoted copy's (the copy is the

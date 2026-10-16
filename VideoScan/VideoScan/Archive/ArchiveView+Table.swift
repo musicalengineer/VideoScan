@@ -230,10 +230,10 @@ extension ArchiveView {
         .contextMenu(forSelectionType: UUID.self) { ids in
             recordContextMenu(for: ids)
         } primaryAction: { ids in
-            // Double-click / Return on row(s) → smart open (QuickTime when
-            // the cataloged codecs guarantee picture+sound, else VLC).
-            let recs = ids.compactMap { id in rows.first { $0.id == id } }
-            MediaOpener.open(recs)
+            // Double-click / Return on row(s) → the Archive door
+            // (ArchiveView+Doors): a promotion source opens its archived
+            // copy, then MediaOpener's smart chooser. Table order kept.
+            openArchiveItems(rows.filter { ids.contains($0.id) }.map(\.id))
         }
     }
 
@@ -393,19 +393,12 @@ extension ArchiveView {
             }
         }
 
-        if let rec = recs.first, count == 1,
-           let copy = model.masterArchiveCopy(of: rec) {
-            Button {
-                NSWorkspace.shared.selectFile(copy.fullPath, inFileViewerRootedAtPath: "")
-            } label: {
-                Label("Reveal Archive Copy in Finder", systemImage: "archivebox")
-            }
-        }
-
+        // ONE reveal (Rick 2026-10-16): the archived copy for a promotion
+        // source, the row itself otherwise, "not at its path" words when
+        // neither is on disk — ArchiveView+Doors. The former "Reveal
+        // Archive Copy in Finder" item was this same door.
         Button {
-            if let rec = recs.first {
-                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
-            }
+            if let rec = recs.first { revealArchiveItem(rec) }
         } label: {
             Label("Reveal in Finder", systemImage: "folder")
         }
@@ -433,7 +426,7 @@ extension ArchiveView {
             items: filteredMusicItems,
             isSearching: !searchText.isEmpty,
             openExternally: { id in
-                if let rec = model.record(forID: id) { MediaOpener.open([rec]) }
+                openArchiveItems([id])
             },
             contextMenu: { id in AnyView(self.musicContextMenu(for: id)) })
     }
@@ -443,7 +436,7 @@ extension ArchiveView {
     func musicContextMenu(for id: UUID) -> some View {
         if let rec = model.record(forID: id) {
             Button {
-                NSWorkspace.shared.selectFile(rec.fullPath, inFileViewerRootedAtPath: "")
+                revealArchiveItem(rec)
             } label: {
                 Label("Reveal in Finder", systemImage: "folder")
             }

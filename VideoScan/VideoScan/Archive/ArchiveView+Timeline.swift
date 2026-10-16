@@ -123,9 +123,10 @@ extension ArchiveView {
             selectedIDs: selectedIDs,
             scrollTarget: timelineScrollTarget,
             contextMenu: { ids in AnyView(self.recordContextMenu(for: ids)) },
-            openItems: { ids in
-                MediaOpener.open(ids.compactMap { self.model.record(forID: $0) })
-            },
+            // The Archive door (ArchiveView+Doors): a promotion source
+            // opens its archived copy; a lost file says so with the
+            // archive path (Rick 2026-10-16).
+            openItems: { ids in self.openArchiveItems(ids) },
             auditYear: { year in auditYearRequest = ArchiveAuditRequest(year: year) })
     }
 }
