@@ -54,7 +54,10 @@ public struct RelatedEvidence: Sendable, Equatable {
     /// One side of the pair, as the catalog knows it.
     public struct Side: Sendable, Equatable {
         /// Whole-file SHA-256 (lowercase), only when it covers the whole file.
-        public var digest: String?
+        /// An empty string is no digest, however it got here (codex 10/15 F3).
+        public var digest: String? {
+            didSet { if let d = digest, d.isEmpty { digest = nil } }
+        }
         public var sizeBytes: Int64
         public var durationSeconds: Double
         /// Seconds the fingerprint heard sound in; nil = no fingerprint yet.
@@ -84,14 +87,19 @@ public struct RelatedEvidence: Sendable, Equatable {
         /// staging copy had been gone eleven days and the band said "byte
         /// for byte").
         public var isOnDisk: Bool?
+        /// The recording's year when only the year is known (a "1988" tape
+        /// label, a folder year): the era rule reads this when there is no
+        /// day (codex 10/15 F2). A day sets it too.
+        public var year: Int?
 
         public init(digest: String? = nil, sizeBytes: Int64 = 0, durationSeconds: Double = 0,
                     audibleSeconds: Double? = nil, day: EventDay? = nil, dayIsReliable: Bool = false,
                     people: Set<String> = [], namesSaid: Set<String> = [], occasionWords: Set<String> = [],
                     folderLabel: String? = nil, isArchiveFile: Bool = false, isArchived: Bool = false,
                     codec: CodecGeneration = .unknown, frameHeight: Int? = nil, bitRate: Int64? = nil,
-                    isOnDisk: Bool? = nil) {
-            self.digest = digest.map { $0.lowercased() }
+                    isOnDisk: Bool? = nil, year: Int? = nil) {
+            // An empty digest is no digest (codex 10/15 F3: "" == "" must never be identity).
+            self.digest = digest.flatMap { $0.isEmpty ? nil : $0.lowercased() }
             self.sizeBytes = sizeBytes
             self.durationSeconds = durationSeconds
             self.audibleSeconds = audibleSeconds
@@ -107,11 +115,11 @@ public struct RelatedEvidence: Sendable, Equatable {
             self.frameHeight = frameHeight
             self.bitRate = bitRate
             self.isOnDisk = isOnDisk
+            self.year = year ?? day?.year
         }
 
         public var hasFingerprint: Bool { audibleSeconds != nil }
         public var isSilent: Bool { (audibleSeconds ?? 0) <= 0 && hasFingerprint }
-        public var year: Int? { day?.year }
     }
 
     public var a: Side
@@ -254,8 +262,14 @@ public enum RelatedLadder {
     // MARK: Rung 6
 
     static func identicalCopy(_ e: RelatedEvidence, into lines: inout [RelatedLine]) -> RelatedVerdict? {
-        if let da = e.a.digest, let db = e.b.digest, da == db, e.a.sizeBytes == e.b.sizeBytes, e.a.sizeBytes > 0 {
+        if let da = e.a.digest, let db = e.b.digest, !da.isEmpty, da == db, e.a.sizeBytes == e.b.sizeBytes, e.a.sizeBytes > 0 {
             lines.insert(.init(.supports, "Whole-file SHA-256 equal (\(short(da))), \(bytes(e.a.sizeBytes)) both."), at: 0)
+            // A contradiction is shown even when a higher rung wins (codex 10/15 F4).
+            switch e.audio {
+            case .different?, .overlap?:
+                lines.append(.init(.contradicts, "Sound: nothing in common at any offset — the bytes are identical, so one fingerprint is stale or partial. Fingerprint again."))
+            default: break
+            }
             peopleAndWords(e, rung: .identicalCopy, into: &lines)
             return RelatedVerdict(rung: .identicalCopy, band: .sameEvent,
                                   headline: "The same recording, byte for byte.", lines: lines, better: nil)

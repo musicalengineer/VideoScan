@@ -640,12 +640,14 @@
         "identicalEdges",
         "r1",
         "r2",
+        "r2NeverTargetsProtectedClip",
         "r3",
         "r4",
         "r5",
         "r6Transfers",
         "r7r8",
-        "table"
+        "table",
+        "transferDateCannotCancelEraProtection"
       ]
     },
     {
@@ -2245,7 +2247,9 @@
         "betterTransferOrder",
         "clipOfMaster",
         "differentIsAnAnswer",
+        "emptyDigestsCannotAuthorizeCopyRemoval",
         "identicalCopy",
+        "identicalCopyStillShowsSoundContradiction",
         "masterContainsClip",
         "notEnoughEvidence",
         "notOnDisk",
@@ -2255,7 +2259,8 @@
         "sameOccasion",
         "sameRecordingOtherTransfer",
         "silentFootageByFrames",
-        "words"
+        "words",
+        "yearOnly"
       ]
     },
     {
@@ -8503,11 +8508,14 @@
       "tests": [
         "codecGeneration",
         "durationWords",
+        "durationWordsRequireEqualSizesForByteIdentity",
         "factRows",
         "folderLabel",
         "namesSaid",
         "sideFromRecord",
-        "sizes"
+        "sizes",
+        "stripBins",
+        "yearOnlyDate"
       ]
     },
     {
@@ -30036,7 +30044,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2390,
+      "expected_floor": 2393,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
