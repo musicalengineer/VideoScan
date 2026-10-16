@@ -2248,6 +2248,7 @@
         "identicalCopy",
         "masterContainsClip",
         "notEnoughEvidence",
+        "notOnDisk",
         "overlapTooShort",
         "relatedAndNone",
         "sameMoment",

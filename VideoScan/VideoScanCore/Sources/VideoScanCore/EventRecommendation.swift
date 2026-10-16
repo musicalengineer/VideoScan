@@ -43,6 +43,10 @@ public struct EventRecommendation: Sendable, Equatable {
 
     public static func recommend(_ verdict: RelatedVerdict, evidence e: RelatedEvidence) -> EventRecommendation {
         switch verdict.band {
+        case .notEnoughEvidence where e.a.isOnDisk == false || e.b.isOnDisk == false:
+            return .init(rule: .r8, words: "Rescan the drive: a catalog row points at a file that is not there.",
+                         why: verdict.lines.first(where: { $0.kind == .missing })?.words ?? "The file is not at its path.",
+                         door: .fingerprint, subject: e.a.isOnDisk == false ? .a : .b)
         case .notEnoughEvidence:
             return .init(rule: .r8, words: "Fingerprint and hash these first; the analyzer can't say yet.",
                          why: (verdict.lines.first(where: { $0.kind == .missing && $0.words.localizedCaseInsensitiveContains("fingerprint") })

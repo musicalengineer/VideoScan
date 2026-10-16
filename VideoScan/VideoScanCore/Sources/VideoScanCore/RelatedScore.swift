@@ -78,12 +78,19 @@ public struct RelatedEvidence: Sendable, Equatable {
         public var codec: CodecGeneration
         public var frameHeight: Int?
         public var bitRate: Int64?
+        /// Whether the file is at its path right now (nil = not asked, e.g.
+        /// its drive is not connected). The catalog's hashes describe what
+        /// WAS there; a gone file gets no verdict (Rick 2026-10-15: the
+        /// staging copy had been gone eleven days and the band said "byte
+        /// for byte").
+        public var isOnDisk: Bool?
 
         public init(digest: String? = nil, sizeBytes: Int64 = 0, durationSeconds: Double = 0,
                     audibleSeconds: Double? = nil, day: EventDay? = nil, dayIsReliable: Bool = false,
                     people: Set<String> = [], namesSaid: Set<String> = [], occasionWords: Set<String> = [],
                     folderLabel: String? = nil, isArchiveFile: Bool = false, isArchived: Bool = false,
-                    codec: CodecGeneration = .unknown, frameHeight: Int? = nil, bitRate: Int64? = nil) {
+                    codec: CodecGeneration = .unknown, frameHeight: Int? = nil, bitRate: Int64? = nil,
+                    isOnDisk: Bool? = nil) {
             self.digest = digest.map { $0.lowercased() }
             self.sizeBytes = sizeBytes
             self.durationSeconds = durationSeconds
@@ -99,6 +106,7 @@ public struct RelatedEvidence: Sendable, Equatable {
             self.codec = codec
             self.frameHeight = frameHeight
             self.bitRate = bitRate
+            self.isOnDisk = isOnDisk
         }
 
         public var hasFingerprint: Bool { audibleSeconds != nil }
@@ -215,14 +223,32 @@ public enum RelatedLadder {
     public static let sameDayToleranceDays = 1
 
     /// The ladder, top rung first: each step answers or adds its lines and
-    /// passes the pair down.
+    /// passes the pair down. A file that is not on disk gets no verdict at
+    /// all: the catalog's hashes and fingerprints describe a file that was
+    /// there, and nothing can be verified against one that is not.
     public static func judge(_ e: RelatedEvidence) -> RelatedVerdict {
         var lines: [RelatedLine] = []
+        if let v = notOnDisk(e, into: &lines) { return v }
         let dates = dateRelation(e, into: &lines)
         if let v = identicalCopy(e, into: &lines) { return v }
         if let v = whatTheSoundSays(e, dates: dates, into: &lines) { return v }
         if let v = whatTheFramesSay(e, into: &lines) { return v }
         return calendarAndPeople(e, dates: dates, into: &lines)
+    }
+
+    // MARK: Before the ladder — is the file there?
+
+    static func notOnDisk(_ e: RelatedEvidence, into lines: inout [RelatedLine]) -> RelatedVerdict? {
+        let goneA = e.a.isOnDisk == false, goneB = e.b.isOnDisk == false
+        guard goneA || goneB else { return nil }
+        let which = goneA && goneB ? "Neither file is" : goneA ? "The first file is not" : "The second file is not"
+        lines.append(.init(.missing, "\(which) at its path — the catalog row points at nothing. Rescan the drive."))
+        if let da = e.a.digest, let db = e.b.digest, da == db, e.a.sizeBytes == e.b.sizeBytes {
+            lines.append(.init(.nonClue, "The catalog's stored SHA-256s match (\(short(da))) — what WAS there, not what is."))
+        }
+        return RelatedVerdict(rung: nil, band: .notEnoughEvidence,
+                              headline: goneA && goneB ? "Neither file is on disk." : "One file is not on disk — nothing can be verified.",
+                              lines: lines, better: nil)
     }
 
     // MARK: Rung 6
