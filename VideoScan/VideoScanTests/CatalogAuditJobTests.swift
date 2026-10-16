@@ -1,0 +1,570 @@
+// CatalogAuditJobTests.swift
+// "Audit Catalog…" tier 0 (Rick 2026-10-15/16; design §6) — the five
+// dimensions:
+//   LOGIC     — every per-row outcome through the real job and real stats
+//               (present / changed reported not marked / gone → Missing
+//               through the engine / came back → live / still missing /
+//               archived gone reported not marked / skipped rows); the
+//               reason names the audit; EACCES and every errno but ENOENT
+//               never mark; an unmounted root (at the start, or leaving
+//               mid-run) never marks; a result for a row whose path or
+//               marker changed meanwhile is dropped; save cadence; a save
+//               that is not acknowledged undoes the marks and fails the run;
+//               Stop is partial and saved; refusals; the words; the reason
+//               decodes from an older catalog's JSON.
+//   SCALE     — 100k rows on 10 drives planned and applied inside a budget.
+//   ISOLATION — a poisoned / newer-schema catalog-audit.json is noise
+//               (no crash, no mark, no line); a read-only catalog and the
+//               shared store under a test host refuse before any stat; the
+//               marker lives in the test catalog's folder.
+//   SENSOR    — the audit's sources hold no file-moving / -removing /
+//               -writing call, no Process(); its ONLY mark path is
+//               stampRemoval / clearRemoval inside the model half; media is
+//               byte-, inode- and mtime-identical after a run; one START and
+//               one OUTCOME per run, stopped runs included.
+// (No media matrix: the job never opens a media file — one stat per row.)
+
+import Foundation
+import Testing
+@testable import VideoScan
+import VideoScanCore
+
+// MARK: - Helpers
+
+@MainActor
+private func runAudit(_ model: VideoScanModel,
+                      marker: CatalogAuditRunMarker? = nil,
+                      online: @escaping @Sendable (String) -> Bool = { _ in true },
+                      configure: (CatalogAuditJob) -> Void = { _ in }) async -> CatalogAuditJob {
+    let job = CatalogAuditJob(model: model, marker: marker)
+    job.volumeOnline = online
+    job.tickMilliseconds = 20
+    configure(job)
+    job.start()
+    await job.task?.value
+    return job
+}
+
+/// Thread-safe call counter for the seams (≈ C++ std::atomic<int>).
+private final class CallCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func next() -> Int { lock.withLock { n += 1; return n } }
+    var value: Int { lock.withLock { n } }
+}
+
+@MainActor
+private extension ShowAgainSandbox {
+    /// A live row (no label) for a file written with `bytes` bytes, or
+    /// not written at all.
+    @discardableResult
+    func live(_ name: String, bytes: Int = 2_000, onDisk: Bool = true) throws -> VideoRecord {
+        try record(name, bytes: bytes, onDisk: onDisk, stage: .none)
+    }
+
+    /// A row already marked Missing by an earlier door.
+    @discardableResult
+    func missingRow(_ name: String, bytes: Int = 2_000, onDisk: Bool) throws -> VideoRecord {
+        let r = try live(name, bytes: bytes, onDisk: onDisk)
+        VideoScanModel.stampRemoval(r, .missing(noticedAt: Date(timeIntervalSinceNow: -3_600), lastSeen: nil, reason: .missingOnDisk))
+        return r
+    }
+
+    func auditMarkerFile() -> URL { catalogDir.appendingPathComponent(CatalogAuditRunMarker.fileName) }
+}
+
+// MARK: - Logic
+
+@Suite("Audit catalog — logic", .serialized)
+@MainActor
+struct CatalogAuditJobLogicTests {
+
+    @Test("every per-row outcome: present, changed (not marked), gone → Missing, came back → live, still missing, archived gone (not marked), skipped")
+    func perRowOutcomes() async throws {
+        let sb = try ShowAgainSandbox.make("ca_rows"); defer { sb.cleanup() }
+        let present = try sb.live("present.mov")
+        let changed = try sb.live("changed.mov", bytes: 2_000)
+        changed.sizeBytes = 1_500                                    // the catalog remembers another size
+        let gone = try sb.live("gone.mov", onDisk: false)
+        gone.contentHashAt = Date(timeIntervalSince1970: 1_700_000_000)
+        let back = try sb.missingRow("back.mov", onDisk: true)
+        let still = try sb.missingRow("still.mov", onDisk: false)
+        let archivedGone = try sb.live("arch_gone.mov", onDisk: false)
+        archivedGone.archiveFixity = ArchiveFixity(digest: "ab", verifiedAt: Date(), sizeBytes: 2_000)
+        let trash = try sb.live("trash.mov", onDisk: false)
+        VideoScanModel.stampRemoval(trash, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))
+        let removed = try sb.live("removed.mov")
+        VideoScanModel.stampRemoval(removed, .removedFromCatalog(at: Date(), reason: .userRemoved))
+        let superseded = try sb.live("old.mov", onDisk: false); superseded.supersededByID = UUID()
+        let marker = CatalogAuditRunMarker()
+
+        let job = await runAudit(sb.model, marker: marker)
+
+        if case .finished(let summary) = job.state {
+            #expect(summary.hasPrefix(job.totals.line) && summary.contains("gone under"), Comment(rawValue: summary))
+        } else { Issue.record("expected finished, got \(job.state)") }
+        #expect(job.totals.planned == 6 && job.totals.done == 6, Comment(rawValue: job.totals.line))
+        #expect(job.totals[.present] == 1 && job.totals[.changed] == 1 && job.totals[.gone] == 1
+                && job.totals[.cameBack] == 1 && job.totals[.stillMissing] == 1 && job.totals[.goneArchived] == 1,
+                Comment(rawValue: job.totals.line))
+        #expect(job.totals.skipped == [.inTrash: 1, .removedFromCatalog: 1, .superseded: 1])
+        // The marks — through the engine, with the audit's reason.
+        #expect(gone.removal?.state == .missing && gone.removal?.reason == .missingAtAudit)
+        #expect(gone.removal?.lastSeen == gone.contentHashAt, "last seen = when the scan last hashed it")
+        #expect(gone.lifecycleStage == .cataloged, "Missing writes no legacy stage")
+        #expect(back.removal == nil, "a Missing row whose file is back is live again")
+        // Reported, never marked.
+        #expect(present.removal == nil && changed.removal == nil && archivedGone.removal == nil)
+        #expect(still.removal?.reason == .missingOnDisk, "an existing Missing marker is left exactly as it was")
+        #expect(trash.removal?.state == .inTrash && removed.removal?.state == .removedFromCatalog)
+        #expect(job.storedCount == 2 && job.saveCount >= 1 && !job.saveFailed)
+        // The detail rows carry the reasons.
+        #expect(job.problems.first { $0.path == changed.fullPath }?.detail.contains("the catalog says") == true)
+        #expect(job.problems.first { $0.path == archivedGone.fullPath }?.detail.contains("Verify Archive") == true)
+        #expect(job.sample.map(\.path) == [present.fullPath])
+        // The OUTCOME names the counts and the folder that lost files.
+        let text = sb.catalogLogText()
+        #expect(text.contains("Audit catalog: OUTCOME — ") && text.contains("1 gone — marked Missing") && text.contains("2 gone under \(sb.files.path)"),
+                Comment(rawValue: text))
+        #expect(!text.contains("partial"))
+        // The marker file: counts, outcome, not partial.
+        let last = try #require(marker.lastRun)
+        #expect(last.outcome == .completed && !last.partial && last.marked == 2 && last.counts["gone"] == 1 && last.counts["planned"] == 6)
+        #expect(marker.fileURL == sb.auditMarkerFile() && FileManager.default.fileExists(atPath: sb.auditMarkerFile().path))
+        // The real save reached catalog.json: a reloaded catalog carries the mark and the restore.
+        let reloaded = CatalogStore(directory: sb.catalogDir).load()
+        #expect(reloaded.first { $0.id == gone.id }?.removal?.reason == .missingAtAudit)
+        #expect(reloaded.first { $0.id == back.id }?.removal == nil)
+    }
+
+    @Test("a catalog size of 0 is unknown: the file is present, never 'changed'")
+    func zeroCatalogSizeIsNotCompared() async throws {
+        let sb = try ShowAgainSandbox.make("ca_zero"); defer { sb.cleanup() }
+        let r = try sb.live("z.mov", bytes: 10); r.sizeBytes = 0
+        let job = await runAudit(sb.model)
+        #expect(job.totals[.present] == 1 && job.totals[.changed] == 0, Comment(rawValue: job.totals.line))
+    }
+
+    @Test("never marks on EACCES — or any errno but ENOENT/ENOTDIR (invariant 2)")
+    func neverMarksOnEACCES() async throws {
+        let sb = try ShowAgainSandbox.make("ca_eacces"); defer { sb.cleanup() }
+        let a = try sb.live("a.mov", onDisk: false)
+        let b = try sb.live("b.mov", onDisk: false)
+        let c = try sb.live("c.mov", onDisk: false)
+        let back = try sb.missingRow("back.mov", onDisk: false)
+        let errnos: [String: Int32] = [a.fullPath: EACCES, b.fullPath: EIO, c.fullPath: ETIMEDOUT, back.fullPath: EPERM]
+        let job = await runAudit(sb.model) { j in
+            j.statPaths = { paths in paths.map { .unreadable(errno: errnos[$0] ?? EACCES) } }
+        }
+        #expect(job.totals[.couldNotCheck] == 4 && job.totals[.gone] == 0 && job.totals[.cameBack] == 0, Comment(rawValue: job.totals.line))
+        #expect(a.removal == nil && b.removal == nil && c.removal == nil, "an unreadable path is never a gone file")
+        #expect(back.removal?.state == .missing, "and never a returned one")
+        #expect(job.storedCount == 0 && job.saveCount == 0, "nothing to save")
+        #expect(job.problems.first { $0.path == a.fullPath }?.detail.contains("EACCES") == true)
+        if case .finished = job.state {} else { Issue.record("expected finished, got \(job.state)") }
+    }
+
+    @Test("a path that is a folder now is 'could not check', never marked")
+    func notAFileIsNotGone() async throws {
+        let sb = try ShowAgainSandbox.make("ca_dir"); defer { sb.cleanup() }
+        let r = try sb.live("was_a_file.mov", onDisk: false)
+        try FileManager.default.createDirectory(atPath: r.fullPath, withIntermediateDirectories: true)
+        let job = await runAudit(sb.model)
+        #expect(job.totals[.couldNotCheck] == 1 && job.totals[.gone] == 0, Comment(rawValue: job.totals.line))
+        #expect(r.removal == nil)
+    }
+
+    @Test("never marks when the root is unmounted — at the start (not asked) or when the drive leaves mid-run (invariant 1)")
+    func neverMarksWhenRootUnmounted() async throws {
+        // (i) Not mounted at the start: not asked, never stat'ed.
+        let sb = try ShowAgainSandbox.make("ca_unmounted"); defer { sb.cleanup() }
+        let offlineRoot = "/Volumes/CAUnmounted_\(UUID().uuidString.prefix(8))"
+        let away = VideoRecord()
+        away.fullPath = offlineRoot + "/away.mov"; away.filename = "away.mov"; away.sizeBytes = 3_000; away.directory = offlineRoot
+        sb.model.records.append(away)
+        let here = try sb.live("here.mov")
+        let stats = CallCounter()
+        let first = await runAudit(sb.model, online: { !$0.hasPrefix(offlineRoot) }) { j in
+            let real = j.statPaths
+            j.statPaths = { paths in _ = stats.next(); #expect(!paths.contains { $0.hasPrefix(offlineRoot) }, "an unmounted root is never stat'ed"); return real(paths) }
+        }
+        #expect(first.totals[.notAsked] == 1 && first.totals[.present] == 1, Comment(rawValue: first.totals.line))
+        #expect(away.removal == nil, "a row on an unmounted drive is never marked")
+        #expect(first.lanes.first { $0.root == offlineRoot }?.phase == .disconnected)
+        _ = here
+
+        // (ii) Mounted when planned, gone before the answers land: every
+        // stat reads ENOENT, and NOTHING is marked.
+        let sb2 = try ShowAgainSandbox.make("ca_left"); defer { sb2.cleanup() }
+        let rows = try (0..<4).map { try sb2.live("left\($0).mov", onDisk: false) }
+        let probes = CallCounter()
+        let second = await runAudit(sb2.model, online: { _ in probes.next() == 1 })
+        #expect(second.totals[.notAsked] == 4 && second.totals[.gone] == 0, Comment(rawValue: second.totals.line))
+        #expect(rows.allSatisfy { $0.removal == nil }, "a drive that left mid-run marks nothing")
+        #expect(second.lanes.first?.phase == .disconnected)
+        #expect(second.storedCount == 0)
+        #expect(sb2.catalogLogText().contains("the drive went away"))
+    }
+
+    @Test("a result is applied only to the row it asked about: a changed path or marker meanwhile drops it (invariant 4)")
+    func resultDroppedWhenRowChangedMeanwhile() throws {
+        let sb = try ShowAgainSandbox.make("ca_cas"); defer { sb.cleanup() }
+        let moved = try sb.live("moved.mov", onDisk: false)
+        let marked = try sb.live("marked.mov", onDisk: false)
+        let restored = try sb.missingRow("restored.mov", onDisk: true)
+        let deleted = try sb.live("deleted.mov", onDisk: false)
+        let plan = sb.model.catalogAuditPlan()
+        let item = { (r: VideoRecord) in plan.lanes.flatMap(\.items).first { $0.id == r.id }! }
+        let movedItem = item(moved), markedItem = item(marked), restoredItem = item(restored), deletedItem = item(deleted)
+
+        moved.fullPath = sb.files.appendingPathComponent("elsewhere.mov").path              // rescanned to a new path
+        VideoScanModel.stampRemoval(marked, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))   // another door
+        _ = sb.model.clearRemoval(restored)                                                  // Restore clicked meanwhile
+        sb.model.records.removeAll { $0.id == deleted.id }                                   // row left the catalog
+
+        for (stat, it) in [(CatalogAuditStat.gone, movedItem), (.gone, markedItem), (.file(size: 2_000), restoredItem), (.gone, deletedItem)] {
+            let (apply, mark) = sb.model.applyCatalogAudit(stat, to: it)
+            #expect(apply.result == .recordChanged && mark == nil, "\(it.filename): \(apply.result)")
+        }
+        #expect(moved.removal == nil && marked.removal?.state == .inTrash && restored.removal == nil)
+    }
+
+    @Test("an acknowledged save every N marks and at the end; the clock alone saves too")
+    func saveCadence() async throws {
+        let sb = try ShowAgainSandbox.make("ca_saveN"); defer { sb.cleanup() }
+        for i in 0..<5 { try sb.live("g\(i).mov", onDisk: false) }
+        let job = await runAudit(sb.model) { j in
+            j.checkpointRows = 2
+            j.checkpointSeconds = 3_600
+            j.chunkSize = 1
+            j.saveCatalogForTesting = { true }
+        }
+        #expect(job.storedCount == 5 && job.totals[.gone] == 5)
+        #expect(job.saveCount == 3, "after 2, after 4, and the final one for the 5th (got \(job.saveCount))")
+
+        let sb2 = try ShowAgainSandbox.make("ca_saveT"); defer { sb2.cleanup() }
+        for i in 0..<3 { try sb2.live("t\(i).mov", onDisk: false) }
+        let clock = await runAudit(sb2.model) { j in
+            j.checkpointRows = 10_000
+            j.checkpointSeconds = 0
+            j.chunkSize = 1
+            j.statPaths = { paths in Thread.sleep(forTimeInterval: 0.05); return paths.map { _ in .gone } }
+            j.saveCatalogForTesting = { true }
+        }
+        #expect(clock.storedCount == 3 && clock.saveCount >= 2, "time-based checkpoints fired (got \(clock.saveCount))")
+    }
+
+    @Test("a save that is not acknowledged undoes the unsaved marks (compare-and-set) and fails the run")
+    func failedSaveUndoesMarks() async throws {
+        let sb = try ShowAgainSandbox.make("ca_savefail"); defer { sb.cleanup() }
+        let gone = try (0..<3).map { try sb.live("s\($0).mov", onDisk: false) }
+        let back = try sb.missingRow("back.mov", onDisk: true)
+        let kept = try sb.live("kept.mov", onDisk: false)
+        let marker = CatalogAuditRunMarker()
+        let job = await runAudit(sb.model, marker: marker) { j in
+            j.chunkSize = 1
+            j.checkpointRows = 100
+            j.saveCatalogForTesting = { false }
+        }
+        if case .failed(let msg) = job.state { #expect(msg.contains("could not be saved"), Comment(rawValue: msg)) } else { Issue.record("expected failed, got \(job.state)") }
+        #expect(job.saveFailed && job.storedCount == 0)
+        #expect(gone.allSatisfy { $0.removal == nil } && kept.removal == nil, "every unsaved mark is undone")
+        #expect(back.removal?.state == .missing && back.removal?.reason == .missingOnDisk, "the restore is undone exactly")
+        #expect(marker.lastRun?.outcome == .failed && marker.lastRun?.partial == true)
+        let text = sb.catalogLogText()
+        #expect(text.contains("NOT confirmed") && text.contains("OUTCOME failed (partial)"))
+        // The undo is compare-and-set: a row that moved on keeps what it has now.
+        let plan = sb.model.catalogAuditPlan()
+        let item = plan.lanes.flatMap(\.items).first { $0.id == kept.id }!
+        let (_, mark) = sb.model.applyCatalogAudit(.gone, to: item)
+        VideoScanModel.stampRemoval(kept, .inTrash(movedAt: Date(), trashPath: nil, reason: .catalogTrash))
+        let reverted = sb.model.revertCatalogAuditMark(try #require(mark))
+        #expect(reverted == false)
+        #expect(kept.removal?.state == .inTrash)
+    }
+
+    @Test("Stop finishes the chunk in flight, saves the marks so far, and says partial", .timeLimit(.minutes(1)))
+    func stopIsPartialAndSaved() async throws {
+        let sb = try ShowAgainSandbox.make("ca_stop"); defer { sb.cleanup() }
+        let rows = try (0..<12).map { try sb.live("stop\($0).mov", onDisk: false) }
+        let marker = CatalogAuditRunMarker()
+        let job = CatalogAuditJob(model: sb.model, marker: marker)
+        job.volumeOnline = { _ in true }
+        job.tickMilliseconds = 20
+        job.chunkSize = 1
+        job.statPaths = { paths in Thread.sleep(forTimeInterval: 0.04); return paths.map { _ in .gone } }
+        job.start()
+        try await Task.sleep(for: .milliseconds(150))
+        job.cancel()
+        await job.task?.value
+        #expect(job.state == .cancelled, "\(job.state)")
+        #expect(job.totals.done > 0 && job.totals.done < 12, "stopped part-way (\(job.totals.done))")
+        #expect(job.storedCount == job.totals[.gone], "every mark made was saved")
+        #expect(rows.filter { $0.removal != nil }.count == job.storedCount, "no row carries an unsaved mark")
+        #expect(marker.lastRun?.outcome == .stopped && marker.lastRun?.partial == true)
+        #expect(sb.catalogLogText().contains("OUTCOME stopped (partial)"))
+    }
+
+    @Test("the reason decodes from an older catalog's JSON, and an unknown reason still decodes")
+    func reasonDecodesFromOldJSON() throws {
+        let decoder = JSONDecoder()
+        let audit = try decoder.decode(RemovalMarker.self, from: Data(#"{"state":"missing","since":1700000000,"reason":"missingAtAudit","lastSeen":1690000000}"#.utf8))
+        #expect(audit.state == .missing && audit.reason == .missingAtAudit && audit.lastSeen != nil)
+        let older = try decoder.decode(RemovalMarker.self, from: Data(#"{"state":"missing","since":1700000000,"reason":"missingOnDisk"}"#.utf8))
+        #expect(older.reason == .missingOnDisk && older.reason != .missingAtAudit)
+        let newer = try decoder.decode(RemovalMarker.self, from: Data(#"{"state":"missing","since":1700000000,"reason":"missingAtSomethingNewer"}"#.utf8))
+        #expect(newer.reason.rawValue == "missingAtSomethingNewer")
+        #expect(RemovalReason.missingAtAudit.rawValue == "missingAtAudit", "the on-disk key is pinned")
+        // Round trip through the marker's own encoder (the catalog's round
+        // trip through catalog.json is pinned in perRowOutcomes).
+        let written = RemovalMarker.missing(noticedAt: Date(timeIntervalSince1970: 1_700_000_000), lastSeen: nil, reason: .missingAtAudit)
+        let roundTripped = try decoder.decode(RemovalMarker.self, from: try JSONEncoder().encode(written))
+        #expect(roundTripped == written)
+    }
+
+    @Test("the words: the line, the folders that lost the most files, skipped")
+    func words() {
+        var t = CatalogAuditTotals()
+        t.planned = 10
+        t.add(.present, rows: 6); t.add(.gone, rows: 3); t.add(.changed)
+        t.skipped = [.inTrash: 2, .superseded: 1]
+        for p in ["/Volumes/P/_staging/a.mov", "/Volumes/P/_staging/b.mov", "/Volumes/Q/x/c.mov"] { t.noteGone(path: p) }
+        #expect(t.line == "6 of 10 present · 1 changed size (reported, not marked) · 3 gone — marked Missing · 3 skipped (in the Trash 2, superseded 1)", Comment(rawValue: t.line))
+        #expect(t.topFolders().map(\.folder) == ["/Volumes/P/_staging", "/Volumes/Q/x"])
+        #expect(t.goneFoldersClause == "2 gone under /Volumes/P/_staging; 1 gone under /Volumes/Q/x", Comment(rawValue: t.goneFoldersClause))
+        for i in 0..<5 { t.noteGone(path: "/Volumes/R/f\(i)/g.mov") }
+        #expect(t.goneFoldersClause.hasSuffix("; 4 more in 4 other folder(s)"), Comment(rawValue: t.goneFoldersClause))
+        #expect(t.marked == 3)
+        #expect(CatalogAuditResult.gone.isMark && CatalogAuditResult.cameBack.isMark && !CatalogAuditResult.changed.isMark)
+    }
+
+    @Test("the plan: live rows and Missing rows are asked; Trash, removed, superseded and pathless rows are skipped; one lane per root in path order")
+    func planShape() throws {
+        let sb = try ShowAgainSandbox.make("ca_plan"); defer { sb.cleanup() }
+        try sb.live("b.mov"); try sb.live("a.mov")
+        try sb.missingRow("m.mov", onDisk: false)
+        let t = try sb.live("t.mov"); VideoScanModel.stampRemoval(t, .inTrash(movedAt: Date(), trashPath: nil, reason: .junk))
+        let x = try sb.live("x.mov"); VideoScanModel.stampRemoval(x, .removedFromCatalog(at: Date(), reason: .userRemoved))
+        let s = try sb.live("s.mov"); s.supersededByID = UUID()
+        let p = VideoRecord(); sb.model.records.append(p)
+        let ext = VideoRecord(); ext.fullPath = "/Volumes/CAPlan/clip.mov"; ext.filename = "clip.mov"; sb.model.records.append(ext)
+        let plan = sb.model.catalogAuditPlan()
+        #expect(plan.lanes.map(\.root) == ["/", "/Volumes/CAPlan"])
+        #expect(plan.lanes[0].items.map(\.filename) == ["a.mov", "b.mov", "m.mov"])
+        #expect(plan.lanes[0].items.last?.wasMissing == true && plan.missingRecheck == 1)
+        #expect(plan.skipped == [.inTrash: 1, .removedFromCatalog: 1, .superseded: 1, .noPath: 1])
+        #expect(plan.rowCount == 4 && plan.skippedCount == 4)
+    }
+}
+
+// MARK: - Scale
+
+@Suite("Audit catalog — scale (100k rows)", .serialized)
+@MainActor
+struct CatalogAuditJobScaleTests {
+
+    /// 100k rows on 10 drives, 1 in 10,000 gone, applied through the real
+    /// job with a stubbed stat and an acknowledged-save seam.
+    /// Budget (Debug, M4 Max, headroom ×3+): plan < 2 s; plan + run < 10 s.
+    @Test(.timeLimit(.minutes(2)))
+    func planAndRunAt100k() async throws {
+        let sb = try ShowAgainSandbox.make("ca_scale"); defer { sb.cleanup() }
+        var records: [VideoRecord] = []
+        records.reserveCapacity(100_000)
+        for i in 0..<100_000 {
+            let r = VideoRecord()
+            r.fullPath = "/Volumes/CAScale\(i % 10)/\(i / 1000)/clip_\(i).mov"
+            r.filename = "clip_\(i).mov"
+            r.sizeBytes = Int64(10_000 + i)
+            records.append(r)
+        }
+        sb.model.records = records
+        let load = TimingBudget.sampleLoad()
+        let clock = ContinuousClock()
+        var plan = CatalogAuditPlan()
+        let planned = clock.measure { plan = sb.model.catalogAuditPlan() }
+        #expect(plan.lanes.count == 10 && plan.rowCount == 100_000)
+        expectWithinTimingBudget("audit plan over 100k rows", measured: planned,
+                                 budget: PerformanceLane.debugCeiling(.seconds(2)), loadBefore: load)
+
+        let start = clock.now
+        let job = await runAudit(sb.model) { j in
+            j.statPaths = { paths in
+                paths.map { p in
+                    let n = Int(p.split(separator: "_").last!.dropLast(4)) ?? -1
+                    return n % 10_000 == 0 ? .gone : .file(size: Int64(10_000 + n))
+                }
+            }
+            j.saveCatalogForTesting = { true }
+        }
+        let ran = clock.now - start
+        #expect(job.totals.done == 100_000 && job.totals[.gone] == 10 && job.totals[.present] == 99_990, Comment(rawValue: job.totals.line))
+        #expect(job.storedCount == 10 && job.sample.count == CatalogAuditJob.sampleCap)
+        #expect(records.filter { $0.removal != nil }.count == 10)
+        expectWithinTimingBudget("audit plan + run over 100k rows", measured: planned + ran,
+                                 budget: PerformanceLane.debugCeiling(.seconds(10)), loadBefore: load)
+    }
+}
+
+// MARK: - Isolation
+
+@Suite("Audit catalog — isolation: poisoned marker, refusals", .serialized)
+@MainActor
+struct CatalogAuditJobIsolationTests {
+
+    @Test("a poisoned or newer-schema catalog-audit.json is read-only noise: no crash, no mark, no launch line; the run then rewrites it")
+    func poisonedMarkerIsNoise() async throws {
+        let sb = try ShowAgainSandbox.make("ca_poison"); defer { sb.cleanup() }
+        try FileManager.default.createDirectory(at: sb.catalogDir, withIntermediateDirectories: true)
+        let file = sb.auditMarkerFile()
+        for poison in ["{ not json", #"{"startedAt":"2026-10-16T02:00:00Z","outcome":"somethingNewer","schema":9,"counts":{"gone":99999}}"#, ""] {
+            try Data(poison.utf8).write(to: file)
+            let marker = CatalogAuditRunMarker()
+            #expect(marker.attach(catalogFile: sb.model.catalogStore.fileLocation) == nil, Comment(rawValue: poison))
+            #expect(marker.lastRun == nil)
+        }
+        #expect(CatalogAuditRunMarker.launchLine(CatalogAuditRunRecord(startedAt: Date(), finishedAt: Date(), outcome: .completed)) == nil,
+                "a clean completed run says nothing at launch")
+        let live = try sb.live("ok.mov")
+        let marker = CatalogAuditRunMarker()
+        let job = await runAudit(sb.model, marker: marker)
+        #expect(job.totals[.present] == 1 && live.removal == nil)
+        #expect(marker.lastRun?.outcome == .completed, "the run's own marker replaces the poison")
+        #expect(marker.fileURL?.path.hasPrefix(sb.root.path) == true, "never the real Application Support marker")
+    }
+
+    @Test("a read-only catalog refuses before any stat; nothing is marked or saved")
+    func readOnlyRefusesBeforeAnyStat() async throws {
+        let sb = try ShowAgainSandbox.make("ca_ro"); defer { sb.cleanup() }
+        let gone = try sb.live("gone.mov", onDisk: false)
+        sb.model.isReadOnly = true
+        let stats = CallCounter()
+        let marker = CatalogAuditRunMarker()
+        let job = await runAudit(sb.model, marker: marker) { j in
+            j.statPaths = { paths in _ = stats.next(); return paths.map { _ in .gone } }
+        }
+        #expect(job.wasRefused)
+        if case .failed(let msg) = job.state { #expect(msg.contains("read-only"), Comment(rawValue: msg)) } else { Issue.record("expected refused, got \(job.state)") }
+        #expect(stats.value == 0, "no stat ran")
+        #expect(gone.removal == nil && job.storedCount == 0 && job.saveCount == 0)
+        #expect(sb.catalogLogText().contains("Audit catalog: refused"))
+        #expect(!FileManager.default.fileExists(atPath: sb.auditMarkerFile().path), "a refused run writes no marker")
+    }
+
+    @Test("the shared App Support store refuses from a test host")
+    func sharedStoreRefusesUnderTestHost() async throws {
+        let model = VideoScanModel(logDirectory: FileManager.default.temporaryDirectory
+            .appendingPathComponent("test_ca_shared_\(UUID().uuidString.prefix(8))", isDirectory: true))
+        #expect(model.catalogStore === CatalogStore.shared)
+        let stats = CallCounter()
+        let job = await runAudit(model) { j in j.statPaths = { paths in _ = stats.next(); return paths.map { _ in .gone } } }
+        #expect(job.wasRefused && stats.value == 0)
+        if case .failed(let msg) = job.state { #expect(msg.contains("shared one"), Comment(rawValue: msg)) } else { Issue.record("\(job.state)") }
+    }
+
+    @Test("a second run while one is active is refused by the Center; nothing starts")
+    func secondRunRefused() async throws {
+        let sb = try ShowAgainSandbox.make("ca_twice"); defer { sb.cleanup() }
+        try sb.live("a.mov")
+        let center = MediaFileOperationsCenter()
+        let first = center.startCatalogAudit(model: sb.model, marker: nil)
+        let second = center.startCatalogAudit(model: sb.model, marker: nil)
+        #expect(second.wasRefused)
+        await first.task?.value
+        await second.task?.value
+        if case .finished = first.state {} else { Issue.record("\(first.state)") }
+    }
+}
+
+// MARK: - Sensor
+
+@Suite("Audit catalog — sensor: one mark path, nothing on media", .serialized)
+@MainActor
+struct CatalogAuditJobSensorTests {
+
+    static let modelHalf = "VideoScanModel+CatalogAudit.swift"
+    static let sources = [
+        "CatalogAuditPlan.swift", "CatalogAuditJob.swift", "CatalogAuditRun.swift", "CatalogAuditDetailView.swift",
+        "CatalogAuditMenuItem.swift", "CatalogAuditCLI.swift", modelHalf,
+    ]
+
+    static func code(_ name: String) throws -> String {
+        try SourceTree.appSource(named: name).split(separator: "\n")
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }.joined(separator: "\n")
+    }
+
+    @Test("no file-moving, -removing or -writing call, no Process(), no row removal, no direct marker write in the audit's sources")
+    func sourcesTouchNoFileAndNoRow() throws {
+        let forbidden = CheckCopiesSensorTests.forbidden + ["analyzeDuplicates", "purge", "setAside(", "Process()", "Process(", "posix_spawn",
+                                                          "records.remove"]
+        // Assignments, not comparisons (OneEngineSensorTests' own patterns).
+        let writes = [#"\.removal\s*=[^=]"#, #"\.purgedAt\s*=[^=]"#, #"lifecycleStage\s*=[^=]"#, #"archiveStage\s*=[^=]"#]
+        for name in Self.sources {
+            let code = try Self.code(name)
+            for call in forbidden { #expect(!code.contains(call), "\(name) contains \(call)") }
+            for pattern in writes {
+                #expect(code.range(of: pattern, options: .regularExpression) == nil, "\(name) writes a marker field directly (\(pattern))")
+            }
+        }
+    }
+
+    @Test("the ONLY mark path is stampRemoval / clearRemoval inside the model half, and the job reaches rows only through it")
+    func onlyOneMarkPath() throws {
+        for name in Self.sources where name != Self.modelHalf {
+            let code = try Self.code(name)
+            for call in ["stampRemoval", "clearRemoval", "RemovalUndo", "RemovalMarker.missing", ".reinstate("] {
+                #expect(!code.contains(call), "\(name) reaches the marker through \(call) — only \(Self.modelHalf) may")
+            }
+        }
+        let half = try Self.code(Self.modelHalf)
+        #expect(half.components(separatedBy: "stampRemoval(").count == 2, "exactly one stampRemoval call")
+        #expect(half.components(separatedBy: "clearRemoval(").count == 2, "exactly one clearRemoval call")
+        #expect(half.contains("reason: .missingAtAudit"))
+        let job = try Self.code("CatalogAuditJob.swift")
+        #expect(job.contains("model.applyCatalogAudit(stat, to: item)") && job.contains("model.revertCatalogAuditMark(mark)"))
+        #expect(job.contains("if stats.contains(.gone), !volumeOnline(lane.root)"), "the fresh mount check before any gone answer lands")
+        #expect(job.contains("saveCatalogAcknowledged()"), "marks land only after an acknowledged save")
+        let plan = try Self.code("CatalogAuditPlan.swift")
+        #expect(plan.contains("(e == ENOENT || e == ENOTDIR) ? .gone : .unreadable(errno: e)"), "only ENOENT / ENOTDIR mean gone")
+        // The only file written: catalog-audit.json, through AtomicFilePublish, in the run marker.
+        for name in Self.sources where name != "CatalogAuditRun.swift" {
+            let other = try Self.code(name)
+            #expect(!other.contains("AtomicFilePublish"), "\(name) writes a file")
+        }
+        let run = try Self.code("CatalogAuditRun.swift")
+        #expect(run.contains("AtomicFilePublish.write(data, to: fileURL"))
+    }
+
+    @Test("every file is still at its path with the same bytes, inode and mtime after a run; nothing appeared beside the media")
+    func filesUntouched() async throws {
+        let sb = try ShowAgainSandbox.make("ca_untouched"); defer { sb.cleanup() }
+        let recs = try (0..<4).map { try sb.live("ro\($0).mov", bytes: 3_000 + $0) }
+        let back = try sb.missingRow("back.mov", bytes: 777, onDisk: true)
+        let before = try (recs + [back]).map { try MediaFingerprint.of($0.fullPath) }
+        let job = await runAudit(sb.model)
+        #expect(job.totals[.present] == 4 && job.totals[.cameBack] == 1)
+        #expect(try (recs + [back]).map { try MediaFingerprint.of($0.fullPath) } == before)
+        let names = try FileManager.default.contentsOfDirectory(atPath: sb.files.path).sorted()
+        #expect(names == (recs + [back]).map(\.filename).sorted(), "nothing appeared beside the media")
+    }
+
+    @Test("exactly one START and one OUTCOME line per run, including a stopped and a refused one")
+    func oneStartOneOutcome() async throws {
+        let sb = try ShowAgainSandbox.make("ca_lines"); defer { sb.cleanup() }
+        try sb.live("l.mov")
+        _ = await runAudit(sb.model)
+        var text = sb.catalogLogText()
+        #expect(text.components(separatedBy: "Audit catalog: START").count == 2)
+        #expect(text.components(separatedBy: "Audit catalog: OUTCOME").count == 2)
+        let job = CatalogAuditJob(model: sb.model)
+        job.volumeOnline = { _ in true }
+        job.statPaths = { paths in Thread.sleep(forTimeInterval: 0.2); return paths.map { _ in .file(size: 2_000) } }
+        job.start()
+        try await Task.sleep(for: .milliseconds(30))
+        job.cancel()
+        await job.task?.value
+        text = sb.catalogLogText()
+        #expect(text.components(separatedBy: "Audit catalog: START").count == 3)
+        #expect(text.components(separatedBy: "Audit catalog: OUTCOME").count == 3)
+    }
+}

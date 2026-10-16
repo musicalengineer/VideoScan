@@ -490,9 +490,9 @@ struct MediaFileOperationKindTests {
             "checkMedia", "repair", "findPerson", "promote", "verifyArchive", "archiveAngel",
             "deleteDuplicates", "pruneCopies", "findSimilarFootage", "bindFixity", "lockArchive",
             "compareFootage", "fingerprintBackfill", "showAgain", "checkCopies", "fillFullHashes",
-            "cleanupTrash", "fingerprintSound",
+            "cleanupTrash", "fingerprintSound", "auditCatalog",
         ]
-        #expect(MediaFileOperationKind.all.count == 31)   // update when adding a kind
+        #expect(MediaFileOperationKind.all.count == 32)   // update when adding a kind
         #expect(MediaFileOperationKind.all.map(\.rawValue) == expected)
     }
 
