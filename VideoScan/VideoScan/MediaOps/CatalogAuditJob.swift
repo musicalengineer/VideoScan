@@ -8,9 +8,9 @@
 // Shape (FullHashBackfillJob's lanes, AudioFingerprintBackfillJob's
 // save/undo contract):
 //   • One LANE per volume root, all lanes in parallel (a TaskGroup). A lane
-//     first ANCHORS its rows (off the main actor): the identity of the
-//     filesystem each file is expected on (CatalogAuditMountIdentity — the
-//     real mount, not the lexical root). Then it stats its rows in CHUNKS
+//     first ANCHORS its rows (off the main actor): the identity of the LANE
+//     ROOT's filesystem (CatalogAuditMountIdentity — "/Volumes/X" itself,
+//     or this Mac's data volume for "/"; codex r2 F1). Then it stats its rows in CHUNKS
 //     (`chunkSize`) off the main actor, and applies the chunk's answers on
 //     the main actor — each to the row it asked about only (same id, same
 //     snapshot of the fields that matter: invariant 4).
@@ -19,11 +19,14 @@
 //     anything gone re-asks the KERNEL MOUNT TABLE (no disk I/O, no cache)
 //     before applying: a drive that left mid-run makes every path look gone,
 //     so that lane stops and its remaining rows are "not asked".
-//   • PROVE AT THE MARK (codex 2026-10-16 F1/F2): the chunk's ENOENT is the
-//     cheap first pass and decides nothing. The apply step re-stats every
-//     gone row SYNCHRONOUSLY just before the mark and accepts ENOENT only
-//     on the SAME filesystem the lane anchored — a drive that left, a link
-//     whose target moved, a file that is back, an errno: never a mark.
+//   • PROVE AT THE MARK (codex 2026-10-16 F1/F2, r2 F1/F2): the chunk's
+//     ENOENT is the cheap first pass and decides nothing. The apply step
+//     walks every gone row again SYNCHRONOUSLY just before the mark through
+//     a DIRECTORY HANDLE (open/openat O_NOFOLLOW, fstatfs, fstatat) and
+//     accepts ENOENT only on the lane root's filesystem, under the lane's
+//     rule (under "/": the file's own folder must be there and hold
+//     something else) — a drive that left, a link in the path, a file that
+//     is back, an errno, an empty folder under "/": never a mark.
 //   • ERRNO RULE (invariant 2): only ENOENT / ENOTDIR mean gone. Permission,
 //     I/O, timeout — anything else — is "could not check", never a mark.
 //   • ONE WRITER (invariant 3): marks go through `applyCatalogAudit`
@@ -42,7 +45,9 @@
 //     test host.
 //
 // NOTHING ON MEDIA: the syscalls against a media path are `stat(2)` and,
-// for the anchor, `realpath` / `lstat` / `statfs` on its FOLDER. The only
+// at the mark, the read-only DIRECTORY handle walk in CatalogAuditPlan.swift
+// (the one declared exception to "nothing opened" — a folder, never a media
+// file; MOPS-14); the anchor is one `statfs` of the lane root. The only
 // writes are the catalog's removal markers (through the engine), catalog
 // saves, log lines and `catalog-audit.json` (CatalogAuditRun.swift) in the
 // catalog's folder. CatalogAuditSensorTests reads these sources.
@@ -85,6 +90,10 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     /// One stat per path, in order — the FIRST PASS only. The default is
     /// the real `stat(2)`. The second look at the mark is never a seam.
     var statPaths: @Sendable ([String]) -> [CatalogAuditStat] = { $0.map(CatalogAuditStat.of) }
+    /// Which lane a path belongs to. Production: "/Volumes/X" or "/". Tests
+    /// make a sandbox folder a lane root of its own (its identity is then
+    /// that folder's filesystem and a missing parent folder is proof).
+    var laneRoot: @Sendable (String) -> String = CatalogAuditPlanner.productionLaneRoot
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
     var chunkSize = 256
@@ -199,7 +208,7 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             finish(failed: "Refused — \(why). Nothing was checked or changed.")
             return
         }
-        let plan = model.catalogAuditPlan()
+        let plan = model.catalogAuditPlan(laneRoot: laneRoot)
         let split = splitByConnection(plan.lanes)
         seed(plan, online: split.online, offline: split.offline)
         marker?.attach(catalogFile: model.catalogStore.fileLocation)
@@ -288,34 +297,28 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         setPhase(lane.root, .finished)
     }
 
-    /// Before the lane's first stat: which filesystem each row's file is
-    /// expected on, read while the drive is (by the mount table) here. Off
-    /// the main actor — a sleeping drive answers its first `realpath` slowly.
+    /// Before the lane's first stat: the identity of the LANE ROOT's
+    /// filesystem (codex r2 F1) — every gone proof in the lane must be read
+    /// on it — taken while the drive is (by the mount table) here. Off the
+    /// main actor — a sleeping drive can answer its first call slowly.
     private func anchor(_ lane: CatalogAuditLane) async -> CatalogAuditLane {
         checking.insert(lane.root)
         defer { checking.remove(lane.root) }
         var anchored = lane
-        anchored.items = await Self.anchorOffMain(lane.items)
+        anchored.items = await Self.anchorOffMain(lane.items, root: lane.root)
         return anchored
     }
 
-    /// One `realpath` + `statfs` per distinct FOLDER (rows share folders;
-    /// the cache is one entry per folder in the lane).
+    /// One `statfs` per lane: the root's own filesystem, never where a
+    /// parent folder leads now. nil (not a mount point) = never provable.
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated static func anchorOffMain(_ items: [CatalogAuditItem]) async -> [CatalogAuditItem] {
-        var byFolder: [String: CatalogAuditMountIdentity?] = [:]
+    nonisolated static func anchorOffMain(_ items: [CatalogAuditItem], root: String) async -> [CatalogAuditItem] {
+        let identity = CatalogAuditMountIdentity.ofLaneRoot(root)
         return items.map { item in
             var anchored = item
-            let folder = item.directory
-            if let known = byFolder[folder] {
-                anchored.expectedMount = known
-            } else {
-                let identity = CatalogAuditMountIdentity.expected(forDirectory: folder, root: item.root)
-                byFolder.updateValue(identity, forKey: folder)
-                anchored.expectedMount = identity
-            }
+            anchored.expectedMount = identity
             return anchored
         }
     }

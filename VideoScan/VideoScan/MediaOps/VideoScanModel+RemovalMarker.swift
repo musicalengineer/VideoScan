@@ -33,6 +33,7 @@ extension VideoScanModel {
     /// Static so a door with no model at hand (the caption orchestrator)
     /// still writes through the one function.
     nonisolated static func stampRemoval(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage? = nil) {
+        if rec.removal != marker { rec.removalRevision += 1 }
         rec.removal = marker
         if let mirror = stage ?? Self.lifecycleMirror(for: marker.state) {
             rec.lifecycleStage = mirror
@@ -48,19 +49,24 @@ extension VideoScanModel {
         }
     }
 
-    /// Undo one marker write BY VALUE, on whatever instance `rec` is now
-    /// (codex 2026-10-16 F4; the audit's unsaved-batch rollback). Only when
-    /// the row still carries exactly `wrote` is its marker put back to
-    /// `previous`; each legacy mirror goes back only if it still holds the
-    /// value the write itself left (so a newer lifecycle or archive-stage
-    /// edit survives). No other field is touched. False = the row was
-    /// changed by another door since; there is nothing of ours to undo.
-    /// (For Rick: a compare-and-swap on the marker, then on each mirror.)
+    /// Undo one marker write BY VALUE AND REVISION, on whatever instance
+    /// `rec` is now (codex 2026-10-16 F4, r2 F4; the audit's unsaved-batch
+    /// rollback). Only when the row still carries exactly `wrote` AT the
+    /// `revision` that write produced is its marker put back to `previous`
+    /// (and the revision bumped again); each legacy mirror goes back only
+    /// if it still holds the value the write itself left (so a newer
+    /// lifecycle or archive-stage edit survives). No other field is
+    /// touched. False = the row was changed by another door since — even
+    /// back to an equal value (nil → Trash → Put Back → Restore → nil has a
+    /// higher revision); there is nothing of ours to undo.
+    /// (For Rick: a compare-and-swap on (marker, revision), then on each
+    /// mirror — the revision is the ABA tag.)
     @discardableResult
-    nonisolated static func revertRemoval(_ rec: VideoRecord, wrote: RemovalMarker?, previous: RemovalMarker?,
+    nonisolated static func revertRemoval(_ rec: VideoRecord, wrote: RemovalMarker?, previous: RemovalMarker?, revision: Int,
                                           mirrorsBefore: RemovalMirrors, mirrorsAfter: RemovalMirrors) -> Bool {
-        guard rec.removal == wrote else { return false }
+        guard rec.removal == wrote, rec.removalRevision == revision else { return false }
         rec.removal = previous
+        rec.removalRevision += 1
         if rec.lifecycleStage == mirrorsAfter.lifecycleStage { rec.lifecycleStage = mirrorsBefore.lifecycleStage }
         if rec.archiveStage == mirrorsAfter.archiveStage { rec.archiveStage = mirrorsBefore.archiveStage }
         return true
@@ -82,6 +88,7 @@ extension VideoScanModel {
         if fileLeft, rec.fullPath.isEmpty || !FileManager.default.fileExists(atPath: rec.fullPath) {
             return "\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."
         }
+        if rec.removal != nil { rec.removalRevision += 1 }
         rec.removal = nil
         // A successful, explicit Restore clears the old "Manually Deleted"
         // label whichever legacy encoding won the migration (codex round 1

@@ -125,6 +125,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
     public let scanContext: ScanContext
     public let purgedAt: Date?
     public let removal: RemovalMarker?   // GH #143 — purgedAt is derived from it
+    /// codex r2 F4 — the marker's write counter; nil while it is still 0 so
+    /// a never-marked legacy row writes no key and stays byte-identical.
+    public let removalRevision: Int?
     public let embeddedCreationDate: Date?
     public let embeddedCreationSource: String?
     public let originMake: String?
@@ -261,6 +264,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         scanContext                 = r.scanContext
         purgedAt                    = r.purgedAt
         removal                     = r.removal
+        removalRevision             = r.removalRevision > 0 ? r.removalRevision : nil
         embeddedCreationDate        = r.embeddedCreationDate
         embeddedCreationSource      = r.embeddedCreationSource
         originMake                  = r.originMake
@@ -454,6 +458,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // still written (derived from it) so an older build keeps hiding the
         // row; restoring a row drops both keys.
         try c.encodeIfPresent(removal, forKey: .removal)
+        // The marker's write counter (codex r2 F4): only once the engine has
+        // ever changed the marker (nil until then — see the property).
+        try c.encodeIfPresent(removalRevision, forKey: .removalRevision)
         // Embedded creation date + origin (2026-08-16): keys written only
         // when present — records without a container stamp (every legacy
         // record) round-trip byte-identical.

@@ -4,19 +4,21 @@
 // §6). CatalogAuditSensorTests pins that `stampRemoval` / `clearRemoval`
 // appear in no other audit source.
 //
-// Compare-and-set (invariant 4; codex 2026-10-16 F3): a stat's answer is
-// applied only to the row it was asked about — same id and the SAME
-// snapshot of the fields that matter (path, size, marker, lifecycle,
-// archive stage and fixity, hash time, mtime) as when planned. A row
-// rescanned, edited, restored or marked by another door while the stats
-// ran is "changed meanwhile" and left alone. Whether a row is an archive
-// copy is read from the LIVE record here, never from the plan.
+// Compare-and-set (invariant 4; codex 2026-10-16 F3, r2 F3): a stat's
+// answer is applied only to the row it was asked about — same id and the
+// SAME snapshot of the fields that matter (path, size, marker, lifecycle,
+// archive stage and fixity, derivation, supersession, hash time, mtime) as
+// when planned. A row rescanned, edited, restored, marked or superseded by
+// another door while the stats ran is "changed meanwhile" and left alone.
+// Whether a row is an archive copy is read from the LIVE record here,
+// never from the plan.
 //
-// PROVE AT THE MARK (codex F1/F2): the chunk's ENOENT decides nothing. A
-// gone answer is re-stat'ed SYNCHRONOUSLY here, just before the one
-// `stampRemoval`, and marked only if the file is still ENOENT on the SAME
-// filesystem the plan anchored (CatalogAuditProof). Present now → present;
-// any other errno → could not check; another filesystem → could not check,
+// PROVE AT THE MARK (codex F1/F2, r2 F1/F2): the chunk's ENOENT decides
+// nothing. A gone answer is walked again SYNCHRONOUSLY here, through a
+// directory handle bound to the lane root's filesystem, just before the one
+// `stampRemoval` (CatalogAuditProof). Present now → present; any other
+// errno → could not check; a link in the path, an empty folder under "/" →
+// could not check (not provable); another filesystem → could not check,
 // "drive not connected". Nothing here awaits: the proof and the mark are
 // one synchronous step on the main actor.
 //
@@ -27,12 +29,15 @@
 // owns the archive). A changed size is reported, never marked (§6: that
 // is a decision). Every other answer writes nothing.
 //
-// Undo (invariant 6; codex F4): each mark is a VALUE — what the row's
-// marker was, what the audit wrote, and the legacy mirrors before and
-// after. A save that is not acknowledged puts the marker back on the
-// CURRENT instance of the row, only if it still carries exactly what the
-// audit wrote; mirrors go back only where the write itself moved them; no
-// other field is touched. No object memento (`RemovalUndo`) is held.
+// Undo (invariant 6; codex F4, r2 F4): each mark is a VALUE — what the
+// row's marker was, what the audit wrote, the REVISION that write produced,
+// and the legacy mirrors before and after. A save that is not acknowledged
+// puts the marker back on the CURRENT instance of the row, only if it still
+// carries exactly what the audit wrote AT THAT REVISION — an equal value
+// written since by another door (nil → Trash → Put Back → Restore → nil)
+// has a higher revision and is left alone; mirrors go back only where the
+// write itself moved them; no other field is touched. No object memento
+// (`RemovalUndo`) is held.
 
 import Foundation
 import VideoScanCore
@@ -49,6 +54,9 @@ struct CatalogAuditMark: Sendable, Equatable {
     let previous: RemovalMarker?
     /// The marker the row carries after the write (nil = restored to live).
     let wrote: RemovalMarker?
+    /// `removalRevision` after the write — the audit OWNS the marker only
+    /// while the row still sits at this revision (codex r2 F4).
+    let revision: Int
     let mirrorsBefore: RemovalMirrors
     let mirrorsAfter: RemovalMirrors
 }
@@ -68,8 +76,8 @@ extension VideoScanModel {
         catalogAuditLog.notice("\(line, privacy: .public)")
     }
 
-    func catalogAuditPlan() -> CatalogAuditPlan {
-        CatalogAuditPlanner.plan(records: records)
+    func catalogAuditPlan(laneRoot: @Sendable (String) -> String = CatalogAuditPlanner.productionLaneRoot) -> CatalogAuditPlan {
+        CatalogAuditPlanner.plan(records: records, laneRoot: laneRoot)
     }
 
     /// Apply one stat to the row it was asked about. Returns what happened
@@ -79,7 +87,7 @@ extension VideoScanModel {
                            now: Date = Date()) -> (apply: CatalogAuditApply, mark: CatalogAuditMark?) {
         guard let rec = record(forID: item.id), CatalogAuditRowSnapshot.of(rec) == item.planned else {
             return (CatalogAuditApply(result: .recordChanged,
-                                      detail: "moved, rescanned, restored, edited or marked by another door while the audit ran — left alone; the next run asks again"), nil)
+                                      detail: "moved, rescanned, restored, edited, superseded or marked by another door while the audit ran — left alone; the next run asks again"), nil)
         }
         switch stat {
         case .unreadable, .notAFile:
@@ -92,8 +100,8 @@ extension VideoScanModel {
     }
 
     /// The chunk's stat said ENOENT. That was the first pass; the mark is
-    /// decided here by the second look, at this moment, on the filesystem
-    /// the file was expected on.
+    /// decided here by the second look, at this moment, through a handle
+    /// on the filesystem the file was expected on.
     private func applyGone(_ rec: VideoRecord, item: CatalogAuditItem, now: Date) -> (apply: CatalogAuditApply, mark: CatalogAuditMark?) {
         switch CatalogAuditProof.atTheMark(item) {
         case .notGone(.file(let size)):
@@ -104,6 +112,8 @@ extension VideoScanModel {
             let words = "expected \(expected?.words ?? "a filesystem that could not be identified"); found \(found?.words ?? "none")"
             return (CatalogAuditApply(result: .couldNotCheck,
                                       detail: "not at its path, but the drive it was expected on is not connected (\(words)) — not marked"), nil)
+        case .notProvable(let why):
+            return (CatalogAuditApply(result: .couldNotCheck, detail: "not at its path, but that is not proof here: \(why) — not marked"), nil)
         case .gone:
             return markGone(rec, item: item, now: now)
         }
@@ -124,7 +134,7 @@ extension VideoScanModel {
         Self.stampRemoval(rec, marker)
         return (CatalogAuditApply(result: .gone, detail: "not at its path, on its connected drive, at the moment of marking — marked Missing"),
                 CatalogAuditMark(id: item.id, path: item.path, previous: item.plannedMarker, wrote: marker,
-                                 mirrorsBefore: before, mirrorsAfter: .of(rec)))
+                                 revision: rec.removalRevision, mirrorsBefore: before, mirrorsAfter: .of(rec)))
     }
 
     /// The file is there: a Missing row goes live again (the engine checks
@@ -140,7 +150,7 @@ extension VideoScanModel {
             let sizeNote = sizeOnDisk == item.sizeBytes || item.sizeBytes == 0 ? "" : " (now \(MediaBytes.display(sizeOnDisk)), the catalog said \(MediaBytes.display(item.sizeBytes)))"
             return (CatalogAuditApply(result: .cameBack, detail: "the file is back at its path — live again" + sizeNote),
                     CatalogAuditMark(id: item.id, path: item.path, previous: item.plannedMarker, wrote: nil,
-                                     mirrorsBefore: before, mirrorsAfter: .of(rec)))
+                                     revision: rec.removalRevision, mirrorsBefore: before, mirrorsAfter: .of(rec)))
         }
         if item.sizeBytes > 0, sizeOnDisk != item.sizeBytes {
             return (CatalogAuditApply(result: .changed,
@@ -156,20 +166,21 @@ extension VideoScanModel {
         case .unreadable(let e):
             return CatalogAuditApply(result: .couldNotCheck, detail: "stat failed\(when): \(errnoWords(e)) — not marked")
         case .notAFile:
-            return CatalogAuditApply(result: .couldNotCheck, detail: "not a regular file any more\(when) (a folder or device is at the path) — not marked; a person decides")
+            return CatalogAuditApply(result: .couldNotCheck, detail: "not a regular file any more\(when) (a folder, device or link is at the path) — not marked; a person decides")
         case .file, .gone:
             return CatalogAuditApply(result: .couldNotCheck, detail: "no answer\(when) — not marked")
         }
     }
 
-    /// Take one mark back, by value, on the CURRENT instance of the row —
-    /// only while it still carries exactly what the audit wrote. False when
-    /// the row moved on (another door changed it; nothing of ours to undo),
-    /// and the console says so.
+    /// Take one mark back, by value AND revision, on the CURRENT instance of
+    /// the row — only while it still carries exactly what the audit wrote
+    /// at the revision that write produced. False when the row moved on
+    /// (another door changed it, even back to an equal value; nothing of
+    /// ours to undo), and the console says so.
     @discardableResult
     func revertCatalogAuditMark(_ mark: CatalogAuditMark) -> Bool {
         guard let rec = record(forID: mark.id), rec.fullPath == mark.path,
-              Self.revertRemoval(rec, wrote: mark.wrote, previous: mark.previous,
+              Self.revertRemoval(rec, wrote: mark.wrote, previous: mark.previous, revision: mark.revision,
                                  mirrorsBefore: mark.mirrorsBefore, mirrorsAfter: mark.mirrorsAfter) else {
             catalogAuditNote("undo: \(mark.path) was changed by another door since the audit marked it — left as it is now")
             return false
@@ -187,6 +198,7 @@ extension VideoScanModel {
         case ETIMEDOUT: name = "ETIMEDOUT"
         case ENXIO: name = "ENXIO"
         case ELOOP: name = "ELOOP"
+        case ENOTDIR: name = "ENOTDIR"
         case ENAMETOOLONG: name = "ENAMETOOLONG"
         default: name = "errno \(e)"
         }

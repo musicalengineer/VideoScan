@@ -159,6 +159,9 @@ struct RescanPreservedFields: Sendable {
     /// record as active. The whole marker travels — its state, reason and
     /// Trash path — not just the date.
     let removal: RemovalMarker?
+    /// The marker's write counter travels with it (codex r2 F4): a door
+    /// undoing its own write still recognises the marker as its own.
+    let removalRevision: Int
     /// Derived, for readers: when the row left.
     var purgedAt: Date? { removal?.since }
 
@@ -347,6 +350,7 @@ struct RescanPreservedFields: Sendable {
         self.tags = rec.tags
         self.userNotes = rec.userNotes
         self.removal = rec.removal
+        self.removalRevision = rec.removalRevision
         self.setAsideReason = rec.setAsideReason
         self.supersededByID = rec.supersededByID
         self.repairConfirmedDate = rec.repairConfirmedDate
@@ -448,6 +452,7 @@ struct RescanPreservedFields: Sendable {
         rec.tags = self.tags
         rec.userNotes = self.userNotes
         rec.removal = self.removal
+        rec.removalRevision = self.removalRevision
         rec.setAsideReason = self.setAsideReason
         rec.supersededByID = self.supersededByID
         rec.repairConfirmedDate = self.repairConfirmedDate
