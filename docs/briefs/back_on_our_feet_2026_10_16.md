@@ -47,6 +47,12 @@
 5. Credits: each integrity step is one bounded brief; codex on every batch; say if you want a
    different spend shape.
 
+## One local thing before you commit your project file
+Your uncommitted `project.pbxproj` (Xcode 27's upgrade check) flips the TEST target's Release
+`SWIFT_COMPILATION_MODE` from `singlefile` to `wholemodule`: it fails
+`tests/test_nightly_build_speed_settings.py` locally (the only local Python red) and would slow every
+nightly Release test compile. Keep `singlefile` on the test target; the 5.1 → 5.2 bump is fine.
+
 ## Open issues from today
 #323 headless audit vs GUI launch · #324 sibling proof's link blind spot · #325 ladder "different
 events" from no evidence · #326 scanner catalogues through symlinks · #327 P0 unverified facts ·
