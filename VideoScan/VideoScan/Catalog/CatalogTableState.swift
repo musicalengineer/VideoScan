@@ -72,6 +72,11 @@ struct CatalogTableState: DynamicProperty {
     @State var folderRows: [FootageFolderTableRow] = []
     /// The event ids among `folderRows` (O(1) "is this id a folder?").
     @State var folderIDs: Set<UUID> = []
+    /// The record ids among `folderRows` — members and loose files under
+    /// the filter, sort, open set AND scope. With the option on this is
+    /// THE displayed set every row action and prune reads (codex
+    /// 2026-10-16 P1); off, the linear rows are.
+    @State var folderRecordIDs: Set<UUID> = []
     /// Whether the option is on, for the key monitor (see FootageFolderKeyMirror).
     @State var folderKeyMirror = FootageFolderKeyMirror()
 }
@@ -101,7 +106,9 @@ extension CatalogContent {
     /// filter still shows (Rick 2026-10-06: "drop highlighted files that a
     /// filter or search hides" — Finder's rule; a hidden selection was a
     /// ⌘⌫ / Promote trap). Never touches keyboard focus. With the folder
-    /// view on, the folder display follows the new rows (a no-op otherwise).
+    /// view on, the folder display follows the new rows (a no-op otherwise)
+    /// and prunes again against what it shows when it lands
+    /// (`rebuildFolderRows` → `pruneSelectionToDisplay`).
     func refreshRows() {
         tableData = computeFiltered()
         // A selected folder row is not a record: it stays selected.
@@ -109,6 +116,37 @@ extension CatalogContent {
             .union(selectedIDs.intersection(tableState.folderIDs))
         if kept != selectedIDs { selectedIDs = kept }
         refreshFolderDisplay()
+    }
+
+    // MARK: The displayed selection — ONE source of truth for every row action
+
+    /// `ids` ∩ what the table shows right now: the folder display's record
+    /// ids while Show ▸ Events & Copies as Folders is on (members and loose
+    /// files under the filter, sort, open set AND scope), the linear rows
+    /// otherwise. Every row action — ⌘⌫, Promote, ⌘O, ⌘I, Return, the row
+    /// menu — goes through this, never the raw selection (codex 2026-10-16
+    /// P1: a derivative selected while a scope hid it reached ⌘⌫).
+    /// O(rows) only when `ids` is non-empty; event handlers only, never a body.
+    func displayedIDs(among ids: Set<UUID>) -> Set<UUID> {
+        CatalogSelectionPrune.displayed(ids, foldersOn: tableState.folderKeyMirror.isOn,
+                                        folderRecordIDs: tableState.folderRecordIDs, rows: tableData)
+    }
+
+    /// The selection ∩ displayed.
+    var displayedSelection: Set<UUID> { displayedIDs(among: selectedIDs) }
+
+    /// The selected rows on screen, in table order.
+    var displayedSelectedRecords: [VideoRecord] {
+        let shown = displayedSelection
+        return shown.isEmpty ? [] : tableData.filter { shown.contains($0.id) }
+    }
+
+    /// The folder display changed: keep only what it shows (a selected
+    /// folder row stays). Called when the display lands, so a scope change
+    /// drops the ids it hid.
+    func pruneSelectionToDisplay() {
+        let kept = displayedSelection.union(selectedIDs.intersection(tableState.folderIDs))
+        if kept != selectedIDs { selectedIDs = kept }
     }
 }
 
@@ -126,5 +164,15 @@ enum CatalogSelectionPrune {
             if kept.count == selection.count { break }
         }
         return kept
+    }
+
+    /// THE displayed rule (codex 2026-10-16 P1): with the folder view on,
+    /// only ids the folder display shows; either way only ids that are
+    /// linear rows — the intersection, so a display that lags the rows
+    /// (the compose is asynchronous) can never widen the set.
+    static func displayed(_ ids: Set<UUID>, foldersOn: Bool, folderRecordIDs: Set<UUID>, rows: [VideoRecord]) -> Set<UUID> {
+        guard !ids.isEmpty else { return ids }
+        let shown = foldersOn ? ids.intersection(folderRecordIDs) : ids
+        return visibleSelection(shown, rows: rows)
     }
 }

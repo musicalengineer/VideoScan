@@ -109,6 +109,25 @@ enum FootageFolderWords {
     static let closeFolder = "Close Folder"
     static let showOnlyThisEvent = "Show Only This Event"
 
+    // MARK: A derivative landed — the one console line
+
+    static func landed(_ name: String, source: String) -> String {
+        "Catalog: \(name) is in the catalog (made from \(source))"
+    }
+    static func landedSelected(_ name: String, source: String) -> String {
+        "\(landed(name, source: source)) — selected."
+    }
+    static func landedScopeCleared(_ name: String, source: String, scope: String) -> String {
+        "\(landed(name, source: source)) — the list was narrowed to \(scope); showing everything again, with it selected."
+    }
+    static func landedHiddenByFilter(_ name: String, source: String) -> String {
+        "\(landed(name, source: source)) — hidden by the current filter or search, so it is not selected."
+    }
+    static func landedOutsideScope(_ name: String, source: String, scope: String, place: String?) -> String {
+        let placeWords = place.map { "it is in \($0)" } ?? "it is in no event"
+        return "\(landed(name, source: source)) — the list is narrowed to \(scope); \(placeWords), so it is not selected."
+    }
+
     // MARK: Colours and spacing
 
     /// Copies read in grey; relation words are muted sans.

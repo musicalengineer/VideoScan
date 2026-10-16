@@ -365,33 +365,48 @@ enum FootageFolders {
 
     /// A component becomes one family in the event its members share;
     /// members accepted into a DIFFERENT event keep their own (v1 says
-    /// confirmed ranges never overlap, so this is defensive).
+    /// confirmed ranges never overlap, so this is defensive). A member with
+    /// no event of its own follows ITS OWN copy group's accepted member
+    /// first — a copy is the same content (codex 2026-10-16 P2); only a
+    /// member whose copy group has none falls back to the family's vote.
     static func split(_ component: [Row], ownEvent: [UUID: UUID]) -> [(UUID?, [Row])] {
-        var votes: [UUID: Int] = [:]
-        for r in component { if let e = ownEvent[r.id] { votes[e, default: 0] += 1 } }
-        guard let primary = votes.max(by: { $0.value != $1.value ? $0.value < $1.value : $0.key.uuidString > $1.key.uuidString })?.key
-        else { return [(nil, component)] }
-        var main: [Row] = []
-        var others: [UUID: [Row]] = [:]
+        let group = copyGroups(component)
+        var familyVotes: [UUID: Int] = [:]
+        var groupVotes: [String: [UUID: Int]] = [:]
         for r in component {
-            if let e = ownEvent[r.id], e != primary { others[e, default: []].append(r) } else { main.append(r) }
+            guard let e = ownEvent[r.id] else { continue }
+            familyVotes[e, default: 0] += 1
+            groupVotes[group[r.id] ?? "", default: [:]][e, default: 0] += 1
         }
-        return [(primary, main)] + others.keys.sorted { $0.uuidString < $1.uuidString }.map { ($0, others[$0] ?? []) }
+        guard let primary = winner(familyVotes) else { return [(nil, component)] }
+        var buckets: [UUID: [Row]] = [:]
+        for r in component {
+            let e = ownEvent[r.id] ?? groupVotes[group[r.id] ?? ""].flatMap(winner) ?? primary
+            buckets[e, default: []].append(r)
+        }
+        let others = buckets.keys.filter { $0 != primary }.sorted { $0.uuidString < $1.uuidString }
+        return [(primary, buckets[primary] ?? [])] + others.map { ($0, buckets[$0] ?? []) }
+    }
+
+    /// Most votes; a tie goes to the smaller id (stable, never the luck of
+    /// input order).
+    static func winner(_ votes: [UUID: Int]) -> UUID? {
+        votes.max(by: { $0.value != $1.value ? $0.value < $1.value : $0.key.uuidString > $1.key.uuidString })?.key
     }
 
     // MARK: The family — keeper and relations
 
-    /// Keeper = the best ORIGINAL (a member whose source is outside the
-    /// family, or inside its own copy group — a promoted copy counts): the
-    /// archived file, else the better transfer, else the longest. Every
-    /// version then reads "↳ made from it" in the right direction.
+    /// Keeper = the best ORIGINAL — a member whose lineage, followed inside
+    /// the family (stepping over a byte-copy of its own source, e.g. a
+    /// promote), never reaches another copy group: the archived file, else
+    /// the better transfer, else the longest. A byte-copy of a DERIVATIVE is
+    /// not an original (codex 2026-10-16 P2): it inherits the derivative's
+    /// place, so every version reads "↳ made from it" in the right direction
+    /// and the copy reads "= copy" of that version.
     static func family(_ members: [Row]) -> Family {
         let group = copyGroups(members)
-        let ids = Set(members.map(\.id))
-        let roots = members.filter { r in
-            guard let p = r.derivedFrom, ids.contains(p) else { return true }
-            return group[p] == group[r.id]
-        }
+        let byID = Dictionary(members.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        let roots = members.filter { isOriginal($0, group: group, byID: byID) }
         let pool = roots.isEmpty ? members : roots
         // A full tie: the copy the versions were made from leads, then the
         // catalog's order (the first one scanned) — never the luck of a UUID.
@@ -404,15 +419,10 @@ enum FootageFolders {
         }) else { return Family(keeper: UUID(), members: []) }
         let keeper = pool[keeperIndex]
         let keeperGroup = group[keeper.id] ?? ""
-        let byID = Dictionary(members.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-        var descends: [UUID: Bool] = [:]
-        for r in members { descends[r.id] = descendsFromGroup(r, keeperGroup, group: group, byID: byID) }
-        var groupDescends: [String: UUID] = [:]
-        for r in members where descends[r.id] == true && groupDescends[group[r.id] ?? ""] == nil { groupDescends[group[r.id] ?? ""] = r.id }
+        let leaders = versionLeaders(members, keeperGroup: keeperGroup, group: group, byID: byID)
         var rest: [Member] = []
         for r in members where r.id != keeper.id {
-            rest.append(Member(id: r.id, relation: relation(r, keeperGroup: keeperGroup, group: group,
-                                                           descends: descends[r.id] ?? false, groupDescends: groupDescends, byID: byID)))
+            rest.append(Member(id: r.id, relation: relation(r, keeperGroup: keeperGroup, group: group, leaders: leaders, byID: byID)))
         }
         rest.sort { $0.relation.tier != $1.relation.tier ? $0.relation.tier < $1.relation.tier
             : (byID[$0.id]?.keys.filename ?? "") < (byID[$1.id]?.keys.filename ?? "") }
@@ -427,6 +437,21 @@ enum FootageFolders {
         return out
     }
 
+    /// An ORIGINAL: following `derivedFrom` inside the family (up to 8
+    /// hops) never reaches a member of another copy group. A byte-copy of
+    /// its own source (a promote) steps over to the source's lineage; a
+    /// source outside the family ends the walk as an original.
+    static func isOriginal(_ r: Row, group: [UUID: String], byID: [UUID: Row]) -> Bool {
+        let own = group[r.id]
+        var cursor = r
+        for _ in 0..<8 {
+            guard let p = cursor.derivedFrom, let parent = byID[p] else { return true }
+            if group[p] != own { return false }
+            cursor = parent
+        }
+        return true
+    }
+
     /// Does `r`'s lineage (up to 8 hops) reach the keeper's copy group?
     static func descendsFromGroup(_ r: Row, _ target: String, group: [UUID: String], byID: [UUID: Row]) -> Bool {
         var cursor = r
@@ -438,19 +463,33 @@ enum FootageFolders {
         return false
     }
 
-    static func relation(_ r: Row, keeperGroup: String, group: [UUID: String], descends: Bool,
-                         groupDescends: [String: UUID], byID: [UUID: Row]) -> Relation {
+    /// Per copy group that descends from the keeper: the member that IS the
+    /// version (its source lies outside its own group). Its byte-copies — a
+    /// promote of it, a backup of it — read "= copy" of it. A group where
+    /// every source lies inside the group keeps its first member.
+    static func versionLeaders(_ members: [Row], keeperGroup: String, group: [UUID: String], byID: [UUID: Row]) -> [String: UUID] {
+        var leader: [String: UUID] = [:]
+        var settled: Set<String> = []
+        for r in members where group[r.id] != keeperGroup && descendsFromGroup(r, keeperGroup, group: group, byID: byID) {
+            let g = group[r.id] ?? ""
+            let isVersion = r.derivedFrom.map { group[$0] != g } ?? false
+            guard leader[g] == nil || (isVersion && !settled.contains(g)) else { continue }
+            leader[g] = r.id
+            if isVersion { settled.insert(g) }
+        }
+        return leader
+    }
+
+    static func relation(_ r: Row, keeperGroup: String, group: [UUID: String], leaders: [String: UUID], byID: [UUID: Row]) -> Relation {
         let g = group[r.id] ?? ""
         if g == keeperGroup {
             return .copy(FootageFolderWords.copy(byteForByte: r.copyIsByteForByte, volume: r.volume))
         }
-        if descends {
+        guard let leader = leaders[g] else { return .sameEvent }
+        if leader == r.id {
             return .madeFrom(FootageFolderWords.madeFrom(kind: r.derivationKind, codec: r.displayCodec))
         }
-        if let d = groupDescends[g], let derivative = byID[d] {
-            return .copy(FootageFolderWords.copyOf(derivative.keys.filename, byteForByte: r.copyIsByteForByte, volume: r.volume))
-        }
-        return .sameEvent
+        return .copy(FootageFolderWords.copyOf(byID[leader]?.keys.filename ?? "", byteForByte: r.copyIsByteForByte, volume: r.volume))
     }
 
     /// "a" is the better keeper than "b" (strict weak order; a full tie
