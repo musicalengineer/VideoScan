@@ -333,7 +333,7 @@ struct CatalogFreshnessTests {
         let prints = FreshnessRow(kind: "soundprint", title: "Sound Prints", eligible: 12, lastOutcome: .neverRan)
         let s = summarize([Self.currentPresence(), hashes, prints])
         #expect(s.colour == .yellow)
-        #expect(s.headline == "2 things need a run")
+        #expect(s.headline == "2 things need attention")
         #expect(s.items.map(\.kind) == ["fullhash", "soundprint"])
         #expect(s.items[0].words == "660 files without a full hash")
         #expect(s.items[0].title == "Full Hashes")
@@ -344,7 +344,7 @@ struct CatalogFreshnessTests {
     @Test func oneYellowRowIsSingular() {
         var hashes = Self.currentHashes()
         hashes.covered = 540
-        #expect(summarize([hashes]).headline == "1 thing needs a run")
+        #expect(summarize([hashes]).headline == "1 thing needs attention")
     }
 
     @Test func oneRedRowPutsItsWordsInTheHeadline() {
@@ -352,7 +352,7 @@ struct CatalogFreshnessTests {
         presence.needsDecision = 3
         let s = summarize([Self.currentHashes(), presence])
         #expect(s.colour == .red)
-        #expect(s.headline == "Needs attention: 3 rows pointing at nothing — look at Fix Links")
+        #expect(s.headline == "Needs a decision: 3 rows pointing at nothing — look at Fix Links")
         #expect(s.needsAttention)
         #expect(s.items.map(\.kind) == ["presence"])
     }
@@ -363,7 +363,7 @@ struct CatalogFreshnessTests {
         var hashes = Self.currentHashes()
         hashes.lastOutcome = .failed
         let s = summarize([hashes, presence])
-        #expect(s.headline == "Needs attention: 2 things")
+        #expect(s.headline == "Needs a decision: 2 things")
     }
 
     @Test func itemsListRedFirstThenYellowThenGreyInRegistryOrder() {
@@ -446,6 +446,6 @@ struct CatalogFreshnessTests {
         #expect(summary?.colour == .red)
         #expect(summary?.items.count == 750)
         #expect(summary?.staleKinds.count == 500)
-        #expect(summary?.headline == "Needs attention: 250 things")
+        #expect(summary?.headline == "Needs a decision: 250 things")
     }
 }

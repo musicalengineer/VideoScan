@@ -6,8 +6,8 @@
 // band at the top says the same thing with the items behind it.
 //
 //   ● Catalog Status: current · checked 02:14      (green: quiet secondary text)
-//   ● Catalog Status: 2 things need a run          (yellow: a run fixes it)
-//   ● Catalog Status: 3 rows point at nothing      (red: a person must look)
+//   ● Catalog Status: 2 things need attention      (yellow: a run fixes it)
+//   ● Catalog Status: needs a decision — 3 rows point at nothing (red: a person must look)
 //
 // Format (Rick 2026-10-16): "Catalog Status: <briefly what it needs>", at
 // the totals strip's own 15pt mono register so it reads as one of the
@@ -25,7 +25,7 @@ struct CatalogStatusChip: View {
     enum Colour { case green, yellow, red, grey }
 
     var colour: Colour = .yellow
-    var words: String = "2 things need a run"
+    var words: String = "2 things need attention"
 
     @Environment(\.openWindow) private var openWindow
 

@@ -19,8 +19,9 @@ them "two transfers", tied, and said "promote the longer one". Nothing anywhere 
 - **One surface, grown — the Analyze panel** (⇧⌘O, "What the catalog keeps current…"),
   not a second window. A new Catalog menu item **Catalog Status…** opens the same panel.
 - **A summary band at the top** of the panel: one colour, one sentence, the items behind
-  it. "Catalog is current" · "2 things need a run: Full Hashes (660 files), Sound Prints
-  (12)" · "Needs attention: 3 rows point at nothing under Projects/_staging…".
+  it. "Catalog is current" · "2 things need attention: Full Hashes (660 files), Sound Prints
+  (12)" · "Needs a decision: 3 rows point at nothing under Projects/_staging…". (Rick 10/16:
+  yellow says "need attention"; red therefore says "Needs a decision".)
 - **Three integrity rows join the registry**: File Presence (Audit Catalog tier 0),
   Full Hashes (SHA-256), Sound Prints (audio fingerprints). Each row's Run now starts the
   job that already exists (or the new tier-0 job). They are cyclers by Rick's own
@@ -79,12 +80,12 @@ pattern — published once per debounced catalog change, never per record):
    screenshot): far left of "TOTAL CATALOG 7.5 TB", in line with UNIQUE and ARCHIVED — the
    catalog's vital signs, and "is it current" is the fourth. A coloured dot + a short
    sentence: green "Catalog current · checked 02:14" in quiet secondary text (calm by
-   default); yellow "2 things need a run"; red "Needs attention: 3 rows point at nothing".
+   default); yellow "2 things need attention"; red "Needs a decision: 3 rows point at nothing".
    Click → opens Content Analysis (the Analyze panel) with the band at the top, so the fact
    and the door agree. The **Content Analysis toolbar button carries the same dot** when not
    green. (Rejected: a fifth button in the upper-right toolbar — it would fight the yellow
    Backup Catalog highlight for attention.)
-2. **The Analyze menu's first row IS the summary sentence** ("Needs attention: 1 thing"),
+2. **The Analyze menu's first row IS the summary sentence** ("Needs a decision: 1 thing"),
    above the per-cycler rows; the Catalog ▸ Catalog Status… item carries the colour word
    in its title when not green.
 3. **At launch and after the nightly**, a red summary is one console/log line (the same

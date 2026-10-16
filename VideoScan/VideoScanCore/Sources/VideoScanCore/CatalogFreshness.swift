@@ -428,16 +428,17 @@ public enum FreshnessPolicy {
         var yellow: Int
         var anyOffline: Bool
         /// The one red row's words, when there is exactly one — the chip
-        /// says "Needs attention: 3 rows pointing at nothing" (design §4).
+        /// says "Needs a decision: 3 rows pointing at nothing" (design §4;
+        /// Rick 2026-10-16: yellow says "need attention", so red says "decision").
         var onlyRedWords: String?
     }
 
     static func headline(_ colour: FreshnessColour, _ tally: Tally) -> String {
         switch colour {
         case .red:
-            return "Needs attention: \(tally.onlyRedWords ?? things(tally.red))"
+            return "Needs a decision: \(tally.onlyRedWords ?? things(tally.red))"
         case .yellow:
-            return "\(things(tally.yellow)) \(tally.yellow == 1 ? "needs" : "need") a run"
+            return "\(things(tally.yellow)) \(tally.yellow == 1 ? "needs" : "need") attention"
         case .green:
             return "Catalog is current"
         case .grey:
