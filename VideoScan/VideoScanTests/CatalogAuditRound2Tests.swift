@@ -21,8 +21,18 @@
 //                the directory its pathname names (a folder replaced under
 //                the audit is not provable).
 //   D7 (r3 F3) — rescan preservation carries the revision and the stamp.
+//   D8 (r4 F1) — the stamp names the PHYSICAL DEVICE too (Delete
+//                Duplicates' drive key): the same volume UUID on another
+//                drive (a clone, a restored image) is never gone; a stamp
+//                without a device (a share) proves by UUID alone.
+//   D9 (r4 F2) — stamp acquisition is bound to the pathname like the proof:
+//                after the open, the lexical walk again and the handle must
+//                name its path, before anything is read through it.
+//   D10        — a path change to another folder or volume root clears the
+//                stamp in the one `fullPath` setter; a rename keeps it.
 // Helpers (`runAudit`, the ShowAgainSandbox rows / links / stamps / lane
-// root) are shared from CatalogAuditJobTests.swift.
+// root) are shared from CatalogAuditJobTests.swift. The ROUND 4 pins were
+// red on the r3 tree with only the two task-local seams added.
 
 import Foundation
 import Testing
@@ -398,5 +408,157 @@ struct CatalogAuditRound2Tests {
         stamped.userNotes = ""; stamped.starRating = 0
         #expect(RescanPreservedFields(from: stamped).carriesRemovalHistory)
         #expect(!RescanPreservedFields(from: VideoRecord()).carriesRemovalHistory, "a plain fresh row carries none")
+    }
+
+    // MARK: D8 — the stamp names the physical device too (r4 F1)
+
+    @Test("r4 F1 / D8: a volume with the SAME UUID on a DIFFERENT drive (a clone, a restored image, mounted at the path while the original is disconnected) is 'a clone? not marked' — the stamp names the physical device the file was last seen on and the proof compares it; the same drive again is gone")
+    func cloneOnAnotherDriveWithTheSameVolumeUUIDIsNeverGone() async throws {
+        let sb = try ShowAgainSandbox.make("ca_clone"); defer { sb.cleanup() }
+        let r = try sb.live("on_the_original.mov")
+        let driveA: @Sendable (String, UInt64) -> DuplicateDrives.Identity = { _, dev in
+            .init(device: dev, kind: .physical, physicalDevice: "IOService:/test/driveA", deviceLabel: "Original")
+        }
+        let driveB: @Sendable (String, UInt64) -> DuplicateDrives.Identity = { _, dev in
+            .init(device: dev, kind: .physical, physicalDevice: "IOService:/test/driveB", deviceLabel: "Clone")
+        }
+        let first = await DuplicateDrives.$lookupOverride.withValue(driveA) { await runAudit(sb.model) }
+        #expect(first.totals[.present] == 1 && r.auditSeenOn != nil, Comment(rawValue: first.totals.line))
+        // The original is disconnected; a clone with the same volume UUID, without this file, sits at the path.
+        try FileManager.default.removeItem(atPath: r.fullPath)
+        let second = await DuplicateDrives.$lookupOverride.withValue(driveB) { await runAudit(sb.model) }
+        #expect(second.totals[.couldNotCheck] == 1 && second.totals[.gone] == 0, Comment(rawValue: second.totals.line))
+        #expect(r.removal == nil, "a file on the disconnected original was marked Missing through its clone")
+        let detail = second.problems.first { $0.path == r.fullPath }?.detail ?? "no detail row"
+        #expect(detail.contains("a clone?") && detail.contains("different drive"), Comment(rawValue: detail))
+        // The same drive: gone.
+        let third = await DuplicateDrives.$lookupOverride.withValue(driveA) { await runAudit(sb.model) }
+        #expect(third.totals[.gone] == 1 && r.removal?.reason == .missingAtAudit, Comment(rawValue: third.totals.line))
+    }
+
+    @Test("r4 D8: the stamp names the physical device (Delete Duplicates' drive key, asked for the handle's mount) and round-trips; an older stamp without one decodes; a stamp WITHOUT a key proves by volume UUID alone (a share's clone is the share); a stamp WITH a key against a drive that cannot be described is not provable")
+    func theStampNamesTheDriveAndProvesByTheVolumeAloneWithoutOne() async throws {
+        let sb = try ShowAgainSandbox.make("ca_drive_key"); defer { sb.cleanup() }
+        let r = try sb.live("keyed.mov")
+        _ = await runAudit(sb.model)
+        let stamp = try #require(r.auditSeenOn)
+        let identity = DuplicateDrives.liveIdentityFresh(forPath: sb.files.path, device: 0)
+        let expected = identity.kind == .physical ? DuplicateDrives.key(for: identity) : nil
+        #expect(stamp.deviceKey == expected, "the stamp's drive is the one Delete Duplicates sees for this folder: \(stamp) vs \(identity)")
+        let encoder = JSONEncoder(), decoder = JSONDecoder()
+        let json = String(bytes: try encoder.encode(VideoRecordDTO(r)), encoding: .utf8) ?? ""
+        #expect(json.contains("\"deviceKey\"") == (expected != nil), Comment(rawValue: json))
+        #expect(try decoder.decode(VideoRecord.self, from: Data(json.utf8)).auditSeenOn == stamp)
+        let older = try decoder.decode(AuditSeenOn.self, from: Data(#"{"volumeUUID":"\#(sb.volumeUUID)","mountFrom":"/dev/disk9s1","seenAt":0}"#.utf8))
+        #expect(older.deviceKey == nil && older.volumeUUID == sb.volumeUUID, "an r3 stamp decodes without a drive")
+        // A drive DiskArbitration cannot describe: a keyed stamp is not provable; an unkeyed one proves by the volume UUID.
+        let unknown: @Sendable (String, UInt64) -> DuplicateDrives.Identity = { _, dev in .init(device: dev, kind: .unknown) }
+        try FileManager.default.removeItem(atPath: r.fullPath)
+        r.auditSeenOn = AuditSeenOn(volumeUUID: sb.volumeUUID, mountFrom: "sandbox", seenAt: Date(), deviceKey: "disk:0123456789ab")
+        let unkeyed = try sb.live("unkeyed.mov", onDisk: false, seen: true)        // `sb.stamp` carries no drive
+        let job = await DuplicateDrives.$lookupOverride.withValue(unknown) { await runAudit(sb.model) }
+        #expect(job.totals[.couldNotCheck] == 1 && job.totals[.gone] == 1, Comment(rawValue: job.totals.line))
+        #expect(r.removal == nil && unkeyed.removal?.reason == .missingAtAudit)
+        let detail = job.problems.first { $0.path == r.fullPath }?.detail ?? "no detail row"
+        #expect(detail.contains("cannot be identified") && detail.contains("a clone?"), Comment(rawValue: detail))
+    }
+
+    // MARK: D9 — stamp acquisition is bound to the pathname like the proof (r4 F2)
+
+    /// files/mid/sub/clip.mov on disk, and a same-shaped `elsewhere/sub` beside
+    /// the sandbox (with or without a clip.mov). The outside actor renames
+    /// `mid` away and puts a LINK to `elsewhere` at its path.
+    private func midLinkScene(_ sb: ShowAgainSandbox, elsewhereHasTheFile: Bool) throws
+        -> (row: VideoRecord, substitute: @Sendable () -> Void, mid: URL, aside: URL) {
+        let mid = sb.files.appendingPathComponent("mid", isDirectory: true)
+        let sub = mid.appendingPathComponent("sub", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 2_000).write(to: sub.appendingPathComponent("clip.mov"))
+        let elsewhere = sb.root.appendingPathComponent("elsewhere", isDirectory: true)
+        try FileManager.default.createDirectory(at: elsewhere.appendingPathComponent("sub", isDirectory: true), withIntermediateDirectories: true)
+        if elsewhereHasTheFile { try Data(repeating: 2, count: 2_000).write(to: elsewhere.appendingPathComponent("sub/clip.mov")) }
+        let aside = sb.files.appendingPathComponent("mid.old", isDirectory: true)
+        let substitute: @Sendable () -> Void = {
+            try? FileManager.default.moveItem(at: mid, to: aside)
+            try? FileManager.default.createSymbolicLink(at: mid, withDestinationURL: elsewhere)
+        }
+        return (sb.row(at: sub.appendingPathComponent("clip.mov").path), substitute, mid, aside)
+    }
+
+    @Test("r4 F2 / D9: a link substituted for an INTERMEDIATE folder between the lexical walk and the open — the open follows it; O_NOFOLLOW guards only the last component — writes NO stamp, and the row's old stamp is untouched")
+    func linkSubstitutedBetweenTheWalkAndTheOpenWritesNoStamp() async throws {
+        let sb = try ShowAgainSandbox.make("ca_acquire_link"); defer { sb.cleanup() }
+        let scene = try midLinkScene(sb, elsewhereHasTheFile: true)
+        let old = AuditSeenOn(volumeUUID: "6E6F7420-7468-6973-2D64-7269766521AA", mountFrom: "/dev/disk9s1", seenAt: Date(timeIntervalSinceNow: -86_400))
+        scene.row.auditSeenOn = old
+        let job = await CatalogAuditDirectoryWalk.$betweenTheWalkAndTheOpenForTesting.withValue(scene.substitute) { await runAudit(sb.model) }
+        #expect(job.totals[.present] == 1 && job.stampedCount == 0, Comment(rawValue: job.totals.line))
+        #expect(scene.row.auditSeenOn == old, "a stamp was written through a link: \(String(describing: scene.row.auditSeenOn))")
+    }
+
+    @Test("r4 F2 / D9: the same substitution during the PROOF — the handle opened through the link reads ENOENT in another folder on the same volume, and `lstat(path)` follows the link so the post-ENOENT check agrees with it — is 'a link in the path', never gone")
+    func linkSubstitutedBetweenTheWalkAndTheOpenNeverMarks() async throws {
+        let sb = try ShowAgainSandbox.make("ca_acquire_link_proof"); defer { sb.cleanup() }
+        let scene = try midLinkScene(sb, elsewhereHasTheFile: false)
+        scene.row.auditSeenOn = sb.stamp
+        let job = await CatalogAuditDirectoryWalk.$betweenTheWalkAndTheOpenForTesting.withValue(scene.substitute) {
+            await runAudit(sb.model) { j in j.statPaths = { paths in paths.map { _ in .gone } } }   // a stale first pass
+        }
+        // The outside actor puts the folder back: the file is at the cataloged path.
+        try FileManager.default.removeItem(at: scene.mid)
+        try FileManager.default.moveItem(at: scene.aside, to: scene.mid)
+        #expect(FileManager.default.fileExists(atPath: scene.row.fullPath))
+        #expect(job.totals[.couldNotCheck] == 1 && job.totals[.gone] == 0, Comment(rawValue: job.totals.line))
+        #expect(scene.row.removal == nil, "marked Missing through a link substituted after the lexical walk")
+        let detail = job.problems.first { $0.path == scene.row.fullPath }?.detail ?? "no detail row"
+        #expect(detail.contains("a link in the path"), Comment(rawValue: detail))
+    }
+
+    @Test("r4 F2 / D9: the file's folder replaced between the open and the name read — the handle no longer names the path — writes NO stamp")
+    func folderReplacedBetweenTheOpenAndTheNameReadWritesNoStamp() async throws {
+        let sb = try ShowAgainSandbox.make("ca_acquire_replaced"); defer { sb.cleanup() }
+        let sub = sb.files.appendingPathComponent("sub", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        let r = sb.row(at: sub.appendingPathComponent("clip.mov").path)
+        try Data(repeating: 1, count: 2_000).write(to: URL(fileURLWithPath: r.fullPath))
+        let aside = sb.files.appendingPathComponent("sub.old", isDirectory: true)
+        let path = r.fullPath
+        let swap: @Sendable () -> Void = {
+            try? FileManager.default.moveItem(at: sub, to: aside)
+            try? FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+            try? Data(repeating: 2, count: 2_000).write(to: URL(fileURLWithPath: path))
+        }
+        let job = await CatalogAuditDirectoryWalk.$beforeTheNameIsReadForTesting.withValue(swap) { await runAudit(sb.model) }
+        #expect(job.totals[.present] == 1 && job.stampedCount == 0, Comment(rawValue: job.totals.line))
+        #expect(r.auditSeenOn == nil, "a stamp was written through a handle on a folder that no longer names the path")
+    }
+
+    // MARK: D10 — a path change clears the stamp
+
+    @Test("r4 D10: a stamp is 'this path's folder, on this volume' — a move to another folder or volume root (Relocate, a source-side move) clears it in the one setter; a rename within the folder keeps it; the first audit after a move stamps the new place and marks nothing there")
+    func aPathChangeClearsTheStamp() async throws {
+        let sb = try ShowAgainSandbox.make("ca_path_change"); defer { sb.cleanup() }
+        let renamed = try sb.live("renamed.mov", seen: true)
+        let renamedPath = sb.files.appendingPathComponent("renamed_2.mov").path
+        try FileManager.default.moveItem(atPath: renamed.fullPath, toPath: renamedPath)
+        renamed.fullPath = renamedPath
+        #expect(renamed.auditSeenOn != nil, "a rename within the folder keeps the stamp")
+        let there = sb.files.appendingPathComponent("moved_here", isDirectory: true)
+        try FileManager.default.createDirectory(at: there, withIntermediateDirectories: true)
+        let moved = try sb.live("moved.mov", seen: true)
+        try FileManager.default.moveItem(atPath: moved.fullPath, toPath: there.appendingPathComponent("moved.mov").path)
+        moved.fullPath = there.appendingPathComponent("moved.mov").path
+        moved.directory = there.path
+        #expect(moved.auditSeenOn == nil, "a move to another folder kept the old stamp")
+        let lost = try sb.live("lost.mov", seen: true)                           // moved in the catalog to a place the file is not
+        lost.fullPath = there.appendingPathComponent("lost.mov").path
+        lost.directory = there.path
+        let other = try sb.live("other.mov", seen: true)
+        other.fullPath = "/Volumes/Other/other.mov"
+        #expect(other.auditSeenOn == nil, "a move to another volume root kept the old stamp")
+        sb.model.records.removeAll { $0 === other }
+        let job = await runAudit(sb.model)
+        #expect(job.totals[.present] == 2 && job.totals[.neverSeenByAnAudit] == 1 && job.totals[.gone] == 0, Comment(rawValue: job.totals.line))
+        #expect(moved.auditSeenOn != nil && lost.removal == nil, "the first audit after a move stamps the new place and marks nothing there")
     }
 }

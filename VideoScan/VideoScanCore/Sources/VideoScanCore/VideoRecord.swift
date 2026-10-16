@@ -129,7 +129,18 @@ public class VideoRecord: Identifiable, Decodable {
     public var originModel: String?
     public var originEncoder: String?
     public var fullPath: String = "" {
-        didSet { Self.bumpIdentityGeneration() }
+        didSet {
+            Self.bumpIdentityGeneration()
+            // codex r4 2026-10-16 D10: the audit's where-seen stamp is "this
+            // path's folder, on this volume" — a move to another folder or
+            // volume root (Relocate, a source-side move) clears it; a rename
+            // within the folder keeps it. Observers do not run in the
+            // decoder, so a loaded row keeps its stamp.
+            if auditSeenOn != nil,
+               (fullPath as NSString).deletingLastPathComponent != (oldValue as NSString).deletingLastPathComponent {
+                auditSeenOn = nil
+            }
+        }
     }
     public var directory: String = ""
     public var notes: String = ""

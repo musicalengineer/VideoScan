@@ -29,8 +29,13 @@
 //     (`VideoRecord.auditSeenOn`) at apply time.
 //   • THE ONE PROOF RULE (codex r3 2026-10-16 F1, D5): a file is provably
 //     gone ONLY when the folder it is not in is on the volume the file was
-//     LAST SEEN on — the handle's volume UUID equals the row's stamp. No
-//     stamp → "never seen by an audit" (never marked; Fix Links decides).
+//     LAST SEEN on — the handle's volume UUID equals the row's stamp AND,
+//     when the stamp names a physical device (D8, codex r4 F1: Delete
+//     Duplicates' drive key, asked for the handle's mount), the device
+//     equals it — a clone or a restored image carries the UUID onto
+//     another drive and is not the volume the file was last seen on; a
+//     stamp without a device (a share) proves by UUID alone. No stamp →
+//     "never seen by an audit" (never marked; Fix Links decides).
 //     A different volume → could not check ("drive not connected?"): an
 //     unmounted drive's stub folder, a nested volume that left, a relocated
 //     home all read ENOENT on SOME volume, never on the one the file was
@@ -45,8 +50,13 @@
 //     looked at lexically with `lstat`: a symlink ANYWHERE (an
 //     intermediate one too — `/var` → `/private/var`) → could not check,
 //     "a link in the path" (D6). Then the nearest existing ancestor folder
-//     is opened read-only (O_DIRECTORY | O_NOFOLLOW), the remaining folders
-//     walked one `openat` at a time, the name read with `fstatat(…,
+//     is opened read-only (O_DIRECTORY | O_NOFOLLOW) — and, because that
+//     open was given a PATHNAME whose intermediate components O_NOFOLLOW
+//     does not guard, the lexical walk runs AGAIN after the open and the
+//     handle must name its path before anything is read through it (D9,
+//     codex r4 F2; the same binding in the first pass's `seenOn`, so no
+//     stamp is acquired through a link substituted in that window); the
+//     remaining folders are walked one `openat` at a time, the name read with `fstatat(…,
 //     AT_SYMLINK_NOFOLLOW)`; after an ENOENT the handle must STILL be the
 //     directory its pathname names (`fstat(fd)` dev+ino == `lstat(path)`
 //     dev+ino) — a folder renamed away and replaced between the open and
@@ -237,8 +247,18 @@ struct CatalogAuditMountIdentity: Sendable, Equatable {
     /// nil = the filesystem reports no UUID (some network shares): nothing
     /// on it can be stamped, so nothing on it is ever provably gone.
     let volumeUUID: String?
+    /// The PHYSICAL device behind the mount (D8, codex r4 F1): the key
+    /// Delete Duplicates' two-drives rule compares (`DuplicateDrives.
+    /// physicalDeviceKey` — a digest of the DiskArbitration device path,
+    /// asked for `f_mntfromname`); nil for a network share, a disk image
+    /// or a device DiskArbitration cannot describe. The one DiskArbitration
+    /// call stays in DeleteDuplicatesDrives.swift, never in an audit source.
+    let deviceKey: String?
 
-    var words: String { "\(mountFrom) on \(mountOn)" + (volumeUUID.map { " [\($0)]" } ?? " [no volume UUID]") }
+    var words: String {
+        "\(mountFrom) on \(mountOn)" + (volumeUUID.map { " [\($0)]" } ?? " [no volume UUID]")
+            + (deviceKey.map { " drive \($0)" } ?? " [drive not identified]")
+    }
 
     /// `fstatfs` + the volume UUID of an open directory handle: the volume
     /// the handle is bound to, whatever the path says now (codex r2 F2).
@@ -251,14 +271,17 @@ struct CatalogAuditMountIdentity: Sendable, Equatable {
         let from = withUnsafePointer(to: &fs.f_mntfromname) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
         }
+        let isLocal = fs.f_flags & UInt32(MNT_LOCAL) != 0
         return CatalogAuditMountIdentity(fsid0: fs.f_fsid.val.0, fsid1: fs.f_fsid.val.1, mountOn: on, mountFrom: from,
-                                         volumeUUID: VolumeIdentity.uuid(forDescriptor: fd, path: nil))
+                                         volumeUUID: VolumeIdentity.uuid(forDescriptor: fd, path: nil),
+                                         deviceKey: DuplicateDrives.physicalDeviceKey(mountFrom: from, isLocal: isLocal,
+                                                                                      device: DeviceID.from(fs.f_fsid.val.0)))
     }
 
     /// The stamp a file found through this handle gets; nil when the
-    /// volume has no UUID (no stamp — D5).
+    /// volume has no UUID (no stamp — D5). The device key rides along (D8).
     func seenOn(at now: Date) -> AuditSeenOn? {
-        volumeUUID.map { AuditSeenOn(volumeUUID: $0, mountFrom: mountFrom, seenAt: now) }
+        volumeUUID.map { AuditSeenOn(volumeUUID: $0, mountFrom: mountFrom, seenAt: now, deviceKey: deviceKey) }
     }
 }
 
@@ -336,6 +359,10 @@ enum CatalogAuditDirectoryWalk {
     /// test can rename the folder away and put another at its path. nil in
     /// production.
     @TaskLocal static var beforeTheNameIsReadForTesting: (@Sendable () -> Void)?
+    /// TEST SEAM (D9) — task-local: runs between the lexical link walk and
+    /// the open of the folder, so a test can substitute a link for an
+    /// intermediate folder in that window. nil in production.
+    @TaskLocal static var betweenTheWalkAndTheOpenForTesting: (@Sendable () -> Void)?
 
     private enum Opened { case opened(fd: Int32, path: String, depth: Int), failed(CatalogAuditWalk) }
     private enum Descent { case reached, gone, failed(CatalogAuditWalk) }
@@ -347,6 +374,7 @@ enum CatalogAuditDirectoryWalk {
     static func prove(directory: String, filename: String, root: String) -> CatalogAuditWalk {
         guard let folders = folders(of: directory, below: root) else { return .unreadable(errno: EINVAL) }
         if let refusal = linkInTheExistingPath(root: root, folders: folders) { return refusal }
+        betweenTheWalkAndTheOpenForTesting?()
         var fd: Int32 = -1
         defer { if fd >= 0 { close(fd) } }
         var handlePath: String
@@ -354,6 +382,7 @@ enum CatalogAuditDirectoryWalk {
         case .opened(let opened, let path, let depth):
             fd = opened
             handlePath = path
+            if let refusal = boundToItsPath(root: root, folders: folders, path: path, fd: fd) { return refusal }
             switch descend(&fd, &handlePath, through: folders[depth...]) {
             case .reached: break
             case .gone: return goneThrough(fd, named: handlePath)
@@ -374,14 +403,23 @@ enum CatalogAuditDirectoryWalk {
     /// stamp for every name found as a regular file that way; nil for the
     /// others (no stamp: a link in the path, a folder that is not there, a
     /// name that is not a regular file through the handle, a volume with
-    /// no UUID). Off the main actor; no pathname is trusted twice.
+    /// no UUID). Bound to the pathname exactly like the proof (D9, codex
+    /// r4 F2): after the open, the lexical walk again and the handle must
+    /// name its path, BEFORE the identity or any name is read through it —
+    /// a stamp is a licence to mark, and none is acquired through a link
+    /// substituted between the walk and the open, or on a folder replaced
+    /// between the open and the read. Off the main actor; no pathname is
+    /// trusted twice.
     static func seenOn(directory: String, filenames: [String], root: String, now: Date) -> [AuditSeenOn?] {
         let none = [AuditSeenOn?](repeating: nil, count: filenames.count)
         guard let folders = folders(of: directory, below: root),
-              linkInTheExistingPath(root: root, folders: folders) == nil,
-              case .opened(let fd, _, let depth) = openNearestExistingAncestor(root: root, folders: folders) else { return none }
+              linkInTheExistingPath(root: root, folders: folders) == nil else { return none }
+        betweenTheWalkAndTheOpenForTesting?()
+        guard case .opened(let fd, let path, let depth) = openNearestExistingAncestor(root: root, folders: folders) else { return none }
         defer { close(fd) }
-        guard depth == folders.count, let stamp = CatalogAuditMountIdentity.of(fd: fd)?.seenOn(at: now) else { return none }
+        beforeTheNameIsReadForTesting?()
+        guard depth == folders.count, boundToItsPath(root: root, folders: folders, path: path, fd: fd) == nil,
+              let stamp = CatalogAuditMountIdentity.of(fd: fd)?.seenOn(at: now) else { return none }
         return filenames.map { name in
             if case .found(.file) = statName(name, in: fd) { return stamp }
             return nil
@@ -415,6 +453,18 @@ enum CatalogAuditDirectoryWalk {
             if (sb.st_mode & S_IFMT) == S_IFLNK { return .link }
         }
         return nil
+    }
+
+    /// D9 (codex r4 F2): the handle was opened by PATHNAME, and O_NOFOLLOW
+    /// guards only its LAST component — a link substituted for an
+    /// intermediate folder between the lexical walk and the open is
+    /// followed, and `lstat(path)` would follow it too. So, after the open
+    /// and before anything is read through the handle: the lexical walk
+    /// again (D6), then the handle must name its path (`stillNames`). nil =
+    /// bound; else the refusal.
+    private static func boundToItsPath(root: String, folders: [String], path: String, fd: Int32) -> CatalogAuditWalk? {
+        if let refusal = linkInTheExistingPath(root: root, folders: folders) { return refusal }
+        return stillNames(path, fd) ? nil : .changedUnderTheAudit
     }
 
     /// Opens the deepest `root/folders[0..<k]` that is there, trying the
@@ -564,6 +614,24 @@ enum CatalogAuditProof: Sendable, Equatable {
             let seen = lastSeenOn.seenAt.formatted(date: .abbreviated, time: .shortened)
             return .notProvable("the folder is on a different volume (\(on.words)) than the file was last seen on "
                 + "(\(lastSeenOn.mountFrom ?? "?") [\(lastSeenOn.volumeUUID)], \(seen)) — drive not connected?")
+        }
+        return onTheDriveLastSeen(on, lastSeenOn: lastSeenOn)
+    }
+
+    /// D8 (codex r4 F1): a stamp that names the physical device is held to
+    /// it — the same volume UUID on another drive is a clone or a restored
+    /// image, not the volume the file was last seen on; a drive that cannot
+    /// be described now is not provably the same one either. A stamp
+    /// without a device (a share, an older stamp) proves by volume UUID
+    /// alone: a share's clone is the share.
+    private static func onTheDriveLastSeen(_ on: CatalogAuditMountIdentity, lastSeenOn: AuditSeenOn) -> CatalogAuditProof {
+        guard let stampedDrive = lastSeenOn.deviceKey else { return .gone }
+        guard let drive = on.deviceKey else {
+            return .notProvable("the volume has the UUID the file was last seen on, but the drive it is on cannot be identified "
+                + "(\(on.words); last seen on drive \(stampedDrive)) — a clone? not marked")
+        }
+        guard drive == stampedDrive else {
+            return .notProvable("the same volume name on a different drive (\(on.words); last seen on drive \(stampedDrive)) — a clone? not marked")
         }
         return .gone
     }

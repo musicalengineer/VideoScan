@@ -6552,9 +6552,14 @@
         "CatalogAuditRound2Tests"
       ],
       "tests": [
+        "aPathChangeClearsTheStamp",
+        "cloneOnAnotherDriveWithTheSameVolumeUUIDIsNeverGone",
         "directoryWalkValues",
+        "folderReplacedBetweenTheOpenAndTheNameReadWritesNoStamp",
         "folderReplacedUnderTheAuditIsNeverProvable",
         "linkInTheExistingPartOfThePathIsNeverProvable",
+        "linkSubstitutedBetweenTheWalkAndTheOpenNeverMarks",
+        "linkSubstitutedBetweenTheWalkAndTheOpenWritesNoStamp",
         "nestedVolumeUnmountedUnderALaneRootIsNeverGone",
         "ordinaryRollbackStillWorks",
         "presentRowsAreStampedAndTheStampRoundTrips",
@@ -6568,6 +6573,7 @@
         "symlinkInTheRemainderIsNotProvable",
         "symlinkedParentRetargetedIsNeverGone",
         "theSecondRunMarksWhatTheFirstCouldNot",
+        "theStampNamesTheDriveAndProvesByTheVolumeAloneWithoutOne",
         "unstampedGoneRowIsNeverSeenByAnAudit"
       ]
     },
