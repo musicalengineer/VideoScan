@@ -172,19 +172,25 @@ struct SoundStrip: View {
     let active: [Bool]
     let matched: Range<Int>?
     let durationSeconds: Double
+    /// Prefix sums over the audible seconds, built once per view value so
+    /// every draw is O(width), not O(seconds) (codex 10/15 F6).
+    private let bins: SoundStripBins
+
+    init(active: [Bool], matched: Range<Int>?, durationSeconds: Double) {
+        self.active = active
+        self.matched = matched
+        self.durationSeconds = durationSeconds
+        self.bins = SoundStripBins(active: active, matched: matched, durationSeconds: durationSeconds)
+    }
 
     var body: some View {
         Canvas { ctx, size in
-            let n = max(active.count, Int(durationSeconds.rounded(.up)), 1)
-            let bins = max(1, Int(size.width))
-            let per = Double(n) / Double(bins)
-            for px in 0..<bins {
+            let n = bins.seconds
+            let width = max(1, Int(size.width))
+            let per = Double(n) / Double(width)
+            for px in 0..<width {
                 let s0 = Int(Double(px) * per), s1 = max(s0 + 1, Int(Double(px + 1) * per))
-                var audible = false, inMatch = false
-                for s in s0..<min(s1, n) {
-                    if s < active.count, active[s] { audible = true }
-                    if let m = matched, m.contains(s) { inMatch = true }
-                }
+                let audible = bins.anyAudible(s0, min(s1, n)), inMatch = bins.anyMatched(s0, min(s1, n))
                 let h = audible ? size.height * 0.85 : size.height * 0.18
                 let rect = CGRect(x: CGFloat(px), y: size.height - h, width: 1, height: h)
                 let color: Color = !audible ? Color.gray.opacity(0.35) : inMatch ? Color.green : Color.orange.opacity(0.8)
@@ -192,6 +198,34 @@ struct SoundStrip: View {
             }
         }
         .accessibilityLabel("sound strip")
+    }
+}
+
+/// The strip's per-second facts, answered per pixel in O(1): prefix sums
+/// over the audible seconds and the matched range. Pure.
+struct SoundStripBins: Equatable {
+    let seconds: Int
+    private let audiblePrefix: [Int]
+    private let matched: Range<Int>?
+
+    init(active: [Bool], matched: Range<Int>?, durationSeconds: Double) {
+        seconds = max(active.count, Int(durationSeconds.rounded(.up)), 1)
+        var prefix = [Int](repeating: 0, count: active.count + 1)
+        for (i, on) in active.enumerated() { prefix[i + 1] = prefix[i] + (on ? 1 : 0) }
+        audiblePrefix = prefix
+        self.matched = matched
+    }
+
+    /// Any audible second in `s0..<s1`?
+    func anyAudible(_ s0: Int, _ s1: Int) -> Bool {
+        let lo = max(0, min(s0, audiblePrefix.count - 1)), hi = max(0, min(s1, audiblePrefix.count - 1))
+        return hi > lo && audiblePrefix[hi] - audiblePrefix[lo] > 0
+    }
+
+    /// Any matched second in `s0..<s1`?
+    func anyMatched(_ s0: Int, _ s1: Int) -> Bool {
+        guard let m = matched, s1 > s0 else { return false }
+        return s0 < m.upperBound && s1 > m.lowerBound
     }
 }
 
@@ -208,7 +242,8 @@ enum CompareMediaWords {
         let m = RelatedLadder.mmss
         switch band {
         case .sameEvent:
-            return e.a.digest != nil && e.a.digest == e.b.digest ? "byte for byte · \(m(e.a.durationSeconds))"
+            let identical = e.a.digest != nil && e.a.digest == e.b.digest && e.a.sizeBytes == e.b.sizeBytes && e.a.sizeBytes > 0
+            return identical ? "byte for byte · \(m(e.a.durationSeconds))"
                 : "\(m(min(e.a.durationSeconds, e.b.durationSeconds))) of \(m(max(e.a.durationSeconds, e.b.durationSeconds)))"
         case .clipFromSameEvent(let clip, let seconds, let offset):
             let master = clip == .a ? e.b : e.a

@@ -195,4 +195,21 @@ struct CleanupTrashHardeningTests {
         #expect(byID[extras[2].id]?.removal == nil, "the unticked file's row is untouched on disk")
         for rec in extras { if let t = rec.removal?.trashPath { try? FileManager.default.removeItem(atPath: t) } }
     }
+
+    @Test("a Trash move refused by a read-only folder says so, and says the fix — not 'you don't have permission' (the 2006 DVD rip's VIDEO_TS)")
+    func readOnlyFolderWording() {
+        let denied = NSError(domain: NSCocoaErrorDomain, code: NSFileWriteNoPermissionError,
+                             userInfo: [NSLocalizedDescriptionKey: "“VTS_03_1.VOB” couldn’t be moved to the Trash because you don’t have permission to access “VIDEO_TS”."])
+        let path = "/Volumes/LaCieWorkspace/Timmy 10th Bday Restored/VIDEO_TS/VTS_03_1.VOB"
+        let words = VideoScanModel.JunkDeletionResult.trashFailureWords(volume: "LaCieWorkspace", path: path, error: denied, parentWritable: false)
+        #expect(words.hasPrefix("its folder “VIDEO_TS” is read-only") && words.contains("chmod u+w") && words.hasSuffix("nothing was deleted"))
+        // The same error with a writable folder is something else: say what the system said.
+        let other = VideoScanModel.JunkDeletionResult.trashFailureWords(volume: "LaCieWorkspace", path: path, error: denied, parentWritable: true)
+        #expect(other.hasPrefix("couldn't move it to the Trash on LaCieWorkspace: ") && other.contains("permission"))
+        // A non-permission error in a read-only folder is not blamed on the folder.
+        let full = NSError(domain: NSCocoaErrorDomain, code: NSFileWriteOutOfSpaceError, userInfo: [NSLocalizedDescriptionKey: "The disk is full."])
+        #expect(VideoScanModel.JunkDeletionResult.trashFailureWords(volume: "X", path: path, error: full, parentWritable: false).contains("The disk is full."))
+        let posix = NSError(domain: NSPOSIXErrorDomain, code: Int(EACCES), userInfo: nil)
+        #expect(VideoScanModel.JunkDeletionResult.trashFailureWords(volume: "X", path: path, error: posix, parentWritable: false).hasPrefix("its folder “VIDEO_TS” is read-only"))
+    }
 }

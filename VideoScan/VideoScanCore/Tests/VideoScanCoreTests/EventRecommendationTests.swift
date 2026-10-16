@@ -89,6 +89,28 @@ struct EventRecommendationTests {
         #expect(r8.rule == .r8 && r8.door == .fingerprint && r8.why.contains("fingerprint"))
     }
 
+    @Test("codex 10/15 F1: R2 never targets a clip that is itself an archive file or archived content")
+    func r2NeverTargetsProtectedClip() {
+        for (archiveFile, archived) in [(true, false), (false, true)] {
+            var clip = Side(digest: "c" + String(repeating: "0", count: 63), sizeBytes: 90, durationSeconds: 78, audibleSeconds: 76,
+                            day: day(1996, 4, 22), dayIsReliable: true, codec: .delivery)
+            clip.isArchiveFile = archiveFile; clip.isArchived = archived
+            let r = reco(RelatedEvidence(a: clip, b: side(archived: true, digest: "m"), audio: .containedInMaster(offsetSeconds: 376), audioCoverage: 0.96))
+            #expect(r.rule == .r7 && r.subject == nil, "\(archiveFile) \(archived): \(r.rule)")
+        }
+    }
+
+    @Test("codex 10/15 F2: an unreliable newer transfer date never cancels the pre-2000 protection; a year-only 1988 counts")
+    func transferDateCannotCancelEraProtection() {
+        var copy = side(archived: false, year: 2006, digest: "x"); copy.dayIsReliable = false
+        let r = reco(RelatedEvidence(a: copy, b: side(archived: true, year: 1988, digest: "y"), audio: .sameRecording, audioCoverage: 0.99))
+        #expect(r.rule == .r5, "\(r.rule)")
+        var yearOnly = side(archived: false, digest: "p"); yearOnly.day = nil; yearOnly.dayIsReliable = false; yearOnly.year = 1988
+        var archivedYearOnly = side(archived: true, digest: "q"); archivedYearOnly.day = nil; archivedYearOnly.dayIsReliable = false; archivedYearOnly.year = 1988
+        let y = reco(RelatedEvidence(a: yearOnly, b: archivedYearOnly, audio: .sameRecording, audioCoverage: 0.99))
+        #expect(y.rule == .r5, "\(y.rule)")
+    }
+
     @Test("every rule names a door; the subject is the side the door acts on")
     func table() {
         #expect(EventRule.allCases.count == 8)

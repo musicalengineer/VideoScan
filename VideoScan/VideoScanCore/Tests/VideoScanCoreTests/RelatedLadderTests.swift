@@ -171,6 +171,30 @@ struct RelatedLadderTests {
         #expect(RelatedLadder.judge(RelatedEvidence(a: unknown, b: here)).rung == .identicalCopy)
     }
 
+    @Test("codex 10/15 F3: empty digests never establish identity, so no R1 against an archived counterpart")
+    func emptyDigestsCannotAuthorizeCopyRemoval() {
+        var archived = master; archived.digest = ""
+        var copy = archived; copy.isArchiveFile = false; copy.isArchived = false
+        let e = RelatedEvidence(a: copy, b: archived)
+        let v = RelatedLadder.judge(e)
+        #expect(!v.isIdenticalCopy && copy.digest == nil)
+        #expect(EventRecommendation.recommend(v, evidence: e).rule != .r1)
+    }
+
+    @Test("codex 10/15 F4: identical bytes with a 'different' sound verdict keep rung 6 AND show the contradiction")
+    func identicalCopyStillShowsSoundContradiction() {
+        let v = RelatedLadder.judge(RelatedEvidence(a: master, b: master, audio: .different))
+        #expect(v.rung == .identicalCopy && has(v, .contradicts, "Sound: nothing in common"))
+    }
+
+    @Test("a year-only date carries its year for the era rule")
+    func yearOnly() {
+        let s = Side(sizeBytes: 1, durationSeconds: 1, year: 1988)
+        #expect(s.year == 1988 && s.day == nil)
+        let d = Side(sizeBytes: 1, durationSeconds: 1, day: day(1996, 4, 22))
+        #expect(d.year == 1996)
+    }
+
     @Test("words: mm:ss and h:mm:ss, the band words")
     func words() {
         #expect(RelatedLadder.mmss(376) == "6:16" && RelatedLadder.mmss(3725) == "1:02:05" && RelatedLadder.mmss(-3) == "0:00")

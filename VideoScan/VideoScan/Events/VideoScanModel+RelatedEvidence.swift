@@ -92,7 +92,8 @@ extension VideoScanModel {
             occasionWords: occasionWords(captions: r.sceneCaptions, transcript: r.audioTranscript),
             folderLabel: folderLabel(forPath: r.fullPath), isArchiveFile: isArchiveFile, isArchived: isArchived,
             codec: codecGeneration(video: r.videoCodec, audio: r.audioCodec),
-            frameHeight: frameHeight(fromResolution: r.resolution), bitRate: bitRate(from: r.totalBitrate))
+            frameHeight: frameHeight(fromResolution: r.resolution), bitRate: bitRate(from: r.totalBitrate),
+            year: date.year)
     }
 
     /// Transcript words that are a person's name on either side (case-insensitive, whole words).

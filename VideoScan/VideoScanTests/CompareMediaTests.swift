@@ -86,6 +86,32 @@ struct CompareMediaTests {
         #expect(CompareMediaWords.duration(.differentEvents, RelatedEvidence(a: a, b: b)) == "no shared minute")
     }
 
+    @Test("codex 10/15 F5: 'byte for byte' only for a true identical copy — equal stored digests with different sizes are not")
+    func durationWordsRequireEqualSizesForByteIdentity() {
+        let a = RelatedEvidence.Side(digest: "x", sizeBytes: 1, durationSeconds: 2280), b = RelatedEvidence.Side(digest: "x", sizeBytes: 2, durationSeconds: 2280)
+        let e = RelatedEvidence(a: a, b: b, audio: .sameRecording)
+        #expect(!CompareMediaWords.duration(RelatedLadder.judge(e).band, e).contains("byte for byte"))
+    }
+
+    @Test("codex 10/15 F6: the strip answers each pixel from prefix sums — O(width) per draw, correct at the edges")
+    func stripBins() {
+        let active = [false, true, true, false, false, true]
+        let bins = SoundStripBins(active: active, matched: 1..<3, durationSeconds: 6)
+        #expect(bins.seconds == 6)
+        #expect(bins.anyAudible(0, 1) == false && bins.anyAudible(0, 2) == true && bins.anyAudible(3, 5) == false && bins.anyAudible(5, 6) == true)
+        #expect(bins.anyAudible(6, 9) == false, "beyond the map is silent")
+        #expect(bins.anyMatched(0, 1) == false && bins.anyMatched(0, 2) == true && bins.anyMatched(2, 3) == true && bins.anyMatched(3, 6) == false)
+        let longer = SoundStripBins(active: [true], matched: nil, durationSeconds: 100)
+        #expect(longer.seconds == 100 && longer.anyAudible(50, 60) == false, "duration beyond the map counts as seconds, silent")
+    }
+
+    @Test("codex 10/15 F2: a year-only user date reaches the side as its year")
+    @MainActor func yearOnlyDate() {
+        let r = VideoRecord(); r.fullPath = "/Volumes/X/a.mov"; r.filename = "a.mov"; r.userDate = "1988"; r.durationSeconds = 2100
+        let s = VideoScanModel.relatedSide(r, isArchiveFile: false, isArchived: false, now: Date())
+        #expect(s.year == 1988 && s.day == nil, "\(String(describing: s.year)) \(String(describing: s.day))")
+    }
+
     @Test("fact rows: a field that differs from the other side is marked; equal ones are not")
     @MainActor func factRows() {
         let r = VideoRecord(); r.videoCodec = "h264"; r.audioCodec = "aac"; r.resolution = "640x480"

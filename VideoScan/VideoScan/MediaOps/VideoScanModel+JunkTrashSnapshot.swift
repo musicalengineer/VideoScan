@@ -210,6 +210,23 @@ extension VideoScanModel.JunkDeletionResult {
 
     static func trashFailureNote(_ rec: VideoRecord, _ error: any Error) -> String {
         let volume = rec.volumeName.isEmpty ? VolumeReachability.volumeName(forPath: rec.fullPath) : rec.volumeName
+        let parent = (rec.fullPath as NSString).deletingLastPathComponent
+        return trashFailureWords(volume: volume, path: rec.fullPath, error: error,
+                                 parentWritable: FileManager.default.isWritableFile(atPath: parent))
+    }
+
+    /// The words for a Trash move that threw. A permission error whose
+    /// folder refuses writes says so and says the fix (Rick 2026-10-14: two
+    /// VOBs in a 2006 DVD rip's `dr-xr-xr-x` VIDEO_TS folder read "you don't
+    /// have permission", which sounded like the archive). Pure.
+    nonisolated static func trashFailureWords(volume: String, path: String, error: any Error, parentWritable: Bool) -> String {
+        let ns = error as NSError
+        let permission = (ns.domain == NSCocoaErrorDomain && (ns.code == NSFileWriteNoPermissionError || ns.code == NSFileReadNoPermissionError))
+            || (ns.domain == NSPOSIXErrorDomain && (ns.code == Int(EACCES) || ns.code == Int(EPERM)))
+        if permission && !parentWritable {
+            let folder = ((path as NSString).deletingLastPathComponent as NSString).lastPathComponent
+            return "its folder “\(folder)” is read-only, so nothing in it can move — make the folder writable (Finder ▸ Get Info, or chmod u+w), then run again — nothing was deleted"
+        }
         return "couldn't move it to the Trash on \(volume): \(error.localizedDescription) — nothing was deleted"
     }
 }
