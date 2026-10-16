@@ -38,6 +38,35 @@ struct ArchiveAngelCatalogHintScaleTests {
         Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18
     }
 
+    @Test("settled waits for the build that LANDS, not the one that was superseded (CI 2026-10-16: 0 hints after settle)",
+          .timeLimit(.minutes(2)))
+    func settledWaitsForTheLandingBuild() async throws {
+        let sb = try MasterArchiveTestSupport.makeSandbox("angel-catalog-hints-settle")
+        defer { try? FileManager.default.removeItem(at: sb.root) }
+        let model = MasterArchiveTestSupport.makeModel(sb)
+        model.previewSweep.stop()
+        model.archiveAngel.sweep.stop()
+        let recs = Array(Self.records().prefix(20_000))
+        model.records = recs
+        let now = Date()
+        var evidence: [UUID: ArchiveAngelEvidenceRecord] = [:]
+        for r in recs {
+            evidence[r.id] = .init(score: 120, lines: [.init(points: 120, line: "You rated it best (★★★)")],
+                                   rejection: nil, useCount: 0, lastUsed: nil, computedAt: now)
+        }
+        let angel = model.archiveAngel
+        angel.store.replace(with: ArchiveAngelEvidenceFile(computedAt: now, records: evidence))
+        // A waiter starts on build #1; a recount then supersedes it (a debounced
+        // catalog change on a slow runner does exactly this) — the waiter must
+        // come back only once a build has landed.
+        let waiter = Task { @MainActor in await angel.catalogHintsSettled() }
+        await Task.yield()
+        angel.scheduleCatalogHints()
+        await waiter.value
+        #expect(angel.catalogHints.byID.count == recs.count, "settled returned with \(angel.catalogHints.byID.count) hints")
+        #expect(angel.catalogBadge(for: recs[0].id)?.text == "Ready for archive")
+    }
+
     @Test("SCALE: 100k picks — snapshot < 1 s on main, build < 4 s off main (Debug); rows read the right words",
           .timeLimit(.minutes(2)))
     func hundredThousandPicks() async throws {

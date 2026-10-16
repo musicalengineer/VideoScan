@@ -67,9 +67,17 @@ extension ArchiveAngel {
         }
     }
 
-    /// Waits for the hint build in flight (tests; instant when none).
+    /// Waits until a hint build has LANDED (tests; instant when none is in
+    /// flight). A recount that arrives while we wait supersedes the build we
+    /// were awaiting — that task returns early without publishing — so keep
+    /// waiting on whichever task is current until the one we awaited still
+    /// is (CI 2026-10-16: a debounced catalog change on a slow runner left
+    /// the 100k scale test with 0 hints after "settled").
     func catalogHintsSettled() async {
-        await catalogHintTask?.value
+        while let task = catalogHintTask {
+            await task.value
+            if task == catalogHintTask { return }
+        }
     }
 
     /// One Sendable input per recommended record (Ready, Needs a date, Worth
