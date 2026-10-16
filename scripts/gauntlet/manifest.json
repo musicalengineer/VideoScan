@@ -27771,12 +27771,15 @@
       "path": "VideoScan/VideoScanTests/ArchivePlayableRecordTests.swift",
       "stage": "regression",
       "suites": [
+        "ArchiveDetailSheetWordsTests",
         "ArchiveDoorSourceSensors",
         "ArchivePlayableRecordIsolationTests",
         "ArchivePlayableRecordTests"
       ],
       "tests": [
+        "aLostFileShowsTheArchiveWords",
         "aRowWithNoArchivedCopyIsItselfEvenWhenGone",
+        "aSubstitutedCopyIsSaidSoWithBothPathsAndBothVolumes",
         "anArchiveCopyRowResolvesToItself",
         "bothGoneNamesTheArchivePathNeverTheSource",
         "copyGoneSourceOnDiskFallsBackToTheRow",
@@ -27784,7 +27787,9 @@
         "danglingSymlinkSourcePlaysTheRealCopy",
         "everyArchiveViewDoorGoesThroughTheResolver",
         "missingWordsArePureAndNameTheArchive",
-        "sourceGoneCopyOnDiskPlaysTheCopy"
+        "rowStateWordsCoverEveryPresence",
+        "sourceGoneCopyOnDiskPlaysTheCopy",
+        "theRowItselfKeepsItsOwnPathAndOneVolume"
       ]
     },
     {
@@ -27793,14 +27798,18 @@
       "path": "VideoScan/VideoScanTests/PlaybackAudioMismatchTests.swift",
       "stage": "integration",
       "suites": [
+        "PlaybackAudioCheckerTests",
         "PlaybackAudioMismatchMediaMatrixTests",
         "PlaybackAudioMismatchSourceSensors",
         "PlaybackAudioMismatchTests"
       ],
       "tests": [
+        "aCheckThatFinishesAfterTheNextStartIsStale",
+        "aCurrentCheckReportsItsWordsOrItsFailure",
         "aacInMp4",
         "catalogCodecOwesANoticeForVideoAudioWithAnEmptyCodecField",
         "everyLocalAVPlayerStartChecksTheAudioTracks",
+        "everyPlayerStartIsNumbered",
         "mp3InM4v",
         "mp3InMkv",
         "mp3WithNoAVTrackIsTheNotice",
@@ -27822,10 +27831,15 @@
       ],
       "tests": [
         "aCopyWithoutFixityProvesNothing",
+        "ancestorLinkOntoAnotherDiskIsNamed",
         "archivedCopyFixitySignsAndArchivesTheSource",
+        "archivedCopyGoneFromDiskDoesNotCompleteArchivedLocally",
+        "archivedCopyPresenceIsSaidInItsOwnWords",
         "deadLinkSourceWithArchivedCopyIsSignedAndArchivedLocally",
         "firstEventIsTheFilesOwnDateNeverAScan",
         "lastEventIsAVerifiedPresenceThatNamesTheArchivedCopy",
+        "md5CopyNeverCompletesArchivedLocally",
+        "permissionDeniedIsUnknownNeverGone",
         "plainLiveRowIsUnchanged",
         "probeTellsARegularFileFromALinkFromNothing",
         "withoutACopyTheLadderIsAsBefore",

@@ -70,6 +70,52 @@ enum PlaybackAudioMismatch {
     }
 }
 
+// MARK: - Playback identity (codex P2, 2026-10-16)
+
+/// The check is async; the player it was started for may be gone by the
+/// time AVFoundation answers. Every player start takes a ticket here, and
+/// a check's result counts only while its ticket is still the current one
+/// — so the first file's "no sound" can never land over the second file's
+/// player. (For Rick: a generation counter; a stale ticket is an ABA guard.)
+@MainActor
+final class PlaybackAudioChecker {
+    private(set) var generation = 0
+
+    enum Outcome: Equatable {
+        /// The player this check was started for is gone — say nothing.
+        case stale
+        /// AVFoundation reads a track, or the catalog knows of no sound.
+        case fine
+        case notice(words: String, tracks: Int)
+        /// The asset could not be opened at all; `String` is the error.
+        case unreadable(String)
+    }
+
+    /// Call on EVERY player start; the ticket identifies that player.
+    func playerStarted() -> Int {
+        generation += 1
+        return generation
+    }
+
+    func isCurrent(_ ticket: Int) -> Bool { ticket == generation }
+
+    /// Compare the catalog's codec with what AVFoundation reads, for the
+    /// player `ticket`. `trackCount` is the one AVFoundation call,
+    /// injectable for tests.
+    func outcome(ticket: Int, catalogCodec: String, url: URL,
+                 trackCount: (URL) async throws -> Int = PlaybackAudioMismatch.avAudioTrackCount(url:)) async -> Outcome {
+        let result: Outcome
+        do {
+            let tracks = try await trackCount(url)
+            result = PlaybackAudioMismatch.words(catalogCodec: catalogCodec, avAudioTracks: tracks)
+                .map { Outcome.notice(words: $0, tracks: tracks) } ?? .fine
+        } catch {
+            result = .unreadable(error.localizedDescription)
+        }
+        return isCurrent(ticket) ? result : .stale
+    }
+}
+
 // MARK: - The notice over the player
 
 /// One line over the preview player: the words, and the two ways out.

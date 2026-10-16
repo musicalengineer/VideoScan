@@ -1,5 +1,55 @@
 import SwiftUI
 
+// MARK: - The sheet's file facts, said per file
+
+/// codex P2 (2026-10-16): the sheet showed the resolved copy's path under
+/// the row's title and Volume — two files' identities on one card. When
+/// the door substituted the archived copy, the header says so and names
+/// both files with the row's own state; the Volume facts name each file's
+/// own volume. Never one file's field beside another's. Pure.
+enum ArchiveDetailWords {
+
+    struct VolumeFact: Identifiable, Equatable {
+        let label: String
+        let value: String
+        var id: String { label }
+    }
+
+    static func headerPath(row: VideoRecord, playable: ArchivePlayable?, rowPresence: JourneyPresence?) -> String {
+        switch playable {
+        case .record(let target)? where target.id != row.id:
+            return "Playing the archived copy: \(target.fullPath) (this row: \(row.fullPath), \(rowState(rowPresence)))"
+        case .record?, nil:
+            return row.fullPath
+        case .missing(_, let message)?:
+            return message
+        }
+    }
+
+    /// The row's own state, in a few words, from the probe's answer.
+    static func rowState(_ presence: JourneyPresence?) -> String {
+        guard let presence else { return "not checked" }
+        switch presence {
+        case .regularFile, .regularFileThroughLink, .linkToFile: return "also on disk"
+        case .brokenLink: return "a dead link"
+        case .missing: return "not at its path"
+        case .notAFile: return "not a file at its path"
+        case .volumeOffline(let volume): return "on \(volume), not connected"
+        case .unknown(let reason), .linkTargetUnknown(_, let reason): return "could not be checked: \(reason)"
+        }
+    }
+
+    /// One Volume fact per file: the copy's and the row's when the door
+    /// substituted the copy, else the row's alone.
+    static func volumeFacts(row: VideoRecord, playable: ArchivePlayable?) -> [VolumeFact] {
+        if case .record(let target)? = playable, target.id != row.id {
+            return [VolumeFact(label: "Volume (archived copy)", value: target.volumeName),
+                    VolumeFact(label: "Volume (this row)", value: row.volumeName)]
+        }
+        return [VolumeFact(label: "Volume", value: row.volumeName)]
+    }
+}
+
 // MARK: - Archive Detail Sheet
 //
 // Split from ArchiveView.swift 2026-08-17. The "Archive Pipeline" section
@@ -14,6 +64,9 @@ struct ArchiveDetailSheet: View {
     /// copy's path for a promotion source, or the "not at its path" words
     /// when neither file is on disk. nil = show the row's own path.
     var playable: ArchivePlayable? = nil
+    /// What the disk said about THIS row's own path (one lstat at sheet
+    /// open) — named in the header when the door substituted the copy.
+    var rowPresence: JourneyPresence? = nil
     @Environment(\.dismiss) private var dismiss
 
     private var duplicates: [VideoRecord] {
@@ -65,7 +118,11 @@ struct ArchiveDetailSheet: View {
                         if !record.resolution.isEmpty { detailRow("Resolution", record.resolution) }
                         if !record.videoCodec.isEmpty { detailRow("Video Codec", record.videoCodec) }
                         if !record.audioCodec.isEmpty { detailRow("Audio Codec", record.audioCodec) }
-                        detailRow("Volume", record.volumeName)
+                        // Each file's own volume, labelled — never the
+                        // copy's volume under the row's name.
+                        ForEach(ArchiveDetailWords.volumeFacts(row: record, playable: playable)) { fact in
+                            detailRow(fact.label, fact.value)
+                        }
                     }
 
                     detailSection("Archive Pipeline") {
@@ -131,14 +188,10 @@ struct ArchiveDetailSheet: View {
         playable?.message == nil ? .secondary : .orange
     }
 
-    /// The file facts' path: the record the doors open — its archived
-    /// copy for a promotion source — or the words when neither is on disk.
+    /// The file facts' path: the row's own, or — when the door substituted
+    /// the archived copy — both, said so (ArchiveDetailWords).
     private var headerPathLine: String {
-        switch playable {
-        case .record(let target)?: return target.fullPath
-        case .missing(_, let message)?: return message
-        case nil: return record.fullPath
-        }
+        ArchiveDetailWords.headerPath(row: record, playable: playable, rowPresence: rowPresence)
     }
 
     /// This record's archive date, or its promoted copy's (the copy is the

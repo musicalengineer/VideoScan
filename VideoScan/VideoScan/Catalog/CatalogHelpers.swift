@@ -131,6 +131,11 @@ struct CatalogContent: View {
     /// silently and say nothing. Set by `checkPlaybackAudio`; keyed by
     /// path so a stale notice never shows over the next row.
     @State private var playbackNotice: PlaybackAudioMismatch.Notice?
+    /// The player's identity for a late audio check (codex 2026-10-16):
+    /// every start takes a ticket; a check publishes only while its ticket
+    /// is current. (A class in @State ≈ a shared_ptr member SwiftUI keeps
+    /// alive for the view's lifetime.)
+    @State private var audioChecker = PlaybackAudioChecker()
 
     /// "Preview follows selection" mode (live-preview, 2026-07-28).
     /// Spacebar (when the table owns focus) toggles it; while armed, an
@@ -1464,6 +1469,7 @@ struct CatalogContent: View {
                                                         player = AVPlayer(url: url)
                                                         isPlaying = true
                                                         player?.play()
+                                                        _ = audioChecker.playerStarted()
                                                     } else {
                                                         let status = resolver.statusURL(recordID: rec.id)
                                                         Task { @MainActor in
@@ -1471,6 +1477,7 @@ struct CatalogContent: View {
                                                                 player = AVPlayer(url: url)
                                                                 isPlaying = true
                                                                 player?.play()
+                                                                _ = audioChecker.playerStarted()
                                                             }
                                                         }
                                                     }
@@ -1868,21 +1875,24 @@ extension CatalogContent {
     /// tracks AVFoundation can read with the catalog's audio stream. A
     /// mismatch shows the one-line notice over the player and writes one
     /// line through the catalog sink. One async load per play, off the
-    /// render path.
+    /// render path — and the result is published only while the player
+    /// it was started for is still the current one (codex 2026-10-16).
     func checkPlaybackAudio(_ rec: VideoRecord, url: URL) {
         playbackNotice = nil
+        let ticket = audioChecker.playerStarted()
         let codec = PlaybackAudioMismatch.catalogCodec(of: rec)
         guard !codec.isEmpty else { return }
         let path = rec.fullPath
         let name = rec.filename
         Task { @MainActor in
-            do {
-                let tracks = try await PlaybackAudioMismatch.avAudioTrackCount(url: url)
-                guard let words = PlaybackAudioMismatch.words(catalogCodec: codec, avAudioTracks: tracks) else { return }
+            switch await audioChecker.outcome(ticket: ticket, catalogCodec: codec, url: url) {
+            case .stale, .fine:
+                return
+            case .notice(let words, let tracks):
                 playbackNotice = PlaybackAudioMismatch.Notice(path: path, text: words)
                 model.log("Playback: \(name) — the catalog says \(codec) sound, AVFoundation reads \(tracks) audio track(s). \(words)")
-            } catch {
-                model.log("Playback: \(name) — could not read its audio tracks (\(error.localizedDescription)).")
+            case .unreadable(let why):
+                model.log("Playback: \(name) — could not read its audio tracks (\(why)).")
             }
         }
     }

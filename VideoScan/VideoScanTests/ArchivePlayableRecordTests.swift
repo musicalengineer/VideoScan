@@ -152,6 +152,62 @@ struct ArchivePlayableRecordTests {
     }
 }
 
+// MARK: - The detail sheet's file facts (codex P2, 2026-10-16)
+
+@Suite("Archive detail sheet — one file's facts never beside another's")
+@MainActor
+struct ArchiveDetailSheetWordsTests {
+
+    private static func record(_ path: String) -> VideoRecord {
+        let r = VideoRecord()
+        r.filename = (path as NSString).lastPathComponent
+        r.fullPath = path
+        return r
+    }
+
+    /// The door substituted the archived copy: the header says so and
+    /// names both files with the row's own state; the Volume facts name
+    /// each file's own volume.
+    @Test func aSubstitutedCopyIsSaidSoWithBothPathsAndBothVolumes() {
+        let source = Self.record("/Users/rickb/Movies/Christmas-1990.mov")
+        let copy = Self.record("/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/1990/1990_Christmas-1990.mov")
+        let header = ArchiveDetailWords.headerPath(row: source, playable: .record(copy),
+                                                   rowPresence: .brokenLink(target: "/Volumes/Projects/Christmas-1990.mov"))
+        #expect(header == "Playing the archived copy: \(copy.fullPath) (this row: \(source.fullPath), a dead link)")
+        let volumes = ArchiveDetailWords.volumeFacts(row: source, playable: .record(copy))
+        #expect(volumes.map(\.label) == ["Volume (archived copy)", "Volume (this row)"])
+        #expect(volumes.map(\.value) == [copy.volumeName, source.volumeName])
+        #expect(copy.volumeName != source.volumeName, "the fixture must put the two files on different volumes")
+    }
+
+    @Test func theRowItselfKeepsItsOwnPathAndOneVolume() {
+        let row = Self.record("/Volumes/FamilyArchive/A/1990_X.mov")
+        #expect(ArchiveDetailWords.headerPath(row: row, playable: .record(row), rowPresence: .regularFile) == row.fullPath)
+        #expect(ArchiveDetailWords.headerPath(row: row, playable: nil, rowPresence: nil) == row.fullPath)
+        let volumes = ArchiveDetailWords.volumeFacts(row: row, playable: .record(row))
+        #expect(volumes.map(\.label) == ["Volume"])
+        #expect(volumes.map(\.value) == [row.volumeName])
+    }
+
+    @Test func aLostFileShowsTheArchiveWords() {
+        let row = Self.record("/Users/rickb/Movies/X.mov")
+        let words = VideoScanModel.archiveMissingWords(filename: "1990_X.mov", archivePath: "/Volumes/FamilyArchive/A/1990_X.mov")
+        let playable = ArchivePlayable.missing(archivePath: "/Volumes/FamilyArchive/A/1990_X.mov", message: words)
+        #expect(ArchiveDetailWords.headerPath(row: row, playable: playable, rowPresence: .missing) == words)
+    }
+
+    @Test func rowStateWordsCoverEveryPresence() {
+        #expect(ArchiveDetailWords.rowState(.missing) == "not at its path")
+        #expect(ArchiveDetailWords.rowState(.regularFile) == "also on disk")
+        #expect(ArchiveDetailWords.rowState(.linkToFile(target: "/V/x.mov")) == "also on disk")
+        #expect(ArchiveDetailWords.rowState(.brokenLink(target: "/V/x.mov")) == "a dead link")
+        #expect(ArchiveDetailWords.rowState(.notAFile) == "not a file at its path")
+        #expect(ArchiveDetailWords.rowState(.volumeOffline(volume: "LaCie")) == "on LaCie, not connected")
+        #expect(ArchiveDetailWords.rowState(.unknown(reason: "Permission denied")) == "could not be checked: Permission denied")
+        #expect(ArchiveDetailWords.rowState(nil) == "not checked")
+    }
+}
+
 // MARK: - Isolation: the real symptom on a real disk (temp dir only)
 
 @Suite("Archive doors — a dangling symlink source on disk", .serialized)

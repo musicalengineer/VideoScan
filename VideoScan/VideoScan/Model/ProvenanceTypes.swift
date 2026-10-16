@@ -169,6 +169,10 @@ enum JourneyEventKind: String, Equatable {
     /// file, a dead link, an unmounted volume): orange, so "Not at …"
     /// never wears the green pin of "Now at …" (Rick 2026-10-16).
     case notAtPath
+    /// The current-state event when the disk would not answer (a folder
+    /// we may not read, an I/O error): grey, a question — never the
+    /// orange of "gone" nor the green of "here" (codex 2026-10-16).
+    case presenceUnknown
 
     var color: Color {
         switch self {
@@ -182,6 +186,7 @@ enum JourneyEventKind: String, Equatable {
         case .reformat:     return .red
         case .promote:      return .yellow
         case .notAtPath:    return .orange
+        case .presenceUnknown: return .secondary
         }
     }
 
@@ -197,6 +202,7 @@ enum JourneyEventKind: String, Equatable {
         case .reformat:     return "wand.and.stars"
         case .promote:      return "star.circle"
         case .notAtPath:    return "mappin.slash"
+        case .presenceUnknown: return "questionmark.circle"
         }
     }
 }

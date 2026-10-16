@@ -53,6 +53,65 @@ struct PlaybackAudioMismatchSourceSensors {
         #expect(lines.contains { $0.contains("PlaybackAudioMismatch") },
                 "the in-app player never consults PlaybackAudioMismatch")
     }
+
+    /// codex P2 (2026-10-16): a late check published without a playback
+    /// identity, so the first file's notice could land over the second
+    /// file's player. Every `AVPlayer(url:)` start — local or stream —
+    /// numbers the player (`playerStarted()`, directly or inside
+    /// `checkPlaybackAudio`) within the lines that follow it.
+    @Test func everyPlayerStartIsNumbered() throws {
+        let lines = try Self.code("Catalog/CatalogHelpers.swift")
+        let starts = lines.indices.filter { lines[$0].contains("AVPlayer(url:") }
+        try #require(!starts.isEmpty, "the preview player's AVPlayer starts moved — update the sensor")
+        for start in starts {
+            let window = lines[start..<min(start + 6, lines.count)]
+            #expect(window.contains { $0.contains("checkPlaybackAudio(") || $0.contains("playerStarted()") },
+                    "an AVPlayer start at line \(start + 1) is not numbered — a late audio check can speak for it")
+        }
+    }
+}
+
+// MARK: - Late checks (codex P2, 2026-10-16)
+
+@Suite("Playback audio mismatch — a late check never speaks for the current player")
+@MainActor
+struct PlaybackAudioCheckerTests {
+
+    /// Two starts; the FIRST check finishes last. Its words belong to a
+    /// player that is gone — dropped, never published over the second
+    /// file (which AVFoundation read fine).
+    @Test func aCheckThatFinishesAfterTheNextStartIsStale() async {
+        let checker = PlaybackAudioChecker()
+        let first = checker.playerStarted()
+        let second = checker.playerStarted()
+        let (gate, open) = AsyncStream<Void>.makeStream()
+        let late = Task { @MainActor in
+            await checker.outcome(ticket: first, catalogCodec: "mp3", url: URL(fileURLWithPath: "/a.m4v")) { _ in
+                for await _ in gate { break }
+                return 0
+            }
+        }
+        let current = await checker.outcome(ticket: second, catalogCodec: "aac", url: URL(fileURLWithPath: "/b.mp4")) { _ in 1 }
+        #expect(current == .fine)
+        open.yield(())
+        open.finish()
+        #expect(await late.value == .stale, "a check started under an earlier player never publishes")
+    }
+
+    @Test func aCurrentCheckReportsItsWordsOrItsFailure() async {
+        let checker = PlaybackAudioChecker()
+        let ticket = checker.playerStarted()
+        let url = URL(fileURLWithPath: "/a.m4v")
+        let notice = await checker.outcome(ticket: ticket, catalogCodec: "mp3", url: url) { _ in 0 }
+        #expect(notice == .notice(words: PlaybackAudioMismatch.words(catalogCodec: "mp3", avAudioTracks: 0) ?? "", tracks: 0))
+        #expect(await checker.outcome(ticket: ticket, catalogCodec: "mp3", url: url) { _ in 2 } == .fine)
+        struct Boom: Error {}
+        let failed = await checker.outcome(ticket: ticket, catalogCodec: "mp3", url: url) { _ in throw Boom() }
+        guard case .unreadable = failed else {
+            Issue.record("an unreadable asset is reported, not hidden: \(failed)")
+            return
+        }
+    }
 }
 
 // MARK: - Logic (pure words)
