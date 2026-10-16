@@ -259,6 +259,58 @@
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CatalogFreshnessTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogFreshnessTests"
+      ],
+      "tests": [
+        "allGreenReadsCatalogIsCurrent",
+        "allGreyWithOfflineRowsSaysDrivesNotMounted",
+        "cadenceWithNoCompletionIsYellow",
+        "colourRoundTripsThroughCodable",
+        "countsAreGrouped",
+        "coverageWinsOverCadenceInTheWords",
+        "emptyRegistrySaysNothingToCheck",
+        "everythingOnUnmountedDrivesIsGrey",
+        "everythingStampedIsGreenWithTheCheckedTime",
+        "failedLastRunIsRed",
+        "greyNeverOutranksAFailure",
+        "greyRowsBesideGreenOnesReadCurrent",
+        "itemsListRedFirstThenYellowThenGreyInRegistryOrder",
+        "lateNightStampJustAfterMidnightIsMinutesNotYesterday",
+        "neverRanWithEligibleRowsIsYellow",
+        "neverRanWithNothingEligibleIsNotYellow",
+        "noCadenceMeansOldStampsStayGreen",
+        "nothingAtAllIsGrey",
+        "offlineRowsDoNotSpoilGreen",
+        "olderThanCadenceIsYellowNotRed",
+        "oneDecisionRowIsSingular",
+        "oneRedRowPutsItsWordsInTheHeadline",
+        "oneYellowRowIsSingular",
+        "partialLastRunIsYellow",
+        "redBeatsYellowWhenBothApply",
+        "relativeTimeWordsAreDeterministic",
+        "rowsNeedingADecisionAreRedWithTheKindsWords",
+        "runningCurrentRowStaysGreenAndReadsRunning",
+        "runningOverdueRowIsNeverRedForStaleness",
+        "runningRowKeepsItsRedDecisionCount",
+        "runningStaleRowIsYellowAndReadsRunning",
+        "severalRedRowsAreCounted",
+        "staleKindsExcludesRedAndGreyRows",
+        "stampedWithNoTimeSaysCurrent",
+        "storeBeatsFailureBeatsDecision",
+        "thousandRowSummaryIsCheap",
+        "uncoveredRowsAreYellowWithTheCount",
+        "unopenableStoreIsRed",
+        "withinCadenceIsGreen",
+        "worstOfOrderIsRedYellowGreenGrey",
+        "yellowRowsCountTheThingsThatNeedARun"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/ContentFixityRemountReproTests.swift",
       "stage": "regression",
       "suites": [
@@ -27549,6 +27601,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/BirthplaceClassifierTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/CatalogFreshnessTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
