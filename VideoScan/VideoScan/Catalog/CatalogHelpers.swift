@@ -126,6 +126,11 @@ struct CatalogContent: View {
 
     @State private var player: AVPlayer?
     @State private var isPlaying = false
+    /// MP3-in-MP4 (Rick 2026-10-16): AVFoundation reads no audio track
+    /// from a file the catalog KNOWS has sound — the player would play
+    /// silently and say nothing. Set by `checkPlaybackAudio`; keyed by
+    /// path so a stale notice never shows over the next row.
+    @State private var playbackNotice: PlaybackAudioMismatch.Notice?
 
     /// "Preview follows selection" mode (live-preview, 2026-07-28).
     /// Spacebar (when the table owns focus) toggles it; while armed, an
@@ -1410,6 +1415,7 @@ struct CatalogContent: View {
                             VideoPlayer(player: player)
                                 .cornerRadius(6)
                                 .shadow(radius: 3)
+                                .overlay(alignment: .top) { playbackNoticeOverlay }
                         } else if let img = previewImage {
                             ZStack {
                                 Image(nsImage: img)
@@ -1452,6 +1458,7 @@ struct CatalogContent: View {
                                                     player = AVPlayer(url: url)
                                                     isPlaying = true
                                                     player?.play()
+                                                    checkPlaybackAudio(rec, url: url)
                                                 case .stream(let url, let native):
                                                     if native {
                                                         player = AVPlayer(url: url)
@@ -1475,6 +1482,7 @@ struct CatalogContent: View {
                                                 player = AVPlayer(url: url)
                                                 isPlaying = true
                                                 player?.play()
+                                                checkPlaybackAudio(rec, url: url)
                                             }
                                         }
                                     } label: {
@@ -1851,3 +1859,46 @@ enum MediaOpener {
 /// AVKitLinkSensorTests.
 @inline(never)
 func avKitLinkAnchor() -> AnyClass { AVPlayerView.self }
+
+// MARK: - Playback audio mismatch (MP3-in-MP4, Rick 2026-10-16)
+
+extension CatalogContent {
+
+    /// After an in-app AVPlayer starts on a LOCAL file: compare the audio
+    /// tracks AVFoundation can read with the catalog's audio stream. A
+    /// mismatch shows the one-line notice over the player and writes one
+    /// line through the catalog sink. One async load per play, off the
+    /// render path.
+    func checkPlaybackAudio(_ rec: VideoRecord, url: URL) {
+        playbackNotice = nil
+        let codec = PlaybackAudioMismatch.catalogCodec(of: rec)
+        guard !codec.isEmpty else { return }
+        let path = rec.fullPath
+        let name = rec.filename
+        Task { @MainActor in
+            do {
+                let tracks = try await PlaybackAudioMismatch.avAudioTrackCount(url: url)
+                guard let words = PlaybackAudioMismatch.words(catalogCodec: codec, avAudioTracks: tracks) else { return }
+                playbackNotice = PlaybackAudioMismatch.Notice(path: path, text: words)
+                model.log("Playback: \(name) — the catalog says \(codec) sound, AVFoundation reads \(tracks) audio track(s). \(words)")
+            } catch {
+                model.log("Playback: \(name) — could not read its audio tracks (\(error.localizedDescription)).")
+            }
+        }
+    }
+
+    /// The notice, only while it is about the row on screen. "Open in
+    /// VLC" when VLC is installed (MediaOpener.openInVLC falls back to the
+    /// system default handler otherwise); "Make Access Copy…" is the
+    /// existing Transcode door with the everyday-viewing preset.
+    @ViewBuilder
+    var playbackNoticeOverlay: some View {
+        if let notice = playbackNotice, let rec = selectedRecord, notice.path == rec.fullPath {
+            PlaybackAudioNoticeBar(
+                text: notice.text,
+                openWithTitle: MediaOpener.hasVLC ? "Open in VLC" : "Open With…",
+                openWith: { MediaOpener.openInVLC([rec]) },
+                makeAccessCopy: { transcodeRequest = TranscodeRequest(record: rec, initialPreset: .archival) })
+        }
+    }
+}

@@ -165,6 +165,10 @@ enum JourneyEventKind: String, Equatable {
     /// gets "Promoted to Master Archive as …"; the archive COPY's journey
     /// gets "Promoted from …". Verified copy, never a move.
     case promote
+    /// The current-state event when NOTHING is at the row's path (a gone
+    /// file, a dead link, an unmounted volume): orange, so "Not at …"
+    /// never wears the green pin of "Now at …" (Rick 2026-10-16).
+    case notAtPath
 
     var color: Color {
         switch self {
@@ -177,6 +181,7 @@ enum JourneyEventKind: String, Equatable {
         case .freeForm:     return .secondary
         case .reformat:     return .red
         case .promote:      return .yellow
+        case .notAtPath:    return .orange
         }
     }
 
@@ -191,6 +196,7 @@ enum JourneyEventKind: String, Equatable {
         case .freeForm:     return "text.bubble"
         case .reformat:     return "wand.and.stars"
         case .promote:      return "star.circle"
+        case .notAtPath:    return "mappin.slash"
         }
     }
 }

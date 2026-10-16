@@ -27764,6 +27764,73 @@
         "theRevealChecksTheDisplayBeforeSelecting",
         "versionOutsideAnyEventFollowsItsSourceToo"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ArchivePlayableRecordTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ArchiveDoorSourceSensors",
+        "ArchivePlayableRecordIsolationTests",
+        "ArchivePlayableRecordTests"
+      ],
+      "tests": [
+        "aRowWithNoArchivedCopyIsItselfEvenWhenGone",
+        "anArchiveCopyRowResolvesToItself",
+        "bothGoneNamesTheArchivePathNeverTheSource",
+        "copyGoneSourceOnDiskFallsBackToTheRow",
+        "copyOnDiskBeatsASourceThatIsAlsoThere",
+        "danglingSymlinkSourcePlaysTheRealCopy",
+        "everyArchiveViewDoorGoesThroughTheResolver",
+        "missingWordsArePureAndNameTheArchive",
+        "sourceGoneCopyOnDiskPlaysTheCopy"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/PlaybackAudioMismatchTests.swift",
+      "stage": "integration",
+      "suites": [
+        "PlaybackAudioMismatchMediaMatrixTests",
+        "PlaybackAudioMismatchSourceSensors",
+        "PlaybackAudioMismatchTests"
+      ],
+      "tests": [
+        "aacInMp4",
+        "catalogCodecOwesANoticeForVideoAudioWithAnEmptyCodecField",
+        "everyLocalAVPlayerStartChecksTheAudioTracks",
+        "mp3InM4v",
+        "mp3InMkv",
+        "mp3WithNoAVTrackIsTheNotice",
+        "namesTheRealCodecFromTheCatalog",
+        "noNoticeWhenAVFoundationReadsATrack",
+        "noNoticeWhenTheCatalogHasNoSound",
+        "pcmInMov"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FileJourneyTruthTests.swift",
+      "stage": "regression",
+      "suites": [
+        "FileJourneyTruthTests",
+        "JourneyPresenceTests",
+        "PreservationChecklistContentTests"
+      ],
+      "tests": [
+        "aCopyWithoutFixityProvesNothing",
+        "archivedCopyFixitySignsAndArchivesTheSource",
+        "deadLinkSourceWithArchivedCopyIsSignedAndArchivedLocally",
+        "firstEventIsTheFilesOwnDateNeverAScan",
+        "lastEventIsAVerifiedPresenceThatNamesTheArchivedCopy",
+        "plainLiveRowIsUnchanged",
+        "probeTellsARegularFileFromALinkFromNothing",
+        "withoutACopyTheLadderIsAsBefore",
+        "wordsNameTheLinkTheGapAndTheArchivedCopy"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -30949,6 +31016,14 @@
         {
           "name": "VideoScan/VideoScanTests/FamilyTreeCardInvalidationSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ArchivePlayableRecordTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FileJourneyTruthTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 32,
@@ -31085,6 +31160,10 @@
         {
           "name": "tests/test_av_sync.py",
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/PlaybackAudioMismatchTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 6,

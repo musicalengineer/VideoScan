@@ -230,11 +230,15 @@ struct ProvenanceTests {
     @Test
     func fileJourney_handlesRecordWithNoNotes() {
         // The minimum-info record path. Origin + Current — nothing else.
+        // The path is fictional, and presence is not under test here: the
+        // probe says a file is there (the real probe is pinned in
+        // FileJourneyTruthTests / JourneyPresenceTests, 2026-10-16).
         let rec = makeRecord(fullPath: "/Volumes/SomeDrive/clip.mxf")
         let journey = VideoScanModel.buildFileJourney(
             for: rec,
             allRecords: [rec],
-            resolveVolumeSafety: resolver([:])
+            resolveVolumeSafety: resolver([:]),
+            probe: { _ in .regularFile }
         )
         #expect(journey.events.count == 2)
         #expect(journey.events[0].kind == .origin)

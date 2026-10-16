@@ -67,14 +67,21 @@ struct PreservationStep: Identifiable, Equatable {
 
 enum PreservationChecklist {
 
-    /// Score one record.
-    static func steps(for rec: VideoRecord) -> [PreservationStep] {
+    /// Score one record — for the CONTENT it stands for (Rick 2026-10-16).
+    /// `archivedCopy` is the row's promoted archive copy when it has one
+    /// (`VideoScanModel.archivedCopy(of:)`): its recorded fixity signs the
+    /// content and proves the local archive copy, so a promotion source
+    /// whose own file moved still reads 3 of 4, not "compute a signature".
+    static func steps(for rec: VideoRecord, archivedCopy: VideoRecord? = nil) -> [PreservationStep] {
         let local = rec.backupDestinations.first { $0.kind == .local }
         // Cloud and offsite both satisfy "not in this building", which
         // is the only property that matters against fire and theft.
         let away = rec.backupDestinations.first {
             $0.kind == .cloud || $0.kind == .offsite
         }
+        let signature = contentSignature(of: rec, archivedCopy: archivedCopy)
+        // The promotion's read-back SHA-256 is the proof the copy landed.
+        let promoted = archivedCopy?.archiveFixity
 
         return [
             PreservationStep(
@@ -84,14 +91,14 @@ enum PreservationChecklist {
                 todo: ""),
             PreservationStep(
                 kind: .signed,
-                done: rec.hasContentSignature,
-                date: rec.contentHashAt,
+                done: signature.done,
+                date: signature.date,
                 todo: "Compute a file signature so copies can be verified "
                     + "and duplicates found."),
             PreservationStep(
                 kind: .archivedLocally,
-                done: local != nil || rec.archiveStage == .archived,
-                date: local?.date,
+                done: local != nil || rec.archiveStage == .archived || promoted != nil,
+                date: local?.date ?? promoted?.verifiedAt,
                 todo: "Copy to archival storage — the master RAID."),
             PreservationStep(
                 kind: .archivedOffsite,
@@ -101,16 +108,29 @@ enum PreservationChecklist {
         ]
     }
 
+    /// Signed answers for the CONTENT: this row's own signature (the
+    /// segmented content hash, or a whole-file SHA-256 fixity), else its
+    /// archived copy's — the read-back digest Promote recorded, or the
+    /// copy's whole-file fixity. Pure; no disk.
+    static func contentSignature(of rec: VideoRecord, archivedCopy: VideoRecord?) -> (done: Bool, date: Date?) {
+        if rec.hasContentSignature { return (true, rec.contentHashAt) }
+        for holder in [rec, archivedCopy].compactMap({ $0 })
+        where ArchivePromotionIndex.verifiedDigest(of: holder) != nil {
+            return (true, holder.archiveFixity?.verifiedAt ?? holder.contentFixity?.computedAt)
+        }
+        return (false, nil)
+    }
+
     /// How far along, 0…1. Drives the summary line.
-    static func completion(for rec: VideoRecord) -> Double {
-        let all = steps(for: rec)
+    static func completion(for rec: VideoRecord, archivedCopy: VideoRecord? = nil) -> Double {
+        let all = steps(for: rec, archivedCopy: archivedCopy)
         guard !all.isEmpty else { return 0 }
         return Double(all.filter(\.done).count) / Double(all.count)
     }
 
     /// The next thing worth doing, or nil when the file is safe.
-    static func nextAction(for rec: VideoRecord) -> String? {
-        steps(for: rec).first { !$0.done }?.todo
+    static func nextAction(for rec: VideoRecord, archivedCopy: VideoRecord? = nil) -> String? {
+        steps(for: rec, archivedCopy: archivedCopy).first { !$0.done }?.todo
     }
 }
 
