@@ -27704,6 +27704,55 @@
         "uncomputedAndGreyStayQuiet",
         "yellowAndRedChipsReadTheHeadline"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/FootageFoldersTests.swift",
+      "stage": "unit",
+      "suites": [
+        "FootageFoldersLogicTests",
+        "FootageFoldersScaleTests",
+        "FootageFoldersIsolationTests",
+        "FootageFoldersSensorTests",
+        "FootageFoldersStructureTests"
+      ],
+      "tests": [
+        "confirmedEventBecomesAFolderAndTheRestStaysLoose",
+        "copiesByWholeFileDigestAndSizeReadGreyUnderTheRecording",
+        "copyOutsideAnyEventFollowsItsOriginalIntoTheFolder",
+        "damagedEventsFileMakesNoFoldersAndDoesNotCrash",
+        "duplicateGroupMakesACopyWhenThereIsNoDigest",
+        "eventScopeShowsOneFolderOpenAndFamilyScopeShowsOneFamily",
+        "eventsComeStraightFromTheDecisions",
+        "everyDerivativeAppendGoesThroughTheOneDoor",
+        "familyOrderIsRecordingThenMadeFromThenCopies",
+        "folderKeysUseTheMonitorNotATableKeyHandler",
+        "folderRowsObserveOnlyTheSnapshot",
+        "folderSummaryCountsFilesCopiesTimeArchivedAndDate",
+        "folderTableNeverReadsRecords",
+        "foldersAndLooseFilesSortTogetherByTheTableKey",
+        "hundredThousandRowsUnderBudget",
+        "joinRunsOnlyWhileWanted",
+        "keeperIsTheArchivedFileElseTheBetterTransferElseTheLongest",
+        "legendAppearsOnlyWhileOn",
+        "lineageReadsMadeFromItUnderTheSource",
+        "looseFamilyCarriesItsRelativesUnderItsFirstVisibleMember",
+        "membersInsideAFolderFollowFamilyOrderThenTheSort",
+        "noEventsAndNoCopiesIsTodaysRowsInTodaysOrder",
+        "poisonedShowSettingReadsAsOff",
+        "relationGlyphsAndWordsAreTheDesignsFour",
+        "rowMenuItemsOnlyWhileOn",
+        "sampledV1HashIsNeverACopy",
+        "selectionPruneIsUnchangedAndAFolderIdSurvivesThroughRefreshRows",
+        "showOptionExistsAndDefaultsOff",
+        "showingPillOnlyWhileOn",
+        "snapshotPublishesOnlyOnChange",
+        "sortMappingRoundTripsEveryColumn",
+        "supersededRowStaysWithItsFamilyWhenShown",
+        "theArchiveCopyOfARecordingCarriesTheFamily",
+        "versionOutsideAnyEventFollowsItsSourceToo"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -30257,6 +30306,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogStatusFreshnessTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/FootageFoldersTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],

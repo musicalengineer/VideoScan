@@ -81,6 +81,10 @@ struct CatalogFilenameCell: View {
     let isOffline: Bool
     let pairTint: Bool
     let tooltip: String
+    /// Footage folders (2026-10-16): a copy "reads in grey". Only the
+    /// plain-state colour is dimmed — a purged / set-aside / superseded
+    /// state keeps its own colour, and a selected row stays legible.
+    var dimmed: Bool = false
 
     var body: some View {
         HStack(spacing: 4) {
@@ -97,11 +101,7 @@ struct CatalogFilenameCell: View {
                 // Workspace tint (.mint / turquoise) sits between
                 // purged-orange (highest priority) and the rest.
                 .italic(isOffline || record.isPurged || record.isSetAside || record.isSuperseded)
-                .foregroundColor(CatalogContent.filenameColor(
-                    for: record,
-                    selected: isSelected,
-                    offline: isOffline,
-                    pairTint: pairTint))
+                .foregroundColor(filenameColor)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.vertical, 2)
@@ -120,5 +120,13 @@ struct CatalogFilenameCell: View {
             }
         }
         .help(tooltip)
+    }
+
+    /// The ladder's colour, dimmed to secondary only for a plain copy row.
+    private var filenameColor: Color {
+        let ladder = CatalogContent.filenameColor(for: record, selected: isSelected,
+                                                  offline: isOffline, pairTint: pairTint)
+        guard dimmed, !isSelected, ladder == record.filenameColor else { return ladder }
+        return FootageFolderWords.copyColor
     }
 }

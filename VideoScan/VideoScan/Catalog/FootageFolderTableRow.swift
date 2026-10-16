@@ -1,0 +1,191 @@
+// FootageFolderTableRow.swift
+// The row type of the Footage folders Table, the sort mapping between
+// that Table and the linear one, the remembered Show option, and the
+// "reveal the selected row" helper (docs/design/footage_folders_2026_10_16.md).
+//
+// WHY A SECOND ROW TYPE. SwiftUI's `Table` draws ONE row type; the linear
+// table's is `VideoRecord` and its sort order is `[KeyPathComparator<VideoRecord>]`,
+// wired through ContentView, the model's `records.sort(using:)` and every
+// filter. A folder is not a record (and must never reach ⌘⌫ or Promote as
+// one), so the folder view is its own Table over this wrapper: a record
+// row carries the record, a folder row carries its summary. Both tables
+// share one selection (record ids; a folder's id is its event's) and one
+// sort order — mapped here column by column.
+//
+// (For Rick: `PartialKeyPath` ≈ a type-erased pointer-to-member; the
+// static `columns` table is the jump table, data instead of a switch.)
+
+import AppKit
+import Foundation
+import SwiftUI
+
+/// One row of the folder Table: a folder (event) or a record with its
+/// relation to the recording above it.
+struct FootageFolderTableRow: Identifiable {
+    /// The event id for a folder, the record id otherwise (the selection
+    /// set the inspector, ⌘⌫, ⌘O and Promote read).
+    let id: UUID
+    let display: FootageFolders.DisplayRow
+    /// nil for a folder row.
+    let record: VideoRecord?
+    /// The sortable facts (a folder's: title, running time, size, date).
+    let keys: FootageFolders.SortKeys
+
+    init(display: FootageFolders.DisplayRow, record: VideoRecord?, keys: FootageFolders.SortKeys) {
+        self.id = display.id
+        self.display = display
+        self.record = record
+        self.keys = keys
+    }
+
+    var isFolder: Bool { display.isFolder }
+    var eventID: UUID? { display.eventID }
+    var relation: FootageFolders.Relation? { display.relation }
+    var summary: FootageFolders.Summary? {
+        if case .folder(_, _, let s) = display.kind { return s }
+        return nil
+    }
+    var title: String {
+        if case .folder(_, let t, _) = display.kind { return t }
+        return record?.filename ?? ""
+    }
+
+    // The sort columns, one key path per sortable TableColumn.
+    var filename: String { keys.filename }
+    var volume: String { keys.volume }
+    var stream: String { keys.stream }
+    var duration: Double { keys.duration }
+    var pixels: Int { keys.pixels }
+    var codec: String { keys.codec }
+    var dossier: Int { keys.dossier }
+    var size: Int64 { keys.size }
+    var date: Date { keys.date }
+    var place: String { keys.place }
+    var people: String { keys.people }
+}
+
+// MARK: - Sort mapping (linear table ⇄ folder table ⇄ the join's Sort)
+
+enum FootageFolderSort {
+
+    /// One sortable column: its key, and the comparator each table uses
+    /// for it. Data, not a switch — a new column is one more line.
+    struct Column {
+        let key: FootageFolders.SortKey
+        let record: PartialKeyPath<VideoRecord>
+        let row: PartialKeyPath<FootageFolderTableRow>
+        let recordComparator: (SortOrder) -> KeyPathComparator<VideoRecord>
+        let rowComparator: (SortOrder) -> KeyPathComparator<FootageFolderTableRow>
+    }
+
+    /// Computed, not stored: eleven small values per call (a header click,
+    /// a compose), and no shared mutable global for Swift 6 to flag.
+    static var columns: [Column] { [
+        Column(key: .filename, record: \VideoRecord.filename, row: \FootageFolderTableRow.filename,
+               recordComparator: { KeyPathComparator(\VideoRecord.filename, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.filename, order: $0) }),
+        Column(key: .volume, record: \VideoRecord.displayVolumeLabel, row: \FootageFolderTableRow.volume,
+               recordComparator: { KeyPathComparator(\VideoRecord.displayVolumeLabel, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.volume, order: $0) }),
+        Column(key: .stream, record: \VideoRecord.streamTypeRaw, row: \FootageFolderTableRow.stream,
+               recordComparator: { KeyPathComparator(\VideoRecord.streamTypeRaw, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.stream, order: $0) }),
+        Column(key: .duration, record: \VideoRecord.durationSeconds, row: \FootageFolderTableRow.duration,
+               recordComparator: { KeyPathComparator(\VideoRecord.durationSeconds, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.duration, order: $0) }),
+        Column(key: .resolution, record: \VideoRecord.pixelCount, row: \FootageFolderTableRow.pixels,
+               recordComparator: { KeyPathComparator(\VideoRecord.pixelCount, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.pixels, order: $0) }),
+        Column(key: .codec, record: \VideoRecord.displayCodec, row: \FootageFolderTableRow.codec,
+               recordComparator: { KeyPathComparator(\VideoRecord.displayCodec, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.codec, order: $0) }),
+        Column(key: .dossier, record: \VideoRecord.dossierChannelCount, row: \FootageFolderTableRow.dossier,
+               recordComparator: { KeyPathComparator(\VideoRecord.dossierChannelCount, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.dossier, order: $0) }),
+        Column(key: .size, record: \VideoRecord.sizeBytes, row: \FootageFolderTableRow.size,
+               recordComparator: { KeyPathComparator(\VideoRecord.sizeBytes, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.size, order: $0) }),
+        Column(key: .date, record: \VideoRecord.resolvedDateSortKey, row: \FootageFolderTableRow.date,
+               recordComparator: { KeyPathComparator(\VideoRecord.resolvedDateSortKey, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.date, order: $0) }),
+        Column(key: .place, record: \VideoRecord.resolvedPlaceSortKey, row: \FootageFolderTableRow.place,
+               recordComparator: { KeyPathComparator(\VideoRecord.resolvedPlaceSortKey, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.place, order: $0) }),
+        Column(key: .people, record: \VideoRecord.peopleSortKey, row: \FootageFolderTableRow.people,
+               recordComparator: { KeyPathComparator(\VideoRecord.peopleSortKey, order: $0) },
+               rowComparator: { KeyPathComparator(\FootageFolderTableRow.people, order: $0) }),
+    ] }
+
+    static func column(forRecord keyPath: PartialKeyPath<VideoRecord>) -> Column? {
+        columns.first { $0.record == keyPath }
+    }
+
+    static func column(forRow keyPath: PartialKeyPath<FootageFolderTableRow>) -> Column? {
+        columns.first { $0.row == keyPath }
+    }
+
+    /// The join's Sort from the linear table's order (its first comparator
+    /// decides; an unknown column sorts by name).
+    static func sort(from order: [KeyPathComparator<VideoRecord>]) -> FootageFolders.Sort {
+        guard let first = order.first, let c = column(forRecord: first.keyPath) else { return .byName }
+        return FootageFolders.Sort(key: c.key, ascending: first.order == .forward)
+    }
+
+    /// Linear → folder comparators (unknown columns dropped).
+    static func rowComparators(from order: [KeyPathComparator<VideoRecord>]) -> [KeyPathComparator<FootageFolderTableRow>] {
+        order.compactMap { c in column(forRecord: c.keyPath)?.rowComparator(c.order) }
+    }
+
+    /// Folder → linear comparators (unknown columns dropped).
+    static func recordComparators(from order: [KeyPathComparator<FootageFolderTableRow>]) -> [KeyPathComparator<VideoRecord>] {
+        order.compactMap { c in column(forRow: c.keyPath)?.recordComparator(c.order) }
+    }
+}
+
+// MARK: - The remembered Show option
+
+/// Show ▸ Events & Copies as Folders, remembered per user like the other
+/// Show options (UserDefaults). Read strictly: anything but a Bool under
+/// the key — a poisoned or older value — reads as OFF, never as on.
+enum CatalogFootageFoldersSetting {
+    static let key = FootageFolderWords.settingKey
+
+    static func isOn(_ defaults: UserDefaults = .standard) -> Bool {
+        (defaults.object(forKey: key) as? Bool) ?? false
+    }
+
+    static func set(_ on: Bool, _ defaults: UserDefaults = .standard) {
+        defaults.set(on, forKey: key)
+    }
+}
+
+// MARK: - Reveal (scroll the selection into view)
+
+/// SwiftUI's `Table` has no scroll-to; the selection it draws is an
+/// NSTableView's. After a programmatic selection (the post-job reveal),
+/// ask every table view in the app's visible windows to show its
+/// selected row — a table with nothing selected is left alone.
+enum CatalogTableReveal {
+    @MainActor
+    static func scrollSelectionIntoView() {
+        // One run-loop turn later, so SwiftUI has applied the selection.
+        DispatchQueue.main.async {
+            for window in NSApp.windows where window.isVisible {
+                guard let root = window.contentView else { continue }
+                for table in tableViews(under: root) where table.selectedRow >= 0 {
+                    table.scrollRowToVisible(table.selectedRow)
+                }
+            }
+        }
+    }
+
+    static func tableViews(under view: NSView) -> [NSTableView] {
+        var out: [NSTableView] = []
+        var stack: [NSView] = [view]
+        while let v = stack.popLast() {
+            if let t = v as? NSTableView { out.append(t) }
+            stack.append(contentsOf: v.subviews)
+        }
+        return out
+    }
+}

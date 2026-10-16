@@ -295,6 +295,19 @@ final class VideoScanModel: ObservableObject {
     /// attention surface observes (chip, toolbar dot, menu row, band),
     /// published from the same pass. Logic in Analyze/CatalogFreshnessSnapshot.swift.
     let catalogFreshness = CatalogFreshnessSnapshot()
+    /// Footage folders (Show ▸ Events & Copies as Folders, 2026-10-16):
+    /// the ONE snapshot the Catalog's folder view observes — the join
+    /// (families, folders, summaries) from the same debounced pass, only
+    /// while the option is on and the pane is on screen. Logic in
+    /// Catalog/FootageFoldersSnapshot.swift; storage lives here because
+    /// extensions cannot add stored properties.
+    let footageFolders = FootageFoldersSnapshot()
+    var footageFoldersTask: Task<Void, Never>?
+    var footageFoldersWanted = false
+    /// A finished Transcode / Reformat / Trim / Repair / Clean Up job's
+    /// derivative entered the catalog (`adoptDerivative`); the Catalog
+    /// pane selects and reveals it. nil until the first one this session.
+    @Published var lastDerivativeLanding: DerivativeLanding?
     /// "Update everything stale": one kind at a time through the runner.
     let catalogStatusUpdateQueue = CatalogStatusUpdateQueue()
     /// The two run markers beside catalog.json (fullhash-backfill.json,
@@ -389,6 +402,9 @@ final class VideoScanModel: ObservableObject {
         scheduleUserPlaceRosterRefresh()
         // Analyze coverage (2026-10-02) — same pass, same off-main pattern.
         scheduleAnalyzeCoverageRefresh()
+        // Footage folders (2026-10-16) — same pass; a no-op unless the
+        // Catalog's folder view is on screen.
+        scheduleFootageFoldersRefresh()
         // Steward pane cases (2026-10-03) — same pass; a no-op until the
         // pane has been shown.
         scheduleStewardRefresh()

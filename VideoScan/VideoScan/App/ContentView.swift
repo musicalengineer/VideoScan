@@ -447,6 +447,11 @@ struct CatalogView: View {
     /// deliberately NOT persisted (Manager decision 2026-07-24): the
     /// default view should always come back clean on relaunch.
     @State private var showSuperseded: Bool = false
+    /// Show ▸ Events & Copies as Folders (2026-10-16). Off by default;
+    /// remembered per user through CatalogFootageFoldersSetting (read
+    /// strictly — a poisoned value reads as off), written on every flip
+    /// below, the way the view filters are.
+    @State private var showFootageFolders: Bool = CatalogFootageFoldersSetting.isOn()
     /// Strict-catalog policy: scan targets that have never been scanned and
     /// aren't currently doing anything are hidden from the Scan Volumes
     /// table by default. The user opts in with a small toggle near the table.
@@ -707,6 +712,7 @@ struct CatalogView: View {
             showRemoved: $showRemoved,
             showSetAside: $showSetAside,
             showSuperseded: $showSuperseded,
+            showFootageFolders: $showFootageFolders,
             dashboardContent: {
                 if model.isScanning || model.isCombining {
                     CompactDashboard(
@@ -742,6 +748,7 @@ struct CatalogView: View {
             showRemoved: showRemoved,
             showSetAside: showSetAside,
             showSuperseded: showSuperseded,
+            showFootageFolders: showFootageFolders,
             // Media-kind facet (GH #124) — persisted on the model,
             // flipped by the toolbar facet chip.
             kindFacet: model.kindFacetSetting.facet,
@@ -870,6 +877,7 @@ struct CatalogView: View {
                 guard didLoadPersistedViewFilters else { return }
                 persistedViewFilters = CatalogShowingSummary.encode(catalogViewFilters)
             }
+            .onChange(of: showFootageFolders) { CatalogFootageFoldersSetting.set(showFootageFolders) }
             .onChange(of: volumeShowFilter) { volumeShowFilterDidChange() }
             // A Master Archive designated AFTER first run flips the default
             // to the to-do view once (never again — the user's choice wins).

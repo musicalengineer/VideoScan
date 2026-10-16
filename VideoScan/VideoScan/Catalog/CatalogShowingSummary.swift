@@ -56,6 +56,10 @@ enum CatalogShowingSummary {
         var showRemoved = false
         var showSetAside = false
         var showSuperseded = false
+        /// Show ▸ Events & Copies as Folders (2026-10-16) — a view shape,
+        /// not a filter; it gets its own pill so the folder rows explain
+        /// themselves from the Showing box too.
+        var footageFolders = false
         /// A Master Archive is designated — without one "archived" is
         /// meaningless and the archive pill is omitted entirely.
         var hasMasterArchive = false
@@ -120,6 +124,7 @@ enum CatalogShowingSummary {
             out.append(Pill(words(for: f)))
         }
         if s.showPairsOnly { out.append(Pill("Pairs only")) }
+        if s.footageFolders { out.append(Pill(FootageFolderWords.showingPill)) }
 
         out.append(Pill(s.showDisconnectedMedia ? "All drives" : "Connected drives",
                         action: .toggleDrives))

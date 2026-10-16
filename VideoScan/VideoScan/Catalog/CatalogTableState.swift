@@ -2,9 +2,11 @@
 // The Catalog files table's own view state in one place (R1 refactor,
 // GH #281): the rows snapshot it draws, the badge revision its cells
 // read — plus `CatalogPane`, the name of each keyboard-focus target in
-// the Catalog's two panes (2026-10-06). The keyboard focus itself is ONE
-// FocusState (`focusedPane`) in CatalogView; the table's selection and
-// sort order are @Bindings owned there too.
+// the Catalog's two panes (2026-10-06) — and, since the Footage folders
+// view (2026-10-16), the open folders, the scope and the folder rows.
+// The keyboard focus itself is ONE FocusState (`focusedPane`) in
+// CatalogView; the table's selection and sort order are @Bindings owned
+// there too.
 
 import SwiftUI
 
@@ -22,6 +24,15 @@ enum CatalogPane: Hashable {
 @MainActor
 final class CatalogPaneFocusMirror {
     var pane: CatalogPane?
+}
+
+/// Reference box the same NSEvent monitor reads for the folder keys
+/// (→ / ← / Esc): whether Show ▸ Events & Copies as Folders is on. The
+/// option is a plain `let` on CatalogContent, which the monitor's captured
+/// copy would read stale; this box is mirrored on every change.
+@MainActor
+final class FootageFolderKeyMirror {
+    var isOn = false
 }
 
 /// The files table's view-owned state. A custom `DynamicProperty` ≈ a C++
@@ -46,6 +57,23 @@ struct CatalogTableState: DynamicProperty {
     /// Which pane has the keyboard, for the Space monitor (see
     /// CatalogPaneFocusMirror). Written only by `.onChange(of: focusedPane)`.
     @State var paneFocusMirror = CatalogPaneFocusMirror()
+
+    // MARK: Footage folders (Show ▸ Events & Copies as Folders, 2026-10-16)
+
+    /// The folders twisted open (event ids). Session state, like the
+    /// Finder's.
+    @State var openFolderIDs: Set<UUID> = []
+    /// The list narrowed to one event (double-click) or one file's
+    /// family (Show Copies & Related…); nil = everything. Esc / the crumb
+    /// clears it.
+    @State var folderScope: FootageFolders.Scope?
+    /// The folder Table's rows — the published display turned into rows
+    /// in an event handler (CatalogContent.rebuildFolderRows), never in a body.
+    @State var folderRows: [FootageFolderTableRow] = []
+    /// The event ids among `folderRows` (O(1) "is this id a folder?").
+    @State var folderIDs: Set<UUID> = []
+    /// Whether the option is on, for the key monitor (see FootageFolderKeyMirror).
+    @State var folderKeyMirror = FootageFolderKeyMirror()
 }
 
 extension CatalogContent {
@@ -66,14 +94,21 @@ extension CatalogContent {
         nonmutating set { tableState.angelBadgeRevision = newValue }
     }
 
+    /// See `CatalogTableState.folderRows`.
+    var folderRows: [FootageFolderTableRow] { tableState.folderRows }
+
     /// Recompute the rows, then keep the file selection only for rows the
     /// filter still shows (Rick 2026-10-06: "drop highlighted files that a
     /// filter or search hides" — Finder's rule; a hidden selection was a
-    /// ⌘⌫ / Promote trap). Never touches keyboard focus.
+    /// ⌘⌫ / Promote trap). Never touches keyboard focus. With the folder
+    /// view on, the folder display follows the new rows (a no-op otherwise).
     func refreshRows() {
         tableData = computeFiltered()
+        // A selected folder row is not a record: it stays selected.
         let kept = CatalogSelectionPrune.visibleSelection(selectedIDs, rows: tableData)
+            .union(selectedIDs.intersection(tableState.folderIDs))
         if kept != selectedIDs { selectedIDs = kept }
+        refreshFolderDisplay()
     }
 }
 
