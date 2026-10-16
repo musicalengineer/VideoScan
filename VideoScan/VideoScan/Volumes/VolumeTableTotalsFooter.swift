@@ -137,6 +137,14 @@ struct VolumeTableTotalsFooter: View {
             .frame(width: max(0, mediaSizeX - VolumeTableMetrics.labelGutter),
                    alignment: .trailing)
             .padding(.trailing, VolumeTableMetrics.labelGutter)
+            // The catalog status chip (Rick 2026-10-16, option 1): the empty
+            // run-in to the left of the label is the fourth vital sign's
+            // place. An overlay, so the label's measured width and the
+            // figures' column anchors are untouched.
+            .overlay(alignment: .leading) {
+                CatalogStatusChip()
+                    .padding(.leading, 16)
+            }
     }
 
     /// Gross — on the Media Size origin, totalling the column directly
