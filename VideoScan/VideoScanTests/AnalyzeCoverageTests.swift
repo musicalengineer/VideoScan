@@ -217,9 +217,12 @@ struct AnalyzeCoverageLogicTests {
     }
 
     @Test func cyclerOrderIsTheDesignOrder() {
-        #expect(AnalyzeCycler.allCases == [.duplicates, .footage, .sceneCaptions, .ocr, .transcribe,
+        // Catalog Status (2026-10-16): the three integrity rows lead.
+        #expect(AnalyzeCycler.allCases == [.filePresence, .fullHashes, .soundPrints,
+                                           .duplicates, .footage, .sceneCaptions, .ocr, .transcribe,
                                            .correlate, .fileSignatures, .embeddedDates, .dateInference])
-        #expect(AnalyzeCycler.allCases.filter(\.isPausable) == [.footage, .sceneCaptions, .ocr, .transcribe])
+        #expect(AnalyzeCycler.allCases.filter(\.isPausable) == [.filePresence, .fullHashes, .soundPrints,
+                                                                 .footage, .sceneCaptions, .ocr, .transcribe])
     }
 }
 

@@ -80,6 +80,10 @@ struct VolumeTableTotalsFooter: View {
     /// footer never observes the model.
     var showAgainModel: VideoScanModel? = nil
 
+    /// Catalog Status (2026-10-16): the chip observes THIS snapshot and
+    /// nothing else. nil (previews) → no chip.
+    var freshness: CatalogFreshnessSnapshot? = nil
+
     // MARK: Derived geometry
 
     /// Content origin of a measured column, falling back to the
@@ -142,8 +146,10 @@ struct VolumeTableTotalsFooter: View {
             // place. An overlay, so the label's measured width and the
             // figures' column anchors are untouched.
             .overlay(alignment: .leading) {
-                CatalogStatusChip()
-                    .padding(.leading, 16)
+                if let freshness {
+                    CatalogStatusChip(freshness: freshness)
+                        .padding(.leading, 16)
+                }
             }
     }
 

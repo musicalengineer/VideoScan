@@ -1,7 +1,8 @@
 // CatalogAuditSheet.swift
 // Presents a CatalogAuditReport (Storage tab ▸ Catalog row ▸ right-click
-// ▸ Audit Catalog…). Runs the audit off the main thread, lists each check
-// with a pass/warn/fail glyph, and offers Copy Report.
+// ▸ Check Totals… — "Audit Catalog…" until 2026-10-16, when that name went
+// to the Catalog menu's presence job). Runs the check off the main thread,
+// lists each check with a pass/warn/fail glyph, and offers Copy Report.
 
 import SwiftUI
 
@@ -60,7 +61,7 @@ struct CatalogAuditSheet: View {
                 .font(.system(size: 30))
                 .foregroundColor(color(report?.overall))
             VStack(alignment: .leading, spacing: 2) {
-                Text("Catalog audit")
+                Text("Check Totals")
                     .font(.title2.bold())
                 Text(report.map { r in
                     "\(r.activeRecords.formatted()) present records · \(CatalogStorageTotals.displaySize(r.activeBytes)) · \(r.failCount) fail, \(r.warnCount) warn · \(String(format: "%.2f", r.duration)) s"

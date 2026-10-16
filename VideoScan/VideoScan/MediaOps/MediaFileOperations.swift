@@ -876,6 +876,10 @@ final class MediaFileOperationsCenter: ObservableObject {
     /// Keep at most this many non-active jobs around.
     static let finishedCap = 50
 
+    /// "Open the window AT this row" (Catalog Status band → See details,
+    /// 2026-10-16): the window expands the job and clears the request.
+    @Published var revealJobID: UUID?
+
     /// Brings the window forward when a USER-started job registers
     /// (Rick 2026-09-21; MediaFileOperationsWindowForwarder.swift). `var`
     /// only so tests can swap in a forwarder with a fake presenter.

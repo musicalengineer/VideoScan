@@ -1,32 +1,42 @@
 // AnalyzePanelView.swift
-// The Analyze panel — a quiet control panel for the metadata cyclers
+// The Analyze panel — a quiet control panel for the knowledge kinds
 // (Rick 2026-10-02, design §5.5: "Time Machine's pane, one row per
 // cycler"). Replaces the content of the ⇧⌘O window and the Catalog
 // toolbar's "Analyze Catalog" button target. PHASE A TRIAL: rewires the
 // existing engines into this shape; nothing underneath is refactored.
 //
+// CATALOG STATUS (Rick 2026-10-16, docs/design/catalog_status_freshness
+// _2026_10_16.md §2): the summary band sits at the TOP (CatalogStatusBand
+// — one colour, one headline, one button per item, "Update everything
+// stale"); the three integrity rows (File Presence, Full Hashes, Sound
+// Prints) come first; every row carries a FRESHNESS column (colour dot +
+// the policy's words) beside its coverage text.
+//
 // One row per cycler, in registry order:
 //   name · STATE chip (Current / Cycling — N to go / Paused / Waiting for
 //   drive / Manual / Auto) · COVERAGE "x of y eligible · z%" with a small
-//   "n offline · m not applicable" · Pause/Resume (enabled only where the
-//   engine supports it) · Run now · schedule menu (stored; label-only in
-//   Phase A) · an optional disclosure with the per-volume breakdown.
+//   "n offline · m not applicable" · FRESHNESS "● 660 files without a full
+//   hash" · Pause/Resume (enabled only where the engine supports it) · Run
+//   now · schedule menu (stored; label-only in Phase A) · an optional
+//   disclosure with the per-volume breakdown.
 //
-// OBSERVATION (the 2026-07-14 render-loop lesson): the panel observes TWO
-// equality-gated snapshot objects — the model's AnalyzeCoverageSnapshot
-// (recomputed off-main on catalog mutation) and the orchestrator's
-// DossierDashboardSnapshot (≤2 Hz) — and samples the handful of engine
-// flags (isAnalyzingDuplicates, isCorrelating, …, the footage job) on a
-// 1 s tick into ONE Equatable @State value, written only when it changed.
+// OBSERVATION (the 2026-07-14 render-loop lesson): the panel observes
+// FOUR equality-gated snapshot objects — the model's AnalyzeCoverageSnapshot
+// and CatalogFreshnessSnapshot (recomputed off-main on catalog mutation),
+// the orchestrator's DossierDashboardSnapshot (≤2 Hz) and the update
+// queue — and samples the handful of engine flags (isAnalyzingDuplicates,
+// isCorrelating, …, the footage job, the three integrity jobs) on a 1 s
+// tick into ONE Equatable @State value, written only when it changed.
 // `model`, `orchestrator` and `center` are plain references: reads and
 // action calls only. NO O(records) work in this body — every number is
-// read from the cached report (AnalyzePanelSensorTests pins it).
+// read from the cached reports (AnalyzePanelSensorTests pins it).
 //
 // (For Rick: `@ObservedObject` ≈ subscribing to an object's change signal;
 // a plain `let model` ≈ holding a pointer without subscribing.)
 
 import SwiftUI
 import Combine
+import VideoScanCore
 
 struct AnalyzePanelView: View {
 
@@ -35,7 +45,9 @@ struct AnalyzePanelView: View {
     let center: MediaFileOperationsCenter
 
     @ObservedObject private var coverage: AnalyzeCoverageSnapshot
+    @ObservedObject private var freshness: CatalogFreshnessSnapshot
     @ObservedObject private var dossier: DossierDashboardSnapshot
+    @ObservedObject private var queue: CatalogStatusUpdateQueue
 
     @Environment(\.openWindow) private var openWindow
     @AppStorage(CaptionOrchestrator.autoResumePrefsKey) private var autoResume: Bool = false
@@ -56,7 +68,9 @@ struct AnalyzePanelView: View {
         // Property-wrapper backing init (`_coverage` ≈ the wrapper struct
         // itself, not the wrapped value).
         self._coverage = ObservedObject(wrappedValue: model.analyzeCoverageSnapshot)
+        self._freshness = ObservedObject(wrappedValue: model.catalogFreshness)
         self._dossier = ObservedObject(wrappedValue: orchestrator.dashboardSnapshot)
+        self._queue = ObservedObject(wrappedValue: model.catalogStatusUpdateQueue)
     }
 
     private var runner: AnalyzeRunner {
@@ -69,6 +83,7 @@ struct AnalyzePanelView: View {
         ScrollView(.vertical) {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                statusBand
                 VStack(spacing: 8) {
                     ForEach(AnalyzeCycler.allCases) { cycler in
                         row(cycler)
@@ -118,6 +133,23 @@ struct AnalyzePanelView: View {
         }
     }
 
+    // MARK: Catalog Status band (§2.1)
+
+    private var statusBand: some View {
+        CatalogStatusBand(
+            state: freshness.state,
+            queue: queue,
+            runningJob: { cycler in runner.activeIntegrityJob(for: cycler) },
+            onRunNow: { cycler in runner.runNow(cycler, source: "status band") },
+            onUpdateAll: {
+                queue.enqueue(freshness.state.staleCyclers, runner: runner, source: "status band")
+            },
+            onSeeDetails: { job in
+                center.revealJobID = job.id
+                openWindow(id: MediaFileOperationsWindowOpener.sceneID)
+            })
+    }
+
     // MARK: Rows
 
     @ViewBuilder
@@ -144,12 +176,12 @@ struct AnalyzePanelView: View {
         .equatable()
     }
 
-    /// Everything a row renders, as values — derived from the two
-    /// snapshots and the sampled flags, never from `records`.
+    /// Everything a row renders, as values — derived from the snapshots
+    /// and the sampled flags, never from `records`.
     private func rowFacts(_ cycler: AnalyzeCycler) -> AnalyzeRowFacts {
         let report = coverage.report
-        let counts = report.counts(cycler)
-        let known = report.coverageKnown(cycler)
+        let counts = rowCounts(cycler)
+        let known = report.coverageKnown(cycler) || cycler == .filePresence
         let schedule = live.schedules[cycler] ?? cycler.defaultSchedule
         let liveRule = liveRule(for: cycler)
 
@@ -167,29 +199,45 @@ struct AnalyzePanelView: View {
                                               schedule: schedule)
 
         let words = Self.coverageWords(for: cycler, counts: counts, report: report)
-
-        var volumes: [AnalyzeRowFacts.VolumeLine] = []
-        if cycler.hasVolumeScope, let perVolume = report.byVolume[cycler] {
-            volumes = live.volumes.compactMap { v in
-                guard let k = perVolume[v.root] else { return nil }
-                var text = cycler == .footage ? "\(k.secondary.formatted()) grouped" : k.line
-                if !k.sideLine.isEmpty { text += " · \(k.sideLine)" }
-                if cycler.isDossierStage {
-                    if dossier.state.isVolumeAnalyzing(v.root) { text += " · analyzing" }
-                    else if let q = dossier.state.queuePosition(of: v.root) { text += " · in line (#\(q))" }
-                    else if dossier.state.parkedVolumePrefixes.contains(v.root) { text += " · waiting for drive" }
-                }
-                return .init(root: v.root, label: v.label, text: text, isReachable: v.isReachable)
-            }
-            if let other = perVolume[AnalyzeCoverageCalculator.otherRoot], other.eligible + other.offline > 0 {
-                volumes.append(.init(root: AnalyzeCoverageCalculator.otherRoot, label: "Other locations",
-                                     text: other.line, isReachable: false))
-            }
-        }
+        let verdict = freshness.state.verdict(cycler)
 
         return AnalyzeRowFacts(cycler: cycler, state: state, coverageLine: words.line, sideLine: words.side,
                                note: words.note, schedule: schedule, isPaused: liveRule.isPaused,
-                               isRunning: liveRule.isRunning, volumes: volumes)
+                               isRunning: liveRule.isRunning, volumes: volumeLines(cycler),
+                               freshnessColour: verdict?.colour, freshnessWords: verdict?.words ?? "")
+    }
+
+    /// The counts a row renders. File Presence has no per-record stamp:
+    /// its "covered" is the last audit's checked count, carried by the
+    /// freshness row; everything else reads the coverage report.
+    private func rowCounts(_ cycler: AnalyzeCycler) -> AnalyzeCoverageCounts {
+        var counts = coverage.report.counts(cycler)
+        if cycler == .filePresence, let row = freshness.state.row(cycler) {
+            counts.covered = row.covered
+        }
+        return counts
+    }
+
+    /// The per-volume disclosure lines for cyclers with a volume scope.
+    private func volumeLines(_ cycler: AnalyzeCycler) -> [AnalyzeRowFacts.VolumeLine] {
+        let report = coverage.report
+        guard cycler.hasVolumeScope, let perVolume = report.byVolume[cycler] else { return [] }
+        var volumes: [AnalyzeRowFacts.VolumeLine] = live.volumes.compactMap { v in
+            guard let k = perVolume[v.root] else { return nil }
+            var text = cycler == .footage ? "\(k.secondary.formatted()) grouped" : k.line
+            if !k.sideLine.isEmpty { text += " · \(k.sideLine)" }
+            if cycler.isDossierStage {
+                if dossier.state.isVolumeAnalyzing(v.root) { text += " · analyzing" }
+                else if let q = dossier.state.queuePosition(of: v.root) { text += " · in line (#\(q))" }
+                else if dossier.state.parkedVolumePrefixes.contains(v.root) { text += " · waiting for drive" }
+            }
+            return .init(root: v.root, label: v.label, text: text, isReachable: v.isReachable)
+        }
+        if let other = perVolume[AnalyzeCoverageCalculator.otherRoot], other.eligible + other.offline > 0 {
+            volumes.append(.init(root: AnalyzeCoverageCalculator.otherRoot, label: "Other locations",
+                                 text: other.line, isReachable: false))
+        }
+        return volumes
     }
 
     /// The coverage line, its small side note and the honesty note per
@@ -197,6 +245,15 @@ struct AnalyzePanelView: View {
     static func coverageWords(for cycler: AnalyzeCycler, counts: AnalyzeCoverageCounts,
                               report: AnalyzeCoverageReport, now: Date = Date()) -> (line: String, side: String, note: String) {
         switch cycler {
+        case .filePresence:
+            let line = counts.eligible > 0
+                ? "\(counts.covered.formatted()) of \(counts.eligible.formatted()) checked by the last audit"
+                : "nothing eligible"
+            return (line, counts.sideLine, "one stat per file on a connected drive; the run's own record is catalog-audit.json, not a stamp per row")
+        case .fullHashes:
+            return (counts.line, counts.sideLine, "a whole-file SHA-256 only — the sampled hash a scan leaves does not count")
+        case .soundPrints:
+            return (counts.line, counts.sideLine, "a stamp per file, fingerprint or \"no sound\"; the landmarks live in the sidecar")
         case .correlate:
             let offline = report.correlate.offlineCandidates
             return (report.correlate.line, offline > 0 ? "\(offline.formatted()) candidates offline" : "", "")
@@ -223,6 +280,12 @@ struct AnalyzePanelView: View {
     private func liveRule(for cycler: AnalyzeCycler) -> AnalyzeRowStateRule.Live {
         var l = AnalyzeRowStateRule.Live()
         switch cycler {
+        case .filePresence, .fullHashes, .soundPrints:
+            if let job = live.integrity[cycler] {
+                l.isRunning = true
+                l.isPaused = job.isPaused
+                l.progressText = job.subtitle
+            }
         case .duplicates:
             l.isRunning = live.isAnalyzingDuplicates
             l.progressText = live.isAnalyzingDuplicates ? live.duplicateStatus : ""
@@ -232,18 +295,7 @@ struct AnalyzePanelView: View {
             l.progressText = live.footageActive ? live.footageSubtitle : ""
             l.lastAutoRunAt = live.footageLastAutoRunAt
         case .sceneCaptions, .ocr, .transcribe:
-            let d = dossier.state
-            l.isRunning = d.statusIsActive
-            l.isPaused = d.paused || (d.queuePaused && !d.queuedVolumePrefixes.isEmpty)
-            l.queueWaitingFromLastSession = d.queuePaused && !d.queuedVolumePrefixes.isEmpty && !d.statusIsActive
-            l.parkedVolumes = d.parkedVolumePrefixes.count
-            if d.statusIsActive {
-                var parts: [String] = []
-                if let v = d.currentVolumePrefix { parts.append(VolumeReachability.displayLabel(forPath: v)) }
-                if live.dossierTotal > 0 { parts.append("\(live.dossierIndex.formatted()) of \(live.dossierTotal.formatted()) this pass") }
-                if !d.queuedVolumePrefixes.isEmpty { parts.append("\(d.queuedVolumePrefixes.count) in line") }
-                l.progressText = parts.joined(separator: " · ")
-            }
+            l = dossierLiveRule()
         case .correlate:
             l.isRunning = live.isCorrelating
             l.progressText = live.isCorrelating ? live.correlateStatus : ""
@@ -253,6 +305,24 @@ struct AnalyzePanelView: View {
             l.isRunning = live.isRefreshingEmbeddedDates
         case .dateInference:
             break   // runs synchronously on the main actor; never "running" between frames
+        }
+        return l
+    }
+
+    /// The three dossier stages share one engine and one queue.
+    private func dossierLiveRule() -> AnalyzeRowStateRule.Live {
+        var l = AnalyzeRowStateRule.Live()
+        let d = dossier.state
+        l.isRunning = d.statusIsActive
+        l.isPaused = d.paused || (d.queuePaused && !d.queuedVolumePrefixes.isEmpty)
+        l.queueWaitingFromLastSession = d.queuePaused && !d.queuedVolumePrefixes.isEmpty && !d.statusIsActive
+        l.parkedVolumes = d.parkedVolumePrefixes.count
+        if d.statusIsActive {
+            var parts: [String] = []
+            if let v = d.currentVolumePrefix { parts.append(VolumeReachability.displayLabel(forPath: v)) }
+            if live.dossierTotal > 0 { parts.append("\(live.dossierIndex.formatted()) of \(live.dossierTotal.formatted()) this pass") }
+            if !d.queuedVolumePrefixes.isEmpty { parts.append("\(d.queuedVolumePrefixes.count) in line") }
+            l.progressText = parts.joined(separator: " · ")
         }
         return l
     }
@@ -305,7 +375,7 @@ struct AnalyzePanelView: View {
 
     private var footnote: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Trial: these rows drive the engines as they are today. Find Similar Footage still shows a row in Media File Operations while it runs; the schedule choice is remembered but not yet acted on. The old dashboard is under Window ▸ Analyze Dashboard (legacy).")
+            Text("Trial: these rows drive the engines as they are today. File Presence, Full Hashes, Sound Prints and Find Similar Footage run as Media File Operations (the band above mirrors their row); the schedule choice is remembered but not yet acted on. The old dashboard is under Window ▸ Analyze Dashboard (legacy).")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -326,6 +396,12 @@ struct AnalyzePanelView: View {
             s.footageActive = true
             s.footagePaused = job.isPaused
             s.footageSubtitle = job.subtitle
+        }
+        // The three integrity jobs: the same objects the MFO rows show.
+        for c in AnalyzeCycler.integrity {
+            if let job = runner.activeIntegrityJob(for: c) {
+                s.integrity[c] = .init(isPaused: job.isPaused, subtitle: job.subtitle)
+            }
         }
         s.footageLastAutoRunAt = model.archiveAngel.lastFootageAutoRunAt
         s.dossierIndex = orchestrator.liveCurrentIndex
@@ -349,6 +425,8 @@ struct AnalyzePanelView: View {
 
 struct AnalyzeLiveSample: Equatable {
     struct Volume: Equatable { var root: String; var label: String; var isReachable: Bool }
+    /// One integrity job's sampled facts (the job itself is observed by the band's mirror).
+    struct IntegrityJob: Equatable { var isPaused: Bool; var subtitle: String }
     var isAnalyzingDuplicates = false
     var duplicateStatus = ""
     var isCorrelating = false
@@ -359,6 +437,7 @@ struct AnalyzeLiveSample: Equatable {
     var footagePaused = false
     var footageSubtitle = ""
     var footageLastAutoRunAt: Date?
+    var integrity: [AnalyzeCycler: IntegrityJob] = [:]
     var dossierIndex = 0
     var dossierTotal = 0
     var schedules: [AnalyzeCycler: AnalyzeSchedule] = [:]
@@ -384,6 +463,9 @@ struct AnalyzeRowFacts: Equatable {
     var isPaused: Bool
     var isRunning: Bool
     var volumes: [VolumeLine]
+    /// The freshness column (Catalog Status §2): nil until judged.
+    var freshnessColour: FreshnessColour?
+    var freshnessWords: String
 }
 
 // MARK: - Row view (value-only; Equatable so an unchanged row is skipped)
@@ -455,6 +537,7 @@ struct AnalyzeCyclerRow: View, Equatable {
                                 .font(.system(size: 12))
                                 .foregroundStyle(.secondary)
                         }
+                        freshnessColumn
                     }
                     if !facts.note.isEmpty {
                         Text(facts.note)
@@ -479,6 +562,24 @@ struct AnalyzeCyclerRow: View, Equatable {
             .accessibilityIdentifier("analyze.row.\(cycler.rawValue)")
 
             if isExpanded { disclosure.padding(.leading, 72) }
+        }
+    }
+
+    /// Freshness (Catalog Status §2): the policy's colour dot + words,
+    /// beside the coverage text — the same verdict the band summarizes.
+    @ViewBuilder
+    private var freshnessColumn: some View {
+        if let colour = facts.freshnessColour {
+            HStack(spacing: 5) {
+                Circle().fill(colour.tint).frame(width: 8, height: 8)
+                Text(facts.freshnessWords)
+                    .font(.system(size: 12))
+                    .foregroundStyle(colour == .green || colour == .grey ? Color.secondary : Color.primary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .padding(.leading, 4)
+            .accessibilityIdentifier("analyze.row.\(cycler.rawValue).freshness")
         }
     }
 
@@ -597,6 +698,8 @@ struct AnalyzeCyclerRow: View, Equatable {
 /// hues taken from the Media File Operations verb chips (the darkened,
 /// legible set of 2026-07-31), so the Analyze window and the MFO window
 /// read as one family, and the rows fall into bands down the list:
+///   catalog integrity     → Audit's slate teal       (File Presence,
+///                           Full Hashes, Sound Prints — the AUDIT chip's hue)
 ///   finding copies        → Compare's cobalt        (Detect Duplicates,
 ///                           Find Similar Footage)
 ///   understanding content → Analyze's dark cyan     (Scene Captions, OCR,
@@ -609,6 +712,8 @@ struct AnalyzeCyclerRow: View, Equatable {
 extension AnalyzeCycler {
     var familyTint: Color {
         switch self {
+        case .filePresence, .fullHashes, .soundPrints:
+            return Color(red: 0.20, green: 0.50, blue: 0.55)
         case .duplicates, .footage:
             return Color(red: 0.08, green: 0.32, blue: 0.72)
         case .correlate:

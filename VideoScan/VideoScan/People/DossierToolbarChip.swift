@@ -22,6 +22,9 @@ import Combine
 struct DossierToolbarChip: View {
 
     @ObservedObject var model: VideoScanModel
+    /// Catalog Status (2026-10-16, §4): the equality-gated freshness
+    /// snapshot — the dot's colour when the summary is not green.
+    @ObservedObject var freshness: CatalogFreshnessSnapshot
     @Environment(\.openWindow) private var openWindow
 
     /// Tracks the dossier count over a sliding window so we can color
@@ -51,9 +54,21 @@ struct DossierToolbarChip: View {
             AnalyzeWindowOpener.open(using: openWindow, source: "chip")
         } label: {
             Label(buttonTitle, systemImage: "wand.and.stars")
+                // The same dot the totals-strip chip carries, when the
+                // catalog is not current (design §4: "the Content Analysis
+                // toolbar button carries the same dot").
+                .overlay(alignment: .topTrailing) {
+                    if attentionColour != nil {
+                        Circle()
+                            .fill(attentionColour?.tint ?? .clear)
+                            .frame(width: 8, height: 8)
+                            .offset(x: 6, y: -4)
+                            .accessibilityIdentifier("catalog.analyzeCatalog.dot")
+                    }
+                }
         }
         .buttonStyle(.bordered)
-        .help("Catalog analysis: \(headlineCount) (\(percentLabel))\(rateHelp). Click for the Analyze panel (⌘⇧O).")
+        .help("Catalog analysis: \(headlineCount) (\(percentLabel))\(rateHelp). \(statusHelp)Click for the Analyze panel (⌘⇧O).")
         .accessibilityIdentifier("catalog.analyzeCatalog")
         .onAppear { rate.record(count: dossieredCount, at: Date()) }
         .onReceive(refreshTimer) { _ in
@@ -68,6 +83,17 @@ struct DossierToolbarChip: View {
     /// eye away from the catalog for no decision it can inform.
     /// It remains in the tooltip.
     private var buttonTitle: String { "Content Analysis" }
+
+    /// nil when green (or not computed yet): no dot.
+    private var attentionColour: FreshnessColour? {
+        let s = freshness.state
+        guard s.isComputed, s.summary.colour == .yellow || s.summary.colour == .red else { return nil }
+        return s.summary.colour
+    }
+
+    private var statusHelp: String {
+        attentionColour == nil ? "" : "Catalog status: \(freshness.state.summary.headline). "
+    }
 
     private var rateHelp: String {
         rate.hasEnoughSamples ? ". Rate \(rate.displayText)." : ""

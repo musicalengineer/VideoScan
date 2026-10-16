@@ -130,13 +130,15 @@ struct AnchoredVolumeTableTotalsFooter: View {
     var archivedBytes: Int64?
     var archivedHelp: String = ""
     var showAgainModel: VideoScanModel?
+    var freshness: CatalogFreshnessSnapshot?
 
     var body: some View {
         VolumeTableTotalsFooter(totals: totals,
                                 columnFrames: anchors.frames,
                                 archivedBytes: archivedBytes,
                                 archivedHelp: archivedHelp,
-                                showAgainModel: showAgainModel)
+                                showAgainModel: showAgainModel,
+                                freshness: freshness)
             .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
     }
 }

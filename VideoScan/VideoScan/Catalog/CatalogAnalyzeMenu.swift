@@ -4,7 +4,15 @@
 // "Duplicates" menu:
 //
 //   Analyze ▾
+//     2 things need attention                  (the Catalog Status summary —
+//                                               FIRST row, opens the panel;
+//                                               Rick 2026-10-16 §4.2)
+//     ─────────────
 //     Click a row to update it now
+//     File Presence — current · checked today at 02:14
+//     Full Hashes — 660 files without a full hash
+//     Sound Prints — …                         (the three integrity rows
+//                                               read their freshness words)
 //     Duplicates — current · 13,842 of 13,842
 //     Similar Footage — 3,112 grouped · last run 2 days ago
 //     … one row per cycler, registry order; a running one reads "running…"
@@ -30,16 +38,20 @@
 // where the operand (a drive) lives. The from-scratch "Clear &
 // Re-correlate All…" moved into the Analyze panel's Correlate row.
 //
-// OBSERVATION: the one @ObservedObject is the model's
-// AnalyzeCoverageSnapshot — equality-gated, published once per debounced
-// catalog change, never per record. Everything else is a plain value.
+// OBSERVATION: the two @ObservedObjects are the model's
+// AnalyzeCoverageSnapshot and CatalogFreshnessSnapshot — equality-gated,
+// published once per debounced catalog change, never per record.
+// Everything else is a plain value.
 
 import SwiftUI
+import VideoScanCore
 
 struct CatalogAnalyzeMenu: View {
 
     @ObservedObject var coverage: AnalyzeCoverageSnapshot
-    /// Cyclers whose engine flag is set right now (toolbar-computed).
+    @ObservedObject var freshness: CatalogFreshnessSnapshot
+    /// Cyclers whose engine flag is set right now (toolbar-computed); the
+    /// integrity rows' running state comes from the freshness snapshot.
     let running: Set<AnalyzeCycler>
     let isReadOnly: Bool
     let selectionCount: Int
@@ -69,12 +81,35 @@ struct CatalogAnalyzeMenu: View {
         "\(analyzeSelectedPrefix) (\(count)) — \(cycler.menuTitle)"
     }
 
+    /// The first row: the Catalog Status summary sentence (its colour
+    /// lives on the chip and the band — a macOS menu row is monochrome).
+    static func summaryTitle(_ state: CatalogFreshnessState) -> String {
+        state.isComputed ? state.summary.headline : "Checking what the catalog knows…"
+    }
+
+    private func isRunning(_ cycler: AnalyzeCycler) -> Bool {
+        running.contains(cycler) || freshness.state.isRunning(cycler)
+    }
+
+    /// The integrity rows read their freshness verdict (the counts the
+    /// band uses); the metadata cyclers keep their coverage line.
+    private func summary(_ cycler: AnalyzeCycler) -> String {
+        if cycler.isIntegrity, let v = freshness.state.verdict(cycler) { return v.words }
+        return coverage.report.menuSummary(cycler)
+    }
+
     var body: some View {
         Menu {
+            // The summary sentence IS the first row (design §4.2): the
+            // fact and the door agree — it opens the panel with the band.
+            Button(Self.summaryTitle(freshness.state), action: onOpenPanel)
+                .help("Catalog status. Click to open Content Analysis, where the band at the top lists each item with its button.")
+                .accessibilityIdentifier("catalog.analyze.status")
+            Divider()
             Text("Click a row to update it now")
             ForEach(AnalyzeCycler.allCases) { cycler in
-                let isRunning = running.contains(cycler)
-                Button(Self.rowTitle(cycler, summary: coverage.report.menuSummary(cycler), isRunning: isRunning)) {
+                let isRunning = isRunning(cycler)
+                Button(Self.rowTitle(cycler, summary: summary(cycler), isRunning: isRunning)) {
                     onUpdateNow(cycler)
                 }
                 .disabled(isRunning || isReadOnly)

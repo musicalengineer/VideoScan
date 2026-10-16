@@ -1,11 +1,20 @@
 // AnalyzeCyclers.swift
-// The nine METADATA CYCLERS the Analyze panel shows, one row each
+// The knowledge kinds the Analyze panel shows, one row each
 // (Rick 2026-10-02, docs/design/analyze_knowledge_and_storage_actions_2026-10-02.md
 // §5.5 "governing distinction"):
 //
 //   MFO = file operations a person started (Combine, Trim, Delete on X…).
 //   Analyze = continuous background metadata cyclers — no "done", only
 //   "current"; natural state is running quietly or paused.
+//
+// THREE INTEGRITY ROWS come first (Rick 2026-10-16, Catalog Status
+// freshness §2): File Presence (Audit Catalog tier 0), Full Hashes
+// (SHA-256) and Sound Prints (audio fingerprints). They are cyclers by
+// Rick's own definition — no "done", only "current" — but their work reads
+// files for minutes to hours, so each Run now starts the MEDIA FILE
+// OPERATION that already exists (AUDIT, the hash backfill, SOUND PRINT);
+// the panel's band mirrors that job's row (§2.1). Then the nine metadata
+// cyclers of the 10/2 trial.
 //
 // PHASE A TRIAL. This file is the registry the UI reads: display names,
 // order, icons, help, which engine flag means "running", whether the
@@ -19,8 +28,14 @@
 
 import Foundation
 
-/// One metadata cycler. Raw values are stable keys (UserDefaults, logs).
+/// One knowledge kind. Raw values are stable keys (UserDefaults, logs,
+/// the FreshnessRow.kind the summary band keys on).
 enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
+    // Integrity — "does the catalog still describe the files?" First.
+    case filePresence    = "filePresence"
+    case fullHashes      = "fullHashes"
+    case soundPrints     = "soundPrints"
+    // Metadata cyclers (10/2 trial order).
     case duplicates      = "duplicates"
     case footage         = "footage"
     case sceneCaptions   = "sceneCaptions"
@@ -33,9 +48,24 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    /// The three integrity kinds, in registry order.
+    static let integrity: [AnalyzeCycler] = [.filePresence, .fullHashes, .soundPrints]
+
+    /// True for the kinds whose work is a Media File Operation (the band
+    /// mirrors the MFO row; Pause / Stop act on the job).
+    var isIntegrity: Bool {
+        switch self {
+        case .filePresence, .fullHashes, .soundPrints: return true
+        default: return false
+        }
+    }
+
     /// Row title — plain words, the verb the design doc uses.
     var title: String {
         switch self {
+        case .filePresence:   return "File Presence"
+        case .fullHashes:     return "Full Hashes"
+        case .soundPrints:    return "Sound Prints"
         case .duplicates:     return "Detect Duplicates"
         case .footage:        return "Find Similar Footage"
         case .sceneCaptions:  return "Scene Captions"
@@ -51,6 +81,9 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
     /// Short noun for the toolbar menu rows ("Duplicates — current · …").
     var menuTitle: String {
         switch self {
+        case .filePresence:   return "File Presence"
+        case .fullHashes:     return "Full Hashes"
+        case .soundPrints:    return "Sound Prints"
         case .duplicates:     return "Duplicates"
         case .footage:        return "Similar Footage"
         case .sceneCaptions:  return "Scene Captions"
@@ -65,6 +98,9 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
 
     var systemImage: String {
         switch self {
+        case .filePresence:   return "doc.text.magnifyingglass"
+        case .fullHashes:     return "checkmark.seal"
+        case .soundPrints:    return "waveform.badge.magnifyingglass"
         case .duplicates:     return "doc.on.doc"
         case .footage:        return "square.stack.3d.up"
         case .sceneCaptions:  return "text.below.photo"
@@ -80,6 +116,12 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
     /// What this cycler records, in one sentence (the row's help).
     var help: String {
         switch self {
+        case .filePresence:
+            return "Checks that every catalog entry on a connected drive still points at its file (one stat per file, nothing is opened). A file that is gone is marked Missing; a Missing file that is back is shown again."
+        case .fullHashes:
+            return "Reads each file once in full and keeps its SHA-256, so two copies can be proved byte-for-byte identical. A sampled hash from a scan does not count."
+        case .soundPrints:
+            return "Listens to each file once and keeps a small fingerprint of its sound, so copies and clips of the same recording can be told apart. Kept in a sidecar beside the catalog."
         case .duplicates:
             return "Groups files that are the same bytes and elects the copy to keep. Catalog metadata only; nothing is removed here."
         case .footage:
@@ -108,10 +150,11 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// Pause/Resume is enabled only where the engine supports it today:
-    /// the dossier pipeline (orchestrator pause) and Find Similar Footage
-    /// (its MFO job pauses at phase boundaries). The rest say so.
+    /// the dossier pipeline (orchestrator pause), Find Similar Footage
+    /// (its MFO job pauses at phase boundaries) and the three integrity
+    /// jobs (each pauses between chunks / files). The rest say so.
     var isPausable: Bool {
-        isDossierStage || self == .footage
+        isDossierStage || self == .footage || isIntegrity
     }
 
     /// Help text for a disabled Pause control.
@@ -123,21 +166,23 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .duplicates, .footage, .sceneCaptions, .ocr, .transcribe, .fileSignatures:
             return true
-        case .correlate, .embeddedDates, .dateInference:
-            // Correlate and the backfills take a path prefix too, but their
-            // coverage is catalog-shaped (pairs; "has a tag"); kept simple.
+        case .filePresence, .fullHashes, .soundPrints, .correlate, .embeddedDates, .dateInference:
+            // The integrity jobs run every connected drive in parallel
+            // lanes; Correlate and the backfills take a path prefix too,
+            // but their coverage is catalog-shaped (pairs; "has a tag").
             return false
         }
     }
 
     /// What ALREADY runs by itself today, so the schedule menu's "Auto"
-    /// tells the truth: Date Inference (on load / live reload / each
-    /// dossier result), Find Similar Footage (the Archive Angel's
-    /// keep-current run) and the dossier queue (Resume on launch).
+    /// tells the truth: File Presence (the nightly's `--audit-catalog`),
+    /// Date Inference (on load / live reload / each dossier result), Find
+    /// Similar Footage (the Archive Angel's keep-current run) and the
+    /// dossier queue (Resume on launch).
     var autoRunsToday: Bool {
         switch self {
-        case .dateInference, .footage, .sceneCaptions, .ocr, .transcribe: return true
-        case .duplicates, .correlate, .fileSignatures, .embeddedDates: return false
+        case .filePresence, .dateInference, .footage, .sceneCaptions, .ocr, .transcribe: return true
+        case .fullHashes, .soundPrints, .duplicates, .correlate, .fileSignatures, .embeddedDates: return false
         }
     }
 

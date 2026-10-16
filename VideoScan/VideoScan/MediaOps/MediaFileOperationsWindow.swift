@@ -178,6 +178,13 @@ struct MediaFileOperationsWindow: View {
         // Repair… from a finished Verify row or its detail opens the Repair
         // sheet here, on this window (Rick 2026-10-10).
         .modifier(MediaRepairLaunchHost())
+        // "See details" from the Catalog Status band (2026-10-16): expand
+        // the requested row, then clear the request.
+        .onChange(of: center.revealJobID, initial: true) { _, id in
+            guard let id else { return }
+            expandedJobIDs.insert(id)
+            center.revealJobID = nil
+        }
         .onAppear {
             DispatchQueue.main.async {
                 for window in NSApp.windows where window.title.contains("Media File Operations") {

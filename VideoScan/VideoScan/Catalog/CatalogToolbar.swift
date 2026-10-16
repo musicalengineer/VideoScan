@@ -275,6 +275,7 @@ struct CatalogToolbar<Dashboard: View>: View {
                 // re-correlate moved into the panel's Correlate row.
                 CatalogAnalyzeMenu(
                     coverage: model.analyzeCoverageSnapshot,
+                    freshness: model.catalogFreshness,
                     running: runningCyclers,
                     isReadOnly: model.isReadOnly,
                     selectionCount: selectedIDs.count,

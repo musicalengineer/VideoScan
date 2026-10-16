@@ -1,0 +1,315 @@
+// CatalogFreshnessSnapshot.swift
+// ONE equality-gated snapshot behind every Catalog Status surface (Rick
+// 2026-10-16, docs/design/catalog_status_freshness_2026_10_16.md §4): the
+// chip on the totals strip, the dot on the Content Analysis button, the
+// Analyze menu's first row, the Catalog ▸ Catalog Status… title, the band
+// at the top of the Analyze panel and the freshness column on every row.
+//
+// Pattern = AnalyzeCoverageSnapshot: the model's debounced catalog-change
+// pass projects once, computes off-main, and publishes here; the views
+// observe THIS object and nothing else. NO O(records) work anywhere in
+// this file — the rows are built from the cached AnalyzeCoverageReport
+// (already O(1) per cycler) plus two small facts (CatalogFreshnessFacts).
+//
+// Three things move the snapshot:
+//   1. the coverage pass (catalog mutation; the audit / hash / sound jobs
+//      save the catalog, so their stamps land here) — report + facts;
+//   2. the MFO center's job list (a 4 Hz-throttled change signal): which
+//      integrity kinds are running right now, re-judged only when the SET
+//      changes. A kind that just STOPPED also re-reads the two facts off
+//      the main actor — an audit that found every file present marks
+//      nothing, so no catalog save (and no coverage pass) would follow,
+//      yet its marker just changed;
+//   3. a 60 s clock: "12 minutes ago" ages; re-judging 12 rows is µs.
+// Each lands as one `state` write, and only when the value differs.
+//
+// Memory: a dozen FreshnessRows and their verdicts — bytes.
+//
+// (For Rick: `@Published private(set) var state` ≈ a struct member with a
+// change signal the views subscribe to; `AnyCancellable` ≈ an RAII
+// subscription handle.)
+
+import Combine
+import Foundation
+import VideoScanCore
+
+// MARK: - Rows (pure)
+
+enum CatalogFreshnessRows {
+
+    /// One FreshnessRow per registry kind, in registry order.
+    /// `running` = kinds with a pass in flight (sampled by the caller).
+    static func rows(report: AnalyzeCoverageReport,
+                     facts: CatalogFreshnessFacts,
+                     running: Set<AnalyzeCycler>) -> [FreshnessRow] {
+        AnalyzeCycler.allCases.map { row($0, report: report, facts: facts, running: running) }
+    }
+
+    static func row(_ cycler: AnalyzeCycler, report: AnalyzeCoverageReport,
+                    facts: CatalogFreshnessFacts, running: Set<AnalyzeCycler>) -> FreshnessRow {
+        let k = report.counts(cycler)
+        var row = FreshnessRow(kind: cycler.rawValue, title: cycler.title,
+                               eligible: k.eligible, covered: k.covered, offline: k.offline,
+                               lastCompleted: k.newestStamp, lastOutcome: .ok,
+                               isRunning: running.contains(cycler), phrases: phrases(cycler))
+        switch cycler {
+        case .filePresence:
+            let audit = CatalogAuditPresenceFacts.from(facts.audit)
+            row.covered = min(row.eligible, audit.checked)
+            row.lastCompleted = audit.lastCompleted
+            row.lastOutcome = audit.outcome
+            row.needsDecision = audit.needsDecision
+            row.cadence = .seconds(24 * 3_600)
+        case .soundPrints:
+            row.storeUnavailable = facts.soundStoreProblem
+        case .correlate:
+            // Pairs are counted differently: the unpaired candidates are
+            // the uncovered rows, the pairs the covered ones.
+            let c = report.correlate
+            row.eligible = c.pairs * 2 + c.unpaired
+            row.covered = c.pairs * 2
+            row.offline = c.offlineCandidates
+        case .footage:
+            // No per-record stamp (a singleton carries nothing): the row
+            // can only say when it last ran, never a count. Treat it as
+            // covered so the band does not shout about a number it does
+            // not have (AnalyzeCoverageReport.coverageUnknown).
+            row.covered = row.eligible
+        default:
+            break
+        }
+        return row
+    }
+
+    /// Each kind's own words for its counts (FreshnessRow.Phrases).
+    static func phrases(_ cycler: AnalyzeCycler) -> FreshnessRow.Phrases {
+        switch cycler {
+        case .filePresence:
+            return .init(unit: "file", uncovered: "not yet checked",
+                         decision: "pointing at nothing or changed on disk — look at Fix Links")
+        case .fullHashes:
+            return .init(unit: "file", uncovered: "without a full hash")
+        case .soundPrints:
+            return .init(unit: "file", uncovered: "without a sound print")
+        case .correlate:
+            return .init(unit: "file", uncovered: "unpaired")
+        case .dateInference:
+            return .init(unit: "file", uncovered: "without an inferred date")
+        case .duplicates, .footage, .sceneCaptions, .ocr, .transcribe, .fileSignatures, .embeddedDates:
+            return .init(unit: "file", uncovered: "not yet \(verb(cycler))")
+        }
+    }
+
+    private static func verb(_ cycler: AnalyzeCycler) -> String {
+        switch cycler {
+        case .duplicates: return "checked for duplicates"
+        case .footage: return "grouped"
+        case .sceneCaptions: return "captioned"
+        case .ocr: return "read for on-screen text"
+        case .transcribe: return "transcribed"
+        case .fileSignatures: return "signed"
+        case .embeddedDates: return "probed for an embedded date"
+        default: return "checked"
+        }
+    }
+}
+
+// MARK: - State (one value; Equatable)
+
+/// Everything the surfaces read. Built in one place (`CatalogFreshnessSnapshot`),
+/// compared as a whole before it is published.
+struct CatalogFreshnessState: Equatable {
+    var rows: [FreshnessRow] = []
+    var verdicts: [AnalyzeCycler: FreshnessVerdict] = [:]
+    var summary = FreshnessSummary(colour: .grey, headline: "Nothing to check", items: [], staleKinds: [])
+    /// False until the first coverage pass has landed (the chip stays
+    /// quiet rather than claiming "nothing to check" at launch).
+    var isComputed = false
+
+    func verdict(_ cycler: AnalyzeCycler) -> FreshnessVerdict? { verdicts[cycler] }
+    func row(_ cycler: AnalyzeCycler) -> FreshnessRow? { rows.first { $0.kind == cycler.rawValue } }
+    func isRunning(_ cycler: AnalyzeCycler) -> Bool { row(cycler)?.isRunning ?? false }
+
+    /// The kinds "Update everything stale" queues, in registry order.
+    var staleCyclers: [AnalyzeCycler] { summary.staleKinds.compactMap(AnalyzeCycler.init(rawValue:)) }
+
+    /// Judge every row and summarize — the one place the policy is applied.
+    static func judged(rows: [FreshnessRow], now: Date, wording: FreshnessWording = .current) -> CatalogFreshnessState {
+        var s = CatalogFreshnessState()
+        s.rows = rows
+        for row in rows {
+            guard let cycler = AnalyzeCycler(rawValue: row.kind) else { continue }
+            s.verdicts[cycler] = FreshnessPolicy.judge(row, now: now, wording: wording)
+        }
+        s.summary = FreshnessPolicy.summarize(rows, now: now, wording: wording)
+        s.isComputed = true
+        return s
+    }
+}
+
+// MARK: - Words for the chip and the menu (pure)
+
+enum CatalogStatusWords {
+
+    static let chipPrefix = "Catalog Status: "
+
+    /// What follows "Catalog Status: " on the totals strip. Green reads the
+    /// File Presence row's own "current · checked …" (the one row with a
+    /// clock); yellow/red read the headline, lowered to sit after the
+    /// prefix ("needs a decision — 3 files …"); grey keeps its headline.
+    static func chipWords(_ state: CatalogFreshnessState) -> String {
+        guard state.isComputed else { return "checking…" }
+        switch state.summary.colour {
+        case .green:
+            if let presence = state.verdict(.filePresence), presence.colour == .green { return presence.words }
+            return "current"
+        case .yellow, .red:
+            return afterPrefix(state.summary.headline)
+        case .grey:
+            return state.summary.headline
+        }
+    }
+
+    /// "Needs a decision: 3 files …" → "needs a decision — 3 files …";
+    /// "2 things need attention" is already fine after the prefix.
+    static func afterPrefix(_ headline: String) -> String {
+        var s = headline
+        if let first = s.first, first.isUppercase, !first.isNumber {
+            s = first.lowercased() + s.dropFirst()
+        }
+        if let colon = s.range(of: ": ") { s.replaceSubrange(colon, with: " — ") }
+        return s
+    }
+
+    /// Catalog ▸ "Catalog Status…" carries the colour word when not green.
+    static func menuTitle(_ colour: FreshnessColour) -> String {
+        switch colour {
+        case .red: return "Catalog Status — needs a decision…"
+        case .yellow: return "Catalog Status — needs attention…"
+        case .green, .grey: return "Catalog Status…"
+        }
+    }
+
+    /// The one console/log line at launch when the summary is red.
+    static func launchLine(_ summary: FreshnessSummary) -> String {
+        let items = summary.items.filter { $0.colour == .red }.map { "\($0.title): \($0.words)" }
+        return "\(summary.headline) — \(items.joined(separator: "; ")). Catalog ▸ Catalog Status… lists the doors."
+    }
+}
+
+// MARK: - The snapshot (model-owned; views observe this and nothing else)
+
+@MainActor
+final class CatalogFreshnessSnapshot: ObservableObject {
+
+    @Published private(set) var state = CatalogFreshnessState()
+    /// Test hook: how many state writes actually landed.
+    private(set) var publishCount = 0
+
+    private var report = AnalyzeCoverageReport()
+    private var facts = CatalogFreshnessFacts()
+    private var running: Set<AnalyzeCycler> = []
+    /// The catalog.json path the facts were read beside (for the re-read).
+    private var catalogFile: String?
+    private var factsTask: Task<Void, Never>?
+    private var centerSubscription: AnyCancellable?
+    private var clock: AnyCancellable?
+    private var announced = false
+
+    init() {}
+
+    /// From the coverage pass: the report and the two file facts.
+    func publish(report: AnalyzeCoverageReport, facts: CatalogFreshnessFacts, catalogFile: String? = nil) {
+        self.report = report
+        self.facts = facts
+        if let catalogFile { self.catalogFile = catalogFile }
+        rejudge()
+    }
+
+    /// Which kinds have a pass in flight. Re-judges only when the set
+    /// changed; a kind that just stopped re-reads the facts (see header).
+    func setRunning(_ kinds: Set<AnalyzeCycler>) {
+        guard kinds != running else { return }
+        let stopped = !running.subtracting(kinds).isEmpty
+        running = kinds
+        rejudge()
+        if stopped { rereadFacts() }
+    }
+
+    /// One small JSON + one SQLite open, off the main actor; the result
+    /// lands through `publish` (equality-gated like everything else).
+    func rereadFacts() {
+        guard let catalogFile else { return }
+        factsTask?.cancel()
+        factsTask = Task { [weak self] in
+            let facts = await Task.detached(priority: .utility) {
+                CatalogFreshnessFactsReader.read(catalogFile: catalogFile)
+            }.value
+            guard !Task.isCancelled, let self else { return }
+            self.publish(report: self.report, facts: facts)
+        }
+    }
+
+    /// Follow the MFO center: the three integrity jobs are MFO jobs, so
+    /// "running" is whether one of them is active in the list. The center
+    /// already throttles its change signal to 4 Hz; the set comparison
+    /// above makes a progress beat a no-op.
+    func observeRunning(in center: MediaFileOperationsCenter) {
+        centerSubscription = center.objectWillChange
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self, weak center] _ in
+                guard let self, let center else { return }
+                self.setRunning(Self.integrityRunning(in: center))
+            }
+        setRunning(Self.integrityRunning(in: center))
+    }
+
+    /// The integrity kinds with an active job in the center. O(jobs).
+    static func integrityRunning(in center: MediaFileOperationsCenter) -> Set<AnalyzeCycler> {
+        var s: Set<AnalyzeCycler> = []
+        for job in center.jobs where job.state.isActive {
+            if job is CatalogAuditJob { s.insert(.filePresence) }
+            else if job is FullHashBackfillJob { s.insert(.fullHashes) }
+            else if job is AudioFingerprintBackfillJob { s.insert(.soundPrints) }
+        }
+        return s
+    }
+
+    /// Keep the relative words honest ("12 minutes ago" → "13 …") — one
+    /// re-judge a minute, equality-gated so an unchanged minute is free.
+    func startClock(every seconds: TimeInterval = 60) {
+        clock = Timer.publish(every: seconds, on: .main, in: .common).autoconnect()
+            .sink { [weak self] _ in self?.rejudge() }
+    }
+
+    /// §4.3: at launch, a red summary is ONE line through the catalog sink.
+    /// Called after each publish; fires once per process, on the first
+    /// computed state that saw a loaded catalog (an empty pre-load pass
+    /// has nothing to say and must not spend the one line).
+    func announceAtLaunch(to model: VideoScanModel) {
+        guard !announced, state.isComputed, report.activeRecords > 0 else { return }
+        announced = true
+        guard state.summary.needsAttention else { return }
+        model.catalogStatusNote(CatalogStatusWords.launchLine(state.summary))
+    }
+
+    private func rejudge(now: Date = Date()) {
+        guard report.computedAt.timeIntervalSince1970 > 0 else { return }
+        let rows = CatalogFreshnessRows.rows(report: report, facts: facts, running: running)
+        let new = CatalogFreshnessState.judged(rows: rows, now: now)
+        guard new != state else { return }
+        publishCount += 1
+        state = new
+    }
+}
+
+// MARK: - Model half
+
+extension VideoScanModel {
+    /// The one sink: console + catalog.log, videoscan.log (the full-hash
+    /// launch line's pattern).
+    func catalogStatusNote(_ line: String) {
+        log("Catalog status: " + line)
+        appLog.write("[catalog-status] " + line)
+    }
+}
