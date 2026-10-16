@@ -369,18 +369,22 @@ struct PerceptualFingerprintScaleTests {
             if i % 10 == 1 { r.derivationKind = ArchivePromotion.derivationKind }
             return r
         }
-        let start = Date()
+        let loadBefore = TimingBudget.sampleLoad()
+        let clock = ContinuousClock()
+        let start = clock.now
         let plan = VideoScanModel.perceptualFingerprintBackfillPlan(
             records: records, isArchived: { $0.derivationKind == ArchivePromotion.derivationKind })
         var found = 0
         for r in records where VideoScanModel.storedPerceptualFingerprint(of: r) != nil { found += 1 }
-        let elapsed = Date().timeIntervalSince(start)
+        let elapsed = clock.now - start
         #expect(plan.count == 50_000)
         #expect(found == 50_000)
         let archivedFirst = plan.prefix(10_000).allSatisfy { $0.isArchived }
         #expect(archivedFirst, "the 10k archived rows come first")
         #expect(plan[10_000].isArchived == false)
-        #expect(elapsed < 3.0, "plan + 100k lookups took \(elapsed) s")
+        // Load-aware (GH #208): a slow hosted runner measured 3.6 s on 2026-10-16.
+        expectWithinTimingBudget("plan + 100k stored-fingerprint lookups", measured: elapsed, budget: .seconds(3),
+                                 loadBefore: loadBefore)
     }
 }
 
