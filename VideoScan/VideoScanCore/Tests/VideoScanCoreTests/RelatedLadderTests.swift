@@ -187,6 +187,12 @@ struct RelatedLadderTests {
         #expect(v.rung == .identicalCopy && has(v, .contradicts, "Sound: nothing in common"))
     }
 
+    @Test("codex r2 F5: an overlap on identical bytes is described as partial, never as 'nothing in common'")
+    func identicalCopyOverlapWording() {
+        let v = RelatedLadder.judge(RelatedEvidence(a: master, b: master, audio: .overlap(offsetSeconds: 0, seconds: 2000)))
+        #expect(v.rung == .identicalCopy && has(v, .contradicts, "only 2000 s matched") && !has(v, .contradicts, "nothing in common"))
+    }
+
     @Test("a year-only date carries its year for the era rule")
     func yearOnly() {
         let s = Side(sizeBytes: 1, durationSeconds: 1, year: 1988)

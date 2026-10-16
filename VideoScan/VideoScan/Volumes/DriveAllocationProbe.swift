@@ -62,10 +62,20 @@ enum DriveAllocationProbe {
     /// unreachable one never blanks it.
     static func facts(for requests: [Request]) async -> [String: DriveAllocationFacts] {
         var out: [String: DriveAllocationFacts] = [:]
+        var reachable: [String: Bool] = [:]
         var units: [String: Unit] = [:]
         for r in requests {
             let f = await facts(for: r, units: &units)
-            if out[r.label] == nil || (out[r.label]?.freeBytes == nil && f.freeBytes != nil) { out[r.label] = f }
+            // A reachable answer always replaces an unreachable one, even
+            // when its filesystem query failed (codex 10/15 F3); between
+            // two of the same reachability, the one with free bytes wins.
+            let was = reachable[r.label]
+            let replace = out[r.label] == nil || (r.isReachable && was == false)
+                || (r.isReachable == (was ?? r.isReachable) && out[r.label]?.freeBytes == nil && f.freeBytes != nil)
+            if replace {
+                out[r.label] = f
+                reachable[r.label] = r.isReachable
+            }
         }
         return out
     }
@@ -115,13 +125,18 @@ enum DriveAllocationProbe {
 
     // MARK: Pure parsing (tested)
 
-    /// The whole disk a volume lives on: the first APFS physical store if
-    /// there is one (an APFS volume's own identifier is a virtual disk),
-    /// else the volume's device identifier — either way without its slice.
+    /// The whole disk a volume lives on. An APFS volume (the key
+    /// `APFSPhysicalStores` is present) resolves ONLY through exactly one
+    /// physical store: a container over two disks (Fusion) is not one unit,
+    /// and an empty or malformed store list fails closed — never the
+    /// volume's own identifier, which is a virtual disk (codex 10/15 F1, F2).
+    /// A non-APFS volume resolves through its device identifier. Either way
+    /// without the slice.
     nonisolated static func wholeDisk(fromVolumeInfo plist: [String: Any]) -> String? {
-        if let stores = plist["APFSPhysicalStores"] as? [[String: Any]],
-           let first = stores.first?["APFSPhysicalStore"] as? String, !first.isEmpty {
-            return DriveHealthProbe.stripSliceSuffix(from: first)
+        if plist["APFSPhysicalStores"] != nil {
+            guard let stores = plist["APFSPhysicalStores"] as? [[String: Any]], stores.count == 1,
+                  let store = stores[0]["APFSPhysicalStore"] as? String, !store.isEmpty else { return nil }
+            return DriveHealthProbe.stripSliceSuffix(from: store)
         }
         if let ident = plist["DeviceIdentifier"] as? String, !ident.isEmpty {
             return DriveHealthProbe.stripSliceSuffix(from: ident)

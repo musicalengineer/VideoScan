@@ -112,6 +112,15 @@ struct CompareMediaTests {
         #expect(s.year == 1988 && s.day == nil, "\(String(describing: s.year)) \(String(describing: s.day))")
     }
 
+    @Test("codex r2 F3: a non-finite or negative duration never traps the strip — the map's length wins")
+    func nonfiniteDurationUsesMapLength() {
+        let active = [false, true, true, false, false, true]
+        #expect(SoundStripBins(active: active, matched: 1..<3, durationSeconds: .nan).seconds == 6)
+        #expect(SoundStripBins(active: active, matched: nil, durationSeconds: .infinity).seconds == 6)
+        #expect(SoundStripBins(active: active, matched: nil, durationSeconds: -5).seconds == 6)
+        #expect(SoundStripBins(active: [], matched: nil, durationSeconds: .nan).seconds == 1)
+    }
+
     @Test("fact rows: a field that differs from the other side is marked; equal ones are not")
     @MainActor func factRows() {
         let r = VideoRecord(); r.videoCodec = "h264"; r.audioCodec = "aac"; r.resolution = "640x480"

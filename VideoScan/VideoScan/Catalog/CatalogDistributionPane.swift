@@ -444,13 +444,15 @@ struct CatalogDistributionPane: View {
     }
 
     /// The row's name: the volume, and in parentheses the physical unit it
-    /// sits on when the disk told us ("FamilyArchive (Promise Pegasus3 R4)",
-    /// "Projects (Promise Pegasus3 R4)" — two volumes, one box). The home
-    /// folder's catch-all label reads as this Mac.
+    /// sits on ("FamilyArchive (Pegasus32 R4)", "Projects (Pegasus32 R4)" —
+    /// two volumes, one box); "(—)" when the disk could not say (codex
+    /// 10/15 F4: an unknown unit is shown as unknown, never hidden). The
+    /// home folder's catch-all label reads as this Mac. The folded "Other"
+    /// row has no unit.
     static func rowName(_ slice: MediaDistributionSlice, facts: DriveAllocationFacts?, host: String) -> String {
         let base = slice.name == MediaDistributionCalculator.homeName ? "\(host) (system)" : slice.name
-        guard !slice.isOther, let unit = facts?.unitName else { return base }
-        return "\(base) (\(unit))"
+        guard !slice.isOther else { return base }
+        return "\(base) (\(facts?.unitName ?? "—"))"
     }
 
     /// This Mac's name for the home-folder row ("RicksM4" from "RicksM4.local").

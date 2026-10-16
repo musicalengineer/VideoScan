@@ -636,8 +636,11 @@
         "EventRecommendationTests"
       ],
       "tests": [
+        "archivedClipStillNeedsItsMasterArchived",
+        "correctedDayUpdatesEraYear",
         "eraRule",
         "identicalEdges",
+        "mixedErasDoNotRecommendRemoval",
         "r1",
         "r2",
         "r2NeverTargetsProtectedClip",
@@ -2249,6 +2252,7 @@
         "differentIsAnAnswer",
         "emptyDigestsCannotAuthorizeCopyRemoval",
         "identicalCopy",
+        "identicalCopyOverlapWording",
         "identicalCopyStillShowsSoundContradiction",
         "masterContainsClip",
         "notEnoughEvidence",
@@ -8512,6 +8516,7 @@
         "factRows",
         "folderLabel",
         "namesSaid",
+        "nonfiniteDurationUsesMapLength",
         "sideFromRecord",
         "sizes",
         "stripBins",
@@ -10229,8 +10234,11 @@
       ],
       "tests": [
         "apfsPhysicalStore",
+        "emptyAPFSStoresNeverUseVirtualDisk",
         "freePercent",
+        "multiStoreIsNotOnePhysicalUnit",
         "plainVolume",
+        "reachableFallbackReplacesOfflineFallback",
         "rowName",
         "unitName"
       ]
@@ -30044,7 +30052,7 @@
           "reason": "python adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2393,
+      "expected_floor": 2397,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

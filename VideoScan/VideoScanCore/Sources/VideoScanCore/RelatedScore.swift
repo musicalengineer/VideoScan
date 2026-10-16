@@ -87,10 +87,14 @@ public struct RelatedEvidence: Sendable, Equatable {
         /// staging copy had been gone eleven days and the band said "byte
         /// for byte").
         public var isOnDisk: Bool?
-        /// The recording's year when only the year is known (a "1988" tape
-        /// label, a folder year): the era rule reads this when there is no
-        /// day (codex 10/15 F2). A day sets it too.
-        public var year: Int?
+        /// The recording's year: the day's year when there is a day, else the
+        /// year-only hint (a "1988" tape label, a folder year — codex 10/15
+        /// F2). Follows a corrected day (round 2 F4).
+        public var year: Int? {
+            get { day?.year ?? yearHint }
+            set { yearHint = newValue }
+        }
+        private var yearHint: Int?
 
         public init(digest: String? = nil, sizeBytes: Int64 = 0, durationSeconds: Double = 0,
                     audibleSeconds: Double? = nil, day: EventDay? = nil, dayIsReliable: Bool = false,
@@ -115,7 +119,7 @@ public struct RelatedEvidence: Sendable, Equatable {
             self.frameHeight = frameHeight
             self.bitRate = bitRate
             self.isOnDisk = isOnDisk
-            self.year = year ?? day?.year
+            self.yearHint = year
         }
 
         public var hasFingerprint: Bool { audibleSeconds != nil }
@@ -266,8 +270,10 @@ public enum RelatedLadder {
             lines.insert(.init(.supports, "Whole-file SHA-256 equal (\(short(da))), \(bytes(e.a.sizeBytes)) both."), at: 0)
             // A contradiction is shown even when a higher rung wins (codex 10/15 F4).
             switch e.audio {
-            case .different?, .overlap?:
+            case .different?:
                 lines.append(.init(.contradicts, "Sound: nothing in common at any offset — the bytes are identical, so one fingerprint is stale or partial. Fingerprint again."))
+            case .overlap(_, let seconds)?:
+                lines.append(.init(.contradicts, "Sound: only \(Int(seconds.rounded())) s matched at one offset although the bytes are identical — one fingerprint is stale or partial. Fingerprint again."))
             default: break
             }
             peopleAndWords(e, rung: .identicalCopy, into: &lines)
