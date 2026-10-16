@@ -128,6 +128,9 @@ public struct VideoRecordDTO: Sendable, Encodable {
     /// codex r2 F4 — the marker's write counter; nil while it is still 0 so
     /// a never-marked legacy row writes no key and stays byte-identical.
     public let removalRevision: Int?
+    /// codex r3 D5 — where the audit last saw the file; nil until stamped
+    /// (no key written, so an unstamped row stays byte-identical).
+    public let auditSeenOn: AuditSeenOn?
     public let embeddedCreationDate: Date?
     public let embeddedCreationSource: String?
     public let originMake: String?
@@ -265,6 +268,7 @@ public struct VideoRecordDTO: Sendable, Encodable {
         purgedAt                    = r.purgedAt
         removal                     = r.removal
         removalRevision             = r.removalRevision > 0 ? r.removalRevision : nil
+        auditSeenOn                 = r.auditSeenOn
         embeddedCreationDate        = r.embeddedCreationDate
         embeddedCreationSource      = r.embeddedCreationSource
         originMake                  = r.originMake
@@ -461,6 +465,8 @@ public struct VideoRecordDTO: Sendable, Encodable {
         // The marker's write counter (codex r2 F4): only once the engine has
         // ever changed the marker (nil until then — see the property).
         try c.encodeIfPresent(removalRevision, forKey: .removalRevision)
+        // Where the audit last saw the file (codex r3 D5): only once stamped.
+        try c.encodeIfPresent(auditSeenOn, forKey: .auditSeenOn)
         // Embedded creation date + origin (2026-08-16): keys written only
         // when present — records without a container stamp (every legacy
         // record) round-trip byte-identical.

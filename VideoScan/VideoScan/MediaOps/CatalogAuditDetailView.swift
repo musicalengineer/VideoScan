@@ -100,7 +100,7 @@ struct CatalogAuditDetailView: View {
         switch result {
         case .present: return "checkmark.circle.fill"
         case .cameBack: return "arrow.uturn.backward.circle.fill"
-        case .gone, .goneArchived, .stillMissing: return "questionmark.folder"
+        case .gone, .goneArchived, .stillMissing, .neverSeenByAnAudit: return "questionmark.folder"
         case .changed: return "exclamationmark.triangle.fill"
         case .couldNotCheck: return "xmark.octagon.fill"
         case .notAsked: return "externaldrive.badge.xmark"
@@ -111,7 +111,7 @@ struct CatalogAuditDetailView: View {
     static func color(_ result: CatalogAuditResult) -> Color {
         switch result {
         case .present, .cameBack: return Color(red: 0.10, green: 0.45, blue: 0.25)
-        case .gone, .goneArchived, .couldNotCheck: return Color(red: 0.80, green: 0.10, blue: 0.10)
+        case .gone, .goneArchived, .neverSeenByAnAudit, .couldNotCheck: return Color(red: 0.80, green: 0.10, blue: 0.10)
         case .changed: return Color(red: 0.75, green: 0.45, blue: 0.00)
         default: return .secondary
         }

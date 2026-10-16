@@ -131,6 +131,7 @@ extension VideoRecord {
         c.sourceHost = sourceHost
         c.removal = removal          // GH #143 — purgedAt is derived from it
         c.removalRevision = removalRevision
+        c.auditSeenOn = auditSeenOn  // codex r3 D5 — where the audit last saw the file
         c.embeddedCreationDate = embeddedCreationDate
         c.embeddedCreationSource = embeddedCreationSource
         c.originMake = originMake

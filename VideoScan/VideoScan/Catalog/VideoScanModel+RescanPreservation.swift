@@ -162,6 +162,10 @@ struct RescanPreservedFields: Sendable {
     /// The marker's write counter travels with it (codex r2 F4): a door
     /// undoing its own write still recognises the marker as its own.
     let removalRevision: Int
+    /// Where Audit Catalog last saw the file (codex r3 D5): the audit's one
+    /// proof rule rests on it, and a rescan must not make a stamped row
+    /// "never seen" again.
+    let auditSeenOn: AuditSeenOn?
     /// Derived, for readers: when the row left.
     var purgedAt: Date? { removal?.since }
 
@@ -320,6 +324,14 @@ struct RescanPreservedFields: Sendable {
     /// `isWorthRestoring` so that known complexity offender does not grow.
     var carriesKeptFingerprint: Bool { perceptualFingerprint != nil }
 
+    /// Codex r3 2026-10-16 F3 (D7): worth snapshotting for its removal
+    /// history alone — a marker's write counter after mark → restore
+    /// (revision 2 on an otherwise plain row: the audit's rollback
+    /// ownership check must still see it), or the audit's where-seen stamp.
+    /// A sibling of `isWorthRestoring` for the same reason as
+    /// `carriesKeptFingerprint`.
+    var carriesRemovalHistory: Bool { removalRevision > 0 || auditSeenOn != nil }
+
     @MainActor
     init(from rec: VideoRecord) {
         self.sceneCaptions = rec.sceneCaptions
@@ -351,6 +363,7 @@ struct RescanPreservedFields: Sendable {
         self.userNotes = rec.userNotes
         self.removal = rec.removal
         self.removalRevision = rec.removalRevision
+        self.auditSeenOn = rec.auditSeenOn
         self.setAsideReason = rec.setAsideReason
         self.supersededByID = rec.supersededByID
         self.repairConfirmedDate = rec.repairConfirmedDate
@@ -453,6 +466,7 @@ struct RescanPreservedFields: Sendable {
         rec.userNotes = self.userNotes
         rec.removal = self.removal
         rec.removalRevision = self.removalRevision
+        rec.auditSeenOn = self.auditSeenOn
         rec.setAsideReason = self.setAsideReason
         rec.supersededByID = self.supersededByID
         rec.repairConfirmedDate = self.repairConfirmedDate
@@ -509,7 +523,7 @@ extension VideoScanModel {
             // restoring (deep-test finding 2).
             oldIDs[rec.fullPath] = rec.id
             let snap = RescanPreservedFields(from: rec)
-            if snap.isWorthRestoring || snap.carriesKeptFingerprint {
+            if snap.isWorthRestoring || snap.carriesKeptFingerprint || snap.carriesRemovalHistory {
                 map[rec.fullPath] = snap
             }
         }
