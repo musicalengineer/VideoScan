@@ -5,9 +5,13 @@
 // one short sentence; click opens Content Analysis, where the summary
 // band at the top says the same thing with the items behind it.
 //
-//   ● Catalog current · checked 02:14        (green: quiet secondary text)
-//   ● 2 things need a run                    (yellow: a run fixes it)
-//   ● Needs attention: 3 rows point at nothing (red: a person must look)
+//   ● Catalog Status: current · checked 02:14      (green: quiet secondary text)
+//   ● Catalog Status: 2 things need a run          (yellow: a run fixes it)
+//   ● Catalog Status: 3 rows point at nothing      (red: a person must look)
+//
+// Format (Rick 2026-10-16): "Catalog Status: <briefly what it needs>", at
+// the totals strip's own 15pt mono register so it reads as one of the
+// figures, not as chrome.
 //
 // MOCK (2026-10-16): the words and colour are fixed until the freshness
 // model (VideoScanCore.CatalogFreshness) and the integrity rows land;
@@ -40,17 +44,22 @@ struct CatalogStatusChip: View {
 
     var body: some View {
         Button(action: open) {
-            HStack(spacing: 6) {
+            HStack(spacing: 0) {
                 Circle()
                     .fill(tint)
-                    .frame(width: 8, height: 8)
+                    .frame(width: 10, height: 10)
+                    .padding(.trailing, 8)
+                Text("Catalog Status: ")
+                    .font(.system(size: 15, weight: .medium, design: .monospaced))
+                    .foregroundColor(.secondary)
+                    .fixedSize()
                 Text(words)
-                    .font(.system(size: 12, weight: isQuiet ? .regular : .medium))
+                    .font(.system(size: 15, weight: isQuiet ? .medium : .semibold, design: .monospaced))
                     .foregroundColor(isQuiet ? .secondary : .primary)
                     .lineLimit(1)
                     .truncationMode(.tail)
             }
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 11)
             .padding(.vertical, 4)
             .background(
                 Capsule().fill(isQuiet ? Color.clear : tint.opacity(0.16))
