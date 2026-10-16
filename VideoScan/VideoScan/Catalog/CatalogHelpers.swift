@@ -73,6 +73,12 @@ struct CatalogContent: View {
     /// files untouched. Session-scoped in the parent (deliberately NOT
     /// persisted, unlike showRemoved/showSetAside).
     var showSuperseded: Bool = false
+    /// Show ▸ Events & Copies as Folders (2026-10-16, docs/design/
+    /// footage_folders_2026_10_16.md). Off (the default) = the linear
+    /// table exactly as before; on = the folder view
+    /// (CatalogContent+FolderTable.swift). Remembered per user by the
+    /// parent (CatalogFootageFoldersSetting).
+    var showFootageFolders: Bool = false
     /// Media-kind facet (GH #124): which stream shapes the table shows.
     /// Default `.videoBearing` — audio-only rows hidden until the user
     /// flips the toolbar facet chip. Applied in computeFiltered AFTER the
@@ -339,7 +345,7 @@ struct CatalogContent: View {
     /// straight through to the search field, rename/inline-edit fields (any
     /// field editor is an NSText), and to buttons (which handle Space
     /// themselves). This is the text-field guard the feature promises.
-    private func spaceShouldToggleLivePreview() -> Bool {
+    func spaceShouldToggleLivePreview() -> Bool {
         // The volumes table is an NSTableView too: Space there is not a
         // live-preview gesture. Only the FILES pane counts (2026-10-06).
         guard tableState.paneFocusMirror.pane == .files else { return false }
@@ -366,6 +372,11 @@ struct CatalogContent: View {
     private func installSpaceKeyMonitor() {
         guard spaceKeyMonitor == nil else { return }
         spaceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            // Footage folders (2026-10-16): → / ← / Esc while the option is
+            // on and the files table has the keyboard — same monitor, same
+            // focus rule (CatalogContent+FolderTable.swift). Not ours →
+            // falls through to the Space rule below.
+            if handleFolderKey(event) { return nil }
             // 49 = kVK_Space. Bare Space only — let ⌘/⌥/⌃-Space through to
             // their owners (menu shortcuts, input sources, etc.).
             let bareSpace = event.keyCode == 49
@@ -707,6 +718,9 @@ struct CatalogContent: View {
                     // "3 matches are already in the Archive" — the
                     // to-do view's search escape hatch (2026-08-22).
                     archivedHitsBanner
+                    // Footage folders: "‹ All · Thanksgiving 2009" while
+                    // the list is scoped (nothing when it is not).
+                    footageFolderCrumb
                     // Empty-state overlay: when a search is active and
                     // yields zero rows, surface that explicitly instead
                     // of leaving the user staring at a blank table area.
@@ -717,6 +731,10 @@ struct CatalogContent: View {
                         if tableData.isEmpty && !searchText.isEmpty {
                             noMatchesOverlay
                         }
+                    }
+                    // The four glyphs, named, while the folder view is on.
+                    if showFootageFolders {
+                        footageFolderLegend
                     }
                 }
                     .frame(minHeight: 250)
@@ -762,7 +780,12 @@ struct CatalogContent: View {
         .onAppear { installSpaceKeyMonitor() }
         // (The files table's default focus is declared on CatalogView's
         // rootSplit, the common ancestor of both panes.)
-        .onDisappear { removeSpaceKeyMonitor() }
+        .onDisappear {
+            removeSpaceKeyMonitor()
+            // The folder join is kept warm only while this pane is on
+            // screen with the option on (FootageFoldersSnapshot.swift).
+            footageFoldersOptionChanged(on: false)
+        }
         .sheet(isPresented: $showRenameSheet) {
             RenameSheet(
                 filename: $renameText,

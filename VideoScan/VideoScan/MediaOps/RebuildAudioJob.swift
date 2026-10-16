@@ -719,11 +719,9 @@ final class RebuildAudioJob: @MainActor MediaFileOperationJob {
             ? derivedNote
             : "\(newRec.notes)\n\(derivedNote)"
 
-        if let existing = model.records.firstIndex(where: { $0.fullPath == publishedURL.path }) {
-            model.records[existing] = newRec
-        } else {
-            model.records.append(newRec)
-        }
+        // The one door into the catalog for a derivative (replace at the
+        // path, else append); the Catalog pane reveals the row.
+        model.adoptDerivative(newRec, at: publishedURL.path, from: record.id)
         model.searchIndex.update(newRec)
         model.searchIndex.update(record)
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)

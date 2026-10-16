@@ -19,7 +19,7 @@ extension CatalogContent {
     /// bundle tag when the file lives inside a project bundle ("Look Inside
     /// Video Project Bundles", 2026-07-02). Kept as a helper so the bundle
     /// line composes with every existing state instead of another ternary.
-    private func filenameTooltip(for rec: VideoRecord, offline: Bool, purged: Bool) -> String {
+    func filenameTooltip(for rec: VideoRecord, offline: Bool, purged: Bool) -> String {
         var tip: String
         if purged {
             // GH #143: the one removal marker says which kind of "removed".
@@ -114,7 +114,7 @@ extension CatalogContent {
     // (C++ analogy: breaking one giant template expression into named
     // intermediate typedefs so overload resolution stays local.)
     private var tableWithCatalogTriggers: some View {
-        tableWithFilterTriggers
+        tableWithFolderTriggers
             .onChange(of: model.lastTidyBatch) { refreshRows() }
             // Re-compute when purge state flips on any record (purge, undo, restore).
             // We key off lastPurgedBatch so mutations from the model are observed.
@@ -125,6 +125,23 @@ extension CatalogContent {
             // Confirm Repair supersedes originals (and undo restores them) —
             // same observation pattern as the purge batch (GH #132).
             .onChange(of: model.lastConfirmBatch) { refreshRows() }
+    }
+
+    /// Footage folders (Show ▸ Events & Copies as Folders, 2026-10-16):
+    /// the option flipping, the published display landing (the ONLY thing
+    /// the folder rows observe), and a derivative landing in the catalog.
+    /// Its own stage, same reason as the others (GH #132).
+    private var tableWithFolderTriggers: some View {
+        tableWithFilterTriggers
+            .onChange(of: showFootageFolders, initial: true) { footageFoldersOptionChanged(on: showFootageFolders) }
+            .onReceive(folderDisplayPublisher) { rebuildFolderRows($0) }
+            .onChange(of: model.lastDerivativeLanding) {
+                if let landing = model.lastDerivativeLanding { revealDerivative(landing) }
+            }
+    }
+
+    private var folderDisplayPublisher: Published<FootageFolders.Display>.Publisher {
+        model.footageFolders.$display
     }
 
     /// Reveal toggles: disconnected media, kind facet, removed / set-aside /
@@ -149,7 +166,10 @@ extension CatalogContent {
     /// First appearance, record count, and the search / scope inputs.
     private var tableWithSearchTriggers: some View {
         tableWithMenus
-            .onAppear { tableData = computeFiltered() }   // appear: no filter changed — selection untouched
+            .onAppear {
+                tableData = computeFiltered()   // appear: no filter changed — selection untouched
+                refreshFolderDisplay()          // the folder view starts from these rows (no-op when off)
+            }
             .onChange(of: records.count) { refreshRows() }
             .onChange(of: searchText) { refreshRows() }
             .onChange(of: filterTargetPaths) { refreshRows() }
@@ -164,14 +184,18 @@ extension CatalogContent {
         .onChange(of: sortOrder) {
             onSort(sortOrder)
             tableData.sort(using: sortOrder)
+            refreshFolderDisplay()   // folder view follows the sort (no-op when off)
         }
         .contextMenu(forSelectionType: UUID.self) { ids in
-            rowContextMenu(ids: ids)
+            // A folder row gets the folder menu; rows get the row menu as
+            // always (CatalogContent+FolderTable.swift).
+            tableContextMenu(ids: ids)
         } primaryAction: { ids in
             // Double-click / Return on row(s) → the ONE open path (smart
             // player choice + looks-moved check), shared with File ▸ Open
-            // ⌘O — see CatalogOpenCommand.swift.
-            openRows(ids: ids, gesture: "double-click")
+            // ⌘O — see CatalogOpenCommand.swift. A folder row scopes the
+            // list instead.
+            tablePrimaryAction(ids: ids)
         }
     }
 
@@ -181,7 +205,7 @@ extension CatalogContent {
     /// keyboard focus: the search box, rename fields and the editor sheets
     /// keep their own ⌘⌫. Its own stage, same reason as the others (GH #132).
     private var tableWithTrashShortcut: some View {
-        catalogTableBase
+        catalogTableChoice
             // Keyboard harness hook (CatalogKeyboardUITests).
             .accessibilityIdentifier("catalog.filesTable")
             // One of the two Catalog focus targets (CatalogPane). Focus
@@ -241,18 +265,22 @@ extension CatalogContent {
         return rec.filenameColor
     }
 
+    /// The linear table, or the folder view when Show ▸ Events & Copies as
+    /// Folders is on (CatalogContent+FolderTable.swift). Off = exactly the
+    /// table below, nothing added.
+    @ViewBuilder
+    private var catalogTableChoice: some View {
+        if showFootageFolders {
+            footageFolderTable
+        } else {
+            catalogTableBase
+        }
+    }
+
     private var catalogTableBase: some View {
         Table(tableData, selection: $selectedIDs, sortOrder: $sortOrder) {
             TableColumn("Filename", value: \.filename) { rec in
-                // The cell (glyph, name, selection outline, tooltip) and its
-                // state ladder live in CatalogFilenameCell.swift; this
-                // closure only decides what the cell cannot see for itself.
-                let offline = !VolumeReachability.isReachable(path: rec.fullPath)
-                CatalogFilenameCell(record: rec,
-                                    isSelected: selectedIDs.contains(rec.id),
-                                    isOffline: offline,
-                                    pairTint: showPairsOnly && rec.pairedWith != nil,
-                                    tooltip: filenameTooltip(for: rec, offline: offline, purged: rec.isPurged))
+                filenameCell(rec)
             }
             .width(min: 180, ideal: 260)
 
@@ -261,37 +289,22 @@ extension CatalogContent {
             // sort together under their owning volume. The label embeds the
             // volume name as the prefix, so this preserves volume grouping.
             TableColumn("Volume", value: \.displayVolumeLabel) { rec in
-                Text(rec.displayVolumeLabel)
-                    .font(.system(.body, design: .monospaced))
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .help(rec.fullPath)
+                volumeCell(rec)
             }
             .width(min: 80, ideal: 160)
 
             TableColumn("Stream", value: \.streamTypeRaw) { rec in
-                let unpaired = rec.streamType.needsCorrelation && rec.pairedWith == nil
-                let display = rec.streamType == .ffprobeFailed
-                    ? rec.isPlayable
-                    : rec.streamTypeRaw
-                Text(display)
-                    .foregroundColor(unpaired ? .orange : streamTypeColor(rec.streamType))
-                    .bold(rec.streamType.needsCorrelation)
-                    .help(unpaired
-                          ? (rec.streamType == .videoOnly ? "No audio pair found" : "No video pair found")
-                          : "V+A = video and audio, V-only/A-only = single stream, or file status if damaged")
+                streamCell(rec)
             }
             .width(min: 90, ideal: 130)
 
             TableColumn("Duration", value: \.durationSeconds) { rec in
-                Text(rec.duration)
-                    .help("Playback duration (HH:MM:SS)")
+                durationCell(rec)
             }
             .width(min: 65, ideal: 75)
 
             TableColumn("Resolution", value: \.pixelCount) { rec in
-                Text(rec.resolution)
-                    .help("Video frame size (width x height)")
+                resolutionCell(rec)
             }
             .width(min: 80, ideal: 95)
 
@@ -301,9 +314,7 @@ extension CatalogContent {
             // displayCodec = videoCodec, falling back to audioCodec when
             // there's no video stream. Sort key follows the displayed value.
             TableColumn("Codec", value: \.displayCodec) { rec in
-                Text(rec.displayCodec.isEmpty ? "—" : rec.displayCodec)
-                    .foregroundColor(rec.displayCodec.isEmpty ? .secondary : .primary)
-                    .help("Video codec (e.g. h264, prores); for audio-only files, the audio codec (e.g. mp3, aac, pcm_s16le)")
+                codecCell(rec)
             }
             .width(min: 60, ideal: 80)
 
@@ -313,16 +324,12 @@ extension CatalogContent {
             // ascending → emptiest-first ("what's left to do") and
             // descending → richest-first ("what's been captured").
             TableColumn("Dossier", value: \.dossierChannelCount) { rec in
-                DossierChannelDots(record: rec)
-                    .frame(maxWidth: .infinity, alignment: .center)
+                dossierCell(rec)
             }
             .width(min: 64, ideal: 72)
 
             TableColumn("Size", value: \.sizeBytes) { rec in
-                // Formatted from bytes, not the persisted string (Rick
-                // 2026-08-18: decimal units, consistent across rows).
-                Text(rec.sizeDisplay)
-                    .help("File size on disk")
+                sizeCell(rec)
             }
             .width(min: 60, ideal: 75)
 
@@ -334,11 +341,7 @@ extension CatalogContent {
             // math on the user-date path — VideoRecordUserDate.swift),
             // so the column stays safe at catalog scale.
             TableColumn("Date", value: \.resolvedDateSortKey) { rec in
-                let display = rec.resolvedDateDisplay
-                Text(display.isEmpty ? "—" : display)
-                    .foregroundColor(display.isEmpty ? .secondary : .primary)
-                    .font(.system(size: 11))
-                    .help(rec.resolvedDateHelp)
+                dateCell(rec)
             }
             .width(min: 80, ideal: 100)
 
@@ -358,12 +361,7 @@ extension CatalogContent {
                 // " (est.)" suffix, unplaced rows show "—" and sort
                 // first ascending (the review queue). O(1) per record.
                 TableColumn("Place", value: \VideoRecord.resolvedPlaceSortKey) { rec in
-                    let display = rec.resolvedPlaceDisplay
-                    Text(display.isEmpty ? "—" : display)
-                        .foregroundColor(display.isEmpty ? .secondary : .primary)
-                        .font(.system(size: 11))
-                        .lineLimit(1)
-                        .help(rec.resolvedPlaceHelp)
+                    placeCell(rec)
                 }
                 .width(min: 80, ideal: 110)
 
@@ -378,14 +376,102 @@ extension CatalogContent {
                 .width(min: 70, ideal: 120)
 
                 TableColumn("Duplicate") { rec in
-                    DuplicateDispositionCell(record: rec)
-                        .help(rec.duplicateDisposition == .none
-                              ? "Run Duplicates analysis to check for copies"
-                              : "Total copies across catalog. Color: green = Keep (best copy), orange = Review (check manually), red = Extra copy (safe to remove)")
+                    duplicateCell(rec)
                 }
                 .width(min: 80, ideal: 95)
             }
         }
+    }
+
+    // MARK: - Per-column cells (shared with the folder view)
+    //
+    // Each is the column's closure, verbatim, as a function: the linear
+    // table and the folder table (CatalogContent+FolderTable.swift) draw
+    // a record's cells the same way. O(1) per cell.
+
+    /// The cell (glyph, name, selection outline, tooltip) and its state
+    /// ladder live in CatalogFilenameCell.swift; this only decides what
+    /// the cell cannot see for itself.
+    func filenameCell(_ rec: VideoRecord) -> some View {
+        let offline = !VolumeReachability.isReachable(path: rec.fullPath)
+        return CatalogFilenameCell(record: rec,
+                                   isSelected: selectedIDs.contains(rec.id),
+                                   isOffline: offline,
+                                   pairTint: showPairsOnly && rec.pairedWith != nil,
+                                   tooltip: filenameTooltip(for: rec, offline: offline, purged: rec.isPurged))
+    }
+
+    func volumeCell(_ rec: VideoRecord) -> some View {
+        Text(rec.displayVolumeLabel)
+            .font(.system(.body, design: .monospaced))
+            .foregroundColor(.secondary)
+            .lineLimit(1)
+            .help(rec.fullPath)
+    }
+
+    func streamCell(_ rec: VideoRecord) -> some View {
+        let unpaired = rec.streamType.needsCorrelation && rec.pairedWith == nil
+        let display = rec.streamType == .ffprobeFailed
+            ? rec.isPlayable
+            : rec.streamTypeRaw
+        return Text(display)
+            .foregroundColor(unpaired ? .orange : streamTypeColor(rec.streamType))
+            .bold(rec.streamType.needsCorrelation)
+            .help(unpaired
+                  ? (rec.streamType == .videoOnly ? "No audio pair found" : "No video pair found")
+                  : "V+A = video and audio, V-only/A-only = single stream, or file status if damaged")
+    }
+
+    func durationCell(_ rec: VideoRecord) -> some View {
+        Text(rec.duration)
+            .help("Playback duration (HH:MM:SS)")
+    }
+
+    func resolutionCell(_ rec: VideoRecord) -> some View {
+        Text(rec.resolution)
+            .help("Video frame size (width x height)")
+    }
+
+    func codecCell(_ rec: VideoRecord) -> some View {
+        Text(rec.displayCodec.isEmpty ? "—" : rec.displayCodec)
+            .foregroundColor(rec.displayCodec.isEmpty ? .secondary : .primary)
+            .help("Video codec (e.g. h264, prores); for audio-only files, the audio codec (e.g. mp3, aac, pcm_s16le)")
+    }
+
+    func dossierCell(_ rec: VideoRecord) -> some View {
+        DossierChannelDots(record: rec)
+            .frame(maxWidth: .infinity, alignment: .center)
+    }
+
+    /// Formatted from bytes, not the persisted string (Rick 2026-08-18:
+    /// decimal units, consistent across rows).
+    func sizeCell(_ rec: VideoRecord) -> some View {
+        Text(rec.sizeDisplay)
+            .help("File size on disk")
+    }
+
+    func dateCell(_ rec: VideoRecord) -> some View {
+        let display = rec.resolvedDateDisplay
+        return Text(display.isEmpty ? "—" : display)
+            .foregroundColor(display.isEmpty ? .secondary : .primary)
+            .font(.system(size: 11))
+            .help(rec.resolvedDateHelp)
+    }
+
+    func placeCell(_ rec: VideoRecord) -> some View {
+        let display = rec.resolvedPlaceDisplay
+        return Text(display.isEmpty ? "—" : display)
+            .foregroundColor(display.isEmpty ? .secondary : .primary)
+            .font(.system(size: 11))
+            .lineLimit(1)
+            .help(rec.resolvedPlaceHelp)
+    }
+
+    func duplicateCell(_ rec: VideoRecord) -> some View {
+        DuplicateDispositionCell(record: rec)
+            .help(rec.duplicateDisposition == .none
+                  ? "Run Duplicates analysis to check for copies"
+                  : "Total copies across catalog. Color: green = Keep (best copy), orange = Review (check manually), red = Extra copy (safe to remove)")
     }
 
     /// Surface a result alert ONLY when something interesting happened —
@@ -428,7 +514,7 @@ extension CatalogContent {
     /// MediaOpener's smart launch — is `CatalogOpenAction.open`
     /// (CatalogOpenCommand.swift). `tableData`, not `records`: the ids
     /// came from the rows on screen, and one filter pass is O(n).
-    private func openRows(ids: Set<UUID>, gesture: String) {
+    func openRows(ids: Set<UUID>, gesture: String) {
         CatalogOpenAction.open(ids: ids, rows: tableData, gesture: gesture, model: model)
     }
 
@@ -509,7 +595,7 @@ extension CatalogContent {
     /// People column pushed this Table from 10 → 11 columns, type-check
     /// timed out on the larger expression.
     @ViewBuilder
-    private func tagColumnCell(for rec: VideoRecord) -> some View {
+    func tagColumnCell(for rec: VideoRecord) -> some View {
         HStack(spacing: 3) {
             Image(systemName: rec.mediaDisposition.icon)
                 .foregroundColor(rec.mediaDisposition.color)
@@ -597,7 +683,7 @@ extension CatalogContent {
     /// " · ". Em-dash when both arrays are empty (junk-triage signal).
     /// Tooltip lists names with tier annotations.
     @ViewBuilder
-    private func peopleColumnCell(for rec: VideoRecord) -> some View {
+    func peopleColumnCell(for rec: VideoRecord) -> some View {
         // Notation (Rick 2026-08-02, deduced-vs-confirmed model):
         //   Donna   = confirmed by Rick        (plain blue)
         //   Donna*  = machine detected          (blue, starred)

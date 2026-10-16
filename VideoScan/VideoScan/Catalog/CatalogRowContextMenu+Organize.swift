@@ -55,6 +55,11 @@ extension CatalogContent {
 
             findMenu(rec: rec)
 
+            // Footage folders (2026-10-16): "Show in its event" / "Show
+            // Copies & Related…" — only while the folder view is on
+            // (CatalogContent+FolderTable.swift); nothing is added otherwise.
+            footageFolderItems(rec: rec)
+
             Button("Copy Path") {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(rec.fullPath, forType: .string)

@@ -877,11 +877,11 @@ final class TranscodeJob: @MainActor MediaFileOperationJob {
                 ? derivedNote
                 : "\(newRec.notes)\n\(derivedNote)"
 
-            if let existing = model.records.firstIndex(where: { $0.fullPath == newURL.path }) {
-                model.records[existing] = newRec
-            } else {
-                model.records.append(newRec)
-            }
+            // The one door into the catalog for a derivative (replace at
+            // the path, else append) — it also tells the Catalog pane to
+            // open the source's folder and select the new row
+            // (FootageFoldersSnapshot.swift, Rick 2026-10-16).
+            model.adoptDerivative(newRec, at: newURL.path, from: record.id)
             transcodeLog.info("transcode: catalogued \(newURL.lastPathComponent, privacy: .public) as \(self.preset.rawValue, privacy: .public) derivative (workspaceActive=true, derivedFrom=\(self.record.id.uuidString, privacy: .public))")
         }
     }

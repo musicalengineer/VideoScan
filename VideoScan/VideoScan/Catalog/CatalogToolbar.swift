@@ -81,13 +81,17 @@ struct CatalogToolbar<Dashboard: View>: View {
     /// GH #132) render alongside active rows (italic + brown). Session-
     /// scoped @State in the parent — deliberately NOT persisted.
     @Binding var showSuperseded: Bool
+    /// Show ▸ Events & Copies as Folders (2026-10-16): confirmed events as
+    /// folders, copies and versions under their recording. Remembered by
+    /// the parent (CatalogFootageFoldersSetting). Off by default.
+    @Binding var showFootageFolders: Bool
 
     /// True when the View menu holds any non-default state — an active
-    /// filter, or one of the hidden-record reveals that moved into the
-    /// menu on 2026-08-11. Drives the menu's filled icon so a toggle
-    /// buried one click deep still announces itself.
+    /// filter, one of the hidden-record reveals that moved into the
+    /// menu on 2026-08-11, or the folder view. Drives the menu's filled
+    /// icon so a toggle buried one click deep still announces itself.
     private var viewIsModified: Bool {
-        !viewFilters.isEmpty || showRemoved || showSetAside || showSuperseded
+        !viewFilters.isEmpty || showRemoved || showSetAside || showSuperseded || showFootageFolders
     }
 
     /// Plain values for the Showing box — a handful of Bools, no records.
@@ -100,6 +104,7 @@ struct CatalogToolbar<Dashboard: View>: View {
             showRemoved: showRemoved,
             showSetAside: showSetAside,
             showSuperseded: showSuperseded,
+            footageFolders: showFootageFolders,
             hasMasterArchive: model.masterArchive != nil)
     }
     @ViewBuilder let dashboardContent: () -> Dashboard
@@ -385,6 +390,13 @@ struct CatalogToolbar<Dashboard: View>: View {
                 // in when any of them is on — otherwise you could leave
                 // "Show removed" enabled, see italic orange rows, and
                 // have nothing on screen explaining why.
+                // Footage folders (Rick 2026-10-16, docs/design/
+                // footage_folders_2026_10_16.md): a view SHAPE, not a
+                // filter — its own section, left alone by Clear All
+                // Filters, remembered per user.
+                Section("Show files — as folders") {
+                    FootageFoldersShowToggle(isOn: $showFootageFolders)
+                }
                 Section("Show files — hidden records") {
                     Toggle(isOn: $showRemoved) {
                         Label("Removed", systemImage: showRemoved

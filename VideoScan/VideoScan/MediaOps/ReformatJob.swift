@@ -463,11 +463,9 @@ final class ReformatJob: @MainActor MediaFileOperationJob {
                 ? derivedNote
                 : "\(newRec.notes)\n\(derivedNote)"
 
-            if let existing = model.records.firstIndex(where: { $0.fullPath == newURL.path }) {
-                model.records[existing] = newRec
-            } else {
-                model.records.append(newRec)
-            }
+            // The one door into the catalog for a derivative (replace at
+            // the path, else append); the Catalog pane reveals the row.
+            model.adoptDerivative(newRec, at: newURL.path, from: record.id)
             reformatLog.info("reformat: catalogued \(newURL.lastPathComponent, privacy: .public) (\(model.records.count) records total) — journey events added to source + derived")
         }
         // Queue analyze: kick the orchestrator on this single record's
