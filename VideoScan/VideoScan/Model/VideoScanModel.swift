@@ -1109,6 +1109,11 @@ final class VideoScanModel: ObservableObject {
         // GH #167: designation START / OUTCOME / REFUSED lines reach the
         // console, catalog.log and videoscan.log from the very first load.
         installDesignationAuditSink()
+        // Catalog Status (codex cycle #80): the freshness snapshot hears the
+        // model's own engine flags, so a running Duplicates / Correlate /
+        // Signatures / Embedded Dates pass reads "running" on every surface
+        // and stays out of "Update everything stale".
+        catalogFreshness.observeEngines(of: self)
         // Restore previously-scanned records so the user can browse the
         // catalog even when source volumes are offline.
         let restored = catalogStore.load()

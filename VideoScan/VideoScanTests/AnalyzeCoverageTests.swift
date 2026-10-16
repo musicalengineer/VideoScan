@@ -410,9 +410,10 @@ struct AnalyzeCoverageCacheTests {
         let before = model.analyzeCoverageSnapshot.publishCount
         model.scheduleAnalyzeCoverageRefresh()
         try await settle()
-        // The report carries `computedAt`, so an identical catalog still
-        // differs by the clock; what must NOT happen is a publish storm.
-        #expect(model.analyzeCoverageSnapshot.publishCount - before <= 1)
+        // `computedAt` is a caption, not a change (codex cycle #80, P2):
+        // an identical catalog recomputed later publishes NOTHING.
+        #expect(model.analyzeCoverageSnapshot.publishCount - before == 0,
+                "unchanged coverage republished \(model.analyzeCoverageSnapshot.publishCount - before) times")
     }
 }
 

@@ -630,6 +630,11 @@ struct VideoScanApp: App {
                         // launch line is written by the snapshot itself on its
                         // first computed state (announceAtLaunch).
                         catalogModel.catalogFreshness.observeRunning(in: fileOpsCenter)
+                        // … and the dossier engine (Captions / OCR /
+                        // Transcribe), so a running pass is "running" here
+                        // too (codex cycle #80). The model's own engine
+                        // flags are wired in its init.
+                        catalogModel.catalogFreshness.observeDossier(captionOrchestrator.dashboardSnapshot)
                         catalogModel.catalogFreshness.startClock()
                         // Archive Angel phase 2: the scoring sweep parks
                         // while an Angel or Promote job is active
