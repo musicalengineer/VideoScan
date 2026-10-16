@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-15T19:11:39Z",
- "sha": "72d8dbf0",
+ "ts": "2026-10-16T09:24:47Z",
+ "sha": "8a39b62c",
  "formula_version": 1,
- "files_scored": 713,
+ "files_scored": 717,
  "rows": [
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -138,17 +138,6 @@
    "score": 26.3
   },
   {
-   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
-   "offenders": 3,
-   "worst_ccn": 31,
-   "new_or_worse": 0,
-   "lines": 1830,
-   "could_be_private": 3,
-   "widened_for_split": 0,
-   "churn_7d": 3,
-   "score": 25.4
-  },
-  {
    "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift",
    "offenders": 4,
    "worst_ccn": 23,
@@ -169,6 +158,17 @@
    "widened_for_split": 0,
    "churn_7d": 0,
    "score": 23.9
+  },
+  {
+   "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
+   "offenders": 1,
+   "worst_ccn": 20,
+   "new_or_worse": 0,
+   "lines": 2996,
+   "could_be_private": 10,
+   "widened_for_split": 0,
+   "churn_7d": 1,
+   "score": 22.8
   }
  ]
 }

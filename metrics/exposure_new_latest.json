@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-15T19:11:34Z",
- "sha": "72d8dbf0",
+ "ts": "2026-10-16T09:24:39Z",
+ "sha": "8a39b62c",
  "new": [
   {
    "key": "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageInput.inDossierPool",
@@ -991,6 +991,48 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift::VideoScanModel.SoundEvidence",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift",
+   "name": "VideoScanModel.SoundEvidence",
+   "kind": "struct",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift::VideoScanModel.SoundEvidence.audibleA",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift",
+   "name": "VideoScanModel.SoundEvidence.audibleA",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift::VideoScanModel.SoundEvidence.audibleB",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift",
+   "name": "VideoScanModel.SoundEvidence.audibleB",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift::VideoScanModel.isOnDisk",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift",
+   "name": "VideoScanModel.isOnDisk",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift::VideoScanModel.occasionWords",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift",
+   "name": "VideoScanModel.occasionWords",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift::VideoScanModel.soundEvidence",
+   "file": "VideoScan/VideoScan/Events/VideoScanModel+RelatedEvidence.swift",
+   "name": "VideoScanModel.soundEvidence",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScan/Hallie/ArchivistGraphExecutor+Evidence.swift::ArchivistGraphExecutor.biographyEvidence",
    "file": "VideoScan/VideoScan/Hallie/ArchivistGraphExecutor+Evidence.swift",
    "name": "ArchivistGraphExecutor.biographyEvidence",
@@ -1878,6 +1920,41 @@
    "name": "VideoScanModel.storedFullDigest",
    "kind": "func",
    "classification": "widened-for-split"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift::CompareMediaStore.isWorking",
+   "file": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift",
+   "name": "CompareMediaStore.isWorking",
+   "kind": "var",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift::CompareMediaView.bandColor",
+   "file": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift",
+   "name": "CompareMediaView.bandColor",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift::CompareMediaView.bandForeground",
+   "file": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift",
+   "name": "CompareMediaView.bandForeground",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift::CompareMediaView.lineColor",
+   "file": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift",
+   "name": "CompareMediaView.lineColor",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift::SoundStrip.init",
+   "file": "VideoScan/VideoScan/MediaOps/CompareMediaView.swift",
+   "name": "SoundStrip.init",
+   "kind": "init",
+   "classification": "could-be-private"
   },
   {
    "key": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesAudit.swift::DeleteDuplicatesJob.auditRefusedReviewedPlan",
@@ -2993,6 +3070,20 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventRecommendation.swift::EventRecommendation.clipRule",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventRecommendation.swift",
+   "name": "EventRecommendation.clipRule",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventRecommendation.swift::EventRecommendation.isOlderGeneration",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/EventRecommendation.swift",
+   "name": "EventRecommendation.isOlderGeneration",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ExcessCopiesPlan.swift::ArchiveIndex.init",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/ExcessCopiesPlan.swift",
    "name": "ArchiveIndex.init",
@@ -3098,6 +3189,76 @@
    "classification": "could-be-private"
   },
   {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.DateRelation",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.DateRelation",
+   "kind": "enum",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.calendarAndPeople",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.calendarAndPeople",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.codecLines",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.codecLines",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.dateRelation",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.dateRelation",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.daysBetween",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.daysBetween",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.evidenceAvailable",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.evidenceAvailable",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.peopleAndWords",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.peopleAndWords",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.soundAbsence",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.soundAbsence",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.whatTheFramesSay",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.whatTheFramesSay",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift::RelatedLadder.whatTheSoundSays",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/RelatedScore.swift",
+   "name": "RelatedLadder.whatTheSoundSays",
+   "kind": "func",
+   "classification": "could-be-private"
+  },
+  {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/StoredPerceptualFingerprint.swift::StoredPerceptualFingerprint.base64",
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/StoredPerceptualFingerprint.swift",
    "name": "StoredPerceptualFingerprint.base64",
@@ -3126,8 +3287,8 @@
    "classification": "could-be-private"
   }
  ],
- "fixed": 5,
+ "fixed": 6,
  "baseline_before": 2461,
- "baseline_after": 2456,
+ "baseline_after": 2455,
  "shrink_skipped": false
 }
