@@ -691,6 +691,7 @@
         "archivedClipStillNeedsItsMasterArchived",
         "correctedDayUpdatesEraYear",
         "eraRule",
+        "hashlessTieAsksForTheHash",
         "identicalEdges",
         "mixedErasDoNotRecommendRemoval",
         "r1",
@@ -699,6 +700,7 @@
         "r3",
         "r4",
         "r5",
+        "r6TieNeverSaysLonger",
         "r6Transfers",
         "r7r8",
         "table",
@@ -2307,6 +2309,7 @@
         "identicalCopyOverlapWording",
         "identicalCopyStillShowsSoundContradiction",
         "masterContainsClip",
+        "missingFullHashIsSaid",
         "notEnoughEvidence",
         "notOnDisk",
         "overlapTooShort",
@@ -3366,7 +3369,8 @@
         "ArchiveAngelCatalogHintScaleTests"
       ],
       "tests": [
-        "hundredThousandPicks"
+        "hundredThousandPicks",
+        "settledWaitsForTheLandingBuild"
       ]
     },
     {
@@ -27654,8 +27658,12 @@
       ],
       "tests": [
         "aKindThatStopsRereadsTheMarker",
+        "aPartialRunContributesNoDecision",
         "aPoisonedSidecarIsAProblemAndAnAbsentOneIsNot",
         "aRealMarkerRoundTrips",
+        "aRunningDossierStageIsNotStale",
+        "aRunningMetadataEngineIsNotStale",
+        "anAbsentSidecarInAReadOnlyFolderIsNotAProblem",
         "analyzeMenusFirstItemIsTheSummary",
         "bandMirrorsTheJobTheMFORowObserves",
         "chipMenuItemAndDotObserveOnlyTheSnapshot",
@@ -27665,6 +27673,7 @@
         "fullHashCountingExcludesTheSampledHash",
         "greenChipReadsThePresenceClock",
         "hundredThousandRowsStayInsideTheCoverageBudget",
+        "identicalCoverageAtALaterTimePublishesOnce",
         "integrityRunsGoThroughTheCenterWithTheModelsMarkers",
         "markerFileNameMatchesTheReader",
         "missingAndGarbageMarkersReadAsNeverRan",
