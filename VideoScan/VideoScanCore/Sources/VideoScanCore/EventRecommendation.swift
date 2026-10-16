@@ -107,9 +107,20 @@ public struct EventRecommendation: Sendable, Equatable {
         // Two transfers of one recording.
         let better = verdict.better ?? .tie
         guard let archived = archivedSides.first else {
-            let pick = better.side ?? .a
-            return .init(rule: .r6, words: "Nothing is archived. Promote the \(better.side == nil ? "longer" : "better") transfer as the master, then revisit the other.",
-                         why: why(better) ?? "Two transfers, neither archived.", door: .recommendMaster, subject: pick)
+            if better.side == nil, e.a.digest == nil || e.b.digest == nil {
+                // A tie with no byte-for-byte proof (Rick 2026-10-16: the Christmas
+                // .flv pair): the honest next step is the hash, not a promotion.
+                return .init(rule: .r8, words: "Fill in full hashes first. The same recording, and if the bytes match Cleanup can remove one.",
+                             why: "No whole-file SHA-256 on \(e.a.digest == nil && e.b.digest == nil ? "either file" : "one file") — the byte-for-byte proof needs it.",
+                             door: .fingerprint, subject: nil)
+            }
+            if let pick = better.side {
+                return .init(rule: .r6, words: "Nothing is archived. Promote the better transfer as the master, then revisit the other.",
+                             why: why(better) ?? "Two transfers, neither archived.", door: .recommendMaster, subject: pick)
+            }
+            return .init(rule: .r6, words: "Nothing is archived. Promote either one as the master, then revisit the other.",
+                         why: "Two transfers of one recording and neither is better: same length, codec generation, frame and bit rate.",
+                         door: .recommendMaster, subject: .a)
         }
         let theOther = other(archived)
         if better.side == theOther {

@@ -68,10 +68,32 @@ struct EventRecommendationTests {
         #expect(r.rule == .r5 && r.door == .groupAsEvent && r.words.contains("pre-2000"))
     }
 
-    @Test("same recording, neither archived → R6 promote the better (or the longer) one")
+    @Test("same recording, neither archived → R6 promote the better one")
     func r6Transfers() {
         let r = reco(RelatedEvidence(a: side(archived: false, codec: .delivery, digest: "x"), b: side(archived: false, codec: .original, digest: "y"), audio: .sameRecording, audioCoverage: 0.99))
         #expect(r.rule == .r6 && r.subject == .b)
+        #expect(r.words.contains("the better transfer"))
+    }
+
+    @Test("a tie with hashes on both sides says 'either one', never 'longer' (Rick 2026-10-16)")
+    func r6TieNeverSaysLonger() {
+        let r = reco(RelatedEvidence(a: side(archived: false, codec: .delivery, digest: "x"), b: side(archived: false, codec: .delivery, digest: "y"), audio: .sameRecording, audioCoverage: 0.99))
+        #expect(r.rule == .r6 && r.subject == .a && r.door == .recommendMaster)
+        #expect(r.words.contains("either one"))
+        #expect(!r.words.contains("longer"))
+    }
+
+    @Test("a tie with no whole-file hash → R8 fill in full hashes first, not a promotion (the Christmas .flv pair)")
+    func hashlessTieAsksForTheHash() {
+        let a = Side(sizeBytes: 660_299_659, durationSeconds: 9553, audibleSeconds: 9000, codec: .delivery)
+        let b = Side(sizeBytes: 660_299_659, durationSeconds: 9553, audibleSeconds: 9000, codec: .delivery)
+        let r = reco(RelatedEvidence(a: a, b: b, audio: .sameRecording, audioCoverage: 1.0))
+        #expect(r.rule == .r8 && r.door == .fingerprint && r.subject == nil)
+        #expect(r.words.hasPrefix("Fill in full hashes first"))
+        #expect(r.why.contains("either file"))
+        // One side better by codec: no hash needed to choose, still R6.
+        let better = reco(RelatedEvidence(a: a, b: Side(sizeBytes: 660_299_659, durationSeconds: 9553, audibleSeconds: 9000, codec: .original), audio: .sameRecording, audioCoverage: 1.0))
+        #expect(better.rule == .r6 && better.subject == .b)
     }
 
     @Test("R5: same event, different capture — keep both, group them")

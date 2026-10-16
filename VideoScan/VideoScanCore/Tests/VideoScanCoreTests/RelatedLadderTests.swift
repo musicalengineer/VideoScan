@@ -34,6 +34,17 @@ private func has(_ v: RelatedVerdict, _ kind: RelatedLine.Kind, _ text: String) 
 @Suite("Related ladder — rungs and bands")
 struct RelatedLadderTests {
 
+    @Test("no whole-file hash on a side: the ladder says so instead of staying silent (Rick 2026-10-16)")
+    func missingFullHashIsSaid() {
+        let a = RelatedEvidence.Side(sizeBytes: 100, durationSeconds: 60, audibleSeconds: 50)
+        let b = RelatedEvidence.Side(digest: String(repeating: "b", count: 64), sizeBytes: 100, durationSeconds: 60, audibleSeconds: 50)
+        let v = RelatedLadder.judge(RelatedEvidence(a: a, b: b, audio: .sameRecording, audioCoverage: 0.99))
+        #expect(v.rung == .sameRecording && !v.isIdenticalCopy)
+        #expect(has(v, .missing, "No whole-file SHA-256 for the first file"))
+        let both = RelatedLadder.judge(RelatedEvidence(a: a, b: RelatedEvidence.Side(sizeBytes: 100, durationSeconds: 60, audibleSeconds: 50), audio: .sameRecording, audioCoverage: 0.99))
+        #expect(has(both, .missing, "for either file"))
+    }
+
     @Test("rung 6: the same SHA-256 and size is an identical copy, whatever the sound says")
     func identicalCopy() {
         var copy = master; copy.isArchiveFile = false; copy.isArchived = true; copy.folderLabel = "Mirror"

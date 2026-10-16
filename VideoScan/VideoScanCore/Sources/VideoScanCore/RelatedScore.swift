@@ -282,6 +282,12 @@ public enum RelatedLadder {
         }
         if e.a.digest != nil, e.b.digest != nil {
             lines.append(.init(.differs, "Different bytes (SHA-256 differs)."))
+        } else {
+            // Rick 2026-10-16: two byte-identical Christmas .flv copies carried only
+            // the sampled `v1:` hash, so this rung never fired and the pair read as
+            // "two transfers" — say so, instead of staying silent.
+            let which = e.a.digest == nil && e.b.digest == nil ? "either file" : e.a.digest == nil ? "the first file" : "the second file"
+            lines.append(.init(.missing, "No whole-file SHA-256 for \(which) — Catalog ▸ Fill In Full Hashes… proves whether these are copies."))
         }
         return nil
     }
