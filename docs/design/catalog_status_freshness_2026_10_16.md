@@ -29,6 +29,29 @@ them "two transfers", tied, and said "promote the longer one". Nothing anywhere 
 - **"Update everything stale"** at the top queues the yellow rows through the existing
   scheduler, integrity rows first.
 
+### 2.1 Landing from the chip: what needs fixing, the buttons, and where progress lives (Rick, 10/16)
+
+Clicking the chip opens Content Analysis with the band at the top. Each band item carries
+ONE button: yellow → **Run now**; red → the door a person needs (**Fix Links…**,
+**Fingerprint again**, …). **Update everything stale** queues every yellow item through the
+scheduler, integrity rows first.
+
+**Progress lives in MFO; the band mirrors it.** One job, one state, two views:
+- The three integrity kinds (File Presence, Full Hashes, Sound Prints) read files for
+  minutes to hours with per-file outcomes and must survive overnight → they are MFO jobs
+  (they already are: chips SOUND PRINT, the hash backfill, now AUDIT). The MFO row is the
+  source of truth for START, progress, the per-item detail and OUTCOME.
+- Once a run starts, the band item becomes a mirror of the MFO row's collapsed line (what
+  it is doing · N of M · time left · progress bar · the same Pause / Stop), read from the
+  same job state the MFO window reads — never a second progress implementation. "See
+  details" opens the MFO window at that row.
+- The metadata cyclers (duplicates, footage, captions, OCR, transcripts, A/V pairs,
+  signatures, dates) keep the Analyze-only progress of the 10/2 ruling; they are not MFO
+  rows.
+
+Rule of thumb: reads files for more than a minute with per-file outcomes → MFO holds the
+job and the band mirrors its line; otherwise the band is the only progress.
+
 ## 3. Colours — and yes, red
 
 The colour answers one question: *do I need to look, or just click?*
