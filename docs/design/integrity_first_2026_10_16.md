@@ -1,0 +1,101 @@
+# Integrity first — the catalog must be verified before anything else is built (Rick, 2026-10-16)
+
+## 1. In Rick's words
+
+> "Everyone in software knows you have to be extremely careful and know where your data is,
+> checksummed, sha-hashed, voice-printed, captioned, transcribed, and tracked. Every night or
+> periodically the catalog has to be validated/verified. The highest priority is data
+> integrity, then showing truth about the data, then performance and overall robustness,
+> security, etc. … we need a best-in-class integrity check process, whether it runs
+> overnight or periodically or on-demand … we can't go forward until we know we can trust our
+> data and the UI shows us truth."
+
+What triggered it (one evening, 2026-10-16): a row whose path was a dead symlink and whose
+journey sheet said "Now at <path>", a preservation ladder reading "1 of 4" under a timeline
+line that said "promoted to Master Archive", a player that played an MP3-in-M4V silently and
+said nothing, two byte-identical copies the ladder could not call copies because only a
+sampled hash was stored, and an Archive-tab double-click that opened the source row's dead
+path instead of the archived copy. None of those lost data. Every one of them was the app
+stating a fact it had not checked.
+
+## 2. Ruling
+
+1. **Priority order:** data integrity · then the UI telling the truth about the data · then
+   performance, robustness, security. Feature work pauses until the trust gate (§6) is green.
+   Fixes to integrity and truth are not features.
+2. **One process — Verify Catalog** — runs the checks below on three cadences: **nightly**
+   (cheap, whole catalog), **weekly** (deep, full reads), **on demand** (any tier, any scope:
+   a row, a folder, a drive, the archive). It is an MFO job (long, per-item outcomes, START /
+   OUTCOME) and it feeds Catalog Status (the chip, the band) with its findings.
+3. **It checks; it never fixes.** The only writes are the audit's where-seen stamps and
+   `.missing` marks through the one removal engine (tier 0), and the dated report. Every other
+   finding is a row in the needs-a-decision bucket → Fix Links / Verify Media / the person.
+4. **No verdict from unverified evidence.** A sampled hash never says "copy". A header never
+   says "has sound". A path string never says "now at". A row's own fields never answer for
+   its content when the content's evidence lives on another row (the archived copy). Pinned by
+   source sensors (§5).
+5. **Every fact the UI shows names its evidence and its age** (the Catalog Status model
+   already does this for coverage; it extends to every fact-bearing surface — §5).
+
+## 3. The tiers (cheapest first; each has its own stamp and its own cadence)
+
+| Tier | Question | Evidence | Exists today | Cadence |
+|---|---|---|---|---|
+| 0 | Does every row point at a real file? | stat through a directory handle; the where-seen stamp (volume UUID + device key); links refused | **Audit Catalog tier 0** (built today, codex ×6) | nightly; before any backup; on demand |
+| 1 | Is every file's identity known? | whole-file SHA-256 for every live row; the sampled `v1:` hash is NEVER a verdict | Fill In Full Hashes (660 rows still sampled only) | nightly incremental until 100 %, then on new rows |
+| 2 | Are the bytes still the bytes? | re-read against the stored SHA-256 / archive fixity; mismatch = red, never auto-rehash | archive fixity (stored); Verify Archive (lock + fixity) | archive: weekly full read; everything else: rolling 1/30 per night; on demand |
+| 3 | Does it decode, and does it sound? | ffmpeg decode-to-end (`-f null`); audible seconds from the sound print vs the header's "Video+Audio"; AVFoundation playability recorded as its own fact ("plays in app: no — MP3 in M4V") | Verify Media (per file); sound prints (whole catalog, Tue night); Audit Archive §3 designed | archive: weekly; others: on demand + sound/header mismatch nightly from the stamps |
+| 4 | Is derived knowledge still about THIS content? | every derived stamp (print, caption, transcript, preview, dossier, dup group) carries the content digest it was made from; a changed digest invalidates it | stamps carry digests partly (print yes; others by path) | nightly, from the stamps (no I/O) |
+| 5 | Do the relations hold? | lineage targets exist; copy groups re-validated by full hash; supersession consistent; no row path contains a link (GH #326); every promotion source has its archived copy on disk with fixity | Catalog "Check Totals"; the audit's link refusal; Cleanup's proofs at the move | nightly (no I/O beyond tier 0) |
+| 6 | Does the UI tell the truth? | every fact-bearing surface reads verified evidence or says "unknown"; sensors pin it | partly (Compare Media's `isOnDisk` veto; Catalog Status) | every build (tests), every night (gauntlet) |
+
+## 4. The report
+
+One dated `integrity-<date>.json` beside catalog.json plus the human report in Catalog Status:
+per tier — checked · passed · **needs a decision** (with the list) · could not check (drives
+not mounted, no UUID…) · last completed · how long. The chip goes red on any needs-a-decision;
+yellow when a tier is overdue; green only when every tier within its cadence passed with zero
+decisions pending. The nightly metrics page gets an Integrity row (the same colours).
+Console / catalog.log / videoscan.log: START, one line per finding, OUTCOME, through the one
+sink.
+
+## 5. The UI tells the truth — the contract and its sensors
+
+Surfaces that state facts about a file, each to be audited and rewritten to the contract
+(`FileFact { value, evidence: .stat | .sha256 | .archiveFixity | .soundPrint | .ffprobe |
+.avfoundation | .catalogField, asOf: Date }`), then pinned:
+- File Journey sheet (ladder "Signed / Archived locally", "Scanned on", "Now at")
+- Preservation checklist · Inspector file facts · Archive timeline (play / reveal target)
+- Compare Media band and lines · Footage folders relation words ("copy · byte for byte")
+- Catalog columns Stream / Sound / Size / Date · the player (silent-audio notice)
+- Catalog Status rows and chip
+
+Sensors: no `fullPath` rendered as presence without a stat; no `contentHash` with a `v1:`
+prefix in any equality that produces "copy"/"identical"; no ladder step from a row's own
+field when `archivedCopy(of:)` exists; every `FileFact` shown with its evidence word.
+
+## 6. The trust gate (when features resume)
+
+- Tiers 0–5 implemented with their stamps, pins (five dimensions) and the report.
+- **Seven consecutive nights** of Verify Catalog with zero unexplained findings (explained =
+  a Fix Links decision taken, or a declared limit with its count).
+- Tier 1 at 100 % of live rows (no sampled-only identity left).
+- Archive: one full weekly pass (fixity + decode-to-end) green.
+- The §5 surfaces rewritten and their sensors green.
+- Rick's spot test of each surface in the list says "true".
+
+## 7. Order of work (integrity only until the gate)
+
+1. Finish the three door fixes in flight (Archive play target · silent-MP3 notice · journey
+   sheet truth) — they are §5 items.
+2. Tier 0 nightly: in-app overnight schedule when the app is open; headless when it is not;
+   the reciprocal launch check (GH #323).
+3. Tier 1 to 100 %: run Fill In Full Hashes to completion; sensor: `v1:` never a verdict.
+4. Verify Catalog umbrella job (tiers 2–5 on the stamps and existing engines: fixity, Verify
+   Media, sound prints, Check Totals), the report, Catalog Status integration.
+5. The §5 surface audit: list, rewrite, pin — one surface per commit.
+6. Audit Archive weekly deep pass (fixity + decode-to-end + codec risk).
+7. Scanner stops cataloguing through links; Fix Links review sheet (GH #326, design §2b).
+
+Codex reviews every batch (data-risk ones under the safety-critical protocol). Nothing in this
+list deletes, moves or rewrites media.
