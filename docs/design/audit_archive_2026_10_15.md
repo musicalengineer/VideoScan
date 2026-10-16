@@ -21,6 +21,62 @@ The job reads; it moves, rewrites and transcodes nothing. Every finding is a fla
 on the record, with the door that fixes it (Repair, Update…, or Promote a better transfer).
 The archive stays read-only to background jobs (Rick 2026-09-27).
 
+## 2a. Tier 0 — Audit Catalog: every row points at a real file (Rick, 2026-10-15 evening)
+
+The staging copy of a VHS capture vanished from Projects on October 4 — outside the app, no
+receipt, no ledger line — and for eleven days its catalog row posed as a live copy: the
+duplicates job held its twin ("could not read the keeper", correctly), and Compare Media's
+band said "byte for byte" from the stored hashes while the tiers could not read the file.
+Rick: "if by some weird turn of events … someone moved the file or deleted the file, the
+catalog has no knowledge … run an audit overnight or periodically or prior to doing a backup
+catalog … ensure the catalog entries all have links to real media."
+
+So the first tier is cheap and catalog-wide, not archive-only:
+- **What:** stat every live row on every mounted volume (device + inode + size against the
+  record's identity stamp where one exists). ~10,000 stats, seconds.
+- **Outcome per row:** present · present but changed (size or identity differ: "replaced
+  since cataloged") · gone → the existing removal marker `.missing` through the one engine,
+  with the audit as the reason; a row whose drive is not mounted is "not asked", never
+  marked.
+- **When:** every night before the metrics publish; before any catalog backup / export;
+  from Catalog ▸ Audit Catalog… on demand. One START / OUTCOME pair; the OUTCOME names the
+  counts and the folders where files went missing ("3 gone under Projects/_staging_…").
+- **Why it is separate from Rescan:** Rescan asks one volume when you ask; the audit is a
+  standing guarantee over the whole catalog and marks nothing but presence.
+- **Build first:** it is the smallest piece of this design and it closes the hole that was
+  open for eleven days. Compare Media now refuses a verdict for a file that is not on disk
+  (RelatedLadder.notOnDisk) — the audit is what keeps that case rare.
+
+## 2b. What to do with the holes — Fix Links (Rick, 2026-10-15 evening)
+
+"So we run an audit and it reports 115 files are no longer where we said … what to do? …
+rescan sounds expensive and may reingest stuff we don't want, but we could search for the
+missing or moved files and, after reporting the changes or missing links, have at-the-ready
+a fix-links with a review."
+
+1. **Group by folder.** One line per vanished folder ("38 gone under Projects/_staging_…"),
+   because a folder move or a cleaned staging area is the common cause.
+2. **Search before asking, cheapest first, no media read:**
+   a. another live catalog row with the same whole-file SHA-256 and size (the file was moved
+      and its new place was already scanned) — proven already;
+   b. the same file name and size on any mounted drive through Spotlight (`NSMetadataQuery`
+      on name + size; instant) — a candidate, confirmed by a full hash before it is called
+      the same file;
+   c. the vanished folder's name elsewhere on the same drive (the moved-folder case) —
+      candidates per file as in b.
+3. **Fix Links — one review sheet:** old path · found at · how proven (same SHA-256 /
+   name + size, hashed now / not found) · choice per row and per folder: **Relink** (the
+   row points at the new path and keeps its hand marks: stars, people, dates, notes;
+   when the file was found as a second row the two MERGE — hand marks to the survivor, the
+   old row marked "moved, now at …", never deleted) · **Mark missing** (the removal marker
+   `.missing`, reason "audit"; visible under Show Removed; relinkable later when a drive
+   comes back) · **Leave**. Applied through the one marker engine with a receipt.
+4. **Never rescan to fix a hole.** Rescan ingests; Fix Links moves pointers. Nothing enters
+   the catalog from the audit.
+
+Outcomes: relinked · merged · marked missing · left · could not prove (a name + size
+candidate whose hash differs: shown, never relinked).
+
 ## 3. The job: Archive ▸ Audit Archive…
 
 An MFO job (chip AUDIT), overnight, resumable, scoped to the whole archive or one decade.

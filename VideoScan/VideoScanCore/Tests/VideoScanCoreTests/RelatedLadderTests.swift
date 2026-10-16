@@ -156,6 +156,21 @@ struct RelatedLadderTests {
         #expect(v.rung == RelatedRung.none && v.band == .differentEvents)
     }
 
+    @Test("a file that is not on disk gets no verdict — even when the catalog's stored hashes say identical (Rick 2026-10-15)")
+    func notOnDisk() {
+        var gone = master; gone.isOnDisk = false
+        var here = master; here.isOnDisk = true; here.isArchiveFile = false
+        let v = RelatedLadder.judge(RelatedEvidence(a: gone, b: here, audio: .sameRecording, audioCoverage: 1))
+        #expect(v.rung == nil && v.band == .notEnoughEvidence)
+        #expect(v.headline == "One file is not on disk — nothing can be verified.")
+        #expect(has(v, .missing, "The first file is not at its path") && has(v, .nonClue, "stored SHA-256s match"))
+        let r = EventRecommendation.recommend(v, evidence: RelatedEvidence(a: gone, b: here))
+        #expect(r.rule == .r8 && r.subject == .a && r.words.hasPrefix("Rescan the drive"))
+        // Not asked (drive off) is not gone: the ladder runs.
+        var unknown = master; unknown.isOnDisk = nil
+        #expect(RelatedLadder.judge(RelatedEvidence(a: unknown, b: here)).rung == .identicalCopy)
+    }
+
     @Test("words: mm:ss and h:mm:ss, the band words")
     func words() {
         #expect(RelatedLadder.mmss(376) == "6:16" && RelatedLadder.mmss(3725) == "1:02:05" && RelatedLadder.mmss(-3) == "0:00")

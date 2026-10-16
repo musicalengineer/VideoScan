@@ -55,9 +55,13 @@ extension VideoScanModel {
         sideB.namesSaid = Self.namesSaid(in: b.audioTranscript, known: known)
         let keyA = Self.fingerprintKey(a), keyB = Self.fingerprintKey(b)
         let directory = audioFingerprintSidecarDirectory
-        let sound = await Task.detached(priority: .userInitiated) {
-            Self.soundEvidence(keyA: keyA, keyB: keyB, directory: directory)
+        let pathA = a.fullPath, pathB = b.fullPath
+        let (sound, onDiskA, onDiskB) = await Task.detached(priority: .userInitiated) {
+            (Self.soundEvidence(keyA: keyA, keyB: keyB, directory: directory),
+             Self.isOnDisk(pathA), Self.isOnDisk(pathB))
         }.value
+        sideA.isOnDisk = onDiskA
+        sideB.isOnDisk = onDiskB
         if let s = sound.audibleA { sideA.audibleSeconds = s }
         if let s = sound.audibleB { sideB.audibleSeconds = s }
         let evidence = RelatedEvidence(a: sideA, b: sideB, audio: sound.verdict, audioCoverage: sound.coverage, video: nil)
@@ -142,6 +146,15 @@ extension VideoScanModel {
         if lower.contains("mb") { return Int64(number * 1_000_000) }
         if lower.contains("kb") { return Int64(number * 1_000) }
         return Int64(number)
+    }
+
+    /// The file is at its path (a plain file; a drive that is not mounted
+    /// answers nil, not false — "not asked", never "gone").
+    nonisolated static func isOnDisk(_ path: String) -> Bool? {
+        guard !path.isEmpty else { return false }
+        if Self.isExternalVolumePath(path), !VolumeReachability.isReachable(path: path) { return nil }
+        var isDir: ObjCBool = false
+        return FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && !isDir.boolValue
     }
 
     nonisolated static func fingerprintKey(_ r: VideoRecord) -> AudioFingerprintStore.Key? {
