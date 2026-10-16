@@ -627,8 +627,10 @@ struct CatalogAuditJobSensorTests {
         #expect(plan.contains("guard uuid == lastSeenOn.volumeUUID else {"))
         // D8 (r4 F1): the physical device, asked for the handle's own mount through Delete Duplicates' one DiskArbitration
         // helper; a stamp that names a drive is held to it, one without proves by volume UUID alone.
-        #expect(plan.contains("deviceKey: DuplicateDrives.physicalDeviceKey(mountFrom: from, isLocal: isLocal,"),
-                "the device key is asked for the handle's f_mntfromname, in the one identity read")
+        #expect(plan.contains("DuplicateDrives.deviceIdentification(mountFrom: from, isLocal: isLocal,")
+                && plan.contains("deviceKey: drive.key, deviceIdentified: drive.identified)")
+                && plan.contains("guard deviceIdentified else { return nil }"),
+                "r5 P1: the device key is asked for the handle's f_mntfromname in the one identity read, the identity says whether the drive was identified, and an unidentified local drive gets no stamp")
         #expect(plan.contains("guard let stampedDrive = lastSeenOn.deviceKey else { return .gone }")
                 && plan.contains("guard let drive = on.deviceKey else {") && plan.contains("guard drive == stampedDrive else {"))
         #expect(plan.contains("AuditSeenOn(volumeUUID: $0, mountFrom: mountFrom, seenAt: now, deviceKey: deviceKey)"), "the stamp carries the drive")

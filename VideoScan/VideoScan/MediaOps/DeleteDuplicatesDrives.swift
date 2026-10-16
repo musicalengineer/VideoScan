@@ -322,8 +322,19 @@ enum DuplicateDrives {
     /// the cache is neither read nor written. DISK I/O (one DiskArbitration
     /// description); the audit asks once per folder, never per row.
     nonisolated static func physicalDeviceKey(mountFrom node: String, isLocal: Bool, device: UInt64) -> String? {
+        deviceIdentification(mountFrom: node, isLocal: isLocal, device: device).key
+    }
+
+    /// The key AND whether the drive was identified at all (codex r5
+    /// 2026-10-16 P1): a LOCAL device DiskArbitration cannot describe
+    /// (`.unknown`) is `identified: false` — the audit writes NO where-seen
+    /// stamp for it (a key-less stamp would later prove by volume UUID
+    /// alone, which is exactly the clone hole). A share or a disk image is
+    /// identified (no key by design). One DiskArbitration read.
+    nonisolated static func deviceIdentification(mountFrom node: String, isLocal: Bool, device: UInt64)
+        -> (key: String?, identified: Bool) {
         let identity = liveIdentityFresh(mountFrom: node, isLocal: isLocal, device: device)
-        return identity.kind == .physical ? key(for: identity) : nil
+        return (identity.kind == .physical ? key(for: identity) : nil, identity.kind != .unknown)
     }
 
     /// CACHED — advisory uses only (the per-turn gather, the forecast, the

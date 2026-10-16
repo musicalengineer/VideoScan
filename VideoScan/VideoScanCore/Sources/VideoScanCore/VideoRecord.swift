@@ -131,15 +131,13 @@ public class VideoRecord: Identifiable, Decodable {
     public var fullPath: String = "" {
         didSet {
             Self.bumpIdentityGeneration()
-            // codex r4 2026-10-16 D10: the audit's where-seen stamp is "this
-            // path's folder, on this volume" — a move to another folder or
-            // volume root (Relocate, a source-side move) clears it; a rename
-            // within the folder keeps it. Observers do not run in the
-            // decoder, so a loaded row keeps its stamp.
-            if auditSeenOn != nil,
-               (fullPath as NSString).deletingLastPathComponent != (oldValue as NSString).deletingLastPathComponent {
-                auditSeenOn = nil
-            }
+            // codex r4 2026-10-16 D10 / r5 P2: the audit's where-seen stamp
+            // is "this path, on this volume" — ANY change of the path (a
+            // move, a Relocate, a rename, a volume-rename migration) clears
+            // it; the next audit stamps the new place and marks nothing
+            // there. Observers do not run in the decoder, so a loaded row
+            // keeps its stamp.
+            if auditSeenOn != nil, fullPath != oldValue { auditSeenOn = nil }
         }
     }
     public var directory: String = ""

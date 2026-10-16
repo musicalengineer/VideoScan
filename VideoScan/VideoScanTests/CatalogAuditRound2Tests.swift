@@ -412,6 +412,23 @@ struct CatalogAuditRound2Tests {
 
     // MARK: D8 — the stamp names the physical device too (r4 F1)
 
+    @Test("r5 P1: a local drive DiskArbitration cannot describe gets NO stamp — a key-less stamp would later prove by volume UUID alone")
+    func unidentifiedLocalDriveWritesNoStamp() async throws {
+        let sb = try ShowAgainSandbox.make("ca_unidentified"); defer { sb.cleanup() }
+        let r = try sb.live("on_a_mystery_drive.mov")
+        let unknown: @Sendable (String, UInt64) -> DuplicateDrives.Identity = { _, dev in .init(device: dev, kind: .unknown) }
+        let first = await DuplicateDrives.$lookupOverride.withValue(unknown) { await runAudit(sb.model) }
+        #expect(first.totals[.present] == 1 && first.stampedCount == 0, Comment(rawValue: first.totals.line))
+        #expect(r.auditSeenOn == nil, "a stamp was written for a drive that could not be identified: \(String(describing: r.auditSeenOn))")
+        // Later the file is gone and the drive IS described: still never seen by an audit — no mark.
+        try FileManager.default.removeItem(atPath: r.fullPath)
+        let driveA: @Sendable (String, UInt64) -> DuplicateDrives.Identity = { _, dev in
+            .init(device: dev, kind: .physical, physicalDevice: "IOService:/test/driveA", deviceLabel: "A")
+        }
+        let second = await DuplicateDrives.$lookupOverride.withValue(driveA) { await runAudit(sb.model) }
+        #expect(second.totals[.neverSeenByAnAudit] == 1 && second.totals[.gone] == 0 && r.removal == nil, Comment(rawValue: second.totals.line))
+    }
+
     @Test("r4 F1 / D8: a volume with the SAME UUID on a DIFFERENT drive (a clone, a restored image, mounted at the path while the original is disconnected) is 'a clone? not marked' — the stamp names the physical device the file was last seen on and the proof compares it; the same drive again is gone")
     func cloneOnAnotherDriveWithTheSameVolumeUUIDIsNeverGone() async throws {
         let sb = try ShowAgainSandbox.make("ca_clone"); defer { sb.cleanup() }
@@ -542,7 +559,7 @@ struct CatalogAuditRound2Tests {
         let renamedPath = sb.files.appendingPathComponent("renamed_2.mov").path
         try FileManager.default.moveItem(atPath: renamed.fullPath, toPath: renamedPath)
         renamed.fullPath = renamedPath
-        #expect(renamed.auditSeenOn != nil, "a rename within the folder keeps the stamp")
+        #expect(renamed.auditSeenOn == nil, "any path change clears the stamp (codex r5 P2) — the next audit stamps the new name")
         let there = sb.files.appendingPathComponent("moved_here", isDirectory: true)
         try FileManager.default.createDirectory(at: there, withIntermediateDirectories: true)
         let moved = try sb.live("moved.mov", seen: true)

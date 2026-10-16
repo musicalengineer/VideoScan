@@ -254,6 +254,10 @@ struct CatalogAuditMountIdentity: Sendable, Equatable {
     /// or a device DiskArbitration cannot describe. The one DiskArbitration
     /// call stays in DeleteDuplicatesDrives.swift, never in an audit source.
     let deviceKey: String?
+    /// False only for a LOCAL device DiskArbitration could not describe
+    /// (codex r5 2026-10-16 P1): nothing on it is stamped — a stamp with no
+    /// key would later prove by volume UUID alone, the clone hole.
+    var deviceIdentified: Bool = true
 
     var words: String {
         "\(mountFrom) on \(mountOn)" + (volumeUUID.map { " [\($0)]" } ?? " [no volume UUID]")
@@ -272,16 +276,19 @@ struct CatalogAuditMountIdentity: Sendable, Equatable {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
         }
         let isLocal = fs.f_flags & UInt32(MNT_LOCAL) != 0
+        let drive = DuplicateDrives.deviceIdentification(mountFrom: from, isLocal: isLocal,
+                                                         device: DeviceID.from(fs.f_fsid.val.0))
         return CatalogAuditMountIdentity(fsid0: fs.f_fsid.val.0, fsid1: fs.f_fsid.val.1, mountOn: on, mountFrom: from,
                                          volumeUUID: VolumeIdentity.uuid(forDescriptor: fd, path: nil),
-                                         deviceKey: DuplicateDrives.physicalDeviceKey(mountFrom: from, isLocal: isLocal,
-                                                                                      device: DeviceID.from(fs.f_fsid.val.0)))
+                                         deviceKey: drive.key, deviceIdentified: drive.identified)
     }
 
     /// The stamp a file found through this handle gets; nil when the
-    /// volume has no UUID (no stamp — D5). The device key rides along (D8).
+    /// volume has no UUID (no stamp — D5) or the local drive could not be
+    /// identified (no stamp — codex r5 P1). The device key rides along (D8).
     func seenOn(at now: Date) -> AuditSeenOn? {
-        volumeUUID.map { AuditSeenOn(volumeUUID: $0, mountFrom: mountFrom, seenAt: now, deviceKey: deviceKey) }
+        guard deviceIdentified else { return nil }
+        return volumeUUID.map { AuditSeenOn(volumeUUID: $0, mountFrom: mountFrom, seenAt: now, deviceKey: deviceKey) }
     }
 }
 

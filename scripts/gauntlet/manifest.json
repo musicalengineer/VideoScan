@@ -6574,6 +6574,7 @@
         "symlinkedParentRetargetedIsNeverGone",
         "theSecondRunMarksWhatTheFirstCouldNot",
         "theStampNamesTheDriveAndProvesByTheVolumeAloneWithoutOne",
+        "unidentifiedLocalDriveWritesNoStamp",
         "unstampedGoneRowIsNeverSeenByAnAudit"
       ]
     },
