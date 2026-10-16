@@ -1,8 +1,8 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-16T15:52:50Z",
- "sha": "9b872d62",
+ "ts": "2026-10-16T17:22:11Z",
+ "sha": "b03c3ce6",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
@@ -36,7 +36,7 @@
    "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
    "function": "VideoScanApp.body",
    "ccn": 15,
-   "nloc": 250,
+   "nloc": 257,
    "lang": "swift",
    "base_ccn": 14,
    "base_nloc": 238

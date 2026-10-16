@@ -1,7 +1,7 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-16T15:53:20Z",
- "sha": "9b872d62",
+ "ts": "2026-10-16T17:22:42Z",
+ "sha": "b03c3ce6",
  "files": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift": {
    "lines": 398,
@@ -95,6 +95,14 @@
    "lines": 215,
    "decls": 59,
    "could_be_private": [],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScan/App/CatalogAuditCLI.swift": {
+   "lines": 122,
+   "decls": 6,
+   "could_be_private": [
+    "CatalogAuditCLI.otherVideoScanInstances"
+   ],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/App/CompactDashboard.swift": {
@@ -208,7 +216,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/App/VideoScanApp.swift": {
-   "lines": 1253,
+   "lines": 1271,
    "decls": 31,
    "could_be_private": [
     "AppDelegate.vlmDrainDeadline",
@@ -261,12 +269,13 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/App/main.swift": {
-   "lines": 129,
-   "decls": 5,
+   "lines": 144,
+   "decls": 6,
    "could_be_private": [
     "isPersonEvaluation",
     "isRecipeCalibration",
-    "isFindTagDaemon"
+    "isFindTagDaemon",
+    "isCatalogAudit"
    ],
    "widened_for_split": []
   },
@@ -1610,6 +1619,12 @@
    "could_be_private": [],
    "widened_for_split": []
   },
+  "VideoScan/VideoScan/Catalog/CatalogAuditMenuItem.swift": {
+   "lines": 25,
+   "decls": 3,
+   "could_be_private": [],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScan/Catalog/CatalogAuditSheet.swift": {
    "lines": 220,
    "decls": 1,
@@ -1831,6 +1846,14 @@
    "lines": 136,
    "decls": 26,
    "could_be_private": [],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScan/Catalog/CatalogStatusChip.swift": {
+   "lines": 81,
+   "decls": 3,
+   "could_be_private": [
+    "CatalogStatusChip.Colour"
+   ],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Catalog/CatalogStorageTotals.swift": {
@@ -5732,6 +5755,35 @@
    "could_be_private": [],
    "widened_for_split": []
   },
+  "VideoScan/VideoScan/MediaOps/CatalogAuditDetailView.swift": {
+   "lines": 119,
+   "decls": 4,
+   "could_be_private": [],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScan/MediaOps/CatalogAuditJob.swift": {
+   "lines": 513,
+   "decls": 27,
+   "could_be_private": [
+    "CatalogAuditJob.progressLogRows",
+    "CatalogAuditJob.statOffMain"
+   ],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScan/MediaOps/CatalogAuditPlan.swift": {
+   "lines": 307,
+   "decls": 42,
+   "could_be_private": [
+    "CatalogAuditTotals.goneFolders"
+   ],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScan/MediaOps/CatalogAuditRun.swift": {
+   "lines": 147,
+   "decls": 16,
+   "could_be_private": [],
+   "widened_for_split": []
+  },
   "VideoScan/VideoScan/MediaOps/CatalogKnownCopies.swift": {
    "lines": 94,
    "decls": 4,
@@ -6473,8 +6525,8 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/MediaFileOperations.swift": {
-   "lines": 1618,
-   "decls": 104,
+   "lines": 1628,
+   "decls": 105,
    "could_be_private": [
     "VolumeGateBoard.Holder",
     "MediaFileOperationsCenter.removeJobs"
@@ -7043,6 +7095,14 @@
    "lines": 74,
    "decls": 5,
    "could_be_private": [],
+   "widened_for_split": []
+  },
+  "VideoScan/VideoScan/MediaOps/VideoScanModel+CatalogAudit.swift": {
+   "lines": 142,
+   "decls": 10,
+   "could_be_private": [
+    "VideoScanModel.errnoWords"
+   ],
    "widened_for_split": []
   },
   "VideoScan/VideoScan/MediaOps/VideoScanModel+Combine.swift": {
@@ -9008,7 +9068,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScan/Volumes/VolumeTableTotalsFooter.swift": {
-   "lines": 314,
+   "lines": 322,
    "decls": 8,
    "could_be_private": [
     "VolumeTableTotalsFooter.captionLineHeight"
@@ -9167,6 +9227,18 @@
     "BirthplaceClassifier.usStates",
     "BirthplaceClassifier.canadianProvinces"
    ]
+  },
+  "VideoScan/VideoScanCore/Sources/VideoScanCore/CatalogFreshness.swift": {
+   "lines": 460,
+   "decls": 13,
+   "could_be_private": [
+    "FreshnessPolicy.staleness",
+    "FreshnessPolicy.isOverdue",
+    "FreshnessPolicy.Tally",
+    "FreshnessPolicy.Tally.anyOffline",
+    "FreshnessPolicy.Tally.onlyRedWords"
+   ],
+   "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/CleanupEngine.swift": {
    "lines": 137,
@@ -10205,7 +10277,7 @@
    "widened_for_split": []
   },
   "VideoScan/VideoScanCore/Sources/VideoScanCore/RemovalMarker.swift": {
-   "lines": 161,
+   "lines": 162,
    "decls": 0,
    "could_be_private": [],
    "widened_for_split": []

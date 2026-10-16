@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-16T15:53:28Z",
- "sha": "9b872d62",
+ "ts": "2026-10-16T17:22:50Z",
+ "sha": "b03c3ce6",
  "formula_version": 1,
- "files_scored": 717,
+ "files_scored": 723,
  "rows": [
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -120,11 +120,11 @@
    "offenders": 2,
    "worst_ccn": 24,
    "new_or_worse": 1,
-   "lines": 1253,
+   "lines": 1271,
    "could_be_private": 12,
    "widened_for_split": 0,
-   "churn_7d": 2,
-   "score": 26.7
+   "churn_7d": 3,
+   "score": 30.6
   },
   {
    "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
