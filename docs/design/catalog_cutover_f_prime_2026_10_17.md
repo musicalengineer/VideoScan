@@ -177,3 +177,15 @@ What Rick spot-tests. **Before** (JSON, after the import, before B1 ships): pick
 - /Users/rickb/dev/VideoScan/VideoScan/VideoScanCore/Sources/VideoScanCore/Store/CatalogRepository.swift (the seam; new upsert doors and record readings)
 - /Users/rickb/dev/VideoScan/VideoScan/VideoScanCore/Sources/VideoScanCore/Import/CatalogRecordDTO.swift (+Rows.swift) (the row shapes; reverse init)
 - /Users/rickb/dev/VideoScan/VideoScan/VideoScan/Volumes/VideoScanModel+ScanMerge.swift (:431–562 → ReconcileByDigest through the door)
+
+## 10. Rick's go + the cutover-by-tomorrow scope (2026-10-17, 19:30)
+
+> "we should be able to cutover tomorrow afternoon … use codex to run overnight code reviews … we have to pay down the tech debt overnight in the form of tests, regression tests."
+
+**Decisions (Rick's go on the recommended defaults):** (1) copies that disagree on a curated scalar show EMPTY with `conflict = 1` and a conflicts count in Catalog Status — nothing picked silently; (2) the stat-stamp fast path is allowed only if codex clears it (moot until the rescan batch); (3) rollback = delete the SQLite files → JSON reopens READ-ONLY with an explicit un-freeze door.
+
+**Scope cut for a next-day cutover** (replaces the five-batch plan's order):
+- **B1 read side + flip:** `CatalogRecordDTO.init(record:)` reverse of the importer mapping (Core), `VideoRecord.init(row:)` + `SQLiteCatalogLoader` (app), display-value pass (conflicts → NULL), launch rule + `catalog.json.frozen` latch.
+- **B2-lite write side:** the 120 call sites are NOT edited. The three funnels (`saveCatalogDebounced / saveCatalogNow / saveCatalogAcknowledged`) keep their signatures and, when SQLite is the authority, commit through the seam: DTO every record, DIFF against the last committed DTO per id, write only changed rows (whole-row upsert) in one transaction. The diff IS the dirty tracking until field-level writes exist. Outcomes + banners as §3. Hold (MOPS-16) carried over.
+- **Flip:** final import at the cutover moment (re-run from the latest JSON; minutes), then launch on SQLite.
+- **After the cutover (not blocking):** scan as reconciliation by digest (E′), sidecars → tables (G), Verify/Status as SQL, deleting the JSON code, the internal-drive audit stamp.
