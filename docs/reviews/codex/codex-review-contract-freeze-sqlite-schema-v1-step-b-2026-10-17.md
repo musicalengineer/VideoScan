@@ -68,3 +68,7 @@ Other requested checks:
 **Do only this:** findings against 1–6 (P1 first), each with section/line and a one-line failure scenario; then at most three P2/P3 one-liners. Out of scope: the Swift store implementation (not written yet), performance, wording.
 
 **Do not explore outside the files listed above.**
+
+## Closed
+
+Closed by `433da96bb` at 2026-10-17T17:40:13Z. r2 merged

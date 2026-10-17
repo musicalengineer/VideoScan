@@ -42,3 +42,7 @@ No additional NEW P1 findings. SQLite 3.54.0: all 76 assertions passed, integrit
 - **F8** — effective high-water at open = max(`catalog.highwater`, newest `generationHighWater` ledger line), read on EVERY open; a restore that rewinds database and sidecar together is caught by the append-only ledger; an unreadable ledger is a named refusal. Contract §e.9 + DDL §11.
 - Checks on SQLite 3.54.0: 76 assertions + F5final ok, integrity_check ok.
 **Step B is gated.** Four codex passes on the contract (12 → 6 → 2 → 0 open). The Swift store (C′) implements this schema; the importer (D′) implements §f/§g; both get their own codex passes.
+
+## Closed
+
+Closed by `HEAD` at 2026-10-17T17:40:13Z. F5 + F8 closed by hand; step B gated

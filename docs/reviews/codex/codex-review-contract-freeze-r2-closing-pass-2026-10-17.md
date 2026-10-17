@@ -49,3 +49,7 @@ Three **NEW** findings:
 **Do only this:** for each of your 12 findings say CLOSED (where, one line) or OPEN (why, one line, with section/line); then at most three NEW findings the revision introduced (P1 first, with a one-line failure scenario each). Confirm or refute: `N = M + Q` is now enforced at the row level by the comparator spec, not by counters; a curated value can never be lost or silently merged; a sampled hash never becomes identity; the generation CAS and high-water rules are atomic and restore-proof as specified.
 
 **Do not explore outside the files listed above.**
+
+## Closed
+
+Closed by `7484e32bc` at 2026-10-17T17:40:13Z. r3 merged
