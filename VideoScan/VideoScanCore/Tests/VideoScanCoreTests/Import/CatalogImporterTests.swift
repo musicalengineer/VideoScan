@@ -510,7 +510,7 @@ struct CatalogImporterAuditWordsTests {
         #expect(results.count == 15)
         let deadLink = try #require(results.first { $0.jsonRowID == PoisonedCatalogFixture.id(.deadLink) })
         #expect(deadLink.result == .link)
-        #expect(deadLink.detail == .object(["detail": .string("a link is in the path")]))
+        #expect(deadLink.detail == .object(["detail": .string(PoisonedCatalogFixture.deadLinkDetail), "word": .string("couldNotCheck")]))
         #expect(deadLink.judgedPath == PoisonedCatalogFixture.path(.deadLink))
         let marker = try await scene.read { reader -> CatalogRow.MarkerReading? in
             var found: CatalogRow.MarkerReading?

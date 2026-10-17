@@ -2,7 +2,9 @@
 // The importer's own readings of the two gate files (contract §f "Inputs"):
 //   * catalog-audit.json — `CatalogAuditRunRecord` (A/MediaOps/CatalogAuditRun.swift)
 //     with A′'s per-row results; the contract adds, per non-present row, the
-//     path it was judged at, and the run's `savedGeneration` (N1, F6);
+//     path it was judged at, and the run's catalog generation (N1, F6; the
+//     app's key is `catalogGeneration`, absent on markers older than
+//     2026-10-17);
 //   * integrity-latest.json — `IntegrityReport` schema 2
 //     (A/Integrity/IntegrityReport.swift:146).
 // Both are Codable mirrors so the PoisonedCatalogFixture writes exactly what
@@ -12,7 +14,14 @@
 // `audit_results` row lives HERE, once, so the row pass (from the gate's
 // decode) and the comparator (from its own re-decode of the same file) build
 // the row by one rule and compare whole rows. A result word outside the
-// contract's six is a RUN refusal (`unknownResultWords`), never a silent skip.
+// app's words is a RUN refusal (`unknownResultWords`), never a silent skip.
+//
+// fix 2026-10-17 (Rick's first dry run, catalog.log 17:52:41): the words are
+// the APP's — `CatalogAuditResult.rawValue` (A/MediaOps/CatalogAuditPlan.swift)
+// — not the contract's shorthand. `wordClasses` maps each to the gate's
+// class; the word itself is kept in the row's detail. An app-side sensor
+// (VideoScanTests/ImportAuditVocabularySensorTests) pins `knownResultWords`
+// to the app enum's per-row cases so the two cannot drift.
 //
 // (For Rick: two POD mirrors of the app's JSON files plus the few facts the
 // gate needs from each.)
@@ -22,8 +31,29 @@ import Foundation
 /// catalog-audit.json as the importer reads it.
 public struct AuditMarkerJSON: Codable, Sendable, Equatable {
 
-    /// One per-row result. `result` is kept as a word; a word outside the
-    /// contract's six refuses the run at the gate (codex D′ #4).
+    /// The app's per-row result words (`CatalogAuditResult.rawValue`) and
+    /// the gate class each becomes. `couldNotCheck` becomes `link` when its
+    /// detail says a link is in the path (`Row.gateClass`). The bulk-only
+    /// `notAsked` never appears on a row, so it is not here: a row carrying
+    /// it is refused like any other unknown word. (For Rick: a constant
+    /// lookup table ≈ a `static const std::map`.)
+    static let wordClasses: [String: CatalogDDL.AuditResult] = [
+        "present": .present, "cameBack": .present,
+        "changed": .changed, "recordChanged": .changed,
+        "gone": .gone, "stillMissing": .gone, "goneArchived": .gone,
+        "neverSeenByAnAudit": .neverSeen,
+        "couldNotCheck": .couldNotCheck,
+    ]
+
+    /// Every word a row may carry; anything else refuses the run (codex D′ #4).
+    public static var knownResultWords: Set<String> { Set(wordClasses.keys) }
+
+    /// The phrase the app's detail carries when a link in the path made the
+    /// row not provable ("a link in the path — not provable", CatalogAuditPlan).
+    static let linkPhrase = "link in the path"
+
+    /// One per-row result. `result` is kept as the app's word; a word outside
+    /// `knownResultWords` refuses the run at the gate (codex D′ #4).
     public struct Row: Codable, Sendable, Equatable {
         public var id: String
         public var result: String
@@ -41,16 +71,29 @@ public struct AuditMarkerJSON: Codable, Sendable, Equatable {
             self.seenOn = seenOn
         }
 
-        /// `audit_results.detail`: the audit's words, verbatim, under one key.
+        /// The gate class of this row's word; nil = a word this importer
+        /// does not know (the gate refuses the run).
+        public var gateClass: CatalogDDL.AuditResult? {
+            guard let mapped = AuditMarkerJSON.wordClasses[result] else { return nil }
+            guard mapped == .couldNotCheck, detail?.contains(AuditMarkerJSON.linkPhrase) == true else { return mapped }
+            return .link
+        }
+
+        /// `audit_results.detail`: the audit's words, verbatim, under one
+        /// key, plus the app's word under `word` when it is not the class's
+        /// own name (so `stillMissing` is never flattened into `gone`).
         public var detailObject: CatalogJSONValue {
-            .object(detail.map { ["detail": .string($0)] } ?? [:])
+            var body: [String: CatalogJSONValue] = [:]
+            if let detail { body["detail"] = .string(detail) }
+            if gateClass?.rawValue != result { body["word"] = .string(result) }
+            return .object(body)
         }
 
         /// The `audit_results` row this result becomes (N1: `accepted` by the
         /// snapshot rule against the row's own path and stamp). Throws on a
         /// result word the gate should already have refused.
         func auditResultRow(ordinal: Int, run: String, index: ImportRowIndex, window: ImportGate.AuditWindow) throws -> CatalogRow.AuditResult {
-            guard let result = CatalogDDL.AuditResult(rawValue: self.result) else {
+            guard let result = gateClass else {
                 throw ImportFailure(words: "audit result \(ordinal) carries the unknown word \"\(self.result)\" — the gate should have refused it")
             }
             let canonical = CatalogRecordDTO.canonicalID(id)
@@ -71,7 +114,17 @@ public struct AuditMarkerJSON: Codable, Sendable, Equatable {
     public var counts: [String: Int]
     public var marked: Int
     public var rows: [Row]?
+    /// The catalog generation after the audit's own save (or at its finish
+    /// when it saved nothing). nil = a marker written before the app
+    /// recorded it; the gate then accepts by time order (ImportGate).
     public var savedGeneration: Int?
+
+    /// The app writes the generation as `catalogGeneration`
+    /// (CatalogAuditRunRecord); the Swift name stays `savedGeneration`.
+    private enum CodingKeys: String, CodingKey {
+        case startedAt, finishedAt, outcome, partial, counts, marked, rows
+        case savedGeneration = "catalogGeneration"
+    }
 
     public init(startedAt: CatalogJSONDate, finishedAt: CatalogJSONDate?, outcome: String, partial: Bool,
                 counts: [String: Int], marked: Int, rows: [Row]?, savedGeneration: Int?) {
@@ -104,10 +157,10 @@ public struct AuditMarkerJSON: Codable, Sendable, Equatable {
                                finishedAt: finishedAt?.unixSeconds ?? startedAt.unixSeconds)
     }
 
-    /// Result words outside the contract's six, by source ordinal (codex D′ #4).
+    /// Result words outside `knownResultWords`, by source ordinal (codex D′ #4).
     public var unknownResultWords: [Int: String] {
         var out: [Int: String] = [:]
-        for (index, row) in (rows ?? []).enumerated() where CatalogDDL.AuditResult(rawValue: row.result) == nil {
+        for (index, row) in (rows ?? []).enumerated() where row.gateClass == nil {
             out[Self.rowOrdinal(index)] = row.result
         }
         return out
@@ -128,7 +181,7 @@ public struct AuditMarkerJSON: Codable, Sendable, Equatable {
         var out: [String: ImportGate.AuditEvidence] = [:]
         for row in rows ?? [] {
             let id = CatalogRecordDTO.canonicalID(row.id)
-            guard out[id] == nil, let result = CatalogDDL.AuditResult(rawValue: row.result) else { continue }
+            guard out[id] == nil, let result = row.gateClass else { continue }
             out[id] = ImportGate.AuditEvidence(result: result, judgedPath: row.judgedPath)
         }
         return out

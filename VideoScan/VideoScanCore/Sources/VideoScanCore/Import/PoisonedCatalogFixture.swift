@@ -336,6 +336,11 @@ public struct PoisonedCatalogFixture: Sendable {
 
     // MARK: - Audit marker (contract §c / §f shape)
 
+    /// The app's own detail for a row made not provable by a link in its
+    /// path (VideoScanModel+CatalogAudit.swift + CatalogAuditPlan.swift).
+    public static let deadLinkDetail = "not at its path, but that is not proof here: a link in the path — not provable — not marked"
+
+    /// The marker in the app's words (`CatalogAuditResult.rawValue`).
     static func auditMarker(bulkRows: Int = 0) -> AuditMarkerJSON {
         var rows: [AuditMarkerJSON.Row] = []
         rows.reserveCapacity(Shape.allCases.count + bulkRows)
@@ -348,7 +353,7 @@ public struct PoisonedCatalogFixture: Sendable {
             case .neverSeen:
                 continue
             case .deadLink:
-                rows.append(.init(id: rowID, result: "link", detail: "a link is in the path", judgedPath: path(shape)))
+                rows.append(.init(id: rowID, result: "couldNotCheck", detail: deadLinkDetail, judgedPath: path(shape)))
             case .changedSize:
                 rows.append(.init(id: rowID, result: "changed", detail: "size differs", judgedPath: path(shape)))
             case .tombstonedWithDigest:

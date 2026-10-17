@@ -522,6 +522,8 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             unsavedMarks.removeAll()
         }
         let partial = totals.done < totals.planned
+        // After `persist` above: the generation the run's own last save produced.
+        let generation = model.catalogStore.currentGeneration
         var line = totals.line
         let folders = totals.goneFoldersClause
         if !folders.isEmpty { line += " — " + folders }
@@ -530,15 +532,15 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
             let message = "Failed — marks undone: the catalog could not be saved, so the marks made since the last confirmed save were taken back. "
                 + "\(storedCount.formatted()) mark(s) saved earlier are kept; nothing on media was changed. " + line
             model.catalogAuditNote("OUTCOME failed (partial) — " + message)
-            marker?.noteFinished(.failed, totals: totals, marked: storedCount, partial: true)
+            marker?.noteFinished(.failed, totals: totals, marked: storedCount, partial: true, catalogGeneration: generation)
             finish(failedSave: message)
         } else if stopped {
             model.catalogAuditNote("OUTCOME stopped (partial) at \(totals.done.formatted()) of \(totals.planned.formatted()) — " + line)
-            marker?.noteFinished(.stopped, totals: totals, marked: storedCount, partial: true)
+            marker?.noteFinished(.stopped, totals: totals, marked: storedCount, partial: true, catalogGeneration: generation)
             finish(cancelled: ())
         } else {
             model.catalogAuditNote("OUTCOME — " + line)
-            marker?.noteFinished(.completed, totals: totals, marked: storedCount, partial: partial)
+            marker?.noteFinished(.completed, totals: totals, marked: storedCount, partial: partial, catalogGeneration: generation)
             finish(success: line)
         }
     }

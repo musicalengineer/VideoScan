@@ -223,7 +223,7 @@ public enum RowPreflight {
     /// (N1). An unknown result word is its own refusal (`auditResultUnknownWord`),
     /// not a judged-path fault as well.
     public static func violations(auditRow row: AuditMarkerJSON.Row) -> [String] {
-        guard let result = CatalogDDL.AuditResult(rawValue: row.result), result != .present, row.judgedPath == nil else { return [] }
+        guard let result = row.gateClass, result != .present, row.judgedPath == nil else { return [] }
         return ["audit result \"\(row.result)\" for \(row.id) names no judged path"]
     }
 

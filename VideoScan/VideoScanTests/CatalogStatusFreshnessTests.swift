@@ -215,7 +215,7 @@ struct CatalogFreshnessFactsTests {
         totals.add(.present, rows: 3)
         totals.add(.gone, rows: 1)
         totals.add(.notAsked, rows: 1)
-        marker.noteFinished(.completed, totals: totals, marked: 1, partial: false, at: now)
+        marker.noteFinished(.completed, totals: totals, marked: 1, partial: false, catalogGeneration: nil, at: now)
 
         let facts = CatalogFreshnessFactsReader.read(catalogFile: dir.appendingPathComponent("catalog.json").path)
         let audit = try #require(facts.audit)
@@ -452,7 +452,7 @@ struct CatalogFreshnessSnapshotTests {
         var totals = CatalogAuditTotals()
         totals.planned = 1
         totals.add(.present)
-        marker.noteFinished(.completed, totals: totals, marked: 0, partial: false, at: now)
+        marker.noteFinished(.completed, totals: totals, marked: 0, partial: false, catalogGeneration: nil, at: now)
         snapshot.setRunning([])
         for _ in 0..<50 where snapshot.state.row(.filePresence)?.lastOutcome != .ok {
             try await Task.sleep(nanoseconds: 50_000_000)

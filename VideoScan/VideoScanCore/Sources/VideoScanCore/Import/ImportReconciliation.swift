@@ -38,6 +38,13 @@ public struct ImportReconciliation: Sendable, Equatable {
     public var auditResults = 0
     public var auditAccepted = 0
     public var markers = 0
+    /// The audit marker recorded no generation (older than 2026-10-17) and
+    /// was accepted by time order instead (ImportGate.auditRefusals).
+    public var auditGenerationByTimeOrder = false
+
+    /// The words that say so, last on the line.
+    public static let auditGenerationByTimeOrderNote =
+        "audit generation not recorded (older marker); accepted by time order"
 
     public init() {}
 
@@ -68,6 +75,6 @@ public struct ImportReconciliation: Sendable, Equatable {
             "searches \(searches) (zero-hit \(searchesZeroHit), unreadable \(searchesUnreadable))",
             "audit results \(auditResults) (\(auditAccepted) accepted / \(auditRefused) refused)",
             "markers \(markers)",
-        ].joined(separator: " · ")
+        ].joined(separator: " · ") + (auditGenerationByTimeOrder ? " · " + Self.auditGenerationByTimeOrderNote : "")
     }
 }

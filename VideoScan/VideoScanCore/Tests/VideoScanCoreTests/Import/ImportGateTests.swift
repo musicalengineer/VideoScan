@@ -311,6 +311,31 @@ struct ImportGateRunRefusalTests {
                 == [.auditGenerationMismatch(audit: 40, snapshot: 41, file: 41)])
     }
 
+    // Bug 2 (Rick's first dry run, 2026-10-17 17:52): the app's marker carries
+    // no generation at all. Absent = an older marker; the time order and the
+    // report's certification at the file's generation stand in for it.
+    @Test func anAuditWithoutARecordedGenerationIsAcceptedByTimeOrder() {
+        #expect(Self.run { $0.audit = Self.audit { $0.savedGeneration = nil } }.isEmpty)
+    }
+
+    @Test func anAuditWithoutARecordedGenerationThatFinishedAfterVerifyStartedStillRefuses() {
+        #expect(Self.run { $0.audit = Self.audit { $0.savedGeneration = nil; $0.finishedAt = 3_000 } }
+                == [.auditFinishedAfterIntegrityStarted])
+    }
+
+    @Test func anAuditWithoutARecordedGenerationOnAReportAtAnotherGenerationStillRefuses() {
+        let refusals = Self.run {
+            $0.audit = Self.audit { $0.savedGeneration = nil }
+            $0.report = Self.report { $0.snapshotGeneration = 40 }
+        }
+        #expect(refusals == [.reportGenerationMismatch(report: 40, file: 41)])
+    }
+
+    @Test func anAuditWithoutARecordedGenerationThatNeverFinishedStillRefuses() {
+        #expect(Self.run { $0.audit = Self.audit { $0.savedGeneration = nil; $0.finishedAt = nil } }
+                == [.auditNotCompleted("unfinished")])
+    }
+
     @Test func truncatedFindingsRefuse() {
         #expect(Self.run { $0.report = Self.report { $0.findingsTotal = 5_001; $0.findingsListed = 5_000 } }
                 == [.findingsTruncated(total: 5_001, listed: 5_000)])

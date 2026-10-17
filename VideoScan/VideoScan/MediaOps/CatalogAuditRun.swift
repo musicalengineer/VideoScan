@@ -23,6 +23,13 @@
 // and the detail list already print, and the where-seen stamp when the
 // first pass read one.
 //
+// THE CATALOG GENERATION (2026-10-17; importer N1, bug 2 of Rick's first
+// dry run): at the finish the marker records `catalogGeneration`, the
+// catalog's generation after the run's own last acknowledged save (or the
+// one it started from, when it saved nothing). The importer requires it to
+// equal the generation Verify Catalog checked. Additive: an older marker
+// without the key reads with nil.
+//
 // Per catalog (the marker lives in the catalog's folder), so a test
 // catalog in a scratch directory never sees the real one. A missing,
 // damaged or newer-schema marker is read-only noise: `lastRun` is nil, no
@@ -151,6 +158,9 @@ struct CatalogAuditRunRecord: Codable, Equatable, Sendable {
     var counts: [String: Int] = [:]
     /// Rows the run changed and whose save was acknowledged.
     var marked = 0
+    /// The catalog generation at the finish — after the run's own last
+    /// acknowledged save. nil = still running, or an older marker.
+    var catalogGeneration: Int?
     /// One answer per row the run ASKED, in the order answered. nil = an
     /// older marker without them, or a rows part the strict reader refused
     /// (`rowsRefusal` says why). Rows "not asked" (a drive not connected)
@@ -239,7 +249,7 @@ struct CatalogAuditRunRecord: Codable, Equatable, Sendable {
 
     // MARK: Codable — the strict reader
 
-    private enum CodingKeys: String, CodingKey { case startedAt, finishedAt, outcome, partial, counts, marked, rows }
+    private enum CodingKeys: String, CodingKey { case startedAt, finishedAt, outcome, partial, counts, marked, catalogGeneration, rows }
 
     /// An older marker (no `rows` key) reads with rows = nil and no
     /// refusal. A rows part that cannot be read, uses an unknown word,
@@ -254,6 +264,7 @@ struct CatalogAuditRunRecord: Codable, Equatable, Sendable {
                   partial: try c.decodeIfPresent(Bool.self, forKey: .partial) ?? false,
                   counts: try c.decodeIfPresent([String: Int].self, forKey: .counts) ?? [:],
                   marked: try c.decodeIfPresent(Int.self, forKey: .marked) ?? 0)
+        catalogGeneration = try c.decodeIfPresent(Int.self, forKey: .catalogGeneration)
         let read = Self.readRows(c, counts: counts)
         rowsRefusal = read.refusal
         // Built once here; `refusal(rows:counts:)` already refused a
@@ -285,6 +296,7 @@ struct CatalogAuditRunRecord: Codable, Equatable, Sendable {
         try c.encode(partial, forKey: .partial)
         try c.encode(counts, forKey: .counts)
         try c.encode(marked, forKey: .marked)
+        try c.encodeIfPresent(catalogGeneration, forKey: .catalogGeneration)
         try c.encodeIfPresent(rows, forKey: .rows)
     }
 }
@@ -331,12 +343,15 @@ final class CatalogAuditRunMarker: ObservableObject {
         persist()
     }
 
-    /// The run ended. `partial` = not every planned row was asked.
+    /// The run ended. `partial` = not every planned row was asked;
+    /// `catalogGeneration` = the catalog's generation now, after the run's
+    /// own last acknowledged save (nil only where no catalog is in play).
     func noteFinished(_ outcome: CatalogAuditRunRecord.Outcome, totals: CatalogAuditTotals, marked: Int,
-                      partial: Bool, at date: Date = Date()) {
+                      partial: Bool, catalogGeneration: Int?, at date: Date = Date()) {
         guard current != nil else { return }
         current?.counts = Self.counts(totals)
         current?.marked = marked
+        current?.catalogGeneration = catalogGeneration
         current?.outcome = outcome
         current?.partial = partial
         current?.finishedAt = date

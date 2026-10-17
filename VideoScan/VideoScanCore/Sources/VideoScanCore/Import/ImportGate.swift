@@ -266,9 +266,10 @@ public enum ImportGate {
         public var finishedAt: Int64?
         /// The marker carries a per-row results part (an audit from after A′).
         public var hasRowResults: Bool
-        /// The generation the audit's stamp save produced (N1).
+        /// The generation the audit's stamp save produced (N1); nil = an
+        /// older marker that did not record it (accepted by time order).
         public var savedGeneration: Int?
-        /// Result words outside the contract's six, by source ordinal (codex D′ #4).
+        /// Result words outside the app's words, by source ordinal (codex D′ #4).
         public var unknownResultWords: [Int: String]
 
         public init(outcome: String, partial: Bool, startedAt: Int64, finishedAt: Int64?,
@@ -483,12 +484,21 @@ public enum ImportGate {
 
     /// catalog-audit.json's refusals (§f "catalog-audit.json is missing,
     /// partial, …" and N1 "one snapshot"); a missing marker is one refusal.
+    ///
+    /// fix 2026-10-17 (Rick's first dry run): a marker that RECORDS its
+    /// generation must equal the report's snapshot and the file. A marker
+    /// that does not (written before the app recorded it) has no generation
+    /// to compare; it stands on the two checks that already apply to every
+    /// marker — the audit finished before Verify Catalog started (below) and
+    /// the report is certified at the file's generation (`reportRefusals`).
+    /// Either failing still refuses. The OUTCOME line says which way it was
+    /// accepted (`ImportReconciliation.auditGenerationByTimeOrder`).
     static func auditRefusals(_ run: RunInput) -> [RunRefusal] {
         guard let a = run.audit else { return [.auditMissing] }
         var out: [RunRefusal] = []
         let snapshot = run.report?.snapshotGeneration
-        if a.savedGeneration != snapshot || a.savedGeneration != run.catalogGeneration {
-            out.append(.auditGenerationMismatch(audit: a.savedGeneration, snapshot: snapshot, file: run.catalogGeneration))
+        if let saved = a.savedGeneration, saved != snapshot || saved != run.catalogGeneration {
+            out.append(.auditGenerationMismatch(audit: saved, snapshot: snapshot, file: run.catalogGeneration))
         }
         if a.partial { out.append(.auditPartial) }
         if a.outcome != "completed" { out.append(.auditNotCompleted(a.outcome)) }
