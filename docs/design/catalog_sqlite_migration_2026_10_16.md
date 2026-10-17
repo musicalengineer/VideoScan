@@ -285,3 +285,15 @@ generations for sync (H′), the validator, tombstones, one importer for v1–v6
 
 Timebox (Rick): the JSON-side work is A′ only — tool fixes + one hash run + one report. No further
 polishing of the old store.
+
+### 10b. What must survive the port, and what may be regenerated (Rick, 2026-10-17)
+
+> "machine generated event grouping, dates, inferences, captions, transcripts can all be run again if needed"
+
+| Class | Fields | Import rule |
+|---|---|---|
+| **Curated by Rick — must survive** | stars, user dates / places / notes / tags, confirmed and rejected people, set-aside reasons, promotions (`archivedAt`, `archiveFixity`), lineage (`derivedFrom`, `supersededByID`), footage decisions, report cards | keyed by whole-file digest; a row without a digest goes to quarantine WITH these fields attached; the comparator counts every one |
+| **Derived — regenerable** | scene captions, transcripts, OCR, detected / suspected people, inferred dates and reasons, dossiers, sound prints, duplicate candidate groups, A/V pairs, machine event grouping | imported when the row has a digest (free); otherwise dropped and re-run by the cyclers after the rescan. Re-running costs compute time, not data. |
+| **Disk facts** | path, size, dates, codecs, duration, resolution… | re-read by the rescan; the import copies them only so the catalog is usable before the rescan finishes |
+
+Measured 2026-10-17 on the live catalog: curated fields sit almost entirely on hashed rows (stars 163 live / 13 unhashed / 9 of those on disk; user dates 88 / 14 / 10; confirmed people 70 / 4 / 2; promotions 144 / 1 / 0). After the hash run, roughly a dozen curated rows remain unreachable → quarantine with a secondary key (sampled hash + size) that may SUGGEST a rejoin at rescan time; only a whole-file digest may confirm one.
