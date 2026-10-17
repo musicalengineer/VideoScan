@@ -64,3 +64,16 @@ No files written; tests were inspected, not run.
 **Do only this:** findings against 1–6 (P1 first), each with file:line and a one-line failure scenario; then at most three P2/P3 one-liners. Out of scope: the SQLite plan, the importer, Fix Links, wording.
 
 **Do not explore outside the files listed above and their tests.**
+
+## Closure (Manager, 2026-10-17 — fix `54b8f9f70`, merged `058c59cec`)
+
+All four closed RED FIRST (22 issues red on main in the new pins; then 174 tests green across 28 suites, Debug).
+1. **P1 settle rule leaked into single-file reprobes** — the two-stat/settle rule is SCAN-ONLY (`probeFileOutcome(skipIfStillBeingWritten:)`); every reprobe caller (Transcode, Reformat, Trim, Cleanup, Balance, Rebuild, Repair, Link Repaired Copy, Missing Audio, Import, and a fifth leak codex did not list: Promote's reprobe of the copy it just wrote) goes through `reprobeFileOutcome`, which waits ≤ 10 s for two agreeing stats, then probes with the rule off. Pin `reprobeOfAJustWrittenFileIsValid` (real ffmpeg fixture, 60 s window): valid record; the scan path still skips the same file after the cache is warm.
+2. **P2 supersession to a purged row** — `supersededByID` → purged is a DECISION ("the replacement may be lost; check the ledger"); `derivedFrom` → purged stays history. Pins `lineageTargetsExist` (both branches), `supersessionToARemovedRowIsADecision`.
+3. **P2 future mtime** — the window is `0 ≤ age < settleSeconds`; a future-dated file is catalogued (the two-stat check still applies). Pins `futureMtimeIsNotBeingWritten`, `futureDatedFileIsCatalogued`.
+4. **P2 tiny real video** — `referenceMovie` judges QuickTime files only (`.mov`/`.qt`, or extensionless with a QuickTime container) and is UNVERIFIED ("possibly a reference movie … Verify Media decides"), never a decision. Pins `referenceMovie`, `referenceMovieIsAQuickTimeQuestion`, `referenceMovieIsUnverified`.
+Noted, not changed: a silent file with a stale `audioCodec` retries every run without a stamp (conservative, by design until Verify Media resolves the contradiction); `/Volumes` readdir is a hint — `getmntinfo` if it ever misleads.
+
+## Closed
+
+Closed by `058c59cec` at 2026-10-17T16:20:46Z. 1 P1 + 3 P2 closed red-first; fifth leak (Promote reprobe) closed too
