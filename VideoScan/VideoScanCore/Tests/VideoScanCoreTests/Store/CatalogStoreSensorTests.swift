@@ -7,8 +7,12 @@
 //      `catalog_state` is raw SQL: no query-builder calls in Store/.
 //   3. `DatabasePool` is created in exactly one place.
 // Plus the durability rule: `.volatileForTests` never leaves the tests.
+// Part 2a adds the DDL-file sensors: every table and every trigger the
+// design document declares is in the Swift schema, and the migration
+// creates no table the document does not name.
 
 import Foundation
+import GRDB
 import Testing
 @testable import VideoScanCore
 
@@ -50,6 +54,11 @@ struct CatalogStoreSensorTests {
 
     private static var storeSources: [URL] {
         swiftFiles().filter { $0.path.contains("/VideoScanCore/Sources/VideoScanCore/Store/") }
+    }
+
+    /// Both migrations' statements as one text, for "is it declared" scans.
+    private static var swiftSchema: String {
+        (CatalogBookkeepingSchema.statements + CatalogDataSchema.statements).joined(separator: "\n")
     }
 
     @Test func onlyStoreFoldersImportGRDB() {
@@ -110,5 +119,37 @@ struct CatalogStoreSensorTests {
             #expect(ddl.contains("CREATE TRIGGER \(name)"), Comment(rawValue: name))
         }
         #expect(CatalogBookkeepingSchema.statements.filter { $0.contains("CREATE TABLE") }.count == 3)
+    }
+
+    // MARK: - Part 2a: the DDL file against the Swift schema
+
+    @Test func everyTableOfTheDDLIsInTheSwiftSchema() throws {
+        let documented = try SchemaDocument.ddl().tableNames
+        #expect(documented.count == 51)                        // 3 bookkeeping + 47 data + content_text_fts
+        let swift = Self.swiftSchema
+        for name in documented {
+            let declared = swift.contains("CREATE TABLE \(name) ") || swift.contains("CREATE VIRTUAL TABLE \(name) ")
+            #expect(declared, Comment(rawValue: "table \(name) is in the DDL file but not in the Swift schema"))
+        }
+    }
+
+    @Test func everyTriggerOfTheDDLIsInTheSwiftSchema() throws {
+        let documented = try SchemaDocument.ddl().triggerNames
+        #expect(documented.count == 57)                        // 7 bookkeeping + 50 data
+        let swift = Self.swiftSchema
+        for name in documented {
+            let declared = swift.contains("CREATE TRIGGER \(name) ") || swift.contains("CREATE TRIGGER \(name)\n")
+            #expect(declared, Comment(rawValue: "trigger \(name) is in the DDL file but not in the Swift schema"))
+        }
+    }
+
+    @Test func theMigrationCreatesNoTableOutsideTheDDL() async throws {
+        let documented = Set(try SchemaDocument.ddl().tableNames)
+        let fixture = try await StoreFixture.make(.grdb, generation: 0)
+        defer { fixture.remove() }
+        let inventory = try DatabaseQueue(path: fixture.url.path).inDatabase { db in try SchemaInventory(db) }
+        let strangers = (inventory.tables + inventory.virtualTables).filter { !documented.contains($0) }
+        #expect(strangers.isEmpty, Comment(rawValue: "tables outside the DDL: \(strangers)"))
+        #expect(inventory.shadowTables.allSatisfy { $0.hasPrefix(SchemaInventory.shadowPrefix) })
     }
 }
