@@ -199,7 +199,8 @@ struct RowPreflightTests {
 
     @Test func aNonPresentAuditResultWithoutAJudgedPathIsAFault() {
         let row = AuditMarkerJSON.Row(id: "r", result: "gone")
-        #expect(RowPreflight.violations(auditRow: row) == ["audit result \"gone\" for r names no judged path"])
+        #expect(RowPreflight.violations(auditRow: row) == ["audit result \"gone\" for r names no judged path — "
+                                                            + "an audit marker from before 2026-10-17; run Audit Catalog with this build"])
     }
 
     @Test func aPresentAuditResultNeedsNoJudgedPath() {

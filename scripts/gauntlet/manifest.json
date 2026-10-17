@@ -6805,6 +6805,7 @@
         "aStoppedRunKeepsItsRowsButIsNotAWholeAnswer",
         "anOlderMarkerWithoutRowsStillReads",
         "everyAskedRowIsRecordedAndNothingElseChanges",
+        "everyNonPresentRowRecordsItsJudgedPath",
         "fileShapeAndAccessor",
         "foreignIDsAreRefusedAgainstTheCatalog",
         "notAskedRowsAreCountedInBulkAndTheReaderAccepts",
@@ -28659,11 +28660,13 @@
         "CatalogImporterAppMarkerTests"
       ],
       "tests": [
+        "anOlderMarkerWithoutJudgedPathsIsStillRefused",
         "theAppsMarkerAtAnotherGenerationIsRefused",
         "theAppsMarkerLandsEveryRowWithTheAppsWord",
         "theAppsMarkerWithItsGenerationPassesTheDryRunWithoutTheNote",
         "theAppsMarkerWithoutAGenerationPassesTheDryRunByTimeOrder",
-        "theMarkerTheAppWritesTodayIsRefusedOnlyForTheJudgedPath"
+        "theAppsNonPresentRowsEachNameTheirRowsPath",
+        "theMarkerTheAppWritesTodayPassesTheDryRun"
       ],
       "stage": "unit",
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit"
@@ -28696,10 +28699,14 @@
         "ImportAuditVocabularySensorTests"
       ],
       "tests": [
+        "aPresentRowCarriesNoJudgedPath",
         "everyAppRowHasAGateClass",
         "theAppsLinkDetailIsTheLinkClass",
         "theBulkOnlyWordIsNotARowWord",
-        "theImporterKnowsExactlyTheAppsPerRowWords"
+        "theImporterKnowsExactlyTheAppsPerRowWords",
+        "theImportersGateFactsOfTheAppsMarkerAreWhole",
+        "theImportersPreflightRefusesNothingInTheAppsMarker",
+        "theJudgedPathArrivesInTheImporter"
       ],
       "stage": "unit"
     }
@@ -31314,7 +31321,7 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2413,
+      "expected_floor": 2418,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",

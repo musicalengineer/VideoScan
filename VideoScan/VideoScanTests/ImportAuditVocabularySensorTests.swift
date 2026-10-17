@@ -11,6 +11,13 @@
 //            `CatalogAuditResult`; every per-row row, encoded by the app's
 //            own `CatalogAuditRowResult` encoder, decodes in the importer
 //            with a gate class; the app's link detail is the `link` class.
+//   SENSOR — the judged path (bug 3, importer N1 "names no judged path"):
+//            a non-present row built the way the job builds it, inside a
+//            finished run record, encoded by the marker's OWN encoder,
+//            reaches the importer's `AuditMarkerJSON.Row.judgedPath`; a
+//            present row carries none; the importer's preflight refuses
+//            nothing in the file and its gate facts are whole. This pins
+//            the two sides to one key.
 // One condition per #expect.
 
 import Foundation
@@ -43,6 +50,64 @@ struct ImportAuditVocabularySensorTests {
         let data = try JSONEncoder().encode(row)
         let read = try JSONDecoder().decode(AuditMarkerJSON.Row.self, from: data)
         #expect(read.gateClass != nil)
+    }
+
+    static let judged = "/Volumes/Archive1/Family/1987/Christmas tape.mov"
+
+    /// A finished run record holding one row per per-row result, each built
+    /// by the job's own initializer, encoded by the marker's own encoder.
+    @MainActor
+    static func appMarkerBytes() throws -> (Data, [CatalogAuditResult: UUID]) {
+        var record = CatalogAuditRunRecord(startedAt: Date(timeIntervalSince1970: 1_760_000_000),
+                                           finishedAt: Date(timeIntervalSince1970: 1_760_000_060), outcome: .completed)
+        var ids: [CatalogAuditResult: UUID] = [:]
+        for result in perRowResults {
+            let id = UUID()
+            ids[result] = id
+            let apply = CatalogAuditApply(result: result, detail: result.words)
+            record.noteRow(CatalogAuditRowResult(id: id, apply: apply, seenOn: nil, judgedPath: judged))
+        }
+        record.counts = Dictionary(uniqueKeysWithValues: perRowResults.map { ($0.rawValue, 1) })
+        record.catalogGeneration = 7
+        return (try CatalogAuditRunMarker.encoder.encode(record), ids)
+    }
+
+    @Test("a non-present row's judged path, written by the app's encoder, arrives in the importer's row",
+          arguments: perRowResults.filter { $0 != .present })
+    @MainActor
+    func theJudgedPathArrivesInTheImporter(result: CatalogAuditResult) throws {
+        let (data, ids) = try Self.appMarkerBytes()
+        let read = try AuditMarkerJSON.decode(data)
+        let id = try #require(ids[result]).uuidString
+        let row = try #require(read.rows?.first { $0.id == id })
+        #expect(row.judgedPath == Self.judged)
+    }
+
+    @Test @MainActor
+    func aPresentRowCarriesNoJudgedPath() throws {
+        let (data, ids) = try Self.appMarkerBytes()
+        let read = try AuditMarkerJSON.decode(data)
+        let id = try #require(ids[.present]).uuidString
+        let row = try #require(read.rows?.first { $0.id == id })
+        #expect(row.judgedPath == nil)
+    }
+
+    @Test @MainActor
+    func theImportersPreflightRefusesNothingInTheAppsMarker() throws {
+        let (data, _) = try Self.appMarkerBytes()
+        #expect(try AuditMarkerJSON.decode(data).faults.isEmpty)
+    }
+
+    @Test @MainActor
+    func theImportersGateFactsOfTheAppsMarkerAreWhole() throws {
+        let (data, _) = try Self.appMarkerBytes()
+        let facts = try AuditMarkerJSON.decode(data).facts
+        #expect(facts.hasRowResults)
+        #expect(facts.savedGeneration == 7)
+        #expect(facts.outcome == "completed")
+        #expect(!facts.partial)
+        #expect(facts.finishedAt != nil)
+        #expect(facts.unknownResultWords.isEmpty)
     }
 
     @Test func theAppsLinkDetailIsTheLinkClass() throws {

@@ -30,6 +30,17 @@
 // equal the generation Verify Catalog checked. Additive: an older marker
 // without the key reads with nil.
 //
+// THE JUDGED PATH (2026-10-17; importer N1, bug 3 of Rick's first dry run):
+// every row whose result is NOT present records `judgedPath`, the row's
+// `fullPath` as the audit planned and judged it (`CatalogAuditItem.path`).
+// The importer accepts such a result only when the catalog row still has
+// that path, so a row moved after the audit is not judged by a stale
+// answer. Present rows stay {id, result}: the importer binds them by the
+// row's own where-seen stamp. The key is the importer's
+// (VideoScanCore `AuditMarkerJSON.Row.judgedPath`); the sensor
+// ImportAuditVocabularySensorTests pins the two sides together.
+// Additive: an older marker's rows read with nil.
+//
 // Per catalog (the marker lives in the catalog's folder), so a test
 // catalog in a scratch directory never sees the real one. A missing,
 // damaged or newer-schema marker is read-only noise: `lastRun` is nil, no
@@ -66,6 +77,10 @@ struct CatalogAuditRowResult: Codable, Sendable, Equatable {
     /// `VideoRecord.auditSeenOn`, which is the authoritative one) and for a
     /// row stamped only by the second look at the mark.
     let seenOn: AuditSeenOn?
+    /// The path the audit judged the row at — its `fullPath` when planned.
+    /// Recorded on every row that is not present (importer N1); nil for a
+    /// present row and on rows of a marker written before 2026-10-17.
+    let judgedPath: String?
 
     /// A result word this version of the app does not know — the strict
     /// reader turns it into a refusal of the rows part, with the word.
@@ -73,14 +88,16 @@ struct CatalogAuditRowResult: Codable, Sendable, Equatable {
         let word: String
     }
 
-    init(id: UUID, result: CatalogAuditResult, detail: String? = nil, seenOn: AuditSeenOn? = nil) {
+    init(id: UUID, result: CatalogAuditResult, detail: String? = nil, seenOn: AuditSeenOn? = nil,
+         judgedPath: String? = nil) {
         self.id = id
         self.result = result
         self.detail = detail
         self.seenOn = seenOn
+        self.judgedPath = judgedPath
     }
 
-    private enum CodingKeys: String, CodingKey { case id, result, detail, seenOn }
+    private enum CodingKeys: String, CodingKey { case id, result, detail, seenOn, judgedPath }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -88,7 +105,8 @@ struct CatalogAuditRowResult: Codable, Sendable, Equatable {
         guard let result = CatalogAuditResult(rawValue: word) else { throw UnknownResultWord(word: word) }
         self.init(id: try c.decode(UUID.self, forKey: .id), result: result,
                   detail: try c.decodeIfPresent(String.self, forKey: .detail),
-                  seenOn: try c.decodeIfPresent(AuditSeenOn.self, forKey: .seenOn))
+                  seenOn: try c.decodeIfPresent(AuditSeenOn.self, forKey: .seenOn),
+                  judgedPath: try c.decodeIfPresent(String.self, forKey: .judgedPath))
     }
 
     func encode(to encoder: Encoder) throws {
@@ -97,6 +115,7 @@ struct CatalogAuditRowResult: Codable, Sendable, Equatable {
         try c.encode(result.rawValue, forKey: .result)
         try c.encodeIfPresent(detail, forKey: .detail)
         try c.encodeIfPresent(seenOn, forKey: .seenOn)
+        try c.encodeIfPresent(judgedPath, forKey: .judgedPath)
     }
 }
 
@@ -104,12 +123,15 @@ extension CatalogAuditRowResult {
     /// What the job records for one row from what the apply step said —
     /// after the decision, never part of it. `seenOn` is the first pass's
     /// stamp; it is kept only when the apply wrote it and the row is not
-    /// simply present.
-    init(id: UUID, apply: CatalogAuditApply, seenOn: AuditSeenOn?) {
-        let present = apply.result == .present
-        self.init(id: id, result: apply.result,
-                  detail: present ? nil : apply.detail,
-                  seenOn: !present && apply.stamped ? seenOn : nil)
+    /// simply present. `judgedPath` is the path the row was planned and
+    /// judged at; it is kept on every row that is not present (importer N1).
+    init(id: UUID, apply: CatalogAuditApply, seenOn: AuditSeenOn?, judgedPath: String) {
+        guard apply.result != .present else {
+            self.init(id: id, result: .present)
+            return
+        }
+        self.init(id: id, result: apply.result, detail: apply.detail,
+                  seenOn: apply.stamped ? seenOn : nil, judgedPath: judgedPath)
     }
 }
 
@@ -405,7 +427,9 @@ final class CatalogAuditRunMarker: ObservableObject {
         try? AtomicFilePublish.write(data, to: fileURL, durability: .fast)
     }
 
-    private static let encoder: JSONEncoder = {
+    /// The marker's one encoder (internal so the importer-agreement sensor,
+    /// ImportAuditVocabularySensorTests, encodes exactly what the app writes).
+    static let encoder: JSONEncoder = {
         let e = JSONEncoder()
         e.dateEncodingStrategy = .iso8601
         e.outputFormatting = [.prettyPrinted, .sortedKeys]
