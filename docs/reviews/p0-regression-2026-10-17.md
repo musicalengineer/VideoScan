@@ -17,6 +17,34 @@ commit, not an observed result. The Manager fills the **Observed** lines on the 
   (1205 files, 14157 declarations) after the entries were added; before them it reported exactly the two new files
   as unassigned. **Re-run the real validator on the Mac.**
 
+## Mac results (testing agent, 2026-10-16 evening, M4 Max, Xcode 27, `-configuration Debug`)
+
+Debug because this is a correctness run (the optimizer changes nothing a `#expect` reads); the suite joins the
+Release gauntlet through the manifest. The two files compiled UNCHANGED against main @ `58e608f8b` merged with the
+branch — no signature the cloud guessed was wrong, so no test was renamed, reshaped or disabled.
+
+- **Green** (the step-1 command, both suites): `Test run with 18 tests in 2 suites passed after 0.550 seconds with
+  1 known issue` — 5 fixture tests + 13 regression tests, 0 failures; the one known issue is case 9's
+  `withKnownIssue` (the surface to build). The XCTest line reads `Executed 0 tests` as always for a Swift Testing
+  filter (the 0-test trap); the Swift Testing line is the count.
+- **Red runs**, each in its own worktree at the named SHA with only the two test files copied in, built with the
+  listed compilation condition (`'SWIFT_ACTIVE_COMPILATION_CONDITIONS=$(inherited) P0_RED_…'` inherited fine on
+  this Xcode; no `OTHER_SWIFT_FLAGS` fallback needed):
+  - `d864951be` + `P0_RED_JOURNEY`: `13 tests in 1 suite failed … with 22 issues (including 1 known issue)`
+  - `46c66aae9` + `P0_RED_AUDIT`: `13 tests in 1 suite failed … with 27 issues (including 1 known issue)`
+  - `b03c3ce6b` + `P0_RED_COMPARE`: `13 tests in 1 suite failed … with 37 issues (including 1 known issue)`
+  - branch + `P0_RED_FOLDER_MUTANT` (`.dd-p0-mutant`): `13 tests in 1 suite failed … with 3 issues (including 1
+    known issue)` — exactly the two mutant assertions plus the known issue; every other test stayed green.
+- **Symbol absence** at the red SHAs was confirmed by a grep of each worktree (not by a fourth build per SHA):
+  `JourneyPresence`, `case notAtPath`, `steps(for:archivedCopy:…)`, `archivePlayableRecord`,
+  `PlaybackAudioMismatch`, `checkPlaybackAudio(` and `ArchiveView+Doors.swift` are absent at all three;
+  `FootageFolders`/`footageFolderRow` and `case neverSeenByAnAudit` are absent at `46c66aae9` and `b03c3ce6b`;
+  `catalogAuditPlan(laneRoot:)` is absent at `b03c3ce6b` (only `catalogAuditPlan()`).
+- **Manifest**: the real validator → `{"errors": [], "discovered_files": 1205, "test_count": 14157}`.
+- **SwiftLint** (`--config .swiftlint.yml`, both files): clean, no disables. **CCN** (lizard, `-C 14`): highest
+  function is `writeDisk` at 6. No `&&`/`||` inside any `#expect`.
+- Temporary worktrees removed afterwards; the branch's `.dd-p0` and `.dd-p0-mutant` are untracked build output.
+
 ## How the red builds compile
 
 Several surfaces did not exist before their fix, so the suite cannot compile unchanged at the red commits.
@@ -74,34 +102,63 @@ did not exist yet).
 - Red commit: `d864951be`, condition `P0_RED_JOURNEY`.
 - Expected red: `String(describing: last.kind) == "notAtPath"` fails with `"currentState"`; `last.sentence.hasPrefix("Not at …")` and `!last.sentence.hasPrefix("Now at")` fail. The old code states `"Now at \(rec.fullPath)"` with no stat.
 - Expected green on the branch: the sentence starts `Not at <link path>`, contains `link` and `the archived copy is at <copy path>`.
-- Observed red: _(Manager)_ — Observed green: _(Manager)_
+- **Observed red** (`d864951be`, 5 issues): `Expectation failed: String(describing: last.kind) == "notAtPath"` →
+  `"currentState"`; `Expectation failed: last.sentence.hasPrefix("Not at …/fixture/Movies/Christmas-1990.mov")` with
+  `last.sentence → "Now at …/fixture/Movies/Christmas-1990.mov"`; `.contains("link")`, `.contains("the archived copy
+  is at …/1990/1990_Christmas-1990.mov")` and `!last.sentence.hasPrefix("Now at")` all failed on that same sentence.
+- **Observed green** (main+branch): passed after 0.010 s.
 
 ### 2. `ladderAnswersForTheContent` — the preservation ladder
 - Evidence: `buildFileJourney(…).preservation` (exists at both commits), plus `PreservationChecklist.steps(for:archivedCopy:archivedCopyPresence:)` and `nextAction` on `main` only.
 - Red commit: `d864951be`, `P0_RED_JOURNEY`.
 - Expected red: `ticked == ["Catalogued", "Signed", "Archived locally"]` fails with `["Catalogued"]`; `next?.title == "Archived offsite"` fails with `"Signed"`. The old `steps(for:)` reads only the row itself.
 - Expected green: 3 of 4 ticked; next is "Archived offsite"; `nextAction` contains "out of the building".
-- Observed: _(Manager)_
+- **Observed red** (`d864951be`, 2 issues): `Expectation failed: ticked == ["Catalogued", "Signed", "Archived
+  locally"]` with `ticked → ["Catalogued"]` (the ladder read `["Catalogued=true", "Signed=false", "Archived
+  locally=false", "Archived offsite=false"]`); `Expectation failed: next?.title == "Archived offsite"` with
+  `next?.title → "Signed"`.
+- **Observed green**: passed after 0.009 s (the `steps(for:archivedCopy:archivedCopyPresence:)` and `nextAction`
+  assertions included).
 
 ### 3. `firstJourneyEventIsTheFilesOwnDate` — "File dated", never "Scanned on"
 - Evidence: `buildFileJourney` over row `mtimeYearsBeforeCatalogue` (file mtime and `dateModifiedRaw` 2024-02-22; `scanContext.scannedAt` 2026-08-12).
 - Red commit: `d864951be`, `P0_RED_JOURNEY`.
 - Expected red: `first.sentence.hasPrefix("File dated")` fails (old: `"Scanned on <vol> at <path>"`, or `"Scanned at <path>"` when the volume name is empty); `catalogued != nil` fails; `scanned.isEmpty` fails.
 - Expected green: the first event says "File dated … (from the file's own clock)" with timestamp 2024-02-22, and a separate "Catalogued by VideoScan…" event has 2026-08-12.
-- Observed: _(Manager)_
+- **Observed red** (`d864951be`, 5 issues): `Expectation failed: first.sentence.hasPrefix("File dated")` with
+  `first.sentence → "Scanned on private at …/fixture/Workspace/Birthday-1993.mov"` (the "volume" of a
+  `/private/var` path is `private` — the old sentence had no idea what it was stating); `.contains("from the file's
+  own clock")` failed; `Expectation failed: catalogued != nil` with `catalogued → nil` (the journey held only
+  `["Scanned on private at …", "Now at …"]`); `catalogued?.timestamp == …cataloguedDate` failed; `Expectation
+  failed: scanned.isEmpty` with `scanned → ["Scanned on private at …/Birthday-1993.mov"]`.
+- **Observed green**: passed after 0.009 s.
 
 ### 4. `archivePlayResolvesToTheArchivedCopy` — the Archive doors
 - Evidence: `VideoScanModel.archivePlayableRecord(for:)` with the default FileManager probe. `deadLinkSource` resolves to `.record(copy)`. `sourceWithoutCopy` (both files gone) resolves to `.missing`, whose words name the archive path and "Verify Archive" but never the source path.
 - Red commit: `d864951be`, `P0_RED_JOURNEY`.
 - Expected red: **surface absent.** `Issue.record("archivePlayableRecord(for:) does not exist at this commit…")`; without the condition, the compile error is `cannot find … archivePlayableRecord`. The sensor `archiveDoorsGoOnlyThroughTheResolver` also goes red there, because `ArchiveView+Doors.swift` does not exist yet and the read throws.
-- Observed: _(Manager)_
+- **Observed red** (`d864951be`, surface absent — 1 issue): `Issue recorded: archivePlayableRecord(for:) does not
+  exist at this commit: the Archive doors opened …/fixture/Movies/Christmas-1990.mov / …/Movies/Easter-1991.mov
+  directly (copies: …/1990/1990_Christmas-1990.mov, …/1990/1991_Easter-1991.mov)`. The grep of that worktree
+  confirms `func archivePlayableRecord` is absent. The sensor went red too: `ArchiveView+Table.swift opens or
+  reveals a row directly: ["MediaOpener.open(recs)", "NSWorkspace.shared.selectFile(copy.fullPath, …)",
+  "NSWorkspace.shared.selectFile(rec.fullPath, …)", …]`, `ArchiveView+Timeline.swift … ["MediaOpener.open(ids.compactMap
+  { self.model.record(forID: $0) })"]`, and `Caught error: … "ArchiveView+Doors.swift" couldn't be opened because
+  there is no such file`.
+- **Observed green**: passed after 0.008 s — `.record(copy)` for the dead link; `.missing` for the lost pair with
+  words naming the archive path and "Verify Archive", never the source path.
 
 ### 5. `playerNoticesMP3InM4V` — MP3 in an MPEG-4 container
 - Evidence: real ffmpeg fixtures built at test time under the temp root (mp3-in-m4v, aac-in-mp4, pcm-in-mov, ffv1+pcm-in-mkv), checked with `PlaybackAudioMismatch.catalogCodec(of:)`, `avAudioTrackCount(url:)` and `words(catalogCodec:avAudioTracks:)`. MKV goes through `PreviewFrameRouter.previewRoute` → `PreviewPlayAction.filmstrip`. Requires `CleanupTestMedia.toolsAvailable` (ffmpeg).
 - Red commit: `d864951be`, `P0_RED_JOURNEY`.
 - Expected red: **surface absent** (`Issue.record("PlaybackAudioMismatch does not exist at this commit…")`). Without the condition: `cannot find 'PlaybackAudioMismatch' in scope`. The sensor `everyPlayerStartChecksTheAudio` goes red with `checks >= 2` (0 calls to `checkPlaybackAudio(` in the old CatalogHelpers).
 - Expected green: mp3 has 0 tracks and the exact notice text; aac/pcm have 1 track each and no notice (`nil`); mkv routes to the filmstrip and AVFoundation throws.
-- Observed: _(Manager)_
+- **Observed red** (`d864951be`, surface absent — 1 issue): `Issue recorded: PlaybackAudioMismatch does not exist at
+  this commit: test_mp3_in_m4v.m4v played with no sound and no notice (also built: test_aac_in_mp4.mp4,
+  test_pcm_in_mov.mov, test_ffv1_in_mkv.mkv)` — the four ffmpeg fixtures were really built (0.36 s). The grep
+  confirms `enum PlaybackAudioMismatch` is absent. The sensor `everyPlayerStartChecksTheAudio` went red with
+  `Expectation failed: checks >= 2` — `4 AVPlayer starts, 0 audio checks — an MP3-in-MP4 file plays silently`.
+- **Observed green**: passed after 0.390 s with real media (ffmpeg present on the M4).
 
 ### 6. `compareMediaAsksForTheHashOnASampledPair` — Compare Media on a `v1:`-only pair
 - Evidence: `VideoScanModel.relatedSide` for each row of `sampledOnlyA` / `sampledOnlyB`. They are byte-identical with only a `v1:` hash, on two folders, with `isOnDisk` from a stat. The sound print's answer is injected as `.sameRecording` with coverage 1.0, because the fingerprint engine is not run. The sides go through `RelatedLadder.judge` and then `EventRecommendation.recommend`.
