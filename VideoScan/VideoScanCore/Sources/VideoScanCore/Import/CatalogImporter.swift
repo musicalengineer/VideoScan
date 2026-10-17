@@ -553,6 +553,7 @@ struct ImportPlan: Sendable {
         var reconciliation = try tx.importReconciliation(run: runID)
         reconciliation.membersListed = sidecars.membersListed
         reconciliation.ledgerUnparseable = gate.ledger?.trailingPartialOrdinal == nil ? 0 : 1
+        reconciliation.auditGenerationByTimeOrder = audit.savedGeneration == nil
         try tx.finishImportRun(runID, counters: CatalogRow.ImportCounters(
             rowsBefore: reconciliation.rowsBefore, rowsMain: reconciliation.rowsMain,
             rowsQuarantine: reconciliation.rowsQuarantine, digestsSeen: reconciliation.digests,

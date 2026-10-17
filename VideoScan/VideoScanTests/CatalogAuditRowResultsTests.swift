@@ -147,6 +147,21 @@ struct CatalogAuditRowResultsTests {
         #expect(CatalogFreshnessFactsReader.auditRecord(in: sb.catalogDir)?.rows?.count == 1)
     }
 
+    @Test("the marker records the catalog generation after the audit's own save (importer N1, bug 2 of Rick's first dry run): the key on disk equals the catalog file's header generation and the store's")
+    func theMarkerRecordsTheCatalogGenerationAfterItsOwnSave() async throws {
+        let sb = try ShowAgainSandbox.make("car_gen"); defer { sb.cleanup() }
+        _ = try sb.live("present.mov")
+        let gone = try sb.live("gone.mov", onDisk: false, seen: true)          // one mark → one acknowledged save
+        let marker = CatalogAuditRunMarker()
+        _ = await runAudit(sb.model, marker: marker)
+        #expect(gone.removal?.reason == .missingAtAudit)
+        let onDisk = try #require(CatalogSnapshot.headerProbe(at: URL(fileURLWithPath: sb.model.catalogStore.fileLocation))?.generation)
+        #expect(onDisk > 0)
+        #expect(onDisk == sb.model.catalogStore.currentGeneration)
+        let json = try #require(try JSONSerialization.jsonObject(with: Data(contentsOf: sb.auditMarkerFile())) as? [String: Any])
+        #expect(json["catalogGeneration"] as? Int == onDisk)
+    }
+
     @Test("an older marker without rows still reads: counts, outcome, launch line and facts as before; rows nil with no refusal")
     func anOlderMarkerWithoutRowsStillReads() throws {
         let dir = try scratchCatalogFolder(); defer { try? FileManager.default.removeItem(at: dir) }
@@ -265,7 +280,7 @@ struct CatalogAuditRowResultsScaleTests {
         }
         let load = TimingBudget.sampleLoad()
         let clock = ContinuousClock()
-        let wrote = clock.measure { marker.noteFinished(.completed, totals: totals, marked: 10, partial: false) }
+        let wrote = clock.measure { marker.noteFinished(.completed, totals: totals, marked: 10, partial: false, catalogGeneration: nil) }
         let file = dir.appendingPathComponent(CatalogAuditRunMarker.fileName)
         let bytes = try #require((try FileManager.default.attributesOfItem(atPath: file.path))[.size] as? Int)
         #expect(bytes < 20_000_000, "\(bytes) bytes")

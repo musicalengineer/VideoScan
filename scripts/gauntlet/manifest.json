@@ -1823,6 +1823,10 @@
         "anAuditThatDidNotCompleteRefuses",
         "anAuditThatFinishedAfterVerifyStartedRefuses",
         "anAuditWithNoPerRowResultsRefuses",
+        "anAuditWithoutARecordedGenerationIsAcceptedByTimeOrder",
+        "anAuditWithoutARecordedGenerationOnAReportAtAnotherGenerationStillRefuses",
+        "anAuditWithoutARecordedGenerationThatFinishedAfterVerifyStartedStillRefuses",
+        "anAuditWithoutARecordedGenerationThatNeverFinishedStillRefuses",
         "anOpenArchiveAngelBatchRefuses",
         "anOpenDeleteDuplicatesPlanRefuses",
         "auditGoneBeatsATier5FindingAndKeepsIt",
@@ -6806,6 +6810,7 @@
         "notAskedRowsAreCountedInBulkAndTheReaderAccepts",
         "poisonedRowsAreRefusedAndTheCountsKept",
         "publishAndReadAt100k",
+        "theMarkerRecordsTheCatalogGenerationAfterItsOwnSave",
         "theRecorderIsInvisibleToTheDecisionSources"
       ]
     },
@@ -28646,6 +28651,57 @@
         "theQuarantineFloorIsAThirtySixCharacterId",
         "theWordsNameTheGatesVerdictAndEveryCheck"
       ]
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterAppMarkerTests.swift",
+      "suites": [
+        "CatalogImporterAppMarkerTests"
+      ],
+      "tests": [
+        "theAppsMarkerAtAnotherGenerationIsRefused",
+        "theAppsMarkerLandsEveryRowWithTheAppsWord",
+        "theAppsMarkerWithItsGenerationPassesTheDryRunWithoutTheNote",
+        "theAppsMarkerWithoutAGenerationPassesTheDryRunByTimeOrder",
+        "theMarkerTheAppWritesTodayIsRefusedOnlyForTheJudgedPath"
+      ],
+      "stage": "unit",
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit"
+    },
+    {
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportSidecarsJSONTests.swift",
+      "suites": [
+        "AuditMarkerJSONTests"
+      ],
+      "tests": [
+        "aCouldNotCheckWhoseDetailNamesALinkIsTheLinkClass",
+        "aCouldNotCheckWithoutADetailIsCouldNotCheck",
+        "aNonPresentAppWordNeedsAJudgedPath",
+        "aPresentClassWordNeedsNoJudgedPath",
+        "anUnknownWordIsARunLevelRefusalWithTheOrdinalAndTheWord",
+        "anUnknownWordIsNotEvidence",
+        "anUnknownWordRefusesTheRun",
+        "everyAppWordIsKnown",
+        "everyAppWordMapsToItsClass",
+        "theMarkerInTheAppsExactShapeDecodes"
+      ],
+      "stage": "unit",
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit"
+    },
+    {
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ImportAuditVocabularySensorTests.swift",
+      "suites": [
+        "ImportAuditVocabularySensorTests"
+      ],
+      "tests": [
+        "everyAppRowHasAGateClass",
+        "theAppsLinkDetailIsTheLinkClass",
+        "theBulkOnlyWordIsNotARowWord",
+        "theImporterKnowsExactlyTheAppsPerRowWords"
+      ],
+      "stage": "unit"
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -31248,9 +31304,17 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/RowPreflightTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterAppMarkerTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportSidecarsJSONTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2409,
+      "expected_floor": 2413,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -31436,6 +31500,7 @@
         "VideoScanTests/IdentityNarrowingRegressionSensors",
         "VideoScanTests/IdentityNarrowingTests",
         "VideoScanTests/IdentityPriorScoringTests",
+        "VideoScanTests/ImportAuditVocabularySensorTests",
         "VideoScanTests/InferredDateYearOnlyLogicTests",
         "VideoScanTests/InferredDateYearOnlyScaleTests",
         "VideoScanTests/InferredDateYearOnlySensorTests",
