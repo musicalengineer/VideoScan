@@ -77,16 +77,18 @@ struct VerifyCatalogConstraintTests {
         #expect(findings([row("/same.mov"), gone], rule: .oneLiveRowPerPath).isEmpty)
     }
 
-    @Test("lineage targets exist: a dangling derivedFrom and a dangling supersededByID are findings; links to rows that exist are not")
+    @Test("lineage targets exist: a derivedFrom or supersededByID whose target was removed from the catalog is reported UNVERIFIED (kept as history) — never a decision; links to rows that exist are nothing")
     func lineageTargetsExist() {
         let parent = row("/parent.mov")
         var child = row("/child.mov"); child.derivedFrom = parent.id
         var orphan = row("/orphan.mov"); orphan.derivedFrom = UUID()
         var retired = row("/old.mov"); retired.supersededByID = UUID()
-        let red = findings([parent, child, orphan, retired], rule: .lineageTargetsExist)
-        #expect(red.count == 2)
-        #expect(red.first?.words.hasPrefix("lineage points at a row that no longer exists") == true)
-        #expect(red.last?.words.hasPrefix("superseded by a row that no longer exists") == true)
+        let kept = findings([parent, child, orphan, retired], rule: .lineageTargetsExist)
+        #expect(kept.count == 2)
+        #expect(kept.first?.words == "derived from a row that was removed from the catalog — the link is kept as history")
+        #expect(kept.last?.words == "superseded by a row that was removed from the catalog — the link is kept as history")
+        let noneIsADecision = kept.allSatisfy { !$0.needsDecision }
+        #expect(noneIsADecision, "a purged target is history, not a decision (745-finding report, 2026-10-17: 100 rows, 74 on FamilyArchive)")
         #expect(findings([parent, child], rule: .lineageTargetsExist).isEmpty)
     }
 
@@ -182,7 +184,7 @@ struct VerifyCatalogConstraintTests {
         #expect(red.map(\.recordID) == [otherSHA.id, otherSize.id, otherSampled.id])
         #expect(red.allSatisfy { $0.words.hasPrefix("stale derived knowledge") })
         #expect(CatalogConstraints.Rule.derivedStampsMatchContent.tier == 4)
-        #expect(CatalogConstraints.Rule.allCases.filter { $0.tier == 5 }.count == 13)
+        #expect(CatalogConstraints.Rule.allCases.filter { $0.tier == 5 }.count == 14)
     }
 
     @Test("path alias by case: two live rows whose paths differ only by case are a finding (one file on a case-insensitive volume); a removed row, or exactly the same path, is not")
@@ -222,23 +224,59 @@ struct VerifyCatalogConstraintTests {
         #expect(CatalogConstraints.check(rows: [dangling], events: []).filter { $0.rule.rawValue == "supersessionCycle" }.isEmpty)
     }
 
-    @Test("duplicate group digests agree: live members of one group with DIFFERENT whole-file digests are a finding; equal digests in any case, or a member whose digest is unknown, are not")
+    @Test("duplicate group digests agree: a group is a CANDIDATE (duration/timecode/audio/created) — differing whole-file digests are a finding ONLY when some live member's reasons say the sampled hashes matched; equal digests in any case, or one known digest, are not")
     func duplicateGroupDigestsAgree() {
         let group = UUID()
         var p = row("/p.mov")
         p.duplicateGroupID = group
         p.fullDigest = sha
+        p.duplicateReasons = "duration+timecode"
         var q = row("/q.mov")
         q.duplicateGroupID = group
         q.fullDigest = String(repeating: "cd", count: 32)
+        q.duplicateReasons = "duration+timecode"
         var unknown = row("/u.mov")
         unknown.duplicateGroupID = group
+        let candidates = CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }
+        #expect(candidates.isEmpty, "formed on similarity, not on bytes — the 514 false positives of 2026-10-17")
+        p.duplicateReasons = "hash+duration"
         let red = CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }
         #expect(red.count == 1)
         #expect(red.first?.recordID == p.id)
-        #expect(red.first?.words == "duplicate group \(CatalogConstraints.short(group)): its members carry 2 different whole-file digests — not copies of one another")
+        #expect(red.first?.words == "duplicate group \(CatalogConstraints.short(group)): formed on a sampled-hash match, but its members carry 2 different whole-file digests")
+        #expect(red.first?.needsDecision == true)
         q.fullDigest = sha.uppercased()
         #expect(CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }.isEmpty)
+        q.fullDigest = nil
+        #expect(CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }.isEmpty, "one known digest is not a disagreement")
+    }
+
+    @Test("reference movie (tier 5, no I/O): a video row of 3,274,279 bytes that ffprobe reads as 7,288 s is a reference movie (needs a decision); a 125 MB / 35 s DV row is not; an audio-only MP3 at 16 KB/s is not; a clip under 10 s is not")
+    func referenceMovie() {
+        var reference = row("/Volumes/LaCie/Avid/Tape 12.mov")
+        reference.sizeBytes = 3_274_279
+        reference.durationSeconds = 7_288
+        reference.videoCodec = "dvvideo"
+        reference.audioCodec = "pcm_s16le"
+        var dv = row("/Volumes/LaCie/clip.dv")
+        dv.sizeBytes = 125_000_000
+        dv.durationSeconds = 35
+        dv.videoCodec = "dvvideo"
+        var mp3 = row("/Volumes/LaCie/song.mp3")
+        mp3.sizeBytes = 16_000 * 240
+        mp3.durationSeconds = 240
+        mp3.audioCodec = "mp3"
+        var stub = row("/Volumes/LaCie/stub.mov")
+        stub.sizeBytes = 4_000
+        stub.durationSeconds = 9
+        stub.videoCodec = "h264"
+        let red = findings([reference, dv, mp3, stub], rule: .referenceMovie)
+        #expect(red.count == 1)
+        #expect(red.first?.recordID == reference.id)
+        #expect(red.first?.words == "3.3 MB for 2 h 1 min — a reference movie; the content lives in other files")
+        #expect(red.first?.needsDecision == true)
+        #expect(CatalogConstraints.Rule.referenceMovie.tier == 5)
+        #expect(CatalogConstraints.Rule.referenceMovie.words(count: 33) == "33 files are reference movies — the content lives in other files")
     }
 
     @Test("TRUTH: the P0 shapes each produce a finding, and a clean catalog produces none")
@@ -250,8 +288,8 @@ struct VerifyCatalogConstraintTests {
         var bare = row("/Volumes/FamilyArchive/1990s/x.mov"); bare.derivationKind = ArchivePromotion.derivationKind
         let all = CatalogConstraints.check(rows: [dangling, sampledFixity, twin1, twin2, bare], events: [])
         #expect(all.map(\.rule) == [.oneLiveRowPerPath, .lineageTargetsExist, .promotionsHaveASource, .wholeFileDigestsAreWhole])
-        let everyOneIsADecision = all.allSatisfy { $0.needsDecision }
-        #expect(everyOneIsADecision)
+        let everyOneButTheLineageLinkIsADecision = all.allSatisfy { $0.needsDecision != ($0.rule == .lineageTargetsExist) }
+        #expect(everyOneButTheLineageLinkIsADecision)
         #expect(CatalogConstraints.check(rows: [row("/a.mov"), row("/b.mov")], events: []).isEmpty)
     }
 
@@ -268,8 +306,9 @@ struct VerifyCatalogConstraintTests {
 @Suite("Verify Catalog — tiers from the stamps")
 struct VerifyCatalogTierTests {
 
-    private func input(_ rows: [IntegrityRow], previous: IntegrityReport? = nil) -> VerifyCatalogTiers.TierInput {
-        VerifyCatalogTiers.TierInput(snapshot: VerifyCatalogSnapshot(rows: rows, events: [], catalogFile: "/nowhere/catalog.json"),
+    private func input(_ rows: [IntegrityRow], previous: IntegrityReport? = nil, mounted: Set<String> = ["/"]) -> VerifyCatalogTiers.TierInput {
+        VerifyCatalogTiers.TierInput(snapshot: VerifyCatalogSnapshot(rows: rows, events: [], catalogFile: "/nowhere/catalog.json",
+                                                                     mountedVolumeRoots: mounted),
                                      previous: previous, constraintFindings: nil, runID: UUID(), now: now)
     }
 
@@ -308,6 +347,24 @@ struct VerifyCatalogTierTests {
         #expect(clean.result == .ok)
     }
 
+    @Test("tier 1 words split by connectivity: sampled-only files on connected drives are one Fill In Full Hashes away; those on drives not connected are said apart; all-connected keeps the short words; all-disconnected says so")
+    func identityWordsSplitByConnectivity() {
+        var rows: [IntegrityRow] = []
+        for n in 0..<3 { var r = row("/Volumes/LaCie/\(n).mov"); r.contentHash = "v1:" + sha; rows.append(r) }
+        var home = row("/Users/rickb/Movies/h.mov"); home.contentHash = "v1:" + sha
+        var gone = row("/Volumes/Gone/g.mov"); gone.contentHash = "v1:" + sha
+        var known = row("/Volumes/Gone/k.mov"); known.fullDigest = sha
+        let mounted: Set<String> = ["/", "/Volumes/LaCie"]
+        let t = VerifyCatalogTiers.evaluate(1, input: input(rows + [home, gone, known], mounted: mounted)).tier
+        #expect(t.result == .couldNotCheck(5))
+        #expect(t.checked == 6)
+        #expect(t.summary == "5 files still have only a sampled hash — 4 on connected drives (Fill In Full Hashes) · 1 on drives not connected")
+        let allConnected = VerifyCatalogTiers.evaluate(1, input: input(rows, mounted: mounted)).tier
+        #expect(allConnected.summary == "3 files still have only a sampled hash — Fill In Full Hashes")
+        let none = VerifyCatalogTiers.evaluate(1, input: input([gone], mounted: mounted)).tier
+        #expect(none.summary == "1 files still have only a sampled hash — all on drives not connected")
+    }
+
     @Test("tier 3: a Video+Audio row whose print is silent or says noAudio needs a decision; a print that heard sound passes; rows without a print could not be checked")
     func soundAgainstTheHeader() {
         let va = StreamType.videoAndAudio.rawValue
@@ -322,7 +379,7 @@ struct VerifyCatalogTierTests {
         #expect(out.tier.couldNotCheck == 1)
         #expect(out.findings.map(\.recordID) == [silent.id, noStream.id])
         #expect(out.findings.first?.words == "the header says Video+Audio, but the sound print heard nothing (silent)")
-        #expect(out.findings.last?.words == "the header says Video+Audio, but ffmpeg found no audio stream")
+        #expect(out.findings.last?.words == "the header says Video+Audio, but the sound print recorded no audio — Fingerprint Sound again")
         #expect(out.findings.first?.filename == "silent.m4v")
         #expect(out.tier.summary == "2 headers say sound the print never heard")
     }
@@ -338,11 +395,26 @@ struct VerifyCatalogTierTests {
         #expect(four.constraintFindings?.count == 3)
         inp.constraintFindings = four.constraintFindings
         let five = VerifyCatalogTiers.evaluate(5, input: inp)
-        #expect(five.tier.result == .needsDecision(2))
-        #expect(five.tier.summary == "1 lineage links point at nothing · 1 paths have more than one live row")
+        #expect(five.tier.result == .needsDecision(1))
+        #expect(five.tier.couldNotCheck == 1)
+        #expect(five.tier.summary == "1 paths have more than one live row · 1 lineage links point at rows removed from the catalog — kept as history")
         #expect(five.findings.map(\.filename) == ["t.mov", "d.mov"])
         #expect(five.tier.checked == 4)
         #expect(five.tier.passed == 2)
+    }
+
+    @Test("tier 5: a lineage link to a row removed from the catalog is UNVERIFIED — the finding is not a decision, the tier says could-not-check with its count, and the words say the link is kept as history")
+    func lineageToARemovedRowIsUnverifiedNotADecision() {
+        var promoted = row("/Volumes/FamilyArchive/1990s/Christmas 1991.mov")
+        promoted.derivedFrom = UUID()                                   // the source row was purged
+        let five = VerifyCatalogTiers.evaluate(5, input: input([promoted, row("/a.mov")]))
+        #expect(five.findings.count == 1)
+        #expect(five.findings.first?.needsDecision == false)
+        #expect(five.findings.first?.words == "derived from a row that was removed from the catalog — the link is kept as history")
+        #expect(five.tier.result == .couldNotCheck(1))
+        #expect(five.tier.couldNotCheck == 1)
+        #expect(five.tier.needsDecision == 0)
+        #expect(five.tier.summary == "1 lineage links point at rows removed from the catalog — kept as history · every other relation holds (2 rows) · catalog.json is not on disk — nothing to hash")
     }
 
     @Test("tiers 2 and 6 say not built; a stopped tier says so; every tier has a name")
@@ -682,12 +754,13 @@ struct VerifyCatalogJobTests {
         #expect(job.findingsTotal == 5, "\(job.findings)")
         #expect(job.findingsByTier[3]?.map(\.filename) == ["silent.m4v"])
         #expect(job.findingsByTier[5]?.map(\.filename) == ["twin.mov", "dangling.mov", "archive_copy.mov", "Christmas-c1990s.flv"])
-        let everyOneIsADecision = job.findings.allSatisfy { $0.needsDecision }
-        #expect(everyOneIsADecision)
+        let everyOneButTheLineageLinkIsADecision = job.findings.allSatisfy { $0.needsDecision != ($0.rule == "lineageTargetsExist") }
+        #expect(everyOneButTheLineageLinkIsADecision)
         let report = try #require(job.report)
-        #expect(report.needsDecisionTotal == 5)
-        // Tier 5 (4 decisions) before tier 3 (1); inside tier 5 equal counts sort by rule key.
-        #expect(report.decisionWords == "1 lineage links point at nothing · 1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 headers say sound the print never heard")
+        #expect(report.needsDecisionTotal == 4)
+        #expect(report.tier(5)?.couldNotCheck == 1, "the purged lineage target is unverified, not a decision")
+        // Tier 5 (3 decisions) before tier 3 (1); inside tier 5 equal counts sort by rule key; the unverified link follows.
+        #expect(report.decisionWords == "1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 lineage links point at rows removed from the catalog — kept as history · 1 headers say sound the print never heard")
         // Catalog Status: the Integrity row is red with those words.
         let facts = CatalogFreshnessFactsReader.read(catalogFile: sb.model.catalogStore.fileLocation)
         let coverage = AnalyzeCoverageCalculator.compute(inputs: AnalyzeCoverageCalculator.project(sb.model.records), volumes: [],
@@ -696,7 +769,7 @@ struct VerifyCatalogJobTests {
         let state = CatalogFreshnessState.judged(rows: rows, now: Date())
         let verdict = try #require(state.verdict(.integrity))
         #expect(verdict.colour == .red)
-        #expect(verdict.words == "5 findings — 1 lineage links point at nothing · 1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 headers say sound the print never heard · tiers 2 and 6 not built")
+        #expect(verdict.words == "4 findings — 1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 lineage links point at rows removed from the catalog — kept as history · 1 headers say sound the print never heard · tiers 2 and 6 not built")
         #expect(state.summary.colour == .red)
         #expect(CatalogStatusDoor.door(for: verdict.reason, cycler: .integrity) == .verifyAgain)
         // And every row is as it was: no marker, no save of the catalog.

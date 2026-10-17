@@ -301,7 +301,18 @@ extension VideoScanModel {
         rows.reserveCapacity(records.count)
         for r in records { rows.append(IntegrityRow(record: r)) }
         return VerifyCatalogSnapshot(rows: rows, events: events ?? Self.confirmedEventFacts(EventsDecisionStore.shared.snapshot()),
-                                     catalogFile: catalogStore.fileLocation, catalogGeneration: catalogStore.currentGeneration)
+                                     catalogFile: catalogStore.fileLocation, catalogGeneration: catalogStore.currentGeneration,
+                                     mountedVolumeRoots: Self.mountedVolumeRootsNow())
+    }
+
+    /// What tier 1 calls "connected": ONE readdir of /Volumes at snapshot
+    /// time (each entry as "/Volumes/<name>") plus "/" — the boot disk is
+    /// always connected. No stat, no mount-table walk; a leftover empty
+    /// mount folder reads as connected, and the hash job says so when it
+    /// gets there.
+    nonisolated static func mountedVolumeRootsNow() -> Set<String> {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: "/Volumes")) ?? []
+        return Set(names.map { "/Volumes/" + $0 }).union(["/"])
     }
 
     /// Confirmed, un-merged events with their accepted members' content keys.

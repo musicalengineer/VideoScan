@@ -18,6 +18,18 @@
 // one duplicate group really carry one set of bytes
 // (`duplicateGroupDigestsAgree`). Each is a rule in the table now.
 //
+// The first real report (Rick's catalog, 745 findings, 2026-10-17) taught
+// three rules what the catalog actually promises:
+//   • a duplicate group is a CANDIDATE (DuplicateDetector scores duration,
+//     timecode, audio, created…); only a group whose reasons say "hash"
+//     claimed the bytes matched, so only that group can be wrong about
+//     them (514 of 710 groups were false positives before);
+//   • a lineage link to a row that was purged is HISTORY, not a decision —
+//     it is reported unverified (`needsDecision == false`; tier 5 counts it
+//     as could-not-check) and the link is kept (100 rows, 74 on the archive);
+//   • a QuickTime reference movie is a few MB that ffprobe reads as hours
+//     of video (`referenceMovie`): bytes per second tells it apart, no I/O.
+//
 // Memory: one IntegrityRow per catalog row (~400 bytes with its strings) ≈
 // 6 MB at 14k rows, ≈ 40 MB at 100k, freed when the run ends; the index is
 // a few Sets of ids and digests on top. Nothing grows with file size.
@@ -39,7 +51,11 @@ struct IntegrityRow: Sendable, Equatable {
     var fullPath: String
     var filename: String
     var sizeBytes: Int64
+    /// ffprobe's duration (0 = unknown).
+    var durationSeconds: Double
     var streamTypeRaw: String
+    /// "" = no video stream.
+    var videoCodec: String
     var audioCodec: String
     /// The scan's sampled `v1:` hash ("" = none).
     var contentHash: String
@@ -56,24 +72,30 @@ struct IntegrityRow: Sendable, Equatable {
     var derivationKind: String?
     var supersededByID: UUID?
     var duplicateGroupID: UUID?
+    /// How DuplicateDetector put this row in its group — its tags joined
+    /// by "+" ("duration+timecode+audio"; "hash" = the sampled hashes
+    /// matched). "" = no group or no reason recorded.
+    var duplicateReasons: String
     var pairGroupID: UUID?
     var auditSeenOn: AuditSeenOn?
     var audioFingerprint: AudioFingerprintStamp?
     var isSetAside: Bool
 
-    init(id: UUID = UUID(), fullPath: String, filename: String = "", sizeBytes: Int64 = 1,
-         streamTypeRaw: String = "", audioCodec: String = "", contentHash: String = "",
+    init(id: UUID = UUID(), fullPath: String, filename: String = "", sizeBytes: Int64 = 1, durationSeconds: Double = 0,
+         streamTypeRaw: String = "", videoCodec: String = "", audioCodec: String = "", contentHash: String = "",
          fullDigest: String? = nil, contentFixity: ContentFixity? = nil, archiveFixity: ArchiveFixity? = nil,
          lifecycleStage: LifecycleStage = .cataloged, archiveStage: ArchiveStage = .none,
          removal: RemovalMarker? = nil, removalRevision: Int = 0,
          derivedFrom: UUID? = nil, derivationKind: String? = nil, supersededByID: UUID? = nil,
-         duplicateGroupID: UUID? = nil, pairGroupID: UUID? = nil, auditSeenOn: AuditSeenOn? = nil,
-         audioFingerprint: AudioFingerprintStamp? = nil, isSetAside: Bool = false) {
+         duplicateGroupID: UUID? = nil, duplicateReasons: String = "", pairGroupID: UUID? = nil,
+         auditSeenOn: AuditSeenOn? = nil, audioFingerprint: AudioFingerprintStamp? = nil, isSetAside: Bool = false) {
         self.id = id
         self.fullPath = fullPath
         self.filename = filename.isEmpty ? (fullPath as NSString).lastPathComponent : filename
         self.sizeBytes = sizeBytes
+        self.durationSeconds = durationSeconds
         self.streamTypeRaw = streamTypeRaw
+        self.videoCodec = videoCodec
         self.audioCodec = audioCodec
         self.contentHash = contentHash
         self.fullDigest = fullDigest
@@ -87,6 +109,7 @@ struct IntegrityRow: Sendable, Equatable {
         self.derivationKind = derivationKind
         self.supersededByID = supersededByID
         self.duplicateGroupID = duplicateGroupID
+        self.duplicateReasons = duplicateReasons
         self.pairGroupID = pairGroupID
         self.auditSeenOn = auditSeenOn
         self.audioFingerprint = audioFingerprint
@@ -96,14 +119,15 @@ struct IntegrityRow: Sendable, Equatable {
     /// Project one record. Main actor (the record lives there).
     @MainActor
     init(record r: VideoRecord) {
-        self.init(id: r.id, fullPath: r.fullPath, filename: r.filename, sizeBytes: r.sizeBytes,
-                  streamTypeRaw: r.streamTypeRaw, audioCodec: r.audioCodec, contentHash: r.contentHash,
+        self.init(id: r.id, fullPath: r.fullPath, filename: r.filename, sizeBytes: r.sizeBytes, durationSeconds: r.durationSeconds,
+                  streamTypeRaw: r.streamTypeRaw, videoCodec: r.videoCodec, audioCodec: r.audioCodec, contentHash: r.contentHash,
                   fullDigest: VideoScanModel.storedFullDigest(r),
                   contentFixity: r.contentFixity, archiveFixity: r.archiveFixity,
                   lifecycleStage: r.lifecycleStage, archiveStage: r.archiveStage,
                   removal: r.removal, removalRevision: r.removalRevision,
                   derivedFrom: r.derivedFrom, derivationKind: r.derivationKind, supersededByID: r.supersededByID,
-                  duplicateGroupID: r.duplicateGroupID, pairGroupID: r.pairGroupID, auditSeenOn: r.auditSeenOn,
+                  duplicateGroupID: r.duplicateGroupID, duplicateReasons: r.duplicateReasons, pairGroupID: r.pairGroupID,
+                  auditSeenOn: r.auditSeenOn,
                   audioFingerprint: r.audioFingerprint, isSetAside: r.isSetAside)
     }
 
@@ -153,6 +177,7 @@ enum CatalogConstraints {
         case pathAliasByCase
         case supersessionCycle
         case duplicateGroupDigestsAgree
+        case referenceMovie
         case derivedStampsMatchContent
 
         /// Which tier owns the rule: the stale-stamp rule is tier 4
@@ -165,7 +190,7 @@ enum CatalogConstraints {
         private static let words: [Rule: (title: String, counted: String)] = [
             .uniqueIDs: ("Unique ids", "ids are carried by more than one row"),
             .oneLiveRowPerPath: ("One live row per path", "paths have more than one live row"),
-            .lineageTargetsExist: ("Lineage targets exist", "lineage links point at nothing"),
+            .lineageTargetsExist: ("Lineage targets exist", "lineage links point at rows removed from the catalog — kept as history"),
             .promotionsHaveASource: ("Archive copies name their source", "archive copies name no source"),
             .removalMirrorsLifecycle: ("Removal marker matches the lifecycle stage", "removal markers disagree with the lifecycle stage"),
             .requiredFields: ("Required fields present", "rows miss a required field"),
@@ -176,6 +201,7 @@ enum CatalogConstraints {
             .pathAliasByCase: ("One file per path on a case-insensitive volume", "paths differ only by case from another live row's"),
             .supersessionCycle: ("Supersession ends", "supersession chains run in a circle"),
             .duplicateGroupDigestsAgree: ("Duplicate groups agree on the bytes", "duplicate groups hold files with different whole-file digests"),
+            .referenceMovie: ("Reference movies", "files are reference movies — the content lives in other files"),
             .derivedStampsMatchContent: ("Derived stamps match the content", "sound prints were made from other content"),
         ]
 
@@ -212,11 +238,14 @@ enum CatalogConstraints {
         var paths: [String]
     }
 
-    /// The live members of one duplicate group — the first member's id and
-    /// the DISTINCT lowercase whole-file digests they carry.
+    /// The live members of one duplicate group — the first member's id,
+    /// the DISTINCT lowercase whole-file digests they carry, and whether
+    /// any member's reasons say the group was formed on a sampled-hash
+    /// match (the only kind of group that claims the bytes agree).
     struct GroupDigests: Sendable, Equatable {
         var firstID: UUID
         var digests: [String]
+        var sampledHashMatch = false
     }
 
     /// What the rules look things up in — built ONCE, O(rows).
@@ -231,7 +260,8 @@ enum CatalogConstraints {
         var caseAliasedPaths: [String: CaseAlias] = [:]
         /// row id → the row that superseded it.
         var supersededBy: [UUID: UUID] = [:]
-        /// duplicate group → its live members' digests, only when they differ.
+        /// duplicate group → its live members' digests, only when the group
+        /// was formed on a sampled-hash match AND the digests differ.
         var disagreeingGroups: [UUID: GroupDigests] = [:]
         var pairGroups: Set<UUID> = []
         /// Lowercase whole-file digests any row carries.
@@ -260,7 +290,7 @@ enum CatalogConstraints {
         idx.duplicatedIDs = seen.filter { $0.value > 1 }
         idx.sharedLivePaths = byPath.filter { $0.value.count > 1 }
         idx.caseAliasedPaths = byFoldedPath.filter { $0.value.paths.count > 1 }
-        idx.disagreeingGroups = groups.filter { $0.value.digests.count > 1 }
+        idx.disagreeingGroups = groups.filter { $0.value.sampledHashMatch && $0.value.digests.count > 1 }
         return idx
     }
 
@@ -277,12 +307,17 @@ enum CatalogConstraints {
 
     private static func noteGroupDigest(_ r: IntegrityRow, group: UUID, in table: inout [UUID: GroupDigests]) {
         let digest = r.fullDigest?.lowercased()
-        guard var g = table[group] else {
-            table[group] = GroupDigests(firstID: r.id, digests: digest.map { [$0] } ?? [])
-            return
-        }
+        var g = table[group] ?? GroupDigests(firstID: r.id, digests: [])
         if let digest, !g.digests.contains(digest) { g.digests.append(digest) }
+        if claimsSampledHashMatch(r.duplicateReasons) { g.sampledHashMatch = true }
         table[group] = g
+    }
+
+    /// DuplicateDetector's reasons are its scoring tags joined by "+"
+    /// ("hash+duration+timecode"); only the "hash" tag says the sampled
+    /// hashes matched — the rest are similarity, never bytes.
+    static func claimsSampledHashMatch(_ reasons: String) -> Bool {
+        reasons.split(separator: "+").contains { $0.trimmingCharacters(in: .whitespaces) == "hash" }
     }
 
     /// Run every rule. Findings come out in rule order, then row order.
@@ -299,7 +334,7 @@ enum CatalogConstraints {
     static let rules: [@Sendable ([IntegrityRow], Index, [IntegrityEventFact]) -> [Finding]] = [
         uniqueIDs, oneLiveRowPerPath, lineageTargetsExist, promotionsHaveASource, removalMirrorsLifecycle,
         requiredFields, wholeFileDigestsAreWhole, removalRevisionNonNegative, auditStampNamesItsVolume,
-        eventMembersExist, pathAliasByCase, supersessionCycle, duplicateGroupDigestsAgree,
+        eventMembersExist, pathAliasByCase, supersessionCycle, duplicateGroupDigestsAgree, referenceMovie,
         derivedStampsMatchContent,
     ]
 
@@ -320,17 +355,23 @@ enum CatalogConstraints {
         }
     }
 
-    /// FK: `derivedFrom` and `supersededByID` point at rows that exist.
+    /// FK, reported as UNVERIFIED: `derivedFrom` / `supersededByID` whose
+    /// target id is not in the catalog. A purged row (Remove from Catalog,
+    /// the ledger's prune) leaves its children's links behind on purpose —
+    /// the link is history, not a decision (`needsDecision == false`; tier
+    /// 5 counts it as could-not-check). Nothing here asks anyone to cut it.
     static func lineageTargetsExist(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
         var out: [Finding] = []
         for r in rows {
             if let from = r.derivedFrom, !idx.ids.contains(from) {
                 out.append(Finding(.lineageTargetsExist, recordID: r.id,
-                                   words: "lineage points at a row that no longer exists (derived from \(short(from)))"))
+                                   words: "derived from a row that was removed from the catalog — the link is kept as history",
+                                   needsDecision: false))
             }
             if let by = r.supersededByID, !idx.ids.contains(by) {
                 out.append(Finding(.lineageTargetsExist, recordID: r.id,
-                                   words: "superseded by a row that no longer exists (\(short(by)))"))
+                                   words: "superseded by a row that was removed from the catalog — the link is kept as history",
+                                   needsDecision: false))
             }
         }
         return out
@@ -471,14 +512,57 @@ enum CatalogConstraints {
         return out
     }
 
-    /// Consistency: the live members of one duplicate group carry ONE
-    /// whole-file digest (or none yet). Two digests in one group means the
-    /// group claims "copies" of files that are not the same bytes.
+    /// Consistency: a duplicate group formed on a sampled-hash match
+    /// ("hash" among some live member's reasons) claimed the bytes agree;
+    /// two whole-file digests among its live members say they do not. A
+    /// group formed on similarity alone (duration, timecode, audio,
+    /// created…) never promised byte identity and is not a finding.
     static func duplicateGroupDigestsAgree(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
         idx.disagreeingGroups.sorted { $0.key.uuidString < $1.key.uuidString }.map { group, g in
             Finding(.duplicateGroupDigestsAgree, recordID: g.firstID,
-                    words: "duplicate group \(short(group)): its members carry \(g.digests.count) different whole-file digests — not copies of one another")
+                    words: "duplicate group \(short(group)): formed on a sampled-hash match, but its members carry \(g.digests.count) different whole-file digests")
         }
+    }
+
+    /// A clip shorter than this is never judged a reference movie.
+    static let referenceMovieMinSeconds = 10.0
+    /// Real video, even DV at its thinnest, carries far more than this
+    /// per second; a QuickTime reference movie carries only pointers.
+    static let referenceMovieMaxBytesPerSecond = 5_000.0
+
+    /// Plausibility: a live video row whose bytes per second of duration
+    /// are far below any real codec is a QuickTime reference movie — a
+    /// small file that names media kept in other files (33 rows of Rick's
+    /// catalog read as hours of dvvideo at 3 MB). No I/O: size, duration
+    /// and the codec from the row. Audio-only rows are left alone (an MP3
+    /// at 16 KB/s is real).
+    static func referenceMovie(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
+        rows.filter(isReferenceMovie).map {
+            Finding(.referenceMovie, recordID: $0.id,
+                    words: "\(sizeWords($0.sizeBytes)) for \(durationWords($0.durationSeconds)) — a reference movie; the content lives in other files")
+        }
+    }
+
+    static func isReferenceMovie(_ r: IntegrityRow) -> Bool {
+        guard r.isLive, r.hasBytes, !r.videoCodec.isEmpty, r.durationSeconds >= referenceMovieMinSeconds else { return false }
+        return Double(r.sizeBytes) / r.durationSeconds < referenceMovieMaxBytesPerSecond
+    }
+
+    /// "3.3 MB", "812 KB", "1.2 GB" — decimal units, one decimal above KB.
+    static func sizeWords(_ bytes: Int64) -> String {
+        let b = Double(bytes)
+        if b >= 1e9 { return String(format: "%.1f GB", b / 1e9) }
+        if b >= 1e6 { return String(format: "%.1f MB", b / 1e6) }
+        return "\(Int((b / 1e3).rounded())) KB"
+    }
+
+    /// "2 h 1 min", "5 min 10 s", "35 s".
+    static func durationWords(_ seconds: Double) -> String {
+        let total = Int(seconds.rounded())
+        let (h, m, s) = (total / 3_600, total % 3_600 / 60, total % 60)
+        if h > 0 { return "\(h) h \(m) min" }
+        if m > 0 { return "\(m) min \(s) s" }
+        return "\(s) s"
     }
 
     /// Tier 4: a derived stamp (the sound print today) names the content it
