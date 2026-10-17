@@ -12,14 +12,16 @@
   constraints (11 rules + the stale-stamp rule), the catalog file's own SHA-256 + generation, the dated
   report beside catalog.json, the Integrity row in Catalog Status; 40 tests. Codex found 6 (3 P1): a
   pause between tiers can let the findings and the file hash describe different generations; a
-  completed run can mask a tier that could not check; tier 3 counts stale sound stamps; three P2. A
-  bug-fix agent is closing them red-first tonight; the closure goes in the codex doc.
+  completed run can mask a tier that could not check; tier 3 counts stale sound stamps; three P2. **All
+  six closed red-first** (10 new tests; 65 green in 10 suites), merged and pushed; three new tier-5 rules
+  (path alias by case, supersession cycle, dup-group digests agree); report schema 2. Closure in
+  `docs/reviews/codex/codex-review-verify-catalog-slice-1-2026-10-16.md`.
 - **The P0 truth-regression suite is on main** (written in the cloud, proven on the M4): the poisoned
   fixture catalog + 13 regression tests (9 falls + 4 source sensors). Green 18 tests; red at the three
   pre-fix commits (22 / 27 / 37 issues) and under a folder mutant (exactly the 2 mutant assertions).
   Run sheet: `docs/reviews/p0-regression-2026-10-17.md`. It sits in the `regression` stage of the
   gauntlet manifest, **blocked** pending the isolation audit (temp dirs + ffmpeg fixtures) — decision 6.
-- **Main is pushed** through the Verify Catalog merge; the P0 suite merge pushes after its re-prove.
+- **Main is pushed** through all of tonight's merges (Verify Catalog slice 1 + its codex closure, the P0 suite).
 
 ## Where we stood at 21:00
 
