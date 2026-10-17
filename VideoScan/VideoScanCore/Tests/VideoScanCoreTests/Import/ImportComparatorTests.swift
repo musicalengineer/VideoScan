@@ -42,7 +42,7 @@ private enum Clean {
             }
         }
         let digests = Set(run.dtos.compactMap { $0.digestState.digest })
-        let members = [ImportComparator.EventMember(eventID: "E1", key: "sha256:" + (digests.sorted().first ?? "")),
+        let members = [ImportComparator.EventMember(eventID: "E1", key: "sha256:" + (digests.min() ?? "")),
                        ImportComparator.EventMember(eventID: "E1", key: "id:" + PoisonedCatalogFixture.id(.sampledOnly))]
         let markers = [ImportComparator.MarkerKey(sourceFile: .catalogAudit, ordinal: 0)]
         let json = ImportComparator.JSONSide(
@@ -233,6 +233,33 @@ struct ImportComparatorTests {
             rowAuditSeenAt: nil)]
         sqlite.auditResults = [:]
         #expect(ImportComparator.compare(json: json, sqlite: sqlite) == .misses([.auditResultMissing(ordinal: 0)]))
+    }
+
+    /// §10b "the comparator counts every one": the all-129-keys row carries
+    /// every curated field; dropping any one of its knowledge rows is named.
+    @Test func everyCuratedFieldIsCountedWhenDropped() throws {
+        let row = try #require(try ImportTestSupport.catalog(ImportGoldenFixtures.full129).records.first)
+        let occurrence = ImportComparator.RowOccurrence(ordinal: 0, record: row)
+        let digest = try #require(occurrence.digest)
+        let json = ImportComparator.JSONSide(rows: [occurrence])
+        let kept = occurrence.knowledge.map {
+            ImportComparator.KnowledgeKey(ordinal: 0, field: $0.field, valueJSON: $0.valueJSON)
+        }
+        let derived = Set(occurrence.derived.map {
+            ImportComparator.DerivedKey(digest: digest, kind: $0.kind, seq: $0.seq, sourceJSONRowID: occurrence.jsonRowID)
+        })
+        let clean = ImportComparator.SQLiteSide(
+            fileLandings: [.init(ordinal: 0, fileID: occurrence.jsonRowID)], quarantineOrdinals: [],
+            contentDigests: [digest], knowledgeSources: kept, derivedUnverified: derived,
+            soundPrintDigests: Set([occurrence.soundPrintDigest].compactMap { $0 }))
+        #expect(ImportComparator.compare(json: json, sqlite: clean) == .ok)
+        #expect(Set(kept.map(\.field)) == Set(CatalogDDL.KnowledgeField.allCases))
+        for field in CatalogDDL.KnowledgeField.allCases {
+            var sqlite = clean
+            sqlite.knowledgeSources.removeAll { $0.field == field }
+            #expect(ImportComparator.compare(json: json, sqlite: sqlite)
+                    == .misses([.curatedValueMissing(ordinal: 0, field: field)]), "\(field.rawValue)")
+        }
     }
 
     @Test func everyMissHasWords() {

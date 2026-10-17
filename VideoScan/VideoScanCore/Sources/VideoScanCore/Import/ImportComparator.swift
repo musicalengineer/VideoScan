@@ -211,62 +211,79 @@ public enum ImportComparator {
 
     // MARK: - Verdict
 
-    public enum Miss: Sendable, Equatable {
-        case rowMissing(ordinal: Int, jsonRowID: String)
-        case rowLandedTwice(ordinal: Int)
-        case fileRowShared(fileID: String, ordinals: [Int])
-        case rowNotInSource(ordinal: Int)
-        case digestMissing(String)
-        case curatedValueMissing(ordinal: Int, field: CatalogDDL.KnowledgeField)
-        case curatedValueDiffers(ordinal: Int, field: CatalogDDL.KnowledgeField)
-        case derivedValueMissing(ordinal: Int, kind: CatalogDDL.DerivedKind, seq: Int)
-        case soundPrintMissing(ordinal: Int, digest: String)
-        case eventDecisionMissing(ordinal: Int)
-        case eventMemberMissing(eventID: String, key: String)
-        case ledgerLineMissing(ordinal: Int)
-        case ignoredEntryMissing(ordinal: Int)
-        case markerMissing(file: String, ordinal: Int)
-        case auditResultMissing(ordinal: Int)
-        case auditAcceptanceWrong(ordinal: Int, expected: Bool)
-        case personSearchMissing(ordinal: Int)
+    /// One miss: its kind (for grouping in the report) and its words,
+    /// composed where the facts are. (For Rick: constants as data — a
+    /// `struct { Kind kind; std::string words; }` with one named factory per
+    /// miss class, not a switch that grows with every class.)
+    public struct Miss: Sendable, Equatable {
+        public enum Kind: String, Sendable, CaseIterable {
+            case rowMissing, rowLandedTwice, fileRowShared, rowNotInSource, digestMissing
+            case curatedValueMissing, curatedValueDiffers, derivedValueMissing, soundPrintMissing
+            case eventDecisionMissing, eventMemberMissing, ledgerLineMissing, ignoredEntryMissing
+            case markerMissing, auditResultMissing, auditAcceptanceWrong, personSearchMissing
+        }
 
-        public var words: String {
-            switch self {
-            case .rowMissing(let o, let id):
-                return "catalog row \(o) (\(id)) landed nowhere"
-            case .rowLandedTwice(let o):
-                return "catalog row \(o) landed in both files and quarantine"
-            case .fileRowShared(let id, let ordinals):
-                return "catalog rows \(ordinals.map { String($0) }.joined(separator: ", ")) all landed on file \(id)"
-            case .rowNotInSource(let o):
-                return "a landing names catalog row \(o), which the file does not have"
-            case .digestMissing(let d):
-                return "whole-file digest \(d) has no content row"
-            case .curatedValueMissing(let o, let f):
-                return "catalog row \(o): its \(f.rawValue) was not kept"
-            case .curatedValueDiffers(let o, let f):
-                return "catalog row \(o): its \(f.rawValue) was kept with a different value"
-            case .derivedValueMissing(let o, let k, let s):
-                return "catalog row \(o): derived \(k.rawValue) #\(s) was not kept"
-            case .soundPrintMissing(let o, let d):
-                return "catalog row \(o): its sound print for \(d) was not kept"
-            case .eventDecisionMissing(let o):
-                return "event decision \(o) was not kept"
-            case .eventMemberMissing(let e, let k):
-                return "event \(e): member \(k) is neither resolved nor listed"
-            case .ledgerLineMissing(let o):
-                return "ledger line \(o) was not kept"
-            case .ignoredEntryMissing(let o):
-                return "ignored entry \(o) was not kept"
-            case .markerMissing(let f, let o):
-                return "marker \(f) #\(o) was not kept"
-            case .auditResultMissing(let o):
-                return "audit result \(o) was not kept"
-            case .auditAcceptanceWrong(let o, let expected):
-                return "audit result \(o) should be \(expected ? "accepted" : "refused") under the snapshot rule"
-            case .personSearchMissing(let o):
-                return "person search \(o) was not kept"
-            }
+        public let kind: Kind
+        public let words: String
+
+        public init(kind: Kind, words: String) {
+            self.kind = kind
+            self.words = words
+        }
+
+        public static func rowMissing(ordinal: Int, jsonRowID: String) -> Miss {
+            Miss(kind: .rowMissing, words: "catalog row \(ordinal) (\(jsonRowID)) landed nowhere")
+        }
+        public static func rowLandedTwice(ordinal: Int) -> Miss {
+            Miss(kind: .rowLandedTwice, words: "catalog row \(ordinal) landed in both files and quarantine")
+        }
+        public static func fileRowShared(fileID: String, ordinals: [Int]) -> Miss {
+            Miss(kind: .fileRowShared,
+                 words: "catalog rows \(ordinals.map { String($0) }.joined(separator: ", ")) all landed on file \(fileID)")
+        }
+        public static func rowNotInSource(ordinal: Int) -> Miss {
+            Miss(kind: .rowNotInSource, words: "a landing names catalog row \(ordinal), which the file does not have")
+        }
+        public static func digestMissing(_ digest: String) -> Miss {
+            Miss(kind: .digestMissing, words: "whole-file digest \(digest) has no content row")
+        }
+        public static func curatedValueMissing(ordinal: Int, field: CatalogDDL.KnowledgeField) -> Miss {
+            Miss(kind: .curatedValueMissing, words: "catalog row \(ordinal): its \(field.rawValue) was not kept")
+        }
+        public static func curatedValueDiffers(ordinal: Int, field: CatalogDDL.KnowledgeField) -> Miss {
+            Miss(kind: .curatedValueDiffers,
+                 words: "catalog row \(ordinal): its \(field.rawValue) was kept with a different value")
+        }
+        public static func derivedValueMissing(ordinal: Int, kind: CatalogDDL.DerivedKind, seq: Int) -> Miss {
+            Miss(kind: .derivedValueMissing, words: "catalog row \(ordinal): derived \(kind.rawValue) #\(seq) was not kept")
+        }
+        public static func soundPrintMissing(ordinal: Int, digest: String) -> Miss {
+            Miss(kind: .soundPrintMissing, words: "catalog row \(ordinal): its sound print for \(digest) was not kept")
+        }
+        public static func eventDecisionMissing(ordinal: Int) -> Miss {
+            Miss(kind: .eventDecisionMissing, words: "event decision \(ordinal) was not kept")
+        }
+        public static func eventMemberMissing(eventID: String, key: String) -> Miss {
+            Miss(kind: .eventMemberMissing, words: "event \(eventID): member \(key) is neither resolved nor listed")
+        }
+        public static func ledgerLineMissing(ordinal: Int) -> Miss {
+            Miss(kind: .ledgerLineMissing, words: "ledger line \(ordinal) was not kept")
+        }
+        public static func ignoredEntryMissing(ordinal: Int) -> Miss {
+            Miss(kind: .ignoredEntryMissing, words: "ignored entry \(ordinal) was not kept")
+        }
+        public static func markerMissing(file: String, ordinal: Int) -> Miss {
+            Miss(kind: .markerMissing, words: "marker \(file) #\(ordinal) was not kept")
+        }
+        public static func auditResultMissing(ordinal: Int) -> Miss {
+            Miss(kind: .auditResultMissing, words: "audit result \(ordinal) was not kept")
+        }
+        public static func auditAcceptanceWrong(ordinal: Int, expected: Bool) -> Miss {
+            Miss(kind: .auditAcceptanceWrong,
+                 words: "audit result \(ordinal) should be \(expected ? "accepted" : "refused") under the snapshot rule")
+        }
+        public static func personSearchMissing(ordinal: Int) -> Miss {
+            Miss(kind: .personSearchMissing, words: "person search \(ordinal) was not kept")
         }
     }
 

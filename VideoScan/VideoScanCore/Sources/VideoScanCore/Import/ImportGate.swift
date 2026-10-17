@@ -313,113 +313,143 @@ public enum ImportGate {
     /// The tiers that must have run (§f "Tiers 0, 1 or 5 notRun").
     public static let requiredTiers = [0, 1, 5]
 
-    public enum RunRefusal: Sendable, Equatable {
-        case jsonVersionTooNew(Int)
-        case reportMissing
-        case reportNotCompleted(String)
-        case reportNotCertified
-        case reportHashMismatch(report: String?, file: String)
-        case reportGenerationMismatch(report: Int?, file: Int)
-        case auditGenerationMismatch(audit: Int?, snapshot: Int?, file: Int)
-        case findingsTruncated(total: Int, listed: Int)
-        case tierNotRun(Int)
-        case auditMissing
-        case auditPartial
-        case auditNotCompleted(String)
-        case auditFinishedAfterIntegrityStarted
-        case auditHasNoRowResults
-        case duplicateEventID(String)
-        case openDeleteDuplicatesPlan(String)
-        case openAngelBatch(String)
-        case anotherWriterRunning(String)
+    /// One run-level refusal: its kind (for grouping in the import report)
+    /// and its words, composed where the facts are. The contract states the
+    /// conditions, not their words; these are the importer's words, pinned
+    /// by the tests. (For Rick: a `struct { Kind kind; std::string words; }`
+    /// with one named factory per condition — constants as data, not a
+    /// switch that grows with every condition.)
+    public struct RunRefusal: Sendable, Equatable {
+        public enum Kind: String, Sendable, CaseIterable {
+            case jsonVersionTooNew, reportMissing, reportNotCompleted, reportNotCertified, reportHashMismatch
+            case reportGenerationMismatch, auditGenerationMismatch, findingsTruncated, tierNotRun
+            case auditMissing, auditPartial, auditNotCompleted, auditFinishedAfterIntegrityStarted
+            case auditHasNoRowResults, duplicateEventID, openDeleteDuplicatesPlan, openAngelBatch
+            case anotherWriterRunning
+        }
 
-        /// The contract states the conditions, not their words; these are the
-        /// importer's words, pinned by the tests.
-        public var words: String {
-            switch self {
-            case .jsonVersionTooNew(let v):
-                return "catalog.json is version \(v); this importer reads versions 1–\(CatalogFileJSON.newestVersion)"
-            case .reportMissing:
-                return "no Verify Catalog report — run Verify Catalog first"
-            case .reportNotCompleted(let o):
-                return "the last Verify Catalog did not complete (\(o)) — run it again"
-            case .reportNotCertified:
-                return "the last Verify Catalog did not certify the catalog file's hash — run it again"
-            case .reportHashMismatch(let report, let file):
-                return "the catalog file (\(file)) is not the one Verify Catalog checked (\(report ?? "none"))"
-            case .reportGenerationMismatch(let report, let file):
-                return "Verify Catalog checked generation \(report.map { String($0) } ?? "unknown"); the file is generation \(file)"
-            case .auditGenerationMismatch(let audit, let snapshot, let file):
-                return "the audit saved generation \(audit.map { String($0) } ?? "unknown"), Verify Catalog checked \(snapshot.map { String($0) } ?? "unknown"), the file is \(file) — something saved in between; audit and verify again"
-            case .findingsTruncated(let total, let listed):
-                return "Verify Catalog listed \(listed) of \(total) findings; fix them and verify again"
-            case .tierNotRun(let t):
-                return "Verify Catalog tier \(t) did not run"
-            case .auditMissing:
-                return "no audit marker — run Audit Catalog first"
-            case .auditPartial:
-                return "the last audit was partial — run it to the end"
-            case .auditNotCompleted(let o):
-                return "the last audit did not complete (\(o))"
-            case .auditFinishedAfterIntegrityStarted:
-                return "the audit finished after Verify Catalog started — verify again"
-            case .auditHasNoRowResults:
-                return "the last audit carries no per-row results — run Audit Catalog again"
-            case .duplicateEventID(let id):
-                return "event \(id) appears twice in events-decisions.json"
-            case .openDeleteDuplicatesPlan(let p):
-                return "a Delete Duplicates plan is still open (\(p))"
-            case .openAngelBatch(let b):
-                return "an Archive Angel batch is still open (\(b))"
-            case .anotherWriterRunning(let w):
-                return "\(w) is running — one writer at a time"
-            }
+        public let kind: Kind
+        public let words: String
+
+        public init(kind: Kind, words: String) {
+            self.kind = kind
+            self.words = words
+        }
+
+        public static func jsonVersionTooNew(_ v: Int) -> RunRefusal {
+            RunRefusal(kind: .jsonVersionTooNew,
+                       words: "catalog.json is version \(v); this importer reads versions 1–\(CatalogFileJSON.newestVersion)")
+        }
+        public static let reportMissing = RunRefusal(
+            kind: .reportMissing, words: "no Verify Catalog report — run Verify Catalog first")
+        public static func reportNotCompleted(_ outcome: String) -> RunRefusal {
+            RunRefusal(kind: .reportNotCompleted,
+                       words: "the last Verify Catalog did not complete (\(outcome)) — run it again")
+        }
+        public static let reportNotCertified = RunRefusal(
+            kind: .reportNotCertified, words: "the last Verify Catalog did not certify the catalog file's hash — run it again")
+        public static func reportHashMismatch(report: String?, file: String) -> RunRefusal {
+            RunRefusal(kind: .reportHashMismatch,
+                       words: "the catalog file (\(file)) is not the one Verify Catalog checked (\(report ?? "none"))")
+        }
+        public static func reportGenerationMismatch(report: Int?, file: Int) -> RunRefusal {
+            RunRefusal(kind: .reportGenerationMismatch,
+                       words: "Verify Catalog checked generation \(name(report)); the file is generation \(file)")
+        }
+        public static func auditGenerationMismatch(audit: Int?, snapshot: Int?, file: Int) -> RunRefusal {
+            RunRefusal(kind: .auditGenerationMismatch,
+                       words: "the audit saved generation \(name(audit)), Verify Catalog checked \(name(snapshot)), "
+                           + "the file is \(file) — something saved in between; audit and verify again")
+        }
+        public static func findingsTruncated(total: Int, listed: Int) -> RunRefusal {
+            RunRefusal(kind: .findingsTruncated,
+                       words: "Verify Catalog listed \(listed) of \(total) findings; fix them and verify again")
+        }
+        public static func tierNotRun(_ tier: Int) -> RunRefusal {
+            RunRefusal(kind: .tierNotRun, words: "Verify Catalog tier \(tier) did not run")
+        }
+        public static let auditMissing = RunRefusal(kind: .auditMissing, words: "no audit marker — run Audit Catalog first")
+        public static let auditPartial = RunRefusal(kind: .auditPartial, words: "the last audit was partial — run it to the end")
+        public static func auditNotCompleted(_ outcome: String) -> RunRefusal {
+            RunRefusal(kind: .auditNotCompleted, words: "the last audit did not complete (\(outcome))")
+        }
+        public static let auditFinishedAfterIntegrityStarted = RunRefusal(
+            kind: .auditFinishedAfterIntegrityStarted, words: "the audit finished after Verify Catalog started — verify again")
+        public static let auditHasNoRowResults = RunRefusal(
+            kind: .auditHasNoRowResults, words: "the last audit carries no per-row results — run Audit Catalog again")
+        public static func duplicateEventID(_ id: String) -> RunRefusal {
+            RunRefusal(kind: .duplicateEventID, words: "event \(id) appears twice in events-decisions.json")
+        }
+        public static func openDeleteDuplicatesPlan(_ plan: String) -> RunRefusal {
+            RunRefusal(kind: .openDeleteDuplicatesPlan, words: "a Delete Duplicates plan is still open (\(plan))")
+        }
+        public static func openAngelBatch(_ batch: String) -> RunRefusal {
+            RunRefusal(kind: .openAngelBatch, words: "an Archive Angel batch is still open (\(batch))")
+        }
+        public static func anotherWriterRunning(_ writer: String) -> RunRefusal {
+            RunRefusal(kind: .anotherWriterRunning, words: "\(writer) is running — one writer at a time")
+        }
+
+        private static func name(_ generation: Int?) -> String {
+            generation.map { String($0) } ?? "unknown"
         }
     }
 
+    /// Every run-level refusal, in the contract's order: the JSON version,
+    /// the integrity report, the audit marker, the sidecars, the writers.
     public static func runLevelRefusals(_ run: RunInput) -> [RunRefusal] {
         var out: [RunRefusal] = []
         if run.catalogVersion > CatalogFileJSON.newestVersion {
             out.append(.jsonVersionTooNew(run.catalogVersion))
         }
-        if let r = run.report {
-            if r.outcome != "completed" { out.append(.reportNotCompleted(r.outcome)) }
-            if !r.catalogHashCertified { out.append(.reportNotCertified) }
-            if r.catalogSHA256?.lowercased() != run.catalogSHA256.lowercased() {
-                out.append(.reportHashMismatch(report: r.catalogSHA256, file: run.catalogSHA256))
-            }
-            if r.snapshotGeneration != run.catalogGeneration {
-                out.append(.reportGenerationMismatch(report: r.snapshotGeneration, file: run.catalogGeneration))
-            }
-            if r.findingsTotal > r.findingsListed {
-                out.append(.findingsTruncated(total: r.findingsTotal, listed: r.findingsListed))
-            }
-            for t in requiredTiers where r.tiersNotRun.contains(t) || !r.tiersPresent.contains(t) {
-                out.append(.tierNotRun(t))
-            }
-        } else {
-            out.append(.reportMissing)
-        }
-        if let a = run.audit {
-            if a.savedGeneration != run.report?.snapshotGeneration || a.savedGeneration != run.catalogGeneration {
-                out.append(.auditGenerationMismatch(audit: a.savedGeneration, snapshot: run.report?.snapshotGeneration,
-                                                    file: run.catalogGeneration))
-            }
-            if a.partial { out.append(.auditPartial) }
-            if a.outcome != "completed" { out.append(.auditNotCompleted(a.outcome)) }
-            if let finished = a.finishedAt {
-                if let r = run.report, finished >= r.startedAt { out.append(.auditFinishedAfterIntegrityStarted) }
-            } else if a.outcome == "completed" {
-                out.append(.auditNotCompleted("unfinished"))
-            }
-            if !a.hasRowResults { out.append(.auditHasNoRowResults) }
-        } else {
-            out.append(.auditMissing)
-        }
+        out += reportRefusals(run)
+        out += auditRefusals(run)
         out += run.duplicateEventIDs.map { RunRefusal.duplicateEventID($0) }
         out += run.openDeleteDuplicatesPlans.map { RunRefusal.openDeleteDuplicatesPlan($0) }
         out += run.openAngelBatches.map { RunRefusal.openAngelBatch($0) }
         out += run.runningWriters.map { RunRefusal.anotherWriterRunning($0) }
+        return out
+    }
+
+    /// The integrity report's refusals (§f "The integrity report: …", the
+    /// findings cap, tiers 0/1/5 notRun); a missing report is one refusal.
+    static func reportRefusals(_ run: RunInput) -> [RunRefusal] {
+        guard let r = run.report else { return [.reportMissing] }
+        var out: [RunRefusal] = []
+        if r.outcome != "completed" { out.append(.reportNotCompleted(r.outcome)) }
+        if !r.catalogHashCertified { out.append(.reportNotCertified) }
+        if r.catalogSHA256?.lowercased() != run.catalogSHA256.lowercased() {
+            out.append(.reportHashMismatch(report: r.catalogSHA256, file: run.catalogSHA256))
+        }
+        if r.snapshotGeneration != run.catalogGeneration {
+            out.append(.reportGenerationMismatch(report: r.snapshotGeneration, file: run.catalogGeneration))
+        }
+        if r.findingsTotal > r.findingsListed {
+            out.append(.findingsTruncated(total: r.findingsTotal, listed: r.findingsListed))
+        }
+        for t in requiredTiers where r.tiersNotRun.contains(t) || !r.tiersPresent.contains(t) {
+            out.append(.tierNotRun(t))
+        }
+        return out
+    }
+
+    /// catalog-audit.json's refusals (§f "catalog-audit.json is missing,
+    /// partial, …" and N1 "one snapshot"); a missing marker is one refusal.
+    static func auditRefusals(_ run: RunInput) -> [RunRefusal] {
+        guard let a = run.audit else { return [.auditMissing] }
+        var out: [RunRefusal] = []
+        let snapshot = run.report?.snapshotGeneration
+        if a.savedGeneration != snapshot || a.savedGeneration != run.catalogGeneration {
+            out.append(.auditGenerationMismatch(audit: a.savedGeneration, snapshot: snapshot, file: run.catalogGeneration))
+        }
+        if a.partial { out.append(.auditPartial) }
+        if a.outcome != "completed" { out.append(.auditNotCompleted(a.outcome)) }
+        if let finished = a.finishedAt {
+            if let r = run.report, finished >= r.startedAt { out.append(.auditFinishedAfterIntegrityStarted) }
+        } else if a.outcome == "completed" {
+            out.append(.auditNotCompleted("unfinished"))
+        }
+        if !a.hasRowResults { out.append(.auditHasNoRowResults) }
         return out
     }
 }

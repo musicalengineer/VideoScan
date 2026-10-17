@@ -173,9 +173,29 @@ public struct PoisonedCatalogFixture: Sendable {
                  "seenAt": .string(iso(seenAt))])
     }
 
+    /// The two conflicting curated values on one shared digest (brief:
+    /// "stars + user date on two copies with conflicting values").
+    struct CuratedConflict: Sendable {
+        let stars: Int64
+        let userDate: String
+        let confidence: String
+        static let a = CuratedConflict(stars: 2, userDate: "1991", confidence: "estimated")
+        static let b = CuratedConflict(stars: 3, userDate: "1992-06", confidence: "known")
+    }
+
     static func row(for shape: Shape) -> CatalogJSONValue {
+        var o = baseRow(shape)
+        if poison(shape, into: &o) {
+            o["contentFixity"] = contentFixity(digest(shape.rawValue), byteCount: sizeBytes)
+        }
+        if seesStamp(shape) { o["auditSeenOn"] = auditSeenOn }
+        return .object(o)
+    }
+
+    /// The healthy row every shape starts from: identity, disk facts, scan context.
+    private static func baseRow(_ shape: Shape) -> [String: CatalogJSONValue] {
         let p = path(shape)
-        var o: [String: CatalogJSONValue] = [
+        return [
             "id": .string(id(shape)),
             "filename": .string((p as NSString).lastPathComponent),
             "ext": .string("mov"),
@@ -188,46 +208,59 @@ public struct PoisonedCatalogFixture: Sendable {
             "scanContext": .object(["volumeUUID": .string(volumeUUID), "volumeName": .string("Fixture"),
                                     "scanHost": .string("FixtureHost")]),
         ]
-        let hashed: Bool
+    }
+
+    /// What is poisoned about the shape — the keys whose value or absence
+    /// send it to its §f row. Returns true when the row still gets its own
+    /// agreeing whole-file fixity (a shape that sets its own, or none, says no).
+    private static func poison(_ shape: Shape, into o: inout [String: CatalogJSONValue]) -> Bool {
         switch shape {
         case .sampledOnly:
-            hashed = false
             o["contentHash"] = .string("v1:" + String(digest("sampled").prefix(32)))
             o["partialMD5"] = .string("d41d8cd98f00b204e9800998ecf8427e")
+            return false
         case .changedSize:
-            hashed = false
             o["sizeBytes"] = .int(sizeBytes * 2)   // the fixity covers the old size: no identity
             o["contentFixity"] = contentFixity(digest(shape.rawValue), byteCount: sizeBytes)
+            return false
         case .disagreeingFixities:
-            hashed = false
             o["contentFixity"] = contentFixity(digest("disagree-content"), byteCount: sizeBytes)
             o["archiveFixity"] = archiveFixity(digest("disagree-archive"))
-        case .curatedConflictA, .curatedConflictB:
-            hashed = false
-            o["contentFixity"] = contentFixity(digest("curated-shared"), byteCount: sizeBytes)
-            o["starRating"] = .int(shape == .curatedConflictA ? 2 : 3)
-            o["userDate"] = .string(shape == .curatedConflictA ? "1991" : "1992-06")
-            o["userDateConfidence"] = .string(shape == .curatedConflictA ? "estimated" : "known")
-        case .supersessionCycleA, .supersessionCycleB:
-            hashed = true
-            o["supersededByID"] = .string(id(shape == .supersessionCycleA ? .supersessionCycleB : .supersessionCycleA))
-            if shape == .supersessionCycleA { o["repairConfirmedDate"] = .string(iso(auditStartedAt - 3_600)) }
+            return false
+        case .curatedConflictA:
+            curate(&o, .a)
+            return false
+        case .curatedConflictB:
+            curate(&o, .b)
+            return false
+        case .duplicateIDSecond:
+            o["contentFixity"] = contentFixity(digest(Shape.duplicateIDFirst.rawValue), byteCount: sizeBytes)
+            return false
+        case .supersessionCycleA:
+            o["supersededByID"] = .string(id(.supersessionCycleB))
+            o["repairConfirmedDate"] = .string(iso(auditStartedAt - 3_600))
+            return true
+        case .supersessionCycleB:
+            o["supersededByID"] = .string(id(.supersessionCycleA))
+            return true
         case .tombstonedWithDigest:
-            hashed = true
             o["lifecycleStage"] = .string("Trashed")
             o["removal"] = .object(["state": .string("inTrash"), "since": .string(iso(auditStartedAt - 600)),
                                     "reason": .string("catalogTrash"),
                                     "trashPath": .string("/Volumes/Fixture/.Trashes/501/tombstonedWithDigest.mov")])
             o["removalRevision"] = .int(1)
+            return true
         default:
-            hashed = true
+            return true
         }
-        if hashed {
-            let label = shape == .duplicateIDSecond ? "duplicateIDFirst" : shape.rawValue
-            o["contentFixity"] = contentFixity(digest(label), byteCount: sizeBytes)
-        }
-        if seesStamp(shape) { o["auditSeenOn"] = auditSeenOn }
-        return .object(o)
+    }
+
+    /// One of the two conflicting copies: the shared digest plus its curated values.
+    private static func curate(_ o: inout [String: CatalogJSONValue], _ c: CuratedConflict) {
+        o["contentFixity"] = contentFixity(digest("curated-shared"), byteCount: sizeBytes)
+        o["starRating"] = .int(c.stars)
+        o["userDate"] = .string(c.userDate)
+        o["userDateConfidence"] = .string(c.confidence)
     }
 
     /// The row carries an `auditSeenOn` inside the audit window.

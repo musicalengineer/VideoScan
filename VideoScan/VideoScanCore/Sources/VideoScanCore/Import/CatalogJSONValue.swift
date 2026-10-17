@@ -113,7 +113,7 @@ public enum CatalogJSONValue: Codable, Sendable, Equatable, Hashable {
     /// The canonical text of this value (sorted keys).
     public func canonicalText() -> String {
         guard let data = try? Self.makeEncoder().encode(self) else { return "null" }
-        return String(decoding: data, as: UTF8.self)
+        return String(bytes: data, encoding: .utf8) ?? "null"
     }
 
     /// Any Encodable value as a CatalogJSONValue (encode, then read back).

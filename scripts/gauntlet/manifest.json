@@ -1766,6 +1766,7 @@
         "aLandingForARowTheFileDoesNotHaveIsNamed",
         "aQuarantinedRowsCuratedValueMayLiveInItsRawRow",
         "anAuditResultAcceptedAgainstTheSnapshotRuleIsNamed",
+        "everyCuratedFieldIsCountedWhenDropped",
         "everyMissHasWords",
         "hundredThousandOccurrencesCompareWithinBudget",
         "twoOccurrencesOnOneFilesRowAreNamed"
@@ -1851,6 +1852,22 @@
         "tier3NotRunDoesNotRefuse",
         "tier5AbsentFromTheReportRefuses",
         "truncatedFindingsRefuse"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/PoisonedCatalogFixtureTests.swift",
+      "stage": "unit",
+      "suites": [
+        "PoisonedCatalogFixtureAppDecodeTests"
+      ],
+      "tests": [
+        "theAppDecoderReadsTheHeaderAndEveryRow",
+        "theAppDecoderSeesTheAuditStampTheGateReads",
+        "theAppDecoderSeesTheSameDigestsAsTheImporter",
+        "theAppDecoderSeesTheSameIdsAndPathsInFileOrder",
+        "theAppDecoderSeesTheTombstoneAndTheConflictingStars"
       ]
     },
     {
@@ -28619,6 +28636,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportGateTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/PoisonedCatalogFixtureTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
