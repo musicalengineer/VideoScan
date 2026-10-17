@@ -28098,9 +28098,48 @@
       "tests": [
         "bookkeepingStatementsAreRawSQL",
         "databasePoolIsCreatedInOnePlace",
+        "everyTableOfTheDDLIsInTheSwiftSchema",
+        "everyTriggerOfTheDDLIsInTheSwiftSchema",
         "onlyStoreFoldersImportGRDB",
         "theDDLMatchesTheDesignDocumentsTriggers",
+        "theMigrationCreatesNoTableOutsideTheDDL",
         "volatileDurabilityNeverLeavesTheTests"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogDataSchemaTests"
+      ],
+      "tests": [
+        "aCaseAliasOnACaseInsensitiveVolumeIsRefusedWithTheTriggersWords",
+        "aDanglingReferenceIsRefused",
+        "aPartOneDatabaseGainsTheDataTablesOnOpen",
+        "aPlainGenerationJumpIsRefusedWithTheTriggersWords",
+        "aRemovalMarkerWithoutItsTombstoneIsRefusedWithTheTriggersWords",
+        "aRowSmuggledInWithForeignKeysOffIsCaughtAtTheNextOpen",
+        "everyStatementOfTheDDLIsWhatTheMigrationCreated",
+        "nothingBeyondTheDDLWasCreated",
+        "searchTextFindsWordsAcrossCaseAndDiacritics",
+        "theChecksFileHoldsAgainstTheMigration",
+        "theEngineHasWhatTheDDLNeeds",
+        "theMigrationCreatesTheDocumentsObjects",
+        "theSwiftSchemaIsSplitByTableInDocumentOrder"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogDataSchemaScaleTests"
+      ],
+      "tests": [
+        "hundredThousandFilesInOneImportTransaction"
       ]
     }
   ],
@@ -31327,6 +31366,10 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreSensorTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 32,
@@ -31531,6 +31574,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryScaleTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaScaleTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],

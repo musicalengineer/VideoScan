@@ -1,7 +1,8 @@
 // GRDBCatalogRepository.swift (VideoScanCore/Store)
 // The SQLite plugin behind CatalogRepository, through GRDB 7 (pinned in
-// Package.swift). Step C′ part 1: bookkeeping only — the data tables and
-// the record methods are part 2.
+// Package.swift). Step C′ part 1: the bookkeeping; part 2a adds the data
+// tables (CatalogDataSchema, migration `v2_data`); the record methods are
+// part 2b.
 //
 // What this file guarantees (contract §9.2, §9.5, §e.9, F8r3):
 //   - every connection runs foreign_keys=ON, synchronous=FULL, fullfsync=1
@@ -267,6 +268,15 @@ public actor GRDBCatalogRepository: CatalogRepository {
                            arguments: [now, host])
             try db.execute(sql: "INSERT INTO generation_history (generation, committed_at, host, writer, files_live, files_total) VALUES (0, ?, ?, ?, 0, 0)",
                            arguments: [now, host, CatalogWriter.create.rawValue])
+        }
+        // Part 2a: the data tables (DDL §2 onward), same rule — foreign
+        // keys stay ON, every statement checked as it runs. Registered
+        // AFTER v1_bookkeeping: GRDB runs migrations in registration order,
+        // so a database a part-1 build created gets exactly this one added.
+        migrator.registerMigration(CatalogDataSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            for statement in CatalogDataSchema.statements {
+                try db.execute(sql: statement)
+            }
         }
         return migrator
     }

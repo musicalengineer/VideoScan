@@ -1,4 +1,7 @@
--- catalog_sqlite_schema_v1.sql — VideoScan catalog, SQLite schema v1.2 (DESIGN, not built)
+-- catalog_sqlite_schema_v1.sql — VideoScan catalog, SQLite schema v1.4 (BUILT: §2 onward is
+-- VideoScanCore/Store/CatalogDataSchema.swift verbatim, migration `v2_data`; §1 is
+-- CatalogBookkeepingSchema.swift, migration `v1_bookkeeping`; CatalogDataSchemaTests diffs this
+-- file against sqlite_master, so the Swift copy cannot drift from this document)
 -- Step B of docs/design/catalog_sqlite_migration_2026_10_16.md §10 (contract freeze, 2026-10-17;
 -- revision 2 closes codex's 12 findings, docs/reviews/codex/
 -- codex-review-contract-freeze-sqlite-schema-v1-step-b-2026-10-17.md; each change cites `-- F<N>`).
@@ -6,6 +9,12 @@
 -- codex-review-contract-freeze-r2-closing-pass-2026-10-17.md): F5, F8, F9 reopened (`-- F<N>r3`)
 -- and the new N1 (audit evidence bound to the snapshot), N2 (derived collisions), N3 (Unicode
 -- case fold) (`-- N<N>`). Decisions: docs/briefs/cloud/CONTRACT_FREEZE_R3.md.
+-- Revision 4 (v1.3, GATED 2026-10-17): F5 final — `findings` must be a JSON array (CHECK + the
+-- F5final check). Revision 5 (v1.4, 2026-10-17, C′ part 2a, built; each change is marked
+-- `-- fix 2026-10-17` in place): `files_no_replace` split into two EXISTS terms so each lookup
+-- uses its partial index (the OR form could use neither and scanned the volume's rows on EVERY
+-- insert: 20k rows 23.6 s, 100k rows ~10 min → 0.44 s / 2.2 s; same refusals, F12 + N3 prove it);
+-- §6d `content_text_fts`, the FTS5 search text (an addition, with its reasons).
 -- Companion: docs/design/catalog_contract_freeze_2026_10_17.md (field inventory, invariants,
 -- importer gate §f, reconciliation §g). Reproductions: catalog_sqlite_schema_v1_checks.sql
 -- (`sqlite3 :memory: < catalog_sqlite_schema_v1_checks.sql`). GH #328.
@@ -320,12 +329,23 @@ BEGIN SELECT RAISE(ABORT, 'volume_case_sensitive must equal volumes.case_sensiti
 --     function for every row (a stale fold is a finding, not silently trusted).           -- N3
 
 -- F4: no REPLACE on files (it would delete a row — and its history — without a delete trigger)
+-- fix 2026-10-17 (v1.4, scale): the live-path test was ONE subquery with `full_path = … OR
+-- (NEW.volume_case_sensitive = 0 AND path_fold = …)`. SQLite uses a partial index only when the
+-- index's WHERE terms stand at the top level of the query, never inside an OR branch, so that
+-- subquery could use neither files_live_path nor files_live_path_fold and walked every row of the
+-- volume on EVERY insert (quadratic: 20k rows 23.6 s, 100k ~10 min). The same test as two EXISTS
+-- terms — path, then fold, each with the index's own terms at its top level — runs each lookup
+-- through its index (100k rows 2.2 s). The meaning is unchanged: a case-insensitive volume's rows
+-- all carry volume_case_sensitive = 0 (files_case_flag_matches_volume_*), so adding that term to
+-- the fold lookup excludes nothing. The refusals F12 and N3 reproduce are the proof.
 CREATE TRIGGER files_no_replace
 BEFORE INSERT ON files
 WHEN EXISTS (SELECT 1 FROM files WHERE id = NEW.id)
   OR (NEW.removal_state IS NULL AND EXISTS (SELECT 1 FROM files WHERE removal_state IS NULL
-        AND volume_uuid = NEW.volume_uuid
-        AND (full_path = NEW.full_path OR (NEW.volume_case_sensitive = 0 AND path_fold = NEW.path_fold))))
+        AND volume_uuid = NEW.volume_uuid AND full_path = NEW.full_path))
+  OR (NEW.removal_state IS NULL AND NEW.volume_case_sensitive = 0
+      AND EXISTS (SELECT 1 FROM files WHERE removal_state IS NULL AND volume_case_sensitive = 0
+        AND volume_uuid = NEW.volume_uuid AND path_fold = NEW.path_fold))
 BEGIN SELECT RAISE(ABORT, 'files rows are never replaced (id or live path already taken)'); END;
 CREATE TRIGGER files_no_delete BEFORE DELETE ON files
 BEGIN SELECT RAISE(ABORT, 'files rows are never deleted; stamp a removal marker'); END;
@@ -845,6 +865,37 @@ WHEN (NEW.search_id IS NOT NULL AND EXISTS (SELECT 1 FROM person_searches WHERE 
   OR (NEW.import_run IS NOT NULL AND EXISTS (SELECT 1 FROM person_searches
         WHERE import_run = NEW.import_run AND source_ordinal = NEW.source_ordinal))
 BEGIN SELECT RAISE(ABORT, 'person_searches: a duplicate is a finding, never a replacement'); END;
+
+-- 6d. SEARCH TEXT — v1.4 addition (2026-10-17, C′ part 2a). ONE FTS5 table over every searchable
+--     text a content carries: the BOUND captions / OCR / transcripts of 6b AND the imported,
+--     unverified ones in derived_unverified — so a person finds "Donna at the lake" whichever table
+--     the words sit in, and every hit names its row (digest, kind, seq, provenance, source row).
+--     It is a REGENERABLE index (§10b: derived), never evidence: the importer and the cyclers write
+--     it beside the rows they write, and Verify Catalog may rebuild it from 6b and
+--     derived_unverified at any time. Why a plain FTS5 table, not external-content and not
+--     contentless:
+--       * external content reads from ONE rowid table, and every text table above is WITHOUT ROWID
+--         (keyed by digest): it would take a mirror table plus three sync triggers;
+--       * contentless (content='') cannot return the key columns (even UNINDEXED ones read NULL)
+--         and cannot produce snippet() / highlight(), so a hit could not name its row.
+--     A plain FTS5 table stores the text once in its own shadow tables (content_text_fts_data,
+--     _idx, _content, _docsize, _config — engine-managed, not part of this DDL), returns the key
+--     columns with every hit and supports snippets. A virtual table takes no STRICT / CHECK / FK,
+--     so the WRITER owns consistency: digest names a content row; kind is 'scene' | 'ocrText' |
+--     'ocrDate' | 'transcript'; seq is captions.seq (0 for a transcript); provenance is 'bound'
+--     (6b) or 'unverified' (derived_unverified); source_json_row_id is derived_unverified's, or
+--     '' for a bound row. unicode61 folds case; remove_diacritics 2 lets "Jose" find "José" —
+--     text search is not path identity (N3's rule is about path_fold, which keeps diacritics).
+--     No comments inside the parentheses: FTS5 receives the argument text verbatim.
+CREATE VIRTUAL TABLE content_text_fts USING fts5(
+  text,
+  digest UNINDEXED,
+  kind UNINDEXED,
+  seq UNINDEXED,
+  provenance UNINDEXED,
+  source_json_row_id UNINDEXED,
+  tokenize = 'unicode61 remove_diacritics 2'
+);
 
 -- ---------------------------------------------------------------------------------------------
 -- 7. RELATIONS
