@@ -96,7 +96,10 @@ enum JSONCatalogHeader {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         guard let head = try? handle.read(upToCount: probeWindowBytes) else { return nil }
-        // Lossy decode on purpose: a cut mid-UTF-8 would nil the whole window.
+        // Lossy decode on purpose: a 4 KB cut can split a multibyte sequence
+        // and the failable initializer would nil the WHOLE window; the keys
+        // searched for are ASCII and survive the replacement character.
+        // swiftlint:disable:next optional_data_string_conversion
         let headText = String(decoding: head, as: UTF8.self)
         var version = intValue(forKey: "version", in: headText, last: false)
         var generation = intValue(forKey: "generation", in: headText, last: false)
@@ -112,6 +115,8 @@ enum JSONCatalogHeader {
         guard let size = try? handle.seekToEnd(), size > UInt64(headCount) else { return nil }
         let start = size > UInt64(probeWindowBytes) ? size - UInt64(probeWindowBytes) : 0
         guard (try? handle.seek(toOffset: start)) != nil, let tail = try? handle.readToEnd() else { return nil }
+        // Lossy on purpose, same reason as the head window.
+        // swiftlint:disable:next optional_data_string_conversion
         return String(decoding: tail, as: UTF8.self)
     }
 
