@@ -39,8 +39,24 @@ let package = Package(
         // `match <query> <master>`, read-only, for "same event?" questions.
         .executable(name: "videoscan-audio-match", targets: ["videoscan-audio-match"]),
     ],
+    dependencies: [
+        // GRDB — the SQLite toolkit behind the catalog store (Rick, 2026-10-17:
+        // "the database is a plugin behind a protocol"). Pinned EXACTLY so a
+        // `swift package update` can never move the engine under the catalog;
+        // bumping it is a deliberate commit. 7.11.1 was released 2026-06-18
+        // (the latest stable, four months old on 2026-10-17); it needs
+        // Swift 6.1+ / Xcode 16.3+ and macOS 10.15+, so it builds on CI's
+        // Xcode 26.3 and on the fleet's 27. Only files under
+        // Sources/VideoScanCore/Store/ may `import GRDB`
+        // (CatalogStoreSensorTests pins that).
+        .package(url: "https://github.com/groue/GRDB.swift.git", exact: "7.11.1"),
+    ],
     targets: [
-        .target(name: "VideoScanCore", swiftSettings: strictConcurrency),
+        .target(
+            name: "VideoScanCore",
+            dependencies: [.product(name: "GRDB", package: "GRDB.swift")],
+            swiftSettings: strictConcurrency
+        ),
         .executableTarget(
             name: "videoscan-preview-sweep",
             dependencies: ["VideoScanCore"],

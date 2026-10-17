@@ -28017,6 +28017,91 @@
         "playerNoticesMP3InM4V",
         "silentHeaderIsNotHasSound"
       ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryContractTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogRepositoryContractTests"
+      ],
+      "tests": [
+        "closeIsIdempotent",
+        "generationIsTheStoresGeneration",
+        "generationIsZeroBeforeOpen",
+        "missingFolderIsRefused",
+        "openNamesItsMode",
+        "openingTwiceIsRefused",
+        "readBeforeOpenThrows",
+        "readRethrowsTheBodysError",
+        "readSeesTheGeneration",
+        "verifyBeforeOpen",
+        "verifyIsOk"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryTests.swift",
+      "stage": "regression",
+      "suites": [
+        "GRDBCatalogRepositoryTests"
+      ],
+      "tests": [
+        "aCorruptedFileIsRefusedWithTheEnginesWords",
+        "aCrashBetweenPhasesOpensReadOnlyUntilAdopted",
+        "aDatabaseRestoredFromAnOlderCopyOpensReadOnlyAndSaysSo",
+        "aFreshFileIsCreatedAtGenerationZero",
+        "aLowerHighWaterIsRaisedToTheGeneration",
+        "aMissingHighWaterIsRecreatedFromTheDatabase",
+        "aNewerSchemaIsRefused",
+        "aPlainJumpIsRefusedByTheTrigger",
+        "aPlusOneStepThroughRawSQLStillWorks",
+        "aPoisonedHighWaterIsRepairedByAnExplicitAdoption",
+        "aReadOnlyFolderNeverOpensForWriting",
+        "aStaleSessionGetsGenerationMismatch",
+        "aThrowingBodyRollsBackEverything",
+        "aWriteAdvancesByOneAndRecordsHistory",
+        "adoptFiveToTenSucceedsWithItsOwnHistoryRow",
+        "adoptingANumberTheFileDoesNotHoldIsRefused",
+        "adoptingWithNothingToAdoptIsRefused",
+        "archivalPragmasQueriedBack",
+        "garbageWalAndShmBesideACheckpointedDatabaseAreHarmless",
+        "poisonedHighWaterOpensReadOnly",
+        "theBodySeesTheGenerationItWritesTo",
+        "volatileDurabilityIsOnlyWeakerWhereItSays"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogRepositoryScaleTests"
+      ],
+      "tests": [
+        "hundredThousandAdvances",
+        "tenThousandAdvances",
+        "twoHundredArchivalCommitsRecordTheirCost"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogStoreSensorTests"
+      ],
+      "tests": [
+        "bookkeepingStatementsAreRawSQL",
+        "databasePoolIsCreatedInOnePlace",
+        "onlyStoreFoldersImportGRDB",
+        "theDDLMatchesTheDesignDocumentsTriggers",
+        "volatileDurabilityNeverLeavesTheTests"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -30587,6 +30672,10 @@
         {
           "name": "VideoScan/VideoScanTests/VerifyCatalogTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryContractTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 2397,
@@ -31230,6 +31319,14 @@
         {
           "name": "VideoScan/VideoScanTests/P0TruthRegressionTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogStoreSensorTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 32,
@@ -31431,6 +31528,10 @@
         {
           "name": "VideoScan/VideoScanTests/SignatureConcurrencyScaleTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryScaleTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "environment": {
