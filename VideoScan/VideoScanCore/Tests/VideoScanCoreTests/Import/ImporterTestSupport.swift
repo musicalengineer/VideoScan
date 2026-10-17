@@ -55,13 +55,34 @@ struct ImporterScene {
 
     /// Run once; the importer closes its store before returning.
     func run(seam: CatalogImporter.ComparatorSeam? = nil,
-             decodeSeam: CatalogImporter.DecodeSeam? = nil) async -> (outcome: CatalogImporter.Outcome, runID: String) {
+             decodeSeam: CatalogImporter.DecodeSeam? = nil,
+             mode: CatalogImporter.Mode = .commit,
+             stopRequested: CatalogImporter.StopCheck? = nil) async -> (outcome: CatalogImporter.Outcome, runID: String) {
         let importer = makeImporter()
         await importer.injectComparatorSeam(seam)
         await importer.injectDecodeSeam(decodeSeam)
-        let outcome = await importer.run(inputs)
+        let outcome = await importer.run(inputs, mode: mode, stopRequested: stopRequested)
         let runID = await importer.lastRunID ?? ""
         return (outcome, runID)
+    }
+
+    /// Rewrite the fixture's catalog.json with `edit` applied to its rows and
+    /// a fresh integrity report that certifies the new bytes (the gate hashes
+    /// the file; a poisoned row must still pass the gate to reach the DDL).
+    func poisonCatalog(_ edit: (inout [[String: CatalogJSONValue]]) -> Void) throws {
+        let tree = try JSONDecoder().decode(CatalogJSONValue.self, from: fixture.catalogData)
+        guard var top = tree.objectValue, let rows = top["records"]?.arrayValue else {
+            throw FixtureFailure(words: "the fixture catalog is not an object with records")
+        }
+        var records = rows.map { $0.objectValue ?? [:] }
+        edit(&records)
+        top["records"] = .array(records.map { .object($0) })
+        let encoder = CatalogJSONValue.makeEncoder()
+        let bytes = try encoder.encode(CatalogJSONValue.object(top))
+        try overwrite(PoisonedCatalogFixture.catalogFileName, with: bytes)
+        let report = PoisonedCatalogFixture.integrityReport(catalogSHA256: ImportGateFiles.sha256(of: bytes),
+                                                            byteCount: Int64(bytes.count), rowCount: records.count)
+        try overwrite(PoisonedCatalogFixture.integrityFileName, with: try encoder.encode(report))
     }
 
     /// Read the committed rows back through the seam.
@@ -106,6 +127,10 @@ extension CatalogImporter.Outcome {
     }
     var failureWords: String? {
         if case .failed(let w) = self { return w }
+        return nil
+    }
+    var dryRunReport: CatalogImporter.DryRunReport? {
+        if case .dryRunPassed(let r) = self { return r }
         return nil
     }
 }

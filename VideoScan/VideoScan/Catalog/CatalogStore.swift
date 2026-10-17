@@ -246,6 +246,45 @@ final class CatalogStore {
     /// main actor (all mutations happen there).
     private var saveInFlight = false
 
+    /// True from `scheduleSave` until its debounced save is handed to the
+    /// write queue (or superseded by a synchronous save). With
+    /// `saveInFlight` and `pendingRecords` it answers `hasUnsavedChanges`.
+    private var debouncedSavePending = false
+
+    /// MOPS-16 (Import to SQLite, 2026-10-17): a named HOLD on every write
+    /// to catalog.json. While set, saveNow / scheduleSave → saveAsync /
+    /// saveAcknowledged refuse with `.heldByJob(reason)` — journalled like
+    /// every other refusal — and `heldRefusals` counts them, so the holder
+    /// can schedule one catch-up save when it lets go. One writer at a
+    /// time: the importer READS this file and hashes it before and during
+    /// the import; a save landing underneath would be refused by the gate
+    /// anyway (`catalogChangedDuringImport`), but the hold says so BEFORE
+    /// the bytes move. (For Rick: a named mutex the job takes for its whole
+    /// run; a save that finds it taken returns "held", never blocks.)
+    private(set) var writeHold: String?
+    private(set) var heldRefusals = 0
+
+    /// Something is on its way to disk or waiting to be: a debounced save
+    /// not yet handed to the queue, a save in flight, or records re-marked
+    /// dirty during one. The pre-flight of a job that reads the file asks.
+    var hasUnsavedChanges: Bool { debouncedSavePending || saveInFlight || pendingRecords != nil }
+
+    /// Take the hold. `reason` names the job in the refusal's words.
+    func holdWrites(reason: String) {
+        writeHold = reason
+        heldRefusals = 0
+    }
+
+    /// Let go. Returns how many saves were refused while held — the holder
+    /// schedules a catch-up save when that is more than zero.
+    @discardableResult
+    func releaseWriteHold() -> Int {
+        writeHold = nil
+        let refused = heldRefusals
+        heldRefusals = 0
+        return refused
+    }
+
     /// Records re-marked dirty while a save was in flight. The follow-up
     /// save starts the moment the in-flight one finishes — a second edit
     /// during a save is never lost. Holds the LATEST array reference only;
@@ -430,6 +469,12 @@ final class CatalogStore {
 
         if let reason = writesDisabledReason {
             return fail(.writesDisabled(reason))
+        }
+
+        // MOPS-16 — a job that reads catalog.json holds every write to it.
+        if let hold = writeHold {
+            heldRefusals += 1
+            return fail(.heldByJob(hold))
         }
 
         // GH #167 — before the lock, before any byte: never drop a
@@ -956,6 +1001,7 @@ final class CatalogStore {
         if writePrecondition() != nil { return false }
         debounceTask?.cancel()
         debounceTask = nil
+        debouncedSavePending = false
         pendingRecords = nil  // superseded by this synchronous save
         // Build the Sendable DTO payload ON the main actor (the only place
         // VideoRecord is read), then encode it off-thread on the write queue.
@@ -1008,10 +1054,12 @@ final class CatalogStore {
             return
         }
         debounceTask?.cancel()
+        debouncedSavePending = true
         let captured = records  // capture the array reference; elements are classes
         debounceTask = Task { [weak self] in
             try? await Task.sleep(nanoseconds: 2_000_000_000)
             if Task.isCancelled { return }
+            self?.debouncedSavePending = false
             self?.saveAsync(records: captured)
         }
     }
@@ -1038,6 +1086,7 @@ final class CatalogStore {
         if writePrecondition() != nil { return false }
         debounceTask?.cancel()
         debounceTask = nil
+        debouncedSavePending = false
         pendingRecords = nil  // superseded by this save
         let nextGeneration = allocateGeneration()
         let payload = Self.makePayload(records: records, generation: nextGeneration,

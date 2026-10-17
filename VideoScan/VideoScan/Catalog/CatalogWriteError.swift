@@ -62,6 +62,12 @@ enum CatalogWriteError: Error, Equatable, Sendable {
     /// the designation on disk survives whatever nulled it in memory.
     case designationLossRefused(targetPath: String)
 
+    /// MOPS-16 (Import to SQLite, 2026-10-17): a job that READS catalog.json
+    /// holds every write to it while it runs — one writer at a time. The
+    /// change stays in memory; the holder schedules a catch-up save when
+    /// it lets go, so nothing is lost, only delayed.
+    case heldByJob(String)
+
     var userFacingDescription: String {
         switch self {
         case .lockedByAnotherProcess(let owner):
@@ -81,6 +87,8 @@ enum CatalogWriteError: Error, Equatable, Sendable {
             return "The catalog failed verification after writing \(bytes) bytes (expected SHA-256 \(expected.prefix(12))…, read back \(actual.prefix(12))…). The previous copy is intact in catalog.json.prev."
         case .designationLossRefused(let targetPath):
             return "Catalog not saved: it would have removed the Master Archive designation (\(targetPath)) without anyone clearing it. catalog.json still carries it. Re-open the Archive tab: re-initialize the archive, or clear it there if that is what you meant."
+        case .heldByJob(let reason):
+            return "Catalog saving is paused while \(reason). The change is kept in memory and saved when the job finishes."
         }
     }
 
@@ -110,6 +118,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .verificationFailed:     return "verificationFailed"
         case .writesDisabled:         return "writesDisabled"
         case .designationLossRefused: return "designationLoss"
+        case .heldByJob:              return "held"
         }
     }
 
@@ -125,6 +134,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
         case .verificationFailed:      return 6
         case .writesDisabled:          return 7
         case .designationLossRefused:  return 8
+        case .heldByJob:               return 9
         }
     }
 
@@ -134,7 +144,7 @@ enum CatalogWriteError: Error, Equatable, Sendable {
     /// very lost update this guard exists to prevent.
     var isTransient: Bool {
         switch self {
-        case .lockedByAnotherProcess, .lockUnavailable: return true
+        case .lockedByAnotherProcess, .lockUnavailable, .heldByJob: return true
         case .readOnlyViewer, .staleGeneration,
              .writeFailed, .verificationFailed,
              .writesDisabled, .designationLossRefused:  return false
