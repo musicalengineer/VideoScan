@@ -305,7 +305,7 @@ Measured 2026-10-17 on the live catalog: curated fields sit almost entirely on h
 | 10/17 morning | A′ tool fixes | MERGED + codex-closed (rules/status `7a4c879db`, MediaOps `21076822c`, closures `058c59cec`); audit per-row results `8c49fc345` |
 | 10/17 | A′ hash + sound runs | Rick running Fill In Full Hashes → Fingerprint Sound → Verify Catalog on a Release build; then his before-port spot test |
 | 10/17 | B contract freeze | r1 cloud (`76a4a750e`, codex block 12) → r2 cloud (`433da96bb`, codex: 9 closed, 3 open + 3 new) → r3 cloud in flight (branch `design/contract-freeze-r3`), then a last codex closing pass = the gate |
-| 10/17 | C′ store foundation | agent in flight: `VideoScanCore/SQLite/` — system libsqlite3 wrapper (Rick: no GRDB), pragmas + checks at open, CAS generation, two-phase high-water + adopt, `CatalogDatabase` actor; data tables = part 2 after the gate |
+| 10/17 | C′ part 1 store foundation | MERGED `5399f6189`: `VideoScanCore/Store/` — `CatalogRepository` seam + `GRDBCatalogRepository` (GRDB 7.11.1 exact; §10d) + read-only `JSONCatalogRepository`; CAS in DDL triggers; two-phase high-water + adopt; 41 tests (crash injection, poisoned high-water, VACUUM INTO restore TRUTH); archival commit ≈ 12 ms |
 | next | C′ part 2 | data tables from the gated DDL; validator; the P0 + Verify Catalog suites run unchanged against the SQLite store through a store seam |
 | next | D′ importer | gate truth table (§f r3), quarantine, knowledge_sources, comparator; codex (data-risk) |
 
