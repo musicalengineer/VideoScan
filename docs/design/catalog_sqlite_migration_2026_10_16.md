@@ -308,3 +308,26 @@ Measured 2026-10-17 on the live catalog: curated fields sit almost entirely on h
 | 10/17 | C′ store foundation | agent in flight: `VideoScanCore/SQLite/` — system libsqlite3 wrapper (Rick: no GRDB), pragmas + checks at open, CAS generation, two-phase high-water + adopt, `CatalogDatabase` actor; data tables = part 2 after the gate |
 | next | C′ part 2 | data tables from the gated DDL; validator; the P0 + Verify Catalog suites run unchanged against the SQLite store through a store seam |
 | next | D′ importer | gate truth table (§f r3), quarantine, knowledge_sources, comparator; codex (data-risk) |
+
+### 10d. Backend decision — GRDB behind a plugin seam (Rick + Manager, 2026-10-17)
+
+Rick: "the db MUST be abstracted so that swapping out a new db is almost a plugin … OO modularity with DB
+plugin insulation … 15k records, maybe 40k, probably never 100k." Manager's lean: GRDB.
+
+- **Seam:** `CatalogRepository` protocol in VideoScanCore, domain values only; no GRDB or SQLite type above
+  the store layer (sensor). Two implementations from day one: `GRDBCatalogRepository` (the authority after
+  cutover) and `JSONCatalogRepository` (read-only; the import source). The P0 and Verify Catalog suites run
+  unchanged against both — the abstraction is a test, not a promise.
+- **Why GRDB over raw libsqlite3:** at this scale no backend is the bottleneck; the decision is correctness and
+  reviewable surface. GRDB removes the 129-field hand-written bind/column layer, enforces the one-writer
+  threading rule at the API, brings a named-migration runner and SwiftUI observation. Cost: one pinned
+  dependency (single maintainer, MIT, ten years; must build on CI's Xcode 26.3).
+- **Rick reviews SQL, not GRDB internals:** every integrity-critical statement (generation CAS, two-phase
+  high-water, removal triggers, the import transaction) is raw SQL via `execute(sql:)`, never the query
+  builder (sensor).
+- **Honest state of the current code:** the JSON store file is sound (atomic publish, generation, snapshot,
+  goldens); the MODEL is not abstracted from storage — `VideoRecord` is a main-actor class with 129 fields
+  mutated directly by dozens of writers, then the whole array is serialized; no dirty tracking, no single
+  write door. Building the seam is most of the port's real work whichever backend.
+- **Timebox-friendly first API:** whole-record `write(record)` (every column of one row, one transaction);
+  writers move over one door at a time; field-level updates after the cutover.
