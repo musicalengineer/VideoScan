@@ -104,14 +104,27 @@ public struct PoisonedCatalogFixture: Sendable {
 
     // MARK: - Built content
 
-    /// Shapes in file order; ordinal = position.
+    /// Shapes in file order; ordinal = position. The bulk rows (scale) follow
+    /// the 17 shapes as `.healthy`.
     public let order: [Shape]
+    /// How many bulk healthy rows follow the shapes.
+    public let bulkRows: Int
     public let catalogData: Data
     public let auditData: Data
     public let integrityData: Data
+    /// The §f sidecars (events-decisions.json, ignored-content.json,
+    /// media-ledger.jsonl, fullhash-backfill.json), by file name.
+    public let sidecarData: [String: Data]
+
+    public static let eventsFileName = CatalogDDL.ImportSourceFile.eventsDecisions.rawValue
+    public static let ignoredFileName = CatalogDDL.ImportSourceFile.ignoredContent.rawValue
+    public static let ledgerFileName = CatalogDDL.ImportSourceFile.mediaLedger.rawValue
+    public static let backfillFileName = CatalogDDL.ImportSourceFile.fullHashBackfill.rawValue
 
     public var files: [String: Data] {
-        [Self.catalogFileName: catalogData, Self.auditFileName: auditData, Self.integrityFileName: integrityData]
+        var all = [Self.catalogFileName: catalogData, Self.auditFileName: auditData, Self.integrityFileName: integrityData]
+        for (name, data) in sidecarData { all[name] = data }
+        return all
     }
 
     public var catalogSHA256: String {
@@ -122,10 +135,15 @@ public struct PoisonedCatalogFixture: Sendable {
         order.enumerated().filter { $0.element == shape }.map(\.offset)
     }
 
-    public init() {
+    /// The 17 shapes, then `healthyRows` distinct healthy rows (ids, paths
+    /// and digests of their own; all `present` with a stamp in the window).
+    public init(healthyRows: Int = 0) {
         let shapes = Shape.allCases
-        order = shapes
-        let rows = shapes.map { Self.row(for: $0) }
+        order = shapes + Array(repeating: Shape.healthy, count: healthyRows)
+        bulkRows = healthyRows
+        var rows = shapes.map { Self.row(for: $0) }
+        rows.reserveCapacity(shapes.count + healthyRows)
+        for n in 0..<healthyRows { rows.append(Self.bulkRow(n)) }
         let catalog: CatalogJSONValue = .object([
             "version": .int(6),
             "generation": .int(Int64(Self.generation)),
@@ -138,9 +156,42 @@ public struct PoisonedCatalogFixture: Sendable {
         let sha = SHA256.hash(data: catalogBytes).map { String(format: "%02x", $0) }.joined()
 
         let encoder = CatalogJSONValue.makeEncoder()
-        auditData = (try? encoder.encode(Self.auditMarker())) ?? Data()
+        auditData = (try? encoder.encode(Self.auditMarker(bulkRows: healthyRows))) ?? Data()
         integrityData = (try? encoder.encode(Self.integrityReport(catalogSHA256: sha, byteCount: Int64(catalogBytes.count),
                                                                   rowCount: rows.count))) ?? Data()
+        sidecarData = [
+            Self.eventsFileName: (try? encoder.encode(Self.eventsDecisions())) ?? Data(),
+            Self.ignoredFileName: (try? encoder.encode(Self.ignoredContent())) ?? Data(),
+            Self.ledgerFileName: Data(Self.ledgerText().utf8),
+            Self.backfillFileName: (try? encoder.encode(Self.backfillMarker())) ?? Data(),
+        ]
+    }
+
+    // MARK: - Bulk rows (scale)
+
+    public static func bulkID(_ n: Int) -> String { String(format: "00000000-0000-4000-8000-1%011ld", n) }
+    public static func bulkPath(_ n: Int) -> String { "/Volumes/Fixture/Bulk/\(n / 1_000)/row-\(n).mov" }
+
+    static func bulkRow(_ n: Int) -> CatalogJSONValue {
+        let p = bulkPath(n)
+        var o: [String: CatalogJSONValue] = [
+            "id": .string(bulkID(n)),
+            "filename": .string((p as NSString).lastPathComponent),
+            "ext": .string("mov"),
+            "fullPath": .string(p),
+            "directory": .string((p as NSString).deletingLastPathComponent),
+            "sizeBytes": .int(sizeBytes),
+            "streamTypeRaw": .string("Video+Audio"),
+            "lifecycleStage": .string("Cataloged"),
+            "archiveStage": .string("None"),
+            "scanContext": .object(["volumeUUID": .string(volumeUUID), "volumeName": .string("Fixture"),
+                                    "scanHost": .string("FixtureHost")]),
+            "contentFixity": contentFixity(digest("bulk-\(n)"), byteCount: sizeBytes),
+            "auditSeenOn": auditSeenOn,
+        ]
+        if n % 10 == 0 { o["starRating"] = .int(Int64(n % 3 + 1)) }      // some curated values, for the counts
+        if n % 25 == 0 { o["sceneCaptions"] = .array([.object(["timestamp": .int(1), "text": .string("bulk caption \(n)")])]) }
+        return .object(o)
     }
 
     // MARK: - Rows
@@ -215,6 +266,11 @@ public struct PoisonedCatalogFixture: Sendable {
     /// agreeing whole-file fixity (a shape that sets its own, or none, says no).
     private static func poison(_ shape: Shape, into o: inout [String: CatalogJSONValue]) -> Bool {
         switch shape {
+        case .deadLink:
+            // A curated value on a row that cannot enter `files` (§10b: it
+            // goes to quarantine WITH its curated fields — the TRUTH test).
+            o["starRating"] = .int(3)
+            return true
         case .sampledOnly:
             o["contentHash"] = .string("v1:" + String(digest("sampled").prefix(32)))
             o["partialMD5"] = .string("d41d8cd98f00b204e9800998ecf8427e")
@@ -242,6 +298,13 @@ public struct PoisonedCatalogFixture: Sendable {
             return true
         case .supersessionCycleB:
             o["supersededByID"] = .string(id(.supersessionCycleA))
+            return true
+        case .stalePrint:
+            // The one row that names an A/V pair, so an event member keyed
+            // `pair:<pairGroupID>` has a half to resolve to (F9).
+            o["pairGroupID"] = .string(pairGroupID)
+            o["pairedWithID"] = .string(id(.healthy))
+            o["pairConfidence"] = .string("High")
             return true
         case .tombstonedWithDigest:
             o["lifecycleStage"] = .string("Trashed")
@@ -273,9 +336,11 @@ public struct PoisonedCatalogFixture: Sendable {
 
     // MARK: - Audit marker (contract §c / §f shape)
 
-    static func auditMarker() -> AuditMarkerJSON {
+    static func auditMarker(bulkRows: Int = 0) -> AuditMarkerJSON {
         var rows: [AuditMarkerJSON.Row] = []
+        rows.reserveCapacity(Shape.allCases.count + bulkRows)
         var seen = Set<String>()
+        for n in 0..<bulkRows { rows.append(.init(id: bulkID(n), result: "present")) }
         for shape in Shape.allCases {
             let rowID = id(shape)
             guard seen.insert(rowID).inserted else { continue }   // one answer per id
@@ -298,6 +363,79 @@ public struct PoisonedCatalogFixture: Sendable {
                                finishedAt: CatalogJSONDate(unixSeconds: auditFinishedAt),
                                outcome: "completed", partial: false, counts: counts, marked: 0,
                                rows: rows, savedGeneration: generation)
+    }
+
+    // MARK: - Sidecars (contract §c), small and deterministic
+
+    public static let pairGroupID = "0A1B2C3D-0000-4000-8000-00000000AA11"
+    public static let eventOneID = "0A1B2C3D-0000-4000-8000-00000000EE01"
+    public static let eventTwoID = "0A1B2C3D-0000-4000-8000-00000000EE02"
+    public static let unknownEventID = "0A1B2C3D-0000-4000-8000-00000000EE03"
+
+    /// Two events; nine decisions in the stream, every kind the app writes
+    /// plus one from a newer build. The fold yields THREE members (the
+    /// deadLink one is accepted then rejected) and ONE key that cannot
+    /// resolve (`id:` of the row with no digest).
+    public static func eventsDecisions() -> CatalogJSONValue {
+        func member(_ event: String, _ key: String, _ verdict: String) -> CatalogJSONValue {
+            .object(["kind": .string("member"), "eventID": .string(event), "range": .object(["contentKey": .string(key)]),
+                     "verdict": .string(verdict)])
+        }
+        let events: [CatalogJSONValue] = [
+            .object(["id": .string(eventOneID), "name": .string("Matt's birthday"), "categories": .array([.string("birthday")]),
+                     "state": .string("confirmed"), "createdAt": .string(iso(auditStartedAt - 9_000)),
+                     "updatedAt": .string(iso(auditStartedAt - 8_000)), "note": .string("the cake")]),
+            .object(["id": .string(eventTwoID), "name": .string("Lake day"), "categories": .array([]),
+                     "state": .string("dismissed"), "createdAt": .string(iso(auditStartedAt - 7_000)),
+                     "updatedAt": .string(iso(auditStartedAt - 7_000))]),
+        ]
+        let decisions: [CatalogJSONValue] = [
+            member(eventOneID, digest(Shape.healthy.rawValue), "accepted"),
+            member(eventOneID, "id:" + id(.sampledOnly), "accepted"),
+            member(eventOneID, "pair:" + pairGroupID, "accepted"),
+            member(eventOneID, digest(Shape.deadLink.rawValue), "accepted"),
+            member(eventOneID, digest(Shape.deadLink.rawValue), "rejected"),
+            .object(["kind": .string("differentOccasions"), "a": .object(["contentKey": .string(digest(Shape.healthy.rawValue))]),
+                     "b": .object(["contentKey": .string(digest(Shape.deadLink.rawValue))])]),
+            .object(["kind": .string("merged"), "from": .string(unknownEventID), "into": .string(eventOneID)]),
+            .object(["kind": .string("futureKind"), "note": .string("written by a newer build")]),
+            member(eventTwoID, digest("curated-shared"), "accepted"),
+        ]
+        return .object(["storeVersion": .int(1), "savedAt": .string(iso(auditStartedAt - 6_000)),
+                        "events": .array(events), "decisions": .array(decisions)])
+    }
+
+    public static func ignoredContent() -> CatalogJSONValue {
+        .object(["storeVersion": .int(1), "savedAt": .string(iso(auditStartedAt - 5_000)), "entries": .array([
+            .object(["id": .string("0A1B2C3D-0000-4000-8000-00000000CC01"), "partialMD5": .string("d41d8cd98f00b204e9800998ecf8427e"),
+                     "sizeBytes": .int(4_096), "filename": .string("junk.mov"), "reason": .string("junk"),
+                     "addedAt": .string(iso(auditStartedAt - 4_000)), "samplePath": .string("/Volumes/Fixture/Junk/junk.mov")]),
+            .object(["id": .string("0A1B2C3D-0000-4000-8000-00000000CC02"), "partialMD5": .string(""),
+                     "sizeBytes": .int(99), "filename": .string("slate.mov"), "reason": .string("removed-by-user"),
+                     "addedAt": .string(iso(auditStartedAt - 3_000)), "samplePath": .string("/Volumes/Fixture/Junk/slate.mov")]),
+        ])])
+    }
+
+    /// Three JSON lines (one names a row with a digest, one a row without,
+    /// one a high-water line with no record) and one torn line.
+    public static func ledgerText() -> String {
+        func line(_ event: String, _ rowID: String, _ path: String) -> String {
+            let o: CatalogJSONValue = .object(["at": .string(iso(auditStartedAt - 2_000) ), "event": .string(event),
+                                               "recordID": .string(rowID), "contentKey": .string(""), "filename": .string(""),
+                                               "fullPath": .string(path), "by": .string("rick"), "detail": .object([:])])
+            return o.canonicalText()
+        }
+        return [
+            line("dateSet", id(.healthy), path(.healthy)),
+            line("setAside", id(.sampledOnly), path(.sampledOnly)),
+            CatalogJSONValue.object(["kind": .string("generationHighWater"), "intended": .int(42)]).canonicalText(),
+            "{\"at\":\"2026-",
+        ].joined(separator: "\n") + "\n"
+    }
+
+    public static func backfillMarker() -> CatalogJSONValue {
+        .object(["startedAt": .string(iso(auditStartedAt - 90_000)), "finishedAt": .string(iso(auditStartedAt - 80_000)),
+                 "hashedSoFar": .int(12)])
     }
 
     // MARK: - Integrity report (schema 2)

@@ -1,6 +1,8 @@
 // CatalogRepository.swift (VideoScanCore/Store)
 // The SEAM between the catalog's domain and whatever stores it. Step C′
-// part 1 of docs/design/catalog_sqlite_migration_2026_10_16.md §10a.
+// part 1 of docs/design/catalog_sqlite_migration_2026_10_16.md §10a; part
+// 2b adds the record doors the importer writes through and the readings
+// the comparator checks.
 //
 // Rick's ruling (2026-10-17): the database is a PLUGIN behind a protocol.
 // Nothing above this layer may name a GRDB or SQLite type, so this file
@@ -13,11 +15,14 @@
 //   - JSONCatalogRepository  — the existing catalog.json, read-only (the
 //                              import source; it is never written here)
 //
-// Part 2 adds the record methods (files, content, knowledge) to
-// CatalogTransaction / CatalogReader. This part carries only the
-// bookkeeping that every later method rides on: open, generation, the
-// one-transaction write with its compare-and-set, read, verify, adopt,
-// close.
+// Part 2b (2026-10-17): `CatalogTransaction` gains one door per table row
+// the importer writes — each one row per call, each raw SQL on the GRDB
+// side (Rick reviews SQL). `CatalogRecordReading` holds the readings the
+// comparator needs; BOTH the reader handle and the transaction handle
+// refine it, because the comparator runs INSIDE the import transaction
+// (contract §f: any miss rolls the import back) and a separate reader
+// connection could not see the uncommitted rows. Readings stream through a
+// visitor closure — no O(records) array where a cursor will do.
 //
 // THREADING RULE. Every method is safe to call from any task or actor.
 // Writes are serialised by the store: one at a time, in call order. The
@@ -29,7 +34,9 @@
 //
 // For Rick: a protocol with `async` requirements is an abstract base class
 // whose virtual methods may suspend. The conforming `actor` types are the
-// concrete classes, each with an implicit mutex around its members.
+// concrete classes, each with an implicit mutex around its members. A
+// visitor closure (`(Row) throws -> Void`) is a callback per row — the
+// cursor stays inside the store.
 
 import Foundation
 
@@ -70,10 +77,13 @@ public enum CatalogAdoptOutcome: Sendable, Equatable {
     case refused(reason: String)
 }
 
-/// Thrown by `read` when the repository is not open. Everything else a
+/// Thrown by `read` when the repository is not open, and by a store that
+/// has no table to answer a record reading from (the JSON store: it is the
+/// import SOURCE, nothing was ever imported into it). Everything else a
 /// repository can say is an outcome value, not an error.
 public enum CatalogRepositoryError: Error, Equatable {
     case notOpen
+    case unsupported(String)
 }
 
 // MARK: - The doors a write comes through
@@ -93,17 +103,91 @@ public enum CatalogWriter: String, Sendable {
 
 // MARK: - What a body sees
 
-/// The handle a `read` body receives. Part 2 adds the record queries.
-public protocol CatalogReader {
+/// The readings the import comparator checks (contract §f "Comparator"),
+/// each keyed by the import run and streamed in storage order. Shared by
+/// the reader handle and the transaction handle so the comparator can run
+/// inside the import's own transaction.
+public protocol CatalogRecordReading {
+    /// How many rows the record tables hold (the importer refuses a non-empty target).
+    func recordCounts() throws -> CatalogRow.TableCounts
+    /// Every catalog.json occurrence of `run` and the table row it landed in.
+    func rowLandings(run: String, _ visit: (CatalogRow.RowLanding) throws -> Void) throws
+    /// `quarantine.raw_row` by ordinal for `run`.
+    func quarantineRawRows(run: String, _ visit: (Int, [String: CatalogJSONValue]) throws -> Void) throws
+    /// Every quarantine row of `run` with its reason and words (the import report).
+    func quarantineEntries(run: String, _ visit: (CatalogRow.QuarantineReading) throws -> Void) throws
+    /// Every `content.digest`.
+    func contentDigests(_ visit: (String) throws -> Void) throws
+    /// Every `knowledge_sources` row of `run`: ordinal, field, value.
+    func knowledgeSources(run: String, _ visit: (CatalogRow.KnowledgeReading) throws -> Void) throws
+    /// Every `derived_unverified` key of `run`.
+    func derivedUnverifiedKeys(run: String, _ visit: (CatalogRow.DerivedKeyReading) throws -> Void) throws
+    /// Every `sound_prints.digest`.
+    func soundPrintDigests(_ visit: (String) throws -> Void) throws
+    /// Source ordinals of `event_decisions` rows of `run`.
+    func eventDecisionOrdinals(run: String, _ visit: (Int) throws -> Void) throws
+    /// Every `event_members` row (event id, the original key).
+    func eventMembers(_ visit: (CatalogRow.EventMemberReading) throws -> Void) throws
+    /// Member keys kept unresolved: the decision stream's keys and `legacy_pair_ids.event_member_keys`.
+    func listedMemberKeys(run: String, _ visit: (String) throws -> Void) throws
+    func ledgerOrdinals(run: String, _ visit: (Int) throws -> Void) throws
+    func ignoredOrdinals(run: String, _ visit: (Int) throws -> Void) throws
+    func jobMarkers(run: String, _ visit: (CatalogRow.MarkerReading) throws -> Void) throws
+    func auditResults(run: String, _ visit: (CatalogRow.AuditResultReading) throws -> Void) throws
+    func personSearchOrdinals(run: String, _ visit: (Int) throws -> Void) throws
+    /// The counts of the reconciliation line, read from the rows (contract §f).
+    func importReconciliation(run: String) throws -> ImportReconciliation
+}
+
+/// The handle a `read` body receives.
+public protocol CatalogReader: CatalogRecordReading {
     /// The committed generation this read's snapshot was taken at.
     var generation: Int { get }
 }
 
-/// The handle a `write` body receives. Part 2 adds the record mutations.
-public protocol CatalogTransaction {
+/// The handle a `write` body receives: one door per table row, each ONE
+/// row per call, plain INSERT (never REPLACE: a duplicate is a finding).
+/// The store's DDL — not the door — refuses a row that breaks a constraint;
+/// the thrown error carries the engine's words and the write rolls back.
+public protocol CatalogTransaction: CatalogRecordReading {
     /// The generation this write advances TO (the committed one plus one).
     /// Rows written in this transaction are stamped with it.
     var generation: Int { get }
+
+    // The occurrence's own rows (CatalogRecordDTO)
+    func insertVolume(_ volume: CatalogRecordDTO.VolumeRowDTO, caseSensitive: Bool) throws
+    func insertContent(_ content: CatalogRecordDTO.ContentRow) throws
+    func insertFile(_ file: CatalogRecordDTO.FileRow, volumeCaseSensitive: Bool) throws
+    func insertTombstone(_ tombstone: CatalogRow.Tombstone) throws
+    func insertArchiveCopy(fileID: String, _ copy: CatalogRecordDTO.ArchiveCopyRow, sourceFileID: String?) throws
+    func insertBackupDestination(fileID: String, _ destination: CatalogRecordDTO.BackupDestinationRow) throws
+
+    // Knowledge and derived evidence
+    func insertKnowledgeSource(_ source: CatalogRow.KnowledgeSource) throws
+    /// False when the same (digest, kind, seq, source row) key is already there.
+    func insertDerivedUnverified(_ derived: CatalogRow.DerivedUnverified) throws -> Bool
+    /// The one BOUND derived value an import carries (§e.8). False when the digest already has a print.
+    func insertSoundPrint(_ print: CatalogRecordDTO.SoundPrintRow) throws -> Bool
+    func insertRegenContext(_ context: CatalogRow.RegenContext) throws
+    func insertLegacyPairIDs(_ pair: CatalogRow.LegacyPairIDs) throws
+    func insertRelation(_ relation: CatalogRow.Relation) throws -> CatalogRow.RelationLanding
+
+    // Quarantine and the import map
+    /// Returns the `quarantine.qid` the row received.
+    func insertQuarantine(_ row: CatalogRow.Quarantine) throws -> Int64
+    func insertImportRun(_ run: CatalogRow.ImportRun) throws
+    /// The one UPDATE that closes a run; the DDL's finish trigger recounts every counter.
+    func finishImportRun(_ runID: String, counters: CatalogRow.ImportCounters, finishedAt: Int64) throws
+    func insertImportItem(_ item: CatalogRow.ImportItem) throws
+
+    // Sidecars
+    func insertEvent(_ event: CatalogRow.Event) throws
+    func insertEventDecision(_ decision: CatalogRow.EventDecision) throws
+    func insertIgnored(_ entry: CatalogRow.Ignored) throws
+    func insertLedgerLine(_ line: CatalogRow.Ledger) throws
+    func insertJobMarker(_ marker: CatalogRow.JobMarker) throws
+    func appendAuditResult(_ result: CatalogRow.AuditResult) throws
+    func insertPersonSearch(_ search: CatalogRow.PersonSearch) throws
 }
 
 // MARK: - The seam

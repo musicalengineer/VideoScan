@@ -1,8 +1,9 @@
 // GRDBCatalogRepository.swift (VideoScanCore/Store)
 // The SQLite plugin behind CatalogRepository, through GRDB 7 (pinned in
 // Package.swift). Step C′ part 1: the bookkeeping; part 2a adds the data
-// tables (CatalogDataSchema, migration `v2_data`); the record methods are
-// part 2b. The codex C′ pass of 2026-10-17 (docs/reviews/codex/
+// tables (CatalogDataSchema, migration `v2_data`); part 2b adds the record
+// doors (+Writes) and readings (+Reads) and fills `files_live` /
+// `files_total` on every commit. The codex C′ pass of 2026-10-17 (docs/reviews/codex/
 // codex-review-sqlite-store-parts-1-2a-step-c-2026-10-17.md) hardened the
 // generation bookkeeping; each change is marked `codex C′ #N` below.
 //
@@ -483,9 +484,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
             if let problem = publishMark(expected: expected, next: next) {
                 return .refused(reason: problem)
             }
-            // files_live / files_total: 0 until part 2b has a `files` row count to write.
-            try db.execute(sql: "INSERT INTO generation_history (generation, committed_at, host, writer, files_live, files_total, kind, from_generation) VALUES (?, ?, ?, ?, 0, 0, 'commit', NULL)",
-                           arguments: [next, now, host, door.rawValue])
+            // Part 2b: the history row carries what `files` holds at this commit.
+            let filesLive = try Int.fetchOne(db, sql: "SELECT count(*) FROM files WHERE removal_state IS NULL") ?? 0
+            let filesTotal = try Int.fetchOne(db, sql: "SELECT count(*) FROM files") ?? 0
+            try db.execute(sql: "INSERT INTO generation_history (generation, committed_at, host, writer, files_live, files_total, kind, from_generation) VALUES (?, ?, ?, ?, ?, ?, 'commit', NULL)",
+                           arguments: [next, now, host, door.rawValue, filesLive, filesTotal])
             try crashBeforeCommit?()
             return .committed(generation: next)                   // phase 2 is the COMMIT that follows
         }
@@ -834,7 +837,9 @@ private func unixNow() -> Int {
     Int(Date().timeIntervalSince1970)
 }
 
-// MARK: - The handles a body sees (part 2 grows them)
+// MARK: - The handles a body sees. Part 2b: the record doors live in
+// GRDBCatalogRepository+Writes.swift (transaction) and the readings in
+// GRDBCatalogRepository+Reads.swift (both handles, via GRDBRecordHandle).
 
 struct GRDBReader: CatalogReader {
     let generation: Int
