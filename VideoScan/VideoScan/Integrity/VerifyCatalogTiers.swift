@@ -36,13 +36,21 @@ struct VerifyCatalogSnapshot: Sendable {
     /// the last one loaded or durably written). The findings describe THIS
     /// generation; tier 5 checks the file on disk still carries it.
     var catalogGeneration: Int
+    /// The volume roots connected when the snapshot was taken ("/" and
+    /// each "/Volumes/<name>" — the job's ONE readdir of /Volumes; tests
+    /// inject it). Tier 1 splits its words by it: a sampled-only file on
+    /// a connected drive is one Fill In Full Hashes away; one on a drive
+    /// that is not connected is not.
+    var mountedVolumeRoots: Set<String>
     var liveCount: Int
 
-    init(rows: [IntegrityRow], events: [IntegrityEventFact], catalogFile: String, catalogGeneration: Int = 0) {
+    init(rows: [IntegrityRow], events: [IntegrityEventFact], catalogFile: String, catalogGeneration: Int = 0,
+         mountedVolumeRoots: Set<String> = ["/"]) {
         self.rows = rows
         self.events = events
         self.catalogFile = catalogFile
         self.catalogGeneration = catalogGeneration
+        self.mountedVolumeRoots = mountedVolumeRoots
         liveCount = rows.reduce(0) { $0 + ($1.isLive ? 1 : 0) }
     }
 
@@ -177,24 +185,43 @@ enum VerifyCatalogTiers {
 
     /// Every active row with bytes should carry a whole-file SHA-256; the
     /// sampled `v1:` hash never counts (`IntegrityRow.fullDigest` is nil
-    /// for it by construction — `storedFullDigest`).
+    /// for it by construction — `storedFullDigest`). The words split the
+    /// sampled-only rows by the snapshot's connected roots: the ones on a
+    /// connected drive are one Fill In Full Hashes away; the rest are not.
     static func identity(_ input: TierInput) -> TierOutcome {
         var checked = 0
         var known = 0
+        var connected = 0
+        let mounted = input.snapshot.mountedVolumeRoots
         for r in input.snapshot.rows where r.isActive && r.hasBytes {
             checked += 1
-            if r.fullDigest != nil { known += 1 }
+            if r.fullDigest != nil {
+                known += 1
+            } else if mounted.contains(VolumeReachability.volumeRootKey(forPath: r.fullPath, mountedRoots: mounted)) {
+                connected += 1
+            }
         }
         let unknown = checked - known
         var t = IntegrityTier(tier: 1, name: name(1), verifiedAt: input.now, runID: input.runID, result: .ok,
                               checked: checked, passed: known, couldNotCheck: unknown, summary: "")
         if unknown > 0 {
             t.result = .couldNotCheck(unknown)
-            t.summary = "\(unknown.formatted()) files still have only a sampled hash — Fill In Full Hashes"
+            t.summary = identityWords(sampledOnly: unknown, connected: connected)
         } else {
             t.summary = "every live file has a whole-file SHA-256 (\(known.formatted()))"
         }
         return TierOutcome(tier: t)
+    }
+
+    /// "712 files still have only a sampled hash — 616 on connected drives
+    /// (Fill In Full Hashes) · 96 on drives not connected"; all connected
+    /// keeps the short words; none connected says so.
+    static func identityWords(sampledOnly n: Int, connected: Int) -> String {
+        let head = "\(n.formatted()) files still have only a sampled hash — "
+        let offline = n - connected
+        if offline == 0 { return head + "Fill In Full Hashes" }
+        if connected == 0 { return head + "all on drives not connected" }
+        return head + "\(connected.formatted()) on connected drives (Fill In Full Hashes) · \(offline.formatted()) on drives not connected"
     }
 
     // MARK: Tier 3 — the header against the sound print
@@ -238,10 +265,12 @@ enum VerifyCatalogTiers {
     }
 
     /// Why a stamp contradicts a Video+Audio header; nil when it does not.
+    /// The evidence is the sound-print STAMP (what Fingerprint Sound
+    /// recorded), never a fresh ffmpeg read — the words say so.
     static func silentPrintReason(_ stamp: AudioFingerprintStamp) -> String? {
         switch stamp.outcome {
         case .noAudio:
-            return "but ffmpeg found no audio stream"
+            return "but the sound print recorded no audio — Fingerprint Sound again"
         case .fingerprinted:
             return stamp.analyzedSeconds > 0 && stamp.landmarks == 0 ? "but the sound print heard nothing (silent)" : nil
         }
@@ -292,25 +321,42 @@ enum VerifyCatalogTiers {
             found.append(IntegrityFinding(tier: 5, rule: catalogFileRule, recordID: nil, filename: nil,
                                           words: comparison.words, needsDecision: true))
         }
-        let decisions = found.reduce(0) { $0 + ($1.needsDecision ? 1 : 0) }
+        let decided = found.filter(\.needsDecision)
+        let unverified = found.count - decided.count
         let rows = input.snapshot.rows.count
         let unreadable = file.hash == nil && file != .notOnDisk
+        let couldNotCheck = unverified + (unreadable ? 1 : 0)
         var t = IntegrityTier(tier: 5, name: name(5), verifiedAt: input.now, runID: input.runID, result: .ok,
                               checked: rows, passed: rows - Set(found.compactMap(\.recordID)).count,
-                              needsDecision: decisions, couldNotCheck: unreadable ? 1 : 0, summary: "")
-        if decisions > 0 {
-            t.result = .needsDecision(decisions)
-            t.summary = constraintSummary(found)
-        } else if unreadable {
-            t.result = .couldNotCheck(1)
-            t.summary = "every relation holds (\(rows.formatted()) rows)"
-        } else {
-            t.summary = "every relation holds (\(rows.formatted()) rows) · \(comparison.words)"
+                              needsDecision: decided.count, couldNotCheck: couldNotCheck, summary: "")
+        if !decided.isEmpty {
+            t.result = .needsDecision(decided.count)
+        } else if couldNotCheck > 0 {
+            t.result = .couldNotCheck(couldNotCheck)
         }
+        t.summary = relationWords(found, rows: rows, fileWords: unreadable ? nil : comparison.words)
         if let said = fileProblemWords(file, snapshotGeneration: input.snapshot.catalogGeneration) {
             t.summary += " · " + said
         }
         return TierOutcome(tier: t, findings: found, catalogHash: file.hash)
+    }
+
+    /// The decisions by rule (most first), then the UNVERIFIED findings
+    /// by rule (a lineage link to a purged row — kept as history), then,
+    /// when nothing needs a decision, "every [other] relation holds (N
+    /// rows)" and the catalog-file comparison (`fileWords`; nil when the
+    /// file could not be read, so nothing is claimed about it).
+    static func relationWords(_ found: [IntegrityFinding], rows: Int, fileWords: String?) -> String {
+        let decided = found.filter(\.needsDecision)
+        let kept = found.filter { !$0.needsDecision }
+        var parts: [String] = []
+        if !decided.isEmpty { parts.append(constraintSummary(decided)) }
+        if !kept.isEmpty { parts.append(constraintSummary(kept)) }
+        if decided.isEmpty {
+            parts.append("every \(kept.isEmpty ? "" : "other ")relation holds (\(rows.formatted()) rows)")
+            if let fileWords { parts.append(fileWords) }
+        }
+        return parts.joined(separator: " · ")
     }
 
     /// The catalog file's streamed SHA-256, or why there is none: not on

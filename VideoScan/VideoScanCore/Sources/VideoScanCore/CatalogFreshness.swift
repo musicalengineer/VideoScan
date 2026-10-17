@@ -420,29 +420,31 @@ public enum FreshnessPolicy {
             .sorted { $0.verdict.colour > $1.verdict.colour }
             .map { FreshnessSummary.Item(kind: $0.row.kind, title: $0.row.title,
                                          colour: $0.verdict.colour, words: $0.verdict.words) }
-        let reds = judged.filter { $0.verdict.colour == .red }
-        let tally = Tally(red: reds.count,
-                          yellow: judged.filter { $0.verdict.colour == .yellow }.count,
+        let tally = Tally(yellow: judged.filter { $0.verdict.colour == .yellow }.count,
                           anyOffline: rows.contains { $0.offline > 0 },
-                          onlyRedWords: reds.count == 1 ? reds[0].verdict.words : nil)
+                          redWords: judged.filter { $0.verdict.colour == .red }.map(\.verdict.words))
         let stale = judged.filter { $0.verdict.colour == .yellow && !$0.row.isRunning }.map(\.row.kind)
         return FreshnessSummary(colour: colour, headline: headline(colour, tally), items: items, staleKinds: stale)
     }
 
     struct Tally {
-        var red: Int
         var yellow: Int
         var anyOffline: Bool
-        /// The one red row's words, when there is exactly one — the chip
-        /// says "Needs a decision: 3 rows pointing at nothing" (design §4;
-        /// Rick 2026-10-16: yellow says "need attention", so red says "decision").
-        var onlyRedWords: String?
+        /// The red rows' words, registry order — the chip says what to
+        /// decide, never how many things ("Needs a decision: 3 rows
+        /// pointing at nothing"; design §4; Rick 2026-10-16: yellow says
+        /// "need attention", so red says "decision"; 2026-10-17: with
+        /// several red rows, name up to two, then "N more").
+        var redWords: [String]
     }
+
+    /// Red rows named in the headline before "N more".
+    static let headlineRedRowsNamed = 2
 
     static func headline(_ colour: FreshnessColour, _ tally: Tally) -> String {
         switch colour {
         case .red:
-            return "Needs a decision: \(tally.onlyRedWords ?? things(tally.red))"
+            return "Needs a decision: \(decisionWords(tally.redWords))"
         case .yellow:
             return "\(things(tally.yellow)) \(tally.yellow == 1 ? "needs" : "need") attention"
         case .green:
@@ -454,6 +456,13 @@ public enum FreshnessPolicy {
 
     static func things(_ n: Int) -> String {
         "\(n) thing\(n == 1 ? "" : "s")"
+    }
+
+    /// "<row A words> · <row B words>", then " · N more" past the first two.
+    static func decisionWords(_ redWords: [String]) -> String {
+        let named = redWords.prefix(headlineRedRowsNamed).joined(separator: " · ")
+        let more = redWords.count - headlineRedRowsNamed
+        return more > 0 ? "\(named) · \(more) more" : named
     }
 }
 

@@ -357,13 +357,25 @@ struct CatalogFreshnessTests {
         #expect(s.items.map(\.kind) == ["presence"])
     }
 
+    /// Two red rows: the headline names BOTH (registry order) — "2 things"
+    /// told nobody what to decide (Rick's first real report, 2026-10-17).
     @Test func severalRedRowsAreCounted() {
         var presence = Self.currentPresence()
         presence.needsDecision = 3
         var hashes = Self.currentHashes()
         hashes.lastOutcome = .failed
         let s = summarize([hashes, presence])
-        #expect(s.headline == "Needs a decision: 2 things")
+        #expect(s.headline == "Needs a decision: the last run failed or was stopped — look at the log, then run again · 3 rows pointing at nothing — look at Fix Links")
+    }
+
+    @Test func moreThanTwoRedRowsNameTwoThenCountTheRest() {
+        var a = Self.currentPresence(); a.kind = "a"; a.needsDecision = 1
+        var b = Self.currentHashes(); b.kind = "b"; b.lastOutcome = .failed
+        var c = Self.currentHashes(); c.kind = "c"; c.storeUnavailable = "locked"
+        var d = Self.currentPresence(); d.kind = "d"; d.needsDecision = 2
+        let s = summarize([a, b, c, d])
+        #expect(s.headline == "Needs a decision: 1 row pointing at nothing — look at Fix Links · the last run failed or was stopped — look at the log, then run again · 2 more")
+        #expect(summarize([a, b, c]).headline.hasSuffix(" · 1 more"))
     }
 
     @Test func itemsListRedFirstThenYellowThenGreyInRegistryOrder() {
@@ -446,6 +458,6 @@ struct CatalogFreshnessTests {
         #expect(summary?.colour == .red)
         #expect(summary?.items.count == 750)
         #expect(summary?.staleKinds.count == 500)
-        #expect(summary?.headline == "Needs a decision: 250 things")
+        #expect(summary?.headline == "Needs a decision: 3 files needing a decision · 1 file needing a decision · 248 more")
     }
 }
