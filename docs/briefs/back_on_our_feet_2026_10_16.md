@@ -1,6 +1,27 @@
-# Getting back on our feet — the plan as of 2026-10-16, 21:00 (for Rick, after dinner)
+# Getting back on our feet — the plan as of 2026-10-16, 21:15 (for Rick, after dinner)
 
-## Where we stand tonight
+## Tonight's results (21:15)
+
+- **First real Audit Catalog run (your Release build, ~3 s):** 10,831 rows present and stamped with where
+  they were seen · 144 never seen by an audit (audio-project backups, a Chrome cache, Immich, photo sets,
+  NH_Christmas.mov — nothing under Breen_Family_Archive/30_Video) · 216 still missing · 2 could not be
+  checked (the two symlink rows) · **marked 0**, as designed. "Update everything stale": hashes 0 of 114
+  (all 114 are gone rows; 10,236 rows hashed; 628 archived rows carry fixity); sound prints 45 new ·
+  142 missing · 26 failed · 6 never hashed.
+- **Verify Catalog, slice 1, is on main** (`Catalog ▸ Verify Catalog…`, an MFO job, read-only): tier 5
+  constraints (11 rules + the stale-stamp rule), the catalog file's own SHA-256 + generation, the dated
+  report beside catalog.json, the Integrity row in Catalog Status; 40 tests. Codex found 6 (3 P1): a
+  pause between tiers can let the findings and the file hash describe different generations; a
+  completed run can mask a tier that could not check; tier 3 counts stale sound stamps; three P2. A
+  bug-fix agent is closing them red-first tonight; the closure goes in the codex doc.
+- **The P0 truth-regression suite is on main** (written in the cloud, proven on the M4): the poisoned
+  fixture catalog + 13 regression tests (9 falls + 4 source sensors). Green 18 tests; red at the three
+  pre-fix commits (22 / 27 / 37 issues) and under a folder mutant (exactly the 2 mutant assertions).
+  Run sheet: `docs/reviews/p0-regression-2026-10-17.md`. It sits in the `regression` stage of the
+  gauntlet manifest, **blocked** pending the isolation audit (temp dirs + ffmpeg fixtures) — decision 6.
+- **Main is pushed** through the Verify Catalog merge; the P0 suite merge pushes after its re-prove.
+
+## Where we stood at 21:00
 
 - **Nothing was lost.** Every file you thought was gone is where the ledger says: the Christmas 1990
   master is on FamilyArchive with its SHA-256 fixity; the m4v has its MP3 sound. What failed was
@@ -40,12 +61,16 @@
 
 ## Decisions I need from you tomorrow
 
-1. Start the first real Audit Catalog run (it marks nothing; it stamps and lists)? Yes/no.
-2. Paste the regression brief to the cloud, or run it locally on the ~$90? (Cloud recommended.)
+1. ~~Start the first real Audit Catalog run~~ — done tonight (numbers above). The 144 never-seen and
+   216 missing rows wait for Fix Links; nothing was marked.
+2. ~~Paste the regression brief to the cloud~~ — done; I launch cloud routines directly now.
 3. Plan v2 §9a: one cutover instead of two, and certifying sidecars moved before cutover — agree?
 4. The contract freeze (step B) overlapping integrity work now, read-only — agree?
 5. Credits: each integrity step is one bounded brief; codex on every batch; say if you want a
    different spend shape.
+6. Unblock the P0 suite in the nightly gauntlet once its isolation audit is done (it writes only under
+   a temp dir and reads the ffmpeg fixtures) — or run it blocked-but-reported first for a few nights?
+7. Rebuild (Debug or Release) and run `Catalog ▸ Verify Catalog…` once — the first real integrity report.
 
 ## One local thing before you commit your project file
 Your uncommitted `project.pbxproj` (Xcode 27's upgrade check) flips the TEST target's Release
@@ -56,4 +81,4 @@ nightly Release test compile. Keep `singlefile` on the test target; the 5.1 → 
 ## Open issues from today
 #323 headless audit vs GUI launch · #324 sibling proof's link blind spot · #325 ladder "different
 events" from no evidence · #326 scanner catalogues through symlinks · #327 P0 unverified facts ·
-#328 P0 JSON → SQLite.
+#328 P0 JSON → SQLite · #329 Events membership lost on merge.
