@@ -720,18 +720,26 @@ extension VideoScanModel {
 
     /// Probe a single file and return a populated `VideoRecord`.
     ///
-    /// `@MainActor` shim over the nonisolated `probeFileOutcome` core: the
-    /// heavy work (existence check, hashing, ffprobe subprocess, MXF fallback,
-    /// caching) runs off-actor inside the core and yields a Sendable
-    /// `ProbeOutcome`; the `VideoRecord` is materialized HERE, on the main
-    /// actor. This is the single-file reprobe entry point used by TranscodeJob,
-    /// ReformatJob, and TriageView (all `@MainActor`) — and by the probe-engine
-    /// tests. The scan pipeline does NOT call this; it consumes the carrier
-    /// from the core directly (see `probeAndRecord`).
+    /// `@MainActor` shim over the nonisolated `reprobeFileOutcome` entry
+    /// (ScanWriteInProgress.swift): the heavy work (settle wait, existence
+    /// check, hashing, ffprobe subprocess, MXF fallback, caching) runs
+    /// off-actor and yields a Sendable `ProbeOutcome`; the `VideoRecord` is
+    /// materialized HERE, on the main actor. This is the single-file reprobe
+    /// entry point used by TranscodeJob, ReformatJob, TrimJob, CleanupJob,
+    /// BalanceAudioJob, RebuildAudioJob, MediaRepairJob, Link Repaired Copy,
+    /// Find Missing Audio and TriageView's Import (all `@MainActor`) — and by
+    /// the probe-engine tests. The scan pipeline does NOT call this; it
+    /// consumes the carrier from the core directly (see `probeAndRecord`).
+    ///
+    /// A file the caller just wrote is WAITED for, never skipped (codex P1,
+    /// 2026-10-17): the scan's "still being written" rule belongs to the
+    /// scan. Only a file still changing after the bounded wait yields the
+    /// skipped record (ffprobeFailed, "Still being written") — callers that
+    /// want the typed fact use `reprobeFileOutcome` directly.
     func probeFile(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil) async -> VideoRecord {
-        let outcome = await probeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath)
+        let reprobe = await reprobeFileOutcome(url: url, prefetchToRAM: prefetchToRAM, ramPath: ramPath, skipHashing: skipHashing, scanRootPath: scanRootPath)
         let rec = VideoRecord()
-        rec.apply(outcome)
+        rec.apply(reprobe.outcome)
         return rec
     }
 
@@ -755,7 +763,10 @@ extension VideoScanModel {
     #if compiler(>=6.2)
     @concurrent
     #endif
-    nonisolated func probeFileOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = []) async -> ProbeOutcome {
+    /// `skipIfStillBeingWritten` is the SCAN rule (ScanWriteInProgress):
+    /// true from the scan pipeline (the default); false from
+    /// `reprobeFileOutcome`, which has already waited for the file.
+    nonisolated func probeFileOutcome(url: URL, prefetchToRAM: Bool = false, ramPath: String? = nil, skipHashing: Bool = false, scanRootPath: String? = nil, catalogedPaths: Set<String> = [], skipIfStillBeingWritten: Bool = true) async -> ProbeOutcome {
         // Test seam (GH #163) — synthetic scans at scale, no ffprobe.
         if let stub = probeOutcomeStub { return await stub(url) }
         let fm = FileManager.default
@@ -792,8 +803,9 @@ extension VideoScanModel {
 
         // Still being written? (Verify Catalog bug 3, 2026-10-17.) An mtime
         // inside the settle window is judged BEFORE the cache can vouch
-        // for the file; the second stat follows ffprobe below.
-        if let why = writeInProgressReason(path: path, before: before, afterProbe: false) {
+        // for the file; the second stat follows ffprobe below. Scan only —
+        // a reprobe has waited for the file instead (codex P1).
+        if skipIfStillBeingWritten, let why = writeInProgressReason(path: path, before: before, afterProbe: false) {
             return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why)
         }
 
@@ -873,7 +885,7 @@ extension VideoScanModel {
 
         // The second stat: a row is built only from a file that did not
         // change under the probe (bug 3). Never cached — the next scan looks.
-        if let why = writeInProgressReason(path: path, before: before, afterProbe: true) {
+        if skipIfStillBeingWritten, let why = writeInProgressReason(path: path, before: before, afterProbe: true) {
             return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why)
         }
 

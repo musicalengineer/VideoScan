@@ -562,7 +562,9 @@ extension PromoteToArchiveJob {
             case .changed, .alreadySo: break
             }
         }
-        let outcome = await model.probeFileOutcome(url: destURL)
+        // The copy was just written: a reprobe waits for it to settle; the
+        // scan's skip rule never applies here (codex P1, 2026-10-17).
+        let outcome = await model.reprobeFileOutcome(url: destURL).outcome
         let copyProbe = VideoRecord(id: copyID)
         copyProbe.apply(outcome)
         let now = Date()

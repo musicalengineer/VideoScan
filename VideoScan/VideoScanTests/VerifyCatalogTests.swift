@@ -77,18 +77,20 @@ struct VerifyCatalogConstraintTests {
         #expect(findings([row("/same.mov"), gone], rule: .oneLiveRowPerPath).isEmpty)
     }
 
-    @Test("lineage targets exist: a derivedFrom or supersededByID whose target was removed from the catalog is reported UNVERIFIED (kept as history) — never a decision; links to rows that exist are nothing")
+    @Test("lineage targets exist: a derivedFrom whose target was removed from the catalog is UNVERIFIED (kept as history, never a decision); a supersededByID whose target was removed is a DECISION — the replacement may be lost; links to rows that exist are nothing")
     func lineageTargetsExist() {
         let parent = row("/parent.mov")
         var child = row("/child.mov"); child.derivedFrom = parent.id
         var orphan = row("/orphan.mov"); orphan.derivedFrom = UUID()
         var retired = row("/old.mov"); retired.supersededByID = UUID()
-        let kept = findings([parent, child, orphan, retired], rule: .lineageTargetsExist)
-        #expect(kept.count == 2)
-        #expect(kept.first?.words == "derived from a row that was removed from the catalog — the link is kept as history")
-        #expect(kept.last?.words == "superseded by a row that was removed from the catalog — the link is kept as history")
-        let noneIsADecision = kept.allSatisfy { !$0.needsDecision }
-        #expect(noneIsADecision, "a purged target is history, not a decision (745-finding report, 2026-10-17: 100 rows, 74 on FamilyArchive)")
+        let found = findings([parent, child, orphan, retired], rule: .lineageTargetsExist)
+        #expect(found.count == 2)
+        let kept = found.first { $0.recordID == orphan.id }
+        #expect(kept?.words == "derived from a row that was removed from the catalog — the link is kept as history")
+        #expect(kept?.needsDecision == false, "a purged source is history, not a decision (745-finding report, 2026-10-17: 100 rows, 74 on FamilyArchive)")
+        let lost = found.first { $0.recordID == retired.id }
+        #expect(lost?.words == "superseded by a row that was removed from the catalog — the replacement may be lost; check the ledger")
+        #expect(lost?.needsDecision == true, "RED 2026-10-17 (codex P2): the REPLACEMENT is gone — a loss signal, not history")
         #expect(findings([parent, child], rule: .lineageTargetsExist).isEmpty)
     }
 
@@ -251,13 +253,17 @@ struct VerifyCatalogConstraintTests {
         #expect(CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }.isEmpty, "one known digest is not a disagreement")
     }
 
-    @Test("reference movie (tier 5, no I/O): a video row of 3,274,279 bytes that ffprobe reads as 7,288 s is a reference movie (needs a decision); a 125 MB / 35 s DV row is not; an audio-only MP3 at 16 KB/s is not; a clip under 10 s is not")
+    @Test("reference movie (tier 5, no I/O, UNVERIFIED): a 3.3 MB / 2 h .mov video row is a possible reference movie — Verify Media decides, never a decision here; a self-contained 13 KB / 20 s .mp4 is nothing; a 125 MB / 35 s DV row is nothing; an audio-only MP3 at 16 KB/s is nothing; a clip under 10 s is nothing")
     func referenceMovie() {
         var reference = row("/Volumes/LaCie/Avid/Tape 12.mov")
         reference.sizeBytes = 3_274_279
         reference.durationSeconds = 7_288
         reference.videoCodec = "dvvideo"
         reference.audioCodec = "pcm_s16le"
+        var tinyMP4 = row("/Volumes/LaCie/tiny.mp4")       // codex 2026-10-17: a real, self-contained H.264 MP4 of 13,237 bytes / 20 s
+        tinyMP4.sizeBytes = 13_237
+        tinyMP4.durationSeconds = 20
+        tinyMP4.videoCodec = "h264"
         var dv = row("/Volumes/LaCie/clip.dv")
         dv.sizeBytes = 125_000_000
         dv.durationSeconds = 35
@@ -270,13 +276,35 @@ struct VerifyCatalogConstraintTests {
         stub.sizeBytes = 4_000
         stub.durationSeconds = 9
         stub.videoCodec = "h264"
-        let red = findings([reference, dv, mp3, stub], rule: .referenceMovie)
-        #expect(red.count == 1)
-        #expect(red.first?.recordID == reference.id)
-        #expect(red.first?.words == "3.3 MB for 2 h 1 min — a reference movie; the content lives in other files")
-        #expect(red.first?.needsDecision == true)
+        let found = findings([reference, tinyMP4, dv, mp3, stub], rule: .referenceMovie)
+        #expect(found.count == 1, "RED 2026-10-17 (codex P2): the 13 KB / 20 s .mp4 fired — \(found.map(\.words))")
+        #expect(found.first?.recordID == reference.id)
+        #expect(found.first?.words == "3.3 MB for 2 h 1 min in a QuickTime file — possibly a reference movie whose content lives in other files; Verify Media decides")
+        #expect(found.first?.needsDecision == false, "RED 2026-10-17 (codex P2): the rule is a plausibility hint; Verify Media (tier 2) decides")
         #expect(CatalogConstraints.Rule.referenceMovie.tier == 5)
-        #expect(CatalogConstraints.Rule.referenceMovie.words(count: 33) == "33 files are reference movies — the content lives in other files")
+        #expect(CatalogConstraints.Rule.referenceMovie.words(count: 33) == "33 files may be reference movies — Verify Media decides")
+    }
+
+    @Test("reference movie: only QuickTime files are judged — an extensionless file whose container says QuickTime / MOV is; an .mp4 whose container says the same (ffprobe names one demuxer for both) is not; a .qt is; an extensionless file with no container is not")
+    func referenceMovieIsAQuickTimeQuestion() {
+        func thin(_ path: String, container: String = "") -> IntegrityRow {
+            IntegrityRow(fullPath: path, sizeBytes: 3_000_000, durationSeconds: 7_200, container: container, videoCodec: "dvvideo")
+        }
+        let noExt = thin("/Volumes/LaCie/Avid/Tape 12", container: "QuickTime / MOV")
+        let mp4 = thin("/Volumes/LaCie/x.mp4", container: "QuickTime / MOV")
+        let qt = thin("/Volumes/LaCie/x.qt")
+        let bare = thin("/Volumes/LaCie/Avid/Tape 13")
+        let found = findings([noExt, mp4, qt, bare], rule: .referenceMovie)
+        #expect(found.map(\.recordID) == [noExt.id, qt.id])
+    }
+
+    @Test("the projection carries the record's container to the row")
+    @MainActor
+    func projectionCarriesTheContainer() {
+        let rec = VideoRecord()
+        rec.fullPath = "/Volumes/LaCie/a.mov"
+        rec.container = "QuickTime / MOV"
+        #expect(IntegrityRow(record: rec).container == "QuickTime / MOV")
     }
 
     @Test("TRUTH: the P0 shapes each produce a finding, and a clean catalog produces none")
@@ -415,6 +443,32 @@ struct VerifyCatalogTierTests {
         #expect(five.tier.couldNotCheck == 1)
         #expect(five.tier.needsDecision == 0)
         #expect(five.tier.summary == "1 lineage links point at rows removed from the catalog — kept as history · every other relation holds (2 rows) · catalog.json is not on disk — nothing to hash")
+    }
+
+    @Test("tier 5: a supersededByID to a row removed from the catalog is a DECISION (the replacement may be lost) while a derivedFrom to a removed row stays UNVERIFIED — one rule, two phrases")
+    func supersessionToARemovedRowIsADecision() {
+        var retired = row("/Volumes/LaCie/old.mov"); retired.supersededByID = UUID()   // the repaired copy was purged
+        var promoted = row("/Volumes/FamilyArchive/1990s/copy.mov"); promoted.derivedFrom = UUID()
+        let five = VerifyCatalogTiers.evaluate(5, input: input([retired, promoted]))
+        #expect(five.tier.result == .needsDecision(1), "RED 2026-10-17 (codex P2): a lost replacement read as kept history")
+        #expect(five.tier.needsDecision == 1)
+        #expect(five.tier.couldNotCheck == 1)
+        #expect(five.findings.first { $0.filename == "old.mov" }?.needsDecision == true)
+        #expect(five.findings.first { $0.filename == "copy.mov" }?.needsDecision == false)
+        #expect(five.tier.summary == "1 lineage links point at replacements removed from the catalog — the replacement may be lost · 1 lineage links point at rows removed from the catalog — kept as history")
+    }
+
+    @Test("tier 5: a possible reference movie is UNVERIFIED — could-not-check, never a decision; the words say Verify Media decides")
+    func referenceMovieIsUnverified() {
+        var reference = row("/Volumes/LaCie/Avid/Tape 12.mov")
+        reference.sizeBytes = 3_274_279
+        reference.durationSeconds = 7_288
+        reference.videoCodec = "dvvideo"
+        let five = VerifyCatalogTiers.evaluate(5, input: input([reference, row("/a.mov")]))
+        #expect(five.tier.result == .couldNotCheck(1), "RED 2026-10-17 (codex P2): a reference-movie guess was a decision")
+        #expect(five.tier.needsDecision == 0)
+        #expect(five.findings.first?.needsDecision == false)
+        #expect(five.tier.summary == "1 files may be reference movies — Verify Media decides · every other relation holds (2 rows) · catalog.json is not on disk — nothing to hash")
     }
 
     @Test("tiers 2 and 6 say not built; a stopped tier says so; every tier has a name")
