@@ -35,6 +35,10 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
     case filePresence    = "filePresence"
     case fullHashes      = "fullHashes"
     case soundPrints     = "soundPrints"
+    /// Verify Catalog (2026-10-16, integrity first): the catalog's own rows,
+    /// stamps and relations against their constraints; reads
+    /// integrity-latest.json. AFTER the three integrity rows.
+    case integrity       = "integrity"
     // Metadata cyclers (10/2 trial order).
     case duplicates      = "duplicates"
     case footage         = "footage"
@@ -48,14 +52,14 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
-    /// The three integrity kinds, in registry order.
-    static let integrity: [AnalyzeCycler] = [.filePresence, .fullHashes, .soundPrints]
+    /// The integrity kinds, in registry order — each backed by an MFO job.
+    static let integrityJobs: [AnalyzeCycler] = [.filePresence, .fullHashes, .soundPrints, .integrity]
 
     /// True for the kinds whose work is a Media File Operation (the band
     /// mirrors the MFO row; Pause / Stop act on the job).
     var isIntegrity: Bool {
         switch self {
-        case .filePresence, .fullHashes, .soundPrints: return true
+        case .filePresence, .fullHashes, .soundPrints, .integrity: return true
         default: return false
         }
     }
@@ -66,6 +70,7 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
         case .filePresence:   return "File Presence"
         case .fullHashes:     return "Full Hashes"
         case .soundPrints:    return "Sound Prints"
+        case .integrity:      return "Integrity"
         case .duplicates:     return "Detect Duplicates"
         case .footage:        return "Find Similar Footage"
         case .sceneCaptions:  return "Scene Captions"
@@ -84,6 +89,7 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
         case .filePresence:   return "File Presence"
         case .fullHashes:     return "Full Hashes"
         case .soundPrints:    return "Sound Prints"
+        case .integrity:      return "Integrity"
         case .duplicates:     return "Duplicates"
         case .footage:        return "Similar Footage"
         case .sceneCaptions:  return "Scene Captions"
@@ -101,6 +107,7 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
         case .filePresence:   return "doc.text.magnifyingglass"
         case .fullHashes:     return "checkmark.seal"
         case .soundPrints:    return "waveform.badge.magnifyingglass"
+        case .integrity:      return "checkmark.shield"
         case .duplicates:     return "doc.on.doc"
         case .footage:        return "square.stack.3d.up"
         case .sceneCaptions:  return "text.below.photo"
@@ -122,6 +129,8 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
             return "Reads each file once in full and keeps its SHA-256, so two copies can be proved byte-for-byte identical. A sampled hash from a scan does not count."
         case .soundPrints:
             return "Listens to each file once and keeps a small fingerprint of its sound, so copies and clips of the same recording can be told apart. Kept in a sidecar beside the catalog."
+        case .integrity:
+            return "Verify Catalog: checks the catalog itself — ids, paths, lineage, fixity digests, the removal markers, the sound prints against each file's header, the catalog file's own hash — and writes a dated report beside the catalog. Nothing on media is opened; nothing is changed."
         case .duplicates:
             return "Groups files that are the same bytes and elects the copy to keep. Catalog metadata only; nothing is removed here."
         case .footage:
@@ -166,7 +175,7 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .duplicates, .footage, .sceneCaptions, .ocr, .transcribe, .fileSignatures:
             return true
-        case .filePresence, .fullHashes, .soundPrints, .correlate, .embeddedDates, .dateInference:
+        case .filePresence, .fullHashes, .soundPrints, .integrity, .correlate, .embeddedDates, .dateInference:
             // The integrity jobs run every connected drive in parallel
             // lanes; Correlate and the backfills take a path prefix too,
             // but their coverage is catalog-shaped (pairs; "has a tag").
@@ -182,7 +191,7 @@ enum AnalyzeCycler: String, CaseIterable, Identifiable, Sendable {
     var autoRunsToday: Bool {
         switch self {
         case .filePresence, .dateInference, .footage, .sceneCaptions, .ocr, .transcribe: return true
-        case .fullHashes, .soundPrints, .duplicates, .correlate, .fileSignatures, .embeddedDates: return false
+        case .fullHashes, .soundPrints, .integrity, .duplicates, .correlate, .fileSignatures, .embeddedDates: return false
         }
     }
 

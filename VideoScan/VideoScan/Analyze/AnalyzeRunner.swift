@@ -58,7 +58,7 @@ struct AnalyzeRunner {
         start(cycler, "START — \(scopeText) (\(source))")
 
         switch cycler {
-        case .filePresence, .fullHashes, .soundPrints:
+        case .filePresence, .fullHashes, .soundPrints, .integrity:
             startIntegrityJob(cycler)
 
         case .duplicates:
@@ -144,6 +144,8 @@ struct AnalyzeRunner {
                 _ = c.startFullHashBackfill(model: model, marker: model.fullHashResumeMarker)
             case .soundPrints:
                 _ = c.startAudioFingerprintBackfill(model: model)
+            case .integrity:
+                _ = c.startVerifyCatalog(model: model)
             default:
                 break
             }
@@ -189,7 +191,7 @@ struct AnalyzeRunner {
         case .correlate:
             if model.isCorrelating { refuse(cycler, "already running"); return false }
             if model.isScanning { refuse(cycler, "a scan is running — try again when it finishes"); return false }
-        case .filePresence, .fullHashes, .soundPrints:
+        case .filePresence, .fullHashes, .soundPrints, .integrity:
             if activeIntegrityJob(for: cycler) != nil { refuse(cycler, "already running"); return false }
         default:
             break
@@ -203,7 +205,7 @@ struct AnalyzeRunner {
     /// engine flags the panel samples on its tick, in one place.
     func isRunning(_ cycler: AnalyzeCycler) -> Bool {
         switch cycler {
-        case .filePresence, .fullHashes, .soundPrints:
+        case .filePresence, .fullHashes, .soundPrints, .integrity:
             return activeIntegrityJob(for: cycler) != nil
         case .duplicates:
             return model.isAnalyzingDuplicates
@@ -226,7 +228,7 @@ struct AnalyzeRunner {
 
     func pause(_ cycler: AnalyzeCycler) {
         switch cycler {
-        case .filePresence, .fullHashes, .soundPrints:
+        case .filePresence, .fullHashes, .soundPrints, .integrity:
             activeIntegrityJob(for: cycler)?.pause()
         case .sceneCaptions, .ocr, .transcribe:
             orchestrator?.pause()
@@ -240,7 +242,7 @@ struct AnalyzeRunner {
 
     func resume(_ cycler: AnalyzeCycler) {
         switch cycler {
-        case .filePresence, .fullHashes, .soundPrints:
+        case .filePresence, .fullHashes, .soundPrints, .integrity:
             activeIntegrityJob(for: cycler)?.resume()
         case .sceneCaptions, .ocr, .transcribe:
             guard let orchestrator else { return }
@@ -256,7 +258,7 @@ struct AnalyzeRunner {
 
     func stop(_ cycler: AnalyzeCycler) {
         switch cycler {
-        case .filePresence, .fullHashes, .soundPrints:
+        case .filePresence, .fullHashes, .soundPrints, .integrity:
             activeIntegrityJob(for: cycler)?.cancel()
         case .sceneCaptions, .ocr, .transcribe:
             orchestrator?.cancel()
@@ -283,6 +285,7 @@ struct AnalyzeRunner {
             case .filePresence: return job is CatalogAuditJob
             case .fullHashes: return job is FullHashBackfillJob
             case .soundPrints: return job is AudioFingerprintBackfillJob
+            case .integrity: return job is VerifyCatalogJob
             default: return false
             }
         }

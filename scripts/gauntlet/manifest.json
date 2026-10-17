@@ -27845,6 +27845,63 @@
         "withoutACopyTheLadderIsAsBefore",
         "wordsNameTheLinkTheGapAndTheArchivedCopy"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/VerifyCatalogTests.swift",
+      "stage": "unit",
+      "suites": [
+        "VerifyCatalogConstraintTests",
+        "VerifyCatalogTierTests",
+        "VerifyCatalogReportTests",
+        "VerifyCatalogScaleTests",
+        "VerifyCatalogJobTests",
+        "VerifyCatalogStatusTests",
+        "VerifyCatalogSensorTests"
+      ],
+      "tests": [
+        "aRunWritesTheReportAndLogs",
+        "auditStampNamesItsVolume",
+        "catalogFileHashStreams",
+        "checkAt100k",
+        "derivedStampsMatchContent",
+        "derivedThenConstraints",
+        "doorAndBand",
+        "eventFactsFromTheDecisionSnapshot",
+        "eventMembersExist",
+        "factsFromAReport",
+        "hashComparisonWords",
+        "identityFromTheStamps",
+        "lineageTargetsExist",
+        "notBuiltAndStopped",
+        "oneLiveRowPerPath",
+        "oneWriterOneRead",
+        "poisonedLatestReport",
+        "presenceFromTheAuditMarker",
+        "promotionsHaveASource",
+        "readOnlyCatalogFolder",
+        "registry",
+        "removalMirrorsLifecycle",
+        "removalRevisionNonNegative",
+        "reportRoundTrips",
+        "requiredFields",
+        "rowColours",
+        "ruleTableIsComplete",
+        "runNowStartsVerifyCatalog",
+        "secondRunIsRefused",
+        "shapeOfTheJob",
+        "soundAgainstTheHeader",
+        "sourcesTouchNoFileNoRowNoMedia",
+        "stopEndsAfterTheCurrentTier",
+        "strictReader",
+        "theP0ShapesProduceFindings",
+        "theP0ShapesProduceFindingsThroughTheJob",
+        "theSecondRunComparesTheCatalogHash",
+        "uniqueIDs",
+        "wholeFileDigestsAreWhole",
+        "writeLatestAndDated"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -30402,6 +30459,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/FootageFoldersTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/VerifyCatalogTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],

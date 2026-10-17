@@ -58,6 +58,10 @@ enum CatalogStatusDoor: Equatable {
     /// Red, File Presence found rows pointing at nothing: Fix Links (§2b)
     /// is not built yet — the button is shown DISABLED and says so.
     case fixLinks
+    /// Red, Verify Catalog found decisions pending: run it again — its MFO
+    /// row lists every finding (the decisions themselves are taken
+    /// elsewhere: Fix Links, Fingerprint Sound, the person).
+    case verifyAgain
     /// Grey — not asked; nothing to press.
     case none
 
@@ -67,6 +71,7 @@ enum CatalogStatusDoor: Equatable {
         case .runAgain: return "Run again"
         case .fingerprintAgain: return "Fingerprint again"
         case .fixLinks: return "Fix Links…"
+        case .verifyAgain: return "Verify again"
         case .none: return ""
         }
     }
@@ -75,6 +80,16 @@ enum CatalogStatusDoor: Equatable {
     var isEnabled: Bool { self != .fixLinks }
 
     static let fixLinksHelp = "Fix Links is coming next: a review sheet for rows whose file is gone or changed, with relink / forget per row. Until then the Audit Catalog detail (Media File Operations) lists them."
+    static let verifyAgainHelp = "Run Verify Catalog again; its Media File Operations row lists every finding by tier, with the file and the words."
+
+    /// The button's help, per door.
+    func help(cycler: AnalyzeCycler) -> String {
+        switch self {
+        case .fixLinks: return Self.fixLinksHelp
+        case .verifyAgain: return Self.verifyAgainHelp
+        default: return "Start \(cycler.title) now."
+        }
+    }
 
     static func door(for reason: FreshnessReason, cycler: AnalyzeCycler) -> CatalogStatusDoor {
         switch reason {
@@ -83,7 +98,11 @@ enum CatalogStatusDoor: Equatable {
         case .lastRunFailed:
             return .runAgain
         case .needsDecision:
-            return cycler == .filePresence ? .fixLinks : .runNow
+            switch cycler {
+            case .filePresence: return .fixLinks
+            case .integrity: return .verifyAgain
+            default: return .runNow
+            }
         case .uncovered, .neverRan, .lastRunPartial, .overdue:
             return .runNow
         case .notMounted, .nothingToCheck, .current:
@@ -177,7 +196,7 @@ struct CatalogStatusBand: View {
             Button(door.title) { onRunNow(cycler) }
                 .controlSize(.small)
                 .disabled(!door.isEnabled)
-                .help(door == .fixLinks ? CatalogStatusDoor.fixLinksHelp : "Start \(cycler.title) now.")
+                .help(door.help(cycler: cycler))
                 .accessibilityIdentifier("catalog.status.band.door.\(cycler.rawValue)")
         }
     }

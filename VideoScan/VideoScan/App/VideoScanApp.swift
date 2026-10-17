@@ -855,6 +855,10 @@ struct VideoScanApp: App {
                 // The same job the nightly runs through --audit-catalog.
                 CatalogAuditMenuItem(model: catalogModel, center: fileOpsCenter,
                                      marker: catalogModel.catalogAuditRunMarker, isReadOnly: catalogModel.isReadOnly)
+                // Verify Catalog (2026-10-16, integrity first): tiers 0–6
+                // over the catalog's own stamps and relations; the only
+                // file written is the report beside the catalog.
+                VerifyCatalogMenuItem(model: catalogModel, center: fileOpsCenter, isReadOnly: catalogModel.isReadOnly)
                 Divider()
                 // Catalog Status (2026-10-16): opens Content Analysis with
                 // the summary band; the title carries the colour word.
