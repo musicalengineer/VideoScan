@@ -28379,6 +28379,101 @@
         "hundredThousandFilesInOneImportTransaction",
         "identicalDerivedValuesFlagConflictsInLinearWork"
       ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogTransactionDoorsTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogTransactionDoorsTests"
+      ],
+      "tests": [
+        "aRowTheDDLRefusesRollsTheWriteBack",
+        "anEmptyRunFinishesWithTrueCountersAndTheItemsMap",
+        "eventMembershipIsLandedOnceAndThenAlreadyPresent",
+        "fileContentAndVolumeDoorsWriteTheirRowsAndTheCommitCountsThem",
+        "finishingARunWithLyingCountersIsRefusedByTheTrigger",
+        "quarantineKnowledgeAndDerivedDoorsWriteOneRowEach",
+        "theJSONReaderRefusesRecordReadingsByName",
+        "theRelationDoorAnswersLandedAlreadyPresentAndRefused"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogImporterTests"
+      ],
+      "tests": [
+        "aCatalogThatChangesMidImportIsRefusedAndNothingIsWritten",
+        "aComparatorMissRollsEverythingBackAndNamesIt",
+        "aQuarantinedRowsStarsAreInItsRawRowAndInKnowledgeSources",
+        "aReadOnlyTargetFolderFailsBeforeAnyWrite",
+        "aReportWhoseHashIsNotTheFrozenFilesIsRefused",
+        "aSecondRunIntoTheSameDatabaseIsRefused",
+        "anAuditMarkerWithoutRowResultsRefusesTheRun",
+        "everyShapeLandsWhereTheContractSays",
+        "knowledgeSourcesHoldsEveryCuratedValueOfEveryRowPerField",
+        "theImportCommitsOneGenerationWithTheFileCounts",
+        "theReconciliationLineEqualsTheCounts",
+        "theSidecarsLandWithTheirOrdinals",
+        "theTombstonedShapeIsCountedAsTombstonedMain",
+        "withoutSidecarsTheImportStillCompletes"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogImporterSensorTests"
+      ],
+      "tests": [
+        "importerWritesOnlyThroughTheTransactionDoors",
+        "noAppVideoRecordSymbolInImport",
+        "theComparatorReDecodesFromTheFilePath"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ReconcileByDigestTests.swift",
+      "stage": "regression",
+      "suites": [
+        "ReconcileByDigestTests"
+      ],
+      "tests": [
+        "aDigestKnownOnlyFromQuarantineBecomesANewRowAndResolvesIt",
+        "aFileStillBeingWrittenIsDeferredNeverARow",
+        "aKnownDigestWhoseOneRowIsProvenGoneMovesThatRow",
+        "aKnownDigestWhoseRowIsStillPresentIsACopy",
+        "aKnownDigestWithSeveralRowsGoneIsACopyLeftToTheAudit",
+        "aLinkInThePathIsRefused",
+        "aMainRowAndAQuarantinedRowSharingTheDigestResolveAsCopy",
+        "aNewDigestIsANewRowWithNoKnowledge",
+        "aQuarantinedRowWhoseIdIsTakenGetsAFreshId",
+        "aRowWithFindingsStaysOpenAfterAByteMatch",
+        "digestlessPresenceReasonsAreNeverAutomatic",
+        "findingReasonsStayOpen",
+        "otherBytesAtTheSamePathReplaceTheRow",
+        "theSameBytesAtTheSamePathRefreshInPlace"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogImporterScaleTests"
+      ],
+      "tests": [
+        "oneHundredThousandRowsImportWithinBudget"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -31629,6 +31724,22 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogTransactionDoorsTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterSensorTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ReconcileByDigestTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 32,
@@ -31837,6 +31948,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDataSchemaScaleTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterScaleTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],

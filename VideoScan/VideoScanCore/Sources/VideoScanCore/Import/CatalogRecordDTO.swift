@@ -164,7 +164,10 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
         file = FileRow(record: r, digest: state, contentFixity: cf, archiveFixity: af, removal: marker, audit: audit)
         archiveCopy = af.map { ArchiveCopyRow(record: r, archiveFixity: $0) }
         backupDestinations = (r.backupDestinations ?? []).map { BackupDestinationRow($0) }
-        soundPrint = r.audioFingerprint.flatMap { SoundPrintRow($0) }
+        // §e.8: a print is BOUND only when its stamp names THIS row's bytes; a
+        // print for other bytes (a tier-4 stale stamp) is not imported — the
+        // next sound run redoes it. (D′ importer, 2026-10-17.)
+        soundPrint = r.audioFingerprint.flatMap { SoundPrintRow($0) }.flatMap { $0.digest == state.digest ? $0 : nil }
         curated = Self.curatedKnowledge(r, id: Self.canonicalID(r.id), archiveFixity: af)
         curatedFields = Self.curatedFieldList(raw: r.raw)
         knowledgeSources = Self.knowledgeSourceRows(raw: r.raw)

@@ -8,8 +8,9 @@
 // What it answers: the file's generation (the cheap head/tail header probe,
 // same rule as CatalogSnapshot.headerProbe — see JSONCatalogHeader below),
 // the `catalog.generation.max` sidecar as its high-water, and a read whose
-// handle carries that generation. Part 2 adds record reads for the
-// importer.
+// handle carries that generation. Part 2b: the record readings are named
+// refusals here (`CatalogRepositoryError.unsupported`) — this store has no
+// tables; the importer decodes the file itself.
 //
 // For Rick: this is the "null object" implementation of the interface —
 // every mutating call returns a named refusal instead of doing work.
@@ -75,8 +76,34 @@ public actor JSONCatalogRepository: CatalogRepository {
     }
 }
 
+/// The JSON store's read handle. It answers the generation; every record
+/// reading throws `CatalogRepositoryError.unsupported` — the JSON file is
+/// the import SOURCE, it has no tables and nothing was ever imported into
+/// it, so "what landed" has no truthful answer here.
 struct JSONReader: CatalogReader {
     let generation: Int
+
+    private var unsupported: CatalogRepositoryError {
+        .unsupported("\(JSONCatalogRepository.readOnlyReason); it has no record tables to read")
+    }
+
+    func recordCounts() throws -> CatalogRow.TableCounts { throw unsupported }
+    func rowLandings(run: String, _ visit: (CatalogRow.RowLanding) throws -> Void) throws { throw unsupported }
+    func quarantineRawRows(run: String, _ visit: (Int, [String: CatalogJSONValue]) throws -> Void) throws { throw unsupported }
+    func quarantineEntries(run: String, _ visit: (CatalogRow.QuarantineReading) throws -> Void) throws { throw unsupported }
+    func contentDigests(_ visit: (String) throws -> Void) throws { throw unsupported }
+    func knowledgeSources(run: String, _ visit: (CatalogRow.KnowledgeReading) throws -> Void) throws { throw unsupported }
+    func derivedUnverifiedKeys(run: String, _ visit: (CatalogRow.DerivedKeyReading) throws -> Void) throws { throw unsupported }
+    func soundPrintDigests(_ visit: (String) throws -> Void) throws { throw unsupported }
+    func eventDecisionOrdinals(run: String, _ visit: (Int) throws -> Void) throws { throw unsupported }
+    func eventMembers(_ visit: (CatalogRow.EventMemberReading) throws -> Void) throws { throw unsupported }
+    func listedMemberKeys(run: String, _ visit: (String) throws -> Void) throws { throw unsupported }
+    func ledgerOrdinals(run: String, _ visit: (Int) throws -> Void) throws { throw unsupported }
+    func ignoredOrdinals(run: String, _ visit: (Int) throws -> Void) throws { throw unsupported }
+    func jobMarkers(run: String, _ visit: (CatalogRow.MarkerReading) throws -> Void) throws { throw unsupported }
+    func auditResults(run: String, _ visit: (CatalogRow.AuditResultReading) throws -> Void) throws { throw unsupported }
+    func personSearchOrdinals(run: String, _ visit: (Int) throws -> Void) throws { throw unsupported }
+    func importReconciliation(run: String) throws -> ImportReconciliation { throw unsupported }
 }
 
 // MARK: - Header probe

@@ -326,6 +326,9 @@ public enum ImportGate {
             case auditMissing, auditPartial, auditNotCompleted, auditFinishedAfterIntegrityStarted
             case auditHasNoRowResults, duplicateEventID, openDeleteDuplicatesPlan, openAngelBatch
             case anotherWriterRunning
+            /// The importer's own two (D′): the target must be empty, and the
+            /// frozen file must not change under the import.
+            case targetNotEmpty, catalogChangedDuringImport
         }
 
         public let kind: Kind
@@ -388,6 +391,15 @@ public enum ImportGate {
         }
         public static func anotherWriterRunning(_ writer: String) -> RunRefusal {
             RunRefusal(kind: .anotherWriterRunning, words: "\(writer) is running — one writer at a time")
+        }
+        public static func targetNotEmpty(_ counts: CatalogRow.TableCounts) -> RunRefusal {
+            RunRefusal(kind: .targetNotEmpty,
+                       words: "the target catalog is not empty (files \(counts.files), quarantine \(counts.quarantine), "
+                           + "content \(counts.content), import runs \(counts.importRuns)) — import into a fresh database")
+        }
+        public static func catalogChangedDuringImport(before: String, after: String) -> RunRefusal {
+            RunRefusal(kind: .catalogChangedDuringImport,
+                       words: "catalog.json changed while it was being imported (\(before) → \(after)) — freeze it, verify again")
         }
 
         private static func name(_ generation: Int?) -> String {
