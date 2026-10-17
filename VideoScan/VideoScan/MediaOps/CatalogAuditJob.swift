@@ -63,7 +63,9 @@
 //
 // Memory: the plan (~300 bytes per live row), at most `problemCap` detail
 // rows and `sampleCap` present rows, the pending batch of marks (≤ 25 + one
-// chunk) and the per-folder gone tally. Nothing grows with file size.
+// chunk), the per-folder gone tally, and — in the run marker, not here —
+// one recorded answer per row asked (CatalogAuditRun.swift: ≈ 1 MB at 10k
+// rows, ≈ 10–25 MB at 100k). Nothing grows with file size.
 //
 // (For Rick: `withTaskGroup` ≈ spawning N worker threads and joining them —
 // except every lane's bookkeeping runs on the main actor, so the counters
@@ -370,6 +372,10 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         bumpLane(lane.root, by: 1)
         let (apply, mark) = model.applyCatalogAudit(observation.stat, seenOn: observation.seenOn, to: item)
         totals.add(apply.result)
+        // Recorded AFTER the apply decided (D′ importer, codex step-B F6):
+        // the marker keeps one answer per row asked, in the publish that
+        // carries the counts. It changes no decision.
+        marker?.noteRow(CatalogAuditRowResult(id: item.id, apply: apply, seenOn: observation.seenOn))
         if let mark { unsavedMarks.append(mark) }
         if apply.stamped { unsavedStamps += 1 }
         switch apply.result {
