@@ -69,3 +69,19 @@ Validation: in-memory SQLite 3.54 reproductions and source-proven interleavings;
 **Do only this:** findings against 1–7 (P1 first), each with file:line and a one-line failure scenario; then at most three P2/P3 one-liners. Out of scope: the importer (not written), record mapping (not written), UI, wording.
 
 **Do not explore outside the files listed above and their tests.**
+
+## Closure (Manager, 2026-10-17 — fix `5aa440d06`, merged `6ae5deff9`)
+
+All eight closed RED FIRST (30 issues red in 5 suites; then 77 green in 7 store suites; with the import suites 207 in 21).
+1–2. **OR REPLACE / generation replacement** — `PRAGMA recursive_triggers = ON` per connection (queried back) so REPLACE's implicit deletes meet BEFORE DELETE guards; delete/replace triggers on `files` (live rows are tombstoned, never deleted), `catalog_state`, `generations`, `generation_history` and every evidence table; `files_no_replace_upd` + `files_id_immutable`; sensor: no `OR REPLACE` / `REPLACE INTO` / `OR IGNORE` spelling in Store/. Codex's three reproductions pinned refused.
+3. **db + sidecar restore** — `catalog.highwater.log` (append-only text, O_APPEND + F_FULLFSYNC, written in phase 1 after the sidecar); effective high-water = max(sidecar, log, MAX(generation_history)); words name the witness. The all-three restore is pinned as the documented limit.
+4. **open lowering the mark** — reconciliation inside `BEGIN IMMEDIATE`; compare-and-raise re-reads the sidecar before writing; codex's schedule pinned with an injected hook.
+5. **crash warning consumed** — phase 1 requires the sidecar to read exactly this session's `g`; otherwise `.refused("another writer published generation N — reopen")` and `needsReopen`.
+6. **queued writes** — the CAS expectation lives in a locked `WriterSession` box read inside the serialized write; a stale second repository still gets `.generationMismatch`.
+7. **quadratic conflict** — covering index `derived_unverified_by_value` + two range probes; 196 VM steps per row flat (was ×15 per ×4 rows). Checks block C7 pins the plan.
+8. **drift normalisation** — quote-aware. DDL v1.5; checks 85 assertions.
+Declined (follow-up): key-immutability guards on evidence tables beyond `files` for a FOREIGN connection without the pragma. Adoption rule judgement: with every witness readable the adopted number must equal the highest; with a witness unreadable it may exceed every readable value.
+
+## Closed
+
+Closed by `6ae5deff9` at 2026-10-17T19:40:01Z. 5 P1 + 3 P2 closed red-first; DDL v1.5
