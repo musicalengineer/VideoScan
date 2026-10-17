@@ -12,6 +12,12 @@
 // is about (when it is about one row), family-app words, and whether a
 // person has to decide — nothing here writes a row.
 //
+// Codex (Verify Catalog slice 1, P2): three relations were unchecked —
+// path identity on a case-insensitive volume (`pathAliasByCase`), that a
+// supersession chain ENDS (`supersessionCycle`), and that the members of
+// one duplicate group really carry one set of bytes
+// (`duplicateGroupDigestsAgree`). Each is a rule in the table now.
+//
 // Memory: one IntegrityRow per catalog row (~400 bytes with its strings) ≈
 // 6 MB at 14k rows, ≈ 40 MB at 100k, freed when the run ends; the index is
 // a few Sets of ids and digests on top. Nothing grows with file size.
@@ -144,6 +150,9 @@ enum CatalogConstraints {
         case removalRevisionNonNegative
         case auditStampNamesItsVolume
         case eventMembersExist
+        case pathAliasByCase
+        case supersessionCycle
+        case duplicateGroupDigestsAgree
         case derivedStampsMatchContent
 
         /// Which tier owns the rule: the stale-stamp rule is tier 4
@@ -164,6 +173,9 @@ enum CatalogConstraints {
             .removalRevisionNonNegative: ("Removal revision never negative", "removal revisions are negative"),
             .auditStampNamesItsVolume: ("Audit stamp names its volume", "audit stamps name no volume"),
             .eventMembersExist: ("Event members exist", "event members point at nothing"),
+            .pathAliasByCase: ("One file per path on a case-insensitive volume", "paths differ only by case from another live row's"),
+            .supersessionCycle: ("Supersession ends", "supersession chains run in a circle"),
+            .duplicateGroupDigestsAgree: ("Duplicate groups agree on the bytes", "duplicate groups hold files with different whole-file digests"),
             .derivedStampsMatchContent: ("Derived stamps match the content", "sound prints were made from other content"),
         ]
 
@@ -192,6 +204,21 @@ enum CatalogConstraints {
         }
     }
 
+    /// The live rows that share one path once case is folded — the first
+    /// row's id, every row's id, and the DISTINCT spellings.
+    struct CaseAlias: Sendable, Equatable {
+        var firstID: UUID
+        var rows = 1
+        var paths: [String]
+    }
+
+    /// The live members of one duplicate group — the first member's id and
+    /// the DISTINCT lowercase whole-file digests they carry.
+    struct GroupDigests: Sendable, Equatable {
+        var firstID: UUID
+        var digests: [String]
+    }
+
     /// What the rules look things up in — built ONCE, O(rows).
     struct Index: Sendable {
         var ids: Set<UUID> = []
@@ -199,6 +226,13 @@ enum CatalogConstraints {
         var duplicatedIDs: [UUID: Int] = [:]
         /// path → ids of the LIVE rows at it (only paths with more than one).
         var sharedLivePaths: [String: [UUID]] = [:]
+        /// lowercased path → the live rows there, only when their exact
+        /// spellings differ (the same spelling twice is `sharedLivePaths`).
+        var caseAliasedPaths: [String: CaseAlias] = [:]
+        /// row id → the row that superseded it.
+        var supersededBy: [UUID: UUID] = [:]
+        /// duplicate group → its live members' digests, only when they differ.
+        var disagreeingGroups: [UUID: GroupDigests] = [:]
         var pairGroups: Set<UUID> = []
         /// Lowercase whole-file digests any row carries.
         var fullDigests: Set<String> = []
@@ -208,17 +242,47 @@ enum CatalogConstraints {
         var idx = Index()
         var seen: [UUID: Int] = [:]
         var byPath: [String: [UUID]] = [:]
+        var byFoldedPath: [String: CaseAlias] = [:]
+        var groups: [UUID: GroupDigests] = [:]
         idx.ids.reserveCapacity(rows.count)
         for r in rows {
             seen[r.id, default: 0] += 1
             idx.ids.insert(r.id)
-            if r.isLive, !r.fullPath.isEmpty { byPath[r.fullPath, default: []].append(r.id) }
+            if r.isLive, !r.fullPath.isEmpty {
+                byPath[r.fullPath, default: []].append(r.id)
+                noteFoldedPath(r, in: &byFoldedPath)
+            }
+            if r.isLive, let g = r.duplicateGroupID { noteGroupDigest(r, group: g, in: &groups) }
+            if let by = r.supersededByID { idx.supersededBy[r.id] = by }
             if let p = r.pairGroupID { idx.pairGroups.insert(p) }
             if let d = r.fullDigest { idx.fullDigests.insert(d.lowercased()) }
         }
         idx.duplicatedIDs = seen.filter { $0.value > 1 }
         idx.sharedLivePaths = byPath.filter { $0.value.count > 1 }
+        idx.caseAliasedPaths = byFoldedPath.filter { $0.value.paths.count > 1 }
+        idx.disagreeingGroups = groups.filter { $0.value.digests.count > 1 }
         return idx
+    }
+
+    private static func noteFoldedPath(_ r: IntegrityRow, in table: inout [String: CaseAlias]) {
+        let folded = r.fullPath.lowercased()
+        guard var alias = table[folded] else {
+            table[folded] = CaseAlias(firstID: r.id, paths: [r.fullPath])
+            return
+        }
+        alias.rows += 1
+        if !alias.paths.contains(r.fullPath) { alias.paths.append(r.fullPath) }
+        table[folded] = alias
+    }
+
+    private static func noteGroupDigest(_ r: IntegrityRow, group: UUID, in table: inout [UUID: GroupDigests]) {
+        let digest = r.fullDigest?.lowercased()
+        guard var g = table[group] else {
+            table[group] = GroupDigests(firstID: r.id, digests: digest.map { [$0] } ?? [])
+            return
+        }
+        if let digest, !g.digests.contains(digest) { g.digests.append(digest) }
+        table[group] = g
     }
 
     /// Run every rule. Findings come out in rule order, then row order.
@@ -235,7 +299,8 @@ enum CatalogConstraints {
     static let rules: [@Sendable ([IntegrityRow], Index, [IntegrityEventFact]) -> [Finding]] = [
         uniqueIDs, oneLiveRowPerPath, lineageTargetsExist, promotionsHaveASource, removalMirrorsLifecycle,
         requiredFields, wholeFileDigestsAreWhole, removalRevisionNonNegative, auditStampNamesItsVolume,
-        eventMembersExist, derivedStampsMatchContent,
+        eventMembersExist, pathAliasByCase, supersessionCycle, duplicateGroupDigestsAgree,
+        derivedStampsMatchContent,
     ]
 
     // MARK: Rules (one concept each)
@@ -368,6 +433,54 @@ enum CatalogConstraints {
         return idx.fullDigests.contains(key.lowercased())
     }
 
+    /// Unique, case-folded: two live rows whose paths differ only by case
+    /// name ONE file on the volumes this app ships on (APFS and HFS+ as
+    /// formatted by default are case-insensitive). A case-sensitive volume
+    /// can hold both — the words say which assumption is made, and a
+    /// person decides.
+    static func pathAliasByCase(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
+        idx.caseAliasedPaths.sorted { $0.key < $1.key }.map { _, alias in
+            Finding(.pathAliasByCase, recordID: alias.firstID,
+                    words: "\(alias.rows) rows at paths that differ only by case (\(alias.paths.joined(separator: " · "))) — one file on a case-insensitive volume")
+        }
+    }
+
+    /// Acyclic: following `supersededByID` ends somewhere. A circle makes no
+    /// row the current one — every member is "retired by" another member.
+    /// One finding per circle (at its first row in row order); a chain that
+    /// merely leads INTO a circle is not reported again. Each id is walked
+    /// once (`settled`), so this is O(rows) over any shape.
+    static func supersessionCycle(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
+        var out: [Finding] = []
+        var settled: Set<UUID> = []
+        for r in rows where r.supersededByID != nil && !settled.contains(r.id) {
+            var path: [UUID] = []
+            var seen: Set<UUID> = []
+            var cursor: UUID? = r.id
+            while let id = cursor, !settled.contains(id), seen.insert(id).inserted {
+                path.append(id)
+                cursor = idx.supersededBy[id]
+            }
+            if let id = cursor, seen.contains(id), !settled.contains(id) {
+                let circle = Array(path.drop { $0 != id })
+                out.append(Finding(.supersessionCycle, recordID: circle.first,
+                                   words: "superseded in a circle (\((circle + [id]).map(short).joined(separator: " → "))) — no row is the current one"))
+            }
+            settled.formUnion(path)
+        }
+        return out
+    }
+
+    /// Consistency: the live members of one duplicate group carry ONE
+    /// whole-file digest (or none yet). Two digests in one group means the
+    /// group claims "copies" of files that are not the same bytes.
+    static func duplicateGroupDigestsAgree(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
+        idx.disagreeingGroups.sorted { $0.key.uuidString < $1.key.uuidString }.map { group, g in
+            Finding(.duplicateGroupDigestsAgree, recordID: g.firstID,
+                    words: "duplicate group \(short(group)): its members carry \(g.digests.count) different whole-file digests — not copies of one another")
+        }
+    }
+
     /// Tier 4: a derived stamp (the sound print today) names the content it
     /// was made from; when the row's own digest or size no longer agrees,
     /// the knowledge is about other bytes.
@@ -381,7 +494,8 @@ enum CatalogConstraints {
     }
 
     /// Why `stamp` is no longer about `row`'s content; nil when it still is
-    /// (or when neither side knows enough to say).
+    /// (or when neither side knows enough to say). Tier 3 uses the same
+    /// rule to leave a stale stamp alone (it is this tier's finding).
     static func staleStampReason(_ stamp: AudioFingerprintStamp, row: IntegrityRow) -> String? {
         if stamp.sizeBytes != row.sizeBytes {
             return "was made from a file of another size (\(stamp.sizeBytes) vs \(row.sizeBytes) bytes)"

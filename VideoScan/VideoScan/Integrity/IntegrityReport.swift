@@ -7,10 +7,19 @@
 // `findingsCap`, with the true total). Catalog Status reads the latest
 // through `IntegrityReportFacts`.
 //
-// Written ONLY through AtomicFilePublish (MOPS-15). Read with a STRICT
-// reader: a missing file is "never run"; garbage, a newer schema or an
-// unreadable file is `.unreadable(why)` — the row says so and nothing
-// crashes, nothing is written over it.
+// SCHEMA 2 (codex, Verify Catalog slice 1): the report says which catalog
+// GENERATION its findings describe (`snapshotGeneration`), whether the
+// file on disk had moved on by the time it was hashed
+// (`catalogChangedDuringRun`), and whether the recorded hash is CERTIFIED
+// — the file's generation equals the snapshot's — or merely recorded. A
+// schema-1 file (none of the three) still reads: nothing certified.
+//
+// Written ONLY through AtomicFilePublish (MOPS-15), the DATED copy first:
+// the latest is what Catalog Status reads, so it moves only once the day's
+// copy has landed; if either write fails the previous latest stands and the
+// job says Failed. Read with a STRICT reader: a missing file is "never
+// run"; garbage, a newer schema or an unreadable file is `.unreadable(why)`
+// — the row says so and nothing crashes, nothing is written over it.
 //
 // "Keep the last 30" (the design): this slice writes the dated copies and
 // never deletes one — the lane's one write is the report (MOPS-15), and a
@@ -19,7 +28,10 @@
 //
 // (For Rick: `IntegrityTierResult` is a tagged union with a hand-written
 // JSON shape — `{"kind":"needsDecision","count":3}` — instead of Swift's
-// synthesized `{"needsDecision":{"_0":3}}`, so the file reads well.)
+// synthesized `{"needsDecision":{"_0":3}}`, so the file reads well.
+// `IntegrityReport.init(from:)` is hand-written only to default the three
+// schema-2 keys when a schema-1 file lacks them — `decodeIfPresent` ≈ a
+// field with a default in a versioned struct.)
 
 import Foundation
 import VideoScanCore
@@ -115,6 +127,9 @@ struct IntegrityTier: Codable, Equatable, Sendable, Identifiable {
         self.elapsedSeconds = elapsedSeconds
         self.summary = summary
     }
+
+    /// "tier 1 File identity".
+    var label: String { "tier \(tier) \(name)" }
 }
 
 /// One finding, as written to the file (and shown in the detail view).
@@ -131,7 +146,7 @@ struct IntegrityFinding: Codable, Equatable, Sendable {
 struct IntegrityReport: Codable, Equatable, Sendable {
     enum Outcome: String, Codable, Sendable { case completed, stopped, failed }
 
-    static let currentSchemaVersion = 1
+    static let currentSchemaVersion = 2
     /// Findings kept in the file and in memory; `findingsTotal` keeps the truth.
     static let findingsCap = 5_000
 
@@ -142,9 +157,19 @@ struct IntegrityReport: Codable, Equatable, Sendable {
     var verifiedAt: Date?
     var outcome: Outcome
     var catalogFile: String
+    /// The generation the ROWS came from — what the findings describe.
+    var snapshotGeneration: Int?
+    /// The generation in the FILE that was hashed.
     var catalogGeneration: Int?
     var catalogSHA256: String?
     var catalogByteCount: Int64?
+    /// The file's generation is not the snapshot's: a save landed during
+    /// the run. The findings stand for `snapshotGeneration`; run again.
+    var catalogChangedDuringRun = false
+    /// `catalogSHA256` was taken from a file carrying exactly the
+    /// snapshot's generation. False when there is no hash, the file has no
+    /// generation, or the generation moved.
+    var catalogHashCertified = false
     var rowsTotal: Int
     var rowsLive: Int
     var elapsedSeconds: Double
@@ -153,7 +178,8 @@ struct IntegrityReport: Codable, Equatable, Sendable {
     var findingsTotal: Int
 
     init(runID: UUID, startedAt: Date, verifiedAt: Date? = nil, outcome: Outcome, catalogFile: String,
-         catalogGeneration: Int? = nil, catalogSHA256: String? = nil, catalogByteCount: Int64? = nil,
+         snapshotGeneration: Int? = nil, catalogGeneration: Int? = nil, catalogSHA256: String? = nil,
+         catalogByteCount: Int64? = nil, catalogChangedDuringRun: Bool = false, catalogHashCertified: Bool = false,
          rowsTotal: Int, rowsLive: Int, elapsedSeconds: Double, tiers: [IntegrityTier],
          findings: [IntegrityFinding], findingsTotal: Int) {
         self.runID = runID
@@ -161,9 +187,12 @@ struct IntegrityReport: Codable, Equatable, Sendable {
         self.verifiedAt = verifiedAt
         self.outcome = outcome
         self.catalogFile = catalogFile
+        self.snapshotGeneration = snapshotGeneration
         self.catalogGeneration = catalogGeneration
         self.catalogSHA256 = catalogSHA256
         self.catalogByteCount = catalogByteCount
+        self.catalogChangedDuringRun = catalogChangedDuringRun
+        self.catalogHashCertified = catalogHashCertified
         self.rowsTotal = rowsTotal
         self.rowsLive = rowsLive
         self.elapsedSeconds = elapsedSeconds
@@ -172,7 +201,36 @@ struct IntegrityReport: Codable, Equatable, Sendable {
         self.findingsTotal = findingsTotal
     }
 
+    /// Schema 1 lacked the three generation keys: they default to
+    /// "unknown / not certified". Every other key is required as before.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try c.decode(Int.self, forKey: .schemaVersion)
+        runID = try c.decode(UUID.self, forKey: .runID)
+        startedAt = try c.decode(Date.self, forKey: .startedAt)
+        verifiedAt = try c.decodeIfPresent(Date.self, forKey: .verifiedAt)
+        outcome = try c.decode(Outcome.self, forKey: .outcome)
+        catalogFile = try c.decode(String.self, forKey: .catalogFile)
+        snapshotGeneration = try c.decodeIfPresent(Int.self, forKey: .snapshotGeneration)
+        catalogGeneration = try c.decodeIfPresent(Int.self, forKey: .catalogGeneration)
+        catalogSHA256 = try c.decodeIfPresent(String.self, forKey: .catalogSHA256)
+        catalogByteCount = try c.decodeIfPresent(Int64.self, forKey: .catalogByteCount)
+        catalogChangedDuringRun = try c.decodeIfPresent(Bool.self, forKey: .catalogChangedDuringRun) ?? false
+        catalogHashCertified = try c.decodeIfPresent(Bool.self, forKey: .catalogHashCertified) ?? false
+        rowsTotal = try c.decode(Int.self, forKey: .rowsTotal)
+        rowsLive = try c.decode(Int.self, forKey: .rowsLive)
+        elapsedSeconds = try c.decode(Double.self, forKey: .elapsedSeconds)
+        tiers = try c.decode([IntegrityTier].self, forKey: .tiers)
+        findings = try c.decode([IntegrityFinding].self, forKey: .findings)
+        findingsTotal = try c.decode(Int.self, forKey: .findingsTotal)
+    }
+
     func tier(_ n: Int) -> IntegrityTier? { tiers.first { $0.tier == n } }
+
+    /// The tiers this build evaluates, in tier order (the verdict's input).
+    var builtTiers: [IntegrityTier] {
+        tiers.filter { VerifyCatalogTiers.builtTiers.contains($0.tier) }.sorted { $0.tier < $1.tier }
+    }
 
     /// The chip's red: decisions pending across every tier.
     var needsDecisionTotal: Int { tiers.reduce(0) { $0 + $1.needsDecision } }
@@ -187,12 +245,20 @@ struct IntegrityReport: Codable, Equatable, Sendable {
         return pending.map(\.summary).joined(separator: " · ")
     }
 
+    /// "findings describe generation 10; the file on disk is generation 11
+    /// — run again" when the catalog changed during the run; else nil.
+    var generationMismatchWords: String? {
+        guard catalogChangedDuringRun, let snapshot = snapshotGeneration else { return nil }
+        return VerifyCatalogTiers.generationMismatch(snapshot: snapshot, file: catalogGeneration)
+    }
+
     /// The OUTCOME line's tally.
     var outcomeLine: String {
         let ran = tiers.filter { !$0.result.isNotRun }.count
         var s = "\(needsDecisionTotal.formatted()) finding(s) need a decision across \(ran) tier(s) run"
         if couldNotCheckTotal > 0 { s += " · \(couldNotCheckTotal.formatted()) could not be checked" }
         if findingsTotal > findings.count { s += " · \(findings.count.formatted()) of \(findingsTotal.formatted()) findings kept in the report" }
+        if let mismatch = generationMismatchWords { s += " · \(mismatch)" }
         return s
     }
 }
@@ -215,17 +281,18 @@ enum IntegrityReportStore {
         return String(format: "integrity-%04d-%02d-%02d.json", p.year ?? 0, p.month ?? 0, p.day ?? 0)
     }
 
-    /// Publish the report beside the catalog: the latest, then the dated
-    /// copy. Throws the first failure (the latest is tried first, so a
-    /// thrown error means nothing landed for this run).
+    /// Publish the report beside the catalog: the DATED copy first, and
+    /// only when it landed, the latest (what Catalog Status reads, synced
+    /// to disk). Throws the first failure; a thrown error means the
+    /// previous latest still stands, whatever happened to the dated copy.
     @discardableResult
     static func write(_ report: IntegrityReport, besideCatalogAt catalogFile: URL, now: Date = Date()) throws -> (latest: URL, dated: URL) {
         let data = try encoder.encode(report)
         let folder = catalogFile.deletingLastPathComponent()
         let latest = folder.appendingPathComponent(latestFileName)
         let dated = folder.appendingPathComponent(datedFileName(for: now))
-        try AtomicFilePublish.write(data, to: latest, durability: .fullFsync, createIntermediates: false)
         try AtomicFilePublish.write(data, to: dated, durability: .fast, createIntermediates: false)
+        try AtomicFilePublish.write(data, to: latest, durability: .fullFsync, createIntermediates: false)
         return (latest, dated)
     }
 
@@ -249,8 +316,9 @@ enum IntegrityReportStore {
         return read(data: data)
     }
 
-    /// Strict: the whole file decodes at this build's schema, or it is
-    /// unreadable. Never a crash, never a partial report.
+    /// Strict: the whole file decodes at this build's schema (or an older
+    /// one it still understands), or it is unreadable. Never a crash,
+    /// never a partial report.
     static func read(data: Data) -> Read {
         guard let probe = try? decoder.decode(SchemaProbe.self, from: data) else {
             return .unreadable("not readable as an integrity report")
@@ -282,22 +350,41 @@ enum IntegrityReportStore {
 
 // MARK: - Facts for Catalog Status (pure)
 
-/// What the Integrity row of Catalog Status reads off the latest report.
+/// What the Integrity row of Catalog Status reads off the latest report —
+/// derived from the BUILT tiers only (codex, slice 1, P1: a completed run
+/// must not read "current" while a built tier could not check, was not
+/// run, or is older than its day).
 struct IntegrityReportFacts: Sendable, Equatable {
+    /// The OLDEST built tier's verified-at (tier 0 stands on the audit's
+    /// own date), so the day's cadence judges the stalest tier. nil unless
+    /// the run completed.
     var lastCompleted: Date?
     var outcome: FreshnessRow.Outcome = .neverRan
-    /// The sum of needs-a-decision counts across tiers.
+    /// The sum of needs-a-decision counts across the built tiers.
     var needsDecision = 0
+    /// Rows some built tier could not verify — the largest single gap (a
+    /// tier not run counts every live row); 0 when every built tier is ok.
+    var unverified = 0
+    /// The gaps, each naming its tier ("tier 1 File identity: 660 files
+    /// still have only a sampled hash — Fill In Full Hashes"); nil = none.
+    var unverifiedWords: String?
+    /// Said whatever the colour: which tier the date is (when the built
+    /// tiers' dates differ) and which tiers are not built.
+    var note: String?
     /// The report exists but cannot be read — the row's red words.
     var problem: String?
     /// The tiers with decisions pending, worst first (IntegrityReport.decisionWords).
     var decisionWords: String?
 
     init(lastCompleted: Date? = nil, outcome: FreshnessRow.Outcome = .neverRan, needsDecision: Int = 0,
+         unverified: Int = 0, unverifiedWords: String? = nil, note: String? = nil,
          problem: String? = nil, decisionWords: String? = nil) {
         self.lastCompleted = lastCompleted
         self.outcome = outcome
         self.needsDecision = needsDecision
+        self.unverified = unverified
+        self.unverifiedWords = unverifiedWords
+        self.note = note
         self.problem = problem
         self.decisionWords = decisionWords
     }
@@ -314,16 +401,62 @@ struct IntegrityReportFacts: Sendable, Equatable {
     }
 
     static func from(report r: IntegrityReport) -> IntegrityReportFacts {
-        var f = IntegrityReportFacts(needsDecision: r.needsDecisionTotal, decisionWords: r.decisionWords)
+        let built = r.builtTiers
+        var f = IntegrityReportFacts(needsDecision: built.reduce(0) { $0 + $1.needsDecision }, decisionWords: r.decisionWords)
+        f.note = note(for: r)
         switch r.outcome {
-        case .completed:
-            f.outcome = .ok
-            f.lastCompleted = r.verifiedAt
-        case .stopped:
-            f.outcome = .partial
         case .failed:
             f.outcome = .failed
+            return f
+        case .stopped:
+            f.outcome = .partial
+        case .completed:
+            f.outcome = .ok
+            f.lastCompleted = oldest(built)?.verifiedAt
         }
+        var gaps = built.compactMap { gap($0, rowsLive: r.rowsLive) }
+        if let mismatch = r.generationMismatchWords {
+            gaps.append((max(1, r.rowsLive), "the catalog changed during the run: \(mismatch)"))
+        }
+        f.unverified = gaps.map(\.count).max() ?? 0
+        f.unverifiedWords = gaps.isEmpty ? nil : gaps.map(\.words).joined(separator: " · ")
         return f
+    }
+
+    /// What one built tier leaves unverified, naming the tier; nil when it
+    /// verified everything it was asked.
+    static func gap(_ t: IntegrityTier, rowsLive: Int) -> (count: Int, words: String)? {
+        switch t.result {
+        case .notRun(let why):
+            return (max(1, rowsLive), "\(t.label): not run — \(why)")
+        case .couldNotCheck(let n):
+            return (n, "\(t.label): \(t.summary)")
+        case .ok, .needsDecision:
+            return t.couldNotCheck > 0 ? (t.couldNotCheck, "\(t.label): \(t.couldNotCheck.formatted()) could not be checked") : nil
+        }
+    }
+
+    /// The built tier with the oldest verified-at (among those that ran).
+    static func oldest(_ built: [IntegrityTier]) -> IntegrityTier? {
+        built.filter { $0.verifiedAt != nil }.min { ($0.verifiedAt ?? .distantPast) < ($1.verifiedAt ?? .distantPast) }
+    }
+
+    /// "oldest: tier 0 File presence · tiers 2 and 6 not built" — the first
+    /// part only when the oldest built tier was verified by ANOTHER run
+    /// (tier 0 stands on the audit's record) and is strictly older than
+    /// the run's own tiers, so the row's date is named.
+    static func note(for r: IntegrityReport) -> String? {
+        var parts: [String] = []
+        let built = r.builtTiers
+        if let old = oldest(built), old.runID != r.runID,
+           let newest = built.compactMap(\.verifiedAt).max(), (old.verifiedAt ?? newest) < newest {
+            parts.append("oldest: \(old.label)")
+        }
+        let notBuilt = VerifyCatalogTiers.notBuiltTiers.filter { n in r.tier(n)?.result.isNotRun ?? true }
+        if !notBuilt.isEmpty {
+            let list = notBuilt.map(String.init).joined(separator: " and ")
+            parts.append("tier\(notBuilt.count == 1 ? "" : "s") \(list) not built")
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 }

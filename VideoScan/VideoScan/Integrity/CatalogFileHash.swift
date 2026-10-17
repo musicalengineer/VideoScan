@@ -13,11 +13,18 @@
 // that header — CatalogStore writes it by hand BEFORE `records`, in the
 // first few hundred bytes (CatalogGenerationSidecar relies on the same).
 //
+// A file that EXISTS and cannot be read — no permission, an I/O error, or
+// fewer bytes than the open file says it holds — throws, with the errno in
+// words (`readProblemWords`); the tier that asked says "could not check",
+// never "ok" and never "not on disk" (codex, Verify Catalog slice 1, P2).
+//
 // Read-only on the catalog: the file is opened for reading and closed. Pure
 // apart from that one read; safe off the main actor.
 //
 // (For Rick: `SHA256()` from CryptoKit is an incremental hasher ≈ OpenSSL's
-// EVP_DigestUpdate loop; `Comparison` is a tagged union the words switch on.)
+// EVP_DigestUpdate loop; `Comparison` is a tagged union the words switch on;
+// `fstat(2)` on the open descriptor sizes the SAME inode the loop reads, so
+// an atomic replace during the read cannot fake a short read.)
 
 import CryptoKit
 import Foundation
@@ -33,11 +40,21 @@ struct CatalogFileHash: Sendable, Equatable {
     static let chunkBytes = 1 << 20
     static let headerBytes = 4_096
 
-    /// Hash the file at `url`, streaming. Throws when it cannot be opened
-    /// or read.
+    /// The open file said it held `expected` bytes; the read ended after
+    /// `read` — a short read (EIO part way, a truncating writer) is not a
+    /// hash of the file.
+    struct IncompleteRead: Error, CustomStringConvertible, Equatable {
+        let read: Int64
+        let expected: Int64
+        var description: String { "short read — \(read.formatted()) of \(expected.formatted()) bytes" }
+    }
+
+    /// Hash the file at `url`, streaming. Throws when it cannot be opened,
+    /// read, or read to its full length.
     static func of(fileAt url: URL) throws -> CatalogFileHash {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
+        let expected = try byteCount(of: handle)
         var hasher = SHA256()
         var head = Data()
         var total: Int64 = 0
@@ -46,8 +63,36 @@ struct CatalogFileHash: Sendable, Equatable {
             total += Int64(chunk.count)
             if head.count < headerBytes { head.append(chunk.prefix(headerBytes - head.count)) }
         }
+        guard total == expected else { throw IncompleteRead(read: total, expected: expected) }
         let hex = hasher.finalize().map { String(format: "%02x", $0) }.joined()
         return CatalogFileHash(sha256: hex, byteCount: total, generation: generation(inHeader: head))
+    }
+
+    /// The size of the open file, from its descriptor.
+    static func byteCount(of handle: FileHandle) throws -> Int64 {
+        var st = stat()
+        guard fstat(handle.fileDescriptor, &st) == 0 else {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+        }
+        return Int64(st.st_size)
+    }
+
+    /// Why a read failed, in words a person can act on: the errno's text
+    /// and number ("Permission denied (errno 13)"), a short read's counts,
+    /// or the error's own description.
+    static func readProblemWords(_ error: Error) -> String {
+        if let short = error as? IncompleteRead { return short.description }
+        let ns = error as NSError
+        if let code = posixCode(ns) { return "\(String(cString: strerror(code))) (errno \(code))" }
+        return ns.localizedDescription
+    }
+
+    /// The POSIX errno behind a Foundation error, following the
+    /// underlying-error chain (`NSFileReadNoPermissionError` wraps EACCES).
+    static func posixCode(_ error: NSError) -> Int32? {
+        if error.domain == NSPOSIXErrorDomain { return Int32(error.code) }
+        if let under = error.userInfo[NSUnderlyingErrorKey] as? NSError { return posixCode(under) }
+        return nil
     }
 
     /// `"generation": 1234` in the first bytes of a catalog. Decoded as
