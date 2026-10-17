@@ -438,3 +438,15 @@ SELECT 'integrity_check: ' || integrity_check FROM pragma_integrity_check;
 INSERT INTO t_assert VALUES ('END foreign_key_check clean', (SELECT count(*) = 0 FROM pragma_foreign_key_check));
 SELECT 'FAILED: ' || label FROM t_assert WHERE ok IS NOT 1;
 SELECT 'all checks ok (' || count(*) || ' assertions)' FROM t_assert HAVING count(*) > 0 AND sum(ok IS NOT 1) = 0;
+
+-- ---------------------------------------------------------------------------------------------
+-- F5 final (Manager, 2026-10-17, codex r3 final pass): `findings` must be a JSON ARRAY. A JSON
+-- object made json_array_length() return 0 and let a quarantined row with an unresolved finding
+-- resolve as a copy. The CHECK now requires json_type(findings) = 'array'.
+-- ---------------------------------------------------------------------------------------------
+.bail off
+INSERT INTO quarantine (import_run_id, source_ordinal, json_row_id, reason_code, words, findings, quarantined_at, generation)
+  SELECT import_run_id, 90001, 'f5-final-object', 'auditGone', 'w', '{"rule":"referenceMovie","needsDecision":true}', 1, 1
+  FROM quarantine LIMIT 1;
+SELECT CASE WHEN (SELECT count(*) FROM quarantine WHERE json_row_id = 'f5-final-object') = 0
+            THEN 'F5final ok' ELSE 'F5final FAILED' END;

@@ -375,7 +375,11 @@ writes `integrity_runs`.
    `generationHighWater {intended: g+1}` to the JSONL ledger (fsync);
    (2) commit the CAS g → g+1.
    So codex's crash after commit 6, followed by a restore of 5, is caught: (1) already recorded 6.
-   **Invariant at open:** `highwater ≥ generation`.
+   **Effective high-water at open** <!-- F8 final -->: the larger of `catalog.highwater` and the newest
+   `generationHighWater` line in the JSONL ledger — read BOTH on every open. A restore that rewinds the
+   database and its sidecar together (codex r3: commit 6, restore both to 5) is caught by the ledger, which
+   is append-only and lives apart from the database; a ledger that cannot be read is itself a named refusal.
+   **Invariant at open:** `effective highwater ≥ generation`.
    - `highwater > generation` ⇒ a restore, or a crash between (1) and (2); only the JSONL's last line tells
      them apart. Either way: READ-ONLY (`restoredBelowHighWater`), words naming the case, until a person adopts.
    - `highwater < generation` ⇒ the file was rolled back; it is raised to the generation.

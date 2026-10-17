@@ -1085,7 +1085,8 @@ CREATE TABLE quarantine (
                                        'noWholeFileDigest','removedNoDigest') THEN 'presence'
                   ELSE 'finding' END) VIRTUAL,
   words         TEXT    NOT NULL,            -- family-app words: what is wrong and what to do
-  findings      TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(findings)),  -- integrity findings for the row
+  findings      TEXT    NOT NULL DEFAULT '[]'                                 -- integrity findings for the row
+                        CHECK (json_valid(findings) AND json_type(findings) = 'array'),  -- F5 final: an object is not an empty array
   raw_row       TEXT    CHECK (raw_row IS NULL OR json_valid(raw_row)),      -- the full VideoRecordDTO JSON
   quarantined_at INTEGER NOT NULL,
   generation    INTEGER NOT NULL,
@@ -1371,7 +1372,10 @@ BEGIN SELECT RAISE(ABORT, 'the ledger is append-only (no replace)'); END;
 -- 11. Open checks at every open (§9.2): PRAGMA integrity_check; PRAGMA foreign_key_check;
 --     SELECT * FROM catalog_state and generations — exactly one row each, schema_version known;
 --     no `adopt` history row above the counter (a half-done adoption, F8r3);
---     then read catalog.highwater (F8r3, written BEFORE each commit):
+--     then the EFFECTIVE high-water (F8 final): the larger of catalog.highwater (written BEFORE each
+--     commit, F8r3) and the newest `generationHighWater` line of the JSONL ledger — read BOTH on
+--     EVERY open, not only when the sidecar is missing (a restore that rewinds database AND sidecar
+--     together is caught by the ledger, which lives elsewhere and is append-only):
 --       high-water = generation ⇒ normal open;
 --       high-water > generation ⇒ READ-ONLY, named refusal `restoredBelowHighWater`, until a
 --         person adopts (§1); the words say "restored" or "the last save did not finish" from
