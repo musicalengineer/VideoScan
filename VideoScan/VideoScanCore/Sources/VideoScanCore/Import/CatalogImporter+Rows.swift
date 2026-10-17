@@ -1,18 +1,25 @@
 // CatalogImporter+Rows.swift
 // The row pass of the import (contract §f "What every occurrence writes"):
 // for every catalog.json occurrence in file order, the gate decides
-// (ImportGate.decide), the occurrence lands in `files` (+ `content`,
-// `volumes`, archive copy, backups) or in `quarantine` (the whole row
-// verbatim, its findings, its words), and in BOTH cases every curated value
-// becomes a `knowledge_sources` row, every derived value a
+// (ImportGate.decide), the preflight says whether the DDL can hold the row
+// as-is (RowPreflight, codex D′ #6), the occurrence lands in `files`
+// (+ `content`, `volumes`, archive copy, backups) or in `quarantine` (the
+// whole row verbatim, its findings, its words), and in BOTH cases every
+// curated value becomes a `knowledge_sources` row, every derived value a
 // `derived_unverified` row when the row has a digest, plus `regen_context`
 // and `legacy_pair_ids`, and one `import_items` row names the landing.
+//
+// An UNREPRESENTABLE occurrence (a row-local CHECK would refuse it) lands in
+// quarantine with the check's words and writes only its knowledge rows
+// (digest NULL — the DDL's finish trigger requires one per curated field
+// listed, and §10b says curated values survive): no content, no derived,
+// no relation, no pair group. The rest of the catalog imports.
 //
 // Relations whose other end may come LATER in the file (lineage,
 // supersession, archive-copy source, footage decisions, duplicate groups)
 // are deferred to `relationPass`, which runs after every row is in.
 //
-// What is kept per row after the pass (`ImportRowFacts`, ≈ 250 bytes): the
+// What is kept per row after the pass (`ImportRowIndex`, ≈ 250 bytes): the
 // digest, the files.id when it landed in files, the path and audit stamp
 // (for the audit results), the pair group. The decoded catalog itself is
 // released when `rowPass` returns.
@@ -21,16 +28,6 @@
 // straight-line INSERTs through the transaction's doors.)
 
 import Foundation
-
-/// What later passes need to know about one occurrence.
-struct ImportRowFacts: Sendable, Equatable {
-    var digest: String?
-    /// The `files.id` when the occurrence landed in files.
-    var fileID: String?
-    var fullPath: String
-    var auditSeenAt: Int64?
-    var pairGroupID: String?
-}
 
 /// A relation the row pass found and the relation pass writes.
 enum DeferredRelation: Sendable {
@@ -41,13 +38,11 @@ enum DeferredRelation: Sendable {
     case footage(ordinal: Int, digest: String?, decisions: [CatalogRecordDTO.FootageDecisionRow])
 }
 
-/// The row pass's result: the facts by canonical row id (ids that occur
-/// more than once are ambiguous and absent), the pair groups, the digests
-/// and volumes written, the deferred relations.
+/// The row pass's result: the index of facts by canonical row id, the
+/// digests and volumes written, the deferred relations.
 struct ImportRowPass: Sendable {
-    var facts: [String: ImportRowFacts] = [:]
-    var pairGroups: [String: [String]] = [:]
-    var contentDigests: Set<String> = []
+    var index = ImportRowIndex()
+    var contentWritten: Set<String> = []
     var volumes: Set<String> = []
     var deferred: [DeferredRelation] = []
     var mainCount = 0
@@ -70,7 +65,8 @@ extension ImportPlan {
             let input = ImportGate.Input(record: dto, occurrences: occurrences[dto.file.id] ?? 1, audit: evidence[dto.file.id],
                                          auditWindow: audit.window, findings: findings[dto.file.id] ?? [])
             let writer = OccurrenceWriter(plan: self, tx: tx, ordinal: ordinal, dto: dto, rawID: record.id,
-                                          landing: ImportGate.decide(input), eventKeys: eventKeys)
+                                          landing: ImportGate.decide(input), tier5: ImportGate.tier5Findings(input),
+                                          eventKeys: eventKeys)
             do {
                 try writer.write(into: &pass)
             } catch let abort as ImportAbort {
@@ -103,14 +99,21 @@ struct OccurrenceWriter {
     let dto: CatalogRecordDTO
     let rawID: String?
     let landing: ImportGate.Landing
+    /// Every tier-5 finding for the record (kept on any quarantine row, F5r3).
+    let tier5: [ImportGate.Finding]
     let eventKeys: EventKeyIndex
 
     private var id: String { dto.file.id }
     private var digest: String? { dto.digestState.digest }
 
     func write(into pass: inout ImportRowPass) throws {
-        guard UUID(uuidString: id) != nil else {
-            throw ImportFailure(words: "catalog row \(ordinal) has no usable id (\(rawID ?? "absent")) — nothing can be keyed by it")
+        if let floor = RowPreflight.quarantineFloor(dto) {
+            throw ImportFailure(words: "catalog row \(ordinal): \(floor)")
+        }
+        let violations = RowPreflight.report(dto).violations(for: landing)     // codex D′ #6: before any insert
+        if !violations.isEmpty {
+            try writeUnrepresentable(violations, into: &pass)
+            return
         }
         try writeContent(into: &pass)
         let landed: (table: CatalogDDL.LandedTable, ref: String, fileID: String?)
@@ -124,19 +127,36 @@ struct OccurrenceWriter {
             pass.quarantineByReason[reason.rawValue, default: 0] += 1
             landed = (.quarantine, String(qid), nil)
         }
-        try writeKnowledge()
+        try writeKnowledge(digest: digest)
         try writeDerived(into: &pass)
         try tx.insertImportItem(CatalogRow.ImportItem(importRun: plan.runID, sourceFile: .catalog, sourceOrdinal: ordinal,
                                                       itemKind: .row, sourceKey: rawID, curatedFields: dto.curatedFields,
                                                       landedTable: landed.table, landedRef: landed.ref))
-        recordFacts(fileID: landed.fileID, into: &pass)
+        pass.index.record(id: id, digest: digest, fileID: landed.fileID, fullPath: dto.file.fullPath,
+                          auditSeenAt: dto.auditStamp?.auditSeenAt, pairGroupID: dto.legacyPairIDs?.pairGroupID,
+                          reason: landing.reason)
         deferRelations(fileID: landed.fileID, into: &pass)
+    }
+
+    /// codex D′ #6: a row the DDL cannot hold as-is. Quarantine (verbatim,
+    /// the gate's tier-5 findings, the checks' words), its knowledge rows
+    /// with no digest, the import_items row — nothing else.
+    func writeUnrepresentable(_ violations: [String], into pass: inout ImportRowPass) throws {
+        let words = RowPreflight.words(gate: landing, violations: violations)
+        let qid = try writeQuarantine(reason: .unrepresentable, words: words, findings: tier5)
+        pass.quarantineByReason[CatalogDDL.ReasonCode.unrepresentable.rawValue, default: 0] += 1
+        try writeKnowledge(digest: nil)
+        try tx.insertImportItem(CatalogRow.ImportItem(importRun: plan.runID, sourceFile: .catalog, sourceOrdinal: ordinal,
+                                                      itemKind: .row, sourceKey: rawID, curatedFields: dto.curatedFields,
+                                                      landedTable: .quarantine, landedRef: String(qid)))
+        pass.index.record(id: id, digest: nil, fileID: nil, fullPath: dto.file.fullPath, auditSeenAt: dto.auditStamp?.auditSeenAt,
+                          pairGroupID: nil, reason: .unrepresentable)
     }
 
     /// Every agreeing whole-file digest is a `content` row, whichever table
     /// the occurrence lands in (a quarantined row's knowledge hangs on it).
     private func writeContent(into pass: inout ImportRowPass) throws {
-        guard let digest, let content = dto.content, pass.contentDigests.insert(digest).inserted else { return }
+        guard let digest, let content = dto.content, pass.contentWritten.insert(digest).inserted else { return }
         try tx.insertContent(content)
     }
 
@@ -183,7 +203,7 @@ struct OccurrenceWriter {
         return seen
     }
 
-    private func writeKnowledge() throws {
+    private func writeKnowledge(digest: String?) throws {
         for value in dto.knowledgeSources {
             try tx.insertKnowledgeSource(CatalogRow.KnowledgeSource(importRun: plan.runID, sourceOrdinal: ordinal,
                                                                      jsonRowID: id, digest: digest, value: value))
@@ -213,24 +233,6 @@ struct OccurrenceWriter {
         if let print = dto.soundPrint {
             _ = try tx.insertSoundPrint(print)
         }
-    }
-
-    private func recordFacts(fileID: String?, into pass: inout ImportRowPass) {
-        if let group = dto.legacyPairIDs?.pairGroupID {
-            pass.pairGroups[CatalogRecordDTO.canonicalID(group), default: []].append(id)
-        }
-        // A repeated id (every occurrence quarantined) binds nothing — no
-        // digest, no file — but its audit result still needs the row's path
-        // and stamp (N1): the FIRST occurrence's, the comparator's rule too.
-        if case .quarantine(.duplicateId, _, _) = landing {
-            if pass.facts[id] == nil {
-                pass.facts[id] = ImportRowFacts(digest: nil, fileID: nil, fullPath: dto.file.fullPath,
-                                                auditSeenAt: dto.auditStamp?.auditSeenAt, pairGroupID: nil)
-            }
-            return
-        }
-        pass.facts[id] = ImportRowFacts(digest: digest, fileID: fileID, fullPath: dto.file.fullPath,
-                                        auditSeenAt: dto.auditStamp?.auditSeenAt, pairGroupID: dto.legacyPairIDs?.pairGroupID)
     }
 
     private func deferRelations(fileID: String?, into pass: inout ImportRowPass) {
@@ -275,23 +277,6 @@ struct EventKeyIndex: Sendable {
     }
 }
 
-/// The three shapes of `ContentRange.contentKey` (EventsDecisionStore.swift:35).
-enum EventMemberKey {
-    static func pairGroupID(_ key: String) -> String? {
-        key.hasPrefix("pair:") ? CatalogRecordDTO.canonicalID(String(key.dropFirst("pair:".count))) : nil
-    }
-
-    static func rowID(_ key: String) -> String? {
-        key.hasPrefix("id:") ? CatalogRecordDTO.canonicalID(String(key.dropFirst("id:".count))) : nil
-    }
-
-    /// The plain digest, with or without a `sha256:` prefix; nil otherwise.
-    static func digest(_ key: String) -> String? {
-        let hex = (key.hasPrefix("sha256:") ? String(key.dropFirst("sha256:".count)) : key).lowercased()
-        return CatalogRecordDTO.isWholeFileDigest(hex) ? hex : nil
-    }
-}
-
 // MARK: - The relation pass (after every row is in)
 
 extension ImportPlan {
@@ -300,7 +285,7 @@ extension ImportPlan {
         for relation in rows.deferred {
             switch relation {
             case .archiveCopy(let fileID, let copy):
-                let source = copy.sourceRowID.flatMap { rows.facts[CatalogRecordDTO.canonicalID($0)]?.fileID }
+                let source = copy.sourceRowID.flatMap { rows.index.facts[CatalogRecordDTO.canonicalID($0)]?.fileID }
                 try tx.insertArchiveCopy(fileID: fileID, copy, sourceFileID: source == fileID ? nil : source)
             case .duplicateCandidate(let fileID, let member):
                 _ = try tx.insertRelation(.duplicateCandidate(fileID: fileID, member: member))   // rebuildable: a refusal is a skip
@@ -310,7 +295,7 @@ extension ImportPlan {
                 try writeSupersession(tx, rows, ordinal: ordinal, childRowID: child, childDigest: childDigest, byRowID: by, confirmedAt: confirmedAt)
             case .footage(let ordinal, let digest, let decisions):
                 for decision in decisions {
-                    let other = rows.facts[decision.otherRowID]?.digest
+                    let other = rows.index.facts[decision.otherRowID]?.digest
                     _ = try tx.insertRelation(.footageDecision(importRun: runID, sourceOrdinal: ordinal, decision: decision,
                                                                digest: digest, otherDigest: other))
                 }
@@ -326,7 +311,7 @@ extension ImportPlan {
                               childDigest: String?, value: CatalogRecordDTO.LineageValue, covered: Bool) throws {
         if covered && value.isArchivePromotion { return }            // archive_copies holds it (§e.5)
         let parentRowID = value.derivedFrom.map { CatalogRecordDTO.canonicalID($0) } ?? ""
-        let parentDigest = rows.facts[parentRowID]?.digest
+        let parentDigest = rows.index.facts[parentRowID]?.digest
         var payload = (try? CatalogJSONValue.of(value).objectValue) ?? [:]
         var refusal: String?
         if let childDigest, let parentDigest, !value.isArchivePromotion {
@@ -348,7 +333,7 @@ extension ImportPlan {
 
     private func writeSupersession(_ tx: any CatalogTransaction, _ rows: ImportRowPass, ordinal: Int, childRowID: String,
                                    childDigest: String?, byRowID: String, confirmedAt: Int64?) throws {
-        let byDigest = rows.facts[byRowID]?.digest
+        let byDigest = rows.index.facts[byRowID]?.digest
         var payload: [String: CatalogJSONValue] = ["supersededByID": .string(byRowID)]
         if let confirmedAt { payload["repairConfirmedDate"] = .string(CatalogJSONDate.format(confirmedAt)) }
         var refusal: String?

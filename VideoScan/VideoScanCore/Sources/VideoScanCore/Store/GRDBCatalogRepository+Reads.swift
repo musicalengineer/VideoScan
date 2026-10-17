@@ -6,6 +6,12 @@
 // the reader handle and the transaction handle through `GRDBRecordHandle`,
 // so the comparator can read inside the import's own transaction.
 //
+// fix 2026-10-17 (codex D′ #1, #3): the readings carry IDENTITY, not just
+// presence — a landing is JOINED to the row it names (its id and digest), a
+// knowledge row carries the digest it hangs on, an event member its digest
+// and range — and the sidecar tables are read back WHOLE so the comparator
+// compares payloads, not ordinals.
+//
 // (For Rick: each function is one prepared SELECT stepped to the end with a
 // callback per row — `sqlite3_step` in a loop, no result vector.)
 
@@ -22,14 +28,27 @@ extension GRDBRecordHandle {
                                       content: try count("content"), importRuns: try count("import_runs"))
     }
 
+    /// Each landing JOINED to the row it names (codex D′ #1): a files landing
+    /// to `files` by id, a quarantine landing to the `quarantine` row of the
+    /// same (run, ordinal) AND qid. Both nil when the row is not there.
     func rowLandings(run: String, _ visit: (CatalogRow.RowLanding) throws -> Void) throws {
         let cursor = try Row.fetchCursor(db, sql: """
-            SELECT source_ordinal, landed_table, landed_ref FROM import_items
-             WHERE import_run = ? AND item_kind = 'row' ORDER BY source_ordinal
+            SELECT i.source_ordinal, i.landed_table, i.landed_ref, f.id, f.content_digest, q.json_row_id, q.digest
+              FROM import_items i
+              LEFT JOIN files f ON i.landed_table = 'files' AND f.id = i.landed_ref
+              LEFT JOIN quarantine q ON i.landed_table = 'quarantine' AND q.origin = 'import'
+                   AND q.import_run = i.import_run AND q.source_ordinal = i.source_ordinal
+                   AND q.qid = CAST(i.landed_ref AS INTEGER)
+             WHERE i.import_run = ? AND i.item_kind = 'row' ORDER BY i.source_ordinal
             """, arguments: [run])
         while let row = try cursor.next() {
             guard let table = CatalogDDL.LandedTable.init(rawValue: row[1] as String) else { continue }
-            try visit(CatalogRow.RowLanding(ordinal: row[0], landedTable: table, landedRef: row[2]))
+            let fileID: String? = row[3]
+            let quarantineRowID: String? = row[5]
+            let fileDigest: String? = row[4]
+            let quarantineDigest: String? = row[6]
+            try visit(CatalogRow.RowLanding(ordinal: row[0], landedTable: table, landedRef: row[2],
+                                            rowID: fileID ?? quarantineRowID, digest: fileDigest ?? quarantineDigest))
         }
     }
 
@@ -39,9 +58,7 @@ extension GRDBRecordHandle {
             """, arguments: [run])
         while let row = try cursor.next() {
             let text: String? = row[1]
-            guard let text, let data = text.data(using: .utf8),
-                  let value = try? JSONDecoder().decode(CatalogJSONValue.self, from: data),
-                  let object = value.objectValue else { continue }
+            guard let text, let object = Self.json(text)?.objectValue else { continue }
             try visit(row[0], object)
         }
     }
@@ -65,13 +82,12 @@ extension GRDBRecordHandle {
 
     func knowledgeSources(run: String, _ visit: (CatalogRow.KnowledgeReading) throws -> Void) throws {
         let cursor = try Row.fetchCursor(db, sql: """
-            SELECT source_ordinal, json_row_id, field, value_json FROM knowledge_sources WHERE import_run = ? ORDER BY source_ordinal
+            SELECT source_ordinal, json_row_id, field, value_json, digest FROM knowledge_sources WHERE import_run = ? ORDER BY source_ordinal
             """, arguments: [run])
         while let row = try cursor.next() {
             guard let field = CatalogDDL.KnowledgeField.init(rawValue: row[2] as String),
-                  let data = (row[3] as String).data(using: .utf8),
-                  let value = try? JSONDecoder().decode(CatalogJSONValue.self, from: data) else { continue }
-            try visit(CatalogRow.KnowledgeReading(ordinal: row[0], jsonRowID: row[1], field: field, value: value))
+                  let value = Self.json(row[3] as String) else { continue }
+            try visit(CatalogRow.KnowledgeReading(ordinal: row[0], jsonRowID: row[1], field: field, value: value, digest: row[4]))
         }
     }
 
@@ -90,16 +106,35 @@ extension GRDBRecordHandle {
         while let digest = try cursor.next() { try visit(digest) }
     }
 
-    func eventDecisionOrdinals(run: String, _ visit: (Int) throws -> Void) throws {
-        let cursor = try Int.fetchCursor(db, sql: "SELECT source_ordinal FROM event_decisions WHERE import_run = ?",
-                                         arguments: [run])
-        while let ordinal = try cursor.next() { try visit(ordinal) }
+    // MARK: - Sidecar rows, whole (codex D′ #3)
+
+    func events(run: String, _ visit: (CatalogRow.Event) throws -> Void) throws {
+        let cursor = try Row.fetchCursor(db, sql: """
+            SELECT event_id, name, state, categories, note, created_at, updated_at, source_ordinal
+              FROM events WHERE import_run = ? ORDER BY source_ordinal
+            """, arguments: [run])
+        while let row = try cursor.next() {
+            let categories = Self.json(row[3] as String)?.arrayValue?.compactMap(\.stringValue) ?? []
+            try visit(CatalogRow.Event(eventID: row[0], name: row[1], state: row[2], categories: categories, note: row[4],
+                                       createdAt: row[5], updatedAt: row[6], importRun: run, sourceOrdinal: row[7]))
+        }
+    }
+
+    func eventDecisions(run: String, _ visit: (CatalogRow.EventDecision) throws -> Void) throws {
+        let cursor = try Row.fetchCursor(db, sql: """
+            SELECT kind, payload, source_ordinal FROM event_decisions WHERE import_run = ? ORDER BY source_ordinal
+            """, arguments: [run])
+        while let row = try cursor.next() {
+            guard let payload = Self.json(row[1] as String) else { continue }
+            try visit(CatalogRow.EventDecision(kind: row[0], payload: payload, importRun: run, sourceOrdinal: row[2]))
+        }
     }
 
     func eventMembers(_ visit: (CatalogRow.EventMemberReading) throws -> Void) throws {
-        let cursor = try Row.fetchCursor(db, sql: "SELECT event_id, imported_key FROM event_members")
+        let cursor = try Row.fetchCursor(db, sql: "SELECT event_id, digest, range_start_s, range_end_s, imported_key FROM event_members")
         while let row = try cursor.next() {
-            try visit(CatalogRow.EventMemberReading(eventID: row[0], importedKey: row[1]))
+            try visit(CatalogRow.EventMemberReading(eventID: row[0], digest: row[1], rangeStart: row[2], rangeEnd: row[3],
+                                                    importedKey: row[4]))
         }
     }
 
@@ -113,37 +148,57 @@ extension GRDBRecordHandle {
         let payloads = try String.fetchCursor(db, sql: "SELECT payload FROM event_decisions WHERE import_run = ?",
                                               arguments: [run])
         while let payload = try payloads.next() {
-            guard let data = payload.data(using: .utf8),
-                  let value = try? JSONDecoder().decode(CatalogJSONValue.self, from: data) else { continue }
+            guard let value = Self.json(payload) else { continue }
             for key in EventsDecisionsJSON.contentKeys(in: value) { try visit(key) }
         }
     }
 
-    func ledgerOrdinals(run: String, _ visit: (Int) throws -> Void) throws {
-        let cursor = try Int.fetchCursor(db, sql: "SELECT source_ordinal FROM ledger WHERE import_run = ?", arguments: [run])
-        while let ordinal = try cursor.next() { try visit(ordinal) }
-    }
-
-    func ignoredOrdinals(run: String, _ visit: (Int) throws -> Void) throws {
-        let cursor = try Int.fetchCursor(db, sql: "SELECT source_ordinal FROM ignored_content WHERE import_run = ?",
-                                         arguments: [run])
-        while let ordinal = try cursor.next() { try visit(ordinal) }
-    }
-
-    func jobMarkers(run: String, _ visit: (CatalogRow.MarkerReading) throws -> Void) throws {
-        let cursor = try Row.fetchCursor(db, sql: "SELECT source_file, source_ordinal FROM job_markers WHERE import_run = ?",
-                                         arguments: [run])
+    func ledgerLines(run: String, _ visit: (CatalogRow.Ledger) throws -> Void) throws {
+        let cursor = try Row.fetchCursor(db, sql: """
+            SELECT at, kind, actor, record_id, content_key, digest, path, payload, source_ordinal
+              FROM ledger WHERE import_run = ? ORDER BY source_ordinal
+            """, arguments: [run])
         while let row = try cursor.next() {
-            guard let file = CatalogDDL.ImportSourceFile.init(rawValue: row[0] as String) else { continue }
-            try visit(CatalogRow.MarkerReading(sourceFile: file, ordinal: row[1]))
+            guard let payload = Self.json(row[7] as String) else { continue }
+            try visit(CatalogRow.Ledger(at: row[0], kind: row[1], actor: row[2], recordID: row[3], contentKey: row[4],
+                                        digest: row[5], path: row[6], payload: payload, importRun: run, sourceOrdinal: row[8]))
         }
     }
 
-    func auditResults(run: String, _ visit: (CatalogRow.AuditResultReading) throws -> Void) throws {
-        let cursor = try Row.fetchCursor(db, sql: "SELECT source_ordinal, accepted FROM audit_results WHERE import_run = ?",
+    func ignoredEntries(run: String, _ visit: (CatalogRow.Ignored) throws -> Void) throws {
+        let cursor = try Row.fetchCursor(db, sql: """
+            SELECT entry_id, source_ordinal, partial_md5, size_bytes, filename, reason, added_at, sample_path, digest, binding
+              FROM ignored_content WHERE import_run = ? ORDER BY source_ordinal
+            """, arguments: [run])
+        while let row = try cursor.next() {
+            guard let binding = CatalogDDL.IgnoredBinding.init(rawValue: row[9] as String) else { continue }
+            try visit(CatalogRow.Ignored(entryID: row[0], importRun: run, sourceOrdinal: row[1], partialMD5: row[2],
+                                         sizeBytes: row[3], filename: row[4], reason: row[5], addedAt: row[6],
+                                         samplePath: row[7], digest: row[8], binding: binding))
+        }
+    }
+
+    func jobMarkers(run: String, _ visit: (CatalogRow.MarkerReading) throws -> Void) throws {
+        let cursor = try Row.fetchCursor(db, sql: "SELECT source_file, source_ordinal, detail FROM job_markers WHERE import_run = ?",
                                          arguments: [run])
         while let row = try cursor.next() {
-            try visit(CatalogRow.AuditResultReading(ordinal: row[0], accepted: (row[1] as Int) == 1))
+            guard let file = CatalogDDL.ImportSourceFile.init(rawValue: row[0] as String) else { continue }
+            let hash = Self.json(row[2] as String)?[CatalogRow.JobMarker.fileSHA256Key]?.stringValue
+            try visit(CatalogRow.MarkerReading(sourceFile: file, ordinal: row[1], fileSHA256: hash))
+        }
+    }
+
+    func auditResults(run: String, _ visit: (CatalogRow.AuditResult) throws -> Void) throws {
+        let cursor = try Row.fetchCursor(db, sql: """
+            SELECT source_ordinal, json_row_id, result, detail, judged_path, row_full_path, row_audit_seen_at, accepted
+              FROM audit_results WHERE import_run = ? ORDER BY source_ordinal
+            """, arguments: [run])
+        while let row = try cursor.next() {
+            guard let result = CatalogDDL.AuditResult.init(rawValue: row[2] as String),
+                  let detail = Self.json(row[3] as String) else { continue }
+            try visit(CatalogRow.AuditResult(importRun: run, sourceOrdinal: row[0], jsonRowID: row[1], result: result,
+                                             detail: detail, judgedPath: row[4], rowFullPath: row[5], rowAuditSeenAt: row[6],
+                                             accepted: (row[7] as Int) == 1))
         }
     }
 
@@ -151,6 +206,13 @@ extension GRDBRecordHandle {
         let cursor = try Int.fetchCursor(db, sql: "SELECT source_ordinal FROM person_searches WHERE import_run = ?",
                                          arguments: [run])
         while let ordinal = try cursor.next() { try visit(ordinal) }
+    }
+
+    /// A JSON column back into the importer's value tree (nil when the text
+    /// is not JSON — the DDL's CHECKs make that unreachable).
+    private static func json(_ text: String) -> CatalogJSONValue? {
+        guard let data = text.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(CatalogJSONValue.self, from: data)
     }
 
     // MARK: - The reconciliation line's counts (contract §f), from the rows

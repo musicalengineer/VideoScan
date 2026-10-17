@@ -361,6 +361,13 @@ public enum CatalogRow {
     }
 
     public struct JobMarker: Sendable, Equatable {
+        /// `detail.fileSHA256`: the SHA-256 of the marker file's bytes as the
+        /// gate read them (codex D′ #3/#4) — the comparator re-hashes the file.
+        public static let fileSHA256Key = "fileSHA256"
+        /// `detail.rowCount`: how many per-row results the audit file carried
+        /// (they are the `audit_results` rows, not the marker's own body).
+        public static let rowCountKey = "rowCount"
+
         public var job: CatalogDDL.JobKind
         public var scope: String
         public var startedAt: Int64
@@ -451,28 +458,39 @@ public enum CatalogRow {
 
     // MARK: - Readings (what the comparator asks the store)
 
-    /// An `import_items` row of kind 'row' with where it landed.
+    /// An `import_items` row of kind 'row' JOINED to the row it names
+    /// (fix 2026-10-17, codex D′ #1): `rowID` is `files.id` or
+    /// `quarantine.json_row_id`, `digest` the landed row's digest; both nil
+    /// when the landing names a row that is not there.
     public struct RowLanding: Sendable, Equatable {
         public var ordinal: Int
         public var landedTable: CatalogDDL.LandedTable
         public var landedRef: String
-        public init(ordinal: Int, landedTable: CatalogDDL.LandedTable, landedRef: String) {
+        public var rowID: String?
+        public var digest: String?
+        public init(ordinal: Int, landedTable: CatalogDDL.LandedTable, landedRef: String, rowID: String? = nil, digest: String? = nil) {
             self.ordinal = ordinal
             self.landedTable = landedTable
             self.landedRef = landedRef
+            self.rowID = rowID
+            self.digest = digest
         }
     }
 
+    /// One `knowledge_sources` row with its BINDING (codex D′ #1): the row id
+    /// and the digest the value hangs on.
     public struct KnowledgeReading: Sendable, Equatable {
         public var ordinal: Int
         public var jsonRowID: String
         public var field: CatalogDDL.KnowledgeField
         public var value: CatalogJSONValue
-        public init(ordinal: Int, jsonRowID: String, field: CatalogDDL.KnowledgeField, value: CatalogJSONValue) {
+        public var digest: String?
+        public init(ordinal: Int, jsonRowID: String, field: CatalogDDL.KnowledgeField, value: CatalogJSONValue, digest: String? = nil) {
             self.ordinal = ordinal
             self.jsonRowID = jsonRowID
             self.field = field
             self.value = value
+            self.digest = digest
         }
     }
 
@@ -507,30 +525,33 @@ public enum CatalogRow {
         }
     }
 
+    /// One `event_members` row: the RESOLVED member (codex D′ #1) — its
+    /// digest and range — plus the key it was imported from.
     public struct EventMemberReading: Sendable, Hashable {
         public var eventID: String
+        public var digest: String
+        public var rangeStart: Double?
+        public var rangeEnd: Double?
         public var importedKey: String
-        public init(eventID: String, importedKey: String) {
+        public init(eventID: String, digest: String, rangeStart: Double? = nil, rangeEnd: Double? = nil, importedKey: String) {
             self.eventID = eventID
+            self.digest = digest
+            self.rangeStart = rangeStart
+            self.rangeEnd = rangeEnd
             self.importedKey = importedKey
         }
     }
 
+    /// One `job_markers` row: its source and the hash of the file it was
+    /// read from (`detail.fileSHA256`, codex D′ #3/#4).
     public struct MarkerReading: Sendable, Hashable {
         public var sourceFile: CatalogDDL.ImportSourceFile
         public var ordinal: Int
-        public init(sourceFile: CatalogDDL.ImportSourceFile, ordinal: Int) {
+        public var fileSHA256: String?
+        public init(sourceFile: CatalogDDL.ImportSourceFile, ordinal: Int, fileSHA256: String? = nil) {
             self.sourceFile = sourceFile
             self.ordinal = ordinal
-        }
-    }
-
-    public struct AuditResultReading: Sendable, Equatable {
-        public var ordinal: Int
-        public var accepted: Bool
-        public init(ordinal: Int, accepted: Bool) {
-            self.ordinal = ordinal
-            self.accepted = accepted
+            self.fileSHA256 = fileSHA256
         }
     }
 

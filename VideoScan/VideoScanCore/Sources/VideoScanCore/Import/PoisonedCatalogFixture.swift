@@ -430,7 +430,7 @@ public struct PoisonedCatalogFixture: Sendable {
             line("setAside", id(.sampledOnly), path(.sampledOnly)),
             CatalogJSONValue.object(["kind": .string("generationHighWater"), "intended": .int(42)]).canonicalText(),
             "{\"at\":\"2026-",
-        ].joined(separator: "\n") + "\n"
+        ].joined(separator: "\n")                       // no newline after the torn line: a torn append (codex D′ #5)
     }
 
     public static func backfillMarker() -> CatalogJSONValue {

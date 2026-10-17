@@ -231,6 +231,9 @@ public enum CatalogDDL {
         case noWholeFileDigest, auditGone, auditNeverSeen, auditCouldNotCheck, auditChanged
         case tier5Finding, referenceMovie, fixityDisagree, duplicateId, removedNoDigest
         case stillBeingWritten, pathReplaced, unreadable
+        /// fix 2026-10-17 (codex D′ #6): a row the DDL's row-local CHECKs would
+        /// refuse (RowPreflight) lands here instead of aborting the run.
+        case unrepresentable
         public static let ddlLocation = Location("quarantine", "reason_code")
 
         /// quarantine.reason_class (F5): a presence reason may be resolved
@@ -243,6 +246,12 @@ public enum CatalogDDL {
                 return false
             }
         }
+    }
+
+    /// events.state (EventRecord.State; codex D′ #6: checked before the insert).
+    public enum EventState: String, Codable, CaseIterable, Sendable {
+        case confirmed, dismissed
+        public static let ddlLocation = Location("events", "state")
     }
 
     /// import_items.source_file.
@@ -323,6 +332,7 @@ public enum CatalogDDL {
         (DuplicateDisposition.ddlLocation, DuplicateDisposition.allCases.map(\.rawValue)),
         (IgnoredBinding.ddlLocation, IgnoredBinding.allCases.map(\.rawValue)),
         (ReasonCode.ddlLocation, ReasonCode.allCases.map(\.rawValue)),
+        (EventState.ddlLocation, EventState.allCases.map(\.rawValue)),
         (ImportSourceFile.ddlLocation, ImportSourceFile.allCases.map(\.rawValue)),
         (ImportItemKind.ddlLocation, ImportItemKind.allCases.map(\.rawValue)),
         (LandedTable.ddlLocation, LandedTable.allCases.map(\.rawValue)),

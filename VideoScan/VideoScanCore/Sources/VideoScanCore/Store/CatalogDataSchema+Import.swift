@@ -1,6 +1,6 @@
 // CatalogDataSchema+Import.swift (VideoScanCore/Store)
 // §8–§10: quarantine, import runs, certifying sidecars, the ledger
-// of catalog schema v1.4, verbatim from docs/design/catalog_sqlite_schema_v1.sql.
+// of catalog schema v1.6, verbatim from docs/design/catalog_sqlite_schema_v1.sql.
 // See CatalogDataSchema.swift for the rule (raw SQL, character for
 // character, interior comments kept) and the migration that runs these.
 // Split from the main file along the DDL's own section boundary so each
@@ -29,7 +29,8 @@ extension CatalogDataSchema {
           reason_code   TEXT    NOT NULL CHECK (reason_code IN
                           ('noWholeFileDigest','auditGone','auditNeverSeen','auditCouldNotCheck','auditChanged',
                            'tier5Finding','referenceMovie','fixityDisagree','duplicateId','removedNoDigest',
-                           'stillBeingWritten','pathReplaced','unreadable')),
+                           'stillBeingWritten','pathReplaced','unreadable',
+                           'unrepresentable')),                        -- fix 2026-10-17 (codex D′ #6): a row a row-local CHECK would refuse
           reason_class  TEXT    NOT NULL GENERATED ALWAYS AS (CASE                                  -- F5
                           WHEN reason_code IN ('auditGone','auditNeverSeen','auditCouldNotCheck',
                                                'noWholeFileDigest','removedNoDigest') THEN 'presence'

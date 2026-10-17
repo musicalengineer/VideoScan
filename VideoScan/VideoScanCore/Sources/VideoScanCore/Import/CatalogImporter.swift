@@ -94,6 +94,7 @@ public actor CatalogImporter {
         }
 
         /// The gate files' names beside catalog.json (contract §f "Inputs").
+        public static let catalogFileName = CatalogDDL.ImportSourceFile.catalog.rawValue
         public static let integrityFileName = "integrity-latest.json"
         public static let auditFileName = "catalog-audit.json"
         public static let databaseFileName = "catalog.sqlite"
@@ -195,10 +196,16 @@ public actor CatalogImporter {
     /// transaction (a file that changes under the import must be refused).
     typealias DecodeSeam = @Sendable () -> Void
 
+    /// Test seam: runs between the outer empty-target check and the write
+    /// transaction (codex D′ #7: a write that lands in that window must be
+    /// caught by the check repeated INSIDE the transaction).
+    typealias PreTransactionSeam = @Sendable () async -> Void
+
     private let repository: any CatalogRepository
     private let sink: Sink
     private var comparatorSeam: ComparatorSeam?
     private var decodeSeam: DecodeSeam?
+    private var preTransactionSeam: PreTransactionSeam?
     /// The run id of the last `run` (the tests read the rows by it).
     public private(set) var lastRunID: String?
     /// Where the last dry run put its database — removed when the run ended
@@ -216,6 +223,10 @@ public actor CatalogImporter {
 
     func injectDecodeSeam(_ seam: DecodeSeam?) {
         decodeSeam = seam
+    }
+
+    func injectPreTransactionSeam(_ seam: PreTransactionSeam?) {
+        preTransactionSeam = seam
     }
 
     // MARK: - Run
@@ -260,6 +271,8 @@ public actor CatalogImporter {
         let gate: ImportGateFiles
         do {
             gate = try ImportGateFiles.load(inputs)
+        } catch let abort as ImportAbort {
+            return abort.outcome
         } catch {
             return .failed(Self.words(error))
         }
@@ -294,6 +307,7 @@ public actor CatalogImporter {
         } catch {
             return .failed(Self.words(error))
         }
+        await preTransactionSeam?()
         return await transact(plan)
     }
 
@@ -412,43 +426,83 @@ struct ImportGateFiles: Sendable {
     let ignored: IgnoredContentJSON?
     let ledger: LedgerLinesJSON?
     let backfill: BackfillMarkerJSON?
+    /// The SHA-256 of every sidecar's bytes as the gate read them (codex D′
+    /// #3): the comparator re-reads each file and re-hashes it.
+    let sidecarSHA256: [CatalogDDL.ImportSourceFile: String]
+    let integritySHA256: String
 
     static func sha256(of data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 
     static func load(_ inputs: CatalogImporter.Inputs) throws -> ImportGateFiles {
-        let catalogData = try bytes(inputs.catalogURL, "catalog.json")
+        var reader = GateReader()
+        let catalogData = try reader.bytes(inputs.catalogURL, .catalog)
         let header = JSONCatalogHeader.probe(at: inputs.catalogURL) ?? (version: 1, generation: 0)
-        let report = try IntegrityReportJSON.decode(try bytes(inputs.integrityURL, "integrity-latest.json"))
-        let audit = try optional(inputs.auditURL, "catalog-audit.json", AuditMarkerJSON.decode)
+        let integrityData = try reader.bytes(inputs.integrityURL, name: Inputs.integrityFileName)
+        let report = try GateReader.decode(integrityData, Inputs.integrityFileName, IntegrityReportJSON.decode)
+        let audit = try reader.optional(inputs.auditURL, .catalogAudit, AuditMarkerJSON.decode)
+        let events = try reader.optional(inputs.eventsURL, .eventsDecisions, EventsDecisionsJSON.decode)
+        let ignored = try reader.optional(inputs.ignoredURL, .ignoredContent, IgnoredContentJSON.decode)
+        let ledger = try reader.optional(inputs.ledgerURL, .mediaLedger) { LedgerLinesJSON.decode($0) }
+        let backfill = try reader.optional(inputs.backfillURL, .fullHashBackfill, BackfillMarkerJSON.decode)
         return ImportGateFiles(
             catalogSHA256: sha256(of: catalogData), catalogVersion: header.version, catalogGeneration: header.generation,
-            report: report, audit: audit,
-            events: try optional(inputs.eventsURL, "events-decisions.json", EventsDecisionsJSON.decode),
-            ignored: try optional(inputs.ignoredURL, "ignored-content.json", IgnoredContentJSON.decode),
-            ledger: try optional(inputs.ledgerURL, "media-ledger.jsonl") { LedgerLinesJSON.decode($0) },
-            backfill: try optional(inputs.backfillURL, "fullhash-backfill.json", BackfillMarkerJSON.decode))
+            report: report, audit: audit, events: events, ignored: ignored, ledger: ledger, backfill: backfill,
+            sidecarSHA256: reader.hashes, integritySHA256: sha256(of: integrityData))
     }
 
-    private static func bytes(_ url: URL, _ name: String) throws -> Data {
-        do {
-            return try Data(contentsOf: url)
-        } catch {
-            throw ImportFailure(words: "\(name) could not be read at \(url.path): \(error.localizedDescription)")
+    typealias Inputs = CatalogImporter.Inputs
+
+    /// Reads and hashes each input file once. (For Rick: a tiny accumulator
+    /// so `load` stays a list of named reads.)
+    struct GateReader {
+        var hashes: [CatalogDDL.ImportSourceFile: String] = [:]
+
+        mutating func bytes(_ url: URL, _ file: CatalogDDL.ImportSourceFile) throws -> Data {
+            let data = try bytes(url, name: file.rawValue, lines: file == .mediaLedger)
+            hashes[file] = ImportGateFiles.sha256(of: data)
+            return data
         }
-    }
 
-    /// A sidecar that is absent is nil; one that is present but damaged is a
-    /// failure in words (never silently empty).
-    private static func optional<T>(_ url: URL?, _ name: String, _ decode: (Data) throws -> T) throws -> T? {
-        guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
-        do {
-            return try decode(try bytes(url, name))
-        } catch let failure as ImportFailure {
-            throw failure
-        } catch {
-            throw ImportFailure(words: "\(name) could not be decoded: \(error)")
+        /// Read, then the duplicate-key pre-pass (codex D′ #2): a key that
+        /// occurs twice in one object refuses the run before any decode.
+        func bytes(_ url: URL, name: String, lines: Bool = false) throws -> Data {
+            let data: Data
+            do {
+                data = try Data(contentsOf: url)
+            } catch {
+                throw ImportFailure(words: "\(name) could not be read at \(url.path): \(error.localizedDescription)")
+            }
+            if lines {
+                if let found = JSONDuplicateKeyScanner.firstDuplicate(inLines: data) {
+                    throw ImportAbort.refused([.duplicateJSONKey(file: name, path: "line \(found.line): \(found.duplicate.path)",
+                                                                 key: found.duplicate.key, recordOrdinal: nil)])
+                }
+            } else if let found = JSONDuplicateKeyScanner.firstDuplicate(in: data) {
+                throw ImportAbort.refused([.duplicateJSONKey(file: name, path: found.path, key: found.key,
+                                                             recordOrdinal: name == Inputs.catalogFileName ? found.recordOrdinal : nil)])
+            }
+            return data
+        }
+
+        /// A sidecar that is absent is nil; one that is present but damaged is a
+        /// failure in words (never silently empty).
+        mutating func optional<T>(_ url: URL?, _ file: CatalogDDL.ImportSourceFile, _ decode: (Data) throws -> T) throws -> T? {
+            guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return try Self.decode(try bytes(url, file), file.rawValue, decode)
+        }
+
+        static func decode<T>(_ data: Data, _ name: String, _ decode: (Data) throws -> T) throws -> T {
+            do {
+                return try decode(data)
+            } catch let failure as ImportFailure {
+                throw failure
+            } catch let abort as ImportAbort {
+                throw abort
+            } catch {
+                throw ImportFailure(words: "\(name) could not be decoded: \(error)")
+            }
         }
     }
 
@@ -456,7 +510,9 @@ struct ImportGateFiles: Sendable {
         ImportGate.RunInput(catalogVersion: catalogVersion, catalogGeneration: catalogGeneration, catalogSHA256: catalogSHA256,
                             report: report.facts, audit: audit?.facts, duplicateEventIDs: events?.duplicateEventIDs ?? [],
                             openDeleteDuplicatesPlans: environment.openDeleteDuplicatesPlans,
-                            openAngelBatches: environment.openAngelBatches, runningWriters: environment.runningWriters)
+                            openAngelBatches: environment.openAngelBatches, runningWriters: environment.runningWriters,
+                            ledgerCorruptLines: ledger?.corruptLines ?? [],
+                            sidecarFaults: (events?.faults ?? []) + (ignored?.faults ?? []) + (audit?.faults ?? []))
     }
 }
 
@@ -481,6 +537,11 @@ struct ImportPlan: Sendable {
                                                                savedGeneration: nil) }
 
     func run(_ tx: any CatalogTransaction) throws -> ImportReconciliation {
+        // codex D′ #7: the empty-target check again, now under the writer lock —
+        // a write that landed between the outer check and this transaction
+        // refuses the import here, and nothing of it is kept.
+        let counts = try tx.recordCounts()
+        if !counts.isEmpty { throw ImportAbort.refused([.targetNotEmpty(counts)]) }
         try tx.insertImportRun(importRun())
         let rows = try rowPass(tx)                      // decode #1 lives and dies in here
         try stopCheck()
@@ -491,7 +552,7 @@ struct ImportPlan: Sendable {
         try stopCheck()
         var reconciliation = try tx.importReconciliation(run: runID)
         reconciliation.membersListed = sidecars.membersListed
-        reconciliation.ledgerUnparseable = gate.ledger?.unparseable.count ?? 0
+        reconciliation.ledgerUnparseable = gate.ledger?.trailingPartialOrdinal == nil ? 0 : 1
         try tx.finishImportRun(runID, counters: CatalogRow.ImportCounters(
             rowsBefore: reconciliation.rowsBefore, rowsMain: reconciliation.rowsMain,
             rowsQuarantine: reconciliation.rowsQuarantine, digestsSeen: reconciliation.digests,

@@ -1,4 +1,4 @@
--- catalog_sqlite_schema_v1.sql — VideoScan catalog, SQLite schema v1.5 (BUILT: §2 onward is
+-- catalog_sqlite_schema_v1.sql — VideoScan catalog, SQLite schema v1.6 (BUILT: §2 onward is
 -- VideoScanCore/Store/CatalogDataSchema.swift verbatim, migration `v2_data`; §1 is
 -- CatalogBookkeepingSchema.swift, migration `v1_bookkeeping`; CatalogDataSchemaTests diffs this
 -- file against sqlite_master, so the Swift copy cannot drift from this document)
@@ -37,6 +37,11 @@
 -- Companion: docs/design/catalog_contract_freeze_2026_10_17.md (field inventory, invariants,
 -- importer gate §f, reconciliation §g). Reproductions: catalog_sqlite_schema_v1_checks.sql
 -- (`sqlite3 :memory: < catalog_sqlite_schema_v1_checks.sql`). GH #328.
+-- Revision 7 (v1.6, 2026-10-17, codex D′ pass on the importer, docs/reviews/codex/
+-- codex-review-sqlite-importer-step-d-data-risk-2026-10-17.md #6): `quarantine.reason_code` gains
+-- `unrepresentable` — a catalog.json row that a row-local CHECK of files/volumes/content/backup_destinations/
+-- sound_prints/footage_decisions would refuse is quarantined with the check's words (RowPreflight.swift)
+-- instead of aborting the whole import. Marked `-- fix 2026-10-17 (codex D′ #6)` in place.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1215,7 +1220,8 @@ CREATE TABLE quarantine (
   reason_code   TEXT    NOT NULL CHECK (reason_code IN
                   ('noWholeFileDigest','auditGone','auditNeverSeen','auditCouldNotCheck','auditChanged',
                    'tier5Finding','referenceMovie','fixityDisagree','duplicateId','removedNoDigest',
-                   'stillBeingWritten','pathReplaced','unreadable')),
+                   'stillBeingWritten','pathReplaced','unreadable',
+                   'unrepresentable')),                        -- fix 2026-10-17 (codex D′ #6): a row a row-local CHECK would refuse
   reason_class  TEXT    NOT NULL GENERATED ALWAYS AS (CASE                                  -- F5
                   WHEN reason_code IN ('auditGone','auditNeverSeen','auditCouldNotCheck',
                                        'noWholeFileDigest','removedNoDigest') THEN 'presence'
