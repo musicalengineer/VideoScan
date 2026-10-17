@@ -218,6 +218,15 @@ protocol CatalogStoreObserver: AnyObject {
     func catalogStoreDidWrite(_ store: CatalogStore)
 }
 
+/// MOPS-16: the token a job takes the store's write hold with
+/// (`holdWrites(reason:owner:)`). Its own acknowledged saves present it
+/// (`saveAcknowledged(records:as:)`) and pass; every other save is held.
+/// Equality is identity: a fresh token per job. (For Rick: an opaque
+/// handle, like the owner thread id a recursive mutex compares against.)
+struct CatalogWriteHoldOwner: Hashable, Sendable {
+    private let id = UUID()
+}
+
 @MainActor
 final class CatalogStore {
     static let shared = CatalogStore()
@@ -252,16 +261,21 @@ final class CatalogStore {
     private var debouncedSavePending = false
 
     /// MOPS-16 (Import to SQLite, 2026-10-17): a named HOLD on every write
-    /// to catalog.json. While set, saveNow / scheduleSave → saveAsync /
-    /// saveAcknowledged refuse with `.heldByJob(reason)` — journalled like
-    /// every other refusal — and `heldRefusals` counts them, so the holder
-    /// can schedule one catch-up save when it lets go. One writer at a
-    /// time: the importer READS this file and hashes it before and during
-    /// the import; a save landing underneath would be refused by the gate
-    /// anyway (`catalogChangedDuringImport`), but the hold says so BEFORE
-    /// the bytes move. (For Rick: a named mutex the job takes for its whole
-    /// run; a save that finds it taken returns "held", never blocks.)
+    /// to catalog.json, taken WITH AN OWNER TOKEN. While set, saveNow /
+    /// scheduleSave → saveAsync / saveAcknowledged refuse with
+    /// `.heldByJob(reason)` — journalled like every other refusal — and
+    /// `heldRefusals` counts them, so the holder can schedule one catch-up
+    /// save when it lets go. The ONE exception is an acknowledged save that
+    /// presents the holder's token (`saveAcknowledged(records:as:)`): the
+    /// holder's own writer passes — inside Import to SQLite that is the
+    /// audit's where-seen stamp save, evidence the importer checks (N1).
+    /// One writer at a time: the import audits, verifies and imports ONE
+    /// generation — the one its own audit saved. (For Rick: a named mutex
+    /// the job takes for its whole run, with the job's own writer let
+    /// through; any other save that finds it taken returns "held", never
+    /// blocks.)
     private(set) var writeHold: String?
+    private var writeHoldOwner: CatalogWriteHoldOwner?
     private(set) var heldRefusals = 0
 
     /// Something is on its way to disk or waiting to be: a debounced save
@@ -269,9 +283,11 @@ final class CatalogStore {
     /// dirty during one. The pre-flight of a job that reads the file asks.
     var hasUnsavedChanges: Bool { debouncedSavePending || saveInFlight || pendingRecords != nil }
 
-    /// Take the hold. `reason` names the job in the refusal's words.
-    func holdWrites(reason: String) {
+    /// Take the hold. `reason` names the job in the refusal's words;
+    /// `owner` is the token the holder's own acknowledged saves present.
+    func holdWrites(reason: String, owner: CatalogWriteHoldOwner) {
         writeHold = reason
+        writeHoldOwner = owner
         heldRefusals = 0
     }
 
@@ -280,6 +296,7 @@ final class CatalogStore {
     @discardableResult
     func releaseWriteHold() -> Int {
         writeHold = nil
+        writeHoldOwner = nil
         let refused = heldRefusals
         heldRefusals = 0
         return refused
@@ -460,7 +477,7 @@ final class CatalogStore {
     /// Order: latch → ownership → staleness. If another process owns the
     /// catalog, "your copy is stale" is a confusing way to say "you are
     /// not the writer".
-    private func writePrecondition() -> CatalogWriteError? {
+    private func writePrecondition(as owner: CatalogWriteHoldOwner? = nil) -> CatalogWriteError? {
         func fail(_ e: CatalogWriteError) -> CatalogWriteError {
             lastWriteError = e
             CatalogWriteJournal.record(e, catalogURL: fileURL)
@@ -471,8 +488,9 @@ final class CatalogStore {
             return fail(.writesDisabled(reason))
         }
 
-        // MOPS-16 — a job that reads catalog.json holds every write to it.
-        if let hold = writeHold {
+        // MOPS-16 — a job that reads catalog.json holds every write to it
+        // except its own (the save that presents the owner token).
+        if let hold = writeHold, owner != writeHoldOwner {
             heldRefusals += 1
             return fail(.heldByJob(hold))
         }
@@ -1073,8 +1091,10 @@ final class CatalogStore {
     /// queue orders it after any async save already running, exactly as
     /// `saveNow` is ordered. Any pending debounced / coalesced save is
     /// superseded by this snapshot (as in `saveNow`).
+    /// `owner`: the token of the MOPS-16 hold this save belongs to — the
+    /// holder's own writer passes its hold; nil = an ordinary save (held).
     /// - Returns: true only when the snapshot durably reached disk.
-    func saveAcknowledged(records: [VideoRecord]) async -> Bool {
+    func saveAcknowledged(records: [VideoRecord], as owner: CatalogWriteHoldOwner? = nil) async -> Bool {
         if Self.isRunningTests && self === CatalogStore.shared { return false }
         if isReadOnly {
             NSLog("VideoScan: CatalogStore.saveAcknowledged refused — read-only viewer mode")
@@ -1083,7 +1103,7 @@ final class CatalogStore {
             CatalogWriteJournal.record(.readOnlyViewer, catalogURL: fileURL)
             return false
         }
-        if writePrecondition() != nil { return false }
+        if writePrecondition(as: owner) != nil { return false }
         debounceTask?.cancel()
         debounceTask = nil
         debouncedSavePending = false

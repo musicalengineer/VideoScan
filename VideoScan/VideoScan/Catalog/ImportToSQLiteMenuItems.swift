@@ -1,12 +1,15 @@
 // ImportToSQLiteMenuItems.swift
 // Catalog ▸ "Import to SQLite (Dry Run)…" and "Import to SQLite…" (Rick
-// 2026-10-17, catalog_sqlite_migration §10c "app wiring"). The dry run
-// starts straight away as a Media File Operation (the MFO window comes
-// forward via `startedByUser`); the real import is ENABLED only when a dry
-// run has passed on the current catalog generation (ImportDryRunMarker,
-// beside the catalog) and confirms with a sheet that names the
-// reconciliation line and says: the JSON catalog stays as it is; nothing is
-// deleted. Both are disabled in read-only (viewer) mode.
+// 2026-10-17, catalog_sqlite_migration §10c "app wiring"; one action verb
+// the same evening). Each runs as ONE Media File Operation in three phases
+// inside one write hold — Audit Catalog, Verify Catalog, then the import —
+// so there is nothing to sequence by hand. The dry run starts straight
+// away (the MFO window comes forward via `startedByUser`); the real import
+// is ENABLED once a dry run has passed on THIS BUILD (ImportDryRunMarker,
+// beside the catalog) and confirms with a sheet that shows the last dry
+// run's line and says the real run repeats audit + verify + gate +
+// comparator, the JSON catalog stays as it is, nothing is deleted. Both
+// are disabled in read-only (viewer) mode.
 
 import SwiftUI
 import VideoScanCore
@@ -15,28 +18,30 @@ struct ImportToSQLiteMenuItems: View {
     let model: VideoScanModel
     let center: MediaFileOperationsCenter
     @ObservedObject var marker: ImportDryRunMarker
-    /// The catalog generation the app holds now (the store's); the marker
-    /// must name the same one for the real import to be offered.
-    let catalogGeneration: Int
     let isReadOnly: Bool
+
+    private var commitEnabled: Bool {
+        ImportDryRunMarker.enablesCommit(marker.lastPassed, build: ImportBuildIdentity.current)
+    }
 
     var body: some View {
         Button("Import to SQLite (Dry Run)…") {
             _ = center.startedByUser { $0.startImportToSQLite(model: model, mode: .dryRun) }
         }
         .disabled(isReadOnly)
-        .help("Run the whole import — the gate, every row, the sidecars, the comparator — and then roll it back. Nothing is written beside the catalog; the row shows the reconciliation line the real import would commit. The JSON catalog is read-only for the run.")
+        .help("Audit Catalog, then Verify Catalog, then the whole import — the gate, every row, the sidecars, the comparator — rolled back at the end. Catalog saves wait until it finishes. Nothing is written beside the catalog but the audit's stamps and the two reports; the row shows the reconciliation line the real import would commit.")
         .accessibilityIdentifier("catalog.menu.importToSQLiteDryRun")
 
         Button("Import to SQLite…") {
             guard let passed = marker.lastPassed else { return }
             model.importToSQLiteConfirm = ImportToSQLiteConfirmRequest(reconciliationLine: passed.reconciliationLine,
-                                                                       catalogGeneration: passed.catalogGeneration)
+                                                                       catalogGeneration: passed.catalogGeneration,
+                                                                       passedAt: passed.passedAt)
         }
-        .disabled(isReadOnly || !ImportDryRunMarker.enablesCommit(marker.lastPassed, catalogGeneration: catalogGeneration))
-        .help(ImportDryRunMarker.enablesCommit(marker.lastPassed, catalogGeneration: catalogGeneration)
-              ? "Import the verified catalog into catalog.sqlite beside it. The JSON catalog stays as it is; nothing is deleted. A confirm sheet names the reconciliation line first."
-              : "Run Import to SQLite (Dry Run)… first; the real import is offered once a dry run has passed on this catalog.")
+        .disabled(isReadOnly || !commitEnabled)
+        .help(commitEnabled
+              ? "Audit, verify and import the catalog into catalog.sqlite beside it, in one run. The JSON catalog stays as it is; nothing is deleted. A confirm sheet shows the last dry run's line first."
+              : "Run Import to SQLite (Dry Run)… first; the real import is offered once a dry run has passed with this build of VideoScan.")
         .accessibilityIdentifier("catalog.menu.importToSQLite")
     }
 }
@@ -56,7 +61,7 @@ struct ImportToSQLiteConfirmSheet: View {
         VStack(alignment: .leading, spacing: 12) {
             Text("Import to SQLite")
                 .font(.title2.weight(.semibold))
-            Text("The dry run on catalog generation \(request.catalogGeneration) passed with this reconciliation line. The real import runs the same flow and commits it.")
+            Text("The last dry run (\(request.passedAt.formatted(date: .abbreviated, time: .shortened)), catalog generation \(request.catalogGeneration)) passed with this reconciliation line:")
                 .font(.system(size: 13))
                 .fixedSize(horizontal: false, vertical: true)
             Text(request.reconciliationLine)
@@ -65,7 +70,8 @@ struct ImportToSQLiteConfirmSheet: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
             VStack(alignment: .leading, spacing: 4) {
-                Label("The JSON catalog stays as it is; nothing is deleted. It is read-only while the import runs.", systemImage: "lock.shield")
+                Label("The real import repeats everything in one run: Audit Catalog, Verify Catalog, the gate and the comparator — then commits. Its line may differ from the dry run's if the catalog changed since.", systemImage: "checkmark.shield")
+                Label("Catalog saves wait until it finishes. The JSON catalog stays as it is; nothing is deleted.", systemImage: "lock.shield")
                 Label("One new file is written: catalog.sqlite beside the catalog. If it is already there, the import refuses.", systemImage: "cylinder")
                 Label(ImportToSQLiteJob.noPauseWords, systemImage: "stop.circle")
             }

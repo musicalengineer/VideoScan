@@ -562,7 +562,7 @@ struct CatalogAuditJobSensorTests {
         let job = try Self.code("CatalogAuditJob.swift")
         #expect(job.contains("model.applyCatalogAudit(observation.stat, seenOn: observation.seenOn, to: item)") && job.contains("model.revertCatalogAuditMark(mark)"))
         #expect(job.contains("if observations.contains(where: { $0.stat == .gone }), !volumeOnline(lane.root)"), "the fresh mount check before any gone answer lands")
-        #expect(job.contains("saveCatalogAcknowledged()"), "marks land only after an acknowledged save")
+        #expect(job.contains("saveCatalogAcknowledged(asHoldOwner: writeHoldOwner)"), "marks land only after an acknowledged save")
         let plan = try Self.code("CatalogAuditPlan.swift")
         #expect(plan.contains("(e == ENOENT || e == ENOTDIR) ? .gone : .unreadable(errno: e)"), "only ENOENT / ENOTDIR mean gone")
         try Self.expectProofAtTheMark(half: half, plan: plan, job: job)
