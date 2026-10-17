@@ -50,6 +50,12 @@ struct ImporterScene {
         return ImporterScene(fixture: fixture, directory: directory, databaseFolder: databaseFolder, inputs: inputs)
     }
 
+    func makeImporter() -> CatalogImporter {
+        let repository = GRDBCatalogRepository(host: "import-test", durability: .volatileForTests)
+        let sink = sink
+        return CatalogImporter(repository: repository) { sink.append($0) }
+    }
+
     /// A write through the SAME repository the importer holds, in the window
     /// between its outer empty-target check and its transaction (codex D′ #7).
     typealias PreTransaction = @Sendable (any CatalogRepository) async -> Void
