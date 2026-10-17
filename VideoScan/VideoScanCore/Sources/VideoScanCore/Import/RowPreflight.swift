@@ -224,7 +224,8 @@ public enum RowPreflight {
     /// not a judged-path fault as well.
     public static func violations(auditRow row: AuditMarkerJSON.Row) -> [String] {
         guard let result = row.gateClass, result != .present, row.judgedPath == nil else { return [] }
-        return ["audit result \"\(row.result)\" for \(row.id) names no judged path"]
+        return ["audit result \"\(row.result)\" for \(row.id) names no judged path — "
+                + "an audit marker from before 2026-10-17; run Audit Catalog with this build"]
     }
 
     // MARK: - Shapes

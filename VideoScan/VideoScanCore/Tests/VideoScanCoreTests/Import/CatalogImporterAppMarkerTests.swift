@@ -8,9 +8,11 @@
 // `catalogGeneration` the app records from this fix on. The dry run must
 // pass with the same landings the fixture's own marker gives.
 //
-// The marker the app writes TODAY also lacks `judgedPath` on non-present
-// rows (N1); that is the one refusal left after these two fixes, pinned
-// here so the next dispatch knows exactly what remains.
+// From 2026-10-17 (bug 3 of Rick's first dry run) the app also writes
+// `judgedPath` on every non-present row (N1). The marker the app writes
+// today — its words, its generation, its judged paths — passes the dry
+// run; an OLDER marker (rows without `judgedPath`) is still refused, with
+// words that say to run Audit Catalog with this build.
 // One condition per #expect.
 
 import Foundation
@@ -27,7 +29,9 @@ struct CatalogImporterAppMarkerTests {
     static let olderMarkerNote = "audit generation not recorded (older marker); accepted by time order"
 
     /// The fixture's audit answers in the app's words. `judgedPath` is the
-    /// N1 key the app does not write yet; `withJudgedPath` adds it.
+    /// N1 key the app writes on non-present rows from 2026-10-17
+    /// (`CatalogAuditRowResult.judgedPath`); `withJudgedPath: false` is an
+    /// older marker.
     static func appRows(withJudgedPath: Bool) -> [CatalogJSONValue] {
         var rows: [CatalogJSONValue] = []
         var seen = Set<String>()
@@ -129,12 +133,36 @@ struct CatalogImporterAppMarkerTests {
         #expect(deadLink.result == .link)
     }
 
-    /// What is left for the writer: the app's rows carry no `judgedPath`.
-    @Test func theMarkerTheAppWritesTodayIsRefusedOnlyForTheJudgedPath() async throws {
+    /// The marker the app writes today: the app's words, its generation and
+    /// a judged path on every non-present row — the dry run passes, with the
+    /// same landings as the fixture's own marker, and no row is refused.
+    @Test func theMarkerTheAppWritesTodayPassesTheDryRun() async throws {
+        let scene = try Self.scene(withJudgedPath: true, catalogGeneration: F.generation)
+        defer { scene.remove() }
+        let dry = await scene.run(mode: .dryRun)
+        let report = try #require(dry.outcome.dryRunReport, Comment(rawValue: "\(dry.outcome)"))
+        #expect(dry.outcome.refusalKinds.isEmpty)
+        #expect(report.reconciliation.rowsQuarantine == 12)
+        #expect(report.reconciliation.auditResults == 15)
+        #expect(scene.sink.lines.last == "OUTCOME dry run passed — nothing written · " + report.reconciliation.line)
+    }
+
+    /// The app's non-present rows each carry the path the fixture's row has.
+    @Test func theAppsNonPresentRowsEachNameTheirRowsPath() throws {
+        let rows = Self.appRows(withJudgedPath: true).compactMap(\.objectValue)
+        let nonPresent = rows.filter { $0["result"] != .string("present") }
+        #expect(nonPresent.count == 3)
+        #expect(nonPresent.allSatisfy { $0["judgedPath"]?.stringValue != nil })
+    }
+
+    /// An OLDER marker (rows without `judgedPath`) is still refused, once per
+    /// non-present row, with words that say what to do.
+    @Test func anOlderMarkerWithoutJudgedPathsIsStillRefused() async throws {
         let scene = try Self.scene(withJudgedPath: false, catalogGeneration: nil)
         defer { scene.remove() }
         let dry = await scene.run(mode: .dryRun)
         #expect(dry.outcome.refusalKinds == [.unrepresentableSidecarEntry, .unrepresentableSidecarEntry, .unrepresentableSidecarEntry])
         #expect(dry.outcome.refusals.allSatisfy { $0.words.contains("names no judged path") })
+        #expect(dry.outcome.refusals.allSatisfy { $0.words.hasSuffix("run Audit Catalog with this build") })
     }
 }

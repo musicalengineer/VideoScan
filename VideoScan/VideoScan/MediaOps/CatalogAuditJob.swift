@@ -374,8 +374,9 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         totals.add(apply.result)
         // Recorded AFTER the apply decided (D′ importer, codex step-B F6):
         // the marker keeps one answer per row asked, in the publish that
-        // carries the counts. It changes no decision.
-        marker?.noteRow(CatalogAuditRowResult(id: item.id, apply: apply, seenOn: observation.seenOn))
+        // carries the counts. It changes no decision. The judged path is
+        // the planned one — the path the stat and the apply looked at (N1).
+        marker?.noteRow(CatalogAuditRowResult(id: item.id, apply: apply, seenOn: observation.seenOn, judgedPath: item.path))
         if let mark { unsavedMarks.append(mark) }
         if apply.stamped { unsavedStamps += 1 }
         switch apply.result {

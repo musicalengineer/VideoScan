@@ -162,6 +162,27 @@ struct CatalogAuditRowResultsTests {
         #expect(json["catalogGeneration"] as? Int == onDisk)
     }
 
+    @Test("every non-present row records the path the audit judged it at (importer N1, bug 3 of Rick's first dry run): the importer's own reader of the file on disk finds it on each, none on a present row, and its preflight refuses nothing")
+    func everyNonPresentRowRecordsItsJudgedPath() async throws {
+        let sb = try ShowAgainSandbox.make("car_judged"); defer { sb.cleanup() }
+        let present = try sb.live("present.mov")
+        let changed = try sb.live("changed.mov", bytes: 2_000)
+        changed.sizeBytes = 1_500
+        let gone = try sb.live("gone.mov", onDisk: false, seen: true)
+        let still = try sb.missingRow("still.mov", onDisk: false, seen: true)
+        let unseen = try sb.live("unseen.mov", onDisk: false)
+        let marker = CatalogAuditRunMarker()
+        _ = await runAudit(sb.model, marker: marker)
+        let read = try AuditMarkerJSON.decode(Data(contentsOf: sb.auditMarkerFile()))
+        let byID = Dictionary(uniqueKeysWithValues: (read.rows ?? []).map { ($0.id, $0) })
+        #expect(byID.count == 5)
+        #expect(byID[present.id.uuidString]?.judgedPath == nil)
+        for rec in [changed, gone, still, unseen] {
+            #expect(byID[rec.id.uuidString]?.judgedPath == rec.fullPath, Comment(rawValue: rec.filename))
+        }
+        #expect(read.faults.isEmpty)
+    }
+
     @Test("an older marker without rows still reads: counts, outcome, launch line and facts as before; rows nil with no refusal")
     func anOlderMarkerWithoutRowsStillReads() throws {
         let dir = try scratchCatalogFolder(); defer { try? FileManager.default.removeItem(at: dir) }
@@ -212,9 +233,12 @@ struct CatalogAuditRowResultsTests {
         var r = CatalogAuditRunRecord(startedAt: Date(timeIntervalSince1970: 1_760_000_000))
         let p = UUID(), g = UUID(), c = UUID()
         let stamp = AuditSeenOn(volumeUUID: "ABC", mountFrom: "/dev/disk9s1", seenAt: Date(timeIntervalSince1970: 1_760_000_000), deviceKey: "k")
-        r.noteRow(CatalogAuditRowResult(id: p, apply: CatalogAuditApply(result: .present, detail: "at its path, 2 KB", stamped: true), seenOn: stamp))
-        r.noteRow(CatalogAuditRowResult(id: g, apply: CatalogAuditApply(result: .gone, detail: "not at its path — marked Missing"), seenOn: nil))
-        r.noteRow(CatalogAuditRowResult(id: c, apply: CatalogAuditApply(result: .changed, detail: "on disk 1 KB, the catalog says 2 KB", stamped: true), seenOn: stamp))
+        r.noteRow(CatalogAuditRowResult(id: p, apply: CatalogAuditApply(result: .present, detail: "at its path, 2 KB", stamped: true), seenOn: stamp,
+                                        judgedPath: "/Volumes/T/p.mov"))
+        r.noteRow(CatalogAuditRowResult(id: g, apply: CatalogAuditApply(result: .gone, detail: "not at its path — marked Missing"), seenOn: nil,
+                                        judgedPath: "/Volumes/T/g.mov"))
+        r.noteRow(CatalogAuditRowResult(id: c, apply: CatalogAuditApply(result: .changed, detail: "on disk 1 KB, the catalog says 2 KB", stamped: true), seenOn: stamp,
+                                        judgedPath: "/Volumes/T/c.mov"))
         r.noteRow(CatalogAuditRowResult(id: p, result: .gone))
         r.counts = ["present": 1, "gone": 1, "changed": 1, "planned": 3]
         #expect(r.rows?.count == 3)
@@ -222,6 +246,9 @@ struct CatalogAuditRowResultsTests {
         #expect(r.rowResult(for: g)?.detail == "not at its path — marked Missing")
         #expect(r.rowResult(for: g)?.seenOn == nil)
         #expect(r.rowResult(for: c)?.seenOn == stamp)
+        #expect(r.rowResult(for: p)?.judgedPath == nil)
+        #expect(r.rowResult(for: g)?.judgedPath == "/Volumes/T/g.mov")
+        #expect(r.rowResult(for: c)?.judgedPath == "/Volumes/T/c.mov")
         #expect(r.rowResult(for: UUID()) == nil)
         #expect(CatalogAuditRunRecord.refusal(rows: try #require(r.rows), counts: r.counts) == nil)
         let encoder = JSONEncoder()
@@ -229,7 +256,7 @@ struct CatalogAuditRowResultsTests {
         encoder.outputFormatting = [.sortedKeys]
         let json = try #require(String(data: try encoder.encode(r), encoding: .utf8))
         #expect(json.contains(#"{"id":"\#(p.uuidString)","result":"present"}"#))
-        #expect(json.contains(#""id":"\#(g.uuidString)","result":"gone"}"#))
+        #expect(json.contains(#""id":"\#(g.uuidString)","judgedPath":"\/Volumes\/T\/g.mov","result":"gone"}"#))
         #expect(!json.contains("rowsRefusal"))
         #expect(!json.contains("\"index\""))
         let decoder = JSONDecoder()
@@ -266,15 +293,17 @@ struct CatalogAuditRowResultsScaleTests {
             ids.append(id)
             if i % 10_000 == 0 {
                 marker.noteRow(CatalogAuditRowResult(id: id, apply: CatalogAuditApply(
-                    result: .gone, detail: "not at its path, in a folder on the drive it was last seen on, at the moment of marking — marked Missing"), seenOn: nil))
+                    result: .gone, detail: "not at its path, in a folder on the drive it was last seen on, at the moment of marking — marked Missing"), seenOn: nil,
+                    judgedPath: "/Volumes/Archive1/Family/1987/tape_\(i).mov"))
                 totals.add(.gone)
             } else if i % 1_000 == 1 {
                 marker.noteRow(CatalogAuditRowResult(id: id, apply: CatalogAuditApply(
                     result: .changed, detail: "on disk 1.5 MB, the catalog says 2.0 MB — replaced since it was cataloged? Not marked; Update Catalog rescans it",
-                    stamped: true), seenOn: stamp))
+                    stamped: true), seenOn: stamp, judgedPath: "/Volumes/Archive1/Family/1987/tape_\(i).mov"))
                 totals.add(.changed)
             } else {
-                marker.noteRow(CatalogAuditRowResult(id: id, apply: CatalogAuditApply(result: .present, detail: "at its path, 2 MB", stamped: true), seenOn: stamp))
+                marker.noteRow(CatalogAuditRowResult(id: id, apply: CatalogAuditApply(result: .present, detail: "at its path, 2 MB", stamped: true), seenOn: stamp,
+                                                     judgedPath: "/Volumes/Archive1/Family/1987/tape_\(i).mov"))
                 totals.add(.present)
             }
         }
@@ -398,7 +427,8 @@ struct CatalogAuditRowResultsSensorTests {
         #expect(job.components(separatedBy: "marker?.noteRow(").count == 2, "exactly one record call")
         let apply = try #require(job.range(of: "model.applyCatalogAudit(observation.stat, seenOn: observation.seenOn, to: item)"))
         let tally = try #require(job.range(of: "totals.add(apply.result)"))
-        let note = try #require(job.range(of: "marker?.noteRow(CatalogAuditRowResult(id: item.id, apply: apply, seenOn: observation.seenOn))"))
+        let note = try #require(job.range(of: "marker?.noteRow(CatalogAuditRowResult(id: item.id, apply: apply, seenOn: observation.seenOn, judgedPath: item.path))"),
+                               "the judged path is the planned path the stat and the apply looked at (importer N1)")
         #expect(apply.upperBound < note.lowerBound, "the row is recorded after the apply decided")
         #expect(tally.upperBound < note.lowerBound, "…and after the tally the counts come from")
         let run = try CatalogAuditJobSensorTests.code("CatalogAuditRun.swift")
