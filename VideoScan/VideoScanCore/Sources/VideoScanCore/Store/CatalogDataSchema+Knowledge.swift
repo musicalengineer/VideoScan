@@ -279,7 +279,7 @@ extension CatalogDataSchema {
         """,
     ]
 
-    // MARK: - derived_unverified + 1 index, 4 triggers
+    // MARK: - derived_unverified + 2 indexes, 4 triggers
 
     static let derivedUnverified: [String] = [
         """
@@ -305,6 +305,9 @@ extension CatalogDataSchema {
         CREATE INDEX derived_unverified_by_source ON derived_unverified(import_run, source_ordinal) WHERE import_run IS NOT NULL
         """,
         """
+        CREATE INDEX derived_unverified_by_value ON derived_unverified(digest, kind, seq, value_json)   -- fix 2026-10-17 (codex C′ #7)
+        """,
+        """
         CREATE TRIGGER derived_unverified_no_replace BEFORE INSERT ON derived_unverified             -- N2
         WHEN EXISTS (SELECT 1 FROM derived_unverified d WHERE d.digest = NEW.digest AND d.kind = NEW.kind
                       AND d.seq = NEW.seq AND d.source_json_row_id = NEW.source_json_row_id)
@@ -313,13 +316,12 @@ extension CatalogDataSchema {
         """
         CREATE TRIGGER derived_unverified_flags_conflict AFTER INSERT ON derived_unverified           -- N2
         WHEN EXISTS (SELECT 1 FROM derived_unverified d WHERE d.digest = NEW.digest AND d.kind = NEW.kind
-                      AND d.seq = NEW.seq AND d.source_json_row_id <> NEW.source_json_row_id
-                      AND d.value_json IS NOT NEW.value_json)
+                      AND d.seq = NEW.seq AND d.value_json < NEW.value_json)
+          OR EXISTS (SELECT 1 FROM derived_unverified d WHERE d.digest = NEW.digest AND d.kind = NEW.kind
+                      AND d.seq = NEW.seq AND d.value_json > NEW.value_json)
         BEGIN
           UPDATE derived_unverified SET conflict = 1
-           WHERE digest = NEW.digest AND kind = NEW.kind AND seq = NEW.seq AND conflict = 0
-             AND EXISTS (SELECT 1 FROM derived_unverified o WHERE o.digest = NEW.digest AND o.kind = NEW.kind
-                          AND o.seq = NEW.seq AND o.value_json IS NOT derived_unverified.value_json);
+           WHERE digest = NEW.digest AND kind = NEW.kind AND seq = NEW.seq AND conflict = 0;
         END
         """,
         """
@@ -416,7 +418,7 @@ extension CatalogDataSchema {
         """,
     ]
 
-    // MARK: - regen_context
+    // MARK: - regen_context + 1 trigger
 
     static let regenContext: [String] = [
         """
@@ -436,9 +438,13 @@ extension CatalogDataSchema {
           PRIMARY KEY (import_run, source_ordinal, kind, value_json)
         ) STRICT, WITHOUT ROWID
         """,
+        """
+        CREATE TRIGGER regen_context_no_delete BEFORE DELETE ON regen_context                        -- fix 2026-10-17 (codex C′ #1)
+        BEGIN SELECT RAISE(ABORT, 'regen_context is imported evidence; never deleted'); END
+        """,
     ]
 
-    // MARK: - legacy_pair_ids + 1 index
+    // MARK: - legacy_pair_ids + 1 index, 1 trigger
 
     static let legacyPairIds: [String] = [
         """
@@ -456,6 +462,10 @@ extension CatalogDataSchema {
         """,
         """
         CREATE INDEX legacy_pair_ids_by_group ON legacy_pair_ids(pair_group_id)
+        """,
+        """
+        CREATE TRIGGER legacy_pair_ids_no_delete BEFORE DELETE ON legacy_pair_ids                    -- fix 2026-10-17 (codex C′ #1)
+        BEGIN SELECT RAISE(ABORT, 'legacy_pair_ids is imported evidence; never deleted'); END
         """,
     ]
 

@@ -108,13 +108,26 @@ struct SQLScript {
 
     // MARK: Normalisation (both sides of a diff go through this)
 
-    /// Comments out, every run of whitespace one space, no trailing `;`.
+    /// Comments out, every run of whitespace OUTSIDE a string literal one
+    /// space, no trailing `;`. Inside `'…'` nothing is touched (codex C′
+    /// #8: `'Backed Up'` and `'Backed  Up'` are two different constants).
     static func normalized(_ sql: String) -> String {
-        let words = sql.components(separatedBy: "\n")
-            .map(strippingComment)
-            .joined(separator: " ")
-            .split(whereSeparator: \.isWhitespace)
-        var text = words.joined(separator: " ")
+        let stripped = sql.components(separatedBy: "\n").map(strippingComment).joined(separator: "\n")
+        var text = ""
+        var inQuote = false
+        var pendingSpace = false
+        for character in stripped {
+            if character == "'" { inQuote.toggle() }
+            if !inQuote && character.isWhitespace {
+                pendingSpace = true
+                continue
+            }
+            if pendingSpace {
+                text.append(" ")
+                pendingSpace = false
+            }
+            text.append(character)
+        }
         if text.hasSuffix(";") { text.removeLast() }
         return text.trimmingCharacters(in: .whitespaces)
     }
@@ -144,7 +157,7 @@ struct SQLScript {
     }
 
     private static func blockHeader(of line: String) -> String? {
-        guard let match = line.firstMatch(of: #/^-- (F\d+(?:r\d)?|N\d+|D:530|F5 final)(?: — | \()/#) else { return nil }
+        guard let match = line.firstMatch(of: #/^-- (F\d+(?:r\d)?|N\d+|C\d+|D:530|F5 final)(?: — | \()/#) else { return nil }
         return String(match.1).replacingOccurrences(of: ":", with: "").replacingOccurrences(of: " ", with: "")
     }
 }

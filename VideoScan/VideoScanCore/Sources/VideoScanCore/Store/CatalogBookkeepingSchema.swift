@@ -1,7 +1,9 @@
 // CatalogBookkeepingSchema.swift (VideoScanCore/Store)
 // The bookkeeping tables of catalog schema v1 as RAW SQL, verbatim from
-// docs/design/catalog_sqlite_schema_v1.sql §1 (revision 3, F8 / F8r3):
-// `catalog_state`, `generations`, `generation_history` and their triggers.
+// docs/design/catalog_sqlite_schema_v1.sql §1 (revision 3, F8 / F8r3;
+// revision 6 / v1.5 adds the no-replace and no-delete guards of codex C′
+// #2): `catalog_state`, `generations`, `generation_history` and their
+// triggers.
 //
 // Rick's ruling (2026-10-17): every integrity-critical statement is raw
 // SQL, never the query builder, so it reads like the DDL it came from and
@@ -14,6 +16,13 @@
 // module. GRDBCatalogRepository still names the outcome
 // (`.generationMismatch`) from the CAS's own `changes()` BEFORE the trigger
 // would have a say, so the person sees words, not an engine error.
+//
+// Codex C′ #2 (2026-10-17): a REPLACE conflict resolution is a delete plus
+// an insert, and SQLite fires the delete's trigger only with
+// recursive_triggers on. So every row that must never be rewritten has
+// BOTH a BEFORE INSERT no-replace guard (fires before the conflict is
+// resolved, whatever the connection's pragmas) and a BEFORE DELETE guard
+// (what the pragma, set by the store, lets REPLACE's delete reach).
 //
 // For Rick: `enum` with only statics is Swift's way to write a namespace
 // that cannot be instantiated.
@@ -39,6 +48,15 @@ enum CatalogBookkeepingSchema {
           master_archive   TEXT    CHECK (master_archive IS NULL OR json_valid(master_archive)),
           imported_from    TEXT
         ) STRICT
+        """,
+        """
+        CREATE TRIGGER catalog_state_no_replace BEFORE INSERT ON catalog_state
+        WHEN EXISTS (SELECT 1 FROM catalog_state)
+        BEGIN SELECT RAISE(ABORT, 'catalog_state is one row, never replaced'); END
+        """,
+        """
+        CREATE TRIGGER catalog_state_no_delete BEFORE DELETE ON catalog_state
+        BEGIN SELECT RAISE(ABORT, 'catalog_state is never deleted'); END
         """,
         """
         CREATE TABLE generations (
@@ -97,6 +115,12 @@ enum CatalogBookkeepingSchema {
         CREATE TRIGGER generations_no_delete BEFORE DELETE ON generations
         BEGIN SELECT RAISE(ABORT, 'the generation counter is never deleted'); END
         """,
+        // codex C′ #2: the counter is ONE row; a second insert can only be a REPLACE of it.
+        """
+        CREATE TRIGGER generations_no_replace BEFORE INSERT ON generations
+        WHEN EXISTS (SELECT 1 FROM generations)
+        BEGIN SELECT RAISE(ABORT, 'the generation counter is one row, never replaced'); END
+        """,
         """
         CREATE TRIGGER generation_history_names_this_commit
         BEFORE INSERT ON generation_history
@@ -114,6 +138,16 @@ enum CatalogBookkeepingSchema {
         """,
         """
         CREATE TRIGGER generation_history_no_update BEFORE UPDATE ON generation_history
+        BEGIN SELECT RAISE(ABORT, 'generation history is append-only'); END
+        """,
+        // codex C′ #2: a row for a generation that already has one can only be a REPLACE of it.
+        """
+        CREATE TRIGGER generation_history_no_replace BEFORE INSERT ON generation_history
+        WHEN EXISTS (SELECT 1 FROM generation_history WHERE generation = NEW.generation)
+        BEGIN SELECT RAISE(ABORT, 'generation history is append-only (no replace)'); END
+        """,
+        """
+        CREATE TRIGGER generation_history_no_delete BEFORE DELETE ON generation_history
         BEGIN SELECT RAISE(ABORT, 'generation history is append-only'); END
         """,
     ]

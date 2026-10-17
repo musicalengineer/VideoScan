@@ -9,7 +9,7 @@
 //               nothing beyond the document was created.
 //   CHECKS    — docs/design/catalog_sqlite_schema_v1_checks.sql played block
 //               by block: every `<block> ok` row, every announced refusal
-//               refused, no unannounced error, 76 assertions, then the store
+//               refused, no unannounced error, 85 assertions, then the store
 //               reopens the same file and says it is sound.
 //   ISOLATION — a raw sqlite3-style connection poisons the file; the
 //               trigger's words come back; a foreign-key violation is
@@ -70,8 +70,8 @@ struct CatalogDataSchemaTests {
         let inventory = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }
         #expect(inventory.tables.count == 50)                  // 3 bookkeeping + 47 data
         #expect(inventory.virtualTables == ["content_text_fts"])
-        #expect(inventory.triggers.count == 57)                // 7 bookkeeping + 50 data
-        #expect(inventory.indexes.count == 32)                 // 8 UNIQUE + 24 plain, all named in the DDL
+        #expect(inventory.triggers.count == 70)                // 12 bookkeeping + 58 data (v1.5: +5, +8 for codex C′ #1/#2)
+        #expect(inventory.indexes.count == 33)                 // 8 UNIQUE + 25 plain, all named in the DDL
         #expect(inventory.views.sorted() == ["byte_copies", "duplicate_hash_groups_disagree"])
         #expect(inventory.shadowTables.count == 5)             // FTS5's _config _content _data _docsize _idx
         let migrations = try rawQueue(fixture).inDatabase { db in
@@ -157,7 +157,7 @@ struct CatalogDataSchemaTests {
         let fixture = try await StoreFixture.make(.grdb, generation: 0)
         defer { fixture.remove() }
         let documented = try SchemaDocument.ddl().statements.filter { $0.hasPrefix("CREATE") }
-        #expect(documented.count == 142)                       // 51 tables + 57 triggers + 32 indexes + 2 views
+        #expect(documented.count == 156)                       // 51 tables + 70 triggers + 33 indexes + 2 views
         let created = try rawQueue(fixture).inDatabase { db in try SchemaInventory(db) }.normalizedSQL
         let createdText = Set(created.values)
         for statement in documented {
@@ -186,15 +186,17 @@ struct CatalogDataSchemaTests {
         let run = try rawQueue(fixture).inDatabase { db in ChecksRun.play(script, on: db) }
 
         #expect(run.skippedSeeding.count == 2)
-        #expect(run.expectedOk.count == 20)                     // F1…F12, D530, F5r3, F8r3, F9r3, N1, N2, N3, F5final
+        #expect(run.expectedOk.count == 22)                     // F1…F12, D530, F5r3, F8r3, F9r3, N1, N2, N3, C1, C7, F5final
         for label in run.expectedOk {
             #expect(run.okRows.contains(label), Comment(rawValue: label))
         }
         #expect(run.problems.isEmpty, Comment(rawValue: run.problems.map(\.description).joined(separator: "\n")))
-        #expect(run.refusals.count == 57)
+        #expect(run.refusals.count == 63)
         #expect(run.summary.contains("integrity_check: ok"))
-        #expect(run.summary.contains("all checks ok (76 assertions)"))
+        #expect(run.summary.contains("all checks ok (85 assertions)"))
         #expect(run.queryPlans.first?.contains("USING INDEX files_by_path_prefix") == true)
+        #expect(run.queryPlans.contains { $0.contains("INDEX derived_unverified_by_value") })   // C7's probe
+        #expect(run.refusals.contains { $0.block == "C1" && $0.words == "files rows are never replaced (a live path is already taken)" })
         // Three of the refusals, by their words — the triggers and CHECKs speak, not the harness.
         #expect(run.refusals.contains { $0.words == "a removal-marker change must append its tombstone first" })
         #expect(run.refusals.contains { $0.words == "files rows are never replaced (id or live path already taken)" })
@@ -276,5 +278,79 @@ struct CatalogDataSchemaTests {
             return
         }
         #expect(reason == "foreign_key_check: 1 violation(s)")
+    }
+
+    // MARK: - Isolation: REPLACE conflict resolution on a raw connection (codex C′ #1, #2)
+    //
+    // A raw DatabaseQueue runs with recursive_triggers OFF — the sqlite3
+    // shell's default — so REPLACE's implicit delete of the row in the way
+    // never reaches a delete trigger. These pins prove the BEFORE INSERT /
+    // BEFORE UPDATE guards refuse the statement before any conflict is
+    // resolved, which binds every connection whatever its pragmas.
+
+    /// Codex C′ #1, verbatim: A at /A, B at /Other, `UPDATE OR REPLACE …
+    /// WHERE id = B`. Before the fix A silently disappeared.
+    @Test func updateOrReplaceOntoAnotherLivePathIsRefusedAndTheOtherRowStays() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 1)
+        defer { fixture.remove() }
+        let queue = try rawQueue(fixture)
+        try queue.inDatabase { db in
+            try db.execute(sql: SchemaSeed.volumeInsert)
+            try db.execute(sql: SchemaSeed.contentAInsert)
+            try db.execute(sql: SchemaSeed.fileInsert(id: SchemaSeed.fileOne, digest: SchemaSeed.digestA, path: "/A", fold: "/a"))
+            try db.execute(sql: SchemaSeed.fileInsert(id: SchemaSeed.fileTwo, digest: SchemaSeed.digestA, path: "/Other", fold: "/other"))
+        }
+        let words = refusal(queue, "UPDATE OR REPLACE files SET full_path = '/A', path_fold = '/a' WHERE id = '\(SchemaSeed.fileTwo)'")
+        #expect(words == "files rows are never replaced (a live path is already taken)")
+        let paths = try queue.inDatabase { db in try String.fetchAll(db, sql: "SELECT full_path FROM files ORDER BY full_path") }
+        #expect(paths == ["/A", "/Other"])
+        let idWords = refusal(queue, "UPDATE OR REPLACE files SET id = '\(SchemaSeed.fileOne)' WHERE id = '\(SchemaSeed.fileTwo)'")
+        #expect(idWords == "files.id is immutable")
+        let rows = try count(queue, "SELECT count(*) FROM files")
+        #expect(rows == 2)
+    }
+
+    /// Codex C′ #2: `INSERT OR REPLACE INTO generations … 99` moved the
+    /// counter 5 → 99 with no adoption; integrity and FK checks stayed clean.
+    @Test func insertOrReplaceOverTheGenerationCounterIsRefused() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 5)
+        defer { fixture.remove() }
+        let queue = try rawQueue(fixture)
+        let words = refusal(queue, "INSERT OR REPLACE INTO generations (id, generation, saved_at, saved_from_host) VALUES (1, 99, 1, 'test')")
+        #expect(words == "the generation counter is one row, never replaced")
+        let generation = try count(queue, "SELECT generation FROM generations WHERE id = 1")
+        #expect(generation == 5)
+    }
+
+    /// Codex C′ #2: replacing the CURRENT history row rewrote its writer
+    /// despite generation_history_no_update (REPLACE is a delete + insert).
+    @Test func insertOrReplaceOverTheCurrentHistoryRowIsRefused() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 5)
+        defer { fixture.remove() }
+        let queue = try rawQueue(fixture)
+        let words = refusal(queue, "INSERT OR REPLACE INTO generation_history (generation, committed_at, host, writer, files_live, files_total) VALUES (5, 2, 'x', 'forged', 0, 0)")
+        #expect(words == "generation history is append-only (no replace)")
+        let writer = try queue.inDatabase { db in try String.fetchOne(db, sql: "SELECT writer FROM generation_history WHERE generation = 5") }
+        #expect(writer == "ui")
+        let deleted = refusal(queue, "DELETE FROM generation_history WHERE generation = 5")
+        #expect(deleted == "generation history is append-only")
+    }
+
+    /// WHY the store sets recursive_triggers: SQLite fires a BEFORE DELETE
+    /// trigger for REPLACE's implicit delete only when the pragma is on.
+    /// Pinned on a scratch table so the mechanism itself is on record.
+    @Test("REPLACE reaches the delete trigger only with recursive_triggers on", arguments: [false, true])
+    func replaceReachesTheDeleteTriggerOnlyWithRecursiveTriggers(recursive: Bool) throws {
+        let queue = try DatabaseQueue()
+        try queue.inDatabase { db in
+            try db.execute(sql: "PRAGMA recursive_triggers = \(recursive ? "ON" : "OFF")")
+            try db.execute(sql: "CREATE TABLE evidence (k INTEGER PRIMARY KEY, v TEXT NOT NULL)")
+            try db.execute(sql: "CREATE TRIGGER evidence_no_delete BEFORE DELETE ON evidence BEGIN SELECT RAISE(ABORT, 'evidence is never deleted'); END")
+            try db.execute(sql: "INSERT INTO evidence VALUES (1, 'original')")
+        }
+        let words = refusal(queue, "INSERT OR REPLACE INTO evidence VALUES (1, 'forged')")
+        #expect((words == "evidence is never deleted") == recursive)
+        let value = try queue.inDatabase { db in try String.fetchOne(db, sql: "SELECT v FROM evidence WHERE k = 1") }
+        #expect(value == (recursive ? "original" : "forged"))
     }
 }

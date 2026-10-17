@@ -32,6 +32,16 @@ struct GRDBCatalogRepositoryTests {
         try DatabaseQueue(path: fixture.url.path)
     }
 
+    private static func database(of transaction: any CatalogTransaction) throws -> Database {
+        guard let grdb = transaction as? GRDBTransaction else { throw FixtureFailure(words: "not a GRDB transaction") }
+        return grdb.db
+    }
+
+    private static func database(of reader: any CatalogReader) throws -> Database {
+        guard let grdb = reader as? GRDBReader else { throw FixtureFailure(words: "not a GRDB reader") }
+        return grdb.db
+    }
+
     private struct HistoryRow: Equatable {
         let generation: Int
         let writer: String
@@ -72,6 +82,7 @@ struct GRDBCatalogRepositoryTests {
         #expect(pragmas["foreign_keys"] == "1")
         #expect(pragmas["busy_timeout"] == "5000")
         #expect(pragmas["user_version"] == "7")
+        #expect(pragmas["recursive_triggers"] == "1")   // codex C′ #1: REPLACE's deletes reach the delete triggers
         await repository.close()
     }
 
@@ -83,6 +94,7 @@ struct GRDBCatalogRepositoryTests {
         #expect(pragmas["fullfsync"] == "0")
         #expect(pragmas["journal_mode"] == "wal")
         #expect(pragmas["foreign_keys"] == "1")
+        #expect(pragmas["recursive_triggers"] == "1")
         await repository.close()
     }
 
@@ -419,6 +431,249 @@ struct GRDBCatalogRepositoryTests {
         #expect(afterAdoption == .ok(generation: 10, highWater: 10))
         await restored.close()
     }
+
+    // MARK: - Codex C′ #1, #2: REPLACE through the store's own connection
+
+    /// Codex's reproduction inside a write body. On the store's connection
+    /// (recursive_triggers ON) the implicit delete of the row in the way
+    /// would fire files_no_delete; the BEFORE UPDATE guard refuses earlier
+    /// still. Either way the body throws, the write is `.refused`, A is live.
+    @Test func aReplaceInsideAWriteBodyIsRefusedAndRolledBack() async throws {
+        let (fixture, repository) = try await openAtFive()
+        defer { fixture.remove() }
+        let planted = await repository.write(as: .rescan) { transaction in
+            let db = try Self.database(of: transaction)
+            try SchemaSeed.plant(db)
+            try db.execute(sql: SchemaSeed.fileInsert(id: SchemaSeed.fileTwo, digest: SchemaSeed.digestA,
+                                                      path: "/Volumes/A/Other.mov", fold: "/volumes/a/other.mov"))
+        }
+        #expect(planted == .committed(generation: 6))
+        let outcome = await repository.write(as: .ui) { transaction in
+            try Self.database(of: transaction).execute(sql: "UPDATE OR REPLACE files SET full_path = '/Volumes/A/Movie.mov', path_fold = '/volumes/a/movie.mov' WHERE id = '\(SchemaSeed.fileTwo)'")
+        }
+        guard case .refused(let reason) = outcome else {
+            Issue.record("expected .refused, got \(outcome)")
+            return
+        }
+        #expect(reason.contains("files rows are never"))
+        let live = try await repository.read { reader in
+            try String.fetchAll(Self.database(of: reader), sql: "SELECT full_path FROM files WHERE removal_state IS NULL ORDER BY full_path")
+        }
+        #expect(live == ["/Volumes/A/Movie.mov", "/Volumes/A/Other.mov"])
+        let generation = await repository.generation
+        #expect(generation == 6)
+        await repository.close()
+    }
+
+    @Test func replaceOverTheCounterOrItsHistoryInsideAWriteIsRefused() async throws {
+        let (fixture, repository) = try await openAtFive()
+        defer { fixture.remove() }
+        let counter = await repository.write(as: .ui) { transaction in
+            try Self.database(of: transaction).execute(sql: "INSERT OR REPLACE INTO generations (id, generation, saved_at, saved_from_host) VALUES (1, 99, 1, 'test')")
+        }
+        guard case .refused(let why) = counter else {
+            Issue.record("expected .refused, got \(counter)")
+            return
+        }
+        #expect(why.contains("never replaced") || why.contains("never deleted"))
+        let history = await repository.write(as: .ui) { transaction in
+            try Self.database(of: transaction).execute(sql: "INSERT OR REPLACE INTO generation_history (generation, committed_at, host, writer, files_live, files_total) VALUES (5, 2, 'x', 'forged', 0, 0)")
+        }
+        guard case .refused(let words) = history else {
+            Issue.record("expected .refused, got \(history)")
+            return
+        }
+        #expect(words.contains("append-only"))
+        let generation = await repository.generation
+        #expect(generation == 5)
+        await repository.close()
+        #expect(try self.history(fixture).last == HistoryRow(generation: 5, writer: "ui", kind: "commit", fromGeneration: nil))
+    }
+
+    // MARK: - Codex C′ #3: the independent witness (catalog.highwater.log)
+    // The log's own reader and append are pinned in GRDBCatalogRepositoryLedgerTests.
+
+    /// Restores the database AND the sidecar to their generation-5 copies;
+    /// the append-only log stays. The log is what says "already wrote 10".
+    @Test func restoringDatabaseAndSidecarTogetherIsCaughtByTheLog() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 5)
+        defer { fixture.remove() }
+        let backup = fixture.directory.appendingPathComponent("catalog.backup-at-5.sqlite")
+        try rawQueue(fixture).inDatabase { db in try db.execute(sql: "VACUUM INTO ?", arguments: [backup.path]) }
+        let sidecarAtFive = try #require(fixture.highWaterText())
+
+        let writer = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests)
+        _ = await writer.open(at: fixture.url)
+        for _ in 0..<5 { _ = await writer.write(as: .ui) { _ in } }     // 5 → 10
+        await writer.close()
+        try fixture.restoreDatabase(from: backup)
+        try fixture.writeHighWater(sidecarAtFive)
+
+        let restored = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests)
+        let outcome = await restored.open(at: fixture.url)
+        guard case .readOnly(let reason) = outcome else {
+            Issue.record("expected .readOnly, got \(outcome)")
+            return
+        }
+        #expect(reason.contains("restoredBelowHighWater"))
+        #expect(reason.contains(CatalogHighWaterLedger.fileName))
+        #expect(reason.contains("generation 10"))
+        let refused = await restored.write(as: .ui) { _ in }
+        guard case .refused = refused else {
+            Issue.record("expected .refused, got \(refused)")
+            return
+        }
+        let adopted = await restored.adopt(toHighWater: 10)
+        #expect(adopted == .adopted(from: 5, to: 10))
+        #expect(fixture.highWaterText() == "10")
+        let next = await restored.write(as: .ui) { _ in }
+        #expect(next == .committed(generation: 11))
+        await restored.close()
+    }
+
+    /// The documented limit: a restore of ALL THREE files from one moment is
+    /// undetectable by construction (the app-level ledger is the further
+    /// witness, contract §e.9). Pinned so the limit stays explicit.
+    @Test func restoringAllThreeFilesTogetherIsNotDetectable() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 5)
+        defer { fixture.remove() }
+        let backup = fixture.directory.appendingPathComponent("catalog.backup-at-5.sqlite")
+        try rawQueue(fixture).inDatabase { db in try db.execute(sql: "VACUUM INTO ?", arguments: [backup.path]) }
+        let sidecarAtFive = try #require(fixture.highWaterText())
+        let logAtFive = fixture.highWaterLogText() ?? ""
+
+        let writer = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests)
+        _ = await writer.open(at: fixture.url)
+        for _ in 0..<5 { _ = await writer.write(as: .ui) { _ in } }
+        await writer.close()
+        try fixture.restoreDatabase(from: backup)
+        try fixture.writeHighWater(sidecarAtFive)
+        try fixture.writeHighWaterLog(logAtFive)
+
+        let restored = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests)
+        let outcome = await restored.open(at: fixture.url)
+        #expect(outcome == .readWrite)
+        let generation = await restored.generation
+        #expect(generation == 5)
+        await restored.close()
+    }
+
+    // MARK: - Codex C′ #4: reconciliation at open never lowers the mark
+
+    /// Codex's schedule: B opens and reads a sidecar below the generation;
+    /// A commits 6 and publishes 6; B resumes and would publish 5. The hook
+    /// sits between B's read and B's publish and starts A's write there. B
+    /// holds the writer lock across its reconciliation, so A cannot finish
+    /// inside the hook (it waits for the lock), and the mark ends at 6.
+    @Test func reconciliationAtOpenNeverLowersTheMark() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 5)
+        defer { fixture.remove() }
+        let a = GRDBCatalogRepository(host: "a-host", durability: .volatileForTests)
+        let openedA = await a.open(at: fixture.url)
+        try #require(openedA == .readWrite)
+        try fixture.writeHighWater("2")                              // B will read "lower"
+
+        let b = GRDBCatalogRepository(host: "b-host", durability: .volatileForTests)
+        let aFinished = DispatchSemaphore(value: 0)
+        let aWrite = TaskBox()
+        let aWasBlocked = Seen()
+        await b.injectOpenHook {
+            aWrite.store(Task {
+                let outcome = await a.write(as: .ui) { _ in }
+                aFinished.signal()
+                return outcome
+            })
+            // A gets 400 ms to finish; it must not (the lock is B's).
+            aWasBlocked.record(aFinished.wait(timeout: .now() + .milliseconds(400)) == .timedOut ? 1 : 0)
+        }
+        let openedB = await b.open(at: fixture.url)
+        #expect(openedB == .readWrite)
+        let aOutcome = await aWrite.value()
+        #expect(aOutcome == .committed(generation: 6))
+        #expect(aWasBlocked.value == 1, "A's write finished while B held the reconciliation lock")
+        #expect(fixture.highWaterText() == "6")
+        await a.close()
+        await b.close()
+    }
+
+    // MARK: - Codex C′ #5: a surviving writer never consumes a crash warning
+
+    /// A and B open at 5. A publishes 6 and dies before COMMIT. The mark now
+    /// says 6 while the database says 5 — a warning only a person resolves.
+    /// B's phase 1 must see "not my 5" and refuse; so must A's own retry.
+    @Test func aSurvivingWriterDoesNotConsumeACrashWarning() async throws {
+        let (fixture, a) = try await openAtFive()
+        defer { fixture.remove() }
+        let b = GRDBCatalogRepository(host: "b-host", durability: .volatileForTests)
+        let openedB = await b.open(at: fixture.url)
+        try #require(openedB == .readWrite)
+        await a.injectCrashBeforeCommit { throw FixtureFailure(words: "power lost") }
+        _ = await a.write(as: .ui) { _ in }                          // publishes 6, dies before COMMIT
+        #expect(fixture.highWaterText() == "6")
+
+        let refused = await b.write(as: .ui) { _ in }
+        guard case .refused(let reason) = refused else {
+            Issue.record("expected .refused, got \(refused)")
+            return
+        }
+        #expect(reason.contains("generation 6"))
+        #expect(reason.contains("reopen"))
+        let stillFive = await b.generation
+        #expect(stillFive == 5)
+        let again = await b.write(as: .ui) { _ in }                  // every later write, until reopen
+        guard case .refused = again else {
+            Issue.record("expected .refused, got \(again)")
+            return
+        }
+        await a.injectCrashBeforeCommit(nil)
+        let retry = await a.write(as: .ui) { _ in }                  // the same session, same path
+        guard case .refused = retry else {
+            Issue.record("expected .refused, got \(retry)")
+            return
+        }
+        #expect(try history(fixture).count == 6)                     // nothing committed by anyone
+
+        await b.close()
+        let reopened = await b.open(at: fixture.url)
+        guard case .readOnly(let why) = reopened else {
+            Issue.record("expected .readOnly, got \(reopened)")
+            return
+        }
+        #expect(why.contains("restoredBelowHighWater"))
+        let adopted = await b.adopt(toHighWater: 6)
+        #expect(adopted == .adopted(from: 5, to: 6))
+        let next = await b.write(as: .ui) { _ in }
+        #expect(next == .committed(generation: 7))
+        await a.close()
+        await b.close()
+    }
+
+    // MARK: - Codex C′ #6: two writes queued on one repository both commit
+
+    @Test func twoWritesQueuedOnOneRepositoryCommitSixThenSeven() async throws {
+        let (fixture, repository) = try await openAtFive()
+        defer { fixture.remove() }
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        let first = Task {
+            await repository.write(as: .ui) { _ in
+                entered.signal()
+                release.wait()
+            }
+        }
+        entered.wait()                                                // A's body is running on the writer
+        let second = Task { await repository.write(as: .rescan) { _ in } }
+        try await Task.sleep(for: .milliseconds(200))                // B reaches the actor and queues
+        release.signal()
+        let firstOutcome = await first.value
+        let secondOutcome = await second.value
+        #expect(firstOutcome == .committed(generation: 6))
+        #expect(secondOutcome == .committed(generation: 7))
+        let generation = await repository.generation
+        #expect(generation == 7)
+        await repository.close()
+        #expect(try history(fixture).last == HistoryRow(generation: 7, writer: "rescan", kind: "commit", fromGeneration: nil))
+    }
 }
 
 /// A box a `@Sendable` body can write into (the body runs on the store's
@@ -428,4 +683,15 @@ private final class Seen: @unchecked Sendable {
     private var stored = 0
     var value: Int { lock.withLock { stored } }
     func record(_ value: Int) { lock.withLock { stored = value } }
+}
+
+/// Holds the Task a test seam starts, for the test to await afterwards.
+private final class TaskBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var task: Task<CatalogWriteOutcome, Never>?
+    func store(_ task: Task<CatalogWriteOutcome, Never>) { lock.withLock { self.task = task } }
+    func value() async -> CatalogWriteOutcome? {
+        guard let task = lock.withLock({ task }) else { return nil }
+        return await task.value
+    }
 }

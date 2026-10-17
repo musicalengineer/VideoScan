@@ -28268,7 +28268,9 @@
         "aPlusOneStepThroughRawSQLStillWorks",
         "aPoisonedHighWaterIsRepairedByAnExplicitAdoption",
         "aReadOnlyFolderNeverOpensForWriting",
+        "aReplaceInsideAWriteBodyIsRefusedAndRolledBack",
         "aStaleSessionGetsGenerationMismatch",
+        "aSurvivingWriterDoesNotConsumeACrashWarning",
         "aThrowingBodyRollsBackEverything",
         "aWriteAdvancesByOneAndRecordsHistory",
         "adoptFiveToTenSucceedsWithItsOwnHistoryRow",
@@ -28277,8 +28279,29 @@
         "archivalPragmasQueriedBack",
         "garbageWalAndShmBesideACheckpointedDatabaseAreHarmless",
         "poisonedHighWaterOpensReadOnly",
+        "reconciliationAtOpenNeverLowersTheMark",
+        "replaceOverTheCounterOrItsHistoryInsideAWriteIsRefused",
+        "restoringAllThreeFilesTogetherIsNotDetectable",
+        "restoringDatabaseAndSidecarTogetherIsCaughtByTheLog",
         "theBodySeesTheGenerationItWritesTo",
+        "twoWritesQueuedOnOneRepositoryCommitSixThenSeven",
         "volatileDurabilityIsOnlyWeakerWhereItSays"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryLedgerTests.swift",
+      "stage": "regression",
+      "suites": [
+        "GRDBCatalogRepositoryLedgerTests"
+      ],
+      "tests": [
+        "aLongLogIsReadFromItsTail",
+        "anAppendNeverMergesIntoATornLastLine",
+        "anUnreadableLogOpensReadOnly",
+        "everyCommitAppendsOneLineToTheLog",
+        "theLogsLastParseableLineIsItsValue"
       ]
     },
     {
@@ -28308,6 +28331,8 @@
         "databasePoolIsCreatedInOnePlace",
         "everyTableOfTheDDLIsInTheSwiftSchema",
         "everyTriggerOfTheDDLIsInTheSwiftSchema",
+        "noReplaceOrIgnoreConflictResolutionInTheStore",
+        "normalisationKeepsWhitespaceInsideStringLiterals",
         "onlyStoreFoldersImportGRDB",
         "theDDLMatchesTheDesignDocumentsTriggers",
         "theMigrationCreatesNoTableOutsideTheDDL",
@@ -28330,12 +28355,16 @@
         "aRemovalMarkerWithoutItsTombstoneIsRefusedWithTheTriggersWords",
         "aRowSmuggledInWithForeignKeysOffIsCaughtAtTheNextOpen",
         "everyStatementOfTheDDLIsWhatTheMigrationCreated",
+        "insertOrReplaceOverTheCurrentHistoryRowIsRefused",
+        "insertOrReplaceOverTheGenerationCounterIsRefused",
         "nothingBeyondTheDDLWasCreated",
+        "replaceReachesTheDeleteTriggerOnlyWithRecursiveTriggers",
         "searchTextFindsWordsAcrossCaseAndDiacritics",
         "theChecksFileHoldsAgainstTheMigration",
         "theEngineHasWhatTheDDLNeeds",
         "theMigrationCreatesTheDocumentsObjects",
-        "theSwiftSchemaIsSplitByTableInDocumentOrder"
+        "theSwiftSchemaIsSplitByTableInDocumentOrder",
+        "updateOrReplaceOntoAnotherLivePathIsRefusedAndTheOtherRowStays"
       ]
     },
     {
@@ -28347,7 +28376,8 @@
         "CatalogDataSchemaScaleTests"
       ],
       "tests": [
-        "hundredThousandFilesInOneImportTransaction"
+        "hundredThousandFilesInOneImportTransaction",
+        "identicalDerivedValuesFlagConflictsInLinearWork"
       ]
     }
   ],
@@ -31586,6 +31616,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryLedgerTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {

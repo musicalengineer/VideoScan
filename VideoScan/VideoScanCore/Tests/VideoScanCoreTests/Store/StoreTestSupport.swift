@@ -70,6 +70,27 @@ struct StoreFixture: Sendable {
         try Data(text.utf8).write(to: highWaterURL)
     }
 
+    var highWaterLogURL: URL { CatalogHighWaterLedger.url(besideDatabaseAt: url) }
+
+    func highWaterLogText() -> String? {
+        try? String(contentsOf: highWaterLogURL, encoding: .utf8)
+    }
+
+    func writeHighWaterLog(_ text: String) throws {
+        try Data(text.utf8).write(to: highWaterLogURL)
+    }
+
+    /// Puts `backup` (a completed VACUUM INTO, §9.6) in the database's
+    /// place and drops the newer file's WAL and SHM — a restore as a person
+    /// would do it.
+    func restoreDatabase(from backup: URL) throws {
+        let manager = FileManager.default
+        try manager.removeItem(at: url)
+        try? manager.removeItem(at: URL(fileURLWithPath: url.path + "-wal"))
+        try? manager.removeItem(at: URL(fileURLWithPath: url.path + "-shm"))
+        try manager.copyItem(at: backup, to: url)
+    }
+
     /// Scratch only — the fixture's own temp directory.
     func remove() {
         try? FileManager.default.removeItem(at: directory)

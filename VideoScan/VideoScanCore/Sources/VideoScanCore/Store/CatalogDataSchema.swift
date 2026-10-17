@@ -129,7 +129,7 @@ enum CatalogDataSchema {
         """,
     ]
 
-    // MARK: - files + 6 indexes, 12 triggers
+    // MARK: - files + 6 indexes, 14 triggers
 
     static let files: [String] = [
         """
@@ -276,6 +276,22 @@ enum CatalogDataSchema {
         """
         CREATE TRIGGER files_no_delete BEFORE DELETE ON files
         BEGIN SELECT RAISE(ABORT, 'files rows are never deleted; stamp a removal marker'); END
+        """,
+        """
+        CREATE TRIGGER files_no_replace_upd                                                         -- fix 2026-10-17 (codex C′ #1)
+        BEFORE UPDATE OF full_path, path_fold, volume_uuid, volume_case_sensitive, removal_state ON files
+        WHEN NEW.removal_state IS NULL
+         AND (EXISTS (SELECT 1 FROM files WHERE removal_state IS NULL
+                        AND volume_uuid = NEW.volume_uuid AND full_path = NEW.full_path AND id <> NEW.id)
+              OR (NEW.volume_case_sensitive = 0
+                  AND EXISTS (SELECT 1 FROM files WHERE removal_state IS NULL AND volume_case_sensitive = 0
+                                AND volume_uuid = NEW.volume_uuid AND path_fold = NEW.path_fold AND id <> NEW.id)))
+        BEGIN SELECT RAISE(ABORT, 'files rows are never replaced (a live path is already taken)'); END
+        """,
+        """
+        CREATE TRIGGER files_id_immutable BEFORE UPDATE OF id ON files                            -- fix 2026-10-17 (codex C′ #1)
+        WHEN NEW.id IS NOT OLD.id
+        BEGIN SELECT RAISE(ABORT, 'files.id is immutable'); END
         """,
         """
         CREATE TRIGGER files_removal_revision_monotonic
