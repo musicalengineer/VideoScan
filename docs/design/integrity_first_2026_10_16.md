@@ -87,7 +87,14 @@ Sensors: no `fullPath` rendered as presence without a stat; no `contentHash` wit
 prefix in any equality that produces "copy"/"identical"; no ladder step from a row's own
 field when `archivedCopy(of:)` exists; every `FileFact` shown with its evidence word.
 
-## 6. The trust gate (when features resume)
+## 6. The trust gate (when features resume) — superseded 2026-10-17 by the import gate
+
+Rick, 2026-10-17: the seven-night gate on the JSON store is dropped. The catalog is verified ONCE after
+the tool fixes and a full-hash run; rows that pass tiers 0, 1 and 5 are imported into SQLite, the
+rest are quarantined with their words, and the drives are rescanned into SQLite keyed by whole-file
+SHA-256 (`catalog_sqlite_migration` §10). Features resume after the cutover and Rick's post-port spot
+test. The original gate, kept for the record:
+
 
 - Tiers 0–5 implemented with their stamps, pins (five dimensions) and the report.
 - **Seven consecutive nights** of Verify Catalog with zero unexplained findings (explained =

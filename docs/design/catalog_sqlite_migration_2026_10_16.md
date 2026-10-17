@@ -246,3 +246,42 @@ is re-estimated after D with real numbers.
 Keep `VideoRecord` a class; defer lazy loading; no server; JSON retained; sound prints stay in their
 own database with the digest binding; the existing store's snapshot, coalescing, generation and
 golden guarantees carry forward.
+
+## 10. Version 3 — Rick's ruling (2026-10-17 morning): import, don't babysit the JSON
+
+> "I'd rather rebuild some info with a new robust database … we'll import the known good, verified
+> files exist etc, then we'll start fresh with sqlite and if we have to do some rescans, so be it."
+> "I'll spot test the media and metadata before then after the port."
+
+What changed from v2: no shadow dual-write period and no seven-night gate. The JSON catalog is
+verified ONCE (after today's tool fixes and a full-hash run), the verified rows are IMPORTED, the
+drives are RESCANNED into SQLite as a reconciliation keyed by whole-file SHA-256, and SQLite becomes
+the authority. The JSON file is frozen read-only as the backup.
+
+**The one rule that makes it safe: identity is the whole-file SHA-256, never the path.** A rescan
+recovers only what is on disk (paths, sizes, codecs, durations). Events, people, stars, inferred
+dates, lineage, promotion records, fixity history and the ledger live on rows; after the port they
+live on DIGESTS, so a rescanned file re-attaches to its knowledge wherever it now sits. A row without
+a whole-file hash cannot be re-joined — that is why the hash run precedes the import, and why the
+importer quarantines rather than drops.
+
+### 10a. The steps, v3
+
+| Step | What | Gate |
+|---|---|---|
+| A′ | Tool fixes from the first real report (hash queue hashes archived rows; sound engine never writes "noAudio" from a decode failure; reference-movie rule; dup-group rule narrowed; lineage-to-purged = unverified; still-being-written scan rule) → Fill In Full Hashes on every reachable row → Verify Catalog once more. The rows that pass tiers 0, 1 and 5 are the **import set**. | the report; Rick's spot test of media + metadata BEFORE the port |
+| B | Contract freeze (cloud, 2026-10-17): field inventory with type / optionality / **evidence role** (disk fact · derived stamp · curated by Rick · bookkeeping) / writers; invariants (the 13 tier-5 rules + MOPS); sidecars; the DDL with CHECK + FK; the knowledge-by-digest tables; the quarantine table; the importer gate spec; the reconciliation spec. | codex pass on the schema document |
+| C′ | The SQLite store: schema, validator, `integrity_check` + `foreign_key_check` at open, `fullfsync`, CAS generation in-transaction, constraints as tiers. Built against the FIXTURE catalog; the P0 suite and the Verify Catalog suites run unchanged against it. | tests green on the fixture; codex |
+| D′ | The importer: reads JSON + the integrity report; a row with its file seen by the audit and a whole-file digest → main tables; every other row → `quarantine` with its finding words and whatever digest it has; nothing dropped. Reconciliation line: rows before · main · quarantine · knowledge rows by digest. Independent comparator: every JSON row id and every digest accounted for. | counts reconcile to zero loss; codex (data-risk) |
+| E′ | Rescan every drive into SQLite as reconciliation by digest: a known digest at a new path updates the path (and resolves a quarantined row, bringing its knowledge back); a new digest is a new row; a quarantined row never found stays listed with its words. The Trash is already emptied — orphans that are truly gone stay in quarantine as history. | the rescan report; Rick's spot test AFTER the port |
+| F′ | Cutover: SQLite is the authority for reads and writes; the JSON file frozen read-only (dated, hashed) as the backup; Verify Catalog runs against SQLite. | Rick's go |
+| G | Sidecars (events, ignored, audit marker, backfill marker, freshness stamps, ledger) imported keyed by digest where they refer to content, by id where they refer to rows. Events were only just starting (Rick) — imported as they are, not perfected. | drift zero per sidecar |
+| I | Constraints = tiers (as v2). | codex |
+
+Dropped from v2: step C (seam over JSON) and D (shadow dual-write) — their purpose was proving the
+new store against the old one over time; v3 proves the IMPORT once (D′'s comparator) and trusts
+the engine for storage integrity thereafter. Kept: the schema shape (§4), `VACUUM INTO` sealed
+generations for sync (H′), the validator, tombstones, one importer for v1–v6 JSON.
+
+Timebox (Rick): the JSON-side work is A′ only — tool fixes + one hash run + one report. No further
+polishing of the old store.
