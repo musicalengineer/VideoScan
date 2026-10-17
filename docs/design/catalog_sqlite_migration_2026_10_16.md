@@ -297,3 +297,14 @@ polishing of the old store.
 | **Disk facts** | path, size, dates, codecs, duration, resolution… | re-read by the rescan; the import copies them only so the catalog is usable before the rescan finishes |
 
 Measured 2026-10-17 on the live catalog: curated fields sit almost entirely on hashed rows (stars 163 live / 13 unhashed / 9 of those on disk; user dates 88 / 14 / 10; confirmed people 70 / 4 / 2; promotions 144 / 1 / 0). After the hash run, roughly a dozen curated rows remain unreachable → quarantine with a secondary key (sampled hash + size) that may SUGGEST a rejoin at rescan time; only a whole-file digest may confirm one.
+
+### 10c. Progress log
+
+| When | Step | State |
+|---|---|---|
+| 10/17 morning | A′ tool fixes | MERGED + codex-closed (rules/status `7a4c879db`, MediaOps `21076822c`, closures `058c59cec`); audit per-row results `8c49fc345` |
+| 10/17 | A′ hash + sound runs | Rick running Fill In Full Hashes → Fingerprint Sound → Verify Catalog on a Release build; then his before-port spot test |
+| 10/17 | B contract freeze | r1 cloud (`76a4a750e`, codex block 12) → r2 cloud (`433da96bb`, codex: 9 closed, 3 open + 3 new) → r3 cloud in flight (branch `design/contract-freeze-r3`), then a last codex closing pass = the gate |
+| 10/17 | C′ store foundation | agent in flight: `VideoScanCore/SQLite/` — system libsqlite3 wrapper (Rick: no GRDB), pragmas + checks at open, CAS generation, two-phase high-water + adopt, `CatalogDatabase` actor; data tables = part 2 after the gate |
+| next | C′ part 2 | data tables from the gated DDL; validator; the P0 + Verify Catalog suites run unchanged against the SQLite store through a store seam |
+| next | D′ importer | gate truth table (§f r3), quarantine, knowledge_sources, comparator; codex (data-risk) |
