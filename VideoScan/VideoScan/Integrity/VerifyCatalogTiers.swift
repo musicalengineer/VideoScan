@@ -350,8 +350,8 @@ enum VerifyCatalogTiers {
         let decided = found.filter(\.needsDecision)
         let kept = found.filter { !$0.needsDecision }
         var parts: [String] = []
-        if !decided.isEmpty { parts.append(constraintSummary(decided)) }
-        if !kept.isEmpty { parts.append(constraintSummary(kept)) }
+        if !decided.isEmpty { parts.append(constraintSummary(decided, decided: true)) }
+        if !kept.isEmpty { parts.append(constraintSummary(kept, decided: false)) }
         if decided.isEmpty {
             parts.append("every \(kept.isEmpty ? "" : "other ")relation holds (\(rows.formatted()) rows)")
             if let fileWords { parts.append(fileWords) }
@@ -394,20 +394,21 @@ enum VerifyCatalogTiers {
     }
 
     /// "3 rows share a path · 2 lineage links point at nothing" — the rules
-    /// with findings, most findings first.
-    static func constraintSummary(_ findings: [IntegrityFinding]) -> String {
+    /// with findings, most findings first. `decided` picks the rule's
+    /// decided or unverified phrase (the lineage rule has both).
+    static func constraintSummary(_ findings: [IntegrityFinding], decided: Bool) -> String {
         var counts: [String: Int] = [:]
         for f in findings { counts[f.rule, default: 0] += 1 }
         return counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
-            .map { rule, n in ruleWords(rule, count: n) }
+            .map { rule, n in ruleWords(rule, count: n, decided: decided) }
             .joined(separator: " · ")
     }
 
     /// A constraint rule's counted phrase (its own table), or the one
     /// tier-5 rule that is not a constraint: the catalog file's hash.
-    static func ruleWords(_ rule: String, count n: Int) -> String {
+    static func ruleWords(_ rule: String, count n: Int, decided: Bool = true) -> String {
         guard let r = CatalogConstraints.Rule(rawValue: rule) else { return "catalog.json changed without a new generation" }
-        return r.words(count: n)
+        return r.words(count: n, decided: decided)
     }
 
     // MARK: Helpers

@@ -54,6 +54,9 @@ struct IntegrityRow: Sendable, Equatable {
     /// ffprobe's duration (0 = unknown).
     var durationSeconds: Double
     var streamTypeRaw: String
+    /// ffprobe's container name ("QuickTime / MOV", "MXF (Material
+    /// eXchange Format)"…); "" = not probed.
+    var container: String
     /// "" = no video stream.
     var videoCodec: String
     var audioCodec: String
@@ -82,7 +85,7 @@ struct IntegrityRow: Sendable, Equatable {
     var isSetAside: Bool
 
     init(id: UUID = UUID(), fullPath: String, filename: String = "", sizeBytes: Int64 = 1, durationSeconds: Double = 0,
-         streamTypeRaw: String = "", videoCodec: String = "", audioCodec: String = "", contentHash: String = "",
+         streamTypeRaw: String = "", container: String = "", videoCodec: String = "", audioCodec: String = "", contentHash: String = "",
          fullDigest: String? = nil, contentFixity: ContentFixity? = nil, archiveFixity: ArchiveFixity? = nil,
          lifecycleStage: LifecycleStage = .cataloged, archiveStage: ArchiveStage = .none,
          removal: RemovalMarker? = nil, removalRevision: Int = 0,
@@ -95,6 +98,7 @@ struct IntegrityRow: Sendable, Equatable {
         self.sizeBytes = sizeBytes
         self.durationSeconds = durationSeconds
         self.streamTypeRaw = streamTypeRaw
+        self.container = container
         self.videoCodec = videoCodec
         self.audioCodec = audioCodec
         self.contentHash = contentHash
@@ -120,7 +124,8 @@ struct IntegrityRow: Sendable, Equatable {
     @MainActor
     init(record r: VideoRecord) {
         self.init(id: r.id, fullPath: r.fullPath, filename: r.filename, sizeBytes: r.sizeBytes, durationSeconds: r.durationSeconds,
-                  streamTypeRaw: r.streamTypeRaw, videoCodec: r.videoCodec, audioCodec: r.audioCodec, contentHash: r.contentHash,
+                  streamTypeRaw: r.streamTypeRaw, container: r.container, videoCodec: r.videoCodec, audioCodec: r.audioCodec,
+                  contentHash: r.contentHash,
                   fullDigest: VideoScanModel.storedFullDigest(r),
                   contentFixity: r.contentFixity, archiveFixity: r.archiveFixity,
                   lifecycleStage: r.lifecycleStage, archiveStage: r.archiveStage,
@@ -190,7 +195,7 @@ enum CatalogConstraints {
         private static let words: [Rule: (title: String, counted: String)] = [
             .uniqueIDs: ("Unique ids", "ids are carried by more than one row"),
             .oneLiveRowPerPath: ("One live row per path", "paths have more than one live row"),
-            .lineageTargetsExist: ("Lineage targets exist", "lineage links point at rows removed from the catalog — kept as history"),
+            .lineageTargetsExist: ("Lineage targets exist", "lineage links point at replacements removed from the catalog — the replacement may be lost"),
             .promotionsHaveASource: ("Archive copies name their source", "archive copies name no source"),
             .removalMirrorsLifecycle: ("Removal marker matches the lifecycle stage", "removal markers disagree with the lifecycle stage"),
             .requiredFields: ("Required fields present", "rows miss a required field"),
@@ -201,15 +206,25 @@ enum CatalogConstraints {
             .pathAliasByCase: ("One file per path on a case-insensitive volume", "paths differ only by case from another live row's"),
             .supersessionCycle: ("Supersession ends", "supersession chains run in a circle"),
             .duplicateGroupDigestsAgree: ("Duplicate groups agree on the bytes", "duplicate groups hold files with different whole-file digests"),
-            .referenceMovie: ("Reference movies", "files are reference movies — the content lives in other files"),
+            .referenceMovie: ("Possible reference movies", "files may be reference movies — Verify Media decides"),
             .derivedStampsMatchContent: ("Derived stamps match the content", "sound prints were made from other content"),
+        ]
+
+        /// The phrase for a rule's UNVERIFIED findings (`needsDecision ==
+        /// false`) when it differs from its decided phrase — only the
+        /// lineage rule has both (a purged source is history; a purged
+        /// replacement is a loss signal).
+        private static let unverifiedWords: [Rule: String] = [
+            .lineageTargetsExist: "lineage links point at rows removed from the catalog — kept as history",
         ]
 
         var title: String { Self.words[self]?.title ?? rawValue }
 
-        /// "3 paths have more than one live row".
-        func words(count n: Int) -> String {
-            "\(n.formatted()) \(Self.words[self]?.counted ?? "findings")"
+        /// "3 paths have more than one live row". `decided: false` asks for
+        /// the unverified phrase where the rule has one.
+        func words(count n: Int, decided: Bool = true) -> String {
+            let phrase = decided ? nil : Self.unverifiedWords[self]
+            return "\(n.formatted()) \(phrase ?? Self.words[self]?.counted ?? "findings")"
         }
     }
 
@@ -355,11 +370,14 @@ enum CatalogConstraints {
         }
     }
 
-    /// FK, reported as UNVERIFIED: `derivedFrom` / `supersededByID` whose
-    /// target id is not in the catalog. A purged row (Remove from Catalog,
-    /// the ledger's prune) leaves its children's links behind on purpose —
-    /// the link is history, not a decision (`needsDecision == false`; tier
-    /// 5 counts it as could-not-check). Nothing here asks anyone to cut it.
+    /// FK: `derivedFrom` / `supersededByID` whose target id is not in the
+    /// catalog. Two meanings (codex P2, 2026-10-17):
+    ///   * `derivedFrom` → purged: a purged SOURCE (Remove from Catalog, the
+    ///     ledger's prune) leaves its children's links behind on purpose —
+    ///     UNVERIFIED, kept as history (`needsDecision == false`; tier 5
+    ///     counts it as could-not-check). Nothing asks anyone to cut it.
+    ///   * `supersededByID` → purged: the REPLACEMENT — the row that was
+    ///     the usable copy — is gone. A loss signal: a DECISION.
     static func lineageTargetsExist(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
         var out: [Finding] = []
         for r in rows {
@@ -370,8 +388,8 @@ enum CatalogConstraints {
             }
             if let by = r.supersededByID, !idx.ids.contains(by) {
                 out.append(Finding(.lineageTargetsExist, recordID: r.id,
-                                   words: "superseded by a row that was removed from the catalog — the link is kept as history",
-                                   needsDecision: false))
+                                   words: "superseded by a row that was removed from the catalog — the replacement may be lost; check the ledger",
+                                   needsDecision: true))
             }
         }
         return out
@@ -530,22 +548,36 @@ enum CatalogConstraints {
     /// per second; a QuickTime reference movie carries only pointers.
     static let referenceMovieMaxBytesPerSecond = 5_000.0
 
-    /// Plausibility: a live video row whose bytes per second of duration
-    /// are far below any real codec is a QuickTime reference movie — a
-    /// small file that names media kept in other files (33 rows of Rick's
-    /// catalog read as hours of dvvideo at 3 MB). No I/O: size, duration
-    /// and the codec from the row. Audio-only rows are left alone (an MP3
-    /// at 16 KB/s is real).
+    /// Plausibility, reported as UNVERIFIED: a live QuickTime video row
+    /// whose bytes per second of duration are far below any real codec may
+    /// be a reference movie — a small file that names media kept in other
+    /// files (33 rows of Rick's catalog read as hours of dvvideo at 3 MB).
+    /// No I/O: size, duration, codec and container from the row; Verify
+    /// Media (tier 2) decides, so this is never a decision (codex P2,
+    /// 2026-10-17: a self-contained 13 KB / 20 s H.264 MP4 fired). Reference
+    /// movies are a QuickTime feature, so only `.mov` / `.qt` files (or an
+    /// extensionless file whose container says QuickTime) are judged;
+    /// audio-only rows are left alone (an MP3 at 16 KB/s is real).
     static func referenceMovie(_ rows: [IntegrityRow], _ idx: Index, _ events: [IntegrityEventFact]) -> [Finding] {
-        rows.filter(isReferenceMovie).map {
+        rows.filter(isPossibleReferenceMovie).map {
             Finding(.referenceMovie, recordID: $0.id,
-                    words: "\(sizeWords($0.sizeBytes)) for \(durationWords($0.durationSeconds)) — a reference movie; the content lives in other files")
+                    words: "\(sizeWords($0.sizeBytes)) for \(durationWords($0.durationSeconds)) in a QuickTime file — possibly a reference movie whose content lives in other files; Verify Media decides",
+                    needsDecision: false)
         }
     }
 
-    static func isReferenceMovie(_ r: IntegrityRow) -> Bool {
-        guard r.isLive, r.hasBytes, !r.videoCodec.isEmpty, r.durationSeconds >= referenceMovieMinSeconds else { return false }
+    static func isPossibleReferenceMovie(_ r: IntegrityRow) -> Bool {
+        guard r.isLive, r.hasBytes, isQuickTimeFile(r), !r.videoCodec.isEmpty,
+              r.durationSeconds >= referenceMovieMinSeconds else { return false }
         return Double(r.sizeBytes) / r.durationSeconds < referenceMovieMaxBytesPerSecond
+    }
+
+    /// The extension decides (ffprobe names the SAME "QuickTime / MOV"
+    /// demuxer for .mp4); the container only vouches for a file with none.
+    static func isQuickTimeFile(_ r: IntegrityRow) -> Bool {
+        let ext = (r.fullPath as NSString).pathExtension.lowercased()
+        if ext == "mov" || ext == "qt" { return true }
+        return ext.isEmpty && r.container.lowercased().contains("quicktime")
     }
 
     /// "3.3 MB", "812 KB", "1.2 GB" — decimal units, one decimal above KB.
