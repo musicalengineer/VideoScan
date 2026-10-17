@@ -118,11 +118,14 @@ public struct FreshnessRow: Sendable, Equatable {
     /// A pass is in progress right now.
     public var isRunning: Bool
     public var phrases: Phrases
+    /// What the kind wants said after its words whatever the colour
+    /// ("tiers 2 and 6 not built") — never a reason, never a colour.
+    public var note: String?
 
     public init(kind: String, title: String, eligible: Int = 0, covered: Int = 0, offline: Int = 0,
                 lastCompleted: Date? = nil, lastOutcome: Outcome = .neverRan, needsDecision: Int = 0,
                 storeUnavailable: String? = nil, cadence: Duration? = nil, isRunning: Bool = false,
-                phrases: Phrases = .standard) {
+                phrases: Phrases = .standard, note: String? = nil) {
         self.kind = kind
         self.title = title
         self.eligible = eligible
@@ -135,6 +138,7 @@ public struct FreshnessRow: Sendable, Equatable {
         self.cadence = cadence
         self.isRunning = isRunning
         self.phrases = phrases
+        self.note = note
     }
 
     /// Eligible rows without a stamp, never negative.
@@ -354,16 +358,18 @@ public enum FreshnessPolicy {
     /// The colour's words, then the running overlay: a running row that is
     /// not red just says "running" — the pass is on, the button is not
     /// needed; a red row keeps its words and adds "· running" because the
-    /// person still has to look.
+    /// person still has to look. The row's `note`, when it has one, ends
+    /// the words in every colour.
     static func judge(_ row: FreshnessRow, reason: FreshnessReason,
                       wording: FreshnessWording, relative: RelativeTimeWords) -> FreshnessVerdict {
         let plain = words(for: reason, phrases: row.phrases, wording: wording, relative: relative)
-        let words: String
+        var words: String
         switch (row.isRunning, reason.colour) {
         case (false, _): words = plain
         case (true, .red): words = "\(plain) · running"
         case (true, _): words = "running"
         }
+        if let note = row.note { words += " · \(note)" }
         return FreshnessVerdict(colour: reason.colour, words: words, reason: reason)
     }
 

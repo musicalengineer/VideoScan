@@ -182,7 +182,63 @@ struct VerifyCatalogConstraintTests {
         #expect(red.map(\.recordID) == [otherSHA.id, otherSize.id, otherSampled.id])
         #expect(red.allSatisfy { $0.words.hasPrefix("stale derived knowledge") })
         #expect(CatalogConstraints.Rule.derivedStampsMatchContent.tier == 4)
-        #expect(CatalogConstraints.Rule.allCases.filter { $0.tier == 5 }.count == 10)
+        #expect(CatalogConstraints.Rule.allCases.filter { $0.tier == 5 }.count == 13)
+    }
+
+    @Test("path alias by case: two live rows whose paths differ only by case are a finding (one file on a case-insensitive volume); a removed row, or exactly the same path, is not")
+    func pathAliasByCase() {
+        let upper = row("/Volumes/LaCie/Christmas.MOV")
+        let lower = row("/Volumes/LaCie/christmas.mov")
+        let red = CatalogConstraints.check(rows: [upper, lower], events: []).filter { $0.rule.rawValue == "pathAliasByCase" }
+        #expect(red.count == 1)
+        #expect(red.first?.recordID == upper.id)
+        #expect(red.first?.words == "2 rows at paths that differ only by case (/Volumes/LaCie/Christmas.MOV · /Volumes/LaCie/christmas.mov) — one file on a case-insensitive volume")
+        #expect(red.first?.needsDecision == true)
+        var gone = lower
+        gone.removal = .removedFromCatalog(at: now, reason: .userRemoved)
+        #expect(CatalogConstraints.check(rows: [upper, gone], events: []).filter { $0.rule.rawValue == "pathAliasByCase" }.isEmpty)
+        let twins = CatalogConstraints.check(rows: [row("/same.mov"), row("/same.mov")], events: [])
+        #expect(twins.filter { $0.rule.rawValue == "pathAliasByCase" }.isEmpty, "exactly the same path is oneLiveRowPerPath's finding")
+    }
+
+    @Test("supersession cycle: A superseded by B superseded by A is ONE finding (no row is the current one); a chain that ends, or a dangling link, is not")
+    func supersessionCycle() {
+        var a = row("/a.mov")
+        var b = row("/b.mov")
+        let c = row("/c.mov")
+        a.supersededByID = b.id
+        b.supersededByID = a.id
+        let red = CatalogConstraints.check(rows: [a, b, c], events: []).filter { $0.rule.rawValue == "supersessionCycle" }
+        #expect(red.count == 1)
+        #expect(red.first?.recordID == a.id)
+        #expect(red.first?.words.hasPrefix("superseded in a circle") == true)
+        var x = row("/x.mov")
+        var y = row("/y.mov")
+        x.supersededByID = y.id
+        y.supersededByID = c.id
+        #expect(CatalogConstraints.check(rows: [x, y, c], events: []).filter { $0.rule.rawValue == "supersessionCycle" }.isEmpty)
+        var dangling = row("/d.mov")
+        dangling.supersededByID = UUID()
+        #expect(CatalogConstraints.check(rows: [dangling], events: []).filter { $0.rule.rawValue == "supersessionCycle" }.isEmpty)
+    }
+
+    @Test("duplicate group digests agree: live members of one group with DIFFERENT whole-file digests are a finding; equal digests in any case, or a member whose digest is unknown, are not")
+    func duplicateGroupDigestsAgree() {
+        let group = UUID()
+        var p = row("/p.mov")
+        p.duplicateGroupID = group
+        p.fullDigest = sha
+        var q = row("/q.mov")
+        q.duplicateGroupID = group
+        q.fullDigest = String(repeating: "cd", count: 32)
+        var unknown = row("/u.mov")
+        unknown.duplicateGroupID = group
+        let red = CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }
+        #expect(red.count == 1)
+        #expect(red.first?.recordID == p.id)
+        #expect(red.first?.words == "duplicate group \(CatalogConstraints.short(group)): its members carry 2 different whole-file digests — not copies of one another")
+        q.fullDigest = sha.uppercased()
+        #expect(CatalogConstraints.check(rows: [p, q, unknown], events: []).filter { $0.rule.rawValue == "duplicateGroupDigestsAgree" }.isEmpty)
     }
 
     @Test("TRUTH: the P0 shapes each produce a finding, and a clean catalog produces none")
@@ -296,6 +352,54 @@ struct VerifyCatalogTierTests {
         #expect(VerifyCatalogTiers.stopped(3).result == .notRun("stopped before this tier"))
         #expect(VerifyCatalogTiers.order.map(VerifyCatalogTiers.name).allSatisfy { !$0.isEmpty })
     }
+
+    @Test("tier 3 judges only CURRENT stamps: a silent print made from other content is tier 4's finding, not tier 3's (tier 3 could not check that row); a current silent print is tier 3's; an old audible print never passes tier 3 for new content")
+    func tier3JudgesOnlyCurrentStamps() {
+        let va = StreamType.videoAndAudio.rawValue
+        let digestB = String(repeating: "cd", count: 32)
+        var staleSilent = row("/stale.m4v")
+        staleSilent.streamTypeRaw = va
+        staleSilent.fullDigest = digestB
+        staleSilent.audioFingerprint = print(landmarks: 0)          // made from digest A
+        var currentSilent = row("/silent.m4v")
+        currentSilent.streamTypeRaw = va
+        currentSilent.fullDigest = sha
+        currentSilent.audioFingerprint = print(landmarks: 0)        // made from digest A, which IS the row's
+        let three = VerifyCatalogTiers.evaluate(3, input: input([staleSilent, currentSilent]))
+        #expect(three.findings.map(\.recordID) == [currentSilent.id])
+        #expect(three.tier.result == .needsDecision(1))
+        #expect(three.tier.couldNotCheck == 1)
+        #expect(three.tier.checked == 1)
+        let four = VerifyCatalogTiers.evaluate(4, input: input([staleSilent, currentSilent]))
+        #expect(four.findings.map(\.recordID) == [staleSilent.id])
+        var staleHeard = row("/heard.mov")
+        staleHeard.streamTypeRaw = va
+        staleHeard.fullDigest = digestB
+        staleHeard.audioFingerprint = print()
+        let alone = VerifyCatalogTiers.evaluate(3, input: input([staleHeard])).tier
+        #expect(alone.result == .couldNotCheck(1))
+        #expect(alone.summary == "1 Video+Audio files have no current sound print yet — Fingerprint Sound")
+    }
+
+    @Test("ISOLATION: a catalog file that EXISTS but cannot be read is tier 5 'could not check' with the errno words — never ok, never 'not on disk'")
+    func unreadableCatalogFileIsCouldNotCheck() throws {
+        guard getuid() != 0 else { return }                           // root reads anything
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vc_unreadable_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("catalog.json")
+        try Data(#"{"version": 4, "generation": 5, "records": []}"#.utf8).write(to: url)
+        try FileManager.default.setAttributes([.posixPermissions: 0], ofItemAtPath: url.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: url.path) }
+        let inp = VerifyCatalogTiers.TierInput(snapshot: VerifyCatalogSnapshot(rows: [row()], events: [], catalogFile: url.path),
+                                               previous: nil, constraintFindings: nil, runID: UUID(), now: now)
+        let five = VerifyCatalogTiers.evaluate(5, input: inp)
+        #expect(five.tier.result == .couldNotCheck(1))
+        #expect(five.tier.couldNotCheck == 1)
+        #expect(five.tier.summary.contains("Permission denied"), Comment(rawValue: five.tier.summary))
+        #expect(!five.tier.summary.contains("not on disk"))
+        #expect(five.catalogHash == nil)
+    }
 }
 
 // MARK: - Logic: the report and the catalog-file hash
@@ -322,7 +426,7 @@ struct VerifyCatalogReportTests {
         let text = String(bytes: data, encoding: .utf8) ?? ""
         #expect(text.contains("\"kind\" : \"needsDecision\""))
         #expect(text.contains("\"count\" : 519"))
-        #expect(text.contains("\"schemaVersion\" : 1"))
+        #expect(text.contains("\"schemaVersion\" : 2"))
         #expect(!text.contains("_0"), "no synthesized associated-value keys")
         #expect(IntegrityReportStore.read(data: data) == .report(r))
         #expect(r.needsDecisionTotal == 522)
@@ -414,6 +518,45 @@ struct VerifyCatalogReportTests {
         #expect(!CatalogFileHash.Comparison.changedExpected(from: 41, to: 42).needsDecision)
         #expect(CatalogFileHash.Comparison.changedExpected(from: 41, to: 42).words == "catalog.json changed (generation 41 → 42, expected)")
         #expect(CatalogFileHash.Comparison.changedSameGeneration(42).words.contains("SAME generation (42) — look"))
+    }
+
+    @Test("publication order: the dated copy lands FIRST; when it cannot (its path is a directory) the write throws and the previous latest is untouched")
+    func datedCopyFirstThenLatest() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vc_order_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let catalog = dir.appendingPathComponent("catalog.json")
+        let first = sampleReport()
+        try IntegrityReportStore.write(first, besideCatalogAt: catalog, now: now)
+        let dated = dir.appendingPathComponent(IntegrityReportStore.datedFileName(for: now))
+        try FileManager.default.removeItem(at: dated)
+        try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: false)
+        let second = sampleReport()
+        #expect(throws: (any Error).self) { try IntegrityReportStore.write(second, besideCatalogAt: catalog, now: now) }
+        #expect(IntegrityReportStore.read(besideCatalogAt: catalog).report?.runID == first.runID, "the previous latest stands")
+        let leftovers = try FileManager.default.contentsOfDirectory(atPath: dir.path).filter(AtomicFilePublish.isTemporaryPublishArtifact)
+        #expect(leftovers.isEmpty)
+    }
+
+    @Test("schema 2: this build writes schema 2 with the generation fields; a schema-1 file (none of them) still reads, with nothing certified; the next version is refused by the strict reader")
+    func schemaVersionTwo() throws {
+        #expect(IntegrityReport.currentSchemaVersion == 2)
+        let data = try IntegrityReportStore.encoder.encode(sampleReport())
+        let text = String(bytes: data, encoding: .utf8) ?? ""
+        #expect(text.contains("\"schemaVersion\" : 2"))
+        #expect(text.contains("\"catalogHashCertified\" : false"))
+        // The same report as a schema-1 file: the three generation keys absent.
+        var v1 = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        v1["schemaVersion"] = 1
+        for key in ["snapshotGeneration", "catalogChangedDuringRun", "catalogHashCertified"] { v1.removeValue(forKey: key) }
+        let old = IntegrityReportStore.read(data: try JSONSerialization.data(withJSONObject: v1)).report
+        #expect(old?.schemaVersion == 1)
+        #expect(old?.catalogHashCertified == false)
+        #expect(old?.catalogChangedDuringRun == false)
+        #expect(old?.snapshotGeneration == nil)
+        #expect(old?.catalogGeneration == 41, "the schema-1 keys still read")
+        let next = "{\"schemaVersion\": \(IntegrityReport.currentSchemaVersion + 1)}"
+        #expect(IntegrityReportStore.read(data: Data(next.utf8)) == .unreadable("written by a newer VideoScan (schema \(IntegrityReport.currentSchemaVersion + 1)) — not read"))
     }
 }
 
@@ -553,7 +696,7 @@ struct VerifyCatalogJobTests {
         let state = CatalogFreshnessState.judged(rows: rows, now: Date())
         let verdict = try #require(state.verdict(.integrity))
         #expect(verdict.colour == .red)
-        #expect(verdict.words == "5 findings — 1 lineage links point at nothing · 1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 headers say sound the print never heard")
+        #expect(verdict.words == "5 findings — 1 lineage links point at nothing · 1 paths have more than one live row · 1 archive copies name no source · 1 whole-file digests are not whole · 1 headers say sound the print never heard · tiers 2 and 6 not built")
         #expect(state.summary.colour == .red)
         #expect(CatalogStatusDoor.door(for: verdict.reason, cycler: .integrity) == .verifyAgain)
         // And every row is as it was: no marker, no save of the catalog.
@@ -671,6 +814,61 @@ struct VerifyCatalogJobTests {
         #expect(facts.map(\.name) == ["Christmas"])
         #expect(facts.first?.memberKeys.count == 2, "the merged event's member now belongs to Christmas; the rejected one does not")
     }
+
+    @Test("the findings and the catalog hash describe ONE generation: the snapshot carries the catalog's generation; a save between the snapshot and the hash tier (Pause, save, Resume — the snapshot is not retaken) is said out loud, the run completes, and the hash is not certified")
+    func findingsAndHashDescribeOneGeneration() async throws {
+        let sb = try ShowAgainSandbox.make("vc_generation"); defer { sb.cleanup() }
+        let catalog = URL(fileURLWithPath: sb.model.catalogStore.fileLocation)
+        try Data(#"{"version": 4, "generation": 10, "records": []}"#.utf8).write(to: catalog)
+        _ = sb.model.catalogStore.load()
+        #expect(sb.model.catalogStore.currentGeneration == 10)
+        try sb.live("a.mov")
+        let same = await runVerify(sb)
+        #expect(same.report?.outcome == .completed)
+        #expect(same.report?.tier(5)?.summary.contains("run again") == false)
+        #expect(same.report?.snapshotGeneration == 10)
+        #expect(same.report?.catalogHashCertified == true)
+        #expect(same.report?.catalogChangedDuringRun == false)
+        let job = VerifyCatalogJob(model: sb.model)
+        job.eventsForTesting = []
+        job.start()
+        job.pause()
+        try await Task.sleep(for: .milliseconds(200))               // the snapshot is taken; the job waits at the first tier boundary
+        try Data(#"{"version": 4, "generation": 11, "records": [ ]}"#.utf8).write(to: catalog)
+        job.resume()
+        await job.task?.value
+        let report = try #require(job.report)
+        #expect(report.outcome == .completed)
+        #expect(report.catalogGeneration == 11)
+        #expect(report.snapshotGeneration == 10)
+        #expect(report.catalogChangedDuringRun)
+        #expect(!report.catalogHashCertified)
+        #expect(report.catalogSHA256 != nil, "the hash is recorded, not certified")
+        #expect(report.tier(5)?.summary.contains("findings describe generation 10; the file on disk is generation 11 — run again") == true, Comment(rawValue: report.tier(5)?.summary ?? ""))
+        #expect(report.outcomeLine.contains("run again"), Comment(rawValue: report.outcomeLine))
+        #expect(sb.catalogLogText().contains("findings describe generation 10; the file on disk is generation 11"))
+        // Catalog Status reads it as yellow: the findings stand for generation 10, the file is 11.
+        let facts = IntegrityReportFacts.from(report: report)
+        #expect(facts.outcome == .ok)
+        #expect(facts.unverifiedWords?.contains("the catalog changed during the run: findings describe generation 10") == true)
+    }
+
+    @Test("ISOLATION: the dated copy cannot land (its path is a directory) — the job ends Failed, OUTCOME says so, and the previous latest is untouched")
+    func datedCopyFailureFailsTheJobAndKeepsTheLatest() async throws {
+        let sb = try ShowAgainSandbox.make("vc_dated"); defer { sb.cleanup() }
+        try sb.live("a.mov")
+        let first = await runVerify(sb)
+        #expect(first.state == .finished(summary: first.subtitle))
+        let catalog = URL(fileURLWithPath: sb.model.catalogStore.fileLocation)
+        let dated = catalog.deletingLastPathComponent().appendingPathComponent(IntegrityReportStore.datedFileName(for: Date()))
+        try FileManager.default.removeItem(at: dated)
+        try FileManager.default.createDirectory(at: dated, withIntermediateDirectories: false)
+        let second = await runVerify(sb)
+        guard case .failed(let message) = second.state else { Issue.record("expected failed, got \(second.state)"); return }
+        #expect(message.hasPrefix("report could not be written:"), Comment(rawValue: message))
+        #expect(IntegrityReportStore.read(besideCatalogAt: catalog).report?.runID == first.id, "the previous latest stands")
+        #expect(sb.catalogLogText().contains("Verify catalog: OUTCOME failed — report could not be written:"))
+    }
 }
 
 // MARK: - Catalog Status
@@ -752,6 +950,63 @@ struct VerifyCatalogStatusTests {
         await job.task?.value
         #expect(!job.state.isActive)
         #expect(sb.catalogLogText().contains("Analyze: Integrity — START — all reachable (test)"))
+    }
+
+    /// A completed report over the given tiers, stamped the way the job
+    /// stamps them: the run's id on every tier it ran, none on tier 0
+    /// (the audit's record stands in) or on a tier not run.
+    private func completed(_ tiers: [IntegrityTier]) -> IntegrityReport {
+        let id = UUID()
+        let stamped = tiers.map { t -> IntegrityTier in
+            var t = t
+            t.runID = (t.tier == 0 || t.verifiedAt == nil) ? nil : id
+            return t
+        }
+        return IntegrityReport(runID: id, startedAt: now.addingTimeInterval(-5), verifiedAt: now, outcome: .completed,
+                               catalogFile: "/x/catalog.json", rowsTotal: 10, rowsLive: 10, elapsedSeconds: 5,
+                               tiers: stamped, findings: [], findingsTotal: tiers.reduce(0) { $0 + $1.needsDecision })
+    }
+
+    private func okTier(_ n: Int, at date: Date = now) -> IntegrityTier {
+        IntegrityTier(tier: n, name: VerifyCatalogTiers.name(n), verifiedAt: date, result: .ok, checked: 10, passed: 10, summary: "ok")
+    }
+
+    private var notBuilt: [IntegrityTier] {
+        [VerifyCatalogTiers.notBuilt(2, "weekly deep pass — not built yet").tier, VerifyCatalogTiers.notBuilt(6, "truth sweep — not built yet").tier]
+    }
+
+    @Test("the verdict comes from the BUILT tiers (0, 1, 3, 4, 5): a completed run with a tier that could not check is yellow naming the tier; a built tier not run is yellow naming it; a decision in any built tier is red; a built tier older than its day is yellow naming it; green only when every built tier is ok — and tiers 2 and 6 never colour the row but are named as not built")
+    func verdictFromTheBuiltTiers() {
+        let wording = FreshnessWording(calendar: Calendar(identifier: .gregorian), groupingSeparator: ",")
+        var hashes = okTier(1)
+        hashes.result = .couldNotCheck(660)
+        hashes.couldNotCheck = 660
+        hashes.passed = 0
+        hashes.summary = "660 files still have only a sampled hash — Fill In Full Hashes"
+        let yellowFacts = IntegrityReportFacts.from(report: completed([okTier(0), hashes, okTier(3), okTier(4), okTier(5)] + notBuilt))
+        #expect(yellowFacts.unverified == 660)
+        #expect(yellowFacts.outcome == .ok)
+        let yellow = FreshnessPolicy.judge(rowFor(yellowFacts, eligible: 1_000), now: now, wording: wording)
+        #expect(yellow.colour == .yellow)
+        #expect(yellow.reason == .uncovered(660))
+        #expect(yellow.words == "660 rows not verified — tier 1 File identity: 660 files still have only a sampled hash — Fill In Full Hashes · tiers 2 and 6 not built")
+        let noAudit = VerifyCatalogTiers.presence(audit: nil).tier
+        let notRun = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([noAudit, okTier(1), okTier(3), okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
+        #expect(notRun.colour == .yellow)
+        #expect(notRun.words.contains("tier 0 File presence: not run — Audit Catalog has not run"), Comment(rawValue: notRun.words))
+        var sound = okTier(3)
+        sound.result = .needsDecision(2)
+        sound.needsDecision = 2
+        sound.summary = "2 headers say sound the print never heard"
+        let red = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([okTier(0), hashes, sound, okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
+        #expect(red.colour == .red)
+        #expect(red.reason == .needsDecision(2))
+        let overdue = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([okTier(0, at: now.addingTimeInterval(-3 * 86_400)), okTier(1), okTier(3), okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
+        #expect(overdue.colour == .yellow)
+        #expect(overdue.words.contains("tier 0 File presence"), Comment(rawValue: overdue.words))
+        let green = FreshnessPolicy.judge(rowFor(IntegrityReportFacts.from(report: completed([okTier(0), okTier(1), okTier(3), okTier(4), okTier(5)] + notBuilt))), now: now, wording: wording)
+        #expect(green.colour == .green)
+        #expect(green.words.contains("tiers 2 and 6 not built"), Comment(rawValue: green.words))
     }
 }
 

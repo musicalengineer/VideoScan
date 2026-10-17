@@ -5,7 +5,15 @@
 // catalog already records — the audit's marker, the fixity and sound-print
 // stamps, the rows' relations — and the catalog file's own hash. Tiers 2
 // (bytes re-read against the stored digest) and 6 (the UI truth sweep) say
-// "not built yet" rather than claim anything.
+// "not built yet" rather than claim anything (`builtTiers` is the list the
+// Catalog Status verdict reads; the other two never colour the row).
+//
+// ONE GENERATION (codex, Verify Catalog slice 1, P1): the snapshot carries
+// the catalog generation its rows came from; tier 5 reads the generation
+// in the file it hashes and, when the two differ (a save landed between
+// the snapshot and the hash — Pause, save, Resume; the snapshot is never
+// retaken), says so in words. The report then marks the hash "not
+// certified" and `catalogChangedDuringRun`; the run still completes.
 //
 // No I/O here except two reads: the audit marker (tier 0) and the catalog
 // file hash (tier 5), both of files beside the catalog — never a media file.
@@ -24,12 +32,17 @@ struct VerifyCatalogSnapshot: Sendable {
     var events: [IntegrityEventFact]
     /// The catalog.json path (the marker and the report live beside it).
     var catalogFile: String
+    /// The generation the rows derive from (`CatalogStore.currentGeneration`:
+    /// the last one loaded or durably written). The findings describe THIS
+    /// generation; tier 5 checks the file on disk still carries it.
+    var catalogGeneration: Int
     var liveCount: Int
 
-    init(rows: [IntegrityRow], events: [IntegrityEventFact], catalogFile: String) {
+    init(rows: [IntegrityRow], events: [IntegrityEventFact], catalogFile: String, catalogGeneration: Int = 0) {
         self.rows = rows
         self.events = events
         self.catalogFile = catalogFile
+        self.catalogGeneration = catalogGeneration
         liveCount = rows.reduce(0) { $0 + ($1.isLive ? 1 : 0) }
     }
 
@@ -39,6 +52,12 @@ struct VerifyCatalogSnapshot: Sendable {
 enum VerifyCatalogTiers {
 
     static let order = [0, 1, 2, 3, 4, 5, 6]
+
+    /// The tiers this build actually evaluates. Catalog Status derives its
+    /// verdict from these alone; the rest say "not built yet".
+    static let builtTiers: Set<Int> = [0, 1, 3, 4, 5]
+
+    static var notBuiltTiers: [Int] { order.filter { !builtTiers.contains($0) } }
 
     static func name(_ tier: Int) -> String {
         switch tier {
@@ -70,7 +89,8 @@ enum VerifyCatalogTiers {
         var findings: [IntegrityFinding]
         /// Tier 4 fills this for tier 5.
         var constraintFindings: [CatalogConstraints.Finding]?
-        /// Tier 5 fills this for the report (so the file is hashed once).
+        /// Tier 5 fills this for the report (so the file is hashed once);
+        /// nil when the file is not on disk or could not be read.
         var catalogHash: CatalogFileHash?
 
         init(tier: IntegrityTier, findings: [IntegrityFinding] = [], constraintFindings: [CatalogConstraints.Finding]? = nil,
@@ -181,14 +201,21 @@ enum VerifyCatalogTiers {
 
     static let silentPrintRule = "headerSaysSoundPrintHeardNone"
 
-    /// A Video+Audio row whose sound print heard nothing (or found no
-    /// stream) is a header that says sound the print never heard.
+    /// A Video+Audio row whose CURRENT sound print heard nothing (or found
+    /// no stream) is a header that says sound the print never heard. A
+    /// print made from other content (`staleStampReason`, tier 4's rule)
+    /// is not evidence about this row either way: it is tier 4's finding,
+    /// and here the row counts as having no current print (codex, slice 1,
+    /// P1: an old audible print must never pass new content).
     static func sound(_ input: TierInput) -> TierOutcome {
         var findings: [IntegrityFinding] = []
         var stamped = 0
         var unstamped = 0
         for r in input.snapshot.rows where r.isActive && r.streamTypeRaw == StreamType.videoAndAudio.rawValue {
-            guard let stamp = r.audioFingerprint else { unstamped += 1; continue }
+            guard let stamp = r.audioFingerprint, CatalogConstraints.staleStampReason(stamp, row: r) == nil else {
+                unstamped += 1
+                continue
+            }
             stamped += 1
             if let why = silentPrintReason(stamp) {
                 findings.append(IntegrityFinding(tier: 3, rule: silentPrintRule, recordID: r.id, filename: r.filename,
@@ -203,7 +230,7 @@ enum VerifyCatalogTiers {
             t.summary = "\(findings.count.formatted()) headers say sound the print never heard"
         } else if unstamped > 0 {
             t.result = .couldNotCheck(unstamped)
-            t.summary = "\(unstamped.formatted()) Video+Audio files have no sound print yet — Fingerprint Sound"
+            t.summary = "\(unstamped.formatted()) Video+Audio files have no current sound print yet — Fingerprint Sound"
         } else {
             t.summary = "every Video+Audio file's print heard sound (\(stamped.formatted()))"
         }
@@ -241,36 +268,83 @@ enum VerifyCatalogTiers {
 
     static let catalogFileRule = "catalogFileChanged"
 
+    /// What tier 5 learned about the catalog file itself.
+    enum CatalogFileRead: Sendable, Equatable {
+        case notOnDisk
+        /// Exists and could not be read (or not read whole) — the errno words.
+        case unreadable(String)
+        case hashed(CatalogFileHash)
+
+        var hash: CatalogFileHash? {
+            if case .hashed(let h) = self { return h }
+            return nil
+        }
+    }
+
     static func constraints(_ input: TierInput) -> TierOutcome {
         let all = input.constraintFindings
             ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events)
         var found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
-        let hash = catalogHash(input.snapshot.catalogURL)
+        let file = catalogFile(input.snapshot.catalogURL)
         let comparison = CatalogFileHash.compare(previousSHA: input.previous?.catalogSHA256,
-                                                 previousGeneration: input.previous?.catalogGeneration, current: hash)
+                                                 previousGeneration: input.previous?.catalogGeneration, current: file.hash)
         if comparison.needsDecision {
             found.append(IntegrityFinding(tier: 5, rule: catalogFileRule, recordID: nil, filename: nil,
                                           words: comparison.words, needsDecision: true))
         }
         let decisions = found.reduce(0) { $0 + ($1.needsDecision ? 1 : 0) }
         let rows = input.snapshot.rows.count
+        let unreadable = file.hash == nil && file != .notOnDisk
         var t = IntegrityTier(tier: 5, name: name(5), verifiedAt: input.now, runID: input.runID, result: .ok,
                               checked: rows, passed: rows - Set(found.compactMap(\.recordID)).count,
-                              needsDecision: decisions, summary: "")
+                              needsDecision: decisions, couldNotCheck: unreadable ? 1 : 0, summary: "")
         if decisions > 0 {
             t.result = .needsDecision(decisions)
             t.summary = constraintSummary(found)
+        } else if unreadable {
+            t.result = .couldNotCheck(1)
+            t.summary = "every relation holds (\(rows.formatted()) rows)"
         } else {
             t.summary = "every relation holds (\(rows.formatted()) rows) · \(comparison.words)"
         }
-        return TierOutcome(tier: t, findings: found, catalogHash: hash)
+        if let said = fileProblemWords(file, snapshotGeneration: input.snapshot.catalogGeneration) {
+            t.summary += " · " + said
+        }
+        return TierOutcome(tier: t, findings: found, catalogHash: file.hash)
     }
 
-    /// The catalog file's streamed SHA-256; nil when it is not on disk or
-    /// cannot be read (the comparison then says so).
-    static func catalogHash(_ url: URL) -> CatalogFileHash? {
-        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try? CatalogFileHash.of(fileAt: url)
+    /// The catalog file's streamed SHA-256, or why there is none: not on
+    /// disk, or on disk and unreadable (the words carry the errno).
+    static func catalogFile(_ url: URL) -> CatalogFileRead {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .notOnDisk }
+        do {
+            return .hashed(try CatalogFileHash.of(fileAt: url))
+        } catch {
+            return .unreadable(CatalogFileHash.readProblemWords(error))
+        }
+    }
+
+    /// What a person must hear about the file beyond the routine
+    /// comparison: it could not be read; or its generation is not the
+    /// snapshot's; or it carries no generation, so nothing is certified.
+    static func fileProblemWords(_ file: CatalogFileRead, snapshotGeneration: Int) -> String? {
+        switch file {
+        case .notOnDisk:
+            return nil
+        case .unreadable(let why):
+            return "catalog.json exists but could not be read (\(why)) — its hash is not recorded"
+        case .hashed(let hash):
+            guard hash.generation != nil else { return "catalog.json carries no generation header — hash recorded, not certified" }
+            return generationMismatch(snapshot: snapshotGeneration, file: hash.generation)
+        }
+    }
+
+    /// "findings describe generation N; the file on disk is generation M —
+    /// run again" when they differ; nil when they agree or the file's is
+    /// unknown. The report derives `catalogChangedDuringRun` from the same.
+    static func generationMismatch(snapshot: Int, file: Int?) -> String? {
+        guard let file, file != snapshot else { return nil }
+        return "findings describe generation \(snapshot); the file on disk is generation \(file) — run again"
     }
 
     /// "3 rows share a path · 2 lineage links point at nothing" — the rules

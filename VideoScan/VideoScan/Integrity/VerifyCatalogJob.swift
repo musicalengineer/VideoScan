@@ -117,7 +117,10 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
         subtitleText = "Stopping after the current tier…"
     }
 
-    /// Pause takes effect between tiers.
+    /// Pause takes effect between tiers. Resume never re-snapshots: the
+    /// findings describe the generation the snapshot was taken from, and
+    /// tier 5 compares the file's generation with it (the report says
+    /// `catalogChangedDuringRun` when a save landed in between).
     func pause() {
         guard state == .running, !isPausedValue else { return }
         isPausedValue = true
@@ -232,12 +235,21 @@ final class VerifyCatalogJob: @MainActor MediaFileOperationJob, MediaFileOperati
         }
     }
 
+    /// The hash is CERTIFIED only when the hashed file carries exactly the
+    /// snapshot's generation; a different one is `catalogChangedDuringRun`
+    /// (the run still completes — the findings stand for the snapshot's
+    /// generation, and the words say to run again).
     private func buildReport(snapshot: VerifyCatalogSnapshot, outcome: IntegrityReport.Outcome) -> IntegrityReport {
         let now = Date()
         let hash = catalogHash
+        let fileGeneration = hash?.generation
+        let changed = VerifyCatalogTiers.generationMismatch(snapshot: snapshot.catalogGeneration, file: fileGeneration) != nil
         return IntegrityReport(runID: id, startedAt: startedAt, verifiedAt: outcome == .completed ? now : nil,
                                outcome: outcome, catalogFile: snapshot.catalogFile,
-                               catalogGeneration: hash?.generation, catalogSHA256: hash?.sha256, catalogByteCount: hash?.byteCount,
+                               snapshotGeneration: snapshot.catalogGeneration, catalogGeneration: fileGeneration,
+                               catalogSHA256: hash?.sha256, catalogByteCount: hash?.byteCount,
+                               catalogChangedDuringRun: changed,
+                               catalogHashCertified: hash != nil && fileGeneration == snapshot.catalogGeneration,
                                rowsTotal: snapshot.rows.count, rowsLive: snapshot.liveCount,
                                elapsedSeconds: now.timeIntervalSince(startedAt),
                                tiers: tiers.sorted { $0.tier < $1.tier }, findings: findings, findingsTotal: findingsTotal)
@@ -281,13 +293,15 @@ extension VideoScanModel {
     }
 
     /// ONE O(records) pass on the main actor into Sendable values. `events`
-    /// nil = the app's confirmed events (EventsDecisionStore).
+    /// nil = the app's confirmed events (EventsDecisionStore). The snapshot
+    /// carries the generation the records derive from (the store's last
+    /// loaded or durably written one) — what the findings will describe.
     func verifyCatalogSnapshot(events: [IntegrityEventFact]? = nil) -> VerifyCatalogSnapshot {
         var rows: [IntegrityRow] = []
         rows.reserveCapacity(records.count)
         for r in records { rows.append(IntegrityRow(record: r)) }
         return VerifyCatalogSnapshot(rows: rows, events: events ?? Self.confirmedEventFacts(EventsDecisionStore.shared.snapshot()),
-                                     catalogFile: catalogStore.fileLocation)
+                                     catalogFile: catalogStore.fileLocation, catalogGeneration: catalogStore.currentGeneration)
     }
 
     /// Confirmed, un-merged events with their accepted members' content keys.

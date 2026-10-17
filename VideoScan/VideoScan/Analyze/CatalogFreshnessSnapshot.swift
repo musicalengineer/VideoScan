@@ -69,16 +69,26 @@ enum CatalogFreshnessRows {
             row.storeUnavailable = facts.soundStoreProblem
         case .integrity:
             // No stamp per row: the last Verify Catalog report stands in
-            // (its verifiedAt, its decisions, its words); covered = eligible
-            // so the row ages by its clock, not by a count it has not got.
+            // (its BUILT tiers' results, dates and words — IntegrityReportFacts).
+            // uncovered = the rows some built tier could not verify (a tier
+            // not run, "could not check", the catalog changed during the
+            // run): yellow, naming the tier; lastCompleted = the OLDEST
+            // built tier's date, so the day's cadence judges the stalest
+            // one; the note names the tiers not built, whatever the colour.
             let integrity = facts.integrity
-            row.covered = row.eligible
+            row.covered = row.eligible - integrity.unverified
             row.lastCompleted = integrity.lastCompleted
             row.lastOutcome = integrity.outcome
             row.needsDecision = integrity.needsDecision
             row.storeUnavailable = integrity.problem
             row.cadence = .seconds(24 * 3_600)
+            row.note = integrity.note
             if let words = integrity.decisionWords { row.phrases.decision = "— \(words)" }
+            if integrity.needsDecision == 0, let words = integrity.unverifiedWords {
+                // The yellow words count rows; red keeps "findings".
+                row.phrases.unit = "row"
+                row.phrases.uncovered = "not verified — \(words)"
+            }
         case .correlate:
             // Pairs are counted differently: the unpaired candidates are
             // the uncovered rows, the pairs the covered ones.
