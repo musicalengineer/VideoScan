@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-16T17:22:50Z",
- "sha": "b03c3ce6",
+ "ts": "2026-10-17T08:56:53Z",
+ "sha": "ff7f1430",
  "formula_version": 1,
- "files_scored": 723,
+ "files_scored": 737,
  "rows": [
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -13,41 +13,41 @@
    "lines": 2897,
    "could_be_private": 37,
    "widened_for_split": 0,
-   "churn_7d": 13,
-   "score": 132.6
+   "churn_7d": 2,
+   "score": 61.9
   },
   {
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "offenders": 4,
    "worst_ccn": 20,
    "new_or_worse": 0,
-   "lines": 1767,
+   "lines": 1775,
    "could_be_private": 5,
    "widened_for_split": 21,
-   "churn_7d": 5,
-   "score": 43.2
+   "churn_7d": 6,
+   "score": 47.6
   },
   {
-   "file": "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift",
-   "offenders": 5,
-   "worst_ccn": 42,
-   "new_or_worse": 0,
-   "lines": 2083,
-   "could_be_private": 25,
-   "widened_for_split": 2,
-   "churn_7d": 1,
-   "score": 41.8
-  },
-  {
-   "file": "VideoScan/VideoScan/Catalog/TriageView.swift",
-   "offenders": 3,
-   "worst_ccn": 14,
+   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
+   "offenders": 2,
+   "worst_ccn": 24,
    "new_or_worse": 1,
-   "lines": 1350,
-   "could_be_private": 0,
+   "lines": 1287,
+   "could_be_private": 12,
    "widened_for_split": 0,
-   "churn_7d": 11,
-   "score": 41.2
+   "churn_7d": 6,
+   "score": 42.3
+  },
+  {
+   "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
+   "offenders": 1,
+   "worst_ccn": 16,
+   "new_or_worse": 0,
+   "lines": 1797,
+   "could_be_private": 6,
+   "widened_for_split": 35,
+   "churn_7d": 5,
+   "score": 37.9
   },
   {
    "file": "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift",
@@ -61,15 +61,26 @@
    "score": 35.6
   },
   {
-   "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesPlan.swift",
-   "offenders": 2,
-   "worst_ccn": 19,
-   "new_or_worse": 0,
-   "lines": 1327,
-   "could_be_private": 12,
+   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
+   "offenders": 3,
+   "worst_ccn": 31,
+   "new_or_worse": 1,
+   "lines": 1914,
+   "could_be_private": 4,
    "widened_for_split": 0,
-   "churn_7d": 8,
-   "score": 34.9
+   "churn_7d": 3,
+   "score": 34.8
+  },
+  {
+   "file": "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift",
+   "offenders": 5,
+   "worst_ccn": 42,
+   "new_or_worse": 0,
+   "lines": 2083,
+   "could_be_private": 25,
+   "widened_for_split": 2,
+   "churn_7d": 0,
+   "score": 34.8
   },
   {
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor+Conversation.swift",
@@ -83,17 +94,6 @@
    "score": 34.0
   },
   {
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift",
-   "offenders": 1,
-   "worst_ccn": 16,
-   "new_or_worse": 1,
-   "lines": 1556,
-   "could_be_private": 10,
-   "widened_for_split": 1,
-   "churn_7d": 5,
-   "score": 32.5
-  },
-  {
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift",
    "offenders": 4,
    "worst_ccn": 41,
@@ -101,8 +101,8 @@
    "lines": 2734,
    "could_be_private": 7,
    "widened_for_split": 2,
-   "churn_7d": 1,
-   "score": 32.2
+   "churn_7d": 0,
+   "score": 26.9
   },
   {
    "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
@@ -112,40 +112,29 @@
    "lines": 2141,
    "could_be_private": 9,
    "widened_for_split": 4,
-   "churn_7d": 1,
-   "score": 31.0
+   "churn_7d": 0,
+   "score": 25.8
   },
   {
-   "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
-   "offenders": 2,
-   "worst_ccn": 24,
+   "file": "VideoScan/VideoScan/Catalog/TriageView.swift",
+   "offenders": 3,
+   "worst_ccn": 14,
    "new_or_worse": 1,
-   "lines": 1271,
-   "could_be_private": 12,
+   "lines": 1350,
+   "could_be_private": 0,
    "widened_for_split": 0,
-   "churn_7d": 3,
-   "score": 30.6
+   "churn_7d": 4,
+   "score": 24.8
   },
   {
-   "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift",
    "offenders": 1,
-   "worst_ccn": 16,
-   "new_or_worse": 0,
-   "lines": 1764,
-   "could_be_private": 6,
-   "widened_for_split": 35,
-   "churn_7d": 2,
-   "score": 26.3
-  },
-  {
-   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+PruneApply.swift",
-   "offenders": 4,
-   "worst_ccn": 23,
-   "new_or_worse": 0,
-   "lines": 877,
-   "could_be_private": 14,
-   "widened_for_split": 3,
-   "churn_7d": 2,
+   "worst_ccn": 1,
+   "new_or_worse": 1,
+   "lines": 973,
+   "could_be_private": 2,
+   "widened_for_split": 0,
+   "churn_7d": 9,
    "score": 24.8
   },
   {
@@ -169,6 +158,17 @@
    "widened_for_split": 0,
    "churn_7d": 1,
    "score": 22.8
+  },
+  {
+   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
+   "offenders": 0,
+   "worst_ccn": 0,
+   "new_or_worse": 0,
+   "lines": 825,
+   "could_be_private": 25,
+   "widened_for_split": 0,
+   "churn_7d": 4,
+   "score": 22.7
   }
  ]
 }

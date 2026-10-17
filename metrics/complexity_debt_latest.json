@@ -1,15 +1,15 @@
 {
  "overrides_recent": [],
  "overrides_total": 0,
- "ts": "2026-10-16T17:22:11Z",
- "sha": "b03c3ce6",
+ "ts": "2026-10-17T08:56:24Z",
+ "sha": "ff7f1430",
  "thresholds": {
   "ccn": 15,
   "nloc": 80
  },
- "offenders": 408,
- "baseline_before": 407,
- "baseline_after": 407,
+ "offenders": 404,
+ "baseline_before": 403,
+ "baseline_after": 403,
  "new": [
   {
    "key": "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift::VideoScanModel.prepareDuplicateDeletion",
@@ -36,10 +36,20 @@
    "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
    "function": "VideoScanApp.body",
    "ccn": 15,
-   "nloc": 257,
+   "nloc": 261,
    "lang": "swift",
    "base_ccn": 14,
    "base_nloc": 238
+  },
+  {
+   "key": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body",
+   "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
+   "function": "CatalogContent.body",
+   "ccn": 13,
+   "nloc": 166,
+   "lang": "swift",
+   "base_ccn": 12,
+   "base_nloc": 149
   },
   {
    "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/ProcessRunner.swift::ProcessRunner.runProcess",
@@ -66,10 +76,20 @@
    "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift",
    "function": "VideoRecord.init",
    "ccn": 2,
-   "nloc": 139,
+   "nloc": 141,
    "lang": "swift",
    "base_ccn": 1,
    "base_nloc": 126
+  },
+  {
+   "key": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecordDTO.swift::VideoRecordDTO.init",
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecordDTO.swift",
+   "function": "VideoRecordDTO.init",
+   "ccn": 2,
+   "nloc": 131,
+   "lang": "swift",
+   "base_ccn": 1,
+   "base_nloc": 125
   }
  ],
  "fixed": [],

@@ -4,19 +4,15 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 407,
+ "entry_count": 403,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
-   "ccn": 26,
+   "ccn": 25,
    "nloc": 61
   },
   "VideoScan/VideoScan/Analyze/AnalyzeCyclers.swift::AnalyzeRowStateRule.state": {
    "ccn": 18,
    "nloc": 45
-  },
-  "VideoScan/VideoScan/Analyze/AnalyzePanelView.swift::AnalyzePanelView.liveRule": {
-   "ccn": 20,
-   "nloc": 36
   },
   "VideoScan/VideoScan/Analyze/AnalyzeReclaimable.swift::ReclaimableCalculator.compute": {
    "ccn": 18,
@@ -24,7 +20,7 @@
   },
   "VideoScan/VideoScan/Analyze/AnalyzeRunner.swift::AnalyzeRunner.runNow": {
    "ccn": 16,
-   "nloc": 51
+   "nloc": 49
   },
   "VideoScan/VideoScan/App/BundleExporter.swift::BundleExporter.writeBundle": {
    "ccn": 11,
@@ -105,10 +101,6 @@
   "VideoScan/VideoScan/Archive/ArchiveView+DetailSheet.swift::ArchiveDetailSheet.body": {
    "ccn": 16,
    "nloc": 96
-  },
-  "VideoScan/VideoScan/Archive/ArchiveView+Table.swift::ArchiveView.recordContextMenu": {
-   "ccn": 13,
-   "nloc": 82
   },
   "VideoScan/VideoScan/Archive/ArchiveView.swift::ArchiveView.masterArchivePanel": {
    "ccn": 7,
@@ -266,10 +258,6 @@
    "ccn": 23,
    "nloc": 73
   },
-  "VideoScan/VideoScan/Catalog/CatalogContent+Table.swift::CatalogContent.catalogTableBase": {
-   "ccn": 14,
-   "nloc": 94
-  },
   "VideoScan/VideoScan/Catalog/CatalogHelpers.swift::CatalogContent.body": {
    "ccn": 12,
    "nloc": 149
@@ -369,10 +357,6 @@
   "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift::VideoScanModel.unwindUnverifiedPropagatedDates": {
    "ccn": 17,
    "nloc": 75
-  },
-  "VideoScan/VideoScan/Catalog/VideoScanModel+Provenance.swift::VideoScanModel.buildFileJourney": {
-   "ccn": 20,
-   "nloc": 112
   },
   "VideoScan/VideoScan/Catalog/VideoScanModel+Provenance.swift::VideoScanModel.buildMigrationOverview": {
    "ccn": 10,
