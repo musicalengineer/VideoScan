@@ -382,10 +382,11 @@ struct CatalogContent: View {
     private func installSpaceKeyMonitor() {
         guard spaceKeyMonitor == nil else { return }
         spaceKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            // Footage folders (2026-10-16): → / ← / Esc while the option is
-            // on and the files table has the keyboard — same monitor, same
-            // focus rule (CatalogContent+FolderTable.swift). Not ours →
-            // falls through to the Space rule below.
+            // Footage folders (2026-10-16): → / ← / Esc and the Finder's
+            // ⌘↓ / ⌘↑ while the option is on and the files table has the
+            // keyboard — same monitor, same focus rule
+            // (CatalogContent+FolderTable.swift). Not ours → falls through
+            // to the Space rule below.
             if handleFolderKey(event) { return nil }
             // 49 = kVK_Space. Bare Space only — let ⌘/⌥/⌃-Space through to
             // their owners (menu shortcuts, input sources, etc.).
@@ -728,8 +729,8 @@ struct CatalogContent: View {
                     // "3 matches are already in the Archive" — the
                     // to-do view's search escape hatch (2026-08-22).
                     archivedHitsBanner
-                    // Footage folders: "‹ All · Thanksgiving 2009" while
-                    // the list is scoped (nothing when it is not).
+                    // Footage folders: the breadcrumb bar ("‹ Back ·
+                    // Catalog ▸ Thanksgiving 2009") while the option is on.
                     footageFolderCrumb
                     // Empty-state overlay: when a search is active and
                     // yields zero rows, surface that explicitly instead
