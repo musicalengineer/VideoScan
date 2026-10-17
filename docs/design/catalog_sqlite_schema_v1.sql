@@ -1,7 +1,11 @@
--- catalog_sqlite_schema_v1.sql — VideoScan catalog, SQLite schema v1.1 (DESIGN, not built)
+-- catalog_sqlite_schema_v1.sql — VideoScan catalog, SQLite schema v1.2 (DESIGN, not built)
 -- Step B of docs/design/catalog_sqlite_migration_2026_10_16.md §10 (contract freeze, 2026-10-17;
 -- revision 2 closes codex's 12 findings, docs/reviews/codex/
 -- codex-review-contract-freeze-sqlite-schema-v1-step-b-2026-10-17.md; each change cites `-- F<N>`).
+-- Revision 3 (v1.2) closes the closing pass's 6 (docs/reviews/codex/
+-- codex-review-contract-freeze-r2-closing-pass-2026-10-17.md): F5, F8, F9 reopened (`-- F<N>r3`)
+-- and the new N1 (audit evidence bound to the snapshot), N2 (derived collisions), N3 (Unicode
+-- case fold) (`-- N<N>`). Decisions: docs/briefs/cloud/CONTRACT_FREEZE_R3.md.
 -- Companion: docs/design/catalog_contract_freeze_2026_10_17.md (field inventory, invariants,
 -- importer gate §f, reconciliation §g). Reproductions: catalog_sqlite_schema_v1_checks.sql
 -- (`sqlite3 :memory: < catalog_sqlite_schema_v1_checks.sql`). GH #328.
@@ -46,14 +50,30 @@ PRAGMA user_version = 7;           -- JSON schema was v6 (CatalogStore.swift:79)
 --      UPDATE generations SET generation = generation + 1, saved_at = :now, saved_from_host = :host
 --       WHERE id = 1 AND generation = :expected;      -- changes() must be 1, else ROLLBACK
 --    The HIGH-WATER is NOT in this database: a restore of the database would rewind it. It lives
---    in `catalog.highwater` beside the database (one integer, written atomically after every
---    commit, never lowered) and each value is also appended to ledger/media-ledger.jsonl
---    (`generationHighWater`). At open: a database whose generation is BELOW the high-water opens
---    READ-ONLY with the named refusal `restoredBelowHighWater` ("this catalog is older than one
---    this Mac already wrote — restore refused for writing; open the newer copy or adopt this one
---    explicitly"). Adopting a restore is a person's act that raises the database to the
---    high-water first (one CAS step per generation is NOT replayed: adoption writes one
---    `generation_history` row with writer 'adoptRestore').
+--    in `catalog.highwater` beside the database (one integer, never lowered).
+--    F8r3 — TWO-PHASE, high-water FIRST. Every write that advances the generation from g:
+--      (1) write `catalog.highwater` = g+1 (temp file, fsync, rename, fsync the directory) and
+--          append `generationHighWater {intended: g+1}` to ledger/media-ledger.jsonl (O_APPEND +
+--          fsync);
+--      (2) commit the transaction that runs the CAS g → g+1.
+--    Invariant at open: highwater >= generation, always. highwater > generation means a restore
+--    of the database, or a crash between (1) and (2) — told apart only by the JSONL's last line —
+--    and either way the database opens READ-ONLY with the named refusal `restoredBelowHighWater`
+--    ("this catalog is older than one this Mac already wrote — open the newer copy or adopt this
+--    one explicitly") until a person ADOPTS it. highwater < generation means the high-water file
+--    itself was rolled back: it is raised to the generation (never the reverse) and a ledger line
+--    says so.
+--    ADOPTION is an explicit operation, not a CAS. In one transaction:
+--      INSERT INTO generation_history (generation, kind, from_generation, …)
+--        VALUES (:hw, 'adopt', :old, …);
+--      UPDATE generations SET generation = :hw, adopted_at = :now, adopted_from = :old
+--       WHERE id = 1 AND :hw > generation;
+--    The step trigger allows the jump only when that `adopt` row (same :hw, same :old) exists.
+--    SQLite cannot see transaction boundaries, so "same transaction" is enforced by shape: the
+--    adopt row is insertable only while the counter still reads :old, and while an adopt row sits
+--    above the counter every ordinary +1 step is refused — a half-done adoption cannot commit
+--    and be followed by normal writes. Restore-then-crash-then-restore (codex F8: generation 6
+--    commits, the process dies, generation 5 is restored) now trips the rule: (1) already wrote 6.
 -- ---------------------------------------------------------------------------------------------
 CREATE TABLE catalog_state (
   singleton        INTEGER PRIMARY KEY NOT NULL CHECK (singleton = 1),
@@ -66,13 +86,33 @@ CREATE TABLE generations (                -- the CAS counter (one row)          
   id               INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
   generation       INTEGER NOT NULL CHECK (generation >= 0),
   saved_at         INTEGER NOT NULL,
-  saved_from_host  TEXT    NOT NULL
+  saved_from_host  TEXT    NOT NULL,
+  adopted_at       INTEGER,                -- F8r3: the last adoption of a restore (NULL = never)
+  adopted_from     INTEGER,                -- F8r3: the generation the restored database carried
+  CHECK ((adopted_at IS NULL) = (adopted_from IS NULL)),
+  CHECK (adopted_from IS NULL OR adopted_from < generation)
 ) STRICT;
 
-CREATE TRIGGER generations_step_by_one                                                       -- F8
+-- F8: +1 per commit. F8r3: or a jump by ADOPTION, only with its `adopt` history row.
+CREATE TRIGGER generations_step_by_one                                                       -- F8 F8r3
 BEFORE UPDATE OF generation ON generations
 WHEN NEW.generation <> OLD.generation + 1
-BEGIN SELECT RAISE(ABORT, 'generation must advance by exactly one (CAS)'); END;
+ AND NOT (NEW.generation > OLD.generation
+          AND NEW.adopted_from IS OLD.generation AND NEW.adopted_at IS NOT NULL
+          AND EXISTS (SELECT 1 FROM generation_history h
+                       WHERE h.generation = NEW.generation AND h.kind = 'adopt'
+                         AND h.from_generation = OLD.generation))
+BEGIN SELECT RAISE(ABORT, 'generation must advance by exactly one (CAS), or jump by an adopt row'); END;
+CREATE TRIGGER generations_no_step_over_pending_adopt                                        -- F8r3
+BEFORE UPDATE OF generation ON generations
+WHEN NEW.generation = OLD.generation + 1
+ AND EXISTS (SELECT 1 FROM generation_history h WHERE h.kind = 'adopt' AND h.generation > NEW.generation)
+BEGIN SELECT RAISE(ABORT, 'an adoption is half done: finish it or roll it back'); END;
+CREATE TRIGGER generations_adoption_fields_only_by_adoption                                  -- F8r3
+BEFORE UPDATE OF adopted_at, adopted_from ON generations
+WHEN (NEW.adopted_at IS NOT OLD.adopted_at OR NEW.adopted_from IS NOT OLD.adopted_from)
+ AND NEW.adopted_from IS NOT OLD.generation
+BEGIN SELECT RAISE(ABORT, 'adopted_from names the generation the adoption jumped from'); END;
 CREATE TRIGGER generations_no_delete BEFORE DELETE ON generations
 BEGIN SELECT RAISE(ABORT, 'the generation counter is never deleted'); END;
 
@@ -81,15 +121,28 @@ CREATE TABLE generation_history (
   generation   INTEGER PRIMARY KEY NOT NULL CHECK (generation >= 0),
   committed_at INTEGER NOT NULL,
   host         TEXT    NOT NULL,
-  writer       TEXT    NOT NULL,           -- the door: 'import','rescan','promote','audit','ui','adoptRestore', …
+  writer       TEXT    NOT NULL,           -- the door: 'import','rescan','promote','audit','ui','adopt', …
   files_live   INTEGER NOT NULL CHECK (files_live >= 0),
   files_total  INTEGER NOT NULL CHECK (files_total >= 0),
-  export_sha256 TEXT CHECK (export_sha256 IS NULL OR (length(export_sha256) = 64 AND export_sha256 NOT GLOB '*[^0-9a-f]*'))
+  export_sha256 TEXT CHECK (export_sha256 IS NULL OR (length(export_sha256) = 64 AND export_sha256 NOT GLOB '*[^0-9a-f]*')),
+  kind         TEXT    NOT NULL DEFAULT 'commit' CHECK (kind IN ('commit','adopt')),        -- F8r3
+  from_generation INTEGER,                                                                  -- F8r3: adopt only
+  CHECK ((kind = 'adopt') = (from_generation IS NOT NULL)),
+  CHECK (from_generation IS NULL OR from_generation < generation)
 ) STRICT;
 CREATE TRIGGER generation_history_names_this_commit                                         -- F8
 BEFORE INSERT ON generation_history
-WHEN NEW.generation IS NOT (SELECT generation FROM generations WHERE id = 1)
+WHEN NEW.kind = 'commit' AND NEW.generation IS NOT (SELECT generation FROM generations WHERE id = 1)
 BEGIN SELECT RAISE(ABORT, 'a history row names the generation this transaction advanced to'); END;
+-- F8r3: an adopt row is written FIRST, while the counter still reads :old, and names a jump up.
+CREATE TRIGGER generation_history_adopt_precedes_jump                                       -- F8r3
+BEFORE INSERT ON generation_history
+WHEN NEW.kind = 'adopt'
+ AND (NEW.from_generation IS NOT (SELECT generation FROM generations WHERE id = 1)
+      OR NEW.generation <= NEW.from_generation)
+BEGIN SELECT RAISE(ABORT, 'an adopt row names the current generation and the high-water above it'); END;
+CREATE TRIGGER generation_history_no_update BEFORE UPDATE ON generation_history             -- F8r3
+BEGIN SELECT RAISE(ABORT, 'generation history is append-only'); END;
 
 -- ---------------------------------------------------------------------------------------------
 -- 2. content — ONE row per whole-file SHA-256. §10: "identity is the whole-file SHA-256".
@@ -138,10 +191,16 @@ CREATE TABLE files (
   volume_uuid     TEXT    NOT NULL REFERENCES volumes(volume_uuid) ON DELETE RESTRICT,
   volume_case_sensitive INTEGER NOT NULL CHECK (volume_case_sensitive IN (0,1)),  -- F12: copy of volumes.case_sensitive (trigger)
   full_path       TEXT    NOT NULL CHECK (length(trim(full_path)) > 0 AND substr(full_path,1,1) = '/'),
-  -- F12: the store's fold of full_path — Unicode lowercase of the NFC form (Swift
-  -- `precomposedStringWithCanonicalMapping.lowercased()`); SQLite's lower() is ASCII-only, so the
-  -- CHECK can only prove the ASCII part is folded.
-  path_fold       TEXT    NOT NULL CHECK (length(path_fold) > 0 AND path_fold = lower(path_fold)),
+  -- F12 / N3: the store's fold of full_path, COMPUTED BY THE APP and stored: NFC, then Unicode
+  -- case folding ONLY — diacritics are kept (`é` ≠ `e`):
+  --   full_path.precomposedStringWithCanonicalMapping
+  --            .folding(options: [.caseInsensitive], locale: nil)    // NOT .diacriticInsensitive
+  -- So `É.mov` and `é.mov` share one fold; `é.mov` and `e.mov` do not.
+  -- N3: SQLite's lower()/upper()/LIKE/NOCASE are ASCII-only (`lower('É') = 'É'`). They must NEVER
+  -- be used for path identity: every trigger and index here compares the STORED path_fold. The
+  -- CHECK below is a shape check only (absolute, no ASCII capital survived the fold), not a fold.
+  path_fold       TEXT    NOT NULL CHECK (length(path_fold) > 0 AND substr(path_fold,1,1) = '/'
+                                          AND path_fold NOT GLOB '*[A-Z]*'),
   filename        TEXT    NOT NULL,
   ext             TEXT    NOT NULL,
   directory       TEXT    NOT NULL,
@@ -250,12 +309,15 @@ CREATE TRIGGER files_case_flag_matches_volume_upd
 BEFORE UPDATE OF volume_uuid, volume_case_sensitive ON files
 WHEN NEW.volume_case_sensitive IS NOT (SELECT case_sensitive FROM volumes WHERE volume_uuid = NEW.volume_uuid)
 BEGIN SELECT RAISE(ABORT, 'volume_case_sensitive must equal volumes.case_sensitive'); END;
--- F12: a moved path carries a recomputed fold (the ASCII part is checkable here)
-CREATE TRIGGER files_path_fold_follows_path
-BEFORE UPDATE OF full_path, path_fold ON files
-WHEN NEW.full_path IS NOT OLD.full_path AND NEW.path_fold IS OLD.path_fold
-     AND lower(NEW.full_path) <> lower(OLD.full_path)
-BEGIN SELECT RAISE(ABORT, 'path_fold must be recomputed when full_path changes'); END;
+-- F12 / N3: r2's `files_path_fold_follows_path` compared lower(NEW.full_path) with
+-- lower(OLD.full_path) and so refused the legal case-only rename `É.mov` → `é.mov` (codex N3).
+-- It is REMOVED: the engine cannot compute a Unicode fold, and any approximation with lower()
+-- is wrong for non-ASCII names. Instead:
+--   * the store has ONE path door (`setPath(id, path)`) that writes full_path AND path_fold
+--     (the app's fold, above) in the same UPDATE;
+--   * the engine compares stored folds only (files_live_path_fold, files_no_replace);
+--   * Verify Catalog's tier-5 rule `pathFoldMatchesPath` recomputes the fold with the same Swift
+--     function for every row (a stale fold is a finding, not silently trusted).           -- N3
 
 -- F4: no REPLACE on files (it would delete a row — and its history — without a delete trigger)
 CREATE TRIGGER files_no_replace
@@ -501,7 +563,7 @@ CREATE TABLE people_tags (
   kind         TEXT NOT NULL CHECK (kind IN ('detected','suspected','confirmed','rejected')),
   confirmed_at INTEGER,                    -- ConfirmedTag.confirmedAt (confirmed only; earliest of the copies')
   conflict     INTEGER NOT NULL DEFAULT 0 CHECK (conflict IN (0,1)),                      -- F2
-  provenance   TEXT CHECK (provenance IN ('bound','unverified')),                          -- F9 (machine kinds)
+  provenance   TEXT CHECK (provenance = 'bound'),                          -- F9 N2 (machine kinds; imported → derived_unverified)
   CHECK ((kind = 'confirmed') = (confirmed_at IS NOT NULL)),
   CHECK ((kind IN ('detected','suspected')) = (provenance IS NOT NULL)),
   PRIMARY KEY (digest, name, kind)
@@ -562,6 +624,12 @@ CREATE TABLE dispositions (
 --     or the row's fixity stat stamp equals the stat stamp the value was computed against; else
 --     'unverified' — kept, not shown as fact, replaced by the cyclers' regeneration. A value
 --     computed by the SQLite-era cyclers is 'bound' by construction (it hashes, then derives).
+--     N2: the per-content tables below hold BOUND values only (`provenance = 'bound'`), keyed by
+--     digest (+ kind, seq). Every UNVERIFIED value — all imported derived values but sound prints
+--     (contract §e.8) — lives in `derived_unverified`, keyed by its SOURCE ROW as well, so two
+--     same-digest rows carrying different first captions both land. A second BOUND value for the
+--     same key: byte-identical → dropped as a duplicate (RAISE(IGNORE)); different → refused,
+--     and the writer moves BOTH into derived_unverified with conflict = 1.
 CREATE TABLE sound_prints (                -- AudioFingerprintStamp; landmarks stay in audio-fingerprints.sqlite
   digest          TEXT PRIMARY KEY NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
   engine_version  INTEGER NOT NULL CHECK (engine_version >= 1),
@@ -582,7 +650,7 @@ CREATE TABLE perceptual_prints (           -- StoredPerceptualFingerprint (carri
   hashes_b64      TEXT    NOT NULL,
   duration_s      REAL    NOT NULL,
   computed_at     INTEGER NOT NULL,
-  provenance      TEXT    NOT NULL DEFAULT 'bound' CHECK (provenance IN ('bound','unverified'))  -- F9
+  provenance      TEXT    NOT NULL DEFAULT 'bound' CHECK (provenance = 'bound')  -- F9
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE captions (                    -- sceneCaptions / ocrDateCandidates / ocrText
@@ -591,15 +659,72 @@ CREATE TABLE captions (                    -- sceneCaptions / ocrDateCandidates 
   seq         INTEGER NOT NULL CHECK (seq >= 0),   -- array order is meaningful (§9.3)
   at_s        REAL    NOT NULL,                     -- SceneCaption.timestamp
   text        TEXT    NOT NULL,
-  provenance  TEXT    NOT NULL DEFAULT 'bound' CHECK (provenance IN ('bound','unverified')),  -- F9
+  provenance  TEXT    NOT NULL DEFAULT 'bound' CHECK (provenance = 'bound'),  -- F9
   PRIMARY KEY (digest, kind, seq)
 ) STRICT, WITHOUT ROWID;
+-- N2: a bound value arriving for an occupied (digest, kind, seq). Plain INSERT (no OR IGNORE /
+-- OR REPLACE): the trigger decides. Same bytes → the duplicate is dropped; different → refused.
+CREATE TRIGGER captions_bound_dedupe BEFORE INSERT ON captions                               -- N2
+WHEN EXISTS (SELECT 1 FROM captions c WHERE c.digest = NEW.digest AND c.kind = NEW.kind AND c.seq = NEW.seq
+              AND c.text = NEW.text AND c.at_s = NEW.at_s)
+BEGIN SELECT RAISE(IGNORE); END;
+CREATE TRIGGER captions_bound_conflict BEFORE INSERT ON captions                             -- N2
+WHEN EXISTS (SELECT 1 FROM captions c WHERE c.digest = NEW.digest AND c.kind = NEW.kind AND c.seq = NEW.seq
+              AND (c.text IS NOT NEW.text OR c.at_s IS NOT NEW.at_s))
+BEGIN SELECT RAISE(ABORT, 'derived conflict: two bound values for one (digest, kind, seq) — move both to derived_unverified'); END;
+
+-- N2: every unverified derived value, keyed (digest, kind, seq, source_json_row_id): the row it
+-- came from is part of the key, so copies never collide. `source_json_row_id` is the JSON row id
+-- for an imported value (unique among main rows: a repeated id is quarantined, F4), or the
+-- files.id a SQLite-era value was computed through when it is moved here by a bound conflict.
+-- Rows are evidence: never deleted, never replaced; the only update is raising `conflict`.
+CREATE TABLE derived_unverified (
+  digest         TEXT    NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
+  kind           TEXT    NOT NULL CHECK (kind IN (
+                   'scene','ocrDate','ocrText',            -- captions (seq = array index)
+                   'captionRun','transcript','dossier','inferredDate',
+                   'audioCheck','videoCheck','reportCard','perceptualPrint','footageMembership',
+                   'detectedPerson','suspectedPerson')),   -- seq = array index; value = the name
+  seq            INTEGER NOT NULL DEFAULT 0 CHECK (seq >= 0),
+  source_json_row_id TEXT NOT NULL CHECK (length(source_json_row_id) = 36),
+  value_json     TEXT    NOT NULL CHECK (json_valid(value_json)),   -- the DTO value, verbatim
+  stamp_json     TEXT    NOT NULL DEFAULT '{}' CHECK (json_valid(stamp_json)), -- model / date / size it carried
+  import_run     TEXT    REFERENCES import_runs(run_id) ON DELETE RESTRICT,
+  source_ordinal INTEGER,
+  conflict       INTEGER NOT NULL DEFAULT 0 CHECK (conflict IN (0,1)),
+  CHECK ((import_run IS NULL) = (source_ordinal IS NULL)),
+  PRIMARY KEY (digest, kind, seq, source_json_row_id)
+) STRICT, WITHOUT ROWID;
+CREATE INDEX derived_unverified_by_source ON derived_unverified(import_run, source_ordinal) WHERE import_run IS NOT NULL;
+CREATE TRIGGER derived_unverified_no_replace BEFORE INSERT ON derived_unverified             -- N2
+WHEN EXISTS (SELECT 1 FROM derived_unverified d WHERE d.digest = NEW.digest AND d.kind = NEW.kind
+              AND d.seq = NEW.seq AND d.source_json_row_id = NEW.source_json_row_id)
+BEGIN SELECT RAISE(ABORT, 'derived_unverified: a duplicate is a finding, never a replacement'); END;
+-- different values for one (digest, kind, seq) from different rows flag each other
+CREATE TRIGGER derived_unverified_flags_conflict AFTER INSERT ON derived_unverified           -- N2
+WHEN EXISTS (SELECT 1 FROM derived_unverified d WHERE d.digest = NEW.digest AND d.kind = NEW.kind
+              AND d.seq = NEW.seq AND d.source_json_row_id <> NEW.source_json_row_id
+              AND d.value_json IS NOT NEW.value_json)
+BEGIN
+  UPDATE derived_unverified SET conflict = 1
+   WHERE digest = NEW.digest AND kind = NEW.kind AND seq = NEW.seq AND conflict = 0
+     AND EXISTS (SELECT 1 FROM derived_unverified o WHERE o.digest = NEW.digest AND o.kind = NEW.kind
+                  AND o.seq = NEW.seq AND o.value_json IS NOT derived_unverified.value_json);
+END;
+CREATE TRIGGER derived_unverified_only_flag BEFORE UPDATE ON derived_unverified              -- N2
+WHEN NEW.digest IS NOT OLD.digest OR NEW.kind IS NOT OLD.kind OR NEW.seq IS NOT OLD.seq
+  OR NEW.source_json_row_id IS NOT OLD.source_json_row_id OR NEW.value_json IS NOT OLD.value_json
+  OR NEW.stamp_json IS NOT OLD.stamp_json OR NEW.import_run IS NOT OLD.import_run
+  OR NEW.source_ordinal IS NOT OLD.source_ordinal OR NEW.conflict < OLD.conflict
+BEGIN SELECT RAISE(ABORT, 'derived_unverified is evidence: only conflict may rise'); END;
+CREATE TRIGGER derived_unverified_no_delete BEFORE DELETE ON derived_unverified              -- N2
+BEGIN SELECT RAISE(ABORT, 'derived_unverified is evidence; regeneration writes a bound row beside it'); END;
 
 CREATE TABLE caption_runs (                -- sceneCaptionModel / sceneCaptionDate
   digest      TEXT PRIMARY KEY NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
   model       TEXT NOT NULL,
   made_at     INTEGER NOT NULL,
-  provenance  TEXT NOT NULL DEFAULT 'bound' CHECK (provenance IN ('bound','unverified'))     -- F9
+  provenance  TEXT NOT NULL DEFAULT 'bound' CHECK (provenance = 'bound')     -- F9
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE transcripts (
@@ -607,14 +732,14 @@ CREATE TABLE transcripts (
   text        TEXT NOT NULL,                -- '' = ran, found no speech (distinct from no row)
   model       TEXT,
   made_at     INTEGER,
-  provenance  TEXT NOT NULL DEFAULT 'bound' CHECK (provenance IN ('bound','unverified'))     -- F9
+  provenance  TEXT NOT NULL DEFAULT 'bound' CHECK (provenance = 'bound')     -- F9
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE dossiers (
   digest       TEXT PRIMARY KEY NOT NULL REFERENCES content(digest) ON DELETE RESTRICT,
   processed_at INTEGER NOT NULL,
   processed_by TEXT    NOT NULL,
-  provenance   TEXT    NOT NULL DEFAULT 'bound' CHECK (provenance IN ('bound','unverified'))  -- F9
+  provenance   TEXT    NOT NULL DEFAULT 'bound' CHECK (provenance = 'bound')  -- F9
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE inferred_dates (
@@ -625,7 +750,7 @@ CREATE TABLE inferred_dates (
   range_start INTEGER,
   range_end   INTEGER,
   reason      TEXT,
-  provenance  TEXT    NOT NULL DEFAULT 'bound' CHECK (provenance IN ('bound','unverified')),  -- F9
+  provenance  TEXT    NOT NULL DEFAULT 'bound' CHECK (provenance = 'bound'),  -- F9
   CHECK ((range_start IS NULL) = (range_end IS NULL)),
   CHECK (range_start IS NULL OR range_start <= range_end),
   CHECK (date_at IS NOT NULL OR reason IS NOT NULL)
@@ -638,7 +763,7 @@ CREATE TABLE media_checks (                -- Verify Audio / Verify Video / Chec
   note        TEXT NOT NULL DEFAULT '',
   checked_at  INTEGER,
   card        TEXT CHECK (card IS NULL OR json_valid(card)),   -- MediaReportCard, reportCard only
-  provenance  TEXT NOT NULL DEFAULT 'bound' CHECK (provenance IN ('bound','unverified')),   -- F9
+  provenance  TEXT NOT NULL DEFAULT 'bound' CHECK (provenance = 'bound'),   -- F9
   CHECK (kind <> 'audio'      OR status IN ('ok','damaged')),
   CHECK (kind <> 'video'      OR status IN ('ok','warning','broken')),
   CHECK (kind <> 'reportCard' OR (status IN ('quick','full') AND card IS NOT NULL)),
@@ -654,9 +779,10 @@ CREATE TABLE regen_context (
   digest         TEXT    REFERENCES content(digest) ON DELETE RESTRICT,
   kind           TEXT    NOT NULL CHECK (kind IN (
                    'folderDate',      -- inferredDateSource 'folder-year' + its reason (the folder may be gone)
-                   'donorDate',       -- 'propagated from <uuid>' + reason; the donor row id verbatim
-                   'personSearched')),-- a detected/suspected name: the named person a Person Finder run
-                                      -- was asked for — the reference input a re-run needs
+                   'donorDate')),     -- 'propagated from <uuid>' + reason; the donor row id verbatim
+                   -- F9r3: r2's 'personSearched' (read from detected/suspected names) is REMOVED:
+                   -- those are a search's OUTPUTS (hits), not its inputs; a zero-hit search left
+                   -- none. Search evidence is `person_searches` below.
   value_json     TEXT    NOT NULL CHECK (json_valid(value_json)),
   reason         TEXT,
   PRIMARY KEY (import_run, source_ordinal, kind, value_json)
@@ -676,6 +802,49 @@ CREATE TABLE legacy_pair_ids (
   PRIMARY KEY (import_run, source_ordinal)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX legacy_pair_ids_by_group ON legacy_pair_ids(pair_group_id);
+
+-- F9r3: person-search evidence — ONE row per (file, search) INCLUDING ZERO HITS, so "Donna was
+-- looked for here and not found" survives. Source today (contract §e.8): catalog.json carries
+-- none (detectedPeople / suspectedPeople are hits only; mediaReportCard is media health). The
+-- only per-file search record is Person Finder's cache, `personfinder_cache.sqlite` table
+-- `pf_cache` (A/People/PersonFinderCache.swift:78–91; written :311 from
+-- PersonFinderModel+JobLifecycle.swift:1152 and :1162), keyed by (video_path, file_size,
+-- mod_date, person_name, engine, threshold, ref_hash) with `total_hits` (0 stored; a
+-- watchdog-aborted partial is not, :18). It is a PATH + size + mtime key, a latest-only cache
+-- (INSERT OR REPLACE): imported verbatim as `unverified`, never as identity. The SQLite-era
+-- search writes `bound` rows (it hashes, then searches).
+CREATE TABLE person_searches (
+  search_id      INTEGER PRIMARY KEY,
+  digest         TEXT    REFERENCES content(digest) ON DELETE RESTRICT,  -- NULL: no main row with a digest at that path
+  person_id      TEXT    CHECK (person_id IS NULL OR length(person_id) = 36),  -- POIProfile.uuid; pf_cache names only
+  person_name    TEXT    NOT NULL CHECK (length(trim(person_name)) > 0),
+  searched_at    INTEGER NOT NULL,         -- pf_cache.cached_at (REAL seconds, floored)
+  engine         TEXT    NOT NULL,
+  threshold      REAL    NOT NULL,
+  hits           INTEGER NOT NULL CHECK (hits >= 0),
+  outcome        TEXT    NOT NULL CHECK (outcome IN ('searched','unreadable')),  -- :1162 caches an
+                                           -- unreadable file as 0 hits, 0 s, 0 fps: NOT a zero-hit search
+  source_json_row_id TEXT,                 -- the catalog row whose fullPath + sizeBytes the cache key named
+  provenance     TEXT    NOT NULL CHECK (provenance IN ('bound','unverified')),
+  source_key     TEXT    NOT NULL DEFAULT '{}' CHECK (json_valid(source_key)),  -- the pf_cache key, verbatim
+  import_run     TEXT    REFERENCES import_runs(run_id) ON DELETE RESTRICT,
+  source_ordinal INTEGER,
+  CHECK ((import_run IS NULL) = (source_ordinal IS NULL)),
+  CHECK (import_run IS NULL OR provenance = 'unverified'),
+  CHECK (provenance <> 'bound' OR digest IS NOT NULL),
+  CHECK (outcome = 'searched' OR hits = 0)
+) STRICT;
+CREATE UNIQUE INDEX person_searches_by_source ON person_searches(import_run, source_ordinal) WHERE import_run IS NOT NULL;
+CREATE INDEX person_searches_by_digest ON person_searches(digest, person_name COLLATE NOCASE);
+CREATE TRIGGER person_searches_no_update BEFORE UPDATE ON person_searches                    -- F9r3
+BEGIN SELECT RAISE(ABORT, 'person_searches is append-only evidence'); END;
+CREATE TRIGGER person_searches_no_delete BEFORE DELETE ON person_searches                    -- F9r3
+BEGIN SELECT RAISE(ABORT, 'person_searches is append-only evidence'); END;
+CREATE TRIGGER person_searches_no_replace BEFORE INSERT ON person_searches                   -- F9r3
+WHEN (NEW.search_id IS NOT NULL AND EXISTS (SELECT 1 FROM person_searches WHERE search_id = NEW.search_id))
+  OR (NEW.import_run IS NOT NULL AND EXISTS (SELECT 1 FROM person_searches
+        WHERE import_run = NEW.import_run AND source_ordinal = NEW.source_ordinal))
+BEGIN SELECT RAISE(ABORT, 'person_searches: a duplicate is a finding, never a replacement'); END;
 
 -- ---------------------------------------------------------------------------------------------
 -- 7. RELATIONS
@@ -794,7 +963,7 @@ CREATE TABLE footage_membership (
   group_id     TEXT NOT NULL,
   membership   TEXT NOT NULL CHECK (json_valid(membership)),
   scanned_at   INTEGER NOT NULL,
-  provenance   TEXT NOT NULL DEFAULT 'bound' CHECK (provenance IN ('bound','unverified'))    -- F9
+  provenance   TEXT NOT NULL DEFAULT 'bound' CHECK (provenance = 'bound')    -- F9
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX footage_membership_by_group ON footage_membership(group_id);
 
@@ -890,6 +1059,9 @@ BEGIN SELECT RAISE(ABORT, 'ignored_content: a duplicate is a finding, never a re
 --    repeat (two occurrences of one UUID are two rows, both `duplicateId`).
 --    F5: a row's reason has a CLASS. A `presence` reason (where is the file?) may be resolved by a
 --    rescan that finds the digest; a `finding` reason stays open until its own rule clears it.
+--    F5r3: `findings` holds EVERY tier-5 finding for the row, whichever reason won the precedence
+--    (an `auditGone` row with a `referenceMovie` finding keeps it) — never dropped. Any finding
+--    closes the byte-match door, even on a presence reason.
 -- ---------------------------------------------------------------------------------------------
 CREATE TABLE quarantine (
   qid           INTEGER PRIMARY KEY,
@@ -919,14 +1091,22 @@ CREATE TABLE quarantine (
   generation    INTEGER NOT NULL,
   resolved_file_id TEXT REFERENCES files(id) ON DELETE RESTRICT,
   resolved_at   INTEGER,
-  resolution    TEXT    CHECK (resolution IN
-                  ('foundByDigest','resolvedAsCopy','personDecided','importedAfterHash','findingCleared')),
-  resolution_note TEXT,                      -- findingCleared / personDecided: which rule or decision
+  resolution    TEXT    CHECK (resolution IN                                                -- F5r3
+                  ('foundByDigest','resolvedAsCopy','personDecided','importedAfterHash','resolvedByRule')),
+  resolution_note TEXT,                      -- resolvedByRule / personDecided: in words
+  resolved_rule TEXT,                        -- F5r3: resolvedByRule — the CatalogConstraints rule name
+  resolved_integrity_run TEXT,               -- F5r3: the integrity run id that no longer reports it
   CHECK ((resolved_at IS NULL) = (resolution IS NULL)),
-  CHECK (resolution IS NULL OR resolution = 'findingCleared' OR resolved_file_id IS NOT NULL),
-  CHECK (resolution IS NULL OR resolution NOT IN ('findingCleared','personDecided') OR resolution_note IS NOT NULL),
-  -- F5: a rescan's byte match resolves only a presence reason
-  CHECK (resolution IS NULL OR resolution NOT IN ('foundByDigest','resolvedAsCopy') OR reason_class = 'presence'),
+  CHECK (resolution IS NULL OR resolution = 'resolvedByRule' OR resolved_file_id IS NOT NULL),
+  CHECK (resolution IS NULL OR resolution NOT IN ('resolvedByRule','personDecided') OR resolution_note IS NOT NULL),
+  CHECK ((resolution IS 'resolvedByRule') = (resolved_rule IS NOT NULL AND resolved_integrity_run IS NOT NULL)),  -- F5r3
+  CHECK ((resolved_rule IS NULL) = (resolved_integrity_run IS NULL)),                                              -- F5r3
+  -- F5 / F5r3: a rescan's byte match resolves a row ONLY when its reason is a presence reason
+  -- AND it carries no integrity finding (the CHECK spans both columns). A row WITH findings is
+  -- resolved only by resolvedByRule (its rule name + the integrity run that no longer reports it).
+  CHECK (resolution IS NULL OR resolution NOT IN ('foundByDigest','resolvedAsCopy')
+         OR (reason_class = 'presence' AND json_array_length(findings) = 0)),
+  CHECK (resolution IS NULL OR json_array_length(findings) = 0 OR resolution = 'resolvedByRule'),
   CHECK (origin <> 'import' OR (import_run IS NOT NULL AND source_ordinal IS NOT NULL
                                 AND json_row_id IS NOT NULL AND raw_row IS NOT NULL)),
   CHECK (origin <> 'rescan' OR (import_run IS NULL AND source_ordinal IS NULL)),
@@ -950,6 +1130,7 @@ WHEN OLD.resolved_at IS NOT NULL
   OR NEW.digest IS NOT OLD.digest OR NEW.words IS NOT OLD.words
   OR NEW.reason_code IS NOT OLD.reason_code OR NEW.evidence_digests IS NOT OLD.evidence_digests
   OR NEW.import_run IS NOT OLD.import_run OR NEW.source_ordinal IS NOT OLD.source_ordinal
+  OR NEW.findings IS NOT OLD.findings     -- F5r3: emptying findings cannot open the byte-match door
 BEGIN SELECT RAISE(ABORT, 'quarantine evidence is immutable; a row is resolved once'); END;
 
 -- ---------------------------------------------------------------------------------------------
@@ -968,6 +1149,15 @@ CREATE TABLE import_runs (
   source_generation INTEGER NOT NULL,
   integrity_run_id TEXT NOT NULL,           -- integrity-latest.json runID used as the gate
   audit_run_started_at INTEGER NOT NULL,    -- catalog-audit.json startedAt: the per-row results' run (F6)
+  -- N1: the snapshot the audit evidence belongs to. The audit saves its auditSeenOn stamps and
+  -- records the generation that save produced (`savedGeneration`, A′ adds it with the per-row
+  -- results); the integrity report certifies `snapshotGeneration`; the frozen file carries
+  -- `source_generation`. All three must be ONE generation, and the audit must have finished
+  -- before the integrity run started. Any save in between bumps the generation: refused.
+  audit_run_finished_at INTEGER NOT NULL,                                                    -- N1
+  audit_generation      INTEGER NOT NULL,   -- catalog-audit.json savedGeneration          -- N1
+  integrity_started_at  INTEGER NOT NULL,   -- integrity-latest.json run.startedAt         -- N1
+  integrity_generation  INTEGER NOT NULL,   -- integrity-latest.json snapshotGeneration    -- N1
   rows_before     INTEGER NOT NULL DEFAULT 0,
   rows_main       INTEGER NOT NULL DEFAULT 0,
   rows_quarantine INTEGER NOT NULL DEFAULT 0,
@@ -975,24 +1165,29 @@ CREATE TABLE import_runs (
   knowledge_rows  INTEGER NOT NULL DEFAULT 0,
   comparator_ok   INTEGER NOT NULL DEFAULT 0 CHECK (comparator_ok IN (0,1)),
   CHECK (rows_before = rows_main + rows_quarantine),            -- backstop only (F1)
-  CHECK (finished_at IS NULL OR comparator_ok = 1)
+  CHECK (finished_at IS NULL OR comparator_ok = 1),
+  CHECK (audit_run_started_at <= audit_run_finished_at),                                     -- N1
+  CHECK (audit_run_finished_at < integrity_started_at),                                      -- N1
+  CHECK (audit_generation = source_generation AND integrity_generation = source_generation)  -- N1
 ) STRICT, WITHOUT ROWID;
 
 CREATE TABLE import_items (                                                                  -- F1
   import_run     TEXT    NOT NULL REFERENCES import_runs(run_id) ON DELETE RESTRICT,
   source_file    TEXT    NOT NULL CHECK (source_file IN
                    ('catalog.json','events-decisions.json','ignored-content.json',
-                    'media-ledger.jsonl','catalog-audit.json','fullhash-backfill.json')),
+                    'media-ledger.jsonl','catalog-audit.json','fullhash-backfill.json',
+                    'personfinder_cache.sqlite')),                                           -- F9r3
   source_ordinal INTEGER NOT NULL CHECK (source_ordinal >= 0),
   item_kind      TEXT    NOT NULL CHECK (item_kind IN
-                   ('row','event','eventDecision','ignored','ledgerLine','marker','auditResult')),
+                   ('row','event','eventDecision','ignored','ledgerLine','marker','auditResult',
+                    'personSearch')),                                                        -- F9r3
   source_key     TEXT,                    -- the id the occurrence carries, verbatim (non-unique)
   -- catalog rows: the §10b curated fields this occurrence carried (non-default), as the importer
   -- decoded them; the comparator re-derives this list from catalog.json independently.
   curated_fields TEXT    NOT NULL DEFAULT '[]' CHECK (json_valid(curated_fields)),
   landed_table   TEXT    NOT NULL CHECK (landed_table IN
                    ('files','quarantine','events','event_decisions','ignored_content','ledger',
-                    'job_markers','audit_results')),
+                    'job_markers','audit_results','person_searches')),                       -- F9r3
   landed_ref     TEXT    NOT NULL,        -- files.id | quarantine.qid | events.event_id | '' (keyed by run+ordinal)
   PRIMARY KEY (import_run, source_file, source_ordinal),
   CHECK ((source_file = 'catalog.json') = (item_kind = 'row')),
@@ -1005,15 +1200,39 @@ WHEN EXISTS (SELECT 1 FROM import_items WHERE import_run = NEW.import_run
 BEGIN SELECT RAISE(ABORT, 'import_items: one occurrence, one row'); END;
 
 -- per-row Tier 0 results, read from catalog-audit.json (F6: the importer does not walk the disk)
-CREATE TABLE audit_results (                                                                 -- F6
+-- N1: every result is kept verbatim, and `accepted` says whether it may gate the row:
+--   * `present` only when the ROW's own auditSeenOn stamp (from the frozen catalog.json) exists
+--     and its seenAt lies within the audit run's [startedAt, finishedAt]. The model clears the
+--     stamp on ANY fullPath change (VideoRecord.fullPath didSet, C/VideoRecord.swift:140), so a
+--     row moved after the audit cannot carry the old `present`;
+--   * any other result only when the path it was judged at equals the row's fullPath.
+-- An unaccepted result reads as "no result" → `neverSeen` (contract §f). Codex N1's scenario —
+-- path changed after an older completed audit, UUID kept — is refused twice: the stamp is gone,
+-- and the save that changed the path bumped the generation (import_runs N1 CHECK).
+CREATE TABLE audit_results (                                                                 -- F6 N1
   import_run     TEXT    NOT NULL REFERENCES import_runs(run_id) ON DELETE RESTRICT,
   source_ordinal INTEGER NOT NULL CHECK (source_ordinal >= 0),   -- position in catalog-audit.json's rows
   json_row_id    TEXT    NOT NULL,
   result         TEXT    NOT NULL CHECK (result IN ('present','gone','neverSeen','couldNotCheck','changed','link')),
   detail         TEXT    NOT NULL DEFAULT '{}' CHECK (json_valid(detail)),  -- errno, link component, stamp seen
+  judged_path    TEXT,                     -- N1: the path the audit judged (required unless present)
+  row_full_path  TEXT    NOT NULL,         -- N1: the row's fullPath in the frozen catalog.json
+  row_audit_seen_at INTEGER,               -- N1: the row's auditSeenOn.seenAt; NULL = no stamp
+  accepted       INTEGER NOT NULL CHECK (accepted IN (0,1)),                                 -- N1
+  CHECK (result = 'present' OR judged_path IS NOT NULL),                                     -- N1
   PRIMARY KEY (import_run, source_ordinal)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX audit_results_by_row ON audit_results(import_run, json_row_id);
+CREATE TRIGGER audit_results_bound_to_snapshot BEFORE INSERT ON audit_results               -- N1
+WHEN NEW.accepted IS NOT (
+  SELECT CASE WHEN NEW.result = 'present'
+              THEN (NEW.row_audit_seen_at IS NOT NULL
+                    AND NEW.row_audit_seen_at BETWEEN r.audit_run_started_at AND r.audit_run_finished_at)
+              ELSE (NEW.judged_path IS NEW.row_full_path) END
+    FROM import_runs r WHERE r.run_id = NEW.import_run)
+BEGIN SELECT RAISE(ABORT, 'audit_results.accepted must follow the snapshot rule (N1)'); END;
+CREATE TRIGGER audit_results_no_update BEFORE UPDATE ON audit_results                       -- N1
+BEGIN SELECT RAISE(ABORT, 'audit results are evidence'); END;
 
 -- A run is inserted OPEN and finished by one UPDATE inside the import transaction. F1
 CREATE TRIGGER import_runs_open_first BEFORE INSERT ON import_runs
@@ -1050,6 +1269,8 @@ WHEN NEW.finished_at IS NOT NULL AND OLD.finished_at IS NULL AND (
                                AND j.source_file = i.source_file AND j.source_ordinal = i.source_ordinal))
   OR EXISTS (SELECT 1 FROM import_items i WHERE i.import_run = NEW.run_id AND i.landed_table = 'audit_results'
               AND NOT EXISTS (SELECT 1 FROM audit_results a WHERE a.import_run = i.import_run AND a.source_ordinal = i.source_ordinal))
+  OR EXISTS (SELECT 1 FROM import_items i WHERE i.import_run = NEW.run_id AND i.landed_table = 'person_searches'  -- F9r3
+              AND NOT EXISTS (SELECT 1 FROM person_searches s WHERE s.import_run = i.import_run AND s.source_ordinal = i.source_ordinal))
   -- every curated field an occurrence carried has its verbatim knowledge_sources row
   OR EXISTS (SELECT 1 FROM import_items i, json_each(i.curated_fields) cf
               WHERE i.import_run = NEW.run_id AND i.item_kind = 'row'
@@ -1149,7 +1370,13 @@ BEGIN SELECT RAISE(ABORT, 'the ledger is append-only (no replace)'); END;
 -- ---------------------------------------------------------------------------------------------
 -- 11. Open checks at every open (§9.2): PRAGMA integrity_check; PRAGMA foreign_key_check;
 --     SELECT * FROM catalog_state and generations — exactly one row each, schema_version known;
---     then read catalog.highwater: generations.generation < high-water ⇒ open READ-ONLY with the
---     named refusal `restoredBelowHighWater` (F8); a missing high-water file is recreated from the
---     larger of the database generation and the newest `generationHighWater` ledger line.
+--     no `adopt` history row above the counter (a half-done adoption, F8r3);
+--     then read catalog.highwater (F8r3, written BEFORE each commit):
+--       high-water = generation ⇒ normal open;
+--       high-water > generation ⇒ READ-ONLY, named refusal `restoredBelowHighWater`, until a
+--         person adopts (§1); the words say "restored" or "the last save did not finish" from
+--         the JSONL's last `generationHighWater` line;
+--       high-water < generation ⇒ the file was rolled back: raise it to the generation;
+--       missing ⇒ recreated from the larger of the database generation and the newest
+--         `generationHighWater` ledger line, then the rules above.
 -- ---------------------------------------------------------------------------------------------

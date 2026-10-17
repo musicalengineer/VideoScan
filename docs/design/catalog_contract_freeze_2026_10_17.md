@@ -2,18 +2,18 @@
 
 Status: DESIGN, read-only. Brief: `docs/briefs/cloud/CONTRACT_FREEZE.md`. Plan: `catalog_sqlite_migration_2026_10_16.md`
 §10 (v3: verify once → import the verified rows → rescan by digest → cutover); `integrity_first_2026_10_16.md`
-§2–§3a. Schema: `catalog_sqlite_schema_v1.sql` (same branch). GH #328. Read from source (no Swift toolchain); every writer is a
-grep-and-read citation. The DDL was loaded into
-SQLite 3.45 and 20 refusal cases were exercised against it (duplicate live path, `v1:` digest, revision going down,
-supersession cycle, ledger UPDATE / `INSERT OR REPLACE`, generation skip, lossy import line, …): all refused.
+§2–§3a. Schema: `catalog_sqlite_schema_v1.sql`. GH #328. Read from source (no Swift toolchain); every writer is a
+grep-and-read citation.
 
-**Revision 2 (2026-10-17 evening).** Closes codex's 12 findings
-(`docs/reviews/codex/codex-review-contract-freeze-sqlite-schema-v1-step-b-2026-10-17.md`, verdict *block*) with the
-Manager's decisions (`docs/briefs/cloud/CONTRACT_FREEZE_R2.md`). Schema now **v1.1**. Each change carries
-`<!-- F<N> -->`. One reproduction per finding is in `catalog_sqlite_schema_v1_checks.sql`
-(`sqlite3 :memory: < docs/design/catalog_sqlite_schema_v1_checks.sql`, from the repo root): run on sqlite3 3.45.1,
-F1–F12 and D:530 print `ok`, and the run ends `all checks ok (44 assertions)`. 24 statements are expected
-refusals, and each one is announced. Two rules run through the whole revision:
+**Revision 2.** Closed codex's 12 first-pass findings
+(`docs/reviews/codex/codex-review-contract-freeze-sqlite-schema-v1-step-b-2026-10-17.md`) per
+`docs/briefs/cloud/CONTRACT_FREEZE_R2.md`; changes carry `<!-- F<N> -->`.
+**Revision 3 (schema v1.2).** Closes the closing pass's 6
+(`docs/reviews/codex/codex-review-contract-freeze-r2-closing-pass-2026-10-17.md`): F5, F8, F9 reopened
+(`<!-- F<N>r3 -->`) and new N1, N2, N3 (`<!-- N<N> -->`), per `docs/briefs/cloud/CONTRACT_FREEZE_R3.md`.
+Reproductions: `sqlite3 :memory: < docs/design/catalog_sqlite_schema_v1_checks.sql` from the repo root. Run on
+sqlite3 3.45.1: F1–F12, D530, F5r3, F8r3, F9r3, N1, N2, N3 print `ok`, `integrity_check: ok`,
+`all checks ok (76 assertions)`; 56 statements are expected refusals, each announced. Two rules run through both revisions:
 **nothing the JSON carried is merged away**: every imported occurrence is a row keyed by
 `(import_run, source_ordinal)`, and the per-content tables hold only the display choice.
 And **the importer and the rescan never promote evidence into identity**: no `lstat` verdict, no sampled hash and no
@@ -200,10 +200,9 @@ L = lineage / relation · V = display copy of another field. **Fate**: `col` = c
 today** (no R): every verify field, `contentFixity`, `audioFingerprint`, `mediaReportCard`, `archivedAt`,
 `needsReformat`, `backupDestinations`, `junkReasons`, `workspaceActive`, all pair/dup/avid/trim/cleanup fields — the
 SHA-256 among them, which is exactly why §10 keys knowledge by digest instead of trusting rescan preservation.
-**Unbound stamps** (no content digest today, so tier 4 cannot check them): captions, transcripts, OCR, dossier,
-inferred dates, faces, junk, verify verdicts, report card. A digest key does NOT bind them retroactively: hashing
-the bytes today cannot prove a caption written last spring described those bytes. So they import as `unverified`
-(§e.8). Only values computed after cutover, which hash first and then derive, are bound by construction. <!-- F9 -->
+**Unbound stamps** (captions, transcripts, OCR, dossier, inferred dates, faces, junk, verify verdicts, report
+card): a digest key does not bind them retroactively, so they import `unverified` (§e.8); only post-cutover
+values (hash first, then derive) are bound. <!-- F9 -->
 
 **Curated fields the comparator counts** (all of §10b, by field): 41, 42, 64, 70, 73, 74, 97 (set-aside reason),
 106–110, 118–119 (supersession), 100–105 (lineage, as one `lineage` value), 120 + 122 (promotion: `archiveFixity`,
@@ -247,14 +246,15 @@ externalRepair (RL:41), archivePromotion (`C/VideoRecordUserDate.swift:256`). Re
 | `events-decisions.json` (+`.prev`) | `EventsDecisionFile {storeVersion 1, savedAt, events:[EventRecord], decisions:[EventDecision]}` `A/Events/EventsDecisionStore.swift:154`; membership = folded `member` decisions (:173) | `ContentRange.contentKey` (:35): full SHA-256, else `pair:<pairGroupID>`, else `id:<recordID>` | `EventsDecisionWriter.write` :600 (atomic, `.prev`) | `events`, `event_decisions` (verbatim), `event_members` by digest |
 | `events_latest.json` | `EventsStats` counts (`A/Events/VideoScanModel+Events.swift:120`) | none | `EventsStats.write` :219 | stays a file (metrics) |
 | `ignored-content.json` | `IgnoredContentFile {entries:[{id, partialMD5, sizeBytes, filename, reason, addedAt, samplePath}]}` `A/Catalog/IgnoredContentStore.swift:76,109` | (partialMD5, size); fallback (filename, size) — **sampled**; no row id, no digest | `saveOffMain` :338 | `ignored_content`, `unbound` (Q4) <!-- F7 --> |
-| `catalog-audit.json` | `CatalogAuditRunRecord {startedAt, finishedAt?, outcome, partial, counts, marked}` `A/MediaOps/CatalogAuditRun.swift:25` | today none — **no per-row result**; A′ adds per-row results (present / gone / neverSeen / couldNotCheck / changed / link) by record id, written by Tier 0 (Manager's code change) | `CatalogAuditRunMarker.persist` :132 | `job_markers` (job=audit) + `audit_results` per row <!-- F6 --> |
+| `catalog-audit.json` | `CatalogAuditRunRecord {startedAt, finishedAt?, outcome, partial, counts, marked}` `A/MediaOps/CatalogAuditRun.swift:25` | today none — **no per-row result**; A′ adds per-row results (present / gone / neverSeen / couldNotCheck / changed / link) by record id, each non-present one with the path it was judged at, and `savedGeneration` (the generation its stamp save produced) | `CatalogAuditRunMarker.persist` :132 | `job_markers` (job=audit) + `audit_results` per row <!-- F6 N1 --> |
+| `personfinder_cache.sqlite` | `pf_cache(video_path, file_size, mod_date, person_name, engine, threshold, ref_hash, duration_seconds, fps, total_hits, segments_json, cached_at)` `A/People/PersonFinderCache.swift:78–91` | (path, size, mtime, person, engine, threshold, ref hash), latest only (`INSERT OR REPLACE` :315) | `store` :311 ← `PersonFinderModel+JobLifecycle.swift:1152` (result, zero hits included) and :1162 (unreadable: 0 hits, 0 s, 0 fps) | `person_searches`, `unverified` (§e.8) <!-- F9r3 --> |
 | `fullhash-backfill.json` | `{startedAt, finishedAt?, hashedSoFar}` `A/MediaOps/FullHashBackfillResume.swift:26` | none | `persist` :99 (MOPS-13) | `job_markers` (job=fullHash), body verbatim in `detail`; an importer input <!-- F1 --> |
 | sound-print backfill | no resume file (`A/MediaOps/AudioFingerprintBackfill.swift:18`) | — | — | — |
 | freshness stamps | not persisted separately; per-row stamps + the two markers above (`A/Analyze/AnalyzeCoverage.swift:1–27`) | — | — | the stamps' tables + `job_markers` |
 | `integrity-latest.json`, `integrity-<date>.json` | `IntegrityReport` schema 2 `A/Integrity/IntegrityReport.swift:146`: run, generations, catalogSHA256, tiers, findings ≤ 5,000 (:151) | tier int; findings by **record UUID** (:136) | `IntegrityReportStore.write` :289 (MOPS-15) | `integrity_runs`; files stay as the dated history |
 | `ledger/media-ledger.jsonl` | `MediaLedgerEvent {at, event, recordID, contentKey, filename, fullPath, by, batchID?, detail}` `C/MediaLedgerEvent.swift:31`, 18 kinds :35 | recordID + `contentKey` = `h:`+**v1 contentHash** or `p:md5:size` (:183) + path | `MediaLedger.append` `A/Archive/MediaLedger.swift:102` (O_APPEND + fsync) | `ledger` (append-only) + the JSONL kept |
 | `audio-fingerprints.sqlite` | `fingerprints(content_digest, size_bytes, engine_version, …, blob)` PK the three, `C/AudioFingerprintStore.swift:177–204` | self-describing digest (`sha256:` or `v1:`) + size | `put` :262 | stays its own DB (§9b); bound through `sound_prints.sidecar_key` |
-| `catalog.generation.max` | one integer | none | `A/Catalog/CatalogGenerationSidecar.swift` via CatalogStore:510,552,792 | NOT in the database: it stays a file beside it, renamed `catalog.highwater`, plus a `generationHighWater` ledger line (§e.9) <!-- F8 --> |
+| `catalog.generation.max` | one integer | none | `A/Catalog/CatalogGenerationSidecar.swift` via CatalogStore:510,552,792 | NOT in the database: a file beside it, renamed `catalog.highwater`, written BEFORE each commit, plus a `generationHighWater` ledger line (§e.9) <!-- F8 F8r3 --> |
 | `date-inference/unwound-*.json` | `UnwoundDateSidecar` (DI:1099) | recordID + fullPath (DI:1075) | DI:1285 | stays (undo history) |
 | `archive-angel/evidence.json` | `[UUID: ArchiveAngelEvidenceRecord]` | record UUID | `ArchiveAngelEvidenceStore.saveOffMain` :473 | rebuildable cache — not imported |
 | `delete-duplicates/<plan>/plan.json` | targets: path + recordID? (`A/MediaOps/DeleteDuplicatesPlan.swift:89–172`) | path | rewritten per pair | import gate: **no open plan** |
@@ -280,15 +280,13 @@ and `derivedStampsMatchContent` is tier 4. All 15 map: <!-- F5 -->
 | 8 | removalRevisionNonNegative | CHECK ≥ 0; `files_removal_revision_monotonic`; `files_removal_change_bumps_revision` | CHECK + trigger |
 | 9 | auditStampNamesItsVolume | CHECK non-blank; stamp ⇔ seen_at; `files_path_change_clears_audit_stamp` (= `C/VideoRecord.swift:140`) | CHECK + trigger |
 | 10 | eventMembersExist | `event_members.digest` FK | FK |
-| 11 | pathAliasByCase | `volumes.case_sensitive` decides; `files_live_path_fold` UNIQUE (volume_uuid, path_fold) WHERE live AND case-insensitive volume refuses the alias; on a case-sensitive volume both rows are legal and not reported <!-- F12 --> | partial UNIQUE |
+| 11 | pathAliasByCase | `volumes.case_sensitive` decides; `files_live_path_fold` UNIQUE (volume_uuid, path_fold) WHERE live AND case-insensitive volume refuses the alias; on a case-sensitive volume both rows are legal and not reported <!-- F12 -->. `path_fold` is the APP's NFC + case fold (`folding(options: [.caseInsensitive], locale: nil)`; diacritics kept), stored; the engine compares stored folds, never SQLite's ASCII-only `lower()`. `É.mov` → `é.mov` is accepted; `A.mov` beside `a.mov` is refused. A stale fold → new tier-5 rule `pathFoldMatchesPath` (A′) <!-- N3 --> | partial UNIQUE + job |
 | 12 | supersessionCycle | `supersessions_acyclic` (recursive CTE) + `supersessions_no_rewrite` | trigger |
 | 13 | duplicateGroupDigestsAgree | narrowed rule (`CatalogConstraints.swift:515–524`): a candidate group may hold different digests; a group formed on a `hash` reason with differing digests is a finding — view `duplicate_hash_groups_disagree`, read by the job. v1's one-digest trigger is removed <!-- D:530 --> | job (view) |
 | 14 | derivedStampsMatchContent (tier 4) | structural: every stamp table's key IS the digest it was made from; a changed file is a new row with a new digest | retired by the key |
 
-**MOPS** (`docs/practices/invariants/MediaOps.md`). Need I/O → **stay jobs**: MOPS-1/2 (prove a surviving copy at
-delete time, nothing from a cache), 4/5 (no clobber; sources untouched), 7 (catalog and disk agree per item — one
-transaction per item), 8 (path inside its volume, no links), 10, 11 (`MediaTrash.move`), 12 (receipt CSV stays a
-file). Engine support: rows never deleted (tombstones); MOPS-3 → `archive_copy_never_trashed`; MOPS-6 (the record
+**MOPS** (`docs/practices/invariants/MediaOps.md`). Need I/O → **stay jobs**: MOPS-1/2 (surviving copy proven at
+delete time), 4/5, 7 (one transaction per item), 8, 10, 11, 12 (receipt CSV stays a file). Engine support: rows never deleted (tombstones); MOPS-3 → `archive_copy_never_trashed`; MOPS-6 (the record
 follows only a verified copy) → `files_digest_immutable` + the size trigger, so a moved path must carry the same
 content; MOPS-9 → the sink + `ledger`; MOPS-13 → `job_markers`; MOPS-14 → removal triggers (every marker field, tombstone required, F11) + audit-stamp CHECK and
 trigger (the proof walk stays a job); MOPS-15 → Verify Catalog runs in one read transaction (a true snapshot) and
@@ -305,21 +303,20 @@ writes `integrity_runs`.
    nothing references it.
 2. `files.content_digest` is NOT NULL → **a row without a whole-file digest cannot enter `files`**; it goes to
    `quarantine` with its full JSON (§f). This is the price of the rule, paid once: A′'s hash run shrinks it.
-3. Every knowledge table (§6 of the DDL) is keyed by digest. So two byte-identical files show one star / date /
-   people list (Q1), and a rescanned file at a new path re-attaches without any id or path match. What they show
-   is a **display choice**. Every occurrence's own value stays in `knowledge_sources` (§e.10). <!-- F2 -->
+3. Every knowledge table is keyed by digest: byte-identical files show one value (Q1), and a rescanned file at a
+   new path re-attaches without an id or path match. The shown value is a **display choice**; every occurrence's
+   own value stays in `knowledge_sources` (§e.10). <!-- F2 -->
 4. A file whose bytes change is a NEW row (`files_digest_immutable`); the old content's knowledge stays on the old
    digest — never silently carried onto other bytes.
 5. Archive promotion copies bytes, so the archive copy and its source share a digest: promotion is file → file
    (`archive_copies`), not content lineage. Derivatives (trim, repair, …) are other bytes: `lineage` digest → digest.
-6. Sound prints: only `sha256:`-keyed stamps import, and the prefix is stripped before the value is a digest. The
-   ledger, the ignored list, person links and v1 prints carry sampled keys. They import verbatim and are never
-   identity. **A sampled key never binds**, not even when exactly one hashed file matches it: codex's case is an
-   ignored file that is gone while a different file shares its partialMD5 and size. An ignored entry, a person
-   link or a ledger line binds to a digest only when (a) the original row's whole-file digest is known from the
-   JSON, or (b) a person decides. Otherwise it stays `unbound`. Today an ignored entry carries no row id and no
-   digest (`IgnoredContentEntry`, `IgnoredContentStore.swift:76`), so (a) never applies to it: all of them import
-   `unbound`. A ledger line binds through its `recordID` when that row's JSON digest is known. <!-- F7 -->
+6. Sound prints: only `sha256:`-keyed stamps import (prefix stripped). The ledger, the ignored list, person links
+   and v1 prints carry sampled keys: verbatim, never identity. **A sampled key never binds**, not even when exactly
+   one hashed file matches it (codex: an ignored file is gone and a different file shares its partialMD5 and
+   size). An entry binds to a digest only when (a) the original row's whole-file digest is known from the JSON, or
+   (b) a person decides; else `unbound`. An ignored entry carries no row id or digest
+   (`IgnoredContentStore.swift:76`), so all import `unbound`; a ledger line binds through its `recordID`'s JSON
+   digest. <!-- F7 -->
 7. Knowledge whose writer named a ROW is translated to digests at import through that row's digest:
    `inferredDateSource = "propagated from <uuid>"`, `FootageDecision.otherID`, events `id:`, `pair:`. The row id
    is ALSO kept verbatim (`footage_decisions.row_id/other_row_id`, `regen_context`, `legacy_pair_ids`,
@@ -339,24 +336,57 @@ writes `integrity_runs`.
    - A time-window argument ("derived after `contentFixity.computedAt`, and the stamp still matches now") is
      possible but NOT adopted here. It is Rick's call (§h Q6).
 
+   **Where they land** <!-- N2 -->:
+   - Per-content tables (`captions`, `transcripts`, …) hold **bound** values only, keyed (digest, kind, seq).
+   - **Unverified** values (all imported derived values but `sha256:` sound prints, names included) go to
+     `derived_unverified`, keyed (digest, kind, seq, `source_json_row_id`). Two same-digest rows with
+     different first captions both land, and a trigger flags both `conflict = 1`.
+   - A second bound value for a key: byte-identical is dropped (`RAISE(IGNORE)`); different is refused, and
+     the writer moves BOTH to `derived_unverified` with `conflict = 1`.
+
    Context that regeneration cannot recover from the file is preserved:
    - folder-derived and donor-derived dates, with their source and reason (`regen_context` `folderDate` /
      `donorDate`);
-   - the named-person inputs, i.e. which people a Person Finder run was asked to find, from the detected and
-     suspected names (`personSearched`);
    - the original `pairedWithID` / `pairGroupID`, together with the event member keys that cite them
      (`legacy_pair_ids`).
 
    <!-- F9 -->
+
+   **Search evidence** <!-- F9r3 -->: `person_searches`, one row per (file, search), zero hits included. r2's
+   `personSearched` read `detectedPeople` / `suspectedPeople`, which are a search's *outputs*; it is removed.
+   What carries search evidence today (read in `A/People/`):
+   - **catalog.json: none.** Detected / suspected names are hits only (FamilyTagging:80, :102);
+     `mediaReportCard` is media health. Find & Tag writes names on hits and log lines (`FindPersonJob.swift:902`).
+   - **`personfinder_cache.sqlite` `pf_cache`**: per (path, size, mtime, person, engine, threshold, ref hash),
+     `total_hits` with zeros. Partials are not stored (`shouldStore` :18). An unreadable file is stored as
+     0 hits / 0 s / 0 fps (JobLifecycle:1162) and imports as `outcome = 'unreadable'`, not a miss.
+   - `scan_jobs/*.json` (`ScanJobsStorage.swift:26`) holds per-search totals, not per file, and is not
+     imported. `validation_labels.json` holds confirmations, not searches.
+
+   Each `pf_cache` row imports `unverified`, with the key verbatim. Its `source_json_row_id` / `digest` come
+   from the one catalog row whose `fullPath` and `sizeBytes` match the key, otherwise NULL. A path key never
+   binds identity. SQLite-era searches write `bound` rows.
 9. **Generation and high-water.** The CAS runs inside the write transaction:
    `UPDATE generations SET generation = generation + 1 … WHERE id = 1 AND generation = :expected`.
-   `changes()` must be 1, else ROLLBACK, and a trigger refuses any step other than +1. The high-water is not in the
-   database (v1 had it in `catalog_state`, where a restore rewinds it). It lives in `catalog.highwater` beside the
-   database: one integer, written atomically after each commit, never lowered. Each value is also appended to
-   `ledger/media-ledger.jsonl` as `generationHighWater`. **Rule:** a database whose generation is below the
-   high-water opens READ-ONLY with the named refusal `restoredBelowHighWater`. Writing again needs a person to
-   *adopt* the restore. Adoption raises the counter to the high-water in one step (`generation_history` writer
-   `adoptRestore`). <!-- F8 -->
+   `changes()` must be 1, else ROLLBACK. The high-water is not in the database (a restore would rewind it):
+   it lives in `catalog.highwater` beside the database, one integer, never lowered. <!-- F8 -->
+   **Two-phase, high-water FIRST** <!-- F8r3 -->. Every write advancing from g:
+   (1) write `catalog.highwater` = g+1 (temp, fsync, rename, fsync dir) and append
+   `generationHighWater {intended: g+1}` to the JSONL ledger (fsync);
+   (2) commit the CAS g → g+1.
+   So codex's crash after commit 6, followed by a restore of 5, is caught: (1) already recorded 6.
+   **Invariant at open:** `highwater ≥ generation`.
+   - `highwater > generation` ⇒ a restore, or a crash between (1) and (2); only the JSONL's last line tells
+     them apart. Either way: READ-ONLY (`restoredBelowHighWater`), words naming the case, until a person adopts.
+   - `highwater < generation` ⇒ the file was rolled back; it is raised to the generation.
+
+   **Adoption** is explicit, not a CAS. In one transaction: insert a `generation_history` row with kind `adopt`
+   (generation :hw, `from_generation` :old), then
+   `UPDATE generations SET generation = :hw, adopted_at = now, adopted_from = :old WHERE id = 1 AND :hw > generation`.
+   The step trigger allows the jump only with that row. SQLite cannot see transactions, so the binding is by
+   shape: the adopt row is insertable only while the counter reads :old, and while one sits above the counter
+   every +1 is refused. Reproduced from 6, because the F8 block took 5 → 6 by CAS: 6 → 10 by plain UPDATE
+   fails, and by adoption succeeds.
 10. **No curated value is merged away.** `knowledge_sources` keeps one row per (occurrence, field), verbatim:
     `(import_run, source_ordinal, json_row_id, digest NULL-able, field, value_json, set_at, source)`. The
     per-content tables (`user_notes`, `stars`, `user_dates`, `user_places`, `dispositions`, `family_music`,
@@ -376,12 +406,16 @@ writes `integrity_runs`.
 - `integrity-latest.json`;
 - `catalog-audit.json`, with A′'s per-row results;
 - `fullhash-backfill.json`; <!-- F1 -->
-- `events-decisions.json`, `ignored-content.json`, `ledger/media-ledger.jsonl`.
+- `events-decisions.json`, `ignored-content.json`, `ledger/media-ledger.jsonl`;
+- `personfinder_cache.sqlite`, opened read-only (§e.8 search evidence). <!-- F9r3 -->
 
 **Run-level refusals** (nothing is written):
 - JSON version > 6.
 - The integrity report: `outcome ≠ completed`, or `catalogHashCertified = false`, or `catalogSHA256 ≠` the frozen
   file's hash, or `snapshotGeneration ≠` the file's generation.
+- **One snapshot** <!-- N1 -->: the audit's `savedGeneration` ≠ `snapshotGeneration` or ≠ the file's generation.
+  Every save bumps the generation, so ANY save after the audit (rename, move, tag) refuses the import
+  (CHECKs on `import_runs`).
 - `findingsTotal > findings.count`. Findings are capped at 5,000, and a truncated list cannot gate rows: rerun
   after fixing.
 - Tiers 0, 1 or 5 `notRun`.
@@ -399,6 +433,12 @@ writes `integrity_runs`.
   against the fixity stamp. The results are `present`, `gone` (ENOENT on a mounted volume, by the audit's proof
   rule), `neverSeen`, `couldNotCheck`, `changed` and `link`. A row with no result reads as `neverSeen`. This
   answers Q3. <!-- F6 -->
+  **A result gates its row only when bound to the snapshot** <!-- N1 -->:
+  - `present` is accepted only when the row's own `auditSeenOn` exists in the frozen JSON and its `seenAt` lies
+    within the audit's [startedAt, finishedAt]. The model clears the stamp on ANY `fullPath` change
+    (`C/VideoRecord.swift:140`), so a moved row cannot carry an old `present`.
+  - Any other result is refused when the path it was judged at differs from the row's `fullPath`.
+  - A refused result is kept (`accepted = 0`, recomputed by trigger) and the row reads as `neverSeen`.
 - *Digest* — `storedFullDigest(r)`. When both fixities exist they must agree. An archive-only fixity has no stat
   stamp (`MasterArchive.swift:1290–1297`); it counts as "digest known, seen = the audit result", with nothing to
   compare. <!-- F10 -->
@@ -426,6 +466,10 @@ writes `integrity_runs`.
 A main row whose live path collides with another main row (rule 2, or its case alias on a case-insensitive volume)
 is caught at step 6 as a tier-5 finding; the UNIQUE indexes are the backstop.
 
+**Findings are never dropped** <!-- F5r3 -->. A quarantine row's `findings` holds EVERY tier-5 finding for its
+recordID, whichever reason won. Codex's `auditGone` row keeps its `referenceMovie` finding, and that finding
+closes the byte-match door (§g Step B).
+
 **What every occurrence writes.** Plain INSERT only. There is no `INSERT OR REPLACE` anywhere in the importer, and
 a duplicate is a finding, never a replacement. Each evidence table also refuses a replace by trigger. <!-- F4 -->
 - One `import_items` row per occurrence in every input file, naming the one table row it landed in
@@ -438,15 +482,18 @@ a duplicate is a finding, never a replacement. Each evidence table also refuses 
   goes into `lineage_pending` by row ids, and is never dropped (codex's main child with a digest-less parent). An
   archive-promotion `derivedFrom` is `archive_copies.source_row_id`, verbatim, with `source_file_id` NULL while the
   source is quarantined. <!-- F1 -->
-- Derived values go in with `provenance` per §e.8; `regen_context` and `legacy_pair_ids` per §e.8. <!-- F9 -->
+- Derived values go in with `provenance` per §e.8 (unverified ones in `derived_unverified`, keyed by source
+  row); `regen_context` and `legacy_pair_ids` per §e.8. <!-- F9 N2 -->
+- Each `pf_cache` row → one `person_searches` row and one `import_items` row. <!-- F9r3 -->
 - Events: the decision stream verbatim, membership and non-membership decisions alike, plus the fold. A member key
   resolves `sha256` → digest, `pair:` → both halves' digests, `id:` → that row's digest. An unresolvable member
   stays in the stream and in `legacy_pair_ids`, and is listed against its row. <!-- F1 -->
 
 **Reconciliation line** (one OUTCOME line through the sink):
 `rows before N · main M (live L, tombstoned T) · quarantine Q (by reason …) · digests D · knowledge rows K (by
-field) · conflicts C (by table) · pending lineage P · events E (decisions, members resolved / listed) · ignored I
-(bound / unbound) · ledger lines J · markers`. The `import_runs` counters are NOT the proof. A run is inserted open
+field) · conflicts C (by table) · unverified U (conflicts) · pending lineage P · events E (decisions, members
+resolved / listed) · ignored I (bound / unbound) · ledger lines J · searches S (zero-hit Z, unreadable R) · audit
+results A (accepted / refused) · markers`. <!-- N1 N2 F9r3 --> The `import_runs` counters are NOT the proof. A run is inserted open
 and finished by one UPDATE, which a trigger refuses unless:
 - the counters equal counts of the rows;
 - every `import_items` landing exists, and no two occurrences landed on one `files` row;
@@ -464,7 +511,9 @@ and finished by one UPDATE, which a trigger refuses unless:
   included);
 - every event decision (membership AND non-membership) → `event_decisions`;
 - every marker file (`catalog-audit.json`, `fullhash-backfill.json`) → `job_markers`;
-- every per-row audit result → `audit_results`;
+- every per-row audit result → `audit_results`, with `accepted` recomputed by the N1 rule;
+- every `pf_cache` row → `person_searches`, zero hits included; <!-- F9r3 -->
+- every derived value → its bound table or `derived_unverified`, by (digest, kind, seq, source row); <!-- N2 -->
 - every ledger line → `ledger`;
 - every ignored entry → `ignored_content`;
 - every distinct agreeing whole-file digest → `content`.
@@ -492,22 +541,26 @@ Per mounted volume, per media file:
 |---|---|
 | live row at (volume, path) with the same digest | refresh disk facts + stamp; nothing else |
 | live row at (volume, path) with a **different digest** (the file was replaced) | old row → removal `removedFromCatalog`, reason `replacedAtPath` (a new `RemovalReason`), tombstone first; NEW row for the new digest; knowledge stays with the old digest; listed |
-| **known digest at a new path**, and exactly one live row with that digest is proven gone from its own path (the audit's proof rule) | that row's path is updated (keeps its id; the trigger clears the audit stamp; `path_fold` recomputed) |
+| **known digest at a new path**, and exactly one live row with that digest is proven gone from its own path (the audit's proof rule) | that row's path is updated through the store's one path door (keeps its id; the trigger clears the audit stamp; the app recomputes `path_fold`, N3) |
 | known digest at a new path, its other rows still present (or several gone) | new row (a copy); knowledge shared by digest; gone candidates left to the audit |
-| digest known only from a **quarantined** row (no main row has it) | new `files` row. It reuses `json_row_id` as `id` only when that id occurs once in the import and is not in `files`; otherwise it gets a fresh id. File-level fields come from `raw_row` (lifecycle, archive stage, notes; a `missing` marker is not carried, since the file was found) |
+| digest known only from a **quarantined** row (no main row has it) | new `files` row; `id` = `json_row_id` only when that id occurs once in the import and is not in `files`, else fresh. File-level fields from `raw_row` (a `missing` marker is not carried: the file was found) |
 | **new digest** | new `content` + `files` rows; no knowledge |
 
 **Step B — quarantine resolution** (writes `quarantine.resolved_*` only, after Step A): <!-- F5 -->
-- A row is resolved by the rescan ONLY when its reason is a **presence** reason: `auditGone`, `auditNeverSeen`,
-  `auditCouldNotCheck`, `noWholeFileDigest`, `removedNoDigest` (`quarantine.reason_class`, enforced by CHECK).
+- A row is resolved by the rescan (`foundByDigest` / `resolvedAsCopy`) ONLY when its reason is a **presence**
+  reason (`auditGone`, `auditNeverSeen`, `auditCouldNotCheck`, `noWholeFileDigest`, `removedNoDigest`) **AND its
+  `findings` array is empty**. One CHECK spans `reason_class` and `findings`. `findings` is immutable after
+  insert, so it cannot be emptied to open this door. <!-- F5r3 -->
+- A row WITH findings is resolved only by `resolvedByRule`: the rule name and the integrity run id that no
+  longer reports it, both CHECK-enforced. `personDecided` is refused on it. <!-- F5r3 -->
 - `foundByDigest`: Step A created the file row for this row's digest, and no main row carried that digest.
 - `resolvedAsCopy`: the digest matches a main row AND this quarantined row. The file at the new path is a second
   `files` row (a copy), and the quarantine row points at it. Nothing collides.
 - **Finding** reasons (`tier5Finding`, `referenceMovie`, `fixityDisagree`, `duplicateId`, and `auditChanged`,
   which the Manager's list did not name: classed here as a finding, Q6) stay open after a byte match. Only their
-  own rule clears them (`findingCleared`, with `resolution_note` naming the rule), or a person
-  (`personDecided`). A returning reference movie is reconciled as a file in Step A, but its quarantine row stays
-  open until its external media are accounted for.
+  own rule clears them (`resolvedByRule`, as above), or a person (`personDecided`) when the row carries no
+  finding. A returning reference movie is reconciled as a file in Step A, but its quarantine row stays
+  open until its external media are accounted for. <!-- F5r3 -->
 - `noWholeFileDigest` / `removedNoDigest` rows have no digest to match. Their route is a candidate offered to Rick
   (sampled hash + size + name match a new file) → `personDecided`, never automatic. <!-- F7 -->
 - A quarantined row that is never found stays open with its words: history, never deleted.
@@ -518,9 +571,8 @@ see are NOT marked by the rescan: the audit owns "gone".
 
 ## h. Open questions for Rick (6)
 
-1. **Curated knowledge per content, not per file.** Keying stars, notes, tags, disposition, date, place, people by
-   digest means two byte-identical copies show one value (today they can differ). *Recommend: yes — it is the §10
-   rule, Promote already propagates these onto the archive copy (MA:1312–1344), and the per-copy originals stay in
+1. **Curated knowledge per content, not per file**: byte-identical copies show one value (today they can differ).
+   *Recommend: yes — the §10 rule; Promote already propagates these (MA:1312–1344); per-copy originals stay in
    `knowledge_sources` (§e.10).* <!-- F2 -->
 2. **Display choice when copies disagree.** *Recommend:*
    - Sets (tags, attestations, footage verdicts) show the union.
@@ -530,17 +582,12 @@ see are NOT marked by the rescan: the audit owns "gone".
      archive copy's value. The display is that pick with `conflict = 1`. Anything still tied shows empty with
      `conflict = 1` until you choose.
    - Nothing is merged away: every original stays in `knowledge_sources`. <!-- F2 -->
-3. **Per-row audit evidence.** *Answered (Manager):* Tier 0 writes per-row results into `catalog-audit.json`
-   (Manager's code change, separate); the importer reads them and walks nothing (§f). <!-- F6 -->
-4. **Stores keyed by sampled hashes:** `ignored-content.json` (partialMD5 + size), `media-person-links.json`
-   (partialMD5), the ledger `contentKey` (`h:v1…`), `v1:` sound prints. *Answered (Manager):* import verbatim,
-   never as identity. A sampled match never binds, even when unique (§e.6). `v1:` prints are recomputed; person
-   links move into a digest-keyed table in step G and bind by the same rule. <!-- F7 -->
-5. **Fields whose role is unclear**: `isPlayable` (a word from ffprobe — fact or verdict?), `masterLocation` (free
-   text beside the Master Archive designation), `backupDestinations` (manual "backed up to" list; is it still used
-   next to attestations?), `workspaceActive` and `needsReformat` (file state or content property?).
-   *Recommend:* carry all five verbatim (columns / `probe_extra` / `backup_destinations`) and decide after the
-   cutover; none of them gates a delete.
+3. **Per-row audit evidence.** *Answered:* Tier 0 writes per-row results; the importer walks nothing (§f). <!-- F6 -->
+4. **Sampled-hash stores** (ignored list, person links, ledger `contentKey`, `v1:` prints). *Answered:* verbatim,
+   never identity, never bound by a sampled match (§e.6). <!-- F7 -->
+5. **Unclear roles**: `isPlayable` (fact or verdict?), `masterLocation` (free text), `backupDestinations` (still
+   used beside attestations?), `workspaceActive`, `needsReformat` (file or content?). *Recommend:* carry verbatim,
+   decide after cutover; none gates a delete.
 6. **New in r2, two small calls.**
    (a) `auditChanged` is classed as a *finding* reason: a byte match by the old digest does not resolve it. The
    rule that clears it is "the rescan at the same path yields the recorded digest", i.e. only the metadata
