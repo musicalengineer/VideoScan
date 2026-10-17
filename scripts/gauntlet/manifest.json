@@ -192,7 +192,8 @@
         "schemaVersion",
         "sharedRow",
         "twoThousandRows",
-        "unreadableStampIsAbsent"
+        "unreadableStampIsAbsent",
+        "versionTwoNoSoundStampsAreSuspect"
       ]
     },
     {
@@ -5836,6 +5837,7 @@
         "budgetHonouredAtRunTime",
         "checkpointRaceKeepsSidecarBytes",
         "decodeBudget",
+        "decodeFailureIsNeverNoSound",
         "driveLeavingMidRun",
         "engineBumpRedoesNoAudio",
         "failedDecodeNamedAndSkipped",
@@ -5852,6 +5854,7 @@
         "partialComesFromTheEngine",
         "partialStamp",
         "planLanesArchivedFirst",
+        "planRequeuesOnlySuspectV2NoAudioStamps",
         "planSelection",
         "planningAt100k",
         "poisonedSidecarRefuses",
@@ -7983,6 +7986,7 @@
         "CheckCopiesMediaMatrixTests"
       ],
       "tests": [
+        "archivedTwinWithoutFixityIsHashed",
         "filesUntouched",
         "hashesEveryContainer",
         "offlineTwinNeverKeeper",
@@ -12725,6 +12729,7 @@
         "FullHashBackfillMediaMatrixTests"
       ],
       "tests": [
+        "archivedRowsWithoutFixityAreHashed",
         "driveLeavingMidRunStopsItsLane",
         "failedSaveStopsAndOffersResume",
         "filesUntouched",
@@ -22865,6 +22870,23 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ScanStillBeingWrittenTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ScanStillBeingWrittenTests"
+      ],
+      "tests": [
+        "defaults",
+        "fileGoneAfterTheProbeIsSkipped",
+        "fileThatGrowsUnderTheProbeIsSkipped",
+        "justWrittenFileIsLeftOut",
+        "rule",
+        "settledFileIsCatalogued"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ScanTargetPolicyTests.swift",
       "stage": "unit",
       "suites": [
@@ -30033,6 +30055,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/ScanOptionsMusicSkipTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ScanStillBeingWrittenTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

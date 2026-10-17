@@ -13,7 +13,9 @@
 //     (the FixityRebind full read, identity held on the opened file) and
 //     `storeCheckedCopyFixity` → `storeContentFixity`, compare-and-set (the
 //     record must still be at the planned path with the planned fixity, and
-//     never an archived row). The duplicate RE-GROUP stage is not run: over
+//     never an archive copy with its own `archiveFixity`; an Archived-stage
+//     row without one takes the hash — 2026-10-17). The duplicate RE-GROUP
+//     stage is not run: over
 //     the whole catalog it is the full duplicate analysis, not a cheap tail
 //     — Rick runs that on purpose.
 //   • DURABILITY: `storeContentFixity` only sets a field — it does NOT
@@ -178,7 +180,7 @@ final class FullHashBackfillJob: @MainActor MediaFileOperationJob, MediaFileOper
             finish(failed: "The catalog is read-only on this Mac — nothing was read or changed.")
             return
         }
-        let plan = FullHashBackfillPlanner.plan(records: model.records, isReadOnly: model.isDateReadOnly)
+        let plan = FullHashBackfillPlanner.plan(records: model.records)
         let split = await splitByConnection(plan.lanes)
         seed(plan, online: split.online, offline: split.offline)
         marker?.attach(catalogFile: model.catalogStore.fileLocation)

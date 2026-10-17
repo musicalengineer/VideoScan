@@ -6,9 +6,15 @@
 //      candidate twin — same sampled hash + size, same head+tail hash +
 //      size, or the same duplicate group. Each needs a full hash unless it
 //      already carries a VALID stored one (`isUsableForVerification`: sha256,
-//      stamp with ctime and volume UUID). Archived records (`isDateReadOnly`)
-//      and archive copies with an `archiveFixity` are never written here —
-//      they are left alone and counted.
+//      stamp with ctime and volume UUID). An archive copy that an
+//      `archiveFixity` already identifies is never written here — it is
+//      left alone and counted. An ARCHIVED-STAGE row without one IS hashed
+//      (Verify Catalog bug 1, 2026-10-17: 595 archived rows on
+//      SanDiskWorkspace carried no fixity at all and were skipped by the
+//      date rule — `isDateReadOnly` guards a record's DATES, Rick's
+//      2026-10-11 ruling; a full hash is a probe fact about the bytes, and
+//      the archive rule forbids changing name and date, not adding
+//      metadata).
 //   2. HASH (off the main actor, one file at a time, behind the volume gates):
 //      `FixityRebind.rehash` — the existing full read with before/after
 //      identity on the opened file — and the digest is stored through the
@@ -57,7 +63,7 @@ struct CheckCopiesPlan: Sendable, Equatable {
     var twinCount = 0
     /// Already carry a valid stored full hash.
     var alreadyHashed = 0
-    /// Archived / archive copies: read-only here, never written.
+    /// Archive copies an `archiveFixity` already identifies — never written.
     var archivedLeftAlone = 0
     /// Seeds + twins: what the duplicate analysis re-derives (widened later).
     var scopeIDs: Set<UUID> = []
@@ -69,8 +75,7 @@ struct CheckCopiesPlan: Sendable, Equatable {
 @MainActor
 enum CheckCopiesPlanner {
 
-    static func plan(seeds: Set<UUID>, records: [VideoRecord],
-                     isReadOnly: (VideoRecord) -> Bool) -> CheckCopiesPlan {
+    static func plan(seeds: Set<UUID>, records: [VideoRecord]) -> CheckCopiesPlan {
         let active = records.filter { !$0.isPurged && !$0.isSetAside && !$0.isSuperseded }
         var byKey: [String: [VideoRecord]] = [:]
         for r in active {
@@ -88,7 +93,7 @@ enum CheckCopiesPlanner {
         plan.twinCount = scope.count - plan.seedCount
         plan.scopeIDs = Set(scope.keys)
         for r in scope.values.sorted(by: { $0.fullPath < $1.fullPath }) {
-            switch need(r, isReadOnly: isReadOnly) {
+            switch need(r) {
             case .hashed: plan.alreadyHashed += 1
             case .leftAlone: plan.archivedLeftAlone += 1
             case .hash:
@@ -101,10 +106,14 @@ enum CheckCopiesPlanner {
 
     enum Need: Equatable { case hash, hashed, leftAlone }
 
-    /// Does this record need a full read? The order is the rule.
-    static func need(_ r: VideoRecord, isReadOnly: (VideoRecord) -> Bool) -> Need {
+    /// Does this record need a full read? The order is the rule: a valid
+    /// stored hash → done; an `archiveFixity` (the archive's own digest of
+    /// these bytes) → left alone; everything else — an Archived-stage row
+    /// included — is read. The lifecycle stage never decides: the archive
+    /// rule protects a record's name and date, and a hash is neither.
+    static func need(_ r: VideoRecord) -> Need {
         if let f = r.contentFixity, f.isUsableForVerification { return .hashed }
-        if r.archiveFixity != nil || isReadOnly(r) { return .leftAlone }
+        if r.archiveFixity != nil { return .leftAlone }
         return .hash
     }
 
@@ -260,7 +269,7 @@ final class CheckCopiesJob: @MainActor MediaFileOperationJob {
             finish(failed: "The catalog is read-only on this Mac — nothing was read or changed.")
             return
         }
-        let plan = CheckCopiesPlanner.plan(seeds: recordIDs, records: model.records, isReadOnly: model.isDateReadOnly)
+        let plan = CheckCopiesPlanner.plan(seeds: recordIDs, records: model.records)
         summary.seeds = plan.seedCount
         summary.twins = plan.twinCount
         summary.planned = plan.toHash.count
@@ -427,10 +436,13 @@ extension VideoScanModel {
 
     /// Store a fresh full hash through the existing writer — only if the
     /// record is still the one planned (same path, same fixity as at the
-    /// plan). Never touches an archived record.
+    /// plan). Never touches an archive copy that has its own
+    /// `archiveFixity`; an Archived-stage row without one takes the hash
+    /// (metadata may be added to an archived record — its name and date
+    /// may not change, and `storeContentFixity` writes neither).
     func storeCheckedCopyFixity(_ item: CheckCopiesItem, fixity: ContentFixity) -> Bool {
         guard let rec = record(forID: item.id), rec.fullPath == item.path,
-              rec.contentFixity == item.priorFixity, !isDateReadOnly(rec), rec.archiveFixity == nil else { return false }
+              rec.contentFixity == item.priorFixity, rec.archiveFixity == nil else { return false }
         return storeContentFixity(recordID: item.id, path: item.path, fixity: fixity)
     }
 

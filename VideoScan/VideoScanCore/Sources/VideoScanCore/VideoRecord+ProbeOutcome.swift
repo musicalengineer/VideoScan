@@ -73,6 +73,14 @@ public struct ProbeOutcome: Sendable {
     /// never-cataloged diagnostic).
     public var sniffRejected: Bool = false
 
+    /// True when the scan found the file still being written: its size or
+    /// mtime changed between the stat before and the stat after ffprobe,
+    /// or its mtime is inside the settle window (Verify Catalog bug 3,
+    /// 2026-10-17 — a 944 MB combine output catalogued at 450 MB). Always
+    /// gated out of the catalog and never cached; a drain-point signal
+    /// like `sniffRejected`, with no `VideoRecord` counterpart.
+    public var stillBeingWritten: Bool = false
+
     public init() {}
 }
 

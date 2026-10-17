@@ -95,6 +95,27 @@ struct FullHashBackfillLogicTests {
         #expect(archived.contentFixity == nil && removed.contentFixity == nil && superseded.contentFixity == nil)
     }
 
+    @Test("RED 2026-10-17: an Archived-stage row with no fixity of its own is hashed (the archive rule forbids name/date changes, not added metadata); one that an archiveFixity already identifies is left alone")
+    func archivedRowsWithoutFixityAreHashed() async throws {
+        let sb = try ShowAgainSandbox.make("fhb_archived"); defer { sb.cleanup() }
+        let archivedNoFixity = try sb.record("arch_nofix.mov", bytes: 1_000, stage: .none)
+        archivedNoFixity.lifecycleStage = .archived
+        let archivedProven = try sb.record("arch_proven.mov", bytes: 1_000, stage: .none)
+        archivedProven.lifecycleStage = .archived
+        archivedProven.archiveFixity = ArchiveFixity(digest: "ab", verifiedAt: Date(), sizeBytes: 1_000)
+        #expect(sb.model.isDateReadOnly(archivedNoFixity), "fixture sanity: the stage rule calls this row read-only")
+        let job = await runBackfill(sb.model)
+        #expect(job.totals.planned == 1, Comment(rawValue: job.totals.line))
+        #expect(job.totals[.hashed] == 1, Comment(rawValue: job.totals.line))
+        #expect(job.totals.archivedLeftAlone == 1, Comment(rawValue: job.totals.line))
+        #expect(archivedNoFixity.contentFixity?.digest == sha256(archivedNoFixity.fullPath), "the full hash is stored on the archived row")
+        #expect(archivedProven.contentFixity == nil, "an archive copy with its own digest is never written")
+        // The plan counts it the same way the job did (a second run reads nothing).
+        let again = FullHashBackfillPlanner.plan(records: sb.model.records)
+        #expect(again.fileCount == 0, "the archived row now carries its hash")
+        #expect(again.archivedLeftAlone == 1)
+    }
+
     @Test("an acknowledged save every N stored hashes and at the end")
     func savesEveryNFiles() async throws {
         let sb = try ShowAgainSandbox.make("fhb_saveN"); defer { sb.cleanup() }
@@ -182,7 +203,7 @@ struct FullHashBackfillScaleTests {
         }
         let hashedCount = usable?.isUsableForVerification == true ? 25_000 : 0
         let t0 = Date()
-        let plan = FullHashBackfillPlanner.plan(records: records, isReadOnly: { _ in false })
+        let plan = FullHashBackfillPlanner.plan(records: records)
         let elapsed = -t0.timeIntervalSinceNow
         #expect(plan.lanes.count == 10)
         #expect(plan.alreadyHashed == hashedCount)

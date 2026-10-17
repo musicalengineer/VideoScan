@@ -39,16 +39,32 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
     public enum Outcome: String, Codable, Sendable {
         /// Landmarks were computed and stored in the sidecar.
         case fingerprinted
-        /// ffmpeg found no audio stream (or an empty one): nothing to store.
+        /// No sound to store — and, from stamp version 3 on, the file's
+        /// HEADER agrees (the row's probe reports no audio codec). Version
+        /// 2 also wrote this on a decode failure (zero samples from a file
+        /// whose header has sound — 98 real files + 33 reference movies on
+        /// 2026-10-17); those stamps are redone, see `describes`.
         case noAudio
     }
+
+    /// The STAMP's rule version — separate from `AudioFingerprint
+    /// .currentVersion` (the sidecar blob's on-disk format, still 2).
+    ///   2: fingerprint format 2; `.noAudio` written on any decoder
+    ///      "no audio stream", decode failures included.
+    ///   3: `.noAudio` only when the header agrees (no audio codec on the
+    ///      row); zero samples from a file whose header has sound is a
+    ///      failed decode, retried next run (design: integrity_first §2 —
+    ///      no verdict from unverified evidence).
+    public static let currentEngineVersion = 3
+    /// The version whose `.noAudio` stamps may be decode failures.
+    public static let noAudioOnDecodeFailureVersion = 2
 
     /// Decoder cap the engine applies (AudioPCMDecoder.defaultMaxSeconds):
     /// a recording longer than this is analysed as a prefix only.
     public static let decoderCapSeconds = AudioPCMDecoder.defaultMaxSeconds
 
     public var computedAt: Date
-    /// `AudioFingerprint.currentVersion` when the stamp was written.
+    /// `currentEngineVersion` when the stamp was written.
     public var engineVersion: Int
     /// Sidecar key, self-describing ("sha256:…" or "v1:…", see header).
     public var contentDigest: String
@@ -63,7 +79,7 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
     /// Encoded size of the sidecar blob (0 for `.noAudio`).
     public var bytes: Int
 
-    public init(computedAt: Date = Date(), engineVersion: Int = Int(AudioFingerprint.currentVersion),
+    public init(computedAt: Date = Date(), engineVersion: Int = AudioFingerprintStamp.currentEngineVersion,
                 contentDigest: String, sizeBytes: Int64, outcome: Outcome, analyzedSeconds: Double,
                 complete: Bool, landmarks: Int, bytes: Int) {
         self.computedAt = computedAt
@@ -82,13 +98,14 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
     /// `.complete` — false when the decoder hit its cap), never recomputed.
     public static func fingerprinted(_ fingerprint: AudioFingerprint, contentDigest: String, sizeBytes: Int64,
                                      computedAt: Date = Date()) -> AudioFingerprintStamp {
-        AudioFingerprintStamp(computedAt: computedAt, engineVersion: Int(AudioFingerprint.currentVersion),
+        AudioFingerprintStamp(computedAt: computedAt, engineVersion: Self.currentEngineVersion,
                               contentDigest: contentDigest, sizeBytes: sizeBytes, outcome: .fingerprinted,
                               analyzedSeconds: fingerprint.analyzedSeconds, complete: fingerprint.complete,
                               landmarks: fingerprint.landmarkCount, bytes: fingerprint.estimatedBytes)
     }
 
-    /// Stamp for a file ffmpeg found no audio in.
+    /// Stamp for a file with no sound — written only when the header agrees
+    /// (the job checks the row's audio codec before asking for this).
     public static func noAudio(contentDigest: String, sizeBytes: Int64, computedAt: Date = Date()) -> AudioFingerprintStamp {
         AudioFingerprintStamp(computedAt: computedAt, contentDigest: contentDigest, sizeBytes: sizeBytes,
                               outcome: .noAudio, analyzedSeconds: 0, complete: true, landmarks: 0, bytes: 0)
@@ -96,14 +113,24 @@ public struct AudioFingerprintStamp: Codable, Equatable, Hashable, Sendable {
 
     /// Does this stamp describe a file of `sizeBytes` whose PREFERRED
     /// digest (`digests.first`: the full hash when the record has one, else
-    /// the sampled one) is the key it was written under, at the engine
-    /// version this build writes? False → the file is (re)done. A stamp
+    /// the sampled one) is the key it was written under, at a stamp version
+    /// this build still trusts? False → the file is (re)done. A stamp
     /// keyed on a sampled "v1:" hash is redone once the record gains a full
     /// hash — one extra decode, and from then on a real identity (QA P1-a).
-    public func describes(sizeBytes: Int64, digests: [String],
-                          engineVersion: Int = Int(AudioFingerprint.currentVersion)) -> Bool {
-        self.engineVersion == engineVersion && self.sizeBytes == sizeBytes && sizeBytes > 0
-            && digests.first == contentDigest
+    ///
+    /// `headerHasAudio` is the row's own evidence (its probe reports an
+    /// audio codec). A version-2 stamp stands EXCEPT a `.noAudio` one on a
+    /// row whose header has sound: version 2 wrote that on decode failures
+    /// too, so it is a verdict from unverified evidence and is redone. A
+    /// version-2 `.noAudio` stamp on a row with no audio codec, and every
+    /// version-2 `.fingerprinted` stamp (same engine, same bytes), stay.
+    public func describes(sizeBytes: Int64, digests: [String], headerHasAudio: Bool,
+                          engineVersion: Int = AudioFingerprintStamp.currentEngineVersion) -> Bool {
+        guard self.sizeBytes == sizeBytes, sizeBytes > 0, digests.first == contentDigest else { return false }
+        if self.engineVersion == engineVersion { return true }
+        guard self.engineVersion == Self.noAudioOnDecodeFailureVersion,
+              engineVersion == Self.currentEngineVersion else { return false }
+        return outcome == .fingerprinted || !headerHasAudio
     }
 
     // MARK: Digest spelling

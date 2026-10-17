@@ -715,6 +715,21 @@ final class VideoScanModel: ObservableObject {
     /// only before a scan starts (tests). Production never sets it.
     nonisolated(unsafe) var probeOutcomeStub: (@Sendable (URL) async -> ProbeOutcome)?
 
+    /// A file modified more recently than this is still being written and
+    /// is skipped this scan (ScanWriteInProgress, Verify Catalog bug 3).
+    /// 60 s in the app; 0 under the test host, whose scans fixture-then-
+    /// scan within seconds (ScanStillBeingWrittenTests pins both). Read
+    /// off the main actor like `ffprobePath`; set before a scan starts.
+    nonisolated(unsafe) var scanSettleSeconds: TimeInterval =
+        ScanWriteInProgress.defaultSettleSeconds(isTestHost: TestEnvironment.isTestHost)
+
+    /// Test seam: the stat taken AFTER ffprobe (nil = `ScanFileStat.of`).
+    /// A test grows the file inside this closure to prove the skip.
+    nonisolated(unsafe) var scanSecondStatForTesting: (@Sendable (String) -> ScanFileStat?)?
+
+    /// Test seam: the clock the settle window is measured against.
+    nonisolated(unsafe) var scanClockForTesting: (@Sendable () -> Date)?
+
     /// Test seam (GH #163): observes the probe task groups' LIVE child
     /// count (children added minus outcomes drained) after every change,
     /// so a test can pin `max ≤ probeGroupLiveChildBound`. Nil in

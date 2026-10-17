@@ -77,7 +77,7 @@ struct CheckCopiesLogicTests {
                 "a sampled-hash lookalike is told apart by its full digest")
     }
 
-    @Test("a record that already has a valid full hash is not read again; an archived one is left alone")
+    @Test("a record that already has a valid full hash is not read again; an archive copy with its own archiveFixity is left alone; an Archived-stage row without one is read")
     func planSkipsHashedAndArchived() throws {
         let sb = try ShowAgainSandbox.make("checkcopies_plan"); defer { sb.cleanup() }
         let hashed = try sb.record("a.mov", bytes: 100)
@@ -85,14 +85,41 @@ struct CheckCopiesLogicTests {
         let archived = try sb.record("b.mov", bytes: 100)
         archived.archiveFixity = ArchiveFixity(digest: "ab", verifiedAt: Date(), sizeBytes: 100)
         let plain = try sb.record("c.mov", bytes: 100)
-        for r in [hashed, archived, plain] { r.partialMD5 = "same" }
+        let archivedStage = try sb.record("d.mov", bytes: 100)
+        archivedStage.lifecycleStage = .archived
+        for r in [hashed, archived, plain, archivedStage] { r.partialMD5 = "same" }
         let usable = hashed.contentFixity?.isUsableForVerification == true
-        let plan = CheckCopiesPlanner.plan(seeds: [plain.id], records: sb.model.records, isReadOnly: { _ in false })
-        #expect(plan.seedCount == 1 && plan.twinCount == 2)
+        let plan = CheckCopiesPlanner.plan(seeds: [plain.id], records: sb.model.records)
+        #expect(plan.seedCount == 1 && plan.twinCount == 3)
         #expect(plan.archivedLeftAlone == 1)
         #expect(plan.alreadyHashed == (usable ? 1 : 0))
         #expect(plan.toHash.map(\.id).contains(plain.id))
+        #expect(plan.toHash.map(\.id).contains(archivedStage.id), "the stage protects name and date, not a hash")
         #expect(!plan.toHash.map(\.id).contains(archived.id))
+        // The need rule itself (2026-10-17): the lifecycle stage never decides.
+        #expect(CheckCopiesPlanner.need(archivedStage) == .hash)
+        #expect(CheckCopiesPlanner.need(archived) == .leftAlone)
+        #expect(CheckCopiesPlanner.need(plain) == .hash)
+        #expect(CheckCopiesPlanner.need(hashed) == (usable ? .hashed : .hash))
+    }
+
+    @Test("RED 2026-10-17: an Archived-stage twin with no fixity of its own is hashed in full; one that an archiveFixity already identifies is left alone")
+    func archivedTwinWithoutFixityIsHashed() async throws {
+        let sb = try ShowAgainSandbox.make("checkcopies_archived"); defer { sb.cleanup() }
+        let seed = try sb.record("seed.mov", bytes: 300, stage: .none)
+        let archived = try sb.record("archived_twin.mov", bytes: 300, stage: .none)
+        archived.lifecycleStage = .archived
+        let proven = try sb.record("archive_copy.mov", bytes: 300, stage: .none)
+        proven.lifecycleStage = .archived
+        proven.archiveFixity = ArchiveFixity(digest: "ab", verifiedAt: Date(), sizeBytes: 300)
+        for r in [seed, archived, proven] { twinReady(r, md5: "same") }
+        #expect(sb.model.isDateReadOnly(archived), "fixture sanity: the stage rule calls this row read-only")
+        let summary = await runJob(sb.model, [seed.id])
+        #expect(summary.planned == 2, Comment(rawValue: summary.line))
+        #expect(summary.hashed == 2, Comment(rawValue: summary.line))
+        #expect(summary.archivedLeftAlone == 1, Comment(rawValue: summary.line))
+        #expect(archived.contentFixity?.digest == sha256(archived.fullPath), "the archived twin's full hash is stored")
+        #expect(proven.contentFixity == nil, "an archive copy with its own digest is never written")
     }
 }
 
@@ -117,7 +144,7 @@ struct CheckCopiesScaleTests {
         }
         let seeds = Set(stride(from: 0, to: 100_000, by: 10).map { records[$0].id })
         let t0 = Date()
-        let plan = CheckCopiesPlanner.plan(seeds: seeds, records: records, isReadOnly: { _ in false })
+        let plan = CheckCopiesPlanner.plan(seeds: seeds, records: records)
         let elapsed = -t0.timeIntervalSinceNow
         #expect(plan.seedCount == 10_000 && plan.twinCount == 10_000)
         #expect(plan.toHash.count == 20_000)
