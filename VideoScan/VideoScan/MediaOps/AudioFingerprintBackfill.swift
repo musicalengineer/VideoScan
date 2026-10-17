@@ -10,10 +10,13 @@
 //     records that need a look into LANES, one per volume root; inside a
 //     lane the archived files come first, then the rest, each in path
 //     order. The need rule is the stamp's: `AudioFingerprintStamp.describes`
-//     (same size, keyed on the record's PREFERRED digest, this engine
-//     version) → skip, whatever its outcome — fingerprinted, no sound, or
-//     partial. Only a full "sha256:" digest is an identity; a sampled "v1:"
-//     key is good enough for the record's OWN stamp but never for sharing.
+//     (same size, keyed on the record's PREFERRED digest, a stamp version
+//     this build trusts — judged against the row's audio codec: a version-2
+//     "no sound" stamp on a row whose header has sound was a decode
+//     failure and is redone, Verify Catalog bug 2 2026-10-17) → skip,
+//     whatever its outcome — fingerprinted, no sound, or partial. Only a
+//     full "sha256:" digest is an identity; a sampled "v1:" key is good
+//     enough for the record's OWN stamp but never for sharing.
 //     Because a stamped record is skipped, running again after a stop, quit
 //     or crash IS the resume: no resume file exists for this job.
 //   • RUN (AudioFingerprintBackfillJob.swift): lanes in parallel, one decode
@@ -48,8 +51,13 @@ struct AudioFingerprintBackfillItem: Identifiable, Sendable, Equatable {
     /// `complete`.
     let durationSeconds: Double
     /// The catalog already knows there is no sound track — stamped without
-    /// a decode.
+    /// a decode (only when `audioCodec` is empty too).
     let isVideoOnly: Bool
+    /// The row's audio codec from its probe ("" = the header reports no
+    /// audio stream). THE evidence a "no sound" stamp needs: zero samples
+    /// from a file whose header names a codec is a failed decode, never a
+    /// verdict (design: integrity_first §2).
+    let audioCodec: String
     /// A Master Archive file (planned first within its drive).
     let isArchived: Bool
     /// Digests the record carries, preferred first ("sha256:…", then "v1:…").
@@ -58,6 +66,8 @@ struct AudioFingerprintBackfillItem: Identifiable, Sendable, Equatable {
 
     /// The sidecar key this run writes under.
     var key: AudioFingerprintStore.Key { .init(contentDigest: digests[0], sizeBytes: sizeBytes) }
+    /// The header says there is sound to hear.
+    var headerHasAudio: Bool { !audioCodec.isEmpty }
 }
 
 /// One drive's queue: one decode at a time, archived files first.
@@ -97,7 +107,8 @@ enum AudioFingerprintBackfillPlanner {
         for r in records where isActive(r) {
             let digests = digests(of: r)
             guard !digests.isEmpty else { plan.noDigest += 1; continue }
-            if let stamp = r.audioFingerprint, stamp.describes(sizeBytes: r.sizeBytes, digests: digests) {
+            if let stamp = r.audioFingerprint,
+               stamp.describes(sizeBytes: r.sizeBytes, digests: digests, headerHasAudio: !r.audioCodec.isEmpty) {
                 switch (stamp.outcome, stamp.complete) {
                 case (.noAudio, _): plan.noSoundStamped += 1
                 case (.fingerprinted, false): plan.partialStamped += 1
@@ -109,7 +120,7 @@ enum AudioFingerprintBackfillPlanner {
             byRoot[root, default: AudioFingerprintBackfillLane(root: root)].items.append(
                 AudioFingerprintBackfillItem(id: r.id, path: r.fullPath, filename: r.filename, sizeBytes: r.sizeBytes,
                                              durationSeconds: r.durationSeconds, isVideoOnly: r.streamType == .videoOnly,
-                                             isArchived: isArchived(r), digests: digests))
+                                             audioCodec: r.audioCodec, isArchived: isArchived(r), digests: digests))
         }
         plan.lanes = byRoot.values
             .map { lane in

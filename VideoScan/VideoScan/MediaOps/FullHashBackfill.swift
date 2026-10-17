@@ -8,8 +8,11 @@
 //   • PLAN (this file, main actor, one O(records) pass, no I/O): group the
 //     records that need a read into LANES, one per volume root, each lane
 //     sorted by path. The need rule is CheckCopies' (`CheckCopiesPlanner
-//     .need`): a valid stored hash → skip; an archived row / archive copy →
-//     left alone; otherwise read. Because a record with a valid hash is
+//     .need`): a valid stored hash → skip; an archive copy with its own
+//     `archiveFixity` → left alone; otherwise read — an Archived-stage row
+//     without a fixity too (Verify Catalog bug 1, 2026-10-17: the date
+//     rule used to skip 595 of them, so tier 1 said 712 unhashed while
+//     this job said "0 of 114"). Because a record with a valid hash is
 //     skipped, running again after a stop, quit or crash IS the resume.
 //   • RUN (FullHashBackfillJob.swift): lanes in parallel, one sequential
 //     reader per lane, behind the volume gates.
@@ -43,7 +46,7 @@ struct FullHashBackfillPlan: Sendable, Equatable {
     var lanes: [FullHashBackfillLane] = []
     /// Already carry a valid stored full hash — skipped (the resume rule).
     var alreadyHashed = 0
-    /// Archived rows / archive copies — never written here.
+    /// Archive copies an `archiveFixity` already identifies — never written here.
     var archivedLeftAlone = 0
 
     var fileCount: Int { lanes.reduce(0) { $0 + $1.items.count } }
@@ -54,11 +57,11 @@ struct FullHashBackfillPlan: Sendable, Equatable {
 @MainActor
 enum FullHashBackfillPlanner {
 
-    static func plan(records: [VideoRecord], isReadOnly: (VideoRecord) -> Bool) -> FullHashBackfillPlan {
+    static func plan(records: [VideoRecord]) -> FullHashBackfillPlan {
         var plan = FullHashBackfillPlan()
         var byRoot: [String: FullHashBackfillLane] = [:]
         for r in records where isActive(r) {
-            switch CheckCopiesPlanner.need(r, isReadOnly: isReadOnly) {
+            switch CheckCopiesPlanner.need(r) {
             case .hashed: plan.alreadyHashed += 1
             case .leftAlone: plan.archivedLeftAlone += 1
             case .hash:

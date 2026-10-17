@@ -94,6 +94,10 @@ struct DiscoveryAudit: Codable, Equatable, Sendable {
     /// Probed files gated out of the catalog (extensionless/unknown
     /// extension + ffprobe could not identify — the 11e7ad0 junk gate).
     var probeRejected: Int = 0
+    /// Files still being written when probed (size or mtime changed under
+    /// the probe, or mtime inside the settle window — ScanWriteInProgress,
+    /// Verify Catalog bug 3 2026-10-17): skipped this scan, never a row.
+    var stillBeingWritten: Int = 0
     /// Directories the enumerator could not read. NON-ZERO MEANS DISCOVERY
     /// WAS INCOMPLETE — finalize must not treat the scan as complete.
     var directoryEnumerationErrors: Int = 0
@@ -113,6 +117,8 @@ struct DiscoveryAudit: Codable, Equatable, Sendable {
 
     var sniffRejectedPaths: [String] = []
     var probeRejectedPaths: [String] = []
+    /// "Where did my file go?" for a file skipped as still being written.
+    var stillBeingWrittenPaths: [String] = []
     /// "path — error description" per unreadable directory.
     var unreadableDirectories: [String] = []
     /// Unreadable-entry paths (capped like the other lists; count stays exact).
@@ -229,6 +235,10 @@ final class DiscoveryAuditCollector: @unchecked Sendable {
     func probeRejected(path: String) {
         with { $0.probeRejected += 1 }
         append(path, to: \.probeRejectedPaths)
+    }
+    func stillBeingWritten(path: String) {
+        with { $0.stillBeingWritten += 1 }
+        append(path, to: \.stillBeingWrittenPaths)
     }
 
     /// Read-only peek used by finalize to decide scan completeness before

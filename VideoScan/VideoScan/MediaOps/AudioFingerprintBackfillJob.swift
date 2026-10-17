@@ -339,7 +339,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
     /// before the file was opened (nothing to record).
     private func lookAtOne(_ item: AudioFingerprintBackfillItem, root: String) async -> Outcome? {
         guard fileExists(item.path) else { return .missing }
-        if item.isVideoOnly { return .noAudio(fromCatalog: true) }
+        if item.isVideoOnly, !item.headerHasAudio { return .noAudio(fromCatalog: true) }
         if let (key, summary) = sharedFingerprint(for: item) { return .shared(key: key, summary) }
         // The budget slot is RESERVED by waitForBudget before any await
         // (codex QA P2: the gate acquire suspends, and every lane used to
@@ -379,7 +379,12 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
             let fingerprint = try await runPass(item)
             return .fingerprint(fingerprint)
         } catch AudioPCMDecoder.Failure.noAudioStream {
-            return .noAudio(fromCatalog: false)
+            // Zero samples (or "does not contain any stream") is a verdict
+            // only when the header agrees. 98 real files with pcm/aac/ac3
+            // streams were stamped "no sound" this way before 2026-10-17;
+            // 9 of 10 decoded fine when retried.
+            guard item.headerHasAudio else { return .noAudio(fromCatalog: false) }
+            return .failed(Self.decodeGaveNoSamplesWords(codec: item.audioCodec))
         } catch AudioPCMDecoder.Failure.decodeFailed(let code, let tail) {
             return .failed("ffmpeg could not decode it (exit \(code)): \(tail.trimmingCharacters(in: .whitespacesAndNewlines))")
         } catch AudioPCMDecoder.Failure.timedOut {
@@ -401,6 +406,18 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
         return try await Self.fingerprintOffMain(path: item.path, ffmpegPath: ffmpegPath, parameters: parameters,
                                                  maxSeconds: decoderMaxSeconds,
                                                  deadlineSeconds: Self.decodeDeadline(sizeBytes: item.sizeBytes))
+    }
+
+    /// The FAILED words for a decode that produced no samples from a file
+    /// whose header names an audio codec — not a stamp, so the plan retries.
+    nonisolated static func decodeGaveNoSamplesWords(codec: String) -> String {
+        "could not decode the sound (0 samples) — the header says \(codec) sound is there; retried next run"
+    }
+
+    /// The "no sound" words, naming the evidence the stamp rests on.
+    nonisolated static func noSoundWords(fromCatalog: Bool) -> String {
+        fromCatalog ? "no sound track (the catalog's probe found no audio stream) — nothing to fingerprint"
+            : "ffmpeg found no sound and the header agrees (no audio codec on the row) — nothing to fingerprint"
     }
 
     /// 300 s + 1 s per 10 MB: ffmpeg must read the whole file to reach its
@@ -505,7 +522,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
                            "only the first \(Self.seconds(stamp.analyzedSeconds)) of \(Self.seconds(item.durationSeconds)) were fingerprinted (the decoder's cap) — kept as partial; not retried")
             }
         case .shared(let key, let summary):
-            let stamp = AudioFingerprintStamp(computedAt: summary.computedAt, engineVersion: summary.engineVersion,
+            let stamp = AudioFingerprintStamp(computedAt: summary.computedAt, engineVersion: AudioFingerprintStamp.currentEngineVersion,
                                               contentDigest: key.contentDigest, sizeBytes: key.sizeBytes, outcome: .fingerprinted,
                                               analyzedSeconds: summary.analyzedSeconds, complete: summary.complete,
                                               landmarks: summary.landmarks, bytes: summary.bytes)
@@ -517,8 +534,7 @@ final class AudioFingerprintBackfillJob: @MainActor MediaFileOperationJob, Media
             if !fromCatalog { totals.readBytes += item.sizeBytes }
             guard stamped(stamp, item, lane: lane, model: model) else { return }
             totals.add(.noAudio, bytes: item.sizeBytes)
-            addSample(item, lane: lane, .noAudio, fromCatalog ? "no sound track (the catalog knew) — nothing to fingerprint"
-                      : "ffmpeg found no sound track — nothing to fingerprint")
+            addSample(item, lane: lane, .noAudio, Self.noSoundWords(fromCatalog: fromCatalog))
         case .missing:
             totals.add(.missing, bytes: item.sizeBytes)
             addProblem(filename: item.filename, path: item.path, drive: lane.label, archived: item.isArchived, .missing,

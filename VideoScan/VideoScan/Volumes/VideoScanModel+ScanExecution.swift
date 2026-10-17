@@ -95,7 +95,7 @@ extension VideoScanModel {
             // report thousands of "errors" on a perfectly healthy scan).
             // ffprobe-failed outcomes that PASSED the sniff still count.
             let isProbeError = outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue
-                && !outcome.sniffRejected
+                && !outcome.sniffRejected && !outcome.stillBeingWritten
             // Single batched seam (item-4 leg-2): scanCompleted, cache
             // hit/miss, error, stream-type, and per-volume row updates all
             // ride DashboardState's ≤4 Hz / 50-event flush machinery —
@@ -158,9 +158,8 @@ extension VideoScanModel {
     ) -> Bool {
         if outcome.probe.streamTypeRaw == StreamType.ffprobeFailed.rawValue {
             let notFound = outcome.probe.isPlayable == "File not found"
-            if notFound || !catalogGated {
-                let detail = outcome.notes.isEmpty ? "no detail available" : outcome.notes
-                log("  ⚠ FAILED: \(outcome.filename) — \(detail)")
+            if let line = Self.probeFailureLine(outcome: outcome, notFound: notFound, catalogGated: catalogGated) {
+                log(line)
             }
             if notFound {
                 consecutiveNotAccessible += 1
@@ -193,6 +192,22 @@ extension VideoScanModel {
             log("  [\(volName)] \(completedCount)/\(totalFiles) (\(pct)%)")
         }
         return false
+    }
+
+    /// The console line for a failed-probe outcome, or nil when it stays
+    /// quiet (a gated-out junk blob on a healthy volume keeps the appLog
+    /// treatment). Pure: the words, not the accounting.
+    ///   • still being written (bug 3, 2026-10-17) → "⏳ SKIPPED" — never a
+    ///     FAILED row, never a step toward the unmount abort;
+    ///   • file not found, or a failure the catalog would have admitted →
+    ///     "⚠ FAILED" with the probe's note.
+    nonisolated static func probeFailureLine(outcome: ProbeOutcome, notFound: Bool, catalogGated: Bool) -> String? {
+        if outcome.stillBeingWritten {
+            return "  ⏳ SKIPPED: \(outcome.filename) — \(ScanWriteInProgress.skipWords)"
+        }
+        guard notFound || !catalogGated else { return nil }
+        let detail = outcome.notes.isEmpty ? "no detail available" : outcome.notes
+        return "  ⚠ FAILED: \(outcome.filename) — \(detail)"
     }
 
     /// Post-scan bookkeeping for a single-target scan: unmount, persist,
@@ -415,6 +430,18 @@ extension VideoScanModel {
             sidecarPath = DiscoveryAuditSidecar.write(audit, to: PersistentLog.logDir)
         }
 
+        log(Self.discoveryAuditLines(audit, volName: volName, sidecarPath: sidecarPath).joined(separator: "\n"))
+
+        discoveryAuditLog.info("Discovery audit \(volName, privacy: .public): enumerated=\(audit.filesEnumerated) admitted=\(audit.filesAdmitted) cataloged=\(audit.filesCataloged) sniffRejected=\(audit.sniffRejected) probeRejected=\(audit.probeRejected) enumErrors=\(audit.directoryEnumerationErrors)")
+        if audit.directoryEnumerationErrors > 0 {
+            discoveryAuditLog.warning("Discovery INCOMPLETE for \(volName, privacy: .public): \(audit.directoryEnumerationErrors) unreadable directories — scan finalized as not-complete (upsert, no prune)")
+        }
+        appLog.write("Discovery audit (\(volName)): enumerated \(audit.filesEnumerated), admitted \(audit.filesAdmitted), cataloged \(audit.filesCataloged), sniff-rejected \(audit.sniffRejected), probe-rejected \(audit.probeRejected), unreadable dirs \(audit.directoryEnumerationErrors), unreadable files \(audit.unreadableFiles)\(sidecarPath.map { "; sidecar: \($0)" } ?? "")")
+    }
+
+    /// The discovery audit's console block, one line per class that has
+    /// something to say (pure; moved out of `finishDiscoveryAudit`).
+    nonisolated static func discoveryAuditLines(_ audit: DiscoveryAudit, volName: String, sidecarPath: String?) -> [String] {
         var lines: [String] = []
         lines.append("  ── Discovery audit — \(volName) ──")
         lines.append("  Enumerated \(audit.filesEnumerated) file(s) · admitted \(audit.filesAdmitted) · cataloged \(audit.filesCataloged)")
@@ -424,6 +451,9 @@ extension VideoScanModel {
         }
         if audit.sniffRejected > 0 || audit.probeRejected > 0 {
             lines.append("  Not cataloged: \(audit.sniffRejected) no media signature (sniff) · \(audit.probeRejected) unidentified by ffprobe")
+        }
+        if audit.stillBeingWritten > 0 {
+            lines.append("  ⏳ \(audit.stillBeingWritten) file(s) \(ScanWriteInProgress.skipWords) — not cataloged; the next scan looks again")
         }
         if audit.unreadableFiles > 0 {
             lines.append("  ⚠ \(audit.unreadableFiles) file(s) could not be read (permissions) — recorded in the audit, never probed")
@@ -440,13 +470,7 @@ extension VideoScanModel {
         if let sidecarPath {
             lines.append("  Audit JSON: \(sidecarPath)")
         }
-        log(lines.joined(separator: "\n"))
-
-        discoveryAuditLog.info("Discovery audit \(volName, privacy: .public): enumerated=\(audit.filesEnumerated) admitted=\(audit.filesAdmitted) cataloged=\(audit.filesCataloged) sniffRejected=\(audit.sniffRejected) probeRejected=\(audit.probeRejected) enumErrors=\(audit.directoryEnumerationErrors)")
-        if audit.directoryEnumerationErrors > 0 {
-            discoveryAuditLog.warning("Discovery INCOMPLETE for \(volName, privacy: .public): \(audit.directoryEnumerationErrors) unreadable directories — scan finalized as not-complete (upsert, no prune)")
-        }
-        appLog.write("Discovery audit (\(volName)): enumerated \(audit.filesEnumerated), admitted \(audit.filesAdmitted), cataloged \(audit.filesCataloged), sniff-rejected \(audit.sniffRejected), probe-rejected \(audit.probeRejected), unreadable dirs \(audit.directoryEnumerationErrors), unreadable files \(audit.unreadableFiles)\(sidecarPath.map { "; sidecar: \($0)" } ?? "")")
+        return lines
     }
 
     /// Mount the RAM disk for network scans if any root needs it.

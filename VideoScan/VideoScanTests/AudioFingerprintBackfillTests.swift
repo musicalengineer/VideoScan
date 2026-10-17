@@ -110,7 +110,7 @@ struct AudioFingerprintBackfillLogicTests {
         let rehashed = try sb.sound("rehashed.mov")
         rehashed.audioFingerprint = .fingerprinted(fingerprint(seed: 1, seconds: 60), contentDigest: "v1:old-bytes", sizeBytes: 2_000)
         let oldEngine = try sb.sound("oldengine.mov")
-        oldEngine.audioFingerprint = AudioFingerprintStamp(engineVersion: Int(AudioFingerprint.currentVersion) + 1, contentDigest: "v1:oldengine.mov",
+        oldEngine.audioFingerprint = AudioFingerprintStamp(engineVersion: AudioFingerprintStamp.currentEngineVersion + 1, contentDigest: "v1:oldengine.mov",
                                                            sizeBytes: 2_000, outcome: .fingerprinted, analyzedSeconds: 60, complete: true, landmarks: 1, bytes: 8)
         let gainedFullHash = try sb.sound("full.mov")
         gainedFullHash.contentFixity = ContentFixity.captured(path: gainedFullHash.fullPath, digest: String(repeating: "f", count: 64), byteCount: 2_000)
@@ -214,6 +214,48 @@ struct AudioFingerprintBackfillLogicTests {
         #expect(broken.audioFingerprint == nil && slow.audioFingerprint == nil && next.audioFingerprint != nil)
         #expect(sb.catalogLogText().contains("FAILED \(broken.fullPath)"))
         if case .finished = job.state {} else { Issue.record("expected finished, got \(job.state)") }
+    }
+
+    @Test("RED 2026-10-17: zero samples from a file whose header has sound is a FAILED decode (retried next run), never a no-sound stamp; a row with no audio codec gets the stamp")
+    func decodeFailureIsNeverNoSound() async throws {
+        let sb = try ShowAgainSandbox.make("afb_header"); defer { sb.cleanup() }
+        let hasSound = try sb.sound("has_sound.mov"); hasSound.audioCodec = "pcm_s16le"
+        let noCodec = try sb.sound("no_codec.mov")
+        let job = await runJob(sb.model, pass: { _ in throw AudioPCMDecoder.Failure.noAudioStream })
+        #expect(job.totals[.failed] == 1, Comment(rawValue: job.totals.line))
+        #expect(job.totals[.noAudio] == 1, Comment(rawValue: job.totals.line))
+        #expect(hasSound.audioFingerprint == nil, "a decode failure is not a verdict about the file")
+        let why = job.problems.first { $0.path == hasSound.fullPath }?.detail ?? "(no problem row)"
+        #expect(why.contains("could not decode the sound (0 samples)"), Comment(rawValue: why))
+        #expect(why.contains("pcm_s16le"), Comment(rawValue: why))
+        #expect(sb.catalogLogText().contains("FAILED \(hasSound.fullPath)"))
+        #expect(noCodec.audioFingerprint?.outcome == .noAudio)
+        #expect(noCodec.audioFingerprint?.engineVersion == 3, "stamp rule version 3: the header agreed")
+        #expect(sb.model.audioFingerprintBackfillPlan().fileCount == 1, "the failed file is planned again; the stamped one is not")
+        // The words name the evidence on both sides.
+        #expect(AudioFingerprintBackfillJob.noSoundWords(fromCatalog: false).contains("the header agrees (no audio codec on the row)"))
+        #expect(AudioFingerprintBackfillJob.noSoundWords(fromCatalog: true).contains("the catalog's probe found no audio stream"))
+    }
+
+    @Test("RED 2026-10-17: the plan redoes a version-2 no-sound stamp on a row whose header has sound (those were decode failures); a version-2 no-sound stamp on a row with no audio codec and every version-2 fingerprinted stamp stand")
+    func planRequeuesOnlySuspectV2NoAudioStamps() throws {
+        let sb = try ShowAgainSandbox.make("afb_v2"); defer { sb.cleanup() }
+        func v2(_ digest: String, _ outcome: AudioFingerprintStamp.Outcome) -> AudioFingerprintStamp {
+            AudioFingerprintStamp(engineVersion: 2, contentDigest: digest, sizeBytes: 2_000, outcome: outcome,
+                                  analyzedSeconds: outcome == .noAudio ? 0 : 60, complete: true,
+                                  landmarks: outcome == .noAudio ? 0 : 10, bytes: outcome == .noAudio ? 0 : 80)
+        }
+        let suspect = try sb.sound("suspect.mov"); suspect.audioCodec = "aac"
+        suspect.audioFingerprint = v2("v1:suspect.mov", .noAudio)
+        let silent = try sb.sound("silent.mov")
+        silent.audioFingerprint = v2("v1:silent.mov", .noAudio)
+        let printed = try sb.sound("printed.mov"); printed.audioCodec = "aac"
+        printed.audioFingerprint = v2("v1:printed.mov", .fingerprinted)
+        let plan = sb.model.audioFingerprintBackfillPlan()
+        let planned = plan.lanes.first?.items.map(\.filename) ?? []
+        #expect(planned == ["suspect.mov"], Comment(rawValue: "\(planned)"))
+        #expect(plan.noSoundStamped == 1, "silent.mov: no audio codec, the stamp agrees with the header")
+        #expect(plan.alreadyFingerprinted == 1, "printed.mov: the same engine made it")
     }
 
     @Test("memory budget (pure): ≤ 4 decodes, ≤ 1.5 GB estimated, a file over the budget runs alone, unknown duration = the cap")
@@ -365,9 +407,9 @@ struct AudioFingerprintBackfillLogicTests {
         #expect(AudioFingerprintBackfillSheet.headline(plan) == "Every file already has a sound fingerprint (0 done). Nothing to do.")
         var lane = AudioFingerprintBackfillLane(root: "/Volumes/A")
         lane.items = [AudioFingerprintBackfillItem(id: UUID(), path: "/Volumes/A/a.mov", filename: "a.mov", sizeBytes: 2_400_000_000_000,
-                                                   durationSeconds: 1, isVideoOnly: false, isArchived: true, digests: ["v1:a"]),
+                                                   durationSeconds: 1, isVideoOnly: false, audioCodec: "aac", isArchived: true, digests: ["v1:a"]),
                       AudioFingerprintBackfillItem(id: UUID(), path: "/Volumes/A/b.mov", filename: "b.mov", sizeBytes: 1,
-                                                   durationSeconds: 1, isVideoOnly: false, isArchived: false, digests: ["v1:b"])]
+                                                   durationSeconds: 1, isVideoOnly: false, audioCodec: "", isArchived: false, digests: ["v1:b"])]
         plan.lanes = [lane]; plan.alreadyFingerprinted = 6_940
         #expect(AudioFingerprintBackfillSheet.headline(plan) == "2 files need a sound fingerprint — about 2.4 TB to read. 6,940 are already done.")
         #expect(AudioFingerprintBackfillSheet.archiveLine(plan) == "1 archived file goes first, then the other 1 — drive by drive, one reader per drive."

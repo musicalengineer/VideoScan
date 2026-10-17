@@ -356,7 +356,10 @@ extension VideoScanModel {
         // accounting call below needs it too (gated-out failures on a
         // healthy volume keep the quieter appLog-only treatment instead
         // of a console FAILED line per junk blob).
-        let shouldCatalog = Self.shouldCatalogProbeResult(
+        // A file still being written (bug 3, 2026-10-17) is never a row,
+        // whatever its extension: the junk gate alone would admit a known
+        // extension with a failed probe.
+        let shouldCatalog = !outcome.stillBeingWritten && Self.shouldCatalogProbeResult(
             ext: outcome.ext, streamTypeRaw: outcome.probe.streamTypeRaw,
             knownMediaExtensions: ctx.knownMediaExtensions)
 
@@ -451,7 +454,10 @@ extension VideoScanModel {
     func recordGatedOutcome(_ outcome: ProbeOutcome, audit: DiscoveryAuditCollector?,
                             gatedLog: GatedOutcomeLogBatcher? = nil) {
         let line: String
-        if outcome.sniffRejected {
+        if outcome.stillBeingWritten {
+            line = "SKIPPED — \(ScanWriteInProgress.skipWords): \(outcome.fullPath)"
+            audit?.stillBeingWritten(path: outcome.fullPath)
+        } else if outcome.sniffRejected {
             line = "NOT CATALOGED — no media signature in file header (ffprobe skipped): \(outcome.fullPath)"
             audit?.sniffRejected(path: outcome.fullPath)
         } else {
@@ -782,6 +788,14 @@ extension VideoScanModel {
         let attrs = try? fm.attributesOfItem(atPath: path)
         let fileSize = (attrs?[.size] as? Int64) ?? 0
         let modDate = (attrs?[.modificationDate] as? Date) ?? Date.distantPast
+        let before = ScanFileStat(sizeBytes: fileSize, modifiedAt: modDate)
+
+        // Still being written? (Verify Catalog bug 3, 2026-10-17.) An mtime
+        // inside the settle window is judged BEFORE the cache can vouch
+        // for the file; the second stat follows ffprobe below.
+        if let why = writeInProgressReason(path: path, before: before, afterProbe: false) {
+            return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why)
+        }
 
         // Check SQLite cache first — skip ffprobe if file unchanged.
         // Always refresh scanContext on cache hits so provenance (scan host,
@@ -830,42 +844,8 @@ extension VideoScanModel {
             return o
         }
 
-        // autoreleasepool drains Obj-C bridged objects (DateFormatter, NSString,
-        // FileManager internals) created during record population
-        var outcome: ProbeOutcome = autoreleasepool {
-            var o = ProbeOutcome()
-            o.filename  = url.lastPathComponent
-            o.ext       = url.pathExtension.uppercased()
-            o.fullPath  = path
-            o.directory = url.deletingLastPathComponent().path
-
-            let df = DateFormatter()
-            df.dateFormat = "yyyy-MM-dd HH:mm:ss"
-            o.sizeBytes       = fileSize
-            o.size            = Formatting.humanSize(fileSize)
-            // Reject impossible dates (future, before 1900, or the
-            // known 2040-02-06 06:28:16 UTC sentinel from Rick's old
-            // MacPro PRAM-dead scan) so they never enter the catalog.
-            // See DateValidation.swift for the predicates + tests.
-            o.dateModifiedRaw = pfDateOrNilIfImpossible(attrs?[.modificationDate] as? Date)
-            o.dateCreatedRaw  = pfDateOrNilIfImpossible(attrs?[.creationDate] as? Date)
-            o.dateModified    = o.dateModifiedRaw.map { df.string(from: $0) } ?? ""
-            o.dateCreated     = o.dateCreatedRaw.map { df.string(from: $0) } ?? ""
-
-            // partialMD5 is the strong identity key for duplicate detection.
-            // Skip reads ~64 KB per file, which is free on local SSD but costs
-            // real seconds over SMB on thousands of files. skipHashing trades
-            // dup detection for a faster pass — user can run "Analyze
-            // Duplicates" later if they change their mind.
-            o.partialMD5 = skipHashing ? "" : FileHasher.partialMD5(path: path)
-            // Segmented content hash — the identity strong enough to
-            // authorize deletion (see FileHasher). Rides the SAME
-            // skipHashing gate: it is three 1 MiB reads, negligible on
-            // local SSD and deliberately skippable over SMB.
-            o.contentHash = skipHashing ? "" : FileHasher.segmentedHash(path: path)
-            o.contentHashAt = o.contentHash.isEmpty ? nil : Date()
-            return o
-        }
+        // Identity, size, dates and the two scan hashes (ScanWriteInProgress.swift).
+        var outcome = scanTimeFields(url: url, attrs: attrs, fileSize: fileSize, skipHashing: skipHashing)
 
         // Prefetch file header to RAM disk for fast ffprobe
         let (probeURL, tempFile) = await prefetchIfNeeded(
@@ -874,6 +854,7 @@ extension VideoScanModel {
             prefetchToRAM: prefetchToRAM,
             ramPath: ramPath
         )
+        defer { if let tmp = tempFile { try? fm.removeItem(at: tmp) } }
 
         // The subprocess gets its own deadline equal to the probe timeout.
         // The task-group race in probeFileWithTimeout alone cannot bound a
@@ -890,13 +871,14 @@ extension VideoScanModel {
         )
         let stderrTrimmed = probeResult.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
 
+        // The second stat: a row is built only from a file that did not
+        // change under the probe (bug 3). Never cached — the next scan looks.
+        if let why = writeInProgressReason(path: path, before: before, afterProbe: true) {
+            return ScanWriteInProgress.skippedOutcome(url: url, stat: before, why: why)
+        }
+
         ScanEngine.applyProbeOrFallback(outcome: &outcome, url: url, path: path,
                                         probe: probeResult.output, stderrTrimmed: stderrTrimmed)
-
-        // Clean up temp file
-        if let tmp = tempFile {
-            try? fm.removeItem(at: tmp)
-        }
 
         // Cache the result — but don't cache ffprobe failures, so future runs
         // with improved fallback parsers can retry them.
