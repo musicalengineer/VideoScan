@@ -165,26 +165,56 @@ did not exist yet).
 - Red commit: `b03c3ce6b`, `P0_RED_COMPARE`.
 - Expected red: `reco.rule == .r8` fails with `r6`; `reco.door == .fingerprint` fails with `recommendMaster`; `reco.words.hasPrefix("Fill in full hashes first")` fails; `!reco.words.contains("longer")` fails (old: "Nothing is archived. Promote the longer transfer as the master, then revisit the other."); the `.missing` line "No whole-file SHA-256 for either file" is absent.
 - Caveat: this assumes the ladder reaches the same-recording rung for these sides. The two folder labels differ ("volumea"/"volumeb"). If the rung differs, the first failing line will say so. Record what it says.
-- Observed: _(Manager)_
+- **Observed red** (`b03c3ce6b`, 5 issues — the caveat did not bite; the ladder reached the same-recording rung):
+  `Expectation failed: reco.rule == .r8` with `reco.rule → .r6`; `Expectation failed: reco.door == .fingerprint` with
+  `reco.door → .recommendMaster`; `Expectation failed: reco.words.hasPrefix("Fill in full hashes first")` with
+  `reco.words → "Nothing is archived. Promote the longer transfer as the master, then revisit the other."`;
+  `!reco.words.contains("longer")` failed on the same words; `Expectation failed: missing.contains {
+  $0.hasPrefix("No whole-file SHA-256 for either file") }` — the ladder's only `.missing` line was
+  `["No date on either file."]`.
+- **Observed green**: passed after 0.010 s.
 
 ### 7. `folderViewNeverCallsASampledPairCopies` — Footage folders
 - Evidence: `FootageFolders.index(rows: model.footageFolderRows(), events:)` with one event holding both rows' content keys, plus `FootageFolders.Row.copyKey` for each row.
 - Red: **no commit ever had this defect.** `FootageFolders` refused `v1:` from its first commit `a1385a8`, and the type does not exist at `b03c3ce6b` / `46c66aae9`. The red is a **seam**: build `main` with `P0_RED_FOLDER_MUTANT`. The test's `copyKey` then becomes a copy of the predicate with the `v1:` guard removed.
 - Expected red (mutant): `Self.copyKey(rowA, sampledHash:) == nil` and the same for B fail with `"d:v1:…:4096"`. The real `index` assertions stay green under the mutant, because it only replaces the test's own copy of the predicate.
-- Observed: _(Manager)_
+- **Observed red** (branch + `P0_RED_FOLDER_MUTANT`, 2 issues): `Expectation failed: Self.copyKey(rowA, sampledHash:
+  a.contentHash) == nil` with `→ "d:v1:dc0fd08f0f501e5159b71ebec2d3e678:4096"`, and the same for `rowB` (same key —
+  the two files would have been called copies). The three `index` assertions stayed green under the mutant, as
+  predicted. At `46c66aae9` and `b03c3ce6b` the test records `FootageFolders does not exist at this commit
+  (Christmas-c1990s.flv / Christmas-c1990s.flv)` — surface absent, not a runtime red.
+- **Observed green**: passed after 0.009 s.
 
 ### 8. `auditListsALinkRowForFixLinksAndMarksNothing` — Audit Catalog
 - Evidence: `model.catalogAuditPlan(laneRoot:)` (the lane is the fixture's physical root), then `CatalogAuditStat.of(path)`, then `model.applyCatalogAudit(_:to:)`. That last call is the proof at the mark, through a directory handle. Two rows: `deadLinkSource` (a link at the name) and `sourceWithoutCopy` (a plain gone file with no where-seen stamp).
 - Red commit: `46c66aae9`, `P0_RED_AUDIT`.
 - Expected red, **only for the never-seen row**: `unseenResult.result == "neverSeenByAnAudit"` fails with `"couldNotCheck"`; `detail.contains("Fix Links decides")` fails; `!detail.contains("not connected")` fails. Without the job's mount anchor, the old proof returns `.driveNotConnected` and says "the drive it was expected on is not connected", which is false for a connected drive.
 - **Expected NOT red: the link row.** The old walk already read the name with `fstatat(…, AT_SYMLINK_NOFOLLOW)` (`46c66aae9:CatalogAuditPlan.swift`, `statName`), so a dead link there was already "could not check … (a folder, device or link is at the path)". The link half of the case cannot be shown red at this commit. It is pinned as a guard only.
-- Observed: _(Manager)_
+- **Observed red** (`46c66aae9`, 3 issues, all on the never-seen row — the link half stayed green there, as
+  predicted): `Expectation failed: unseenResult.result == "neverSeenByAnAudit"` with `unseenResult.result →
+  "couldNotCheck"` and `detail → "not at its path, but the drive it was expected on is not connected (expected a
+  filesystem that could not be identified; found /dev/disk3s5 on /System/Volumes/Data) — not marked"`;
+  `.contains("Fix Links decides")` failed; `!unseenResult.detail.contains("not connected")` failed — the drive was
+  connected.
+- **Bonus red for the link half** (`b03c3ce6b`, the tier-0 audit's first merge, where the suite also ran for case
+  6): `Expectation failed: ["couldNotCheck", "neverSeenByAnAudit"].contains(linkResult.result)` with
+  `linkResult.result → "gone"`, `detail → "not at its path (the drive is connected) — marked Missing"`,
+  `Expectation failed: !linkResult.marked` with `marked → true`, and `Expectation failed: link.removal == nil` with
+  `link.removal → RemovalMarker(state: .missing, … reason: missingAtAudit …)`. So the link guard IS a regression
+  sensor after all: one commit earlier than the sheet looked, the audit marked a dead link Missing. The never-seen
+  row went `"gone"` there too.
+- **Observed green**: passed after 0.010 s — link row `couldNotCheck` ("a link in the path — not provable"), never-seen
+  row `neverSeenByAnAudit` ("… Fix Links decides"), `removal == nil` on both.
 
 ### 9. `silentHeaderIsNotHasSound` — Video+Audio with a silent sound print
 - Evidence: the row's `AudioFingerprintStamp` (`outcome == .fingerprinted`, `analyzedSeconds == 3`, `landmarks == 0`) and `VideoScanModel.relatedSide(…).audibleSeconds`.
 - **Surface: to build.** No surface says "silent" yet. `CatalogFreshnessFacts` carries no per-row sound fact. The one reader of the stamp, Compare Media's `relatedSide`, counts `analyzedSeconds` as audible seconds when landmarks are 0. That behaviour is pinned under `withKnownIssue`, so the test passes today and fails when someone fixes it. It then has to be turned into a plain expectation.
 - Red: none exists (there is no fix commit). The pure stamp assertions are green at every commit.
-- Observed: _(Manager)_
+- **Observed** (every run, main and all three SHAs): `recorded a known issue at P0TruthRegressionTests.swift:247:13:
+  Expectation failed: side.audibleSeconds == 0` with `side.audibleSeconds → 3.0` — `relatedSide reads a
+  fingerprinted stamp with 0 landmarks as 3.0 s of sound`; the test passes "with 1 known issue". Not `.disabled`:
+  the stamp assertions run, and the day the silent-header surface lands this test fails loudly and must be turned
+  into a plain `#expect`. **Surface to build — GH #327 case 5.**
 
 ### Source sensors (same suite)
 | Test | Expected red |
@@ -194,13 +224,25 @@ did not exist yet).
 | `everyPlayerStartChecksTheAudio` | `d864951be`: `checks >= 2` fails (0) |
 | `archiveDoorsGoOnlyThroughTheResolver` | `d864951be`: `ArchiveView+Doors.swift` absent (read throws); the direct `MediaOpener.open(` in the ArchiveView files |
 
+Observed at `d864951be` (and at the two older SHAs): `journeyRendersNoPathAsPresenceWithoutAStat` red with
+`unverified → ["            currentSentence = \"Now at \\(rec.fullPath)\""]`, `scanned → ["            originSentence
+= \"Scanned on \\(originVol) at \\(originPath)\""]` and no `JourneyPresence.currentSentence(`;
+`everyPlayerStartChecksTheAudio` red with `4 AVPlayer starts, 0 audio checks`; `archiveDoorsGoOnlyThroughTheResolver`
+red (quoted under case 4); `noSampledHashDecidesACopy` green at `d864951be`, and at `46c66aae9`/`b03c3ce6b` it
+threw `"FootageFolders.swift" couldn't be opened because there is no such file` (the file did not exist yet). All four
+green on main+branch.
+
 ## What the brief asked for that this run could not do
+(The cloud's list, kept as written; the Mac closed the first two items — see "Mac results" above.)
 - **Run anything.** No Xcode, no Swift toolchain (`swift --version`: not found). No red or green is quoted here.
-  Each "Observed" line is for the Manager.
+  Each "Observed" line is for the Manager. → **Done on the Mac 2026-10-16**; every Observed line is now a quote.
 - **`swiftc -parse`:** not available. The new files were checked by reading only, against the signatures at `main`
-  and at each red commit.
+  and at each red commit. → **Compiled unchanged on the Mac**, SwiftLint clean, CCN ≤ 6.
 - **Red-first for the audit case's link half and for the silent header:** not possible (see cases 8 and 9).
-  The folder case's red is a mutation seam, not a commit.
+  The folder case's red is a mutation seam, not a commit. → The link half turned out red at `b03c3ce6b` (case 8,
+  "Bonus red"); the silent header still has no fix commit and stays a `withKnownIssue`; the folder red is the seam.
+- **Still not done:** a compile WITHOUT the condition at each red SHA (to quote `cannot find 'X' in scope`) — three
+  more full builds for evidence a grep already gives; the symbol-absence list in "Mac results" stands in for it.
 - **`archiveStage = .master`** (the brief's word) is spelled `.masterAssigned` in the code.
 - **ShowAgainSandbox**: used for the model (isolated catalog store, ledger, logs). Its `physical(_:)` helper is not
   at the red commits, so the fixture carries its own `realpath(3)`.
