@@ -27845,6 +27845,46 @@
         "withoutACopyTheLadderIsAsBefore",
         "wordsNameTheLinkTheGapAndTheArchivedCopy"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/P0TruthFixture.swift",
+      "stage": "regression",
+      "suites": [
+        "P0TruthFixtureTests"
+      ],
+      "tests": [
+        "deadLinkAndArchivedCopyAreWhatTheySay",
+        "everyRowOfTheTableIsBuilt",
+        "mtimeRowCarriesBothClocks",
+        "sampledPairIsByteIdenticalWithOnlyAV1Hash",
+        "silentHeaderStampSaysNothingWasHeard"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/P0TruthRegressionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "P0TruthRegressionTests"
+      ],
+      "tests": [
+        "archiveDoorsGoOnlyThroughTheResolver",
+        "archivePlayResolvesToTheArchivedCopy",
+        "auditListsALinkRowForFixLinksAndMarksNothing",
+        "compareMediaAsksForTheHashOnASampledPair",
+        "everyPlayerStartChecksTheAudio",
+        "firstJourneyEventIsTheFilesOwnDate",
+        "folderViewNeverCallsASampledPairCopies",
+        "journeyNeverSaysNowAtForADeadLink",
+        "journeyRendersNoPathAsPresenceWithoutAStat",
+        "ladderAnswersForTheContent",
+        "noSampledHashDecidesACopy",
+        "playerNoticesMP3InM4V",
+        "silentHeaderIsNotHasSound"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -31037,6 +31077,14 @@
         },
         {
           "name": "VideoScan/VideoScanTests/FileJourneyTruthTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/P0TruthFixture.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/P0TruthRegressionTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
