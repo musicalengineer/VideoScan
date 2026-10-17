@@ -306,7 +306,8 @@ Measured 2026-10-17 on the live catalog: curated fields sit almost entirely on h
 | 10/17 | A′ hash + sound runs | Rick running Fill In Full Hashes → Fingerprint Sound → Verify Catalog on a Release build; then his before-port spot test |
 | 10/17 | B contract freeze | r1 cloud (`76a4a750e`, codex block 12) → r2 cloud (`433da96bb`, codex: 9 closed, 3 open + 3 new) → r3 cloud in flight (branch `design/contract-freeze-r3`), then a last codex closing pass = the gate |
 | 10/17 | C′ part 1 store foundation | MERGED `5399f6189`: `VideoScanCore/Store/` — `CatalogRepository` seam + `GRDBCatalogRepository` (GRDB 7.11.1 exact; §10d) + read-only `JSONCatalogRepository`; CAS in DDL triggers; two-phase high-water + adopt; 41 tests (crash injection, poisoned high-water, VACUUM INTO restore TRUTH); archival commit ≈ 12 ms |
-| next | C′ part 2 | data tables from the gated DDL; validator; the P0 + Verify Catalog suites run unchanged against the SQLite store through a store seam |
+| 10/17 | C′ part 2a data tables | MERGED `356bc83b0`: migration `v2_data` — 47 STRICT tables + FTS5 `content_text_fts`, 50 triggers, 32 indexes, 2 views; Swift DDL generated from the document and drift-pinned; checks file replayed (76 assertions); 100k/100k/300k rows 13 s; DDL v1.4 (quadratic `files_no_replace` trigger rewritten; F5final check corrected) |
+| next | C′ part 2b | record mapping (cloud DTOs on `feat/import-pure`) wired into the store; the P0 + Verify Catalog suites run unchanged against SQLite through the seam |
 | next | D′ importer | gate truth table (§f r3), quarantine, knowledge_sources, comparator; codex (data-risk) |
 
 ### 10d. Backend decision — GRDB behind a plugin seam (Rick + Manager, 2026-10-17)
