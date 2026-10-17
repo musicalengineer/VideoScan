@@ -28189,6 +28189,48 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/ImportToSQLiteTests.swift",
+      "stage": "unit",
+      "suites": [
+        "ImportToSQLitePreflightTests",
+        "ImportDryRunMarkerTests",
+        "ImportToSQLiteJobTests",
+        "ImportToSQLiteSensorTests"
+      ],
+      "tests": [
+        "aDamagedMarkerReadsAsNone",
+        "aDryRunPassedAtNEnablesCommitAtNOnly",
+        "aDryRunPassesAndWritesNothing",
+        "aMissingAuditRefuses",
+        "aMissingOrUnreadableReportRefuses",
+        "aRealImportCommitsTheSameLine",
+        "aReportOlderThanTheCatalogRefusesWithBothGenerations",
+        "aReportWithoutAGenerationIsStale",
+        "aSaveDuringTheRunIsRefused",
+        "allClearHasNoRefusal",
+        "anAuditWithoutPerRowResultsRefuses",
+        "anExistingTargetRefusesInCommitModeOnly",
+        "anotherJobRefuses",
+        "anotherJobRunningRefusesAndNamesIt",
+        "auditWithoutRowsRefuses",
+        "everyRefusalIsListedInFixOrder",
+        "existingTargetRefuses",
+        "shapeOfTheWiring",
+        "staleReportRefuses",
+        "stopBeforeTheGate",
+        "stopDuringTheRun",
+        "theJobHoldsAndReleasesTheOneWriter",
+        "theMarkerNeverTouchesUserDefaults",
+        "theMarkerRoundTripsBesideTheCatalogAndNowhereElse",
+        "theRowsLineBecomesTheSubtitle",
+        "theStoreHoldRefusesEveryDoor",
+        "unsavedChangesRefuse",
+        "unsavedChangesRefuseTheJob"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/P0TruthFixture.swift",
       "stage": "regression",
       "suites": [
@@ -28422,6 +28464,27 @@
         "theSidecarsLandWithTheirOrdinals",
         "theTombstonedShapeIsCountedAsTombstonedMain",
         "withoutSidecarsTheImportStillCompletes"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterDryRunTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogImporterDryRunTests"
+      ],
+      "tests": [
+        "aDryRunCarriesTheQuarantineWordsCappedAtTheSample",
+        "aDryRunLogsStartAndADryRunOutcomeThroughTheSink",
+        "aDryRunPassesWithTheSameLineARealRunWouldPrint",
+        "aDryRunWritesNothingToTheInputsTargetAndRemovesItsScratch",
+        "aGateRefusalInADryRunIsTheSameRefusal",
+        "aMissInADryRunRollsBackAndNamesItAndTheScratchIsGone",
+        "aRowWithAnEmptyContentHashLandsInFiles",
+        "aStopRequestedBeforeTheTargetOpensEndsStoppedWithNothingWritten",
+        "aStopRequestedDuringTheRowsRollsTheTransactionBack",
+        "anEmptyContentHashMapsToANilSampledHash"
       ]
     },
     {
@@ -31064,6 +31127,10 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogRepositoryContractTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/ImportToSQLiteTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 2409,
@@ -31739,6 +31806,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ReconcileByDigestTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterDryRunTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],

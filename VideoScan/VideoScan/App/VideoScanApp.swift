@@ -620,8 +620,13 @@ struct VideoScanApp: App {
                             // marker is read (one small JSON); a run that
                             // found files gone, or did not finish, is one
                             // console/log line. Nothing starts.
+                            // Import to SQLite (2026-10-17): the dry-run
+                            // marker beside the catalog decides whether the
+                            // real import is offered. One small JSON read
+                            // in the same hop; nothing starts.
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
                                 catalogModel?.catalogAuditRunMarker.announceLastRun(to: catalogModel)
+                                catalogModel?.attachImportDryRunMarker()
                             }
                         }
                         // Catalog Status (2026-10-16, §4): the freshness
@@ -859,6 +864,14 @@ struct VideoScanApp: App {
                 // over the catalog's own stamps and relations; the only
                 // file written is the report beside the catalog.
                 VerifyCatalogMenuItem(model: catalogModel, center: fileOpsCenter, isReadOnly: catalogModel.isReadOnly)
+                Divider()
+                // Import to SQLite (2026-10-17, catalog_sqlite_migration
+                // §10c): the dry run first — the same flow, rolled back —
+                // then the real import, offered only once a dry run passed
+                // on this catalog generation (the marker beside the catalog).
+                ImportToSQLiteMenuItems(model: catalogModel, center: fileOpsCenter, marker: catalogModel.importDryRunMarker,
+                                        catalogGeneration: catalogModel.catalogStore.currentGeneration,
+                                        isReadOnly: catalogModel.isReadOnly)
                 Divider()
                 // Catalog Status (2026-10-16): opens Content Analysis with
                 // the summary band; the title carries the colour word.

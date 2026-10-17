@@ -316,6 +316,10 @@ final class VideoScanModel: ObservableObject {
     /// the SAME marker to it; VideoScanApp attaches them at launch.
     let fullHashResumeMarker = FullHashBackfillResumeMarker()
     let catalogAuditRunMarker = CatalogAuditRunMarker()
+    /// The dry-run marker beside catalog.json (import-dryrun.json): which
+    /// catalog generation a dry run of Import to SQLite last PASSED on.
+    /// The Catalog menu's real import is enabled only at that generation.
+    let importDryRunMarker = ImportDryRunMarker()
     /// The dossier Analysis Scope the coverage math uses (decides which
     /// audio-only files are "eligible"). The Analyze panel mirrors the
     /// orchestrator's live scope into this; default = the app default.
@@ -1569,6 +1573,11 @@ final class VideoScanModel: ObservableObject {
     /// through this flag (bound in ContentView), the same door the purge
     /// dialog uses — the menu lives at app level, the sheet in the window.
     @Published var showFingerprintSoundSheet: Bool = false
+    /// Catalog ▸ "Import to SQLite…" (2026-10-17) opens its confirm sheet
+    /// through this item (`.sheet(item:)` in ContentView); it carries the
+    /// passed dry run's reconciliation line, so the sheet names what will
+    /// be written before Rick says yes.
+    @Published var importToSQLiteConfirm: ImportToSQLiteConfirmRequest?
 
     // MARK: - Update Catalog (VideoScanModel+UpdateCatalog.swift)
     //

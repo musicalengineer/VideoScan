@@ -1127,6 +1127,13 @@ struct CatalogView: View {
             AudioFingerprintBackfillSheet()
                 .environmentObject(model)
         }
+        // Import to SQLite (2026-10-17): Catalog ▸ Import to SQLite… opens
+        // this confirm sheet with the passed dry run's reconciliation line;
+        // Import there runs the MFO job in commit mode.
+        .sheet(item: $model.importToSQLiteConfirm) { request in
+            ImportToSQLiteConfirmSheet(request: request)
+                .environmentObject(model)
+        }
         // Update Catalog (2026-08-17): the ONE door for "files were moved /
         // renamed outside the app". Opened from the Catalog menu, the
         // volume-rename badge, the "looks moved" banner and the target

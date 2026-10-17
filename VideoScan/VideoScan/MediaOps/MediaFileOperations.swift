@@ -454,6 +454,19 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let verifyCatalog = Self("verifyCatalog", hasDetailView: true,
         style: .init(badge: "Verify Catalog", logVerb: "verify catalog", fill: .init(0.00, 0.40, 0.90)))
 
+    // Import to SQLite (2026-10-17, catalog_sqlite_migration §10c "app
+    // wiring") — ledger indigo: a verb that READS the frozen JSON catalog
+    // and writes one new file (catalog.sqlite), or nothing at all on a dry
+    // run. Δ ≥ 0.14 from every other fill (nearest: Find's slate blue),
+    // contrast vs white ≈ 12.
+    /// "Import to SQLite (Dry Run)…" / "Import to SQLite…" (Rick 2026-10-17):
+    /// the verified JSON catalog into SQLite through the Core importer —
+    /// gate, one transaction, comparator, commit — or the same flow rolled
+    /// back on purpose (dry run). The JSON catalog is read-only for the
+    /// whole run (MOPS-16). ImportToSQLiteJob.
+    static let importToSQLite = Self("importToSQLite", hasDetailView: true,
+        style: .init(badge: "Import", logVerb: "import to sqlite", fill: .init(0.18, 0.18, 0.42)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -463,7 +476,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
-        .verifyCatalog,
+        .verifyCatalog, .importToSQLite,
     ]
 
     /// Badge text — rendered in small caps by the row view.

@@ -19,6 +19,20 @@
 //     a miss throws, the store rolls back, and the outcome names every miss;
 //   * the JSON files are never written; the database is the only output.
 //
+// Two modes (app wiring, 2026-10-17). `.commit` is the import. `.dryRun`
+// runs the IDENTICAL flow — gate, one transaction, rows, sidecars,
+// comparator, finish — against a database in a scratch folder the importer
+// creates for the run, then ALWAYS rolls the transaction back (by throwing
+// `ImportAbort.dryRunPassed` from inside the body) and removes the scratch
+// folder. Nothing at `inputs.databaseURL` is touched by a dry run; a gate
+// refusal or a comparator miss reads exactly as it would in a real run.
+//
+// Stop (the MFO row's Stop button): `stopRequested` is asked BEFORE the
+// target opens and at each phase boundary inside the transaction (after
+// the rows, after the sidecars, after the comparator). A raised flag throws
+// `ImportAbort.stopped`, the store rolls back, the outcome is `.stopped` —
+// never `.imported`. Between those boundaries the body runs to the next one.
+//
 // Memory (worst case, 100k rows): the catalog is decoded TWICE — once for
 // the row pass, once for the comparator — but never both at once: the row
 // pass runs in its own function and releases its decode before the
@@ -26,13 +40,19 @@
 // row: the typed mirror plus its raw object) + the comparator's two sides
 // (ordinal-keyed landings, knowledge keys, derived keys — small per row) +
 // the per-row facts map (id → digest, file id, path; ≈ 250 bytes per row).
-// Nothing is O(rows²). Measured by CatalogImporterScaleTests.
+// A dry run adds its quarantine sample: at most `quarantineSampleCap` (200)
+// short rows. Nothing is O(rows²). Measured by CatalogImporterScaleTests.
 //
 // Outcomes (playbook §7: every case named, no `default:` at the caller):
 //   .imported(reconciliation)   committed; the §f line is in the value
+//   .dryRunPassed(report)       the dry run reached the finish and rolled
+//                               back by design; the report carries the §f
+//                               line and the first quarantine words
 //   .refused([RunRefusal])      a gate said no; nothing was written
 //   .rolledBack([Miss])         the comparator found a miss; the store rolled
 //                               back; the database is as empty as before
+//   .stopped                    Stop was requested; the store rolled back (or
+//                               the target never opened); nothing written
 //   .failed(words)              the store or a file said no (read-only
 //                               folder, a row the DDL refuses, a damaged
 //                               sidecar); nothing committed
@@ -110,16 +130,60 @@ public actor CatalogImporter {
         }
     }
 
+    /// Commit, or prove and roll back. (For Rick: a two-valued enum, not a
+    /// Bool, so the call site reads `mode: .dryRun`.)
+    public enum Mode: Sendable, Equatable {
+        case dryRun
+        case commit
+    }
+
+    /// One quarantined row as the dry run reports it (the detail view's
+    /// "first 200 quarantine words").
+    public struct QuarantineSample: Sendable, Equatable {
+        public var ordinal: Int
+        public var jsonRowID: String
+        public var reasonCode: String
+        public var words: String
+
+        public init(ordinal: Int, jsonRowID: String, reasonCode: String, words: String) {
+            self.ordinal = ordinal
+            self.jsonRowID = jsonRowID
+            self.reasonCode = reasonCode
+            self.words = words
+        }
+    }
+
+    /// What a passed dry run hands back: the §f line it would have committed
+    /// and the first `quarantineSampleCap` quarantined rows, in file order.
+    public struct DryRunReport: Sendable, Equatable {
+        public var reconciliation: ImportReconciliation
+        public var quarantineSample: [QuarantineSample]
+
+        public init(reconciliation: ImportReconciliation, quarantineSample: [QuarantineSample]) {
+            self.reconciliation = reconciliation
+            self.quarantineSample = quarantineSample
+        }
+    }
+
+    /// How many quarantine rows a dry run carries out (bounded memory).
+    public static let quarantineSampleCap = 200
+
     public enum Outcome: Sendable, Equatable {
         case imported(ImportReconciliation)
+        case dryRunPassed(DryRunReport)
         case refused([ImportGate.RunRefusal])
         case rolledBack([ImportComparator.Miss])
+        case stopped
         case failed(String)
     }
 
     /// One line for the console / catalog.log / videoscan.log; the app wires
     /// the sink, Core only speaks through it.
     public typealias Sink = @Sendable (String) -> Void
+
+    /// "Has Stop been pressed?" — asked before the target opens and at each
+    /// phase boundary of the transaction. nil = never.
+    public typealias StopCheck = @Sendable () -> Bool
 
     /// Test seam: runs on the SQLite side the comparator is about to check,
     /// after every row is written and before `compare` (a real row cannot be
@@ -137,6 +201,9 @@ public actor CatalogImporter {
     private var decodeSeam: DecodeSeam?
     /// The run id of the last `run` (the tests read the rows by it).
     public private(set) var lastRunID: String?
+    /// Where the last dry run put its database — removed when the run ended
+    /// (the tests check that it is gone).
+    public private(set) var lastDryRunScratch: URL?
 
     public init(repository: any CatalogRepository, sink: @escaping Sink) {
         self.repository = repository
@@ -153,17 +220,43 @@ public actor CatalogImporter {
 
     // MARK: - Run
 
-    public func run(_ inputs: Inputs, environment: Environment = Environment()) async -> Outcome {
+    public func run(_ inputs: Inputs, environment: Environment = Environment(), mode: Mode = .commit,
+                    stopRequested: StopCheck? = nil) async -> Outcome {
         let runID = UUID().uuidString
         lastRunID = runID
         let startedAt = Int64(Date().timeIntervalSince1970)
-        sink("START import \(inputs.catalogURL.path) → \(inputs.databaseURL.path) (run \(runID))")
-        let outcome = await runSteps(inputs, environment: environment, runID: runID, startedAt: startedAt)
+        let target = Self.target(for: mode, inputs: inputs, runID: runID)
+        if mode == .dryRun { lastDryRunScratch = target.deletingLastPathComponent() }
+        sink("START import\(mode == .dryRun ? " (dry run)" : "") \(inputs.catalogURL.path) → \(target.path) (run \(runID))")
+        let outcome = await runSteps(inputs, environment: environment, mode: mode, target: target,
+                                     stopRequested: stopRequested, runID: runID, startedAt: startedAt)
+        if mode == .dryRun { Self.removeScratch(target.deletingLastPathComponent()) }
         sink(Self.outcomeLine(outcome))
         return outcome
     }
 
-    private func runSteps(_ inputs: Inputs, environment: Environment, runID: String, startedAt: Int64) async -> Outcome {
+    /// A dry run's database lives in a scratch folder of its own (never the
+    /// inputs' target); a commit's is the inputs' target.
+    private static func target(for mode: Mode, inputs: Inputs, runID: String) -> URL {
+        switch mode {
+        case .commit:
+            return inputs.databaseURL
+        case .dryRun:
+            return FileManager.default.temporaryDirectory
+                .appendingPathComponent("videoscan-import-dryrun-\(runID)", isDirectory: true)
+                .appendingPathComponent(Inputs.databaseFileName)
+        }
+    }
+
+    /// Scratch only: the dry run's own folder (database, high-water files,
+    /// WAL) — nothing else is ever removed here.
+    private static func removeScratch(_ folder: URL) {
+        guard folder.lastPathComponent.hasPrefix("videoscan-import-dryrun-") else { return }
+        try? FileManager.default.removeItem(at: folder)
+    }
+
+    private func runSteps(_ inputs: Inputs, environment: Environment, mode: Mode, target: URL,
+                          stopRequested: StopCheck?, runID: String, startedAt: Int64) async -> Outcome {
         let gate: ImportGateFiles
         do {
             gate = try ImportGateFiles.load(inputs)
@@ -172,13 +265,21 @@ public actor CatalogImporter {
         }
         let refusals = ImportGate.runLevelRefusals(gate.runInput(environment: environment))
         if !refusals.isEmpty { return .refused(refusals) }
-        switch await repository.open(at: inputs.databaseURL) {
+        if stopRequested?() == true { return .stopped }
+        if mode == .dryRun {
+            do {
+                try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+            } catch {
+                return .failed("the dry run's scratch folder could not be made: \(error.localizedDescription)")
+            }
+        }
+        switch await repository.open(at: target) {
         case .readWrite: break
         case .readOnly(let reason): return .failed("the target opened read-only: \(reason)")
         case .refused(let reason): return .failed("the target did not open: \(reason)")
         }
-        let plan = ImportPlan(inputs: inputs, gate: gate, runID: runID, startedAt: startedAt, seam: comparatorSeam,
-                              decodeSeam: decodeSeam, sink: sink)
+        let plan = ImportPlan(inputs: inputs, gate: gate, runID: runID, startedAt: startedAt, mode: mode,
+                              stopRequested: stopRequested, seam: comparatorSeam, decodeSeam: decodeSeam, sink: sink)
         let outcome = await importIntoOpenTarget(plan)
         await repository.close()
         return outcome
@@ -237,8 +338,10 @@ public actor CatalogImporter {
     static func outcomeLine(_ outcome: Outcome) -> String {
         switch outcome {
         case .imported(let r): return "OUTCOME imported · " + r.line
+        case .dryRunPassed(let report): return "OUTCOME dry run passed — nothing written · " + report.reconciliation.line
         case .refused(let refusals): return "OUTCOME refused · " + refusals.map(\.words).joined(separator: " · ")
         case .rolledBack(let misses): return "OUTCOME rolled back · \(misses.count) miss(es) · " + misses.prefix(5).map(\.words).joined(separator: " · ")
+        case .stopped: return "OUTCOME stopped · nothing written"
         case .failed(let words): return "OUTCOME failed · " + words
         }
     }
@@ -250,12 +353,17 @@ public actor CatalogImporter {
 enum ImportAbort: Error {
     case refused([ImportGate.RunRefusal])
     case rolledBack([ImportComparator.Miss])
+    /// The dry run reached the finish: roll back by design, carry the proof out.
+    case dryRunPassed(CatalogImporter.DryRunReport)
+    case stopped
     case failed(String)
 
     var outcome: CatalogImporter.Outcome {
         switch self {
         case .refused(let r): return .refused(r)
         case .rolledBack(let m): return .rolledBack(m)
+        case .dryRunPassed(let report): return .dryRunPassed(report)
+        case .stopped: return .stopped
         case .failed(let w): return .failed(w)
         }
     }
@@ -264,6 +372,8 @@ enum ImportAbort: Error {
         switch self {
         case .refused(let r): return r.map(\.words).joined(separator: " · ")
         case .rolledBack(let m): return m.map(\.words).joined(separator: " · ")
+        case .dryRunPassed: return "dry run passed — rolled back by design"
+        case .stopped: return "stopped — rolled back"
         case .failed(let w): return w
         }
     }
@@ -359,6 +469,8 @@ struct ImportPlan: Sendable {
     let gate: ImportGateFiles
     let runID: String
     let startedAt: Int64
+    let mode: CatalogImporter.Mode
+    let stopRequested: CatalogImporter.StopCheck?
     let seam: CatalogImporter.ComparatorSeam?
     let decodeSeam: CatalogImporter.DecodeSeam?
     let sink: CatalogImporter.Sink
@@ -371,9 +483,12 @@ struct ImportPlan: Sendable {
     func run(_ tx: any CatalogTransaction) throws -> ImportReconciliation {
         try tx.insertImportRun(importRun())
         let rows = try rowPass(tx)                      // decode #1 lives and dies in here
+        try stopCheck()
         try relationPass(tx, rows)
         let sidecars = try sidecarPass(tx, rows)
+        try stopCheck()
         try comparatorPass(tx)                          // decode #2, independent
+        try stopCheck()
         var reconciliation = try tx.importReconciliation(run: runID)
         reconciliation.membersListed = sidecars.membersListed
         reconciliation.ledgerUnparseable = gate.ledger?.unparseable.count ?? 0
@@ -381,7 +496,29 @@ struct ImportPlan: Sendable {
             rowsBefore: reconciliation.rowsBefore, rowsMain: reconciliation.rowsMain,
             rowsQuarantine: reconciliation.rowsQuarantine, digestsSeen: reconciliation.digests,
             knowledgeRows: reconciliation.knowledgeRows), finishedAt: Int64(Date().timeIntervalSince1970))
+        if mode == .dryRun {
+            throw ImportAbort.dryRunPassed(CatalogImporter.DryRunReport(reconciliation: reconciliation,
+                                                                        quarantineSample: try quarantineSample(tx)))
+        }
         return reconciliation
+    }
+
+    /// A phase boundary: Stop pressed → roll back with its own outcome.
+    private func stopCheck() throws {
+        if stopRequested?() == true { throw ImportAbort.stopped }
+    }
+
+    /// The first `quarantineSampleCap` quarantined rows of this run, in
+    /// storage (file) order — read through the transaction before the dry
+    /// run rolls it back.
+    private func quarantineSample(_ tx: any CatalogTransaction) throws -> [CatalogImporter.QuarantineSample] {
+        var sample: [CatalogImporter.QuarantineSample] = []
+        try tx.quarantineEntries(run: runID) { entry in
+            guard sample.count < CatalogImporter.quarantineSampleCap else { return }
+            sample.append(CatalogImporter.QuarantineSample(ordinal: entry.ordinal, jsonRowID: entry.jsonRowID,
+                                                           reasonCode: entry.reasonCode.rawValue, words: entry.words))
+        }
+        return sample
     }
 
     private func importRun() -> CatalogRow.ImportRun {
