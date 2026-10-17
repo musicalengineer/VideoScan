@@ -97,6 +97,18 @@ field when `archivedCopy(of:)` exists; every `FileFact` shown with its evidence 
 - The §5 surfaces rewritten and their sensors green.
 - Rick's spot test of each surface in the list says "true".
 
+## 6a. How every step is proven (Rick, 2026-10-16: "you'd want testing so you can verify every step")
+
+Every gate is a test result, never a judgement. Each step uses all three kinds of proof:
+
+| Proof | What it proves | Where it runs | Who reads it |
+|---|---|---|---|
+| **Deterministic tests on the dummy (poisoned) catalog** — the five dimensions + TRUTH; the cumulative P0 regression suite (every fall ever found, red first, kept forever; runs unchanged against the JSON store now and the SQLite store later) | the CODE did not regress | every CI run; the nightly gauntlet, blocking | the metrics page; the Manager |
+| **Verify Catalog on the real catalog, read-only** — the report with a dated "verified at" per tier | the DATA is what the catalog says | every night; weekly deep; on demand | the Catalog Status chip; Rick |
+| **For the port: the shadow is the test** — the independent drift comparator on every load, crash-injection and restore tests on the fixture, N nights of zero drift with exercised saves and restarts | the NEW STORE agrees with the old one | nightly during steps D–F | the report; Rick's go at each gate |
+
+Plus, for every step: a codex pass on the code, and Rick's spot test of each surface it touches. A step is done when all four hold; if any is missing it is not done, whatever the calendar says.
+
 ## 7. Order of work (integrity only until the gate)
 
 1. Finish the three door fixes in flight (Archive play target · silent-MP3 notice · journey
