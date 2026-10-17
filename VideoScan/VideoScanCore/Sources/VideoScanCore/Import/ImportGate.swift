@@ -268,15 +268,18 @@ public enum ImportGate {
         public var hasRowResults: Bool
         /// The generation the audit's stamp save produced (N1).
         public var savedGeneration: Int?
+        /// Result words outside the contract's six, by source ordinal (codex D′ #4).
+        public var unknownResultWords: [Int: String]
 
         public init(outcome: String, partial: Bool, startedAt: Int64, finishedAt: Int64?,
-                    hasRowResults: Bool, savedGeneration: Int?) {
+                    hasRowResults: Bool, savedGeneration: Int?, unknownResultWords: [Int: String] = [:]) {
             self.outcome = outcome
             self.partial = partial
             self.startedAt = startedAt
             self.finishedAt = finishedAt
             self.hasRowResults = hasRowResults
             self.savedGeneration = savedGeneration
+            self.unknownResultWords = unknownResultWords
         }
     }
 
@@ -293,11 +296,16 @@ public enum ImportGate {
         public var openAngelBatches: [String]
         /// Writers found running ("the app", "the headless audit").
         public var runningWriters: [String]
+        /// Malformed ledger lines before the end (codex D′ #5).
+        public var ledgerCorruptLines: [Int]
+        /// Sidecar entries a table would refuse (codex D′ #6).
+        public var sidecarFaults: [RowPreflight.SidecarFault]
 
         public init(catalogVersion: Int, catalogGeneration: Int, catalogSHA256: String,
                     report: ReportFacts?, audit: AuditMarkerFacts?, duplicateEventIDs: [String] = [],
                     openDeleteDuplicatesPlans: [String] = [], openAngelBatches: [String] = [],
-                    runningWriters: [String] = []) {
+                    runningWriters: [String] = [], ledgerCorruptLines: [Int] = [],
+                    sidecarFaults: [RowPreflight.SidecarFault] = []) {
             self.catalogVersion = catalogVersion
             self.catalogGeneration = catalogGeneration
             self.catalogSHA256 = catalogSHA256
@@ -307,6 +315,8 @@ public enum ImportGate {
             self.openDeleteDuplicatesPlans = openDeleteDuplicatesPlans
             self.openAngelBatches = openAngelBatches
             self.runningWriters = runningWriters
+            self.ledgerCorruptLines = ledgerCorruptLines
+            self.sidecarFaults = sidecarFaults
         }
     }
 
@@ -326,9 +336,13 @@ public enum ImportGate {
             case auditMissing, auditPartial, auditNotCompleted, auditFinishedAfterIntegrityStarted
             case auditHasNoRowResults, duplicateEventID, openDeleteDuplicatesPlan, openAngelBatch
             case anotherWriterRunning
-            /// The importer's own two (D′): the target must be empty, and the
-            /// frozen file must not change under the import.
+            /// The importer's own two (D′): the target must be empty, and no
+            /// input file may change under the import (the catalog or a sidecar).
             case targetNotEmpty, catalogChangedDuringImport
+            /// codex D′ #2, #4, #5, #6: a duplicate key inside one JSON object;
+            /// an audit result word outside the six; a malformed ledger line
+            /// before the end; a sidecar entry a table would refuse.
+            case duplicateJSONKey, auditResultUnknownWord, ledgerCorruptLine, unrepresentableSidecarEntry
         }
 
         public let kind: Kind
@@ -398,8 +412,28 @@ public enum ImportGate {
                            + "content \(counts.content), import runs \(counts.importRuns)) — import into a fresh database")
         }
         public static func catalogChangedDuringImport(before: String, after: String) -> RunRefusal {
+            fileChangedDuringImport(file: "catalog.json", before: before, after: after)
+        }
+        /// Any input file (codex D′ #3): the comparator re-hashes every sidecar.
+        public static func fileChangedDuringImport(file: String, before: String, after: String?) -> RunRefusal {
             RunRefusal(kind: .catalogChangedDuringImport,
-                       words: "catalog.json changed while it was being imported (\(before) → \(after)) — freeze it, verify again")
+                       words: "\(file) changed while it was being imported (\(before) → \(after ?? "missing")) — freeze it, verify again")
+        }
+        public static func duplicateJSONKey(file: String, path: String, key: String, recordOrdinal: Int?) -> RunRefusal {
+            let place = recordOrdinal.map { "catalog row \($0)" } ?? file
+            return RunRefusal(kind: .duplicateJSONKey,
+                              words: "\(place) carries the key \"\(key)\" twice (\(file): \(path)) — a decoder would keep one and lose the other; repair the file first")
+        }
+        public static func auditResultUnknownWord(ordinal: Int, word: String) -> RunRefusal {
+            RunRefusal(kind: .auditResultUnknownWord,
+                       words: "catalog-audit.json result \(ordinal) says \"\(word)\", which this importer does not know — run Audit Catalog with this build")
+        }
+        public static func ledgerCorruptLine(_ line: Int) -> RunRefusal {
+            RunRefusal(kind: .ledgerCorruptLine,
+                       words: "media-ledger.jsonl line \(line) is not a JSON object and is not the file's torn end — the ledger is damaged; repair it before importing")
+        }
+        public static func unrepresentableSidecarEntry(file: String, ordinal: Int, words: String) -> RunRefusal {
+            RunRefusal(kind: .unrepresentableSidecarEntry, words: "\(file) entry \(ordinal) cannot be stored as-is: \(words)")
         }
 
         private static func name(_ generation: Int?) -> String {
@@ -417,6 +451,8 @@ public enum ImportGate {
         out += reportRefusals(run)
         out += auditRefusals(run)
         out += run.duplicateEventIDs.map { RunRefusal.duplicateEventID($0) }
+        out += run.ledgerCorruptLines.map { RunRefusal.ledgerCorruptLine($0) }
+        out += run.sidecarFaults.map { RunRefusal.unrepresentableSidecarEntry(file: $0.file.rawValue, ordinal: $0.ordinal, words: $0.words) }
         out += run.openDeleteDuplicatesPlans.map { RunRefusal.openDeleteDuplicatesPlan($0) }
         out += run.openAngelBatches.map { RunRefusal.openAngelBatch($0) }
         out += run.runningWriters.map { RunRefusal.anotherWriterRunning($0) }
@@ -462,6 +498,9 @@ public enum ImportGate {
             out.append(.auditNotCompleted("unfinished"))
         }
         if !a.hasRowResults { out.append(.auditHasNoRowResults) }
+        for ordinal in a.unknownResultWords.keys.sorted() {
+            out.append(.auditResultUnknownWord(ordinal: ordinal, word: a.unknownResultWords[ordinal] ?? ""))
+        }
         return out
     }
 }

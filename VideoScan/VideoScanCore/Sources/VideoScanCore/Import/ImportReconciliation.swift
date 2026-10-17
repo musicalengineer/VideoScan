@@ -64,7 +64,7 @@ public struct ImportReconciliation: Sendable, Equatable {
             "pending lineage \(pendingLineage)",
             "events \(events) (\(eventDecisions) decisions, members \(membersResolved) resolved / \(membersListed) listed)",
             "ignored \(ignored) (\(ignoredBound) bound / \(ignoredUnbound) unbound)",
-            "ledger lines \(ledgerLines)" + (ledgerUnparseable > 0 ? " (\(ledgerUnparseable) unparseable, not imported)" : ""),
+            "ledger lines \(ledgerLines)" + (ledgerUnparseable > 0 ? " (\(ledgerUnparseable) torn at the end, kept with its bytes)" : ""),
             "searches \(searches) (zero-hit \(searchesZeroHit), unreadable \(searchesUnreadable))",
             "audit results \(auditResults) (\(auditAccepted) accepted / \(auditRefused) refused)",
             "markers \(markers)",

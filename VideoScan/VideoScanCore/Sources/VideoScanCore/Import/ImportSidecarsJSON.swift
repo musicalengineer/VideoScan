@@ -8,6 +8,12 @@
 // Both are Codable mirrors so the PoisonedCatalogFixture writes exactly what
 // the importer reads. Pure: callers pass Data.
 //
+// fix 2026-10-17 (codex D′ #3/#4): the mapping from an audit row to its
+// `audit_results` row lives HERE, once, so the row pass (from the gate's
+// decode) and the comparator (from its own re-decode of the same file) build
+// the row by one rule and compare whole rows. A result word outside the
+// contract's six is a RUN refusal (`unknownResultWords`), never a silent skip.
+//
 // (For Rick: two POD mirrors of the app's JSON files plus the few facts the
 // gate needs from each.)
 
@@ -16,8 +22,8 @@ import Foundation
 /// catalog-audit.json as the importer reads it.
 public struct AuditMarkerJSON: Codable, Sendable, Equatable {
 
-    /// One per-row result. `result` is kept as a word: a word outside the
-    /// contract's six reads as "no result" (→ neverSeen), never as a guess.
+    /// One per-row result. `result` is kept as a word; a word outside the
+    /// contract's six refuses the run at the gate (codex D′ #4).
     public struct Row: Codable, Sendable, Equatable {
         public var id: String
         public var result: String
@@ -33,6 +39,28 @@ public struct AuditMarkerJSON: Codable, Sendable, Equatable {
             self.detail = detail
             self.judgedPath = judgedPath
             self.seenOn = seenOn
+        }
+
+        /// `audit_results.detail`: the audit's words, verbatim, under one key.
+        public var detailObject: CatalogJSONValue {
+            .object(detail.map { ["detail": .string($0)] } ?? [:])
+        }
+
+        /// The `audit_results` row this result becomes (N1: `accepted` by the
+        /// snapshot rule against the row's own path and stamp). Throws on a
+        /// result word the gate should already have refused.
+        func auditResultRow(ordinal: Int, run: String, index: ImportRowIndex, window: ImportGate.AuditWindow) throws -> CatalogRow.AuditResult {
+            guard let result = CatalogDDL.AuditResult(rawValue: self.result) else {
+                throw ImportFailure(words: "audit result \(ordinal) carries the unknown word \"\(self.result)\" — the gate should have refused it")
+            }
+            let canonical = CatalogRecordDTO.canonicalID(id)
+            let facts = index.facts[canonical]
+            let evidence = ImportGate.AuditEvidence(result: result, judgedPath: judgedPath)
+            return CatalogRow.AuditResult(
+                importRun: run, sourceOrdinal: ordinal, jsonRowID: canonical, result: result, detail: detailObject,
+                judgedPath: judgedPath, rowFullPath: facts?.fullPath ?? "", rowAuditSeenAt: facts?.auditSeenAt,
+                accepted: ImportGate.accepts(evidence, rowFullPath: facts?.fullPath ?? "", rowAuditSeenAt: facts?.auditSeenAt,
+                                             window: window))
         }
     }
 
@@ -61,16 +89,37 @@ public struct AuditMarkerJSON: Codable, Sendable, Equatable {
         try JSONDecoder().decode(AuditMarkerJSON.self, from: data)
     }
 
+    /// The source ordinal of row `index` (the marker itself is ordinal 0).
+    public static func rowOrdinal(_ index: Int) -> Int { 1 + index }
+
     public var facts: ImportGate.AuditMarkerFacts {
         ImportGate.AuditMarkerFacts(outcome: outcome, partial: partial, startedAt: startedAt.unixSeconds,
                                     finishedAt: finishedAt?.unixSeconds, hasRowResults: rows != nil,
-                                    savedGeneration: savedGeneration)
+                                    savedGeneration: savedGeneration, unknownResultWords: unknownResultWords)
     }
 
     /// [startedAt, finishedAt]; an unfinished run's window ends at its start.
     public var window: ImportGate.AuditWindow {
         ImportGate.AuditWindow(startedAt: startedAt.unixSeconds,
                                finishedAt: finishedAt?.unixSeconds ?? startedAt.unixSeconds)
+    }
+
+    /// Result words outside the contract's six, by source ordinal (codex D′ #4).
+    public var unknownResultWords: [Int: String] {
+        var out: [Int: String] = [:]
+        for (index, row) in (rows ?? []).enumerated() where CatalogDDL.AuditResult(rawValue: row.result) == nil {
+            out[Self.rowOrdinal(index)] = row.result
+        }
+        return out
+    }
+
+    /// Rows the `audit_results` table would refuse (codex D′ #6).
+    public var faults: [RowPreflight.SidecarFault] {
+        (rows ?? []).enumerated().flatMap { index, row in
+            RowPreflight.violations(auditRow: row).map {
+                RowPreflight.SidecarFault(file: .catalogAudit, ordinal: Self.rowOrdinal(index), words: $0)
+            }
+        }
     }
 
     /// Canonical row id → its result (first answer wins; the reader refuses
@@ -83,6 +132,17 @@ public struct AuditMarkerJSON: Codable, Sendable, Equatable {
             out[id] = ImportGate.AuditEvidence(result: result, judgedPath: row.judgedPath)
         }
         return out
+    }
+
+    /// `job_markers.detail` for the audit marker: the file body without its
+    /// per-row results (they are the `audit_results` rows), plus the hash of
+    /// the whole file and how many rows it carried (codex D′ #4).
+    public func markerDetail(fileSHA256: String) -> CatalogJSONValue {
+        var body = (try? CatalogJSONValue.of(self).objectValue) ?? [:]
+        body.removeValue(forKey: "rows")
+        body[CatalogRow.JobMarker.fileSHA256Key] = .string(fileSHA256)
+        body[CatalogRow.JobMarker.rowCountKey] = .int(Int64(rows?.count ?? 0))
+        return .object(body)
     }
 }
 

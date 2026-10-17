@@ -57,6 +57,14 @@ struct ReconcileByDigestTests {
         #expect(action == .reconciled(file: .updatePath(fileID: "F1"), resolved: [], findingsStillOpen: []))
     }
 
+    /// Codex D′ #8: §g says "exactly one live row with that digest is proven
+    /// gone" — the other rows being present does not make the found file a copy.
+    @Test func aKnownDigestWithOneRowGoneAndAnotherPresentMovesTheGoneRow() {
+        let action = ReconcileByDigest.decide(found: Self.found(),
+                                              existing: .init(withDigest: [Self.main("F1", gone: true), Self.main("F2", path: "/Volumes/A/two.mov")]))
+        #expect(action == .reconciled(file: .updatePath(fileID: "F1"), resolved: [], findingsStillOpen: []))
+    }
+
     @Test func aKnownDigestWhoseRowIsStillPresentIsACopy() {
         let action = ReconcileByDigest.decide(found: Self.found(), existing: .init(withDigest: [Self.main("F1")]))
         #expect(action == .reconciled(file: .newCopyRow, resolved: [], findingsStillOpen: []))
@@ -100,7 +108,7 @@ struct ReconcileByDigestTests {
     }
 
     @Test("finding reasons never resolve by a byte match",
-          arguments: [CatalogDDL.ReasonCode.tier5Finding, .referenceMovie, .fixityDisagree, .duplicateId, .auditChanged])
+          arguments: [CatalogDDL.ReasonCode.tier5Finding, .referenceMovie, .fixityDisagree, .duplicateId, .auditChanged, .unrepresentable])
     func findingReasonsStayOpen(reason: CatalogDDL.ReasonCode) {
         let action = ReconcileByDigest.decide(found: Self.found(), existing: .init(quarantined: [Self.quarantined(5, reason)]))
         #expect(action == .reconciled(file: .newRow(id: .fresh), resolved: [], findingsStillOpen: [5]))

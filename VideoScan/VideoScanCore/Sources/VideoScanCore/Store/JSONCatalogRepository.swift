@@ -95,13 +95,14 @@ struct JSONReader: CatalogReader {
     func knowledgeSources(run: String, _ visit: (CatalogRow.KnowledgeReading) throws -> Void) throws { throw unsupported }
     func derivedUnverifiedKeys(run: String, _ visit: (CatalogRow.DerivedKeyReading) throws -> Void) throws { throw unsupported }
     func soundPrintDigests(_ visit: (String) throws -> Void) throws { throw unsupported }
-    func eventDecisionOrdinals(run: String, _ visit: (Int) throws -> Void) throws { throw unsupported }
+    func events(run: String, _ visit: (CatalogRow.Event) throws -> Void) throws { throw unsupported }
+    func eventDecisions(run: String, _ visit: (CatalogRow.EventDecision) throws -> Void) throws { throw unsupported }
     func eventMembers(_ visit: (CatalogRow.EventMemberReading) throws -> Void) throws { throw unsupported }
     func listedMemberKeys(run: String, _ visit: (String) throws -> Void) throws { throw unsupported }
-    func ledgerOrdinals(run: String, _ visit: (Int) throws -> Void) throws { throw unsupported }
-    func ignoredOrdinals(run: String, _ visit: (Int) throws -> Void) throws { throw unsupported }
+    func ledgerLines(run: String, _ visit: (CatalogRow.Ledger) throws -> Void) throws { throw unsupported }
+    func ignoredEntries(run: String, _ visit: (CatalogRow.Ignored) throws -> Void) throws { throw unsupported }
     func jobMarkers(run: String, _ visit: (CatalogRow.MarkerReading) throws -> Void) throws { throw unsupported }
-    func auditResults(run: String, _ visit: (CatalogRow.AuditResultReading) throws -> Void) throws { throw unsupported }
+    func auditResults(run: String, _ visit: (CatalogRow.AuditResult) throws -> Void) throws { throw unsupported }
     func personSearchOrdinals(run: String, _ visit: (Int) throws -> Void) throws { throw unsupported }
     func importReconciliation(run: String) throws -> ImportReconciliation { throw unsupported }
 }

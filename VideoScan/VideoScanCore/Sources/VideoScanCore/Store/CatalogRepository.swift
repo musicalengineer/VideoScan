@@ -124,16 +124,25 @@ public protocol CatalogRecordReading {
     func derivedUnverifiedKeys(run: String, _ visit: (CatalogRow.DerivedKeyReading) throws -> Void) throws
     /// Every `sound_prints.digest`.
     func soundPrintDigests(_ visit: (String) throws -> Void) throws
-    /// Source ordinals of `event_decisions` rows of `run`.
-    func eventDecisionOrdinals(run: String, _ visit: (Int) throws -> Void) throws
-    /// Every `event_members` row (event id, the original key).
+    // The sidecar rows, read back WHOLE (fix 2026-10-17, codex D′ #3): the
+    // comparator compares the row it would write from its own decode with
+    // the row that is there — payloads, not ordinals.
+    /// Every `events` row of `run`.
+    func events(run: String, _ visit: (CatalogRow.Event) throws -> Void) throws
+    /// Every `event_decisions` row of `run`, payload decoded.
+    func eventDecisions(run: String, _ visit: (CatalogRow.EventDecision) throws -> Void) throws
+    /// Every `event_members` row: the resolved digest and range, with the key it came from.
     func eventMembers(_ visit: (CatalogRow.EventMemberReading) throws -> Void) throws
     /// Member keys kept unresolved: the decision stream's keys and `legacy_pair_ids.event_member_keys`.
     func listedMemberKeys(run: String, _ visit: (String) throws -> Void) throws
-    func ledgerOrdinals(run: String, _ visit: (Int) throws -> Void) throws
-    func ignoredOrdinals(run: String, _ visit: (Int) throws -> Void) throws
+    /// Every `ledger` row of `run`, payload decoded.
+    func ledgerLines(run: String, _ visit: (CatalogRow.Ledger) throws -> Void) throws
+    /// Every `ignored_content` row of `run`.
+    func ignoredEntries(run: String, _ visit: (CatalogRow.Ignored) throws -> Void) throws
+    /// Every `job_markers` row of `run` with the hash of the file it came from.
     func jobMarkers(run: String, _ visit: (CatalogRow.MarkerReading) throws -> Void) throws
-    func auditResults(run: String, _ visit: (CatalogRow.AuditResultReading) throws -> Void) throws
+    /// Every `audit_results` row of `run`, whole.
+    func auditResults(run: String, _ visit: (CatalogRow.AuditResult) throws -> Void) throws
     func personSearchOrdinals(run: String, _ visit: (Int) throws -> Void) throws
     /// The counts of the reconciliation line, read from the rows (contract §f).
     func importReconciliation(run: String) throws -> ImportReconciliation

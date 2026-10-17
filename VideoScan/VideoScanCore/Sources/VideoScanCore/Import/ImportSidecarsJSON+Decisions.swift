@@ -6,15 +6,21 @@
 //   * ignored-content.json — `IgnoredContentFile` (A/Catalog/IgnoredContentStore
 //     .swift:109);
 //   * ledger/media-ledger.jsonl — one `MediaLedgerEvent` per line
-//     (C/MediaLedgerEvent.swift), read leniently: a line that is a JSON object
-//     is a ledger line whatever its keys; a line that is not JSON is counted,
-//     never guessed at;
+//     (C/MediaLedgerEvent.swift), read line by line: a line that is a JSON
+//     object is a ledger line whatever its keys; only an UNTERMINATED last
+//     line may be anything else (a torn append) and it is kept with its bytes;
+//     any other malformed line refuses the run (fix 2026-10-17, codex D′ #5);
 //   * fullhash-backfill.json — `FullHashBackfillRunRecord` (A/MediaOps/
 //     FullHashBackfillResume.swift:26).
 // Plus the fold of the decision stream into event membership
 // (`EventsDecisionSnapshot`, EventsDecisionStore.swift:173), reproduced here
 // as a pure function so the importer writes `event_members` the way the
 // app computes them. Pure: callers pass Data.
+//
+// fix 2026-10-17 (codex D′ #3): the mapping from each entry to its table row
+// (`row(ordinal:run:)`) lives here, once; the row pass writes it from the
+// gate's decode and the comparator rebuilds it from its own re-decode and
+// compares whole rows.
 //
 // (For Rick: POD mirrors plus one fold — a reduce over the decision list.)
 
@@ -43,6 +49,16 @@ public struct EventsDecisionsJSON: Decodable, Sendable, Equatable {
             self.updatedAt = updatedAt
             self.note = note
         }
+
+        /// The `events` row. `created_at` / `updated_at` are NOT NULL; the app
+        /// always writes them. 0 marks a record that arrived without one — never "now".
+        public func row(ordinal: Int, run: String) -> CatalogRow.Event {
+            CatalogRow.Event(eventID: CatalogRecordDTO.canonicalID(id), name: name,
+                             state: state ?? CatalogDDL.EventState.confirmed.rawValue, categories: categories ?? [],
+                             note: note, createdAt: createdAt?.unixSeconds ?? 0,
+                             updatedAt: updatedAt?.unixSeconds ?? createdAt?.unixSeconds ?? 0,
+                             importRun: run, sourceOrdinal: ordinal)
+        }
     }
 
     /// One decision, verbatim, with its kind word ("" when the object has none).
@@ -53,6 +69,10 @@ public struct EventsDecisionsJSON: Decodable, Sendable, Equatable {
         public init(payload: CatalogJSONValue) {
             self.payload = payload
             self.kind = payload["kind"]?.stringValue ?? ""
+        }
+
+        public func row(ordinal: Int, run: String) -> CatalogRow.EventDecision {
+            CatalogRow.EventDecision(kind: kind, payload: payload, importRun: run, sourceOrdinal: ordinal)
         }
     }
 
@@ -81,11 +101,29 @@ public struct EventsDecisionsJSON: Decodable, Sendable, Equatable {
         try JSONDecoder().decode(EventsDecisionsJSON.self, from: data)
     }
 
+    /// Source ordinals: events 0..<E, then decisions E..<E+D.
+    public func decisionOrdinal(_ index: Int) -> Int { events.count + index }
+
+    /// Canonical ids of every event record.
+    public var knownEventIDs: Set<String> { Set(events.map { CatalogRecordDTO.canonicalID($0.id) }) }
+
     /// Event ids that occur more than once (F4: a run-level refusal).
     public var duplicateEventIDs: [String] {
         var seen: [String: Int] = [:]
         for e in events { seen[CatalogRecordDTO.canonicalID(e.id), default: 0] += 1 }
         return seen.keys.sorted().filter { (seen[$0] ?? 0) > 1 }
+    }
+
+    /// Entries the `events` / `event_members` tables would refuse (codex D′ #6).
+    public var faults: [RowPreflight.SidecarFault] {
+        var out: [RowPreflight.SidecarFault] = []
+        for (ordinal, event) in events.enumerated() {
+            out += RowPreflight.violations(event: event).map { .init(file: .eventsDecisions, ordinal: ordinal, words: $0) }
+        }
+        for (index, member) in foldedMembers().enumerated() {
+            out += RowPreflight.violations(member: member).map { .init(file: .eventsDecisions, ordinal: decisionOrdinal(index), words: $0) }
+        }
+        return out
     }
 
     /// Every `contentKey` a decision payload names (member ranges, both
@@ -162,6 +200,13 @@ public struct IgnoredContentJSON: Decodable, Sendable, Equatable {
             self.addedAt = addedAt
             self.samplePath = samplePath
         }
+
+        /// The `ignored_content` row: `unbound` (F7: a sampled key never binds).
+        public func row(ordinal: Int, run: String) -> CatalogRow.Ignored {
+            CatalogRow.Ignored(entryID: CatalogRecordDTO.canonicalID(id), importRun: run, sourceOrdinal: ordinal,
+                               partialMD5: partialMD5 ?? "", sizeBytes: sizeBytes ?? 0, filename: filename ?? "",
+                               reason: reason ?? "", addedAt: addedAt?.unixSeconds ?? 0, samplePath: samplePath ?? "")
+        }
     }
 
     public var storeVersion: Int?
@@ -182,46 +227,83 @@ public struct IgnoredContentJSON: Decodable, Sendable, Equatable {
     public static func decode(_ data: Data) throws -> IgnoredContentJSON {
         try JSONDecoder().decode(IgnoredContentJSON.self, from: data)
     }
+
+    /// Entries the `ignored_content` table would refuse (codex D′ #6).
+    public var faults: [RowPreflight.SidecarFault] {
+        entries.enumerated().flatMap { ordinal, entry in
+            RowPreflight.violations(ignored: entry).map { .init(file: .ignoredContent, ordinal: ordinal, words: $0) }
+        }
+    }
 }
 
 // MARK: - ledger/media-ledger.jsonl
 
 /// The ledger read line by line. A non-blank line that is a JSON object is
-/// one `Line` (ordinal = its index among the non-blank lines); a non-blank
-/// line that is not one is listed in `unparseable` by that same ordinal and
-/// never guessed at.
+/// one `Line` (ordinal = its index among the non-blank lines). A non-blank
+/// line that is not one is a CORRUPT line (listed in `corruptLines`, a
+/// run-level refusal) — unless it is the LAST line and the file does not end
+/// with a newline: that is a torn append, kept as a `Line` whose payload
+/// carries its raw bytes (`isTrailingPartial`), never guessed at.
 public struct LedgerLinesJSON: Sendable, Equatable {
 
     public struct Line: Sendable, Equatable {
         public var ordinal: Int
         public var payload: [String: CatalogJSONValue]
+        /// The unterminated last line, kept as bytes (codex D′ #5).
+        public var isTrailingPartial: Bool = false
 
         public var at: Int64? { payload["at"]?.stringValue.flatMap { CatalogJSONDate.parse($0) } }
-        public var event: String { payload["event"]?.stringValue ?? "" }
+        public var event: String { isTrailingPartial ? Self.unparseableKind : (payload["event"]?.stringValue ?? "") }
         public var actor: String { payload["by"]?.stringValue ?? "" }
         public var recordID: String { CatalogRecordDTO.canonicalID(payload["recordID"]?.stringValue) }
         public var contentKey: String { payload["contentKey"]?.stringValue ?? "" }
         public var fullPath: String { payload["fullPath"]?.stringValue ?? "" }
+
+        /// `ledger.kind` of a torn last line.
+        public static let unparseableKind = "unparseable"
+
+        /// The torn line's payload: its bytes as text when they are UTF-8, and
+        /// as base64 always (exact).
+        public static func partialPayload(_ bytes: Data) -> [String: CatalogJSONValue] {
+            ["unparseable": .bool(true), "rawText": .string(String(data: bytes, encoding: .utf8) ?? "(not UTF-8; see rawBase64)"),
+             "rawBase64": .string(bytes.base64EncodedString())]
+        }
+
+        /// The `ledger` row: the line verbatim, its digest through the record
+        /// id's JSON digest only (F7).
+        func row(run: String, index: ImportRowIndex) -> CatalogRow.Ledger {
+            CatalogRow.Ledger(at: at ?? 0, kind: event, actor: actor, recordID: recordID, contentKey: contentKey,
+                              digest: index.facts[recordID]?.digest, path: fullPath, payload: .object(payload),
+                              importRun: run, sourceOrdinal: ordinal)
+        }
     }
 
     public var lines: [Line]
-    public var unparseable: [Int]
+    /// Ordinals of malformed lines before the end (a run-level refusal, codex D′ #5).
+    public var corruptLines: [Int]
+
+    /// The torn last line's ordinal, when there is one.
+    public var trailingPartialOrdinal: Int? { lines.first { $0.isTrailingPartial }?.ordinal }
 
     public static func decode(_ data: Data) -> LedgerLinesJSON {
         var lines: [Line] = []
-        var unparseable: [Int] = []
+        var corrupt: [Int] = []
         var ordinal = 0
-        for raw in data.split(separator: 0x0A, omittingEmptySubsequences: true) {
+        let segments = data.split(separator: 0x0A, omittingEmptySubsequences: false)
+        let terminated = data.last == 0x0A
+        for (index, raw) in segments.enumerated() {
             let trimmed = raw.drop(while: { $0 == 0x20 || $0 == 0x0D || $0 == 0x09 })
             guard !trimmed.isEmpty else { continue }
-            if let value = try? JSONDecoder().decode(CatalogJSONValue.self, from: Data(trimmed)), let object = value.objectValue {
+            if let object = (try? JSONDecoder().decode(CatalogJSONValue.self, from: Data(trimmed)))?.objectValue {
                 lines.append(Line(ordinal: ordinal, payload: object))
+            } else if index == segments.count - 1 && !terminated {
+                lines.append(Line(ordinal: ordinal, payload: Line.partialPayload(Data(raw)), isTrailingPartial: true))
             } else {
-                unparseable.append(ordinal)
+                corrupt.append(ordinal)
             }
             ordinal += 1
         }
-        return LedgerLinesJSON(lines: lines, unparseable: unparseable)
+        return LedgerLinesJSON(lines: lines, corruptLines: corrupt)
     }
 }
 
@@ -240,5 +322,12 @@ public struct BackfillMarkerJSON: Codable, Sendable, Equatable {
 
     public static func decode(_ data: Data) throws -> BackfillMarkerJSON {
         try JSONDecoder().decode(BackfillMarkerJSON.self, from: data)
+    }
+
+    /// `job_markers.detail`: the file body plus the hash of the file (codex D′ #3).
+    public func markerDetail(fileSHA256: String) -> CatalogJSONValue {
+        var body = (try? CatalogJSONValue.of(self).objectValue) ?? [:]
+        body[CatalogRow.JobMarker.fileSHA256Key] = .string(fileSHA256)
+        return .object(body)
     }
 }

@@ -158,8 +158,12 @@ public enum ReconcileByDigest {
         }
         let known = existing.withDigest
         if !known.isEmpty {
+            // §g: "exactly one live row with that digest is proven gone from its
+            // own path" — the other copies being present changes nothing (fix
+            // 2026-10-17, codex D′ #8: `known.count == 1` turned a proven move
+            // into a copy).
             let gone = known.filter(\.provenGone)
-            if gone.count == 1, known.count == 1 { return .updatePath(fileID: gone[0].fileID) }
+            if gone.count == 1 { return .updatePath(fileID: gone[0].fileID) }
             return .newCopyRow
         }
         guard let first = existing.quarantined.first else { return .newRow(id: .fresh) }
@@ -196,7 +200,7 @@ public enum ReconcileByDigest {
         switch reason {
         case .auditGone, .auditNeverSeen, .auditCouldNotCheck: return true
         case .noWholeFileDigest, .removedNoDigest, .auditChanged, .tier5Finding, .referenceMovie, .fixityDisagree,
-             .duplicateId, .stillBeingWritten, .pathReplaced, .unreadable: return false
+             .duplicateId, .stillBeingWritten, .pathReplaced, .unreadable, .unrepresentable: return false
         }
     }
 }
