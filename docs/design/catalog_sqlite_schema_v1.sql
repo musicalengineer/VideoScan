@@ -1,4 +1,4 @@
--- catalog_sqlite_schema_v1.sql — VideoScan catalog, SQLite schema v1.4 (BUILT: §2 onward is
+-- catalog_sqlite_schema_v1.sql — VideoScan catalog, SQLite schema v1.5 (BUILT: §2 onward is
 -- VideoScanCore/Store/CatalogDataSchema.swift verbatim, migration `v2_data`; §1 is
 -- CatalogBookkeepingSchema.swift, migration `v1_bookkeeping`; CatalogDataSchemaTests diffs this
 -- file against sqlite_master, so the Swift copy cannot drift from this document)
@@ -15,6 +15,25 @@
 -- uses its partial index (the OR form could use neither and scanned the volume's rows on EVERY
 -- insert: 20k rows 23.6 s, 100k rows ~10 min → 0.44 s / 2.2 s; same refusals, F12 + N3 prove it);
 -- §6d `content_text_fts`, the FTS5 search text (an addition, with its reasons).
+-- Revision 6 (v1.5, 2026-10-17, codex C′ pass on the BUILT store, docs/reviews/codex/
+-- codex-review-sqlite-store-parts-1-2a-step-c-2026-10-17.md; each change is marked
+-- `-- fix 2026-10-17 (codex C′ #N)` in place): #1/#2 — a REPLACE conflict resolution deleted the row
+-- in the way without its delete trigger (`UPDATE OR REPLACE files` onto a live path removed the
+-- other file; `INSERT OR REPLACE INTO generations` moved the counter 5 → 99; replacing the current
+-- history row rewrote it). Now `PRAGMA recursive_triggers = ON` (the store sets it per connection
+-- and queries it back) lets REPLACE's delete reach the delete triggers, every history / evidence
+-- table has one (`catalog_state`, `generation_history`, `import_runs`, `import_items`,
+-- `audit_results`, `regen_context`, `legacy_pair_ids`, `job_markers` gained theirs), and BEFORE
+-- INSERT / BEFORE UPDATE no-replace guards (`catalog_state_no_replace`, `generations_no_replace`,
+-- `generation_history_no_replace`, `files_no_replace_upd`, `files_id_immutable`) refuse the
+-- statement before any conflict is resolved, which binds a connection that never set the pragma.
+-- #7 — `derived_unverified_flags_conflict` walked every row of a (digest, kind, seq) group on each
+-- insert (quadratic): the WHEN is now two range probes on the new `derived_unverified_by_value`
+-- index and the body no longer re-tests each row. #3/#4/#5/#6 are store-side (the second witness
+-- `catalog.highwater.log`, reconciliation under the writer lock, the exact-mark rule of phase 1,
+-- the session box) and are described in §1 and §11 below. The two migrations (`v1_bookkeeping`,
+-- `v2_data`) were amended IN PLACE: no catalog outside test fixtures had been created by this store
+-- (the app does not construct it yet); from the first shipped build on, changes are new migrations.
 -- Companion: docs/design/catalog_contract_freeze_2026_10_17.md (field inventory, invariants,
 -- importer gate §f, reconciliation §g). Reproductions: catalog_sqlite_schema_v1_checks.sql
 -- (`sqlite3 :memory: < catalog_sqlite_schema_v1_checks.sql`). GH #328.
@@ -43,14 +62,20 @@
 --   * The importer uses plain INSERT only. No `INSERT OR REPLACE` / `REPLACE` / `ON CONFLICT DO
 --     UPDATE` anywhere: a duplicate is a finding, never a replacement. Every evidence table also
 --     carries a `*_no_replace` trigger, because REPLACE deletes the old row WITHOUT firing delete
---     triggers (recursive_triggers is off) — BEFORE INSERT triggers fire before the conflict is
---     resolved, so they can refuse it.                                                         -- F4
+--     triggers unless recursive_triggers is on — BEFORE INSERT triggers fire before the conflict is
+--     resolved, so they can refuse it whatever the connection's pragmas.                       -- F4
+--     fix 2026-10-17 (codex C′ #1): the store sets `PRAGMA recursive_triggers = ON` on every
+--     connection (below), so on its connections REPLACE's implicit delete ALSO reaches the
+--     `*_no_delete` triggers — two layers; and `files` refuses the UPDATE form too
+--     (`files_no_replace_upd`), since an UPDATE onto another live row's path is the same deletion.
 --   * Enum CHECKs list the raw values written by the Swift enums today (cited in the .md §a/§b).
 
 PRAGMA foreign_keys = ON;          -- per connection; the store asserts it after open (§9.2)
 PRAGMA journal_mode = WAL;         -- persistent in the file
 PRAGMA synchronous = FULL;
 PRAGMA fullfsync = ON;             -- macOS: FULL alone does not flush the drive (§9.5)
+PRAGMA recursive_triggers = ON;    -- fix 2026-10-17 (codex C′ #1): REPLACE's implicit delete fires the
+                                   -- delete triggers only with this on; per connection, queried back
 PRAGMA user_version = 7;           -- JSON schema was v6 (CatalogStore.swift:79); SQLite starts at 7
 
 -- ---------------------------------------------------------------------------------------------
@@ -61,10 +86,20 @@ PRAGMA user_version = 7;           -- JSON schema was v6 (CatalogStore.swift:79)
 --    The HIGH-WATER is NOT in this database: a restore of the database would rewind it. It lives
 --    in `catalog.highwater` beside the database (one integer, never lowered).
 --    F8r3 — TWO-PHASE, high-water FIRST. Every write that advances the generation from g:
---      (1) write `catalog.highwater` = g+1 (temp file, fsync, rename, fsync the directory) and
---          append `generationHighWater {intended: g+1}` to ledger/media-ledger.jsonl (O_APPEND +
---          fsync);
+--      (1) write `catalog.highwater` = g+1 (temp file, fsync, rename, fsync the directory), append
+--          one line `g+1 <ISO 8601> <host>` to `catalog.highwater.log` (the store's own append-only
+--          witness, O_APPEND + F_FULLFSYNC; fix 2026-10-17, codex C′ #3), and append
+--          `generationHighWater {intended: g+1}` to ledger/media-ledger.jsonl (the app's further
+--          witness, part 2b);
 --      (2) commit the transaction that runs the CAS g → g+1.
+--    fix 2026-10-17 (codex C′ #5): before (1) the sidecar must read EXACTLY g — this session's own
+--    generation — and the log's last line must not exceed g. Any other reading is a mark this
+--    session did not write (another writer's, or its own from a write that died after (1)): the
+--    write is refused, nothing commits, and the session refuses every later write until it is
+--    reopened, which runs the open check below. A surviving writer never consumes a crash warning.
+--    fix 2026-10-17 (codex C′ #6): the session's CAS expectation is read inside the serialized
+--    write, after every earlier write on the same repository has committed — two queued writes
+--    commit g+1 then g+2; a stale SECOND repository still gets `generationMismatch`.
 --    Invariant at open: highwater >= generation, always. highwater > generation means a restore
 --    of the database, or a crash between (1) and (2) — told apart only by the JSONL's last line —
 --    and either way the database opens READ-ONLY with the named refusal `restoredBelowHighWater`
@@ -90,6 +125,12 @@ CREATE TABLE catalog_state (
   master_archive   TEXT    CHECK (master_archive IS NULL OR json_valid(master_archive)), -- MasterArchiveDesignation
   imported_from    TEXT    -- 'catalog.json gen <N> sha256 <hex>' — the frozen backup this DB came from (§10 F′)
 ) STRICT;
+-- fix 2026-10-17 (codex C′ #2): one row; a second insert can only be a REPLACE of it.
+CREATE TRIGGER catalog_state_no_replace BEFORE INSERT ON catalog_state
+WHEN EXISTS (SELECT 1 FROM catalog_state)
+BEGIN SELECT RAISE(ABORT, 'catalog_state is one row, never replaced'); END;
+CREATE TRIGGER catalog_state_no_delete BEFORE DELETE ON catalog_state
+BEGIN SELECT RAISE(ABORT, 'catalog_state is never deleted'); END;
 
 CREATE TABLE generations (                -- the CAS counter (one row)                          -- F8
   id               INTEGER PRIMARY KEY NOT NULL CHECK (id = 1),
@@ -124,6 +165,12 @@ WHEN (NEW.adopted_at IS NOT OLD.adopted_at OR NEW.adopted_from IS NOT OLD.adopte
 BEGIN SELECT RAISE(ABORT, 'adopted_from names the generation the adoption jumped from'); END;
 CREATE TRIGGER generations_no_delete BEFORE DELETE ON generations
 BEGIN SELECT RAISE(ABORT, 'the generation counter is never deleted'); END;
+-- fix 2026-10-17 (codex C′ #2): `INSERT OR REPLACE INTO generations … 99` moved the counter 5 → 99
+-- with no adoption (REPLACE = delete + insert; the delete trigger fires only with
+-- recursive_triggers on). The counter is ONE row: a second insert can only be a REPLACE of it.
+CREATE TRIGGER generations_no_replace BEFORE INSERT ON generations
+WHEN EXISTS (SELECT 1 FROM generations)
+BEGIN SELECT RAISE(ABORT, 'the generation counter is one row, never replaced'); END;
 
 -- One row per committed generation (the CAS history; §4), written in the same transaction.
 CREATE TABLE generation_history (
@@ -151,6 +198,13 @@ WHEN NEW.kind = 'adopt'
       OR NEW.generation <= NEW.from_generation)
 BEGIN SELECT RAISE(ABORT, 'an adopt row names the current generation and the high-water above it'); END;
 CREATE TRIGGER generation_history_no_update BEFORE UPDATE ON generation_history             -- F8r3
+BEGIN SELECT RAISE(ABORT, 'generation history is append-only'); END;
+-- fix 2026-10-17 (codex C′ #2): replacing the CURRENT history row rewrote its writer despite the
+-- no-update trigger. A row for a generation that already has one can only be a REPLACE of it.
+CREATE TRIGGER generation_history_no_replace BEFORE INSERT ON generation_history
+WHEN EXISTS (SELECT 1 FROM generation_history WHERE generation = NEW.generation)
+BEGIN SELECT RAISE(ABORT, 'generation history is append-only (no replace)'); END;
+CREATE TRIGGER generation_history_no_delete BEFORE DELETE ON generation_history
 BEGIN SELECT RAISE(ABORT, 'generation history is append-only'); END;
 
 -- ---------------------------------------------------------------------------------------------
@@ -349,6 +403,24 @@ WHEN EXISTS (SELECT 1 FROM files WHERE id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'files rows are never replaced (id or live path already taken)'); END;
 CREATE TRIGGER files_no_delete BEFORE DELETE ON files
 BEGIN SELECT RAISE(ABORT, 'files rows are never deleted; stamp a removal marker'); END;
+-- fix 2026-10-17 (codex C′ #1): `UPDATE OR REPLACE files SET full_path = A's path WHERE id = B`
+-- deleted A (the UNIQUE live-path conflict; REPLACE's delete never reached files_no_delete with
+-- recursive_triggers off). The UPDATE form of files_no_replace: a live row may not take a path
+-- another live row holds on its volume (exact, or by fold on a case-insensitive volume). Same
+-- two indexed lookups as the INSERT form; `id <> NEW.id` leaves the row's own path alone.
+CREATE TRIGGER files_no_replace_upd                                                         -- fix 2026-10-17 (codex C′ #1)
+BEFORE UPDATE OF full_path, path_fold, volume_uuid, volume_case_sensitive, removal_state ON files
+WHEN NEW.removal_state IS NULL
+ AND (EXISTS (SELECT 1 FROM files WHERE removal_state IS NULL
+                AND volume_uuid = NEW.volume_uuid AND full_path = NEW.full_path AND id <> NEW.id)
+      OR (NEW.volume_case_sensitive = 0
+          AND EXISTS (SELECT 1 FROM files WHERE removal_state IS NULL AND volume_case_sensitive = 0
+                        AND volume_uuid = NEW.volume_uuid AND path_fold = NEW.path_fold AND id <> NEW.id)))
+BEGIN SELECT RAISE(ABORT, 'files rows are never replaced (a live path is already taken)'); END;
+-- and the PRIMARY KEY form of the same deletion (`UPDATE OR REPLACE files SET id = A WHERE id = B`):
+CREATE TRIGGER files_id_immutable BEFORE UPDATE OF id ON files                            -- fix 2026-10-17 (codex C′ #1)
+WHEN NEW.id IS NOT OLD.id
+BEGIN SELECT RAISE(ABORT, 'files.id is immutable'); END;
 
 -- F11: the removal marker. Every marker field is covered; removal_revision changes IF AND ONLY IF
 -- the marker changes, by exactly one; and the change must already have its tombstone (written
@@ -716,20 +788,29 @@ CREATE TABLE derived_unverified (
   PRIMARY KEY (digest, kind, seq, source_json_row_id)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX derived_unverified_by_source ON derived_unverified(import_run, source_ordinal) WHERE import_run IS NOT NULL;
+-- fix 2026-10-17 (codex C′ #7): the conflict trigger's probes seek this index (group, then value).
+CREATE INDEX derived_unverified_by_value ON derived_unverified(digest, kind, seq, value_json);   -- fix 2026-10-17 (codex C′ #7)
 CREATE TRIGGER derived_unverified_no_replace BEFORE INSERT ON derived_unverified             -- N2
 WHEN EXISTS (SELECT 1 FROM derived_unverified d WHERE d.digest = NEW.digest AND d.kind = NEW.kind
               AND d.seq = NEW.seq AND d.source_json_row_id = NEW.source_json_row_id)
 BEGIN SELECT RAISE(ABORT, 'derived_unverified: a duplicate is a finding, never a replacement'); END;
 -- different values for one (digest, kind, seq) from different rows flag each other
+-- fix 2026-10-17 (codex C′ #7): the WHEN walked every row of the group on EVERY insert (100 /
+-- 400 / 1,600 identical-value sources: 56k / 706k / 10.5M VM steps — quadratic). Now two range
+-- probes on derived_unverified_by_value: a value below NEW's, a value above it (value_json is NOT
+-- NULL, so "different" is exactly "below or above"; the row's own source id cannot repeat, by the
+-- no-replace trigger, so the only row with NEW's value AND NEW's source is NEW itself). The body
+-- no longer re-tests each row: once the WHEN holds the group carries two distinct values, so EVERY
+-- row of it has a differing partner. Same verdicts (N2, C7); CatalogDataSchemaScaleTests pins the
+-- growth (1,600 rows ≈ 4× the work of 400, not 15×).
 CREATE TRIGGER derived_unverified_flags_conflict AFTER INSERT ON derived_unverified           -- N2
 WHEN EXISTS (SELECT 1 FROM derived_unverified d WHERE d.digest = NEW.digest AND d.kind = NEW.kind
-              AND d.seq = NEW.seq AND d.source_json_row_id <> NEW.source_json_row_id
-              AND d.value_json IS NOT NEW.value_json)
+              AND d.seq = NEW.seq AND d.value_json < NEW.value_json)
+  OR EXISTS (SELECT 1 FROM derived_unverified d WHERE d.digest = NEW.digest AND d.kind = NEW.kind
+              AND d.seq = NEW.seq AND d.value_json > NEW.value_json)
 BEGIN
   UPDATE derived_unverified SET conflict = 1
-   WHERE digest = NEW.digest AND kind = NEW.kind AND seq = NEW.seq AND conflict = 0
-     AND EXISTS (SELECT 1 FROM derived_unverified o WHERE o.digest = NEW.digest AND o.kind = NEW.kind
-                  AND o.seq = NEW.seq AND o.value_json IS NOT derived_unverified.value_json);
+   WHERE digest = NEW.digest AND kind = NEW.kind AND seq = NEW.seq AND conflict = 0;
 END;
 CREATE TRIGGER derived_unverified_only_flag BEFORE UPDATE ON derived_unverified              -- N2
 WHEN NEW.digest IS NOT OLD.digest OR NEW.kind IS NOT OLD.kind OR NEW.seq IS NOT OLD.seq
@@ -807,6 +888,8 @@ CREATE TABLE regen_context (
   reason         TEXT,
   PRIMARY KEY (import_run, source_ordinal, kind, value_json)
 ) STRICT, WITHOUT ROWID;
+CREATE TRIGGER regen_context_no_delete BEFORE DELETE ON regen_context                        -- fix 2026-10-17 (codex C′ #1)
+BEGIN SELECT RAISE(ABORT, 'regen_context is imported evidence; never deleted'); END;
 
 -- Original A/V pair ids, and the event member keys that cite them ('pair:<pairGroupID>',
 -- 'id:<recordID>'), so an event member survives a re-run of Correlate that mints new ids.   -- F9
@@ -822,6 +905,8 @@ CREATE TABLE legacy_pair_ids (
   PRIMARY KEY (import_run, source_ordinal)
 ) STRICT, WITHOUT ROWID;
 CREATE INDEX legacy_pair_ids_by_group ON legacy_pair_ids(pair_group_id);
+CREATE TRIGGER legacy_pair_ids_no_delete BEFORE DELETE ON legacy_pair_ids                    -- fix 2026-10-17 (codex C′ #1)
+BEGIN SELECT RAISE(ABORT, 'legacy_pair_ids is imported evidence; never deleted'); END;
 
 -- F9r3: person-search evidence — ONE row per (file, search) INCLUDING ZERO HITS, so "Donna was
 -- looked for here and not found" survives. Source today (contract §e.8): catalog.json carries
@@ -1250,6 +1335,8 @@ CREATE TRIGGER import_items_no_replace BEFORE INSERT ON import_items
 WHEN EXISTS (SELECT 1 FROM import_items WHERE import_run = NEW.import_run
               AND source_file = NEW.source_file AND source_ordinal = NEW.source_ordinal)
 BEGIN SELECT RAISE(ABORT, 'import_items: one occurrence, one row'); END;
+CREATE TRIGGER import_items_no_delete BEFORE DELETE ON import_items                          -- fix 2026-10-17 (codex C′ #1)
+BEGIN SELECT RAISE(ABORT, 'import_items is the map of an import; never deleted'); END;
 
 -- per-row Tier 0 results, read from catalog-audit.json (F6: the importer does not walk the disk)
 -- N1: every result is kept verbatim, and `accepted` says whether it may gate the row:
@@ -1284,6 +1371,8 @@ WHEN NEW.accepted IS NOT (
     FROM import_runs r WHERE r.run_id = NEW.import_run)
 BEGIN SELECT RAISE(ABORT, 'audit_results.accepted must follow the snapshot rule (N1)'); END;
 CREATE TRIGGER audit_results_no_update BEFORE UPDATE ON audit_results                       -- N1
+BEGIN SELECT RAISE(ABORT, 'audit results are evidence'); END;
+CREATE TRIGGER audit_results_no_delete BEFORE DELETE ON audit_results                       -- fix 2026-10-17 (codex C′ #1)
 BEGIN SELECT RAISE(ABORT, 'audit results are evidence'); END;
 
 -- A run is inserted OPEN and finished by one UPDATE inside the import transaction. F1
@@ -1350,6 +1439,8 @@ BEGIN SELECT RAISE(ABORT, 'import run cannot finish: an occurrence, a landing or
 CREATE TRIGGER import_runs_finished_is_final BEFORE UPDATE ON import_runs
 WHEN OLD.finished_at IS NOT NULL
 BEGIN SELECT RAISE(ABORT, 'a finished import run is history'); END;
+CREATE TRIGGER import_runs_no_delete BEFORE DELETE ON import_runs                            -- fix 2026-10-17 (codex C′ #1)
+BEGIN SELECT RAISE(ABORT, 'an import run is history; never deleted'); END;
 
 -- ---------------------------------------------------------------------------------------------
 -- 9. Certifying sidecars as tables (§9.7): completion stamps carry scope + generation certified.
@@ -1381,6 +1472,8 @@ CREATE TABLE job_markers (                 -- catalog-audit.json, fullhash-backf
   CHECK ((import_run IS NULL) = (source_file IS NULL) AND (import_run IS NULL) = (source_ordinal IS NULL)),
   PRIMARY KEY (job, scope, started_at)
 ) STRICT, WITHOUT ROWID;
+CREATE TRIGGER job_markers_no_delete BEFORE DELETE ON job_markers                            -- fix 2026-10-17 (codex C′ #1)
+BEGIN SELECT RAISE(ABORT, 'job markers are history; never deleted'); END;
 
 -- ---------------------------------------------------------------------------------------------
 -- 10. LEDGER (§9.7): commits with the mutation it records; append-only by trigger; the JSONL
@@ -1423,15 +1516,29 @@ BEGIN SELECT RAISE(ABORT, 'the ledger is append-only (no replace)'); END;
 -- 11. Open checks at every open (§9.2): PRAGMA integrity_check; PRAGMA foreign_key_check;
 --     SELECT * FROM catalog_state and generations — exactly one row each, schema_version known;
 --     no `adopt` history row above the counter (a half-done adoption, F8r3);
---     then the EFFECTIVE high-water (F8 final): the larger of catalog.highwater (written BEFORE each
---     commit, F8r3) and the newest `generationHighWater` line of the JSONL ledger — read BOTH on
---     EVERY open, not only when the sidecar is missing (a restore that rewinds database AND sidecar
---     together is caught by the ledger, which lives elsewhere and is append-only):
+--     then the EFFECTIVE high-water (F8 final; fix 2026-10-17, codex C′ #3/#4), INSIDE ONE
+--     `BEGIN IMMEDIATE` so no other writer's phase (1) can land between the read and the publish:
+--     the largest of THREE witnesses, read on EVERY open —
+--       catalog.highwater      — the sidecar, replaced before each commit (F8r3);
+--       catalog.highwater.log  — the store's append-only log beside the database, one line per
+--                                publication (`<generation> <ISO 8601> <host>`), its LAST parseable
+--                                line; a restore that rewinds database AND sidecar together is
+--                                caught by this file, which is never replaced (the app's JSONL
+--                                ledger line, part 2b, is the further witness; a restore of all
+--                                three files from one moment is undetectable by construction);
+--       MAX(generation) FROM generation_history — restored with the database, so it only catches a
+--                                counter rewound inside the file —
+--     and then:
 --       high-water = generation ⇒ normal open;
 --       high-water > generation ⇒ READ-ONLY, named refusal `restoredBelowHighWater`, until a
---         person adopts (§1); the words say "restored" or "the last save did not finish" from
---         the JSONL's last `generationHighWater` line;
---       high-water < generation ⇒ the file was rolled back: raise it to the generation;
---       missing ⇒ recreated from the larger of the database generation and the newest
---         `generationHighWater` ledger line, then the rules above.
+--         person adopts (§1); the words name the witness that recorded it;
+--       a witness that exists but holds no readable value ⇒ READ-ONLY until a person adopts
+--         (adoption rewrites the sidecar and appends a readable line);
+--       sidecar < generation (rolled back) or missing ⇒ raised to the generation by
+--         COMPARE-AND-RAISE: re-read immediately before writing, never written below what it then
+--         holds (codex C′ #4: an opener could otherwise publish 5 over a 6 landed meanwhile); the
+--         log gains the same line so both witnesses agree.
+--     ADOPTION (§1) takes the person's number only when it is the witnesses' highest value while
+--     every witness is readable; with a witness missing or poisoned the person's number becomes
+--     the mark, never below a readable witness. Both files are written BEFORE the database jumps.
 -- ---------------------------------------------------------------------------------------------

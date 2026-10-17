@@ -133,7 +133,7 @@ extension CatalogDataSchema {
         """,
     ]
 
-    // MARK: - import_items + 1 trigger
+    // MARK: - import_items + 2 triggers
 
     static let importItems: [String] = [
         """
@@ -167,9 +167,13 @@ extension CatalogDataSchema {
                       AND source_file = NEW.source_file AND source_ordinal = NEW.source_ordinal)
         BEGIN SELECT RAISE(ABORT, 'import_items: one occurrence, one row'); END
         """,
+        """
+        CREATE TRIGGER import_items_no_delete BEFORE DELETE ON import_items                          -- fix 2026-10-17 (codex C′ #1)
+        BEGIN SELECT RAISE(ABORT, 'import_items is the map of an import; never deleted'); END
+        """,
     ]
 
-    // MARK: - audit_results + 1 index, 5 triggers
+    // MARK: - audit_results + 1 index, 7 triggers (incl. import_runs')
 
     static let auditResults: [String] = [
         """
@@ -202,6 +206,10 @@ extension CatalogDataSchema {
         """,
         """
         CREATE TRIGGER audit_results_no_update BEFORE UPDATE ON audit_results                       -- N1
+        BEGIN SELECT RAISE(ABORT, 'audit results are evidence'); END
+        """,
+        """
+        CREATE TRIGGER audit_results_no_delete BEFORE DELETE ON audit_results                       -- fix 2026-10-17 (codex C′ #1)
         BEGIN SELECT RAISE(ABORT, 'audit results are evidence'); END
         """,
         """
@@ -271,6 +279,10 @@ extension CatalogDataSchema {
         WHEN OLD.finished_at IS NOT NULL
         BEGIN SELECT RAISE(ABORT, 'a finished import run is history'); END
         """,
+        """
+        CREATE TRIGGER import_runs_no_delete BEFORE DELETE ON import_runs                            -- fix 2026-10-17 (codex C′ #1)
+        BEGIN SELECT RAISE(ABORT, 'an import run is history; never deleted'); END
+        """,
     ]
 
     // MARK: - integrity_runs
@@ -292,7 +304,7 @@ extension CatalogDataSchema {
         """,
     ]
 
-    // MARK: - job_markers
+    // MARK: - job_markers + 1 trigger
 
     static let jobMarkers: [String] = [
         """
@@ -310,6 +322,10 @@ extension CatalogDataSchema {
           CHECK ((import_run IS NULL) = (source_file IS NULL) AND (import_run IS NULL) = (source_ordinal IS NULL)),
           PRIMARY KEY (job, scope, started_at)
         ) STRICT, WITHOUT ROWID
+        """,
+        """
+        CREATE TRIGGER job_markers_no_delete BEFORE DELETE ON job_markers                            -- fix 2026-10-17 (codex C′ #1)
+        BEGIN SELECT RAISE(ABORT, 'job markers are history; never deleted'); END
         """,
     ]
 

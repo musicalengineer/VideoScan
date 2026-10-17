@@ -19,6 +19,7 @@
 
 import Foundation
 import GRDB
+import SQLite3
 import Testing
 @testable import VideoScanCore
 
@@ -160,4 +161,59 @@ struct CatalogDataSchemaScaleTests {
         }
         await repository.close()
     }
+
+    // MARK: - Codex C′ #7: the N2 conflict trigger must not be quadratic
+
+    /// Codex measured ~56k / 192k / 704k VM steps for 100 / 200 / 400
+    /// identical-value sources: `derived_unverified_flags_conflict` walked
+    /// every row sharing (digest, kind, seq) on each insert. VM steps are
+    /// SQLite's own count of work done (`sqlite3_stmt_status`, the trigger's
+    /// steps included), so the growth ratio is deterministic; wall time is
+    /// budgeted load-aware beside it.
+    @Test func identicalDerivedValuesFlagConflictsInLinearWork() async throws {
+        let fixture = try await StoreFixture.make(.grdb, generation: 0)
+        defer { fixture.remove() }
+        let queue = try DatabaseQueue(path: fixture.url.path)
+        let sizes = [100, 400, 1_600]
+        var steps: [Int: Int] = [:]
+        var elapsed: [Int: Duration] = [:]
+        let clock = ContinuousClock()
+        let loadBefore = TimingBudget.sampleLoad()
+        try queue.inDatabase { db in
+            for (group, size) in sizes.enumerated() {
+                let digest = Self.digest(0xC7_0000 + group)
+                try db.execute(sql: "INSERT INTO content (digest, byte_count, first_seen_at, first_seen_how) VALUES (?, 1, 1, 'job')", arguments: [digest])
+                let insert = try db.cachedStatement(sql: "INSERT INTO derived_unverified (digest, kind, seq, source_json_row_id, value_json) VALUES (?, 'scene', 0, ?, '{\"text\":\"the same caption\"}')")
+                var total = 0
+                let start = clock.now
+                try db.inTransaction {
+                    for row in 0..<size {
+                        try insert.execute(arguments: [digest, Self.fileID(row)])
+                        total += Int(sqlite3_stmt_status(insert.sqliteStatement, SQLITE_STMTSTATUS_VM_STEP, 1))
+                    }
+                    return .commit
+                }
+                steps[size] = total
+                elapsed[size] = clock.now - start
+                // The verdict is unchanged: identical values, no conflict; one different value flags them all.
+                let flagged = try Int.fetchOne(db, sql: "SELECT count(*) FROM derived_unverified WHERE digest = ? AND conflict = 1", arguments: [digest]) ?? -1
+                #expect(flagged == 0)
+                try db.execute(sql: "INSERT INTO derived_unverified (digest, kind, seq, source_json_row_id, value_json) VALUES (?, 'scene', 0, ?, '{\"text\":\"a different caption\"}')",
+                               arguments: [digest, Self.fileID(size)])
+                let flaggedAfter = try Int.fetchOne(db, sql: "SELECT count(*) FROM derived_unverified WHERE digest = ? AND conflict = 1", arguments: [digest]) ?? -1
+                #expect(flaggedAfter == size + 1)
+            }
+        }
+        for size in sizes {
+            print("[schema-scale] \(size) identical derived values: \(steps[size] ?? 0) VM steps (\((steps[size] ?? 0) / size) per row), \(elapsed[size] ?? .zero)")
+        }
+        let growth = Double(steps[1_600] ?? 0) / Double(max(steps[400] ?? 1, 1))
+        #expect(growth < 6, "4× the rows cost \(growth)× the work (linear ≈ 4, the quadratic trigger measured ≈ 16)")
+        expectWithinTimingBudget("1,600 identical derived values through the conflict trigger",
+                                 measured: elapsed[1_600] ?? .zero, budget: Self.conflictBudget, loadBefore: loadBefore)
+    }
+
+    /// 1,600 inserts through two indexed probes each: a few ms. Budgeted at
+    /// 1 s so a return of the quadratic walk (hundreds of ms) is a miss.
+    static let conflictBudget: Duration = .seconds(1)
 }

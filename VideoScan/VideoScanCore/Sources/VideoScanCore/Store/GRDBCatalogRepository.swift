@@ -2,19 +2,36 @@
 // The SQLite plugin behind CatalogRepository, through GRDB 7 (pinned in
 // Package.swift). Step C′ part 1: the bookkeeping; part 2a adds the data
 // tables (CatalogDataSchema, migration `v2_data`); the record methods are
-// part 2b.
+// part 2b. The codex C′ pass of 2026-10-17 (docs/reviews/codex/
+// codex-review-sqlite-store-parts-1-2a-step-c-2026-10-17.md) hardened the
+// generation bookkeeping; each change is marked `codex C′ #N` below.
 //
 // What this file guarantees (contract §9.2, §9.5, §e.9, F8r3):
-//   - every connection runs foreign_keys=ON, synchronous=FULL, fullfsync=1
-//     (macOS: FULL alone stops at the drive's cache), a busy timeout, WAL;
+//   - every connection runs foreign_keys=ON, recursive_triggers=ON (so a
+//     REPLACE's implicit delete reaches the delete triggers, codex C′ #1),
+//     synchronous=FULL, fullfsync=1 (macOS: FULL alone stops at the drive's
+//     cache), a busy timeout, WAL;
 //   - at open: integrity_check + foreign_key_check → `.refused` with the
 //     engine's words; a NEWER schema_version → `.refused`; exactly one
-//     catalog_state row and one generations row;
+//     catalog_state row and one generations row; then the high-water
+//     reconciliation INSIDE one immediate transaction (codex C′ #4) against
+//     THREE witnesses — the sidecar `catalog.highwater`, the append-only
+//     `catalog.highwater.log` (codex C′ #3) and generation_history — any of
+//     them above the generation ⇒ `.readOnly` (`restoredBelowHighWater`)
+//     until a person adopts; a sidecar below the generation is raised by
+//     compare-and-raise, never lowered;
 //   - a write is ONE immediate transaction: body, then the generation CAS
-//     (`changes() == 1` or `.generationMismatch`), then the external
-//     high-water raised to g+1 (phase 1), then the history row, then COMMIT
-//     (phase 2). A crash between the phases leaves highwater > generation,
-//     which the next open reports as read-only until a person adopts;
+//     (`changes() == 1` or `.generationMismatch`), then phase 1 — the
+//     sidecar must read EXACTLY this session's generation g (codex C′ #5),
+//     it is raised to g+1 and the log gains a line — then the history row,
+//     then COMMIT (phase 2). A crash between the phases leaves the
+//     witnesses above the generation, which the next open reports as
+//     read-only; a session that finds the mark moved from under it refuses
+//     every later write until it is reopened;
+//   - the session's CAS expectation lives in a box the serialized write
+//     reads and updates (codex C′ #6): two writes queued on one repository
+//     commit g+1 then g+2, while a stale SECOND repository still gets
+//     `.generationMismatch`;
 //   - adoption is the only jump larger than +1, and the DDL's triggers —
 //     not this file — are what refuse any other jump.
 //
@@ -32,7 +49,9 @@
 // `await` on its methods is "take the mutex, possibly waiting". The GRDB
 // pool has its own serial writer queue underneath, so the two never nest
 // the wrong way round: the actor hands the closure to the pool and
-// suspends until the pool is done.
+// suspends until the pool is done. While it is suspended another call may
+// enter the actor — which is why the write's expectation is NOT actor
+// state but a locked box the serialized closure owns.
 
 import Foundation
 import GRDB
@@ -73,7 +92,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     // MARK: - State
 
-    private enum Mode: Equatable {
+    private enum Mode: Equatable, Sendable {
         case closed
         case readWrite
         case readOnly(reason: String)
@@ -93,15 +112,22 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let reason: String
     }
 
+    /// A test seam: a synchronous closure run at one named point. A throw
+    /// is "the process died here".
+    typealias Seam = @Sendable () throws -> Void
+
     public let host: String
     private let durability: Durability
     private var pool: DatabasePool?
     private var databaseURL: URL?
     private var mode: Mode = .closed
-    private var committedGeneration = 0
+    /// The generation this session last loaded or committed, and whether
+    /// a reopen is owed — read and updated inside the serialized write.
+    private let session = WriterSession()
     /// Test seam: runs after phase 1 (high-water raised) and before COMMIT.
-    /// A throw here is "the process died between the phases".
-    private var crashBeforeCommit: (@Sendable () throws -> Void)?
+    private var crashBeforeCommit: Seam?
+    /// Test seam: runs at open between reading the witnesses and publishing.
+    private var openHook: Seam?
 
     public init(host: String = GRDBCatalogRepository.defaultHost,
                 durability: Durability = .archival) {
@@ -109,7 +135,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         self.durability = durability
     }
 
-    public var generation: Int { committedGeneration }
+    public var generation: Int { session.generation }
 
     // MARK: - Open
 
@@ -125,15 +151,13 @@ public actor GRDBCatalogRepository: CatalogRepository {
         }
         do {
             let loaded = try await Self.prepare(opened, host: host)
-            let readOnlyReason = opened.readOnlyReason ?? Self.folderNotWritableReason(for: url)
-            let newMode = readOnlyReason.map { Mode.readOnly(reason: $0) }
-                ?? Self.reconcileHighWater(generation: loaded, at: url, durability: durability)
+            let settled = try await settle(opened, loaded: loaded, at: url)
             pool = opened.pool
             databaseURL = url
-            committedGeneration = loaded
-            mode = newMode
-            storeLog.notice("catalog store OPEN \(url.lastPathComponent, privacy: .public) generation \(loaded, privacy: .public) → \(String(describing: newMode.outcome), privacy: .public)")
-            return newMode.outcome
+            session.reset(generation: settled.generation)
+            mode = settled.mode
+            storeLog.notice("catalog store OPEN \(url.lastPathComponent, privacy: .public) generation \(settled.generation, privacy: .public) → \(String(describing: settled.mode.outcome), privacy: .public)")
+            return settled.mode.outcome
         } catch {
             try? opened.pool.close()
             return refusedToOpen(url, Self.words(error))
@@ -189,6 +213,11 @@ public actor GRDBCatalogRepository: CatalogRepository {
         configuration.prepareDatabase { db in
             try db.execute(sql: "PRAGMA synchronous = \(synchronous)")
             try db.execute(sql: "PRAGMA fullfsync = \(fullfsync)")
+            // codex C′ #1: a REPLACE conflict resolution deletes the row in
+            // the way, and SQLite fires that row's BEFORE DELETE trigger
+            // only when this is on. The DDL's no-delete triggers are the
+            // second layer; this pragma is what lets them see the delete.
+            try db.execute(sql: "PRAGMA recursive_triggers = ON")
             // The engine's own busy handler (not GRDB's `busyMode`, which
             // installs a callback the pragma cannot report back).
             try db.execute(sql: "PRAGMA busy_timeout = \(busyMilliseconds)")
@@ -286,41 +315,104 @@ public actor GRDBCatalogRepository: CatalogRepository {
         return try await pool.read { db in try migrator.hasCompletedMigrations(db) }
     }
 
-    // MARK: - High-water at open
+    // MARK: - High-water at open (DDL §11)
 
-    /// DDL §11: `highwater > generation` ⇒ read-only with words;
-    /// `highwater < generation` ⇒ the file was rolled back, raise it (never
-    /// the reverse); missing ⇒ recreate from the database generation (the
-    /// ledger's newest `generationHighWater` line is the app's to consult —
-    /// part 2); unreadable ⇒ read-only until a person decides.
-    private static func reconcileHighWater(generation: Int, at url: URL, durability: Durability) -> Mode {
-        switch CatalogHighWater.read(besideDatabaseAt: url) {
-        case .value(let highWater) where highWater > generation:
-            return .readOnly(reason: restoredBelowHighWaterWords(generation: generation, highWater: highWater))
-        case .value(let highWater) where highWater < generation:
-            storeLog.notice("catalog store: \(CatalogHighWater.fileName, privacy: .public) read \(highWater, privacy: .public) below generation \(generation, privacy: .public) — raised to the generation")
-            return publishHighWater(generation, at: url, durability: durability)
-        case .value:
-            return .readWrite
-        case .missing:
-            storeLog.notice("catalog store: no \(CatalogHighWater.fileName, privacy: .public) — recreated at generation \(generation, privacy: .public)")
-            return publishHighWater(generation, at: url, durability: durability)
-        case .unreadable(let words):
-            return .readOnly(reason: "\(words) — writing is disabled until a person adopts a high-water explicitly, or removes the file so it is recreated from the database")
+    private struct Settled: Sendable {
+        let generation: Int
+        let mode: Mode
+    }
+
+    /// A read-only open (a sealed file, a read-only folder) keeps the
+    /// generation it loaded; a read-write open reconciles the witnesses
+    /// under the writer lock.
+    private func settle(_ opened: Opened, loaded: Int, at url: URL) async throws -> Settled {
+        if let reason = opened.readOnlyReason ?? Self.folderNotWritableReason(for: url) {
+            return Settled(generation: loaded, mode: .readOnly(reason: reason))
+        }
+        let plan = OpenPlan(databaseURL: url, host: host, publish: durability.publish, hook: openHook)
+        return try await opened.pool.writeWithoutTransaction { db in try plan.run(db) }
+    }
+
+    /// Reconciliation at open, INSIDE one immediate transaction (codex C′
+    /// #4). The writer lock keeps every other writer's phase 1 out from
+    /// between this read and this publish; the publish re-reads the
+    /// sidecar first and never writes below what it finds. `hook` is the
+    /// test seam that sits in that window.
+    private struct OpenPlan: Sendable {
+        let databaseURL: URL
+        let host: String
+        let publish: AtomicFilePublish.Durability
+        let hook: Seam?
+
+        func run(_ db: Database) throws -> Settled {
+            var settled = Settled(generation: 0, mode: .closed)
+            try db.inTransaction(.immediate) {
+                settled = try reconcile(db)
+                return .commit
+            }
+            return settled
+        }
+
+        private func reconcile(_ db: Database) throws -> Settled {
+            let generation = try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? 0
+            let witnesses = try HighWaterWitnesses.read(db, besideDatabaseAt: databaseURL)
+            try hook?()
+            return Settled(generation: generation, mode: mode(for: witnesses, generation: generation))
+        }
+
+        /// `highest > generation` ⇒ read-only with words naming the witness;
+        /// a poisoned witness ⇒ read-only until a person decides; the sidecar
+        /// missing or below ⇒ raised (never the reverse); equal ⇒ read-write.
+        private func mode(for witnesses: HighWaterWitnesses, generation: Int) -> Mode {
+            if let words = witnesses.unreadable {
+                return .readOnly(reason: GRDBCatalogRepository.poisonedWitnessWords(words))
+            }
+            if witnesses.highest > generation {
+                return .readOnly(reason: GRDBCatalogRepository.restoredBelowHighWaterWords(generation: generation, witnesses: witnesses))
+            }
+            if witnesses.sidecar == .value(generation) { return .readWrite }
+            return raise(to: generation)
+        }
+
+        /// Compare-and-raise: re-read the sidecar immediately before writing
+        /// it, and never write below what it now holds. The log gains the
+        /// same line so both witnesses agree.
+        private func raise(to generation: Int) -> Mode {
+            let current = CatalogHighWater.read(besideDatabaseAt: databaseURL)
+            if case .value(let value) = current, value >= generation {
+                guard value > generation else { return .readWrite }
+                return .readOnly(reason: GRDBCatalogRepository.restoredBelowHighWaterWords(
+                    generation: generation, highest: value, witness: "\(CatalogHighWater.fileName) now reads \(value), published while this catalog was opening"))
+            }
+            if case .unreadable(let words) = current {
+                return .readOnly(reason: GRDBCatalogRepository.poisonedWitnessWords(words))
+            }
+            storeLog.notice("catalog store: \(CatalogHighWater.fileName, privacy: .public) \(current == .missing ? "missing" : "below the generation", privacy: .public) — raised to generation \(generation, privacy: .public)")
+            do {
+                try CatalogHighWater.write(generation, besideDatabaseAt: databaseURL, durability: publish)
+                try CatalogHighWaterLedger.append(generation, host: host, besideDatabaseAt: databaseURL, durability: publish)
+                return .readWrite
+            } catch {
+                return .readOnly(reason: "the high-water could not be written (\(GRDBCatalogRepository.words(error))) — the catalog opened for reading only")
+            }
         }
     }
 
-    private static func publishHighWater(_ generation: Int, at url: URL, durability: Durability) -> Mode {
-        do {
-            try CatalogHighWater.write(generation, besideDatabaseAt: url, durability: durability.publish)
-            return .readWrite
-        } catch {
-            return .readOnly(reason: "\(CatalogHighWater.fileName) could not be written (\(words(error))) — the catalog opened for reading only")
-        }
+    private static func poisonedWitnessWords(_ words: String) -> String {
+        "\(words) — writing is disabled until a person adopts a high-water explicitly, or removes the file so it is recreated from the database"
     }
 
-    private static func restoredBelowHighWaterWords(generation: Int, highWater: Int) -> String {
-        "restoredBelowHighWater: this catalog is at generation \(generation) but this Mac already wrote generation \(highWater) — it is an older copy (a restore, or a crash between a high-water write and its commit). Open the newer copy, or adopt this one explicitly to write to it again."
+    private static func restoredBelowHighWaterWords(generation: Int, witnesses: HighWaterWitnesses) -> String {
+        restoredBelowHighWaterWords(generation: generation, highest: witnesses.highest, witness: witnesses.testimony)
+    }
+
+    private static func restoredBelowHighWaterWords(generation: Int, highest: Int, witness: String) -> String {
+        "restoredBelowHighWater: this catalog is at generation \(generation) but this Mac already wrote generation \(highest) — \(witness). It is an older copy (a restore, or a crash between a high-water write and its commit). Open the newer copy, or adopt this one explicitly to write to it again."
+    }
+
+    /// Internal test seam. See `openHook`.
+    func injectOpenHook(_ seam: Seam?) {
+        openHook = seam
     }
 
     // MARK: - Write (one transaction, CAS, two-phase high-water)
@@ -329,7 +421,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
                       _ body: @Sendable (any CatalogTransaction) throws -> Void) async -> CatalogWriteOutcome {
         guard let pool, let databaseURL else { return .refused(reason: "not open") }
         if case .readOnly(let reason) = mode { return .refused(reason: "read-only: \(reason)") }
-        let plan = WritePlan(expected: committedGeneration, door: door, host: host, databaseURL: databaseURL,
+        let plan = WritePlan(session: session, door: door, host: host, databaseURL: databaseURL,
                              publish: durability.publish, crashBeforeCommit: crashBeforeCommit)
         let outcome: CatalogWriteOutcome
         do {
@@ -338,7 +430,6 @@ public actor GRDBCatalogRepository: CatalogRepository {
             outcome = .refused(reason: "write rolled back: \(Self.words(error))")
         }
         if case .committed(let generation) = outcome {
-            committedGeneration = generation
             storeLog.debug("catalog store commit generation \(generation, privacy: .public) via \(door.rawValue, privacy: .public)")
         }
         return outcome
@@ -347,27 +438,35 @@ public actor GRDBCatalogRepository: CatalogRepository {
     /// Everything one write needs, captured by value so the closure the
     /// pool runs touches no actor state. For Rick: a plain struct of
     /// `let`s handed to another thread — the Swift way to say "no shared
-    /// mutable state crosses here" (`Sendable`).
+    /// mutable state crosses here" (`Sendable`). The one shared thing, the
+    /// session box, has its own lock.
     private struct WritePlan: Sendable {
-        let expected: Int
+        let session: WriterSession
         let door: CatalogWriter
         let host: String
         let databaseURL: URL
         let publish: AtomicFilePublish.Durability
-        let crashBeforeCommit: (@Sendable () throws -> Void)?
+        let crashBeforeCommit: Seam?
 
         func run(_ db: Database,
                  _ body: @Sendable (any CatalogTransaction) throws -> Void) throws -> CatalogWriteOutcome {
+            if let reason = session.needsReopen {
+                return .refused(reason: "reopen the catalog: \(reason)")
+            }
+            // codex C′ #6: read HERE, on the writer, after every earlier
+            // write on this repository has committed and updated the box.
+            let expected = session.generation
             var outcome: CatalogWriteOutcome = .refused(reason: "the transaction did not run")
             try db.inTransaction(.immediate) {
-                outcome = try steps(db, body)
+                outcome = try steps(db, expected: expected, body)
                 if case .committed = outcome { return .commit }
                 return .rollback
             }
+            if case .committed(let generation) = outcome { session.commit(generation) }
             return outcome
         }
 
-        private func steps(_ db: Database,
+        private func steps(_ db: Database, expected: Int,
                            _ body: @Sendable (any CatalogTransaction) throws -> Void) throws -> CatalogWriteOutcome {
             let next = expected + 1
             let now = unixNow()
@@ -381,39 +480,68 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 return .generationMismatch(expected: expected, found: found)
             }
             // Phase 1 (F8r3): the external mark says `next` BEFORE the commit.
-            if let problem = raiseHighWater(to: next) {
+            if let problem = publishMark(expected: expected, next: next) {
                 return .refused(reason: problem)
             }
-            // files_live / files_total: 0 until part 2 has a `files` table to count.
+            // files_live / files_total: 0 until part 2b has a `files` row count to write.
             try db.execute(sql: "INSERT INTO generation_history (generation, committed_at, host, writer, files_live, files_total, kind, from_generation) VALUES (?, ?, ?, ?, 0, 0, 'commit', NULL)",
                            arguments: [next, now, host, door.rawValue])
             try crashBeforeCommit?()
             return .committed(generation: next)                   // phase 2 is the COMMIT that follows
         }
 
-        /// Never lowers the mark. The write lock is held, so the only way
-        /// the file can read above `next` is a mark this session never
-        /// learned about — refuse, nothing has committed.
-        private func raiseHighWater(to next: Int) -> String? {
-            switch CatalogHighWater.read(besideDatabaseAt: databaseURL) {
-            case .value(let current) where current > next:
-                return "\(CatalogHighWater.fileName) reads \(current), above the generation this write would reach (\(next)) — reopen the catalog"
-            case .unreadable(let words):
-                return "\(words) — reopen the catalog"
-            case .value, .missing:
-                break
+        /// Phase 1 (F8r3, codex C′ #5). The witnesses must read EXACTLY this
+        /// session's generation; anything else is a mark this session did
+        /// not write — another writer's, or this session's own from a write
+        /// that died after publishing — and only a reopen (which runs the
+        /// restore check) may resolve it. Nothing has committed either way.
+        private func publishMark(expected: Int, next: Int) -> String? {
+            if let stale = staleMarkWords(expected: expected) {
+                session.flagReopen(stale)
+                return "\(stale) — reopen the catalog"
             }
             do {
                 try CatalogHighWater.write(next, besideDatabaseAt: databaseURL, durability: publish)
-                return nil
             } catch {
                 return "\(CatalogHighWater.fileName) could not be written: \(GRDBCatalogRepository.words(error))"
+            }
+            do {
+                try CatalogHighWaterLedger.append(next, host: host, besideDatabaseAt: databaseURL, durability: publish)
+                return nil
+            } catch {
+                // The sidecar already reads `next`: this session's mark is out of step with its generation.
+                let reason = "\(CatalogHighWaterLedger.fileName) could not be appended (\(GRDBCatalogRepository.words(error))) after \(CatalogHighWater.fileName) was raised to \(next)"
+                session.flagReopen(reason)
+                return "\(reason) — reopen the catalog"
+            }
+        }
+
+        private func staleMarkWords(expected: Int) -> String? {
+            switch CatalogHighWater.read(besideDatabaseAt: databaseURL) {
+            case .value(let current) where current > expected:
+                return "another writer published generation \(current)"
+            case .value(let current) where current < expected:
+                return "\(CatalogHighWater.fileName) reads \(current), below this session's generation \(expected)"
+            case .missing:
+                return "\(CatalogHighWater.fileName) is missing"
+            case .unreadable(let words):
+                return words
+            case .value:
+                break
+            }
+            switch CatalogHighWaterLedger.read(besideDatabaseAt: databaseURL) {
+            case .value(let last) where last > expected:
+                return "\(CatalogHighWaterLedger.fileName) last recorded generation \(last), above this session's \(expected)"
+            case .unreadable(let words):
+                return words
+            case .value, .missing:
+                return nil
             }
         }
     }
 
     /// Internal test seam. See `crashBeforeCommit`.
-    func injectCrashBeforeCommit(_ seam: (@Sendable () throws -> Void)?) {
+    func injectCrashBeforeCommit(_ seam: Seam?) {
         crashBeforeCommit = seam
     }
 
@@ -433,7 +561,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         guard let pool else { throw CatalogRepositoryError.notOpen }
         return try await pool.read { db in
             var reported: [String: String] = [:]
-            for name in ["journal_mode", "synchronous", "fullfsync", "foreign_keys", "busy_timeout", "user_version"] {
+            for name in ["journal_mode", "synchronous", "fullfsync", "foreign_keys", "recursive_triggers", "busy_timeout", "user_version"] {
                 reported[name] = try Row.fetchOne(db, sql: "PRAGMA \(name)").map { Self.text($0[0]) } ?? ""
             }
             return reported
@@ -454,27 +582,19 @@ public actor GRDBCatalogRepository: CatalogRepository {
     public func verify() async -> CatalogVerifyOutcome {
         guard let pool, let databaseURL else { return .problems(["not open"]) }
         var problems: [String] = []
-        var generation = committedGeneration
+        var generation = session.generation
+        var highWater = generation
         do {
             try await Self.checkEngine(pool)
-            let bookkeeping = try await pool.read { db in try Self.bookkeepingProblems(db) }
+            let (bookkeeping, witnesses) = try await pool.read { db in
+                (try Self.bookkeepingProblems(db), try HighWaterWitnesses.read(db, besideDatabaseAt: databaseURL))
+            }
             generation = bookkeeping.generation
             problems += bookkeeping.problems
+            problems += Self.witnessProblems(witnesses, generation: generation)
+            highWater = max(witnesses.highest, generation)
         } catch {
             problems.append(Self.words(error))
-        }
-        let highWater: Int
-        switch CatalogHighWater.read(besideDatabaseAt: databaseURL) {
-        case .value(let value):
-            highWater = value
-            if value < generation { problems.append("\(CatalogHighWater.fileName) reads \(value), below generation \(generation)") }
-            if value > generation { problems.append(Self.restoredBelowHighWaterWords(generation: generation, highWater: value)) }
-        case .missing:
-            highWater = generation
-            problems.append("\(CatalogHighWater.fileName) is missing")
-        case .unreadable(let words):
-            highWater = generation
-            problems.append(words)
         }
         return problems.isEmpty ? .ok(generation: generation, highWater: highWater) : .problems(problems)
     }
@@ -493,15 +613,49 @@ public actor GRDBCatalogRepository: CatalogRepository {
         return (generation, problems)
     }
 
+    /// The same three witnesses open consults, as findings for a person.
+    private static func witnessProblems(_ witnesses: HighWaterWitnesses, generation: Int) -> [String] {
+        var problems: [String] = []
+        switch witnesses.sidecar {
+        case .value(let value) where value < generation:
+            problems.append("\(CatalogHighWater.fileName) reads \(value), below generation \(generation)")
+        case .missing:
+            problems.append("\(CatalogHighWater.fileName) is missing")
+        case .unreadable(let words):
+            problems.append(words)
+        case .value:
+            break
+        }
+        switch witnesses.log {
+        case .missing:
+            problems.append("\(CatalogHighWaterLedger.fileName) is missing")
+        case .unreadable(let words):
+            problems.append(words)
+        case .value:
+            break
+        }
+        if witnesses.highest > generation {
+            problems.append(restoredBelowHighWaterWords(generation: generation, witnesses: witnesses))
+        }
+        return problems
+    }
+
     // MARK: - Adopt
 
     public func adopt(toHighWater highWater: Int) async -> CatalogAdoptOutcome {
         guard let pool, let databaseURL else { return .refused(reason: "not open") }
-        let from = committedGeneration
+        let from = session.generation
         guard highWater > from else {
             return .refused(reason: "nothing to adopt: generation \(from) is not below \(highWater)")
         }
-        if let problem = Self.confirmHighWater(highWater, at: databaseURL, durability: durability) {
+        let witnesses: HighWaterWitnesses
+        do {
+            witnesses = try await pool.read { db in try HighWaterWitnesses.read(db, besideDatabaseAt: databaseURL) }
+        } catch {
+            return .refused(reason: Self.words(error))
+        }
+        if let problem = Self.confirmAdoptable(highWater, witnesses: witnesses)
+            ?? Self.raiseWitnesses(to: highWater, witnesses: witnesses, at: databaseURL, host: host, durability: durability.publish) {
             return .refused(reason: problem)
         }
         let host = host
@@ -514,27 +668,38 @@ public actor GRDBCatalogRepository: CatalogRepository {
         } catch {
             return .refused(reason: "adoption rolled back: \(Self.words(error))")
         }
-        committedGeneration = highWater
+        session.reset(generation: highWater)
         mode = .readWrite
-        storeLog.notice("catalog store ADOPT generation \(from, privacy: .public) → \(highWater, privacy: .public) (\(CatalogHighWater.fileName, privacy: .public)) — writes enabled")
+        storeLog.notice("catalog store ADOPT generation \(from, privacy: .public) → \(highWater, privacy: .public) (\(CatalogHighWater.fileName, privacy: .public), \(CatalogHighWaterLedger.fileName, privacy: .public)) — writes enabled")
         return .adopted(from: from, to: highWater)
     }
 
-    /// The person's number must be the file's number; when the file is
-    /// missing or unreadable, the person's number becomes the file's.
-    private static func confirmHighWater(_ highWater: Int, at url: URL, durability: Durability) -> String? {
-        switch CatalogHighWater.read(besideDatabaseAt: url) {
-        case .value(let current) where current != highWater:
-            return "\(CatalogHighWater.fileName) reads \(current), not \(highWater) — adopt the value it holds"
-        case .value:
-            return nil
-        case .missing, .unreadable:
-            do {
-                try CatalogHighWater.write(highWater, besideDatabaseAt: url, durability: durability.publish)
-                return nil
-            } catch {
-                return "\(CatalogHighWater.fileName) could not be written: \(words(error))"
+    /// The person's number must be what the witnesses hold: never below the
+    /// highest readable one, and exactly it while every witness is readable.
+    /// With a witness missing or poisoned, the person's number becomes the
+    /// mark — it can only be ABOVE every readable witness, which restricts
+    /// older copies further and loses nothing.
+    private static func confirmAdoptable(_ highWater: Int, witnesses: HighWaterWitnesses) -> String? {
+        let required = witnesses.highest
+        guard highWater < required || (highWater > required && witnesses.unreadable == nil && witnesses.sidecarValue != nil) else { return nil }
+        return "\(witnesses.loudest) reads \(required), not \(highWater) — adopt the value it holds"
+    }
+
+    /// Both files say `highWater` BEFORE the database jumps (F8r3's order:
+    /// the witnesses first; a failure after this leaves them above the
+    /// generation, which the next open reports as read-only again).
+    private static func raiseWitnesses(to highWater: Int, witnesses: HighWaterWitnesses, at url: URL,
+                                       host: String, durability: AtomicFilePublish.Durability) -> String? {
+        do {
+            if witnesses.sidecarValue != highWater {
+                try CatalogHighWater.write(highWater, besideDatabaseAt: url, durability: durability)
             }
+            if witnesses.logValue != highWater {
+                try CatalogHighWaterLedger.append(highWater, host: host, besideDatabaseAt: url, durability: durability)
+            }
+            return nil
+        } catch {
+            return "the high-water could not be written: \(words(error))"
         }
     }
 
@@ -573,6 +738,93 @@ public actor GRDBCatalogRepository: CatalogRepository {
         if let refusal = error as? Refusal { return refusal.reason }
         if let engine = error as? DatabaseError { return engine.description }
         return String(describing: error)
+    }
+}
+
+// MARK: - The session box (codex C′ #6)
+
+/// What a session knows between writes: the generation it last loaded or
+/// committed (the CAS expectation) and whether a reopen is owed. A class
+/// with a lock rather than actor state because the pool's writer closure
+/// reads and updates it OFF the actor, in the serialized section: codex
+/// C′ #6 showed two `write` calls both capturing the actor's number before
+/// either had committed. For Rick: a mutex around an int and a string.
+final class WriterSession: @unchecked Sendable {
+    private let lock = NSLock()
+    private var committed = 0
+    private var reopenReason: String?
+
+    var generation: Int { lock.withLock { committed } }
+    var needsReopen: String? { lock.withLock { reopenReason } }
+
+    func reset(generation: Int) {
+        lock.withLock {
+            committed = generation
+            reopenReason = nil
+        }
+    }
+
+    func commit(_ generation: Int) {
+        lock.withLock { committed = generation }
+    }
+
+    func flagReopen(_ reason: String) {
+        lock.withLock { reopenReason = reason }
+    }
+}
+
+// MARK: - The three witnesses (codex C′ #3)
+
+/// The three places a generation this Mac intended to write can be found:
+/// the sidecar (one integer, replaced per write), the append-only log (one
+/// line per publication), and the database's own history (restored with
+/// it, so it only catches a counter rewound inside the file). The highest
+/// is the effective high-water (DDL §11). Open, verify and adopt all read
+/// the same struct, so the three cannot disagree about what "restored" means.
+struct HighWaterWitnesses: Sendable, Equatable {
+    let sidecar: CatalogHighWater.Reading
+    let log: CatalogHighWaterLedger.Reading
+    let historyNewest: Int
+
+    static func read(_ db: Database, besideDatabaseAt url: URL) throws -> HighWaterWitnesses {
+        HighWaterWitnesses(sidecar: CatalogHighWater.read(besideDatabaseAt: url),
+                           log: CatalogHighWaterLedger.read(besideDatabaseAt: url),
+                           historyNewest: try Int.fetchOne(db, sql: "SELECT max(generation) FROM generation_history") ?? 0)
+    }
+
+    var sidecarValue: Int? {
+        if case .value(let value) = sidecar { return value }
+        return nil
+    }
+
+    var logValue: Int? {
+        if case .value(let value) = log { return value }
+        return nil
+    }
+
+    var highest: Int { max(sidecarValue ?? 0, logValue ?? 0, historyNewest) }
+
+    /// The first poisoned witness's words (the sidecar's first: it is the
+    /// one a person repairs by hand), or nil when both files are sound.
+    var unreadable: String? {
+        if case .unreadable(let words) = sidecar { return words }
+        if case .unreadable(let words) = log { return words }
+        return nil
+    }
+
+    private var readings: [(name: String, value: Int?)] {
+        [(CatalogHighWater.fileName, sidecarValue), (CatalogHighWaterLedger.fileName, logValue), ("generation_history", historyNewest)]
+    }
+
+    /// The witness(es) that hold the highest value, by name.
+    var loudest: String {
+        readings.filter { $0.value == highest }.map(\.name).joined(separator: " and ")
+    }
+
+    /// "catalog.highwater.log recorded it (catalog.highwater 5, catalog.highwater.log 10, generation_history 5)"
+    var testimony: String {
+        let all = readings.map { "\($0.name) \($0.value.map(String.init) ?? "unreadable or missing")" }.joined(separator: ", ")
+        return "\(loudest) recorded it (\(all))"
     }
 }
 

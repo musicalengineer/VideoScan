@@ -109,10 +109,11 @@ struct CatalogStoreSensorTests {
     @Test func theDDLMatchesTheDesignDocumentsTriggers() {
         // The bookkeeping triggers by name, as docs/design/catalog_sqlite_schema_v1.sql r3 lists them.
         let names = [
+            "catalog_state_no_replace", "catalog_state_no_delete",
             "generations_step_by_one", "generations_no_step_over_pending_adopt",
-            "generations_adoption_fields_only_by_adoption", "generations_no_delete",
+            "generations_adoption_fields_only_by_adoption", "generations_no_delete", "generations_no_replace",
             "generation_history_names_this_commit", "generation_history_adopt_precedes_jump",
-            "generation_history_no_update",
+            "generation_history_no_update", "generation_history_no_replace", "generation_history_no_delete",
         ]
         let ddl = CatalogBookkeepingSchema.statements.joined(separator: "\n")
         for name in names {
@@ -135,7 +136,7 @@ struct CatalogStoreSensorTests {
 
     @Test func everyTriggerOfTheDDLIsInTheSwiftSchema() throws {
         let documented = try SchemaDocument.ddl().triggerNames
-        #expect(documented.count == 57)                        // 7 bookkeeping + 50 data
+        #expect(documented.count == 70)                        // 12 bookkeeping + 58 data
         let swift = Self.swiftSchema
         for name in documented {
             let declared = swift.contains("CREATE TRIGGER \(name) ") || swift.contains("CREATE TRIGGER \(name)\n")
@@ -151,5 +152,34 @@ struct CatalogStoreSensorTests {
         let strangers = (inventory.tables + inventory.virtualTables).filter { !documented.contains($0) }
         #expect(strangers.isEmpty, Comment(rawValue: "tables outside the DDL: \(strangers)"))
         #expect(inventory.shadowTables.allSatisfy { $0.hasPrefix(SchemaInventory.shadowPrefix) })
+    }
+
+    // MARK: - Codex C′ #1 (c): no REPLACE / IGNORE conflict resolution in the store
+
+    /// Spelled out: the store writes plain INSERT / UPDATE only. A REPLACE
+    /// deletes the row in the way (the delete triggers catch it now, but
+    /// the spelling should never appear), and an IGNORE hides a refusal.
+    @Test func noReplaceOrIgnoreConflictResolutionInTheStore() {
+        let spellings = ["OR REPLACE", "REPLACE INTO", "OR IGNORE", "or replace", "replace into", "or ignore"]
+        let sources = Self.storeSources
+        #expect(sources.count >= 9)
+        for file in sources {
+            let text = Self.read(file)
+            let found = spellings.filter { text.contains($0) }
+            #expect(found.isEmpty, "\(file.lastPathComponent) spells conflict resolution: \(found)")
+        }
+    }
+
+    // MARK: - Codex C′ #8: the drift test's normalisation keeps literals whole
+
+    /// `'Backed Up'` and `'Backed  Up'` are two different CHECK constants;
+    /// collapsing whitespace inside a string literal would hide the drift.
+    @Test func normalisationKeepsWhitespaceInsideStringLiterals() {
+        let statement = CatalogDataSchema.files[0]
+        #expect(statement.contains("'Backed Up'"))
+        let mutated = statement.replacingOccurrences(of: "'Backed Up'", with: "'Backed  Up'")
+        #expect(SQLScript.normalized(mutated) != SQLScript.normalized(statement))
+        #expect(SQLScript.normalized("CREATE  TABLE t\n  (s TEXT)") == "CREATE TABLE t (s TEXT)")
+        #expect(SQLScript.normalized("CHECK (s IN ('a  b',  'c'));") == "CHECK (s IN ('a  b', 'c'))")
     }
 }
