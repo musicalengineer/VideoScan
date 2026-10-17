@@ -713,10 +713,11 @@ struct CatalogStatusStructureTests {
 
     @Test func theThreeIntegrityRowsComeFirst() {
         #expect(Array(AnalyzeCycler.allCases.prefix(3)) == [.filePresence, .fullHashes, .soundPrints])
-        #expect(AnalyzeCycler.integrity == [.filePresence, .fullHashes, .soundPrints])
-        #expect(AnalyzeCycler.allCases.filter(\.isIntegrity) == AnalyzeCycler.integrity)
-        #expect(AnalyzeCycler.integrity.allSatisfy { $0.isPausable }, "the three MFO jobs pause")
-        #expect(AnalyzeCycler.integrity.allSatisfy { !$0.hasVolumeScope })
+        #expect(AnalyzeCycler.integrityJobs == [.filePresence, .fullHashes, .soundPrints, .integrity])
+        #expect(AnalyzeCycler.allCases.filter(\.isIntegrity) == AnalyzeCycler.integrityJobs)
+        #expect(AnalyzeCycler.integrityJobs.allSatisfy { $0.isPausable }, "the four MFO jobs pause")
+        #expect(AnalyzeCycler.integrityJobs.allSatisfy { !$0.hasVolumeScope })
+        #expect(AnalyzeCycler.allCases[3] == .integrity, "Verify Catalog's row comes right after the three")
         #expect(AnalyzeCycler.filePresence.autoRunsToday, "the nightly runs the audit")
         #expect(!AnalyzeCycler.fullHashes.autoRunsToday && !AnalyzeCycler.soundPrints.autoRunsToday)
         #expect([AnalyzeCycler.filePresence, .fullHashes, .soundPrints].map(\.title) == ["File Presence", "Full Hashes", "Sound Prints"])

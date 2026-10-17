@@ -67,6 +67,18 @@ enum CatalogFreshnessRows {
             row.cadence = .seconds(24 * 3_600)
         case .soundPrints:
             row.storeUnavailable = facts.soundStoreProblem
+        case .integrity:
+            // No stamp per row: the last Verify Catalog report stands in
+            // (its verifiedAt, its decisions, its words); covered = eligible
+            // so the row ages by its clock, not by a count it has not got.
+            let integrity = facts.integrity
+            row.covered = row.eligible
+            row.lastCompleted = integrity.lastCompleted
+            row.lastOutcome = integrity.outcome
+            row.needsDecision = integrity.needsDecision
+            row.storeUnavailable = integrity.problem
+            row.cadence = .seconds(24 * 3_600)
+            if let words = integrity.decisionWords { row.phrases.decision = "— \(words)" }
         case .correlate:
             // Pairs are counted differently: the unpaired candidates are
             // the uncovered rows, the pairs the covered ones.
@@ -96,6 +108,9 @@ enum CatalogFreshnessRows {
             return .init(unit: "file", uncovered: "without a full hash")
         case .soundPrints:
             return .init(unit: "file", uncovered: "without a sound print")
+        case .integrity:
+            return .init(unit: "finding", uncovered: "not yet verified",
+                         decision: "needing a decision — Verify Catalog's row lists them")
         case .correlate:
             return .init(unit: "file", uncovered: "unpaired")
         case .dateInference:
@@ -327,6 +342,7 @@ final class CatalogFreshnessSnapshot: ObservableObject {
             if job is CatalogAuditJob { s.insert(.filePresence) }
             else if job is FullHashBackfillJob { s.insert(.fullHashes) }
             else if job is AudioFingerprintBackfillJob { s.insert(.soundPrints) }
+            else if job is VerifyCatalogJob { s.insert(.integrity) }
             else if job is FindSimilarFootageJob { s.insert(.footage) }
         }
         return s
@@ -334,7 +350,7 @@ final class CatalogFreshnessSnapshot: ObservableObject {
 
     /// The integrity kinds with an active job in the center.
     static func integrityRunning(in center: MediaFileOperationsCenter) -> Set<AnalyzeCycler> {
-        jobRunning(in: center).intersection(AnalyzeCycler.integrity)
+        jobRunning(in: center).intersection(AnalyzeCycler.integrityJobs)
     }
 
     /// Keep the relative words honest ("12 minutes ago" → "13 …") — one

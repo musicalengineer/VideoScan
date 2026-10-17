@@ -277,7 +277,7 @@ struct AnalyzeCoverageReport: Sendable, Equatable {
     /// "x of y" line would be a guess. Footage (singletons carry nothing);
     /// File Presence (the audit keeps one run marker, not a stamp per row —
     /// its "covered" is supplied by CatalogFreshnessRows from that marker).
-    static let coverageUnknown: Set<AnalyzeCycler> = [.footage, .filePresence]
+    static let coverageUnknown: Set<AnalyzeCycler> = [.footage, .filePresence, .integrity]
 
     func counts(_ c: AnalyzeCycler) -> AnalyzeCoverageCounts { byCycler[c] ?? AnalyzeCoverageCounts() }
 
@@ -395,6 +395,7 @@ enum AnalyzeCoverageCalculator {
             // (covered comes from the audit marker). Hashes and sound
             // prints: anything with bytes, like Signatures.
             tally(.filePresence, root: root, reachable: reachable, applies: true, covered: false)
+            tally(.integrity, root: root, reachable: reachable, applies: true, covered: false)
             tally(.fullHashes, root: root, reachable: reachable, applies: r.hasBytes,
                   covered: r.hasFullDigest, stamp: r.fullDigestAt)
             tally(.soundPrints, root: root, reachable: reachable, applies: r.hasBytes,

@@ -442,6 +442,18 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
     static let auditCatalog = Self("auditCatalog", hasDetailView: true,
         style: .init(badge: "Audit", logVerb: "audit catalog", fill: .init(0.20, 0.50, 0.55)))
 
+    // Verify Catalog (2026-10-16, integrity first) — verifier blue: a
+    // checking verb that reads only the catalog's own stamps and writes only
+    // its report. Δ ≥ 0.21 from every other fill (nearest: Compare's cobalt),
+    // contrast vs white ≈ 5.2. The badge reads "Verify Catalog" because
+    // "Verify" is Verify Audio's (badges must be unique).
+    /// "Verify Catalog…" (Rick 2026-10-16, docs/design/integrity_first_2026_10_16.md):
+    /// tiers 0–6 over the catalog's rows, stamps and relations, a dated
+    /// report beside the catalog, Catalog Status fed. Nothing on media is
+    /// opened; no row is changed. VerifyCatalogJob.
+    static let verifyCatalog = Self("verifyCatalog", hasDetailView: true,
+        style: .init(badge: "Verify Catalog", logVerb: "verify catalog", fill: .init(0.00, 0.40, 0.90)))
+
     /// Every kind, in declaration order — what `CaseIterable.allCases` was.
     /// A new kind goes here too (MediaFileOperationKindTests.allPinsEveryKindInDeclarationOrder
     /// pins the list and count).
@@ -451,6 +463,7 @@ struct MediaFileOperationKind: Hashable, Sendable, CustomStringConvertible {
         .findPerson, .promote, .verifyArchive, .archiveAngel, .deleteDuplicates, .pruneCopies,
         .findSimilarFootage, .bindFixity, .lockArchive, .compareFootage, .fingerprintBackfill,
         .showAgain, .checkCopies, .fillFullHashes, .cleanupTrash, .fingerprintSound, .auditCatalog,
+        .verifyCatalog,
     ]
 
     /// Badge text — rendered in small caps by the row view.

@@ -25,10 +25,14 @@ struct CatalogFreshnessFacts: Sendable, Equatable {
     /// Words from the sound sidecar when it cannot be opened; nil = fine
     /// (or not created yet — nothing stored is not a fault).
     var soundStoreProblem: String?
+    /// The last Verify Catalog report (integrity-latest.json), as facts.
+    var integrity: IntegrityReportFacts
 
-    init(audit: CatalogAuditRunRecord? = nil, soundStoreProblem: String? = nil) {
+    init(audit: CatalogAuditRunRecord? = nil, soundStoreProblem: String? = nil,
+         integrity: IntegrityReportFacts = IntegrityReportFacts()) {
         self.audit = audit
         self.soundStoreProblem = soundStoreProblem
+        self.integrity = integrity
     }
 }
 
@@ -39,7 +43,17 @@ enum CatalogFreshnessFactsReader {
     nonisolated static func read(catalogFile: String) -> CatalogFreshnessFacts {
         let folder = URL(fileURLWithPath: catalogFile).deletingLastPathComponent()
         return CatalogFreshnessFacts(audit: auditRecord(in: folder),
-                                     soundStoreProblem: soundStoreProblem(in: folder))
+                                     soundStoreProblem: soundStoreProblem(in: folder),
+                                     integrity: integrityFacts(catalogFile: catalogFile))
+    }
+
+    // MARK: Integrity report
+
+    /// The strict read of `integrity-latest.json` beside the catalog, as
+    /// the Integrity row's facts: missing → never run; garbage or a newer
+    /// schema → the row's red words; never a crash.
+    nonisolated static func integrityFacts(catalogFile: String) -> IntegrityReportFacts {
+        IntegrityReportFacts.from(IntegrityReportStore.read(besideCatalogAt: URL(fileURLWithPath: catalogFile)))
     }
 
     // MARK: Audit marker

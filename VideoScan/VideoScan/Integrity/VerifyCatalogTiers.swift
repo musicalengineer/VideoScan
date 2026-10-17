@@ -1,0 +1,310 @@
+// VerifyCatalogTiers.swift
+// The seven tiers of Verify Catalog (docs/design/integrity_first_2026_10_16.md
+// §3), each a pure function from the snapshot to one IntegrityTier line and
+// its findings. THIS SLICE fills tiers 0, 1, 3, 4 and 5 from what the
+// catalog already records — the audit's marker, the fixity and sound-print
+// stamps, the rows' relations — and the catalog file's own hash. Tiers 2
+// (bytes re-read against the stored digest) and 6 (the UI truth sweep) say
+// "not built yet" rather than claim anything.
+//
+// No I/O here except two reads: the audit marker (tier 0) and the catalog
+// file hash (tier 5), both of files beside the catalog — never a media file.
+// Nothing is written. Runs off the main actor on Sendable values.
+//
+// (For Rick: `evaluate(_:input:)` is the dispatcher — a switch over the tier
+// number to one function each; `TierInput` / `TierOutcome` are the plain
+// structs that cross the thread boundary.)
+
+import Foundation
+import VideoScanCore
+
+/// Everything the tiers read, taken on the main actor in one pass.
+struct VerifyCatalogSnapshot: Sendable {
+    var rows: [IntegrityRow]
+    var events: [IntegrityEventFact]
+    /// The catalog.json path (the marker and the report live beside it).
+    var catalogFile: String
+    var liveCount: Int
+
+    init(rows: [IntegrityRow], events: [IntegrityEventFact], catalogFile: String) {
+        self.rows = rows
+        self.events = events
+        self.catalogFile = catalogFile
+        liveCount = rows.reduce(0) { $0 + ($1.isLive ? 1 : 0) }
+    }
+
+    var catalogURL: URL { URL(fileURLWithPath: catalogFile) }
+}
+
+enum VerifyCatalogTiers {
+
+    static let order = [0, 1, 2, 3, 4, 5, 6]
+
+    static func name(_ tier: Int) -> String {
+        switch tier {
+        case 0: return "File presence"
+        case 1: return "File identity"
+        case 2: return "Bytes still the bytes"
+        case 3: return "Decodes and sounds"
+        case 4: return "Derived knowledge"
+        case 5: return "Relations and constraints"
+        default: return "The UI tells the truth"
+        }
+    }
+
+    /// What one tier evaluation is given.
+    struct TierInput: Sendable {
+        var snapshot: VerifyCatalogSnapshot
+        /// The last report (for the catalog-file hash comparison); nil = none.
+        var previous: IntegrityReport?
+        /// The constraint findings computed by tier 4, handed on to tier 5
+        /// so the rows are walked once for both.
+        var constraintFindings: [CatalogConstraints.Finding]?
+        var runID: UUID
+        var now: Date
+    }
+
+    /// What one tier evaluation returns.
+    struct TierOutcome: Sendable {
+        var tier: IntegrityTier
+        var findings: [IntegrityFinding]
+        /// Tier 4 fills this for tier 5.
+        var constraintFindings: [CatalogConstraints.Finding]?
+        /// Tier 5 fills this for the report (so the file is hashed once).
+        var catalogHash: CatalogFileHash?
+
+        init(tier: IntegrityTier, findings: [IntegrityFinding] = [], constraintFindings: [CatalogConstraints.Finding]? = nil,
+             catalogHash: CatalogFileHash? = nil) {
+            self.tier = tier
+            self.findings = findings
+            self.constraintFindings = constraintFindings
+            self.catalogHash = catalogHash
+        }
+    }
+
+    /// The dispatcher.
+    static func evaluate(_ tier: Int, input: TierInput) -> TierOutcome {
+        let clock = ContinuousClock.now
+        var outcome: TierOutcome
+        switch tier {
+        case 0: outcome = presence(input)
+        case 1: outcome = identity(input)
+        case 2: outcome = notBuilt(2, "weekly deep pass — not built yet")
+        case 3: outcome = sound(input)
+        case 4: outcome = derivedKnowledge(input)
+        case 5: outcome = constraints(input)
+        default: outcome = notBuilt(6, "truth sweep — not built yet")
+        }
+        outcome.tier.elapsedSeconds = seconds(since: clock)
+        return outcome
+    }
+
+    /// A tier the run did not reach (Stop ends after the current tier).
+    static func stopped(_ tier: Int) -> IntegrityTier {
+        IntegrityTier(tier: tier, name: name(tier), result: .notRun("stopped before this tier"), summary: "stopped before this tier")
+    }
+
+    static func notBuilt(_ tier: Int, _ why: String) -> TierOutcome {
+        TierOutcome(tier: IntegrityTier(tier: tier, name: name(tier), result: .notRun(why), summary: why))
+    }
+
+    // MARK: Tier 0 — from the audit's marker
+
+    /// Reads `catalog-audit.json` beside the catalog (the one small read).
+    static func presence(_ input: TierInput) -> TierOutcome {
+        let folder = input.snapshot.catalogURL.deletingLastPathComponent()
+        return presence(audit: CatalogFreshnessFactsReader.auditRecord(in: folder))
+    }
+
+    static func presence(audit record: CatalogAuditRunRecord?) -> TierOutcome {
+        var t = IntegrityTier(tier: 0, name: name(0), result: .notRun(""), summary: "")
+        guard let record else {
+            t.result = .notRun("Audit Catalog has not run — Catalog ▸ Audit Catalog… (the nightly runs it too)")
+            t.summary = "Audit Catalog has not run"
+            return TierOutcome(tier: t)
+        }
+        let facts = CatalogAuditPresenceFacts.from(record)
+        t.verifiedAt = record.finishedAt
+        t.checked = facts.checked
+        t.couldNotCheck = record.counts[CatalogAuditResult.couldNotCheck.rawValue] ?? 0
+        t.needsDecision = facts.needsDecision
+        t.passed = max(0, facts.checked - facts.needsDecision - t.couldNotCheck)
+        let planned = record.counts["planned"] ?? facts.checked
+        switch facts.outcome {
+        case .ok where facts.needsDecision > 0:
+            t.result = .needsDecision(facts.needsDecision)
+            t.summary = "\(facts.needsDecision.formatted()) rows point at nothing or changed on disk — Fix Links"
+        case .ok:
+            t.result = .ok
+            t.summary = "\(facts.checked.formatted()) rows present at their path"
+        case .partial:
+            let left = max(1, planned - facts.checked)
+            t.result = .couldNotCheck(left)
+            t.couldNotCheck = left
+            t.summary = "the last audit stopped part way — \(left.formatted()) rows not asked; run it again"
+        case .failed:
+            t.result = .couldNotCheck(max(1, planned))
+            t.couldNotCheck = max(1, planned)
+            t.summary = "the last audit failed or was killed — run Audit Catalog again"
+        case .neverRan:
+            t.result = .notRun("the last audit was refused — run Audit Catalog again")
+            t.summary = "the last audit was refused"
+        }
+        return TierOutcome(tier: t)
+    }
+
+    // MARK: Tier 1 — identity from the stamps
+
+    /// Every active row with bytes should carry a whole-file SHA-256; the
+    /// sampled `v1:` hash never counts (`IntegrityRow.fullDigest` is nil
+    /// for it by construction — `storedFullDigest`).
+    static func identity(_ input: TierInput) -> TierOutcome {
+        var checked = 0
+        var known = 0
+        for r in input.snapshot.rows where r.isActive && r.hasBytes {
+            checked += 1
+            if r.fullDigest != nil { known += 1 }
+        }
+        let unknown = checked - known
+        var t = IntegrityTier(tier: 1, name: name(1), verifiedAt: input.now, runID: input.runID, result: .ok,
+                              checked: checked, passed: known, couldNotCheck: unknown, summary: "")
+        if unknown > 0 {
+            t.result = .couldNotCheck(unknown)
+            t.summary = "\(unknown.formatted()) files still have only a sampled hash — Fill In Full Hashes"
+        } else {
+            t.summary = "every live file has a whole-file SHA-256 (\(known.formatted()))"
+        }
+        return TierOutcome(tier: t)
+    }
+
+    // MARK: Tier 3 — the header against the sound print
+
+    static let silentPrintRule = "headerSaysSoundPrintHeardNone"
+
+    /// A Video+Audio row whose sound print heard nothing (or found no
+    /// stream) is a header that says sound the print never heard.
+    static func sound(_ input: TierInput) -> TierOutcome {
+        var findings: [IntegrityFinding] = []
+        var stamped = 0
+        var unstamped = 0
+        for r in input.snapshot.rows where r.isActive && r.streamTypeRaw == StreamType.videoAndAudio.rawValue {
+            guard let stamp = r.audioFingerprint else { unstamped += 1; continue }
+            stamped += 1
+            if let why = silentPrintReason(stamp) {
+                findings.append(IntegrityFinding(tier: 3, rule: silentPrintRule, recordID: r.id, filename: r.filename,
+                                                 words: "the header says Video+Audio, \(why)", needsDecision: true))
+            }
+        }
+        var t = IntegrityTier(tier: 3, name: name(3), verifiedAt: input.now, runID: input.runID, result: .ok,
+                              checked: stamped, passed: stamped - findings.count, needsDecision: findings.count,
+                              couldNotCheck: unstamped, summary: "")
+        if !findings.isEmpty {
+            t.result = .needsDecision(findings.count)
+            t.summary = "\(findings.count.formatted()) headers say sound the print never heard"
+        } else if unstamped > 0 {
+            t.result = .couldNotCheck(unstamped)
+            t.summary = "\(unstamped.formatted()) Video+Audio files have no sound print yet — Fingerprint Sound"
+        } else {
+            t.summary = "every Video+Audio file's print heard sound (\(stamped.formatted()))"
+        }
+        return TierOutcome(tier: t, findings: findings)
+    }
+
+    /// Why a stamp contradicts a Video+Audio header; nil when it does not.
+    static func silentPrintReason(_ stamp: AudioFingerprintStamp) -> String? {
+        switch stamp.outcome {
+        case .noAudio:
+            return "but ffmpeg found no audio stream"
+        case .fingerprinted:
+            return stamp.analyzedSeconds > 0 && stamp.landmarks == 0 ? "but the sound print heard nothing (silent)" : nil
+        }
+    }
+
+    // MARK: Tier 4 — derived knowledge (and the constraints pass, once)
+
+    static func derivedKnowledge(_ input: TierInput) -> TierOutcome {
+        let all = CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events)
+        let stale = all.filter { $0.rule.tier == 4 }
+        let stamped = input.snapshot.rows.reduce(0) { $0 + ($1.audioFingerprint == nil ? 0 : 1) }
+        var t = IntegrityTier(tier: 4, name: name(4), verifiedAt: input.now, runID: input.runID, result: .ok,
+                              checked: stamped, passed: stamped - stale.count, needsDecision: stale.count, summary: "")
+        if stale.isEmpty {
+            t.summary = "every derived stamp is about its row's content (\(stamped.formatted()) checked)"
+        } else {
+            t.result = .needsDecision(stale.count)
+            t.summary = "\(stale.count.formatted()) sound prints were made from other content"
+        }
+        return TierOutcome(tier: t, findings: findings(stale, rows: input.snapshot.rows), constraintFindings: all)
+    }
+
+    // MARK: Tier 5 — relations, constraints, the catalog file's hash
+
+    static let catalogFileRule = "catalogFileChanged"
+
+    static func constraints(_ input: TierInput) -> TierOutcome {
+        let all = input.constraintFindings
+            ?? CatalogConstraints.check(rows: input.snapshot.rows, events: input.snapshot.events)
+        var found = findings(all.filter { $0.rule.tier == 5 }, rows: input.snapshot.rows)
+        let hash = catalogHash(input.snapshot.catalogURL)
+        let comparison = CatalogFileHash.compare(previousSHA: input.previous?.catalogSHA256,
+                                                 previousGeneration: input.previous?.catalogGeneration, current: hash)
+        if comparison.needsDecision {
+            found.append(IntegrityFinding(tier: 5, rule: catalogFileRule, recordID: nil, filename: nil,
+                                          words: comparison.words, needsDecision: true))
+        }
+        let decisions = found.reduce(0) { $0 + ($1.needsDecision ? 1 : 0) }
+        let rows = input.snapshot.rows.count
+        var t = IntegrityTier(tier: 5, name: name(5), verifiedAt: input.now, runID: input.runID, result: .ok,
+                              checked: rows, passed: rows - Set(found.compactMap(\.recordID)).count,
+                              needsDecision: decisions, summary: "")
+        if decisions > 0 {
+            t.result = .needsDecision(decisions)
+            t.summary = constraintSummary(found)
+        } else {
+            t.summary = "every relation holds (\(rows.formatted()) rows) · \(comparison.words)"
+        }
+        return TierOutcome(tier: t, findings: found, catalogHash: hash)
+    }
+
+    /// The catalog file's streamed SHA-256; nil when it is not on disk or
+    /// cannot be read (the comparison then says so).
+    static func catalogHash(_ url: URL) -> CatalogFileHash? {
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try? CatalogFileHash.of(fileAt: url)
+    }
+
+    /// "3 rows share a path · 2 lineage links point at nothing" — the rules
+    /// with findings, most findings first.
+    static func constraintSummary(_ findings: [IntegrityFinding]) -> String {
+        var counts: [String: Int] = [:]
+        for f in findings { counts[f.rule, default: 0] += 1 }
+        return counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .map { rule, n in ruleWords(rule, count: n) }
+            .joined(separator: " · ")
+    }
+
+    /// A constraint rule's counted phrase (its own table), or the one
+    /// tier-5 rule that is not a constraint: the catalog file's hash.
+    static func ruleWords(_ rule: String, count n: Int) -> String {
+        guard let r = CatalogConstraints.Rule(rawValue: rule) else { return "catalog.json changed without a new generation" }
+        return r.words(count: n)
+    }
+
+    // MARK: Helpers
+
+    /// Constraint findings → report findings, with the row's filename.
+    static func findings(_ found: [CatalogConstraints.Finding], rows: [IntegrityRow]) -> [IntegrityFinding] {
+        guard !found.isEmpty else { return [] }
+        var names: [UUID: String] = [:]
+        for r in rows { names[r.id] = r.filename }
+        return found.map {
+            IntegrityFinding(tier: $0.rule.tier, rule: $0.rule.rawValue, recordID: $0.recordID,
+                             filename: $0.recordID.flatMap { names[$0] }, words: $0.words, needsDecision: $0.needsDecision)
+        }
+    }
+
+    static func seconds(since start: ContinuousClock.Instant) -> Double {
+        let d = (ContinuousClock.now - start).components
+        return Double(d.seconds) + Double(d.attoseconds) / 1e18
+    }
+}

@@ -244,16 +244,8 @@ struct AnalyzePanelView: View {
     /// cycler — words only, from the cached counts.
     static func coverageWords(for cycler: AnalyzeCycler, counts: AnalyzeCoverageCounts,
                               report: AnalyzeCoverageReport, now: Date = Date()) -> (line: String, side: String, note: String) {
+        if cycler.isIntegrity { return integrityCoverageWords(for: cycler, counts: counts) }
         switch cycler {
-        case .filePresence:
-            let line = counts.eligible > 0
-                ? "\(counts.covered.formatted()) of \(counts.eligible.formatted()) checked by the last audit"
-                : "nothing eligible"
-            return (line, counts.sideLine, "one stat per file on a connected drive; the run's own record is catalog-audit.json, not a stamp per row")
-        case .fullHashes:
-            return (counts.line, counts.sideLine, "a whole-file SHA-256 only — the sampled hash a scan leaves does not count")
-        case .soundPrints:
-            return (counts.line, counts.sideLine, "a stamp per file, fingerprint or \"no sound\"; the landmarks live in the sidecar")
         case .correlate:
             let offline = report.correlate.offlineCandidates
             return (report.correlate.line, offline > 0 ? "\(offline.formatted()) candidates offline" : "", "")
@@ -276,11 +268,35 @@ struct AnalyzePanelView: View {
         }
     }
 
+    /// The integrity kinds' words: two of them keep a stamp per file (Full
+    /// Hashes, Sound Prints); two keep ONE run record beside the catalog and
+    /// no stamp per row (File Presence → catalog-audit.json, Integrity →
+    /// integrity-latest.json), so their line is "N checked by the last run".
+    static func integrityCoverageWords(for cycler: AnalyzeCycler,
+                                       counts: AnalyzeCoverageCounts) -> (line: String, side: String, note: String) {
+        switch cycler {
+        case .filePresence:
+            let line = counts.eligible > 0
+                ? "\(counts.covered.formatted()) of \(counts.eligible.formatted()) checked by the last audit"
+                : "nothing eligible"
+            return (line, counts.sideLine, "one stat per file on a connected drive; the run's own record is catalog-audit.json, not a stamp per row")
+        case .fullHashes:
+            return (counts.line, counts.sideLine, "a whole-file SHA-256 only — the sampled hash a scan leaves does not count")
+        case .soundPrints:
+            return (counts.line, counts.sideLine, "a stamp per file, fingerprint or \"no sound\"; the landmarks live in the sidecar")
+        case .integrity:
+            let line = counts.eligible > 0 ? "\(counts.eligible.formatted()) rows checked by the last Verify Catalog run" : "nothing eligible"
+            return (line, counts.sideLine, "the run's own record is integrity-latest.json beside the catalog, not a stamp per row")
+        default:
+            return (counts.line, counts.sideLine, "")
+        }
+    }
+
     /// The engine facts for the state rule, per cycler.
     private func liveRule(for cycler: AnalyzeCycler) -> AnalyzeRowStateRule.Live {
         var l = AnalyzeRowStateRule.Live()
         switch cycler {
-        case .filePresence, .fullHashes, .soundPrints:
+        case .filePresence, .fullHashes, .soundPrints, .integrity:
             if let job = live.integrity[cycler] {
                 l.isRunning = true
                 l.isPaused = job.isPaused
@@ -398,7 +414,7 @@ struct AnalyzePanelView: View {
             s.footageSubtitle = job.subtitle
         }
         // The three integrity jobs: the same objects the MFO rows show.
-        for c in AnalyzeCycler.integrity {
+        for c in AnalyzeCycler.integrityJobs {
             if let job = runner.activeIntegrityJob(for: c) {
                 s.integrity[c] = .init(isPaused: job.isPaused, subtitle: job.subtitle)
             }
@@ -712,7 +728,7 @@ struct AnalyzeCyclerRow: View, Equatable {
 extension AnalyzeCycler {
     var familyTint: Color {
         switch self {
-        case .filePresence, .fullHashes, .soundPrints:
+        case .filePresence, .fullHashes, .soundPrints, .integrity:
             return Color(red: 0.20, green: 0.50, blue: 0.55)
         case .duplicates, .footage:
             return Color(red: 0.08, green: 0.32, blue: 0.72)
