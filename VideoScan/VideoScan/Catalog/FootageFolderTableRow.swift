@@ -28,23 +28,24 @@ struct FootageFolderTableRow: Identifiable {
     let display: FootageFolders.DisplayRow
     /// nil for a folder row.
     let record: VideoRecord?
+    /// The folder's counts, size, running time and date words (the top
+    /// level, FootageFolderLevel.swift); nil for a record row.
+    let folder: FootageFolderLevel.FolderRow?
     /// The sortable facts (a folder's: title, running time, size, date).
     let keys: FootageFolders.SortKeys
 
-    init(display: FootageFolders.DisplayRow, record: VideoRecord?, keys: FootageFolders.SortKeys) {
+    init(display: FootageFolders.DisplayRow, record: VideoRecord?, folder: FootageFolderLevel.FolderRow? = nil,
+         keys: FootageFolders.SortKeys) {
         self.id = display.id
         self.display = display
         self.record = record
+        self.folder = folder
         self.keys = keys
     }
 
     var isFolder: Bool { display.isFolder }
     var eventID: UUID? { display.eventID }
     var relation: FootageFolders.Relation? { display.relation }
-    var summary: FootageFolders.Summary? {
-        if case .folder(_, _, let s) = display.kind { return s }
-        return nil
-    }
     var title: String {
         if case .folder(_, let t, _) = display.kind { return t }
         return record?.filename ?? ""

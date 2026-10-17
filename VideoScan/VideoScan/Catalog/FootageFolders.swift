@@ -272,7 +272,11 @@ enum FootageFolders {
         var totalSeconds = 0.0
         var totalBytes: Int64 = 0
         var archivedCount = 0
+        /// The earliest recording's day.
         var date: Date?
+        /// The latest recording's day (the Finder level's date range,
+        /// 2026-10-17); nil when no recording is dated.
+        var latestDate: Date?
         var dateWords = ""
     }
 
@@ -529,11 +533,15 @@ enum FootageFolders {
         var f = Folder(id: e.id, title: e.title, families: families)
         var s = Summary()
         var earliest: Date?
+        var latest: Date?
         for fi in families {
             let fam = index.families[fi]
             if let keeper = byID[fam.keeper], keeper.isActive {
                 s.totalSeconds += keeper.durationSeconds
-                if keeper.keys.date > .distantPast { earliest = min(earliest ?? keeper.keys.date, keeper.keys.date) }
+                if keeper.keys.date > .distantPast {
+                    earliest = min(earliest ?? keeper.keys.date, keeper.keys.date)
+                    latest = max(latest ?? keeper.keys.date, keeper.keys.date)
+                }
             }
             for m in fam.members {
                 guard let r = byID[m.id], r.isActive else { continue }
@@ -544,6 +552,7 @@ enum FootageFolders {
             }
         }
         s.date = earliest
+        s.latestDate = latest
         s.dateWords = e.dateWords ?? earliest.map { dateFormatter.string(from: $0) } ?? ""
         f.summary = s
         f.keys = SortKeys(filename: e.title, duration: s.totalSeconds, size: s.totalBytes, date: earliest ?? .distantPast)

@@ -1,20 +1,30 @@
 // CatalogContent+FolderTable.swift
-// Show ▸ Events & Copies as Folders — the Catalog's folder view
-// (docs/design/footage_folders_2026_10_16.md §2). A second Table over
-// `FootageFolderTableRow` (why: FootageFolderTableRow.swift), drawn
-// INSTEAD of the linear one while the option is on; the linear table is
-// untouched when it is off.
+// Show ▸ Events & Copies as Folders — the Catalog's folder view as a
+// two-level Finder (docs/design/footage_folders_2026_10_16.md §2; Rick
+// 2026-10-17: "I'd really like it to look like Finder in this view, with
+// MarksBirthday, Cape1990, etc, then double-click shows the event
+// including copies"). A second Table over `FootageFolderTableRow` (why:
+// FootageFolderTableRow.swift), drawn INSTEAD of the linear one while the
+// option is on; the linear table is untouched when it is off.
 //
-//   ▸ 📁 Thanksgiving 2009          5 files · 2 copies   1:12:30  12.4 GB  Nov 26, 2009  3 archived
-//       Thanksgiving_2009.dv        LaCie     V+A  0:41:02 …                       Ready
-//       ↳ Thanksgiving_2009.mkv     LaCie     V+A  0:41:02 …   made from it · preservation master
-//       = Thanksgiving_2009.dv      SanDisk   V+A  0:41:02 …   copy · byte for byte, SanDisk   (grey)
-//       ≈ Pie_contest.mov           LaCie     V+A  0:08:11 …   same event · different footage
-//   loose_file.mov                  …
+//   ‹ Back   Catalog                                   (the breadcrumb bar)
+//   📁 Marks Birthday 1984        12 items · 3 copies   1:12:30  12.4 GB  Apr 7, 1984 – Apr 8, 1984   3 archived
+//   📁 Cape 1990                   4 items              0:41:02   6.1 GB  Jul 1990
+//   loose_file.mov                LaCie     V+A  0:08:11 …
+//     = loose_file.mov            SanDisk   V+A  0:08:11 …   copy · byte for byte, SanDisk   (grey)
 //
-// Rows observe ONLY the model's FootageFoldersSnapshot (the display lands
-// through `onReceive`, turned into table rows in that event handler); no
-// O(records) work in any body. Words, glyphs, colours and spacing live in
+//   ‹ Back   Catalog ▸ Marks Birthday 1984              (double-click / Return / ⌘↓ / →)
+//   Birthday_1984.dv              LaCie     V+A  0:41:02 …                       Ready
+//     ↳ Birthday_1984.mkv         LaCie     V+A  0:41:02 …   made from it · preservation master
+//     = Birthday_1984.dv          SanDisk   V+A  0:41:02 …   copy · byte for byte, SanDisk   (grey)
+//     ≈ Cake.mov                  LaCie     V+A  0:08:11 …   same event · different footage
+//
+// Back, ⌘↑, ← and Esc return to the top with the folder selected (the
+// Finder's Enclosing Folder). Rows observe ONLY the model's
+// FootageFoldersSnapshot (the display lands through `onReceive`, turned
+// into the level and its table rows in that event handler); no
+// O(records) work in any body. The level itself is pure
+// (FootageFolderLevel.swift); words, glyphs, colours and spacing live in
 // FootageFolderWords.swift.
 //
 // (Swift extension ≈ C++ partial class via free member functions; the
@@ -36,7 +46,7 @@ extension CatalogContent {
             .width(min: 180, ideal: 260)
 
             TableColumn("Volume", value: \.volume) { row in
-                if let rec = row.record { volumeCell(rec) } else { folderSummaryText(folderFilesWords(row)) }
+                if let rec = row.record { volumeCell(rec) } else { folderSummaryText(row.folder?.itemsWords ?? "") }
             }
             .width(min: 80, ideal: 160)
 
@@ -71,7 +81,7 @@ extension CatalogContent {
             .width(min: 60, ideal: 75)
 
             TableColumn("Date", value: \.date) { row in
-                if let rec = row.record { dateCell(rec) } else { folderSummaryText(row.summary?.dateWords ?? "") }
+                if let rec = row.record { dateCell(rec) } else { folderSummaryText(row.folder?.dateWords ?? "") }
             }
             .width(min: 80, ideal: 100)
 
@@ -103,7 +113,8 @@ extension CatalogContent {
 
     /// The shared sort order, seen through the folder table's own row
     /// type. A header click lands in `sortOrder` as a VideoRecord
-    /// comparator, so the model, the linear table and the join all follow.
+    /// comparator, so the model, the linear table and the join all follow
+    /// (the loose rows and the members; the folders keep date-then-name).
     var folderSortBinding: Binding<[KeyPathComparator<FootageFolderTableRow>]> {
         Binding(
             get: { FootageFolderSort.rowComparators(from: sortOrder) },
@@ -112,21 +123,21 @@ extension CatalogContent {
 
     // MARK: - Cells
 
-    /// The name cell: chevron + folder glyph + title for a folder; indent +
-    /// relation glyph + the real filename cell + muted words for a member;
-    /// the plain filename cell for a loose file.
+    /// The name cell: folder glyph + title for a folder; indent + relation
+    /// glyph + the real filename cell + muted words for a copy or a
+    /// version; the plain filename cell for a recording or a loose file.
     @ViewBuilder
     func folderNameCell(_ row: FootageFolderTableRow) -> some View {
         if let eventID = row.eventID {
-            folderTitleCell(eventID: eventID, title: row.title, selected: selectedIDs.contains(eventID))
+            folderTitleCell(title: row.title, selected: selectedIDs.contains(eventID))
         } else if let rec = row.record {
             HStack(spacing: 4) {
-                if let relation = row.relation {
+                if let glyph = row.relation?.glyph {
                     Spacer().frame(width: FootageFolderWords.memberIndent)
-                    Text(relation.glyph ?? " ")
+                    Text(glyph)
                         .font(FootageFolderWords.glyphFont)
                         .foregroundColor(FootageFolderWords.relationColor)
-                        .frame(width: 12)
+                        .frame(width: FootageFolderWords.glyphWidth)
                 }
                 recordFilenameCell(rec, dimmed: row.relation?.isCopy ?? false)
                 if let words = row.relation?.words {
@@ -140,20 +151,9 @@ extension CatalogContent {
         }
     }
 
-    private func folderTitleCell(eventID: UUID, title: String, selected: Bool) -> some View {
-        let open = tableState.openFolderIDs.contains(eventID)
-        return HStack(spacing: 4) {
-            Button {
-                toggleFolder(eventID)
-            } label: {
-                Image(systemName: open ? FootageFolderWords.chevronOpen : FootageFolderWords.chevronClosed)
-                    .font(.system(size: 10, weight: .semibold))
-                    .frame(width: FootageFolderWords.chevronWidth)
-            }
-            .buttonStyle(.borderless)
-            .help(open ? FootageFolderWords.closeFolder : FootageFolderWords.openFolder)
-            .accessibilityIdentifier("catalog.folder.chevron")
-            Image(systemName: open ? FootageFolderWords.folderOpenSymbol : FootageFolderWords.folderSymbol)
+    private func folderTitleCell(title: String, selected: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: FootageFolderWords.folderSymbol)
                 .foregroundColor(selected ? .primary : FootageFolderWords.folderTint)
             Text(title)
                 .font(.system(.body, design: .default).weight(.medium))
@@ -183,26 +183,50 @@ extension CatalogContent {
             .lineLimit(1)
     }
 
-    private func folderFilesWords(_ row: FootageFolderTableRow) -> String {
-        guard let s = row.summary else { return "" }
-        return FootageFolderWords.filesAndCopies(files: s.files, copies: s.copies)
-    }
-
     private func folderDurationWords(_ row: FootageFolderTableRow) -> String {
-        guard let s = row.summary, s.totalSeconds > 0 else { return "" }
-        return RelatedLadder.mmss(s.totalSeconds)
+        guard let f = row.folder, f.totalSeconds > 0 else { return "" }
+        return RelatedLadder.mmss(f.totalSeconds)
     }
 
     private func folderSizeWords(_ row: FootageFolderTableRow) -> String {
-        guard let s = row.summary, s.totalBytes > 0 else { return "" }
-        return MediaBytes.display(s.totalBytes)
+        guard let f = row.folder, f.totalBytes > 0 else { return "" }
+        return MediaBytes.display(f.totalBytes)
     }
 
     private func folderArchivedWords(_ row: FootageFolderTableRow) -> String {
-        FootageFolderWords.archived(row.summary?.archivedCount ?? 0)
+        FootageFolderWords.archived(row.folder?.archived ?? 0)
     }
 
-    // MARK: - Legend and breadcrumb
+    // MARK: - The breadcrumb bar and the legend
+
+    /// Above the table while the option is on: "‹ Back · Catalog ▸ Marks
+    /// Birthday 1984" inside a folder, "Catalog" (Back greyed) at the top.
+    @ViewBuilder
+    var footageFolderCrumb: some View {
+        if showFootageFolders {
+            HStack(spacing: 8) {
+                Button {
+                    leaveFolder()
+                } label: {
+                    Label(FootageFolderWords.backTitle, systemImage: FootageFolderWords.backSymbol)
+                        .font(FootageFolderWords.crumbFont)
+                }
+                .buttonStyle(.plain)
+                .disabled(tableState.folderScope == nil)
+                .help(tableState.folderScope == nil ? FootageFolderWords.backHelpAtTop : FootageFolderWords.backHelp)
+                .accessibilityLabel(FootageFolderWords.crumb(tableState.folderScope.map(folderScopeTitle) ?? ""))
+                .accessibilityIdentifier("catalog.folders.back")
+                Text(FootageFolderWords.crumbPath(tableState.folderScope.map(folderScopeTitle)))
+                    .font(FootageFolderWords.crumbFont)
+                    .lineLimit(1)
+                    .accessibilityIdentifier("catalog.folders.crumb")
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(Color.accentColor.opacity(0.08))
+        }
+    }
 
     /// Under the table while the option is on.
     var footageFolderLegend: some View {
@@ -217,30 +241,6 @@ extension CatalogContent {
         .padding(.vertical, 3)
         .help(FootageFolderWords.legendHelp)
         .accessibilityIdentifier("catalog.folders.legend")
-    }
-
-    /// "‹ All · Thanksgiving 2009" above the table while the list is
-    /// scoped to one event or one family — the pair-filter banner's style
-    /// (the Catalog's existing focus chip); click or Esc comes back.
-    @ViewBuilder
-    var footageFolderCrumb: some View {
-        if let scope = tableState.folderScope {
-            HStack(spacing: 8) {
-                Button {
-                    setFolderScope(nil)
-                } label: {
-                    Text(FootageFolderWords.crumb(folderScopeTitle(scope)))
-                        .font(.system(size: 12, weight: .medium))
-                }
-                .buttonStyle(.plain)
-                .help(FootageFolderWords.crumbHelp)
-                .accessibilityIdentifier("catalog.folders.crumb")
-                Spacer()
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(Color.accentColor.opacity(0.08))
-        }
     }
 
     private func folderScopeTitle(_ scope: FootageFolders.Scope) -> String {
@@ -259,24 +259,17 @@ extension CatalogContent {
     @ViewBuilder
     func tableContextMenu(ids: Set<UUID>) -> some View {
         if showFootageFolders, let folderID = ids.first(where: { tableState.folderIDs.contains($0) }) {
-            folderContextMenu(folderID)
+            Button(FootageFolderWords.openFolder) { enterFolder(folderID) }
         } else {
             rowContextMenu(ids: ids)
         }
     }
 
-    @ViewBuilder
-    private func folderContextMenu(_ eventID: UUID) -> some View {
-        let open = tableState.openFolderIDs.contains(eventID)
-        Button(open ? FootageFolderWords.closeFolder : FootageFolderWords.openFolder) { toggleFolder(eventID) }
-        Button(FootageFolderWords.showOnlyThisEvent) { setFolderScope(.event(eventID)) }
-    }
-
-    /// Double-click / Return: a folder scopes the list; rows open as always
-    /// — only the rows on screen (Return carries the whole selection).
+    /// Double-click / Return: a folder opens (the Finder); rows open as
+    /// always — only the rows on screen (Return carries the whole selection).
     func tablePrimaryAction(ids: Set<UUID>) {
         if showFootageFolders, let folderID = ids.first(where: { tableState.folderIDs.contains($0) }) {
-            setFolderScope(.event(folderID))
+            enterFolder(folderID)
             return
         }
         openRows(ids: displayedIDs(among: ids), gesture: "double-click")
@@ -291,7 +284,6 @@ extension CatalogContent {
             let index = model.footageFolders.index
             if let eventID = index.folderOf[rec.id] {
                 Button(FootageFolderWords.showInItsEvent) {
-                    tableState.openFolderIDs.insert(eventID)
                     setFolderScope(.event(eventID))
                     selectedIDs = [rec.id]
                 }
@@ -308,26 +300,33 @@ extension CatalogContent {
         }
     }
 
-    // MARK: - State changes (open set, scope) → one compose
+    // MARK: - Moving between the levels → one compose
 
-    func toggleFolder(_ eventID: UUID) {
-        if tableState.openFolderIDs.contains(eventID) {
-            tableState.openFolderIDs.remove(eventID)
-        } else {
-            tableState.openFolderIDs.insert(eventID)
-        }
-        refreshFolderDisplay()
+    /// Into a folder: the level is that event's members.
+    func enterFolder(_ eventID: UUID) {
+        setFolderScope(.event(eventID))
+    }
+
+    /// Up to the top, with the folder just left selected (the Finder's
+    /// Enclosing Folder). Nothing to do at the top.
+    func leaveFolder() {
+        guard let scope = tableState.folderScope else { return }
+        setFolderScope(nil)
+        if case .event(let id) = scope { selectedIDs = [id] }
     }
 
     func setFolderScope(_ scope: FootageFolders.Scope?) {
         guard scope != tableState.folderScope else { return }
         tableState.folderScope = scope
+        tableState.pendingReveal = nil   // Rick moved: a waiting reveal is stale
         refreshFolderDisplay()
     }
 
     /// Hand the snapshot what the table shows now. Called from
-    /// `refreshRows` (rows changed), the sort change, and every open /
-    /// scope change; a repeat request is free. Nothing while the option is off.
+    /// `refreshRows` (rows changed), the sort change, and every level
+    /// change; a repeat request is free. Nothing while the option is off.
+    /// No folder is ever twisted open: the top shows folder rows, and a
+    /// scope shows one folder's members (the join's event scope).
     func refreshFolderDisplay() {
         // The mirror, not `showFootageFolders`: the key monitor's closure
         // holds a copy of this view struct from install time, and only
@@ -335,41 +334,50 @@ extension CatalogContent {
         guard tableState.folderKeyMirror.isOn else { return }
         model.footageFolders.compose(visible: tableData.map(\.id),
                                      sort: FootageFolderSort.sort(from: sortOrder),
-                                     open: tableState.openFolderIDs,
+                                     open: [],
                                      scope: tableState.folderScope)
     }
 
-    /// The display landed: one pass turns it into table rows (record
-    /// lookups are O(1) through the model's id index) and publishes the
-    /// displayed record ids; then the selection is pruned to what shows.
-    /// Event handler, never body.
+    /// The display landed: the level is derived (pure, O(rows)) and one
+    /// pass turns it into table rows (record lookups are O(1) through the
+    /// model's id index) and publishes the displayed record ids; then the
+    /// selection is pruned to what shows and a waiting reveal completes.
+    /// A folder the join no longer has (merged, dismissed) sends the
+    /// table back to the top. Event handler, never body.
     func rebuildFolderRows(_ display: FootageFolders.Display) {
-        let keysOf = model.footageFolders.index.keysOf
-        var rows: [FootageFolderTableRow] = []
-        rows.reserveCapacity(display.rows.count)
-        var folderIDs = Set<UUID>()
-        var recordIDs = Set<UUID>()
-        for d in display.rows {
-            if let e = d.eventID {
-                folderIDs.insert(e)
-                rows.append(FootageFolderTableRow(display: d, record: nil,
-                                                  keys: model.footageFolders.index.folders[e]?.keys ?? FootageFolders.SortKeys()))
-            } else if let id = d.recordID, let rec = model.record(forID: id) {
-                // A row the index has not seen yet (a derivative that just
-                // landed) still needs its sort facts: one projection.
-                recordIDs.insert(id)
-                rows.append(FootageFolderTableRow(display: d, record: rec,
-                                                  keys: keysOf[id] ?? model.footageFolderRow(rec).keys))
-            }
+        let index = model.footageFolders.index
+        if tableState.folderKeyMirror.isOn, let scope = tableState.folderScope, !FootageFolderLevel.exists(scope, in: index) {
+            setFolderScope(nil)   // nothing to re-select; the top level's compose is on its way
+            return
         }
-        tableState.folderRows = rows
-        tableState.folderIDs = folderIDs
-        tableState.folderRecordIDs = recordIDs
+        let level = FootageFolderLevel.level(scope: tableState.folderScope, index: index, display: display)
+        tableState.folderRows = folderTableRows(level, index: index)
+        tableState.folderIDs = level.folderIDs
+        tableState.folderRecordIDs = level.recordIDs
         // The empty display is also what `stop()` and a fresh subscription
         // deliver (the pane re-appearing with the option on): nothing is
         // shown yet, so nothing is pruned yet — every action intersects
         // with this (empty) set regardless.
-        if tableState.folderKeyMirror.isOn, !display.rows.isEmpty { pruneSelectionToDisplay() }
+        guard tableState.folderKeyMirror.isOn, !display.rows.isEmpty else { return }
+        pruneSelectionToDisplay()
+        completePendingReveal()
+    }
+
+    private func folderTableRows(_ level: FootageFolderLevel.Level, index: FootageFolders.Index) -> [FootageFolderTableRow] {
+        var rows: [FootageFolderTableRow] = []
+        rows.reserveCapacity(level.rows.count)
+        for d in level.rows {
+            if let e = d.eventID {
+                rows.append(FootageFolderTableRow(display: d, record: nil, folder: level.folders[e],
+                                                  keys: index.folders[e]?.keys ?? FootageFolders.SortKeys()))
+            } else if let id = d.recordID, let rec = model.record(forID: id) {
+                // A row the index has not seen yet (a derivative that just
+                // landed) still needs its sort facts: one projection.
+                rows.append(FootageFolderTableRow(display: d, record: rec,
+                                                  keys: index.keysOf[id] ?? model.footageFolderRow(rec).keys))
+            }
+        }
+        return rows
     }
 
     /// The option flipped (or the pane appeared / left): tell the model
@@ -381,27 +389,26 @@ extension CatalogContent {
             refreshFolderDisplay()
         } else {
             tableState.folderScope = nil
+            tableState.pendingReveal = nil
             tableState.folderRows = []
             tableState.folderIDs = []
             tableState.folderRecordIDs = []
         }
     }
 
-    // MARK: - Keyboard (→ / ← / Esc) — through the pane's NSEvent monitor
+    // MARK: - Keyboard (→ / ← / Esc, ⌘↓ / ⌘↑) — through the pane's NSEvent monitor
 
     /// True when the key was ours. Only while the option is on and the
-    /// FILES table has the keyboard (the Space rule); bare keys only, so
-    /// ⌘← and friends keep their owners. ↑↓ are never touched — the
-    /// Table's native row walk (Rick 2026-10-05).
+    /// FILES table has the keyboard (the Space rule). Bare → / ← / Esc and
+    /// the Finder's ⌘↓ (open) / ⌘↑ (enclosing folder); anything else keeps
+    /// its owner. ↑↓ alone are never touched — the Table's native row walk
+    /// (Rick 2026-10-05).
     func handleFolderKey(_ event: NSEvent) -> Bool {
         guard tableState.folderKeyMirror.isOn, spaceShouldToggleLivePreview() else { return false }
-        let bare = event.modifierFlags.intersection(.deviceIndependentFlagsMask).isSubset(of: [.function, .numericPad])
-        guard bare else { return false }
-        switch FootageFolderKey(keyCode: event.keyCode) {
-        case .open?: return openSelectedFolder()
-        case .close?: return closeSelectedFolder()
-        case .escape?: return clearFolderScope()
-        case nil: return false
+        guard let key = FootageFolderKey(event) else { return false }
+        switch key {
+        case .open: return enterSelectedFolder()
+        case .close, .escape: return leaveFolderByKey()
         }
     }
 
@@ -409,48 +416,33 @@ extension CatalogContent {
         selectedIDs.count == 1 ? selectedIDs.first : nil
     }
 
-    /// → on a folder opens it.
-    private func openSelectedFolder() -> Bool {
+    /// → or ⌘↓ on a folder row opens it.
+    private func enterSelectedFolder() -> Bool {
         guard let id = singleSelection, tableState.folderIDs.contains(id) else { return false }
-        guard !tableState.openFolderIDs.contains(id) else { return true }
-        tableState.openFolderIDs.insert(id)
-        refreshFolderDisplay()
+        enterFolder(id)
         return true
     }
 
-    /// ← on an open folder closes it; on a member it selects the folder
-    /// (the Finder's two-step), so a second ← closes it.
-    private func closeSelectedFolder() -> Bool {
-        guard let id = singleSelection else { return false }
-        if tableState.folderIDs.contains(id) {
-            guard tableState.openFolderIDs.contains(id) else { return true }
-            tableState.openFolderIDs.remove(id)
-            refreshFolderDisplay()
-            return true
-        }
-        guard let parent = model.footageFolders.index.folderOf[id], tableState.folderIDs.contains(parent) else { return false }
-        selectedIDs = [parent]
-        return true
-    }
-
-    /// Esc clears the scope; without one it is not ours.
-    private func clearFolderScope() -> Bool {
+    /// ←, ⌘↑ or Esc inside a folder goes back up; at the top the key is
+    /// not ours.
+    private func leaveFolderByKey() -> Bool {
         guard tableState.folderScope != nil else { return false }
-        setFolderScope(nil)
+        leaveFolder()
         return true
     }
 
-    // MARK: - A derivative landed: open its source's folder, select, reveal
+    // MARK: - A derivative landed: enter its source's folder, select, reveal
 
     /// Transcode / Reformat / Trim / Repair / Clean Up finished and the
     /// catalog took the new row (`VideoScanModel.adoptDerivative`). With
-    /// the option on, the source's folder opens and the new row is
-    /// selected under it; off, the row is selected in the linear table.
-    /// Either way the selection is scrolled into view — but ONLY when the
-    /// list can show the row (codex 2026-10-16 P1): a row the filter hides,
-    /// or a scope on another event hides, is never selected; the one
-    /// console line says where it went. Scoped to the source's own event or
-    /// family, the scope is cleared so the row can be shown and selected.
+    /// the option on, the new row belongs under its source: the source's
+    /// folder is entered (from the top) or kept (inside it), and the row
+    /// is selected as soon as the level shows it — the join may still be
+    /// placing it (`pendingReveal`). Off, the row is selected in the
+    /// linear table. Either way the selection is scrolled into view — but
+    /// ONLY when the list can show the row (codex 2026-10-16 P1): a row
+    /// the filter hides, or a scope on another event hides, is never
+    /// selected; the one console line says where it went.
     func revealDerivative(_ landing: DerivativeLanding) {
         refreshRows()
         let name = model.record(forID: landing.id)?.filename ?? landing.id.uuidString
@@ -461,14 +453,10 @@ extension CatalogContent {
                                          scope: tableState.folderScope,
                                          index: model.footageFolders.index)
         switch plan {
-        case .select:
-            selectDerivative(landing)
-            model.log(FootageFolderWords.landedSelected(name, source: source))
-        case .openScopeAndSelect:
-            let scope = tableState.folderScope.map(folderScopeTitle) ?? ""
-            setFolderScope(nil)
-            selectDerivative(landing)
-            model.log(FootageFolderWords.landedScopeCleared(name, source: source, scope: scope))
+        case .select, .openScopeAndSelect:
+            let folder = selectDerivative(landing)
+            model.log(folder.map { FootageFolderWords.landedInFolder(name, source: source, folder: $0) }
+                      ?? FootageFolderWords.landedSelected(name, source: source))
         case .hiddenByFilter:
             model.log(FootageFolderWords.landedHiddenByFilter(name, source: source))
         case .outsideScope:
@@ -478,13 +466,25 @@ extension CatalogContent {
         }
     }
 
-    /// The row can be shown: open the source's folder (option on), select
-    /// the new row, scroll to it.
-    private func selectDerivative(_ landing: DerivativeLanding) {
+    /// The row can be shown: from the top, enter the source's folder
+    /// (option on); then select the new row as soon as the level shows it.
+    /// Returns the folder's title when one was entered or kept.
+    private func selectDerivative(_ landing: DerivativeLanding) -> String? {
+        var folder: String?
         if showFootageFolders, let eventID = model.footageFolders.index.folderOf[landing.sourceID] {
-            tableState.openFolderIDs.insert(eventID)
+            if tableState.folderScope == nil { enterFolder(eventID) }
+            if tableState.folderScope == .event(eventID) { folder = model.footageFolders.index.folders[eventID]?.title }
         }
-        refreshFolderDisplay()
+        tableState.pendingReveal = landing
+        completePendingReveal()
+        return folder
+    }
+
+    /// A waiting reveal whose row is on screen now: select it, scroll to
+    /// it, done. A row not shown yet waits for the next display.
+    private func completePendingReveal() {
+        guard let landing = tableState.pendingReveal, displayedIDs(among: [landing.id]).contains(landing.id) else { return }
+        tableState.pendingReveal = nil
         selectedIDs = [landing.id]
         CatalogTableReveal.scrollSelectionIntoView()
     }
@@ -504,12 +504,16 @@ struct FootageFoldersShowToggle: View {
     }
 }
 
-/// The three folder keys, by virtual key code (kVK_RightArrow,
-/// kVK_LeftArrow, kVK_Escape). (≈ a C++ enum class with an explicit
-/// converting constructor.)
-enum FootageFolderKey {
+/// The folder keys: `open` = into the selected folder (bare →, or ⌘↓ —
+/// the Finder's Open), `close` = up to the enclosing level (bare ←, or
+/// ⌘↑ — the Finder's Enclosing Folder), `escape` = up as well. By virtual
+/// key code (kVK_RightArrow 124, kVK_LeftArrow 123, kVK_DownArrow 125,
+/// kVK_UpArrow 126, kVK_Escape 53). (≈ a C++ enum class with explicit
+/// converting constructors.)
+enum FootageFolderKey: Equatable {
     case open, close, escape
 
+    /// A BARE key (no modifier beyond fn / the numeric pad).
     init?(keyCode: UInt16) {
         switch keyCode {
         case 124: self = .open
@@ -517,5 +521,26 @@ enum FootageFolderKey {
         case 53: self = .escape
         default: return nil
         }
+    }
+
+    /// A key with ⌘ alone held.
+    init?(commandKeyCode: UInt16) {
+        switch commandKeyCode {
+        case 125: self = .open
+        case 126: self = .close
+        default: return nil
+        }
+    }
+
+    /// The event's key, bare or ⌘-only; any other modifier set is not ours.
+    init?(_ event: NSEvent) {
+        self.init(keyCode: event.keyCode, modifiers: event.modifierFlags.intersection(.deviceIndependentFlagsMask))
+    }
+
+    init?(keyCode: UInt16, modifiers: NSEvent.ModifierFlags) {
+        let real = modifiers.subtracting([.function, .numericPad])
+        if real.isEmpty { self.init(keyCode: keyCode) }
+        else if real == [.command] { self.init(commandKeyCode: keyCode) }
+        else { return nil }
     }
 }

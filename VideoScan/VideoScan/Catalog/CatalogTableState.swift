@@ -3,7 +3,8 @@
 // GH #281): the rows snapshot it draws, the badge revision its cells
 // read — plus `CatalogPane`, the name of each keyboard-focus target in
 // the Catalog's two panes (2026-10-06) — and, since the Footage folders
-// view (2026-10-16), the open folders, the scope and the folder rows.
+// view (2026-10-16; a two-level Finder since 2026-10-17), the folder the
+// table is inside, the folder rows and a derivative waiting to be shown.
 // The keyboard focus itself is ONE FocusState (`focusedPane`) in
 // CatalogView; the table's selection and sort order are @Bindings owned
 // there too.
@@ -27,9 +28,9 @@ final class CatalogPaneFocusMirror {
 }
 
 /// Reference box the same NSEvent monitor reads for the folder keys
-/// (→ / ← / Esc): whether Show ▸ Events & Copies as Folders is on. The
-/// option is a plain `let` on CatalogContent, which the monitor's captured
-/// copy would read stale; this box is mirrored on every change.
+/// (→ / ← / Esc / ⌘↓ / ⌘↑): whether Show ▸ Events & Copies as Folders is
+/// on. The option is a plain `let` on CatalogContent, which the monitor's
+/// captured copy would read stale; this box is mirrored on every change.
 @MainActor
 final class FootageFolderKeyMirror {
     var isOn = false
@@ -60,23 +61,28 @@ struct CatalogTableState: DynamicProperty {
 
     // MARK: Footage folders (Show ▸ Events & Copies as Folders, 2026-10-16)
 
-    /// The folders twisted open (event ids). Session state, like the
-    /// Finder's.
-    @State var openFolderIDs: Set<UUID> = []
-    /// The list narrowed to one event (double-click) or one file's
-    /// family (Show Copies & Related…); nil = everything. Esc / the crumb
-    /// clears it.
+    /// Where the Finder is: nil = the top level (folders and loose files);
+    /// `.event` = inside that folder (double-click / Return / ⌘↓);
+    /// `.family` = one file's copies and versions (Show Copies & Related…).
+    /// Back, ⌘↑, ← and Esc clear it; so does turning the option off, and
+    /// a rebuilt join in which the event no longer exists.
     @State var folderScope: FootageFolders.Scope?
-    /// The folder Table's rows — the published display turned into rows
-    /// in an event handler (CatalogContent.rebuildFolderRows), never in a body.
+    /// The folder Table's rows — the published display turned into the
+    /// current level's rows in an event handler
+    /// (CatalogContent.rebuildFolderRows), never in a body.
     @State var folderRows: [FootageFolderTableRow] = []
     /// The event ids among `folderRows` (O(1) "is this id a folder?").
     @State var folderIDs: Set<UUID> = []
     /// The record ids among `folderRows` — members and loose files under
-    /// the filter, sort, open set AND scope. With the option on this is
-    /// THE displayed set every row action and prune reads (codex
-    /// 2026-10-16 P1); off, the linear rows are.
+    /// the filter, sort AND scope. With the option on this is THE
+    /// displayed set every row action and prune reads (codex 2026-10-16
+    /// P1); off, the linear rows are. A folder row is never in it.
     @State var folderRecordIDs: Set<UUID> = []
+    /// A derivative that just landed and is to be selected as soon as the
+    /// level shows it (its folder was entered; the join may still be
+    /// placing the row). Cleared when it is selected, when Rick moves
+    /// between levels, or when the option goes off.
+    @State var pendingReveal: DerivativeLanding?
     /// Whether the option is on, for the key monitor (see FootageFolderKeyMirror).
     @State var folderKeyMirror = FootageFolderKeyMirror()
 }
@@ -122,11 +128,12 @@ extension CatalogContent {
 
     /// `ids` ∩ what the table shows right now: the folder display's record
     /// ids while Show ▸ Events & Copies as Folders is on (members and loose
-    /// files under the filter, sort, open set AND scope), the linear rows
-    /// otherwise. Every row action — ⌘⌫, Promote, ⌘O, ⌘I, Return, the row
-    /// menu — goes through this, never the raw selection (codex 2026-10-16
-    /// P1: a derivative selected while a scope hid it reached ⌘⌫).
-    /// O(rows) only when `ids` is non-empty; event handlers only, never a body.
+    /// files under the filter, sort AND scope — never a folder row), the
+    /// linear rows otherwise. Every row action — ⌘⌫, Promote, ⌘O, ⌘I,
+    /// Return, the row menu — goes through this, never the raw selection
+    /// (codex 2026-10-16 P1: a derivative selected while a scope hid it
+    /// reached ⌘⌫). O(rows) only when `ids` is non-empty; event handlers
+    /// only, never a body.
     func displayedIDs(among ids: Set<UUID>) -> Set<UUID> {
         CatalogSelectionPrune.displayed(ids, foldersOn: tableState.folderKeyMirror.isOn,
                                         folderRecordIDs: tableState.folderRecordIDs, rows: tableData)
@@ -142,7 +149,7 @@ extension CatalogContent {
     }
 
     /// The folder display changed: keep only what it shows (a selected
-    /// folder row stays). Called when the display lands, so a scope change
+    /// folder row stays). Called when the display lands, so a level change
     /// drops the ids it hid.
     func pruneSelectionToDisplay() {
         let kept = displayedSelection.union(selectedIDs.intersection(tableState.folderIDs))

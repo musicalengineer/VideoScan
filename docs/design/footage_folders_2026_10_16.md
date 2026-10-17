@@ -46,6 +46,33 @@ Mock (three modes; Rick chose C): https://claude.ai/artifact/5hKKk3tuQUn4Mh2zt9G
 - **Calm by default:** copies grey, relation words muted, the keeper's existing tag (Ready /
   Archived) is the only colour.
 
+## 2a. Two levels, like the Finder (Rick, 2026-10-17)
+
+> "I'd really like it to look like Finder in this view, with MarksBirthday, Cape1990, etc, then
+> double-click shows the event including copies."
+
+The twisty outline of §2 gave way to a two-level Finder; the join (§3–§4) did not change.
+
+- **Top level:** one row per confirmed event, with a folder icon, the name, "12 items · 3 copies",
+  the running time, the total size, the date range ("Apr 7, 1984 – Apr 8, 1984") and how many
+  are archived — folders by date, then by name — followed by the loose files (no event), each
+  with its own copies and versions under it as before. No folder opens in place.
+- **Inside a folder** (double-click, Return, ⌘↓ or → on the row; Right-click ▸ Open Folder;
+  "Show in its event" on a member): only that event's members, with the glyph rows exactly as
+  the flat view drew them. A slim breadcrumb bar above the table reads "‹ Back · Catalog ▸
+  Marks Birthday 1984"; Back, ⌘↑, ← or Esc returns to the top with the folder selected (the
+  Finder's Enclosing Folder). "Show Copies & Related…" is the same level for one file's family.
+- **Selection:** a folder row is selectable (so a later Add to Event… can act on it) but it is
+  never a record: ⌘⌫, Promote, ⌘O and the row menu read `selection ∩ displayed`, which holds
+  record ids only.
+- **State:** the current folder is the table's `folderScope`; it clears when the option goes
+  off and when a rebuilt join no longer has the event (a merge, a dismiss).
+- **A derivative lands** inside its source's folder: from the top the folder is entered, and the
+  row is selected as soon as the level shows it (the join may still be placing it).
+- **Model:** `FootageFolderLevel` (pure, O(rows)) turns the published display into the level
+  the table draws — folders reordered at the top, the folder's own row dropped inside; built in
+  the same event handler as the table rows, never in a body.
+
 ## 3. How media is related into folders — the challenge
 
 Four sources, all already in the catalog; the view is a join, not a new analyzer:
