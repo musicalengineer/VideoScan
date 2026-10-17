@@ -61,3 +61,19 @@ Read, no additional findings: domain/seam types, reconciliation formatting, fixt
 **Do only this:** findings against 1–7 (P1 first), each with file:line and a one-line failure scenario; then at most three P2/P3 one-liners. Out of scope: the app wiring (not written), the rescan job (not written), UI, wording.
 
 **Do not explore outside the files listed above and their tests.**
+
+## Closure (Manager, 2026-10-17 — fix `c048c34f9`, merged `e774b172e`)
+
+All eight closed RED FIRST (36 tests red on main; then 250 green in 26 import suites; 322 in 34 with the store suites after the merge with the app wiring).
+1. **Identity, not counts** — `rowLandings` joins files/quarantine (row id + digest), knowledge readings carry the digest, event members compared RESOLVED both ways with ranges; expected landings derived on decode #2 by gate + preflight. Codex's swap → `[rowIdentityWrong×2, curatedBindingWrong×2]`, rolled back; a cleared membership view → one miss per member.
+2. **Duplicate keys** — `JSONDuplicateKeyScanner` (byte tokenizer, object scopes, unescaped keys) over every JSON input before any decode → `.refused(duplicateJSONKey)` naming row and key.
+3. **Sidecars re-read** — hashed at gate load, re-read + re-hashed + re-decoded in the comparator (`fileChangedDuringImport` on any difference), compared by payload.
+4. **Unknown audit words** — refuse the run naming ordinal + word; every audit row lands with its word and detail; the marker keeps the file's SHA-256.
+5. **Ledger** — only an unterminated last line is tolerated (kept with its bytes as `unparseable`); any other malformed line refuses the run.
+6. **RowPreflight** — the DDL's row-local CHECKs applied before any insert; a violating row quarantines as `unrepresentable` (DDL v1.6) with its curated values still in `knowledge_sources`; a sidecar entry that cannot be stored refuses the run. `VU-1` and a negative size no longer abort 13,000 rows.
+7. **Empty target under the lock** — the check repeats as the first statement of the transaction.
+8. **Move vs copy** — exactly one proven-gone row + one present = a move.
+
+## Closed
+
+Closed by `e774b172e` at 2026-10-17T21:26:09Z. 5 P1 + 3 P2 closed red-first; DDL v1.6
