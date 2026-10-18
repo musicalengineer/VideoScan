@@ -74,8 +74,9 @@ extension VideoScanModel {
             return
         }
         let replaced = records[existing]
+        if replaced === newRec { return }
         if replaced.id == newRec.id {
-            records[existing] = newRec
+            landSameID(newRec, over: replaced, at: existing, path: path)
         } else if let why = catalogCutover.committer?.commitBeforeReplacing(replaced.id) {
             keepBoth(replaced, newRec, at: existing, path: path, why: why)
         } else if CatalogReplacedRecord.sameContent(replaced, newRec) {
@@ -83,6 +84,28 @@ extension VideoScanModel {
         } else {
             retire(replaced, for: newRec, at: existing, path: path)
         }
+    }
+
+    /// A job lands a record with the SAME id as the live one (codex B2.5/B2.6
+    /// closing pass, 2026-10-18): it may be a snapshot taken before the
+    /// person's latest edit. The live record is committed first (its values
+    /// reach SQLite and history), and the person's curated values carry onto
+    /// the incoming record — a job's snapshot never overwrites what a person
+    /// wrote. When the commit cannot run, the live record stays and the job's
+    /// update is not recorded (refused, not lost).
+    private func landSameID(_ newRec: VideoRecord, over live: VideoRecord, at index: Int, path: String) {
+        if let why = catalogCutover.committer?.commitBeforeReplacing(live.id) {
+            noteReplacement("NOT RECORDED: a job's update to \(path) landed, but the record there "
+                            + "(\(CatalogReplacedRecord.describe(live))) could not be saved first — \(why). "
+                            + "The record is kept as it is; run the job again when the catalog can save.")
+            return
+        }
+        let persons = CatalogSharedCurated(live)
+        for group in CatalogSharedCurated.Group.allCases {
+            persons.apply(group, to: newRec)
+        }
+        newRec.setAsideReason = live.setAsideReason
+        records[index] = newRec
     }
 
     /// The old record's current values could not be saved first: nothing

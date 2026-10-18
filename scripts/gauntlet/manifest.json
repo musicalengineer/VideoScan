@@ -29220,6 +29220,20 @@
       "tests": [
         "removeVersusRedate"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB27Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogPlaceRecordSameIDTests"
+      ],
+      "tests": [
+        "heldStoreKeepsTheLiveRecord",
+        "staleSnapshotKeepsTheEditAfterRelaunch",
+        "staleSnapshotKeepsTheEditInMemory"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32602,6 +32616,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogCutoverB26Tests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogCutoverB27Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
