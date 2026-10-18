@@ -278,7 +278,12 @@ print(json.dumps(base, separators=(",", ":")))
 # dashboard's series do not step. A Core failure, timeout or not-run turns a
 # green app verdict red via apply_core_package_verdict (reason "core-<why>").
 # Strict timing (GH #208): `swift test` reads VIDEOSCAN_TIMING_STRICT, which
-# the top of this script exports.
+# the top of this script exports. Strict means "a quiet machine", so the lane
+# runs `--no-parallel` (Swift Testing honours it): with suites in parallel in
+# one process, a scale test's wall time and resident-size growth include its
+# neighbours' (first real run, 2026-10-18: AudioFingerprintEngineTests saw
+# 2.4 GB "growth" while the 100k import ran beside it, and a 10 ms freshness
+# budget read 12.9 ms). GitHub CI keeps parallel + non-strict.
 NIGHTLY_CORE_TIMEOUT_SECONDS="${VIDEOSCAN_NIGHTLY_CORE_TIMEOUT_SECONDS:-3600}"
 NIGHTLY_CORE_LOG="${VIDEOSCAN_NIGHTLY_CORE_LOG:-/tmp/nightly-core-test-output.log}"
 CORE_STATUS="not-run"
@@ -302,7 +307,8 @@ run_core_package_tests() {
         swift test \
         --package-path "$package_path" \
         -c "$swift_configuration" \
-        --scratch-path "$scratch_path"
+        --scratch-path "$scratch_path" \
+        --no-parallel
     rc=$?
     timed_out=$NIGHTLY_WATCHDOG_DID_TIMEOUT
     end=$(date +%s)

@@ -1035,8 +1035,8 @@ else
     [ "$got" = "$want" ] && pass "green Core lane: 2 XCTest + 3 Swift Testing (1 known issue) counted, row stays green" \
         || fail "green Core lane: got '$got' want '$want'"
     args=$(cat "$SANDBOX/core-args.txt" 2>/dev/null)
-    [ "$args" = "test --package-path /pkg/VideoScanCore -c release --scratch-path /caches/core-build" ] \
-        && pass "swift test gets the package path, -c release and the private scratch path" \
+    [ "$args" = "test --package-path /pkg/VideoScanCore -c release --scratch-path /caches/core-build --no-parallel" ] \
+        && pass "swift test gets the package path, -c release, the private scratch path and --no-parallel" \
         || fail "swift test arguments changed: '$args'"
     got=$(run_core_case "$SANDBOX/core-red.log" 1 ok "")
     want='failed|core-failed-tests:1|7|7|failed|failed-tests:1|2|1|0|3|0|1|release|["commitHighWater()"]'
