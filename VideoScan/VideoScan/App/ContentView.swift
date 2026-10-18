@@ -5,6 +5,13 @@ private let catalogViewLog = Logger(subsystem: "Rick-Breen.VideoScan", category:
 
 // MARK: - Root (Tab switcher)
 
+/// The main window's tab tags — the numbers `selectedTab` stores. Name a
+/// tab by this, never by a bare number: the tags were renumbered on
+/// 2026-08-19 and a stale `2` sent "Show in Archive" to Triage.
+enum MainTab: Int {
+    case people = 0, catalog = 1, triage = 2, workbench = 3, archive = 4, familyTree = 5, storage = 6
+}
+
 struct ContentView: View {
     @EnvironmentObject var model: VideoScanModel
     @EnvironmentObject var catalogSync: CatalogSync
@@ -803,7 +810,9 @@ struct CatalogView: View {
             onShowInArchive: { rec in
                 model.focusedMediaIDs = model.focusSet(for: rec.id)
                 model.pendingArchiveSelection = rec.id
-                selectedTab = 2
+                // Was `2` — Triage since the 2026-08-19 renumbering, so
+                // "Show in Archive" landed in Triage (Rick 2026-10-18).
+                selectedTab = MainTab.archive.rawValue
             },
             onShowOnlineCopies: { focusIDs, selectID in
                 searchText = ""

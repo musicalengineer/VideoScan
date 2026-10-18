@@ -29224,6 +29224,22 @@
     {
       "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/MainTabTagSensorTests.swift",
+      "stage": "regression",
+      "suites": [
+        "MainTabTagSensorTests"
+      ],
+      "tests": [
+        "archiveTag",
+        "catalogTag",
+        "familyTreeTag",
+        "showInArchiveUsesTheName",
+        "triageTag"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverB27Tests.swift",
       "stage": "regression",
       "suites": [
@@ -32620,6 +32636,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogCutoverB27Tests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/MainTabTagSensorTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
