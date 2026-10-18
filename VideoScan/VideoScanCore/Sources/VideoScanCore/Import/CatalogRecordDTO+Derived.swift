@@ -82,6 +82,39 @@ extension CatalogRecordDTO {
         }
     }
 
+    // MARK: The inverse (cutover B1): rows → the raw members they came from
+
+    /// The raw row members a set of derived rows came from — the exact
+    /// inverse of `derivedValueRows` over the same descriptor table, so a
+    /// SQLite load gives the record back the keys the JSON row carried.
+    /// Rows of one kind are taken in `seq` order; a `.value` kind's inner
+    /// stamp keys stay inside its value (only its sibling keys come back).
+    public static func rawMembers(of rows: [DerivedValueRow]) -> [String: CatalogJSONValue] {
+        var raw: [String: CatalogJSONValue] = [:]
+        for (kind, source) in derivedSources {
+            let mine = rows.filter { $0.kind == kind }.sorted { $0.seq < $1.seq }
+            guard let first = mine.first else { continue }
+            switch source {
+            case .list(let key, _):
+                raw[key] = .array(mine.map(\.valueJSON))
+                merge(first.stampJSON, keys: nil, into: &raw)
+            case .gathered, .check:
+                merge(first.valueJSON, keys: nil, into: &raw)
+            case .value(let key, let stampKeys, _):
+                raw[key] = first.valueJSON
+                merge(first.stampJSON, keys: stampKeys, into: &raw)
+            }
+        }
+        return raw
+    }
+
+    /// Copy an object's members (all, or only `keys`) into `raw`.
+    private static func merge(_ object: CatalogJSONValue, keys: [String]?, into raw: inout [String: CatalogJSONValue]) {
+        for (k, v) in object.objectValue ?? [:] where keys?.contains(k) ?? true {
+            raw[k] = v
+        }
+    }
+
     /// The present, non-null members of `raw` named by `keys`, as one object.
     private static func object(_ raw: [String: CatalogJSONValue], _ keys: [String]) -> CatalogJSONValue {
         var o: [String: CatalogJSONValue] = [:]

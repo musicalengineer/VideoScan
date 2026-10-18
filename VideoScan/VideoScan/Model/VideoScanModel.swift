@@ -1150,8 +1150,10 @@ final class VideoScanModel: ObservableObject {
         // and stays out of "Update everything stale".
         catalogFreshness.observeEngines(of: self)
         // Restore previously-scanned records so the user can browse the
-        // catalog even when source volumes are offline.
-        let restored = catalogStore.load()
+        // catalog even when source volumes are offline. Cutover B1: the
+        // launch rule picks catalog.json (today's path, unchanged) unless
+        // the SQLite switch was made — CatalogAuthorityFlip.swift.
+        let restored = loadCatalogAtLaunch()
         // Master Archive designation rides the same snapshot (additive
         // key) — adopt it before anything else reads `masterArchive`.
         // Test hosts: the shared store never loads, and its `masterArchive`

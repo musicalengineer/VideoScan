@@ -122,6 +122,33 @@ public enum CatalogJSONValue: Codable, Sendable, Equatable, Hashable {
         return try JSONDecoder().decode(CatalogJSONValue.self, from: data)
     }
 
+    /// Parse JSON text (a store column) into the tree; nil when it is not
+    /// JSON. Foundation's C parser, not the Codable cascade above: a load
+    /// reads one or two of these per row, 100k rows at a time (cutover B1).
+    /// Numbers keep the integer / fraction distinction the text made.
+    public static func parse(_ text: String) -> CatalogJSONValue? {
+        guard let data = text.data(using: .utf8),
+              let any = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else { return nil }
+        return from(any)
+    }
+
+    private static func from(_ any: Any) -> CatalogJSONValue? {
+        switch any {
+        case is NSNull: return .null
+        case let s as String: return .string(s)
+        case let n as NSNumber: return number(n)
+        case let a as [Any]: return .array(a.compactMap(from))
+        case let o as [String: Any]: return .object(o.compactMapValues(from))
+        default: return nil
+        }
+    }
+
+    private static func number(_ n: NSNumber) -> CatalogJSONValue {
+        if CFGetTypeID(n) == CFBooleanGetTypeID() { return .bool(n.boolValue) }
+        if !CFNumberIsFloatType(n) { return .int(n.int64Value) }
+        return .double(n.doubleValue)
+    }
+
     /// Decode a typed value back out of this tree.
     public func decode<T: Decodable>(_ type: T.Type) throws -> T {
         let data = try Self.makeEncoder().encode(self)
