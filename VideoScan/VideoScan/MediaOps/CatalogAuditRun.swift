@@ -395,14 +395,22 @@ final class CatalogAuditRunMarker: ObservableObject {
     /// write that one line through the audit's sink. Nothing starts; a
     /// missing or damaged marker says nothing.
     func announceLastRun(to model: VideoScanModel?) {
-        guard let model, let last = attach(catalogFile: model.catalogStore.fileLocation),
-              let line = Self.launchLine(last) else { return }
+        guard let model, let last = attach(catalogFile: model.catalogStore.fileLocation) else { return }
+        let folder = URL(fileURLWithPath: model.catalogStore.fileLocation).deletingLastPathComponent()
+        guard let line = Self.launchLine(last, switchedAt: CatalogFreshnessFactsReader.cutoverSwitchedAt(in: folder)) else { return }
         model.catalogAuditNote(line)
     }
 
-    /// The launch line for the last run (nil when none).
-    nonisolated static func launchLine(_ r: CatalogAuditRunRecord) -> String? {
+    /// The launch line for the last run (nil when none). A run from before
+    /// the switch to SQLite (`switchedAt`; nil = no switch) audited
+    /// catalog.json: its counts are not about this catalog, so the line
+    /// says so and points at Audit Catalog instead of repeating them.
+    nonisolated static func launchLine(_ r: CatalogAuditRunRecord, switchedAt: Date? = nil) -> String? {
         let started = r.startedAt.formatted(date: .abbreviated, time: .shortened)
+        if CatalogFreshnessFactsReader.predatesSwitch(r.startedAt, switchedAt: switchedAt) {
+            return "Audit catalog: the last run (\(started)) audited catalog.json, before the switch to SQLite — "
+                + "it says nothing about this catalog; run Catalog ▸ Audit Catalog… again."
+        }
         switch r.outcome {
         case .completed:
             let gone = r.counts[CatalogAuditResult.gone.rawValue] ?? 0

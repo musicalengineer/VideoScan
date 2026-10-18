@@ -375,10 +375,14 @@ struct IntegrityReportFacts: Sendable, Equatable {
     var problem: String?
     /// The tiers with decisions pending, worst first (IntegrityReport.decisionWords).
     var decisionWords: String?
+    /// The report was made from catalog.json before the switch to SQLite
+    /// (`CatalogFreshnessFactsReader.predatesSwitch`): it says nothing
+    /// about the catalog in use — no decision, no date, every row unverified.
+    var predatesSwitch = false
 
     init(lastCompleted: Date? = nil, outcome: FreshnessRow.Outcome = .neverRan, needsDecision: Int = 0,
          unverified: Int = 0, unverifiedWords: String? = nil, note: String? = nil,
-         problem: String? = nil, decisionWords: String? = nil) {
+         problem: String? = nil, decisionWords: String? = nil, predatesSwitch: Bool = false) {
         self.lastCompleted = lastCompleted
         self.outcome = outcome
         self.needsDecision = needsDecision
@@ -387,15 +391,22 @@ struct IntegrityReportFacts: Sendable, Equatable {
         self.note = note
         self.problem = problem
         self.decisionWords = decisionWords
+        self.predatesSwitch = predatesSwitch
     }
 
-    static func from(_ read: IntegrityReportStore.Read) -> IntegrityReportFacts {
+    /// `switchedAt` = when `catalog.cutover` says the catalog switched to
+    /// SQLite (nil = no switch): a report whose run STARTED before it is
+    /// catalog.json's, not this catalog's.
+    static func from(_ read: IntegrityReportStore.Read, switchedAt: Date? = nil) -> IntegrityReportFacts {
         switch read {
         case .missing:
             return IntegrityReportFacts()
         case .unreadable(let why):
             return IntegrityReportFacts(problem: "\(IntegrityReportStore.latestFileName) can't be read: \(why)")
         case .report(let r):
+            if CatalogFreshnessFactsReader.predatesSwitch(r.startedAt, switchedAt: switchedAt) {
+                return IntegrityReportFacts(predatesSwitch: true)
+            }
             return from(report: r)
         }
     }
