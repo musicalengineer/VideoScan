@@ -4,7 +4,7 @@
   "ccn": 15,
   "nloc": 80
  },
- "entry_count": 403,
+ "entry_count": 401,
  "entries": {
   "VideoScan/VideoScan/Analyze/AnalyzeCoverage.swift::AnalyzeCoverageCalculator.compute": {
    "ccn": 25,
@@ -56,7 +56,7 @@
   },
   "VideoScan/VideoScan/App/VideoScanApp.swift::AppDelegate.applicationShouldTerminate": {
    "ccn": 24,
-   "nloc": 86
+   "nloc": 85
   },
   "VideoScan/VideoScan/App/VideoScanApp.swift::VideoScanApp.body": {
    "ccn": 14,
@@ -159,8 +159,8 @@
    "nloc": 36
   },
   "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift::VideoScanModel.registerPromotedCopy": {
-   "ccn": 10,
-   "nloc": 86
+   "ccn": 9,
+   "nloc": 82
   },
   "VideoScan/VideoScan/Archive/VideoScanModel+MediaLedger.swift::VideoScanModel.archiveCopySnapshots": {
    "ccn": 24,
@@ -181,10 +181,6 @@
   "VideoScan/VideoScan/ArchiveAngel/Prepare/ArchiveAngelJob.swift::ArchiveAngelJob.run": {
    "ccn": 26,
    "nloc": 148
-  },
-  "VideoScan/VideoScan/ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift::VideoScanModel.forgetArchiveAngelCompanions scopes : [ ArchiveAngelCompanionScope ] , reason : String , at now : Date = Date , presence : String -> ArchiveAngelFilePresence = { ArchiveAngelFilePresence . of $ 0 }": {
-   "ccn": 19,
-   "nloc": 69
   },
   "VideoScan/VideoScan/ArchiveAngel/Prepare/VideoScanModel+ArchiveAngelCompanions.swift::VideoScanModel.reconcileArchiveAngelBufferAtLaunch": {
    "ccn": 18,
@@ -1009,10 +1005,6 @@
   "VideoScan/VideoScan/Media/VideoScanModel+EmbeddedDateBackfill.swift::VideoScanModel.runEmbeddedDateBackfill": {
    "ccn": 20,
    "nloc": 89
-  },
-  "VideoScan/VideoScan/Media/VideoScanModel+ProbeEngine.swift::VideoScanModel.probeFileOutcome": {
-   "ccn": 11,
-   "nloc": 84
   },
   "VideoScan/VideoScan/Media/VideoScanModel+ProbeEngine.swift::VideoScanModel.runTargetProbeGroup": {
    "ccn": 15,
