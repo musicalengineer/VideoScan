@@ -100,8 +100,18 @@ struct ImporterScene {
 
     /// Read the committed rows back through the seam.
     func read<T: Sendable>(_ body: @Sendable (any CatalogReader) throws -> T) async throws -> T {
+        try await read(at: databaseURL, body)
+    }
+
+    /// A commit run's staged database (+Staging): `catalog.sqlite.importing-<runID>/catalog.sqlite`.
+    func stagedDatabase(runID: String) -> URL {
+        ImportStaging.database(target: databaseURL, runID: runID)
+    }
+
+    /// Read rows back from `url` (the published target, or a staged database).
+    func read<T: Sendable>(at url: URL, _ body: @Sendable (any CatalogReader) throws -> T) async throws -> T {
         let repository = GRDBCatalogRepository(host: "import-test-reader", durability: .volatileForTests)
-        let opened = await repository.open(at: databaseURL)
+        let opened = await repository.open(at: url)
         guard opened == .readWrite else { throw FixtureFailure(words: "reader could not open: \(opened)") }
         let value: T
         do {

@@ -26,6 +26,9 @@
 // `ImportAbort.dryRunPassed` from inside the body) and removes the scratch
 // folder. Nothing at `inputs.databaseURL` is touched by a dry run; a gate
 // refusal or a comparator miss reads exactly as it would in a real run.
+// A `.commit` writes a STAGING folder beside `inputs.databaseURL` and
+// publishes it there only when imported, verified and permitted (+Staging,
+// codex 2026-10-17 round 2 P1): no other outcome ever creates the target.
 //
 // Stop (the MFO row's Stop button): `stopRequested` is asked BEFORE the
 // target opens and at each phase boundary inside the transaction (after
@@ -186,6 +189,14 @@ public actor CatalogImporter {
     /// phase boundary of the transaction. nil = never.
     public typealias StopCheck = @Sendable () -> Bool
 
+    /// Commit mode: "may the staged set become catalog.sqlite now?" — asked
+    /// ONCE, after the commit, the close and the staged verify, immediately
+    /// before the first publish rename. false = Stop won: nothing is
+    /// published, the outcome is `.stopped` (codex 2026-10-17 P1 fence,
+    /// +Staging). nil = `stopRequested` is not raised. The app passes an
+    /// atomic claim, so Stop and publish cannot both win.
+    public typealias PublishPermit = @Sendable () -> Bool
+
     /// Test seam: runs on the SQLite side the comparator is about to check,
     /// after every row is written and before `compare` (a real row cannot be
     /// deleted — every evidence table refuses it by trigger — so the seam
@@ -211,6 +222,9 @@ public actor CatalogImporter {
     /// Where the last dry run put its database — removed when the run ended
     /// (the tests check that it is gone).
     public private(set) var lastDryRunScratch: URL?
+    /// Where the last commit run staged its database (+Staging): published
+    /// and emptied on `.imported`, kept otherwise until the next import moves it aside.
+    public private(set) var lastStagingFolder: URL?
 
     public init(repository: any CatalogRepository, sink: @escaping Sink) {
         self.repository = repository
@@ -232,26 +246,34 @@ public actor CatalogImporter {
     // MARK: - Run
 
     public func run(_ inputs: Inputs, environment: Environment = Environment(), mode: Mode = .commit,
-                    stopRequested: StopCheck? = nil) async -> Outcome {
+                    stopRequested: StopCheck? = nil, publishPermit: PublishPermit? = nil) async -> Outcome {
         let runID = UUID().uuidString
         lastRunID = runID
         let startedAt = Int64(Date().timeIntervalSince1970)
         let target = Self.target(for: mode, inputs: inputs, runID: runID)
         if mode == .dryRun { lastDryRunScratch = target.deletingLastPathComponent() }
+        if mode == .commit { lastStagingFolder = target.deletingLastPathComponent() }
         sink("START import\(mode == .dryRun ? " (dry run)" : "") \(inputs.catalogURL.path) → \(target.path) (run \(runID))")
-        let outcome = await runSteps(inputs, environment: environment, mode: mode, target: target,
+        var outcome = await runSteps(inputs, environment: environment, mode: mode, target: target,
                                      stopRequested: stopRequested, runID: runID, startedAt: startedAt)
+        // The staging folder exists only once the run got past its refusals
+        // (+Staging `prepare`); from then on every outcome lands through it.
+        if mode == .commit, FileManager.default.fileExists(atPath: target.deletingLastPathComponent().path) {
+            outcome = await ImportStaging.land(outcome, staging: target, target: inputs.databaseURL, repository: repository,
+                                               permit: publishPermit ?? { stopRequested?() != true }, sink: sink)
+        }
         if mode == .dryRun { Self.removeScratch(target.deletingLastPathComponent()) }
         sink(Self.outcomeLine(outcome))
         return outcome
     }
 
     /// A dry run's database lives in a scratch folder of its own (never the
-    /// inputs' target); a commit's is the inputs' target.
+    /// inputs' target); a commit's is STAGED beside the inputs' target and
+    /// published onto it only when imported (+Staging, codex 2026-10-17 P1).
     private static func target(for mode: Mode, inputs: Inputs, runID: String) -> URL {
         switch mode {
         case .commit:
-            return inputs.databaseURL
+            return ImportStaging.database(target: inputs.databaseURL, runID: runID)
         case .dryRun:
             return FileManager.default.temporaryDirectory
                 .appendingPathComponent("videoscan-import-dryrun-\(runID)", isDirectory: true)
@@ -285,6 +307,9 @@ public actor CatalogImporter {
             } catch {
                 return .failed("the dry run's scratch folder could not be made: \(error.localizedDescription)")
             }
+        } else if let early = await ImportStaging.prepare(target: inputs.databaseURL, staging: target,
+                                                          repository: repository, sink: sink) {
+            return early
         }
         switch await repository.open(at: target) {
         case .readWrite: break

@@ -30,6 +30,25 @@ Read, no additional findings: decoder deduplication, pair rewiring/revalidation,
 
 Tests read, not executed because they write files. No files written.
 
+## Closure (fix branch, 2026-10-17 night)
+
+Every finding closed by a pinning test shown red first (Core: red on the
+unmodified importer; app: red by mutation where the red needs a new seam).
+
+| Finding | Pin | Red | Fix |
+|---|---|---|---|
+| P1 force-release is not a COMMIT fence | Core `CatalogImporterStagingTests` (6); app `ImportToSQLiteQuitPathTests.aLateCommitNeverReachesCatalogSQLite` (stall injected in the store's write after the last Stop poll, before COMMIT) | Core, unmodified importer: 6 tests, 15 issues — "Expectation failed: outcome == .stopped", "Expectation failed: !FileManager.default.fileExists(atPath: scene.databaseURL.path)". App, mutant (publish gate ignored): "Expectation failed: job.state == .cancelled", "Expectation failed: !FileManager.default.fileExists(atPath: scene.databaseURL.path)", "Expectation failed: next.state == .finished(summary: next.subtitle)" | `Import/CatalogImporter+Staging.swift` (staging folder, verified publish, database last, RENAME_EXCL, leftovers moved aside); `CatalogImporter.run(publishPermit:)`; `ImportStopFlag.claimPublish` |
+| P1 failed persistence still permits termination | `aRefusedSaveAtQuitLeavesARecoveryCopy`, `bothFailingKeepsTheAppOpen`, `theTerminalSaveIsChecked`, `theNextLaunchSaysACopyIsThere`, `ImportToSQLiteQuitSensorTests` | mutant (no copy; the reply always quits, as on main): "Issue recorded" (expected a recovery copy, got unsaved), "Expectation failed: kept == .terminateCancel", "Expectation failed: words.contains("the recovery copy also failed")"; the launch notice is new behaviour with no main counterpart | `ImportToSQLiteQuit.SaveOutcome` / `terminateReply`; `App/CatalogQuitRecovery.swift`; `finishQuit` returns the reply; willTerminate cancels, releases, `saveAtTermination` |
+| P2 holdWrites can wait forever | `theHoldGivesUpOnAStalledSave`, `theJobRefusesOnAStalledWriter`, `aQuitBehindAStalledWriterWritesTheCopy` | mutant (drain effectively unbounded): "Expectation failed: Date().timeIntervalSince(started) < 1.5", "Expectation failed: result == .writerStalled(heldSaves: 0)", "Expectation failed: job.wasRefused", "Expectation failed: Date().timeIntervalSince(started) < 2" | `CatalogStore.holdWrites(within:)` → `.writerStalled`; `waitForWriterToDrain`; the job refuses before phase 1; the quit skips its synchronous save behind a stalled writer |
+
+Found while fixing (not a codex finding, recorded for the cutover): the
+store's `close()` does not fold the WAL into catalog.sqlite (GRDB closes the
+writer before its read-only readers) — measured 4 KB database + 745 KB WAL
+after a 3-row import. The publish therefore moves the WAL with the database.
+Anything that copies catalog.sqlite ALONE (a backup, an off-site copy) loses
+the import. Recommended: `wal_checkpoint(TRUNCATE)` in
+`GRDBCatalogRepository.close()` (Store/, outside this branch).
+
 ## Brief
 
 # Codex brief: quit during a held import + hold drain + Verify-from-file (2026-10-17 night, data-risk: the catalog write gate)

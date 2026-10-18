@@ -227,6 +227,15 @@ struct CatalogWriteHoldOwner: Hashable, Sendable {
     private let id = UUID()
 }
 
+/// What `holdWrites` did (codex 2026-10-17 round 2 P2). `.writerStalled`:
+/// a save admitted before the hold did not drain within the bound — the
+/// hold is ALREADY RELEASED and `heldSaves` were refused meanwhile (the
+/// caller schedules one catch-up save when that is more than zero).
+enum CatalogWriteHoldResult: Equatable {
+    case taken
+    case writerStalled(heldSaves: Int)
+}
+
 @MainActor
 final class CatalogStore {
     static let shared = CatalogStore()
@@ -285,9 +294,15 @@ final class CatalogStore {
     /// an async one (FIFO on the queue orders them).
     private var acknowledgedInFlight = 0
 
-    /// Callers of `holdWrites` waiting for the writes admitted before the
-    /// hold to come back to the main actor. Resumed when none is in flight.
-    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+    /// Callers of `holdWrites` / `waitForWriterToDrain` waiting for the
+    /// writes admitted before them to come back to the main actor. Resumed
+    /// (true) when none is in flight; each also has its own timer (false).
+    private var drainWaiters: [OnceResume<Bool>] = []
+
+    /// Saves asked for since the last one that reached disk (a refusal, a
+    /// held save, a failed write each count one; a durable save resets it).
+    /// The quit's "lose N unsaved change(s)" (codex round 2 P1).
+    private(set) var savesNotLanded = 0
 
     /// Something is on its way to disk or waiting to be: a debounced save
     /// not yet handed to the queue, a save in flight (async or
@@ -297,38 +312,12 @@ final class CatalogStore {
         debouncedSavePending || saveInFlight || acknowledgedInFlight > 0 || pendingRecords != nil
     }
 
-    /// Take the hold — an ATOMIC ADMISSION BOUNDARY (codex 2026-10-17 P2).
-    /// The hold is set first, on the main actor, so from this line no save
-    /// is admitted (every door checks it in `writePrecondition`). A save
-    /// admitted BEFORE it has already put its write on `writeQueue`, so the
-    /// function then waits behind them on that queue (serial with saves)
-    /// and for their main-actor completions (the generation they stamp).
-    /// When it returns, nothing but the owner can write and nothing
-    /// admitted earlier is still outstanding; the caller reads the
-    /// generation after it. A debounced save still waiting on its timer was
-    /// not admitted: it fires into the hold, is refused and counted.
-    /// `reason` names the job in the refusal's words; `owner` is the token
-    /// the holder's own acknowledged saves present. (For Rick: take the
-    /// mutex, then post a barrier to the writer thread's FIFO and wait for
-    /// it — everything queued ahead of the barrier has finished.)
-    func holdWrites(reason: String, owner: CatalogWriteHoldOwner) async {
-        writeHold = reason
-        writeHoldOwner = owner
-        heldRefusals = 0
-        await withCheckedContinuation { (barrier: CheckedContinuation<Void, Never>) in
-            writeQueue.async { barrier.resume() }
-        }
-        while saveInFlight || acknowledgedInFlight > 0 {
-            await withCheckedContinuation { drainWaiters.append($0) }
-        }
-    }
-
-    /// Wake `holdWrites` callers once no save is in flight.
+    /// Wake drain waiters once no save is in flight.
     private func resumeDrainWaitersIfIdle() {
         guard !saveInFlight, acknowledgedInFlight == 0, !drainWaiters.isEmpty else { return }
         let waiters = drainWaiters
         drainWaiters = []
-        for waiter in waiters { waiter.resume() }
+        for waiter in waiters { waiter.resume(true) }
     }
 
     /// Let go. Returns how many saves were refused while held — the holder
@@ -520,6 +509,7 @@ final class CatalogStore {
     private func writePrecondition(as owner: CatalogWriteHoldOwner? = nil) -> CatalogWriteError? {
         func fail(_ e: CatalogWriteError) -> CatalogWriteError {
             lastWriteError = e
+            savesNotLanded += 1
             CatalogWriteJournal.record(e, catalogURL: fileURL)
             return e
         }
@@ -607,6 +597,7 @@ final class CatalogStore {
             // next save see its own predecessor as a foreign, newer write.
             loadedGeneration = max(loadedGeneration, wroteGeneration)
             lastWriteError = nil
+            savesNotLanded = 0
             // High-water mark (GH #165). One tiny atomic write per save;
             // never decrements. Skipped when nothing advanced.
             if wroteGeneration > generationFloor {
@@ -631,6 +622,7 @@ final class CatalogStore {
         } else if lastWriteError == nil {
             lastWriteError = .writeFailed("encode or atomic write failed")
         }
+        if !success { savesNotLanded += 1 }
         if !success && designationChanging {
             auditDesignation("Master Archive designation: OUTCOME FAILED — catalog save generation \(wroteGeneration) did not land (\(lastWriteError?.persistentDescription ?? "unknown")); catalog.json still carries \(Self.describe(persistedMasterArchive)).")
         }
@@ -1697,6 +1689,99 @@ extension CatalogStore {
         } catch {
             NSLog("VideoScan: failed to decode catalog at %@: %@", url.path, String(describing: error))
             return nil
+        }
+    }
+}
+
+// MARK: - The write hold and the writer's drain (MOPS-16; codex 2026-10-17 rounds 1–2)
+
+// An extension in the SAME file, so it reaches the class's private queue and
+// counters; kept outside the class body on purpose (type_body_length).
+extension CatalogStore {
+
+    /// How long `holdWrites` waits for admitted saves to drain before it
+    /// gives the hold back (codex 2026-10-17 round 2 P2).
+    static let holdDrainDeadline: TimeInterval = 60
+
+    /// Take the hold — an ATOMIC ADMISSION BOUNDARY (codex 2026-10-17 P2).
+    /// The hold is set first, on the main actor, so from this line no save
+    /// is admitted (every door checks it in `writePrecondition`). A save
+    /// admitted BEFORE it has already put its write on `writeQueue`, so the
+    /// function then waits behind them on that queue (serial with saves)
+    /// and for their main-actor completions (the generation they stamp).
+    /// When it returns, nothing but the owner can write and nothing
+    /// admitted earlier is still outstanding; the caller reads the
+    /// generation after it. A debounced save still waiting on its timer was
+    /// not admitted: it fires into the hold, is refused and counted.
+    /// `reason` names the job in the refusal's words; `owner` is the token
+    /// the holder's own acknowledged saves present. (For Rick: take the
+    /// mutex, then post a barrier to the writer thread's FIFO and wait for
+    /// it — everything queued ahead of the barrier has finished.)
+    ///
+    /// BOUNDED (codex 2026-10-17 round 2 P2): an admitted save that never
+    /// finishes (a stalled volume) would hold this forever, and Stop could
+    /// not interrupt it. Past `seconds` the hold is RELEASED here and the
+    /// result says `.writerStalled` — the caller refuses its work.
+    func holdWrites(reason: String, owner: CatalogWriteHoldOwner,
+                    within seconds: TimeInterval = CatalogStore.holdDrainDeadline) async -> CatalogWriteHoldResult {
+        writeHold = reason
+        writeHoldOwner = owner
+        heldRefusals = 0
+        if await waitForWriterToDrain(within: seconds) { return .taken }
+        let held = releaseWriteHold()
+        catalogStoreLog.error("catalog hold for '\(reason, privacy: .public)' GIVEN BACK: an admitted save did not finish within \(seconds, privacy: .public) s")
+        return .writerStalled(heldSaves: held)
+    }
+
+    /// True once every save admitted before this call has landed — behind
+    /// `writeQueue` (serial with saves) and back on the main actor — false
+    /// when that takes longer than `seconds`. Never blocks the main actor:
+    /// the quit path asks this before its synchronous save, so a stalled
+    /// writer is DETECTED (this times out) instead of joined (codex round 2 P2).
+    func waitForWriterToDrain(within seconds: TimeInterval) async -> Bool {
+        let until = Date().addingTimeInterval(seconds)
+        let queue = writeQueue
+        let barrierPassed = await OnceResume<Bool>.race(within: seconds, timeout: false) { once in
+            queue.async { once.resume(true) }
+        }
+        guard barrierPassed else { return false }
+        while saveInFlight || acknowledgedInFlight > 0 {
+            let left = until.timeIntervalSinceNow
+            guard left > 0 else { return false }
+            let woke = await OnceResume<Bool>.race(within: left, timeout: false) { drainWaiters.append($0) }
+            guard woke else { return false }
+        }
+        return true
+    }
+
+    /// The same question, answered synchronously for `applicationWillTerminate`
+    /// (the main thread waits at most `seconds` for the write queue).
+    func writeQueueDrainsBlocking(within seconds: TimeInterval) -> Bool {
+        let done = DispatchSemaphore(value: 0)
+        writeQueue.async { done.signal() }
+        return done.wait(timeout: .now() + max(0, seconds)) == .success
+    }
+
+    /// The quit's recovery copy (codex 2026-10-17 round 2 P1): the payload
+    /// is built HERE, on the main actor, from the live records (the one
+    /// place they are read); the returned closure encodes it with the
+    /// catalog's own encoder and publishes it with AtomicFilePublish
+    /// (`.fullFsync`) at the URL it is given — on any thread, never on
+    /// `writeQueue`, so a stalled catalog save cannot hold it. The closure
+    /// returns nil when the copy is durable, else the words. Not a catalog
+    /// save: no hold, lock or generation check — it never touches catalog.json.
+    func recoveryCopyWriter(records: [VideoRecord]) -> @Sendable (URL) -> String? {
+        let payload = Self.makePayload(records: records, generation: currentGeneration, masterArchive: masterArchive)
+        return { url in
+            do {
+                let encoder = JSONEncoder()
+                encoder.dateEncodingStrategy = .iso8601
+                let data = try payload.encoded(using: encoder)
+                try AtomicFilePublish.write(data, to: url, durability: .fullFsync, createIntermediates: false)
+                return nil
+            } catch {
+                return String(describing: error)
+            }
         }
     }
 }
