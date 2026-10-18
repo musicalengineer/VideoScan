@@ -26,6 +26,9 @@ script rebuilds three small, sanitized streams and pushes them to `metrics`:
                                   that publishes twice keeps the
                                   later row; a day on which `gh` failed gets
                                   NO row (never nulls in a trend).
+    metrics/modules.jsonl         one row per day: per-module counts for the
+                                  page's Module health table, published by
+                                  scripts/complexity_backfill.py --modules
     metrics/events_latest.json    ONE object: the event-recognition prototype's
                                   counts (scripts/events_prototype.py
                                   --stats-json): records with captions /
@@ -119,6 +122,9 @@ RUN_STATUS = ("findings", "failed", "disabled", "nothing", "none", "other")
 
 _CX_BUCKET = {"files": "int", "functions": "int", "ccn_over_15": "int", "ccn_over_30": "int",
               "nloc_over_80": "int", "offenders": "int", "files_over_800": "int", "mean_ccn": "num?"}
+_MOD_BUCKET = {"lines": "int", "files": "int", "functions": "int", "mean_ccn": "num?", "max_ccn": "int",
+               "ccn_over_15": "int", "ccn_over_30": "int", "files_over_1000": "int",
+               "fix_commits_90d": "int?", "fix_commits_all": "int?"}
 TS_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 SHA_RE = re.compile(r"^[0-9a-f]{7,40}$")
 # Exposure / problem-file streams name app SOURCE files and Swift identifiers,
@@ -218,6 +224,19 @@ SCHEMAS: Dict[str, dict] = {
         "swift_by_folder": ("opt", ("map", ("either", "folder", ("enum", ("swift_cli",))), ("obj", _CX_BUCKET))),
         "python_by_folder": ("opt", ("map", ("enum", ("scripts", "tools")), ("obj", _CX_BUCKET))),
         "folders_mapped_pct": "num?",
+    },
+    # Per-module history for the page's Module health table
+    # (scripts/complexity_backfill.py --modules, 2026-10-18): one row per day,
+    # counts and module names only ("Catalog", "Core", "Core/Store",
+    # "swift_cli"). The nightly carries the same numbers, plus names, as
+    # `modules` on its complexity.jsonl row.
+    "modules.jsonl": {
+        "schemaVersion": "int",
+        "ts": "ts",
+        "sha": "sha",
+        "run_kind": ("enum", ("backfill",)),
+        "modules": ("map", "module", ("obj", _MOD_BUCKET)),
+        "files_mapped_pct": "num?",
     },
     # Over-exposure (scripts/exposure_metrics.py) and the problem-files table
     # (scripts/problem_files.py), published by the GitHub nightly's aggregate
@@ -383,6 +402,32 @@ def _check_folder(value, where: str, folders: Optional[set]) -> None:
         raise _bad(where, value, "not a source folder of this repo")
 
 
+CORE_SOURCES = REPO / "VideoScan" / "VideoScanCore" / "Sources" / "VideoScanCore"
+
+
+def core_subfolders() -> set:
+    """VideoScanCore's subfolders: the "Core/<name>" modules a row may name."""
+    if not CORE_SOURCES.is_dir():
+        return set()
+    return {p.name for p in CORE_SOURCES.iterdir() if p.is_dir() and FOLDER_RE.match(p.name)}
+
+
+def _check_module(value, where: str, folders: Optional[set]) -> None:
+    """A Module health table name: a source folder, "swift_cli", or
+    "Core/<subfolder>" (one plain component after the slash, and with a
+    folder set given, a subfolder that exists)."""
+    if value == "swift_cli":
+        return
+    if isinstance(value, str) and value.startswith("Core/"):
+        sub = value[len("Core/"):]
+        if not FOLDER_RE.match(sub) or sub == "(app root)":
+            raise _bad(where, value, "expected Core/<plain folder name>")
+        if folders is not None and sub not in core_subfolders():
+            raise _bad(where, value, "not a VideoScanCore subfolder of this repo")
+        return
+    _check_folder(value, where, folders)
+
+
 def _check_obj(spec, value, where, folders) -> None:
     if not isinstance(value, dict):
         raise _bad(where, value, "expected an object")
@@ -447,6 +492,9 @@ def _check(spec, value, where: str, folders: Optional[set]) -> None:
             spec = spec[:-1]
         if spec == "folder":
             _check_folder(value, where, folders)
+            return
+        if spec == "module":
+            _check_module(value, where, folders)
             return
         if spec in _SCALARS:
             test, why = _SCALARS[spec]

@@ -101,3 +101,65 @@ def test_publisher_appends_backfill_and_keeps_ci_rows_verbatim(tmp_path):
     (tmp_path / "complexity.jsonl").write_text(text)
     again = pm.sanitized_files({"complexity.jsonl": [row]}, tmp_path, {"Catalog"})["complexity.jsonl"]
     assert again == text                                                # idempotent
+
+
+# ---------------------------------------------------------------- per-module history (--modules, 2026-10-18)
+
+CORE = "VideoScan/VideoScanCore/Sources/VideoScanCore/"
+
+
+def test_module_of_splits_core_subfolders_and_never_names_tests():
+    assert cm.module_of(CORE + "PrunePlan.swift") == "Core"
+    assert cm.module_of(CORE + "Store/GRDBCatalogRepository.swift") == "Core/Store"
+    assert cm.module_of("VideoScan/VideoScan/Catalog/A.swift") == "Catalog"
+    assert cm.module_of("swift_cli/main.swift") == "swift_cli"
+    assert cm.module_of("VideoScan/VideoScanTests/ATests.swift") is None
+    assert cm.module_of("VideoScan/VideoScanCore/Tests/X/Y.swift") is None
+    assert cm.module_of("scripts/x.py") is None
+
+
+def test_notable_imports_skip_apple_and_our_own_modules():
+    text = "import Foundation\n@preconcurrency import GRDB\nimport struct MLX.Array\nimport VideoScanCore\nimport SQLite3\n// import Fake\n"
+    assert cm.notable_imports(text) == ["GRDB", "MLX", "SQLite3"]
+
+
+def test_module_counts_and_fix_window():
+    files = {CORE + "A.swift": 1200, CORE + "Store/B.swift": 100, "VideoScan/VideoScan/Catalog/C.swift": 50}
+    funcs = [(CORE + "A.swift", 52), (CORE + "A.swift", 3), (CORE + "Store/B.swift", 16)]
+    now = datetime(2026, 10, 18, tzinfo=UTC).timestamp()
+    commits = [(now - 10 * 86400, [CORE + "A.swift", CORE + "A.swift"]),        # one commit, counted once
+               (now - 200 * 86400, [CORE + "A.swift"]),                         # all-time only
+               (now + 86400, [CORE + "A.swift"])]                               # after as_of: ignored
+    m = cm.module_counts(funcs, files, fixes=cm.fix_counts(commits, now))
+    assert m["Core"] == {"lines": 1200, "files": 1, "functions": 2, "max_ccn": 52, "ccn_over_15": 1, "ccn_over_30": 1,
+                         "files_over_1000": 1, "mean_ccn": 27.5, "fix_commits_90d": 1, "fix_commits_all": 2}
+    assert m["Core/Store"]["ccn_over_15"] == 1 and m["Core/Store"]["fix_commits_all"] == 0
+    assert m["Catalog"]["functions"] == 0 and m["Catalog"]["mean_ccn"] is None
+    assert cm.module_counts(funcs, files)["Core"]["fix_commits_90d"] is None    # no git: null, not 0
+
+
+def test_module_mapper_follows_moved_files_by_name_for_bugs():
+    today = [CORE + "Store/Repo.swift", CORE + "Other.swift", "VideoScan/VideoScan/Hallie/H.swift"]
+    asof = cm.module_mapper(today)
+    bugs = cm.module_mapper(today, by_name_first=True)
+    assert asof("VideoScan/VideoScan/H.swift") == "Hallie"                    # old flat layout, by name
+    assert asof(CORE + "Repo.swift") == "Core"                                # where it was then
+    assert bugs(CORE + "Repo.swift") == "Core/Store"                          # the fix follows the code
+    assert asof("VideoScan/VideoScan/Gone.swift") is None
+
+
+def test_module_row_is_counts_only_and_passes_the_privacy_gate():
+    class Cache:
+        seen = {"b1": (1200, [52, 3]), "b2": (100, [16])}
+    entries = [(CORE + "A.swift", "b1"), (CORE + "Store/B.swift", "b2")]
+    mapper = cm.module_mapper([p for p, _ in entries])
+    row = bf.module_row(entries, Cache(), "abcdef1234", datetime(2026, 10, 1, 15, tzinfo=UTC), mapper, {})
+    assert row["modules"]["Core"]["max_ccn"] == 52 and row["files_mapped_pct"] == 100.0
+    assert "A.swift" not in json.dumps(row)
+    pm.validate("modules.jsonl", row, {"Catalog", "Core"})
+    with pytest.raises(pm.PrivacyError):
+        pm.validate("modules.jsonl", dict(row, modules={"Core/Nope": row["modules"]["Core"]}), {"Catalog", "Core"})
+    with pytest.raises(pm.PrivacyError):
+        pm.validate("modules.jsonl", dict(row, modules={"Core/Store/x.swift": row["modules"]["Core"]}), None)
+    with pytest.raises(pm.PrivacyError):
+        pm.validate("modules.jsonl", dict(row, modules={"Core": dict(row["modules"]["Core"], max_fn="PrunePlan.plan")}), None)

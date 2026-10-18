@@ -35,6 +35,7 @@ Usage
 -----
     venv/bin/python3 scripts/complexity_backfill.py            # measure + publish
     venv/bin/python3 scripts/complexity_backfill.py --no-publish
+    venv/bin/python3 scripts/complexity_backfill.py --modules [--no-publish]   # per-module history
 """
 
 from __future__ import annotations
@@ -175,8 +176,161 @@ def measure(args: Tuple[str, str, str, List[str]]) -> dict:
                         getattr(lizard, "version", None) if isinstance(getattr(lizard, "version", None), str) else None)
 
 
+# ---------------------------------------------------------------- per-module history (--modules)
+#
+# The metrics page's Module health table needs per-MODULE history (lines,
+# max CCN, files over 1,000 lines, fix commits) that the rows above never
+# carried. `--modules` measures the last commit of each of the last
+# --module-days days (default 60) and writes one COUNTS-ONLY row per day to
+# metrics/modules.jsonl (no names, no paths: privacy gate as above).
+#
+# Cheap by construction: `git ls-tree` lists each commit's blobs, and lizard
+# runs once per DISTINCT blob (cached across commits, read with one
+# `git cat-file --batch`), so 60 days costs about one full scan plus the
+# files that changed — not 60 scans. Sequential, one process.
+
+DEFAULT_MODULES_OUT = Path.home() / "Library/Logs/VideoScan/modules_backfill.jsonl"
+
+
+class BlobCache:
+    """blob sha -> (line count, [ccn, ...]) measured once."""
+
+    def __init__(self, repo: str):
+        self.repo = repo
+        self.seen: Dict[str, Tuple[int, List[int]]] = {}
+        self.measured = 0
+        self._cat = subprocess.Popen(["git", "-C", repo, "cat-file", "--batch"],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+
+    def _read(self, blob: str) -> str:
+        self._cat.stdin.write((blob + "\n").encode())
+        self._cat.stdin.flush()
+        header = self._cat.stdout.readline().split()
+        size = int(header[2])
+        data = self._cat.stdout.read(size)
+        self._cat.stdout.read(1)                     # trailing newline
+        return data.decode("utf-8", "replace")
+
+    def measure(self, entries: Sequence[Tuple[str, str]]) -> None:
+        """entries: (path, blob). Measures the blobs not seen yet."""
+        todo: Dict[str, str] = {}
+        queued = set()
+        for path, blob in entries:
+            if blob not in self.seen and blob not in queued:
+                todo[path] = blob
+                queued.add(blob)
+        if not todo:
+            return
+        sources = {path: self._read(blob) for path, blob in todo.items()}
+        funcs, _ = cm.analyze_sources(sources, ".")
+        ccns: Dict[str, List[int]] = {p: [] for p in sources}
+        for f in funcs:
+            ccns.setdefault(f.file, []).append(f.ccn)
+        for path, blob in todo.items():
+            self.seen[blob] = (sources[path].count("\n"), ccns.get(path, []))
+        self.measured += len(todo)
+
+    def close(self) -> None:
+        try:
+            self._cat.stdin.close()
+            self._cat.wait(timeout=10)
+        except (OSError, subprocess.SubprocessError):
+            self._cat.kill()
+
+
+def tree_entries(repo: str, sha: str) -> List[Tuple[str, str]]:
+    """(path, blob) for the production Swift files of a commit."""
+    out = _git(repo, "ls-tree", "-r", "-z", sha, "--", *cm.SWIFT_ROOTS)
+    entries = []
+    for rec in out.split("\0"):
+        if not rec or "\t" not in rec:
+            continue
+        meta, path = rec.split("\t", 1)
+        parts = meta.split()
+        if len(parts) == 3 and parts[1] == "blob" and cm.in_scope(path):
+            entries.append((path, parts[2]))
+    return entries
+
+
+def module_row(entries: Sequence[Tuple[str, str]], cache: BlobCache, sha: str, when: _dt.datetime,
+               mapper, fixes: Optional[Dict[str, Dict[str, int]]]) -> dict:
+    """One counts-only modules.jsonl row (the nightly's `modules` minus names)."""
+    file_lines = {path: cache.seen[blob][0] for path, blob in entries}
+    funcs = [(path, ccn) for path, blob in entries for ccn in cache.seen[blob][1]]
+    ok = sum(1 for p in file_lines if mapper(p))
+    return {
+        "schemaVersion": 1,
+        "ts": when.astimezone(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "sha": sha[:8],
+        "run_kind": "backfill",
+        "modules": cm.module_counts(funcs, file_lines, mapper, fixes),
+        "files_mapped_pct": round(100.0 * ok / len(file_lines), 1) if file_lines else None,
+    }
+
+
+def run_modules(a) -> int:
+    t0, c0 = time.monotonic(), time.process_time()
+    stop_at = t0 + a.budget_minutes * 60
+    today = _dt.date.today()
+    picks = choose_commits(main_history(a.repo, a.ref), today - _dt.timedelta(days=a.module_days), today,
+                           a.module_days)
+    current = cm.list_files(a.repo)
+    mapper = cm.module_mapper(current)
+    fix_mapper = cm.module_mapper(current, by_name_first=True)
+    commits = cm.fix_commits(a.repo, a.ref)
+    print(f"START module backfill: {len(picks)} days, budget {a.budget_minutes} min")
+    cache = BlobCache(a.repo)
+    rows: List[dict] = []
+    skipped = 0
+    try:
+        for i, (sha, when) in enumerate(picks):
+            if time.monotonic() >= stop_at:
+                skipped = len(picks) - i
+                break
+            entries = tree_entries(a.repo, sha)
+            cache.measure(entries)
+            fixes = cm.fix_counts(commits, when.timestamp(), fix_mapper) if commits is not None else None
+            row = module_row(entries, cache, sha, when, mapper, fixes)
+            rows.append(row)
+            print(f"  {row['ts'][:10]} {sha[:8]}  modules {len(row['modules']):>2}  "
+                  f"lines {sum(m['lines'] for m in row['modules'].values()):>7}  "
+                  f"mapped {row['files_mapped_pct']}%  blobs measured {cache.measured}", flush=True)
+    finally:
+        cache.close()
+    out = Path(a.modules_out).expanduser()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    by_day = {}
+    if out.exists():
+        for line in out.read_text().splitlines():
+            try:
+                r = json.loads(line)
+                by_day[r["ts"][:10]] = r
+            except (ValueError, KeyError, TypeError):
+                continue
+    for r in rows:
+        by_day[r["ts"][:10]] = r
+    out.write_text("".join(json.dumps(by_day[k], sort_keys=True, separators=(",", ":")) + "\n"
+                           for k in sorted(by_day)))
+    elapsed, cpu = time.monotonic() - t0, time.process_time() - c0
+    result = "not published (--no-publish)"
+    if not a.no_publish and rows:
+        import publish_metrics as pm
+        try:
+            result = pm.publish({"modules.jsonl": rows}, folders=pm.source_folders())
+        except (pm.PrivacyError, pm.PublishError, OSError, subprocess.SubprocessError) as exc:
+            print(f"OUTCOME failed: {len(rows)} module rows in {elapsed:.0f}s, publish failed: {exc}")
+            return 1
+    print(f"OUTCOME ok: {len(rows)} module rows in {elapsed:.0f}s ({cpu:.0f}s CPU here, {cache.measured} blobs "
+          f"through lizard, {skipped} days skipped for time); {result}; local copy {out}")
+    return 0
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
+    ap.add_argument("--modules", action="store_true",
+                    help="per-module history for the Module health table (metrics/modules.jsonl)")
+    ap.add_argument("--module-days", type=int, default=60)
+    ap.add_argument("--modules-out", default=str(DEFAULT_MODULES_OUT))
     ap.add_argument("--repo", default=str(HERE.parent))
     ap.add_argument("--ref", default="origin/main")
     ap.add_argument("--start", default="2026-04-15")
@@ -187,6 +341,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--out", default=str(DEFAULT_OUT))
     ap.add_argument("--no-publish", action="store_true")
     a = ap.parse_args(argv)
+    if a.modules:
+        return run_modules(a)
 
     t0 = time.monotonic()
     now = _dt.datetime.now()
