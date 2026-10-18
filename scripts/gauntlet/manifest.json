@@ -29236,6 +29236,9 @@
         "catalogTag",
         "familyTreeTag",
         "showInArchiveUsesTheName",
+        "timelineHidesNonMatch",
+        "timelineShowsIndexedMatch",
+        "timelineUsesTheSharedIndex",
         "transcriptOnlyRecordIsFound",
         "triageTag"
       ]
