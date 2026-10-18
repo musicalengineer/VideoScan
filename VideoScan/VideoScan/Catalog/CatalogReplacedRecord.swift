@@ -53,6 +53,16 @@ enum CatalogReplacedRecord {
         return differing
     }
 
+    /// True when a person curated anything on `record` (any shared curated
+    /// group, or a set-aside reason) — the only case worth keeping a
+    /// replaced row as history.
+    static func carriesCuration(_ record: VideoRecord) -> Bool {
+        let blank = CatalogSharedCurated(VideoRecord())
+        let mine = CatalogSharedCurated(record)
+        if record.setAsideReason != nil { return true }
+        return CatalogSharedCurated.Group.allCases.contains { !mine.same($0, as: blank) }
+    }
+
     /// "stars 2, notes 'the lake house', tags Gold" — the curated values
     /// `record` carries, in the person's words; "no curated values" when none.
     static func describe(_ record: VideoRecord) -> String {

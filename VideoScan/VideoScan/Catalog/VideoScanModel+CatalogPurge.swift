@@ -136,6 +136,15 @@ extension VideoScanModel {
     /// old row stays live, the new one waits for the path (refused, not lost),
     /// and the words say so.
     private func retire(_ old: VideoRecord, for newRec: VideoRecord, at index: Int, path: String) {
+        // Nothing a person curated on the old row (M5 full run, 2026-10-18:
+        // CleanupScaleTests' stale record): there is nothing to keep as
+        // history — swap in place and purge, as before B2.4, so stale rows
+        // do not pile up at an output path.
+        if !CatalogReplacedRecord.carriesCuration(old) {
+            records[index] = newRec
+            purgeCatalogRows(ids: [old.id], reason: "a new file replaced an uncurated record at \(path)")
+            return
+        }
         let carried = CatalogReplacedRecord.describe(old)
         let marker = RemovalMarker.removedFromCatalog(at: Date(), reason: .replacedAtPath)
         // Marker FIRST (it frees the live path), then the new record right
