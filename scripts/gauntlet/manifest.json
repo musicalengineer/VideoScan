@@ -11689,34 +11689,15 @@
       "path": "VideoScan/VideoScanTests/FamilyMusicTests.swift",
       "stage": "unit",
       "suites": [
-        "FamilyMusicLogicTests",
-        "FamilyMusicScaleTests",
-        "FamilyMusicMediaMatrixTests",
-        "FamilyMusicIsolationTests",
+        "FamilyMusicFieldTests",
         "FamilyMusicSensorTests"
       ],
       "tests": [
         "additiveField",
-        "audio",
-        "copyDedupe",
-        "edgeRoutes",
         "familyMusicMarkSurvivesModelRescan",
         "familyMusicMarkSurvivesRescan",
         "infoCleaning",
-        "ledgerVocabulary",
-        "markUnmark",
-        "menuTitles",
-        "multiMark",
-        "poisonedState",
-        "prefill",
-        "readOnly",
-        "sandboxed",
-        "scale",
-        "snapshotCounts",
-        "sortOrder",
-        "stateMachine",
-        "unmarkedPurchasedMusicNeverAppears",
-        "video"
+        "ledgerVocabulary"
       ]
     },
     {

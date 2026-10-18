@@ -361,6 +361,47 @@ struct VerifyCatalogTierTests {
         #expect(VerifyCatalogTiers.presence(audit: r).tier.result == .couldNotCheck(100))
     }
 
+    /// RED 2026-10-18, Rick's first afternoon on catalog.sqlite: the
+    /// import's Audit (started 15:38:49) ran on catalog.json a minute
+    /// before the switch (catalog.cutover 15:39:47); its 144 never-seen
+    /// rows and 1 changed row went to quarantine, so none of them is a
+    /// record. Tier 0 must not stand on that run: not run, with the door.
+    @Test("tier 0: an audit that started before the switch to SQLite is not this catalog's — not run, 'run Audit Catalog again'; one that started after keeps its decision")
+    func presenceFromBeforeTheSwitchIsNotRun() {
+        let switched = now
+        var before = CatalogAuditRunRecord(startedAt: switched.addingTimeInterval(-58))
+        before.finishedAt = switched.addingTimeInterval(-54)
+        before.outcome = .completed
+        before.counts = ["present": 10_831, "neverSeenByAnAudit": 144, "changed": 1, "planned": 11_194]
+        let stale = VerifyCatalogTiers.presence(audit: before, switchedAt: switched).tier
+        #expect(stale.result == .notRun("the last audit ran on catalog.json, before the switch to SQLite — run Audit Catalog again"))
+        #expect(stale.needsDecision == 0, "145 rows that are not records are no decision of this catalog's")
+        #expect(stale.verifiedAt == nil)
+        #expect(VerifyCatalogTiers.presence(audit: before).tier.result == .needsDecision(145), "no latch: judged as before")
+        var after = before
+        after.startedAt = switched.addingTimeInterval(60)
+        after.finishedAt = switched.addingTimeInterval(64)
+        #expect(VerifyCatalogTiers.presence(audit: after, switchedAt: switched).tier.result == .needsDecision(145))
+    }
+
+    @Test("the audit's launch line: a run from before the switch says so and points at Audit Catalog — never 'the Catalog Status panel lists them'")
+    func auditLaunchLineFromBeforeTheSwitch() throws {
+        let switched = now
+        var before = CatalogAuditRunRecord(startedAt: switched.addingTimeInterval(-58))
+        before.finishedAt = switched.addingTimeInterval(-54)
+        before.outcome = .completed
+        before.counts = ["neverSeenByAnAudit": 144, "planned": 11_194]
+        let line = try #require(CatalogAuditRunMarker.launchLine(before, switchedAt: switched))
+        #expect(line.contains("before the switch to SQLite"), Comment(rawValue: line))
+        #expect(line.hasSuffix("run Catalog ▸ Audit Catalog… again."), Comment(rawValue: line))
+        #expect(!line.contains("lists them"), Comment(rawValue: line))
+        #expect(CatalogAuditRunMarker.launchLine(before)?.contains("lists them") == true, "no latch: as before")
+        var clean = before
+        clean.counts = ["present": 10, "planned": 10]
+        #expect(CatalogAuditRunMarker.launchLine(clean, switchedAt: switched)?.contains("before the switch") == true,
+                "even a clean pre-switch run is not this catalog's audit")
+    }
+
     @Test("tier 1: active rows with a whole-file SHA-256 pass; a sampled hash never counts; removed rows are not asked")
     func identityFromTheStamps() {
         var known = row("/k.mov"); known.fullDigest = sha
@@ -410,6 +451,46 @@ struct VerifyCatalogTierTests {
         #expect(out.findings.last?.words == "the header says Video+Audio, but the sound print recorded no audio — Fingerprint Sound again")
         #expect(out.findings.first?.filename == "silent.m4v")
         #expect(out.tier.summary == "2 headers say sound the print never heard")
+    }
+
+    /// RED 2026-10-18: 25 of Rick's 131 tier-3 decisions were iMovie
+    /// "Shared Movies" reference movies (3.3 MB for 2 h of dvvideo). Their
+    /// own bytes hold no samples, so the print finding no audio says
+    /// nothing about the header, and "Fingerprint Sound again" cannot help;
+    /// tier 5 already names them ("Verify Media decides"). Tier 3 could not
+    /// check them. A SILENT print of a reference movie (ffmpeg followed the
+    /// reference and heard the media) still counts.
+    @Test("tier 3: a possible reference movie whose print found no audio is could-not-check, not a decision — the words say Verify Media decides; a silent print of one still counts; a real file with no audio still counts")
+    func referenceMovieWithNoAudioIsNotATier3Decision() {
+        let va = StreamType.videoAndAudio.rawValue
+        func reference(_ name: String, _ stamp: (Int64) -> AudioFingerprintStamp) -> IntegrityRow {
+            var r = row("/Volumes/LaCie/babies.iMovieProject/Shared Movies/iDVD/\(name)")
+            r.streamTypeRaw = va
+            r.sizeBytes = 3_274_279
+            r.durationSeconds = 7_289
+            r.videoCodec = "dvvideo"
+            r.audioFingerprint = stamp(r.sizeBytes)
+            return r
+        }
+        let noAudio = reference("babies tim and matt.mov") { print(outcome: .noAudio, seconds: 0, landmarks: 0, size: $0) }
+        let silent = reference("CapeCod1997.mov") { print(landmarks: 0, size: $0) }
+        var realNoAudio = row("/Volumes/LaCie/real.mov")
+        realNoAudio.streamTypeRaw = va
+        realNoAudio.audioFingerprint = print(outcome: .noAudio, seconds: 0, landmarks: 0)
+        #expect(CatalogConstraints.isPossibleReferenceMovie(noAudio) && !CatalogConstraints.isPossibleReferenceMovie(realNoAudio))
+
+        let alone = VerifyCatalogTiers.evaluate(3, input: input([noAudio]))
+        #expect(alone.findings.isEmpty, "a reference movie's empty print is no decision (got \(alone.findings.map(\.words)))")
+        #expect(alone.tier.result == .couldNotCheck(1))
+        #expect(alone.tier.needsDecision == 0)
+        #expect(alone.tier.summary == "1 possible reference movies — their sound lives in other files; Verify Media decides")
+
+        let mixed = VerifyCatalogTiers.evaluate(3, input: input([noAudio, silent, realNoAudio]))
+        #expect(mixed.findings.map(\.recordID) == [silent.id, realNoAudio.id])
+        #expect(mixed.tier.result == .needsDecision(2))
+        #expect(mixed.tier.couldNotCheck == 1)
+        #expect(mixed.tier.checked == 2)
+        #expect(mixed.tier.summary == "2 headers say sound the print never heard")
     }
 
     @Test("tier 4 computes the constraints once and hands them to tier 5; tier 5 names the worst rule first and carries the filename")
@@ -1060,7 +1141,8 @@ struct VerifyCatalogStatusTests {
         let summary = FreshnessPolicy.summarize(rows, now: now, wording: FreshnessWording(calendar: Calendar(identifier: .gregorian), groupingSeparator: ","))
         #expect(summary.colour == .red)
         #expect(summary.items.first?.title == "Integrity")
-        #expect(summary.headline == "Needs a decision: 2 findings — 2 rows share a path")
+        #expect(summary.headline == "Needs a decision: Integrity", "the headline names the row; its words are the item")
+        #expect(summary.items.first?.words == "2 findings — 2 rows share a path")
     }
 
     @Test("Run now on the Integrity row starts Verify Catalog through the center; the runner sees it running and can stop it")
@@ -1100,6 +1182,61 @@ struct VerifyCatalogStatusTests {
 
     private var notBuilt: [IntegrityTier] {
         [VerifyCatalogTiers.notBuilt(2, "weekly deep pass — not built yet").tier, VerifyCatalogTiers.notBuilt(6, "truth sweep — not built yet").tier]
+    }
+
+    /// RED 2026-10-18: integrity-latest.json was written by the import's
+    /// Verify phase (15:38:54) on catalog.json, before catalog.cutover
+    /// (15:39:47). Its 304 findings describe the retired store — 173 of
+    /// their rows are in quarantine, not in the catalog — yet the row was
+    /// red all afternoon. Through the REAL report store, latch writer and
+    /// facts reader: yellow, "not verified since the switch", Run now.
+    @Test("ISOLATION: a Verify Catalog report from before the switch to SQLite is not this catalog's — yellow 'not verified since the switch', no decision, Run now; a report after the switch keeps its red; a garbage latch changes nothing")
+    func aReportFromBeforeTheSwitchIsNotThisCatalogs() throws {
+        let wording = FreshnessWording(calendar: Calendar(identifier: .gregorian), groupingSeparator: ",")
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("vc_switch_\(UUID().uuidString.prefix(8))", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let catalog = dir.appendingPathComponent("catalog.json")
+        var sound = okTier(3, at: now.addingTimeInterval(-60))
+        sound.result = .needsDecision(131)
+        sound.needsDecision = 131
+        sound.summary = "131 headers say sound the print never heard"
+        var red = completed([okTier(0, at: now.addingTimeInterval(-60)), okTier(1, at: now.addingTimeInterval(-60)), sound,
+                             okTier(4, at: now.addingTimeInterval(-60)), okTier(5, at: now.addingTimeInterval(-60))] + notBuilt)
+        red.startedAt = now.addingTimeInterval(-61)
+        red.verifiedAt = now.addingTimeInterval(-60)
+        try IntegrityReportStore.write(red, besideCatalogAt: catalog, now: now)
+        let latch = dir.appendingPathComponent(CatalogFreshnessFactsReader.cutoverLatchFileName)
+
+        // No latch yet: the report stands (red), exactly as before.
+        let unlatched = CatalogFreshnessFactsReader.read(catalogFile: catalog.path)
+        #expect(unlatched.switchedAt == nil)
+        #expect(FreshnessPolicy.judge(rowFor(unlatched.integrity), now: now, wording: wording).colour == .red)
+
+        // The switch lands after the report.
+        try CatalogSwitch.latchData(CatalogRow.FinishedImport(runID: "R", finishedAt: 0, sourceSHA256: "ab", sourceGeneration: 4_900),
+                                    at: now).write(to: latch)
+        let facts = CatalogFreshnessFactsReader.read(catalogFile: catalog.path)
+        #expect(facts.switchedAt == now)
+        #expect(facts.integrity.predatesSwitch)
+        #expect(facts.integrity.needsDecision == 0)
+        let stale = FreshnessPolicy.judge(rowFor(facts.integrity), now: now, wording: wording)
+        #expect(stale.colour == .yellow, Comment(rawValue: stale.words))
+        #expect(stale.words == "10 rows not verified since the switch to SQLite")
+        #expect(CatalogStatusDoor.door(for: stale.reason, cycler: .integrity) == .runNow)
+
+        // A report made after the switch keeps its decision.
+        var after = red
+        after.startedAt = now.addingTimeInterval(5)
+        after.verifiedAt = now.addingTimeInterval(6)
+        #expect(IntegrityReportFacts.from(.report(after), switchedAt: now).needsDecision == 131)
+        #expect(!IntegrityReportFacts.from(.report(after), switchedAt: now).predatesSwitch)
+
+        // A latch this build cannot read judges nothing (red stays red).
+        try Data("{ garbage".utf8).write(to: latch)
+        let poisoned = CatalogFreshnessFactsReader.read(catalogFile: catalog.path)
+        #expect(poisoned.switchedAt == nil)
+        #expect(poisoned.integrity.needsDecision == 131)
     }
 
     @Test("the verdict comes from the BUILT tiers (0, 1, 3, 4, 5): a completed run with a tier that could not check is yellow naming the tier; a built tier not run is yellow naming it; a decision in any built tier is red; a built tier older than its day is yellow naming it; green only when every built tier is ok — and tiers 2 and 6 never colour the row but are named as not built")

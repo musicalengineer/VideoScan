@@ -347,35 +347,60 @@ struct CatalogFreshnessTests {
         #expect(summarize([hashes]).headline == "1 thing needs attention")
     }
 
-    @Test func oneRedRowPutsItsWordsInTheHeadline() {
+    /// The headline NAMES the red row; its words are the item line under
+    /// it, said once (Rick 2026-10-18: the band repeated every red row's
+    /// words in the headline, five lines for two rows).
+    @Test func oneRedRowIsNamedInTheHeadline() {
         var presence = Self.currentPresence()
         presence.needsDecision = 3
         let s = summarize([Self.currentHashes(), presence])
         #expect(s.colour == .red)
-        #expect(s.headline == "Needs a decision: 3 rows pointing at nothing — look at Fix Links")
+        #expect(s.headline == "Needs a decision: File Presence")
         #expect(s.needsAttention)
         #expect(s.items.map(\.kind) == ["presence"])
+        #expect(s.items.first?.words == "3 rows pointing at nothing — look at Fix Links", "the words stay on the item")
     }
 
-    /// Two red rows: the headline names BOTH (registry order) — "2 things"
-    /// told nobody what to decide (Rick's first real report, 2026-10-17).
-    @Test func severalRedRowsAreCounted() {
+    /// Two red rows: the headline names BOTH by title (registry order) —
+    /// "2 things" told nobody what to decide (2026-10-17), and the rows'
+    /// own words said twice told it two times over (2026-10-18).
+    @Test func severalRedRowsAreNamed() {
         var presence = Self.currentPresence()
         presence.needsDecision = 3
         var hashes = Self.currentHashes()
         hashes.lastOutcome = .failed
         let s = summarize([hashes, presence])
-        #expect(s.headline == "Needs a decision: the last run failed or was stopped — look at the log, then run again · 3 rows pointing at nothing — look at Fix Links")
+        #expect(s.headline == "Needs a decision: Full Hashes · File Presence")
     }
 
     @Test func moreThanTwoRedRowsNameTwoThenCountTheRest() {
-        var a = Self.currentPresence(); a.kind = "a"; a.needsDecision = 1
-        var b = Self.currentHashes(); b.kind = "b"; b.lastOutcome = .failed
-        var c = Self.currentHashes(); c.kind = "c"; c.storeUnavailable = "locked"
-        var d = Self.currentPresence(); d.kind = "d"; d.needsDecision = 2
+        var a = Self.currentPresence(); a.kind = "a"; a.title = "A"; a.needsDecision = 1
+        var b = Self.currentHashes(); b.kind = "b"; b.title = "B"; b.lastOutcome = .failed
+        var c = Self.currentHashes(); c.kind = "c"; c.title = "C"; c.storeUnavailable = "locked"
+        var d = Self.currentPresence(); d.kind = "d"; d.title = "D"; d.needsDecision = 2
         let s = summarize([a, b, c, d])
-        #expect(s.headline == "Needs a decision: 1 row pointing at nothing — look at Fix Links · the last run failed or was stopped — look at the log, then run again · 2 more")
+        #expect(s.headline == "Needs a decision: A · B · 2 more")
         #expect(summarize([a, b, c]).headline.hasSuffix(" · 1 more"))
+    }
+
+    /// SENSOR — Rick's band of 2026-10-18 16:46: File Presence and
+    /// Integrity both red. The headline is one short line that repeats
+    /// neither item's words; each item's words appear exactly once.
+    @Test func theHeadlineNeverRepeatsAnItemsWords() {
+        var presence = Self.currentPresence()
+        presence.needsDecision = 145
+        presence.phrases.decision = "pointing at nothing or changed on disk — look at Fix Links"
+        var integrity = FreshnessRow(kind: "integrity", title: "Integrity", eligible: 7_239, covered: 7_239,
+                                     lastCompleted: Self.now, lastOutcome: .ok, needsDecision: 304,
+                                     phrases: .init(unit: "finding", uncovered: "not yet verified",
+                                                    decision: "— 145 rows point at nothing or changed on disk — Fix Links · 131 headers say sound the print never heard"))
+        integrity.note = "tiers 2 and 6 not built"
+        let s = summarize([presence, integrity])
+        #expect(s.headline == "Needs a decision: File Presence · Integrity")
+        for item in s.items {
+            #expect(!s.headline.contains(item.words), "the headline repeats \(item.title)'s words")
+        }
+        #expect(s.headline.count < 60, "one short line (got \(s.headline.count) characters)")
     }
 
     @Test func itemsListRedFirstThenYellowThenGreyInRegistryOrder() {
@@ -458,6 +483,7 @@ struct CatalogFreshnessTests {
         #expect(summary?.colour == .red)
         #expect(summary?.items.count == 750)
         #expect(summary?.staleKinds.count == 500)
-        #expect(summary?.headline == "Needs a decision: 3 files needing a decision · 1 file needing a decision · 248 more")
+        // The red rows are every i % 4 == 2 — all even, all built from currentHashes().
+        #expect(summary?.headline == "Needs a decision: Full Hashes · Full Hashes · 248 more")
     }
 }

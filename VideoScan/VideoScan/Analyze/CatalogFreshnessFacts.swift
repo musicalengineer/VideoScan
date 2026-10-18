@@ -27,33 +27,73 @@ struct CatalogFreshnessFacts: Sendable, Equatable {
     var soundStoreProblem: String?
     /// The last Verify Catalog report (integrity-latest.json), as facts.
     var integrity: IntegrityReportFacts
+    /// When `catalog.cutover` says this catalog switched to SQLite; nil =
+    /// no switch (or a latch this build cannot read). The File Presence row
+    /// judges the audit marker against it (the Integrity facts already
+    /// were, when they were read).
+    var switchedAt: Date?
 
     init(audit: CatalogAuditRunRecord? = nil, soundStoreProblem: String? = nil,
-         integrity: IntegrityReportFacts = IntegrityReportFacts()) {
+         integrity: IntegrityReportFacts = IntegrityReportFacts(), switchedAt: Date? = nil) {
         self.audit = audit
         self.soundStoreProblem = soundStoreProblem
         self.integrity = integrity
+        self.switchedAt = switchedAt
     }
 }
 
 enum CatalogFreshnessFactsReader {
 
-    /// Read both facts for the catalog at `catalogFile` (its catalog.json
-    /// path). Safe off the main actor; never throws.
+    /// Read the facts for the catalog at `catalogFile` (its catalog.json
+    /// path — still where every sidecar lives after the switch). Safe off
+    /// the main actor; never throws.
     nonisolated static func read(catalogFile: String) -> CatalogFreshnessFacts {
         let folder = URL(fileURLWithPath: catalogFile).deletingLastPathComponent()
+        let switchedAt = cutoverSwitchedAt(in: folder)
         return CatalogFreshnessFacts(audit: auditRecord(in: folder),
                                      soundStoreProblem: soundStoreProblem(in: folder),
-                                     integrity: integrityFacts(catalogFile: catalogFile))
+                                     integrity: integrityFacts(catalogFile: catalogFile, switchedAt: switchedAt),
+                                     switchedAt: switchedAt)
     }
 
     // MARK: Integrity report
 
     /// The strict read of `integrity-latest.json` beside the catalog, as
     /// the Integrity row's facts: missing → never run; garbage or a newer
-    /// schema → the row's red words; never a crash.
-    nonisolated static func integrityFacts(catalogFile: String) -> IntegrityReportFacts {
-        IntegrityReportFacts.from(IntegrityReportStore.read(besideCatalogAt: URL(fileURLWithPath: catalogFile)))
+    /// schema → the row's red words; a report from before the switch to
+    /// SQLite → not this catalog's (`IntegrityReportFacts.predatesSwitch`);
+    /// never a crash.
+    nonisolated static func integrityFacts(catalogFile: String, switchedAt: Date? = nil) -> IntegrityReportFacts {
+        IntegrityReportFacts.from(IntegrityReportStore.read(besideCatalogAt: URL(fileURLWithPath: catalogFile)),
+                                  switchedAt: switchedAt)
+    }
+
+    // MARK: The switch to SQLite
+
+    /// The latch's name — the same string CatalogAuthority.latchFileName
+    /// holds (CatalogFreshnessFactsTests pins the two equal), spelled here
+    /// so the read can run off the main actor.
+    nonisolated static let cutoverLatchFileName = "catalog.cutover"
+
+    /// `switchedAt` from `catalog.cutover` beside the catalog (written once,
+    /// by Switch Catalog to SQLite…). Missing, garbage or no date → nil:
+    /// then nothing is judged by it and every row reads as it always did.
+    nonisolated static func cutoverSwitchedAt(in folder: URL) -> Date? {
+        struct Latch: Decodable { let switchedAt: Date }
+        guard let data = try? Data(contentsOf: folder.appendingPathComponent(cutoverLatchFileName)) else { return nil }
+        return (try? decoder.decode(Latch.self, from: data))?.switchedAt
+    }
+
+    /// THE rule (one place, three readers — the File Presence row, Verify
+    /// Catalog's tier 0 and the Integrity row, and the audit's launch line):
+    /// a pass that STARTED before the switch read catalog.json, the store
+    /// the switch retired. Its findings are about rows as catalog.json had
+    /// them — the import quarantined the ones it could not vouch for, so
+    /// they are not records at all — and not about the catalog in use.
+    /// No switch (nil) → false: nothing changes for a JSON catalog.
+    nonisolated static func predatesSwitch(_ startedAt: Date, switchedAt: Date?) -> Bool {
+        guard let switchedAt else { return false }
+        return startedAt < switchedAt
     }
 
     // MARK: Audit marker
@@ -112,11 +152,19 @@ struct CatalogAuditPresenceFacts: Sendable, Equatable {
     var needsDecision = 0
     var lastCompleted: Date?
     var outcome: FreshnessRow.Outcome = .neverRan
+    /// The last run read catalog.json before the switch to SQLite
+    /// (`CatalogFreshnessFactsReader.predatesSwitch`): it claims nothing
+    /// about this catalog — never ran, as far as these rows go.
+    var predatesSwitch = false
 
     /// nil record = never ran. A run still marked "running" with no end
-    /// is a run that was killed (quit or crash): red, like a failure.
-    nonisolated static func from(_ record: CatalogAuditRunRecord?) -> CatalogAuditPresenceFacts {
+    /// is a run that was killed (quit or crash): red, like a failure. A
+    /// run from before the switch to SQLite is no run of this catalog's.
+    nonisolated static func from(_ record: CatalogAuditRunRecord?, switchedAt: Date? = nil) -> CatalogAuditPresenceFacts {
         guard let r = record else { return CatalogAuditPresenceFacts() }
+        if CatalogFreshnessFactsReader.predatesSwitch(r.startedAt, switchedAt: switchedAt) {
+            return CatalogAuditPresenceFacts(predatesSwitch: true)
+        }
         var f = CatalogAuditPresenceFacts()
         f.checked = CatalogAuditResult.allCases
             .filter { $0 != .notAsked }

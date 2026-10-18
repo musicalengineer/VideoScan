@@ -1,7 +1,6 @@
 // ArchiveView+Doors.swift
 // The Archive tab's doors — play / open and Reveal in Finder — for the
-// Timeline cards, their version chips, the Files table and the Family
-// Music shelf. Every one resolves through `archivePlayableRecord(for:)`
+// Timeline cards, their version chips and the Files table. Every one resolves through `archivePlayableRecord(for:)`
 // (VideoScanModel+ArchivePlayable.swift) so a promotion source whose own
 // file is gone opens its archived copy, and a file the archive has lost
 // says so with the ARCHIVE path (Rick 2026-10-16). The source sensor in

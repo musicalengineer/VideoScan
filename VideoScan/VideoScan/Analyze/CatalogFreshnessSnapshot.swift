@@ -59,12 +59,13 @@ enum CatalogFreshnessRows {
                                isRunning: running.contains(cycler), phrases: phrases(cycler))
         switch cycler {
         case .filePresence:
-            let audit = CatalogAuditPresenceFacts.from(facts.audit)
+            let audit = CatalogAuditPresenceFacts.from(facts.audit, switchedAt: facts.switchedAt)
             row.covered = min(row.eligible, audit.checked)
             row.lastCompleted = audit.lastCompleted
             row.lastOutcome = audit.outcome
             row.needsDecision = audit.needsDecision
             row.cadence = .seconds(24 * 3_600)
+            if audit.predatesSwitch { row.phrases.uncovered = Self.notSinceTheSwitch("checked") }
         case .soundPrints:
             row.storeUnavailable = facts.soundStoreProblem
         case .integrity:
@@ -89,6 +90,13 @@ enum CatalogFreshnessRows {
                 row.phrases.unit = "row"
                 row.phrases.uncovered = "not verified — \(words)"
             }
+            if integrity.predatesSwitch {
+                // The report is catalog.json's: every row of this catalog
+                // is unverified, and Run now is the answer.
+                row.covered = 0
+                row.phrases.unit = "row"
+                row.phrases.uncovered = Self.notSinceTheSwitch("verified")
+            }
         case .correlate:
             // Pairs are counted differently: the unpaired candidates are
             // the uncovered rows, the pairs the covered ones.
@@ -106,6 +114,12 @@ enum CatalogFreshnessRows {
             break
         }
         return row
+    }
+
+    /// "not checked since the switch to SQLite" — the uncovered words of a
+    /// row whose last pass read catalog.json, before the switch.
+    static func notSinceTheSwitch(_ participle: String) -> String {
+        "not \(participle) since the switch to SQLite"
     }
 
     /// Each kind's own words for its counts (FreshnessRow.Phrases).
