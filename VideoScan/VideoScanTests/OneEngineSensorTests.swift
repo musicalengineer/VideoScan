@@ -195,6 +195,8 @@ struct OneEngineSensorTests {
         #expect(engine.contains("let changed = rec.removal != marker\n        if changed { rec.removalRevision += 1 }"), "an identical re-stamp is not a change")
         #expect(engine.contains("let changed = rec.removal != nil\n        if changed { rec.removalRevision += 1 }"), "Restore of a live row is not a change")
         #expect(engine.components(separatedBy: "CatalogMarkerRelay.markerChanged(").count == 6, "every bump is relayed (B2.1 gap 2)")
+        #expect(engine.components(separatedBy: "CatalogMarkerRelay.markerWillChange(").count == 6,
+                "every bump is announced BEFORE it, so an uncommitted earlier change is committed first (B2.2)")
         #expect(engine.contains("guard rec.removal == wrote, rec.removalRevision == revision else { return false }"), "revert is value AND revision")
     }
 

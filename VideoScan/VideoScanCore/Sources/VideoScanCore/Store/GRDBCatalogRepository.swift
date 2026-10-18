@@ -119,14 +119,17 @@ public actor GRDBCatalogRepository: CatalogRepository {
 
     public let host: String
     private let durability: Durability
-    private var pool: DatabasePool?
-    private var databaseURL: URL?
-    private var mode: Mode = .closed
+    private var pool: DatabasePool? { didSet { publishGate() } }
+    private var databaseURL: URL? { didSet { publishGate() } }
+    private var mode: Mode = .closed { didSet { publishGate() } }
     /// The generation this session last loaded or committed, and whether
     /// a reopen is owed — read and updated inside the serialized write.
     private let session = WriterSession()
+    /// What `writeBlocking` reads OFF the actor (cutover B2.2): the four
+    /// properties around it, mirrored under a lock every time one changes.
+    private let gate = WriteGate()
     /// Test seam: runs after phase 1 (high-water raised) and before COMMIT.
-    private var crashBeforeCommit: Seam?
+    private var crashBeforeCommit: Seam? { didSet { publishGate() } }
     /// Test seam: runs at open between reading the witnesses and publishing.
     private var openHook: Seam?
 
@@ -322,13 +325,21 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 try db.execute(sql: statement)
             }
         }
+        // Cutover B2.2 (v1.9): additive — a purge of a held record is a
+        // tombstone beside its kept payload, never a DELETE of it.
+        migrator.registerMigration(CatalogCommitB22Schema.migrationID, foreignKeyChecks: .immediate) { db in
+            for statement in CatalogCommitB22Schema.statements + CatalogCommitB22Schema.versionBump {
+                try db.execute(sql: statement)
+            }
+        }
         return migrator
     }
 
     /// The `catalog_state.schema_version` a fully migrated database carries
     /// (v1 creates 7; `v3_live_writes` raises it to 8; `v4_pending_rows` to
-    /// 9). A HIGHER number is a newer build's file and is refused at open.
-    static let currentSchemaVersion = CatalogPendingRowsSchema.schemaVersion
+    /// 9; `v5_b22_commit` to 10). A HIGHER number is a newer build's
+    /// file and is refused at open.
+    static let currentSchemaVersion = CatalogCommitB22Schema.schemaVersion
 
     private static func migrationsComplete(_ pool: DatabasePool, host: String) async throws -> Bool {
         let migrator = migrator(host: host)
@@ -449,10 +460,44 @@ public actor GRDBCatalogRepository: CatalogRepository {
         } catch {
             outcome = .refused(reason: "write rolled back: \(Self.words(error))")
         }
+        Self.noteCommit(outcome, door: door)
+        return outcome
+    }
+
+    /// The same transaction as `write`, on the calling thread (cutover
+    /// B2.2 — the app's CatalogCommitter, from the main actor, only). It
+    /// reads the open state from the gate, not the actor, so it never
+    /// hops; GRDB's writer queue serializes it with every async `write`
+    /// (the session box keeps the CAS expectation right either way). A
+    /// pool closed under it throws, and that is a `.refused`.
+    public nonisolated func writeBlocking(as door: CatalogWriter,
+                                          _ body: (any CatalogTransaction) throws -> Void) -> CatalogWriteOutcome {
+        let open = gate.state
+        guard let pool = open.pool, let databaseURL = open.databaseURL else { return .refused(reason: "not open") }
+        if let reason = open.readOnlyReason { return .refused(reason: "read-only: \(reason)") }
+        let plan = WritePlan(session: session, door: door, host: host, databaseURL: databaseURL,
+                             publish: durability.publish, crashBeforeCommit: open.crashBeforeCommit)
+        let outcome: CatalogWriteOutcome
+        do {
+            outcome = try pool.writeWithoutTransaction { db in try plan.run(db, body) }
+        } catch {
+            outcome = .refused(reason: "write rolled back: \(Self.words(error))")
+        }
+        Self.noteCommit(outcome, door: door)
+        return outcome
+    }
+
+    private static func noteCommit(_ outcome: CatalogWriteOutcome, door: CatalogWriter) {
         if case .committed(let generation) = outcome {
             storeLog.debug("catalog store commit generation \(generation, privacy: .public) via \(door.rawValue, privacy: .public)")
         }
-        return outcome
+    }
+
+    private func publishGate() {
+        var readOnlyReason: String?
+        if case .readOnly(let reason) = mode { readOnlyReason = reason }
+        gate.set(WriteGate.State(pool: mode == .closed ? nil : pool, databaseURL: databaseURL,
+                                 readOnlyReason: readOnlyReason, crashBeforeCommit: crashBeforeCommit))
     }
 
     /// Everything one write needs, captured by value so the closure the
@@ -469,7 +514,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let crashBeforeCommit: Seam?
 
         func run(_ db: Database,
-                 _ body: @Sendable (any CatalogTransaction) throws -> Void) throws -> CatalogWriteOutcome {
+                 _ body: (any CatalogTransaction) throws -> Void) throws -> CatalogWriteOutcome {
             if let reason = session.needsReopen {
                 return .refused(reason: "reopen the catalog: \(reason)")
             }
@@ -487,7 +532,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         }
 
         private func steps(_ db: Database, expected: Int,
-                           _ body: @Sendable (any CatalogTransaction) throws -> Void) throws -> CatalogWriteOutcome {
+                           _ body: (any CatalogTransaction) throws -> Void) throws -> CatalogWriteOutcome {
             let next = expected + 1
             let now = unixNow()
             try body(GRDBTransaction(generation: next, db: db))
@@ -774,6 +819,30 @@ public actor GRDBCatalogRepository: CatalogRepository {
         if let refusal = error as? Refusal { return refusal.reason }
         if let engine = error as? DatabaseError { return engine.description }
         return String(describing: error)
+    }
+}
+
+// MARK: - The write gate (cutover B2.2)
+
+/// The open state `writeBlocking` needs, mirrored off the actor: the pool,
+/// the database URL, the read-only words and the crash seam. Set by the
+/// actor whenever one of them changes; read once per blocking write. For
+/// Rick: a mutex-guarded copy of four member variables.
+final class WriteGate: @unchecked Sendable {
+    struct State {
+        var pool: DatabasePool?
+        var databaseURL: URL?
+        var readOnlyReason: String?
+        var crashBeforeCommit: GRDBCatalogRepository.Seam?
+    }
+
+    private let lock = NSLock()
+    private var current = State()
+
+    var state: State { lock.withLock { current } }
+
+    func set(_ state: State) {
+        lock.withLock { current = state }
     }
 }
 

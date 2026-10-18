@@ -25,10 +25,12 @@ import VideoScanCore
 // OneEngineSensorTests fails if a production file outside this one writes
 // `.removal =`, `.purgedAt =`, or `lifecycleStage = .trashed / .deletedPermanently`.
 //
-// Cutover B2.1 (gap 2): EVERY marker change bumps `removalRevision` by one
-// and tells CatalogMarkerRelay, which hands the SQLite committer a snapshot
-// of the record at that revision — so Trash then Undo inside one 2 s save
-// window lands as two revisions, each with its own tombstone. (Trash emptied
+// Cutover B2.1 (gap 2), B2.2: EVERY marker change bumps `removalRevision` by
+// one and tells CatalogMarkerRelay twice — BEFORE (`markerWillChange`: the
+// SQLite committer commits an earlier, uncommitted marker change of the row
+// first, synchronously) and AFTER (`markerChanged`: commit once this turn
+// ends) — so Trash then Undo inside one 2 s save window lands as two
+// revisions, each with its own tombstone. (Trash emptied
 // and RemovalUndo used to change the marker without a bump; catalog.sqlite's
 // DDL refuses that, so they bump now too. Under catalog.json the revision is
 // only the ABA tag `revertRemoval` reads, and the relay does nothing.)
@@ -41,6 +43,7 @@ extension VideoScanModel {
     /// Static so a door with no model at hand (the caption orchestrator)
     /// still writes through the one function.
     nonisolated static func stampRemoval(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage? = nil) {
+        CatalogMarkerRelay.markerWillChange(rec)
         let changed = rec.removal != marker
         if changed { rec.removalRevision += 1 }
         rec.removal = marker
@@ -85,6 +88,7 @@ extension VideoScanModel {
     nonisolated static func revertRemoval(_ rec: VideoRecord, wrote: RemovalMarker?, previous: RemovalMarker?, revision: Int,
                                           mirrorsBefore: RemovalMirrors, mirrorsAfter: RemovalMirrors) -> Bool {
         guard rec.removal == wrote, rec.removalRevision == revision else { return false }
+        CatalogMarkerRelay.markerWillChange(rec)
         rec.removal = previous
         rec.removalRevision += 1
         if rec.lifecycleStage == mirrorsAfter.lifecycleStage { rec.lifecycleStage = mirrorsBefore.lifecycleStage }
@@ -109,6 +113,7 @@ extension VideoScanModel {
         if fileLeft, rec.fullPath.isEmpty || !FileManager.default.fileExists(atPath: rec.fullPath) {
             return "\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."
         }
+        CatalogMarkerRelay.markerWillChange(rec)
         let changed = rec.removal != nil
         if changed { rec.removalRevision += 1 }
         rec.removal = nil
@@ -167,6 +172,7 @@ extension VideoScanModel {
         for probe in gone {
             guard let rec = record(forID: probe.id), var marker = rec.removal,
                   probe.describes(marker), marker.noteTrashEmptied(at: now) else { continue }
+            CatalogMarkerRelay.markerWillChange(rec)
             rec.removalRevision += 1      // a marker change, like every other (B2.1)
             rec.removal = marker
             CatalogMarkerRelay.markerChanged(rec)
@@ -251,6 +257,7 @@ struct RemovalUndo {
     }
 
     func reinstate() {
+        CatalogMarkerRelay.markerWillChange(record)
         let changed = record.removal != removal
         if changed { record.removalRevision += 1 }   // a marker change, like every other (B2.1)
         record.removal = removal

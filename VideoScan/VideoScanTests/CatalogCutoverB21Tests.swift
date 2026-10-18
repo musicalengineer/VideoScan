@@ -3,9 +3,9 @@
 // after the flip, and codex's B2 findings (docs/reviews/codex/
 // codex-review-cutover-b2-write-side-switch-door-2026-10-17.md):
 //   LOGIC     a dirty sibling never overwrites a curated value it did not
-//             change (P1-1); copy propagation never overwrites an edit made
-//             while the commit ran (P1-2); a quit during an in-flight commit
-//             waits for it and commits again (P1-3); a new row without a
+//             change (P1-1); copy propagation never overwrites a later edit
+//             (P1-2); a quit after a commit commits what changed since (P1-3 —
+//             "during" is impossible since B2.2's synchronous commit); a new row without a
 //             whole-file hash survives a relaunch and gets its hash job
 //             (gap 1); Trash then Undo stores both revisions (gap 2); a row
 //             removed from the records is purged in the store and stays gone
@@ -141,36 +141,33 @@ struct CatalogCommitterSerialTests {
         #expect(try await scene.reloaded(.curatedConflictA).userNotes == "A wrote this")
     }
 
-    @Test("P1-2: copy propagation leaves an edit the sibling got while the commit ran")
+    // P1-2 ("an edit the sibling got while the commit ran") and P1-3 ("a quit
+    // during an in-flight commit") are impossible since B2.2: a commit is one
+    // synchronous main-actor turn. CatalogCommitterSyncSensorTests pins that;
+    // the cases below keep the user-visible half of each.
+
+    @Test("P1-2: copy propagation leaves an edit the sibling got after A's commit")
     func propagationKeepsLaterEdit() async throws {
         let scene = try CutoverScene.make("b21_propagate"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
-        let committer = try scene.committer()
         let b = try scene.record(.curatedConflictB)
         try scene.record(.curatedConflictA).userNotes = "from A"
-        committer.afterSnapshotForTesting = { b.userNotes = "B, typed while A was saving" }
-        _ = await scene.model.saveCatalogAcknowledged()
-        committer.afterSnapshotForTesting = nil
-        #expect(b.userNotes == "B, typed while A was saving")
+        #expect(await scene.model.saveCatalogAcknowledged())
+        #expect(b.userNotes == "from A", "the copy follows A's committed note")
+        b.userNotes = "B, typed after A was saved"
         #expect(scene.model.saveCatalogNow())
-        #expect(try await scene.reloaded(.curatedConflictB).userNotes == "B, typed while A was saving")
+        #expect(try await scene.reloaded(.curatedConflictB).userNotes == "B, typed after A was saved")
     }
 
-    @Test("P1-3: a quit during an in-flight commit waits for it, then commits what changed since")
-    func quitWaitsForInFlight() async throws {
+    @Test("P1-3: a quit right after an acknowledged commit commits what changed since")
+    func quitAfterAcknowledged() async throws {
         let scene = try CutoverScene.make("b21_quit"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
-        let committer = try scene.committer()
         let healthy = try scene.record(.healthy)
         healthy.starRating = 1
-        var quitDurable = false
-        committer.beforeAbsorbForTesting = {
-            healthy.starRating = 0
-            quitDurable = scene.model.saveCatalogNow()
-        }
-        _ = await scene.model.saveCatalogAcknowledged()
-        committer.beforeAbsorbForTesting = nil
-        #expect(quitDurable)
+        #expect(await scene.model.saveCatalogAcknowledged())
+        healthy.starRating = 0
+        #expect(scene.model.saveCatalogNow())
         #expect(try await scene.reloaded(.healthy).starRating == 0)
     }
 

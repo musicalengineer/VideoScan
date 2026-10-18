@@ -49,6 +49,11 @@
 -- Revision 9 (v1.8, 2026-10-18, cutover B2.1): §13 `pending_rows`, the durable holding place for a
 -- NEW record that has no whole-file digest yet (VideoScanCore/Store/CatalogPendingRowsSchema.swift,
 -- migration `v4_pending_rows`, which raises catalog_state.schema_version to 9). ADDITIVE.
+-- Revision 10 (v1.9, 2026-10-18, cutover B2.2): §14 `pending_purges` — a purge of a held record
+-- tombstones its payload instead of deleting it — and the index `import_items_landed_files` the
+-- commit's one-row read-back needs (VideoScanCore/Store/CatalogCommitB22Schema.swift, migration
+-- `v5_b22_commit`, which raises catalog_state.schema_version to 10). ADDITIVE: no earlier table,
+-- trigger, index or CHECK changes.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1603,7 +1608,8 @@ BEGIN SELECT RAISE(ABORT, 'row_knowledge: a duplicate is a finding, never a repl
 --     payload here verbatim (data in a column, like quarantine.raw_row — never parsed by SQL); the
 --     load turns it back into a record (still deferred) and Fill In Full Hashes is queued for it;
 --     the commit that stores the row deletes its pending row in the same transaction. A held row is
---     never a stored row (the guard). A purge of a record that never got a digest deletes its row.
+--     never a stored row (the guard). A purge of a record that never got a digest tombstones its
+--     row in §14 and keeps it (v1.9; v1.8 deleted it).
 --     The migration then runs: UPDATE catalog_state SET schema_version = 9; PRAGMA user_version = 9.
 -- ---------------------------------------------------------------------------------------------
 CREATE TABLE pending_rows (                -- v1.8: new records waiting for a whole-file digest (cutover B2.1)
@@ -1614,3 +1620,24 @@ CREATE TABLE pending_rows (                -- v1.8: new records waiting for a wh
 CREATE TRIGGER pending_rows_not_stored BEFORE INSERT ON pending_rows
 WHEN EXISTS (SELECT 1 FROM files WHERE id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'pending_rows: this id is already a files row'); END;
+
+-- ---------------------------------------------------------------------------------------------
+-- 14. B2.2 COMMIT SUPPORT (v1.9, cutover B2.2, migration `v5_b22_commit`).
+--     PENDING PURGES: a held record (§13) that left the app's catalog array is purged by a
+--     TOMBSTONE here; its pending row — the sole copy of its payload — is KEPT. The load skips a
+--     tombstoned pending row (the record stays gone at relaunch, as a purged `files` row does);
+--     the record coming back (its payload put again) deletes the tombstone; the commit that stores
+--     it as a `files` row removes both (the payload then lives on as the row). Nothing else ever
+--     deletes a pending row.
+--     THE READ-BACK INDEX: a commit reads each changed row back the way a load does, which joins
+--     `import_items` on `landed_ref` (§F1) — a full scan per row without this index (1,000
+--     read-backs at 14k rows: 3.09 s, Debug, 2026-10-18).
+--     The migration then runs: UPDATE catalog_state SET schema_version = 10; PRAGMA user_version = 10.
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE pending_purges (              -- v1.9: a held record the app no longer has; its payload is KEPT (cutover B2.2)
+  id         TEXT    PRIMARY KEY NOT NULL REFERENCES pending_rows(id) ON DELETE RESTRICT,
+  purged_at  INTEGER NOT NULL,
+  door       TEXT    NOT NULL
+) STRICT;
+CREATE INDEX import_items_landed_files ON import_items(landed_ref)
+ WHERE source_file = 'catalog.json' AND landed_table = 'files';
