@@ -278,17 +278,57 @@ final class CatalogStore {
     private var writeHoldOwner: CatalogWriteHoldOwner?
     private(set) var heldRefusals = 0
 
-    /// Something is on its way to disk or waiting to be: a debounced save
-    /// not yet handed to the queue, a save in flight, or records re-marked
-    /// dirty during one. The pre-flight of a job that reads the file asks.
-    var hasUnsavedChanges: Bool { debouncedSavePending || saveInFlight || pendingRecords != nil }
+    /// Acknowledged saves handed to the write queue whose caller has not
+    /// yet resumed (codex 2026-10-17 P2: an acknowledged write outstanding
+    /// is an unsaved change too). A count, not `saveInFlight`: that flag is
+    /// saveAsync's coalescing slot, and an acknowledged save may run beside
+    /// an async one (FIFO on the queue orders them).
+    private var acknowledgedInFlight = 0
 
-    /// Take the hold. `reason` names the job in the refusal's words;
-    /// `owner` is the token the holder's own acknowledged saves present.
-    func holdWrites(reason: String, owner: CatalogWriteHoldOwner) {
+    /// Callers of `holdWrites` waiting for the writes admitted before the
+    /// hold to come back to the main actor. Resumed when none is in flight.
+    private var drainWaiters: [CheckedContinuation<Void, Never>] = []
+
+    /// Something is on its way to disk or waiting to be: a debounced save
+    /// not yet handed to the queue, a save in flight (async or
+    /// acknowledged), or records re-marked dirty during one. The pre-flight
+    /// of a job that reads the file asks.
+    var hasUnsavedChanges: Bool {
+        debouncedSavePending || saveInFlight || acknowledgedInFlight > 0 || pendingRecords != nil
+    }
+
+    /// Take the hold — an ATOMIC ADMISSION BOUNDARY (codex 2026-10-17 P2).
+    /// The hold is set first, on the main actor, so from this line no save
+    /// is admitted (every door checks it in `writePrecondition`). A save
+    /// admitted BEFORE it has already put its write on `writeQueue`, so the
+    /// function then waits behind them on that queue (serial with saves)
+    /// and for their main-actor completions (the generation they stamp).
+    /// When it returns, nothing but the owner can write and nothing
+    /// admitted earlier is still outstanding; the caller reads the
+    /// generation after it. A debounced save still waiting on its timer was
+    /// not admitted: it fires into the hold, is refused and counted.
+    /// `reason` names the job in the refusal's words; `owner` is the token
+    /// the holder's own acknowledged saves present. (For Rick: take the
+    /// mutex, then post a barrier to the writer thread's FIFO and wait for
+    /// it — everything queued ahead of the barrier has finished.)
+    func holdWrites(reason: String, owner: CatalogWriteHoldOwner) async {
         writeHold = reason
         writeHoldOwner = owner
         heldRefusals = 0
+        await withCheckedContinuation { (barrier: CheckedContinuation<Void, Never>) in
+            writeQueue.async { barrier.resume() }
+        }
+        while saveInFlight || acknowledgedInFlight > 0 {
+            await withCheckedContinuation { drainWaiters.append($0) }
+        }
+    }
+
+    /// Wake `holdWrites` callers once no save is in flight.
+    private func resumeDrainWaitersIfIdle() {
+        guard !saveInFlight, acknowledgedInFlight == 0, !drainWaiters.isEmpty else { return }
+        let waiters = drainWaiters
+        drainWaiters = []
+        for waiter in waiters { waiter.resume() }
     }
 
     /// Let go. Returns how many saves were refused while held — the holder
@@ -861,43 +901,7 @@ final class CatalogStore {
     /// JSON, malformed snapshot). Resolves `pairedWith` references against
     /// the decoded array.
     private func decode(url: URL) -> ([VideoRecord], Int, MasterArchiveDesignation?, Int)? {
-        do {
-            let data = try Data(contentsOf: url)
-            let decoder = JSONDecoder()
-            decoder.dateDecodingStrategy = .iso8601
-            let snapshot = try decoder.decode(CatalogSnapshot.self, from: data)
-            // One UUID = one record. A file that carries twins (the 8/17
-            // live-reload re-append incident) must LOAD — the old
-            // Dictionary(uniqueKeysWithValues:) trapped on the first
-            // duplicate and the app crashed at launch. Dedupe here with
-            // the same policy the model uses (keep the current home:
-            // relinked twin, else the one whose file exists, else first);
-            // the model's repair then finds nothing to do.
-            let records = Self.dedupingByID(snapshot.records, sourceName: url.lastPathComponent)
-            // Build id → record map and rewire pairedWith references.
-            var byID: [UUID: VideoRecord] = [:]
-            byID.reserveCapacity(records.count)
-            for r in records { byID[r.id] = r }
-            for rec in records {
-                if let pid = rec.pendingPairedWithID {
-                    rec.pairedWith = byID[pid]
-                    rec.pendingPairedWithID = nil
-                    if rec.pairedWith == nil {
-                        rec.pairGroupID = nil
-                        rec.pairConfidence = nil
-                    }
-                }
-            }
-            let cleared = CorrelationScorer.revalidateExistingPairs(in: records)
-            if cleared > 0 {
-                NSLog("VideoScan: cleared %d invalid persisted A/V pair endpoint(s) while loading %@",
-                      cleared, url.lastPathComponent)
-            }
-            return (records, snapshot.version, snapshot.masterArchive, snapshot.generation)
-        } catch {
-            NSLog("VideoScan: failed to decode catalog at %@: %@", url.path, String(describing: error))
-            return nil
-        }
+        Self.decodeCatalogFile(at: url)
     }
 
     /// Dedupe by record id, keeping the current home. Pure; logs a summary
@@ -1116,6 +1120,7 @@ final class CatalogStore {
         let dest = fileURL
         let seam = testAfterWriteBeforeVerify
         catalogStoreLog.notice("catalog save (acknowledged): BEGIN \(records.count) records → \(dest.lastPathComponent, privacy: .public)")
+        acknowledgedInFlight += 1
         let writeError: CatalogWriteError? = await withCheckedContinuation { cont in
             writeQueue.async {
                 cont.resume(returning: Self.encodeAndWrite(payload: payload, to: dest,
@@ -1123,11 +1128,13 @@ final class CatalogStore {
                                                            afterWriteBeforeVerify: seam))
             }
         }
+        acknowledgedInFlight -= 1
         let ok = writeError == nil
         finishWrite(success: ok, wroteGeneration: nextGeneration,
                     wroteDesignation: payload.masterArchive,
                     designationChanging: designationChanging, error: writeError)
         if ok { observer?.catalogStoreDidWrite(self) }
+        resumeDrainWaitersIfIdle()
         catalogStoreLog.notice("catalog save (acknowledged): \(ok ? "durable" : "FAILED", privacy: .public)")
         return ok
     }
@@ -1211,6 +1218,7 @@ final class CatalogStore {
             pendingRecords = nil
             saveAsync(records: pending)
         }
+        resumeDrainWaitersIfIdle()
     }
 
     /// Write a snapshot of `records` to an ARBITRARY path using the same
@@ -1638,5 +1646,57 @@ extension CatalogSnapshotDTO {
                   records: snapshot.records.map(VideoRecordDTO.init),
                   savedFromHost: snapshot.savedFromHost,
                   masterArchive: snapshot.masterArchive)
+    }
+}
+
+// MARK: - Read-only decode (no store state)
+
+extension CatalogStore {
+
+    /// The same decode, READ-ONLY and off the main actor: no store state is
+    /// read or written (no rotation, no generation adopted, no outcome
+    /// recorded). Import to SQLite's Verify phase reads the file its audit
+    /// saved through this (codex 2026-10-17 P2), so it sees exactly the rows
+    /// `load()` would. The records it returns belong to the caller's task
+    /// alone. (For Rick: a static member — no `this` — so it can run on any
+    /// thread.)
+    nonisolated static func decodeCatalogFile(at url: URL) -> ([VideoRecord], Int, MasterArchiveDesignation?, Int)? {
+        do {
+            let data = try Data(contentsOf: url)
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            let snapshot = try decoder.decode(CatalogSnapshot.self, from: data)
+            // One UUID = one record. A file that carries twins (the 8/17
+            // live-reload re-append incident) must LOAD — the old
+            // Dictionary(uniqueKeysWithValues:) trapped on the first
+            // duplicate and the app crashed at launch. Dedupe here with
+            // the same policy the model uses (keep the current home:
+            // relinked twin, else the one whose file exists, else first);
+            // the model's repair then finds nothing to do.
+            let records = Self.dedupingByID(snapshot.records, sourceName: url.lastPathComponent)
+            // Build id → record map and rewire pairedWith references.
+            var byID: [UUID: VideoRecord] = [:]
+            byID.reserveCapacity(records.count)
+            for r in records { byID[r.id] = r }
+            for rec in records {
+                if let pid = rec.pendingPairedWithID {
+                    rec.pairedWith = byID[pid]
+                    rec.pendingPairedWithID = nil
+                    if rec.pairedWith == nil {
+                        rec.pairGroupID = nil
+                        rec.pairConfidence = nil
+                    }
+                }
+            }
+            let cleared = CorrelationScorer.revalidateExistingPairs(in: records)
+            if cleared > 0 {
+                NSLog("VideoScan: cleared %d invalid persisted A/V pair endpoint(s) while loading %@",
+                      cleared, url.lastPathComponent)
+            }
+            return (records, snapshot.version, snapshot.masterArchive, snapshot.generation)
+        } catch {
+            NSLog("VideoScan: failed to decode catalog at %@: %@", url.path, String(describing: error))
+            return nil
+        }
     }
 }

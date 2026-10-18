@@ -175,6 +175,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///      blocking the main thread on the drain would deadlock it.
     ///      `.terminateLater` keeps the runloop alive while the drain
     ///      awaits; the reply is guaranteed within `vlmDrainDeadline`.
+    ///   3. If Import to SQLite is running it holds every catalog save, so
+    ///      the quit Stops it, awaits its end (bounded,
+    ///      `ImportToSQLiteQuit.deadline`), and saves the held edits
+    ///      durably before replying (codex 2026-10-17 P1).
     /// Extends — doesn't replace — the existing willTerminate cleanup.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // UI-test target (VS_UI_TEST=1): quit immediately, no alerts —
@@ -221,6 +225,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 appLog.write("quit requested with \(running) file operation(s) running — asking"
                              + (midPair ? " (Delete Duplicates mid-file)" : ""))
                 let response = alert.runModal()
+                // Import to SQLite holds every catalog save while it runs:
+                // each terminateLater path below settles it and saves the
+                // held edits before replying (codex 2026-10-17 P1).
+                let (importJob, model) = (center.activeImportToSQLite, catalogModel)
                 if midPair, response == .alertFirstButtonReturn {
                     appLog.write("quit dialog: user chose Finish this file, then quit — waiting up to \(Int(Self.deleteDuplicatesFinishDeadline))s")
                     center.finishInFlightThenSuspendForQuit()
@@ -233,8 +241,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             ? "quit: Delete Duplicates finished its file and suspended (plan kept for resume)"
                             : "quit: Delete Duplicates did not finish in time — finish revoked, put-back requested")
                         for line in center.deleteDuplicatesQuitOutcomeLines { appLog.write("quit: \(line)") }
-                        self?.captionOrchestrator?.beginShutdown()
-                        await self?.drainVLMForShutdownIfActive()
+                        await self?.finishQuit(importJob: importJob, model: model)
                         NSApp.reply(toApplicationShouldTerminate: true)
                     }
                     return .terminateLater
@@ -250,7 +257,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     // Move to Trash: a file past its guard is mid-trashItem
                     // on a detached task; its purgedAt + ledger line land
                     // only when the job's task returns.
-                    if suspending || center.hasActivePruneApply {
+                    if suspending || center.mustSettleBeforeQuit {
                         Task { @MainActor [weak self] in
                             if suspending {
                                 let stopped = await center.waitForDeleteDuplicatesToStop(deadline: Self.deleteDuplicatesStopDeadline)
@@ -264,8 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 let settled = await center.waitForPruneApplyToSettle(deadline: Self.pruneApplySettleDeadline)
                                 appLog.write(settled ? "quit: Move to Trash settled" : "quit: Move to Trash did not settle in time — proceeding")
                             }
-                            self?.captionOrchestrator?.beginShutdown()
-                            await self?.drainVLMForShutdownIfActive()
+                            await self?.finishQuit(importJob: importJob, model: model)
                             NSApp.reply(toApplicationShouldTerminate: true)
                         }
                         return .terminateLater
@@ -320,6 +326,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// is generous, and past it the plan on disk names the file anyway.
     static let deleteDuplicatesStopDeadline: TimeInterval = 60
 
+    /// The common end of the two file-operation `.terminateLater` paths,
+    /// once their jobs have settled: Import to SQLite stopped and its held
+    /// catalog edits saved (codex 2026-10-17 P1; no-op when none ran), then
+    /// the dossier/VLM shutdown latch and drain. The caller replies.
+    @MainActor
+    private func finishQuit(importJob: ImportToSQLiteJob?, model: VideoScanModel?) async {
+        await ImportToSQLiteQuit.settleForAppQuit(job: importJob, model: model)
+        captionOrchestrator?.beginShutdown()
+        await drainVLMForShutdownIfActive()
+    }
+
     /// The VLM drain, shared by the immediate quit path and the
     /// finish-this-file-first path. No-op when no batch is active.
     @MainActor
@@ -365,6 +382,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // F_FULLFSYNC, then a full streaming SHA-256 re-read. Any of
             // those can block forever on a stalling volume.
             appLog.write("shutdown step: saving catalog")
+            // A path that skipped applicationShouldTerminate's settle could
+            // still find Import to SQLite's hold up; the held edits outrank
+            // an import the exit abandons anyway (codex 2026-10-17 P1).
+            if let model = catalogModel { ImportToSQLiteQuit.releaseHoldIfStillHeld(model: model, deadline: 0) }
             catalogModel?.saveCatalogNow()
             appLog.write("shutdown step: catalog saved")
         }

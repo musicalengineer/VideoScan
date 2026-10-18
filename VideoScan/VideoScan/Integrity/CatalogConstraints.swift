@@ -120,8 +120,11 @@ struct IntegrityRow: Sendable, Equatable {
         self.isSetAside = isSetAside
     }
 
-    /// Project one record. Main actor (the record lives there).
-    @MainActor
+    /// Project one record, on whichever task owns it: the main actor for
+    /// the live rows (`verifyCatalogSnapshot`), the read task for rows
+    /// decoded from the audited file (Import to SQLite's Verify phase,
+    /// codex 2026-10-17 P2). It reads stored fields and a nonisolated
+    /// static only.
     init(record r: VideoRecord) {
         self.init(id: r.id, fullPath: r.fullPath, filename: r.filename, sizeBytes: r.sizeBytes, durationSeconds: r.durationSeconds,
                   streamTypeRaw: r.streamTypeRaw, container: r.container, videoCodec: r.videoCodec, audioCodec: r.audioCodec,

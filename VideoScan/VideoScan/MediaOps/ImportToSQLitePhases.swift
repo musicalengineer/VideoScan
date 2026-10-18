@@ -14,7 +14,9 @@
 //   • ImportToSQLiteTiming.verifyStartDelay — PURE: the importer's gate
 //     refuses an audit that finished in the same whole second Verify
 //     Catalog started (`finishedAt >= report.startedAt`, unix seconds); the
-//     job waits out that second before it makes the verify job.
+//     job waits out that second before it makes the verify job, re-reading
+//     the wall clock after each wake (`waitForVerifyStart`, bounded — a
+//     backward clock step is waited out again, codex 2026-10-17 P3).
 //   • ImportBuildIdentity — "this build" for the dry-run marker: the
 //     bundle's CFBundleVersion plus the Mach-O UUID of the image this code
 //     is linked into (a fresh UUID every link; the git SHA is not baked
@@ -69,6 +71,31 @@ enum ImportToSQLiteTiming {
     static func verifyStartDelay(auditFinishedAt: Date, now: Date) -> TimeInterval {
         let safe = auditFinishedAt.timeIntervalSince1970.rounded(.down) + 1.5
         return max(0, safe - now.timeIntervalSince1970)
+    }
+
+    /// How many waits `waitForVerifyStart` makes before it gives up on a
+    /// clock that keeps stepping back (each wait is at most ~1.5 s plus
+    /// the step).
+    static let verifyWaitRounds = 5
+
+    /// Wait until Verify may start, RE-READING the wall clock after every
+    /// wake (codex 2026-10-17 P3): a backward clock step during the sleep
+    /// (NTP slew/step) would otherwise start Verify inside the audit's
+    /// second and the gate would refuse. Returns false when the clock is
+    /// still short after `verifyWaitRounds` waits — the job refuses with
+    /// words rather than start a run the gate must refuse. `now` and
+    /// `sleep` are injected (tests step the clock). (For Rick: a
+    /// check-sleep-recheck loop, as with a condition variable's spurious
+    /// wakeups — never trust that the sleep alone made the condition true.)
+    @MainActor
+    static func waitForVerifyStart(auditFinishedAt: Date, now: () -> Date,
+                                   sleep: (TimeInterval) async -> Void) async -> Bool {
+        for _ in 0..<verifyWaitRounds {
+            let wait = verifyStartDelay(auditFinishedAt: auditFinishedAt, now: now())
+            if wait <= 0 { return true }
+            await sleep(wait)
+        }
+        return verifyStartDelay(auditFinishedAt: auditFinishedAt, now: now()) <= 0
     }
 }
 
