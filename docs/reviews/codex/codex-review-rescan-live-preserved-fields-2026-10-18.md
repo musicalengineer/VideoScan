@@ -49,3 +49,7 @@ Files under `VideoScan/`: `VideoScan/Volumes/VideoScanModel+ScanMerge.swift` (`c
 
 **Do only this:** attack the invariant **"the live curated value at swap time is what lands — in memory and in catalog.sqlite — and the scan's own technical values (codec, size, MD5, probe note) still refresh."** At most THREE findings, P1 = a lost accepted edit or a resurrected removal/clear, each with a one-line failure scenario. Specifically check: an await or actor hop between the live read and the swap; partial merge and Update Catalog Apply paths; `pendingRescanRestoredPaths` leaking across scans or never cleared on discard/cancel; a fresh probe value wrongly overwritten by a stale live value; shared-path rows. Known and declared, NOT findings: a row hard-purged (not Trashed) during a scan comes back from the snapshot because the file is on disk (policy question for Rick); the snapshot itself keeps the last of two shared-path rows (corrected at swap).
 **Do not explore outside the files listed above and their tests.**
+
+## Closed
+
+Closed by `44ef736cc` at 2026-10-18T21:42:53Z. P1 + P2 + cleanup closed red-first; AdvRescanEditDuringScanTests 15
