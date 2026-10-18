@@ -1,7 +1,8 @@
 // CatalogCommitB24Tests.swift
 // Cutover B2.4 in Core — codex's B2.3 finding F2 (sets), written RED FIRST
-// against 64ea21ac6 (docs/reviews/codex/codex-review-cutover-b2-3-veto-
-// explicit-purge-2026-10-18.md): two copies of one content change a SHARED
+// against 64ea21ac6
+// (docs/reviews/codex/codex-review-cutover-b2-3-veto-explicit-purge-2026-10-18.md):
+// two copies of one content change a SHARED
 // SET (tags, backup attestations) differently in ONE commit. Before: each
 // copy deleted and replaced the content's whole set, so the LAST copy in
 // commit order won and the other copy's addition (or removal) was silently

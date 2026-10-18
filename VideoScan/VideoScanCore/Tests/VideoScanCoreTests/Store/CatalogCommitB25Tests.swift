@@ -1,7 +1,8 @@
 // CatalogCommitB25Tests.swift
 // Cutover B2.5 in Core — codex's B2.4 closing-pass finding 2, written RED
-// FIRST against 6e6717930 (docs/reviews/codex/codex-review-cutover-b2-4-
-// closing-pass-2026-10-18.md, "Codex answer"): an attestation REMOVAL
+// FIRST against 6e6717930
+// (docs/reviews/codex/codex-review-cutover-b2-4-closing-pass-2026-10-18.md,
+// "Codex answer"): an attestation REMOVAL
 // matched the table key (digest, kind, attested_at, answer, by_whom) without
 // the label, while an addition overwrote that key's label. Copies A and B
 // share attestation x; A removes it while B relabels it: A→B kept the
