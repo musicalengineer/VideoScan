@@ -346,10 +346,13 @@ struct MasterArchiveReadoptionTests {
 struct CatalogSessionLoadSensor {
 
     /// `CatalogStore.load()` re-baselines the designation slot, the OCC
-    /// generation and .prev. The only legitimate caller is
-    /// VideoScanModel.init; a read-only query uses
+    /// generation and .prev. The only legitimate caller is the launch
+    /// path — since the cutover read side (B1, 2026-10-17) that is
+    /// `VideoScanModel.loadCatalogAtLaunch()` in Catalog/CatalogAuthorityFlip.swift
+    /// (the JSON branch, the refused-SQLite fallback and the frozen-designation
+    /// read; one doc-comment mention); a read-only query uses
     /// `readRecordsWithoutAdopting()`.
-    @Test("no app source other than VideoScanModel.swift calls catalogStore.load() / CatalogStore.shared.load()")
+    @Test("no app source other than the launch path (CatalogAuthorityFlip.swift) calls catalogStore.load() / CatalogStore.shared.load()")
     func singleSessionLoad() throws {
         let pattern = try NSRegularExpression(pattern: #"(CatalogStore\.shared|catalogStore)\.load\(\)"#)
         var hits: [String] = []
@@ -359,7 +362,7 @@ struct CatalogSessionLoadSensor {
             if n > 0 { hits.append("\(relative)×\(n)") }
         }
         #expect(!SourceTree.appSources.isEmpty, "the sensor must read something")
-        #expect(hits == ["Model/VideoScanModel.swift×1"], "session load() callers: \(hits)")
+        #expect(hits == ["Catalog/CatalogAuthorityFlip.swift×5"], "session load() callers: \(hits)")
     }
 
     @Test("the Person Finder skip set reads without adopting")
