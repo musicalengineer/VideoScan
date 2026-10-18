@@ -27,6 +27,13 @@
 // kept — removed from the catalog as `replacedAtPath`, its curation intact —
 // and one log line names what it carried (CatalogReplacedRecord.swift).
 //
+// Cutover B2.5 (codex B2.4 finding 1 "an unsaved edit before a same-digest
+// heir"): BEFORE any inherit / purge / retire, `placeRecord` commits the old
+// record (`commitBeforeReplacing`), so an edit made inside the 2 s debounce
+// is durable — and in row_knowledge — first. When that commit cannot run
+// (held, blocked, refused) nothing is replaced: the old record stays live,
+// the new one lands beside it, and the log says NOT RECORDED and why.
+//
 // Under catalog.json both are plain array work: the JSON save writes the
 // whole array, so there is nothing to tell.
 //
@@ -58,6 +65,8 @@ extension VideoScanModel {
     ///                        its id is purged;
     ///   otherwise          → it is kept, removed from the catalog as
     ///                        `replacedAtPath` with its curation, and logged.
+    /// Before replacing (B2.5) the old record is committed as it is now;
+    /// when that cannot run, nothing is replaced and both stay live.
     /// No live record at the path → appended.
     func placeRecord(_ newRec: VideoRecord, atPath path: String, reason: String) {
         guard let existing = records.firstIndex(where: { $0.fullPath == path && $0.removal == nil }) else {
@@ -67,6 +76,8 @@ extension VideoScanModel {
         let replaced = records[existing]
         if replaced.id == newRec.id {
             records[existing] = newRec
+        } else if let why = catalogCutover.committer?.commitBeforeReplacing(replaced.id) {
+            keepBoth(replaced, newRec, at: existing, path: path, why: why)
         } else if CatalogReplacedRecord.sameContent(replaced, newRec) {
             inheritThenPurge(replaced, heir: newRec, at: existing, path: path, reason: reason)
         } else {
@@ -74,12 +85,22 @@ extension VideoScanModel {
         }
     }
 
+    /// The old record's current values could not be saved first: nothing
+    /// is replaced, inherited or purged. Both stay live (refused, not lost).
+    private func keepBoth(_ old: VideoRecord, _ newRec: VideoRecord, at index: Int, path: String, why: String) {
+        records.insert(newRec, at: index + 1)
+        noteReplacement("NOT RECORDED: a new file landed at \(path), but the earlier record there "
+                        + "(\(CatalogReplacedRecord.describe(old))) could not be saved first — \(why). Nothing was "
+                        + "replaced; both stay in the catalog; Verify Catalog will find it.")
+    }
+
     /// The same bytes: every curated value moves to `heir`, then the old id goes.
     private func inheritThenPurge(_ old: VideoRecord, heir: VideoRecord, at index: Int, path: String, reason: String) {
         let differing = CatalogReplacedRecord.inherit(from: old, onto: heir)
         if !differing.isEmpty {
-            noteReplacement("the earlier record at \(path) (the same bytes) had \(differing.joined(separator: ", ")) — "
-                            + "the new record's own values are kept; the earlier ones stay in the catalog's history")
+            noteReplacement("the earlier record at \(path) (the same bytes) had \(differing.joined(separator: "; ")). "
+                            + "The new record's own values are kept; the earlier ones were saved first and stay in "
+                            + "the catalog's history")
         }
         records[index] = heir
         purgeCatalogRows(ids: [old.id], reason: reason)
