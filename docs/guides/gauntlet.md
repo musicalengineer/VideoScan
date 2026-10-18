@@ -98,6 +98,37 @@ a Gauntlet-specific name as the fixture archive volume, plus end-to-end
 write-boundary checks through the app and its subprocesses. Keep this simple;
 add no heavier OS sandbox unless a test demonstrates a leak.
 
+### What "isolation audit" means (checklist, 2026-10-18)
+
+A suite blocked with "filesystem/global-state/subprocess isolation audit
+pending" is unblocked once its source has been read against these points:
+
+1. **Catalog / App Support** — no `applicationSupportDirectory`, no write
+   through `CatalogStore.shared` (test hosts make it inert); stores and
+   ledgers are built on a per-test folder (`ShowAgainSandbox`,
+   `CutoverScene`, `CatalogStore(directory:)`).
+2. **Preferences** — no `UserDefaults.standard` writes (the runner's `HOME`
+   and `CFFIXED_USER_HOME` redirect them anyway; suites must not rely on it).
+3. **Volumes** — `/Volumes/...` strings are synthetic record paths only;
+   nothing under `/Volumes` is opened, stat'ed for a verdict or written.
+4. **Temp** — every folder or file name carries a UUID (Swift Testing runs a
+   suite's tests in parallel in one process); `TMPDIR` is the run's own.
+5. **Subprocesses** — only fixed system tools (`/usr/bin/sqlite3`,
+   `/usr/bin/python3`, Homebrew ffmpeg/ffprobe) on sandbox paths.
+6. **No machine data, no skips** — the runner fails a stage on any skip; a
+   test that reads real data or skips elsewhere moves to its own suite and
+   stays blocked as a machine/real-data dependency.
+
+2026-10-18: the catalog cutover and SQLite suites passed this audit and run
+in `regression` (CatalogCutover* B1–B2.7 + Regression, P0Truth*,
+AdvRescanEditDuringScan) and `unit` (CatalogPurge, CatalogStoreAsyncSave,
+CatalogStoreHardening, CatalogLockRobustness). The two real-backup sensors
+moved to `CatalogLockRealBackupTests` (blocked). `regression` now requires
+Homebrew ffmpeg/ffprobe (P0 truth's media matrix). `P0TruthRegressionTests`
+carries one tracked `withKnownIssue` (GH #327 case 5, a silent header read as
+sound); the runner reports known issues as failures by design, so the
+`regression` stage reads failed until that surface lands.
+
 ## Results and publication
 
 Local artifacts live at

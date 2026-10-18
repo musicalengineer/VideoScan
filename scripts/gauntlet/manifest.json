@@ -7001,7 +7001,6 @@
       ]
     },
     {
-      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogLockRobustnessTests.swift",
       "stage": "unit",
@@ -7011,7 +7010,6 @@
       "tests": [
         "testAcquireIsReentrantForSameInstance",
         "testAcquireSucceedsOnFreeLock",
-        "testActualReducerOutputDecodes_endToEnd",
         "testAdoptOnDiskGenerationAfterReconcileUnblocksSaves",
         "testCatalogWithDuplicateRecordIDsStillLoads_keepingTheCurrentHome",
         "testChecksumOfA100kRecordSizedPayloadIsFast",
@@ -7027,7 +7025,6 @@
         "testLockAcquisitionIsCheapUnderRepeatedUse",
         "testLockUnavailableFailsOpenRatherThanBrickingSaves",
         "testOwnerMetadataIdentifiesTheHolder",
-        "testPythonRoundTripOfRealBackupDecodes",
         "testPythonRoundTrippedCatalogStillDecodes",
         "testReleaseClearsOwnerMetadata",
         "testSHA256DetectsASingleFlippedByte",
@@ -7129,7 +7126,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogPurgeTests.swift",
       "stage": "unit",
@@ -7807,7 +7803,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogStoreAsyncSaveTests.swift",
       "stage": "unit",
@@ -7831,7 +7826,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogStoreHardeningTests.swift",
       "stage": "unit",
@@ -26226,6 +26220,11 @@
       ],
       "tests": [
         "test_choose_weekly_then_daily_oldest_first_no_duplicates",
+        "test_module_counts_and_fix_window",
+        "test_module_mapper_follows_moved_files_by_name_for_bugs",
+        "test_module_of_splits_core_subfolders_and_never_names_tests",
+        "test_module_row_is_counts_only_and_passes_the_privacy_gate",
+        "test_notable_imports_skip_apple_and_our_own_modules",
         "test_old_flat_layout_maps_by_file_name",
         "test_privacy_gate_refuses_paths_and_names_on_backfill_rows",
         "test_publisher_appends_backfill_and_keeps_ci_rows_verbatim",
@@ -27116,6 +27115,8 @@
       "tests": [
         "test_event_recognition_line_and_twist_render_counts_only",
         "test_everything_missing_renders_no_data_not_zero",
+        "test_module_health_table_grades_sorts_and_excludes_tests",
+        "test_module_health_without_per_module_rows_uses_folder_rows",
         "test_open_bugs_tile_is_two_counts_and_github_links",
         "test_open_bugs_tile_without_a_summary_is_two_dashes_and_the_bug_link",
         "test_page_data_comes_from_public_sources_only",
@@ -27971,7 +27972,7 @@
         "coverageReportCarriesTheIntegrityKinds",
         "doorRule",
         "fullHashCountingExcludesTheSampledHash",
-        "greenChipReadsThePresenceClock",
+        "greenChipSaysCurrent",
         "hundredThousandRowsStayInsideTheCoverageBudget",
         "identicalCoverageAtALaterTimePublishesOnce",
         "integrityRunsGoThroughTheCenterWithTheModelsMarkers",
@@ -27991,7 +27992,7 @@
         "storageTabCheckIsRetitledAndKept",
         "theThreeIntegrityRowsComeFirst",
         "uncomputedAndGreyStayQuiet",
-        "yellowAndRedChipsReadTheHeadline"
+        "yellowAndRedChipsAreShort"
       ]
     },
     {
@@ -28293,7 +28294,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/P0TruthFixture.swift",
       "stage": "regression",
@@ -28309,7 +28309,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/P0TruthRegressionTests.swift",
       "stage": "regression",
@@ -28868,7 +28867,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverReadSideTests.swift",
       "stage": "regression",
@@ -28957,7 +28955,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverWriteSideTests.swift",
       "stage": "regression",
@@ -29001,7 +28998,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverB21Tests.swift",
       "stage": "regression",
@@ -29035,7 +29031,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverB22Tests.swift",
       "stage": "regression",
@@ -29060,7 +29055,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverB23Tests.swift",
       "stage": "regression",
@@ -29105,7 +29099,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverRegressionTests.swift",
       "stage": "regression",
@@ -29145,7 +29138,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverB24Tests.swift",
       "stage": "regression",
@@ -29177,7 +29169,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverB25Tests.swift",
       "stage": "regression",
@@ -29210,7 +29201,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverB26Tests.swift",
       "stage": "regression",
@@ -29244,7 +29234,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/CatalogCutoverB27Tests.swift",
       "stage": "regression",
@@ -29258,7 +29247,6 @@
       ]
     },
     {
-      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/AdvRescanEditDuringScanTests.swift",
       "stage": "regression",
@@ -29281,6 +29269,19 @@
         "scanDerivedValuesStillRefresh",
         "trashedDuringTheScanStaysRemoved",
         "trashedSuccessorStillBeatsAReplacedRowAtTheSamePath"
+      ]
+    },
+    {
+      "blocked_reason": "positive gate or machine/real-data dependency requires fixture adapter",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogLockRealBackupTests"
+      ],
+      "tests": [
+        "testActualReducerOutputDecodes_endToEnd",
+        "testPythonRoundTripOfRealBackupDecodes"
       ]
     }
   ],
@@ -30170,10 +30171,6 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanTests/CatalogLockRobustnessTests.swift",
-          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
-        },
-        {
           "name": "VideoScan/VideoScanTests/CatalogLogIsolationTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
@@ -30183,10 +30180,6 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogOpenShortcutTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CatalogPurgeTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -30227,14 +30220,6 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogStorageTotalsTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CatalogStoreAsyncSaveTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CatalogStoreHardeningTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
@@ -31908,9 +31893,13 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogLockRealBackupTests.swift",
+          "reason": "positive gate or machine/real-data dependency requires fixture adapter"
         }
       ],
-      "expected_floor": 2417,
+      "expected_floor": 2497,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
@@ -32261,7 +32250,15 @@
         "VideoScanTests/WorkflowTagsModelTests",
         "VideoScanTests/WorkflowTagsScaleSensorTests",
         "VideoScanTests/WorkspaceActiveTests",
-        "VideoScanTests/WorkspaceImportTests"
+        "VideoScanTests/WorkspaceImportTests",
+        "VideoScanTests/CatalogLockRobustnessTests",
+        "VideoScanTests/CatalogPurgeTests",
+        "VideoScanTests/CatalogPurgeUndoStateTests",
+        "VideoScanTests/CatalogPurgeGapTests",
+        "VideoScanTests/CatalogStoreAsyncSaveTests",
+        "VideoScanTests/CatalogStoreHardeningTests",
+        "VideoScanTests/CatalogPathMatchingContractTests",
+        "VideoScanTests/CatalogSnapshotVersionTests"
       ]
     },
     {
@@ -32547,14 +32544,6 @@
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
-          "name": "VideoScan/VideoScanTests/P0TruthFixture.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/P0TruthRegressionTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/GRDBCatalogRepositoryTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
@@ -32607,80 +32596,40 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverReadSideTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverWriteSideTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB21Tests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverB21Tests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverB22Tests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverB23Tests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogReadBackPlanTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverRegressionTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB24Tests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverB24Tests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB25Tests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverB25Tests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB26Tests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         },
         {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverB26Tests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/CatalogCutoverB27Tests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
           "name": "VideoScan/VideoScanTests/MainTabTagSensorTests.swift",
-          "reason": "filesystem/global-state/subprocess isolation audit pending"
-        },
-        {
-          "name": "VideoScan/VideoScanTests/AdvRescanEditDuringScanTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
-      "expected_floor": 32,
+      "expected_floor": 166,
       "name": "regression",
+      "requires_tools": [
+        "/opt/homebrew/bin/ffmpeg",
+        "/opt/homebrew/bin/ffprobe"
+      ],
       "selectors": [
         "VideoScanTests/AdvRollCallUndatedLivingParentTests",
         "VideoScanTests/AgeAtDeathConstraintTests",
@@ -32693,7 +32642,43 @@
         "VideoScanTests/UnreadFamilyScopeSurnameShapeTests",
         "VideoScanTests/VerifyDateSensorReviewTests",
         "VideoScanTests/ViewBuilderArityCrashProbeTests",
-        "VideoScanTests/WorkbenchDiscardTrashFailureTests"
+        "VideoScanTests/WorkbenchDiscardTrashFailureTests",
+        "VideoScanTests/SQLiteCatalogLoaderTests",
+        "VideoScanTests/CatalogAuthorityFlipTests",
+        "VideoScanTests/P0TruthThroughSQLiteTests",
+        "VideoScanTests/CatalogCommitterTests",
+        "VideoScanTests/CatalogSwitchTests",
+        "VideoScanTests/CatalogCommitterSerialTests",
+        "VideoScanTests/CatalogPendingRowsTests",
+        "VideoScanTests/CatalogMarkerRevisionTests",
+        "VideoScanTests/CatalogPurgeMarkerTests",
+        "VideoScanTests/CatalogDirectSaveSensorTests",
+        "VideoScanTests/CatalogAdoptTests",
+        "VideoScanTests/CatalogSwitchB21Tests",
+        "VideoScanTests/CatalogCommitSyncTests",
+        "VideoScanTests/CatalogCommitterSyncSensorTests",
+        "VideoScanTests/CatalogMarkerVetoTests",
+        "VideoScanTests/CatalogExplicitPurgeTests",
+        "VideoScanTests/CatalogMarkerVetoDoorTests",
+        "VideoScanTests/CatalogCopyConflictTests",
+        "VideoScanTests/CatalogSQLiteSnapshotTests",
+        "VideoScanTests/CatalogPurgeDoorSensorTests",
+        "VideoScanTests/CatalogSharedSetTests",
+        "VideoScanTests/CatalogPlaceRecordTests",
+        "VideoScanTests/CatalogPlaceRecordUnsavedEditTests",
+        "VideoScanTests/CatalogAttestationRelabelTests",
+        "VideoScanTests/CatalogPeopleRedateTests",
+        "VideoScanTests/CatalogPlaceRecordSameIDTests",
+        "VideoScanTests/CutoverFirstWeekEditsTests",
+        "VideoScanTests/CutoverRemovalTests",
+        "VideoScanTests/CutoverNewRowTests",
+        "VideoScanTests/CutoverArchiveTests",
+        "VideoScanTests/CutoverHoldTests",
+        "VideoScanTests/CutoverSwitchRestoreTests",
+        "VideoScanTests/CutoverManyEditsTests",
+        "VideoScanTests/P0TruthFixtureTests",
+        "VideoScanTests/P0TruthRegressionTests",
+        "VideoScanTests/AdvRescanEditDuringScanTests"
       ]
     },
     {
