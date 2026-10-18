@@ -5,6 +5,11 @@
 // plus the counts Catalog Status shows. No SQL here (it is in Store/), no
 // VideoRecord here (the app builds those on the main actor from the rows).
 //
+// B2.1: a row carrying the purge marker (the app removed the record from
+// its catalog — Delete All, a prune) is NOT a record: it is skipped and
+// counted. The `pending_rows` (new records still waiting for a whole-file
+// digest) come back beside the rows, for the app to turn into records.
+//
 // The display pass. After the import the display tables are empty; the
 // first load derives them from `knowledge_sources` (DisplayValueDerivation)
 // and writes them in ONE `write(as: .migrate)`. It runs only while the
@@ -52,6 +57,10 @@ public enum CatalogLoad {
         public var displayPass: DisplayPass
         /// The generation the rows were read at.
         public var generation: Int
+        /// New records held without a whole-file digest (B2.1 gap 1).
+        public var pending: [CatalogRow.PendingRow] = []
+        /// Rows skipped because they carry the purge marker (B2.1 gap 3).
+        public var purged = 0
     }
 
     /// Display pass, then one snapshot of every row.
@@ -60,8 +69,14 @@ public enum CatalogLoad {
         do {
             return try await repository.read { reader in
                 var rows: [CatalogLoadedRow] = []
-                try reader.loadedRows { rows.append($0) }
-                return Snapshot(rows: rows, counts: try reader.loadCounts(), displayPass: pass, generation: reader.generation)
+                var purged = 0
+                try reader.loadedRows { row in
+                    if CatalogCommitWords.isPurged(row.file) { purged += 1 } else { rows.append(row) }
+                }
+                var pending: [CatalogRow.PendingRow] = []
+                try reader.pendingRows { pending.append($0) }
+                return Snapshot(rows: rows, counts: try reader.loadCounts(), displayPass: pass, generation: reader.generation,
+                                pending: pending, purged: purged)
             }
         } catch {
             throw Failure.readFailed(String(describing: error))

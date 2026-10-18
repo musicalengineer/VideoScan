@@ -171,7 +171,7 @@ extension VideoScanModel {
         case .success(let launch):
             do {
                 let result = try SQLiteCatalogLoader.build(launch.snapshot)
-                adoptSQLiteAuthority(launch, url: url, records: result.records)
+                adoptSQLiteAuthority(launch, url: url, records: result.records, held: result.heldIDs)
                 catalogAuthorityNote("OUTCOME loaded \(result.summary)")
                 return result.records
             } catch {
@@ -187,7 +187,9 @@ extension VideoScanModel {
     /// while the store has none, catalog.json's is kept and the first commit
     /// moves it in. The baseline is taken NOW, before the launch-time
     /// migrations run, and one commit is scheduled so what they change lands.
-    private func adoptSQLiteAuthority(_ launch: SQLiteLaunchRead, url: URL, records: [VideoRecord]) {
+    /// `held` (B2.1): records from `pending_rows` — still changed, and
+    /// Fill In Full Hashes is queued for them.
+    private func adoptSQLiteAuthority(_ launch: SQLiteLaunchRead, url: URL, records: [VideoRecord], held: Set<UUID>) {
         _ = catalogStore.load()
         catalogStore.isReadOnly = true
         if let stored = CatalogCommitter.designation(fromJSON: launch.designationJSON) {
@@ -195,26 +197,35 @@ extension VideoScanModel {
         }
         let committer = CatalogCommitter(repository: launch.repository, storedDesignationJSON: launch.designationJSON,
                                          input: { [weak self] in self?.catalogCommitInput() ?? CatalogCommitter.Input(
-                                             records: [], designation: nil, clearAuthorized: false, holdReason: nil) },
+                                             records: [], designation: nil, clearAuthorized: false, holdReason: nil, holdOwner: nil) },
                                          sink: { [weak self] line in self?.catalogAuthorityNote(line) })
-        committer.adoptBaseline(records)
+        committer.adoptBaseline(records, held: held)
         committer.onCopiesUpdated = { [weak self] in self?.noteCatalogMutated() }
+        committer.onWritableAgain = { [weak self] in
+            self?.isReadOnly = false
+            self?.catalogCutover.noteWritable()
+        }
+        var readOnlyReason: String?
         if case .readOnly(let reason) = launch.opened {
+            readOnlyReason = reason
             committer.block("read-only: \(reason)")
             isReadOnly = true
-            catalogAuthorityNote("catalog.sqlite opened READ-ONLY — \(reason). Nothing will be saved this session.")
+            catalogAuthorityNote("catalog.sqlite opened READ-ONLY — \(reason). Nothing will be saved this session"
+                                 + (reason.hasPrefix("restoredBelowHighWater") ? " unless you choose Catalog ▸ Adopt This SQLite Catalog…." : "."))
         } else {
             isReadOnly = false
             committer.scheduleCommit()
             catalogAuthorityNote("catalog.json is frozen (read-only); every save now commits to \(url.lastPathComponent)")
         }
-        catalogCutover.install(committer, databaseURL: url)
+        catalogCutover.install(committer, databaseURL: url, readOnlyReason: readOnlyReason)
+        catalogCutover.requestDigests(held)
     }
 
     /// What the committer reads at the moment of a commit.
     func catalogCommitInput() -> CatalogCommitter.Input {
         CatalogCommitter.Input(records: records, designation: masterArchive,
-                               clearAuthorized: catalogStore.designationClearAuthorized, holdReason: catalogStore.writeHold)
+                               clearAuthorized: catalogStore.designationClearAuthorized, holdReason: catalogStore.writeHold,
+                               holdOwner: catalogStore.writeHoldOwner)
     }
 
     private func loadJSONReadOnly(_ why: String) -> [VideoRecord] {

@@ -482,7 +482,7 @@ extension VideoScanModel {
                 dashboard.relocateCompleted += 1
                 _ = r  // record left alone
             }
-            catalogStore.scheduleSave(records: records)
+            saveCatalogDebounced()   // one funnel: catalog.json, or catalog.sqlite after the switch (B2.1)
         } else {
             dashboard.relocateSourceMoves = reconcile.sourceSideMoves.count
             // Same invariant as the real-run loop above: the bucket is
@@ -634,9 +634,9 @@ extension VideoScanModel {
             )
             // Debounced disk write — not per record, but frequent enough
             // that a crash loses no more than ~2s of state.
-            catalogStore.scheduleSave(records: records)
+            saveCatalogDebounced()   // one funnel: catalog.json, or catalog.sqlite after the switch (B2.1)
         }
-        catalogStore.scheduleSave(records: records)
+        saveCatalogDebounced()   // one funnel: catalog.json, or catalog.sqlite after the switch (B2.1)
         if canceledMidRun {
             // User canceled mid-copy. What landed is already persisted above;
             // mark the job canceled, refresh per-volume aggregates, and advance

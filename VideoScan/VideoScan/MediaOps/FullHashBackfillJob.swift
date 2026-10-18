@@ -76,6 +76,10 @@ final class FullHashBackfillJob: @MainActor MediaFileOperationJob, MediaFileOper
     var volumeOnline: @Sendable (String) -> Bool = { VolumeReachability.isVolumeReachable(path: $0) }
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
+    /// The records this run may read (nil = the whole catalog). Set by the
+    /// scoped start (FullHashBackfillScoped.swift — cutover B2.1: the new
+    /// rows catalog.sqlite holds back until they have a whole-file hash).
+    var scope: Set<UUID>?
     var checkpointFiles = 50
     var checkpointSeconds: TimeInterval = 60
     var progressLogSeconds: TimeInterval = 300
@@ -180,7 +184,7 @@ final class FullHashBackfillJob: @MainActor MediaFileOperationJob, MediaFileOper
             finish(failed: "The catalog is read-only on this Mac — nothing was read or changed.")
             return
         }
-        let plan = FullHashBackfillPlanner.plan(records: model.records)
+        let plan = FullHashBackfillPlanner.plan(records: scope.map { ids in model.records.filter { ids.contains($0.id) } } ?? model.records)
         let split = await splitByConnection(plan.lanes)
         seed(plan, online: split.online, offline: split.offline)
         marker?.attach(catalogFile: model.catalogStore.fileLocation)

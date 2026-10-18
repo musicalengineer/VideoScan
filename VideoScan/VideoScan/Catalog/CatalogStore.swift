@@ -284,7 +284,7 @@ final class CatalogStore {
     /// through; any other save that finds it taken returns "held", never
     /// blocks.)
     private(set) var writeHold: String?
-    private var writeHoldOwner: CatalogWriteHoldOwner?
+    private(set) var writeHoldOwner: CatalogWriteHoldOwner?   // read by the SQLite committer (B2.1: the hold owner is compared)
     private(set) var heldRefusals = 0
 
     /// Acknowledged saves handed to the write queue whose caller has not

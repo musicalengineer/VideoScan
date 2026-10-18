@@ -62,6 +62,14 @@ public struct CatalogRecordDiff: Sendable, Equatable {
 
     private init() {}
 
+    /// Keep a SHARED curated field (one every copy of the content shows)
+    /// only when the record itself changed it since its own baseline
+    /// (cutover B2.1, codex P1-1): a sibling's stale copy is never a reason
+    /// to write. Row-scoped knowledge is untouched.
+    public mutating func restrictShared(to edited: Set<CatalogDDL.KnowledgeField>) {
+        knowledge = knowledge.filter { !CatalogCommitWords.sharedByCopies.contains($0) || edited.contains($0) }
+    }
+
     private mutating func describeNew(_ current: CatalogRecordDTO) {
         file = true
         marker = false            // a new row's marker is its first state (the insert trigger records it)

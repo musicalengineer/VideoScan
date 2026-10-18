@@ -180,15 +180,19 @@ struct OneEngineSensorTests {
     ]
     static let revisionCarryAllowlist: [String: String] = [
         "Catalog/VideoScanModel+RescanPreservation.swift": "carries the revision with the marker across a rescan (no bump)",
+        "MediaOps/VideoScanModel+RemovalMarker.swift": "adoptStoredRemovalRevision: a purged catalog.sqlite row came back (cutover B2.1)",
     ]
 
     @Test func onlyTheEngineBumpsTheRemovalRevision() {
         expectMatches(Self.hits([#"\bremovalRevision\s*(\+=|-=|\+\+|--)"#]), allowlist: Self.revisionBumpAllowlist, "a removalRevision bump")
         expectMatches(Self.hits([#"\bremovalRevision\s*=[^=]"#]), allowlist: Self.revisionCarryAllowlist, "a removalRevision assignment")
         let engine = (try? SourceTree.appCode(named: "VideoScanModel+RemovalMarker.swift")) ?? ""
-        #expect(engine.components(separatedBy: "removalRevision += 1").count == 4, "stamp (on change), clear (on change), revert — three bumps")
-        #expect(engine.contains("if rec.removal != marker { rec.removalRevision += 1 }"), "an identical re-stamp is not a change")
-        #expect(engine.contains("if rec.removal != nil { rec.removalRevision += 1 }"), "Restore of a live row is not a change")
+        // Cutover B2.1: Trash emptied and RemovalUndo change the marker too, so they bump (catalog.sqlite's DDL refuses a
+        // marker change without one) — five bumps, each relayed to the SQLite committer.
+        #expect(engine.components(separatedBy: "removalRevision += 1").count == 6, "stamp, clear (on change), revert, Trash emptied, undo — five bumps")
+        #expect(engine.contains("let changed = rec.removal != marker\n        if changed { rec.removalRevision += 1 }"), "an identical re-stamp is not a change")
+        #expect(engine.contains("let changed = rec.removal != nil\n        if changed { rec.removalRevision += 1 }"), "Restore of a live row is not a change")
+        #expect(engine.components(separatedBy: "CatalogMarkerRelay.markerChanged(").count == 6, "every bump is relayed (B2.1 gap 2)")
         #expect(engine.contains("guard rec.removal == wrote, rec.removalRevision == revision else { return false }"), "revert is value AND revision")
     }
 

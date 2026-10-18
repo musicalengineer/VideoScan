@@ -56,6 +56,11 @@ public struct RemovalReason: RawRepresentable, Hashable, Codable, Sendable, Cust
     public static let legacyTrashed = RemovalReason(rawValue: "legacyTrashed")
     public static let legacyDeleted = RemovalReason(rawValue: "legacyDeleted")
     public static let legacyDeletedLabel = RemovalReason(rawValue: "legacyDeletedLabel")
+    /// The record left the app's catalog array (Delete All, a prune, a
+    /// purge) under catalog.sqlite (cutover B2.1): its `files` row is never
+    /// deleted, it gets this marker (state removedFromCatalog) with its
+    /// tombstone, and the load skips it. Never set on a live record.
+    public static let purged = RemovalReason(rawValue: "purged")
     /// A `purgedAt` write that did not come through the engine (tests,
     /// and any writer the source sensor has not caught yet).
     public static let unspecified = RemovalReason(rawValue: "unspecified")

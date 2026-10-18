@@ -6,6 +6,12 @@
 // catalog.json gives today, rewires the A/V pair references exactly as
 // `CatalogStore`'s load does, and says what it found beside the records.
 //
+// B2.1: rows the app purged (Delete All, a prune) are not records — Core
+// skips them; the new records HELD in `pending_rows` (no whole-file hash
+// yet) come back as records from their stored payload, and `heldIDs` names
+// them so the committer keeps them changed and Fill In Full Hashes is queued.
+// A held payload that no longer decodes is left in the table and counted.
+//
 // What the counts mean (the words Catalog Status will show, B4):
 //   quarantineCount — import rows that are NOT records (no digest, gone,
 //                     a finding); they wait for a rescan or a person;
@@ -35,11 +41,19 @@ enum SQLiteCatalogLoader {
         var unverifiedCount: Int
         var displayPass: CatalogLoad.DisplayPass
         var generation: Int
+        /// Records that came from `pending_rows` (no whole-file hash yet).
+        var heldIDs: Set<UUID> = []
+        /// Held payloads that did not decode (left in the table).
+        var unreadableHeld = 0
+        /// Rows skipped because the app had purged them.
+        var purgedCount = 0
 
         /// One line for the console, catalog.log and videoscan.log.
         var summary: String {
             "\(records.count) records from catalog.sqlite (generation \(generation)) · quarantine \(quarantineCount)"
                 + " · conflicts \(conflictCount) · values from before the port \(unverifiedCount)"
+                + " · held for a whole-file hash \(heldIDs.count) · purged \(purgedCount)"
+                + (unreadableHeld > 0 ? " · held rows that would not decode \(unreadableHeld)" : "")
         }
     }
 
@@ -58,10 +72,31 @@ enum SQLiteCatalogLoader {
             records.append(try VideoRecord(row: row, dateFormatter: formatter))
             unverified += row.unverifiedDerived
         }
+        let held = heldRecords(snapshot.pending, stored: Set(records.map(\.id)))
+        records += held.records
         rewirePairs(records)
-        return LoadResult(records: records, quarantineCount: snapshot.counts.quarantineOpen,
-                          conflictCount: snapshot.counts.conflicts, unverifiedCount: unverified,
-                          displayPass: snapshot.displayPass, generation: snapshot.generation)
+        var result = LoadResult(records: records, quarantineCount: snapshot.counts.quarantineOpen,
+                                conflictCount: snapshot.counts.conflicts, unverifiedCount: unverified,
+                                displayPass: snapshot.displayPass, generation: snapshot.generation)
+        result.heldIDs = Set(held.records.map(\.id))
+        result.unreadableHeld = held.unreadable
+        result.purgedCount = snapshot.purged
+        return result
+    }
+
+    /// The held records, from their stored payload (the app's own decoder);
+    /// an id that is already a `files` row is not held twice.
+    static func heldRecords(_ rows: [CatalogRow.PendingRow], stored: Set<UUID>) -> (records: [VideoRecord], unreadable: Int) {
+        var out: [VideoRecord] = []
+        var unreadable = 0
+        for row in rows {
+            guard let record = try? CatalogPendingRecord.record(row.json) else {
+                unreadable += 1
+                continue
+            }
+            if !stored.contains(record.id) { out.append(record) }
+        }
+        return (out, unreadable)
     }
 
     /// `pendingPairedWithID` → `pairedWith`, the same rule as

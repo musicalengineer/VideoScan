@@ -113,7 +113,7 @@ struct CatalogCommitterTests {
         let phases = try String(contentsOf: root.appendingPathComponent("VideoScan/MediaOps/ImportToSQLitePhases.swift"), encoding: .utf8)
         #expect(model.contains("if let committer = catalogCutover.committer { return committer.scheduleCommit() }\n        catalogStore.scheduleSave(records: records)"))
         #expect(model.contains("if let committer = catalogCutover.committer { return committer.commitNow() }\n        return catalogStore.saveNow(records: records)"))
-        #expect(phases.contains("if let committer = catalogCutover.committer { return await committer.commitAcknowledged(holder: owner != nil) }\n        return await catalogStore.saveAcknowledged(records: records, as: owner)"))
+        #expect(phases.contains("if let committer = catalogCutover.committer { return await committer.commitAcknowledged(owner: owner) }\n        return await catalogStore.saveAcknowledged(records: records, as: owner)"))
     }
 
     @Test("ISOLATION: a read-only catalog.sqlite keeps the record changed and says so")
@@ -156,14 +156,14 @@ struct CatalogCommitterTests {
 @MainActor
 struct CatalogSwitchTests {
 
-    private final class Freezes {
+    final class Freezes {
         var calls: [Bool] = []
     }
 
-    private static func environment(_ scene: CutoverScene, freezes: Freezes, designation: String? = nil,
-                                     runImport: @escaping @MainActor () async -> CatalogSwitchImportResult) -> CatalogSwitchEnvironment {
+    static func environment(_ scene: CutoverScene, freezes: Freezes,
+                            runImport: @escaping @MainActor () async -> CatalogSwitchImportResult) -> CatalogSwitchEnvironment {
         CatalogSwitchEnvironment(folder: scene.folder, catalogURL: scene.catalogURL, runImport: runImport,
-                                 freezeJSON: { freezes.calls.append($0) }, designationJSON: designation,
+                                 freezeJSON: { freezes.calls.append($0) },
                                  sink: { scene.model.catalogAuthorityNote($0) })
     }
 
@@ -188,13 +188,13 @@ struct CatalogSwitchTests {
         #expect(freezes.calls.isEmpty)
     }
 
-    @Test("an import that finishes: the latch is written, catalog.json frozen, the designation moved into catalog_state")
+    @Test("an import that finishes: the latch is written, catalog.json frozen, the designation catalog.json carries moved into catalog_state")
     func latchAfterImport() async throws {
         let scene = try CutoverScene.make("switch_ok"); defer { scene.cleanup() }
+        let designation = try scene.writeDesignation(rootPath: "/Volumes/Archive/Breen_Family_Archive")
         try await scene.importCatalog()
         let freezes = Freezes()
-        let json = #"{"rootPath":"/Volumes/Archive/Breen_Family_Archive","targetPath":"/Volumes/Archive"}"#
-        let phase = await CatalogSwitchRun.run(Self.environment(scene, freezes: freezes, designation: json) {
+        let phase = await CatalogSwitchRun.run(Self.environment(scene, freezes: freezes) {
             do { try await scene.importCatalog(); return .imported } catch { return .notImported("\(error)") }
         })
         guard case .done = phase else { Issue.record("expected .done, got \(phase)"); return }
@@ -202,7 +202,7 @@ struct CatalogSwitchTests {
         #expect(freezes.calls == [true])
         let launch = try #require(try? await SQLiteLaunchRead.read(scene.databaseURL).get())
         await launch.repository.close()
-        #expect(launch.designationJSON == json)
+        #expect(CatalogCommitter.designation(fromJSON: launch.designationJSON) == designation)
         #expect(try Self.rehearsalFolders(scene).count == 1)
     }
 

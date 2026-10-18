@@ -193,6 +193,11 @@ public protocol CatalogLiveReading {
     func masterArchiveJSON() throws -> String?
     /// The newest finished, comparator-ok import (nil when none).
     func lastFinishedImport() throws -> CatalogRow.FinishedImport?
+    // Cutover B2.1 (v1.8)
+    /// Every `pending_rows` row (new records waiting for a whole-file digest), by id.
+    func pendingRows(_ visit: (CatalogRow.PendingRow) throws -> Void) throws
+    /// The revisions of `fileID`'s tombstones, ascending.
+    func tombstoneRevisions(fileID: String) throws -> [Int]
 }
 
 /// The handle a `read` body receives.
@@ -283,6 +288,24 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading {
     func replaceDerived(digest: String, kind: CatalogDDL.DerivedKind, _ rows: [CatalogRecordDTO.DerivedValueRow]) throws
     /// `catalog_state.master_archive` (JSON text, nil = none).
     func setMasterArchive(json: String?) throws
+
+    // Cutover B2.1 (v1.8, GRDBCatalogRepository+LivePending.swift)
+    /// Hold a new record with no whole-file digest: its encoded payload.
+    /// False when the same id already holds exactly `json` (nothing written).
+    func putPendingRow(_ row: CatalogRow.PendingRow) throws -> Bool
+    /// The record became a `files` row (or was purged): drop its pending
+    /// row. False when there was none.
+    func removePendingRow(id: String) throws -> Bool
+    /// The record left the app's catalog: the purge marker on its `files`
+    /// row (tombstone first; never a DELETE), or its pending row dropped.
+    func purgeFile(id: String, since: Int64, writtenAt: Int64, door: String) throws -> CatalogRow.PurgeLanding
+    /// The people a person changed on one copy, as a delta on the content's
+    /// display rows: `removed` (name, kind) rows deleted, `added` rows
+    /// written with `conflict = 0` — a name the person set resolves that
+    /// name's conflict (its other-kind conflict row goes); every other name,
+    /// conflicts included, is left exactly as it was.
+    func writePeopleDelta(digest: String, added: [CatalogRecordDTO.PeopleTagRow],
+                          removed: [CatalogRecordDTO.PeopleTagRow]) throws
 }
 
 // MARK: - The seam

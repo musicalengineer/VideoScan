@@ -1,7 +1,8 @@
 // CatalogRow+Live.swift (VideoScanCore/Store)
 // The row-shaped values of the live write doors (cutover B2, schema v1.7):
 // one `row_knowledge` row, and what a commit reads back about one `files`
-// row before it decides insert vs update.
+// row before it decides insert vs update. B2.1 (v1.8): one `pending_rows`
+// row, and what a purge did.
 //
 // (For Rick: PODs for the DAO, like the rest of CatalogRow.)
 
@@ -53,4 +54,34 @@ extension CatalogRow {
             self.sourceGeneration = sourceGeneration
         }
     }
+
+    /// One `pending_rows` row (v1.8): a new record with no whole-file digest
+    /// yet, as the app's encoder wrote it.
+    public struct PendingRow: Sendable, Equatable {
+        public var id: String
+        public var json: String
+        public var queuedAt: Int64
+
+        public init(id: String, json: String, queuedAt: Int64) {
+            self.id = id
+            self.json = json
+            self.queuedAt = queuedAt
+        }
+    }
+
+    /// What `purgeFile` did to one id.
+    public enum PurgeLanding: Sendable, Equatable {
+        /// No `files` row (nor pending row) has this id.
+        case absent
+        /// The id was only a pending row; it was deleted.
+        case pendingDropped
+        /// The row already carries the purge marker.
+        case alreadyPurged
+        /// The purge marker was written at this revision (its tombstone first).
+        case purged(revision: Int)
+    }
+
+    /// `files.removal_reason` of a row the app removed from the catalog
+    /// (Delete All, a prune, a purge): the load skips it.
+    public static let purgeReason = RemovalReason.purged.rawValue
 }

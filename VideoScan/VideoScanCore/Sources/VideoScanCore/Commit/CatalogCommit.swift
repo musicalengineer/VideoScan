@@ -5,24 +5,33 @@
 // their Sendable snapshots on the main actor; this runs everything else in
 // ONE `repository.write(as: door)`:
 //
+//   first the PURGES (B2.1 gap 3): each id the app no longer holds gets the
+//     purge marker on its row (tombstone first, never a DELETE) or its
+//     pending row dropped — before any insert, so a live path a purged row
+//     held is free for the record that replaced it;
 //   per record, in its own SAVEPOINT (one refused row never undoes its
 //   neighbours, and never blocks the next commit's other rows):
 //     map the snapshot (the importer's own mapping, CatalogRecordDTO) →
 //     no whole-file digest: DEFERRED (a `files` row needs one, contract
-//       §e.2 — the scan's hashing is batch B3) — nothing written;
+//       §e.2) and HELD in `pending_rows` (B2.1 gap 1) so a relaunch keeps it;
 //     read the stored row back the way a load does, as a DTO →
-//     diff (CatalogRecordDiff) → unchanged: nothing written;
-//     else write what differs (CatalogCommitBody).
+//     diff (CatalogRecordDiff), the shared curated fields restricted to the
+//       ones THIS record changed since its own baseline (B2.1, codex P1-1)
+//       → unchanged: nothing written; else write what differs
+//       (CatalogCommitBody). Items for one id run in order, so an
+//       intermediate removal-marker revision (B2.1 gap 2) lands before the
+//       final one, each with its own tombstone.
 //   then the Master Archive designation (GH #167's guard: a set designation
 //   becomes none only after Clear) — a refusal there refuses the commit.
 //   Nothing landed and no designation change → the body throws on purpose so
 //   no empty generation is committed.
 //
 // Outcomes (each named, none reported as success unless rows landed):
-//   .committed(generation, rows)   ≥ 1 row or the designation landed; rows
-//                                  that were deferred/refused say why
-//   .nothingWritten(rows)          every row was unchanged, deferred or
-//                                  refused — no generation
+//   .committed(generation, rows)   ≥ 1 row, a held row, a purge or the
+//                                  designation landed; rows that were
+//                                  deferred / partial / refused say why
+//   .nothingWritten(rows)          every row was unchanged, already held,
+//                                  deferred or refused — no generation
 //   .refused(words, rows)          the store said no (read-only, "reopen the
 //                                  catalog", an engine refusal outside a row,
 //                                  the designation guard) — nothing changed
@@ -36,17 +45,23 @@ import Foundation
 
 public enum CatalogCommit {
 
-    /// One changed record: its id, its snapshot, and the fingerprint the
-    /// detector computed for that snapshot (the new baseline if it lands).
+    /// One changed record: its id, its snapshot, the fingerprint the
+    /// detector computed for that snapshot (the new baseline if it lands),
+    /// and the shared curated values the record last agreed with the store on.
     public struct Item: Sendable {
         public var id: UUID
         public var snapshot: VideoRecordDTO
         public var fingerprint: CatalogChangeDetector.Fingerprint
+        /// nil = unknown (a record this session never saw stored): its
+        /// shared fields are compared with the store, as before B2.1.
+        public var sharedBaseline: CatalogSharedCurated?
 
-        public init(id: UUID, snapshot: VideoRecordDTO, fingerprint: CatalogChangeDetector.Fingerprint) {
+        public init(id: UUID, snapshot: VideoRecordDTO, fingerprint: CatalogChangeDetector.Fingerprint,
+                    sharedBaseline: CatalogSharedCurated? = nil) {
             self.id = id
             self.snapshot = snapshot
             self.fingerprint = fingerprint
+            self.sharedBaseline = sharedBaseline
         }
     }
 
@@ -63,34 +78,54 @@ public enum CatalogCommit {
         public var door: CatalogWriter
         public var items: [Item]
         public var designation: Designation
+        /// Ids the app no longer holds (B2.1 gap 3): purged, never deleted.
+        public var purges: [UUID]
         /// Unix seconds stamped on what this commit writes.
         public var now: Int64
 
-        public init(door: CatalogWriter, items: [Item], designation: Designation = .leave,
+        public init(door: CatalogWriter, items: [Item], designation: Designation = .leave, purges: [UUID] = [],
                     now: Int64 = Int64(Date().timeIntervalSince1970)) {
             self.door = door
             self.items = items
             self.designation = designation
+            self.purges = purges
             self.now = now
         }
     }
 
-    /// What happened to one record.
+    /// What happened to one record (or one purged id).
     public enum Landing: Sendable, Equatable {
-        /// Written. `curated`: the curated fields it wrote (the app copies
-        /// them to the other records of the same content); `notes`: derived
-        /// kinds or analysis the store could not hold (regenerable).
+        /// Written. `curated`: the shared curated fields it wrote (the app
+        /// copies them to the other records of the same content); `notes`:
+        /// analysis the store could not hold that is rebuildable (duplicates).
         case written(curated: [CatalogDDL.KnowledgeField], notes: [String])
+        /// Written, but a part the store refused was left out (a derived
+        /// kind — codex B2 P2-7): the record stays CHANGED in the app and is
+        /// sent again; `words` say what is missing.
+        case partial(curated: [CatalogDDL.KnowledgeField], words: [String])
         /// The store already holds exactly this.
         case unchanged
         /// Not storable yet — the words say what it waits for.
         case deferred(String)
         /// The store refused this row — the engine's words.
         case refused(String)
+        /// A purge (B2.1 gap 3): what happened to the id.
+        case removed(CatalogRow.PurgeLanding)
 
+        /// Something of this row reached the store in this commit.
         public var landed: Bool {
-            if case .written = self { return true }
-            return false
+            switch self {
+            case .written, .partial, .removed(.purged), .removed(.pendingDropped): return true
+            case .unchanged, .deferred, .refused, .removed: return false
+            }
+        }
+
+        /// Everything the record holds is in the store (its baseline may move).
+        public var isComplete: Bool {
+            switch self {
+            case .written, .unchanged: return true
+            case .partial, .deferred, .refused, .removed: return false
+            }
         }
     }
 
@@ -99,6 +134,13 @@ public enum CatalogCommit {
         public var fingerprint: CatalogChangeDetector.Fingerprint
         public var digest: String?
         public var landing: Landing
+        /// Deferred AND held in `pending_rows` (B2.1 gap 1): durable, waiting
+        /// for its whole-file digest.
+        public var heldPending = false
+        /// The removal revision the store gave a record whose purged row
+        /// came back (the app sets it on the record so the next change
+        /// follows on from it).
+        public var adoptedRevision: Int?
     }
 
     public enum Outcome: Sendable, Equatable {

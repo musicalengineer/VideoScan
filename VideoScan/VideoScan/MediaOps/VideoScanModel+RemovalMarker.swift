@@ -24,6 +24,14 @@ import VideoScanCore
 //
 // OneEngineSensorTests fails if a production file outside this one writes
 // `.removal =`, `.purgedAt =`, or `lifecycleStage = .trashed / .deletedPermanently`.
+//
+// Cutover B2.1 (gap 2): EVERY marker change bumps `removalRevision` by one
+// and tells CatalogMarkerRelay, which hands the SQLite committer a snapshot
+// of the record at that revision — so Trash then Undo inside one 2 s save
+// window lands as two revisions, each with its own tombstone. (Trash emptied
+// and RemovalUndo used to change the marker without a bump; catalog.sqlite's
+// DDL refuses that, so they bump now too. Under catalog.json the revision is
+// only the ABA tag `revertRemoval` reads, and the relay does nothing.)
 
 extension VideoScanModel {
 
@@ -33,11 +41,23 @@ extension VideoScanModel {
     /// Static so a door with no model at hand (the caption orchestrator)
     /// still writes through the one function.
     nonisolated static func stampRemoval(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage? = nil) {
-        if rec.removal != marker { rec.removalRevision += 1 }
+        let changed = rec.removal != marker
+        if changed { rec.removalRevision += 1 }
         rec.removal = marker
         if let mirror = stage ?? Self.lifecycleMirror(for: marker.state) {
             rec.lifecycleStage = mirror
         }
+        if changed { CatalogMarkerRelay.markerChanged(rec) }
+    }
+
+    /// Cutover B2.1 (gap 3): a record whose catalog.sqlite row had been
+    /// purged came back into the catalog, and the store moved that row on to
+    /// `revision` (with its own tombstone) while keeping this record's
+    /// marker. The record takes the store's revision so its next marker
+    /// change follows on from it. Not a marker change: no bump, no relay.
+    nonisolated static func adoptStoredRemovalRevision(_ rec: VideoRecord, _ revision: Int) {
+        guard revision > rec.removalRevision else { return }
+        rec.removalRevision = revision
     }
 
     /// The lifecycle stage the legacy readers expect for a state; nil =
@@ -69,6 +89,7 @@ extension VideoScanModel {
         rec.removalRevision += 1
         if rec.lifecycleStage == mirrorsAfter.lifecycleStage { rec.lifecycleStage = mirrorsBefore.lifecycleStage }
         if rec.archiveStage == mirrorsAfter.archiveStage { rec.archiveStage = mirrorsBefore.archiveStage }
+        CatalogMarkerRelay.markerChanged(rec)
         return true
     }
 
@@ -88,7 +109,8 @@ extension VideoScanModel {
         if fileLeft, rec.fullPath.isEmpty || !FileManager.default.fileExists(atPath: rec.fullPath) {
             return "\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."
         }
-        if rec.removal != nil { rec.removalRevision += 1 }
+        let changed = rec.removal != nil
+        if changed { rec.removalRevision += 1 }
         rec.removal = nil
         // A successful, explicit Restore clears the old "Manually Deleted"
         // label whichever legacy encoding won the migration (codex round 1
@@ -97,6 +119,7 @@ extension VideoScanModel {
         if rec.lifecycleStage == .trashed || rec.lifecycleStage == .deletedPermanently {
             rec.lifecycleStage = .cataloged
         }
+        if changed { CatalogMarkerRelay.markerChanged(rec) }
         return nil
     }
 
@@ -144,7 +167,9 @@ extension VideoScanModel {
         for probe in gone {
             guard let rec = record(forID: probe.id), var marker = rec.removal,
                   probe.describes(marker), marker.noteTrashEmptied(at: now) else { continue }
+            rec.removalRevision += 1      // a marker change, like every other (B2.1)
             rec.removal = marker
+            CatalogMarkerRelay.markerChanged(rec)
             changed += 1
         }
         return changed
@@ -226,9 +251,12 @@ struct RemovalUndo {
     }
 
     func reinstate() {
+        let changed = record.removal != removal
+        if changed { record.removalRevision += 1 }   // a marker change, like every other (B2.1)
         record.removal = removal
         record.lifecycleStage = lifecycleStage
         record.archiveStage = archiveStage
+        if changed { CatalogMarkerRelay.markerChanged(record) }
     }
 }
 

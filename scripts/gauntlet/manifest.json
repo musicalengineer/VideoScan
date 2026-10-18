@@ -28977,6 +28977,60 @@
         "readOnlyKeepsChanges",
         "saveNowCommits"
       ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB21Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitB21Tests"
+      ],
+      "tests": [
+        "intermediateRevisionsLand",
+        "pendingRowHeldThenStored",
+        "pendingRowsAtLoad",
+        "peopleConflictSurvivesUnrelatedEdit",
+        "purgeDropsPending",
+        "purgeTombstonesAndLoadSkips",
+        "purgedRowComesBack",
+        "refusedDerivedIsPartial",
+        "staleSiblingKeepsEdit"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB21Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitterSerialTests",
+        "CatalogPendingRowsTests",
+        "CatalogMarkerRevisionTests",
+        "CatalogPurgeMarkerTests",
+        "CatalogDirectSaveSensorTests",
+        "CatalogAdoptTests",
+        "CatalogSwitchB21Tests"
+      ],
+      "tests": [
+        "adoptRestoredCatalog",
+        "deleteAllStaysEmpty",
+        "designationFromImportedBytes",
+        "dirtySiblingKeepsEdit",
+        "editDuringImportStops",
+        "hashLandsThenStored",
+        "heldRowsOfferedToTheJob",
+        "holdOwnerCompared",
+        "newRowSurvivesRelaunch",
+        "noDirectStoreSaves",
+        "notOfferedWhenWritable",
+        "pendingEditIsFlushedFirst",
+        "propagationKeepsLaterEdit",
+        "purgedStaysGone",
+        "quitWaitsForInFlight",
+        "trashEmptiedBumps",
+        "trashThenUndo"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32311,6 +32365,14 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogCutoverWriteSideTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB21Tests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogCutoverB21Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],

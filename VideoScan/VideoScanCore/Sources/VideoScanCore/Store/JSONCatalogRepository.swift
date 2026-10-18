@@ -114,6 +114,8 @@ struct JSONReader: CatalogReader {
     func volumeCaseSensitive(_ volumeUUID: String) throws -> Bool { throw unsupported }
     func masterArchiveJSON() throws -> String? { throw unsupported }
     func lastFinishedImport() throws -> CatalogRow.FinishedImport? { throw unsupported }
+    func pendingRows(_ visit: (CatalogRow.PendingRow) throws -> Void) throws { throw unsupported }
+    func tombstoneRevisions(fileID: String) throws -> [Int] { throw unsupported }
 }
 
 // MARK: - Header probe
