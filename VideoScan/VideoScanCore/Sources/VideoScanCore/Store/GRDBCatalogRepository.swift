@@ -487,6 +487,25 @@ public actor GRDBCatalogRepository: CatalogRepository {
         return outcome
     }
 
+    /// A sealed copy of the open catalog.sqlite at `target` (`VACUUM INTO`:
+    /// one self-contained file, no WAL), on the calling thread — the
+    /// pre-change safety copy a door takes before it removes records once
+    /// catalog.sqlite is the authority (cutover B2.3, regression F3; the
+    /// JSON catalog's `catalog.<prefix>.<stamp>.json` twin). Runs on the
+    /// writer queue (VACUUM cannot run inside a read transaction), so it
+    /// sees every committed generation and no commit lands half-way through
+    /// it. Refuses an existing target. nil = written; else the words.
+    public nonisolated func sealedCopyBlocking(to target: URL) -> String? {
+        guard let pool = gate.state.pool else { return "catalog.sqlite is not open" }
+        guard !FileManager.default.fileExists(atPath: target.path) else { return "\(target.lastPathComponent) already exists" }
+        do {
+            try pool.writeWithoutTransaction { db in try db.execute(sql: "VACUUM INTO ?", arguments: [target.path]) }
+            return nil
+        } catch {
+            return "VACUUM INTO \(target.lastPathComponent) failed: \(Self.words(error))"
+        }
+    }
+
     private static func noteCommit(_ outcome: CatalogWriteOutcome, door: CatalogWriter) {
         if case .committed(let generation) = outcome {
             storeLog.debug("catalog store commit generation \(generation, privacy: .public) via \(door.rawValue, privacy: .public)")

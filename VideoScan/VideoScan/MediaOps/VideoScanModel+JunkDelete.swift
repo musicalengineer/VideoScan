@@ -362,6 +362,12 @@ extension VideoScanModel {
             return .held(heldNote(rec, refusal: refusal, label: archiveVolume?.label ?? "the archive volume", guard: fileGuard)
                          + " — nothing moved")
         }
+        // Cutover B2.3: the catalog must be able to record the move — asked
+        // HERE, before any disk work, so a held or read-only catalog.sqlite
+        // refuses the file instead of leaving it in the Trash with a live row.
+        if let why = CatalogMarkerRelay.saveRefusal(for: rec) {
+            return .held(Self.markerRefusal(rec, verb: "move <name> to the Trash", why) + " — nothing moved")
+        }
         // The volumes the person marked Read only (2026-10-03), as the model
         // is at THIS file's turn (codex #258 F5): a drive marked Read only
         // while the batch runs protects every file not yet moved.
@@ -396,7 +402,8 @@ extension VideoScanModel {
                 continue
             }
             let target = settlementTarget(rec, turn: turns[i])
-            Self.stampRemoval(target, marker, stage: stage)
+            // The file already left: a disk fact (B2.3).
+            recordFileLeft(target, marker, stage: stage, whereNow: outcome.isMoved ? "is in the Trash" : "was already gone")
             if outcome.isMoved { removedFromDisk.append(target) }
         }
         // The items name the file each outcome was about (codex round 2 P2):

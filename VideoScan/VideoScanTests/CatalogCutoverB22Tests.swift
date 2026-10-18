@@ -107,8 +107,11 @@ extension CutoverScene {
 @MainActor
 struct CatalogCommitSyncTests {
 
-    @Test("(a) two copies edited differently before one commit: each copy shows what the store holds")
-    func copiesAgreeWithStore() async throws {
+    // B2.3 (regression F2, Manager's rule 2026-10-18): two copies edited
+    // DIFFERENTLY in one commit are a conflict — nothing dropped. Was: "each
+    // copy shows what the store holds" (the records-order winner).
+    @Test("(a) B2.3: two copies edited differently before one commit: each keeps its own; the store holds a conflict (empty)")
+    func copiesEditedDifferentlyAreAConflict() async throws {
         let scene = try CutoverScene.make("b22_copies"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
         let a = try scene.record(.curatedConflictA)
@@ -116,10 +119,10 @@ struct CatalogCommitSyncTests {
         a.userNotes = "one"
         b.userNotes = "two"
         #expect(scene.model.saveCatalogNow())
-        let storedA = try await scene.reloaded(.curatedConflictA).userNotes
-        let storedB = try await scene.reloaded(.curatedConflictB).userNotes
-        #expect(a.userNotes == storedA)
-        #expect(b.userNotes == storedB)
+        #expect(a.userNotes == "one")
+        #expect(b.userNotes == "two")
+        #expect(try await scene.reloaded(.curatedConflictA).userNotes.isEmpty)
+        #expect(try await scene.reloaded(.curatedConflictB).userNotes.isEmpty)
         #expect(try scene.committer().changedRecordCount() == 0)
     }
 
@@ -215,8 +218,13 @@ struct CatalogCommitSyncTests {
         #expect(reloaded.records.contains { $0.id == fresh.id })
     }
 
-    @Test("(e) absent at TWO background commits in a row: purged — the payload kept, tombstoned, not loaded")
-    func absentTwicePurges() async throws {
+    // B2.3 (codex B2.2 finding (e)): absence never purges. The two B2.2
+    // cases that pinned "absent twice → purged" and "a synchronous save
+    // purges what is absent" now pin the opposite: KEPT, and a door's
+    // explicit purge is what removes a held row (its payload still kept).
+
+    @Test("(e) B2.3: a held row absent at two background commits and a quit is KEPT — absence is not a purge")
+    func absentTwiceKept() async throws {
         let scene = try CutoverScene.make("b22_absent_twice"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
         let committer = try scene.committer()
@@ -226,24 +234,24 @@ struct CatalogCommitSyncTests {
         scene.model.records.removeAll { $0.id == fresh.id }
         committer.scheduleCommit(after: .zero)
         try await scene.settle()
-        #expect(committer.heldIDs.contains(fresh.id), "one look is not enough")
         committer.scheduleCommit(after: .zero)
         try await scene.settle()
-        #expect(committer.heldIDs.contains(fresh.id) == false)
+        #expect(scene.model.saveCatalogNow())
+        #expect(committer.heldIDs.contains(fresh.id))
         let reloaded = try await scene.sqliteLoad()
-        #expect(reloaded.records.contains { $0.id == fresh.id } == false)
-        #expect(try scene.pendingPayloadCount(fresh.id) == 1, "the payload is kept")
+        #expect(reloaded.records.contains { $0.id == fresh.id })
+        #expect(scene.sandbox.catalogLogText().contains("left memory without a purge — kept in the catalog"))
     }
 
-    @Test("(e) a synchronous save (quit, Delete All) purges what is absent at once — the payload still kept")
-    func synchronousSavePurgesAtOnce() async throws {
+    @Test("(e) B2.3: a door's explicit purge of a held row removes it at once — the payload still kept")
+    func explicitPurgeOfHeldRow() async throws {
         let scene = try CutoverScene.make("b22_absent_quit"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
         let fresh = try scene.freshCopy(of: .healthy, path: "/Volumes/Fixture/New/gone.mov")
         scene.model.records.append(fresh)
         #expect(scene.model.saveCatalogNow())
         scene.model.records.removeAll { $0.id == fresh.id }
-        #expect(scene.model.saveCatalogNow())
+        scene.model.purgeCatalogRows(ids: [fresh.id], reason: "test door")
         let reloaded = try await scene.sqliteLoad()
         #expect(reloaded.records.contains { $0.id == fresh.id } == false)
         #expect(try scene.pendingPayloadCount(fresh.id) == 1, "the payload is kept")

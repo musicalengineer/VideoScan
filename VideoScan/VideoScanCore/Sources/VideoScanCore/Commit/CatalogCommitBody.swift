@@ -31,6 +31,16 @@ struct CatalogCommitBody {
     let plan: CatalogCommit.Plan
     let tx: any CatalogTransaction
     let ledger: CatalogCommitLedger
+    /// Copies of one content that changed the same field differently in
+    /// this commit (B2.3, regression F2 — CatalogCommitConflicts.swift).
+    let conflicts: CatalogCommitConflicts
+
+    init(plan: CatalogCommit.Plan, tx: any CatalogTransaction, ledger: CatalogCommitLedger) {
+        self.plan = plan
+        self.tx = tx
+        self.ledger = ledger
+        conflicts = CatalogCommitConflicts(plan.items)
+    }
 
     private var source: String { CatalogRow.RowKnowledge.appSource(plan.door) }
 
@@ -150,7 +160,9 @@ struct CatalogCommitBody {
             try tx.inSavepoint {
                 written = try write(current, digest: digest, stored: stored, diff: diff, baseline: item.sharedBaseline)
             }
-            let curated = diff.knowledge.filter(CatalogCommitWords.sharedByCopies.contains)
+            // A field in conflict is not shared: each copy keeps its own value (F2).
+            let inConflict = conflicts.fields(of: digest)
+            let curated = diff.knowledge.filter { CatalogCommitWords.sharedByCopies.contains($0) && !inConflict.contains($0) }
             result.landing = written.missing.isEmpty
                 ? .written(curated: curated, notes: written.notes) : .partial(curated: curated, words: written.missing)
         } catch {
@@ -242,8 +254,11 @@ struct CatalogCommitBody {
             let delta = CatalogPeopleDelta(now: current.curated.people, baseline: baseline)
             try tx.writePeopleDelta(digest: digest, added: delta.added, removed: delta.removed)
         }
+        let inConflict = conflicts.fields(of: digest)
         for field in fields {
-            if !people.contains(field) {
+            if inConflict.contains(field) {
+                try tx.writeDisplayConflict(digest: digest, field: field)   // F2: shown empty, counted as a conflict
+            } else if !people.contains(field) {
                 try tx.writeDisplayValue(digest: digest, field: field, current.curated, setAt: plan.now)
             }
             try tx.appendRowKnowledge(CatalogRow.RowKnowledge(

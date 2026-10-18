@@ -282,6 +282,7 @@ struct CatalogPurgeMarkerTests {
         try await scene.launchOnSQLite()
         let id = try scene.record(.healthy).id
         scene.model.records.removeAll { $0.id == id }
+        scene.model.purgeCatalogRows(ids: [id], reason: "test door")   // B2.3: a door purges explicitly
         #expect(scene.model.saveCatalogNow())
         let reloaded = try await scene.sqliteLoad()
         #expect(reloaded.records.contains { $0.id == id } == false)

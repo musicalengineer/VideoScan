@@ -150,6 +150,7 @@ extension VideoScanModel {
         let countBefore = records.count
         records.removeAll { doomed.contains($0.id) }
         let removed = countBefore - records.count
+        purgeCatalogRows(ids: Set(doomed), reason: "Purge Non-Video Media")   // B2.3: explicit
 
         // 3. Rebuild the search index against the post-purge catalog — a bulk
         //    removal, so a full O(n) rebuild is cheaper and safer than

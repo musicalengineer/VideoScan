@@ -212,11 +212,7 @@ extension VideoScanModel {
     /// what each job did inline — then say so, once, for the Catalog
     /// pane's reveal. A failed job never gets here.
     func adoptDerivative(_ newRec: VideoRecord, at path: String, from sourceID: UUID) {
-        if let existing = records.firstIndex(where: { $0.fullPath == path }) {
-            records[existing] = newRec
-        } else {
-            records.append(newRec)
-        }
+        placeRecord(newRec, atPath: path, reason: "a finished job's output replaced the older record at its path")
         lastDerivativeLanding = DerivativeLanding(id: newRec.id, sourceID: sourceID, kind: newRec.derivationKind, at: Date())
     }
 }

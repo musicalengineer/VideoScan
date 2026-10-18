@@ -70,9 +70,18 @@ extension VideoScanModel {
         guard !ids.isEmpty else { return 0 }
         let now = Date()
         var changed: [UUID] = []
+        var refused: [String] = []
         for rec in records where ids.contains(rec.id) && rec.removal == nil {
-            Self.stampRemoval(rec, .removedFromCatalog(at: now, reason: .userRemoved))   // GH #143: the one marker
+            // GH #143: the one marker. B2.3: the catalog may refuse (held,
+            // read-only) — that row stays exactly as it was.
+            if let why = Self.stampRemoval(rec, .removedFromCatalog(at: now, reason: .userRemoved)) {
+                refused.append(why)
+                continue
+            }
             changed.append(rec.id)
+        }
+        if let first = refused.first {
+            log("Remove from Catalog: left \(refused.count) row(s) as they were — \(first)")
         }
         guard !changed.isEmpty else { return 0 }
         saveCatalogDebounced()

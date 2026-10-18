@@ -149,7 +149,9 @@ extension VideoScanModel {
         }
         let before = RemovalMirrors.of(rec)
         let marker = RemovalMarker.missing(noticedAt: now, lastSeen: rec.contentHashAt, reason: .missingAtAudit)
-        Self.stampRemoval(rec, marker)
+        if let why = Self.stampRemoval(rec, marker) {
+            return (CatalogAuditApply(result: .couldNotCheck, detail: "proven gone, but not marked — \(why)"), nil)
+        }
         return (CatalogAuditApply(result: .gone, detail: "not at its path, in a folder on the drive it was last seen on, at the moment of marking — marked Missing"),
                 CatalogAuditMark(id: item.id, path: item.path, previous: item.plannedMarker, wrote: marker,
                                  revision: rec.removalRevision, mirrorsBefore: before, mirrorsAfter: .of(rec)))
@@ -210,10 +212,13 @@ extension VideoScanModel {
     /// ours to undo), and the console says so.
     @discardableResult
     func revertCatalogAuditMark(_ mark: CatalogAuditMark) -> Bool {
+        var refusal: String?
         guard let rec = record(forID: mark.id), rec.fullPath == mark.path,
               Self.revertRemoval(rec, wrote: mark.wrote, previous: mark.previous, revision: mark.revision,
-                                 mirrorsBefore: mark.mirrorsBefore, mirrorsAfter: mark.mirrorsAfter) else {
-            catalogAuditNote("undo: \(mark.path) was changed by another door since the audit marked it — left as it is now")
+                                 mirrorsBefore: mark.mirrorsBefore, mirrorsAfter: mark.mirrorsAfter,
+                                 refused: { refusal = $0 }) else {
+            catalogAuditNote(refusal.map { "undo: \(mark.path) — \($0)" }
+                             ?? "undo: \(mark.path) was changed by another door since the audit marked it — left as it is now")
             return false
         }
         return true

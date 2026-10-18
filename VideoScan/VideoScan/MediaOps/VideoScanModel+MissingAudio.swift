@@ -143,9 +143,9 @@ extension VideoScanModel {
             if existing.isPurged { _ = restoreRecord(id: existing.id) }
             if existing.isSetAside { _ = restoreSetAsideRecords(ids: [existing.id]) }
             audio = existing
-            undo = {
+            undo = { [weak self] in
                 existing.setAsideReason = priorReason
-                priorRemoval.reinstate()
+                if let why = priorRemoval.reinstate() { self?.log("Find Missing Audio: \(why)") }   // B2.3
             }
         } else {
             let probed = await probeFile(url: URL(fileURLWithPath: candidate.path))
@@ -166,6 +166,7 @@ extension VideoScanModel {
                 audio = probed
                 undo = { [weak self] in
                     self?.records.removeAll { $0.id == probed.id }
+                    self?.purgeCatalogRows(ids: [probed.id], reason: "Find Missing Audio: undo of its own new row")   // B2.3
                 }
             }
         }

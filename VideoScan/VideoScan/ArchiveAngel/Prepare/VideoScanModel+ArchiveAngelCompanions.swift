@@ -161,49 +161,34 @@ extension VideoScanModel {
         }
         guard !roots.isEmpty else { return 0 }
         var retired: [(VideoRecord, String)] = []
-        var survivors: [(VideoRecord, String)] = []
-        var unconfirmed: [(VideoRecord, String, String)] = []
+        var survivors: [KeptCompanion] = []
+        var unconfirmed: [KeptCompanion] = []
         for rec in records where !rec.isPurged {
             guard let root = roots.first(where: { rec.fullPath.hasPrefix($0.prefix) }) else { continue }
             if let prefixes = root.entryPrefixes, !prefixes.contains(where: { rec.fullPath.hasPrefix($0) }) { continue }
             switch presence(rec.fullPath) {
             case .present:
-                survivors.append((rec, root.batchID))
+                survivors.append(KeptCompanion(record: rec, batchID: root.batchID,
+                                               why: "their files are still in the buffer (the removal did not finish)"))
             case .unknown(let why):
                 // codex #1714 R1: `fileExists == false` also answers a
                 // folder it may not enter (EACCES), an I/O error or an
                 // unmounted drive — a SURVIVING file read as deleted.
                 // Only ENOENT on a reachable volume retires a record.
-                unconfirmed.append((rec, root.batchID, why))
+                unconfirmed.append(KeptCompanion(record: rec, batchID: root.batchID, why: "could not confirm their files are gone (\(why))"))
             case .absent:
                 // ENOENT on a reachable volume: the file is gone — the one
                 // removal marker says so (GH #143), the row stays.
-                Self.stampRemoval(rec, .missing(noticedAt: now, lastSeen: nil, reason: .angelCompanion))
-                retired.append((rec, root.batchID))
+                if let why = Self.stampRemoval(rec, .missing(noticedAt: now, lastSeen: nil, reason: .angelCompanion)) {
+                    // B2.3: the catalog refused the mark — kept, and said.
+                    unconfirmed.append(KeptCompanion(record: rec, batchID: root.batchID, why: "could not confirm their files are gone (\(why))"))
+                } else {
+                    retired.append((rec, root.batchID))
+                }
             }
         }
-        if !unconfirmed.isEmpty {
-            let byBatch = Dictionary(grouping: unconfirmed, by: \.1)
-            for (batchID, kept) in byBatch.sorted(by: { $0.key < $1.key }) {
-                let line = "Archive Angel: kept \(kept.count) companion record(s) of \(batchID) — "
-                    + "could not confirm their files are gone (\(kept[0].2)) — \(reason): "
-                    + kept.prefix(5).map { $0.0.filename }.joined(separator: ", ")
-                    + (kept.count > 5 ? " and \(kept.count - 5) more" : "")
-                log(line)
-                appLog.write(line)
-            }
-        }
-        if !survivors.isEmpty {
-            let byBatch = Dictionary(grouping: survivors, by: \.1)
-            for (batchID, kept) in byBatch.sorted(by: { $0.key < $1.key }) {
-                let line = "Archive Angel: kept \(kept.count) companion record(s) of \(batchID) — "
-                    + "their files are still in the buffer (the removal did not finish) — \(reason): "
-                    + kept.prefix(5).map { $0.0.filename }.joined(separator: ", ")
-                    + (kept.count > 5 ? " and \(kept.count - 5) more" : "")
-                log(line)
-                appLog.write(line)
-            }
-        }
+        logKeptCompanions(unconfirmed, reason: reason)
+        logKeptCompanions(survivors, reason: reason)
         guard !retired.isEmpty else { return 0 }
         saveCatalogDebounced()
         noteCatalogRecordsMutated()
@@ -224,6 +209,25 @@ extension VideoScanModel {
             appLog.write(line)
         }
         return retired.count
+    }
+
+    /// A companion record the pass KEPT, and why (one kind of why per list).
+    struct KeptCompanion {
+        let record: VideoRecord
+        let batchID: String
+        let why: String
+    }
+
+    /// One line per batch: "Archive Angel: kept N companion record(s) of
+    /// <batch> — <why of the first> — <reason>: a, b, … and N more".
+    private func logKeptCompanions(_ kept: [KeptCompanion], reason: String) {
+        for (batchID, rows) in Dictionary(grouping: kept, by: \.batchID).sorted(by: { $0.key < $1.key }) {
+            let line = "Archive Angel: kept \(rows.count) companion record(s) of \(batchID) — \(rows[0].why) — \(reason): "
+                + rows.prefix(5).map(\.record.filename).joined(separator: ", ")
+                + (rows.count > 5 ? " and \(rows.count - 5) more" : "")
+            log(line)
+            appLog.write(line)
+        }
     }
 
     /// "/Volumes/X/Buffer/batch-…" → "/Volumes/X/Buffer/batch-…/" (standardized, trailing slash).

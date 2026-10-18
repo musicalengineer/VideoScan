@@ -26,6 +26,7 @@ enum CatalogAuditFixer {
             for r in model.records where want.contains(r.id) {
                 guard let marker = r.removal, marker.state == .inTrash,
                       r.lifecycleStage != .trashed && r.lifecycleStage != .deletedPermanently else { continue }
+                // Its OWN marker again: not a change, so never refused (B2.3) — only the mirror is written.
                 VideoScanModel.stampRemoval(r, marker)
                 n += 1
             }

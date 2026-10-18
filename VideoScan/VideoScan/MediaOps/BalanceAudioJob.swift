@@ -787,11 +787,7 @@ final class BalanceAudioJob: @MainActor MediaFileOperationJob {
             ? derivedNote
             : "\(newRec.notes)\n\(derivedNote)"
 
-        if let existing = model.records.firstIndex(where: { $0.fullPath == publishedURL.path }) {
-            model.records[existing] = newRec
-        } else {
-            model.records.append(newRec)
-        }
+        model.placeRecord(newRec, atPath: publishedURL.path, reason: "Balance Audio: the balanced copy replaced the older record at its path")
         model.searchIndex.update(newRec)
         model.searchIndex.update(record)
         NotificationCenter.default.post(name: .videoScanCatalogMutated, object: nil)

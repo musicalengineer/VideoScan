@@ -192,8 +192,12 @@ struct OneEngineSensorTests {
         // Cutover B2.1: Trash emptied and RemovalUndo change the marker too, so they bump (catalog.sqlite's DDL refuses a
         // marker change without one) — five bumps, each relayed to the SQLite committer.
         #expect(engine.components(separatedBy: "removalRevision += 1").count == 6, "stamp, clear (on change), revert, Trash emptied, undo — five bumps")
-        #expect(engine.contains("let changed = rec.removal != marker\n        if changed { rec.removalRevision += 1 }"), "an identical re-stamp is not a change")
-        #expect(engine.contains("let changed = rec.removal != nil\n        if changed { rec.removalRevision += 1 }"), "Restore of a live row is not a change")
+        // B2.3: between the test and the bump, the catalog may veto (a refused change bumps nothing).
+        #expect(engine.contains("let changed = rec.removal != marker\n        if changed, let why = CatalogMarkerRelay.markerWillChange(rec, kind: kind) {"),
+                "an identical re-stamp is not a change, and is never refused")
+        #expect(engine.contains("let changed = rec.removal != nil\n        if changed, let why = CatalogMarkerRelay.markerWillChange(rec) {"),
+                "Restore of a live row is not a change")
+        #expect(engine.components(separatedBy: "        if changed { rec.removalRevision += 1 }").count == 3, "stamp and clear bump only on a change")
         #expect(engine.components(separatedBy: "CatalogMarkerRelay.markerChanged(").count == 6, "every bump is relayed (B2.1 gap 2)")
         #expect(engine.components(separatedBy: "CatalogMarkerRelay.markerWillChange(").count == 6,
                 "every bump is announced BEFORE it, so an uncommitted earlier change is committed first (B2.2)")
