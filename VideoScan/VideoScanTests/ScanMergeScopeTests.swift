@@ -22,6 +22,7 @@
 import Testing
 import Foundation
 @testable import VideoScan
+import VideoScanCore
 
 // MARK: - Shared fixture helpers (file-scope: used by both suites below)
 
@@ -447,7 +448,11 @@ struct ScanMergeScopeTests {
         #expect(refreshed.mediaDisposition == .important)
         #expect(refreshed.sceneCaptions.first?.text == "porch summer 1985")
         #expect(refreshed.detectedPeople == ["Donna"])
-        #expect(refreshed.notes == "curated")
+        // The carried line survives; since codex 2026-10-18 F2 the fresh
+        // probe's diagnostic for these junk bytes rides beside it.
+        let noteLines = refreshed.notes.split(separator: "\n")
+        #expect(noteLines.first == "curated")
+        #expect(noteLines.dropFirst().allSatisfy { MachineNote.isProbeDiagnostic($0) })
     }
 
     // MARK: - 9. RESUMED scan preserves dossier + user fields (pipeline)
@@ -506,7 +511,11 @@ struct ScanMergeScopeTests {
         #expect(refreshed.lifecycleStage == .archived)
         #expect(refreshed.mediaDisposition == .important)
         #expect(refreshed.sceneCaptions.first?.text == "porch summer 1985")
-        #expect(refreshed.notes == "curated")
+        // The carried line survives; since codex 2026-10-18 F2 the fresh
+        // probe's diagnostic for these junk bytes rides beside it.
+        let noteLines = refreshed.notes.split(separator: "\n")
+        #expect(noteLines.first == "curated")
+        #expect(noteLines.dropFirst().allSatisfy { MachineNote.isProbeDiagnostic($0) })
     }
 
     // MARK: - 10. Complete rescan keeps records INVISIBLE to the scan's options

@@ -514,15 +514,17 @@ extension VideoScanModel {
                 partner.pairConfidence = nil
             }
         }
-        // FINAL fixity reconciliation (codex #985 cycle 4):
-        // `applyPreservedFieldsAfterRescan` ran before this complete merge's
-        // detached existence sweep. Verify Archive Copies can therefore
-        // restore or clear the OLD live record while this method is
-        // suspended. Re-read that live value now, after the final await and
+        // FINAL live reconciliation (codex #985 cycle 4 for fixity;
+        // adversarial 2026-10-18 #1 for every other preserved field):
+        // `applyPreservedFieldsAfterRescan` wrote the SCAN-START snapshot and
+        // ran before this complete merge's detached existence sweep. The
+        // person (notes, stars, Trash …) and Verify Archive Copies can change
+        // the OLD live record during the scan and while this method is
+        // suspended. Re-read the live values now, after the final await and
         // immediately before replacement. There is no suspension between
         // this pass and removeAll/append, so stale scan/preview instances can
-        // no longer replay an earlier fixity value over Verify's verdict.
-        reconcileLiveArchiveFixityBeforeReplacement(
+        // no longer replay an earlier value over a later edit or verdict.
+        reconcileLivePreservedFieldsBeforeReplacement(
             root: root, targetRecords: targetRecords)
         // Remove only what the scan re-saw (replaced by the fresh instance)
         // or what is genuinely gone from disk — retained-invisible records
@@ -661,8 +663,9 @@ extension VideoScanModel {
         let pairCarry = capturePairCarryover(existingUnderRoot: existingUnderRoot,
                                              newPaths: newPaths)
         // Partial merges do not suspend, but use the same last-moment rule so
-        // every replacement door has one fixity contract.
-        reconcileLiveArchiveFixityBeforeReplacement(
+        // every replacement door has one live-wins contract (curated values
+        // edited during the scan, and the fixity verdict).
+        reconcileLivePreservedFieldsBeforeReplacement(
             root: root, targetRecords: targetRecords)
         let leaving: (VideoRecord) -> Bool = {
             PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
@@ -688,53 +691,96 @@ extension VideoScanModel {
         return outcome
     }
 
-    /// Copy the CURRENT same-path record's fixity verdict onto the fresh scan
-    /// instance at the last possible moment before replacement.
+    /// Copy the CURRENT same-path record's preserved fields (curated values,
+    /// removal marker, dossier products, provenance and the fixity verdict)
+    /// onto the fresh scan instance at the last possible moment before
+    /// replacement.
     ///
-    /// A nil live value is meaningful (Verify cleared a mismatch/missing
-    /// file), so it explicitly clears a stale carried value. A non-nil value
-    /// still passes the ordinary size/partial-MD5 identity guard; Verify may
-    /// have validated the old bytes while the freshly probed file already
-    /// proves a different identity.
+    /// Why (adversarial 2026-10-18 #1, invariant VOL-4): the preservation
+    /// pass writes the snapshot taken at scan START onto the fresh records.
+    /// A scan runs for hours (an Update Catalog preview can sit open even
+    /// longer), and the person keeps curating the OLD instance meanwhile —
+    /// a note, a star, a date, a Trash. Without this pass the merge swapped
+    /// in the scan-start copy and purged the old id: every such edit was
+    /// silently lost. The live record is the truth; it wins for the WHOLE
+    /// preserved set, through the same `RescanPreservedFields.apply(to:)`
+    /// carrier the preservation pass uses — so the field list stays ONE
+    /// list, and the scan's own technical values (codec, size, duration,
+    /// partialMD5 …) are never touched.
+    ///
+    /// When the live values are applied: the live record carries something
+    /// worth restoring (same filter as the snapshot), OR this fresh record
+    /// was restored from the snapshot (so even an all-empty live record —
+    /// the person cleared everything — must override the scan-start copy).
+    /// A never-curated record whose fresh probe has its own value (the
+    /// ffprobe machine note in `notes`) keeps the fresh value.
+    ///
+    /// Fixity (codex #985): `apply` runs the size/partial-MD5 identity guard
+    /// against the live value, so a Verify clear (nil) clears, and a Verify
+    /// restore carries only while the fresh bytes still match. A live record
+    /// that is not applied has no fixity (fixity counts as worth restoring),
+    /// so a carried value on the fresh instance is cleared — as before.
+    ///
+    /// Lifecycle pointers: applied values are live pointers, already re-
+    /// linked by the preservation pass; one edited after it would still name
+    /// a pre-rescan id, so the re-link runs again with live id → fresh id.
+    ///
+    /// Not covered (pre-existing, deliberate): a row hard-purged from
+    /// `records` while the scan ran has no live instance — the fresh record
+    /// keeps the snapshot (the file is on disk; the catalog knows all media).
     ///
     /// O(records + targetRecords), no I/O and no await. This is the atomic
     /// compare/copy section in C++ terms: once it starts on the MainActor,
     /// another actor task cannot interleave before the array replacement.
+    /// Which of two rows at one path speaks for the file now: 2 = active,
+    /// 1 = removed by the person or the app (Trash, missing, purged), 0 = a
+    /// `replacedAtPath` row — history kept beside its successor.
+    static func sharedPathRank(_ rec: VideoRecord) -> Int {
+        guard let removal = rec.removal else { return 2 }
+        return removal.reason == .replacedAtPath ? 0 : 1
+    }
+
     @discardableResult
-    func reconcileLiveArchiveFixityBeforeReplacement(
+    func reconcileLivePreservedFieldsBeforeReplacement(
         root: String,
         targetRecords: [VideoRecord]
     ) -> Int {
+        let restoredFromSnapshot = pendingRescanRestoredPaths.removeValue(forKey: PathScope.normalize(root)) ?? []
         let wantedPaths = Set(targetRecords.map(\.fullPath))
         var liveByPath: [String: VideoRecord] = [:]
         liveByPath.reserveCapacity(wantedPaths.count)
         for old in records where PathScope.contains(old.fullPath, within: root)
             && wantedPaths.contains(old.fullPath)
         {
+            // Two rows can share a path (a `replacedAtPath` row kept beside
+            // its successor): the successor is the person's truth — even
+            // once it is Trashed itself (codex 2026-10-18 F1). Rank, never
+            // array order: active › removed › replacedAtPath history; equal
+            // ranks keep the last, as the snapshot does.
+            if let held = liveByPath[old.fullPath],
+               Self.sharedPathRank(held) > Self.sharedPathRank(old) { continue }
             liveByPath[old.fullPath] = old
         }
 
-        var changed = 0
+        var applied = 0
+        var liveIDs: [String: UUID] = [:]
+        liveIDs.reserveCapacity(liveByPath.count)
         for fresh in targetRecords {
-            guard let live = liveByPath[fresh.fullPath] else { continue }
-            let reconciled: ArchiveFixity?
-            if let fixity = live.archiveFixity,
-               RescanPreservedFields.fixityIdentityHolds(
-                   fixity: fixity,
-                   freshSizeBytes: fresh.sizeBytes,
-                   snapshotPartialMD5: live.partialMD5,
-                   freshPartialMD5: fresh.partialMD5)
-            {
-                reconciled = fixity
-            } else {
-                reconciled = nil
-            }
-            if fresh.archiveFixity != reconciled {
-                fresh.archiveFixity = reconciled
-                changed += 1
+            guard let live = liveByPath[fresh.fullPath], live !== fresh else { continue }
+            liveIDs[fresh.fullPath] = live.id
+            let current = RescanPreservedFields(from: live)
+            if current.isWorthRestoring || current.carriesKeptFingerprint || current.carriesRemovalHistory
+                || restoredFromSnapshot.contains(fresh.fullPath) {
+                current.apply(to: fresh)
+                applied += 1
+            } else if fresh.archiveFixity != nil {
+                fresh.archiveFixity = nil
             }
         }
-        return changed
+        if applied > 0 {
+            relinkLifecyclePointersAfterRescan(oldIDs: liveIDs, targetRecords: targetRecords)
+        }
+        return applied
     }
 
     /// Mass-deletion tripwire for a complete-scan merge: snapshot first,

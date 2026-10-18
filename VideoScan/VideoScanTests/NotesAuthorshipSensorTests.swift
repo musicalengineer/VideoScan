@@ -29,7 +29,7 @@ struct NotesAuthorshipSensorTests {
         "ArchiveAngelReviewSheet.swift":          "Angel review sheet: the note Rick types on a plan entry",
         "VideoScanModel+RepairLifecycle.swift":   "repair confirm carries the original's note; undo restores the snapshot",
         "VideoScanModel+MasterArchive.swift":     "Promote: the archive copy carries the source's note verbatim",
-        "VideoScanModel+RescanPreservation.swift": "rescan preservation restores the pre-scan note verbatim",
+        "VideoScanModel+RescanPreservation.swift": "rescan preservation carries the note's history lines; probe diagnostics come from the fresh probe",
         "VideoRecord+Clone.swift":                "clone copies the field",
         "VideoRecord.swift":                      "Codable decode",
         "VideoRecordDTO.swift":                   "export DTO init copies the field",

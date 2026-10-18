@@ -1119,6 +1119,17 @@ final class VideoScanModel: ObservableObject {
     /// held only for the duration of one rescan.
     var pendingRescanOldIDs: [String: [String: UUID]] = [:]
 
+    /// Sibling of `pendingPreservedFields` (adversarial 2026-10-18 #1,
+    /// VOL-4): normalized root → the fullPaths whose fresh record was
+    /// restored from the scan-start snapshot. The merge's live-wins pass
+    /// (`reconcileLivePreservedFieldsBeforeReplacement`) uses it to tell
+    /// "the person CLEARED every curated field during the scan" (re-apply
+    /// the empty live values) from "a never-curated record" (leave the
+    /// fresh probe's own values — e.g. its machine note — alone).
+    /// Transient: written by apply, consumed by the merge, cleared on
+    /// discard. A stale entry is harmless (it only allows a live re-read).
+    var pendingRescanRestoredPaths: [String: Set<String>] = [:]
+
     /// Test seam (ScanMergeScopeTests): invoked by the scan-merge existence
     /// sweep right after its initial root-reachability check passes, so the
     /// millisecond-unmount-window recheck can be exercised deterministically

@@ -83,12 +83,25 @@ import Foundation
 // old instance is already gone. Verify's half of the contract (path-
 // resolved, conditional writes) lives in VerifyArchiveCopiesJob.
 //
+// 2026-10-18 (adversarial review #1, VOL-4): the same race hit EVERY
+// preserved field, not just fixity — a note, star, date or Trash made
+// while the scan ran was replaced by the scan-start copy at the merge.
+// The merge now re-reads the WHOLE preserved set from the live record
+// at the last moment before replacement
+// (`reconcileLivePreservedFieldsBeforeReplacement`, ScanMerge), through
+// this file's `apply(to:)`. The snapshot remains the fallback when the
+// old instance is gone. Pinned by AdvRescanEditDuringScanTests.
+//
 // What we DON'T preserve (the scan re-derives these from disk):
 //   filename, ext, size, sizeBytes, duration, durationSeconds,
 //   container, videoCodec, resolution, frameRate, audioCodec,
 //   audioChannels, audioSampleRate, timecode, dateCreatedRaw,
 //   dateModifiedRaw, partialMD5, etc. — these reflect the file's
-//   current bytes, so a rescan refreshing them is correct.
+//   current bytes, so a rescan refreshing them is correct. Likewise the
+//   PROBE DIAGNOSTIC lines inside `notes` (ffprobe stderr, scan-engine
+//   diagnosis): the fresh probe's lines replace the previous scan's, while
+//   `notes`' history lines (File Journey stamps, Combine, relink…) travel
+//   (codex 2026-10-18 F2; MachineNote.isProbeDiagnostic / rescanMerged).
 
 /// Snapshot of the fields a rescan must not destroy. One per record.
 ///
@@ -461,7 +474,10 @@ struct RescanPreservedFields: Sendable {
         rec.archiveStage = self.archiveStage
         rec.starRating = self.starRating
         rec.junkScore = self.junkScore
-        rec.notes = self.notes
+        // `notes` is MACHINE text with two owners (codex 2026-10-18 F2): the
+        // history lines travel; probe diagnostics are the scan's — the
+        // fresh probe's replace the old ones (MachineNote.rescanMerged).
+        rec.notes = MachineNote.rescanMerged(kept: self.notes, fresh: rec.notes)
         rec.tags = self.tags
         rec.userNotes = self.userNotes
         rec.removal = self.removal
@@ -572,6 +588,7 @@ extension VideoScanModel {
             }
         }
         var restored = 0
+        var restoredPaths = Set<String>()
         var fixityDropped = 0
         var droppedSample: [String] = []
         for rec in targetRecords {
@@ -581,7 +598,12 @@ extension VideoScanModel {
                 if droppedSample.count < 5 { droppedSample.append(rec.filename) }
             }
             restored += 1
+            restoredPaths.insert(rec.fullPath)
         }
+        // For the merge's live-wins pass (adversarial 2026-10-18 #1): which
+        // fresh records carry scan-start curated values that a later edit
+        // (even a clear) must override at replacement time.
+        pendingRescanRestoredPaths[PathScope.normalize(target.searchPath)] = restoredPaths
         if fixityDropped > 0 {
             let more = fixityDropped > droppedSample.count
                 ? " … and \(fixityDropped - droppedSample.count) more" : ""
@@ -624,8 +646,11 @@ extension VideoScanModel {
     /// rescan (its id is unchanged and still resolves) or its file
     /// genuinely vanished (nothing to re-link). Identity mappings from
     /// move-adopted ids are harmless no-ops.
+    /// Also run by the merge's live-wins pass (ScanMerge,
+    /// `reconcileLivePreservedFieldsBeforeReplacement`) so a pointer edited
+    /// while the scan ran is re-linked too — hence internal, not private.
     @MainActor
-    private func relinkLifecyclePointersAfterRescan(
+    func relinkLifecyclePointersAfterRescan(
         oldIDs: [String: UUID],
         targetRecords: [VideoRecord]
     ) {
@@ -689,5 +714,6 @@ extension VideoScanModel {
     func discardPreservedFieldsSnapshot(of target: CatalogScanTarget) {
         pendingPreservedFields.removeValue(forKey: target.searchPath)
         pendingRescanOldIDs.removeValue(forKey: target.searchPath)
+        pendingRescanRestoredPaths.removeValue(forKey: PathScope.normalize(target.searchPath))
     }
 }
