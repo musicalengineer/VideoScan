@@ -89,7 +89,7 @@ duplicates front door (`VideoScan/VideoScan/MediaOps/DeleteDuplicatesFlow.swift`
 a source sensor pins that.
 
 Folders that pre-date this layout are unchanged: **ArchiveAngel/** (the
-Archive Angel, by stage), **FootageGroups/**, **FamilyMusic/**, **ModelsUI/**.
+Archive Angel, by stage), **FootageGroups/**, **ModelsUI/**.
 
 ## Data-risk code (for the codex review policy)
 
