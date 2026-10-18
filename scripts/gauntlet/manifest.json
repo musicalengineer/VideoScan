@@ -28664,8 +28664,10 @@
       ]
     },
     {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterAppMarkerTests.swift",
+      "stage": "unit",
       "suites": [
         "CatalogImporterAppMarkerTests"
       ],
@@ -28677,13 +28679,13 @@
         "theAppsMarkerWithoutAGenerationPassesTheDryRunByTimeOrder",
         "theAppsNonPresentRowsEachNameTheirRowsPath",
         "theMarkerTheAppWritesTodayPassesTheDryRun"
-      ],
-      "stage": "unit",
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit"
+      ]
     },
     {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
       "kind": "package",
       "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportSidecarsJSONTests.swift",
+      "stage": "unit",
       "suites": [
         "AuditMarkerJSONTests"
       ],
@@ -28698,13 +28700,12 @@
         "everyAppWordIsKnown",
         "everyAppWordMapsToItsClass",
         "theMarkerInTheAppsExactShapeDecodes"
-      ],
-      "stage": "unit",
-      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit"
+      ]
     },
     {
       "kind": "xcode",
       "path": "VideoScan/VideoScanTests/ImportAuditVocabularySensorTests.swift",
+      "stage": "unit",
       "suites": [
         "ImportAuditVocabularySensorTests"
       ],
@@ -28717,8 +28718,7 @@
         "theImportersGateFactsOfTheAppsMarkerAreWhole",
         "theImportersPreflightRefusesNothingInTheAppsMarker",
         "theJudgedPathArrivesInTheImporter"
-      ],
-      "stage": "unit"
+      ]
     },
     {
       "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
@@ -28774,7 +28774,7 @@
         "conflictingCopiesLoadEmpty",
         "displayPassRunsOnce",
         "everyMainShapeRoundTrips",
-        "pairIDsRoundTripConfidenceDoesNot",
+        "pairIDsAndConfidenceRoundTrip",
         "quarantineIsNotRecords",
         "theRichRowRoundTrips"
       ]
@@ -28835,6 +28835,86 @@
         "sqliteRecordsEqualJSONRecords",
         "theSeamIsOneLine",
         "unprovenRowsAreNotRecords"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitRoundTripTests",
+        "CatalogCommitIsolationTests"
+      ],
+      "tests": [
+        "conflictSurvivesUnrelatedEdit",
+        "derivedProvenance",
+        "designationGuard",
+        "injectedRefusalAloneChangesNothing",
+        "injectedRefusalIsOneRow",
+        "liveRoundTrip",
+        "markerJumpIsRefused",
+        "newRowIsInserted",
+        "noDigestIsDeferred",
+        "oneHistoryRowPerCommit",
+        "p0FactsSurvive",
+        "pairLinkRoundTrips",
+        "personResolvesConflict",
+        "readOnlyRefuses",
+        "unchangedWritesNothing"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogChangeDetectorTests"
+      ],
+      "tests": [
+        "anyChangeMovesIt",
+        "parallelAndSerialAgree",
+        "theChangedListIsTheRecordsThatDiffer",
+        "theSameStateHasTheSameFingerprint"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogCommitScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogCommitScaleTests"
+      ],
+      "tests": [
+        "fourteenThousand",
+        "hundredThousand",
+        "richDetection"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverWriteSideTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitterTests",
+        "CatalogSwitchTests"
+      ],
+      "tests": [
+        "busyRefusesFirst",
+        "copiesFollow",
+        "debouncedCommits",
+        "funnelSourceOrder",
+        "funnelsNeverTouchJSON",
+        "holdWaits",
+        "jsonChangedMeanwhile",
+        "latchAfterImport",
+        "noLatchWithoutImport",
+        "notReady",
+        "readOnlyKeepsChanges",
+        "saveNowCommits"
       ]
     }
   ],
@@ -31454,6 +31534,10 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/DisplayValueDerivationTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogChangeDetectorTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 2418,
@@ -32147,6 +32231,14 @@
         {
           "name": "VideoScan/VideoScanTests/CatalogCutoverReadSideTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogCutoverWriteSideTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 32,
@@ -32363,6 +32455,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadScaleTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Commit/CatalogCommitScaleTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],

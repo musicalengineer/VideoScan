@@ -18,7 +18,12 @@
 //                  and catalog.json opens READ-ONLY (two writable
 //                  authorities is the lost-update class the generation
 //                  guard exists for).
-// Nothing in this batch writes the latch; nothing here writes catalog.json.
+// Only "Switch Catalog to SQLite…" (CatalogSwitchToSQLite.swift, B2) writes
+// the latch; nothing here writes catalog.json. B2: under `.sqlite` the
+// repository stays OPEN for the session and the save funnels commit
+// through it (CatalogCommitter); the Master Archive designation is read
+// from `catalog_state` (catalog.json's only while the store has none yet —
+// the first commit moves it in).
 //
 // The model's init is synchronous (it always was: catalog.json loads on
 // the main thread at launch), and the store is async, so the launch waits
@@ -40,7 +45,7 @@ enum CatalogAuthority: Equatable, Sendable {
     case refused(String)
 
     static let databaseFileName = CatalogImporter.Inputs.databaseFileName
-    /// Written ONLY by the explicit "Switch to SQLite" door (a later batch).
+    /// Written ONLY by the explicit "Switch Catalog to SQLite…" door (B2).
     static let latchFileName = "catalog.cutover"
 
     /// The launch rule. Reads; writes nothing but what `open` itself does
@@ -74,6 +79,35 @@ enum CatalogAuthority: Equatable, Sendable {
     /// The words a refusal shows (console, catalog.log, videoscan.log).
     static func readOnlyWords(_ why: String) -> String {
         "SQLite catalog refused — \(why). catalog.json is open READ-ONLY: nothing will be saved this session."
+    }
+}
+
+/// The launch's read of catalog.sqlite: open, display pass + snapshot, the
+/// designation — and the repository, left OPEN for the session's commits.
+struct SQLiteLaunchRead: Sendable {
+    let repository: GRDBCatalogRepository
+    let opened: CatalogOpenOutcome
+    let snapshot: CatalogLoad.Snapshot
+    let designationJSON: String?
+
+    static func read(_ url: URL) async -> Result<SQLiteLaunchRead, CatalogLoad.Failure> {
+        let repository = GRDBCatalogRepository()
+        let opened = await repository.open(at: url)
+        if case .refused(let reason) = opened {
+            await repository.close()
+            return .failure(.readFailed("\(CatalogAuthority.databaseFileName) would not open: \(reason)"))
+        }
+        do {
+            let snapshot = try await CatalogLoad.read(repository)
+            let designation = try await repository.read { try $0.masterArchiveJSON() }
+            return .success(SQLiteLaunchRead(repository: repository, opened: opened, snapshot: snapshot, designationJSON: designation))
+        } catch let failure as CatalogLoad.Failure {
+            await repository.close()
+            return .failure(failure)
+        } catch {
+            await repository.close()
+            return .failure(.readFailed(String(describing: error)))
+        }
     }
 }
 
@@ -127,51 +161,60 @@ extension VideoScanModel {
     }
 
     /// The records from catalog.sqlite; any failure falls to the JSON
-    /// catalog READ-ONLY with the words.
+    /// catalog READ-ONLY with the words. On success the repository stays
+    /// open: it is the committer's for the session.
     private func loadFromSQLite(_ url: URL) -> [VideoRecord] {
-        let read: Result<CatalogLoad.Snapshot, CatalogLoad.Failure> = CatalogLaunchWait.run {
-            let repository = GRDBCatalogRepository()
-            if case .refused(let reason) = await repository.open(at: url) {
-                await repository.close()
-                return .failure(.readFailed("\(CatalogAuthority.databaseFileName) would not open: \(reason)"))
-            }
-            do {
-                let snapshot = try await CatalogLoad.read(repository)
-                await repository.close()
-                return .success(snapshot)
-            } catch let failure as CatalogLoad.Failure {
-                await repository.close()
-                return .failure(failure)
-            } catch {
-                await repository.close()
-                return .failure(.readFailed(String(describing: error)))
-            }
-        }
+        let read: Result<SQLiteLaunchRead, CatalogLoad.Failure> = CatalogLaunchWait.run { await SQLiteLaunchRead.read(url) }
         switch read {
         case .failure(let failure):
             return loadJSONReadOnly(failure.words)
-        case .success(let snapshot):
+        case .success(let launch):
             do {
-                let result = try SQLiteCatalogLoader.build(snapshot)
-                adoptSQLiteAuthority()
+                let result = try SQLiteCatalogLoader.build(launch.snapshot)
+                adoptSQLiteAuthority(launch, url: url, records: result.records)
                 catalogAuthorityNote("OUTCOME loaded \(result.summary)")
                 return result.records
             } catch {
+                CatalogLaunchWait.run { await launch.repository.close() }
                 return loadJSONReadOnly("a row could not become a record: \(error)")
             }
         }
     }
 
-    /// SQLite is the authority: catalog.json is read for the Master Archive
-    /// designation it still carries (it moves into the store with the write
-    /// side, B2) and is never written again. Until the write side lands the
-    /// session saves nothing, and says so — which is why only B2's "Switch to
-    /// SQLite" door may write the latch.
-    private func adoptSQLiteAuthority() {
+    /// SQLite is the authority: catalog.json is frozen (read-only, never
+    /// written again); the save funnels commit through `CatalogCommitter`
+    /// into the open repository. The designation comes from catalog_state;
+    /// while the store has none, catalog.json's is kept and the first commit
+    /// moves it in. The baseline is taken NOW, before the launch-time
+    /// migrations run, and one commit is scheduled so what they change lands.
+    private func adoptSQLiteAuthority(_ launch: SQLiteLaunchRead, url: URL, records: [VideoRecord]) {
         _ = catalogStore.load()
         catalogStore.isReadOnly = true
-        isReadOnly = true
-        catalogAuthorityNote("catalog.json is frozen (read-only); edits are not saved until the SQLite write side is installed")
+        if let stored = CatalogCommitter.designation(fromJSON: launch.designationJSON) {
+            catalogStore.masterArchive = stored
+        }
+        let committer = CatalogCommitter(repository: launch.repository, storedDesignationJSON: launch.designationJSON,
+                                         input: { [weak self] in self?.catalogCommitInput() ?? CatalogCommitter.Input(
+                                             records: [], designation: nil, clearAuthorized: false, holdReason: nil) },
+                                         sink: { [weak self] line in self?.catalogAuthorityNote(line) })
+        committer.adoptBaseline(records)
+        committer.onCopiesUpdated = { [weak self] in self?.noteCatalogMutated() }
+        if case .readOnly(let reason) = launch.opened {
+            committer.block("read-only: \(reason)")
+            isReadOnly = true
+            catalogAuthorityNote("catalog.sqlite opened READ-ONLY — \(reason). Nothing will be saved this session.")
+        } else {
+            isReadOnly = false
+            committer.scheduleCommit()
+            catalogAuthorityNote("catalog.json is frozen (read-only); every save now commits to \(url.lastPathComponent)")
+        }
+        catalogCutover.install(committer, databaseURL: url)
+    }
+
+    /// What the committer reads at the moment of a commit.
+    func catalogCommitInput() -> CatalogCommitter.Input {
+        CatalogCommitter.Input(records: records, designation: masterArchive,
+                               clearAuthorized: catalogStore.designationClearAuthorized, holdReason: catalogStore.writeHold)
     }
 
     private func loadJSONReadOnly(_ why: String) -> [VideoRecord] {

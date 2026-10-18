@@ -258,8 +258,8 @@ public actor GRDBCatalogRepository: CatalogRepository {
             guard try db.tableExists("catalog_state") else { return nil }
             return try Int.fetchOne(db, sql: "SELECT schema_version FROM catalog_state WHERE singleton = 1")
         }
-        if let found, found > CatalogBookkeepingSchema.schemaVersion {
-            throw Refusal(reason: "schema version \(found) is newer than this build understands (\(CatalogBookkeepingSchema.schemaVersion)) — open it with a newer VideoScan")
+        if let found, found > currentSchemaVersion {
+            throw Refusal(reason: "schema version \(found) is newer than this build understands (\(currentSchemaVersion)) — open it with a newer VideoScan")
         }
     }
 
@@ -308,8 +308,20 @@ public actor GRDBCatalogRepository: CatalogRepository {
                 try db.execute(sql: statement)
             }
         }
+        // Cutover B2 (v1.7): additive — one table for the app's live writes,
+        // and the version raised so an older build refuses the file.
+        migrator.registerMigration(CatalogLiveWritesSchema.migrationID, foreignKeyChecks: .immediate) { db in
+            for statement in CatalogLiveWritesSchema.statements + CatalogLiveWritesSchema.versionBump {
+                try db.execute(sql: statement)
+            }
+        }
         return migrator
     }
+
+    /// The `catalog_state.schema_version` a fully migrated database carries
+    /// (v1 creates 7; `v3_live_writes` raises it to 8). A HIGHER number is a
+    /// newer build's file and is refused at open.
+    static let currentSchemaVersion = CatalogLiveWritesSchema.schemaVersion
 
     private static func migrationsComplete(_ pool: DatabasePool, host: String) async throws -> Bool {
         let migrator = migrator(host: host)
@@ -607,7 +619,7 @@ public actor GRDBCatalogRepository: CatalogRepository {
         let states = try Int.fetchOne(db, sql: "SELECT count(*) FROM catalog_state") ?? 0
         if states != 1 { problems.append("catalog_state has \(states) rows, not 1") }
         let version = try Int.fetchOne(db, sql: "SELECT schema_version FROM catalog_state WHERE singleton = 1") ?? -1
-        if version != CatalogBookkeepingSchema.schemaVersion { problems.append("schema_version is \(version), expected \(CatalogBookkeepingSchema.schemaVersion)") }
+        if version != currentSchemaVersion { problems.append("schema_version is \(version), expected \(currentSchemaVersion)") }
         let counters = try Int.fetchOne(db, sql: "SELECT count(*) FROM generations") ?? 0
         if counters != 1 { problems.append("generations has \(counters) rows, not 1") }
         let generation = try Int.fetchOne(db, sql: "SELECT generation FROM generations WHERE id = 1") ?? -1

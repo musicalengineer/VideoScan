@@ -1134,6 +1134,8 @@ struct CatalogView: View {
             ImportToSQLiteConfirmSheet(request: request)
                 .environmentObject(model)
         }
+        // Cutover B2: Catalog ▸ Switch Catalog to SQLite… (CatalogSwitchToSQLite.swift).
+        .modifier(CatalogSwitchSheetHost(model: model, cutover: model.catalogCutover))
         // Update Catalog (2026-08-17): the ONE door for "files were moved /
         // renamed outside the app". Opened from the Catalog menu, the
         // volume-rename badge, the "looks moved" banner and the target

@@ -6,8 +6,8 @@
 // the importer's DTO of the JSON row, class by class, for every main-table
 // shape; quarantined shapes do NOT become records; the two copies whose
 // curated values disagree load with those fields EMPTY; a row with all 129
-// keys set round-trips every class but the two pair fields the importer
-// does not keep (pinned, so a fix flips the test). SCALE: 100k rows load
+// keys set round-trips every class (v1.7: the pair confidence and the
+// Combine link ride a row_knowledge 'pair' row — B1's pin, flipped). SCALE: 100k rows load
 // within a load-aware budget.
 //
 // Suites (filter by SUITE): CatalogLoadRoundTripTests · CatalogLoadScaleTests
@@ -36,20 +36,20 @@ struct CatalogLoadRoundTripTests {
             let ordinal = try #require(scene.fixture.ordinals(of: shape).first)
             let original = try importedDTO(scene, ordinal: ordinal)
             let back = try loaded.dto(PoisonedCatalogFixture.id(shape))
-            for c in KeptFields.classes(original, back) where c.name != "legacy pair ids" {
+            for c in KeptFields.classes(original, back) {
                 #expect(c.equal, "\(shape.rawValue): \(c.name)")
             }
         }
     }
 
-    @Test("the pair ids round-trip; the pair CONFIDENCE does not (the importer keeps only the ids — pinned)")
-    func pairIDsRoundTripConfidenceDoesNot() async throws {
+    @Test("the pair ids AND the pair confidence round-trip (v1.7: the link the ids table cannot hold is a row_knowledge 'pair' row)")
+    func pairIDsAndConfidenceRoundTrip() async throws {
         let scene = try ImporterScene.make(); defer { scene.remove() }
         let loaded = try await Self.importAndLoad(scene)
         let back = try loaded.dto(PoisonedCatalogFixture.id(.stalePrint))
         #expect(back.legacyPairIDs?.pairGroupID == PoisonedCatalogFixture.pairGroupID)
         #expect(back.legacyPairIDs?.pairedWithID == PoisonedCatalogFixture.id(.healthy))
-        #expect(back.legacyPairIDs?.pairConfidence == nil, "catalog.json said High; legacy_pair_ids has no column for it")
+        #expect(back.legacyPairIDs?.pairConfidence == "High")
     }
 
     @Test("quarantined shapes never become records; the open quarantine is counted")
@@ -101,7 +101,7 @@ struct CatalogLoadRoundTripTests {
         #expect(second.snapshot.generation == first.snapshot.generation)
     }
 
-    @Test("a row with all 129 keys set: every kept class round-trips except the pair confidence and combined-from id (pinned)")
+    @Test("a row with all 129 keys set: every kept class round-trips, the pair confidence and combined-from id included (v1.7)")
     func theRichRowRoundTrips() async throws {
         let scene = try ImporterScene.make(); defer { scene.remove() }
         let id = try #require(UUID(uuidString: PoisonedCatalogFixture.id(.healthy)))
@@ -116,13 +116,11 @@ struct CatalogLoadRoundTripTests {
         let ordinal = try #require(scene.fixture.ordinals(of: .healthy).first)
         let original = try importedDTO(scene, ordinal: ordinal)
         let back = try loaded.dto(id.uuidString)
-        for c in KeptFields.classes(original, back) where c.name != "legacy pair ids" {
+        for c in KeptFields.classes(original, back) {
             #expect(c.equal, Comment(rawValue: c.name))
         }
-        #expect(back.legacyPairIDs?.pairedWithID == original.legacyPairIDs?.pairedWithID)
-        #expect(back.legacyPairIDs?.pairGroupID == original.legacyPairIDs?.pairGroupID)
-        #expect(back.legacyPairIDs?.pairConfidence == nil, "not kept by the importer: Correlate re-derives it")
-        #expect(back.legacyPairIDs?.combinedFromPairID == nil, "not kept by the importer: a Combine output loses its link")
+        #expect(back.legacyPairIDs?.pairConfidence == "High")
+        #expect(back.legacyPairIDs?.combinedFromPairID == original.legacyPairIDs?.combinedFromPairID)
         let record = try #require(loaded.records[id.uuidString])
         #expect(record.derivedProvenanceUnverified == false, "the flag is the app's to set from the row's count")
         let loadedRow = try #require(loaded.snapshot.rows.first { $0.file.id == id.uuidString })

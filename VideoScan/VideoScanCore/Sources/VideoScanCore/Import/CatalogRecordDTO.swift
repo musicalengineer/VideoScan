@@ -131,6 +131,11 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
     public var derivedUnverified: [DerivedValueRow]
     public var regenContext: [RegenContextRow]
     public var legacyPairIDs: LegacyPairIDsRow?
+    /// The whole A/V link (ids, confidence, Combine source) whenever ANY of
+    /// the four is set — v1.7 `row_knowledge` 'pair'. A Combine output
+    /// carries only `combinedFromPairID`, which `legacy_pair_ids` (a pair id
+    /// is required there) cannot hold.
+    public var pairLink: LegacyPairIDsRow?
     public var duplicateMember: DuplicateMemberRow?
     /// The whole row, verbatim (`quarantine.raw_row`).
     public var raw: [String: CatalogJSONValue]
@@ -174,6 +179,7 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
         derivedUnverified = Self.derivedValueRows(raw: r.raw)
         regenContext = Self.regenContextRows(raw: r.raw)
         legacyPairIDs = LegacyPairIDsRow(record: r)
+        pairLink = LegacyPairIDsRow(link: r)
         duplicateMember = r.duplicateGroupID.map { DuplicateMemberRow(record: r, groupID: $0) }
         raw = r.raw
         undecodable = r.undecodable

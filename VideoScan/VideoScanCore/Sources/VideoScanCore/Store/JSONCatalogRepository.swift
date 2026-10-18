@@ -110,6 +110,10 @@ struct JSONReader: CatalogReader {
     func finishedImports() throws -> Int { throw unsupported }
     func displayTablesEmpty() throws -> Bool { throw unsupported }
     func displaySources(_ visit: (DisplayValueDerivation.Source) throws -> Void) throws { throw unsupported }
+    func storedRow(id: String) throws -> CatalogLoadedRow? { throw unsupported }
+    func volumeCaseSensitive(_ volumeUUID: String) throws -> Bool { throw unsupported }
+    func masterArchiveJSON() throws -> String? { throw unsupported }
+    func lastFinishedImport() throws -> CatalogRow.FinishedImport? { throw unsupported }
 }
 
 // MARK: - Header probe

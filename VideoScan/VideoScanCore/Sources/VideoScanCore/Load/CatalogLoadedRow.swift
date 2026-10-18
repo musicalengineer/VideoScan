@@ -21,7 +21,9 @@
 //                       repairConfirmedDate, and archivedAt when the row has
 //                       no archive copy
 //   footageDecisions    footage_decisions (row_id)
-//   pair                legacy_pair_ids of the occurrence
+//   pair                legacy_pair_ids of the occurrence, then the newest
+//                       row_knowledge 'pair' link (v1.7: confidence + the
+//                       Combine link; the app's later pair edits)
 //   duplicate           duplicate_members ⋈ duplicate_groups (+ member count)
 //   derived             bound tables by digest, else the row's own
 //                       derived_unverified values (`unverifiedDerived` counts
@@ -52,14 +54,19 @@ public struct CatalogLoadedRow: Sendable, Equatable {
         public init() {}
     }
 
-    /// `legacy_pair_ids`, verbatim.
+    /// `legacy_pair_ids`, verbatim; then the newest `row_knowledge` 'pair'
+    /// link (v1.7), which also carries the confidence and the Combine link.
     public struct PairIDs: Sendable, Equatable {
         public var pairedWithID: String?
         public var pairGroupID: String?
+        public var pairConfidence: String?
+        public var combinedFromPairID: String?
 
-        public init(pairedWithID: String?, pairGroupID: String?) {
+        public init(pairedWithID: String?, pairGroupID: String?, pairConfidence: String? = nil, combinedFromPairID: String? = nil) {
             self.pairedWithID = pairedWithID
             self.pairGroupID = pairGroupID
+            self.pairConfidence = pairConfidence
+            self.combinedFromPairID = combinedFromPairID
         }
     }
 

@@ -23,6 +23,11 @@
 // values of that kind (keyed by the row id — the value this row carried in
 // catalog.json, never a sibling's).
 //
+// Cutover B2 (v1.7): the row-scoped values and the pair link are read from
+// the import's evidence AND then from `row_knowledge` (newest entry per
+// field wins; JSON null = cleared). `storedRow(id:)` is the same read for
+// ONE row — what a commit compares the record against.
+//
 // (For Rick: a sort-merge join written by hand — N sorted cursors advanced in
 // lock-step, like merging sorted files on tape.)
 
@@ -43,6 +48,33 @@ extension GRDBRecordHandle {
             try groups.fill(&loaded)
             try visit(loaded)
         }
+    }
+
+    func storedRow(id: String) throws -> CatalogLoadedRow? {
+        guard let row = try Row.fetchOne(db, sql: LoadSQL.oneRow, arguments: [id]) else { return nil }
+        var loaded = LoadSQL.loadedRow(row)
+        try LoadRowMaps(db, only: id).fill(&loaded)
+        if let digest = loaded.file.contentDigest {
+            var groups = try LoadDigestGroups(db, only: digest)
+            try groups.fill(&loaded)
+        }
+        return loaded
+    }
+
+    func volumeCaseSensitive(_ volumeUUID: String) throws -> Bool {
+        try Int.fetchOne(db, sql: "SELECT case_sensitive FROM volumes WHERE volume_uuid = ?", arguments: [volumeUUID]) == 1
+    }
+
+    func masterArchiveJSON() throws -> String? {
+        try String.fetchOne(db, sql: "SELECT master_archive FROM catalog_state WHERE singleton = 1")
+    }
+
+    func lastFinishedImport() throws -> CatalogRow.FinishedImport? {
+        guard let r = try Row.fetchOne(db, sql: """
+            SELECT run_id, finished_at, source_sha256, source_generation FROM import_runs
+             WHERE finished_at IS NOT NULL AND comparator_ok = 1 ORDER BY finished_at DESC, run_id DESC LIMIT 1
+            """) else { return nil }
+        return CatalogRow.FinishedImport(runID: r[0], finishedAt: r[1], sourceSHA256: r[2], sourceGeneration: r[3])
     }
 
     func finishedImports() throws -> Int {
@@ -100,7 +132,7 @@ enum LoadSQL {
         f.audit_seen_volume_uuid, f.audit_seen_mount_from, f.audit_seen_device_key, f.audit_seen_at, f.catalogued_at
         """
 
-    static let main = """
+    private static let select = """
         SELECT \(fileColumns),
                v.last_name, v.mount_type, v.remote_server,
                ac.file_id, ac.source_row_id, ac.archived_at, ac.fixity_verified_at, ac.promoted_by,
@@ -128,8 +160,13 @@ enum LoadSQL {
           LEFT JOIN family_music fm ON fm.digest = f.content_digest
           LEFT JOIN import_items ii ON ii.source_file = 'catalog.json' AND ii.landed_table = 'files' AND ii.landed_ref = f.id
           LEFT JOIN legacy_pair_ids lp ON lp.import_run = ii.import_run AND lp.source_ordinal = ii.source_ordinal
-         ORDER BY f.content_digest, f.id
         """
+
+    /// Every `files` row, copies of one content consecutive.
+    static let main = select + "\n ORDER BY f.content_digest, f.id"
+
+    /// One `files` row by id (a commit's read-back).
+    static let oneRow = select + "\n WHERE f.id = ?"
 
     /// A JSON object column; the common empty `{}` without a parse.
     static func object(_ text: String) -> [String: CatalogJSONValue] {
@@ -176,6 +213,15 @@ enum LoadSQL {
     private static func pair(_ c: inout ColumnCursor) -> CatalogLoadedRow.PairIDs? {
         guard (c.next() as String?) != nil else { return nil }
         return CatalogLoadedRow.PairIDs(pairedWithID: c.next(), pairGroupID: c.next())
+    }
+
+    /// `row_knowledge` 'pair' value → the pair link (an empty object = none).
+    static func pairLink(_ value: CatalogJSONValue) -> CatalogLoadedRow.PairIDs? {
+        guard let object = value.objectValue, !object.isEmpty else { return nil }
+        return CatalogLoadedRow.PairIDs(pairedWithID: object["pairedWithID"]?.stringValue,
+                                        pairGroupID: object["pairGroupID"]?.stringValue,
+                                        pairConfidence: object["pairConfidence"]?.stringValue,
+                                        combinedFromPairID: object["combinedFromPairID"]?.stringValue)
     }
 }
 
@@ -259,28 +305,56 @@ struct LoadRowMaps {
     var backups: [String: [CatalogRecordDTO.BackupDestinationRow]] = [:]
     var decisions: [String: [CatalogRecordDTO.FootageDecisionRow]] = [:]
     var knowledge: [String: [CatalogDDL.KnowledgeField: CatalogJSONValue]] = [:]
+    /// v1.7 `row_knowledge`, newest per (row, field): the row-scoped fields
+    /// and 'pair'. A JSON null is kept (it means "cleared").
+    var written: [String: [String: CatalogJSONValue]] = [:]
 
-    init(_ db: Database) throws {
-        let b = try Row.fetchCursor(db, sql: "SELECT file_id, name, kind, recorded_at FROM backup_destinations ORDER BY file_id, recorded_at, name")
+    /// `only`: one row's maps (a commit's read-back); nil = every row.
+    init(_ db: Database, only fileID: String? = nil) throws {
+        let one = fileID.map { StatementArguments([$0]) } ?? []
+        let b = try Row.fetchCursor(db, sql: """
+            SELECT file_id, name, kind, recorded_at FROM backup_destinations \(fileID == nil ? "" : "WHERE file_id = ?")
+             ORDER BY file_id, recorded_at, name
+            """, arguments: one)
         while let r = try b.next() {
             backups[r[0], default: []].append(CatalogRecordDTO.BackupDestinationRow(name: r[1], kind: r[2], recordedAt: r[3]))
         }
         let d = try Row.fetchCursor(db, sql: """
-            SELECT row_id, other_row_id, verdict, decided_at FROM footage_decisions ORDER BY row_id, decision_id
-            """)
+            SELECT row_id, other_row_id, verdict, decided_at FROM footage_decisions \(fileID == nil ? "" : "WHERE row_id = ?")
+             ORDER BY row_id, decision_id
+            """, arguments: one)
         while let r = try d.next() {
             decisions[r[0], default: []].append(CatalogRecordDTO.FootageDecisionRow(rowID: r[0], otherRowID: r[1], verdict: r[2], decidedAt: r[3]))
         }
-        let fields = CatalogLoadedRow.rowKnowledgeFields.map { "'\($0.rawValue)'" }.joined(separator: ",")
+        try readImportedKnowledge(db, only: fileID)
+        try readWrittenKnowledge(db, only: fileID)
+    }
+
+    private static let rowFields = CatalogLoadedRow.rowKnowledgeFields.map { "'\($0.rawValue)'" }.joined(separator: ",")
+
+    private mutating func readImportedKnowledge(_ db: Database, only fileID: String?) throws {
         let k = try Row.fetchCursor(db, sql: """
             SELECT ii.landed_ref, k.field, k.value_json
               FROM import_items ii
               JOIN knowledge_sources k ON k.import_run = ii.import_run AND k.source_ordinal = ii.source_ordinal
-             WHERE ii.source_file = 'catalog.json' AND ii.landed_table = 'files' AND k.field IN (\(fields))
-            """)
+             WHERE ii.source_file = 'catalog.json' AND ii.landed_table = 'files' AND k.field IN (\(Self.rowFields))
+                   \(fileID == nil ? "" : "AND ii.landed_ref = ?")
+            """, arguments: fileID.map { [$0] } ?? [])
         while let r = try k.next() {
             guard let field = CatalogDDL.KnowledgeField(rawValue: r[1]), let value = CatalogJSONValue.parse(r[2]) else { continue }
             knowledge[r[0], default: [:]][field] = value
+        }
+    }
+
+    private mutating func readWrittenKnowledge(_ db: Database, only fileID: String?) throws {
+        let w = try Row.fetchCursor(db, sql: """
+            SELECT file_id, field, value_json FROM row_knowledge
+             WHERE field IN (\(Self.rowFields), '\(CatalogLiveWritesSchema.pairField)') \(fileID == nil ? "" : "AND file_id = ?")
+             ORDER BY write_id
+            """, arguments: fileID.map { [$0] } ?? [])
+        while let r = try w.next() {
+            guard let value = CatalogJSONValue.parse(r[2]) else { continue }
+            written[r[0], default: [:]][r[1]] = value
         }
     }
 
@@ -289,6 +363,14 @@ struct LoadRowMaps {
         loaded.backupDestinations = backups[id] ?? []
         loaded.footageDecisions = decisions[id] ?? []
         loaded.rowKnowledge = knowledge[id] ?? [:]
+        guard let newer = written[id] else { return }
+        for field in CatalogLoadedRow.rowKnowledgeFields {
+            guard let value = newer[field.rawValue] else { continue }
+            loaded.rowKnowledge[field] = value == .null ? nil : value
+        }
+        if let link = newer[CatalogLiveWritesSchema.pairField] {
+            loaded.pair = LoadSQL.pairLink(link)
+        }
     }
 }
 
@@ -304,8 +386,8 @@ struct DigestRun<Element> {
     private var pending: (digest: String, element: Element)?
     private var last: (digest: String, group: [Element])?
 
-    init(_ db: Database, sql: String, element: @escaping (Row) -> Element) throws {
-        cursor = try Row.fetchCursor(db, sql: sql)
+    init(_ db: Database, sql: String, arguments: StatementArguments = [], element: @escaping (Row) -> Element) throws {
+        cursor = try Row.fetchCursor(db, sql: sql, arguments: arguments)
         self.element = element
     }
 
@@ -330,24 +412,31 @@ struct LoadDigestGroups {
     private var bound: DigestRun<CatalogRecordDTO.DerivedValueRow?>
     private var unverified: DigestRun<(rowID: String, value: CatalogRecordDTO.DerivedValueRow?)>
 
-    init(_ db: Database) throws {
-        tags = try DigestRun(db, sql: "SELECT digest, tag FROM workflow_tags ORDER BY digest, tag") { $0[1] }
+    /// `only`: one digest's groups (a commit's read-back); nil = every digest.
+    init(_ db: Database, only digest: String? = nil) throws {
+        let one: StatementArguments = digest.map { [$0] } ?? []
+        let whereDigest = digest == nil ? "" : "WHERE digest = ?"
+        let andDigest = digest == nil ? "" : "AND digest = ?"
+        tags = try DigestRun(db, sql: "SELECT digest, tag FROM workflow_tags \(whereDigest) ORDER BY digest, tag", arguments: one) { $0[1] }
         people = try DigestRun(db, sql: """
             SELECT digest, name, kind, confirmed_at, conflict FROM people_tags
-             WHERE kind IN ('confirmed','rejected') ORDER BY digest, kind, name
-            """) { r in
+             WHERE kind IN ('confirmed','rejected') \(andDigest) ORDER BY digest, kind, name
+            """, arguments: one) { r in
             (CatalogRecordDTO.PeopleTagRow(name: r[1], kind: CatalogDDL.PeopleTagKind(rawValue: r[2]) ?? .rejected, confirmedAt: r[3]),
              (r[4] as Int64) == 1)
         }
         attestations = try DigestRun(db, sql: """
-            SELECT digest, kind, answer, label, attested_at, by_whom FROM backup_attestations ORDER BY digest, attested_at, kind
-            """) { r in
+            SELECT digest, kind, answer, label, attested_at, by_whom FROM backup_attestations \(whereDigest)
+             ORDER BY digest, attested_at, kind
+            """, arguments: one) { r in
             CatalogRecordDTO.BackupAttestationRow(kind: r[1], answer: r[2], label: r[3], attestedAt: r[4], byWhom: r[5])
         }
-        bound = try DigestRun(db, sql: LoadBoundSQL.union, element: LoadBoundSQL.derived)
+        bound = try DigestRun(db, sql: digest == nil ? LoadBoundSQL.union : LoadBoundSQL.unionForOne, arguments: one,
+                              element: LoadBoundSQL.derived)
         unverified = try DigestRun(db, sql: """
-            SELECT digest, kind, seq, value_json, stamp_json, source_json_row_id FROM derived_unverified ORDER BY digest
-            """) { r in ((r[5] as String), LoadBoundSQL.derived(r)) }
+            SELECT digest, kind, seq, value_json, stamp_json, source_json_row_id FROM derived_unverified \(whereDigest)
+             ORDER BY digest
+            """, arguments: one) { r in ((r[5] as String), LoadBoundSQL.derived(r)) }
     }
 
     mutating func fill(_ loaded: inout CatalogLoadedRow) throws {
@@ -384,7 +473,12 @@ enum LoadBoundSQL {
         "CASE WHEN \(column) IS NULL THEN NULL ELSE strftime('%Y-%m-%dT%H:%M:%SZ', \(column), 'unixepoch') END"
     }
 
-    static let union = """
+    static let union = unionBody + "\nORDER BY 1"
+
+    /// The same rows for ONE digest (bound by `?`).
+    static let unionForOne = "SELECT * FROM (\(unionBody)) WHERE digest = ?"
+
+    private static let unionBody = """
         SELECT digest, kind, seq, json_object('timestamp', at_s, 'text', text), '{}' FROM captions
         UNION ALL
         SELECT digest, 'captionRun', 0, json_object('sceneCaptionModel', model, 'sceneCaptionDate', \(iso("made_at"))), '{}'
@@ -420,7 +514,6 @@ enum LoadBoundSQL {
         SELECT digest, CASE kind WHEN 'detected' THEN 'detectedPerson' ELSE 'suspectedPerson' END,
                row_number() OVER (PARTITION BY digest, kind ORDER BY name) - 1, json_quote(name), '{}'
           FROM people_tags WHERE kind IN ('detected','suspected')
-        ORDER BY 1
         """
 
     /// `(digest, kind, seq, value_json, stamp_json)` → the derived row; nil

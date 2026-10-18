@@ -26,7 +26,13 @@ extension VideoRecordJSON {
 
     /// The importer's reading of what the app would write for `record`.
     public init(record: VideoRecord) throws {
-        let tree = try CatalogJSONValueEncoder().encode(VideoRecordDTO(record))
+        try self.init(snapshot: VideoRecordDTO(record))
+    }
+
+    /// The same from the record's Sendable snapshot (cutover B2: a commit
+    /// takes the snapshot on the main actor and maps it on the store's queue).
+    public init(snapshot: VideoRecordDTO) throws {
+        let tree = try CatalogJSONValueEncoder().encode(snapshot)
         self = try CatalogJSONValueDecoder().decode(VideoRecordJSON.self, from: tree)
     }
 }
@@ -38,5 +44,10 @@ extension CatalogRecordDTO {
     /// never is: the app's decoder already migrated it to a marker).
     public init(record: VideoRecord, migrationLoadedAt: Int64 = Int64(Date().timeIntervalSince1970)) throws {
         self.init(record: try VideoRecordJSON(record: record), migrationLoadedAt: migrationLoadedAt)
+    }
+
+    /// The DTO of a record's snapshot (no main-actor object needed).
+    public init(snapshot: VideoRecordDTO, migrationLoadedAt: Int64 = Int64(Date().timeIntervalSince1970)) throws {
+        self.init(record: try VideoRecordJSON(snapshot: snapshot), migrationLoadedAt: migrationLoadedAt)
     }
 }

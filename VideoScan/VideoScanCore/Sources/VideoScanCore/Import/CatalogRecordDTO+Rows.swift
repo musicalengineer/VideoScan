@@ -383,6 +383,27 @@ extension CatalogRecordDTO.LegacyPairIDsRow {
         self.init(pairedWithID: r.pairedWithID, pairGroupID: r.pairGroupID,
                   pairConfidence: r.pairConfidence, combinedFromPairID: r.combinedFromPairID)
     }
+
+    /// The whole link when any of its four members is set (v1.7 'pair').
+    init?(link r: VideoRecordJSON) {
+        guard r.pairedWithID != nil || r.pairGroupID != nil || r.pairConfidence != nil || r.combinedFromPairID != nil else { return nil }
+        self.init(pairedWithID: r.pairedWithID, pairGroupID: r.pairGroupID,
+                  pairConfidence: r.pairConfidence, combinedFromPairID: r.combinedFromPairID)
+    }
+
+    /// True when `legacy_pair_ids` cannot say all of it (a confidence, or a
+    /// Combine link): the importer then writes the link to `row_knowledge`.
+    public var needsLinkRow: Bool { pairConfidence != nil || combinedFromPairID != nil }
+
+    /// The `row_knowledge` 'pair' value: the set members only.
+    public var linkValue: CatalogJSONValue {
+        var o: [String: CatalogJSONValue] = [:]
+        if let pairedWithID { o["pairedWithID"] = .string(pairedWithID) }
+        if let pairGroupID { o["pairGroupID"] = .string(pairGroupID) }
+        if let pairConfidence { o["pairConfidence"] = .string(pairConfidence) }
+        if let combinedFromPairID { o["combinedFromPairID"] = .string(combinedFromPairID) }
+        return .object(o)
+    }
 }
 
 extension CatalogRecordDTO.DuplicateMemberRow {

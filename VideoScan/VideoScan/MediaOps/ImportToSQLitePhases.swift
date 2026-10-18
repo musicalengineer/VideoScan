@@ -105,6 +105,9 @@ extension VideoScanModel {
     /// hold refuses. `saveCatalogAcknowledged()` is this with nil.
     func saveCatalogAcknowledged(asHoldOwner owner: CatalogWriteHoldOwner?) async -> Bool {
         noteCatalogMutated()
+        // Cutover B2: under catalog.sqlite the committer takes it (the hold's
+        // owner passes, as with the JSON store).
+        if let committer = catalogCutover.committer { return await committer.commitAcknowledged(holder: owner != nil) }
         return await catalogStore.saveAcknowledged(records: records, as: owner)
     }
 }
