@@ -72,6 +72,14 @@ let package = Package(
             dependencies: ["VideoScanCore"],
             swiftSettings: strictConcurrency
         ),
+        // TEST-ONLY (2026-10-18): the child process CatalogHardKillTests
+        // SIGKILLs mid-commit. No product entry: the app links only the
+        // library; `swift build` / `swift test` build it beside the tests.
+        .executableTarget(
+            name: "catalog-crash-helper",
+            dependencies: ["VideoScanCore"],
+            swiftSettings: strictConcurrency
+        ),
         .testTarget(
             name: "VideoScanCoreTests",
             dependencies: ["VideoScanCore"],
