@@ -5,14 +5,14 @@
 // one short sentence; click opens Content Analysis, where the summary
 // band at the top says the same thing with the items behind it.
 //
-//   ● Catalog Status: current · checked today at 02:14   (green: quiet secondary text)
-//   ● Catalog Status: 2 things need attention             (yellow: a run fixes it)
-//   ● Catalog Status: needs a decision — 3 files pointing at nothing… (red)
+//   ● Catalog Status: current            (green: quiet secondary text)
+//   ● Catalog Status: needs attention    (yellow: a run fixes it)
+//   ● Catalog Status: needs a decision   (red)
 //
-// Format (Rick 2026-10-16): "Catalog Status: <briefly what it needs>", at
-// the totals strip's own 15pt mono register so it reads as one of the
-// figures, not as chrome. The words are CatalogStatusWords.chipWords over
-// the summary — the same sentence the band's headline carries.
+// Format (Rick 2026-10-16, shortened 2026-10-18 so it ends under the Files
+// column): "Catalog Status: <colour in words>", at the totals strip's own
+// 15pt mono register so it reads as one of the figures, not as chrome. The
+// headline rides in the tooltip; the items are one click away.
 //
 // OBSERVATION: the chip observes the model's CatalogFreshnessSnapshot and
 // nothing else (equality-gated, published once per debounced catalog

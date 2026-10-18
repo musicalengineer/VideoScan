@@ -311,25 +311,26 @@ struct CatalogStatusWordsTests {
         CatalogFreshnessState.judged(rows: rows, now: now, wording: wording)
     }
 
-    @Test func greenChipReadsThePresenceClock() {
+    @Test func greenChipSaysCurrent() {
         let s = state([
             FreshnessRow(kind: "filePresence", title: "File Presence", eligible: 3, covered: 3,
                          lastCompleted: now.addingTimeInterval(-1_800), lastOutcome: .ok, cadence: .seconds(86_400)),
             FreshnessRow(kind: "fullHashes", title: "Full Hashes", eligible: 3, covered: 3, lastOutcome: .ok),
         ])
         #expect(s.summary.colour == .green)
-        #expect(CatalogStatusWords.chipWords(s) == "current · checked 30 minutes ago")
+        #expect(CatalogStatusWords.chipWords(s) == "current")
         #expect(CatalogStatusWords.menuTitle(s.summary.colour) == "Catalog Status…")
     }
 
-    @Test func yellowAndRedChipsReadTheHeadline() {
+    @Test func yellowAndRedChipsAreShort() {
         let yellow = state([
             FreshnessRow(kind: "fullHashes", title: "Full Hashes", eligible: 700, covered: 40, lastOutcome: .ok,
                          phrases: CatalogFreshnessRows.phrases(.fullHashes)),
             FreshnessRow(kind: "soundPrints", title: "Sound Prints", eligible: 20, covered: 8, lastOutcome: .ok,
                          phrases: CatalogFreshnessRows.phrases(.soundPrints)),
         ])
-        #expect(CatalogStatusWords.chipWords(yellow) == "2 things need attention")
+        #expect(CatalogStatusWords.chipWords(yellow) == "needs attention")
+        #expect(yellow.summary.headline == "2 things need attention")
         #expect(CatalogStatusWords.menuTitle(yellow.summary.colour) == "Catalog Status — needs attention…")
         #expect(yellow.summary.items.map(\.words) == ["660 files without a full hash", "12 files without a sound print"])
 
@@ -338,7 +339,7 @@ struct CatalogStatusWordsTests {
                          lastCompleted: now, lastOutcome: .ok, needsDecision: 3, cadence: .seconds(86_400),
                          phrases: CatalogFreshnessRows.phrases(.filePresence)),
         ])
-        #expect(CatalogStatusWords.chipWords(red) == "needs a decision — 3 files pointing at nothing or changed on disk — look at Fix Links")
+        #expect(CatalogStatusWords.chipWords(red) == "needs a decision")
         #expect(CatalogStatusWords.menuTitle(.red) == "Catalog Status — needs a decision…")
         #expect(CatalogStatusWords.launchLine(red.summary).hasPrefix("Needs a decision: 3 files pointing at nothing"))
         #expect(CatalogStatusWords.launchLine(red.summary).hasSuffix("Catalog ▸ Catalog Status… lists the doors."))
@@ -348,7 +349,7 @@ struct CatalogStatusWordsTests {
         #expect(CatalogStatusWords.chipWords(CatalogFreshnessState()) == "checking…")
         let grey = state([FreshnessRow(kind: "fullHashes", title: "Full Hashes", offline: 5)])
         #expect(grey.summary.colour == .grey)
-        #expect(CatalogStatusWords.chipWords(grey) == "Nothing to check — drives not mounted")
+        #expect(CatalogStatusWords.chipWords(grey) == "nothing to check")
     }
 
     /// ONE button per item (§2.1), from the reason.

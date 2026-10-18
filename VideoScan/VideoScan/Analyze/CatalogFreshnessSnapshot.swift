@@ -183,32 +183,18 @@ enum CatalogStatusWords {
 
     static let chipPrefix = "Catalog Status: "
 
-    /// What follows "Catalog Status: " on the totals strip. Green reads the
-    /// File Presence row's own "current · checked …" (the one row with a
-    /// clock); yellow/red read the headline, lowered to sit after the
-    /// prefix ("needs a decision — 3 files …"); grey keeps its headline.
+    /// What follows "Catalog Status: " on the totals strip: the colour in
+    /// two or three words, so the chip ends under the Files column (Rick
+    /// 2026-10-18). The headline and the items live in the tooltip and in
+    /// Content Analysis, one click away.
     static func chipWords(_ state: CatalogFreshnessState) -> String {
         guard state.isComputed else { return "checking…" }
         switch state.summary.colour {
-        case .green:
-            if let presence = state.verdict(.filePresence), presence.colour == .green { return presence.words }
-            return "current"
-        case .yellow, .red:
-            return afterPrefix(state.summary.headline)
-        case .grey:
-            return state.summary.headline
+        case .green: return "current"
+        case .yellow: return "needs attention"
+        case .red: return "needs a decision"
+        case .grey: return "nothing to check"
         }
-    }
-
-    /// "Needs a decision: 3 files …" → "needs a decision — 3 files …";
-    /// "2 things need attention" is already fine after the prefix.
-    static func afterPrefix(_ headline: String) -> String {
-        var s = headline
-        if let first = s.first, first.isUppercase, !first.isNumber {
-            s = first.lowercased() + s.dropFirst()
-        }
-        if let colon = s.range(of: ": ") { s.replaceSubrange(colon, with: " — ") }
-        return s
     }
 
     /// Catalog ▸ "Catalog Status…" carries the colour word when not green.
