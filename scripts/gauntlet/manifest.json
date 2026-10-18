@@ -29031,6 +29031,33 @@
         "trashEmptiedBumps",
         "trashThenUndo"
       ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverRegressionTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CutoverFirstWeekEditsTests",
+        "CutoverRemovalTests",
+        "CutoverNewRowTests",
+        "CutoverArchiveTests",
+        "CutoverHoldTests",
+        "CutoverSwitchRestoreTests",
+        "CutoverManyEditsTests"
+      ],
+      "tests": [
+        "copiesShareEditsAndLaterEditWins",
+        "curatedEditsSurviveRelaunch",
+        "editDuringHoldLands",
+        "fiftyEditsTenWindows",
+        "newFileBeforeAndAfterHash",
+        "promotedCopySurvives",
+        "purgedRowStaysGone",
+        "restoreThenAdopt",
+        "switchCarriesPendingEdit",
+        "trashUndoEmptied"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32373,6 +32400,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogCutoverB21Tests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogCutoverRegressionTests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
