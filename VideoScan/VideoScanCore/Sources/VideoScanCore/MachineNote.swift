@@ -97,6 +97,47 @@ public enum MachineNote {
         return "\(author): \(trimmed)"
     }
 
+    // MARK: Rescan (codex 2026-10-18 F2)
+
+    /// True when `line` is a PROBE DIAGNOSTIC: what a scan's probe of the
+    /// file says about it today (ffprobe stderr, scan-engine diagnosis —
+    /// signed or legacy). Every scan re-derives these, so a rescan's fresh
+    /// probe replaces them. Everything else in `notes` is HISTORY a scan
+    /// cannot re-derive and must keep: File Journey stamps (including the
+    /// scan-authored Reconcile / Migrate / Confirm), Combine, recipe,
+    /// cleanup, promote, the document-ingest stamp, and any legacy line no
+    /// classifier recognizes (it may be a person's).
+    public static func isProbeDiagnostic(_ line: Substring) -> Bool {
+        let trimmed = line.drop(while: { $0 == " " || $0 == "\t" })
+        if journeyStampVerb(trimmed) != nil { return false }
+        switch author(of: trimmed) {
+        case Author.ffprobe.rawValue?:
+            return true
+        case Author.scan.rawValue?:
+            let key = trimmed.lowercased()
+            return !(key.hasPrefix("added as a document") || key.hasPrefix("scan: added as a document"))
+        default:
+            return false
+        }
+    }
+
+    /// `notes` for a record carried across a rescan: the kept record's
+    /// HISTORY lines (its previous probe diagnostics dropped — this scan
+    /// re-derived them), then the probe diagnostics in `fresh`. Taking only
+    /// the probe lines from `fresh` makes a second carry onto the same
+    /// record (snapshot first, live re-read at the merge) exact: the first
+    /// carry's history is replaced, never doubled. Pure.
+    public static func rescanMerged(kept: String, fresh: String) -> String {
+        var merged = ""
+        for line in kept.split(separator: "\n") where !isProbeDiagnostic(line) {
+            merged = append(String(line), to: merged)
+        }
+        for line in fresh.split(separator: "\n") where isProbeDiagnostic(line) {
+            merged = append(String(line), to: merged)
+        }
+        return merged
+    }
+
     // MARK: Tables (legacy unsigned shapes — every one seen in the live
     // catalog census of 2026-09-11 or produced by a writer in the tree)
 

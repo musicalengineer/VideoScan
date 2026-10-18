@@ -732,6 +732,14 @@ extension VideoScanModel {
     /// O(records + targetRecords), no I/O and no await. This is the atomic
     /// compare/copy section in C++ terms: once it starts on the MainActor,
     /// another actor task cannot interleave before the array replacement.
+    /// Which of two rows at one path speaks for the file now: 2 = active,
+    /// 1 = removed by the person or the app (Trash, missing, purged), 0 = a
+    /// `replacedAtPath` row — history kept beside its successor.
+    static func sharedPathRank(_ rec: VideoRecord) -> Int {
+        guard let removal = rec.removal else { return 2 }
+        return removal.reason == .replacedAtPath ? 0 : 1
+    }
+
     @discardableResult
     func reconcileLivePreservedFieldsBeforeReplacement(
         root: String,
@@ -745,9 +753,12 @@ extension VideoScanModel {
             && wantedPaths.contains(old.fullPath)
         {
             // Two rows can share a path (a `replacedAtPath` row kept beside
-            // its live successor): the ACTIVE one is the person's truth — a
-            // stale removal marker must never ride onto the fresh record.
-            if let held = liveByPath[old.fullPath], held.removal == nil, old.removal != nil { continue }
+            // its successor): the successor is the person's truth — even
+            // once it is Trashed itself (codex 2026-10-18 F1). Rank, never
+            // array order: active › removed › replacedAtPath history; equal
+            // ranks keep the last, as the snapshot does.
+            if let held = liveByPath[old.fullPath],
+               Self.sharedPathRank(held) > Self.sharedPathRank(old) { continue }
             liveByPath[old.fullPath] = old
         }
 

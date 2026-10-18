@@ -263,6 +263,148 @@ struct AdvRescanEditDuringScanTests {
         Self.expectCurated(fresh, "active row at a shared path")
     }
 
+    /// Codex 2026-10-18 F1 (P1): the CURRENT row at a shared path is Trashed
+    /// during the scan, so both rows carry a removal marker. The successor's
+    /// edit and its Trash marker must still win over the historical
+    /// `replacedAtPath` row behind it — never array order.
+    @Test func trashedSuccessorStillBeatsAReplacedRowAtTheSamePath() async throws {
+        let root = try Self.makeRoot("dup_trash"); defer { try? FileManager.default.removeItem(at: root) }
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: root.path)
+        let path = root.appendingPathComponent("balanced.mov").path
+        let active = Self.curatedRecord(path: path)
+        let replaced = Self.curatedRecord(path: path)
+        replaced.userNotes = "the replaced row's old note"
+        replaced.removal = .removedFromCatalog(at: Self.editedAt, reason: .replacedAtPath)
+        model.records = [active, replaced]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        Self.curate(active, in: model)
+        let trash = RemovalMarker.inTrash(movedAt: Self.editedAt, trashPath: "/Users/x/.Trash/balanced.mov",
+                                          reason: .unspecified)
+        active.removal = trash
+        let fresh = Self.freshProbe(path: path)
+        model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        _ = await model.commitScanResults(root: root.path, volName: "Adv",
+                                          targetRecords: [fresh], scanWasComplete: false)
+
+        #expect(fresh.removal == trash, "the successor's own Trash marker lands, not the history row's")
+        Self.expectCurated(fresh, "Trashed successor at a shared path")
+    }
+
+    /// Codex 2026-10-18 F2 (P2): a plain record gets its first star while
+    /// the scan runs; the fresh probe wrote a diagnostic into `notes`. The
+    /// star lands AND the fresh diagnostic survives.
+    @Test func firstStarDuringTheScanKeepsTheFreshProbeNote() async throws {
+        let root = try Self.makeRoot("probe_note"); defer { try? FileManager.default.removeItem(at: root) }
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: root.path)
+        let plain = Self.freshProbe(path: root.appendingPathComponent("broken.mov").path, codec: "h264-OLD")
+        model.records = [plain]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        plain.starRating = 2
+        let fresh = Self.freshProbe(path: plain.fullPath, codec: "", sizeBytes: 7)
+        fresh.notes = MachineNote.line(author: .ffprobe, text: "moov atom not found")
+        model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        _ = await model.commitScanResults(root: root.path, volName: "Adv",
+                                          targetRecords: [fresh], scanWasComplete: false)
+
+        #expect(fresh.starRating == 2)
+        #expect(fresh.notes == "ffprobe: moov atom not found", "the fresh probe's diagnostic survives the live carry")
+    }
+
+    /// F2, the precise split of `notes`: the machine HISTORY lines on the
+    /// live record (File Journey stamps, Combine, relink stamps) are kept;
+    /// the PREVIOUS scan's probe diagnostics are replaced by this scan's.
+    @Test func notesKeepHistoryAndTakeThisScansProbeDiagnostics() async throws {
+        let root = try Self.makeRoot("probe_split"); defer { try? FileManager.default.removeItem(at: root) }
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: root.path)
+        let live = Self.curatedRecord(path: root.appendingPathComponent("tape.mov").path)
+        let promote = "Promote 2026-09-01T10:00:00Z: copied to the Master Archive"
+        let combine = "Combined: video tape.mxf + audio tape_a1.mxf"
+        live.notes = [promote, "ffprobe: Unsupported codec with id 0 for input stream 1", combine,
+                      "scan: File could not be analyzed — truncated"].joined(separator: "\n")
+        model.records = [live]
+        model.scanTargets = [target]
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        live.starRating = 3                                              // an edit during the scan
+        let fresh = Self.freshProbe(path: live.fullPath)
+        fresh.notes = MachineNote.line(author: .ffprobe, text: "moov atom not found")
+        model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        _ = await model.commitScanResults(root: root.path, volName: "Adv",
+                                          targetRecords: [fresh], scanWasComplete: false)
+
+        #expect(fresh.starRating == 3)
+        #expect(fresh.notes == [promote, combine, "ffprobe: moov atom not found"].joined(separator: "\n"))
+    }
+
+    /// F2, the classifier table: which `notes` lines a rescan re-derives.
+    @Test func probeDiagnosticClassifierSplitsHistoryFromProbe() {
+        let probe = ["ffprobe: moov atom not found", "[aac @ 0x7ac800a80] channel element 0.0 is not allocated",
+                     "Unsupported codec with id 0 for input stream 1", "scan: File read timed out",
+                     "MXF header parsed (ffprobe failed: no streams)", "scan: MXF header parsed (ffprobe failed: x)"]
+        let history = ["Promote 2026-09-01T10:00:00Z: copied to the Master Archive",
+                       "Reconcile 2026-09-01T10:00:00Z: Moved from /a to /b (relinked by Update Catalog)",
+                       "Combined: video a.mxf + audio a_a1.mxf", "scan: Added as a document",
+                       "copy at /Volumes/X/a.mov kept", "[1984] Dad and Donna at Thanksgiving",
+                       "Grandma's porch"]
+        for line in probe { #expect(MachineNote.isProbeDiagnostic(Substring(line)), Comment(rawValue: line)) }
+        for line in history { #expect(!MachineNote.isProbeDiagnostic(Substring(line)), Comment(rawValue: line)) }
+        let merged = MachineNote.rescanMerged(kept: (history + probe).joined(separator: "\n"),
+                                              fresh: "ffprobe: new stderr")
+        #expect(merged == (history + ["ffprobe: new stderr"]).joined(separator: "\n"))
+        #expect(MachineNote.rescanMerged(kept: merged, fresh: merged) == merged, "a second carry is exact")
+    }
+
+    // MARK: ISOLATION — the transient restored-path map never outlives its preview
+
+    /// Update Catalog parks a preview (the restored set is armed), then the
+    /// sheet is closed without Apply: the set for that root is forgotten.
+    @Test func closingUpdateCatalogForgetsTheRestoredPaths() async throws {
+        let root = try Self.makeRoot("uc_close"); defer { try? FileManager.default.removeItem(at: root) }
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: root.path)
+        let original = Self.curatedRecord(path: root.appendingPathComponent("a.mov").path)
+        model.records = [original]
+        model.scanTargets = [target]
+        let key = PathScope.normalize(root.path)
+        model.updateCatalogDeferredRoots.insert(key)
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        let fresh = Self.freshProbe(path: original.fullPath)
+        model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        #expect(model.pendingRescanRestoredPaths[key] == [original.fullPath], "precondition: armed")
+        await model.parkScanResultsForUpdateCatalog(target: target, volName: "Adv",
+                                                    targetRecords: [fresh], scanWasComplete: true)
+        model.closeUpdateCatalog()
+        #expect(model.pendingRescanRestoredPaths[key] == nil)
+    }
+
+    /// The deferred scan finishes AFTER the sheet closed: its results are
+    /// discarded, and so is its restored set.
+    @Test func parkingAfterCloseForgetsTheRestoredPaths() async throws {
+        let root = try Self.makeRoot("uc_late"); defer { try? FileManager.default.removeItem(at: root) }
+        let model = VideoScanModel()
+        let target = CatalogScanTarget(searchPath: root.path)
+        let original = Self.curatedRecord(path: root.appendingPathComponent("a.mov").path)
+        model.records = [original]
+        model.scanTargets = [target]
+        let key = PathScope.normalize(root.path)
+
+        model.snapshotPreservedFieldsForRescan(of: target)
+        let fresh = Self.freshProbe(path: original.fullPath)
+        model.applyPreservedFieldsAfterRescan(of: target, onto: [fresh])
+        #expect(model.pendingRescanRestoredPaths[key] != nil, "precondition: armed")
+        await model.parkScanResultsForUpdateCatalog(target: target, volName: "Adv",
+                                                    targetRecords: [fresh], scanWasComplete: true)
+        #expect(model.pendingRescanRestoredPaths[key] == nil)
+    }
+
     /// Edge: the scan's own values are not clobbered by the live record. A
     /// never-curated record keeps the fresh probe's machine note (ffprobe
     /// stderr lands in `notes`), its new codec and size.

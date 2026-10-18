@@ -192,6 +192,11 @@ extension VideoScanModel {
             }
         }
         let parked = updateCatalogPendingMerges.count
+        // The parked previews' restored-path sets die with them (codex
+        // 2026-10-18): nothing will commit them.
+        for key in Set(updateCatalogPendingMerges.keys).union(updateCatalogDeferredRoots) {
+            pendingRescanRestoredPaths.removeValue(forKey: key)
+        }
         updateCatalogPendingMerges.removeAll()
         updateCatalogDeferredRoots.removeAll()
         updateCatalogRows.removeAll()
@@ -322,6 +327,7 @@ extension VideoScanModel {
         // The sheet may have been closed while the scan ran — then there is
         // nobody to apply, and NOTHING commits (never automatic).
         guard updateCatalogDeferredRoots.contains(key) else {
+            pendingRescanRestoredPaths.removeValue(forKey: key)
             updateCatalogLog.notice("Deferred scan for \(volName, privacy: .public) finished after Update Catalog closed — results discarded, catalog unchanged")
             log("  Update Catalog was closed — rescan results for \(volName) discarded, catalog unchanged.")
             return

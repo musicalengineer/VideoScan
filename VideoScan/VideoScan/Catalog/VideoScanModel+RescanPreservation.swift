@@ -97,7 +97,11 @@ import Foundation
 //   container, videoCodec, resolution, frameRate, audioCodec,
 //   audioChannels, audioSampleRate, timecode, dateCreatedRaw,
 //   dateModifiedRaw, partialMD5, etc. — these reflect the file's
-//   current bytes, so a rescan refreshing them is correct.
+//   current bytes, so a rescan refreshing them is correct. Likewise the
+//   PROBE DIAGNOSTIC lines inside `notes` (ffprobe stderr, scan-engine
+//   diagnosis): the fresh probe's lines replace the previous scan's, while
+//   `notes`' history lines (File Journey stamps, Combine, relink…) travel
+//   (codex 2026-10-18 F2; MachineNote.isProbeDiagnostic / rescanMerged).
 
 /// Snapshot of the fields a rescan must not destroy. One per record.
 ///
@@ -470,7 +474,10 @@ struct RescanPreservedFields: Sendable {
         rec.archiveStage = self.archiveStage
         rec.starRating = self.starRating
         rec.junkScore = self.junkScore
-        rec.notes = self.notes
+        // `notes` is MACHINE text with two owners (codex 2026-10-18 F2): the
+        // history lines travel; probe diagnostics are the scan's — the
+        // fresh probe's replace the old ones (MachineNote.rescanMerged).
+        rec.notes = MachineNote.rescanMerged(kept: self.notes, fresh: rec.notes)
         rec.tags = self.tags
         rec.userNotes = self.userNotes
         rec.removal = self.removal

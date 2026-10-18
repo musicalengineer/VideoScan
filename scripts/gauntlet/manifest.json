@@ -29268,13 +29268,19 @@
       "tests": [
         "activeRowWinsOverAReplacedRowAtTheSamePath",
         "clearedDuringTheScanStaysCleared",
+        "closingUpdateCatalogForgetsTheRestoredPaths",
         "editDuringTheMergeAwaitSurvives",
         "firstNoteOnAPlainRecordDuringTheScanSurvives",
+        "firstStarDuringTheScanKeepsTheFreshProbeNote",
+        "notesKeepHistoryAndTakeThisScansProbeDiagnostics",
         "notesTypedDuringTheScanReachCatalogSQLite",
         "notesTypedDuringTheScanSurviveTheMerge",
+        "parkingAfterCloseForgetsTheRestoredPaths",
+        "probeDiagnosticClassifierSplitsHistoryFromProbe",
         "scale_100kEditedDuringTheScanMergeWithinBudget",
         "scanDerivedValuesStillRefresh",
-        "trashedDuringTheScanStaysRemoved"
+        "trashedDuringTheScanStaysRemoved",
+        "trashedSuccessorStillBeatsAReplacedRowAtTheSamePath"
       ]
     }
   ],
