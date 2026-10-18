@@ -31884,7 +31884,7 @@
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
-      "expected_floor": 2418,
+      "expected_floor": 2417,
       "name": "unit",
       "selectors": [
         "VideoScanTests/AVKitLinkSensorTests",
