@@ -29282,6 +29282,18 @@
       "tests": [
         "randomKillsLeaveACommittedPrefix"
       ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDiskFullTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogDiskFullTests"
+      ],
+      "tests": [
+        "diskFullCommitRefusesAndRetries"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32624,6 +32636,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogHardKillTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogDiskFullTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
