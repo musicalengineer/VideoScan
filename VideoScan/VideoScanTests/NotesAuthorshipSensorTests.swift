@@ -35,6 +35,14 @@ struct NotesAuthorshipSensorTests {
         "VideoRecordDTO.swift":                   "export DTO init copies the field",
         "ArchivistPresenceExecutor.swift":        "read-only projection struct init",
         "MachineNote.swift":                      "NotesRepair.Change value init — the rule that separates the two fields",
+        // SQLite cutover (2026-10-17/18): the storage round-trip carries the
+        // person's text verbatim — it never authors a note.
+        "VideoRecordJSON.swift":                  "importer's lenient JSON mirror decodes the field",
+        "DisplayValueDerivation.swift":           "import: the display value is the person's text from knowledge_sources",
+        "GRDBCatalogRepository+Load.swift":       "load: a stored display row read back into a loaded row",
+        "VideoRecord+Loaded.swift":               "load: the loaded row's value onto the record",
+        "CatalogSharedCurated.swift":             "commit: the per-field baseline copies and applies the person's value",
+        "CatalogCommit+Copies.swift":             "commit: a committed value carried to same-content copies",
     ]
 
     /// Files allowed to assign `.notes` (any type — ScanTarget / Person /
@@ -46,6 +54,8 @@ struct NotesAuthorshipSensorTests {
         "GedcomLifeDetails.swift", "LifeAndTimes.swift", "HoldoutReviewQueue.swift", "MachineNote.swift", "MetadataCache.swift",
         "PersonEditSheet.swift", "PersonFinderTypes.swift", "PromoteToArchiveJob+Steps.swift", "RebuildAudioJob.swift", "ReformatJob.swift",
         "ScanEngine.swift", "ScanTargetPersistence.swift", "TranscodeJob.swift", "TrimJob.swift",
+        // the scan's "still being written" skip outcome, signed MachineNote(.scan) (10/17).
+        "ScanWriteInProgress.swift",
         "VideoRecord+Clone.swift", "VideoScanModel+ArchiveUpdate.swift", "VideoScanModel+Combine.swift", "VideoScanModel+DuplicateEnrichment.swift",
         "VideoScanModel+MasterArchive.swift", "VideoScanModel+NotesRepair.swift", "VideoScanModel+PeopleTags.swift",
         "VideoScanModel+ProbeEngine.swift", "VideoScanModel+Relocate.swift", "VideoScanModel+RepairLifecycle.swift",

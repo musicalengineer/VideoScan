@@ -524,6 +524,10 @@ struct FixityStampVolumeIdentityTests {
         let reviewed: [String: Int] = [
             // fd opened for hashing vs the stat taken just before (QA round 3).
             "VideoScan/MediaOps/SignatureVerification.swift": 1,
+            // Audit Catalog tier 0 (codex r2–r6, 10/16): the held directory fd
+            // vs the stat of the same name in the same instant — a link/remount
+            // guard, never a stored stamp.
+            "VideoScan/MediaOps/CatalogAuditPlan.swift": 1,
             // fd vs name identity inside one publish step.
             "VideoScan/Archive/ArchivePromoteEngine.swift": 1,
             // Refile (from main, 9/27): fd/dirfd vs the identity sourceCheck
