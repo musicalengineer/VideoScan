@@ -211,7 +211,7 @@ def full_fixtures(now, with_summary=True):
                                 {"ts": iso(fresh), "total_swift_lines": 546428, "app_source_lines": 376166, "app_swift_lines": 374023,
                                  "app_python_lines": 2143, "test_lines": 340574, "tooling_lines": 50080, "files_over_1000": 61,
                                  "test_count": 9550, "regression_count": 209, "open_issues": 81, "worst_file": "FamilyTreeLiveModel.swift:2996",
-                                 "swift_by_folder": {"Hallie": {"lines": 68739, "files": 181}, "Core": {"lines": 42550, "files": 144}}}]),
+                                 "swift_by_folder": {"Hallie": {"lines": 68739, "files": 181}, "Core": {"lines": 42550, "files": 144}, "Tests": {"lines": 300000, "files": 1000}}}]),
         "static_analysis.jsonl": jsonl([{"ts": iso(old), "codeql_findings": 17, "concurrency_warnings": 189, "tsan_issues": None,
                                          "strict_warning_total": 815, "swiftlint_strict": 430, "periphery_aggressive": 1521,
                                          "codeql_extracted_files": 900, "codeql_in_scope_files": 939},
@@ -303,6 +303,57 @@ needs_node = pytest.mark.skipif(shutil.which("node") is None, reason="needs node
 
 
 @needs_node
+def module_bucket(lines, max_ccn, fix90, **kw):
+    b = {"lines": lines, "files": 20, "functions": 200, "mean_ccn": 3.5, "max_ccn": max_ccn, "ccn_over_15": 1,
+         "ccn_over_30": 0, "files_over_1000": 0, "fix_commits_90d": fix90, "fix_commits_all": fix90 + 5}
+    b.update(kw)
+    return b
+
+
+def test_module_health_table_grades_sorts_and_excludes_tests(tmp_path):
+    """The Module health table (2026-10-18): per-module rows from modules.jsonl and the
+    nightly's `modules`; worst grade first; the grade's why in its tooltip; Tests never a row."""
+    now = datetime.now(timezone.utc)
+    fixtures = full_fixtures(now)
+    old, fresh = now - timedelta(days=8), now - timedelta(hours=2)
+    fixtures["modules.jsonl"] = jsonl([
+        {"schemaVersion": 1, "ts": iso(old), "sha": "0badf00d", "run_kind": "backfill",
+         "modules": {"Core": module_bucket(40000, 52, 100), "Core/Store": module_bucket(6000, 13, 2)}},
+    ])
+    nightly = complexity_row(fresh, 514, 2)
+    nightly["modules"] = {
+        "Core": module_bucket(43000, 52, 140, max_fn="PrunePlan.plan", deps=["SQLite3"], ccn_over_15=4,
+                              top5=[{"function": "PrunePlan.plan", "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift",
+                                     "ccn": 52, "nloc": 108}],
+                              top3_files=[{"file": "VideoScan/VideoScanCore/Sources/VideoScanCore/PrunePlan.swift", "lines": 1245}]),
+        "Core/Store": module_bucket(6344, 13, 2, deps=["GRDB"], ccn_over_15=0),
+        "Steward": module_bucket(3866, 17, 8, deps=[]),
+    }
+    fixtures["complexity.jsonl"] = jsonl([complexity_row(old, 520, 10), nightly])
+    out = run_page(tmp_path, fixtures, {"hash": "#all", "search": ""})
+    assert out["errors"] == []
+    table = out["sections"]["mod-health"]
+    rows = re.findall(r'<tr class="mod-row".*?</tr>', table, re.S)
+    names = [re.findall(r"<td[^>]*>(.*?)</td>", r, re.S)[1] for r in rows]
+    assert names[0] == "Core" and set(names) == {"Core", "Core/Store", "Steward"} and "Tests" not in table
+    assert "max CCN 52 &gt; 50 forces D" in rows[0] and ">D</span>" in rows[0]
+    assert "GRDB" in rows[names.index("Core/Store")] and ">A</span>" in rows[names.index("Core/Store")]
+    assert "145 all-time" in rows[0] and "PrunePlan.plan" in table and "PrunePlan.swift" in table
+    assert "lines <span class=\"bad\">▲3.0k" in rows[0]                    # vs the row 8 days ago
+    assert "Grade = mean of the sub-grades" in table
+    assert "1 at risk" in out["sections"]["sum-size"]
+
+
+def test_module_health_without_per_module_rows_uses_folder_rows(tmp_path):
+    """Before any per-module row is published, the table falls back to swift_by_folder
+    (fewer columns, never a fake zero) and still leaves Tests out."""
+    now = datetime.now(timezone.utc)
+    out = run_page(tmp_path, full_fixtures(now), {"hash": "#all", "search": ""})
+    assert out["errors"] == []
+    table = out["sections"]["mod-health"]
+    assert "Hallie" in table and "Tests" not in table and "mod-row" in table
+
+
 @pytest.mark.parametrize("saved, expected", [(None, "dark"), ("invalid", "dark"), ("dark", "dark"),
                                              ("light", "light"), ("auto", None)])
 def test_theme_defaults_dark_and_respects_saved_choice(tmp_path, saved, expected):
@@ -407,7 +458,7 @@ def test_summary_first_page_renders_every_line_and_twist(tmp_path):
     assert "No catalog-search benchmark" in out["sections"]["sum-speed"]
     # The twists carry the old charts and tables.
     for chart in ["c-tests-passed", "c-tests-failed", "c-cov-folders", "c-cov-trend", "c-sa-compiler", "c-sa-codeql",
-                  "c-codex", "c-hallie", "c-size-folders", "c-size-trend", "c-cx-debt", "c-cx-folders",
+                  "c-codex", "c-hallie", "c-size-trend", "c-cx-debt", "c-cx-folders",
                   "c-ex-trend", "c-ex-folders", "c-bugs"]:
         assert chart in out["charts"], chart
     bugs = out["chartData"]["c-bugs"]

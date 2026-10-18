@@ -33,6 +33,10 @@ One row per run goes to metrics/complexity.jsonl:
   totals: {swift: {...}, python: {...}, all: {...}}   (same fields + offenders)
   top15:  [{file, function, ccn, nloc, lang}]         worst by CCN, then NLOC
   debt_*: offenders / baseline / new / worse / fixed counts (see below)
+  modules: {module: {lines, files, functions, mean_ccn, max_ccn, max_fn,
+                ccn_over_15, ccn_over_30, files_over_1000, fix_commits_90d,
+                fix_commits_all, top5, top3_files, deps}}   (added 2026-10-18;
+                the page's Module health table; see module_report())
 
 Swift computed properties
 -------------------------
@@ -424,6 +428,192 @@ def top_worst(funcs: Sequence[Func], limit: int = TOP_N) -> List[dict]:
     worst = sorted(funcs, key=lambda f: (-f.ccn, -f.nloc, f.file, f.key))[:limit]
     return [{"file": f.file, "function": f.display, "ccn": f.ccn, "nloc": f.nloc, "lang": f.lang}
             for f in worst]
+
+
+# ---------------------------------------------------------------------------
+# modules: the metrics page's Module health table (Rick 2026-10-18)
+#
+# A MODULE is a top-level app source folder (folder_of: Catalog, Hallie, ...,
+# "Core" for VideoScanCore/Sources, "swift_cli"). Tests and tooling are never a
+# module. The nightly row carries `modules` with names (max function, top 5
+# functions, top 3 files, deps); the backfill (complexity_backfill.py
+# --modules) publishes the COUNT fields only, one row per day, to
+# metrics/modules.jsonl, so the page's sparklines have history.
+#
+# Bugs: commits whose subject is a conventional `fix:` / `fix(scope):`
+# touching the module's Swift files, in the 90 days before the measurement and
+# all-time. One `git log` pass; a missing or shallow history gives null.
+
+MODULE_FILE_LINES = 1000
+MODULE_TOP_FUNCS = 5
+MODULE_TOP_FILES = 3
+FIX_WINDOW_DAYS = 90
+FIX_SUBJECT = re.compile(r"^fix(?:\([^)]*\))?!?:")
+# Apple SDK modules (and our own). Anything else imported is a "notable dep".
+# SQLite3 is deliberately NOT here: the raw SQLite C API is worth seeing.
+APPLE_MODULES = frozenset("""
+    Foundation SwiftUI AppKit UIKit Cocoa Combine Observation os OSLog Darwin Dispatch
+    CoreGraphics CoreImage CoreML CoreMedia CoreVideo CoreAudio CoreAudioKit CoreText
+    CoreData CoreServices CoreFoundation CoreLocation CoreTransferable CoreSpotlight
+    AVFoundation AVKit Vision VisionKit Accelerate Metal MetalKit MetalPerformanceShaders
+    Photos PhotosUI Contacts MapKit NaturalLanguage Speech SoundAnalysis QuartzCore Quartz
+    QuickLook QuickLookThumbnailing UniformTypeIdentifiers Security CryptoKit CommonCrypto
+    Network IOKit DiskArbitration ImageIO PDFKit WebKit SystemConfiguration
+    ServiceManagement Charts ObjectiveC MachO Synchronization RegexBuilder SwiftData
+    StoreKit UserNotifications EventKit LocalAuthentication AppIntents ScreenCaptureKit
+    VideoToolbox MediaPlayer LinkPresentation AuthenticationServices FoundationModels
+    Translation simd Spatial Distributed XCTest Testing
+    VideoScan VideoScanCore
+""".split())
+_IMPORT = re.compile(r"^[ \t]*(?:@\w+(?:\([^)\n]*\))?[ \t]+)*import[ \t]+"
+                     r"(?:(?:struct|class|enum|protocol|func|var|let|typealias)[ \t]+)?([A-Za-z_]\w*)", re.M)
+
+
+CORE_SOURCES = "VideoScan/VideoScanCore/Sources/VideoScanCore/"
+
+
+def module_of(path: str) -> Optional[str]:
+    """The module a production Swift file belongs to; None for anything else.
+    VideoScanCore is mostly flat, so its loose files are "Core" and each
+    subfolder is its own module, "Core/Store", "Core/Import", ... (GRDB lives
+    in Core/Store; one 65k-line "Core" row would hide it)."""
+    if lang_of(path) != "swift" or not path.startswith(tuple(r + "/" for r in SWIFT_ROOTS)):
+        return None
+    if path.startswith(CORE_SOURCES):
+        rest = path[len(CORE_SOURCES):]
+        return "Core/" + rest.split("/", 1)[0] if "/" in rest else "Core"
+    folder = folder_of(path)
+    return None if folder == "Tests" else folder
+
+
+def module_mapper(current_paths: Sequence[str], by_name_first: bool = False) -> Callable[[str], Optional[str]]:
+    """Map a path from any commit to TODAY's module: by its own module when
+    that still exists, else by file name (old flat layouts, moved files),
+    else None. by_name_first (bug counts): a file that still exists by name
+    counts where it lives today, so a fix follows the code it fixed."""
+    today = {module_of(p) for p in current_paths} - {None}
+    by_name: Dict[str, str] = {}
+    for p in sorted(current_paths):
+        mod = module_of(p)
+        if mod:
+            by_name.setdefault(os.path.basename(p), mod)
+
+    def mapped(path: str) -> Optional[str]:
+        if not path.endswith(".swift"):
+            return None
+        if by_name_first and os.path.basename(path) in by_name:
+            return by_name[os.path.basename(path)]
+        mod = module_of(path)
+        if mod in today and mod != "(app root)":
+            return mod
+        return by_name.get(os.path.basename(path))
+
+    return mapped
+
+
+def notable_imports(text: str) -> List[str]:
+    return sorted({m for m in _IMPORT.findall(text) if m not in APPLE_MODULES})
+
+
+def fix_commits(root: str, ref: str = "HEAD") -> Optional[List[Tuple[int, List[str]]]]:
+    """(commit time, touched production Swift paths) for every non-merge
+    `fix` commit reachable from ref. None when git fails."""
+    try:
+        out = subprocess.run(["git", "-C", root, "log", ref, "--no-merges", "--format=%x1e%ct%x1f%s",
+                              "--name-only", "--", *SWIFT_ROOTS],
+                             capture_output=True, check=True).stdout.decode("utf-8", "replace")
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    commits = []
+    for chunk in out.split("\x1e"):
+        head, _, names = chunk.partition("\n")
+        if "\x1f" not in head:
+            continue
+        ts, subject = head.split("\x1f", 1)
+        if FIX_SUBJECT.match(subject.strip()):
+            commits.append((int(ts), [p for p in names.split("\n") if p.endswith(".swift")]))
+    return commits
+
+
+def fix_counts(commits: Optional[Sequence[Tuple[int, List[str]]]], as_of: float,
+               mapper: Callable[[str], Optional[str]] = module_of,
+               window_days: int = FIX_WINDOW_DAYS) -> Dict[str, Dict[str, int]]:
+    """{module: {"d90": n, "all": n}} counting each commit once per module,
+    for commits at or before `as_of` (epoch seconds)."""
+    out: Dict[str, Dict[str, int]] = {}
+    if not commits:
+        return out
+    since = as_of - window_days * 86400
+    for ts, paths in commits:
+        if ts > as_of:
+            continue
+        for mod in {m for m in (mapper(p) for p in paths) if m}:
+            c = out.setdefault(mod, {"d90": 0, "all": 0})
+            c["all"] += 1
+            c["d90"] += ts >= since
+    return out
+
+
+def module_counts(funcs: Sequence[Tuple[str, int]], file_lines: Dict[str, int],
+                  mapper: Callable[[str], Optional[str]] = module_of,
+                  fixes: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, dict]:
+    """The numbers of the Module health table. `funcs` is (path, ccn) pairs;
+    `fixes` is fix_counts() output or None (no git: bug fields null)."""
+    mods: Dict[str, dict] = {}
+
+    def bucket(path: str) -> Optional[dict]:
+        mod = mapper(path)
+        if not mod:
+            return None
+        return mods.setdefault(mod, {"lines": 0, "files": 0, "functions": 0, "ccn_sum": 0, "max_ccn": 0,
+                                     "ccn_over_15": 0, "ccn_over_30": 0, "files_over_1000": 0})
+
+    for path, lines in file_lines.items():
+        b = bucket(path)
+        if b is not None:
+            b["lines"] += lines
+            b["files"] += 1
+            b["files_over_1000"] += lines > MODULE_FILE_LINES
+    for path, ccn in funcs:
+        b = bucket(path)
+        if b is not None:
+            b["functions"] += 1
+            b["ccn_sum"] += ccn
+            b["max_ccn"] = max(b["max_ccn"], ccn)
+            b["ccn_over_15"] += ccn > CCN_LIMIT
+            b["ccn_over_30"] += ccn > GATE_CCN_LINE
+    out = {}
+    for mod, b in sorted(mods.items()):
+        ccn_sum = b.pop("ccn_sum")
+        b["mean_ccn"] = round(ccn_sum / b["functions"], 2) if b["functions"] else None
+        fx = (fixes or {}).get(mod, {"d90": 0, "all": 0})
+        b["fix_commits_90d"] = fx["d90"] if fixes is not None else None
+        b["fix_commits_all"] = fx["all"] if fixes is not None else None
+        out[mod] = b
+    return out
+
+
+def module_report(funcs: Sequence[Func], file_lines: Dict[str, int],
+                  imports: Optional[Dict[str, List[str]]] = None,
+                  fixes: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, dict]:
+    """module_counts plus the names the page shows when a row is opened: the
+    worst function (max_fn), top 5 functions by CCN, top 3 files by lines, and
+    the non-Apple modules imported (deps)."""
+    out = module_counts([(f.file, f.ccn) for f in funcs], file_lines, fixes=fixes)
+    by_mod: Dict[str, List[Func]] = {}
+    for f in funcs:
+        mod = module_of(f.file)
+        if mod:
+            by_mod.setdefault(mod, []).append(f)
+    for mod, row in out.items():
+        worst = sorted(by_mod.get(mod, []), key=lambda f: (-f.ccn, -f.nloc, f.file, f.key))
+        row["max_fn"] = worst[0].display if worst else None
+        row["top5"] = [{"function": f.display, "file": f.file, "ccn": f.ccn, "nloc": f.nloc}
+                       for f in worst[:MODULE_TOP_FUNCS]]
+        files = sorted(((p, n) for p, n in file_lines.items() if module_of(p) == mod), key=lambda x: (-x[1], x[0]))
+        row["top3_files"] = [{"file": p, "lines": n} for p, n in files[:MODULE_TOP_FILES]]
+        row["deps"] = sorted({d for p, ds in (imports or {}).items() if module_of(p) == mod for d in ds})
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -959,7 +1149,8 @@ def scan(root: str, duplication: bool = False) -> Tuple[List[Func], Dict[str, in
     for rel, text in sources.items():
         disables.update(count_disables(rel, text))
     file_lines = {rel: text.count("\n") for rel, text in sources.items()}
-    return funcs, file_lines, {"disables": disables, "duplication": dup}
+    imports = {rel: notable_imports(text) for rel, text in sources.items() if lang_of(rel) == "swift"}
+    return funcs, file_lines, {"disables": disables, "duplication": dup, "imports": imports}
 
 
 # ---------------------------------------------------------------------------
@@ -1039,9 +1230,10 @@ def resolve_override_commits(records: List[dict], root: str, overrides_rel: str)
 
 def build_row(funcs: Sequence[Func], file_lines: Dict[str, int], debt: dict,
               ts: str, sha: str, lizard_version: Optional[str],
-              duplication: Optional[dict] = None) -> dict:
+              duplication: Optional[dict] = None, modules: Optional[dict] = None) -> dict:
     agg = aggregate(funcs, file_lines)
     dup = duplication or {}
+    extra = {"modules": modules} if modules is not None else {}   # added 2026-10-18; older rows lack it
     return {
         "ts": ts, "sha": sha, "run_kind": "nightly",
         "lizard_version": lizard_version,
@@ -1056,6 +1248,7 @@ def build_row(funcs: Sequence[Func], file_lines: Dict[str, int], debt: dict,
         "gate_overrides_recent": len(debt.get("overrides_recent") or []),
         "duplicate_rate_pct": dup.get("duplicate_rate_pct"),
         "duplicate_blocks": dup.get("duplicate_blocks"),
+        **extra,
     }
 
 
@@ -1348,7 +1541,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     resolve_override_commits(records, args.root, args.overrides)
     debt = debt_report(result, baseline, len(offenders(funcs)), ts, sha,
                        recent_overrides(records, _dt.datetime.now(_dt.timezone.utc)), len(records))
-    row = build_row(funcs, file_lines, debt, ts, sha, version, extras["duplication"])
+    commits = fix_commits(args.root)
+    fixes = (fix_counts(commits, _dt.datetime.now(_dt.timezone.utc).timestamp(),
+                        module_mapper(list(file_lines), by_name_first=True))
+             if commits is not None else None)
+    modules = module_report(funcs, file_lines, extras.get("imports"), fixes)
+    row = build_row(funcs, file_lines, debt, ts, sha, version, extras["duplication"], modules)
 
     line = json.dumps(row, separators=(",", ":"))
     if args.row_out:

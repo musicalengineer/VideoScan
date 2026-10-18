@@ -175,6 +175,25 @@
   th, td { padding: 4px 8px; border-bottom: 1px solid var(--border); text-align: right; white-space: nowrap; }
   th:first-child, td:first-child { text-align: left; } th:nth-child(2), td:nth-child(2) { text-align: left; }
   th { color: var(--muted); font-weight: 600; font-size: 12px; }
+  /* Module health table (Rick 2026-10-18) */
+  .gchip { display: inline-block; min-width: 26px; text-align: center; font-weight: 700; font-size: 13px; border-radius: 6px;
+           padding: 1px 7px; border: 1px solid currentColor; cursor: help; }
+  .mod-table th.sortable { cursor: pointer; user-select: none; }
+  .mod-table th.sortable:hover { color: var(--fg); }
+  .mod-table th .arrow { font-size: 10px; margin-left: 2px; }
+  .mod-table tr.mod-row { cursor: pointer; }
+  .mod-table tr.mod-row:hover td { background: var(--chip-bg); }
+  .mod-table tr.mod-row td:nth-child(2) { font-weight: 600; }
+  .mod-table td.trendcell { text-align: left; }
+  .mod-table td.deps { text-align: left; color: var(--muted); white-space: normal; min-width: 70px; }
+  .mod-table .mspark { width: 64px; height: 20px; display: inline-block; vertical-align: middle; }
+  .mod-table .tdelta { font-size: 11px; color: var(--muted); display: block; }
+  .mod-table .tdelta .good { color: var(--good); } .mod-table .tdelta .bad { color: var(--bad); }
+  .mod-table tr.mod-detail td { text-align: left; white-space: normal; background: var(--panel); padding: 8px 10px 12px; }
+  .mod-detail .cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 12px; }
+  .mod-detail h4 { font-size: 12px; color: var(--muted); font-weight: 600; margin: 0 0 4px; }
+  .mod-detail .why { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+  .mod-legend { font-size: 12px; color: var(--muted); margin-top: 8px; line-height: 1.5; }
   .footer { margin-top: 24px; padding-top: 10px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
 
   :focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
@@ -509,8 +528,10 @@ function rawUrl(fileName) {
   if (METRICS_SHA) return `https://raw.githubusercontent.com/${REPO}/${METRICS_SHA}/metrics/${fileName}`;
   return `${RAW_BRANCH_BASE}/${fileName}?${CACHE_BUSTER}`;
 }
+// ?local reads only the files next to the page (tools/preview_metrics_page.py), never GitHub.
+const LOCAL_ONLY = typeof location !== "undefined" && /[?&]local\b/.test(location.search || "");
 async function fetchText(remote, localUrl) {
-  try {
+  if (!LOCAL_ONLY) try {
     const r = await fetch(remote, { cache: "no-store" });
     if (r.ok) return await r.text();
   } catch {}
@@ -774,6 +795,15 @@ const AREAS = [
   { id: "reviews", name: "Reviews", sub: "adversarial nightly · codex" },
   { id: "speed", name: "Speed & safety", sub: "catalog at 100k · gauntlet · safety sensors" },
 ];
+// "Modules: 2 at risk (Core, Hallie), 5 need attention." for the size line; "" without data.
+function moduleWords(d) {
+  const rows = Array.isArray(d.moduleHealth) ? d.moduleHealth : [];
+  if (!rows.length) return "";
+  const by = g => rows.filter(r => r.grade === g).sort((a, b) => (b.lines || 0) - (a.lines || 0)).map(r => r.name);
+  const dd = by("D"), cc = by("C");
+  if (!dd.length && !cc.length) return ` Modules: all ${rows.length} grade A or B.`;
+  return ` Modules: ${dd.length ? `<b>${dd.length} at risk</b> (${esc(dd.join(", "))})` : "none at risk"}, ${cc.length} need${cc.length === 1 ? "s" : ""} attention${cc.length ? ` (${esc(cc.slice(0, 4).join(", "))}${cc.length > 4 ? ", …" : ""})` : ""}.`;
+}
 const NO_LINE = { state: "grey", sentence: NO_DATA, number: DASH, trend: `<span class="trend">no data</span>`, spark: [], sparkColor: C.grey };
 // Rick's ✓/✗ marks on the events snapshot: total and % right, or total null when none are published.
 function eventMarks(e) {
@@ -835,7 +865,7 @@ const SUMMARY = {
     const fat = last && isNum(last.files_over_1000) ? ` and ${last.files_over_1000} files over 1,000 lines${isNum(hWk.files_over_1000) ? ` (${hWk.files_over_1000})` : ""}` : "";
     return {
       state: isNum(sw.ccn_over_30) ? (sw.ccn_over_30 > 0 ? "watch" : "green") : "grey",
-      sentence: `${lines}${files}; ${gate}${fat}.${isNum(sw.mean_ccn) ? ` Mean CCN ${sw.mean_ccn}.` : ""}`,
+      sentence: `${lines}${files}; ${gate}${fat}.${isNum(sw.mean_ccn) ? ` Mean CCN ${sw.mean_ccn}.` : ""}${moduleWords(d)}`,
       number: isNum(sw.ccn_over_30) ? `${sw.ccn_over_30} over CCN 30` : DASH,
       trend: trend(swWk.ccn_over_30, sw.ccn_over_30, true, "", cxWk ? cxWk.ts : null),
       spark: lastPerDay(d.cxRows).slice(-30).map(r => r.totals && r.totals.swift && isNum(r.totals.swift.ccn_over_30) ? r.totals.swift.ccn_over_30 : null),
@@ -1072,14 +1102,15 @@ const BODIES = {
       card("Measured", cx ? fmtWhen(cx.ts) : null, null, null, false, ""),
     ];
     const top = (Array.isArray(lastNightly.top15) ? lastNightly.top15 : []).filter(f => (f.lang || "swift") === "swift");
-    body.innerHTML = moved("Moved here unchanged: the Code size cards and charts, the Complexity cards, the mean-CCN chart and the Top 15 table. App source = app Swift (VideoScan/VideoScan, VideoScanCore/Sources, swift_cli) + the Python the app launches; tests and tooling are counted apart. Dual-axis charts are split.") +
+    body.innerHTML = moved("App source = app Swift (VideoScan/VideoScan, VideoScanCore/Sources, swift_cli) + the Python the app launches; tests and tooling are counted apart. The Module health table replaced the two \"Swift lines / files by folder\" bar charts (they repeated the cards, and Tests was the biggest bar).") +
       `<div class="cards">${cards.join("")}</div><div class="charts">` +
+      tableBox("Module health · one row per app source folder (tests and tooling excluded)", "mod-health") +
       chartBox("Lines: app source vs all Swift (app + tests + CLI)", "c-size-trend") + chartBox("Files over 1,000 lines", "c-size-f1000") +
-      chartBox("Swift lines by folder, latest push", "c-size-folders", "tall") + chartBox("Swift files by folder, latest push", "c-size-files", "tall") +
       chartBox("Mean CCN, all app code and by folder (largest folders)", "c-cx-folders", "wide") +
       tableBox(`Top ${top.length || 15} most complex functions${lastNightly.ts ? " · " + day(lastNightly.ts) : ""}`, "cx-top") + "</div>";
 
-    if (!rows.length) { note("c-size-trend", NO_DATA); note("c-size-f1000", NO_DATA); note("c-size-folders", NO_DATA); note("c-size-files", NO_DATA); }
+    try { renderModuleHealth(d); } catch (err) { document.getElementById("mod-health").innerHTML = NO_DATA; showError("size", err); }
+    if (!rows.length) { note("c-size-trend", NO_DATA); note("c-size-f1000", NO_DATA); }
     else {
       // Headline = app source only. Rows before 2026-10-11 lack these keys and show
       // no data; total_swift_lines (app + tests + CLI Swift) stays for continuity.
@@ -1090,14 +1121,6 @@ const BODIES = {
       chartOrNote("c-size-f1000", "line", dateLabels(daily), [
         { label: "files > 1,000 lines", data: daily.map(r => isNum(r.files_over_1000) ? r.files_over_1000 : null), ...lineStyle(C.orange) },
       ]);
-      const withFolders = rows.filter(r => r.swift_by_folder && typeof r.swift_by_folder === "object");
-      if (withFolders.length) {
-        const f = withFolders[withFolders.length - 1].swift_by_folder;
-        const names = Object.keys(f).sort((a, b) => (f[b].lines || 0) - (f[a].lines || 0));
-        const horizontal = { ...chartDefaults, indexAxis: "y", scales: { x: chartDefaults.scales.y, y: { ticks: { autoSkip: false, font: { size: 11 } }, grid: { display: false } } } };
-        chartOrNote("c-size-folders", "bar", names, [{ label: "lines", data: names.map(k => f[k].lines), backgroundColor: C.blue }], horizontal);
-        chartOrNote("c-size-files", "bar", names, [{ label: "files", data: names.map(k => f[k].files), backgroundColor: C.purple }], horizontal);
-      } else { note("c-size-folders", "No per-folder breakdown yet."); note("c-size-files", "No per-folder breakdown yet."); }
     }
     const cxDaily = lastPerDay(d.cxRows), labels = dateLabels(cxDaily);
     const tot = (r, k) => r.totals && r.totals.swift && isNum(r.totals.swift[k]) ? r.totals.swift[k] : null;
@@ -1397,6 +1420,204 @@ const fnTable = (items, withBase) => {
     ...(withBase ? [isNum(f.base_ccn) ? `${f.base_ccn} / ${f.base_nloc}` : "new"] : [])]));
 };
 
+// ---------------------------------------------------------------- module health (Rick 2026-10-18)
+// One row per module (top-level app source folder; VideoScanCore's loose files
+// are "Core", its subfolders "Core/Store" ...). Tests and tooling are never a module.
+// GRADE: tune here. Each sub-grade is A..D; overall = rounded mean (A=4 .. D=1), then the caps.
+const GRADE = {
+  maxCcn:     { A: 15, B: 30, C: 50 },  // worst function's CCN: <= 15 A, <= 30 B, <= 50 C, else D
+  over15Pct:  { A: 1, B: 3, C: 6 },     // % of functions over CCN 15: < 1 A, < 3 B, < 6 C, else D
+  fatFilePct: { A: 0, B: 5, C: 15 },    // % of files over 1,000 lines: 0 A, < 5 B, < 15 C, else D
+  coverage:   { A: 80, B: 60, C: 40 },  // logic coverage %: >= 80 A, >= 60 B, >= 40 C, else D; skipped when no data
+  // Fix commits in 90 days per 10k lines: < 15 A, < 25 B, < 40 C, else D. Set from the
+  // 2026-10-18 distribution over the 27 modules (quartiles 14.2 / 26.1 / 38.1), rounded.
+  bugDensity: { A: 15, B: 25, C: 40 },
+  capAtC: 30,                           // max CCN over this caps the overall grade at C
+  forceD: 50,                           // max CCN over this forces D
+};
+const GRADE_WORDS = { A: "very good", B: "decent", C: "needs attention", D: "at risk" };
+const GRADE_COLORS = { A: C.green, B: C.yellow, C: C.orange, D: C.red };
+const GRADE_POINTS = { A: 4, B: 3, C: 2, D: 1 };
+const MOD_SPARK_POINTS = 30;
+const MOD_STATE = { rows: [], key: "grade", dir: 1, open: new Set() };
+
+const gradeChip = (g, why) => `<span class="gchip" style="color:${GRADE_COLORS[g]};background:${GRADE_COLORS[g]}22" title="${esc(why)}">${g}</span>`;
+// value -> letter. "le": value <= cut; "lt": value < cut; "ge": value >= cut.
+function letter(value, cuts, cmp) {
+  const ok = { le: (v, c) => v <= c, lt: (v, c) => v < c, ge: (v, c) => v >= c }[cmp];
+  return ok(value, cuts.A) ? "A" : ok(value, cuts.B) ? "B" : ok(value, cuts.C) ? "C" : "D";
+}
+function gradeModule(m) {
+  const subs = [];
+  if (isNum(m.max_ccn)) subs.push({ name: "max CCN", g: letter(m.max_ccn, GRADE.maxCcn, "le"), what: `${m.max_ccn}${m.max_fn ? ` (${m.max_fn})` : ""}` });
+  if (isNum(m.ccn_over_15) && m.functions > 0) {
+    const pct = 100 * m.ccn_over_15 / m.functions;
+    subs.push({ name: "functions over CCN 15", g: letter(pct, GRADE.over15Pct, "lt"), what: `${pct.toFixed(1)}% (${m.ccn_over_15} of ${n(m.functions)})` });
+  }
+  if (isNum(m.files_over_1000) && m.files > 0) {
+    const pct = 100 * m.files_over_1000 / m.files;
+    subs.push({ name: "files over 1,000 lines", g: pct === 0 ? "A" : letter(pct, GRADE.fatFilePct, "lt"), what: `${pct.toFixed(1)}% (${m.files_over_1000} of ${m.files})` });
+  }
+  if (isNum(m.coverage)) subs.push({ name: "logic coverage", g: letter(m.coverage, GRADE.coverage, "ge"), what: `${m.coverage.toFixed(1)}%` });
+  if (isNum(m.fix_commits_90d) && m.lines > 0) {
+    const dens = 1e4 * m.fix_commits_90d / m.lines;
+    subs.push({ name: "bug density", g: letter(dens, GRADE.bugDensity, "lt"), what: `${dens.toFixed(1)} fix commits / 10k lines in 90 days` });
+  }
+  if (!subs.length) return { grade: null, why: "no data" };
+  const mean = subs.reduce((a, s) => a + GRADE_POINTS[s.g], 0) / subs.length;
+  let grade = ["D", "D", "C", "B", "A"][Math.max(1, Math.min(4, Math.round(mean)))];
+  let cap = "";
+  if (isNum(m.max_ccn) && m.max_ccn > GRADE.forceD) { grade = "D"; cap = `max CCN ${m.max_ccn} > ${GRADE.forceD} forces D`; }
+  else if (isNum(m.max_ccn) && m.max_ccn > GRADE.capAtC && GRADE_POINTS[grade] > GRADE_POINTS.C) { grade = "C"; cap = `max CCN ${m.max_ccn} > ${GRADE.capAtC} caps at C`; }
+  const why = [`${grade} — ${GRADE_WORDS[grade]}`, ...subs.map(s => `${s.g}  ${s.name}: ${s.what}`),
+    `mean ${mean.toFixed(2)} of ${subs.length} sub-grades`, ...(cap ? [cap] : [])].join("\n");
+  return { grade, why, subs, cap };
+}
+
+// day -> {module -> point}. Per-module rows (nightly `modules`, modules.jsonl) win over the
+// older per-folder rows (history.jsonl lines, complexity.jsonl swift_by_folder), which only
+// fill days the per-module rows do not cover. Those older rows have one "Core" for the whole
+// package, so once per-module rows exist their "Core" is ignored (it is not the same thing).
+function moduleSeries(d) {
+  const legacy = new Map(), modern = new Map();
+  const put = (map, ts, mod, fields) => {
+    const dayKey = String(ts || "").slice(0, 10);
+    if (!dayKey || mod === "Tests") return;
+    if (!map.has(dayKey)) map.set(dayKey, {});
+    const m = map.get(dayKey)[mod] = map.get(dayKey)[mod] || {};
+    for (const [k, v] of Object.entries(fields)) if (v !== undefined && v !== null) m[k] = v;
+  };
+  for (const r of lastPerDay(d.history)) for (const [k, v] of Object.entries(r.swift_by_folder || {})) put(legacy, r.ts, k, { lines: v.lines, files: v.files });
+  for (const r of lastPerDay(d.cxRows)) for (const [k, v] of Object.entries(r.swift_by_folder || {}))
+    put(legacy, r.ts, k, { functions: v.functions, mean_ccn: v.mean_ccn, ccn_over_15: v.ccn_over_15, ccn_over_30: v.ccn_over_30 });
+  const perModule = [...d.modRows, ...d.cxRows.filter(r => r.modules && typeof r.modules === "object")];
+  for (const r of sortByTs(perModule.slice())) {
+    const dayKey = String(r.ts).slice(0, 10);
+    modern.set(dayKey, {});                       // the day's last per-module row wins whole
+    for (const [k, v] of Object.entries(r.modules)) if (v && typeof v === "object") put(modern, r.ts, k, v);
+  }
+  const days = Array.from(new Set([...legacy.keys(), ...modern.keys()])).sort();
+  return days.map(dd => {
+    if (modern.has(dd)) return { day: dd, mods: modern.get(dd) };
+    const mods = { ...legacy.get(dd) };
+    if (modern.size) delete mods.Core;
+    return { day: dd, mods };
+  });
+}
+function miniSpark(values, color, label) {
+  const vs = values.filter(isNum);
+  if (vs.length < 2) return `<svg class="mspark" viewBox="0 0 64 20" aria-label="${esc(label)}: no trend yet"><line x1="2" y1="10" x2="62" y2="10" stroke="var(--border)" stroke-dasharray="2 3"/></svg>`;
+  const min = Math.min(...vs), max = Math.max(...vs), span = max - min || 1;
+  const pts = values.map((v, i) => isNum(v) ? `${(2 + 60 * i / Math.max(1, values.length - 1)).toFixed(1)},${(max === min ? 10 : 17 - 14 * (v - min) / span).toFixed(1)}` : null).filter(Boolean).join(" ");
+  return `<svg class="mspark" viewBox="0 0 64 20"><title>${esc(label)}: ${esc(String(vs[0]))} → ${esc(String(vs[vs.length - 1]))}</title><polyline fill="none" stroke="${color}" stroke-width="1.6" stroke-linejoin="round" points="${pts}"/></svg>`;
+}
+function tDelta(older, newer, label) {
+  if (!isNum(older) || !isNum(newer)) return `${label} —`;
+  const dlt = newer - older;
+  if (dlt === 0) return `${label} →0`;
+  const v = Math.abs(dlt) >= 1000 ? `${(Math.abs(dlt) / 1000).toFixed(1)}k` : Math.abs(dlt).toLocaleString("en-US");
+  return `${label} <span class="${dlt > 0 ? "bad" : "good"}">${dlt > 0 ? "▲" : "▼"}${v}</span>`;
+}
+function moduleRows(d) {
+  const series = moduleSeries(d);
+  if (!series.length) return [];
+  const last = series[series.length - 1];
+  const lastT = toTime(last.day);
+  let wk = null;
+  for (let i = series.length - 2; i >= 0; i--) if (lastT - toTime(series[i].day) >= 7 * 86400000) { wk = series[i]; break; }
+  const nightly = d.cxRows.filter(r => r.modules && typeof r.modules === "object");
+  const detail = nightly.length ? nightly[nightly.length - 1] : null;
+  const cov = d.covRows.length ? d.covRows[d.covRows.length - 1] : null;
+  const covBy = new Map((cov ? cov.folders : []).map(f => [f.folder, f.logic_pct]));
+  const tail = series.slice(-MOD_SPARK_POINTS);
+  return Object.entries(last.mods).map(([name, m]) => {
+    const det = detail && detail.modules[name] ? detail.modules[name] : {};
+    const row = { name, ...m, max_fn: m.max_fn || det.max_fn || null, top5: det.top5 || null, top3_files: det.top3_files || null,
+      deps: Array.isArray(m.deps) ? m.deps : Array.isArray(det.deps) ? det.deps : null,
+      coverage: isNum(covBy.get(name)) ? covBy.get(name) : null, detailDay: detail ? detail.ts : null };
+    const w = wk && wk.mods[name] ? wk.mods[name] : {};
+    row.wkDay = wk ? wk.day : null;
+    row.dLines = [w.lines, m.lines];
+    row.dOver15 = [w.ccn_over_15, m.ccn_over_15];
+    row.linesHist = tail.map(p => p.mods[name] && isNum(p.mods[name].lines) ? p.mods[name].lines : null);
+    row.ccnHist = tail.map(p => p.mods[name] && isNum(p.mods[name].mean_ccn) ? p.mods[name].mean_ccn : null);
+    Object.assign(row, gradeModule(row));
+    return row;
+  });
+}
+const MOD_COLS = [
+  ["grade", "Grade"], ["name", "Module"], ["lines", "Lines"], ["files", "Files"], ["functions", "Functions"],
+  ["mean_ccn", "Mean CCN"], ["max_ccn", "Max CCN"], ["ccn_over_15", "CCN > 15"], ["ccn_over_30", "CCN > 30"],
+  ["files_over_1000", "Files > 1k"], ["coverage", "Logic cov."], ["fix_commits_90d", "Bugs 90 d"], ["deps", "Deps"], ["trend", "Trend · Δ 7 d"],
+];
+function modSortValue(r, key) {
+  if (key === "grade") return r.grade ? GRADE_POINTS[r.grade] : 99;
+  if (key === "name") return r.name;
+  if (key === "deps") return (r.deps || []).join(",");
+  if (key === "trend") return isNum(r.dLines[0]) && isNum(r.dLines[1]) ? r.dLines[0] - r.dLines[1] : 0;
+  return isNum(r[key]) ? -r[key] : 1;                        // biggest first on the first click
+}
+function sortModules(rows, key, dir) {
+  return rows.slice().sort((a, b) => {
+    const va = modSortValue(a, key), vb = modSortValue(b, key);
+    const c = typeof va === "string" ? va.localeCompare(vb) : va - vb;
+    return dir * c || (b.lines || 0) - (a.lines || 0) || a.name.localeCompare(b.name);
+  });
+}
+function modDetail(r) {
+  const fns = Array.isArray(r.top5) && r.top5.length ? fnTable(r.top5, false) : `${NO_DATA}: names arrive with the next 2 AM GitHub nightly.`;
+  const files = Array.isArray(r.top3_files) && r.top3_files.length
+    ? table(["File", "Folder", "Lines"], r.top3_files.map(f => [esc(String(f.file).split("/").pop()), `<span title="${esc(f.file)}">${esc(String(f.file).split("/").slice(-2, -1)[0] || "")}</span>`, n(f.lines)]))
+    : NO_DATA;
+  return `<div class="why">${esc((r.why || "").split("\n").join(" · "))}</div><div class="cols">` +
+    `<div><h4>Top 5 functions by CCN${r.detailDay ? " · " + day(r.detailDay) : ""}</h4><div class="table-wrap">${fns}</div></div>` +
+    `<div><h4>Top 3 files by lines</h4><div class="table-wrap">${files}</div></div></div>`;
+}
+function modCells(r) {
+  const fix = isNum(r.fix_commits_90d)
+    ? `<span title="${esc(`${r.fix_commits_90d} fix commits in 90 days, ${isNum(r.fix_commits_all) ? r.fix_commits_all : "?"} all-time${r.lines ? `; ${(1e4 * r.fix_commits_90d / r.lines).toFixed(1)} per 10k lines` : ""}`)}">${r.fix_commits_90d}</span>` : null;
+  const maxc = isNum(r.max_ccn) ? `<span title="${esc(r.max_fn || "")}">${r.max_ccn}</span>` : null;
+  const since = r.wkDay ? ` vs ${day(r.wkDay)}` : "";
+  const trendCell = `${miniSpark(r.linesHist, C.blue, "lines")} ${miniSpark(r.ccnHist, C.purple, "mean CCN")}` +
+    `<span class="tdelta" title="change${esc(since)}">${tDelta(r.dLines[0], r.dLines[1], "lines")} · ${tDelta(r.dOver15[0], r.dOver15[1], ">15")}</span>`;
+  return [r.grade ? gradeChip(r.grade, r.why) : DASH, `${r.name}`, n(r.lines), n(r.files), n(r.functions),
+    isNum(r.mean_ccn) ? r.mean_ccn.toFixed(2) : null, maxc, n(r.ccn_over_15), n(r.ccn_over_30), n(r.files_over_1000),
+    isNum(r.coverage) ? `${r.coverage.toFixed(0)}%` : null, fix, Array.isArray(r.deps) ? (r.deps.length ? esc(r.deps.join(", ")) : "") : null, trendCell];
+}
+function drawModuleTable() {
+  const el = document.getElementById("mod-health");
+  const rows = sortModules(MOD_STATE.rows, MOD_STATE.key, MOD_STATE.dir);
+  const head = MOD_COLS.map(([k, label]) => `<th class="sortable" onclick="modSort('${k}')" title="Sort by ${esc(label)}">${esc(label)}${MOD_STATE.key === k ? `<span class="arrow">${MOD_STATE.dir > 0 ? "▼" : "▲"}</span>` : ""}</th>`).join("");
+  const body = rows.map((r, i) => {
+    const cells = modCells(r).map((v, j) => `<td${j === 12 ? ' class="deps"' : j === 13 ? ' class="trendcell"' : ""}>${v == null ? DASH : v}</td>`).join("");
+    const open = MOD_STATE.open.has(r.name);
+    return `<tr class="mod-row" onclick="modToggle('${esc(r.name)}')" aria-expanded="${open}">${cells}</tr>` +
+      `<tr class="mod-detail${open ? "" : " hidden"}"><td colspan="${MOD_COLS.length}">${modDetail(r)}</td></tr>`;
+  }).join("");
+  const counts = ["A", "B", "C", "D"].map(g => `${rows.filter(r => r.grade === g).length} ${g}`).join(" · ");
+  el.innerHTML = `<table class="mod-table"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>` +
+    `<div class="mod-legend">${counts}. Grade = mean of the sub-grades (A=4 … D=1): max function CCN (≤${GRADE.maxCcn.A} A, ≤${GRADE.maxCcn.B} B, ≤${GRADE.maxCcn.C} C), ` +
+    `% of functions over CCN 15 (&lt;${GRADE.over15Pct.A} A, &lt;${GRADE.over15Pct.B} B, &lt;${GRADE.over15Pct.C} C), % of files over 1,000 lines (0 A, &lt;${GRADE.fatFilePct.B} B, &lt;${GRADE.fatFilePct.C} C), ` +
+    `logic coverage (≥${GRADE.coverage.A} A, ≥${GRADE.coverage.B} B, ≥${GRADE.coverage.C} C; skipped with no data), fix commits in 90 days per 10k lines (&lt;${GRADE.bugDensity.A} A, &lt;${GRADE.bugDensity.B} B, &lt;${GRADE.bugDensity.C} C); ` +
+    `max CCN over ${GRADE.forceD} forces D, over ${GRADE.capAtC} caps at C. A ${GRADE_WORDS.A} · B ${GRADE_WORDS.B} · C ${GRADE_WORDS.C} · D ${GRADE_WORDS.D}. ` +
+    `Hover a grade for its why; click a header to sort; click a row for its biggest functions and files. Bugs = commits whose subject starts <code>fix:</code> / <code>fix(…):</code> touching the module.</div>`;
+}
+function modSort(key) {
+  MOD_STATE.dir = MOD_STATE.key === key ? -MOD_STATE.dir : 1;
+  MOD_STATE.key = key;
+  drawModuleTable();
+}
+function modToggle(name) {
+  if (MOD_STATE.open.has(name)) MOD_STATE.open.delete(name); else MOD_STATE.open.add(name);
+  drawModuleTable();
+}
+function renderModuleHealth(d) {
+  MOD_STATE.rows = moduleRows(d);
+  d.moduleHealth = MOD_STATE.rows;
+  if (!MOD_STATE.rows.length) { document.getElementById("mod-health").innerHTML = NO_DATA; return; }
+  drawModuleTable();
+}
+
 // ---------------------------------------------------------------- benchmarks (the old section 9, verbatim where it can be)
 function renderBenchmarks(allTdRows, searchText, d) {
   // Gauntlet rows share transport, never nightly averages or freshness.
@@ -1548,8 +1769,8 @@ async function loadData() {
     }
   } catch {}
 
-  METRICS_SHA = await resolveMetricsSha();
-  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, summaryText, ghDailyText, eventsText, searchText, ciRun, naRun] = await Promise.all([
+  METRICS_SHA = LOCAL_ONLY ? null : await resolveMetricsSha();
+  const [historyText, staticText, tdText, findingsText, covText, advText, codexText, cxText, cxDebtText, exText, pfText, summaryText, ghDailyText, eventsText, searchText, modText, ciRun, naRun] = await Promise.all([
     fetchText(rawUrl("history.jsonl"), local("history.jsonl")),
     fetchText(rawUrl("static_analysis.jsonl"), local("static_analysis.jsonl")),
     fetchText(rawUrl("testdriver.jsonl"), local("testdriver.jsonl")),
@@ -1565,6 +1786,7 @@ async function loadData() {
     fetchText(rawUrl("github_daily.jsonl"), local("github_daily.jsonl")),
     fetchText(rawUrl("events_latest.json"), local("events_latest.json")),
     fetchText(rawUrl("search_benchmarks.jsonl"), SEARCH_BENCHMARKS_LOCAL),
+    fetchText(rawUrl("modules.jsonl"), local("modules.jsonl")),
     latestMainRun("ci.yml"),
     latestMainRun("nightly-analysis.yml"),
   ]);
@@ -1583,6 +1805,8 @@ async function loadData() {
     advRows: sortByTs(parseJsonl(advText).filter(r => r.schemaVersion === 1 && r.date)),
     codexRows: sortByTs(parseJsonl(codexText).filter(r => r.schemaVersion === 1 && r.date)),
     cxRows: sortByTs(parseJsonl(cxText).filter(r => r.ts && r.totals && r.totals.all)),
+    // Per-module history (complexity_backfill.py --modules): counts only, one row per day.
+    modRows: sortByTs(parseJsonl(modText).filter(r => r.schemaVersion === 1 && r.ts && r.modules && typeof r.modules === "object")),
     cxDebt: parseJson(cxDebtText),
     exRows: sortByTs(parseJsonl(exText).filter(r => r.schemaVersion === 1 && r.ts && r.totals)),
     problemFiles: parseJson(pfText),
