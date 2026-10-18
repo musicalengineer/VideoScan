@@ -37,3 +37,7 @@ Six extracted-production-SQL checks passed in SQLite memory, covering both commi
 
 **Do only this:** (1) your two B2.4 findings: CLOSED (file:line) or OPEN. (2) at most TWO new P1 findings (a lost accepted edit) with a one-line failure scenario. Known and declared, NOT findings: two copies relabelling one attestation or re-dating one person to different values in one 2 s window (last writer); reject-vs-redate of the same name leaves both rows (a policy question for Rick). Confirm or refute: after the flip, an edit accepted by the app is never lost except by a crash inside the 2 s debounce, an explicit 'Quit and lose N', or the declared same-window value clashes above.
 **Do not explore outside the files listed above and their tests.**
+
+## Closed
+
+Closed by `b9625577d` at 2026-10-18T05:48:45Z. closed by the next batch; chain ended at B2.7

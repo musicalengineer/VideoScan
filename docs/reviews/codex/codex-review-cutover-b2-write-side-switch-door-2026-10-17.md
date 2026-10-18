@@ -59,3 +59,7 @@ Row-refusal savepoint rollback and existing-row tombstone-before-marker ordering
 5. CONCURRENCY: the committer on the main actor + hashing off it — can a record mutate during hashing and the stale fingerprint become the baseline? Two commits overlapping (debounce + quit)?
 6. The known gaps the agent declared (new rows without a digest deferred; marker changing twice in 2 s refused; purged records never deleted from SQLite; direct scheduleSave callers; owner token not compared) — rank them by data-loss risk and say which must close before a real user flips.
 **Do only this:** findings (P1 first) with file:line + a one-line failure scenario; at most three P2/P3. **Do not explore outside the files listed above and their tests.**
+
+## Closed
+
+Closed by `efab05ed8` at 2026-10-18T05:48:45Z. closed by the next batch; chain ended at B2.7

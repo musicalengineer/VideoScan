@@ -47,3 +47,7 @@ Remaining scoped files/tests: **read, no additional confirmed P1 findings**. An 
 
 **Do only this:** (1) CLOSED/OPEN with file:line for: the B2.2 P1 (veto), (e) rescan purge, F1, F2, F3. (2) at most THREE new P1 findings with a one-line failure scenario — focus: a door that removes records from memory but is NOT in the purge-door table (grep every `records.remove`, `records = `, `records.removeAll`, `records[i] =`, filter-reassign; the sensor only matches some shapes) → is the row resurrected at relaunch, or worse, lost?; `placeRecord` — does the new record inherit every curated value of the replaced id before the old id is purged?; the veto's "disk fact" exception (Trash of a file already moved while held) — can it write a revision the store then refuses?; `sealedCopyBlocking` on the main thread during a long VACUUM (a 200 MB db) — UI freeze acceptable vs a hang? Confirm or refute: after the flip, an edit accepted by the app is never lost except by a crash inside the 2 s debounce or an explicit 'Quit and lose N'.
 **Do not explore outside the files listed above and their tests.**
+
+## Closed
+
+Closed by `4a91fdb7f` at 2026-10-18T05:48:45Z. closed by the next batch; chain ended at B2.7

@@ -37,3 +37,7 @@ No additional P1 findings. All listed files and tests were read; remaining scope
 
 **Do only this:** (1) your two B2.3 findings: CLOSED (file:line) or OPEN. (2) at most TWO new P1 findings with a one-line failure scenario. Confirm or refute, finally: after the flip, an edit accepted by the app is never lost except by a crash inside the 2 s debounce or an explicit 'Quit and lose N'.
 **Do not explore outside the files listed above and their tests.**
+
+## Closed
+
+Closed by `87c84b898` at 2026-10-18T05:48:45Z. closed by the next batch; chain ended at B2.7

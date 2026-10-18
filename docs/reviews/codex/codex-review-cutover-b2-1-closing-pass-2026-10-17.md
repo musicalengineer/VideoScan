@@ -55,3 +55,7 @@ Other reviewed scoped files/tests: **read, no independent findings**. No files w
 **Do only this:** (1) for each of your 7 findings and the 5 ranked gaps: CLOSED (file:line) or OPEN (why). (2) at most THREE new P1 findings the fix introduced, each with file:line and a one-line failure scenario — focus on: the pending_rows path (a held row that also gets edited; a pending id colliding with a files id; a crash between the files insert and the pending delete), the per-revision marker snapshots (ordering; a Trash of 1,000 rows), the purge path (a record removed from memory by a rescan that will re-add it under a new id — churn or loss?), the Switch flush+freeze in one turn. Confirm or refute: after the flip, an edit accepted by the app is never lost on quit, crash, or relaunch, except by an explicit 'Quit and lose N' answer.
 
 **Do not explore outside the files listed above and their tests.**
+
+## Closed
+
+Closed by `f3900b36f` at 2026-10-18T05:48:45Z. closed by the next batch; chain ended at B2.7

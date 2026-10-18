@@ -43,3 +43,7 @@ Other scoped files/tests: **read, no additional findings**. Tests inspected, not
 
 **Do only this:** (1) each of your B2.1 findings (a) propagation, (b) marker flight, (c) pending held, (d) marker replay, (e) rescan purge: CLOSED (file:line) or OPEN (why). (2) at most THREE new P1 findings with file:line + one-line failure scenario — focus: can `writeBlocking` deadlock (called on the main actor while a GRDB reader or the async `write` path also needs the writer; the import job's hold; quit); the `markerWillChange` pre-commit when the store is read-only or held (agent says it refuses with words — is any accepted edit lost?); the two-look purge (an id absent at two consecutive full commits because a long scan swaps records twice — is a live file's row purged and its curated values lost?); schema v5 on an existing v4 catalog (migration on open, idempotent?). Confirm or refute: after the flip, an edit accepted by the app is never lost except by a crash inside the 2 s debounce or an explicit 'Quit and lose N'.
 **Do not explore outside the files listed above and their tests.**
+
+## Closed
+
+Closed by `49cb7794a` at 2026-10-18T05:48:45Z. closed by the next batch; chain ended at B2.7

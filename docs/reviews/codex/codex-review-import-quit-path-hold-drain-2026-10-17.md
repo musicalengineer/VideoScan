@@ -59,3 +59,7 @@ the import. Recommended: `wal_checkpoint(TRUNCATE)` in
 
 **Attack:** (1) each of your four findings: CLOSED or OPEN with file:line. (2) Force-release ordering when the 30 s bound expires: can the held edits be saved while the importer's transaction is still open and later COMMITs (two writers)? (3) Can `holdWrites` hang forever (a save that never finishes; `acknowledgedInFlight` never decremented on a throw)? (4) Does `decodeCatalogFile` see exactly what `load()` sees (dedupe, pair rewiring, designation)? (5) `IntegrityRow.init(record:)` off the main actor — any main-actor state read?
 **Do only this:** findings (P1 first) with file:line + one-line failure scenario; at most three P2/P3. **Do not explore outside the files listed above.**
+
+## Closed
+
+Closed by `HEAD` at 2026-10-18T01:37:41Z. 2 P1 + 1 P2 closed red-first; staging + publish fence
