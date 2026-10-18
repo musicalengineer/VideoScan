@@ -43,8 +43,7 @@ row, quit, relaunch — all there. Rescan one small drive — rows stay, nothing
   field shows empty, you pick later) — your call if you want "latest wins" instead.
 
 ## Machines
-RAM disk `VideoScanNight` (32 GB) is mine for the night — I eject it and restore your 16 GB XcodeRAM before
-you open Xcode. M5: full suite run (Metal toolchain installed there overnight). Disk: ~188 GB free.
+RAM disk restored: VideoScanNight ejected, your 16 GB XcodeRAM back, Xcode's DerivedData pointing at it. M5: full suite run (Metal toolchain installed there overnight). Disk: ~188 GB free.
 
 ## Decisions waiting for you (none block the flip)
 1. **Copies of the same content edited differently within 2 s** → a conflict, both values kept, field
@@ -59,5 +58,13 @@ you open Xcode. M5: full suite run (Metal toolchain installed there overnight). 
 - An October 6 Angel batch ("Untitled1-video-only", Christmas 2006) that you cleared last night — it
   blocked the import correctly.
 
-## M5 full suite
-(filled in when it finishes)
+## M5 full suite (11,811 tests)
+- Run 2 (on the evening's main): 9 real issues, all handled — 3 sensors needed registration for the new
+  storage code (notes carriers, a signed scan note, the audit's same-instant fd check), and 1 real
+  behaviour change: a stale uncurated row at an output path was kept instead of replaced → fixed
+  (history is kept only when the row carries curation). The rest were timing budgets under the
+  full-suite load (they pass alone).
+- Run 3 (final main) **hung** on the M5 — one test host at full CPU for an hour, the run idle for 6 h.
+  Left for you: I don't kill processes on your machines without asking.
+- CI on GitHub was red at 10:00 on two things I fixed at 10:20: a docs-link check (two wrapped paths)
+  and a line CI's older Xcode 26.3 can't compile (a local variable shadowing a function). Re-running.
