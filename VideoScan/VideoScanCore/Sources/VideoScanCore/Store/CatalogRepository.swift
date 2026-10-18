@@ -278,8 +278,10 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading {
     /// left out and named in the returned words.
     func replaceDuplicateMember(fileID: String, _ member: CatalogRecordDTO.DuplicateMemberRow?) throws -> String?
     func replaceSoundPrint(digest: String, _ print: CatalogRecordDTO.SoundPrintRow?) throws
-    /// The content's display row(s) for `field` from `curated`, `conflict = 0`
-    /// (a person's write resolves a conflict for that content).
+    /// The content's SCALAR display row for `field` from `curated`,
+    /// `conflict = 0` (a person's write resolves a conflict for that
+    /// content). The sets (tags, people, attestations) are never written
+    /// here: only as a copy's delta (`write…Delta`, cutover B2.4).
     func writeDisplayValue(digest: String, field: CatalogDDL.KnowledgeField,
                            _ curated: CatalogRecordDTO.CuratedKnowledge, setAt: Int64) throws
     /// The content's scalar display row for `field` as an unresolved
@@ -310,6 +312,17 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading {
     /// conflicts included, is left exactly as it was.
     func writePeopleDelta(digest: String, added: [CatalogRecordDTO.PeopleTagRow],
                           removed: [CatalogRecordDTO.PeopleTagRow]) throws
+
+    // Cutover B2.4 (GRDBCatalogRepository+LivePending.swift)
+    /// The tags a person changed on one copy, as a delta on the content's
+    /// set: `removed` tags deleted, `added` tags inserted; every other tag —
+    /// another copy's addition in the same commit included — left as it was.
+    func writeTagsDelta(digest: String, added: [String], removed: [String]) throws
+    /// The backup attestations a person changed on one copy, as a delta:
+    /// `removed` deleted by their key (kind, time, answer, who), `added`
+    /// written settled (`conflict = 0`); every other attestation left as it was.
+    func writeAttestationsDelta(digest: String, added: [CatalogRecordDTO.BackupAttestationRow],
+                                removed: [CatalogRecordDTO.BackupAttestationRow]) throws
 }
 
 // MARK: - The seam

@@ -12,11 +12,16 @@
 // backups / footage decisions / duplicate member / sound print when they
 // differ, the display rows + one `row_knowledge` row per curated field —
 // a SHARED curated field only when this record changed it since its own
-// baseline (codex P1-1), people as a delta (codex P1-6) — the row-scoped
-// values and the pair link, and the bound rows of each derived kind that
+// baseline (codex P1-1), the shared SETS (people — codex P1-6 — tags and
+// backup attestations — B2.4) as this copy's delta against its own
+// baseline — the row-scoped values and the pair link, and the bound rows of each derived kind that
 // differs (each kind in a nested savepoint: a kind the bound table cannot
 // hold is left out and the row is PARTIAL — codex P2-7 — so the app keeps
 // it changed and sends it again).
+//
+// After every row: each content whose sets were written is read back once
+// and its rows report the sets the store ENDS with (B2.4,
+// CatalogSetDelta.swift) — the app shows them on every copy.
 //
 // A record whose stored row carries the purge marker comes back (it is in
 // the app's records again): its marker moves on by one revision with its
@@ -68,6 +73,7 @@ struct CatalogCommitBody {
             if wrote { landed += 1 }
             ledger.record(row)
         }
+        try settleSets()
         let designationLanded = try writeDesignation()
         guard landed > 0 || designationLanded else {
             ledger.noteNothingLanded()
@@ -244,26 +250,54 @@ struct CatalogCommitBody {
             lastSeen: file.removalLastSeen, writtenAt: plan.now, door: source))
     }
 
+    /// The shared sets, written as deltas (never a whole-set replace).
+    static let deltaFields: Set<CatalogDDL.KnowledgeField> = [.tags, .backupAttestations, .confirmedByUserPeople, .rejectedPeople]
+
     /// Display rows for the content (per-content fields), then one
     /// `row_knowledge` row per field that differs (JSON null = cleared).
-    /// People go as a delta against the record's own baseline.
+    /// The sets go as a delta against the record's own baseline.
     private func writeKnowledge(_ current: CatalogRecordDTO, digest: String, fields: [CatalogDDL.KnowledgeField],
                                 baseline: CatalogSharedCurated?) throws {
-        let people = CatalogSharedCurated.Group.people.fields
-        if fields.contains(where: people.contains) {
-            let delta = CatalogPeopleDelta(now: current.curated.people, baseline: baseline)
-            try tx.writePeopleDelta(digest: digest, added: delta.added, removed: delta.removed)
-        }
+        try writeSetDeltas(current, digest: digest, fields: Set(fields), baseline: baseline)
         let inConflict = conflicts.fields(of: digest)
         for field in fields {
             if inConflict.contains(field) {
                 try tx.writeDisplayConflict(digest: digest, field: field)   // F2: shown empty, counted as a conflict
-            } else if !people.contains(field) {
+            } else if !Self.deltaFields.contains(field) {
                 try tx.writeDisplayValue(digest: digest, field: field, current.curated, setAt: plan.now)
             }
             try tx.appendRowKnowledge(CatalogRow.RowKnowledge(
                 fileID: current.file.id, digest: digest, field: field.rawValue,
                 value: CatalogRecordDTO.knowledgeValue(field, raw: current.raw) ?? .null, setAt: plan.now, source: source))
+        }
+    }
+
+    /// People (codex P1-6), tags and attestations (B2.4): only what THIS
+    /// copy added or removed since its own baseline — so two copies edited
+    /// differently in one commit both land, whatever their order.
+    private func writeSetDeltas(_ current: CatalogRecordDTO, digest: String, fields: Set<CatalogDDL.KnowledgeField>,
+                                baseline: CatalogSharedCurated?) throws {
+        if !fields.isDisjoint(with: CatalogSharedCurated.Group.people.fields) {
+            let delta = CatalogPeopleDelta(now: current.curated.people, baseline: baseline)
+            try tx.writePeopleDelta(digest: digest, added: delta.added, removed: delta.removed)
+        }
+        if fields.contains(.tags) {
+            let delta = CatalogSetDelta(now: current.curated.tags, was: baseline?.tags ?? [])
+            try tx.writeTagsDelta(digest: digest, added: delta.added, removed: delta.removed)
+        }
+        if fields.contains(.backupAttestations) {
+            let was = try CatalogRecordDTO.attestationRows(baseline?.backupAttestations ?? [])
+            let delta = CatalogSetDelta(now: current.curated.backupAttestations, was: was)
+            try tx.writeAttestationsDelta(digest: digest, added: delta.added, removed: delta.removed)
+        }
+    }
+
+    /// Each content whose sets this commit wrote, read back once as a load
+    /// gives it: its rows report the sets the store ends with (B2.4).
+    private func settleSets() throws {
+        for writer in ledger.setWriters(Self.deltaFields) {
+            guard let row = try tx.storedRow(id: writer.id.uuidString) else { continue }
+            ledger.settle(digest: writer.digest, CatalogCommit.SettledSets(try VideoRecord(loaded: row)))
         }
     }
 

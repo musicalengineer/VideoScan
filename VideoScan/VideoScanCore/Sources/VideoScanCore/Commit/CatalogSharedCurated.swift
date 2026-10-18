@@ -74,6 +74,13 @@ public struct CatalogSharedCurated: Sendable, Equatable {
             case .music: return [.familyMusic]
             }
         }
+
+        /// A set the copies write as deltas (tags, people, attestations —
+        /// cutover B2.4, CatalogSetDelta.swift): after a commit EVERY copy,
+        /// the writers too, shows the set the store ends with.
+        public var isSet: Bool {
+            self == .tags || self == .people || self == .attestations
+        }
     }
 
     /// True when `self` and `other` hold the same value(s) for `group`.

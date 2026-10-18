@@ -121,6 +121,14 @@ public enum CatalogCommit {
             }
         }
 
+        /// The shared curated fields this row wrote (empty unless written).
+        public var wroteShared: Set<CatalogDDL.KnowledgeField> {
+            switch self {
+            case .written(let curated, _), .partial(let curated, _): return Set(curated)
+            case .unchanged, .deferred, .refused, .removed: return []
+            }
+        }
+
         /// Everything the record holds is in the store (its baseline may move).
         public var isComplete: Bool {
             switch self {
@@ -142,6 +150,10 @@ public enum CatalogCommit {
         /// came back (the app sets it on the record so the next change
         /// follows on from it).
         public var adoptedRevision: Int?
+        /// Written rows of a content whose shared sets (tags, people,
+        /// attestations) this commit changed: the sets the store ENDS with
+        /// (cutover B2.4). nil = no set of the content was written.
+        public var settledSets: SettledSets?
     }
 
     public enum Outcome: Sendable, Equatable {
@@ -195,4 +207,26 @@ final class CatalogCommitLedger: @unchecked Sendable {
 
     func record(_ row: CatalogCommit.RowResult) { lock.withLock { stored.append(row) } }
     func noteNothingLanded() { lock.withLock { nothingOnPurpose = true } }
+
+    /// One written row per content whose shared sets this commit wrote
+    /// (cutover B2.4): digest → the row to read the content back through.
+    func setWriters(_ fields: Set<CatalogDDL.KnowledgeField>) -> [(digest: String, id: UUID)] {
+        lock.withLock {
+            var seen = Set<String>()
+            return stored.compactMap { row in
+                guard let digest = row.digest, !row.landing.wroteShared.isDisjoint(with: fields),
+                      seen.insert(digest).inserted else { return nil }
+                return (digest, row.id)
+            }
+        }
+    }
+
+    /// Every row of `digest` reports the sets the store ended with.
+    func settle(digest: String, _ sets: CatalogCommit.SettledSets) {
+        lock.withLock {
+            for index in stored.indices where stored[index].digest == digest && stored[index].landing.landed {
+                stored[index].settledSets = sets
+            }
+        }
+    }
 }

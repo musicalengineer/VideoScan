@@ -29,7 +29,11 @@
 // must do next. `propagate` then copies, onto the other in-memory copies of
 // one content, the value the store ENDS with for each shared group (the
 // last row of the commit that wrote it — B2.2, codex finding (a)), and only
-// onto a copy whose group still equals its own baseline. The commit is
+// onto a copy whose group still equals its own baseline. The SETS (tags,
+// people, attestations) are each copy's delta (B2.4): the value the store
+// ends with is the set it read back after the commit, and it goes onto the
+// copies that wrote too — A's {base,a} and B's {base,b} both become
+// {a,b,base}, exactly what the next launch loads. The commit is
 // synchronous, so "still equals its baseline" means exactly "the person did
 // not change it since the store last agreed" — no edit can arrive mid-commit.
 //
@@ -227,7 +231,9 @@ struct CatalogCommitBaseline {
     private func share(_ row: CatalogCommit.RowResult, item: CatalogCommit.Item, curated: [CatalogDDL.KnowledgeField],
                        into report: inout Report) {
         guard let digest = row.digest, !curated.isEmpty else { return }
-        report.shared.append((row.id, digest, CatalogSharedCurated.groups(of: curated), CatalogSharedCurated(item.snapshot)))
+        var committed = CatalogSharedCurated(item.snapshot)
+        row.settledSets?.apply(to: &committed)          // the sets as the store ended them (B2.4)
+        report.shared.append((row.id, digest, CatalogSharedCurated.groups(of: curated), committed))
     }
 
     // MARK: - Copies of one content (codex P1-2, B2.2 finding (a))
@@ -265,7 +271,8 @@ struct CatalogCommitBaseline {
         let now = CatalogSharedCurated(copy)
         let wasClean = prints[copy.id] == CatalogChangeDetector.fingerprint(VideoRecordDTO(copy))
         var changed = false
-        for (group, final) in groups where final.source != copy.id {
+        // A set reaches its writer too: the store's set is the union of the copies' deltas.
+        for (group, final) in groups where final.source != copy.id || group.isSet {
             if now.same(group, as: mine), !now.same(group, as: final.value) {
                 final.value.apply(group, to: copy)
                 changed = true

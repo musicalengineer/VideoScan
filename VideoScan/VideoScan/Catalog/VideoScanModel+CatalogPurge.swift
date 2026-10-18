@@ -20,6 +20,13 @@
 // a new record at a path an older record held (Promote, Balance Audio,
 // Repair, a derivative's landing).
 //
+// Cutover B2.4 (codex B2.3 finding "placeRecord purges a replaced row's
+// curation"): `placeRecord` purges the replaced id ONLY when the new record
+// is provably the same bytes (same whole-file digest), and only after the
+// new record has inherited every curated value. Otherwise the old record is
+// kept — removed from the catalog as `replacedAtPath`, its curation intact —
+// and one log line names what it carried (CatalogReplacedRecord.swift).
+//
 // Under catalog.json both are plain array work: the JSON save writes the
 // whole array, so there is nothing to tell.
 //
@@ -28,6 +35,7 @@
 // and guessing which keys were meant to go.)
 
 import Foundation
+import VideoScanCore
 
 extension VideoScanModel {
 
@@ -42,16 +50,66 @@ extension VideoScanModel {
         committer.purge(ids: gone, reason: reason)
     }
 
-    /// Put `newRec` at `path`: it replaces the record that holds the path
-    /// now (that record's id is purged when it differs), or is appended.
-    /// The one door for a job's output landing in the catalog.
+    /// Put `newRec` at `path` — the one door for a job's output landing in
+    /// the catalog. The LIVE record that holds the path now (a removed one
+    /// no longer holds it) is replaced:
+    ///   same id            → swapped in place;
+    ///   same whole-file digest → `newRec` inherits its curated values, then
+    ///                        its id is purged;
+    ///   otherwise          → it is kept, removed from the catalog as
+    ///                        `replacedAtPath` with its curation, and logged.
+    /// No live record at the path → appended.
     func placeRecord(_ newRec: VideoRecord, atPath path: String, reason: String) {
-        guard let existing = records.firstIndex(where: { $0.fullPath == path }) else {
+        guard let existing = records.firstIndex(where: { $0.fullPath == path && $0.removal == nil }) else {
             records.append(newRec)
             return
         }
-        let replaced = records[existing].id
-        records[existing] = newRec
-        if replaced != newRec.id { purgeCatalogRows(ids: [replaced], reason: reason) }
+        let replaced = records[existing]
+        if replaced.id == newRec.id {
+            records[existing] = newRec
+        } else if CatalogReplacedRecord.sameContent(replaced, newRec) {
+            inheritThenPurge(replaced, heir: newRec, at: existing, path: path, reason: reason)
+        } else {
+            retire(replaced, for: newRec, at: existing, path: path)
+        }
+    }
+
+    /// The same bytes: every curated value moves to `heir`, then the old id goes.
+    private func inheritThenPurge(_ old: VideoRecord, heir: VideoRecord, at index: Int, path: String, reason: String) {
+        let differing = CatalogReplacedRecord.inherit(from: old, onto: heir)
+        if !differing.isEmpty {
+            noteReplacement("the earlier record at \(path) (the same bytes) had \(differing.joined(separator: ", ")) — "
+                            + "the new record's own values are kept; the earlier ones stay in the catalog's history")
+        }
+        records[index] = heir
+        purgeCatalogRows(ids: [old.id], reason: reason)
+    }
+
+    /// Different (or unknown) bytes: the old record stays, removed from the
+    /// catalog as `replacedAtPath`; the new one lands beside it. A disk fact
+    /// (the file at that path is no longer those bytes), so refused only when
+    /// the old row's earlier marker change cannot be stored first — then the
+    /// old row stays live, the new one waits for the path (refused, not lost),
+    /// and the words say so.
+    private func retire(_ old: VideoRecord, for newRec: VideoRecord, at index: Int, path: String) {
+        let carried = CatalogReplacedRecord.describe(old)
+        let marker = RemovalMarker.removedFromCatalog(at: Date(), reason: .replacedAtPath)
+        // Marker FIRST (it frees the live path), then the new record right
+        // after the old one, so a commit in records order lands them in that order.
+        let refusal = Self.stampRemoval(old, marker, kind: .diskFact)
+        records.insert(newRec, at: index + 1)
+        if let why = refusal {
+            noteReplacement("NOT RECORDED: a new file landed at \(path), but the earlier record there (\(carried)) could not be "
+                            + "marked replaced — \(why). Both stay in the catalog; Verify Catalog will find it.")
+            return
+        }
+        noteReplacement("the earlier file at \(path) had \(carried) — kept in the catalog's history "
+                        + "(removed from the catalog as replacedAtPath; nothing purged)")
+    }
+
+    /// One line to the console, catalog.log and videoscan.log.
+    private func noteReplacement(_ line: String) {
+        log("Catalog: " + line)
+        appLog.write("[catalog] " + line)
     }
 }
