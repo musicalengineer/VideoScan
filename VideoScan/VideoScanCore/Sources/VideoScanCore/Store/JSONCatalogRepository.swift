@@ -105,6 +105,11 @@ struct JSONReader: CatalogReader {
     func auditResults(run: String, _ visit: (CatalogRow.AuditResult) throws -> Void) throws { throw unsupported }
     func personSearchOrdinals(run: String, _ visit: (Int) throws -> Void) throws { throw unsupported }
     func importReconciliation(run: String) throws -> ImportReconciliation { throw unsupported }
+    func loadedRows(_ visit: (CatalogLoadedRow) throws -> Void) throws { throw unsupported }
+    func loadCounts() throws -> CatalogLoadCounts { throw unsupported }
+    func finishedImports() throws -> Int { throw unsupported }
+    func displayTablesEmpty() throws -> Bool { throw unsupported }
+    func displaySources(_ visit: (DisplayValueDerivation.Source) throws -> Void) throws { throw unsupported }
 }
 
 // MARK: - Header probe

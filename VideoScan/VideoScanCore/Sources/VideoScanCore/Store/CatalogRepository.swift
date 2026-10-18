@@ -99,6 +99,9 @@ public enum CatalogWriter: String, Sendable {
     case promote
     case audit
     case ui
+    /// A one-time pass that derives stored values from stored evidence
+    /// (cutover B1: the display tables filled from knowledge_sources).
+    case migrate
 }
 
 // MARK: - What a body sees
@@ -148,8 +151,26 @@ public protocol CatalogRecordReading {
     func importReconciliation(run: String) throws -> ImportReconciliation
 }
 
+/// The readings a LOAD needs (cutover B1, catalog_cutover_f_prime §2): every
+/// `files` row as a `CatalogLoadedRow` (domain values; the SQL stays in
+/// Store/), the counts Catalog Status shows beside the records, and the
+/// display pass's inputs.
+public protocol CatalogLoadReading {
+    /// Every `files` row (live and tombstoned), ordered by (digest, id),
+    /// streamed — quarantine rows are never records.
+    func loadedRows(_ visit: (CatalogLoadedRow) throws -> Void) throws
+    func loadCounts() throws -> CatalogLoadCounts
+    /// `import_runs` rows that finished with the comparator's word (the
+    /// launch rule's evidence that the import is whole, §7).
+    func finishedImports() throws -> Int
+    /// True while no curated display row has been written.
+    func displayTablesEmpty() throws -> Bool
+    /// Every curated `knowledge_sources` occurrence that hangs on a digest.
+    func displaySources(_ visit: (DisplayValueDerivation.Source) throws -> Void) throws
+}
+
 /// The handle a `read` body receives.
-public protocol CatalogReader: CatalogRecordReading {
+public protocol CatalogReader: CatalogRecordReading, CatalogLoadReading {
     /// The committed generation this read's snapshot was taken at.
     var generation: Int { get }
 }
@@ -197,6 +218,10 @@ public protocol CatalogTransaction: CatalogRecordReading {
     func insertJobMarker(_ marker: CatalogRow.JobMarker) throws
     func appendAuditResult(_ result: CatalogRow.AuditResult) throws
     func insertPersonSearch(_ search: CatalogRow.PersonSearch) throws
+
+    // The display pass (cutover B1): re-checked and filled inside one write.
+    func displayTablesEmpty() throws -> Bool
+    func insertDisplayRows(_ rows: DisplayValueDerivation.Rows) throws
 }
 
 // MARK: - The seam

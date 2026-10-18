@@ -173,6 +173,12 @@ public class VideoRecord: Identifiable, Decodable {
     /// `volumeName` at the time of first migration). nil ⇒ never relocated.
     public var originVolume: String?
     public var wasCacheHit: Bool = false   // transient — not persisted to SQLite cache
+    /// Transient, set by a SQLite load (cutover B1): some derived values on
+    /// this record (captions, transcript, inferred date, checks, faces…) were
+    /// imported from catalog.json and have not been regenerated against the
+    /// bytes since (contract §e.8 `derived_unverified`). Read by Catalog
+    /// Status only ("N values from before the port"). Not persisted.
+    public var derivedProvenanceUnverified: Bool = false
 
     // Avid bin metadata (populated by cross-referencing .avb files)
     public var avidClipName: String = ""

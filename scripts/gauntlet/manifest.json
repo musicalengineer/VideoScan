@@ -28719,6 +28719,123 @@
         "theJudgedPathArrivesInTheImporter"
       ],
       "stage": "unit"
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogRecordDTORecordTests.swift",
+      "stage": "unit",
+      "suites": [
+        "CatalogJSONValueCoderTests",
+        "CatalogRecordDTORecordTests"
+      ],
+      "tests": [
+        "decoderMatchesTheAppDecoder",
+        "decoderRefusals",
+        "encoderMatchesTheAppEncoder",
+        "everyFixtureRowPins",
+        "fastParserMatchesTheCodableReader",
+        "nonFiniteRefuses",
+        "scalarShapes",
+        "theRichRecordPins"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/DisplayValueDerivationTests.swift",
+      "stage": "unit",
+      "suites": [
+        "DisplayValueDerivationTests"
+      ],
+      "tests": [
+        "aCopyWithoutTheFieldDoesNotVote",
+        "aDateIsPairedWithTheConfidenceOfTheSameCopy",
+        "aMatchingDatePairShowsBoth",
+        "aNameConfirmedOnOneCopyAndRejectedOnAnotherKeepsBothInConflict",
+        "aValueTheTableCannotHoldIsNeverInvented",
+        "confirmedNamesUnionWithTheEarliestDate",
+        "copiesThatAgreeShowTheValue",
+        "copiesThatDisagreeShowNothingWithConflict",
+        "digestsAreKeptApartAndFieldsOutsideTheDisplayAreIgnored",
+        "setsAreUnionsAndNeverConflict",
+        "theUserDateShapeIsTheDDLs"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadRoundTripTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogLoadRoundTripTests"
+      ],
+      "tests": [
+        "conflictingCopiesLoadEmpty",
+        "displayPassRunsOnce",
+        "everyMainShapeRoundTrips",
+        "pairIDsRoundTripConfidenceDoesNot",
+        "quarantineIsNotRecords",
+        "theRichRowRoundTrips"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadScaleTests.swift",
+      "stage": "performance",
+      "suites": [
+        "CatalogLoadScaleTests"
+      ],
+      "tests": [
+        "oneHundredThousandRowsLoadWithinBudget"
+      ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogLoadReadingTests"
+      ],
+      "tests": [
+        "aLoadWritesNothing",
+        "boundBeatsUnverified",
+        "readOnlyStoreRefusesTheLoad",
+        "unverifiedWhenNothingIsBound"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverReadSideTests.swift",
+      "stage": "regression",
+      "suites": [
+        "SQLiteCatalogLoaderTests",
+        "CatalogAuthorityFlipTests",
+        "P0TruthThroughSQLiteTests"
+      ],
+      "tests": [
+        "aSampledSoundStampIsNotImported",
+        "conflictCopiesLoadEmpty",
+        "databaseWithoutLatchIsInert",
+        "displayStringsAndPairs",
+        "journeyWordsAreUnchanged",
+        "landedRowsKeepTheirFacts",
+        "latchWithDamagedDatabaseRefuses",
+        "latchWithGoodImportIsSQLite",
+        "latchWithUnfinishedImportRefuses",
+        "latchWithoutDatabaseRefuses",
+        "modelLoadsJSONWithoutLatch",
+        "modelLoadsSQLiteWithLatch",
+        "modelRefusedIsJSONReadOnly",
+        "nothingIsJSON",
+        "quarantineAndCounts",
+        "sqliteRecordsEqualJSONRecords",
+        "theSeamIsOneLine",
+        "unprovenRowsAreNotRecords"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -31329,6 +31446,14 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/ImportSidecarsJSONTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogRecordDTORecordTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/DisplayValueDerivationTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
       "expected_floor": 2418,
@@ -32010,6 +32135,18 @@
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterDryRunTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadRoundTripTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogLoadReadingTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogCutoverReadSideTests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],
       "expected_floor": 32,
@@ -32222,6 +32359,10 @@
         },
         {
           "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Import/CatalogImporterScaleTests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Load/CatalogLoadScaleTests.swift",
           "reason": "package adapter needs separate component build/count extraction and confinement audit"
         }
       ],
