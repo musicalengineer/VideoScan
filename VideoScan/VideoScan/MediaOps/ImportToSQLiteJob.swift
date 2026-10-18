@@ -48,9 +48,15 @@
 // Quit (codex 2026-10-17 P1): the app's quit path Stops the job, awaits its
 // end (bounded, `ImportToSQLiteQuit.deadline`), then saves the held edits
 // durably before it lets the process go; past the bound the hold is
-// released by force and the edits are saved anyway (the import abandoned,
-// its transaction never committed). The hold itself is an atomic admission
-// boundary (`holdWrites` drains every save admitted before it, P2).
+// released by force and the edits are saved anyway. Round 2 (P1): the
+// importer writes only a STAGING folder and publishes onto catalog.sqlite
+// through a gate Stop closes (`ImportStopFlag.claimPublish`), so an
+// abandoned import's late COMMIT lands in staging, never in catalog.sqlite;
+// a save that cannot land at quit becomes a recovery copy, else the app
+// stays open (ImportToSQLiteQuit). The hold itself is an atomic admission
+// boundary (`holdWrites` drains every save admitted before it, P2) and is
+// BOUNDED (round 2 P2): a save that does not drain within
+// `holdDrainDeadline` gives the hold back and the job refuses before phase 1.
 //
 // Progress: phase 1 is 0–40 % of the bar (the audit's own fraction scaled
 // in), phase 2 40–50 %, phase 3 by the importer's phase lines.
@@ -145,6 +151,16 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
     var onImporterLineForTesting: ((String) -> Void)?
     /// After the pre-flight, before the hold (a save admitted in that window).
     var onBeforeHoldForTesting: (() -> Void)?
+    /// The importer's store (default: a production GRDBCatalogRepository) —
+    /// a test passes one with a stall injected before its COMMIT.
+    var makeRepositoryForTesting: (() async -> any CatalogRepository)?
+    /// How long taking the hold may wait for admitted saves to drain
+    /// (codex 2026-10-17 round 2 P2); a test shortens it.
+    var holdDrainDeadline: TimeInterval = CatalogStore.holdDrainDeadline
+    /// True once the importer claimed the publish gate (+Staging): its
+    /// verified staged set is being renamed onto catalog.sqlite and a Stop
+    /// can no longer prevent it. The quit's log line says so.
+    var publishBegan: Bool { stopFlag.publishClaimed }
 
     var title: String { Self.title(for: mode) }
     var subtitle: String { subtitleText }
@@ -218,8 +234,13 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
         onBeforeHoldForTesting?()
         // An atomic admission boundary (codex 2026-10-17 P2): returns once
         // every save admitted before it has landed; the generation the
-        // START line records is read after that drain.
-        await model.catalogStore.holdWrites(reason: Self.holdReason, owner: holdOwner)
+        // START line records is read after that drain. Bounded (round 2
+        // P2): a save that does not drain gives the hold back and refuses.
+        let hold = await model.catalogStore.holdWrites(reason: Self.holdReason, owner: holdOwner, within: holdDrainDeadline)
+        if case .writerStalled(let heldSaves) = hold {
+            refuseStalledWriter(heldSaves: heldSaves, model: model)
+            return
+        }
         let heldAt = await Self.fileGeneration(catalogURL)
         model.importToSQLiteNote("START — \(startClause(generation: heldAt))")
         let ending = await runPhases(model: model, catalogURL: catalogURL)
@@ -229,6 +250,17 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
             model.saveCatalogDebounced()
         }
         await conclude(ending, model: model, catalogURL: catalogURL)
+    }
+
+    /// The hold was given back because an admitted save did not finish:
+    /// refuse before phase 1; a save refused meanwhile is caught up.
+    private func refuseStalledWriter(heldSaves: Int, model: VideoScanModel) {
+        if heldSaves > 0 { model.saveCatalogDebounced() }
+        refuse([Self.stalledWriterWords(holdDrainDeadline)], model: model, tail: Self.nothingWritten)
+    }
+
+    nonisolated static func stalledWriterWords(_ deadline: TimeInterval) -> String {
+        "a catalog save did not finish within \(deadline.quitWords) s — try again"
     }
 
     /// The facts the pre-flight judges: the catalog file's own generation
@@ -381,10 +413,14 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
         let inputs = CatalogImporter.Inputs.beside(catalogURL: catalogURL, databaseFolder: catalogURL.deletingLastPathComponent())
         let environment = await gateEnvironment()
         let flag = stopFlag
-        let importer = CatalogImporter(repository: GRDBCatalogRepository()) { [weak self] line in
+        let repository = await makeRepositoryForTesting?() ?? GRDBCatalogRepository()
+        let importer = CatalogImporter(repository: repository) { [weak self] line in
             Task { @MainActor [weak self] in self?.absorb(line) }
         }
-        let outcome = await importer.run(inputs, environment: environment, mode: mode, stopRequested: { flag.isRaised })
+        // The publish gate (codex 2026-10-17 round 2 P1): Stop and publish
+        // are one atomic choice — whichever the flag sees first wins.
+        let outcome = await importer.run(inputs, environment: environment, mode: mode, stopRequested: { flag.isRaised },
+                                         publishPermit: { flag.claimPublish() })
         return (outcome, await importer.lastRunID ?? "")
     }
 
@@ -531,13 +567,28 @@ final class ImportToSQLiteJob: @MainActor MediaFileOperationJob, MediaFileOperat
 }
 
 /// The Stop flag the importer's `stopRequested` reads from the store's
-/// queue while the job raises it on the main actor. (For Rick: an atomic
-/// bool behind a lock.)
+/// queue while the job raises it on the main actor — and the PUBLISH GATE
+/// (codex 2026-10-17 round 2 P1): `claimPublish` and `raise` decide under
+/// one lock, so either Stop came first (nothing is published, ever) or the
+/// publish was claimed first (Stop arrives too late to matter and the quit
+/// says so). (For Rick: an atomic bool behind a lock, plus a
+/// compare-and-set on a second one.)
 final class ImportStopFlag: @unchecked Sendable {
     private let lock = NSLock()
     private var raised = false
+    private var claimed = false
     var isRaised: Bool { lock.withLock { raised } }
+    var publishClaimed: Bool { lock.withLock { claimed } }
     func raise() { lock.withLock { raised = true } }
+
+    /// True (and remembered) when Stop has not been raised.
+    func claimPublish() -> Bool {
+        lock.withLock {
+            guard !raised else { return false }
+            claimed = true
+            return true
+        }
+    }
 }
 
 // MARK: - Model half (the one sink)

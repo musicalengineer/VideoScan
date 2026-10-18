@@ -642,9 +642,13 @@ struct CatalogImporterEmptyTargetTests {
             }
         })
         #expect(run.outcome.refusalKinds == [.targetNotEmpty])
-        let counts = try await scene.read { try $0.recordCounts() }
+        // Since the codex 2026-10-17 P1 fence the run writes a STAGED
+        // database: the racing write is there (and kept), the target never appeared.
+        #expect(!FileManager.default.fileExists(atPath: scene.databaseURL.path))
+        let staged = scene.stagedDatabase(runID: run.runID)
+        let counts = try await scene.read(at: staged) { try $0.recordCounts() }
         #expect(counts == CatalogRow.TableCounts(files: 0, quarantine: 0, content: 1, importRuns: 0))
-        let generation = try await scene.read { $0.generation }
+        let generation = try await scene.read(at: staged) { $0.generation }
         #expect(generation == 1)
     }
 }

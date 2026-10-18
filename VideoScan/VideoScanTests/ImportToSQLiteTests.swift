@@ -231,7 +231,7 @@ struct ImportToSQLiteHoldTests {
         let sb = try ShowAgainSandbox.make("import_doors"); defer { sb.cleanup() }
         let store = sb.model.catalogStore
         let file = store.fileLocation
-        await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner())
+        #expect(await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
         #expect(store.saveNow(records: []) == false)
         #expect(await store.saveAcknowledged(records: []) == false)
         #expect(store.lastWriteError == .heldByJob("a test job"))
@@ -251,7 +251,7 @@ struct ImportToSQLiteHoldTests {
         #expect(store.saveNow(records: []))
         let before = store.currentGeneration
         let owner = CatalogWriteHoldOwner()
-        await store.holdWrites(reason: "a test job", owner: owner)
+        #expect(await store.holdWrites(reason: "a test job", owner: owner) == .taken)
         #expect(await store.saveAcknowledged(records: [], as: owner))
         #expect(store.currentGeneration == before + 1)
         #expect(CatalogSnapshot.headerProbe(at: URL(fileURLWithPath: store.fileLocation))?.generation == before + 1)
@@ -265,7 +265,7 @@ struct ImportToSQLiteHoldTests {
         let store = sb.model.catalogStore
         #expect(store.saveNow(records: []))
         let before = store.currentGeneration
-        await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner())
+        #expect(await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
         #expect(await store.saveAcknowledged(records: [], as: CatalogWriteHoldOwner()) == false)
         #expect(await store.saveAcknowledged(records: [], as: nil) == false)
         #expect(store.currentGeneration == before)
@@ -280,7 +280,7 @@ struct ImportToSQLiteHoldTests {
         let before = store.currentGeneration
         store.testWriteDelay = 0.3
         store.saveAsync(records: [])                                     // admitted: on the write queue, in flight
-        await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner())
+        #expect(await store.holdWrites(reason: "a test job", owner: CatalogWriteHoldOwner()) == .taken)
         #expect(!store.hasUnsavedChanges)
         #expect(store.currentGeneration == before + 1)
         #expect(CatalogSnapshot.headerProbe(at: URL(fileURLWithPath: store.fileLocation))?.generation == before + 1)
@@ -612,9 +612,10 @@ struct ImportToSQLiteJobTests {
     /// Start `job`; at the start of Verify (after the audit's save, inside
     /// the hold) make an edit as the app does (mark dirty, debounced save —
     /// held) and quit with `deadline`. Returns what the quit's save said.
-    private func quitDuringVerify(_ scene: ImportScene, _ job: ImportToSQLiteJob, deadline: TimeInterval) async throws -> Bool {
+    private func quitDuringVerify(_ scene: ImportScene, _ job: ImportToSQLiteJob,
+                                  deadline: TimeInterval) async throws -> ImportToSQLiteQuit.SaveOutcome {
         let model = scene.sandbox.model
-        var quit: Task<Bool, Never>?
+        var quit: Task<ImportToSQLiteQuit.SaveOutcome, Never>?
         job.onPhaseForTesting = { [weak job] phase in
             guard phase == .verify, quit == nil, let job else { return }
             model.records.first?.userNotes = "edited while the import held the catalog"
@@ -636,7 +637,7 @@ struct ImportToSQLiteJobTests {
         let scene = try ImportScene.make("quit"); defer { scene.cleanup() }
         let job = scene.job(.commit)
         let saved = try await quitDuringVerify(scene, job, deadline: 30)
-        #expect(saved)
+        #expect(saved == .saved)
         #expect(notesOnDisk(scene).contains("edited while the import held the catalog"))
         #expect(scene.sandbox.model.catalogStore.writeHold == nil)
         #expect(job.state == .cancelled)
@@ -651,7 +652,7 @@ struct ImportToSQLiteJobTests {
         let scene = try ImportScene.make("quitlate"); defer { scene.cleanup() }
         let job = scene.job(.commit)
         let saved = try await quitDuringVerify(scene, job, deadline: 0)
-        #expect(saved)
+        #expect(saved == .saved)
         #expect(notesOnDisk(scene).contains("edited while the import held the catalog"))
         #expect(scene.sandbox.model.catalogStore.writeHold == nil)
         #expect(scene.log().contains("Import to SQLite: quit — the import did not end within 0 s; its hold is released by force"))
@@ -731,7 +732,7 @@ struct ImportToSQLiteSensorTests {
     @Test("MOPS-16: the job holds the store's writes (with its owner token) before the three phases and releases them after; it never saves the catalog itself; the only sink is importToSQLiteNote")
     func theJobHoldsAndReleasesTheOneWriter() throws {
         let job = try Self.code("MediaOps/ImportToSQLiteJob.swift")
-        #expect(job.components(separatedBy: "catalogStore.holdWrites(reason: Self.holdReason, owner: holdOwner)").count == 2)
+        #expect(job.components(separatedBy: "catalogStore.holdWrites(reason: Self.holdReason, owner: holdOwner, within: holdDrainDeadline)").count == 2)
         #expect(job.components(separatedBy: "catalogStore.releaseWriteHold()").count == 2)
         let hold = try #require(job.range(of: "catalogStore.holdWrites("))
         let phases = try #require(job.range(of: "await runPhases("))
@@ -767,12 +768,12 @@ struct ImportToSQLiteSensorTests {
         #expect(app.components(separatedBy: "await self?.finishQuit(importJob: importJob, model: model)").count == 3, "both terminateLater paths")
         #expect(app.contains("await ImportToSQLiteQuit.settleForAppQuit(job: importJob, model: model)"))
         #expect(app.contains("if suspending || center.mustSettleBeforeQuit {"))
-        let release = try #require(app.range(of: "ImportToSQLiteQuit.releaseHoldIfStillHeld(model: model, deadline: 0)"))
-        let save = try #require(app.range(of: "catalogModel?.saveCatalogNow()"))
+        let release = try #require(app.range(of: "ImportToSQLiteQuit.releaseHoldIfStillHeld(model: model, deadline: 0, job: importJob)"))
+        let save = try #require(app.range(of: "CatalogQuitRecovery.saveAtTermination(model: model)"))
         #expect(release.lowerBound < save.lowerBound)
         let quit = try Self.code("MediaOps/ImportToSQLiteQuit.swift")
         let wait = try #require(quit.range(of: "await job.waitForEnd(deadline: deadline)"))
-        let force = try #require(quit.range(of: "releaseHoldIfStillHeld(model: model, deadline: deadline)"))
+        let force = try #require(quit.range(of: "releaseHoldIfStillHeld(model: model, deadline: deadline, job: job)"))
         let saveNow = try #require(quit.range(of: "model.saveCatalogNow()"))
         #expect(wait.lowerBound < force.lowerBound)
         #expect(force.lowerBound < saveNow.lowerBound)

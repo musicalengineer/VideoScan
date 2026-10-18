@@ -178,7 +178,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     ///   3. If Import to SQLite is running it holds every catalog save, so
     ///      the quit Stops it, awaits its end (bounded,
     ///      `ImportToSQLiteQuit.deadline`), and saves the held edits
-    ///      durably before replying (codex 2026-10-17 P1).
+    ///      durably before replying (codex 2026-10-17 P1). A save that
+    ///      cannot land becomes a recovery copy; if that fails too the reply
+    ///      is NO unless the person chooses to lose the changes (round 2 P1).
     /// Extends — doesn't replace — the existing willTerminate cleanup.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // UI-test target (VS_UI_TEST=1): quit immediately, no alerts —
@@ -241,8 +243,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                             ? "quit: Delete Duplicates finished its file and suspended (plan kept for resume)"
                             : "quit: Delete Duplicates did not finish in time — finish revoked, put-back requested")
                         for line in center.deleteDuplicatesQuitOutcomeLines { appLog.write("quit: \(line)") }
-                        await self?.finishQuit(importJob: importJob, model: model)
-                        NSApp.reply(toApplicationShouldTerminate: true)
+                        let reply = await self?.finishQuit(importJob: importJob, model: model) ?? .terminateNow
+                        NSApp.reply(toApplicationShouldTerminate: reply == .terminateNow)
                     }
                     return .terminateLater
                 } else if (midPair && response == .alertSecondButtonReturn)
@@ -271,8 +273,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                 let settled = await center.waitForPruneApplyToSettle(deadline: Self.pruneApplySettleDeadline)
                                 appLog.write(settled ? "quit: Move to Trash settled" : "quit: Move to Trash did not settle in time — proceeding")
                             }
-                            await self?.finishQuit(importJob: importJob, model: model)
-                            NSApp.reply(toApplicationShouldTerminate: true)
+                            let reply = await self?.finishQuit(importJob: importJob, model: model) ?? .terminateNow
+                            NSApp.reply(toApplicationShouldTerminate: reply == .terminateNow)
                         }
                         return .terminateLater
                     }
@@ -329,12 +331,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// The common end of the two file-operation `.terminateLater` paths,
     /// once their jobs have settled: Import to SQLite stopped and its held
     /// catalog edits saved (codex 2026-10-17 P1; no-op when none ran), then
-    /// the dossier/VLM shutdown latch and drain. The caller replies.
+    /// the dossier/VLM shutdown latch and drain. Returns the reply the
+    /// caller gives AppKit: `.terminateCancel` when the held edits could
+    /// not be saved nor copied and the person kept the app open (round 2
+    /// P1) — then nothing is shut down.
     @MainActor
-    private func finishQuit(importJob: ImportToSQLiteJob?, model: VideoScanModel?) async {
-        await ImportToSQLiteQuit.settleForAppQuit(job: importJob, model: model)
+    private func finishQuit(importJob: ImportToSQLiteJob?, model: VideoScanModel?) async -> NSApplication.TerminateReply {
+        let reply = await ImportToSQLiteQuit.settleForAppQuit(job: importJob, model: model)
+        guard reply == .terminateNow else { return reply }
         captionOrchestrator?.beginShutdown()
         await drainVLMForShutdownIfActive()
+        return reply
     }
 
     /// The VLM drain, shared by the immediate quit path and the
@@ -383,11 +390,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // those can block forever on a stalling volume.
             appLog.write("shutdown step: saving catalog")
             // A path that skipped applicationShouldTerminate's settle could
-            // still find Import to SQLite's hold up; the held edits outrank
-            // an import the exit abandons anyway (codex 2026-10-17 P1).
-            if let model = catalogModel { ImportToSQLiteQuit.releaseHoldIfStillHeld(model: model, deadline: 0) }
-            catalogModel?.saveCatalogNow()
-            appLog.write("shutdown step: catalog saved")
+            // still find Import to SQLite running: Stop it first (its publish
+            // gate closes — catalog.sqlite cannot appear), then release a hold
+            // still up; the held edits outrank an import the exit abandons
+            // (codex 2026-10-17 P1, round 2 P1). The save is CHECKED: a
+            // stalled writer or a failed save becomes a recovery copy, and
+            // every branch is logged (round 2 P1/P2).
+            if let model = catalogModel {
+                let importJob = fileOpsCenter?.activeImportToSQLite
+                importJob?.cancel()
+                ImportToSQLiteQuit.releaseHoldIfStillHeld(model: model, deadline: 0, job: importJob)
+                let outcome = CatalogQuitRecovery.saveAtTermination(model: model)
+                appLog.write("shutdown step: catalog — \(outcome)")
+            }
         }
         // Synchronous on purpose — Cmd-Q must not return before the RAM disk
         // is gone, otherwise it survives in /Volumes. Skipped under a UI-test
@@ -648,6 +663,9 @@ struct VideoScanApp: App {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak catalogModel] in
                                 catalogModel?.catalogAuditRunMarker.announceLastRun(to: catalogModel)
                                 catalogModel?.attachImportDryRunMarker()
+                                // A quit that could not save left a recovery
+                                // copy beside the catalog: say so (never merged).
+                                catalogModel?.announceCatalogRecoveryCopies()
                             }
                         }
                         // Catalog Status (2026-10-16, §4): the freshness
