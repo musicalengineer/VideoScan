@@ -1220,18 +1220,18 @@ struct AboutView: View {
             // Body
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    AboutSection(icon: "heart.fill", color: .pink, title: "Catalogs videos so you can search for people."){}
-                    AboutSection(icon: "externaldrive.connected.to.line.below", color: .green, title: "Finds videos locally or on the network.") {}
-                    AboutSection(icon: "person.crop.rectangle.stack", color: .blue, title: "Repairs and updates videos for archive or editing.") {}
-                    AboutSection(icon: "waveform.and.magnifyingglass", color: .purple, title: "Handles nearly all video formats.") {}
-                    AboutSection(icon: "brain.head.profile", color: .indigo, title: "Uses AI to recognize people in your videos.") {}
+                    AboutSection(icon: "heart.fill", color: .pink, title: "Find, catalog, and search all your videos."){}
+                    AboutSection(icon: "externaldrive.connected.to.line.below", color: .green, title: "Works locally or on networks.") {}
+                    AboutSection(icon: "person.crop.rectangle.stack", color: .blue, title: "Repairs, modernizes, and archives your media.") {}
+                    AboutSection(icon: "waveform.and.magnifyingglass", color: .purple, title: "Manage and View your Family Tree.") {}
+                    AboutSection(icon: "brain.head.profile", color: .indigo, title: "Uses AI technology to find people and events.") {}
                     
                     Divider()
 
                     HStack {
                         Spacer()
                         VStack(spacing: 4) {
-                            Text("Developed By Rick, inspired by Donna.")
+                            Text("Developed by Rick, inspired by Donna.")
                                 .font(.headline)
                             Text(BuildInfo.summary)
                                 .font(.system(.caption, design: .monospaced))
@@ -1246,7 +1246,7 @@ struct AboutView: View {
                                     .font(.system(.caption, design: .monospaced))
                             }
                             .foregroundStyle(.secondary)
-                            Text("PolyForm Noncommercial 1.0.0 · Not for sale")
+                            Text("This code can be shared but not sold. (PolyForm Noncom License 1.0)")
                                 .font(.system(.caption2, design: .monospaced))
                                 .foregroundStyle(.tertiary)
                             // Family Map borders (GH #227) — the acknowledgement
