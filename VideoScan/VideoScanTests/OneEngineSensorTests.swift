@@ -164,6 +164,7 @@ struct OneEngineSensorTests {
         "MediaOps/VideoScanModel+RemovalMarker.swift": "THE engine's catalog half",
         "Catalog/VideoScanModel+RescanPreservation.swift": "carries the existing marker across a rescan (no new state)",
         "ArchiveAngel/Review/VideoScanModel+ArchiveAngelBufferHygiene.swift": "an unrelated `removal` Task field",
+        "Integrity/CatalogConstraints.swift": "IntegrityRow's memberwise init — a read-only Sendable projection for Verify Catalog, never a record",
     ]
 
     @Test func onlyTheEngineWritesTheMarker() {
@@ -181,6 +182,7 @@ struct OneEngineSensorTests {
     static let revisionCarryAllowlist: [String: String] = [
         "Catalog/VideoScanModel+RescanPreservation.swift": "carries the revision with the marker across a rescan (no bump)",
         "MediaOps/VideoScanModel+RemovalMarker.swift": "adoptStoredRemovalRevision: a purged catalog.sqlite row came back (cutover B2.1)",
+        "Integrity/CatalogConstraints.swift": "IntegrityRow's memberwise init — a read-only Sendable projection for Verify Catalog, never a record",
     ]
 
     @Test func onlyTheEngineBumpsTheRemovalRevision() {
