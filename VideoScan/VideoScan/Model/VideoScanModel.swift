@@ -674,6 +674,11 @@ final class VideoScanModel: ObservableObject {
         recordIndex.record(forID: id, in: records)
     }
 
+    /// Many ids in one lookup — one scan for all misses, not one per id.
+    func records(forIDs ids: [UUID]) -> [UUID: VideoRecord] {
+        recordIndex.records(forIDs: ids, in: records)
+    }
+
     /// O(1) fullPath → record lookup (perf ride-along 2026-07-14); see
     /// RecordPathIndex (CatalogPerfMemo.swift) for the staleness
     /// contract — invalidated by records.didSet AND keyed on

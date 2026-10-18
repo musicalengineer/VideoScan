@@ -172,8 +172,9 @@ extension VideoScanModel {
         guard ArchiveAngel.attentionKinds.contains(kind) else { return nil }
         let by: MediaLedgerEvent.Actor = kind == .angelProposed ? .angel : .rick
         var events: [MediaLedgerEvent] = []
+        let byID = records(forIDs: recordIDs)
         for id in recordIDs {
-            guard let rec = record(forID: id) else { continue }
+            guard let rec = byID[id] else { continue }
             var detail: [String: String] = [:]
             if let reason, !reason.isEmpty { detail[MediaLedgerEvent.Detail.reason] = reason }
             if let score = scores[id] { detail[MediaLedgerEvent.Detail.score] = String(score) }

@@ -111,6 +111,29 @@ final class RecordIDIndex {
         return nil
     }
 
+    /// Many ids at once: hits from the index, and ONE linear scan for all
+    /// the misses together (not one per id — SCALE #10, 2026-10-18: a Clear
+    /// all of 3 undecided batches scanned 100k records 24 times, ~80 ms a
+    /// batch). Found misses mean the index was stale: rebuild once.
+    func records(forIDs ids: [UUID], in records: [VideoRecord]) -> [UUID: VideoRecord] {
+        if records.count != builtForCount {
+            rebuild(records)
+        }
+        var found: [UUID: VideoRecord] = [:]
+        var missing = Set<UUID>()
+        for id in ids {
+            if let hit = map[id] { found[id] = hit } else { missing.insert(id) }
+        }
+        guard !missing.isEmpty else { return found }
+        var stale = false
+        for rec in records where missing.contains(rec.id) && found[rec.id] == nil {
+            found[rec.id] = rec
+            stale = true
+        }
+        if stale { rebuild(records) }
+        return found
+    }
+
     func invalidate() {
         map.removeAll()
         builtForCount = -1
