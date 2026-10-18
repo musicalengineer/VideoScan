@@ -306,7 +306,8 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading {
     /// row (tombstone first; never a DELETE), or its pending row dropped.
     func purgeFile(id: String, since: Int64, writtenAt: Int64, door: String) throws -> CatalogRow.PurgeLanding
     /// The people a person changed on one copy, as a delta on the content's
-    /// display rows: `removed` (name, kind) rows deleted, `added` rows
+    /// display rows: `removed` rows deleted only where name, kind AND
+    /// confirmed_at all match (the exact row the copy saw — B2.6), `added` rows
     /// written with `conflict = 0` — a name the person set resolves that
     /// name's conflict (its other-kind conflict row goes); every other name,
     /// conflicts included, is left exactly as it was.
