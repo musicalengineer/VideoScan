@@ -697,8 +697,8 @@ extension VideoScanModel {
         // alone, not refused: nothing is wrong with the pair, so the row is
         // NOT re-marked Review and a later run may take it once the Angel
         // lets go.
-        if let hold = duplicateDeletionHoldRule()(rec) {
-            return .skip(note: hold.note, log: "Skipped \(e.filename): \(hold.note)", notCountedWhy: hold.why)
+        if let leftAlone = duplicateLeftAloneNow(rec) {
+            return .skip(note: leftAlone.note, log: "Skipped \(e.filename): \(leftAlone.note)", notCountedWhy: leftAlone.why)
         }
         if !PathScope.contains(keeper.fullPath, within: volumePath),
            let why = workingCopyRefusal(keeper: keeper, volumePath: volumePath, crossVolumeMode: crossVolumeMode,
@@ -706,6 +706,16 @@ extension VideoScanModel {
             return .refuse(note: why + " — refused \(stage)")
         }
         return .authorized(record: rec, keeper: keeper)
+    }
+
+    /// Why this copy is LEFT ALONE at its turn — a live hold, not a refusal
+    /// (nothing is wrong with the pair; a later run takes it): the Angel /
+    /// promoted-copy hold, or (cutover B2.3) a catalog that cannot record
+    /// its removal right now, asked before any disk work.
+    private func duplicateLeftAloneNow(_ rec: VideoRecord) -> (note: String, why: String)? {
+        if let hold = duplicateDeletionHoldRule()(rec) { return (hold.note, hold.why) }
+        guard let why = CatalogMarkerRelay.saveRefusal(for: rec) else { return nil }
+        return (DuplicateDeletionHold.leftAlonePrefix + Self.markerRefusal(rec, verb: "move <name> to the Trash", why), why)
     }
 
     /// A WORKING COPY (its keeper on another drive) may go only when the run
@@ -818,7 +828,8 @@ extension VideoScanModel {
                "a retained live row must never be stamped as deleted")
         // The live row, or — when it was replaced — the detached snapshot
         // the ledger line is written from (never a retained live row).
-        Self.stampRemoval(removed, marker, stage: stage)
+        // The file already left: a disk fact (B2.3).
+        recordFileLeft(removed, marker, stage: stage, whereNow: "left its folder (verified identical to its keeper)")
         if currentRecord != nil {
             catalogMutated = true
         } else {

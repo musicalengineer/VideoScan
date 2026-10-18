@@ -48,7 +48,27 @@ extension GRDBTransaction {
                              content.firstSeenHow.rawValue])
     }
 
+    /// ONE UPDATE for the occurrence columns AND (when it changed) the
+    /// removal marker (cutover B2.3, regression F1): the files CHECKs tie
+    /// the marker to the lifecycle mirror (`removalMirrorsLifecycle`), so
+    /// two statements left a row between them that no CHECK allows — an
+    /// Undo of a committed Trash (lifecycle back first, marker still
+    /// 'inTrash') was refused. SQLite checks a row once, after the whole
+    /// statement. The marker columns are still named ONLY when the marker
+    /// changed: `archive_copy_never_trashed` fires on ANY update of
+    /// removal_state (its tombstone is already in).
     func updateFile(_ file: CatalogRecordDTO.FileRow, markerChanged: Bool) throws {
+        let marker = markerChanged
+            ? """
+              ,
+              removal_state = ?, removal_since = ?, removal_reason = ?, removal_trash_path = ?,
+              removal_trash_emptied_at = ?, removal_last_seen = ?, removal_revision = ?
+              """
+            : ""
+        let markerValues: [DatabaseValueConvertible?] = markerChanged
+            ? [file.removalState, file.removalSince, file.removalReason, file.removalTrashPath,
+               file.removalTrashEmptiedAt, file.removalLastSeen, file.removalRevision]
+            : []
         try db.execute(sql: """
             UPDATE files SET
               content_digest = ?, volume_uuid = ?,
@@ -62,40 +82,35 @@ extension GRDBTransaction {
               scan_host = ?, scanned_at = ?, scan_root_label = ?, bundle_container = ?, source_host = ?,
               original_full_path = ?, origin_volume = ?, machine_notes = ?,
               lifecycle = ?, archive_stage = ?, master_location = ?, set_aside_reason = ?,
-              needs_reformat = ?, workspace_active = ?
+              needs_reformat = ?, workspace_active = ?\(marker)
             WHERE id = ?
-            """, arguments: [
-                file.contentDigest?.lowercased(), file.volumeUUID, file.volumeUUID,
-                file.fullPath, file.pathFold, file.filename, file.ext, file.directory,
-                file.sizeBytes, file.fsCreatedAt, file.fsModifiedAt,
-                file.stampDevice, file.stampInode, file.stampMtimeNs, file.stampCtimeNs, file.stampVolumeUUID,
-                file.digestComputedAt, file.digestSource?.rawValue, file.sampledHash, file.sampledHashAt, file.partialMD5,
-                file.streamType, file.durationS, file.container, file.videoCodec, file.audioCodec,
-                file.embeddedCreatedAt, file.embeddedCreatedSource, GRDBJSONText.text(file.probeExtra),
-                file.scanHost, file.scannedAt, file.scanRootLabel, file.bundleContainer, file.sourceHost,
-                file.originalFullPath, file.originVolume, file.machineNotes,
-                file.lifecycle, file.archiveStage, file.masterLocation, file.setAsideReason,
-                file.needsReformat ? 1 : 0, file.workspaceActive ? 1 : 0,
-                file.id,
-            ])
+            """, arguments: StatementArguments(Self.occurrenceValues(file) + markerValues + [file.id]))
         guard db.changesCount == 1 else {
             throw DatabaseError(resultCode: .SQLITE_CONSTRAINT, message: "files row \(file.id) is not there to update")
-        }
-        // The marker only when it changed (its tombstone is already in):
-        // `archive_copy_never_trashed` fires on ANY update of removal_state.
-        if markerChanged {
-            try db.execute(sql: """
-                UPDATE files SET removal_state = ?, removal_since = ?, removal_reason = ?, removal_trash_path = ?,
-                                 removal_trash_emptied_at = ?, removal_last_seen = ?, removal_revision = ?
-                 WHERE id = ?
-                """, arguments: [file.removalState, file.removalSince, file.removalReason, file.removalTrashPath,
-                                 file.removalTrashEmptiedAt, file.removalLastSeen, file.removalRevision, file.id])
         }
         // After the path trigger has cleared a stale stamp: the record's own.
         try db.execute(sql: """
             UPDATE files SET audit_seen_volume_uuid = ?, audit_seen_mount_from = ?, audit_seen_device_key = ?, audit_seen_at = ?
              WHERE id = ?
             """, arguments: [file.auditSeenVolumeUUID, file.auditSeenMountFrom, file.auditSeenDeviceKey, file.auditSeenAt, file.id])
+    }
+
+    /// `updateFile`'s occurrence values, in its column order.
+    private static func occurrenceValues(_ file: CatalogRecordDTO.FileRow) -> [DatabaseValueConvertible?] {
+        let values: [DatabaseValueConvertible?] = [
+            file.contentDigest?.lowercased(), file.volumeUUID, file.volumeUUID,
+            file.fullPath, file.pathFold, file.filename, file.ext, file.directory,
+            file.sizeBytes, file.fsCreatedAt, file.fsModifiedAt,
+            file.stampDevice, file.stampInode, file.stampMtimeNs, file.stampCtimeNs, file.stampVolumeUUID,
+            file.digestComputedAt, file.digestSource?.rawValue, file.sampledHash, file.sampledHashAt, file.partialMD5,
+            file.streamType, file.durationS, file.container, file.videoCodec, file.audioCodec,
+            file.embeddedCreatedAt, file.embeddedCreatedSource, GRDBJSONText.text(file.probeExtra),
+            file.scanHost, file.scannedAt, file.scanRootLabel, file.bundleContainer, file.sourceHost,
+            file.originalFullPath, file.originVolume, file.machineNotes,
+            file.lifecycle, file.archiveStage, file.masterLocation, file.setAsideReason,
+            file.needsReformat ? 1 : 0, file.workspaceActive ? 1 : 0,
+        ]
+        return values
     }
 
     func replaceArchiveCopy(fileID: String, _ copy: CatalogRecordDTO.ArchiveCopyRow?) throws {
@@ -192,6 +207,20 @@ extension GRDBTransaction {
              .supersededByID, .mediaReportCard:
             return   // row-scoped or column-backed: no display table
         }
+    }
+
+    /// The scalar display row as an unresolved conflict (regression F2):
+    /// the DDL's CHECKs allow a value-less row only with `conflict = 1`.
+    func writeDisplayConflict(digest: String, field: CatalogDDL.KnowledgeField) throws {
+        let tables: [CatalogDDL.KnowledgeField: String] = [
+            .starRating: "stars", .userNotes: "user_notes", .mediaDisposition: "dispositions",
+            .userDate: "user_dates", .userDateConfidence: "user_dates",
+            .userPlace: "user_places", .userPlaceConfidence: "user_places", .familyMusic: "family_music",
+        ]
+        guard let table = tables[field] else { return }
+        let digest = digest.lowercased()
+        try db.execute(sql: "DELETE FROM \(table) WHERE digest = ?", arguments: [digest])
+        try db.execute(sql: "INSERT INTO \(table) (digest, conflict) VALUES (?, 1)", arguments: [digest])
     }
 
     /// DELETE the content's row, then INSERT the shown value (nil = no row).

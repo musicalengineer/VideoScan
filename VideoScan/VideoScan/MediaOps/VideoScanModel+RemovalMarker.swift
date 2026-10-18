@@ -34,23 +34,66 @@ import VideoScanCore
 // and RemovalUndo used to change the marker without a bump; catalog.sqlite's
 // DDL refuses that, so they bump now too. Under catalog.json the revision is
 // only the ABA tag `revertRemoval` reads, and the relay does nothing.)
+//
+// Cutover B2.3 (codex B2.2 P1): the BEFORE answer is binding. When the
+// SQLite committer says the catalog can't save the change (held by a job,
+// read-only, the row's previous change not storable), the writer changes
+// NOTHING — no marker, no mirror, no revision — and returns the words:
+// "can't move <name> to the Trash right now — the catalog can't save (…);
+// try again when …". Each door shows them the way it already shows a
+// refused row. An identical re-stamp is not a change and is never refused.
 
 extension VideoScanModel {
 
     /// Mark `rec` gone with `marker`. Idempotent for an identical marker.
     /// `stage` overrides the lifecycle mirror (nil = the marker's default).
+    /// `kind` `.diskFact` = the file already left (the Trash engine's and
+    /// Delete Duplicates' settlements): refused only when the row's
+    /// previous marker change cannot be stored first.
+    /// Returns nil when written, else the refusal words (nothing changed).
     /// Does not save or publish: the door batches those (one save per batch).
     /// Static so a door with no model at hand (the caption orchestrator)
     /// still writes through the one function.
-    nonisolated static func stampRemoval(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage? = nil) {
-        CatalogMarkerRelay.markerWillChange(rec)
+    @discardableResult
+    nonisolated static func stampRemoval(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage? = nil,
+                                         kind: CatalogMarkerChange = .request) -> String? {
         let changed = rec.removal != marker
+        if changed, let why = CatalogMarkerRelay.markerWillChange(rec, kind: kind) {
+            return markerRefusal(rec, verb: markerVerb(marker), why)
+        }
         if changed { rec.removalRevision += 1 }
         rec.removal = marker
         if let mirror = stage ?? Self.lifecycleMirror(for: marker.state) {
             rec.lifecycleStage = mirror
         }
         if changed { CatalogMarkerRelay.markerChanged(rec) }
+        return nil
+    }
+
+    /// The catalog half of a file that ALREADY left (the Trash engine's and
+    /// Delete Duplicates' settlements): a disk fact, so refused only when
+    /// the row's previous marker change cannot be stored first (B2.3). That
+    /// rare refusal is a mixed state — the file moved, the row reads live —
+    /// and it is said, with where the file went, never silent.
+    func recordFileLeft(_ rec: VideoRecord, _ marker: RemovalMarker, stage: LifecycleStage, whereNow: String) {
+        guard let why = Self.stampRemoval(rec, marker, stage: stage, kind: .diskFact) else { return }
+        log("  NOT RECORDED: \(rec.filename) \(whereNow), but its row could not be marked — \(why). Verify Catalog will find it.")
+    }
+
+    /// "can't move clip.mov to the Trash right now — the catalog can't save
+    /// (held — …); try again when that job finishes".
+    nonisolated static func markerRefusal(_ rec: VideoRecord, verb: String, _ why: String) -> String {
+        "can't \(verb.replacingOccurrences(of: "<name>", with: rec.filename)) right now — \(why)"
+    }
+
+    /// The person's verb for a marker change; `<name>` is the file name.
+    nonisolated static func markerVerb(_ marker: RemovalMarker?) -> String {
+        switch marker?.state {
+        case nil: return "restore <name>"
+        case .inTrash?: return "move <name> to the Trash"
+        case .removedFromCatalog?: return "remove <name> from the catalog"
+        case .missing?: return "mark <name> Missing"
+        }
     }
 
     /// Cutover B2.1 (gap 3): a record whose catalog.sqlite row had been
@@ -81,14 +124,19 @@ extension VideoScanModel {
     /// lifecycle or archive-stage edit survives). No other field is
     /// touched. False = the row was changed by another door since — even
     /// back to an equal value (nil → Trash → Put Back → Restore → nil has a
-    /// higher revision); there is nothing of ours to undo.
+    /// higher revision); there is nothing of ours to undo. Also false when
+    /// the catalog refused the change (B2.3) — `refused` gets the words.
     /// (For Rick: a compare-and-swap on (marker, revision), then on each
     /// mirror — the revision is the ABA tag.)
     @discardableResult
     nonisolated static func revertRemoval(_ rec: VideoRecord, wrote: RemovalMarker?, previous: RemovalMarker?, revision: Int,
-                                          mirrorsBefore: RemovalMirrors, mirrorsAfter: RemovalMirrors) -> Bool {
+                                          mirrorsBefore: RemovalMirrors, mirrorsAfter: RemovalMirrors,
+                                          refused: (String) -> Void = { _ in }) -> Bool {
         guard rec.removal == wrote, rec.removalRevision == revision else { return false }
-        CatalogMarkerRelay.markerWillChange(rec)
+        if let why = CatalogMarkerRelay.markerWillChange(rec) {
+            refused(markerRefusal(rec, verb: "undo the last change to <name>", why))
+            return false
+        }
         rec.removal = previous
         rec.removalRevision += 1
         if rec.lifecycleStage == mirrorsAfter.lifecycleStage { rec.lifecycleStage = mirrorsBefore.lifecycleStage }
@@ -113,8 +161,10 @@ extension VideoScanModel {
         if fileLeft, rec.fullPath.isEmpty || !FileManager.default.fileExists(atPath: rec.fullPath) {
             return "\(rec.filename) is still in the Trash (or gone) — Put Back in Finder, then Restore again to mark it live."
         }
-        CatalogMarkerRelay.markerWillChange(rec)
         let changed = rec.removal != nil
+        if changed, let why = CatalogMarkerRelay.markerWillChange(rec) {
+            return Self.markerRefusal(rec, verb: Self.markerVerb(nil), why)
+        }
         if changed { rec.removalRevision += 1 }
         rec.removal = nil
         // A successful, explicit Restore clears the old "Manually Deleted"
@@ -172,7 +222,8 @@ extension VideoScanModel {
         for probe in gone {
             guard let rec = record(forID: probe.id), var marker = rec.removal,
                   probe.describes(marker), marker.noteTrashEmptied(at: now) else { continue }
-            CatalogMarkerRelay.markerWillChange(rec)
+            // Refused (B2.3): left as it is; the next look at the Trash notes it.
+            guard CatalogMarkerRelay.markerWillChange(rec) == nil else { continue }
             rec.removalRevision += 1      // a marker change, like every other (B2.1)
             rec.removal = marker
             CatalogMarkerRelay.markerChanged(rec)
@@ -256,14 +307,19 @@ struct RemovalUndo {
         archiveStage = record.archiveStage
     }
 
-    func reinstate() {
-        CatalogMarkerRelay.markerWillChange(record)
+    /// nil when put back; else the refusal words (B2.3) and nothing changed.
+    @discardableResult
+    func reinstate() -> String? {
         let changed = record.removal != removal
+        if changed, let why = CatalogMarkerRelay.markerWillChange(record) {
+            return VideoScanModel.markerRefusal(record, verb: VideoScanModel.markerVerb(removal), why)
+        }
         if changed { record.removalRevision += 1 }   // a marker change, like every other (B2.1)
         record.removal = removal
         record.lifecycleStage = lifecycleStage
         record.archiveStage = archiveStage
         if changed { CatalogMarkerRelay.markerChanged(record) }
+        return nil
     }
 }
 

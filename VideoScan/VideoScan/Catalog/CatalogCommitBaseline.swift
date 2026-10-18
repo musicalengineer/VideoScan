@@ -15,10 +15,10 @@
 //            it (no whole-file digest yet — gap 1). B2.2 (codex B2.1 closing
 //            pass): a held row is durable only AT that fingerprint, so an
 //            older payload never certifies a newer edit whose update failed;
-//   absent   ids the app did not hold at the last full commit. B2.2: an id
-//            is purged only when it is absent at two full commits in a row
-//            (or at a synchronous save) — a momentary absence never costs a
-//            held row its payload (and the store keeps it anyway, tombstoned).
+//   reportedAbsent  ids the store holds that left memory with no door's
+//            purge, already named once. B2.3 (codex B2.2 finding (e)): absence
+//            never purges — only `purges(requested:present:)`, fed by the
+//            doors' explicit `CatalogCommitter.purge(ids:reason:)`, does.
 //
 // The B2.1 marker journal (a snapshot per revision, replayed in a later
 // commit) is GONE: the committer now commits a row before its marker moves
@@ -53,9 +53,9 @@ struct CatalogCommitBaseline {
     private(set) var shared: [UUID: CatalogSharedCurated] = [:]
     private(set) var waiting: [UUID: (print: Fingerprint, words: String)] = [:]
     private(set) var held: [UUID: Fingerprint] = [:]
-    /// Ids the store holds (or holds pending) that the app did not hold at
-    /// the last full commit.
-    private var absentLastTime: Set<UUID> = []
+    /// Ids the store holds (or holds pending) that left memory with no
+    /// door's purge, already named once.
+    private var reportedAbsent: Set<UUID> = []
     /// Words already said for a partly-written row (said once until they change).
     private var partialWords: [UUID: [String]] = [:]
 
@@ -79,7 +79,7 @@ struct CatalogCommitBaseline {
             }
         }
         waiting = [:]
-        absentLastTime = []
+        reportedAbsent = []
         partialWords = [:]
     }
 
@@ -90,14 +90,27 @@ struct CatalogCommitBaseline {
 
     // MARK: - At a commit
 
-    /// The ids due for a purge: absent now AND at the previous full commit,
-    /// or — `final` (a synchronous save: quit, Delete All) — absent now.
-    /// In a stable order. Called once per FULL commit (never a marker one).
-    mutating func purges(present: Set<UUID>, final: Bool) -> [UUID] {
-        let absent = Set(prints.keys).union(held.keys).subtracting(present)
-        let due = final ? absent : absent.intersection(absentLastTime)
-        absentLastTime = absent
-        return due.sorted { $0.uuidString < $1.uuidString }
+    /// The store holds `id` (as a row, or as a held payload).
+    func holds(_ id: UUID) -> Bool {
+        prints[id] != nil || held[id] != nil
+    }
+
+    /// The ids due for a purge: a door asked (`requested`), the store holds
+    /// the row and memory does not. Nothing else is ever purged. In a
+    /// stable order. Called once per FULL commit (never a marker one).
+    func purges(requested: Set<UUID>, present: Set<UUID>) -> [UUID] {
+        requested.filter { holds($0) && !present.contains($0) }.sorted { $0.uuidString < $1.uuidString }
+    }
+
+    /// Ids the store holds that are not in memory and that no door asked
+    /// to purge — a bug elsewhere — not named before. Each is returned
+    /// ONCE (until it comes back and leaves again); the row is kept.
+    mutating func unpurgedAbsences(present: Set<UUID>, requested: Set<UUID>) -> [UUID] {
+        let absent = Set(prints.keys).union(held.keys).subtracting(present).subtracting(requested)
+        reportedAbsent.formIntersection(absent)
+        let new = absent.subtracting(reportedAbsent)
+        reportedAbsent.formUnion(new)
+        return new.sorted { $0.uuidString < $1.uuidString }
     }
 
     /// Of the changed records the store took nothing from (they wait at
@@ -146,7 +159,7 @@ struct CatalogCommitBaseline {
         shared[row.id] = nil
         waiting[row.id] = nil
         held[row.id] = nil
-        absentLastTime.remove(row.id)
+        reportedAbsent.remove(row.id)
         partialWords[row.id] = nil
     }
 

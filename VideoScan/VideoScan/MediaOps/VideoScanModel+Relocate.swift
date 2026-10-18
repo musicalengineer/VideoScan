@@ -971,8 +971,11 @@ extension VideoScanModel {
     /// for the 959 classification. Plus the audit note and the relocate log
     /// line, as before.
     private func markSourceNotFound(_ r: VideoRecord) {
-        if r.removal == nil {
-            Self.stampRemoval(r, .missing(noticedAt: Date(), lastSeen: nil, reason: .missingAtMigrate))
+        if r.removal == nil,
+           let why = Self.stampRemoval(r, .missing(noticedAt: Date(), lastSeen: nil, reason: .missingAtMigrate)) {
+            // B2.3: the catalog refused — nothing is written; the next Reconcile asks again.
+            log("  Reconcile: \(why)")
+            return
         }
         r.archiveStage = .manuallyDeleted
         r.notes = appendNote(r.notes, "Reconcile \(stamp()): source file not found")

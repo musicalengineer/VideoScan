@@ -1376,11 +1376,7 @@ extension VideoScanModel {
         source.masterLocation = masterArchive?.targetPath ?? source.masterLocation
         copy.masterLocation = source.masterLocation
 
-        if let existing = records.firstIndex(where: { $0.fullPath == destinationURL.path }) {
-            records[existing] = copy
-        } else {
-            records.append(copy)
-        }
+        placeRecord(copy, atPath: destinationURL.path, reason: "Promote: the archive copy replaced the older record at its path")
         searchIndex.update(copy)
         searchIndex.update(source)
         noteCatalogRecordsMutated()
@@ -1450,11 +1446,7 @@ extension VideoScanModel {
         let note = "Promote \(stamp): promoted from \(sourcePath) (source record \(sourceID.uuidString) no longer in the catalog) · sha256 \(sha256)"
         copy.notes = copy.notes.isEmpty ? note : "\(copy.notes)\n\(note)"
 
-        if let existing = records.firstIndex(where: { $0.fullPath == destinationURL.path }) {
-            records[existing] = copy
-        } else {
-            records.append(copy)
-        }
+        placeRecord(copy, atPath: destinationURL.path, reason: "Promote: the orphan archive copy replaced the older record at its path")
         searchIndex.update(copy)
         noteCatalogRecordsMutated()
         saveCatalogDebounced()

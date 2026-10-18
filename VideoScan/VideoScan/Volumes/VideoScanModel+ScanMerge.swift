@@ -532,10 +532,12 @@ extension VideoScanModel {
         // below), which is neither re-seen nor in the (post-exclusion) gone
         // set, and cross-root candidates aren't under the root at all.
         let gonePaths = Set(genuinelyGone.map(\.fullPath))
-        records.removeAll {
+        let leaving: (VideoRecord) -> Bool = {
             PathScope.contains($0.fullPath, within: root)
                 && (newPaths.contains($0.fullPath) || gonePaths.contains($0.fullPath))
         }
+        let replacedIDs = Set(records.lazy.filter(leaving).map(\.id))
+        records.removeAll(where: leaving)
         // Adopted paths are NOT appended: the moved file's record is the OLD
         // instance, relocated in place right after — its id survives, so
         // pairedWith references from other records keep resolving.
@@ -556,6 +558,10 @@ extension VideoScanModel {
         if invalidPairEndpoints > 0 {
             log("  ⚠ Released \(invalidPairEndpoints) stale A/V pair endpoint(s) after refreshed durations proved them incompatible.")
         }
+        // Cutover B2.3: the ids this merge took out — re-seen (their fresh
+        // record carries the preserved values) or gone from disk — are
+        // purged explicitly, in this same turn. Nothing else is.
+        purgeCatalogRows(ids: replacedIDs, reason: "rescan of \(root): replaced by a fresh record or gone from disk")
         scanMergeLog.info("Scan merge for \(volName, privacy: .public): +\(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved, \(retainedInvisible.count) retained-invisible under \(root, privacy: .public)")
         appLog.write("Catalog merge (\(volName)): \(targetRecords.count) upserted (\(outcome.refreshed) refreshed), \(genuinelyGone.count) pruned, \(adoptions.count) moved (followed their files), \(retainedInvisible.count) retained (files on disk, invisible to scan options)")
         return outcome
@@ -658,10 +664,14 @@ extension VideoScanModel {
         // every replacement door has one fixity contract.
         reconcileLiveArchiveFixityBeforeReplacement(
             root: root, targetRecords: targetRecords)
-        records.removeAll {
+        let leaving: (VideoRecord) -> Bool = {
             PathScope.contains($0.fullPath, within: root) && newPaths.contains($0.fullPath)
         }
+        let replacedIDs = Set(records.lazy.filter(leaving).map(\.id))
+        records.removeAll(where: leaving)
         records.append(contentsOf: targetRecords)
+        // Cutover B2.3: the re-seen records' old ids, purged explicitly.
+        purgeCatalogRows(ids: replacedIDs, reason: "partial rescan of \(root): replaced by a fresh record")
         let pairsCarried = rewirePairCarryover(pairCarry, targetRecords: targetRecords)
         if pairsCarried > 0 {
             log("  ↪ \(pairsCarried) A/V pairing(s) carried across the partial rescan.")
@@ -812,9 +822,18 @@ extension VideoScanModel {
     /// (`pre-target-removal`, 2026-07-03). Same test gate and same
     /// same-second uniquify behavior as always. Returns nil on failure —
     /// callers treat that as "no recovery copy → do not destroy".
+    ///
+    /// Cutover B2.3 (regression F3): once catalog.sqlite is the authority,
+    /// catalog.json is frozen and `writeSnapshot` refuses — every door gated
+    /// on this snapshot was dead. The safety copy is then a sealed `VACUUM
+    /// INTO` copy of catalog.sqlite, `catalog.<prefix>.<stamp>.sqlite` in
+    /// the same folder, written with the store's writer held (so it is
+    /// exactly the committed catalog); the door's removals then go through
+    /// its explicit purge. Under catalog.json nothing changed.
     @discardableResult
     func snapshotCatalog(prefix: String) -> String? {
         if TestEnvironment.isTestHost && catalogStore === CatalogStore.shared { return nil }
+        if catalogCutover.isSQLiteAuthority { return sqliteSnapshot(prefix: prefix) }
         guard let snap = snapshotPath(prefix: prefix) else { return nil }
         if catalogStore.writeSnapshot(records: records, toPath: snap) {
             return snap
@@ -827,6 +846,7 @@ extension VideoScanModel {
     /// barrier. Same naming, same fail-safe (nil ⇒ no snapshot).
     func snapshotCatalogAsync(prefix: String) async -> String? {
         if TestEnvironment.isTestHost && catalogStore === CatalogStore.shared { return nil }
+        if catalogCutover.isSQLiteAuthority { return sqliteSnapshot(prefix: prefix) }   // B2.3: see snapshotCatalog
         guard let snap = snapshotPath(prefix: prefix) else { return nil }
         if await catalogStore.writeSnapshotAsync(records: records, toPath: snap) {
             return snap
@@ -834,18 +854,30 @@ extension VideoScanModel {
         return nil
     }
 
-    /// catalog.<prefix>.<stamp>[.n].json beside catalog.json, uniquified.
-    private func snapshotPath(prefix: String) -> String? {
+    /// catalog.<prefix>.<stamp>[.n].<ext> beside the catalog, uniquified.
+    private func snapshotPath(prefix: String, ext: String = "json") -> String? {
         let dir = (catalogStore.fileLocation as NSString).deletingLastPathComponent
         let stamp = ISO8601DateFormatter().string(from: Date())
             .replacingOccurrences(of: ":", with: "-")
-        var snap = (dir as NSString).appendingPathComponent("catalog.\(prefix).\(stamp).json")
+        var snap = (dir as NSString).appendingPathComponent("catalog.\(prefix).\(stamp).\(ext)")
         // Two snapshots in the same second: uniquify rather than fail.
         var n = 1
         while FileManager.default.fileExists(atPath: snap) {
-            snap = (dir as NSString).appendingPathComponent("catalog.\(prefix).\(stamp).\(n).json")
+            snap = (dir as NSString).appendingPathComponent("catalog.\(prefix).\(stamp).\(n).\(ext)")
             n += 1
         }
+        return snap
+    }
+
+    /// The SQLite authority's safety copy (B2.3): a sealed copy of
+    /// catalog.sqlite, said in the one sink. nil = none (the door fails safe).
+    private func sqliteSnapshot(prefix: String) -> String? {
+        guard let committer = catalogCutover.committer, let snap = snapshotPath(prefix: prefix, ext: "sqlite") else { return nil }
+        if let why = committer.repository.sealedCopyBlocking(to: URL(fileURLWithPath: snap)) {
+            catalogAuthorityNote("REFUSED safety copy \(prefix) — \(why)")
+            return nil
+        }
+        catalogAuthorityNote("OUTCOME safety copy \(prefix) of catalog.sqlite: \(snap)")
         return snap
     }
 }

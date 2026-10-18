@@ -29044,19 +29044,51 @@
         "CatalogCommitterSyncSensorTests"
       ],
       "tests": [
-        "absentTwicePurges",
+        "absentTwiceKept",
         "baselineIsSynchronous",
         "batchIsOneCommit",
         "commitSectionIsSynchronous",
-        "copiesAgreeWithStore",
+        "copiesEditedDifferentlyAreAConflict",
         "curatedReversionAcrossMarkers",
+        "explicitPurgeOfHeldRow",
         "failedPendingUpdateNotDurable",
         "momentaryAbsenceKeepsPayload",
         "noFlightMachinery",
         "onlyTheCommitterBlocks",
         "quitIsOneCall",
-        "synchronousSavePurgesAtOnce",
         "trashUndoAfterFirstInsert"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB23Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogMarkerVetoTests",
+        "CatalogExplicitPurgeTests",
+        "CatalogMarkerVetoDoorTests",
+        "CatalogCopyConflictTests",
+        "CatalogSQLiteSnapshotTests",
+        "CatalogPurgeDoorSensorTests"
+      ],
+      "tests": [
+        "absenceNeverPurges",
+        "bothValuesKept",
+        "deleteAllPurges",
+        "detachedSnapshotNotVetoed",
+        "everyDoorPurges",
+        "heldTrashIsRefused",
+        "identicalRestampNeverRefused",
+        "jsonAuthorityUnchanged",
+        "noInference",
+        "refusalWords",
+        "removeFromCatalogKeepsTheRow",
+        "removeWhileHeld",
+        "rescanSwapsKeepValues",
+        "restoreWhileHeld",
+        "sealedCopy",
+        "undoWhileHeldIsVetoed"
       ]
     },
     {
@@ -32444,6 +32476,10 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogCutoverB22Tests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogCutoverB23Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         },
         {

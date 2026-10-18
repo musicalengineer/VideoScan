@@ -31,24 +31,34 @@
 // Doors: the 2 s debounce (it only decides WHEN the synchronous commit
 // runs), `commitNow` (quit and every synchronous save), `commitAcknowledged`
 // (the same synchronous commit; returns its truth), `commitNow(ids:)` (the
-// removal markers).
+// removal markers), `purge(ids:reason:)` (a door took records out).
 //
-// Removal markers (gap 2). catalog.sqlite wants every marker revision with
-// its own tombstone. The one marker writer tells the relay BEFORE a change
-// (`markerWillChange`): rows whose previous marker change is not committed
-// yet are committed NOW, synchronously — so the store holds revision n
-// before a record moves to n+1, by construction. After a change
+// Removal markers (gap 2; B2.3 veto). catalog.sqlite wants every marker
+// revision with its own tombstone. The one marker writer asks BEFORE a
+// change (`markerWillChange`), and the answer is binding (codex B2.2 P1: a
+// pre-commit that failed used to be ignored, the change went ahead, and the
+// store then refused that row — and every later save of it — for good):
+//   * a person's request (`.request`: Trash, Remove, Restore, Undo, an
+//     audit's mark) is REFUSED while no commit can be written now — held by
+//     a job, read-only / refused, being reopened — with words saying why and
+//     when to try again: "the catalog can't save (…); try again when …";
+//   * any change (`.request` or `.diskFact`, a file that already left) of a
+//     row whose previous marker change is not committed yet commits that one
+//     NOW, synchronously; when it cannot be stored the change is REFUSED —
+//     the store holds revision n before any record moves to n+1, always.
+// A refused change touches nothing (no revision bump). After a change
 // (`markerDidChange`) the row is remembered and one commit is asked for at
 // once (zero delay), so Trash of 1,000 rows in one turn is ONE commit.
 //
-// Purges (gap 3). An id the app no longer holds is purged (tombstoned; a
-// held row's payload is KEPT, `pending_purges`) only when it was absent at
-// two full commits in a row, or at a synchronous save (`commitNow`: quit,
-// Delete All — the caller says "this is the catalog"). Two looks, not the
-// scan's completion signal: the scan merge swaps its records in ONE
-// main-actor turn (VideoScanModel+ScanMerge), so no commit sees half of it,
-// and the second look covers every other door that removes and re-adds a
-// record across turns — with no coupling to any one job.
+// Purges (gap 3; B2.3 — codex B2.2 finding (e)). A row is purged
+// (tombstoned; a held row's payload KEPT, `pending_purges`) ONLY when a door
+// that removes a record from the catalog says so: `purge(ids:reason:)`,
+// through VideoScanModel.purgeCatalogRows, in the same turn as the removal.
+// Absence proves nothing — B2.2 purged an id absent at two full commits,
+// and codex showed a live file's row (and its saved curated values) could
+// go that way. An id the store holds that left memory with no door's purge
+// is a BUG: said once per id ("left memory without a purge — kept in the
+// catalog") and kept.
 //
 // Held rows (gap 1): durable only at the fingerprint of the payload the
 // store holds — a failed pending update leaves the row dirty and NOT durable.
@@ -66,7 +76,10 @@
 //                                   changed, the store's words are shown, and
 //                                   NO further commit is tried until the
 //                                   person chooses Catalog ▸ Reopen SQLite
-//                                   Catalog (never retried silently).
+//                                   Catalog (never retried silently);
+//   marker change refused         → the row is left exactly as it was; the
+//                                   door shows the words (once per reason
+//                                   here, per row at the door).
 //
 // Memory: CatalogCommitBaseline (≈ 150 B a record); a commit holds one
 // snapshot per record for its length (the snapshots share their strings and
@@ -74,10 +87,22 @@
 //
 // (For Rick: a write-behind flusher whose flush is now a plain blocking
 // call on the UI thread — dirty bits computed by checksum, a 2-second timer
-// deciding when to flush, and nothing else running while it does.)
+// deciding when to flush, and nothing else running while it does. The
+// marker veto is a "can I take the lock?" asked before the mutation, the
+// purge an explicit erase(key) from the code that erased the element.)
 
 import Foundation
 import VideoScanCore
+
+/// What a removal-marker change is, for the veto (B2.3).
+enum CatalogMarkerChange: Sendable {
+    /// A person's request or an audit's mark: refused while no commit can
+    /// be written now.
+    case request
+    /// The disk already changed (the file is in the Trash): refused only
+    /// when the row's previous marker change cannot be stored first.
+    case diskFact
+}
 
 @MainActor
 final class CatalogCommitter {
@@ -94,6 +119,8 @@ final class CatalogCommitter {
     }
 
     static let debounce: Duration = .seconds(2)
+    /// Lines naming records that left memory without a purge, per commit.
+    static let unpurgedLinesPerCommit = 10
 
     let repository: any CatalogRepository
     private let input: () -> Input
@@ -108,6 +135,9 @@ final class CatalogCommitter {
     var onHeldChanged: (Set<UUID>) -> Void = { _ in }
     /// A reopen or an adopt made the store writable again.
     var onWritableAgain: () -> Void = {}
+    /// True when `record` is THIS session's live record (not a detached
+    /// snapshot, not another session's): only those can be vetoed.
+    var owns: (VideoRecord) -> Bool = { _ in true }
 
     private var baseline = CatalogCommitBaseline()
     /// The designation catalog_state holds as far as this session knows.
@@ -115,10 +145,13 @@ final class CatalogCommitter {
     private var debounceTask: Task<Void, Never>?
     /// Rows whose removal marker changed since their last commit.
     private var markerDirty: Set<UUID> = []
+    /// Ids a door removed from the catalog, not yet purged (id → why).
+    private var purgeRequested: [UUID: String] = [:]
     /// Reopen / Adopt is closing and opening the store: no commit runs.
     private var reopening = false
     private var heldBy: String?
     private var lastRefusalNote: String?
+    private var lastMarkerRefusal: String?
     private(set) var blockedReason: String? {
         didSet { if blockedReason != oldValue { onBlockedChanged(blockedReason) } }
     }
@@ -149,6 +182,7 @@ final class CatalogCommitter {
     func adoptBaseline(_ records: [VideoRecord], held: Set<UUID> = []) {
         baseline.adopt(records, held: held)
         markerDirty = []
+        purgeRequested = [:]
     }
 
     /// Refuse every commit until a person reopens (a read-only open).
@@ -166,12 +200,18 @@ final class CatalogCommitter {
 
     // MARK: - Removal markers (through CatalogMarkerRelay)
 
-    /// The marker of `id` is about to change. Rows whose previous marker
-    /// change is not committed yet are committed now, in one synchronous
-    /// commit, so the store holds revision n before any moves to n+1.
-    func markerWillChange(id: UUID) {
-        guard markerDirty.contains(id) else { return }
+    /// The marker of `record` is about to change. nil = it may; else the
+    /// words ("the catalog can't save (…); try again when …") and the
+    /// writer must leave the row exactly as it is. See the header.
+    func markerWillChange(_ record: VideoRecord, kind: CatalogMarkerChange) -> String? {
+        guard owns(record) else { return nil }
+        let id = record.id
+        if kind == .request, let why = saveRefusal() { return refuseMarker(why) }
+        guard markerDirty.contains(id) else { return nil }
         commitNow(ids: markerDirty)
+        guard markerDirty.contains(id) else { return nil }
+        let words = baseline.waiting[id]?.words ?? "its previous removal-marker change is not saved yet"
+        return refuseMarker(saveRefusal() ?? Self.cantSave(words, until: "that change is saved"))
     }
 
     /// The marker of `id` changed (its revision already bumped): commit it
@@ -180,6 +220,29 @@ final class CatalogCommitter {
         guard baseline.prints[id] != nil else { return }
         markerDirty.insert(id)
         scheduleCommit(after: .zero)
+    }
+
+    /// Why no commit can be written right now, in the person's words; nil
+    /// when one can.
+    private func saveRefusal() -> String? {
+        if reopening { return Self.cantSave("it is being reopened", until: "the reopen finishes") }
+        if let blockedReason { return Self.cantSave(blockedReason, until: "you choose Catalog ▸ Reopen SQLite Catalog") }
+        if let hold = input().holdReason { return Self.cantSave("held — \(hold)", until: "that job finishes") }
+        return nil
+    }
+
+    /// Said once per reason (a batch of 1,000 refusals is one line here;
+    /// the door names its rows).
+    private func refuseMarker(_ why: String) -> String {
+        if lastMarkerRefusal != why {
+            lastMarkerRefusal = why
+            sink("Catalog store: REFUSED a removal-marker change — \(why). The row is left as it was.")
+        }
+        return why
+    }
+
+    static func cantSave(_ words: String, until: String) -> String {
+        "the catalog can't save (\(words)); try again when \(until)"
     }
 
     // MARK: - The doors
@@ -200,7 +263,7 @@ final class CatalogCommitter {
     @discardableResult
     func commitNow() -> Bool {
         cancelTimer()
-        return commit(.quit, owner: nil, scope: .everything(final: true))
+        return commit(.quit, owner: nil, scope: .everything)
     }
 
     /// `saveCatalogAcknowledged`: the same synchronous commit; its truth is
@@ -208,7 +271,7 @@ final class CatalogCommitter {
     /// holder's own passes.
     func commitAcknowledged(owner: CatalogWriteHoldOwner?) async -> Bool {
         cancelTimer()
-        return commit(.acknowledged, owner: owner, scope: .everything(final: false))
+        return commit(.acknowledged, owner: owner, scope: .everything)
     }
 
     /// The removal-marker door: only these rows, now.
@@ -217,9 +280,21 @@ final class CatalogCommitter {
         commit(.save, owner: nil, scope: .only(ids))
     }
 
+    /// A door took these records out of the catalog (VideoScanModel
+    /// .purgeCatalogRows): their rows are purged in one synchronous commit
+    /// now — or, while the store is held or blocked, at the first commit
+    /// that can run. The ONLY way a row is purged (B2.3).
+    func purge(ids: Set<UUID>, reason: String) {
+        let known = ids.filter { baseline.holds($0) }
+        guard !known.isEmpty else { return }
+        for id in known { purgeRequested[id] = reason }
+        sink("Catalog store: START purge of \(known.count) row(s) — \(reason)")
+        commit(.save, owner: nil, scope: .everything)
+    }
+
     private func commitFromTimer() {
         debounceTask = nil
-        commit(.save, owner: nil, scope: .everything(final: false))
+        commit(.save, owner: nil, scope: .everything)
     }
 
     private func cancelTimer() {
@@ -268,6 +343,7 @@ final class CatalogCommitter {
     private func becameWritable() {
         blockedReason = nil
         lastRefusalNote = nil
+        lastMarkerRefusal = nil
         baseline.forgetWaiting()
         onWritableAgain()
         scheduleCommit()
@@ -277,8 +353,8 @@ final class CatalogCommitter {
 
     /// Which records a commit looks at.
     private enum Scope {
-        /// Every record; purges due; `final` = a synchronous save.
-        case everything(final: Bool)
+        /// Every record; the purges the doors asked for; the designation.
+        case everything
         /// Only these rows (the marker door): no purges, no designation.
         case only(Set<UUID>)
     }
@@ -357,10 +433,10 @@ final class CatalogCommitter {
 
     /// The plan, or nil when there is nothing to write.
     private func prepare(_ door: CatalogWriter, _ detected: Detection, now: Input, scope: Scope) -> Prepared? {
-        guard case .everything(let final) = scope else {
+        guard case .everything = scope else {
             return detected.items.isEmpty ? nil : Prepared(plan: CatalogCommit.Plan(door: door, items: detected.items), designationJSON: nil)
         }
-        let purges = baseline.purges(present: Set(now.records.map(\.id)), final: final)
+        let purges = duePurges(present: Set(now.records.map(\.id)))
         let json = Self.json(now.designation)
         let designation: CatalogCommit.Designation = Self.sameJSON(json, storedDesignationJSON)
             ? .leave : .current(json: json, clearAuthorized: now.clearAuthorized)
@@ -369,11 +445,34 @@ final class CatalogCommitter {
                         designationJSON: json)
     }
 
+    /// The purges the doors asked for that are due now (the store holds the
+    /// row, memory does not). A request whose record came back under the
+    /// same id, or that the store does not hold, is dropped. Every other
+    /// absence is named once and KEPT.
+    private func duePurges(present: Set<UUID>) -> [UUID] {
+        for id in purgeRequested.keys.filter({ present.contains($0) || !baseline.holds($0) }) {
+            purgeRequested[id] = nil
+        }
+        let requested = Set(purgeRequested.keys)
+        noteUnpurged(baseline.unpurgedAbsences(present: present, requested: requested))
+        return baseline.purges(requested: requested, present: present)
+    }
+
+    private func noteUnpurged(_ ids: [UUID]) {
+        for id in ids.prefix(Self.unpurgedLinesPerCommit) {
+            sink("Catalog store: record \(id.uuidString) left memory without a purge — kept in the catalog")
+        }
+        if ids.count > Self.unpurgedLinesPerCommit {
+            sink("Catalog store: … and \(ids.count - Self.unpurgedLinesPerCommit) more record(s) left memory without a purge — kept in the catalog")
+        }
+    }
+
     private func absorb(_ outcome: CatalogCommit.Outcome, _ prepared: Prepared) -> Bool {
         let door = prepared.plan.door.rawValue
         switch outcome {
         case .committed(let generation, let rows):
             adoptDesignation(prepared)
+            lastMarkerRefusal = nil
             let durable = apply(rows, prepared.plan)
             sink("Catalog store: OUTCOME commit generation \(generation) via \(door) — " + Self.counts(rows))
             return durable
@@ -408,6 +507,7 @@ final class CatalogCommitter {
         for line in report.lines { sink(line) }
         markerDirty.subtract(rows.filter { $0.landing.landed || $0.landing == .unchanged }.map(\.id))
         markerDirty.subtract(plan.purges)
+        for id in plan.purges where !baseline.holds(id) { purgeRequested[id] = nil }
         let records = input().records
         if !report.revisions.isEmpty { adoptRevisions(report.revisions, records: records) }
         if !report.shared.isEmpty, baseline.propagate(report.shared, records: records) { onCopiesUpdated() }

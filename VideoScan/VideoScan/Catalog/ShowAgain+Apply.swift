@@ -294,8 +294,11 @@ extension VideoScanModel {
                 continue
             }
             guard let rec = record(forID: change.id) else { continue }
-            if let since = change.removalSince {
-                Self.stampRemoval(rec, .removedFromCatalog(at: since, reason: .legacyDeletedLabel))
+            if let since = change.removalSince,
+               let why = Self.stampRemoval(rec, .removedFromCatalog(at: since, reason: .legacyDeletedLabel)) {
+                out.skipped.append(change.path)
+                lines.append("[show-again] label NOT put back: \(change.path) id=\(change.id.uuidString) — \(why) (left as it is)")
+                continue
             }
             let labelPutBack = change.from == ShowAgainRules.falseLabel.rawValue
             if labelPutBack { rec.archiveStage = ShowAgainRules.falseLabel }

@@ -201,6 +201,8 @@ extension VideoScanModel {
                                          sink: { [weak self] line in self?.catalogAuthorityNote(line) })
         committer.adoptBaseline(records, held: held)
         committer.onCopiesUpdated = { [weak self] in self?.noteCatalogMutated() }
+        // B2.3: the marker veto answers only for this session's live records.
+        committer.owns = { [weak self] record in self?.record(forID: record.id) === record }
         committer.onWritableAgain = { [weak self] in
             self?.isReadOnly = false
             self?.catalogCutover.noteWritable()

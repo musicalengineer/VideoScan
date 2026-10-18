@@ -237,11 +237,7 @@ final class MediaRepairJob: @MainActor MediaFileOperationJob {
         copy.userDateConfidence = record.userDateConfidence
         copy.userPlace = record.userPlace
         copy.userPlaceConfidence = record.userPlaceConfidence
-        if let existing = model.records.firstIndex(where: { $0.fullPath == url.path }) {
-            model.records[existing] = copy
-        } else {
-            model.records.append(copy)
-        }
+        model.placeRecord(copy, atPath: url.path, reason: "Repair: the repaired copy replaced the older record at its path")
         model.searchIndex.update(copy)
         return copy
     }

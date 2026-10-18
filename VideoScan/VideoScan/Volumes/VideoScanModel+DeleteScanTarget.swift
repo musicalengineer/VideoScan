@@ -316,6 +316,7 @@ extension VideoScanModel {
         let before = records.count
         records.removeAll { doomed.contains($0.id) }
         outcome.removed = before - records.count
+        purgeCatalogRows(ids: Set(doomed), reason: "Target \(action) (\(root))")   // B2.3: explicit
 
         // (b) THE one prominent line — count first, context after.
         let keptNote = outcome.keptCoveredByOtherTargets > 0

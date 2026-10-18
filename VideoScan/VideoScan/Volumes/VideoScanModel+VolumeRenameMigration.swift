@@ -833,7 +833,10 @@ extension VideoScanModel {
         // Suppress BEFORE mutating records — the didSet schedules a
         // detection rebuild whose auto pass must not re-migrate.
         volumeRenameAutoSuppressed.insert(PathScope.normalize(notice.oldTargetPath))
+        let before = Set(records.map(\.id))
         records = restored
+        // Cutover B2.3: ids the snapshot does not hold left with this Undo — purged explicitly.
+        purgeCatalogRows(ids: before, reason: "Undo of the volume rename \(notice.oldVolumeName) → \(notice.newVolumeName)")
         if let target = scanTargets.first(where: { $0.id == notice.targetID }) {
             target.searchPath = notice.oldTargetPath
             target.isReachable = VolumeReachability.isReachable(path: notice.oldTargetPath)

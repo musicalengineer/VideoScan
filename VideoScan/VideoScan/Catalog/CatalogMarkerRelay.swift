@@ -2,34 +2,40 @@
 // How the ONE removal-marker writer (MediaOps/VideoScanModel+RemovalMarker
 // .swift — `stampRemoval`, `revertRemoval`, `clearRemoval`, Trash emptied,
 // RemovalUndo) reaches the SQLite committer (cutover B2.1 gap 2, re-scoped
-// B2.2).
+// B2.2, veto B2.3).
 //
 // catalog.sqlite records every marker change with its own tombstone, and
 // the DDL refuses a change that skips a revision. B2.2 makes that true by
-// construction instead of by replay:
-//   * BEFORE a change (`markerWillChange`) — rows whose previous marker
-//     change is not committed yet are committed NOW, synchronously, so the
-//     store holds revision n before the record moves to n+1;
+// construction; B2.3 makes the answer BINDING (codex B2.2 P1):
+//   * BEFORE a change (`markerWillChange`) — the committer answers nil (go)
+//     or the words why not. A row whose previous marker change is not
+//     committed yet is committed NOW, synchronously; when that cannot be
+//     stored — or, for a person's request, when no commit can be written at
+//     all (held, read-only, reopening) — the change is REFUSED and the
+//     writer leaves the row exactly as it is (no revision bump);
 //   * AFTER it (`markerChanged`) — the row is remembered and one commit is
 //     asked for at once (zero delay), so a batch (Trash of 1,000 rows in
 //     one main-actor turn) is still ONE commit.
-// (B2.1 kept a snapshot per revision and replayed them later; codex's
-// closing pass showed the replay could lose a curated reversion and drop
-// revisions during a first insert. The replay queue is gone.)
+// A door that is about to move a FILE asks first (`saveRefusal`, the same
+// question) so a refusal comes before any disk work.
 //
 // The writer is a `nonisolated static` function (some doors have no model
 // at hand), so the relay is process-wide: committers register here
-// (weakly). Under catalog.json nothing is registered and the relay does
-// nothing. Every marker door runs on the main actor today (checked
-// 2026-10-18: VideoScanModel and CaptionOrchestrator are @MainActor; the
-// audit fixer is @MainActor). A change made OFF the main thread cannot be
-// pre-committed (the main thread cannot be waited on from there without a
-// deadlock risk): its after-hook is delivered on the main queue, and a
-// second change of the same row before that commit is refused by the store
-// with the "changed N times within one save" words — named, never silent.
+// (weakly), and each answers only for ITS session's live records (a
+// detached snapshot or another session's record is not its business).
+// Under catalog.json nothing is registered and the relay always says go.
+// Every marker door runs on the main actor today (checked 2026-10-18:
+// VideoScanModel and CaptionOrchestrator are @MainActor; the audit fixer is
+// @MainActor). A change made OFF the main thread cannot be pre-committed
+// (the main thread cannot be waited on from there without a deadlock
+// risk): it is not vetoed, its after-hook is delivered on the main queue,
+// and a second change of the same row before that commit is refused by the
+// store with the "changed N times within one save" words — named, never
+// silent.
 //
 // (For Rick: an observer list of weak pointers — the C++ `std::weak_ptr`
-// subscriber pattern — with a pre- and a post-mutation callback.)
+// subscriber pattern — with a pre-mutation callback that can say no, and a
+// post-mutation one.)
 
 import Foundation
 import VideoScanCore
@@ -48,15 +54,23 @@ enum CatalogMarkerRelay {
         committers.append(WeakCommitter(committer: committer))
     }
 
-    /// The marker of `record` may be about to change (its revision not yet
-    /// bumped). On the main thread: an uncommitted earlier change is
-    /// committed first.
-    nonisolated static func markerWillChange(_ record: VideoRecord) {
-        guard Thread.isMainThread else { return }
-        let id = record.id
-        MainActor.assumeIsolated {
-            for entry in committers { entry.committer?.markerWillChange(id: id) }
+    /// The marker of `record` is about to change (its revision not yet
+    /// bumped). nil = go; else "the catalog can't save (…); try again when
+    /// …" and the change must NOT be made.
+    nonisolated static func markerWillChange(_ record: VideoRecord, kind: CatalogMarkerChange = .request) -> String? {
+        guard Thread.isMainThread else { return nil }
+        return MainActor.assumeIsolated {
+            for entry in committers {
+                if let why = entry.committer?.markerWillChange(record, kind: kind) { return why }
+            }
+            return nil
         }
+    }
+
+    /// Asked by a door BEFORE it moves a file whose row it will then mark:
+    /// would the marker change be refused? Same answer as `markerWillChange`.
+    nonisolated static func saveRefusal(for record: VideoRecord) -> String? {
+        markerWillChange(record, kind: .request)
     }
 
     /// The marker of `record` just changed (its revision already bumped).

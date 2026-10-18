@@ -253,7 +253,7 @@ struct CutoverFirstWeekEditsTests {
         note is overwritten by B's earlier one on both copies.
         """
 
-    @Test("Edits on one of two identical copies show on both; edit again → the other follows; both edited in one save window → the later edit wins on both")
+    @Test("Edits on one of two identical copies show on both; edit again → the other follows; both edited differently in one save window → a conflict, nothing dropped; a later single edit resolves it")
     func copiesShareEditsAndLaterEditWins() async throws {
         let scene = try CutoverScene.make("reg_copies"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
@@ -282,14 +282,15 @@ struct CutoverFirstWeekEditsTests {
         #expect(model.saveCatalogNow())
         #expect(a.userPlace == b.userPlace)
 
-        // 3. Both edited in ONE save window, B first, then A: A's is the later edit.
+        // 3. Both edited in ONE save window, differently. B2.3 (Manager's rule,
+        // 2026-10-18 — Rick may change it): nothing is silently dropped. Both
+        // values go to row_knowledge, the display row is a conflict (empty
+        // after a relaunch), and each copy keeps showing its own value now.
         model.setUserNotes("earlier, typed on B", for: b)
         model.setUserNotes("later, typed on A", for: a)
         #expect(model.saveCatalogNow())
-        withKnownIssue(Self.laterEditLoses) {
-            #expect(a.userNotes == "later, typed on A")
-            #expect(b.userNotes == "later, typed on A", "the sibling shows the later edit, not its own stale one")
-        }
+        #expect(a.userNotes == "later, typed on A")
+        #expect(b.userNotes == "earlier, typed on B", "neither copy is overwritten by the other")
 
         try await scene.relaunch()
         let a2 = try scene.record(.curatedConflictA)
@@ -298,10 +299,14 @@ struct CutoverFirstWeekEditsTests {
             #expect(copy.starRating == 1, Comment(rawValue: copy.filename))
             #expect(copy.userDate == date, Comment(rawValue: copy.filename))
             #expect(copy.userPlace == a2.userPlace, Comment(rawValue: copy.filename))
-            withKnownIssue(Self.laterEditLoses) {
-                #expect(copy.userNotes == "later, typed on A", Comment(rawValue: copy.filename))
-            }
+            #expect(copy.userNotes.isEmpty, Comment(rawValue: "\(copy.filename): a conflict shows empty, like an import conflict"))
         }
+        // 4. A later edit on ONE copy resolves it: stored, and the other copy follows.
+        model.setUserNotes("resolved on A", for: a2)
+        #expect(model.saveCatalogNow())
+        #expect(b2.userNotes == "resolved on A")
+        try await scene.relaunch()
+        #expect(try scene.record(.curatedConflictB).userNotes == "resolved on A")
         #expect(a2.userPlace != nil)
         let drift = try CutoverRegression.drift(before: before, after: model.records.filter { $0.id != a.id && $0.id != b.id })
         #expect(drift.isEmpty, Comment(rawValue: drift.joined(separator: ", ")))
@@ -344,20 +349,16 @@ struct CutoverRemovalTests {
         // Empty the Trash: the other seven are seen emptied.
         let rest = Array(trashed.dropFirst(3))
         #expect(model.noteEmptiedTrash(in: rest, now: CutoverRegression.date(1_790_400_600)) == 7)
-        withKnownIssue(Self.undoRefused) {
-            #expect(model.saveCatalogNow())
-        }
+        #expect(model.saveCatalogNow())
 
         try await scene.relaunch()
         for record in undone {
             let back = try scene.live(record.id)
             let stored = try await scene.storedTombstoneRevisions(id: record.id)
-            withKnownIssue(Self.undoRefused) {
-                #expect(back.removal == nil, Comment(rawValue: back.filename))
-                #expect(back.lifecycleStage == mirrors[record.id]?.lifecycleStage, Comment(rawValue: back.filename))
-                #expect(back.removalRevision == 2, Comment(rawValue: back.filename))
-                #expect(stored == [1, 2], Comment(rawValue: back.filename))
-            }
+            #expect(back.removal == nil, Comment(rawValue: back.filename))
+            #expect(back.lifecycleStage == mirrors[record.id]?.lifecycleStage, Comment(rawValue: back.filename))
+            #expect(back.removalRevision == 2, Comment(rawValue: back.filename))
+            #expect(stored == [1, 2], Comment(rawValue: back.filename))
         }
         for record in rest {
             let back = try scene.live(record.id)
@@ -367,9 +368,7 @@ struct CutoverRemovalTests {
             #expect(back.removalRevision == 2, Comment(rawValue: back.filename))
             #expect(try await scene.storedTombstoneRevisions(id: record.id) == [1, 2], Comment(rawValue: back.filename))
         }
-        withKnownIssue(Self.undoRefused) {
-            #expect(model.records.filter { $0.isPurged }.count == 8, "the seven, and the fixture's own tombstoned row")
-        }
+        #expect(model.records.filter { $0.isPurged }.count == 8, "the seven, and the fixture's own tombstoned row")
     }
 
     /// Seen on B2.2 (f3900b36f): the three undone rows come back In the Trash
@@ -417,20 +416,18 @@ struct CutoverRemovalTests {
         #expect(volumes.isEmpty == false, "the classification offers the stray")
         let outcome = model.purgeNonVideoMedia(extensions: ["jpg"], volumeKeys: volumes)
         // Everything after the door depends on it having removed the row.
-        await withKnownIssue(Self.purgeDoorDead) {
-            #expect(outcome.removed == 1, Comment(rawValue: scene.sandbox.catalogLogText()))
-            #expect(model.records.contains { $0.id == id } == false)
+        #expect(outcome.removed == 1, Comment(rawValue: scene.sandbox.catalogLogText()))
+        #expect(model.records.contains { $0.id == id } == false)
 
-            for _ in 1...2 {
-                try await scene.relaunch()
-                #expect(model.records.contains { $0.id == id } == false)
-            }
-            let reloaded = try await scene.sqliteLoad()
-            #expect(reloaded.purgedCount == 1)
-            #expect(try await scene.storedTombstoneRevisions(id: id) == [1], "tombstoned, never deleted")
-            let drift = try CutoverRegression.drift(before: before, after: model.records)
-            #expect(drift.isEmpty, Comment(rawValue: drift.joined(separator: ", ")))
+        for _ in 1...2 {
+            try await scene.relaunch()
+            #expect(model.records.contains { $0.id == id } == false)
         }
+        let reloaded = try await scene.sqliteLoad()
+        #expect(reloaded.purgedCount == 1)
+        #expect(try await scene.storedTombstoneRevisions(id: id) == [1], "tombstoned, never deleted")
+        let drift = try CutoverRegression.drift(before: before, after: model.records)
+        #expect(drift.isEmpty, Comment(rawValue: drift.joined(separator: ", ")))
     }
 }
 

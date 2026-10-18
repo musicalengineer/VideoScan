@@ -282,6 +282,10 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading {
     /// (a person's write resolves a conflict for that content).
     func writeDisplayValue(digest: String, field: CatalogDDL.KnowledgeField,
                            _ curated: CatalogRecordDTO.CuratedKnowledge, setAt: Int64) throws
+    /// The content's scalar display row for `field` as an unresolved
+    /// conflict: `conflict = 1`, no value (B2.3, regression F2 — two copies
+    /// changed it differently in one commit). Set fields: nothing to do.
+    func writeDisplayConflict(digest: String, field: CatalogDDL.KnowledgeField) throws
     func appendRowKnowledge(_ row: CatalogRow.RowKnowledge) throws
     /// The content's BOUND rows of one derived kind replaced by `rows`
     /// (empty = none bound). The unverified evidence is never touched.
@@ -355,4 +359,16 @@ public protocol CatalogRepository: Sendable {
 
     /// Release the store. Safe to call twice.
     func close() async
+
+    /// A sealed, self-contained copy of the store at `target`, on the
+    /// calling thread (cutover B2.3): the pre-change safety copy a door
+    /// takes before removing records. nil = written; else the words.
+    func sealedCopyBlocking(to target: URL) -> String?
+}
+
+extension CatalogRepository {
+    /// A store with no sealed-copy door says so (the JSON repository; test fakes).
+    public func sealedCopyBlocking(to target: URL) -> String? {
+        "this catalog store cannot make a sealed copy"
+    }
 }

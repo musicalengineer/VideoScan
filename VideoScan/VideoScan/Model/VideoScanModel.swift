@@ -1435,7 +1435,9 @@ final class VideoScanModel: ObservableObject {
             clearCacheForTarget(target)
         }
         let count = records.count
+        let ids = Set(records.map(\.id))
         records.removeAll()
+        purgeCatalogRows(ids: ids, reason: "Delete All")   // cutover B2.3: explicit
         searchIndex.clear()
         // Records the banner was tracking are gone — drop it so the user
         // doesn't see a now-meaningless "Undo" affordance after a wipe.
@@ -1728,7 +1730,9 @@ final class VideoScanModel: ObservableObject {
     func log(_ msg: String) { dashboard.log(msg) }
 
     func clearResults() {
+        let ids = Set(records.map(\.id))
         records = []
+        purgeCatalogRows(ids: ids, reason: "Clear Results")   // cutover B2.3: explicit
         // Wholesale reseed of records — same reasoning as deleteAllCatalog:
         // the banner has nothing left to undo, so drop it.
         clearPurgeUndoState()
