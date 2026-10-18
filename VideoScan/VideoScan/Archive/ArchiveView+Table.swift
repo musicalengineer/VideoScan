@@ -105,10 +105,6 @@ extension ArchiveView {
 
             if selectedCategory == .archived && archiveViewMode == ArchiveViewMode.timeline.rawValue {
                 timelinePane
-            } else if selectedCategory == .music {
-                // Family Music (2026-09-23): its own folder-like list with
-                // a play control per row (FamilyMusicPane.swift).
-                musicPane
             } else {
                 // File table
                 let rows = filteredRecords
@@ -144,7 +140,6 @@ extension ArchiveView {
         case .archived:       return "Nothing archived yet"
         case .notYetArchived: return "Everything is archived"
         case .needsDate:      return "Every unarchived file has a date"
-        case .music:          return "No family music yet"
         }
     }
 
@@ -159,8 +154,6 @@ extension ArchiveView {
             return "Every active catalog asset has a byte-verified copy in the Master Archive."
         case .needsDate:
             return "Promote will file each of these under its resolved year."
-        case .music:
-            return "In the Catalog, right-click a recording and choose Mark as Family Music…"
         }
     }
 
@@ -403,59 +396,6 @@ extension ArchiveView {
             Label("Reveal in Finder", systemImage: "folder")
         }
         .disabled(count != 1)
-    }
-
-    // MARK: - Family Music
-
-    /// The shelf rows (memoized snapshot), narrowed by the search field —
-    /// O(marked) per keystroke, never O(records).
-    var filteredMusicItems: [FamilyMusicItem] {
-        let all = snapshot.familyMusic
-        guard !searchText.isEmpty else { return all }
-        let q = searchText.lowercased()
-        return all.filter {
-            $0.title.lowercased().contains(q)
-                || ($0.performer?.lowercased().contains(q) ?? false)
-                || $0.filename.lowercased().contains(q)
-                || ($0.year.map { String($0).contains(q) } ?? false)
-        }
-    }
-
-    var musicPane: some View {
-        FamilyMusicPane(
-            items: filteredMusicItems,
-            isSearching: !searchText.isEmpty,
-            openExternally: { id in
-                openArchiveItems([id])
-            },
-            contextMenu: { id in AnyView(self.musicContextMenu(for: id)) })
-    }
-
-    /// Reveal in Finder · Show in Catalog · Unmark Family Music.
-    @ViewBuilder
-    func musicContextMenu(for id: UUID) -> some View {
-        if let rec = model.record(forID: id) {
-            Button {
-                revealArchiveItem(rec)
-            } label: {
-                Label("Reveal in Finder", systemImage: "folder")
-            }
-            .disabled(!VolumeReachability.isVolumeReachable(path: rec.fullPath))
-            Button {
-                showInCatalog(rec)
-            } label: {
-                Label("Show in Catalog", systemImage: "film.stack")
-            }
-            Divider()
-            // No ellipsis: acts at once (the mark can be put back from the
-            // Catalog with Mark as Family Music…).
-            Button {
-                model.unmarkFamilyMusic([rec.id])
-            } label: {
-                Label(FamilyMusicMenu.unmarkTitle, systemImage: "music.note")
-            }
-            .disabled(model.isReadOnly)
-        }
     }
 
     // MARK: - Navigate to Catalog
