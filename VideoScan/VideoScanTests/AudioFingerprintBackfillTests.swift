@@ -330,18 +330,23 @@ struct AudioFingerprintBackfillLogicTests {
         let job = AudioFingerprintBackfillJob(model: sb.model)
         job.tickMilliseconds = 20
         job.ffmpegPath = "/bin/ls"
+        // Wait on "the file is being read", never on a fixed sleep: CI's
+        // loaded 3-core runner had not started file 2 40 ms after Resume
+        // (red on GitHub all of 2026-10-18).
+        let started = PassStartCounter()
         job.passForTesting = { item in
+            started.bump()
             try await Task.sleep(nanoseconds: 120_000_000)
             return try await stubPass(item)
         }
         job.start()
-        try? await Task.sleep(nanoseconds: 40_000_000)
+        await started.wait(for: 1)
         job.pause()
         #expect(job.subtitle.hasPrefix("Pausing after the current file"), Comment(rawValue: job.subtitle))
         try? await Task.sleep(nanoseconds: 250_000_000)
         #expect(job.totals.done == 1 && job.state == .running, "the first file finished; the second waits")
         job.resume()
-        try? await Task.sleep(nanoseconds: 40_000_000)
+        await started.wait(for: 2)
         job.cancel()
         #expect(job.subtitle.hasPrefix("Stopping — finishing 1 file"), Comment(rawValue: job.subtitle))
         await job.task?.value
@@ -875,5 +880,19 @@ struct AudioFingerprintBackfillMediaMatrixTests {
         print(String(format: "PACE (Debug): 3 × 10-min files, %.0f MB total: %.2f s per file, %.1f MB/s, %@",
                      Double(bytes) / 1_000_000, perFile, mbps, job.totals.line))
         #expect(elapsed < 120, "took \(elapsed) s")
+    }
+}
+
+/// How many decodes have started — the stop/pause test waits on it instead
+/// of guessing with sleeps.
+private final class PassStartCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    func bump() { lock.lock(); count += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return count }
+    /// Polls every 5 ms until `n` decodes have started (10 s ceiling).
+    func wait(for n: Int) async {
+        let deadline = Date().addingTimeInterval(10)
+        while value < n, Date() < deadline { try? await Task.sleep(nanoseconds: 5_000_000) }
     }
 }
