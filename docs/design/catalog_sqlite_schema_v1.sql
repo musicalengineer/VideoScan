@@ -46,6 +46,9 @@
 -- table the live commits need that v1.6 has no room for (VideoScanCore/Store/CatalogLiveWritesSchema
 -- .swift, migration `v3_live_writes`, which also raises catalog_state.schema_version to 8). ADDITIVE:
 -- no v1.6 table, trigger or CHECK changes.
+-- Revision 9 (v1.8, 2026-10-18, cutover B2.1): §13 `pending_rows`, the durable holding place for a
+-- NEW record that has no whole-file digest yet (VideoScanCore/Store/CatalogPendingRowsSchema.swift,
+-- migration `v4_pending_rows`, which raises catalog_state.schema_version to 9). ADDITIVE.
 --
 -- THE ONE RULE (§10): identity is the whole-file SHA-256 (64 lowercase hex), never the path and
 -- never the sampled `v1:` contentHash. Knowledge (people, dates, places, stars, captions,
@@ -1592,3 +1595,22 @@ BEGIN SELECT RAISE(ABORT, 'row_knowledge is append-only evidence'); END;
 CREATE TRIGGER row_knowledge_no_replace BEFORE INSERT ON row_knowledge
 WHEN NEW.write_id IS NOT NULL AND EXISTS (SELECT 1 FROM row_knowledge WHERE write_id = NEW.write_id)
 BEGIN SELECT RAISE(ABORT, 'row_knowledge: a duplicate is a finding, never a replacement'); END;
+
+-- ---------------------------------------------------------------------------------------------
+-- 13. PENDING ROWS (v1.8, cutover B2.1, migration `v4_pending_rows`). A new record (a scan result,
+--     a Combine / Transcode output, a Promote copy) with no whole-file digest cannot be a `files` row
+--     (§10: identity is the digest). The commit that defers it writes the app encoder's record
+--     payload here verbatim (data in a column, like quarantine.raw_row — never parsed by SQL); the
+--     load turns it back into a record (still deferred) and Fill In Full Hashes is queued for it;
+--     the commit that stores the row deletes its pending row in the same transaction. A held row is
+--     never a stored row (the guard). A purge of a record that never got a digest deletes its row.
+--     The migration then runs: UPDATE catalog_state SET schema_version = 9; PRAGMA user_version = 9.
+-- ---------------------------------------------------------------------------------------------
+CREATE TABLE pending_rows (                -- v1.8: new records waiting for a whole-file digest (cutover B2.1)
+  id         TEXT    PRIMARY KEY NOT NULL,
+  json       TEXT    NOT NULL CHECK (json_valid(json)),   -- the app encoder's record payload, verbatim
+  queued_at  INTEGER NOT NULL
+) STRICT;
+CREATE TRIGGER pending_rows_not_stored BEFORE INSERT ON pending_rows
+WHEN EXISTS (SELECT 1 FROM files WHERE id = NEW.id)
+BEGIN SELECT RAISE(ABORT, 'pending_rows: this id is already a files row'); END;

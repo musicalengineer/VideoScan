@@ -1219,7 +1219,7 @@ final class VideoScanModel: ObservableObject {
             catchUpInferredDates(trigger: "load")
             if migrated > 0 {
                 log("Migrated \(migrated) records to lifecycleStage.")
-                catalogStore.scheduleSave(records: records)
+                saveCatalogDebounced()   // one funnel (B2.1)
             }
         }
         // Backfill: for any scan target that has zero records in the restored
@@ -1242,7 +1242,7 @@ final class VideoScanModel: ObservableObject {
         }
         if backfilled > 0 {
             // Persist the merged set so subsequent launches skip the backfill.
-            catalogStore.scheduleSave(records: records)
+            saveCatalogDebounced()   // one funnel (B2.1)
         }
         // One-time notes → userNotes split (2026-07-23): move legacy
         // human text out of the machine `notes` field. Runs over the
@@ -1252,7 +1252,7 @@ final class VideoScanModel: ObservableObject {
         let notesMigrated = migrateLegacyUserNotes()
         if notesMigrated > 0 {
             log("Moved your notes on \(notesMigrated) record(s) into the new Notes field (probe details stay separate).")
-            catalogStore.scheduleSave(records: records)
+            saveCatalogDebounced()   // one funnel (B2.1)
         }
         // GH #176 (2026-09-11): one-time repair of the machine text the
         // split above pumped into userNotes before it knew every machine

@@ -99,7 +99,7 @@ extension VideoScanModel {
             rec.userNotes = change.userNotes
             moved += change.movedLines
         }
-        catalogStore.scheduleSave(records: records)
+        saveCatalogDebounced()   // one funnel: catalog.json, or catalog.sqlite after the switch (B2.1)
         let line = "notes repair: \(plan.count) records cleaned, \(humanKept) human notes kept, \(moved) machine lines moved back to notes, backup at \(backup)"
         writeNotesRepairMarker(at: marker, summary: line)
         log(line)

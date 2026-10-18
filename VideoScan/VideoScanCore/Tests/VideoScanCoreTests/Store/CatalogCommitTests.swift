@@ -253,16 +253,18 @@ struct CatalogCommitRoundTripTests {
         #expect(after.records[staleID]?.pairConfidence == .high)
     }
 
-    @Test("a record with no whole-file hash is deferred with words; nothing is written")
+    @Test("a record with no whole-file hash is deferred with words; no files row — it is held in pending_rows (B2.1)")
     func noDigestIsDeferred() async throws {
         let s = try await CommitScene.make(); defer { s.remove() }
         let fresh = VideoRecord(id: UUID())
         fresh.filename = "new.mov"
         fresh.fullPath = "/Volumes/Fixture/New/new.mov"
-        let start = try s.generation()
         let outcome = try await s.commit([fresh])
         #expect(outcome.landing(fresh.id.uuidString) == .deferred(CatalogCommitWords.noDigest))
-        #expect(try s.generation() == start)
+        let row: Int? = try s.scalar("SELECT count(*) FROM files WHERE id = ?", [fresh.id.uuidString])
+        #expect(row == 0)
+        let held: Int? = try s.scalar("SELECT count(*) FROM pending_rows WHERE id = ?", [fresh.id.uuidString])
+        #expect(held == 1)
     }
 
     @Test("a new record with a whole-file hash is inserted and loads back")

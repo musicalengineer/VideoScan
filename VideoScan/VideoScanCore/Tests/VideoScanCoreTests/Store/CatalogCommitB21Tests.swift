@@ -63,4 +63,189 @@ struct CatalogCommitB21Tests {
         #expect({ if case .written = landing { return false }; return true }())
         #expect(try await s.load().records[healthyID]?.userNotes == "kept")
     }
+
+    // MARK: - Gap 1: pending rows
+
+    @Test("gap 1: a row without a whole-file hash is HELD in pending_rows; when its hash lands it becomes a files row and the pending row goes")
+    func pendingRowHeldThenStored() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let loaded = try await s.load()
+        let fresh = try FreshRecord.copy(try #require(loaded.records[healthyID]), path: "/Volumes/Fixture/New/held.mov")
+        let start = try s.generation()
+        let held = try await s.commit([fresh])
+        #expect(held.landing(fresh.id.uuidString) == .deferred(CatalogCommitWords.noDigest))
+        #expect(held.rows.first?.heldPending == true)
+        #expect(try s.generation() == start + 1)
+        let pending: Int? = try s.scalar("SELECT count(*) FROM pending_rows WHERE id = ?", [fresh.id.uuidString])
+        #expect(pending == 1)
+        let again = try await s.commit([fresh])
+        #expect(again == .nothingWritten(rows: again.rows), "an unchanged held row is not rewritten")
+        FreshRecord.giveDigest(fresh, String(repeating: "c", count: 64))
+        let stored = try await s.commit([fresh])
+        #expect(stored.landing(fresh.id.uuidString)?.landed == true)
+        let after: Int? = try s.scalar("SELECT count(*) FROM pending_rows")
+        #expect(after == 0)
+        let row: Int? = try s.scalar("SELECT count(*) FROM files WHERE id = ?", [fresh.id.uuidString])
+        #expect(row == 1)
+    }
+
+    @Test("gap 1: the load hands back the held rows; the schema refuses a pending row whose id is a files row")
+    func pendingRowsAtLoad() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let loaded = try await s.load()
+        let fresh = try FreshRecord.copy(try #require(loaded.records[healthyID]), path: "/Volumes/Fixture/New/held2.mov")
+        _ = try await s.commit([fresh])
+        let snapshot = try await s.snapshot()
+        #expect(snapshot.pending.map(\.id) == [fresh.id.uuidString])
+        let back = try CatalogPendingRecord.record(try #require(snapshot.pending.first).json)
+        #expect(back.fullPath == "/Volumes/Fixture/New/held2.mov")
+        #expect(throws: (any Error).self) {
+            try s.queue().write { db in
+                try db.execute(sql: "INSERT INTO pending_rows (id, json, queued_at) VALUES (?, '{}', 1)", arguments: [healthyID])
+            }
+        }
+    }
+
+    // MARK: - Gap 3: purges
+
+    @Test("gap 3: a purge tombstones the row (never a DELETE), the load skips it, a second purge is a no-op")
+    func purgeTombstonesAndLoadSkips() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let id = try #require(UUID(uuidString: healthyID))
+        let outcome = try await s.commit([], purges: [id])
+        #expect(outcome.isCommitted)
+        #expect(outcome.landing(healthyID) == .removed(.purged(revision: 1)))
+        let reason: String? = try s.scalar("SELECT removal_reason FROM files WHERE id = ?", [healthyID])
+        #expect(reason == "purged")
+        let tombstones: Int? = try s.scalar("SELECT count(*) FROM tombstones WHERE file_id = ? AND reason = 'purged'", [healthyID])
+        #expect(tombstones == 1)
+        #expect(try await s.load().records[healthyID] == nil)
+        let snapshot = try await s.snapshot()
+        #expect(snapshot.purged == 1)
+        let twice = try await s.commit([], purges: [id])
+        #expect(twice.landing(healthyID) == .removed(.alreadyPurged))
+    }
+
+    @Test("gap 3: a purge of a record that was only held drops its pending row")
+    func purgeDropsPending() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let loaded = try await s.load()
+        let fresh = try FreshRecord.copy(try #require(loaded.records[healthyID]), path: "/Volumes/Fixture/New/held3.mov")
+        _ = try await s.commit([fresh])
+        let outcome = try await s.commit([], purges: [fresh.id])
+        #expect(outcome.landing(fresh.id.uuidString) == .removed(.pendingDropped))
+        let pending: Int? = try s.scalar("SELECT count(*) FROM pending_rows")
+        #expect(pending == 0)
+    }
+
+    @Test("gap 3: a purged row whose record comes back moves on one revision with its own tombstone, and says which")
+    func purgedRowComesBack() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let loaded = try await s.load()
+        let h = try #require(loaded.records[healthyID])
+        _ = try await s.commit([], purges: [h.id])
+        h.userNotes = "back again"
+        let outcome = try await s.commit([h])
+        #expect(outcome.landing(healthyID)?.landed == true)
+        #expect(outcome.rows.first?.adoptedRevision == 2)
+        let state: String? = try s.scalar("SELECT removal_state FROM files WHERE id = ?", [healthyID])
+        #expect(state == nil)
+        #expect(try await s.load().records[healthyID]?.userNotes == "back again")
+    }
+
+    // MARK: - Gap 2: intermediate marker revisions
+
+    @Test("gap 2: the snapshot of each marker revision, in order, lands each with its own tombstone")
+    func intermediateRevisionsLand() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let loaded = try await s.load()
+        let h = try #require(loaded.records[healthyID])
+        h.removal = .removedFromCatalog(at: Date(timeIntervalSince1970: 1_790_300_000), reason: .userRemoved)
+        h.removalRevision += 1
+        let first = CommitScene.item(h)
+        h.removal = nil
+        h.removalRevision += 1
+        let outcome = try await s.commitItems([first, CommitScene.item(h)])
+        #expect(outcome.rows.map(\.landing.landed) == [true, true])
+        let revisions: [Int] = try await s.queue().read { db in
+            try Int.fetchAll(db, sql: "SELECT revision FROM tombstones WHERE file_id = ? ORDER BY revision", arguments: [healthyID])
+        }
+        #expect(revisions == [1, 2])
+        #expect(try await s.load().records[healthyID]?.removal == nil)
+    }
+
+    // MARK: - P1-1: per-field baselines
+
+    @Test("P1-1: a sibling dirty for another field, carrying a stale curated value, does not write it over the edit")
+    func staleSiblingKeepsEdit() async throws {
+        let s = try await CommitScene.make(); defer { s.remove() }
+        let loaded = try await s.load()
+        let a = try #require(loaded.records[PoisonedCatalogFixture.id(.curatedConflictA)])
+        let b = try #require(loaded.records[PoisonedCatalogFixture.id(.curatedConflictB)])
+        let baseA = CatalogSharedCurated(a)
+        let baseB = CatalogSharedCurated(b)
+        a.userNotes = "A wrote this"
+        b.setAsideReason = "damaged"
+        let outcome = try await s.commitItems([CommitScene.item(a, baseline: baseA), CommitScene.item(b, baseline: baseB)])
+        #expect(outcome.isCommitted)
+        #expect(try await s.load().records[a.id.uuidString]?.userNotes == "A wrote this")
+    }
+}
+
+/// A new record built from a stored one: a new id and path, no whole-file hash.
+enum FreshRecord {
+    static func copy(_ source: VideoRecord, path: String) throws -> VideoRecord {
+        let encoded = Data(try CatalogPendingRecord.json(VideoRecordDTO(source)).utf8)
+        var object = try #require(try JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        object["id"] = UUID().uuidString
+        object["fullPath"] = path
+        object["filename"] = (path as NSString).lastPathComponent
+        object["contentFixity"] = nil
+        object["archiveFixity"] = nil
+        object["pairedWithID"] = nil
+        let json = try #require(String(bytes: try JSONSerialization.data(withJSONObject: object), encoding: .utf8))
+        return try CatalogPendingRecord.record(json)
+    }
+
+    static func giveDigest(_ record: VideoRecord, _ digest: String) {
+        record.contentFixity = ContentFixity(digest: digest, byteCount: record.sizeBytes,
+                                             stamp: FileIdentityStamp(device: 1, inode: 2, size: record.sizeBytes, mtimeNs: 3,
+                                                                      ctimeNs: 4, volumeUUID: nil))
+    }
+}
+
+extension CommitScene {
+    static func item(_ record: VideoRecord, baseline: CatalogSharedCurated) -> CatalogCommit.Item {
+        let snapshot = VideoRecordDTO(record)
+        return CatalogCommit.Item(id: record.id, snapshot: snapshot, fingerprint: CatalogChangeDetector.fingerprint(snapshot),
+                                  sharedBaseline: baseline)
+    }
+
+    func commitItems(_ items: [CatalogCommit.Item], purges: [UUID] = []) async throws -> CatalogCommit.Outcome {
+        let repository = GRDBCatalogRepository(host: "commit-test", durability: .volatileForTests)
+        guard await repository.open(at: scene.databaseURL) == .readWrite else {
+            await repository.close()
+            throw FixtureFailure(words: "commit could not open")
+        }
+        let outcome = await CatalogCommit.run(CatalogCommit.Plan(door: .save, items: items, purges: purges), on: repository)
+        await repository.close()
+        return outcome
+    }
+
+    func commit(_ records: [VideoRecord], purges: [UUID]) async throws -> CatalogCommit.Outcome {
+        try await commitItems(records.map { CommitScene.item($0) }, purges: purges)
+    }
+
+    func snapshot() async throws -> CatalogLoad.Snapshot {
+        let repository = GRDBCatalogRepository(host: "commit-test", durability: .volatileForTests)
+        _ = await repository.open(at: scene.databaseURL)
+        do {
+            let snapshot = try await CatalogLoad.read(repository)
+            await repository.close()
+            return snapshot
+        } catch {
+            await repository.close()
+            throw error
+        }
+    }
 }

@@ -81,7 +81,7 @@ struct GRDBCatalogRepositoryTests {
         #expect(pragmas["fullfsync"] == "1")
         #expect(pragmas["foreign_keys"] == "1")
         #expect(pragmas["busy_timeout"] == "5000")
-        #expect(pragmas["user_version"] == "8")                 // v1.7 (`v3_live_writes`) raised it
+        #expect(pragmas["user_version"] == "9")                 // v1.8 (`v4_pending_rows`) raised it
         #expect(pragmas["recursive_triggers"] == "1")   // codex C′ #1: REPLACE's deletes reach the delete triggers
         await repository.close()
     }
@@ -265,7 +265,7 @@ struct GRDBCatalogRepositoryTests {
         let fixture = try await StoreFixture.make(.grdb, generation: 1)
         defer { fixture.remove() }
         try rawQueue(fixture).inDatabase { db in
-            try db.execute(sql: "UPDATE catalog_state SET schema_version = 9 WHERE singleton = 1")
+            try db.execute(sql: "UPDATE catalog_state SET schema_version = 10 WHERE singleton = 1")
         }
         let repository = GRDBCatalogRepository(host: "test-host", durability: .volatileForTests)
         let outcome = await repository.open(at: fixture.url)
@@ -273,7 +273,7 @@ struct GRDBCatalogRepositoryTests {
             Issue.record("expected .refused, got \(outcome)")
             return
         }
-        #expect(reason.contains("schema version 9 is newer"))
+        #expect(reason.contains("schema version 10 is newer"))
     }
 
     @Test func aCorruptedFileIsRefusedWithTheEnginesWords() async throws {

@@ -28987,8 +28987,15 @@
         "CatalogCommitB21Tests"
       ],
       "tests": [
+        "intermediateRevisionsLand",
+        "pendingRowHeldThenStored",
+        "pendingRowsAtLoad",
         "peopleConflictSurvivesUnrelatedEdit",
-        "refusedDerivedIsPartial"
+        "purgeDropsPending",
+        "purgeTombstonesAndLoadSkips",
+        "purgedRowComesBack",
+        "refusedDerivedIsPartial",
+        "staleSiblingKeepsEdit"
       ]
     },
     {
@@ -29001,16 +29008,27 @@
         "CatalogPendingRowsTests",
         "CatalogMarkerRevisionTests",
         "CatalogPurgeMarkerTests",
-        "CatalogDirectSaveSensorTests"
+        "CatalogDirectSaveSensorTests",
+        "CatalogAdoptTests",
+        "CatalogSwitchB21Tests"
       ],
       "tests": [
+        "adoptRestoredCatalog",
+        "deleteAllStaysEmpty",
+        "designationFromImportedBytes",
         "dirtySiblingKeepsEdit",
+        "editDuringImportStops",
+        "hashLandsThenStored",
+        "heldRowsOfferedToTheJob",
         "holdOwnerCompared",
         "newRowSurvivesRelaunch",
         "noDirectStoreSaves",
+        "notOfferedWhenWritable",
+        "pendingEditIsFlushedFirst",
         "propagationKeepsLaterEdit",
         "purgedStaysGone",
         "quitWaitsForInFlight",
+        "trashEmptiedBumps",
         "trashThenUndo"
       ]
     }

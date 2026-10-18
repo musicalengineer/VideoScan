@@ -8,7 +8,9 @@
 // The steps, each refusing before it changes anything:
 //   0. ready?  no switch yet (no `catalog.cutover`), catalog.sqlite beside
 //      the catalog holds a FINISHED, comparator-ok import (the rehearsal),
-//      the app is writable, no Import to SQLite is running;
+//      the app is writable, no Import to SQLite is running; then every
+//      accepted edit is FLUSHED to catalog.json (B2.1, codex P1-4) so the
+//      import reads them;
 //   1. MOVE the rehearsal aside — catalog.sqlite (+ -wal, -shm),
 //      catalog.highwater, catalog.highwater.log — into a new dated folder in
 //      the same directory (`catalog-sqlite-rehearsal-<yyyyMMdd-HHmmss>/`):
@@ -18,13 +20,18 @@
 //      Verify Catalog, gate, rows, sidecars, comparator — the MFO job; this
 //      file does not duplicate it) and await it: anything but `.imported`
 //      stops here, the rehearsal stays in its folder, no latch;
-//   3. freeze catalog.json (read-only for the rest of the session), then
-//      prove it is still the file that was imported: its SHA-256 equals
-//      `import_runs.source_sha256` of the run just made — an edit saved
-//      between the import and the freeze would otherwise be left behind;
-//      a mismatch un-freezes and stops, no latch;
+//   3. in ONE main-actor turn: an edit accepted while the import ran and
+//      not yet saved stops the switch (it is flushed to catalog.json first,
+//      so nothing is lost; codex P1-4); else freeze catalog.json (read-only
+//      for the rest of the session — no edit can be saved to it after this
+//      point). Then read catalog.json ONCE and prove it is the file that was
+//      imported: its SHA-256 equals `import_runs.source_sha256` of the run
+//      just made — an edit saved between the import and the freeze would
+//      otherwise be left behind; a mismatch un-freezes and stops, no latch;
 //   4. move the Master Archive designation into `catalog_state` (one
-//      commit through the door `cutover`, GH #167's guard);
+//      commit through the door `cutover`, GH #167's guard) — the designation
+//      decoded from THOSE SAME BYTES, the ones the importer hashed (codex
+//      P1-5), never a copy taken before the import;
 //   5. write `catalog.cutover` (atomic publish, F_FULLFSYNC) — ONLY now;
 //   6. the person quits; the next launch opens catalog.sqlite (B1's rule).
 //
@@ -142,13 +149,33 @@ enum CatalogSwitch {
         return .success(destination)
     }
 
-    /// SHA-256 of the file, lowercase hex (streamed — catalog.json is ~73 MB).
-    static func sha256(of url: URL) -> String? {
-        guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-        defer { try? handle.close() }
-        var hasher = SHA256()
-        while let chunk = try? handle.read(upToCount: 4 << 20), !chunk.isEmpty { hasher.update(data: chunk) }
-        return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+    /// What the switch proves and moves, read from catalog.json ONCE: its
+    /// SHA-256 and the Master Archive designation those bytes carry (as
+    /// catalog_state stores it). Memory: the file is mapped, not copied;
+    /// the decoder walks it once to find the one key (transient, about the
+    /// file's size — a one-time step of the switch).
+    struct ImportedSource: Equatable {
+        let sha256: String
+        let designationJSON: String?
+    }
+
+    static func importedSource(at url: URL) -> Result<ImportedSource, Words> {
+        let data: Data
+        do {
+            data = try Data(contentsOf: url, options: .mappedIfSafe)
+        } catch {
+            return .failure(Words(text: "catalog.json could not be read: \(error.localizedDescription)"))
+        }
+        let sha = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+        struct Header: Decodable { let masterArchive: MasterArchiveDesignation? }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        do {
+            let header = try decoder.decode(Header.self, from: data)
+            return .success(ImportedSource(sha256: sha, designationJSON: CatalogCommitter.json(header.masterArchive)))
+        } catch {
+            return .failure(Words(text: "catalog.json's Master Archive designation could not be read: \(error)"))
+        }
     }
 
     /// The latch's content: when, which run, which bytes.
@@ -169,8 +196,11 @@ struct CatalogSwitchEnvironment {
     var runImport: @MainActor () async -> CatalogSwitchImportResult
     /// true = freeze catalog.json for the session; false = undo the freeze.
     var freezeJSON: @MainActor (Bool) -> Void
-    /// The designation catalog.json carries, as catalog_state stores it.
-    var designationJSON: String?
+    /// Save every accepted edit to catalog.json now (the JSON path's
+    /// saveNow); false = it did not reach disk.
+    var flushJSON: @MainActor () -> Bool = { true }
+    /// An accepted edit not yet saved to catalog.json.
+    var hasUnsavedJSON: @MainActor () -> Bool = { false }
     var sink: @MainActor (String) -> Void
     var progress: @MainActor (String) -> Void = { _ in }
     /// Step 0's app half: words when the app cannot start the import now
@@ -186,6 +216,9 @@ enum CatalogSwitchRun {
         env.sink("Catalog store: START Switch Catalog to SQLite — move the rehearsal aside, import catalog.json again, then switch")
         if let words = env.busyWords() { return fail(env, words) }
         if let words = await CatalogSwitch.notReadyWords(folder: env.folder) { return fail(env, words) }
+        guard env.flushJSON() else {
+            return fail(env, "catalog.json could not be saved before the import (see the catalog store's words above) — nothing was moved")
+        }
         env.progress("Moving the rehearsal catalog.sqlite aside…")
         let aside: URL
         switch CatalogSwitch.moveRehearsalAside(folder: env.folder, now: env.now()) {
@@ -202,6 +235,13 @@ enum CatalogSwitchRun {
 
     /// Steps 3–5, after `.imported`.
     private static func finish(_ env: CatalogSwitchEnvironment, aside: URL) async -> CatalogSwitchPhase {
+        // One main-actor turn: no edit can slip between the check and the freeze.
+        if env.hasUnsavedJSON() {
+            let saved = env.flushJSON()
+            return fail(env, "an edit was made while the import ran"
+                        + (saved ? " (it is saved in catalog.json)" : " (it could NOT be saved — see the catalog store's words)")
+                        + " — run Switch again; nothing was switched")
+        }
         env.freezeJSON(true)
         let db = env.folder.appendingPathComponent(CatalogAuthority.databaseFileName)
         guard case .success(let made?) = await CatalogSwitch.lastImport(at: db) else {
@@ -209,12 +249,19 @@ enum CatalogSwitchRun {
             return fail(env, "the new \(CatalogAuthority.databaseFileName) holds no finished import — nothing was switched")
         }
         let catalogURL = env.catalogURL
-        let now = await Task.detached { CatalogSwitch.sha256(of: catalogURL) }.value
-        guard now == made.sourceSHA256 else {
+        let source: CatalogSwitch.ImportedSource
+        switch await Task.detached(operation: { CatalogSwitch.importedSource(at: catalogURL) }).value {
+        case .failure(let words):
+            env.freezeJSON(false)
+            return fail(env, "\(words.text) — nothing was switched")
+        case .success(let read):
+            source = read
+        }
+        guard source.sha256 == made.sourceSHA256 else {
             env.freezeJSON(false)
             return fail(env, "catalog.json changed after the import (an edit was saved meanwhile) — run Switch again; nothing was switched")
         }
-        if let words = await seedDesignation(env.designationJSON, db: db) {
+        if let words = await seedDesignation(source.designationJSON, db: db) {
             env.freezeJSON(false)
             return fail(env, "the Master Archive designation could not be moved into catalog.sqlite: \(words) — nothing was switched")
         }
@@ -277,7 +324,12 @@ extension VideoScanModel {
                 self.catalogStore.isReadOnly = freeze || wasReadOnly.store
                 self.isReadOnly = freeze || wasReadOnly.model
             },
-            designationJSON: CatalogCommitter.json(masterArchive),
+            flushJSON: { [weak self] in
+                guard let self else { return false }
+                // The JSON path on purpose: before the switch catalog.json is the catalog.
+                return self.catalogStore.saveNow(records: self.records)
+            },
+            hasUnsavedJSON: { [weak self] in self?.catalogStore.hasUnsavedChanges ?? false },
             sink: { [weak self] line in self?.catalogAuthorityNote(line) },
             progress: { [weak self] line in self?.catalogCutover.switchPhase = .running(line) },
             busyWords: { [weak self] in
@@ -331,6 +383,8 @@ struct CatalogSwitchMenuItems: View {
         .disabled(cutover.blockedReason == nil)
         .help(cutover.blockedReason.map { "Saving to catalog.sqlite stopped: \($0). Reopen to try again." } ?? "Saving to catalog.sqlite is working.")
         .accessibilityIdentifier("catalog.menu.reopenSQLite")
+
+        CatalogAdoptMenuItem(cutover: cutover)
     }
 }
 
@@ -339,11 +393,24 @@ struct CatalogSwitchMenuItems: View {
 struct CatalogSwitchSheetHost: ViewModifier {
     let model: VideoScanModel
     @ObservedObject var cutover: CatalogCutoverState
+    @Environment(\.mediaFileOperationsCenterReference) private var center
 
     func body(content: Content) -> some View {
-        content.sheet(item: $cutover.switchRequest) { _ in
-            CatalogSwitchSheet(cutover: cutover).environmentObject(model)
-        }
+        content
+            .sheet(item: $cutover.switchRequest) { _ in
+                CatalogSwitchSheet(cutover: cutover).environmentObject(model)
+            }
+            .sheet(item: $cutover.adoptRequest) { request in
+                CatalogAdoptSheet(cutover: cutover, request: request)
+            }
+            .onAppear {
+                // B2.1 gap 1: held rows get Fill In Full Hashes, scoped to them.
+                guard let center else { return }
+                cutover.attachDigestJobs { [weak model, weak center] ids in
+                    guard let model, let center else { return }
+                    center.startFullHashBackfill(model: model, scopedTo: ids)
+                }
+            }
     }
 }
 

@@ -4,15 +4,23 @@
 // to the store only through `CatalogTransaction`'s doors, so no SQL and no
 // GRDB type appears here.
 //
-// Per record (its own savepoint): insert or update the `files` row, the
-// tombstone FIRST when the removal marker moved (the DDL refuses the marker
-// change without it), the row's archive copy / backups / footage decisions /
-// duplicate member / sound print when they differ, the display row + one
-// `row_knowledge` row per curated field that differs, the row-scoped values
-// and the pair link, and the bound rows of each derived kind that differs
-// (each kind in a nested savepoint: derived values are regenerable, so a
-// value the bound table cannot hold is left out with words, not a refusal
-// of the whole row).
+// First the purges (B2.1 gap 3), each in its own savepoint. Then per record
+// (its own savepoint): no whole-file digest → held in `pending_rows`
+// (B2.1 gap 1); else insert or update the `files` row (an insert drops the
+// record's pending row), the tombstone FIRST when the removal marker moved
+// (the DDL refuses the marker change without it), the row's archive copy /
+// backups / footage decisions / duplicate member / sound print when they
+// differ, the display rows + one `row_knowledge` row per curated field —
+// a SHARED curated field only when this record changed it since its own
+// baseline (codex P1-1), people as a delta (codex P1-6) — the row-scoped
+// values and the pair link, and the bound rows of each derived kind that
+// differs (each kind in a nested savepoint: a kind the bound table cannot
+// hold is left out and the row is PARTIAL — codex P2-7 — so the app keeps
+// it changed and sends it again).
+//
+// A record whose stored row carries the purge marker comes back (it is in
+// the app's records again): its marker moves on by one revision with its
+// own tombstone, and the app is told the revision.
 //
 // (For Rick: the unit of work's apply loop; each `try` that throws inside a
 // savepoint rolls back that one record and becomes its `.refused` words.)
@@ -40,9 +48,14 @@ struct CatalogCommitBody {
 
     func run() throws {
         var landed = 0
-        for item in plan.items {
-            let row = commit(item)
+        for id in plan.purges {
+            let row = purge(id)
             if row.landing.landed { landed += 1 }
+            ledger.record(row)
+        }
+        for item in plan.items {
+            let (row, wrote) = commit(item)
+            if wrote { landed += 1 }
             ledger.record(row)
         }
         let designationLanded = try writeDesignation()
@@ -52,47 +65,99 @@ struct CatalogCommitBody {
         }
     }
 
+    // MARK: - A purge (gap 3)
+
+    private func purge(_ id: UUID) -> CatalogCommit.RowResult {
+        var result = CatalogCommit.RowResult(id: id, fingerprint: 0, digest: nil, landing: .removed(.absent))
+        do {
+            var landing = CatalogRow.PurgeLanding.absent
+            try tx.inSavepoint {
+                landing = try tx.purgeFile(id: id.uuidString, since: plan.now, writtenAt: plan.now, door: source)
+            }
+            result.landing = .removed(landing)
+        } catch {
+            result.landing = .refused(CatalogCommitWords.engine(error))
+        }
+        return result
+    }
+
     // MARK: - One record
 
-    private func commit(_ item: CatalogCommit.Item) -> CatalogCommit.RowResult {
+    /// The row's result, and whether anything was written for it.
+    private func commit(_ item: CatalogCommit.Item) -> (CatalogCommit.RowResult, Bool) {
         var result = CatalogCommit.RowResult(id: item.id, fingerprint: item.fingerprint, digest: nil, landing: .unchanged)
         let current: CatalogRecordDTO
         do {
             current = try CatalogRecordDTO(snapshot: item.snapshot, migrationLoadedAt: plan.now)
         } catch {
             result.landing = .refused("the record could not be mapped to catalog rows: \(error)")
-            return result
+            return (result, false)
         }
         switch current.digestState {
         case .none:
-            result.landing = .deferred(CatalogCommitWords.noDigest)
-            return result
+            return hold(item, result)
         case .disagree(let digests):
             result.landing = .refused("its two whole-file hashes disagree (\(digests.joined(separator: " vs "))) — Verify the file before it can be stored")
-            return result
+            return (result, false)
         case .known(let digest, _):
             result.digest = digest
-            result.landing = landing(current, digest: digest)
-            return result
+            result = land(current, digest: digest, item: item, into: result)
+            return (result, result.landing.landed)
         }
     }
 
-    private func landing(_ current: CatalogRecordDTO, digest: String) -> CatalogCommit.Landing {
+    /// No whole-file digest yet: deferred, and held in `pending_rows` so a
+    /// relaunch keeps the record.
+    private func hold(_ item: CatalogCommit.Item, _ result: CatalogCommit.RowResult) -> (CatalogCommit.RowResult, Bool) {
+        var result = result
+        result.landing = .deferred(CatalogCommitWords.noDigest)
         do {
-            let stored = try storedDTO(id: current.file.id)
-            if let was = stored?.digestState.digest, was != digest {
-                return .refused(CatalogCommitWords.digestChanged(from: was, to: digest))
-            }
-            let diff = CatalogRecordDiff(stored: stored, current: current)
-            if diff.isEmpty { return .unchanged }
-            var notes: [String] = []
-            try tx.inSavepoint {
-                notes = try write(current, digest: digest, stored: stored, diff: diff)
-            }
-            return .written(curated: diff.knowledge.filter(CatalogCommitWords.sharedByCopies.contains), notes: notes)
+            let row = CatalogRow.PendingRow(id: item.id.uuidString, json: try CatalogPendingRecord.json(item.snapshot),
+                                            queuedAt: plan.now)
+            var wrote = false
+            try tx.inSavepoint { wrote = try tx.putPendingRow(row) }
+            result.heldPending = true
+            return (result, wrote)
         } catch {
-            return .refused(CatalogCommitWords.engine(error))
+            result.landing = .deferred(CatalogCommitWords.notHeld(CatalogCommitWords.engine(error)))
+            return (result, false)
         }
+    }
+
+    private func land(_ mapped: CatalogRecordDTO, digest: String, item: CatalogCommit.Item,
+                      into result: CatalogCommit.RowResult) -> CatalogCommit.RowResult {
+        var result = result
+        do {
+            let stored = try storedDTO(id: mapped.file.id)
+            if let was = stored?.digestState.digest, was != digest {
+                result.landing = .refused(CatalogCommitWords.digestChanged(from: was, to: digest))
+                return result
+            }
+            var current = mapped
+            if let stored, CatalogCommitWords.isPurged(stored.file), !CatalogCommitWords.isPurged(current.file) {
+                current.file.removalRevision = stored.file.removalRevision + 1
+                result.adoptedRevision = current.file.removalRevision
+            }
+            var diff = CatalogRecordDiff(stored: stored, current: current)
+            if stored != nil, let baseline = item.sharedBaseline {
+                diff.restrictShared(to: CatalogSharedCurated(item.snapshot).edited(since: baseline))
+            }
+            guard !diff.isEmpty else {
+                result.landing = .unchanged
+                return result
+            }
+            var written = Written()
+            try tx.inSavepoint {
+                written = try write(current, digest: digest, stored: stored, diff: diff, baseline: item.sharedBaseline)
+            }
+            let curated = diff.knowledge.filter(CatalogCommitWords.sharedByCopies.contains)
+            result.landing = written.missing.isEmpty
+                ? .written(curated: curated, notes: written.notes) : .partial(curated: curated, words: written.missing)
+        } catch {
+            result.landing = .refused(CatalogCommitWords.engine(error))
+            result.adoptedRevision = nil
+        }
+        return result
     }
 
     /// The stored row as the DTO a record loaded from it would give.
@@ -104,28 +169,36 @@ struct CatalogCommitBody {
         return try CatalogRecordDTO(record: record, migrationLoadedAt: plan.now)
     }
 
+    /// What one row's write left out: rebuildable analysis (notes) and
+    /// derived kinds the store refused (the row is partial).
+    private struct Written {
+        var notes: [String] = []
+        var missing: [String] = []
+    }
+
     private func write(_ current: CatalogRecordDTO, digest: String, stored: CatalogRecordDTO?,
-                       diff: CatalogRecordDiff) throws -> [String] {
+                       diff: CatalogRecordDiff, baseline: CatalogSharedCurated?) throws -> Written {
         let id = current.file.id
         if let stored {
             if diff.file || diff.marker { try updateRow(current, stored: stored, diff: diff) }
         } else {
             try insertRow(current)
+            _ = try tx.removePendingRow(id: id)
         }
-        var notes: [String] = []
+        var written = Written()
         if diff.archiveCopy { try tx.replaceArchiveCopy(fileID: id, current.archiveCopy) }
         if diff.backups { try tx.replaceBackupDestinations(fileID: id, current.backupDestinations) }
         if diff.footageDecisions { try tx.replaceFootageDecisions(rowID: id, digest: digest, current.curated.footageDecisions) }
-        if diff.duplicate, let words = try tx.replaceDuplicateMember(fileID: id, current.duplicateMember) { notes.append(words) }
+        if diff.duplicate, let words = try tx.replaceDuplicateMember(fileID: id, current.duplicateMember) { written.notes.append(words) }
         if diff.soundPrint { try tx.replaceSoundPrint(digest: digest, current.soundPrint) }
-        try writeKnowledge(current, digest: digest, fields: diff.knowledge)
+        try writeKnowledge(current, digest: digest, fields: diff.knowledge, baseline: baseline)
         if diff.pair {
             try tx.appendRowKnowledge(CatalogRow.RowKnowledge(fileID: id, digest: digest, field: CatalogLiveWritesSchema.pairField,
                                                               value: current.pairLink?.linkValue ?? .object([:]),
                                                               setAt: plan.now, source: source))
         }
-        notes += writeDerived(current, digest: digest, kinds: diff.derived)
-        return notes
+        written.missing = writeDerived(current, digest: digest, kinds: diff.derived)
+        return written
     }
 
     private func insertRow(_ current: CatalogRecordDTO) throws {
@@ -161,9 +234,18 @@ struct CatalogCommitBody {
 
     /// Display rows for the content (per-content fields), then one
     /// `row_knowledge` row per field that differs (JSON null = cleared).
-    private func writeKnowledge(_ current: CatalogRecordDTO, digest: String, fields: [CatalogDDL.KnowledgeField]) throws {
+    /// People go as a delta against the record's own baseline.
+    private func writeKnowledge(_ current: CatalogRecordDTO, digest: String, fields: [CatalogDDL.KnowledgeField],
+                                baseline: CatalogSharedCurated?) throws {
+        let people = CatalogSharedCurated.Group.people.fields
+        if fields.contains(where: people.contains) {
+            let delta = CatalogPeopleDelta(now: current.curated.people, baseline: baseline)
+            try tx.writePeopleDelta(digest: digest, added: delta.added, removed: delta.removed)
+        }
         for field in fields {
-            try tx.writeDisplayValue(digest: digest, field: field, current.curated, setAt: plan.now)
+            if !people.contains(field) {
+                try tx.writeDisplayValue(digest: digest, field: field, current.curated, setAt: plan.now)
+            }
             try tx.appendRowKnowledge(CatalogRow.RowKnowledge(
                 fileID: current.file.id, digest: digest, field: field.rawValue,
                 value: CatalogRecordDTO.knowledgeValue(field, raw: current.raw) ?? .null, setAt: plan.now, source: source))
@@ -171,19 +253,19 @@ struct CatalogCommitBody {
     }
 
     /// Each differing kind in its own savepoint; a kind the bound table
-    /// cannot hold is left as it was and named.
+    /// cannot hold is left as it was and named (the row is then partial).
     private func writeDerived(_ current: CatalogRecordDTO, digest: String, kinds: [CatalogDDL.DerivedKind]) -> [String] {
-        var notes: [String] = []
+        var missing: [String] = []
         for kind in kinds {
             do {
                 try tx.inSavepoint {
                     try tx.replaceDerived(digest: digest, kind: kind, current.derivedUnverified.filter { $0.kind == kind })
                 }
             } catch {
-                notes.append("derived \(kind.rawValue) not stored: \(CatalogCommitWords.engine(error))")
+                missing.append("derived \(kind.rawValue) not stored: \(CatalogCommitWords.engine(error))")
             }
         }
-        return notes
+        return missing
     }
 
     // MARK: - The designation
@@ -206,6 +288,27 @@ struct CatalogCommitBody {
     }
 }
 
+/// People as a delta against the record's own baseline (codex B2 P1-6):
+/// only the (name, kind) pairs the person added or removed, plus a confirmed
+/// name whose date moved. A name absent from both — an unresolved conflict
+/// the loaded record shows empty — is not touched.
+struct CatalogPeopleDelta {
+    var added: [CatalogRecordDTO.PeopleTagRow] = []
+    var removed: [CatalogRecordDTO.PeopleTagRow] = []
+
+    init(now: [CatalogRecordDTO.PeopleTagRow], baseline: CatalogSharedCurated?) {
+        let was = baseline?.peopleKeys ?? []
+        let wasDates = baseline?.confirmedSeconds ?? [:]
+        let nowKeys = Set(now.map { CatalogSharedCurated.PeopleKey(name: $0.name, kind: $0.kind) })
+        added = now.filter { row in
+            let key = CatalogSharedCurated.PeopleKey(name: row.name, kind: row.kind)
+            return !was.contains(key) || (row.kind == .confirmed && wasDates[row.name] != row.confirmedAt)
+        }
+        removed = was.subtracting(nowKeys).sorted { ($0.kind.rawValue, $0.name) < ($1.kind.rawValue, $1.name) }
+            .map { CatalogRecordDTO.PeopleTagRow(name: $0.name, kind: $0.kind, confirmedAt: nil) }
+    }
+}
+
 /// The words a commit speaks (one place, so tests and the app quote them).
 enum CatalogCommitWords {
 
@@ -215,7 +318,11 @@ enum CatalogCommitWords {
     }
 
     static let noDigest = "no whole-file hash yet — catalog.sqlite keeps a row only for content it can name; "
-        + "it is stored once Compute Full Hashes (or the next scan, batch B3) gives it one"
+        + "it is held until Fill In Full Hashes (queued for it) gives it one, then stored"
+
+    static func notHeld(_ engine: String) -> String {
+        noDigest + " — and it could NOT be held for the next launch (\(engine)); it is in memory only"
+    }
 
     static func digestChanged(from was: String, to now: String) -> String {
         "its whole-file hash changed (\(was.prefix(12))… → \(now.prefix(12))…): a replaced file is a new row, "
@@ -230,6 +337,11 @@ enum CatalogCommitWords {
 
     static func engine(_ error: Error) -> String {
         String(describing: error)
+    }
+
+    /// The row carries the purge marker (gap 3).
+    static func isPurged(_ file: CatalogRecordDTO.FileRow) -> Bool {
+        file.removalState == CatalogDDL.RemovalState.removedFromCatalog.rawValue && file.removalReason == CatalogRow.purgeReason
     }
 
     /// The curated fields every copy of one content shows (the display
