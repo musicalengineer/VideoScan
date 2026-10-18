@@ -638,16 +638,11 @@ extension MediaFileOperationsCenter {
     /// off the main actor).
     private static func importGateEnvironment(model: VideoScanModel) -> @Sendable () async -> CatalogImporter.Environment {
         let plansRoot = DeleteDuplicatesPlanStore.defaultRoot
-        let bufferRoot = model.archiveAngel.environment.bufferRoot
+        let openAngelBatches = model.archiveAngel.openBatchesProbe()
         return {
             await Task.detached(priority: .utility) {
                 let plans = DeleteDuplicatesPlanStore.unfinishedPlans(root: plansRoot, log: { _ in }).map { $0.id.uuidString }
-                let batches: [String]
-                switch ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: bufferRoot) {
-                case .ids(let ids): batches = ids.isEmpty ? [] : ["Archive Angel batches holding \(ids.count) row(s)"]
-                case .uncertain(let why): batches = ["Archive Angel buffer: \(why)"]
-                }
-                return CatalogImporter.Environment(openDeleteDuplicatesPlans: plans, openAngelBatches: batches)
+                return CatalogImporter.Environment(openDeleteDuplicatesPlans: plans, openAngelBatches: openAngelBatches())
             }.value
         }
     }

@@ -588,6 +588,22 @@ final class ArchiveAngel: ObservableObject {
         }
     }
 
+    /// What a whole-catalog writer (Import to SQLite) must know before it
+    /// copies rows: the words for every open batch, or for a buffer that
+    /// could not be read — empty when the buffer holds nothing. The public
+    /// door to the same fresh read Delete Duplicates uses, so the importer
+    /// never names the plan store (boundary sensor, 2026-10-18).
+    /// Read-only. DISK I/O: never call the returned probe on the main thread.
+    func openBatchesProbe() -> @Sendable () -> [String] {
+        let root = environment.bufferRoot
+        return {
+            switch ArchiveAngelPlanStore.inFlightRecordIDsFresh(bufferRoot: root) {
+            case .ids(let ids): return ids.isEmpty ? [] : ["Archive Angel batches holding \(ids.count) row(s)"]
+            case .uncertain(let why): return ["Archive Angel buffer: \(why)"]
+            }
+        }
+    }
+
     /// TEST SEAM: stands in for the buffer read, so a test can make two
     /// readings overlap. nil in production.
     var diskBatchReaderForTests: (@Sendable (URL) async -> Set<UUID>)?
