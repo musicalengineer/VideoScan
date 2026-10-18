@@ -281,7 +281,9 @@ struct CatalogAuditRound2Tests {
         } else { Issue.record("expected gone") }
         #expect(CatalogAuditDirectoryWalk.prove(directory: "/var/tmp", filename: "x.mov", root: "/") == .link, "/var is a link: never provable")
         // The first pass's "where is it": the stamp for the names found as files, nil for the rest.
-        let seen = CatalogAuditDirectoryWalk.seenOn(directory: sb.files.path, filenames: ["real.mov", "alias.mov", "nope.mov"], root: "/", now: Date())
+        let seen = TestHostDrive.identifiedSync {
+            CatalogAuditDirectoryWalk.seenOn(directory: sb.files.path, filenames: ["real.mov", "alias.mov", "nope.mov"], root: "/", now: Date())
+        }
         #expect(seen[0]?.volumeUUID == sb.volumeUUID && seen[1] == nil && seen[2] == nil)
         #expect(CatalogAuditDirectoryWalk.seenOn(directory: "/var/tmp", filenames: ["x"], root: "/", now: Date()) == [nil])
         #expect(CatalogAuditDirectoryWalk.seenOn(directory: sb.files.appendingPathComponent("a/b").path, filenames: ["x"], root: "/", now: Date()) == [nil])

@@ -43,9 +43,45 @@ func runAudit(_ model: VideoScanModel,
     job.laneRoot = laneRoot
     job.tickMilliseconds = 20
     configure(job)
-    job.start()
-    await job.task?.value
+    await TestHostDrive.identified {
+        job.start()
+        await job.task?.value
+    }
     return job
+}
+
+/// GitHub's hosted runner is a virtual Mac: DiskArbitration cannot identify
+/// its disk, so the audit — rightly, refuse over guess (codex r5 P1) — stamps
+/// nothing there, and every stamp test went red on CI (all of 2026-10-18).
+/// On such a host only, the stamp tests run with a stand-in physical drive;
+/// on the fleet they use the real one. "An unidentified drive gets no stamp"
+/// stays pinned by CatalogAuditRound2Tests' own `unknown` override, which
+/// this never replaces (a test's own override wins).
+enum TestHostDrive {
+    static let isUnidentified: Bool = {
+        let tmp = (NSTemporaryDirectory() as NSString).resolvingSymlinksInPath
+        var info = stat()
+        guard stat(tmp, &info) == 0 else { return false }
+        let unknown = DuplicateDrives.liveIdentityFresh(forPath: tmp, device: DeviceID.from(info.st_dev)).kind == .unknown
+        print("[test-host-drive] \(tmp): drive \(unknown ? "NOT identified — stamp tests use a stand-in physical drive" : "identified")")
+        return unknown
+    }()
+
+    private static let standIn: @Sendable (String, UInt64) -> DuplicateDrives.Identity = { _, device in
+        .init(device: device, kind: .physical, physicalDevice: "test-host-\(device)")
+    }
+
+    private static var needed: Bool { isUnidentified && DuplicateDrives.lookupOverride == nil }
+
+    static func identified<T>(_ body: () async throws -> T) async rethrows -> T {
+        guard needed else { return try await body() }
+        return try await DuplicateDrives.$lookupOverride.withValue(standIn) { try await body() }
+    }
+
+    static func identifiedSync<T>(_ body: () throws -> T) rethrows -> T {
+        guard needed else { return try body() }
+        return try DuplicateDrives.$lookupOverride.withValue(standIn) { try body() }
+    }
 }
 
 /// Thread-safe call counter for the seams (≈ C++ std::atomic<int>).

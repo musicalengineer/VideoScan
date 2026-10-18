@@ -352,8 +352,10 @@ struct ImportScene {
              configure: (ImportToSQLiteJob) -> Void = { _ in }) async -> ImportToSQLiteJob {
         let job = job(mode, runningJobs: runningJobs)
         configure(job)
-        job.start()
-        await job.task?.value
+        await TestHostDrive.identified {
+            job.start()
+            await job.task?.value
+        }
         return job
     }
 
