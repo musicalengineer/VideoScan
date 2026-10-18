@@ -337,6 +337,10 @@ extension MediaFileOperationsCenter {
             job.refuseToStart(reason: "Verify Catalog is already running — wait for it to finish (or stop it). Nothing was started.")
             return job
         }
+        if let words = importRunsItsOwn("Verify Catalog") {
+            job.refuseToStart(reason: words)
+            return job
+        }
         job.start()
         appLog.write(Self.startSummaryLine(verb: job.kind.logVerb, title: job.title,
                                            plan: "check the catalog's rows, stamps and relations (tiers 0–6); nothing on media is opened, no row is changed; the only file written is integrity-latest.json beside the catalog"))

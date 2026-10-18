@@ -107,6 +107,11 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
     var laneRoot: @Sendable (String) -> String = CatalogAuditPlanner.productionLaneRoot
     /// TEST SEAM: replaces the acknowledged catalog save. nil in production.
     var saveCatalogForTesting: (@MainActor () async -> Bool)?
+    /// The MOPS-16 write hold this audit runs inside (Import to SQLite runs
+    /// it as phase 1 of 3): its acknowledged saves present the token and
+    /// pass the hold — the stamps are evidence the importer checks (N1).
+    /// nil = the standalone audit; its saves are ordinary saves.
+    var writeHoldOwner: CatalogWriteHoldOwner?
     var chunkSize = 256
     var checkpointRows = 25
     var checkpointSeconds: TimeInterval = 60
@@ -483,7 +488,7 @@ final class CatalogAuditJob: @MainActor MediaFileOperationJob, MediaFileOperatio
         subtitleText = batch.isEmpty ? "Saving where \(stamps.formatted()) file(s) were seen…"
             : "Saving \(batch.count) mark\(batch.count == 1 ? "" : "s")…"
         let ok: Bool
-        if let saveCatalogForTesting { ok = await saveCatalogForTesting() } else { ok = await model.saveCatalogAcknowledged() }
+        if let saveCatalogForTesting { ok = await saveCatalogForTesting() } else { ok = await model.saveCatalogAcknowledged(asHoldOwner: writeHoldOwner) }
         guard ok else {
             failSave(model: model, undo: batch, stampsLost: stamps)
             return false
@@ -592,6 +597,10 @@ extension MediaFileOperationsCenter {
         guard add(job) else { return job }
         if busy {
             job.refuseToStart(reason: "Audit Catalog is already running — wait for it to finish (or stop it). Nothing was started.")
+            return job
+        }
+        if let words = importRunsItsOwn("Audit Catalog") {
+            job.refuseToStart(reason: words)
             return job
         }
         job.start()

@@ -19,6 +19,11 @@ struct ImportToSQLiteDetailView: View {
             Text(ImportToSQLiteJob.noPauseWords)
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+            if let generation = job.auditedGeneration {
+                Text("audited, verified and read at catalog generation \(generation)")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
             ForEach(Array(job.refusals.enumerated()), id: \.offset) { _, words in
                 Label(words, systemImage: "hand.raised.fill")
                     .font(.system(size: 11))
@@ -108,7 +113,9 @@ struct ImportToSQLiteDetailView: View {
     static func phaseWords(_ phase: ImportToSQLiteJob.Phase, mode: CatalogImporter.Mode) -> String {
         let what = mode == .dryRun ? "Dry run" : "Import"
         switch phase {
-        case .preflight: return "\(what) — checking before any work (unsaved changes, other jobs, the report, the audit, the target)"
+        case .preflight: return "\(what) — checking before any work (unsaved changes, other jobs, the target)"
+        case .audit: return "\(what) — phase 1 of 3: Audit Catalog (catalog saves held but the audit's own)"
+        case .verify: return "\(what) — phase 2 of 3: Verify Catalog at the audit's generation"
         case .gate: return "\(what) — the importer's gate (the report's hash and generation, the audit, the sidecars)"
         case .rows: return "\(what) — rows, in one transaction"
         case .sidecars: return "\(what) — sidecars (events, ignored, ledger, markers)"

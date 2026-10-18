@@ -1467,9 +1467,10 @@ final class VideoScanModel: ObservableObject {
     /// Durable save the caller AWAITS without blocking the main actor
     /// (codex #1659 — the Archive Angel's rollback journal is cleared only
     /// after this returns true). See CatalogStore.saveAcknowledged.
+    /// The owner-token form is `saveCatalogAcknowledged(asHoldOwner:)`
+    /// (ImportToSQLitePhases.swift).
     func saveCatalogAcknowledged() async -> Bool {
-        noteCatalogMutated()
-        return await catalogStore.saveAcknowledged(records: records)
+        await saveCatalogAcknowledged(asHoldOwner: nil)
     }
 
     // MARK: - Catalog mutation revision (codex #1393)

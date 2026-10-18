@@ -866,11 +866,11 @@ struct VideoScanApp: App {
                 VerifyCatalogMenuItem(model: catalogModel, center: fileOpsCenter, isReadOnly: catalogModel.isReadOnly)
                 Divider()
                 // Import to SQLite (2026-10-17, catalog_sqlite_migration
-                // §10c): the dry run first — the same flow, rolled back —
-                // then the real import, offered only once a dry run passed
-                // on this catalog generation (the marker beside the catalog).
+                // §10c; one action verb): audit + verify + import in one
+                // job inside one write hold. The dry run first — the same
+                // flow, rolled back — then the real import, offered once a
+                // dry run passed on this build (the marker beside the catalog).
                 ImportToSQLiteMenuItems(model: catalogModel, center: fileOpsCenter, marker: catalogModel.importDryRunMarker,
-                                        catalogGeneration: catalogModel.catalogStore.currentGeneration,
                                         isReadOnly: catalogModel.isReadOnly)
                 Divider()
                 // Catalog Status (2026-10-16): opens Content Analysis with
