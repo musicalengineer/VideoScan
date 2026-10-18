@@ -1,9 +1,9 @@
 {
  "schemaVersion": 1,
- "ts": "2026-10-17T08:56:53Z",
- "sha": "ff7f1430",
+ "ts": "2026-10-18T09:15:03Z",
+ "sha": "a06b4537",
  "formula_version": 1,
- "files_scored": 737,
+ "files_scored": 775,
  "rows": [
   {
    "file": "VideoScan/VideoScan/MediaOps/DeleteDuplicatesJob.swift",
@@ -20,56 +20,45 @@
    "file": "VideoScan/VideoScan/App/ContentView.swift",
    "offenders": 4,
    "worst_ccn": 20,
-   "new_or_worse": 0,
-   "lines": 1775,
+   "new_or_worse": 1,
+   "lines": 1784,
    "could_be_private": 5,
    "widened_for_split": 21,
    "churn_7d": 6,
-   "score": 47.6
+   "score": 58.7
   },
   {
    "file": "VideoScan/VideoScan/App/VideoScanApp.swift",
    "offenders": 2,
    "worst_ccn": 24,
    "new_or_worse": 1,
-   "lines": 1287,
+   "lines": 1343,
    "could_be_private": 12,
    "widened_for_split": 0,
-   "churn_7d": 6,
-   "score": 42.3
+   "churn_7d": 12,
+   "score": 58.5
   },
   {
    "file": "VideoScan/VideoScan/Model/VideoScanModel.swift",
    "offenders": 1,
    "worst_ccn": 16,
    "new_or_worse": 0,
-   "lines": 1797,
+   "lines": 1835,
    "could_be_private": 6,
    "widened_for_split": 35,
-   "churn_7d": 5,
-   "score": 37.9
-  },
-  {
-   "file": "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift",
-   "offenders": 2,
-   "worst_ccn": 18,
-   "new_or_worse": 0,
-   "lines": 1469,
-   "could_be_private": 33,
-   "widened_for_split": 4,
-   "churn_7d": 2,
-   "score": 35.6
+   "churn_7d": 12,
+   "score": 57.4
   },
   {
    "file": "VideoScan/VideoScan/Catalog/CatalogHelpers.swift",
    "offenders": 3,
    "worst_ccn": 31,
    "new_or_worse": 1,
-   "lines": 1914,
+   "lines": 1915,
    "could_be_private": 4,
    "widened_for_split": 0,
-   "churn_7d": 3,
-   "score": 34.8
+   "churn_7d": 4,
+   "score": 39.2
   },
   {
    "file": "VideoScan/VideoScan/Hallie/HallieLineageQuestion.swift",
@@ -94,6 +83,17 @@
    "score": 34.0
   },
   {
+   "file": "VideoScan/VideoScan/Catalog/VideoScanModel+DateInference.swift",
+   "offenders": 2,
+   "worst_ccn": 18,
+   "new_or_worse": 0,
+   "lines": 1469,
+   "could_be_private": 33,
+   "widened_for_split": 4,
+   "churn_7d": 1,
+   "score": 30.5
+  },
+  {
    "file": "VideoScan/VideoScan/Hallie/HallieTurnExecutor.swift",
    "offenders": 4,
    "worst_ccn": 41,
@@ -103,6 +103,17 @@
    "widened_for_split": 2,
    "churn_7d": 0,
    "score": 26.9
+  },
+  {
+   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift",
+   "offenders": 1,
+   "worst_ccn": 1,
+   "new_or_worse": 1,
+   "lines": 979,
+   "could_be_private": 1,
+   "widened_for_split": 1,
+   "churn_7d": 10,
+   "score": 25.9
   },
   {
    "file": "VideoScan/VideoScan/Hallie/Shell/HallieShellCLI.swift",
@@ -127,15 +138,15 @@
    "score": 24.8
   },
   {
-   "file": "VideoScan/VideoScanCore/Sources/VideoScanCore/VideoRecord.swift",
-   "offenders": 1,
-   "worst_ccn": 1,
-   "new_or_worse": 1,
-   "lines": 973,
-   "could_be_private": 2,
-   "widened_for_split": 0,
-   "churn_7d": 9,
-   "score": 24.8
+   "file": "VideoScan/VideoScan/Archive/VideoScanModel+MasterArchive.swift",
+   "offenders": 3,
+   "worst_ccn": 20,
+   "new_or_worse": 0,
+   "lines": 1456,
+   "could_be_private": 5,
+   "widened_for_split": 2,
+   "churn_7d": 4,
+   "score": 23.9
   },
   {
    "file": "VideoScan/VideoScan/Hallie/Voice/PronunciationVariations.swift",
@@ -149,26 +160,15 @@
    "score": 23.9
   },
   {
-   "file": "VideoScan/VideoScan/FamilyTree/FamilyTreeLiveModel.swift",
+   "file": "VideoScan/VideoScan/MediaOps/VideoScanModel+Duplicates.swift",
    "offenders": 1,
-   "worst_ccn": 20,
-   "new_or_worse": 0,
-   "lines": 2996,
+   "worst_ccn": 16,
+   "new_or_worse": 1,
+   "lines": 1567,
    "could_be_private": 10,
-   "widened_for_split": 0,
-   "churn_7d": 1,
+   "widened_for_split": 1,
+   "churn_7d": 2,
    "score": 22.8
-  },
-  {
-   "file": "VideoScan/VideoScan/Events/EventsPlan.swift",
-   "offenders": 0,
-   "worst_ccn": 0,
-   "new_or_worse": 0,
-   "lines": 825,
-   "could_be_private": 25,
-   "widened_for_split": 0,
-   "churn_7d": 4,
-   "score": 22.7
   }
  ]
 }
