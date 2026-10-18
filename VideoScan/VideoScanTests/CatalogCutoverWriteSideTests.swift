@@ -137,7 +137,7 @@ struct CatalogCommitterTests {
         let scene = try CutoverScene.make("b2_hold"); defer { scene.cleanup() }
         try await scene.launchOnSQLite()
         let owner = CatalogWriteHoldOwner()
-        scene.model.catalogStore.holdWrites(reason: "a test job is reading the catalog", owner: owner)
+        await scene.model.catalogStore.holdWrites(reason: "a test job is reading the catalog", owner: owner)
         try scene.record(.healthy).starRating = 2
         #expect(scene.model.saveCatalogNow() == false)
         #expect(scene.sandbox.catalogLogText().contains("HELD — a test job is reading the catalog"))
