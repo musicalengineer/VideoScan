@@ -233,12 +233,18 @@ struct ArchiveTimeline: Equatable {
         return ArchiveTimeline(decades: decades, undated: undated)
     }
 
-    /// Search narrowing for the toolbar field: title, filename, people.
+    /// Search narrowing for the toolbar field: title, filename, people —
+    /// plus `indexed`, the ids the Catalog's search index found for the
+    /// same words (transcripts, captions, notes, places, tags; Rick
+    /// 2026-10-18: "elevator" is only in the Cape 1992 transcripts, and
+    /// Show in Archive opened an empty timeline).
     /// Runs over archived items only (small), per keystroke.
-    static func build(items: [ArchiveTimelineItem], matching query: String) -> ArchiveTimeline {
+    static func build(items: [ArchiveTimelineItem], matching query: String,
+                      indexed: Set<UUID> = []) -> ArchiveTimeline {
         guard !query.isEmpty else { return build(items: items) }
         let q = query.lowercased()
         return build(items: items.filter {
+            indexed.contains($0.id) || $0.versions.contains { indexed.contains($0.id) } ||
             $0.title.lowercased().contains(q) ||
             $0.archiveFilename.lowercased().contains(q) ||
             $0.relPath.lowercased().contains(q) ||
@@ -299,8 +305,9 @@ struct ArchiveTimelineSnapshot: Equatable {
 
     /// O(n log n) in archived items — the grouping. Never call from a
     /// view body except through the memo.
-    static func build(items: [ArchiveTimelineItem], matching query: String) -> ArchiveTimelineSnapshot {
-        let tl = ArchiveTimeline.build(items: items, matching: query)
+    static func build(items: [ArchiveTimelineItem], matching query: String,
+                      indexed: Set<UUID> = []) -> ArchiveTimelineSnapshot {
+        let tl = ArchiveTimeline.build(items: items, matching: query, indexed: indexed)
         return ArchiveTimelineSnapshot(timeline: tl, ticks: ArchiveDecadeTick.ticks(for: tl))
     }
 

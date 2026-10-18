@@ -111,8 +111,23 @@ extension ArchiveView {
             // Rick's occasion tags (Audit <year>…) override the Angel's
             // reading on the cards and in the strip — O(archived), here in
             // the memo, never per render.
-            ArchiveTimelineSnapshot.build(items: taggedTimelineItems(), matching: searchText)
+            let items = taggedTimelineItems()
+            return ArchiveTimelineSnapshot.build(items: items, matching: searchText,
+                                                 indexed: indexedMatches(for: items))
         }
+    }
+
+    /// The archived records the Catalog's search index finds for the
+    /// search text (transcripts, captions, notes, places, tags) — the same
+    /// search as the Catalog, so Show in Archive lands on what it found.
+    /// O(records), in the memo only, and only while searching.
+    @MainActor
+    func indexedMatches(for items: [ArchiveTimelineItem]) -> Set<UUID> {
+        guard !searchText.isEmpty else { return [] }
+        var ids = Set(items.map(\.id))
+        for item in items { ids.formUnion(item.versions.map(\.id)) }
+        let archived = model.records.filter { ids.contains($0.id) }
+        return Set(model.searchIndex.filter(records: archived, query: searchText).map(\.id))
     }
 
     /// The Timeline pane, fed from the memoized snapshot.

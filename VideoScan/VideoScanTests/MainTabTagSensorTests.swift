@@ -70,4 +70,31 @@ struct ArchiveSearchSharedSensorTests {
         index.rebuild(records: [rec])
         #expect(index.filter(records: [rec], query: "elevator").count == 1)
     }
+
+    private static func capeItem() -> ArchiveTimelineItem {
+        ArchiveTimelineItem(id: UUID(), title: "cape 1992 edit", archiveFilename: "1992-xx-xx_cape-1992-edit.mov",
+                            relPath: "1990-1999/1992/1992-xx-xx_cape-1992-edit.mov", year: 1992, kind: .video,
+                            durationSeconds: 600, peopleText: "", isVerified: true)
+    }
+
+    @Test("Show in Archive opens the timeline: a transcript-only match shows on it")
+    func timelineShowsIndexedMatch() {
+        let item = Self.capeItem()
+        let tl = ArchiveTimeline.build(items: [item], matching: "elevator", indexed: [item.id])
+        #expect(!tl.isEmpty)
+    }
+
+    @Test("the timeline without the index's ids still hides a non-match")
+    func timelineHidesNonMatch() {
+        let tl = ArchiveTimeline.build(items: [Self.capeItem()], matching: "elevator")
+        #expect(tl.isEmpty)
+    }
+
+    @Test("the timeline's memo passes the Catalog's search index")
+    func timelineUsesTheSharedIndex() {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan/Archive/ArchiveView+Timeline.swift")
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        #expect(text.contains("indexed: indexedMatches(for: items)"))
+    }
 }
