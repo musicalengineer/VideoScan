@@ -29192,6 +29192,34 @@
         "unsavedEditBeforeRetire",
         "unsavedEditReachesHistory"
       ]
+    },
+    {
+      "blocked_reason": "package adapter needs separate component build/count extraction and confinement audit",
+      "kind": "package",
+      "path": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB26Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogCommitB26Tests"
+      ],
+      "tests": [
+        "redateAlone",
+        "rejectOwnConfirmation",
+        "rejectVersusRedateIsOrderIndependent",
+        "removalAlone",
+        "removeVersusRedate"
+      ]
+    },
+    {
+      "blocked_reason": "filesystem/global-state/subprocess isolation audit pending",
+      "kind": "xcode",
+      "path": "VideoScan/VideoScanTests/CatalogCutoverB26Tests.swift",
+      "stage": "regression",
+      "suites": [
+        "CatalogPeopleRedateTests"
+      ],
+      "tests": [
+        "removeVersusRedate"
+      ]
     }
   ],
   "discovery": "Source declaration inventory; parameterized runtime counts may exceed declaration floors. New tests require explicit reviewed assignment.",
@@ -32566,6 +32594,14 @@
         },
         {
           "name": "VideoScan/VideoScanTests/CatalogCutoverB25Tests.swift",
+          "reason": "filesystem/global-state/subprocess isolation audit pending"
+        },
+        {
+          "name": "VideoScan/VideoScanCore/Tests/VideoScanCoreTests/Store/CatalogCommitB26Tests.swift",
+          "reason": "package adapter needs separate component build/count extraction and confinement audit"
+        },
+        {
+          "name": "VideoScan/VideoScanTests/CatalogCutoverB26Tests.swift",
           "reason": "filesystem/global-state/subprocess isolation audit pending"
         }
       ],

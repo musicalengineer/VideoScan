@@ -184,7 +184,7 @@ extension CatalogRecordDTO {
         public var confidence: String?
     }
 
-    public struct PeopleTagRow: Codable, Sendable, Equatable {
+    public struct PeopleTagRow: Codable, Sendable, Hashable {
         public var name: String
         public var kind: CatalogDDL.PeopleTagKind
         public var confirmedAt: Int64?

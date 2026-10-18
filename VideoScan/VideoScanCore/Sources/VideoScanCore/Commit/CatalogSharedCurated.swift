@@ -151,21 +151,14 @@ public struct CatalogSharedCurated: Sendable, Equatable {
         }
     }
 
-    /// The people as display rows' identities (name, kind).
-    public var peopleKeys: Set<PeopleKey> {
-        Set(confirmedByUserPeople.map { PeopleKey(name: $0.name, kind: .confirmed) }
-            + rejectedPeople.map { PeopleKey(name: $0, kind: .rejected) })
-    }
-
-    /// Each confirmed name's date in whole Unix seconds (as catalog.json's
-    /// ISO 8601 text — and so the people_tags row — carries it).
-    public var confirmedSeconds: [String: Int64] {
-        Dictionary(confirmedByUserPeople.map { ($0.name, Int64($0.confirmedAt.timeIntervalSince1970.rounded(.down))) },
-                   uniquingKeysWith: { first, _ in first })
-    }
-
-    public struct PeopleKey: Hashable, Sendable {
-        public var name: String
-        public var kind: CatalogDDL.PeopleTagKind
+    /// The people as FULL display rows — name, kind AND the confirmation
+    /// date in whole Unix seconds (as catalog.json's ISO 8601 text, and so
+    /// the people_tags row, carries it). The baseline a people delta is
+    /// taken against: a removal deletes only these exact rows (cutover B2.6).
+    public var peopleRows: [CatalogRecordDTO.PeopleTagRow] {
+        confirmedByUserPeople.map {
+            CatalogRecordDTO.PeopleTagRow(name: $0.name, kind: .confirmed,
+                                          confirmedAt: Int64($0.confirmedAt.timeIntervalSince1970.rounded(.down)))
+        } + rejectedPeople.map { CatalogRecordDTO.PeopleTagRow(name: $0, kind: .rejected, confirmedAt: nil) }
     }
 }

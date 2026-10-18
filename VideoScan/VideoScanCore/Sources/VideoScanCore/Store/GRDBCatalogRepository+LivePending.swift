@@ -21,7 +21,9 @@
 //     An attestation is a FULL row (key + label): a removal deletes only
 //     the exact row the copy saw; a relabel is remove-old-row + add-new-row
 //     (B2.5, codex B2.4 F2) — so a removal never takes another copy's
-//     relabel of the same key.
+//     relabel of the same key. A person row is FULL the same way (name +
+//     kind + confirmed_at, B2.6): a re-dated confirmation is remove-old-row
+//     + add-new-row, so an un-confirm never takes another copy's re-date.
 //
 // (For Rick: three small DAO methods; `ON CONFLICT … DO UPDATE` is SQLite's
 // upsert, which never deletes the row in the way.)
@@ -111,8 +113,15 @@ extension GRDBTransaction {
                           removed: [CatalogRecordDTO.PeopleTagRow]) throws {
         let digest = digest.lowercased()
         for person in removed {
-            try db.execute(sql: "DELETE FROM people_tags WHERE digest = ? AND name = ? AND kind = ? AND conflict = 0",
-                           arguments: [digest, person.name, person.kind.rawValue])
+            // The EXACT row this copy's baseline held — name, kind AND date
+            // (B2.6, the class of codex B2.4 F2). Matching (name, kind) alone
+            // let an un-confirm take another copy's re-dated confirmation, so
+            // the result depended on commit order. `confirmed_at IS ?`:
+            // NULL-safe equality (a rejection has no date).
+            try db.execute(sql: """
+                DELETE FROM people_tags
+                 WHERE digest = ? AND name = ? AND kind = ? AND confirmed_at IS ? AND conflict = 0
+                """, arguments: [digest, person.name, person.kind.rawValue, person.confirmedAt])
         }
         for person in added {
             // The person's word on this name resolves its conflict: the

@@ -337,24 +337,21 @@ struct CatalogCommitBody {
     }
 }
 
-/// People as a delta against the record's own baseline (codex B2 P1-6):
-/// only the (name, kind) pairs the person added or removed, plus a confirmed
-/// name whose date moved. A name absent from both — an unresolved conflict
-/// the loaded record shows empty — is not touched.
+/// People as a delta against the record's own baseline (codex B2 P1-6), on
+/// FULL rows — name, kind and confirmation date (cutover B2.6, the class of
+/// codex B2.4 F2): a removal is the exact row the baseline held, and a
+/// re-dated confirmation is remove-old-row + add-new-row, so one copy
+/// un-confirming a name never takes another copy's re-dating of it. A name
+/// absent from both — an unresolved conflict the loaded record shows
+/// empty — is not touched.
 struct CatalogPeopleDelta {
-    var added: [CatalogRecordDTO.PeopleTagRow] = []
-    var removed: [CatalogRecordDTO.PeopleTagRow] = []
+    let added: [CatalogRecordDTO.PeopleTagRow]
+    let removed: [CatalogRecordDTO.PeopleTagRow]
 
     init(now: [CatalogRecordDTO.PeopleTagRow], baseline: CatalogSharedCurated?) {
-        let was = baseline?.peopleKeys ?? []
-        let wasDates = baseline?.confirmedSeconds ?? [:]
-        let nowKeys = Set(now.map { CatalogSharedCurated.PeopleKey(name: $0.name, kind: $0.kind) })
-        added = now.filter { row in
-            let key = CatalogSharedCurated.PeopleKey(name: row.name, kind: row.kind)
-            return !was.contains(key) || (row.kind == .confirmed && wasDates[row.name] != row.confirmedAt)
-        }
-        removed = was.subtracting(nowKeys).sorted { ($0.kind.rawValue, $0.name) < ($1.kind.rawValue, $1.name) }
-            .map { CatalogRecordDTO.PeopleTagRow(name: $0.name, kind: $0.kind, confirmedAt: nil) }
+        let delta = CatalogSetDelta(now: now, was: baseline?.peopleRows ?? [])
+        added = delta.added
+        removed = delta.removed
     }
 }
 
