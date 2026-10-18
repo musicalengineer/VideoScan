@@ -18,6 +18,10 @@
 //   writeTagsDelta / writeAttestationsDelta — the same for the other two
 //     shared sets (B2.4, codex B2.3 F2): two copies edited differently in
 //     one commit both land, in either order.
+//     An attestation is a FULL row (key + label): a removal deletes only
+//     the exact row the copy saw; a relabel is remove-old-row + add-new-row
+//     (B2.5, codex B2.4 F2) — so a removal never takes another copy's
+//     relabel of the same key.
 //
 // (For Rick: three small DAO methods; `ON CONFLICT … DO UPDATE` is SQLite's
 // upsert, which never deletes the row in the way.)
@@ -138,10 +142,15 @@ extension GRDBTransaction {
                                 removed: [CatalogRecordDTO.BackupAttestationRow]) throws {
         let digest = digest.lowercased()
         for a in removed {
+            // The EXACT row this copy's baseline held — key AND label (B2.5,
+            // codex B2.4 F2). Matching the key alone let a removal take
+            // another copy's relabel of the same key, so A-removes vs
+            // B-relabels ended differently by commit order. `label IS ?`:
+            // NULL-safe equality (a label may be absent).
             try db.execute(sql: """
                 DELETE FROM backup_attestations
-                 WHERE digest = ? AND kind = ? AND attested_at = ? AND answer = ? AND by_whom = ?
-                """, arguments: [digest, a.kind, a.attestedAt, a.answer, a.byWhom])
+                 WHERE digest = ? AND kind = ? AND attested_at = ? AND answer = ? AND by_whom = ? AND label IS ?
+                """, arguments: [digest, a.kind, a.attestedAt, a.answer, a.byWhom, a.label])
         }
         for a in added {
             // The person's word on this attestation settles it (conflict = 0).

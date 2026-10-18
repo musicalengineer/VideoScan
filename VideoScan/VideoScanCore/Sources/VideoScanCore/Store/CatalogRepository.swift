@@ -319,8 +319,10 @@ public protocol CatalogTransaction: CatalogRecordReading, CatalogLiveReading {
     /// another copy's addition in the same commit included — left as it was.
     func writeTagsDelta(digest: String, added: [String], removed: [String]) throws
     /// The backup attestations a person changed on one copy, as a delta:
-    /// `removed` deleted by their key (kind, time, answer, who), `added`
-    /// written settled (`conflict = 0`); every other attestation left as it was.
+    /// `removed` deleted only where the WHOLE row matches (kind, time,
+    /// answer, who AND label — B2.5: a relabel by another copy survives a
+    /// removal of the old label), `added` written settled (`conflict = 0`);
+    /// every other attestation left as it was.
     func writeAttestationsDelta(digest: String, added: [CatalogRecordDTO.BackupAttestationRow],
                                 removed: [CatalogRecordDTO.BackupAttestationRow]) throws
 }

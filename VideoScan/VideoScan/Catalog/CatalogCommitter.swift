@@ -31,7 +31,8 @@
 // Doors: the 2 s debounce (it only decides WHEN the synchronous commit
 // runs), `commitNow` (quit and every synchronous save), `commitAcknowledged`
 // (the same synchronous commit; returns its truth), `commitNow(ids:)` (the
-// removal markers), `purge(ids:reason:)` (a door took records out).
+// removal markers), `purge(ids:reason:)` (a door took records out),
+// `commitBeforeReplacing` (placeRecord saves the record it replaces first).
 //
 // Removal markers (gap 2; B2.3 veto). catalog.sqlite wants every marker
 // revision with its own tombstone. The one marker writer asks BEFORE a
@@ -278,6 +279,17 @@ final class CatalogCommitter {
     @discardableResult
     func commitNow(ids: Set<UUID>) -> Bool {
         commit(.save, owner: nil, scope: .only(ids))
+    }
+
+    /// `placeRecord` is about to replace `id` at its path (B2.5, codex
+    /// B2.4 F1): the record's CURRENT values are committed now, so an edit
+    /// made inside the debounce is in files / the display rows /
+    /// row_knowledge before anything is inherited, purged or retired.
+    /// nil = durable; else the words why not (held, blocked, being
+    /// reopened, refused) — and the caller must replace nothing.
+    func commitBeforeReplacing(_ id: UUID) -> String? {
+        if commitNow(ids: [id]) { return nil }
+        return saveRefusal() ?? baseline.waiting[id]?.words ?? "its current values could not be stored"
     }
 
     /// A door took these records out of the catalog (VideoScanModel

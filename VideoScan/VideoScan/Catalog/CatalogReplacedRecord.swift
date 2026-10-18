@@ -6,10 +6,11 @@
 //
 //   same whole-file digest (the same bytes) → the new record INHERITS every
 //     curated value it lacks; where both hold a different value the new
-//     one (the job just copied it from the live source) is kept and the old
-//     one is named in the log — it also stays in `row_knowledge`. Then the
-//     old id is purged: the bytes, and now the curation, live on in the
-//     new row;
+//     one (the job just copied it from the live source) is kept and BOTH
+//     values are named in the log — the old one is in `row_knowledge`,
+//     because placeRecord commits the old record before it replaces it
+//     (B2.5). Then the old id is purged: the bytes, and now the curation,
+//     live on in the new row;
 //   different or unknown digest (Balance Audio's fresh probe, a Repair) →
 //     the old record is KEPT: removed from the catalog with reason
 //     `replacedAtPath` (a disk fact — the file at that path is no longer
@@ -31,8 +32,10 @@ enum CatalogReplacedRecord {
         return was == now
     }
 
-    /// `heir` takes every curated value it lacks from `old`. Returns the
-    /// words for the groups where both held DIFFERENT values (heir's kept).
+    /// `heir` takes every curated value it lacks from `old`. Returns, for
+    /// each group where both held DIFFERENT values (heir's kept), both:
+    /// "family music 'Danny Boy' by Tim — the new record has family music
+    /// 'Amazing Grace' by Matt".
     @discardableResult
     static func inherit(from old: VideoRecord, onto heir: VideoRecord) -> [String] {
         let blank = CatalogSharedCurated(VideoRecord())
@@ -43,7 +46,7 @@ enum CatalogReplacedRecord {
             if now.same(group, as: blank) {
                 was.apply(group, to: heir)
             } else if !now.same(group, as: was) {
-                differing.append(contentsOf: words(for: [group], of: old))
+                differing.append(words(for: group, of: old) + " — the new record has " + words(for: group, of: heir))
             }
         }
         if heir.setAsideReason == nil { heir.setAsideReason = old.setAsideReason }
@@ -56,23 +59,30 @@ enum CatalogReplacedRecord {
         let blank = CatalogSharedCurated(VideoRecord())
         let mine = CatalogSharedCurated(record)
         let groups = CatalogSharedCurated.Group.allCases.filter { !mine.same($0, as: blank) }
-        let words = words(for: groups, of: record)
+        let words = groups.map { words(for: $0, of: record) }
         return words.isEmpty ? "no curated values" : words.joined(separator: ", ")
     }
 
-    private static func words(for groups: [CatalogSharedCurated.Group], of r: VideoRecord) -> [String] {
-        groups.map { group in
-            switch group {
-            case .stars: return "stars \(r.starRating)"
-            case .notes: return "notes '\(r.userNotes)'"
-            case .disposition: return "disposition \(r.mediaDisposition.rawValue)"
-            case .tags: return "tags " + r.tags.joined(separator: " · ")
-            case .people: return "people " + (r.confirmedByUserPeople.map(\.name) + r.rejectedPeople.map { "not \($0)" }).joined(separator: " · ")
-            case .date: return "date \(r.userDate ?? "?")"
-            case .place: return "place \(r.userPlace ?? "?")"
-            case .attestations: return "\(r.backupAttestations.count) backup attestation(s)"
-            case .music: return "family music"
-            }
+    /// One group's value(s) on `r`, in the person's words.
+    private static func words(for group: CatalogSharedCurated.Group, of r: VideoRecord) -> String {
+        switch group {
+        case .stars: return "stars \(r.starRating)"
+        case .notes: return "notes '\(r.userNotes)'"
+        case .disposition: return "disposition \(r.mediaDisposition.rawValue)"
+        case .tags: return "tags " + r.tags.joined(separator: " · ")
+        case .people: return "people " + (r.confirmedByUserPeople.map(\.name) + r.rejectedPeople.map { "not \($0)" }).joined(separator: " · ")
+        case .date: return "date \(r.userDate ?? "?")"
+        case .place: return "place \(r.userPlace ?? "?")"
+        case .attestations: return "backup attestations " + r.backupAttestations.map(\.token).joined(separator: " · ")
+        case .music: return music(r.familyMusic)
         }
+    }
+
+    /// "family music 'Danny Boy' by Tim" (title and performer when given).
+    private static func music(_ m: FamilyMusicInfo?) -> String {
+        var words = "family music"
+        if let title = m?.title { words += " '\(title)'" }
+        if let performer = m?.performer { words += " by \(performer)" }
+        return words
     }
 }

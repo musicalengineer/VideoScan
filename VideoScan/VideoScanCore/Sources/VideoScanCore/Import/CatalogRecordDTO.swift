@@ -258,7 +258,8 @@ public struct CatalogRecordDTO: Codable, Sendable, Equatable {
 
     /// A record's attestations as rows, through the JSON text the catalog
     /// holds them in — so a live commit's baseline maps exactly as the
-    /// stored rows did (cutover B2.4: a removal deletes by these keys).
+    /// stored rows did (cutover B2.4/B2.5: a removal deletes exactly these
+    /// rows, key and label).
     static func attestationRows(_ list: [BackupAttestation]) throws -> [BackupAttestationRow] {
         let json = try JSONDecoder().decode([VideoRecordJSON.BackupAttestationJSON].self, from: JSONEncoder().encode(list))
         return json.map(attestationRow)
