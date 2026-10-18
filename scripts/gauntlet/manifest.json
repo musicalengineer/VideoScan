@@ -29227,13 +29227,16 @@
       "path": "VideoScan/VideoScanTests/MainTabTagSensorTests.swift",
       "stage": "regression",
       "suites": [
+        "ArchiveSearchSharedSensorTests",
         "MainTabTagSensorTests"
       ],
       "tests": [
         "archiveTag",
+        "archiveUsesTheSharedIndex",
         "catalogTag",
         "familyTreeTag",
         "showInArchiveUsesTheName",
+        "transcriptOnlyRecordIsFound",
         "triageTag"
       ]
     },

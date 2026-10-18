@@ -44,3 +44,30 @@ struct MainTabTagSensorTests {
         #expect(Self.contentView.contains("selectedTab = MainTab.archive.rawValue"))
     }
 }
+
+@Suite("Archive search — the same search as the Catalog")
+struct ArchiveSearchSharedSensorTests {
+
+    private static var archiveView: String {
+        let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("VideoScan/Archive/ArchiveView.swift")
+        return (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+    }
+
+    @Test("the Archive tab filters through the Catalog's search index (transcripts, captions, notes, places)")
+    func archiveUsesTheSharedIndex() {
+        #expect(Self.archiveView.contains("model.searchIndex.filter(records: byCategory, query: searchText)"))
+    }
+
+    @Test("a record found only by its transcript is found by the shared index")
+    @MainActor
+    func transcriptOnlyRecordIsFound() {
+        let rec = VideoRecord()
+        rec.filename = "cape-1992-edit.mov"
+        rec.fullPath = "/Volumes/FamilyArchive/Breen_Family_Archive/30_Video/1990-1999/1992/cape-1992-edit.mov"
+        rec.audioTranscript = "Here's the kitchen. Give them a ride in the elevator."
+        let index = CatalogSearchIndex()
+        index.rebuild(records: [rec])
+        #expect(index.filter(records: [rec], query: "elevator").count == 1)
+    }
+}

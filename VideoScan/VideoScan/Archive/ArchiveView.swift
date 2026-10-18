@@ -698,15 +698,29 @@ struct ArchiveView: View {
     var filteredRecords: [VideoRecord] {
         let byCategory = snapshot.records(for: selectedCategory)
         if searchText.isEmpty { return byCategory }
+        // The Catalog's own search (transcripts, captions, your notes,
+        // places, tags, people…) — Rick 2026-10-18: "elevator" found the
+        // Cape 1992 videos in the Catalog, but "Show in Archive" carried
+        // the word here and this tab, matching only names and paths,
+        // showed nothing. One definition of search for both tabs; the
+        // local fields below still match so nothing that matched before
+        // stops matching.
+        let indexed = Set(model.searchIndex.filter(records: byCategory, query: searchText).map(\.id))
         let q = searchText.lowercased()
-        return byCategory.filter {
-            $0.filename.lowercased().contains(q) ||
-            $0.fullPath.lowercased().contains(q) ||
-            $0.videoCodec.lowercased().contains(q) ||
-            $0.notes.lowercased().contains(q) ||
-            $0.detectedPeople.contains { $0.lowercased().contains(q) } ||
-            $0.confirmedByUserPeople.contains { $0.name.lowercased().contains(q) } ||
-            $0.suspectedPeople.contains { $0.lowercased().contains(q) }
-        }
+        return byCategory.filter { indexed.contains($0.id) || Self.localFieldsMatch($0, q) }
+    }
+
+    /// The Archive tab's own fields (kept so nothing that matched before
+    /// the shared search stops matching): names, path, codec, machine
+    /// notes, people. A named function, not one long `||` chain in a
+    /// closure — CI's Xcode 26.3 type-checker gives up on those.
+    static func localFieldsMatch(_ rec: VideoRecord, _ q: String) -> Bool {
+        if rec.filename.lowercased().contains(q) { return true }
+        if rec.fullPath.lowercased().contains(q) { return true }
+        if rec.videoCodec.lowercased().contains(q) { return true }
+        if rec.notes.lowercased().contains(q) { return true }
+        if rec.detectedPeople.contains(where: { $0.lowercased().contains(q) }) { return true }
+        if rec.confirmedByUserPeople.contains(where: { $0.name.lowercased().contains(q) }) { return true }
+        return rec.suspectedPeople.contains(where: { $0.lowercased().contains(q) })
     }
 }
